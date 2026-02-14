@@ -7,6 +7,7 @@ dependencies = [
     "beautifulsoup4>=4.14.3",
     "fastapi>=0.129.0",
     "finnhub-python>=2.4.27",
+    "fredapi>=0.5.2",
     "httpx>=0.28.1",
     "uvicorn>=0.40.0",
 ]

@@ -4,8 +4,9 @@ from data.stocktwits_provider import StockTwitsProvider
 from data.stockanalysis_scraper import StockAnalysisScraper
 from data.options_scraper import OptionsScraper
 from data.finnhub_provider import FinnhubProvider
-from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY
+from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY
 from data.alphavantage_provider import AlphaVantageProvider
+from data.fred_provider import FredProvider
 
 class MarketDataService:
     """
@@ -21,6 +22,7 @@ class MarketDataService:
         self.options = OptionsScraper()
         self.finnhub = FinnhubProvider(FINNHUB_API_KEY)
         self.alphavantage = AlphaVantageProvider(ALPHA_VANTAGE_API_KEY)
+        self.fred = FredProvider(FRED_API_KEY)
 
     async def research_ticker(self, ticker: str) -> dict:
         """
@@ -77,7 +79,7 @@ class MarketDataService:
 
         upcoming_earnings = self.finnhub.get_upcoming_earnings()
 
-        macro = await self.alphavantage.get_macro_overview()
+        macro = self.fred.get_quick_macro()
 
         return {
             "movers": movers,
@@ -120,10 +122,19 @@ class MarketDataService:
 
     async def get_macro_overview(self) -> dict:
         """
-        Dedicated macro economics scan.
+        Dedicated macro economics dashboard.
         Used for "what's happening with the economy" type queries.
+        Returns the full macro dashboard from FRED plus Alpha Vantage
+        market news sentiment.
         """
-        return await self.alphavantage.get_macro_overview()
+        fred_data = self.fred.get_full_macro_dashboard()
+        market_sentiment = await self.alphavantage.get_market_news_sentiment(
+            "economy_macro"
+        )
+        return {
+            "macro_indicators": fred_data,
+            "macro_news_sentiment": market_sentiment,
+        }
 
     async def get_unusual_volume(self) -> dict:
         """
