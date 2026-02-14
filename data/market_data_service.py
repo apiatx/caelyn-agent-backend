@@ -7,6 +7,7 @@ from data.finnhub_provider import FinnhubProvider
 from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY
 from data.alphavantage_provider import AlphaVantageProvider
 from data.fred_provider import FredProvider
+from data.edgar_provider import EdgarProvider
 
 class MarketDataService:
     """
@@ -23,6 +24,7 @@ class MarketDataService:
         self.finnhub = FinnhubProvider(FINNHUB_API_KEY)
         self.alphavantage = AlphaVantageProvider(ALPHA_VANTAGE_API_KEY)
         self.fred = FredProvider(FRED_API_KEY)
+        self.edgar = EdgarProvider()
 
     async def research_ticker(self, ticker: str) -> dict:
         """
@@ -48,6 +50,7 @@ class MarketDataService:
             "social_sentiment": self.finnhub.get_social_sentiment(ticker),
             "peer_companies": self.finnhub.get_company_peers(ticker),
             "news_sentiment_ai": await self.alphavantage.get_news_sentiment(ticker),
+            "sec_filings": await self.edgar.get_company_summary(ticker),
         }
 
     async def scan_market(self) -> dict:
@@ -69,6 +72,7 @@ class MarketDataService:
                 "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
                 "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
                 "earnings_upcoming": self.finnhub.get_earnings_calendar(ticker),
+                "recent_sec_filings": await self.edgar.get_8k_filings(ticker),
             }
 
         trending = await self.stocktwits.get_trending()
@@ -134,6 +138,17 @@ class MarketDataService:
         return {
             "macro_indicators": fred_data,
             "macro_news_sentiment": market_sentiment,
+        }
+
+    async def get_sec_filings(self, ticker: str) -> dict:
+        """
+        Dedicated SEC filings lookup.
+        Used for "show me SEC filings for AAPL" type queries.
+        """
+        return {
+            "company_summary": await self.edgar.get_company_summary(ticker),
+            "all_recent_filings": await self.edgar.get_recent_filings(ticker),
+            "insider_filings": await self.edgar.get_insider_filings(ticker),
         }
 
     async def get_unusual_volume(self) -> dict:

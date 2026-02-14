@@ -90,6 +90,12 @@ class TradingAgent:
         elif category == "macro":
             return await self.data.get_macro_overview()
 
+        elif category == "sec_filings":
+            tickers = query_info.get("tickers", [])
+            if tickers:
+                return await self.data.get_sec_filings(tickers[0])
+            return {"error": "No ticker specified for SEC filings lookup"}
+
         else:
             # General question — still provide some market context
             return {
