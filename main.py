@@ -14,9 +14,8 @@ app = FastAPI(title="Trading Agent API")
 # IMPORTANT: Replace these URLs with YOUR actual website URLs.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://cryptohippo.locker/app",
-    ],
+    allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
