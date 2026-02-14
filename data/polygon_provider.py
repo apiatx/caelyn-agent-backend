@@ -129,3 +129,24 @@ class PolygonProvider:
         except Exception as e:
             print(f"Error getting details for {ticker}: {e}")
             return {"name": ticker.upper(), "error": str(e)}
+
+def get_ticker_events(self, ticker: str) -> dict:
+    """Get upcoming earnings, dividends, and recent news catalysts."""
+    ticker = ticker.upper()
+    result = {"earnings": None, "news": []}
+
+    try:
+        news = list(self.client.list_ticker_news(ticker=ticker, limit=10))
+        result["news"] = [
+            {
+                "title": n.title,
+                "summary": getattr(n, "description", ""),
+                "source": n.publisher.name if n.publisher else "Unknown",
+                "published": str(n.published_utc),
+            }
+            for n in news
+        ]
+    except Exception as e:
+        print(f"Error getting events for {ticker}: {e}")
+
+    return result

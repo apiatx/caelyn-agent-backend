@@ -1,6 +1,6 @@
 from data.polygon_provider import PolygonProvider
 from data.finviz_scraper import FinvizScraper
-
+from data.stocktwits_provider import StockTwitsProvider
 
 class MarketDataService:
     """
@@ -11,6 +11,7 @@ class MarketDataService:
     def __init__(self, polygon_key: str):
         self.polygon = PolygonProvider(polygon_key)
         self.finviz = FinvizScraper()
+        self.stocktwits = StockTwitsProvider()
 
     async def research_ticker(self, ticker: str) -> dict:
         """
@@ -23,19 +24,36 @@ class MarketDataService:
             "technicals": self.polygon.get_technicals(ticker),
             "details": self.polygon.get_ticker_details(ticker),
             "news": self.polygon.get_news(ticker, limit=10),
+            "sentiment": await self.stocktwits.get_sentiment(ticker),
         }
 
     async def scan_market(self) -> dict:
-        """
-        Broad market overview.
-        Used for "best trades today", "what's moving", etc.
-        """
+        """Broad market overview with catalyst and sentiment data."""
+        movers = self.polygon.get_market_movers()
+
+        top_gainer_tickers = [
+            g["ticker"] for g in movers.get("gainers", [])[:5]
+        ]
+
+        catalyst_data = {}
+        for ticker in top_gainer_tickers:
+            catalyst_data[ticker] = {
+                "details": self.polygon.get_ticker_details(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+                "news": self.polygon.get_ticker_events(ticker)["news"],
+                "sentiment": await self.stocktwits.get_sentiment(ticker),
+            }
+
+        trending = await self.stocktwits.get_trending()
+
         return {
-            "movers": self.polygon.get_market_movers(),
-            "news": self.polygon.get_news(limit=15),
+            "movers": movers,
+            "market_news": self.polygon.get_news(limit=15),
             "screener_gainers": await self.finviz.get_screener_results(
                 "ta_topgainers"
             ),
+            "catalyst_data": catalyst_data,
+            "stocktwits_trending": trending,
         }
 
     async def get_unusual_volume(self) -> dict:
