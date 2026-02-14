@@ -1,0 +1,211 @@
+Here's what to paste into Replit Agent:
+
+Please make the following changes to my backend project. Do not delete or modify any existing code unless I specifically say "replace."
+1. Create a new file data/stockanalysis_scraper.py with this code:
+pythonimport httpx
+from bs4 import BeautifulSoup
+
+
+class StockAnalysisScraper:
+    """Scrapes StockAnalysis.com for fundamental data not available via Polygon."""
+
+    HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+
+    async def get_financials(self, ticker: str) -> dict:
+        """Get key financial metrics for a ticker."""
+        ticker = ticker.upper()
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"https://stockanalysis.com/stocks/{ticker.lower()}/financials/",
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            metrics = {}
+
+            # Try to extract key stats from the page
+            stat_tables = soup.select("table")
+            for table in stat_tables:
+                rows = table.select("tr")
+                for row in rows:
+                    cells = row.find_all("td")
+                    if len(cells) >= 2:
+                        label = cells[0].get_text(strip=True).lower()
+                        value = cells[1].get_text(strip=True)
+                        if "revenue" in label:
+                            metrics["revenue"] = value
+                        elif "net income" in label:
+                            metrics["net_income"] = value
+                        elif "eps" in label and "diluted" not in label:
+                            metrics["eps"] = value
+                        elif "profit margin" in label or "net margin" in label:
+                            metrics["profit_margin"] = value
+                        elif "operating margin" in label:
+                            metrics["operating_margin"] = value
+                        elif "free cash flow" in label:
+                            metrics["free_cash_flow"] = value
+
+            return {"ticker": ticker, "financials": metrics}
+        except Exception as e:
+            print(f"StockAnalysis financials error for {ticker}: {e}")
+            return {"ticker": ticker, "financials": {}, "error": str(e)}
+
+    async def get_overview(self, ticker: str) -> dict:
+        """Get stock overview stats like P/E, market cap, dividend yield."""
+        ticker = ticker.upper()
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"https://stockanalysis.com/stocks/{ticker.lower()}/",
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            stats = {}
+
+            # Extract key stats from overview page
+            stat_items = soup.select("[data-test]")
+            for item in stat_items:
+                label = item.get("data-test", "").lower()
+                value = item.get_text(strip=True)
+                if label and value:
+                    stats[label] = value
+
+            # Fallback: try extracting from table rows
+            if not stats:
+                tables = soup.select("table")
+                for table in tables:
+                    rows = table.select("tr")
+                    for row in rows:
+                        cells = row.find_all("td")
+                        if len(cells) >= 2:
+                            label = cells[0].get_text(strip=True)
+                            value = cells[1].get_text(strip=True)
+                            label_lower = label.lower()
+                            if "p/e" in label_lower:
+                                stats["pe_ratio"] = value
+                            elif "forward p/e" in label_lower:
+                                stats["forward_pe"] = value
+                            elif "market cap" in label_lower:
+                                stats["market_cap"] = value
+                            elif "dividend" in label_lower and "yield" in label_lower:
+                                stats["dividend_yield"] = value
+                            elif "52" in label_lower and "high" in label_lower:
+                                stats["week_52_high"] = value
+                            elif "52" in label_lower and "low" in label_lower:
+                                stats["week_52_low"] = value
+                            elif "earnings date" in label_lower:
+                                stats["earnings_date"] = value
+                            elif "beta" in label_lower:
+                                stats["beta"] = value
+                            elif "short" in label_lower and "float" in label_lower:
+                                stats["short_float"] = value
+                            elif "analyst" in label_lower and "rating" in label_lower:
+                                stats["analyst_rating"] = value
+                            elif "price target" in label_lower:
+                                stats["price_target"] = value
+
+            return {"ticker": ticker, "overview": stats}
+        except Exception as e:
+            print(f"StockAnalysis overview error for {ticker}: {e}")
+            return {"ticker": ticker, "overview": {}, "error": str(e)}
+
+    async def get_analyst_ratings(self, ticker: str) -> dict:
+        """Get analyst ratings and price targets."""
+        ticker = ticker.upper()
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"https://stockanalysis.com/stocks/{ticker.lower()}/forecast/",
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            ratings = {}
+
+            tables = soup.select("table")
+            for table in tables:
+                rows = table.select("tr")
+                for row in rows:
+                    cells = row.find_all("td")
+                    if len(cells) >= 2:
+                        label = cells[0].get_text(strip=True).lower()
+                        value = cells[1].get_text(strip=True)
+                        if "consensus" in label or "rating" in label:
+                            ratings["consensus"] = value
+                        elif "price target" in label:
+                            ratings["price_target"] = value
+                        elif "upside" in label or "downside" in label:
+                            ratings["upside_downside"] = value
+                        elif "buy" in label:
+                            ratings["buy_count"] = value
+                        elif "hold" in label:
+                            ratings["hold_count"] = value
+                        elif "sell" in label:
+                            ratings["sell_count"] = value
+
+            return {"ticker": ticker, "analyst_ratings": ratings}
+        except Exception as e:
+            print(f"StockAnalysis ratings error for {ticker}: {e}")
+            return {"ticker": ticker, "analyst_ratings": {}, "error": str(e)}
+2. In data/market_data_service.py, make these changes:
+
+Add this import after the existing StockTwitsProvider import: from data.stockanalysis_scraper import StockAnalysisScraper
+Add self.stockanalysis = StockAnalysisScraper() after self.stocktwits = StockTwitsProvider() in the __init__ method
+Replace the research_ticker method with this:
+
+python    async def research_ticker(self, ticker: str) -> dict:
+        """
+        Get everything about a single stock.
+        Used when someone asks "analyze NVDA" or "what's happening with AAPL".
+        """
+        ticker = ticker.upper()
+        return {
+            "snapshot": self.polygon.get_snapshot(ticker),
+            "technicals": self.polygon.get_technicals(ticker),
+            "details": self.polygon.get_ticker_details(ticker),
+            "news": self.polygon.get_news(ticker, limit=10),
+            "sentiment": await self.stocktwits.get_sentiment(ticker),
+            "fundamentals": await self.stockanalysis.get_overview(ticker),
+            "financials": await self.stockanalysis.get_financials(ticker),
+            "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
+        }
+
+In the scan_market method, find this block inside the for ticker in top_gainer_tickers: loop:
+
+python            catalyst_data[ticker] = {
+                "details": self.polygon.get_ticker_details(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+                "news": self.polygon.get_ticker_events(ticker)["news"],
+                "sentiment": await self.stocktwits.get_sentiment(ticker),
+            }
+Replace it with:
+python            catalyst_data[ticker] = {
+                "details": self.polygon.get_ticker_details(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+                "news": self.polygon.get_ticker_events(ticker)["news"],
+                "sentiment": await self.stocktwits.get_sentiment(ticker),
+                "fundamentals": await self.stockanalysis.get_overview(ticker),
+                "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
+            }
+```
+
+**3. In `agent/prompts.py`, add these lines after the StockTwits-related lines in the system prompt:**
+```
+- Fundamentals (use StockAnalysis data for P/E ratio, market cap, 52-week range, earnings dates, short float, and analyst ratings)
+- When analyst consensus and price targets are available, always include them in your analysis
+- Use P/E ratio, profit margins, and revenue data to assess whether a stock's move is fundamentally justified
+- Mention upcoming earnings dates as potential catalysts or risk events
+- If short float is high (above 15%), flag potential short squeeze dynamics
+- Always compare current price to analyst price targets and 52-week high/low for context
+4. Re-publish/deploy the project when done.

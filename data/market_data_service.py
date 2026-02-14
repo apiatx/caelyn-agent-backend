@@ -1,6 +1,7 @@
 from data.polygon_provider import PolygonProvider
 from data.finviz_scraper import FinvizScraper
 from data.stocktwits_provider import StockTwitsProvider
+from data.stockanalysis_scraper import StockAnalysisScraper
 
 class MarketDataService:
     """
@@ -12,6 +13,7 @@ class MarketDataService:
         self.polygon = PolygonProvider(polygon_key)
         self.finviz = FinvizScraper()
         self.stocktwits = StockTwitsProvider()
+        self.stockanalysis = StockAnalysisScraper()
 
     async def research_ticker(self, ticker: str) -> dict:
         """
@@ -25,6 +27,9 @@ class MarketDataService:
             "details": self.polygon.get_ticker_details(ticker),
             "news": self.polygon.get_news(ticker, limit=10),
             "sentiment": await self.stocktwits.get_sentiment(ticker),
+            "fundamentals": await self.stockanalysis.get_overview(ticker),
+            "financials": await self.stockanalysis.get_financials(ticker),
+            "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
         }
 
     async def scan_market(self) -> dict:
@@ -42,6 +47,8 @@ class MarketDataService:
                 "technicals": self.polygon.get_technicals(ticker),
                 "news": self.polygon.get_ticker_events(ticker)["news"],
                 "sentiment": await self.stocktwits.get_sentiment(ticker),
+                "fundamentals": await self.stockanalysis.get_overview(ticker),
+                "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
             }
 
         trending = await self.stocktwits.get_trending()
