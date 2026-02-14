@@ -81,6 +81,9 @@ class TradingAgent:
         elif category == "overbought":
             return await self.data.get_overbought()
 
+        elif category == "options_flow":
+            return await self.data.get_options_flow()
+
         else:
             # General question — still provide some market context
             return {

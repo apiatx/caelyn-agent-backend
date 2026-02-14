@@ -2,6 +2,7 @@ from data.polygon_provider import PolygonProvider
 from data.finviz_scraper import FinvizScraper
 from data.stocktwits_provider import StockTwitsProvider
 from data.stockanalysis_scraper import StockAnalysisScraper
+from data.options_scraper import OptionsScraper
 
 class MarketDataService:
     """
@@ -14,6 +15,7 @@ class MarketDataService:
         self.finviz = FinvizScraper()
         self.stocktwits = StockTwitsProvider()
         self.stockanalysis = StockAnalysisScraper()
+        self.options = OptionsScraper()
 
     async def research_ticker(self, ticker: str) -> dict:
         """
@@ -30,6 +32,7 @@ class MarketDataService:
             "fundamentals": await self.stockanalysis.get_overview(ticker),
             "financials": await self.stockanalysis.get_financials(ticker),
             "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
+            "options_put_call": await self.options.get_put_call_ratio(ticker),
         }
 
     async def scan_market(self) -> dict:
@@ -53,6 +56,10 @@ class MarketDataService:
 
         trending = await self.stocktwits.get_trending()
 
+        unusual_options = await self.options.get_unusual_options_activity()
+        options_signals = self.options.interpret_flow(unusual_options)
+        options_volume_leaders = await self.options.get_options_volume_leaders()
+
         return {
             "movers": movers,
             "market_news": self.polygon.get_news(limit=15),
@@ -61,6 +68,24 @@ class MarketDataService:
             ),
             "catalyst_data": catalyst_data,
             "stocktwits_trending": trending,
+            "unusual_options_activity": unusual_options,
+            "options_flow_signals": options_signals,
+            "options_volume_leaders": options_volume_leaders,
+        }
+
+    async def get_options_flow(self) -> dict:
+        """
+        Dedicated options flow scan.
+        Used for "show me unusual options activity" type queries.
+        """
+        unusual = await self.options.get_unusual_options_activity()
+        signals = self.options.interpret_flow(unusual)
+        volume_leaders = await self.options.get_options_volume_leaders()
+
+        return {
+            "unusual_activity": unusual,
+            "flow_signals": signals,
+            "volume_leaders": volume_leaders,
         }
 
     async def get_unusual_volume(self) -> dict:
