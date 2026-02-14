@@ -15,9 +15,7 @@ app = FastAPI(title="Trading Agent API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://your-website.yourusername.repl.co",  # Your Replit website URL
-        "https://yourcustomdomain.com",  # Your custom domain if you have one
-        "http://localhost:3000",  # For local testing
+        "https://cryptohippo.locker/app",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
