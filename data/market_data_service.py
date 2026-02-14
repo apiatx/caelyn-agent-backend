@@ -4,7 +4,8 @@ from data.stocktwits_provider import StockTwitsProvider
 from data.stockanalysis_scraper import StockAnalysisScraper
 from data.options_scraper import OptionsScraper
 from data.finnhub_provider import FinnhubProvider
-from config import FINNHUB_API_KEY
+from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY
+from data.alphavantage_provider import AlphaVantageProvider
 
 class MarketDataService:
     """
@@ -19,6 +20,7 @@ class MarketDataService:
         self.stockanalysis = StockAnalysisScraper()
         self.options = OptionsScraper()
         self.finnhub = FinnhubProvider(FINNHUB_API_KEY)
+        self.alphavantage = AlphaVantageProvider(ALPHA_VANTAGE_API_KEY)
 
     async def research_ticker(self, ticker: str) -> dict:
         """
@@ -43,6 +45,7 @@ class MarketDataService:
             "recommendation_trends": self.finnhub.get_recommendation_trends(ticker),
             "social_sentiment": self.finnhub.get_social_sentiment(ticker),
             "peer_companies": self.finnhub.get_company_peers(ticker),
+            "news_sentiment_ai": await self.alphavantage.get_news_sentiment(ticker),
         }
 
     async def scan_market(self) -> dict:
@@ -74,6 +77,8 @@ class MarketDataService:
 
         upcoming_earnings = self.finnhub.get_upcoming_earnings()
 
+        macro = await self.alphavantage.get_macro_overview()
+
         return {
             "movers": movers,
             "market_news": self.polygon.get_news(limit=15),
@@ -86,6 +91,7 @@ class MarketDataService:
             "options_flow_signals": options_signals,
             "options_volume_leaders": options_volume_leaders,
             "upcoming_earnings_this_week": upcoming_earnings,
+            "macro_economic_data": macro,
         }
 
     async def get_options_flow(self) -> dict:
@@ -111,6 +117,13 @@ class MarketDataService:
         return {
             "upcoming_earnings": self.finnhub.get_upcoming_earnings(),
         }
+
+    async def get_macro_overview(self) -> dict:
+        """
+        Dedicated macro economics scan.
+        Used for "what's happening with the economy" type queries.
+        """
+        return await self.alphavantage.get_macro_overview()
 
     async def get_unusual_volume(self) -> dict:
         """

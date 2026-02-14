@@ -87,6 +87,9 @@ class TradingAgent:
         elif category == "earnings":
             return await self.data.get_earnings_scan()
 
+        elif category == "macro":
+            return await self.data.get_macro_overview()
+
         else:
             # General question — still provide some market context
             return {

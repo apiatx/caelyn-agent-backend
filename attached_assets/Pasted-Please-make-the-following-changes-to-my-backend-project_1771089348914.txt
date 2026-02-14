@@ -1,0 +1,383 @@
+Please make the following changes to my backend project. Do not delete or modify any existing code unless I specifically say "replace."
+1. In config.py, add this line after the existing lines:
+pythonALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
+2. Create a new file data/alphavantage_provider.py with this code:
+pythonimport httpx
+
+
+class AlphaVantageProvider:
+    """
+    Provides news sentiment scores and economic indicator data
+    via Alpha Vantage's free API.
+    
+    NOTE: Free tier is limited to 25 requests per day.
+    Use sparingly — only for high-value data that other sources don't provide.
+    """
+
+    BASE_URL = "https://www.alphavantage.co/query"
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    async def get_news_sentiment(self, ticker: str = None, topics: str = None) -> dict:
+        """
+        Get AI-powered news sentiment analysis.
+        Each article gets a sentiment score and relevance score.
+        
+        Topics can be: earnings, ipo, mergers_and_acquisitions,
+        financial_markets, economy_fiscal, economy_monetary,
+        economy_macro, energy_transportation, finance, 
+        life_sciences, manufacturing, real_estate, 
+        retail_wholesale, technology
+        """
+        try:
+            params = {
+                "function": "NEWS_SENTIMENT",
+                "apikey": self.api_key,
+                "limit": 10,
+                "sort": "RELEVANCE",
+            }
+            if ticker:
+                params["tickers"] = ticker.upper()
+            if topics:
+                params["topics"] = topics
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    self.BASE_URL,
+                    params=params,
+                    timeout=20,
+                )
+
+            data = resp.json()
+
+            if "feed" not in data:
+                return {
+                    "ticker": ticker,
+                    "articles": [],
+                    "error": data.get("Note", data.get("Information", "No data")),
+                }
+
+            articles = []
+            overall_sentiment_sum = 0
+            article_count = 0
+
+            for article in data["feed"][:10]:
+                # Get ticker-specific sentiment if available
+                ticker_sentiment = None
+                if ticker:
+                    for ts in article.get("ticker_sentiment", []):
+                        if ts.get("ticker", "").upper() == ticker.upper():
+                            ticker_sentiment = {
+                                "relevance_score": ts.get("relevance_score"),
+                                "sentiment_score": ts.get("ticker_sentiment_score"),
+                                "sentiment_label": ts.get("ticker_sentiment_label"),
+                            }
+                            try:
+                                overall_sentiment_sum += float(
+                                    ts.get("ticker_sentiment_score", 0)
+                                )
+                                article_count += 1
+                            except (ValueError, TypeError):
+                                pass
+                            break
+
+                articles.append({
+                    "title": article.get("title"),
+                    "source": article.get("source"),
+                    "published": article.get("time_published"),
+                    "overall_sentiment": article.get("overall_sentiment_label"),
+                    "overall_sentiment_score": article.get("overall_sentiment_score"),
+                    "ticker_sentiment": ticker_sentiment,
+                })
+
+            # Calculate average sentiment for the ticker
+            avg_sentiment = None
+            sentiment_label = None
+            if article_count > 0:
+                avg_sentiment = round(overall_sentiment_sum / article_count, 4)
+                if avg_sentiment > 0.25:
+                    sentiment_label = "Bullish"
+                elif avg_sentiment > 0.1:
+                    sentiment_label = "Somewhat Bullish"
+                elif avg_sentiment > -0.1:
+                    sentiment_label = "Neutral"
+                elif avg_sentiment > -0.25:
+                    sentiment_label = "Somewhat Bearish"
+                else:
+                    sentiment_label = "Bearish"
+
+            return {
+                "ticker": ticker,
+                "article_count": len(articles),
+                "average_sentiment_score": avg_sentiment,
+                "average_sentiment_label": sentiment_label,
+                "articles": articles,
+            }
+        except Exception as e:
+            print(f"Alpha Vantage news sentiment error: {e}")
+            return {"ticker": ticker, "articles": [], "error": str(e)}
+
+    async def get_market_news_sentiment(self, topic: str = "financial_markets") -> dict:
+        """
+        Get broad market news sentiment for a topic.
+        Useful for 'what's the market mood today' type queries.
+        """
+        return await self.get_news_sentiment(ticker=None, topics=topic)
+
+    async def get_fed_funds_rate(self) -> dict:
+        """Get the current federal funds interest rate."""
+        try:
+            params = {
+                "function": "FEDERAL_FUNDS_RATE",
+                "interval": "monthly",
+                "apikey": self.api_key,
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    self.BASE_URL,
+                    params=params,
+                    timeout=20,
+                )
+
+            data = resp.json()
+            records = data.get("data", [])
+
+            if not records:
+                return {"error": "No data available"}
+
+            recent = records[:6]
+            return {
+                "current_rate": recent[0].get("value") if recent else None,
+                "current_date": recent[0].get("date") if recent else None,
+                "trend": [
+                    {"date": r.get("date"), "rate": r.get("value")}
+                    for r in recent
+                ],
+            }
+        except Exception as e:
+            print(f"Alpha Vantage fed funds rate error: {e}")
+            return {"error": str(e)}
+
+    async def get_cpi(self) -> dict:
+        """Get Consumer Price Index (inflation) data."""
+        try:
+            params = {
+                "function": "CPI",
+                "interval": "monthly",
+                "apikey": self.api_key,
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    self.BASE_URL,
+                    params=params,
+                    timeout=20,
+                )
+
+            data = resp.json()
+            records = data.get("data", [])
+
+            if not records:
+                return {"error": "No data available"}
+
+            recent = records[:6]
+            # Calculate YoY change
+            yoy_change = None
+            if len(records) >= 13:
+                try:
+                    current = float(records[0].get("value", 0))
+                    year_ago = float(records[12].get("value", 0))
+                    if year_ago > 0:
+                        yoy_change = round(
+                            ((current - year_ago) / year_ago) * 100, 2
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+            return {
+                "latest_cpi": recent[0].get("value") if recent else None,
+                "latest_date": recent[0].get("date") if recent else None,
+                "yoy_inflation_pct": yoy_change,
+                "trend": [
+                    {"date": r.get("date"), "cpi": r.get("value")}
+                    for r in recent
+                ],
+            }
+        except Exception as e:
+            print(f"Alpha Vantage CPI error: {e}")
+            return {"error": str(e)}
+
+    async def get_unemployment(self) -> dict:
+        """Get unemployment rate data."""
+        try:
+            params = {
+                "function": "UNEMPLOYMENT",
+                "apikey": self.api_key,
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    self.BASE_URL,
+                    params=params,
+                    timeout=20,
+                )
+
+            data = resp.json()
+            records = data.get("data", [])
+
+            if not records:
+                return {"error": "No data available"}
+
+            recent = records[:6]
+            return {
+                "current_rate": recent[0].get("value") if recent else None,
+                "current_date": recent[0].get("date") if recent else None,
+                "trend": [
+                    {"date": r.get("date"), "rate": r.get("value")}
+                    for r in recent
+                ],
+            }
+        except Exception as e:
+            print(f"Alpha Vantage unemployment error: {e}")
+            return {"error": str(e)}
+
+    async def get_macro_overview(self) -> dict:
+        """
+        Get a combined macro overview: fed funds rate, CPI/inflation,
+        and unemployment. This uses 3 of your 25 daily API calls.
+        """
+        fed = await self.get_fed_funds_rate()
+        cpi = await self.get_cpi()
+        unemployment = await self.get_unemployment()
+
+        return {
+            "federal_funds_rate": fed,
+            "inflation_cpi": cpi,
+            "unemployment": unemployment,
+        }
+3. In data/market_data_service.py, make these changes:
+
+Add these imports after the existing imports at the top:
+
+pythonfrom data.alphavantage_provider import AlphaVantageProvider
+from config import ALPHA_VANTAGE_API_KEY
+
+In the __init__ method, add this line after the other self. assignments:
+
+python        self.alphavantage = AlphaVantageProvider(ALPHA_VANTAGE_API_KEY)
+
+Replace the research_ticker method with this:
+
+python    async def research_ticker(self, ticker: str) -> dict:
+        """
+        Get everything about a single stock.
+        Used when someone asks "analyze NVDA" or "what's happening with AAPL".
+        """
+        ticker = ticker.upper()
+        return {
+            "snapshot": self.polygon.get_snapshot(ticker),
+            "technicals": self.polygon.get_technicals(ticker),
+            "details": self.polygon.get_ticker_details(ticker),
+            "news": self.polygon.get_news(ticker, limit=10),
+            "sentiment": await self.stocktwits.get_sentiment(ticker),
+            "fundamentals": await self.stockanalysis.get_overview(ticker),
+            "financials": await self.stockanalysis.get_financials(ticker),
+            "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
+            "options_put_call": await self.options.get_put_call_ratio(ticker),
+            "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
+            "insider_transactions": self.finnhub.get_insider_transactions(ticker),
+            "earnings_history": self.finnhub.get_earnings_surprises(ticker),
+            "earnings_upcoming": self.finnhub.get_earnings_calendar(ticker),
+            "recommendation_trends": self.finnhub.get_recommendation_trends(ticker),
+            "social_sentiment": self.finnhub.get_social_sentiment(ticker),
+            "peer_companies": self.finnhub.get_company_peers(ticker),
+            "news_sentiment_ai": await self.alphavantage.get_news_sentiment(ticker),
+        }
+
+Replace the scan_market method with this:
+
+python    async def scan_market(self) -> dict:
+        """Broad market overview with all data sources."""
+        movers = self.polygon.get_market_movers()
+
+        top_gainer_tickers = [
+            g["ticker"] for g in movers.get("gainers", [])[:5]
+        ]
+
+        catalyst_data = {}
+        for ticker in top_gainer_tickers:
+            catalyst_data[ticker] = {
+                "details": self.polygon.get_ticker_details(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+                "news": self.polygon.get_ticker_events(ticker)["news"],
+                "sentiment": await self.stocktwits.get_sentiment(ticker),
+                "fundamentals": await self.stockanalysis.get_overview(ticker),
+                "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
+                "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
+                "earnings_upcoming": self.finnhub.get_earnings_calendar(ticker),
+            }
+
+        trending = await self.stocktwits.get_trending()
+
+        # Options flow data
+        unusual_options = await self.options.get_unusual_options_activity()
+        options_signals = self.options.interpret_flow(unusual_options)
+        options_volume_leaders = await self.options.get_options_volume_leaders()
+
+        # Upcoming earnings this week
+        upcoming_earnings = self.finnhub.get_upcoming_earnings()
+
+        # Macro data (uses 3 Alpha Vantage calls — be mindful of 25/day limit)
+        macro = await self.alphavantage.get_macro_overview()
+
+        return {
+            "movers": movers,
+            "market_news": self.polygon.get_news(limit=15),
+            "screener_gainers": await self.finviz.get_screener_results(
+                "ta_topgainers"
+            ),
+            "catalyst_data": catalyst_data,
+            "stocktwits_trending": trending,
+            "unusual_options_activity": unusual_options,
+            "options_flow_signals": options_signals,
+            "options_volume_leaders": options_volume_leaders,
+            "upcoming_earnings_this_week": upcoming_earnings,
+            "macro_economic_data": macro,
+        }
+
+Add a new method to the class:
+
+python    async def get_macro_overview(self) -> dict:
+        """
+        Dedicated macro economics scan.
+        Used for "what's happening with the economy" type queries.
+        """
+        return await self.alphavantage.get_macro_overview()
+4. In agent/claude_agent.py, add macro routing.
+Find the _gather_data method. Find the line that says:
+python        elif category == "earnings":
+            return await self.data.get_earnings_scan()
+Add this block right AFTER it:
+python        elif category == "macro":
+            return await self.data.get_macro_overview()
+```
+
+**5. In `agent/prompts.py`, make two changes:**
+
+First, in the `QUERY_CLASSIFIER_PROMPT`, find the list of categories and add this line after the `"earnings"` line:
+```
+- "macro": User asks about the economy, interest rates, inflation, CPI, unemployment, federal reserve, macro conditions, or broad economic outlook.
+```
+
+Second, in the `SYSTEM_PROMPT`, add these lines after the existing Finnhub-related instructions:
+```
+- AI News Sentiment (use Alpha Vantage sentiment scores to quantify whether recent news coverage is bullish or bearish)
+- News sentiment scores range from -1 (extremely bearish) to +1 (extremely bullish). Scores above 0.25 are bullish, below -0.25 are bearish.
+- When AI news sentiment and social sentiment from StockTwits/Reddit agree, the conviction is higher
+- When AI news sentiment diverges from social sentiment, note the disagreement and explain what it might mean
+- Macroeconomic Data (use Alpha Vantage economic indicators for macro context)
+- Always consider the Fed Funds Rate when discussing growth stocks vs value stocks — higher rates hurt growth stocks more
+- Reference current inflation (CPI) data when discussing consumer-facing companies or commodity plays
+- When unemployment is rising, be more cautious on cyclical stocks; when falling, be more bullish on consumer discretionary
+- Use macro data to frame the broader context — e.g., "In the current environment of X% inflation and Y% fed funds rate, this setup is particularly interesting because..."
+- IMPORTANT: Alpha Vantage has a 25 requests/day limit. The macro data is cached per session. Do not call it more than necessary.
+6. Re-publish/deploy the project when done.
