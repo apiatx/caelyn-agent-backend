@@ -3,6 +3,8 @@ from data.finviz_scraper import FinvizScraper
 from data.stocktwits_provider import StockTwitsProvider
 from data.stockanalysis_scraper import StockAnalysisScraper
 from data.options_scraper import OptionsScraper
+from data.finnhub_provider import FinnhubProvider
+from config import FINNHUB_API_KEY
 
 class MarketDataService:
     """
@@ -16,6 +18,7 @@ class MarketDataService:
         self.stocktwits = StockTwitsProvider()
         self.stockanalysis = StockAnalysisScraper()
         self.options = OptionsScraper()
+        self.finnhub = FinnhubProvider(FINNHUB_API_KEY)
 
     async def research_ticker(self, ticker: str) -> dict:
         """
@@ -33,6 +36,13 @@ class MarketDataService:
             "financials": await self.stockanalysis.get_financials(ticker),
             "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
             "options_put_call": await self.options.get_put_call_ratio(ticker),
+            "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
+            "insider_transactions": self.finnhub.get_insider_transactions(ticker),
+            "earnings_history": self.finnhub.get_earnings_surprises(ticker),
+            "earnings_upcoming": self.finnhub.get_earnings_calendar(ticker),
+            "recommendation_trends": self.finnhub.get_recommendation_trends(ticker),
+            "social_sentiment": self.finnhub.get_social_sentiment(ticker),
+            "peer_companies": self.finnhub.get_company_peers(ticker),
         }
 
     async def scan_market(self) -> dict:
@@ -52,6 +62,8 @@ class MarketDataService:
                 "sentiment": await self.stocktwits.get_sentiment(ticker),
                 "fundamentals": await self.stockanalysis.get_overview(ticker),
                 "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
+                "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
+                "earnings_upcoming": self.finnhub.get_earnings_calendar(ticker),
             }
 
         trending = await self.stocktwits.get_trending()
@@ -59,6 +71,8 @@ class MarketDataService:
         unusual_options = await self.options.get_unusual_options_activity()
         options_signals = self.options.interpret_flow(unusual_options)
         options_volume_leaders = await self.options.get_options_volume_leaders()
+
+        upcoming_earnings = self.finnhub.get_upcoming_earnings()
 
         return {
             "movers": movers,
@@ -71,6 +85,7 @@ class MarketDataService:
             "unusual_options_activity": unusual_options,
             "options_flow_signals": options_signals,
             "options_volume_leaders": options_volume_leaders,
+            "upcoming_earnings_this_week": upcoming_earnings,
         }
 
     async def get_options_flow(self) -> dict:
@@ -86,6 +101,15 @@ class MarketDataService:
             "unusual_activity": unusual,
             "flow_signals": signals,
             "volume_leaders": volume_leaders,
+        }
+
+    async def get_earnings_scan(self) -> dict:
+        """
+        Dedicated earnings scan.
+        Used for "what earnings are coming up" type queries.
+        """
+        return {
+            "upcoming_earnings": self.finnhub.get_upcoming_earnings(),
         }
 
     async def get_unusual_volume(self) -> dict:

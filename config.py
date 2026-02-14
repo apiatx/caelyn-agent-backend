@@ -2,3 +2,4 @@ import os
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")

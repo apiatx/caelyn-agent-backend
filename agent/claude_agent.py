@@ -84,6 +84,9 @@ class TradingAgent:
         elif category == "options_flow":
             return await self.data.get_options_flow()
 
+        elif category == "earnings":
+            return await self.data.get_earnings_scan()
+
         else:
             # General question — still provide some market context
             return {
