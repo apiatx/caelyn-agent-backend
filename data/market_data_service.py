@@ -8,6 +8,7 @@ from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY
 from data.alphavantage_provider import AlphaVantageProvider
 from data.fred_provider import FredProvider
 from data.edgar_provider import EdgarProvider
+from data.fear_greed_provider import FearGreedProvider
 
 class MarketDataService:
     """
@@ -25,6 +26,7 @@ class MarketDataService:
         self.alphavantage = AlphaVantageProvider(ALPHA_VANTAGE_API_KEY)
         self.fred = FredProvider(FRED_API_KEY)
         self.edgar = EdgarProvider()
+        self.fear_greed = FearGreedProvider()
 
     async def research_ticker(self, ticker: str) -> dict:
         """
@@ -84,6 +86,7 @@ class MarketDataService:
         upcoming_earnings = self.finnhub.get_upcoming_earnings()
 
         macro = self.fred.get_quick_macro()
+        fear_greed = await self.fear_greed.get_fear_greed_index()
 
         return {
             "movers": movers,
@@ -98,6 +101,7 @@ class MarketDataService:
             "options_volume_leaders": options_volume_leaders,
             "upcoming_earnings_this_week": upcoming_earnings,
             "macro_economic_data": macro,
+            "fear_greed_index": fear_greed,
         }
 
     async def get_options_flow(self) -> dict:
@@ -128,16 +132,18 @@ class MarketDataService:
         """
         Dedicated macro economics dashboard.
         Used for "what's happening with the economy" type queries.
-        Returns the full macro dashboard from FRED plus Alpha Vantage
-        market news sentiment.
+        Returns the full macro dashboard from FRED, Alpha Vantage
+        market news sentiment, and Fear & Greed Index.
         """
         fred_data = self.fred.get_full_macro_dashboard()
         market_sentiment = await self.alphavantage.get_market_news_sentiment(
             "economy_macro"
         )
+        fear_greed = await self.fear_greed.get_fear_greed_index()
         return {
             "macro_indicators": fred_data,
             "macro_news_sentiment": market_sentiment,
+            "fear_greed_index": fear_greed,
         }
 
     async def get_sec_filings(self, ticker: str) -> dict:
