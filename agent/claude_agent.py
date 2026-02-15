@@ -12,25 +12,14 @@ class TradingAgent:
         self.client = anthropic.Anthropic(api_key=api_key)
         self.data = data_service
 
-    async def query(self, user_prompt: str) -> dict:
+    async def handle_query(self, user_prompt: str, history: list = None) -> dict:
         """
-        Main entry point. Takes a user's question, gathers relevant
-        market data, sends it to Claude, and returns a structured response.
+        Main entry point. Classify the query, gather data, ask Claude.
         """
-
-        # Step 1: Figure out what kind of query this is
         query_info = self._classify_query(user_prompt)
-
-        # Step 2: Fetch the right data based on query type
         market_data = await self._gather_data(query_info)
-
-        # Step 3: Send everything to Claude for analysis
-        raw_response = self._ask_claude(user_prompt, market_data)
-
-        # Step 4: Parse the response into text + structured data
-        parsed = self._parse_response(raw_response)
-
-        return parsed
+        raw_response = self._ask_claude(user_prompt, market_data, history)
+        return self._parse_response(raw_response)
 
     def _classify_query(self, prompt: str) -> dict:
         """Ask Claude to classify what kind of query this is."""
@@ -102,26 +91,60 @@ class TradingAgent:
                 "market_news": self.data.polygon.get_news(limit=10),
             }
 
-    def _ask_claude(self, user_prompt: str, market_data: dict) -> str:
-        """Send the user's question + market data to Claude."""
-        # Convert market data to readable string
+    def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None) -> str:
+        """Send the user's question + market data to Claude with conversation history."""
         data_str = json.dumps(market_data, indent=2, default=str)
+
+        filters = market_data.get("user_filters", {})
+        filter_instructions = ""
+        if filters:
+            if filters.get("market_cap"):
+                cap = filters["market_cap"]
+                if cap == "small_cap":
+                    filter_instructions += "\n⚠️ USER WANTS SMALL CAP STOCKS ONLY (under $2B market cap). Do NOT recommend any stock with a market cap above $2B. Filter out all large caps like RIVN, NVDA, AAPL, etc."
+                elif cap == "mid_cap":
+                    filter_instructions += "\n⚠️ USER WANTS MID CAP STOCKS ONLY ($2B-$10B market cap). Filter out small caps and large caps."
+                elif cap == "large_cap":
+                    filter_instructions += "\n⚠️ USER WANTS LARGE CAP STOCKS ONLY (over $10B market cap). Filter out small and mid caps."
+                elif cap == "mega_cap":
+                    filter_instructions += "\n⚠️ USER WANTS MEGA CAP STOCKS ONLY (over $200B market cap)."
+            if filters.get("sector"):
+                filter_instructions += f"\n⚠️ USER WANTS {filters['sector'].upper()} SECTOR ONLY. Only recommend stocks in this sector."
+            if filters.get("style"):
+                style = filters["style"]
+                if style == "day_trade":
+                    filter_instructions += "\n⚠️ USER WANTS DAY TRADES. Focus on high volume, high volatility stocks with intraday setups. Mention specific entry/exit levels and timeframes."
+                elif style == "swing":
+                    filter_instructions += "\n⚠️ USER WANTS SWING TRADES (days to weeks). Focus on stocks with developing technical patterns and upcoming catalysts."
+                elif style == "position":
+                    filter_instructions += "\n⚠️ USER WANTS POSITION TRADES (weeks to months). Focus on fundamental value and longer-term technical trends."
+
+        messages = []
+
+        if history:
+            recent_history = history[-20:]
+            for msg in recent_history:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"],
+                })
+
+        messages.append({
+            "role": "user",
+            "content": (
+                f"## Real-Time Market Data\n"
+                f"{data_str}\n\n"
+                f"{filter_instructions}\n\n"
+                f"## User Question\n"
+                f"{user_prompt}"
+            ),
+        })
 
         response = self.client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=4096,
             system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"## Real-Time Market Data\n"
-                        f"{data_str}\n\n"
-                        f"## User Question\n"
-                        f"{user_prompt}"
-                    ),
-                }
-            ],
+            messages=messages,
         )
         return response.content[0].text
 

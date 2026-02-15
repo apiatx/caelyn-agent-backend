@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional
 
 from config import ANTHROPIC_API_KEY, POLYGON_API_KEY
 from data.market_data_service import MarketDataService
@@ -37,32 +39,25 @@ async def root():
     return {"status": "running", "message": "Trading Agent API is live"}
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class QueryRequest(BaseModel):
+    prompt: str
+    history: Optional[List[ChatMessage]] = None
+
 @app.post("/api/query")
-async def handle_query(request: dict):
-    """
-    Main endpoint. Your frontend sends POST requests here.
-    Body: {"prompt": "best trades today"}
-    Returns: {"type": "screener|analysis|chat", "analysis": "...", "data": [...]}
-    """
-    prompt = request.get("prompt", "")
-
-    if not prompt:
-        return {"error": "No prompt provided"}
-
+async def query_agent(request: QueryRequest):
     try:
-        result = await agent.query(prompt)
+        result = await agent.handle_query(
+            request.prompt,
+            history=[h.dict() for h in request.history] if request.history else None,
+        )
         return result
     except Exception as e:
-        print(f"Agent error: {e}")
-        return {
-            "type": "chat",
-            "analysis": (
-                "Sorry, I encountered an error processing your request. "
-                "Please try again."
-            ),
-            "data": None,
-            "tickers": None,
-        }
+        print(f"Error in /api/query: {e}")
+        return {"error": str(e), "type": "chat", "analysis": f"Error: {str(e)}"}
 
 
 @app.get("/api/health")
