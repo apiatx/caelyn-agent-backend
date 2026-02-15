@@ -42,7 +42,7 @@ class AlphaVantageProvider:
                 resp = await client.get(
                     self.BASE_URL,
                     params=params,
-                    timeout=20,
+                    timeout=12,
                 )
 
             data = resp.json()
@@ -131,7 +131,7 @@ class AlphaVantageProvider:
                 resp = await client.get(
                     self.BASE_URL,
                     params=params,
-                    timeout=20,
+                    timeout=12,
                 )
 
             data = resp.json()
@@ -165,7 +165,7 @@ class AlphaVantageProvider:
                 resp = await client.get(
                     self.BASE_URL,
                     params=params,
-                    timeout=20,
+                    timeout=12,
                 )
 
             data = resp.json()
@@ -211,7 +211,7 @@ class AlphaVantageProvider:
                 resp = await client.get(
                     self.BASE_URL,
                     params=params,
-                    timeout=20,
+                    timeout=12,
                 )
 
             data = resp.json()

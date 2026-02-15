@@ -25,7 +25,7 @@ class CoinGeckoProvider:
                 resp = await client.get(
                     f"{self.BASE_URL}/{endpoint}",
                     params=params,
-                    timeout=15,
+                    timeout=10,
                 )
             if resp.status_code == 429:
                 print("CoinGecko rate limit hit")

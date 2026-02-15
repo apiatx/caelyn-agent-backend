@@ -36,7 +36,7 @@ class FinvizScraper:
                 resp = await client.get(
                     f"https://finviz.com/screener.ashx?v=111&s={filters}",
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
             soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -160,7 +160,7 @@ class FinvizScraper:
                     resp = await client.get(
                         url,
                         headers=self.HEADERS,
-                        timeout=15,
+                        timeout=10,
                     )
             else:
                 url = "https://finviz.com/screener.ashx"
@@ -174,7 +174,7 @@ class FinvizScraper:
                         url,
                         params=all_params,
                         headers=self.HEADERS,
-                        timeout=15,
+                        timeout=10,
                     )
 
             if resp.status_code != 200:
@@ -415,7 +415,7 @@ async def scrape_yahoo_trending() -> list:
             resp = await client.get(
                 "https://finance.yahoo.com/trending-tickers/",
                 headers=headers,
-                timeout=15,
+                timeout=10,
                 follow_redirects=True,
             )
         if resp.status_code != 200:
@@ -477,7 +477,7 @@ async def scrape_stockanalysis_trending() -> list:
         seen = set()
         base = "https://financialmodelingprep.com/api/v3"
 
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             gainers_resp, actives_resp = await asyncio.gather(
                 client.get(f"{base}/stock_market/gainers", params={"apikey": FMP_API_KEY}),
                 client.get(f"{base}/stock_market/actives", params={"apikey": FMP_API_KEY}),

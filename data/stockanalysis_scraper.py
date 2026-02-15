@@ -39,7 +39,7 @@ class StockAnalysisScraper:
                 resp = await client.get(
                     f"https://stockanalysis.com/stocks/{ticker.lower()}/",
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
             print(f"[StockAnalysis] overview {ticker}: status={resp.status_code}, body_len={len(resp.text)}")
             if resp.status_code != 200:
@@ -141,7 +141,7 @@ class StockAnalysisScraper:
                 resp = await client.get(
                     f"https://stockanalysis.com/stocks/{ticker.lower()}/forecast/",
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
             print(f"[StockAnalysis] analyst {ticker}: status={resp.status_code}, body_len={len(resp.text)}")
             if resp.status_code != 200:
@@ -228,7 +228,7 @@ class StockAnalysisScraper:
                 resp = await client.get(
                     f"https://stockanalysis.com/stocks/{ticker.lower()}/financials/",
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
             print(f"[StockAnalysis] financials {ticker}: status={resp.status_code}, body_len={len(resp.text)}")
             if resp.status_code != 200:

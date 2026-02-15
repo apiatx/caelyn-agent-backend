@@ -30,7 +30,7 @@ class EdgarProvider:
             resp = httpx.get(
                 "https://www.sec.gov/files/company_tickers.json",
                 headers=self.HEADERS,
-                timeout=15,
+                timeout=10,
             )
             data = resp.json()
             for entry in data.values():
@@ -63,7 +63,7 @@ class EdgarProvider:
                 resp = await client.get(
                     f"{self.DATA_URL}/submissions/CIK{cik}.json",
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
 
             if resp.status_code != 200:
@@ -136,7 +136,7 @@ class EdgarProvider:
                 resp = await client.get(
                     f"{self.DATA_URL}/api/xbrl/companyfacts/CIK{cik}.json",
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
 
             if resp.status_code != 200:
@@ -255,7 +255,7 @@ class EdgarProvider:
                     f"{self.BASE_URL}/search-index?q={query}&dateRange=custom"
                     f"&startdt={params['startdt']}&enddt={params['enddt']}",
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
 
             if resp.status_code != 200:

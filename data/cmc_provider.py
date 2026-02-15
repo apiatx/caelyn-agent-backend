@@ -41,7 +41,7 @@ class CMCProvider:
                     f"{self.BASE_URL}{endpoint}",
                     params=params,
                     headers=self.headers,
-                    timeout=15,
+                    timeout=10,
                 )
             if resp.status_code == 429:
                 print("CMC rate limit hit")

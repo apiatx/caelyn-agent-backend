@@ -13,7 +13,7 @@ class PolygonProvider:
         self._last_call = 0
         self._min_interval = 0.25
 
-    def _request(self, path: str, params: dict = None, timeout: int = 10, max_retries: int = 3) -> dict:
+    def _request(self, path: str, params: dict = None, timeout: int = 8) -> dict:
         if params is None:
             params = {}
         params["apiKey"] = self.api_key
@@ -25,27 +25,22 @@ class PolygonProvider:
                 time.sleep(self._min_interval - elapsed)
             self._last_call = time.time()
 
-        for attempt in range(max_retries + 1):
-            try:
-                resp = requests.get(f"{self.base_url}{path}", params=params, timeout=timeout)
-                if resp.status_code == 429:
-                    if attempt < max_retries:
-                        wait = min(30, 12 * (attempt + 1))
-                        print(f"[Polygon] 429 rate limited, waiting {wait}s (attempt {attempt+1}/{max_retries})")
-                        time.sleep(wait)
-                        continue
-                    return {"error": "rate_limited", "status": 429}
-                if resp.status_code == 403:
-                    return {"error": "not_authorized", "status": 403}
-                if resp.status_code != 200:
-                    return {"error": f"HTTP {resp.status_code}", "status": resp.status_code}
-                return resp.json()
-            except Exception as e:
-                if attempt < max_retries:
-                    time.sleep(1)
-                    continue
-                return {"error": str(e)}
-        return {"error": "max_retries_exceeded"}
+        try:
+            resp = requests.get(f"{self.base_url}{path}", params=params, timeout=timeout)
+            if resp.status_code == 429:
+                print("[Polygon] 429 rate limited, skipping (no retry)")
+                return {"error": "rate_limited", "status": 429}
+            if resp.status_code == 403:
+                return {"error": "not_authorized", "status": 403}
+            if resp.status_code != 200:
+                return {"error": f"HTTP {resp.status_code}", "status": resp.status_code}
+            return resp.json()
+        except requests.exceptions.Timeout:
+            print(f"[Polygon] Request timed out: {path}")
+            return {"error": "timeout"}
+        except Exception as e:
+            print(f"[Polygon] Request error: {e}")
+            return {"error": str(e)}
 
     def get_daily_bars(self, ticker: str, days: int = 120) -> list:
         """Fetch daily OHLCV bars. Cached separately since multiple methods use it."""
@@ -162,7 +157,7 @@ class PolygonProvider:
             gainers = []
             losers = []
 
-            resp_g = httpx.get(f"{base}/stock_market/gainers", params={"apikey": FMP_API_KEY}, timeout=15)
+            resp_g = httpx.get(f"{base}/stock_market/gainers", params={"apikey": FMP_API_KEY}, timeout=10)
             if resp_g.status_code == 200:
                 for item in (resp_g.json() or [])[:15]:
                     if isinstance(item, dict):
@@ -173,7 +168,7 @@ class PolygonProvider:
                             "volume": item.get("volume"),
                         })
 
-            resp_l = httpx.get(f"{base}/stock_market/losers", params={"apikey": FMP_API_KEY}, timeout=15)
+            resp_l = httpx.get(f"{base}/stock_market/losers", params={"apikey": FMP_API_KEY}, timeout=10)
             if resp_l.status_code == 200:
                 for item in (resp_l.json() or [])[:15]:
                     if isinstance(item, dict):

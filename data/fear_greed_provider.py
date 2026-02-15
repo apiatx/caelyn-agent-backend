@@ -48,7 +48,7 @@ class FearGreedProvider:
                 resp = await client.get(
                     self.API_URL,
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
 
             if resp.status_code != 200:
@@ -147,7 +147,7 @@ class FearGreedProvider:
                 resp = await client.get(
                     "https://production.dataviz.cnn.io/index/fearandgreed/current",
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
 
             if resp.status_code != 200:

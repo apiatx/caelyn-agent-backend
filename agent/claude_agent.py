@@ -1,5 +1,7 @@
 import json
 import re
+import time
+import asyncio
 
 import anthropic
 
@@ -10,22 +12,77 @@ from data.market_data_service import MarketDataService
 
 class TradingAgent:
     def __init__(self, api_key: str, data_service: MarketDataService):
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client = anthropic.Anthropic(api_key=api_key, timeout=60.0)
         self.data = data_service
 
     async def handle_query(self, user_prompt: str, history: list = None) -> dict:
-        """
-        Main entry point. Classify the query, gather data, ask Claude.
-        """
-        query_info = self._classify_query(user_prompt)
+        start_time = time.time()
+        print(f"[AGENT] === NEW REQUEST ===")
+        print(f"[AGENT] Query: {user_prompt[:100]}")
+
+        query_info = await self._classify_with_timeout(user_prompt)
         query_info["original_prompt"] = user_prompt
-        print(f"[Agent] Classified category: {query_info.get('category')} | filters: {query_info.get('filters', {})}")
-        market_data = await self._gather_data(query_info)
-        raw_response = self._ask_claude(user_prompt, market_data, history)
-        return self._parse_response(raw_response)
+        print(f"[AGENT] Classified as: {query_info.get('category')} | filters: {query_info.get('filters', {})} ({time.time() - start_time:.1f}s)")
+
+        market_data = await self._gather_data_safe(query_info)
+        print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
+
+        raw_response = await self._ask_claude_with_timeout(user_prompt, market_data, history)
+        print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
+
+        result = self._parse_response(raw_response)
+        print(f"[AGENT] Response parsed, display_type: {result.get('structured', {}).get('display_type', result.get('type', 'unknown'))} ({time.time() - start_time:.1f}s)")
+        return result
+
+    async def _classify_with_timeout(self, prompt: str) -> dict:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._classify_query, prompt),
+                timeout=10.0,
+            )
+        except (asyncio.TimeoutError, Exception) as e:
+            print(f"[AGENT] Classification failed/timed out: {e}, using keyword fallback")
+            return self._keyword_classify(prompt)
+
+    def _keyword_classify(self, query: str) -> dict:
+        q = query.lower()
+        if any(w in q for w in ["crypto", "bitcoin", "btc", "eth", "solana", "altcoin", "defi", "funding rate"]):
+            return {"category": "crypto"}
+        if any(w in q for w in ["macro", "fed", "interest rate", "inflation", "gdp", "economy", "dollar"]):
+            return {"category": "macro"}
+        if any(w in q for w in ["briefing", "morning", "daily brief", "intelligence"]):
+            return {"category": "briefing"}
+        if any(w in q for w in ["commodity", "commodities", "oil", "gold", "uranium", "copper", "natural gas"]):
+            return {"category": "commodities"}
+        if any(w in q for w in ["trending", "trend", "what's hot", "popular"]):
+            return {"category": "trending"}
+        if any(w in q for w in ["sector", "rotation", "stage 2", "weinstein"]):
+            return {"category": "sector_rotation"}
+        if any(w in q for w in ["squeeze", "short squeeze", "short interest", "short float"]):
+            return {"category": "squeeze"}
+        if any(w in q for w in ["invest", "long term", "best investment", "hold", "dividend"]):
+            return {"category": "investments"}
+        if any(w in q for w in ["earnings", "earnings watch", "reporting"]):
+            return {"category": "earnings"}
+        if any(w in q for w in ["portfolio", "watchlist", "review my"]):
+            return {"category": "portfolio_review"}
+        if any(w in q for w in ["screen", "screener", "filter", "scan for"]):
+            return {"category": "ai_screener"}
+        if any(w in q for w in ["bearish", "short", "puts", "downside"]):
+            return {"category": "bearish"}
+        if any(w in q for w in ["social", "stocktwits", "sentiment", "buzz"]):
+            return {"category": "social_momentum"}
+        if any(w in q for w in ["volume", "unusual volume", "volume spike"]):
+            return {"category": "volume_spikes"}
+        if any(w in q for w in ["asymmetric", "risk reward", "r/r"]):
+            return {"category": "asymmetric"}
+        if any(w in q for w in ["fundamental", "revenue growth", "improving"]):
+            return {"category": "fundamentals_scan"}
+        if any(w in q for w in ["trade", "best trade", "setup", "swing"]):
+            return {"category": "market_scan"}
+        return {"category": "market_scan"}
 
     def _classify_query(self, prompt: str) -> dict:
-        """Ask Claude to classify what kind of query this is."""
         try:
             response = self.client.messages.create(
                 model="claude-sonnet-4-5-20250929",
@@ -41,14 +98,38 @@ class TradingAgent:
                 ],
             )
             text = response.content[0].text.strip()
-            # Clean up any markdown formatting
             text = re.sub(r"```json\s*", "", text)
             text = re.sub(r"```\s*", "", text)
             return json.loads(text)
         except Exception as e:
-            print(f"Classification error: {e}")
-            # Default to market scan if classification fails
-            return {"category": "market_scan"}
+            print(f"[AGENT] Classification API error: {e}")
+            return self._keyword_classify(prompt)
+
+    async def _gather_data_safe(self, query_info: dict) -> dict:
+        try:
+            return await asyncio.wait_for(
+                self._gather_data(query_info),
+                timeout=45.0,
+            )
+        except asyncio.TimeoutError:
+            print("[AGENT] Data gathering timed out after 45s, returning partial data")
+            return {"error": "Data gathering timed out. Some sources may be slow."}
+        except Exception as e:
+            print(f"[AGENT] Data gathering error: {e}")
+            return {"error": f"Data gathering failed: {str(e)}"}
+
+    async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None) -> str:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._ask_claude, user_prompt, market_data, history),
+                timeout=60.0,
+            )
+        except asyncio.TimeoutError:
+            print("[AGENT] Claude API timed out after 60s")
+            return json.dumps({"display_type": "chat", "message": "The AI took too long to respond. Please try again — sometimes the model is under heavy load."})
+        except Exception as e:
+            print(f"[AGENT] Claude API error: {e}")
+            return json.dumps({"display_type": "chat", "message": f"Error reaching AI: {str(e)}"})
 
     async def _gather_data(self, query_info: dict) -> dict:
         """Fetch the appropriate data based on query classification."""

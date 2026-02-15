@@ -30,7 +30,7 @@ class OptionsScraper:
                 resp = await client.get(
                     "https://www.barchart.com/options/unusual-activity/stocks",
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
 
             if resp.status_code != 200:
@@ -68,7 +68,7 @@ class OptionsScraper:
                 resp = await client.get(
                     "https://www.barchart.com/options/volume-leaders/stocks",
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
 
             if resp.status_code != 200:
@@ -107,7 +107,7 @@ class OptionsScraper:
                 resp = await client.get(
                     f"https://www.barchart.com/stocks/quotes/{ticker}/put-call-ratios",
                     headers=self.HEADERS,
-                    timeout=15,
+                    timeout=10,
                 )
 
             if resp.status_code != 200:

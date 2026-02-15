@@ -68,6 +68,12 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-15: Added comprehensive timeout/reliability layer: 90s global request timeout, 10s classifier timeout with keyword fallback, 45s data gathering timeout, 60s Claude API timeout. All failures return valid JSON chat responses.
+- 2026-02-15: Removed Polygon retry logic on 429 (was causing 90s+ delays). Now returns empty immediately.
+- 2026-02-15: Reduced all provider HTTP timeouts (15s→10s, 20s→12s, Polygon 10s→8s) to prevent cascading delays.
+- 2026-02-15: Added /api/health smoke test endpoint that verifies Claude API connectivity.
+- 2026-02-15: Added keyword-based fallback classifier covering all 20+ query categories (no API call needed).
+- 2026-02-15: Added detailed timing logs at every pipeline step (classification, data gathering, Claude response, parsing).
 - 2026-02-15: Rewrote system prompt identity — "master trader" persona with 10 core principles (signal over noise, conviction-based filtering, macro-driven, opinionated, quality over quantity). Kept all 15 display_type format schemas intact.
 - 2026-02-15: Fixed AI Screener — root cause was max_tokens=4096 truncating screener JSON responses (~17K chars). Increased to 16384.
 - 2026-02-15: Rewrote _parse_response JSON parser — fixed nested JSON regex bug, added brace-depth counting, truncated JSON repair

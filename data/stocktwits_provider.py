@@ -18,7 +18,7 @@ class StockTwitsProvider:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
                     f"{self.BASE_URL}/streams/symbol/{ticker}.json",
-                    timeout=15,
+                    timeout=10,
                 )
             if resp.status_code != 200:
                 return {"ticker": ticker, "error": f"HTTP {resp.status_code}"}
@@ -84,7 +84,7 @@ class StockTwitsProvider:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
                     f"{self.BASE_URL}/trending/symbols.json",
-                    timeout=15,
+                    timeout=10,
                 )
             if resp.status_code != 200:
                 return []

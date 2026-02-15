@@ -28,7 +28,7 @@ class FMPProvider:
                 resp = await client.get(
                     f"{self.BASE_URL}/{endpoint}",
                     params=params,
-                    timeout=15,
+                    timeout=10,
                 )
             if resp.status_code != 200:
                 print(f"FMP error {resp.status_code}: {endpoint}")

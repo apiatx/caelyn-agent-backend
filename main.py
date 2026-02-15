@@ -76,6 +76,7 @@ async def query_agent(
     body: QueryRequest,
     api_key: str = Header(None, alias="X-API-Key"),
 ):
+    import asyncio
     if not api_key or api_key != AGENT_API_KEY:
         raise HTTPException(
             status_code=403,
@@ -83,16 +84,36 @@ async def query_agent(
         )
     print(f"[API] Received query: prompt={body.prompt[:100]}")
     try:
-        result = await agent.handle_query(
-            body.prompt,
-            history=[h.dict() for h in body.history] if body.history else None,
+        result = await asyncio.wait_for(
+            agent.handle_query(
+                body.prompt,
+                history=[h.dict() for h in body.history] if body.history else None,
+            ),
+            timeout=90.0,
         )
         return result
+    except asyncio.TimeoutError:
+        print("[API] Request timed out after 90s")
+        return {
+            "type": "chat",
+            "analysis": "",
+            "structured": {
+                "display_type": "chat",
+                "message": "Request timed out after 90 seconds. The data sources may be slow — please try again.",
+            },
+        }
     except Exception as e:
         import traceback
         print(f"[API] Error in /api/query: {e}")
         traceback.print_exc()
-        return {"error": str(e), "type": "chat", "analysis": f"Error: {str(e)}"}
+        return {
+            "type": "chat",
+            "analysis": "",
+            "structured": {
+                "display_type": "chat",
+                "message": f"Something went wrong: {str(e)}",
+            },
+        }
 
 
 @app.post("/api/cache/clear")
@@ -108,8 +129,25 @@ async def clear_cache(request: Request, api_key: str = Header(None, alias="X-API
 @app.get("/api/health")
 @limiter.limit("30/minute")
 async def health_check(request: Request):
-    """Detailed health check — tests if API keys are configured."""
-    return {
+    """Smoke test — verifies Claude API is reachable and responding."""
+    import asyncio
+    health = {
         "anthropic_key_set": bool(ANTHROPIC_API_KEY),
         "polygon_key_set": bool(POLYGON_API_KEY),
+        "api_working": False,
     }
+    try:
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                agent.client.messages.create,
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=50,
+                messages=[{"role": "user", "content": "Say 'ok' and nothing else."}],
+            ),
+            timeout=15.0,
+        )
+        health["api_working"] = True
+        health["claude_says"] = response.content[0].text.strip()
+    except Exception as e:
+        health["error"] = str(e)
+    return health
