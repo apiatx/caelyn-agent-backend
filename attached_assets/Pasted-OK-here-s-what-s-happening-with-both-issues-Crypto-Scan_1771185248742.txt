@@ -1,0 +1,282 @@
+OK, here's what's happening with both issues:
+Crypto Scanner (215K tokens > 200K limit): The crypto scanner pulls data from CoinGecko dashboard (~8 calls) + CMC dashboard (~8 calls) + deep dive for 10 coins + derivatives tickers + categories + news — ALL of that raw JSON gets dumped into the system prompt or user message. The raw API responses are enormous (full coin descriptions, long metadata, hundreds of derivatives tickers). It's blowing past the 200K context window.
+Macro Overview (infinite loading): Almost certainly the same root cause — the macro scan pulls FMP data, news sentiment, fear & greed, sector data, etc. The combined data payload is either too large (causing a 400 error the frontend doesn't handle) or the backend is timing out trying to fetch from too many sources.
+The fix is the same for both: truncate/compress the data BEFORE sending it to Claude. Give this to your backend Replit Agent:
+
+URGENT FIX: The agent is crashing because the data payloads sent to Claude are too large. The Crypto Scanner is hitting 215,080 tokens (limit is 200,000). Macro Overview is likely timing out or hitting the same limit. This needs to be fixed across ALL scan types.
+ROOT CAUSE
+When data is gathered from APIs (CoinGecko, CMC, Finviz, FMP, StockAnalysis, etc.), the raw JSON responses are being passed directly to Claude without truncation. Raw API responses contain massive amounts of unnecessary data — full coin descriptions (thousands of characters), URLs, image links, localization data, unused fields, hundreds of derivatives tickers, etc.
+FIX: Add a data compression/truncation layer
+STEP 1: Create a new file agent/data_compressor.py:
+python"""
+Compresses API data before sending to Claude to stay under token limits.
+Target: keep total data payload under 80,000 characters (~20K tokens),
+leaving room for the system prompt (~15K tokens) and response.
+"""
+import json
+
+
+MAX_TOTAL_CHARS = 80000  # ~20K tokens for data
+MAX_ARRAY_ITEMS = 15  # max items in any array
+MAX_STRING_LENGTH = 200  # max chars for any single string field
+MAX_DESCRIPTION_LENGTH = 100  # even shorter for descriptions
+
+
+# Fields to always strip (they waste tokens)
+STRIP_FIELDS = {
+    "image", "thumb", "small", "large", "logo", "icon",
+    "sparkline_in_7d", "sparkline", "roi",
+    "localization", "description",  # descriptions are huge and rarely needed
+    "links", "repos_url", "homepage", "blockchain_site",
+    "official_forum_url", "chat_url", "announcement_url",
+    "subreddit_url", "genesis_date", "ico_data",
+    "last_updated", "updated_at",
+    "platform", "contract_address",
+    "urls", "logo", "date_added",  # CMC fields
+    "notice", "tags",  # CMC tags can be very long
+    "slug",
+}
+
+# For coin detail deep dives, keep only these fields
+COIN_KEEP_FIELDS = {
+    "id", "symbol", "name", "market_cap_rank",
+    "market_data", "community_data", "developer_data",
+    "sentiment_votes_up_percentage", "sentiment_votes_down_percentage",
+    "watchlist_portfolio_users", "categories",
+}
+
+# For market_data inside coins, keep only these
+MARKET_DATA_KEEP = {
+    "current_price", "market_cap", "total_volume",
+    "price_change_percentage_24h", "price_change_percentage_7d",
+    "price_change_percentage_30d", "price_change_percentage_1y",
+    "ath", "ath_change_percentage", "atl", "atl_change_percentage",
+    "circulating_supply", "total_supply", "max_supply",
+    "fully_diluted_valuation",
+}
+
+
+def compress_data(data: dict, scan_type: str = "general") -> dict:
+    """Main entry point. Compress any scan data dict."""
+    if not isinstance(data, dict):
+        return data
+
+    compressed = {}
+    for key, value in data.items():
+        compressed[key] = _compress_value(value, key)
+
+    # Final safety check - if still too large, aggressively truncate
+    result_str = json.dumps(compressed, default=str)
+    if len(result_str) > MAX_TOTAL_CHARS:
+        compressed = _aggressive_truncate(compressed, MAX_TOTAL_CHARS)
+
+    return compressed
+
+
+def _compress_value(value, key=""):
+    """Recursively compress a value."""
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        if len(value) > MAX_STRING_LENGTH:
+            return value[:MAX_STRING_LENGTH] + "..."
+        return value
+
+    if isinstance(value, (int, float, bool)):
+        return value
+
+    if isinstance(value, list):
+        # Truncate long arrays
+        truncated = value[:MAX_ARRAY_ITEMS]
+        compressed_items = []
+        for item in truncated:
+            compressed_items.append(_compress_value(item, key))
+        return compressed_items
+
+    if isinstance(value, dict):
+        return _compress_dict(value, key)
+
+    return str(value)[:MAX_STRING_LENGTH]
+
+
+def _compress_dict(d: dict, parent_key: str = "") -> dict:
+    """Compress a dictionary by stripping unnecessary fields."""
+    result = {}
+    for k, v in d.items():
+        # Skip fields we know waste tokens
+        if k.lower() in STRIP_FIELDS:
+            continue
+
+        # Special handling for coin detail deep dives
+        if parent_key == "deep_dive" and isinstance(v, dict):
+            v = _compress_coin_detail(v)
+
+        # Special handling for market_data
+        if k == "market_data" and isinstance(v, dict):
+            v = {mk: mv for mk, mv in v.items() if mk in MARKET_DATA_KEEP}
+            # For price fields that are dicts with currency keys, keep only USD
+            for mk in list(v.keys()):
+                if isinstance(v[mk], dict) and "usd" in v[mk]:
+                    v[mk] = v[mk]["usd"]
+
+        # Special handling for community_data and developer_data
+        if k in ("community_data", "developer_data") and isinstance(v, dict):
+            v = {ck: cv for ck, cv in v.items() if cv is not None and cv != 0 and cv != ""}
+
+        # Recurse
+        result[k] = _compress_value(v, k)
+
+    return result
+
+
+def _compress_coin_detail(coin: dict) -> dict:
+    """Compress a CoinGecko coin detail to essential fields only."""
+    return {k: v for k, v in coin.items() if k in COIN_KEEP_FIELDS}
+
+
+def _aggressive_truncate(data: dict, max_chars: int) -> dict:
+    """If data is still too large, progressively remove the largest fields."""
+    result = dict(data)
+
+    # Find and truncate the largest fields first
+    for _ in range(10):  # max 10 passes
+        result_str = json.dumps(result, default=str)
+        if len(result_str) <= max_chars:
+            break
+
+        # Find the largest field
+        largest_key = None
+        largest_size = 0
+        for k, v in result.items():
+            size = len(json.dumps(v, default=str))
+            if size > largest_size:
+                largest_size = size
+                largest_key = k
+
+        if largest_key is None:
+            break
+
+        # Truncate the largest field
+        val = result[largest_key]
+        if isinstance(val, list) and len(val) > 5:
+            result[largest_key] = val[:5]
+            result[largest_key + "_note"] = f"Truncated from {len(val)} to 5 items"
+        elif isinstance(val, dict) and len(val) > 10:
+            keys = list(val.keys())[:10]
+            result[largest_key] = {k: val[k] for k in keys}
+        elif isinstance(val, str) and len(val) > 500:
+            result[largest_key] = val[:500] + "..."
+        else:
+            # Last resort: remove the field entirely
+            result[largest_key] = f"[removed - too large: {largest_size} chars]"
+
+    return result
+STEP 2: Apply compression in the agent before sending to Claude
+In agent/claude_agent.py, import the compressor:
+pythonfrom agent.data_compressor import compress_data
+Find where gathered data gets injected into the Claude message (in _gather_data or wherever the data dict is built into the prompt). BEFORE it gets sent to Claude, compress it:
+python# After data is gathered:
+raw_data = await self._gather_data(category, query)
+
+# Compress before sending to Claude
+from agent.data_compressor import compress_data
+compressed_data = compress_data(raw_data, scan_type=category)
+
+# Use compressed_data instead of raw_data in the Claude prompt
+STEP 3: Also add a hard character limit on the final prompt
+Wherever the final message to Claude is assembled (system prompt + user query + data), add a safety check:
+pythonimport json
+
+# After building the full data string that goes into the prompt
+data_str = json.dumps(compressed_data, default=str)
+
+# Hard limit: if data is STILL over 80K chars, truncate it
+if len(data_str) > 80000:
+    # Take first 80K chars and close the JSON
+    data_str = data_str[:80000] + '... [DATA TRUNCATED TO FIT CONTEXT WINDOW]"}'
+
+# Also check total prompt length (system + user message + data)
+# Claude's limit is ~200K tokens. Rough estimate: 4 chars = 1 token
+# Keep total under 600K chars to be safe (leaves room for response)
+total_prompt = system_prompt + user_message + data_str
+if len(total_prompt) > 600000:
+    # Truncate data further
+    allowed_data_chars = 600000 - len(system_prompt) - len(user_message) - 1000
+    if allowed_data_chars > 10000:
+        data_str = data_str[:allowed_data_chars] + '... [TRUNCATED]'
+    else:
+        data_str = '{"error": "Data too large, using reduced dataset"}'
+STEP 4: Trim the system prompt itself
+The system prompt in agent/prompts.py likely has a LOT of verbose example JSON blocks showing Claude what format to use. These take up thousands of tokens. Trim them:
+
+Remove any full JSON example that is longer than 30 lines — replace with a SHORT 5-10 line example
+Remove duplicate instructions (if you say "funding rates are important" in 3 places, keep only 1)
+Remove the lengthy preamble/tutorial sections about each API — Claude doesn't need to know CoinGecko's pricing plans or API documentation
+Keep ONLY the analysis instructions, signal hierarchy, and format schema
+
+Specifically search for and remove:
+
+Any text about "how to sign up for API keys"
+Any text about API rate limits or pricing tiers
+Any duplicated signal interpretation sections
+Any JSON examples longer than 20 lines (shorten them to 10 lines max)
+Any paragraphs explaining what each API endpoint does (Claude doesn't need this)
+
+A good system prompt for a trading agent should be 3,000-5,000 tokens MAX, not 15,000+.
+STEP 5: Reduce data fetched for crypto scanner specifically
+In data/market_data_service.py, in the get_crypto_scanner method, reduce the amount of raw data:
+python# Change these limits:
+# top_coins: 50 → 20
+# derivatives: all → 30 max (already done but verify)
+# categories: 15 → 10
+# deep_dive: 10 coins → 5 coins
+# cmc_listings: 30 → 15
+# new_listings: 20 → 10
+# most_visited: 20 → 10
+# trending: keep as-is (usually small)
+STEP 6: Add error handling for 400 responses in the frontend
+In the frontend, wherever the API response is handled, check for error responses and show a user-friendly message instead of infinite loading:
+javascript// After fetch call
+if (!response.ok) {
+  const errorData = await response.json().catch(() => ({}));
+  const errorMsg = errorData?.error?.message || errorData?.message || `Error ${response.status}`;
+  
+  // Show error to user instead of spinning forever
+  setMessages(prev => [...prev, {
+    role: 'assistant',
+    content: JSON.stringify({
+      display_type: 'chat',
+      message: `Sorry, I hit an error: ${errorMsg}. Try again or use a different scan.`
+    })
+  }]);
+  setIsLoading(false);
+  return;
+}
+STEP 7: Add timeout handling
+Add a timeout to the fetch call so it doesn't spin forever:
+javascriptconst controller = new AbortController();
+const timeout = setTimeout(() => controller.abort(), 120000); // 2 min timeout
+
+try {
+  const response = await fetch('/api/query', {
+    ...options,
+    signal: controller.signal,
+  });
+  clearTimeout(timeout);
+  // ... handle response
+} catch (err) {
+  clearTimeout(timeout);
+  if (err.name === 'AbortError') {
+    // Show timeout message
+    setMessages(prev => [...prev, {
+      role: 'assistant',
+      content: JSON.stringify({
+        display_type: 'chat',
+        message: 'Request timed out after 2 minutes. The market data sources may be slow. Please try again.'
+      })
+    }]);
+  }
+  setIsLoading(false);
+}
+Re-deploy after all changes.

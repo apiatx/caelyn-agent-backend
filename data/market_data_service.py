@@ -233,7 +233,7 @@ class MarketDataService:
 
         fear_greed = await self.fear_greed.get_fear_greed_index()
 
-        commodity_news = self.polygon.get_news(limit=15)
+        commodity_news = self.polygon.get_news(limit=8)
 
         commodity_etfs = ["USO", "GLD", "SLV", "URA", "UNG", "COPX", "GDX", "XLE"]
         async def get_etf_ta(ticker):
@@ -1627,7 +1627,7 @@ class MarketDataService:
                 }
                 for t, d in ranked[:15]
             ],
-            "enriched_data": {t: d for t, d in ranked[:12]},
+            "enriched_data": {t: d for t, d in ranked[:10]},
             "market_movers": movers,
             "fear_greed": fear_greed,
             "fred_macro": fred_macro,
@@ -2033,33 +2033,33 @@ class MarketDataService:
 
         deep_dive_ids = []
         if isinstance(cg_trending_data, dict):
-            for coin in cg_trending_data.get("coins", [])[:6]:
+            for coin in cg_trending_data.get("coins", [])[:4]:
                 cid = coin.get("item", {}).get("id")
                 if cid:
                     deep_dive_ids.append(cid)
 
         cg_gl = cg.get("gainers_losers", {})
         if isinstance(cg_gl, dict):
-            for g in (cg_gl.get("gainers") or [])[:4]:
+            for g in (cg_gl.get("gainers") or [])[:1]:
                 cid = g.get("id")
                 if cid and cid not in deep_dive_ids:
                     deep_dive_ids.append(cid)
 
         deep_dive = {}
         if deep_dive_ids and self.coingecko:
-            deep_dive = await self.coingecko.get_coin_deep_dive(deep_dive_ids[:10])
+            deep_dive = await self.coingecko.get_coin_deep_dive(deep_dive_ids[:5])
 
         derivatives = cg.get("derivatives", [])
         funding_analysis = self._analyze_funding_rates(derivatives) if derivatives else {}
 
-        cg_categories = (cg.get("categories") or [])[:15]
-        cmc_categories = (cmc.get("categories") or [])[:15]
+        cg_categories = (cg.get("categories") or [])[:10]
+        cmc_categories = (cmc.get("categories") or [])[:10]
 
-        new_listings = cmc.get("new_listings", [])
+        new_listings = (cmc.get("new_listings") or [])[:10]
 
         cmc_gainers_losers = cmc.get("gainers_losers", {})
 
-        trending_symbols = list(dual_trending | high_attention)[:15]
+        trending_symbols = list(dual_trending | high_attention)[:10]
         coin_metadata = {}
         if trending_symbols and self.cmc:
             try:
@@ -2071,12 +2071,12 @@ class MarketDataService:
             "cg_global": cg.get("global_market", {}),
             "cmc_global": cmc.get("global_metrics", {}),
 
-            "cg_top_coins": cg.get("top_coins", []),
-            "cmc_listings": (cmc.get("listings") or [])[:30],
+            "cg_top_coins": (cg.get("top_coins") or [])[:20],
+            "cmc_listings": (cmc.get("listings") or [])[:15],
 
             "cg_trending": cg_trending_data,
             "cmc_trending": cmc.get("trending", []),
-            "cmc_most_visited": cmc.get("most_visited", []),
+            "cmc_most_visited": (cmc.get("most_visited") or [])[:10],
             "dual_trending": list(dual_trending),
             "high_attention": list(high_attention),
 
@@ -2089,7 +2089,7 @@ class MarketDataService:
             "cg_categories": cg_categories,
             "cmc_categories": cmc_categories,
 
-            "volume_acceleration": volume_acceleration,
+            "volume_acceleration": dict(sorted(volume_acceleration.items(), key=lambda x: abs(x[1].get("volume_change_24h", 0)), reverse=True)[:15]),
 
             "new_listings": new_listings,
 

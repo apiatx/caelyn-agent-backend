@@ -40,7 +40,7 @@ class CoinGeckoProvider:
             print(f"CoinGecko request failed ({endpoint}): {e}")
             return []
 
-    async def get_top_coins(self, limit: int = 50) -> list:
+    async def get_top_coins(self, limit: int = 25) -> list:
         return await self._get("coins/markets", {
             "vs_currency": "usd",
             "order": "market_cap_desc",
@@ -84,15 +84,15 @@ class CoinGeckoProvider:
         })
 
     async def get_top_gainers_losers(self) -> dict:
-        coins = await self.get_top_coins(100)
+        coins = await self.get_top_coins(50)
         if not coins:
             return {"gainers": [], "losers": []}
 
         valid = [c for c in coins if c.get("price_change_percentage_24h") is not None]
         sorted_coins = sorted(valid, key=lambda x: x.get("price_change_percentage_24h", 0), reverse=True)
 
-        gainers = sorted_coins[:15]
-        losers = sorted_coins[-15:][::-1]
+        gainers = sorted_coins[:10]
+        losers = sorted_coins[-10:][::-1]
 
         return {"gainers": gainers, "losers": losers}
 
@@ -102,7 +102,7 @@ class CoinGeckoProvider:
         global_data, top_coins, trending, derivatives, categories, gainers_losers = (
             await asyncio.gather(
                 self.get_global_market(),
-                self.get_top_coins(50),
+                self.get_top_coins(25),
                 self.get_trending(),
                 self.get_derivatives_tickers(),
                 self.get_categories(),
@@ -123,11 +123,11 @@ class CoinGeckoProvider:
     async def get_coin_deep_dive(self, coin_ids: list) -> dict:
         import asyncio
         results = await asyncio.gather(
-            *[self.get_coin_detail(cid) for cid in coin_ids[:10]],
+            *[self.get_coin_detail(cid) for cid in coin_ids[:5]],
             return_exceptions=True,
         )
         enriched = {}
-        for coin_id, result in zip(coin_ids[:10], results):
+        for coin_id, result in zip(coin_ids[:5], results):
             if not isinstance(result, Exception) and isinstance(result, dict):
                 enriched[coin_id] = result
         return enriched

@@ -56,7 +56,7 @@ class CMCProvider:
             print(f"CMC request failed ({endpoint}): {e}")
             return {}
 
-    async def get_listings_latest(self, limit: int = 50) -> list:
+    async def get_listings_latest(self, limit: int = 30) -> list:
         """
         Top coins by market cap with latest market data.
         Returns: price, volume_24h, volume_change_24h, % changes (1h, 24h, 7d, 30d, 90d),

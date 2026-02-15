@@ -3,6 +3,7 @@ import re
 
 import anthropic
 
+from agent.data_compressor import compress_data
 from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT
 from data.market_data_service import MarketDataService
 
@@ -295,7 +296,24 @@ class TradingAgent:
 
     def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None) -> str:
         """Send the user's question + market data to Claude with conversation history."""
-        data_str = json.dumps(market_data, indent=2, default=str)
+        compressed = compress_data(market_data)
+        data_str = json.dumps(compressed, default=str)
+        raw_size = len(json.dumps(market_data, default=str))
+        print(f"[Agent] Data compression: {raw_size:,} → {len(data_str):,} chars ({100 - len(data_str)*100//max(raw_size,1)}% reduction)")
+
+        if len(data_str) > 80000:
+            from agent.data_compressor import _aggressive_truncate
+            compressed = _aggressive_truncate(compressed, 75000)
+            data_str = json.dumps(compressed, default=str)
+            print(f"[Agent] WARNING: Data still over 80K after initial compression, aggressive truncation → {len(data_str):,}")
+
+        total_prompt_len = len(SYSTEM_PROMPT) + len(user_prompt) + len(data_str)
+        if total_prompt_len > 600000:
+            allowed = max(10000, 600000 - len(SYSTEM_PROMPT) - len(user_prompt) - 1000)
+            from agent.data_compressor import _aggressive_truncate
+            compressed = _aggressive_truncate(compressed, allowed)
+            data_str = json.dumps(compressed, default=str)
+            print(f"[Agent] WARNING: Total prompt was {total_prompt_len:,} chars, re-truncated data to {len(data_str):,}")
 
         filters = market_data.get("user_filters", {})
         filter_instructions = ""
