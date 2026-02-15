@@ -126,6 +126,26 @@ class TradingAgent:
         elif category == "commodities":
             return await self.data.get_commodities_dashboard()
 
+        elif category == "portfolio_review":
+            tickers = query_info.get("tickers", [])
+            if not tickers:
+                import re
+                ticker_pattern = re.findall(r'\b([A-Z]{1,5})\b', query_info.get("original_prompt", ""))
+                common_words = {"I", "A", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
+                               "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON", "OR",
+                               "SO", "TO", "UP", "US", "WE", "THE", "AND", "FOR", "ARE",
+                               "BUT", "NOT", "YOU", "ALL", "CAN", "HAD", "HER", "WAS",
+                               "ONE", "OUR", "OUT", "HAS", "HIS", "HOW", "ITS", "MAY",
+                               "NEW", "NOW", "OLD", "SEE", "WAY", "WHO", "DID", "GET",
+                               "HIM", "LET", "SAY", "SHE", "TOO", "USE", "BUY", "SELL",
+                               "HOLD", "LONG", "SHORT", "PUT", "CALL", "ETF", "IPO",
+                               "CEO", "CFO", "COO", "EPS", "GDP", "CPI", "FED", "SEC",
+                               "FDA", "RSI", "SMA", "ATH", "ATL", "YOY", "QOQ", "EBITDA",
+                               "NYSE", "SHOW", "GIVE", "BEST", "WHAT", "WHICH", "RATE",
+                               "FULL", "HIGH", "LOW", "TOP"}
+                tickers = [t for t in ticker_pattern if t not in common_words][:25]
+            return await self.data.analyze_portfolio(tickers)
+
         else:
             # General question — still provide some market context
             return {

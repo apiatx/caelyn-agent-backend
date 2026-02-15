@@ -1,0 +1,221 @@
+The simplest approach is the best here — just let the agent accept a list of tickers and run the full analysis pipeline on all of them. No database, no persistent storage, no extra infrastructure.
+You have three free options:
+Option 1: Just type them in the chat. You already can do this. Type "Analyze NVDA, AMD, SMCI, CCJ, UEC, SMR" and the agent should analyze each one. The problem is it currently routes to ticker_analysis which only does a deep dive on one stock. It doesn't batch-analyze 10-25 tickers with comparative ranking.
+Option 2: A dedicated "Portfolio Review" button with a text input for tickers. Click the button, a small input appears, paste your tickers, it runs the full pipeline on all of them and returns a ranked table with Strong Buy / Buy / Hold / Sell / Short ratings plus the data backing each rating.
+Option 3: Hardcode your current portfolio in the system prompt. You update it when positions change. The agent always knows what you hold. The downside is you have to redeploy the backend every time you change a position.
+Option 2 is the right answer. Here's why — it gives you a dedicated workflow that scores all your tickers against each other using the same scoring engine, shows you which positions are strengthening and which are weakening, and doesn't require any persistent storage or database.
+Here's the implementation — this is two separate prompts, backend first, then frontend:
+
+PROMPT 1 — BACKEND Repl
+Please make ALL of the following changes. Do not delete or modify any existing code unless I specifically say "replace."
+PART 1: Add Multi-Ticker Analysis Method
+In data/market_data_service.py, add this method to the class:
+python    async def analyze_portfolio(self, tickers: list) -> dict:
+        """
+        Full analysis pipeline for a user-provided list of tickers (up to 25).
+        Fetches all data sources for every ticker, scores each one,
+        and ranks them for portfolio decision-making.
+        """
+        import asyncio
+        from data.scoring_engine import score_for_trades, score_for_investments
+
+        # Cap at 25 tickers
+        tickers = [t.upper().strip() for t in tickers[:25] if t.strip()]
+
+        async def full_enrich(ticker):
+            try:
+                # Polygon data (sync calls)
+                snapshot = self.polygon.get_snapshot(ticker)
+                technicals = self.polygon.get_technicals(ticker)
+                details = self.polygon.get_ticker_details(ticker)
+
+                # Async calls in parallel
+                st_result, overview, analyst, insider, earnings, recommendations, news_sent = (
+                    await asyncio.gather(
+                        self.stocktwits.get_sentiment(ticker),
+                        self.stockanalysis.get_overview(ticker),
+                        self.stockanalysis.get_analyst_ratings(ticker),
+                        asyncio.to_thread(lambda: self.finnhub.get_insider_sentiment(ticker)),
+                        asyncio.to_thread(lambda: self.finnhub.get_earnings_surprises(ticker)),
+                        asyncio.to_thread(lambda: self.finnhub.get_recommendation_trends(ticker)),
+                        self.alphavantage.get_news_sentiment(ticker),
+                        return_exceptions=True,
+                    )
+                )
+
+                return {
+                    "snapshot": snapshot,
+                    "technicals": technicals,
+                    "details": details,
+                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
+                    "overview": overview if not isinstance(overview, Exception) else {},
+                    "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
+                    "insider_sentiment": insider if not isinstance(insider, Exception) else {},
+                    "earnings_history": earnings if not isinstance(earnings, Exception) else [],
+                    "recommendations": recommendations if not isinstance(recommendations, Exception) else [],
+                    "news_sentiment": news_sent if not isinstance(news_sent, Exception) else {},
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        # Enrich all tickers in parallel
+        results = await asyncio.gather(
+            *[full_enrich(t) for t in tickers],
+            return_exceptions=True,
+        )
+
+        # Score each ticker on both trading and investment metrics
+        enriched = {}
+        for ticker, result in zip(tickers, results):
+            if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
+                enriched[ticker] = {"error": "Failed to fetch data"}
+                continue
+
+            trade_score = score_for_trades(result)
+            invest_score = score_for_investments(result)
+            # Combined score: 40% investment quality + 40% trade setup + 20% average
+            combined = round((invest_score * 0.4) + (trade_score * 0.4) + ((invest_score + trade_score) / 2 * 0.2), 1)
+
+            result["trade_score"] = trade_score
+            result["invest_score"] = invest_score
+            result["combined_score"] = combined
+            enriched[ticker] = result
+
+        # Sort by combined score
+        ranked = sorted(
+            [(t, d) for t, d in enriched.items() if "error" not in d],
+            key=lambda x: x[1].get("combined_score", 0),
+            reverse=True,
+        )
+
+        # Get macro context
+        fear_greed = {}
+        try:
+            fear_greed = await self.fear_greed.get_fear_greed_index()
+        except:
+            pass
+
+        # Get SPY benchmark for relative strength
+        spy_data = {}
+        try:
+            spy_data = {
+                "snapshot": self.polygon.get_snapshot("SPY"),
+                "technicals": self.polygon.get_technicals("SPY"),
+            }
+        except:
+            pass
+
+        return {
+            "tickers_analyzed": len(tickers),
+            "ranked_tickers": [
+                {"ticker": t, "combined_score": d.get("combined_score", 0),
+                 "trade_score": d.get("trade_score", 0),
+                 "invest_score": d.get("invest_score", 0)}
+                for t, d in ranked
+            ],
+            "enriched_data": enriched,
+            "spy_benchmark": spy_data,
+            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+            "macro": self.fred.get_quick_macro(),
+        }
+PART 2: Add Portfolio Route in Agent
+In agent/claude_agent.py, find the _gather_data method. Add this block after the existing elif blocks (before the final else):
+python        elif category == "portfolio_review":
+            tickers = query_info.get("tickers", [])
+            if not tickers:
+                # Try to extract tickers from the prompt
+                import re
+                ticker_pattern = re.findall(r'\b([A-Z]{1,5})\b', query_info.get("original_prompt", ""))
+                # Filter out common words that look like tickers
+                common_words = {"I", "A", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
+                               "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON", "OR",
+                               "SO", "TO", "UP", "US", "WE", "THE", "AND", "FOR", "ARE",
+                               "BUT", "NOT", "YOU", "ALL", "CAN", "HAD", "HER", "WAS",
+                               "ONE", "OUR", "OUT", "HAS", "HIS", "HOW", "ITS", "MAY",
+                               "NEW", "NOW", "OLD", "SEE", "WAY", "WHO", "DID", "GET",
+                               "HIM", "LET", "SAY", "SHE", "TOO", "USE", "BUY", "SELL",
+                               "HOLD", "LONG", "SHORT", "PUT", "CALL", "ETF", "IPO",
+                               "CEO", "CFO", "COO", "EPS", "GDP", "CPI", "FED", "SEC",
+                               "FDA", "RSI", "SMA", "ATH", "ATL", "YOY", "QOQ", "EBITDA",
+                               "NYSE", "SHOW", "GIVE", "BEST", "WHAT", "WHICH", "RATE",
+                               "FULL", "HIGH", "LOW", "TOP"}
+                tickers = [t for t in ticker_pattern if t not in common_words][:25]
+            return await self.data.analyze_portfolio(tickers)
+```
+
+### PART 3: Add Portfolio Category to Classifier
+
+**In `agent/prompts.py`, in the `QUERY_CLASSIFIER_PROMPT`, add this line after the existing categories:**
+```
+- "portfolio_review": User provides a list of tickers and wants them all analyzed, rated, and ranked. Also triggered by "review my portfolio", "analyze these stocks", "rate these tickers", "rank my holdings". Extract all tickers mentioned.
+```
+
+### PART 4: Add Portfolio Display Format to System Prompt
+
+**In `agent/prompts.py`, find the format definitions section. Add this right BEFORE the `### FORMAT 7: "chat"` section:**
+```
+### FORMAT: "portfolio" — Portfolio / Multi-Ticker Review
+Use when: user provides a list of tickers and wants them all analyzed and ranked.
+
+Each ticker gets a RATING based on the combined quantitative score + your qualitative assessment:
+- **Strong Buy** (80-100 combined score + strong qualitative): Multiple indicators aligned, clear catalyst, strong trend, asymmetric R/R
+- **Buy** (60-79 combined score + positive qualitative): Good setup, most indicators positive, reasonable entry
+- **Hold** (40-59 combined score + mixed qualitative): Mixed signals, no clear edge either direction, maintain position if already in
+- **Sell** (20-39 combined score + negative qualitative): Deteriorating technicals or fundamentals, better to exit and reallocate
+- **Short** (0-19 combined score + bearish qualitative): Stage 3/4 breakdown, deteriorating fundamentals, high conviction downside
+
+You CAN override the quant score with your qualitative assessment. A stock with a 70 quant score but terrible fundamentals can be rated "Hold" or "Sell". A stock with a 45 quant score but a massive upcoming catalyst can be rated "Buy". Explain why if you override.
+```json
+{
+  "display_type": "portfolio",
+  "summary": "Reviewed 12 positions. 3 Strong Buy, 4 Buy, 3 Hold, 1 Sell, 1 Short. Portfolio is overweight AI/semiconductors (65% exposure). Suggest trimming SMCI and adding energy exposure.",
+  "spy_context": {
+    "price": "$520",
+    "change": "+0.8%",
+    "trend": "Stage 2 uptrend"
+  },
+  "positions": [
+    {
+      "ticker": "NVDA",
+      "company": "NVIDIA Corporation",
+      "price": "$875.30",
+      "change": "+2.1%",
+      "market_cap": "$2.1T",
+      "rating": "Strong Buy",
+      "combined_score": 85,
+      "trade_score": 82,
+      "invest_score": 88,
+      "thesis": "Dominant AI infrastructure position. Revenue accelerating +94% YoY. EBITDA margins expanding to 65%. Stage 2 uptrend with volume confirmation.",
+      "ta_summary": "RSI 62 | Above all SMAs | MACD bullish | Volume 1.2x avg",
+      "fundamental_summary": "Rev +94% YoY | EBITDA 65% | Beat 6/6 Qs | P/E 45x",
+      "sentiment": "72% bullish | High buzz",
+      "insider_activity": "Routine 10b5-1 selling (not concerning)",
+      "key_risk": "Export restrictions to China. Valuation stretched at 45x PE.",
+      "action": "Hold full position. Add on pullbacks to $840 (SMA 20).",
+      "relative_strength": "Outperforming SPY by +8% over 30 days"
+    }
+  ],
+  "portfolio_insights": {
+    "sector_concentration": "Technology 65%, Energy 15%, Healthcare 10%, Cash 10%",
+    "risk_flags": ["Heavy AI concentration — if semis correct, portfolio takes a big hit", "No defensive positions"],
+    "suggested_actions": [
+      "Trim SMCI (Hold rating) — weakest name in AI basket",
+      "Add CCJ or UEC — uranium provides uncorrelated upside",
+      "Consider 5% allocation to GLD as macro hedge"
+    ]
+  }
+}
+```
+
+RULES FOR PORTFOLIO FORMAT:
+- Every position MUST get a rating: Strong Buy, Buy, Hold, Sell, or Short
+- Sort positions by rating (Strong Buy first, then Buy, Hold, Sell, Short)
+- Within each rating tier, sort by combined_score descending
+- Every position MUST have: thesis, ta_summary, fundamental_summary, sentiment, key_risk, action
+- ta_summary should be one line: "RSI X | Above/Below SMAs | MACD bullish/bearish | Volume Xx avg"
+- fundamental_summary should be one line: "Rev +X% | EBITDA X% | Beat X/4 Qs | P/E Xx"
+- Include relative_strength vs SPY for each position
+- portfolio_insights MUST include sector_concentration, risk_flags, and suggested_actions
+- If the user has more than 12 positions concentrated in one sector, flag it
+- If any position is rated Sell or Short, explain why and what to replace it with
+Re-publish/deploy the backend.

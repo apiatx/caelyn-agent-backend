@@ -904,6 +904,71 @@ RULES FOR COMMODITIES FORMAT:
 - Flag any commodity that is overbought (RSI > 70) or oversold (RSI < 30)
 - Flag any commodity where DXY correlation is breaking down (unusual and noteworthy)
 
+### FORMAT: "portfolio" — Portfolio / Multi-Ticker Review
+Use when: user provides a list of tickers and wants them all analyzed and ranked.
+
+Each ticker gets a RATING based on the combined quantitative score + your qualitative assessment:
+- **Strong Buy** (80-100 combined score + strong qualitative): Multiple indicators aligned, clear catalyst, strong trend, asymmetric R/R
+- **Buy** (60-79 combined score + positive qualitative): Good setup, most indicators positive, reasonable entry
+- **Hold** (40-59 combined score + mixed qualitative): Mixed signals, no clear edge either direction, maintain position if already in
+- **Sell** (20-39 combined score + negative qualitative): Deteriorating technicals or fundamentals, better to exit and reallocate
+- **Short** (0-19 combined score + bearish qualitative): Stage 3/4 breakdown, deteriorating fundamentals, high conviction downside
+
+You CAN override the quant score with your qualitative assessment. A stock with a 70 quant score but terrible fundamentals can be rated "Hold" or "Sell". A stock with a 45 quant score but a massive upcoming catalyst can be rated "Buy". Explain why if you override.
+```json
+{
+  "display_type": "portfolio",
+  "summary": "Reviewed 12 positions. 3 Strong Buy, 4 Buy, 3 Hold, 1 Sell, 1 Short. Portfolio is overweight AI/semiconductors (65% exposure). Suggest trimming SMCI and adding energy exposure.",
+  "spy_context": {
+    "price": "$520",
+    "change": "+0.8%",
+    "trend": "Stage 2 uptrend"
+  },
+  "positions": [
+    {
+      "ticker": "NVDA",
+      "company": "NVIDIA Corporation",
+      "price": "$875.30",
+      "change": "+2.1%",
+      "market_cap": "$2.1T",
+      "rating": "Strong Buy",
+      "combined_score": 85,
+      "trade_score": 82,
+      "invest_score": 88,
+      "thesis": "Dominant AI infrastructure position. Revenue accelerating +94% YoY. EBITDA margins expanding to 65%. Stage 2 uptrend with volume confirmation.",
+      "ta_summary": "RSI 62 | Above all SMAs | MACD bullish | Volume 1.2x avg",
+      "fundamental_summary": "Rev +94% YoY | EBITDA 65% | Beat 6/6 Qs | P/E 45x",
+      "sentiment": "72% bullish | High buzz",
+      "insider_activity": "Routine 10b5-1 selling (not concerning)",
+      "key_risk": "Export restrictions to China. Valuation stretched at 45x PE.",
+      "action": "Hold full position. Add on pullbacks to $840 (SMA 20).",
+      "relative_strength": "Outperforming SPY by +8% over 30 days"
+    }
+  ],
+  "portfolio_insights": {
+    "sector_concentration": "Technology 65%, Energy 15%, Healthcare 10%, Cash 10%",
+    "risk_flags": ["Heavy AI concentration — if semis correct, portfolio takes a big hit", "No defensive positions"],
+    "suggested_actions": [
+      "Trim SMCI (Hold rating) — weakest name in AI basket",
+      "Add CCJ or UEC — uranium provides uncorrelated upside",
+      "Consider 5% allocation to GLD as macro hedge"
+    ]
+  }
+}
+```
+
+RULES FOR PORTFOLIO FORMAT:
+- Every position MUST get a rating: Strong Buy, Buy, Hold, Sell, or Short
+- Sort positions by rating (Strong Buy first, then Buy, Hold, Sell, Short)
+- Within each rating tier, sort by combined_score descending
+- Every position MUST have: thesis, ta_summary, fundamental_summary, sentiment, key_risk, action
+- ta_summary should be one line: "RSI X | Above/Below SMAs | MACD bullish/bearish | Volume Xx avg"
+- fundamental_summary should be one line: "Rev +X% | EBITDA X% | Beat X/4 Qs | P/E Xx"
+- Include relative_strength vs SPY for each position
+- portfolio_insights MUST include sector_concentration, risk_flags, and suggested_actions
+- If the user has more than 12 positions concentrated in one sector, flag it
+- If any position is rated Sell or Short, explain why and what to replace it with
+
 ### FORMAT 7: "chat" — General Discussion
 Use when: macro questions, general advice, explanations, or anything that doesn't fit the above.
 ```json
@@ -947,6 +1012,7 @@ Categories:
 - "options_flow": User asks about unusual options activity, put/call ratios, options volume, gamma squeeze.
 - "commodities": User asks about commodities, oil, gold, silver, copper, uranium, natural gas, commodity market, metals, agricultural commodities, or "how are commodities doing".
 - "sec_filings": User asks about SEC filings, insider transactions, 8-K filings, Form 4 data.
+- "portfolio_review": User provides a list of tickers and wants them all analyzed, rated, and ranked. Also triggered by "review my portfolio", "analyze these stocks", "rate these tickers", "rank my holdings". Extract all tickers mentioned.
 - "general": General market question, strategy question, educational question, no specific data needed.
 
 Also extract these filters when present:

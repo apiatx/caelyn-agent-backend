@@ -1236,6 +1236,106 @@ class MarketDataService:
             "market_news": self.polygon.get_news(limit=10),
         }
 
+    async def analyze_portfolio(self, tickers: list) -> dict:
+        """
+        Full analysis pipeline for a user-provided list of tickers (up to 25).
+        Fetches all data sources for every ticker, scores each one,
+        and ranks them for portfolio decision-making.
+        """
+        import asyncio
+        from data.scoring_engine import score_for_trades, score_for_investments
+
+        tickers = [t.upper().strip() for t in tickers[:25] if t.strip()]
+
+        async def full_enrich(ticker):
+            try:
+                snapshot = self.polygon.get_snapshot(ticker)
+                technicals = self.polygon.get_technicals(ticker)
+                details = self.polygon.get_ticker_details(ticker)
+
+                st_result, overview, analyst, insider, earnings, recommendations, news_sent = (
+                    await asyncio.gather(
+                        self.stocktwits.get_sentiment(ticker),
+                        self.stockanalysis.get_overview(ticker),
+                        self.stockanalysis.get_analyst_ratings(ticker),
+                        asyncio.to_thread(lambda: self.finnhub.get_insider_sentiment(ticker)),
+                        asyncio.to_thread(lambda: self.finnhub.get_earnings_surprises(ticker)),
+                        asyncio.to_thread(lambda: self.finnhub.get_recommendation_trends(ticker)),
+                        self.alphavantage.get_news_sentiment(ticker),
+                        return_exceptions=True,
+                    )
+                )
+
+                return {
+                    "snapshot": snapshot,
+                    "technicals": technicals,
+                    "details": details,
+                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
+                    "overview": overview if not isinstance(overview, Exception) else {},
+                    "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
+                    "insider_sentiment": insider if not isinstance(insider, Exception) else {},
+                    "earnings_history": earnings if not isinstance(earnings, Exception) else [],
+                    "recommendations": recommendations if not isinstance(recommendations, Exception) else [],
+                    "news_sentiment": news_sent if not isinstance(news_sent, Exception) else {},
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        results = await asyncio.gather(
+            *[full_enrich(t) for t in tickers],
+            return_exceptions=True,
+        )
+
+        enriched = {}
+        for ticker, result in zip(tickers, results):
+            if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
+                enriched[ticker] = {"error": "Failed to fetch data"}
+                continue
+
+            trade_score = score_for_trades(result)
+            invest_score = score_for_investments(result)
+            combined = round((invest_score * 0.4) + (trade_score * 0.4) + ((invest_score + trade_score) / 2 * 0.2), 1)
+
+            result["trade_score"] = trade_score
+            result["invest_score"] = invest_score
+            result["combined_score"] = combined
+            enriched[ticker] = result
+
+        ranked = sorted(
+            [(t, d) for t, d in enriched.items() if "error" not in d],
+            key=lambda x: x[1].get("combined_score", 0),
+            reverse=True,
+        )
+
+        fear_greed = {}
+        try:
+            fear_greed = await self.fear_greed.get_fear_greed_index()
+        except:
+            pass
+
+        spy_data = {}
+        try:
+            spy_data = {
+                "snapshot": self.polygon.get_snapshot("SPY"),
+                "technicals": self.polygon.get_technicals("SPY"),
+            }
+        except:
+            pass
+
+        return {
+            "tickers_analyzed": len(tickers),
+            "ranked_tickers": [
+                {"ticker": t, "combined_score": d.get("combined_score", 0),
+                 "trade_score": d.get("trade_score", 0),
+                 "invest_score": d.get("invest_score", 0)}
+                for t, d in ranked
+            ],
+            "enriched_data": enriched,
+            "spy_benchmark": spy_data,
+            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+            "macro": self.fred.get_quick_macro(),
+        }
+
     async def get_small_cap_spec(self) -> dict:
         """
         Speculative small cap scanner: high volatility, increasing volume,
