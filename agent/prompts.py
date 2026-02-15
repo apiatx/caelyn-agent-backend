@@ -346,6 +346,7 @@ would be most relevant. Reply with ONLY a JSON object, nothing else.
 Categories:
 - "ticker_analysis": User is asking about specific stock(s). Extract the ticker(s).
 - "market_scan": User wants broad market overview, best trades, top movers.
+- "dashboard": User asks for a full dashboard, overview of opportunities, "what should I trade", "show me everything", or asks to see TA setups AND fundamentals AND social buzz together.
 - "unusual_volume": User asks about volume spikes or unusual activity.
 - "oversold": User asks about oversold stocks or bounce plays.
 - "overbought": User asks about overbought stocks or short candidates.

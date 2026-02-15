@@ -61,6 +61,9 @@ class TradingAgent:
         elif category == "market_scan":
             return await self.data.scan_market()
 
+        elif category == "dashboard":
+            return await self.data.get_dashboard()
+
         elif category == "unusual_volume":
             return await self.data.get_unusual_volume()
 
