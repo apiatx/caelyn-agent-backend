@@ -1,0 +1,189 @@
+URGENT: The agent is completely broken. Multiple API failures are cascading. Please diagnose and fix ALL of the following:
+1. Polygon API returning NOT_AUTHORIZED
+Check the Polygon API key in the secrets/environment variables. Print it (first 5 chars only) to verify it exists. Then make a test call:
+pythonimport requests
+key = os.getenv("POLYGON_API_KEY")
+print(f"Polygon key exists: {bool(key)}, starts with: {key[:5] if key else 'NONE'}")
+resp = requests.get(f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/AAPL?apiKey={key}")
+print(f"Status: {resp.status_code}, Response: {resp.text[:200]}")
+If the key is valid but returning NOT_AUTHORIZED, it likely means the free tier doesn't support the snapshot endpoint. In that case, we need to replace get_snapshot with an endpoint that DOES work on the free tier. The free Polygon tier supports:
+
+/v2/aggs/ticker/{ticker}/prev (previous day close — this works on free tier)
+/v3/reference/tickers/{ticker} (ticker details — works on free tier)
+/v2/aggs/ticker/{ticker}/range/1/day/{from}/{to} (daily bars — works on free tier)
+
+If the snapshot endpoint is failing, replace the get_snapshot method to use the previous day endpoint instead:
+pythondef get_snapshot(self, ticker: str) -> dict:
+    """Get latest price data using previous day endpoint (works on free tier)."""
+    cache_key = f"polygon:snapshot:{ticker}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        resp = requests.get(
+            f"https://api.polygon.io/v2/aggs/ticker/{ticker}/prev",
+            params={"apiKey": self.api_key},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            print(f"Polygon prev day failed for {ticker}: {resp.status_code}")
+            return {}
+
+        data = resp.json()
+        results = data.get("results", [])
+        if not results:
+            return {}
+
+        bar = results[0]
+        result = {
+            "ticker": ticker,
+            "price": bar.get("c"),  # close
+            "open": bar.get("o"),
+            "high": bar.get("h"),
+            "low": bar.get("l"),
+            "volume": bar.get("v"),
+            "vwap": bar.get("vw"),
+            "change_pct": round(((bar.get("c", 0) - bar.get("o", 0)) / bar.get("o", 1)) * 100, 2) if bar.get("o") else None,
+        }
+
+        cache.set(cache_key, result, 60)
+        return result
+    except Exception as e:
+        print(f"Polygon snapshot error for {ticker}: {e}")
+        return {}
+2. Technicals (RSI, MACD, SMA) returning empty
+Check if get_technicals is using a Polygon endpoint that requires a paid plan. If so, we need to calculate technicals from historical daily bars instead. The free tier supports /v2/aggs/ticker/{ticker}/range/1/day/{from}/{to} which gives us daily OHLCV. We can compute RSI, SMA 20, SMA 50, and MACD from this data:
+pythondef get_technicals(self, ticker: str) -> dict:
+    """Calculate technicals from daily bars (works on free Polygon tier)."""
+    cache_key = f"polygon:technicals:{ticker}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        from datetime import datetime, timedelta
+        end = datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+
+        resp = requests.get(
+            f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}",
+            params={"apiKey": self.api_key, "adjusted": "true", "sort": "asc", "limit": 120},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return {}
+
+        data = resp.json()
+        bars = data.get("results", [])
+        if len(bars) < 20:
+            return {}
+
+        closes = [b["c"] for b in bars]
+        volumes = [b.get("v", 0) for b in bars]
+
+        # RSI (14-period)
+        rsi = None
+        if len(closes) >= 15:
+            deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+            gains = [d if d > 0 else 0 for d in deltas[-14:]]
+            losses = [-d if d < 0 else 0 for d in deltas[-14:]]
+            avg_gain = sum(gains) / 14
+            avg_loss = sum(losses) / 14
+            if avg_loss > 0:
+                rs = avg_gain / avg_loss
+                rsi = round(100 - (100 / (1 + rs)), 2)
+            else:
+                rsi = 100.0
+
+        # SMAs
+        sma_20 = round(sum(closes[-20:]) / 20, 2) if len(closes) >= 20 else None
+        sma_50 = round(sum(closes[-50:]) / 50, 2) if len(closes) >= 50 else None
+
+        # MACD (12, 26, 9)
+        macd = None
+        macd_signal = None
+        macd_histogram = None
+        if len(closes) >= 35:
+            def ema(data, period):
+                multiplier = 2 / (period + 1)
+                ema_val = sum(data[:period]) / period
+                for price in data[period:]:
+                    ema_val = (price - ema_val) * multiplier + ema_val
+                return ema_val
+
+            ema_12 = ema(closes, 12)
+            ema_26 = ema(closes, 26)
+            macd = round(ema_12 - ema_26, 4)
+
+            # Signal line (9-period EMA of MACD) — simplified
+            macd_values = []
+            for i in range(26, len(closes)):
+                e12 = ema(closes[:i+1], 12)
+                e26 = ema(closes[:i+1], 26)
+                macd_values.append(e12 - e26)
+            if len(macd_values) >= 9:
+                macd_signal = round(ema(macd_values, 9), 4)
+                macd_histogram = round(macd - macd_signal, 4)
+
+        # Average volume
+        avg_volume = round(sum(volumes[-30:]) / min(len(volumes), 30)) if volumes else None
+
+        result = {
+            "rsi": rsi,
+            "sma_20": sma_20,
+            "sma_50": sma_50,
+            "macd": macd,
+            "macd_signal": macd_signal,
+            "macd_histogram": macd_histogram,
+            "avg_volume": avg_volume,
+        }
+
+        cache.set(cache_key, result, 300)
+        return result
+    except Exception as e:
+        print(f"Polygon technicals error for {ticker}: {e}")
+        return {}
+3. Verify the wide_scan_and_rank method for fundamentals_scan category
+Check what screeners are being called when the category is fundamentals_scan. It should be calling these Finviz methods:
+
+get_revenue_growth_leaders()
+get_earnings_growth_leaders()
+get_profitable_growth()
+get_ebitda_positive_turn()
+get_low_ps_high_growth()
+get_low_debt_growth()
+get_insider_buying()
+get_analyst_upgrades()
+get_earnings_this_week()
+
+If these methods don't exist on the FinvizScraper class, they were never implemented from previous instructions. Please add them. They use _custom_screen with these Finviz filter URLs:
+pythonasync def get_revenue_growth_leaders(self) -> list:
+    return await self._custom_screen("v=111&f=fa_salesqoq_o25,sh_avgvol_o300,ta_change_u&ft=4&o=-fa_salesqoq")
+
+async def get_earnings_growth_leaders(self) -> list:
+    return await self._custom_screen("v=111&f=fa_epsqoq_o25,sh_avgvol_o300,ta_change_u&ft=4&o=-fa_epsqoq")
+
+async def get_profitable_growth(self) -> list:
+    return await self._custom_screen("v=111&f=fa_epsqoq_o15,fa_opermargin_pos,fa_salesqoq_o15,sh_avgvol_o300&ft=4&o=-fa_salesqoq")
+
+async def get_ebitda_positive_turn(self) -> list:
+    return await self._custom_screen("v=111&f=fa_opermargin_pos,fa_salesqoq_o10,sh_avgvol_o200,ta_change_u&ft=4&o=-fa_salesqoq")
+
+async def get_low_ps_high_growth(self) -> list:
+    return await self._custom_screen("v=111&f=fa_ps_u5,fa_salesqoq_o20,sh_avgvol_o200&ft=4&o=-fa_salesqoq")
+
+async def get_low_debt_growth(self) -> list:
+    return await self._custom_screen("v=111&f=fa_debteq_u0.5,fa_salesqoq_o15,sh_avgvol_o200&ft=4&o=-fa_salesqoq")
+Also verify that the fundamentals_scan block in wide_scan_and_rank is calling these methods and NOT falling through to a generic fallback.
+4. Add StockAnalysis as a fallback data source
+In the light_enrich function inside wide_scan_and_rank, make sure StockAnalysis overview is ALWAYS fetched for fundamentals_scan and investments categories, not just conditionally. The needs_fundamentals flag should be True for these categories. Check that this is the case.
+5. Test after fixes
+After making all changes, restart the server and test by clicking the "Improving Fundamentals" button. Check the logs for:
+
+Polygon returning actual price data (not NOT_AUTHORIZED)
+Technicals having RSI, SMA, MACD values (not null)
+StockAnalysis overview returning revenue_growth, margins, pe_ratio
+Quant scores above 0
+
+Re-deploy after all fixes.

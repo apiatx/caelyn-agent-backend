@@ -1,77 +1,149 @@
 import time
-from polygon import RESTClient
+import threading
+import requests
+from datetime import datetime, timedelta
 from data.cache import cache, POLYGON_SNAPSHOT_TTL, POLYGON_TECHNICALS_TTL, POLYGON_DETAILS_TTL, POLYGON_NEWS_TTL
 
 
 class PolygonProvider:
     def __init__(self, api_key: str):
-        self.client = RESTClient(api_key=api_key)
+        self.api_key = api_key
+        self.base_url = "https://api.polygon.io"
+        self._rate_lock = threading.Lock()
+        self._last_call = 0
+        self._min_interval = 0.25
 
-    def _retry_on_rate_limit(self, func, *args, max_retries=2, delay=0.5, **kwargs):
+    def _request(self, path: str, params: dict = None, timeout: int = 10, max_retries: int = 3) -> dict:
+        if params is None:
+            params = {}
+        params["apiKey"] = self.api_key
+
+        with self._rate_lock:
+            now = time.time()
+            elapsed = now - self._last_call
+            if elapsed < self._min_interval:
+                time.sleep(self._min_interval - elapsed)
+            self._last_call = time.time()
+
         for attempt in range(max_retries + 1):
             try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                error_str = str(e)
-                if "429" in error_str or "too many" in error_str.lower() or "rate" in error_str.lower():
+                resp = requests.get(f"{self.base_url}{path}", params=params, timeout=timeout)
+                if resp.status_code == 429:
                     if attempt < max_retries:
-                        time.sleep(delay * (attempt + 1))
+                        wait = min(30, 12 * (attempt + 1))
+                        print(f"[Polygon] 429 rate limited, waiting {wait}s (attempt {attempt+1}/{max_retries})")
+                        time.sleep(wait)
                         continue
-                raise
+                    return {"error": "rate_limited", "status": 429}
+                if resp.status_code == 403:
+                    return {"error": "not_authorized", "status": 403}
+                if resp.status_code != 200:
+                    return {"error": f"HTTP {resp.status_code}", "status": resp.status_code}
+                return resp.json()
+            except Exception as e:
+                if attempt < max_retries:
+                    time.sleep(1)
+                    continue
+                return {"error": str(e)}
+        return {"error": "max_retries_exceeded"}
+
+    def get_daily_bars(self, ticker: str, days: int = 120) -> list:
+        """Fetch daily OHLCV bars. Cached separately since multiple methods use it."""
+        ticker = ticker.upper()
+        cache_key = f"polygon:bars:{ticker}:{days}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        end = datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        data = self._request(
+            f"/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}",
+            params={"adjusted": "true", "sort": "asc", "limit": days},
+        )
+        if "error" in data:
+            print(f"Polygon bars failed for {ticker}: {data['error']}")
+            return []
+
+        bars = data.get("results") or []
+        cache.set(cache_key, bars, POLYGON_TECHNICALS_TTL)
+        return bars
 
     def get_snapshot(self, ticker: str) -> dict:
-        """Get current price, volume, and daily change for a ticker."""
-        cache_key = f"polygon:snapshot:{ticker.upper()}"
+        """Get latest price data from daily bars (works on free tier)."""
+        ticker = ticker.upper()
+        cache_key = f"polygon:snapshot:{ticker}"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
         try:
-            snap = self._retry_on_rate_limit(self.client.get_snapshot_ticker, "stocks", ticker.upper())
+            bars = self.get_daily_bars(ticker)
+            if not bars:
+                return {"ticker": ticker, "error": "no_data"}
+
+            bar = bars[-1]
+            prev_bar = bars[-2] if len(bars) >= 2 else None
+
+            open_price = bar.get("o")
+            close_price = bar.get("c")
+            change_pct = None
+            if prev_bar and prev_bar.get("c") and prev_bar["c"] > 0 and close_price:
+                change_pct = round(((close_price - prev_bar["c"]) / prev_bar["c"]) * 100, 2)
+            elif open_price and open_price > 0 and close_price:
+                change_pct = round(((close_price - open_price) / open_price) * 100, 2)
+
             result = {
-                "ticker": ticker.upper(),
-                "price": snap.day.close if snap.day else None,
-                "open": snap.day.open if snap.day else None,
-                "high": snap.day.high if snap.day else None,
-                "low": snap.day.low if snap.day else None,
-                "volume": snap.day.volume if snap.day else None,
-                "change_pct": snap.todays_change_percent,
-                "prev_close": snap.prev_day.close if snap.prev_day else None,
+                "ticker": ticker,
+                "price": close_price,
+                "open": open_price,
+                "high": bar.get("h"),
+                "low": bar.get("l"),
+                "volume": bar.get("v"),
+                "vwap": bar.get("vw"),
+                "change_pct": change_pct,
             }
             cache.set(cache_key, result, POLYGON_SNAPSHOT_TTL)
             return result
         except Exception as e:
-            print(f"Error getting snapshot for {ticker}: {e}")
-            return {"ticker": ticker.upper(), "error": str(e)}
+            print(f"Polygon snapshot error for {ticker}: {e}")
+            return {"ticker": ticker, "error": str(e)}
 
     def get_market_movers(self) -> dict:
-        """Get top gainers and losers for the day."""
+        """Get top gainers and losers using snapshot endpoint (may require paid tier)."""
         cache_key = "polygon:movers"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
         try:
-            gainers = list(self._retry_on_rate_limit(self.client.get_snapshot_direction, "stocks", "gainers"))
-            losers = list(self._retry_on_rate_limit(self.client.get_snapshot_direction, "stocks", "losers"))
-            result = {
-                "gainers": [
-                    {
-                        "ticker": t.ticker,
-                        "price": t.day.close if t.day else None,
-                        "change_pct": t.todays_change_percent,
-                        "volume": t.day.volume if t.day else None,
-                    }
-                    for t in gainers[:15]
-                ],
-                "losers": [
-                    {
-                        "ticker": t.ticker,
-                        "price": t.day.close if t.day else None,
-                        "change_pct": t.todays_change_percent,
-                        "volume": t.day.volume if t.day else None,
-                    }
-                    for t in losers[:15]
-                ],
-            }
+            data = self._request("/v2/snapshot/locale/us/markets/stocks/gainers")
+            if "error" in data:
+                print(f"Polygon movers failed (gainers): {data.get('error')} — falling back to empty")
+                return {"gainers": [], "losers": [], "note": "Snapshot endpoint requires paid plan"}
+
+            gainers = []
+            for t in (data.get("tickers") or [])[:15]:
+                day = t.get("day") or {}
+                gainers.append({
+                    "ticker": t.get("ticker"),
+                    "price": day.get("c"),
+                    "change_pct": t.get("todaysChangePerc"),
+                    "volume": day.get("v"),
+                })
+
+            data2 = self._request("/v2/snapshot/locale/us/markets/stocks/losers")
+            losers = []
+            if "error" not in data2:
+                for t in (data2.get("tickers") or [])[:15]:
+                    day = t.get("day") or {}
+                    losers.append({
+                        "ticker": t.get("ticker"),
+                        "price": day.get("c"),
+                        "change_pct": t.get("todaysChangePerc"),
+                        "volume": day.get("v"),
+                    })
+
+            result = {"gainers": gainers, "losers": losers}
             cache.set(cache_key, result, POLYGON_SNAPSHOT_TTL)
             return result
         except Exception as e:
@@ -88,16 +160,20 @@ class PolygonProvider:
             params = {"limit": limit}
             if ticker:
                 params["ticker"] = ticker.upper()
-            news_items = list(self._retry_on_rate_limit(self.client.list_ticker_news, **params))
+            data = self._request("/v2/reference/news", params=params)
+            if "error" in data:
+                print(f"Error getting news: {data['error']}")
+                return []
+
             result = [
                 {
-                    "title": n.title,
-                    "summary": getattr(n, "description", ""),
-                    "source": n.publisher.name if n.publisher else "Unknown",
-                    "published": str(n.published_utc),
-                    "url": getattr(n, "article_url", ""),
+                    "title": n.get("title", ""),
+                    "summary": n.get("description", ""),
+                    "source": (n.get("publisher") or {}).get("name", "Unknown"),
+                    "published": n.get("published_utc", ""),
+                    "url": n.get("article_url", ""),
                 }
-                for n in news_items
+                for n in (data.get("results") or [])
             ]
             cache.set(cache_key, result, POLYGON_NEWS_TTL)
             return result
@@ -106,72 +182,103 @@ class PolygonProvider:
             return []
 
     def get_technicals(self, ticker: str) -> dict:
-        """Get RSI, SMA, and MACD indicators for a ticker."""
-        cache_key = f"polygon:technicals:{ticker.upper()}"
+        """Calculate technicals from daily bars (works on free Polygon tier)."""
+        ticker = ticker.upper()
+        cache_key = f"polygon:technicals:{ticker}"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
-        result = {}
-        ticker = ticker.upper()
-        try:
-            rsi = list(self._retry_on_rate_limit(self.client.get_rsi, ticker, timespan="day", limit=1))
-            result["rsi"] = rsi[0].value if rsi else None
-        except Exception:
-            result["rsi"] = None
 
         try:
-            sma_20 = list(
-                self._retry_on_rate_limit(self.client.get_sma, ticker, timespan="day", window=20, limit=1)
-            )
-            result["sma_20"] = sma_20[0].value if sma_20 else None
-        except Exception:
-            result["sma_20"] = None
+            bars = self.get_daily_bars(ticker)
+            if len(bars) < 20:
+                return {}
 
-        try:
-            sma_50 = list(
-                self._retry_on_rate_limit(self.client.get_sma, ticker, timespan="day", window=50, limit=1)
-            )
-            result["sma_50"] = sma_50[0].value if sma_50 else None
-        except Exception:
-            result["sma_50"] = None
+            closes = [b["c"] for b in bars]
+            volumes = [b.get("v", 0) for b in bars]
 
-        try:
-            macd = list(self._retry_on_rate_limit(self.client.get_macd, ticker, timespan="day", limit=1))
-            if macd:
-                result["macd"] = macd[0].value
-                result["macd_signal"] = macd[0].signal
-                result["macd_histogram"] = macd[0].histogram
-            else:
-                result["macd"] = None
-                result["macd_signal"] = None
-                result["macd_histogram"] = None
-        except Exception:
-            result["macd"] = None
-            result["macd_signal"] = None
-            result["macd_histogram"] = None
+            rsi = None
+            if len(closes) >= 15:
+                deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+                gains = [d if d > 0 else 0 for d in deltas[-14:]]
+                losses = [-d if d < 0 else 0 for d in deltas[-14:]]
+                avg_gain = sum(gains) / 14
+                avg_loss = sum(losses) / 14
+                if avg_loss > 0:
+                    rs = avg_gain / avg_loss
+                    rsi = round(100 - (100 / (1 + rs)), 2)
+                else:
+                    rsi = 100.0
 
-        cache.set(cache_key, result, POLYGON_TECHNICALS_TTL)
-        return result
+            sma_20 = round(sum(closes[-20:]) / 20, 2) if len(closes) >= 20 else None
+            sma_50 = round(sum(closes[-50:]) / 50, 2) if len(closes) >= 50 else None
+
+            macd = None
+            macd_signal = None
+            macd_histogram = None
+            if len(closes) >= 35:
+                def ema(data_list, period):
+                    multiplier = 2 / (period + 1)
+                    ema_val = sum(data_list[:period]) / period
+                    for price in data_list[period:]:
+                        ema_val = (price - ema_val) * multiplier + ema_val
+                    return ema_val
+
+                ema_12 = ema(closes, 12)
+                ema_26 = ema(closes, 26)
+                macd = round(ema_12 - ema_26, 4)
+
+                macd_values = []
+                for i in range(26, len(closes)):
+                    e12 = ema(closes[: i + 1], 12)
+                    e26 = ema(closes[: i + 1], 26)
+                    macd_values.append(e12 - e26)
+                if len(macd_values) >= 9:
+                    macd_signal = round(ema(macd_values, 9), 4)
+                    macd_histogram = round(macd - macd_signal, 4)
+
+            avg_volume = round(sum(volumes[-30:]) / min(len(volumes), 30)) if volumes else None
+
+            result = {
+                "rsi": rsi,
+                "sma_20": sma_20,
+                "sma_50": sma_50,
+                "macd": macd,
+                "macd_signal": macd_signal,
+                "macd_histogram": macd_histogram,
+                "avg_volume": avg_volume,
+            }
+            cache.set(cache_key, result, POLYGON_TECHNICALS_TTL)
+            return result
+        except Exception as e:
+            print(f"Polygon technicals error for {ticker}: {e}")
+            return {}
 
     def get_ticker_details(self, ticker: str) -> dict:
         """Get company info: name, sector, market cap, etc."""
-        cache_key = f"polygon:details:{ticker.upper()}"
+        ticker = ticker.upper()
+        cache_key = f"polygon:details:{ticker}"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
         try:
-            details = self._retry_on_rate_limit(self.client.get_ticker_details, ticker.upper())
+            data = self._request(f"/v3/reference/tickers/{ticker}")
+            if "error" in data:
+                print(f"Error getting details for {ticker}: {data['error']}")
+                return {"name": ticker, "error": data["error"]}
+
+            details = data.get("results") or {}
             result = {
-                "name": details.name,
-                "sector": getattr(details, "sic_description", "Unknown"),
-                "market_cap": getattr(details, "market_cap", None),
-                "description": getattr(details, "description", ""),
+                "name": details.get("name", ticker),
+                "sector": details.get("sic_description", "Unknown"),
+                "market_cap": details.get("market_cap"),
+                "description": details.get("description", ""),
             }
             cache.set(cache_key, result, POLYGON_DETAILS_TTL)
             return result
         except Exception as e:
             print(f"Error getting details for {ticker}: {e}")
-            return {"name": ticker.upper(), "error": str(e)}
+            return {"name": ticker, "error": str(e)}
 
     def get_ticker_events(self, ticker: str) -> dict:
         """Get upcoming earnings, dividends, and recent news catalysts."""
@@ -179,16 +286,17 @@ class PolygonProvider:
         result = {"earnings": None, "news": []}
 
         try:
-            news = list(self._retry_on_rate_limit(self.client.list_ticker_news, ticker=ticker, limit=10))
-            result["news"] = [
-                {
-                    "title": n.title,
-                    "summary": getattr(n, "description", ""),
-                    "source": n.publisher.name if n.publisher else "Unknown",
-                    "published": str(n.published_utc),
-                }
-                for n in news
-            ]
+            news_data = self._request("/v2/reference/news", params={"ticker": ticker, "limit": 10})
+            if "error" not in news_data:
+                result["news"] = [
+                    {
+                        "title": n.get("title", ""),
+                        "summary": n.get("description", ""),
+                        "source": (n.get("publisher") or {}).get("name", "Unknown"),
+                        "published": n.get("published_utc", ""),
+                    }
+                    for n in (news_data.get("results") or [])
+                ]
         except Exception as e:
             print(f"Error getting events for {ticker}: {e}")
 

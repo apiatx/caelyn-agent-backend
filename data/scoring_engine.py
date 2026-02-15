@@ -15,6 +15,50 @@ qualitative analysis.
 
 DEFAULT_MARKET_CAP_CEILING = 150e9
 
+
+def parse_pct(value) -> float | None:
+    """Parse a percentage string like '18.20%' or '-5.3%' into a decimal float (0.182)."""
+    if value is None:
+        return None
+    try:
+        s = str(value).strip().replace(",", "")
+        if s.endswith("%"):
+            return float(s[:-1]) / 100
+        v = float(s)
+        if abs(v) > 5:
+            return v / 100
+        return v
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_market_cap_string(value) -> float | None:
+    """Parse market cap strings like '$3.45B', '245.6M', '1.2T' into raw numbers."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        pass
+    try:
+        s = str(value).strip().replace("$", "").replace(",", "")
+        multiplier = 1
+        if s.endswith("T"):
+            multiplier = 1e12
+            s = s[:-1]
+        elif s.endswith("B"):
+            multiplier = 1e9
+            s = s[:-1]
+        elif s.endswith("M"):
+            multiplier = 1e6
+            s = s[:-1]
+        elif s.endswith("K"):
+            multiplier = 1e3
+            s = s[:-1]
+        return float(s) * multiplier
+    except (TypeError, ValueError):
+        return None
+
 CATEGORY_MARKET_CAP_CAPS = {
     "small_cap_spec": 2e9,
     "squeeze": 10e9,
@@ -46,33 +90,14 @@ CATEGORY_MARKET_CAP_FLOORS = {
 
 def get_market_cap(ticker_data: dict) -> float | None:
     """Extract market cap from any available data source."""
-    details = ticker_data.get("details", {})
-    if isinstance(details, dict):
-        mc = details.get("market_cap")
-        if mc is not None:
-            try:
-                return float(mc)
-            except (TypeError, ValueError):
-                pass
-
-    overview = ticker_data.get("overview", {})
-    if isinstance(overview, dict):
-        mc = overview.get("market_cap")
-        if mc is not None:
-            try:
-                return float(mc)
-            except (TypeError, ValueError):
-                pass
-
-    snapshot = ticker_data.get("snapshot", {})
-    if isinstance(snapshot, dict):
-        mc = snapshot.get("market_cap")
-        if mc is not None:
-            try:
-                return float(mc)
-            except (TypeError, ValueError):
-                pass
-
+    for source_key in ["details", "overview", "snapshot"]:
+        source = ticker_data.get(source_key, {})
+        if isinstance(source, dict):
+            mc = source.get("market_cap")
+            if mc is not None:
+                parsed = parse_market_cap_string(mc)
+                if parsed is not None:
+                    return parsed
     return None
 
 
@@ -307,54 +332,42 @@ def score_for_investments(ticker_data: dict) -> float:
         overview = {}
 
     # --- Fundamentals: Revenue Growth + Margins (35 pts max) ---
-    rev_growth = overview.get("revenue_growth")
-    if rev_growth is not None:
-        try:
-            rg = float(rev_growth)
-            if rg > 0.40:
-                score += 15
-            elif rg > 0.25:
-                score += 12
-            elif rg > 0.15:
-                score += 9
-            elif rg > 0.05:
-                score += 5
-        except (TypeError, ValueError):
-            pass
+    rg = parse_pct(overview.get("revenue_growth"))
+    if rg is not None:
+        if rg > 0.40:
+            score += 15
+        elif rg > 0.25:
+            score += 12
+        elif rg > 0.15:
+            score += 9
+        elif rg > 0.05:
+            score += 5
 
-    ebitda_margin = overview.get("ebitda_margin")
-    if ebitda_margin is not None:
-        try:
-            em = float(ebitda_margin)
-            if em > 0.30:
-                score += 10
-            elif em > 0.20:
-                score += 8
-            elif em > 0.10:
-                score += 5
-            elif em > 0:
-                score += 3
-        except (TypeError, ValueError):
-            pass
+    em = parse_pct(overview.get("ebitda_margin") or overview.get("operating_margin"))
+    if em is not None:
+        if em > 0.30:
+            score += 10
+        elif em > 0.20:
+            score += 8
+        elif em > 0.10:
+            score += 5
+        elif em > 0:
+            score += 3
 
-    profit_margin = overview.get("profit_margin")
-    if profit_margin is not None:
-        try:
-            pm = float(profit_margin)
-            if pm > 0.20:
-                score += 10
-            elif pm > 0.10:
-                score += 7
-            elif pm > 0:
-                score += 3
-        except (TypeError, ValueError):
-            pass
+    pm = parse_pct(overview.get("profit_margin"))
+    if pm is not None:
+        if pm > 0.20:
+            score += 10
+        elif pm > 0.10:
+            score += 7
+        elif pm > 0:
+            score += 3
 
     # --- Valuation (25 pts max) ---
     ps_ratio = overview.get("ps_ratio")
     if ps_ratio is not None:
         try:
-            ps = float(ps_ratio)
+            ps = float(str(ps_ratio).replace(",", ""))
             if ps < 2:
                 score += 12
             elif ps < 5:
@@ -369,7 +382,7 @@ def score_for_investments(ticker_data: dict) -> float:
     pe_ratio = overview.get("pe_ratio")
     if pe_ratio is not None:
         try:
-            pe = float(pe_ratio)
+            pe = float(str(pe_ratio).replace(",", ""))
             if 0 < pe < 15:
                 score += 13
             elif 15 <= pe < 25:
@@ -565,52 +578,39 @@ def score_for_fundamentals(ticker_data: dict) -> float:
         overview = {}
 
     # --- Revenue Growth (30 pts max) ---
-    rev_growth = overview.get("revenue_growth")
-    if rev_growth is not None:
-        try:
-            rg = float(rev_growth)
-            if rg > 0.50:
-                score += 30
-            elif rg > 0.30:
-                score += 25
-            elif rg > 0.20:
-                score += 20
-            elif rg > 0.10:
-                score += 12
-            elif rg > 0:
-                score += 5
-        except (TypeError, ValueError):
-            pass
+    rg = parse_pct(overview.get("revenue_growth"))
+    if rg is not None:
+        if rg > 0.50:
+            score += 30
+        elif rg > 0.30:
+            score += 25
+        elif rg > 0.20:
+            score += 20
+        elif rg > 0.10:
+            score += 12
+        elif rg > 0:
+            score += 5
 
     # --- Margin Expansion (30 pts max) ---
-    ebitda_margin = overview.get("ebitda_margin")
-    profit_margin = overview.get("profit_margin")
+    em = parse_pct(overview.get("ebitda_margin") or overview.get("operating_margin"))
+    if em is not None:
+        if em > 0.30:
+            score += 15
+        elif em > 0.15:
+            score += 12
+        elif em > 0.05:
+            score += 8
+        elif em > 0:
+            score += 5
 
-    if ebitda_margin is not None:
-        try:
-            em = float(ebitda_margin)
-            if em > 0.30:
-                score += 15
-            elif em > 0.15:
-                score += 12
-            elif em > 0.05:
-                score += 8
-            elif em > 0:
-                score += 5
-        except (TypeError, ValueError):
-            pass
-
-    if profit_margin is not None:
-        try:
-            pm = float(profit_margin)
-            if pm > 0.20:
-                score += 15
-            elif pm > 0.10:
-                score += 12
-            elif pm > 0:
-                score += 8
-        except (TypeError, ValueError):
-            pass
+    pm = parse_pct(overview.get("profit_margin"))
+    if pm is not None:
+        if pm > 0.20:
+            score += 15
+        elif pm > 0.10:
+            score += 12
+        elif pm > 0:
+            score += 8
 
     # --- Earnings Beats (20 pts max) ---
     if isinstance(earnings, list) and len(earnings) > 0:
@@ -625,7 +625,7 @@ def score_for_fundamentals(ticker_data: dict) -> float:
     ps_ratio = overview.get("ps_ratio")
     if ps_ratio is not None:
         try:
-            ps = float(ps_ratio)
+            ps = float(str(ps_ratio).replace(",", ""))
             if ps < 3:
                 score += 20
             elif ps < 6:
@@ -740,8 +740,8 @@ def score_for_small_cap(ticker_data: dict) -> float:
         market_cap = overview.get("market_cap")
 
     if market_cap is not None:
-        try:
-            mc = float(market_cap)
+        mc = parse_market_cap_string(market_cap)
+        if mc is not None:
             if mc > 10e9:
                 return 0
             elif mc > 2e9:
@@ -754,8 +754,6 @@ def score_for_small_cap(ticker_data: dict) -> float:
                 base_score *= 1.0
             else:
                 base_score *= 0.7
-        except (TypeError, ValueError):
-            pass
 
     return round(min(base_score, 100), 1)
 

@@ -423,6 +423,8 @@ class MarketDataService:
                 for item in result:
                     if isinstance(item, dict) and item.get("ticker"):
                         ticker = item["ticker"].upper().strip()
+                        if ".X" in ticker or ".U" in ticker:
+                            continue
                         if len(ticker) <= 5 and ticker.isalpha():
                             all_tickers.add(ticker)
 
@@ -450,27 +452,26 @@ class MarketDataService:
             try:
                 snapshot = self.polygon.get_snapshot(ticker)
                 technicals = self.polygon.get_technicals(ticker)
-                details = self.polygon.get_ticker_details(ticker)
 
                 result = {
                     "snapshot": snapshot,
                     "technicals": technicals,
-                    "details": details,
+                    "details": {},
                 }
 
+                async_tasks = []
                 if needs_fundamentals:
-                    try:
-                        overview = await self.stockanalysis.get_overview(ticker)
-                        result["overview"] = overview if not isinstance(overview, Exception) else {}
-                    except:
-                        result["overview"] = {}
-
+                    async_tasks.append(("overview", self.stockanalysis.get_overview(ticker)))
                 if needs_social:
-                    try:
-                        st = await self.stocktwits.get_sentiment(ticker)
-                        result["sentiment"] = st if not isinstance(st, Exception) else {}
-                    except:
-                        result["sentiment"] = {}
+                    async_tasks.append(("sentiment", self.stocktwits.get_sentiment(ticker)))
+
+                if async_tasks:
+                    async_results = await asyncio.gather(
+                        *[t[1] for t in async_tasks],
+                        return_exceptions=True,
+                    )
+                    for (key, _), res in zip(async_tasks, async_results):
+                        result[key] = res if not isinstance(res, Exception) else {}
 
                 return result
             except Exception as e:
@@ -479,10 +480,12 @@ class MarketDataService:
         max_candidates = 30 if needs_fundamentals else 40
         ticker_list = list(all_tickers)[:max_candidates]
 
-        enrichment_results = await asyncio.gather(
-            *[light_enrich(t) for t in ticker_list],
-            return_exceptions=True,
-        )
+        enrichment_results = []
+        for i, ticker in enumerate(ticker_list):
+            result = await light_enrich(ticker)
+            enrichment_results.append(result)
+            if (i + 1) % 5 == 0 or i == len(ticker_list) - 1:
+                print(f"[Wide Scan] Enriched {i + 1}/{len(ticker_list)} tickers")
 
         candidates = {}
         for ticker, result in zip(ticker_list, enrichment_results):
