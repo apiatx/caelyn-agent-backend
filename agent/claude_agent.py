@@ -174,10 +174,21 @@ class TradingAgent:
             analysis_text = raw_response.strip()
             structured_data = {"display_type": "chat"}
 
-        return {
-            "type": structured_data.get("display_type", "chat"),
+        display_type = structured_data.get("display_type", "chat")
+
+        result = {
+            "type": display_type,
             "analysis": analysis_text,
             "data": structured_data.get("rows"),
             "tickers": structured_data.get("tickers"),
             "technicals": structured_data.get("technicals"),
+            "key_stats": structured_data.get("key_stats"),
         }
+
+        if display_type == "dashboard":
+            result["ta_setups"] = structured_data.get("ta_setups")
+            result["fundamental_catalysts"] = structured_data.get("fundamental_catalysts")
+            result["social_buzz"] = structured_data.get("social_buzz")
+            result["triple_threats"] = structured_data.get("triple_threats")
+
+        return result
