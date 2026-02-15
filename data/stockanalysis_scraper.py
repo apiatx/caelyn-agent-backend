@@ -28,6 +28,10 @@ class StockAnalysisScraper:
                     headers=self.HEADERS,
                     timeout=15,
                 )
+            print(f"[StockAnalysis] financials {ticker}: status={resp.status_code}, body_len={len(resp.text)}")
+            if resp.status_code != 200:
+                print(f"[StockAnalysis] financials {ticker}: non-200 response, first 500 chars: {resp.text[:500]}")
+                return {"ticker": ticker, "financials": {}, "error": f"HTTP {resp.status_code}"}
             soup = BeautifulSoup(resp.text, "html.parser")
 
             metrics = {}
@@ -53,11 +57,12 @@ class StockAnalysisScraper:
                         elif "free cash flow" in label:
                             metrics["free_cash_flow"] = value
 
+            print(f"[StockAnalysis] financials {ticker}: parsed metrics={list(metrics.keys()) if metrics else 'EMPTY'}")
             result = {"ticker": ticker, "financials": metrics}
             cache.set(cache_key, result, STOCKANALYSIS_TTL)
             return result
         except Exception as e:
-            print(f"StockAnalysis financials error for {ticker}: {e}")
+            print(f"[StockAnalysis] financials error for {ticker}: {e}")
             return {"ticker": ticker, "financials": {}, "error": str(e)}
 
     async def get_overview(self, ticker: str) -> dict:
@@ -74,6 +79,10 @@ class StockAnalysisScraper:
                     headers=self.HEADERS,
                     timeout=15,
                 )
+            print(f"[StockAnalysis] overview {ticker}: status={resp.status_code}, body_len={len(resp.text)}")
+            if resp.status_code != 200:
+                print(f"[StockAnalysis] overview {ticker}: non-200 response, first 500 chars: {resp.text[:500]}")
+                return {"ticker": ticker, "overview": {}, "error": f"HTTP {resp.status_code}"}
             soup = BeautifulSoup(resp.text, "html.parser")
 
             stats = {}
@@ -118,11 +127,12 @@ class StockAnalysisScraper:
                             elif "price target" in label_lower:
                                 stats["price_target"] = value
 
+            print(f"[StockAnalysis] overview {ticker}: parsed stats={list(stats.keys()) if stats else 'EMPTY'}")
             result = {"ticker": ticker, "overview": stats}
             cache.set(cache_key, result, STOCKANALYSIS_TTL)
             return result
         except Exception as e:
-            print(f"StockAnalysis overview error for {ticker}: {e}")
+            print(f"[StockAnalysis] overview error for {ticker}: {e}")
             return {"ticker": ticker, "overview": {}, "error": str(e)}
 
     async def get_analyst_ratings(self, ticker: str) -> dict:
@@ -139,6 +149,10 @@ class StockAnalysisScraper:
                     headers=self.HEADERS,
                     timeout=15,
                 )
+            print(f"[StockAnalysis] analyst {ticker}: status={resp.status_code}, body_len={len(resp.text)}")
+            if resp.status_code != 200:
+                print(f"[StockAnalysis] analyst {ticker}: non-200 response, first 500 chars: {resp.text[:500]}")
+                return {"ticker": ticker, "analyst_ratings": {}, "error": f"HTTP {resp.status_code}"}
             soup = BeautifulSoup(resp.text, "html.parser")
 
             ratings = {}
@@ -164,9 +178,10 @@ class StockAnalysisScraper:
                         elif "sell" in label:
                             ratings["sell_count"] = value
 
+            print(f"[StockAnalysis] analyst {ticker}: parsed ratings={list(ratings.keys()) if ratings else 'EMPTY'}")
             result = {"ticker": ticker, "analyst_ratings": ratings}
             cache.set(cache_key, result, STOCKANALYSIS_TTL)
             return result
         except Exception as e:
-            print(f"StockAnalysis ratings error for {ticker}: {e}")
+            print(f"[StockAnalysis] analyst error for {ticker}: {e}")
             return {"ticker": ticker, "analyst_ratings": {}, "error": str(e)}
