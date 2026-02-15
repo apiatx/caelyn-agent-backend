@@ -92,6 +92,16 @@ async def query_agent(
         return {"error": str(e), "type": "chat", "analysis": f"Error: {str(e)}"}
 
 
+@app.post("/api/cache/clear")
+@limiter.limit("5/minute")
+async def clear_cache(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    if not api_key or api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    from data.cache import cache
+    cache.clear()
+    return {"status": "Cache cleared"}
+
+
 @app.get("/api/health")
 @limiter.limit("30/minute")
 async def health_check(request: Request):

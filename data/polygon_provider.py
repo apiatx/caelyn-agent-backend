@@ -1,4 +1,5 @@
 from polygon import RESTClient
+from data.cache import cache, POLYGON_SNAPSHOT_TTL, POLYGON_TECHNICALS_TTL, POLYGON_DETAILS_TTL, POLYGON_NEWS_TTL
 
 
 class PolygonProvider:
@@ -7,9 +8,13 @@ class PolygonProvider:
 
     def get_snapshot(self, ticker: str) -> dict:
         """Get current price, volume, and daily change for a ticker."""
+        cache_key = f"polygon:snapshot:{ticker.upper()}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             snap = self.client.get_snapshot_ticker("stocks", ticker.upper())
-            return {
+            result = {
                 "ticker": ticker.upper(),
                 "price": snap.day.close if snap.day else None,
                 "open": snap.day.open if snap.day else None,
@@ -19,16 +24,22 @@ class PolygonProvider:
                 "change_pct": snap.todays_change_percent,
                 "prev_close": snap.prev_day.close if snap.prev_day else None,
             }
+            cache.set(cache_key, result, POLYGON_SNAPSHOT_TTL)
+            return result
         except Exception as e:
             print(f"Error getting snapshot for {ticker}: {e}")
             return {"ticker": ticker.upper(), "error": str(e)}
 
     def get_market_movers(self) -> dict:
         """Get top gainers and losers for the day."""
+        cache_key = "polygon:movers"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             gainers = list(self.client.get_snapshot_direction("stocks", "gainers"))
             losers = list(self.client.get_snapshot_direction("stocks", "losers"))
-            return {
+            result = {
                 "gainers": [
                     {
                         "ticker": t.ticker,
@@ -48,18 +59,24 @@ class PolygonProvider:
                     for t in losers[:15]
                 ],
             }
+            cache.set(cache_key, result, POLYGON_SNAPSHOT_TTL)
+            return result
         except Exception as e:
             print(f"Error getting market movers: {e}")
             return {"gainers": [], "losers": [], "error": str(e)}
 
     def get_news(self, ticker: str = None, limit: int = 15) -> list:
         """Get recent news articles, optionally filtered by ticker."""
+        cache_key = f"polygon:news:{ticker}:{limit}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             params = {"limit": limit}
             if ticker:
                 params["ticker"] = ticker.upper()
             news_items = list(self.client.list_ticker_news(**params))
-            return [
+            result = [
                 {
                     "title": n.title,
                     "summary": getattr(n, "description", ""),
@@ -69,12 +86,18 @@ class PolygonProvider:
                 }
                 for n in news_items
             ]
+            cache.set(cache_key, result, POLYGON_NEWS_TTL)
+            return result
         except Exception as e:
             print(f"Error getting news: {e}")
             return []
 
     def get_technicals(self, ticker: str) -> dict:
         """Get RSI, SMA, and MACD indicators for a ticker."""
+        cache_key = f"polygon:technicals:{ticker.upper()}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         result = {}
         ticker = ticker.upper()
         try:
@@ -114,18 +137,25 @@ class PolygonProvider:
             result["macd_signal"] = None
             result["macd_histogram"] = None
 
+        cache.set(cache_key, result, POLYGON_TECHNICALS_TTL)
         return result
 
     def get_ticker_details(self, ticker: str) -> dict:
         """Get company info: name, sector, market cap, etc."""
+        cache_key = f"polygon:details:{ticker.upper()}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             details = self.client.get_ticker_details(ticker.upper())
-            return {
+            result = {
                 "name": details.name,
                 "sector": getattr(details, "sic_description", "Unknown"),
                 "market_cap": getattr(details, "market_cap", None),
                 "description": getattr(details, "description", ""),
             }
+            cache.set(cache_key, result, POLYGON_DETAILS_TTL)
+            return result
         except Exception as e:
             print(f"Error getting details for {ticker}: {e}")
             return {"name": ticker.upper(), "error": str(e)}

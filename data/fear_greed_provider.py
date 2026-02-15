@@ -1,4 +1,5 @@
 import httpx
+from data.cache import cache, FEAR_GREED_TTL
 
 
 class FearGreedProvider:
@@ -38,6 +39,10 @@ class FearGreedProvider:
         """
         Get the current Fear & Greed Index value and its components.
         """
+        cache_key = "fear_greed:index"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
@@ -126,6 +131,7 @@ class FearGreedProvider:
                 ),
             }
 
+            cache.set(cache_key, result, FEAR_GREED_TTL)
             return result
         except Exception as e:
             print(f"Fear & Greed Index error: {e}")

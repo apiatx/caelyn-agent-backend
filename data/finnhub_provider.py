@@ -1,5 +1,6 @@
 import finnhub
 from datetime import datetime, timedelta
+from data.cache import cache, FINNHUB_TTL, EARNINGS_TTL
 
 
 class FinnhubProvider:
@@ -19,6 +20,10 @@ class FinnhubProvider:
         This can signal price changes 30-90 days out.
         """
         ticker = ticker.upper()
+        cache_key = f"finnhub:insider:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             today = datetime.now()
             one_year_ago = today - timedelta(days=365)
@@ -34,7 +39,7 @@ class FinnhubProvider:
             recent = records[-3:] if len(records) >= 3 else records
             latest = records[-1]
 
-            return {
+            result = {
                 "ticker": ticker,
                 "latest_mspr": latest.get("mspr"),
                 "latest_change": latest.get("change"),
@@ -49,6 +54,8 @@ class FinnhubProvider:
                 ],
                 "signal": self._interpret_mspr(latest.get("mspr")),
             }
+            cache.set(cache_key, result, FINNHUB_TTL)
+            return result
         except Exception as e:
             print(f"Finnhub insider sentiment error for {ticker}: {e}")
             return {"ticker": ticker, "insider_sentiment": None, "error": str(e)}
@@ -114,9 +121,13 @@ class FinnhubProvider:
     def get_earnings_surprises(self, ticker: str) -> list:
         """Get past earnings results vs estimates (beat or miss)."""
         ticker = ticker.upper()
+        cache_key = f"finnhub:earnings:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             data = self.client.company_earnings(ticker, limit=4)
-            return [
+            result = [
                 {
                     "period": e.get("period"),
                     "actual_eps": e.get("actual"),
@@ -129,6 +140,8 @@ class FinnhubProvider:
                 }
                 for e in data
             ]
+            cache.set(cache_key, result, EARNINGS_TTL)
+            return result
         except Exception as e:
             print(f"Finnhub earnings surprises error for {ticker}: {e}")
             return []
@@ -136,9 +149,13 @@ class FinnhubProvider:
     def get_recommendation_trends(self, ticker: str) -> list:
         """Get analyst recommendation trends (buy/hold/sell counts over time)."""
         ticker = ticker.upper()
+        cache_key = f"finnhub:recommendations:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             data = self.client.recommendation_trends(ticker)
-            return [
+            result = [
                 {
                     "period": r.get("period"),
                     "strong_buy": r.get("strongBuy"),
@@ -149,6 +166,8 @@ class FinnhubProvider:
                 }
                 for r in data[:4]
             ]
+            cache.set(cache_key, result, FINNHUB_TTL)
+            return result
         except Exception as e:
             print(f"Finnhub recommendation trends error for {ticker}: {e}")
             return []
@@ -156,6 +175,10 @@ class FinnhubProvider:
     def get_social_sentiment(self, ticker: str) -> dict:
         """Get social media sentiment from Reddit and Twitter."""
         ticker = ticker.upper()
+        cache_key = f"finnhub:social:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             data = self.client.stock_social_sentiment(ticker)
             reddit_data = data.get("reddit", [])
@@ -212,11 +235,13 @@ class FinnhubProvider:
                     else "neutral",
                 }
 
-            return {
+            result = {
                 "ticker": ticker,
                 "reddit": reddit_summary,
                 "twitter": twitter_summary,
             }
+            cache.set(cache_key, result, FINNHUB_TTL)
+            return result
         except Exception as e:
             print(f"Finnhub social sentiment error for {ticker}: {e}")
             return {"ticker": ticker, "reddit": None, "twitter": None}
@@ -232,6 +257,10 @@ class FinnhubProvider:
 
     def get_upcoming_earnings(self) -> list:
         """Get all earnings coming up in the next 7 days."""
+        cache_key = "finnhub:upcoming_earnings"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             today = datetime.now()
             next_week = today + timedelta(days=7)
@@ -241,7 +270,7 @@ class FinnhubProvider:
                 symbol=None,
             )
             earnings = data.get("earningsCalendar", [])
-            return [
+            result = [
                 {
                     "ticker": e.get("symbol"),
                     "date": e.get("date"),
@@ -251,6 +280,8 @@ class FinnhubProvider:
                 }
                 for e in earnings[:30]
             ]
+            cache.set(cache_key, result, EARNINGS_TTL)
+            return result
         except Exception as e:
             print(f"Finnhub upcoming earnings error: {e}")
             return []

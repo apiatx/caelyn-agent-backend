@@ -474,7 +474,7 @@ class MarketDataService:
             except Exception as e:
                 return {"error": str(e)}
 
-        max_candidates = 40 if needs_fundamentals else 60
+        max_candidates = 30 if needs_fundamentals else 40
         ticker_list = list(all_tickers)[:max_candidates]
 
         enrichment_results = await asyncio.gather(

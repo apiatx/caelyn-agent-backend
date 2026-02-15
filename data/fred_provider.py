@@ -1,5 +1,6 @@
 from fredapi import Fred
 from datetime import datetime, timedelta
+from data.cache import cache, FRED_TTL
 
 
 class FredProvider:
@@ -384,7 +385,11 @@ class FredProvider:
         Complete macroeconomic picture. This is the motherlode —
         everything your agent needs to understand the macro environment.
         """
-        return {
+        cache_key = "fred:full_macro"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        result = {
             "federal_funds_rate": self.get_fed_funds_rate(),
             "inflation_cpi": self.get_inflation_cpi(),
             "core_pce_feds_preferred_inflation": self.get_core_pce(),
@@ -396,15 +401,23 @@ class FredProvider:
             "vix_fear_index": self.get_vix(),
             "weekly_jobless_claims": self.get_initial_jobless_claims(),
         }
+        cache.set(cache_key, result, FRED_TTL)
+        return result
 
     def get_quick_macro(self) -> dict:
         """
         Lighter version — just the 4 most important indicators.
         Use this for scan_market to keep response sizes manageable.
         """
-        return {
+        cache_key = "fred:quick_macro"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        result = {
             "federal_funds_rate": self.get_fed_funds_rate(),
             "inflation_cpi": self.get_inflation_cpi(),
             "yield_curve_10y_2y": self.get_yield_curve_spread(),
             "vix_fear_index": self.get_vix(),
         }
+        cache.set(cache_key, result, FRED_TTL)
+        return result

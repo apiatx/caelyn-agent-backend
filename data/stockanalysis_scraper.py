@@ -1,5 +1,6 @@
 import httpx
 from bs4 import BeautifulSoup
+from data.cache import cache, STOCKANALYSIS_TTL
 
 
 class StockAnalysisScraper:
@@ -16,6 +17,10 @@ class StockAnalysisScraper:
     async def get_financials(self, ticker: str) -> dict:
         """Get key financial metrics for a ticker."""
         ticker = ticker.upper()
+        cache_key = f"stockanalysis:financials:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
@@ -48,7 +53,9 @@ class StockAnalysisScraper:
                         elif "free cash flow" in label:
                             metrics["free_cash_flow"] = value
 
-            return {"ticker": ticker, "financials": metrics}
+            result = {"ticker": ticker, "financials": metrics}
+            cache.set(cache_key, result, STOCKANALYSIS_TTL)
+            return result
         except Exception as e:
             print(f"StockAnalysis financials error for {ticker}: {e}")
             return {"ticker": ticker, "financials": {}, "error": str(e)}
@@ -56,6 +63,10 @@ class StockAnalysisScraper:
     async def get_overview(self, ticker: str) -> dict:
         """Get stock overview stats like P/E, market cap, dividend yield."""
         ticker = ticker.upper()
+        cache_key = f"stockanalysis:overview:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
@@ -107,7 +118,9 @@ class StockAnalysisScraper:
                             elif "price target" in label_lower:
                                 stats["price_target"] = value
 
-            return {"ticker": ticker, "overview": stats}
+            result = {"ticker": ticker, "overview": stats}
+            cache.set(cache_key, result, STOCKANALYSIS_TTL)
+            return result
         except Exception as e:
             print(f"StockAnalysis overview error for {ticker}: {e}")
             return {"ticker": ticker, "overview": {}, "error": str(e)}
@@ -115,6 +128,10 @@ class StockAnalysisScraper:
     async def get_analyst_ratings(self, ticker: str) -> dict:
         """Get analyst ratings and price targets."""
         ticker = ticker.upper()
+        cache_key = f"stockanalysis:analyst:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
@@ -147,7 +164,9 @@ class StockAnalysisScraper:
                         elif "sell" in label:
                             ratings["sell_count"] = value
 
-            return {"ticker": ticker, "analyst_ratings": ratings}
+            result = {"ticker": ticker, "analyst_ratings": ratings}
+            cache.set(cache_key, result, STOCKANALYSIS_TTL)
+            return result
         except Exception as e:
             print(f"StockAnalysis ratings error for {ticker}: {e}")
             return {"ticker": ticker, "analyst_ratings": {}, "error": str(e)}

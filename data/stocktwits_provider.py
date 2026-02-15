@@ -1,4 +1,5 @@
 import httpx
+from data.cache import cache, STOCKTWITS_TTL
 
 
 class StockTwitsProvider:
@@ -9,6 +10,10 @@ class StockTwitsProvider:
     async def get_sentiment(self, ticker: str) -> dict:
         """Get sentiment and recent messages for a specific ticker."""
         ticker = ticker.upper()
+        cache_key = f"stocktwits:sentiment:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
@@ -46,7 +51,7 @@ class StockTwitsProvider:
                     "created_at": msg.get("created_at"),
                 })
 
-            return {
+            result = {
                 "ticker": ticker,
                 "watchlist_count": symbol_data.get("watchlist_count"),
                 "bullish_count": bullish,
@@ -55,12 +60,18 @@ class StockTwitsProvider:
                 "total_messages_sampled": len(messages),
                 "recent_messages": recent_messages,
             }
+            cache.set(cache_key, result, STOCKTWITS_TTL)
+            return result
         except Exception as e:
             print(f"StockTwits error for {ticker}: {e}")
             return {"ticker": ticker, "error": str(e)}
 
     async def get_trending(self) -> list:
         """Get currently trending tickers on StockTwits."""
+        cache_key = "stocktwits:trending"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
@@ -73,7 +84,7 @@ class StockTwitsProvider:
                 return []
 
             symbols = data.get("symbols", [])
-            return [
+            result = [
                 {
                     "ticker": s.get("symbol"),
                     "title": s.get("title"),
@@ -81,6 +92,8 @@ class StockTwitsProvider:
                 }
                 for s in symbols[:15]
             ]
+            cache.set(cache_key, result, STOCKTWITS_TTL)
+            return result
         except Exception as e:
             print(f"StockTwits trending error: {e}")
             return []

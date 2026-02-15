@@ -1,4 +1,5 @@
 import httpx
+from data.cache import cache, FMP_TTL
 
 class FMPProvider:
     """
@@ -15,6 +16,10 @@ class FMPProvider:
 
     async def _get(self, endpoint: str, params: dict = None) -> dict | list:
         """Make a GET request to FMP API."""
+        cache_key = f"fmp:{endpoint}:{str(params)[:80]}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         if params is None:
             params = {}
         params["apikey"] = self.api_key
@@ -28,7 +33,9 @@ class FMPProvider:
             if resp.status_code != 200:
                 print(f"FMP error {resp.status_code}: {endpoint}")
                 return []
-            return resp.json()
+            result = resp.json()
+            cache.set(cache_key, result, FMP_TTL)
+            return result
         except Exception as e:
             print(f"FMP request failed ({endpoint}): {e}")
             return []

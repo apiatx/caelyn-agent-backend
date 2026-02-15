@@ -1,5 +1,6 @@
 import httpx
 from bs4 import BeautifulSoup
+from data.cache import cache, FINVIZ_TTL
 
 
 class FinvizScraper:
@@ -25,6 +26,10 @@ class FinvizScraper:
         - ta_overbought: Overbought (RSI)
         - ta_oversold: Oversold (RSI)
         """
+        cache_key = f"finviz:screener:{filters}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
@@ -55,6 +60,7 @@ class FinvizScraper:
                             "change": cols[9].text.strip(),
                         }
                     )
+            cache.set(cache_key, results, FINVIZ_TTL)
             return results
         except Exception as e:
             print(f"Finviz scraper error: {e}")
@@ -138,6 +144,13 @@ class FinvizScraper:
         """Run a custom Finviz screener with arbitrary filter parameters.
         Accepts either a dict of params or a URL query string like 'v=111&f=...'
         """
+        if isinstance(params, str):
+            cache_key = f"finviz:custom:{params[:100]}"
+        else:
+            cache_key = f"finviz:custom:{str(sorted(params.items()))[:100]}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             if isinstance(params, str):
                 url = f"https://finviz.com/screener.ashx?{params}"
@@ -197,6 +210,7 @@ class FinvizScraper:
                         "change": cells[9].get_text(strip=True) if len(cells) > 9 else "",
                         "volume": cells[10].get_text(strip=True) if len(cells) > 10 else "",
                     })
+            cache.set(cache_key, results, FINVIZ_TTL)
             return results
         except Exception as e:
             print(f"Finviz custom screen error: {e}")
