@@ -123,6 +123,9 @@ class TradingAgent:
         elif category == "small_cap_spec":
             return await self.data.get_small_cap_spec()
 
+        elif category == "commodities":
+            return await self.data.get_commodities_dashboard()
+
         else:
             # General question — still provide some market context
             return {

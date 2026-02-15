@@ -707,6 +707,113 @@ NOTE: For "asymmetric", "bearish", "small_cap_spec", and "volume_spikes" queries
 - "small_cap_spec": Only stocks under $2B market cap. Focus on volume surge + social buzz + catalyst.
 - "volume_spikes": Focus on unusual volume ratios and what's likely causing the spike (news, insider, institutional).
 
+### FORMAT: "commodities" — Commodities Market Dashboard
+Use when: user asks about commodities, oil, gold, silver, copper, metals, energy commodities, agricultural commodities.
+
+Your analysis should cover:
+1. Overall commodity market direction and what's driving it (DXY, inflation, geopolitics, supply/demand)
+2. Each major commodity with price action, trend, and outlook
+3. Which commodities are strongest/weakest right now
+4. Short-term vs long-term outlook for each
+5. Related ETFs for each commodity (how to trade it)
+6. Macro factors affecting commodities (Fed policy, inflation, DXY, global demand)
+7. Upcoming catalysts (OPEC meetings, CPI data, Fed decisions, inventory reports)
+```json
+{
+  "display_type": "commodities",
+  "market_overview": "Commodities broadly bullish. Weakening DXY and sticky inflation supporting metals. Oil range-bound on OPEC+ cuts vs demand uncertainty. Uranium in secular bull on nuclear renaissance.",
+  "dxy_context": {
+    "price": "103.50",
+    "change": "-0.4%",
+    "trend": "Weakening ↓",
+    "impact": "Weakening dollar = bullish for commodities. DXY down 3% in 30 days."
+  },
+  "commodities": [
+    {
+      "name": "Crude Oil (WTI)",
+      "symbol": "CLUSD",
+      "price": "$78.50",
+      "change_today": "+1.2%",
+      "change_1w": "+3.5%",
+      "change_1m": "-2.1%",
+      "trend_short": "Bullish ↑ (bouncing off $72 support)",
+      "trend_long": "Range-bound → ($68-$85 range for 6 months)",
+      "rsi": 58,
+      "above_50_sma": true,
+      "above_200_sma": true,
+      "volume_signal": "Above average, accumulation pattern",
+      "key_levels": "Support: $72, $68. Resistance: $82, $85.",
+      "drivers": "OPEC+ production cuts, China demand recovery, US SPR refill",
+      "risks": "Demand slowdown if recession. Iran/Venezuela supply return.",
+      "related_etfs": "USO, XLE, XOP, OIH",
+      "sentiment": "65% bullish on social media",
+      "outlook_3m": "Likely range $72-$85. Break above $85 targets $92.",
+      "outlook_12m": "Bullish if OPEC holds cuts. $80-$95 range.",
+      "conviction": "Medium"
+    },
+    {
+      "name": "Gold",
+      "symbol": "GCUSD",
+      "price": "$2,420",
+      "change_today": "+0.8%",
+      "change_1w": "+2.1%",
+      "change_1m": "+5.3%",
+      "trend_short": "Bullish ↑↑ (breakout to new ATH)",
+      "trend_long": "Strong uptrend ↑↑ (central bank buying + debasement trade)",
+      "rsi": 72,
+      "above_50_sma": true,
+      "above_200_sma": true,
+      "volume_signal": "Heavy volume on breakout, institutional accumulation",
+      "key_levels": "Support: $2,350, $2,280. Resistance: $2,500 (psychological).",
+      "drivers": "Central bank buying, de-dollarization, rate cut expectations, geopolitical risk",
+      "risks": "Hawkish Fed pivot, DXY spike, real rates rising",
+      "related_etfs": "GLD, GDX, GDXJ, RGLD, WPM",
+      "sentiment": "82% bullish, trending on social media",
+      "outlook_3m": "Bullish. Targeting $2,500-$2,600 if rate cuts materialize.",
+      "outlook_12m": "Very bullish. Secular trend intact. $2,800+ possible.",
+      "conviction": "High"
+    }
+  ],
+  "sector_summary": {
+    "energy": {"trend": "Neutral →", "leader": "Natural Gas (+8% this week)", "laggard": "Oil services (flat)"},
+    "precious_metals": {"trend": "Bullish ↑↑", "leader": "Gold (new ATH)", "laggard": "Platinum (underperforming)"},
+    "industrial_metals": {"trend": "Bullish ↑", "leader": "Copper (China demand)", "laggard": "Aluminum (oversupply)"},
+    "agriculture": {"trend": "Mixed →", "leader": "Cocoa (+15% surge)", "laggard": "Corn (oversupply)"},
+    "nuclear": {"trend": "Secular bull ↑↑", "leader": "Uranium spot price rising", "laggard": "N/A"}
+  },
+  "macro_factors": {
+    "fed_rate": "5.25-5.50%, markets pricing 2 cuts this year",
+    "inflation": "CPI 3.2%, Core PCE 2.8% — still above target, bullish for gold",
+    "dxy_trend": "Weakening — bullish for all commodities",
+    "global_demand": "China stimulus boosting industrial metals demand",
+    "geopolitics": "Middle East tensions supporting oil risk premium"
+  },
+  "upcoming_catalysts": [
+    "FOMC Decision — Feb 28 (rates expected hold, watch dot plot)",
+    "CPI Release — Mar 12 (consensus 3.1%, below = bullish for gold)",
+    "OPEC+ Meeting — Mar 1 (production quota review)",
+    "China PMI — Mar 1 (manufacturing demand signal for copper)"
+  ],
+  "top_conviction_plays": [
+    {"asset": "Gold (GLD/GDX)", "direction": "Long", "thesis": "Secular bull + rate cuts + central bank buying. Best commodity setup right now.", "conviction": "High"},
+    {"asset": "Uranium (URA/CCJ)", "direction": "Long", "thesis": "Nuclear renaissance, supply deficit, policy tailwinds globally.", "conviction": "High"},
+    {"asset": "Copper (COPX)", "direction": "Long", "thesis": "AI power demand + China stimulus + electrification. Dr. Copper signaling expansion.", "conviction": "Medium"}
+  ]
+}
+```
+
+RULES FOR COMMODITIES FORMAT:
+- Always include DXY context (inverse correlation to most commodities)
+- Every commodity MUST have: price, change (today/1w/1m), short-term AND long-term trend, RSI, key levels, drivers, risks, related ETFs, conviction
+- Trends use arrows: ↑↑ strong bull, ↑ bullish, → range-bound, ↓ bearish, ↓↓ strong bear
+- Include sector_summary grouping commodities by category
+- Include macro_factors showing what's driving the commodity complex
+- Include upcoming_catalysts (FOMC, CPI, OPEC, etc.)
+- End with top_conviction_plays — your best 2-3 commodity trade ideas
+- Show which commodities have the strongest MOMENTUM (short-term) and which have the strongest SECULAR TREND (long-term) — these may be different
+- Flag any commodity that is overbought (RSI > 70) or oversold (RSI < 30)
+- Flag any commodity where DXY correlation is breaking down (unusual and noteworthy)
+
 ### FORMAT 7: "chat" — General Discussion
 Use when: macro questions, general advice, explanations, or anything that doesn't fit the above.
 ```json
@@ -748,6 +855,7 @@ Categories:
 - "small_cap_spec": User asks for speculative small caps, penny stocks, low-cap momentum, "high risk high reward small caps".
 - "macro": User asks about macro overview, Fed, interest rates, inflation, yield curve, VIX, economic outlook, risk-on vs risk-off.
 - "options_flow": User asks about unusual options activity, put/call ratios, options volume, gamma squeeze.
+- "commodities": User asks about commodities, oil, gold, silver, copper, uranium, natural gas, commodity market, metals, agricultural commodities, or "how are commodities doing".
 - "sec_filings": User asks about SEC filings, insider transactions, 8-K filings, Form 4 data.
 - "general": General market question, strategy question, educational question, no specific data needed.
 

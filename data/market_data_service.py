@@ -202,6 +202,73 @@ class MarketDataService:
             "fear_greed_index": fear_greed,
         }
 
+    async def get_commodities_dashboard(self) -> dict:
+        """
+        Full commodities market dashboard:
+        FMP commodity prices + related ETFs + DXY (inverse correlation) +
+        FRED inflation data + macro context + sector performance.
+        """
+        fmp_commodities = {}
+        fmp_dxy = {}
+        fmp_econ = {}
+        fmp_treasuries = {}
+        if self.fmp:
+            comm_result, dxy_result, econ_result, treasury_result = await asyncio.gather(
+                self.fmp.get_full_commodity_dashboard(),
+                self.fmp.get_dxy(),
+                self.fmp.get_upcoming_economic_events(),
+                self.fmp.get_treasury_rates(),
+                return_exceptions=True,
+            )
+            fmp_commodities = comm_result if not isinstance(comm_result, Exception) else {}
+            fmp_dxy = dxy_result if not isinstance(dxy_result, Exception) else {}
+            fmp_econ = econ_result if not isinstance(econ_result, Exception) else {}
+            fmp_treasuries = treasury_result if not isinstance(treasury_result, Exception) else {}
+
+        fred_macro = self.fred.get_quick_macro()
+
+        fear_greed = await self.fear_greed.get_fear_greed_index()
+
+        commodity_news = self.polygon.get_news(limit=15)
+
+        commodity_etfs = ["USO", "GLD", "SLV", "URA", "UNG", "COPX", "GDX", "XLE"]
+        async def get_etf_ta(ticker):
+            return {
+                "technicals": self.polygon.get_technicals(ticker),
+                "snapshot": self.polygon.get_snapshot(ticker),
+            }
+
+        etf_ta_results = await asyncio.gather(
+            *[asyncio.to_thread(lambda t=t: get_etf_ta(t)) for t in commodity_etfs],
+            return_exceptions=True,
+        )
+        etf_technicals = {}
+        for ticker, result in zip(commodity_etfs, etf_ta_results):
+            if not isinstance(result, Exception):
+                etf_technicals[ticker] = result
+
+        commodity_sentiment = {}
+        commodity_tickers_social = ["USO", "GLD", "URA", "XLE"]
+        social_results = await asyncio.gather(
+            *[self.stocktwits.get_sentiment(t) for t in commodity_tickers_social],
+            return_exceptions=True,
+        )
+        for ticker, result in zip(commodity_tickers_social, social_results):
+            if not isinstance(result, Exception):
+                commodity_sentiment[ticker] = result
+
+        return {
+            "commodity_prices": fmp_commodities,
+            "dxy": fmp_dxy,
+            "economic_calendar": fmp_econ,
+            "treasury_yields": fmp_treasuries,
+            "fred_macro": fred_macro,
+            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+            "commodity_news": commodity_news,
+            "etf_technicals": etf_technicals,
+            "commodity_sentiment": commodity_sentiment,
+        }
+
     async def get_sec_filings(self, ticker: str) -> dict:
         """
         Dedicated SEC filings lookup.

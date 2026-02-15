@@ -256,3 +256,43 @@ class FMPProvider:
             "sector_performance": sector_perf if not isinstance(sector_perf, Exception) else [],
             "economic_calendar": econ_events if not isinstance(econ_events, Exception) else {},
         }
+
+    async def get_full_commodity_dashboard(self) -> dict:
+        """
+        Comprehensive commodity market snapshot:
+        All major commodities with prices, changes, and context.
+        Uses ~5 API calls.
+        """
+        import asyncio
+
+        all_commodities, key_commodities, energy_etfs, metal_etfs, agri_etfs = (
+            await asyncio.gather(
+                self.get_commodity_quotes(),
+                self.get_key_commodities(),
+                self.get_etf_quotes(["XLE", "XOP", "OIH", "UNG", "USO", "URA"]),
+                self.get_etf_quotes(["GLD", "SLV", "GDX", "GDXJ", "COPX", "PPLT"]),
+                self.get_etf_quotes(["DBA", "CORN", "WEAT", "SOYB", "MOO", "COW"]),
+                return_exceptions=True,
+            )
+        )
+
+        return {
+            "all_commodities": all_commodities if not isinstance(all_commodities, Exception) else [],
+            "key_commodities": key_commodities if not isinstance(key_commodities, Exception) else {},
+            "energy_etfs": energy_etfs if not isinstance(energy_etfs, Exception) else {},
+            "metals_etfs": metal_etfs if not isinstance(metal_etfs, Exception) else {},
+            "agriculture_etfs": agri_etfs if not isinstance(agri_etfs, Exception) else {},
+        }
+
+    async def get_commodity_historical(self, symbol: str, days: int = 30) -> list:
+        """Get historical daily prices for a commodity."""
+        from datetime import datetime, timedelta
+        to_date = datetime.now().strftime("%Y-%m-%d")
+        from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        data = await self._get(
+            f"historical-price-full/{symbol}",
+            {"from": from_date, "to": to_date},
+        )
+        if isinstance(data, dict) and "historical" in data:
+            return data["historical"][:days]
+        return []

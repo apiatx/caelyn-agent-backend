@@ -1,0 +1,241 @@
+Please make ALL of the following changes. Do not delete or modify any existing code unless I specifically say "replace."
+PART 1: Backend — New Commodities Data Method
+In data/fmp_provider.py, add these new methods to the FMPProvider class:
+python    async def get_full_commodity_dashboard(self) -> dict:
+        """
+        Comprehensive commodity market snapshot:
+        All major commodities with prices, changes, and context.
+        Uses ~5 API calls.
+        """
+        import asyncio
+
+        # Get all commodity quotes + key commodities + sector performance
+        all_commodities, key_commodities, energy_etfs, metal_etfs, agri_etfs = (
+            await asyncio.gather(
+                self.get_commodity_quotes(),
+                self.get_key_commodities(),
+                self.get_etf_quotes(["XLE", "XOP", "OIH", "UNG", "USO", "URA"]),
+                self.get_etf_quotes(["GLD", "SLV", "GDX", "GDXJ", "COPX", "PPLT"]),
+                self.get_etf_quotes(["DBA", "CORN", "WEAT", "SOYB", "MOO", "COW"]),
+                return_exceptions=True,
+            )
+        )
+
+        return {
+            "all_commodities": all_commodities if not isinstance(all_commodities, Exception) else [],
+            "key_commodities": key_commodities if not isinstance(key_commodities, Exception) else {},
+            "energy_etfs": energy_etfs if not isinstance(energy_etfs, Exception) else {},
+            "metals_etfs": metal_etfs if not isinstance(metal_etfs, Exception) else {},
+            "agriculture_etfs": agri_etfs if not isinstance(agri_etfs, Exception) else {},
+        }
+
+    async def get_commodity_historical(self, symbol: str, days: int = 30) -> list:
+        """Get historical daily prices for a commodity."""
+        from datetime import datetime, timedelta
+        to_date = datetime.now().strftime("%Y-%m-%d")
+        from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        data = await self._get(
+            f"historical-price-full/{symbol}",
+            {"from": from_date, "to": to_date},
+        )
+        if isinstance(data, dict) and "historical" in data:
+            return data["historical"][:days]
+        return []
+In data/market_data_service.py, add this new method to the class:
+python    async def get_commodities_dashboard(self) -> dict:
+        """
+        Full commodities market dashboard:
+        FMP commodity prices + related ETFs + DXY (inverse correlation) +
+        FRED inflation data + macro context + sector performance.
+        """
+        import asyncio
+
+        # FMP data: commodities + DXY + economic calendar
+        fmp_commodities = {}
+        fmp_dxy = {}
+        fmp_econ = {}
+        fmp_treasuries = {}
+        if self.fmp:
+            comm_result, dxy_result, econ_result, treasury_result = await asyncio.gather(
+                self.fmp.get_full_commodity_dashboard(),
+                self.fmp.get_dxy(),
+                self.fmp.get_upcoming_economic_events(),
+                self.fmp.get_treasury_rates(),
+                return_exceptions=True,
+            )
+            fmp_commodities = comm_result if not isinstance(comm_result, Exception) else {}
+            fmp_dxy = dxy_result if not isinstance(dxy_result, Exception) else {}
+            fmp_econ = econ_result if not isinstance(econ_result, Exception) else {}
+            fmp_treasuries = treasury_result if not isinstance(treasury_result, Exception) else {}
+
+        # FRED macro data (inflation, rates — directly affect commodities)
+        fred_macro = self.fred.get_quick_macro()
+
+        # Fear & Greed (risk sentiment affects commodity flows)
+        fear_greed = await self.fear_greed.get_fear_greed_index()
+
+        # News sentiment for commodity-related tickers
+        commodity_news = self.polygon.get_news(limit=15)
+
+        # Get technicals for key commodity ETFs via Polygon
+        commodity_etfs = ["USO", "GLD", "SLV", "URA", "UNG", "COPX", "GDX", "XLE"]
+        async def get_etf_ta(ticker):
+            return {
+                "technicals": self.polygon.get_technicals(ticker),
+                "snapshot": self.polygon.get_snapshot(ticker),
+            }
+
+        etf_ta_results = await asyncio.gather(
+            *[asyncio.to_thread(lambda t=t: get_etf_ta(t)) for t in commodity_etfs],
+            return_exceptions=True,
+        )
+        etf_technicals = {}
+        for ticker, result in zip(commodity_etfs, etf_ta_results):
+            if not isinstance(result, Exception):
+                etf_technicals[ticker] = result
+
+        # Social sentiment for commodity-related topics
+        commodity_sentiment = {}
+        commodity_tickers_social = ["USO", "GLD", "URA", "XLE"]
+        social_results = await asyncio.gather(
+            *[self.stocktwits.get_sentiment(t) for t in commodity_tickers_social],
+            return_exceptions=True,
+        )
+        for ticker, result in zip(commodity_tickers_social, social_results):
+            if not isinstance(result, Exception):
+                commodity_sentiment[ticker] = result
+
+        return {
+            "commodity_prices": fmp_commodities,
+            "dxy": fmp_dxy,
+            "economic_calendar": fmp_econ,
+            "treasury_yields": fmp_treasuries,
+            "fred_macro": fred_macro,
+            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+            "commodity_news": commodity_news,
+            "etf_technicals": etf_technicals,
+            "commodity_sentiment": commodity_sentiment,
+        }
+PART 2: Backend — Route the New Category
+In agent/claude_agent.py, find the _gather_data method. Add this block after the existing elif blocks (before the final else):
+python        elif category == "commodities":
+            return await self.data.get_commodities_dashboard()
+```
+
+## PART 3: Backend — Add Commodities to Query Classifier
+
+**In `agent/prompts.py`, in the `QUERY_CLASSIFIER_PROMPT`, add this line after the existing categories:**
+```
+- "commodities": User asks about commodities, oil, gold, silver, copper, uranium, natural gas, commodity market, metals, agricultural commodities, or "how are commodities doing".
+```
+
+## PART 4: Backend — Add Commodities Display Format to System Prompt
+
+**In `agent/prompts.py`, find the section with format definitions. Add this right BEFORE the `### FORMAT 7: "chat"` section:**
+```
+### FORMAT: "commodities" — Commodities Market Dashboard
+Use when: user asks about commodities, oil, gold, silver, copper, metals, energy commodities, agricultural commodities.
+
+Your analysis should cover:
+1. Overall commodity market direction and what's driving it (DXY, inflation, geopolitics, supply/demand)
+2. Each major commodity with price action, trend, and outlook
+3. Which commodities are strongest/weakest right now
+4. Short-term vs long-term outlook for each
+5. Related ETFs for each commodity (how to trade it)
+6. Macro factors affecting commodities (Fed policy, inflation, DXY, global demand)
+7. Upcoming catalysts (OPEC meetings, CPI data, Fed decisions, inventory reports)
+```json
+{
+  "display_type": "commodities",
+  "market_overview": "Commodities broadly bullish. Weakening DXY and sticky inflation supporting metals. Oil range-bound on OPEC+ cuts vs demand uncertainty. Uranium in secular bull on nuclear renaissance.",
+  "dxy_context": {
+    "price": "103.50",
+    "change": "-0.4%",
+    "trend": "Weakening ↓",
+    "impact": "Weakening dollar = bullish for commodities. DXY down 3% in 30 days."
+  },
+  "commodities": [
+    {
+      "name": "Crude Oil (WTI)",
+      "symbol": "CLUSD",
+      "price": "$78.50",
+      "change_today": "+1.2%",
+      "change_1w": "+3.5%",
+      "change_1m": "-2.1%",
+      "trend_short": "Bullish ↑ (bouncing off $72 support)",
+      "trend_long": "Range-bound → ($68-$85 range for 6 months)",
+      "rsi": 58,
+      "above_50_sma": true,
+      "above_200_sma": true,
+      "volume_signal": "Above average, accumulation pattern",
+      "key_levels": "Support: $72, $68. Resistance: $82, $85.",
+      "drivers": "OPEC+ production cuts, China demand recovery, US SPR refill",
+      "risks": "Demand slowdown if recession. Iran/Venezuela supply return.",
+      "related_etfs": "USO, XLE, XOP, OIH",
+      "sentiment": "65% bullish on social media",
+      "outlook_3m": "Likely range $72-$85. Break above $85 targets $92.",
+      "outlook_12m": "Bullish if OPEC holds cuts. $80-$95 range.",
+      "conviction": "Medium"
+    },
+    {
+      "name": "Gold",
+      "symbol": "GCUSD",
+      "price": "$2,420",
+      "change_today": "+0.8%",
+      "change_1w": "+2.1%",
+      "change_1m": "+5.3%",
+      "trend_short": "Bullish ↑↑ (breakout to new ATH)",
+      "trend_long": "Strong uptrend ↑↑ (central bank buying + debasement trade)",
+      "rsi": 72,
+      "above_50_sma": true,
+      "above_200_sma": true,
+      "volume_signal": "Heavy volume on breakout, institutional accumulation",
+      "key_levels": "Support: $2,350, $2,280. Resistance: $2,500 (psychological).",
+      "drivers": "Central bank buying, de-dollarization, rate cut expectations, geopolitical risk",
+      "risks": "Hawkish Fed pivot, DXY spike, real rates rising",
+      "related_etfs": "GLD, GDX, GDXJ, RGLD, WPM",
+      "sentiment": "82% bullish, trending on social media",
+      "outlook_3m": "Bullish. Targeting $2,500-$2,600 if rate cuts materialize.",
+      "outlook_12m": "Very bullish. Secular trend intact. $2,800+ possible.",
+      "conviction": "High"
+    }
+  ],
+  "sector_summary": {
+    "energy": {"trend": "Neutral →", "leader": "Natural Gas (+8% this week)", "laggard": "Oil services (flat)"},
+    "precious_metals": {"trend": "Bullish ↑↑", "leader": "Gold (new ATH)", "laggard": "Platinum (underperforming)"},
+    "industrial_metals": {"trend": "Bullish ↑", "leader": "Copper (China demand)", "laggard": "Aluminum (oversupply)"},
+    "agriculture": {"trend": "Mixed →", "leader": "Cocoa (+15% surge)", "laggard": "Corn (oversupply)"},
+    "nuclear": {"trend": "Secular bull ↑↑", "leader": "Uranium spot price rising", "laggard": "N/A"}
+  },
+  "macro_factors": {
+    "fed_rate": "5.25-5.50%, markets pricing 2 cuts this year",
+    "inflation": "CPI 3.2%, Core PCE 2.8% — still above target, bullish for gold",
+    "dxy_trend": "Weakening — bullish for all commodities",
+    "global_demand": "China stimulus boosting industrial metals demand",
+    "geopolitics": "Middle East tensions supporting oil risk premium"
+  },
+  "upcoming_catalysts": [
+    "FOMC Decision — Feb 28 (rates expected hold, watch dot plot)",
+    "CPI Release — Mar 12 (consensus 3.1%, below = bullish for gold)",
+    "OPEC+ Meeting — Mar 1 (production quota review)",
+    "China PMI — Mar 1 (manufacturing demand signal for copper)"
+  ],
+  "top_conviction_plays": [
+    {"asset": "Gold (GLD/GDX)", "direction": "Long", "thesis": "Secular bull + rate cuts + central bank buying. Best commodity setup right now.", "conviction": "High"},
+    {"asset": "Uranium (URA/CCJ)", "direction": "Long", "thesis": "Nuclear renaissance, supply deficit, policy tailwinds globally.", "conviction": "High"},
+    {"asset": "Copper (COPX)", "direction": "Long", "thesis": "AI power demand + China stimulus + electrification. Dr. Copper signaling expansion.", "conviction": "Medium"}
+  ]
+}
+```
+
+RULES FOR COMMODITIES FORMAT:
+- Always include DXY context (inverse correlation to most commodities)
+- Every commodity MUST have: price, change (today/1w/1m), short-term AND long-term trend, RSI, key levels, drivers, risks, related ETFs, conviction
+- Trends use arrows: ↑↑ strong bull, ↑ bullish, → range-bound, ↓ bearish, ↓↓ strong bear
+- Include sector_summary grouping commodities by category
+- Include macro_factors showing what's driving the commodity complex
+- Include upcoming_catalysts (FOMC, CPI, OPEC, etc.)
+- End with top_conviction_plays — your best 2-3 commodity trade ideas
+- Show which commodities have the strongest MOMENTUM (short-term) and which have the strongest SECULAR TREND (long-term) — these may be different
+- Flag any commodity that is overbought (RSI > 70) or oversold (RSI < 30)
+- Flag any commodity where DXY correlation is breaking down (unusual and noteworthy)
