@@ -17,6 +17,7 @@ class TradingAgent:
         Main entry point. Classify the query, gather data, ask Claude.
         """
         query_info = self._classify_query(user_prompt)
+        query_info["original_prompt"] = user_prompt
         market_data = await self._gather_data(query_info)
         raw_response = self._ask_claude(user_prompt, market_data, history)
         return self._parse_response(raw_response)
@@ -132,6 +133,11 @@ class TradingAgent:
         elif category == "trending":
             return await self.data.get_cross_platform_trending()
 
+        elif category == "ai_screener":
+            original_prompt = query_info.get("original_prompt", "")
+            filters = self._extract_screener_filters(original_prompt)
+            return await self.data.run_ai_screener(filters)
+
         elif category == "briefing":
             return await self.data.get_morning_briefing()
 
@@ -160,6 +166,122 @@ class TradingAgent:
             return {
                 "market_news": self.data.polygon.get_news(limit=10),
             }
+
+    def _extract_screener_filters(self, prompt: str) -> dict:
+        """
+        Parse natural language screener request into structured filters.
+        Uses keyword matching for common criteria.
+        """
+        import re
+        filters = {}
+        p = prompt.lower()
+
+        cap_match = re.search(r'(?:market\s*cap|mcap).*?(?:under|below|<|max)\s*\$?(\d+\.?\d*)\s*([bmtBMT])', p)
+        if cap_match:
+            val = float(cap_match.group(1))
+            unit = cap_match.group(2).lower()
+            if unit == 'm': val /= 1000
+            elif unit == 't': val *= 1000
+            filters["market_cap_max"] = val
+
+        cap_match2 = re.search(r'(?:market\s*cap|mcap).*?(?:over|above|>|min|at least)\s*\$?(\d+\.?\d*)\s*([bmtBMT])', p)
+        if cap_match2:
+            val = float(cap_match2.group(1))
+            unit = cap_match2.group(2).lower()
+            if unit == 'm': val /= 1000
+            elif unit == 't': val *= 1000
+            filters["market_cap_min"] = val
+
+        if "small cap" in p and "market_cap_max" not in filters:
+            filters["market_cap_max"] = 2
+        if "micro cap" in p and "market_cap_max" not in filters:
+            filters["market_cap_max"] = 0.3
+        if "mid cap" in p:
+            filters.setdefault("market_cap_min", 2)
+            filters.setdefault("market_cap_max", 10)
+        if "large cap" in p:
+            filters.setdefault("market_cap_min", 10)
+
+        rev_match = re.search(r'(?:revenue|sales)\s*(?:growth)?\s*(?:>|over|above|at least|min)?\s*(\d+)\s*%', p)
+        if rev_match:
+            filters["revenue_growth_min"] = int(rev_match.group(1))
+        elif "revenue growth" in p or "sales growth" in p:
+            filters["revenue_growth_min"] = 10
+
+        eps_match = re.search(r'(?:eps|earnings)\s*(?:growth)?\s*(?:>|over|above)?\s*(\d+)\s*%', p)
+        if eps_match:
+            filters["eps_growth_min"] = int(eps_match.group(1))
+
+        pe_match = re.search(r'(?:p/?e|pe ratio)\s*(?:<|under|below|max)?\s*(\d+)', p)
+        if pe_match:
+            filters["pe_max"] = int(pe_match.group(1))
+
+        ps_match = re.search(r'(?:p/?s|price.to.sales)\s*(?:<|under|below)?\s*(\d+)', p)
+        if ps_match:
+            filters["ps_max"] = int(ps_match.group(1))
+
+        rsi_low = re.search(r'rsi\s*(?:<|under|below)\s*(\d+)', p)
+        if rsi_low:
+            filters["rsi_max"] = int(rsi_low.group(1))
+        rsi_high = re.search(r'rsi\s*(?:>|over|above)\s*(\d+)', p)
+        if rsi_high:
+            filters["rsi_min"] = int(rsi_high.group(1))
+        if "oversold" in p and "rsi_max" not in filters:
+            filters["rsi_max"] = 30
+        if "overbought" in p and "rsi_min" not in filters:
+            filters["rsi_min"] = 70
+
+        if "above 200" in p or "above sma200" in p or "above 200 sma" in p:
+            filters["above_sma200"] = True
+        if "above 50" in p or "above sma50" in p or "above 50 sma" in p:
+            filters["above_sma50"] = True
+        if "below 200" in p or "below sma200" in p:
+            filters["below_sma200"] = True
+        if "below 50" in p or "below sma50" in p:
+            filters["below_sma50"] = True
+        if "stage 2" in p:
+            filters["above_sma200"] = True
+            filters["above_sma50"] = True
+
+        if "insider buy" in p or "insider purchas" in p:
+            filters["insider_buying"] = True
+
+        if "unusual volume" in p or "volume spike" in p:
+            filters["unusual_volume"] = True
+        rv_match = re.search(r'(?:relative|rel)\s*(?:volume|vol)\s*(?:>|over|above)?\s*(\d+\.?\d*)', p)
+        if rv_match:
+            filters["relative_volume_min"] = float(rv_match.group(1))
+
+        if "profitable" in p or "positive margin" in p or "positive ebitda" in p:
+            filters["positive_margin"] = True
+
+        de_match = re.search(r'(?:debt.to.equity|d/?e)\s*(?:<|under|below)\s*(\d+\.?\d*)', p)
+        if de_match:
+            filters["debt_equity_max"] = float(de_match.group(1))
+        if "low debt" in p and "debt_equity_max" not in filters:
+            filters["debt_equity_max"] = 0.5
+
+        sf_match = re.search(r'short\s*(?:float|interest)\s*(?:>|over|above)\s*(\d+)', p)
+        if sf_match:
+            filters["short_float_min"] = int(sf_match.group(1))
+
+        sector_keywords = {
+            "tech": "technology", "healthcare": "healthcare", "health care": "healthcare",
+            "financial": "financial", "bank": "financial", "energy": "energy",
+            "industrial": "industrials", "consumer": "consumer cyclical",
+            "real estate": "real estate", "utilities": "utilities", "materials": "basic materials",
+        }
+        for kw, sec in sector_keywords.items():
+            if kw in p:
+                filters["sector"] = sec
+                break
+
+        div_match = re.search(r'dividend\s*(?:yield)?\s*(?:>|over|above|at least)\s*(\d+\.?\d*)', p)
+        if div_match:
+            filters["dividend_yield_min"] = float(div_match.group(1))
+
+        print(f"[AI Screener] Extracted filters from prompt: {filters}")
+        return filters
 
     def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None) -> str:
         """Send the user's question + market data to Claude with conversation history."""

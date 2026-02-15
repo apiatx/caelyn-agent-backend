@@ -1378,6 +1378,79 @@ RULES FOR TRENDING FORMAT:
 - Include why_trending for each — this is not just a list, explain the narrative driving attention
 - Use StockAnalysis fundamentals (revenue growth, margins, P/E) to distinguish between trending because of FUNDAMENTALS vs trending because of HYPE
 
+### FORMAT: "screener" — AI Custom Stock Screener Results
+Use when: user asks to screen/scan/filter for stocks matching specific criteria.
+
+You receive the results of a custom Finviz screen enriched with StockAnalysis data.
+Your job is to present the results in a clean, sortable screener table format AND
+provide analysis of the best opportunities in the results.
+```json
+{
+  "display_type": "screener",
+  "query_interpretation": "You asked for: small caps under $2B with revenue growth >30%, positive margins, RSI under 40, and insider buying",
+  "filters_applied": {
+    "market_cap_max": "$2B",
+    "revenue_growth_min": "30%+",
+    "positive_margin": true,
+    "rsi_max": 40,
+    "insider_buying": true
+  },
+  "total_matches": 12,
+  "results": [
+    {
+      "ticker": "ACME",
+      "company": "Acme Corp",
+      "price": "$45.20",
+      "change_pct": "+2.1%",
+      "market_cap": "$1.2B",
+      "pe_ratio": "18.5",
+      "ps_ratio": "3.2",
+      "revenue_growth": "+42% YoY",
+      "eps_growth": "+35% YoY",
+      "operating_margin": "18.5%",
+      "profit_margin": "12.3%",
+      "rsi": 35,
+      "sma50": "Above",
+      "sma200": "Above",
+      "rel_volume": "1.8x",
+      "avg_volume": "850K",
+      "short_float": "4.2%",
+      "analyst_rating": "Buy",
+      "price_target": "$58.00",
+      "upside": "+28%",
+      "insider_activity": "3 buys last 30 days",
+      "highlight": true,
+      "note": "Best in screen — highest revenue growth with lowest RSI. Insider cluster buy pattern."
+    }
+  ],
+  "top_picks": [
+    {
+      "ticker": "ACME",
+      "why": "Strongest combination: 42% revenue growth, insiders buying aggressively, RSI 35 (oversold), 28% analyst upside. The fundamentals are accelerating while the stock is pulled back — textbook setup.",
+      "trade_plan": {
+        "entry": "$44-46",
+        "stop": "$39",
+        "target": "$58",
+        "risk_reward": "1:2.3"
+      }
+    }
+  ],
+  "observations": "12 stocks matched your criteria. The healthcare sector dominates (7 of 12) — this aligns with our Stage 2 sector data showing healthcare in strong uptrend. 3 stocks have insider buying clusters which is the highest conviction signal."
+}
+```
+
+RULES FOR SCREENER FORMAT:
+- ALWAYS start with query_interpretation — restate what the user asked for in plain English
+- Show filters_applied so the user can verify their criteria was understood correctly
+- Present ALL results in a table-friendly format with consistent fields
+- Every result must include: ticker, company, price, change, market_cap, and whatever metrics are relevant to the user's query
+- Mark the best 1-3 results with "highlight": true and explain WHY in the note field
+- Include top_picks section with analysis and trade plans for the highest conviction matches
+- Include observations about patterns (sector clustering, common themes, etc.)
+- If no results match, suggest which filter to loosen: "No matches found. The RSI <30 filter is very restrictive — try RSI <40."
+- Include StockAnalysis data fields wherever available: revenue_growth, margins, analyst ratings, price targets
+- If the user's criteria was vague, note what assumptions you made
+
 ### FORMAT 7: "chat" — General Discussion
 Use when: macro questions, general advice, explanations, or anything that doesn't fit the above.
 ```json
@@ -1425,6 +1498,7 @@ Categories:
 - "portfolio_review": User provides a list of tickers and wants them all analyzed, rated, and ranked. Also triggered by "review my portfolio", "analyze these stocks", "rate these tickers", "rank my holdings". Extract all tickers mentioned.
 - "briefing": User asks for a morning briefing, daily overview, "what should I do today", "top moves today", "daily snapshot", "what's the play today", "quick overview", or clicks the daily briefing button. This is a combined intelligence report, not a single category scan.
 - "crypto": User asks about cryptocurrency, Bitcoin, Ethereum, altcoins, crypto market, DeFi, funding rates, perpetuals, on-chain data, crypto momentum, meme coins, or any specific crypto token/coin.
+- "ai_screener": User wants to screen/scan/filter for stocks matching specific custom criteria. They mention specific technical or fundamental requirements like "find stocks with revenue growth >30%", "screen for oversold stocks with insider buying", "show me small caps with low P/E and high growth", or any request that includes multiple specific quantitative filters. This is NOT for general questions like "best trades" — it's for custom screening with user-defined parameters.
 - "general": General market question, strategy question, educational question, no specific data needed.
 
 Also extract these filters when present:

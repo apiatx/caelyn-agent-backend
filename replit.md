@@ -68,6 +68,9 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-15: Added AI custom stock screener (natural language → Finviz filters → StockAnalysis enrichment)
+- 2026-02-15: Added _extract_screener_filters NLP parser for market cap, revenue growth, P/E, RSI, SMA, insider buying, sectors, etc.
+- 2026-02-15: Added screener display format and ai_screener classifier category
 - 2026-02-15: Added CoinMarketCap provider (trending, most-visited, new listings, gainers/losers, categories, metadata, global metrics)
 - 2026-02-15: Combined crypto scanner now cross-references CoinGecko + CMC trending (dual_trending = strongest signal)
 - 2026-02-15: Added volume acceleration, most-visited divergence, new listings watch, and attention signals to crypto format

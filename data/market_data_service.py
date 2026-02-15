@@ -2101,6 +2101,214 @@ class MarketDataService:
             "crypto_news": data.get("crypto_news", {}),
         }
 
+    async def run_ai_screener(self, filters: dict) -> dict:
+        """
+        AI-powered custom screener. Takes parsed filter criteria and
+        builds Finviz screen URL, runs it, then enriches results with
+        StockAnalysis fundamentals.
+        """
+        import asyncio
+        from data.scoring_engine import score_for_trades
+
+        f_parts = []
+
+        mc_min = filters.get("market_cap_min")
+        mc_max = filters.get("market_cap_max")
+        if mc_min is not None:
+            if mc_min >= 200: f_parts.append("cap_megaover")
+            elif mc_min >= 10: f_parts.append("cap_largeover")
+            elif mc_min >= 2: f_parts.append("cap_midover")
+            elif mc_min >= 0.3: f_parts.append("cap_smallover")
+            elif mc_min >= 0.05: f_parts.append("cap_microover")
+        if mc_max is not None:
+            if mc_max <= 0.3: f_parts.append("cap_smallunder")
+            elif mc_max <= 2: f_parts.append("cap_midunder")
+            elif mc_max <= 10: f_parts.append("cap_largeunder")
+            elif mc_max <= 200: f_parts.append("cap_megaunder")
+
+        rg = filters.get("revenue_growth_min")
+        if rg is not None:
+            if rg >= 30: f_parts.append("fa_salesqoq_o30")
+            elif rg >= 25: f_parts.append("fa_salesqoq_o25")
+            elif rg >= 20: f_parts.append("fa_salesqoq_o20")
+            elif rg >= 15: f_parts.append("fa_salesqoq_o15")
+            elif rg >= 10: f_parts.append("fa_salesqoq_o10")
+            elif rg >= 5: f_parts.append("fa_salesqoq_o5")
+
+        eg = filters.get("eps_growth_min")
+        if eg is not None:
+            if eg >= 30: f_parts.append("fa_epsqoq_o30")
+            elif eg >= 25: f_parts.append("fa_epsqoq_o25")
+            elif eg >= 20: f_parts.append("fa_epsqoq_o20")
+            elif eg >= 15: f_parts.append("fa_epsqoq_o15")
+            elif eg >= 10: f_parts.append("fa_epsqoq_o10")
+            elif eg >= 5: f_parts.append("fa_epsqoq_o5")
+
+        pe_max = filters.get("pe_max")
+        if pe_max is not None:
+            if pe_max <= 5: f_parts.append("fa_pe_u5")
+            elif pe_max <= 10: f_parts.append("fa_pe_u10")
+            elif pe_max <= 15: f_parts.append("fa_pe_u15")
+            elif pe_max <= 20: f_parts.append("fa_pe_u20")
+            elif pe_max <= 30: f_parts.append("fa_pe_u30")
+            elif pe_max <= 40: f_parts.append("fa_pe_u40")
+            elif pe_max <= 50: f_parts.append("fa_pe_u50")
+
+        ps_max = filters.get("ps_max")
+        if ps_max is not None:
+            if ps_max <= 1: f_parts.append("fa_ps_u1")
+            elif ps_max <= 2: f_parts.append("fa_ps_u2")
+            elif ps_max <= 3: f_parts.append("fa_ps_u3")
+            elif ps_max <= 5: f_parts.append("fa_ps_u5")
+
+        p_min = filters.get("price_min")
+        if p_min is not None:
+            if p_min >= 50: f_parts.append("sh_price_o50")
+            elif p_min >= 20: f_parts.append("sh_price_o20")
+            elif p_min >= 10: f_parts.append("sh_price_o10")
+            elif p_min >= 5: f_parts.append("sh_price_o5")
+
+        p_max = filters.get("price_max")
+        if p_max is not None:
+            if p_max <= 5: f_parts.append("sh_price_u5")
+            elif p_max <= 10: f_parts.append("sh_price_u10")
+            elif p_max <= 20: f_parts.append("sh_price_u20")
+            elif p_max <= 50: f_parts.append("sh_price_u50")
+
+        rsi_max = filters.get("rsi_max")
+        if rsi_max is not None:
+            if rsi_max <= 30: f_parts.append("ta_rsi_os30")
+            elif rsi_max <= 40: f_parts.append("ta_rsi_os40")
+            elif rsi_max <= 50: f_parts.append("ta_rsi_os50")
+            elif rsi_max <= 60: f_parts.append("ta_rsi_os60")
+
+        rsi_min = filters.get("rsi_min")
+        if rsi_min is not None:
+            if rsi_min >= 70: f_parts.append("ta_rsi_ob70")
+            elif rsi_min >= 60: f_parts.append("ta_rsi_ob60")
+            elif rsi_min >= 50: f_parts.append("ta_rsi_ob50")
+
+        if filters.get("above_sma200"): f_parts.append("ta_sma200_pa")
+        if filters.get("above_sma50"): f_parts.append("ta_sma50_pa")
+        if filters.get("below_sma200"): f_parts.append("ta_sma200_pb")
+        if filters.get("below_sma50"): f_parts.append("ta_sma50_pb")
+
+        if filters.get("insider_buying"): f_parts.append("it_latestbuys")
+
+        if filters.get("analyst_upgrades"): f_parts.append("ta_change_u")
+
+        if filters.get("unusual_volume"): f_parts.append("sh_relvol_o1.5")
+        rv = filters.get("relative_volume_min")
+        if rv is not None:
+            if rv >= 3: f_parts.append("sh_relvol_o3")
+            elif rv >= 2: f_parts.append("sh_relvol_o2")
+            elif rv >= 1.5: f_parts.append("sh_relvol_o1.5")
+
+        av = filters.get("avg_volume_min")
+        if av is not None:
+            if av >= 1000: f_parts.append("sh_avgvol_o1000")
+            elif av >= 500: f_parts.append("sh_avgvol_o500")
+            elif av >= 400: f_parts.append("sh_avgvol_o400")
+            elif av >= 300: f_parts.append("sh_avgvol_o300")
+            elif av >= 200: f_parts.append("sh_avgvol_o200")
+            elif av >= 100: f_parts.append("sh_avgvol_o100")
+        else:
+            f_parts.append("sh_avgvol_o200")
+
+        if filters.get("positive_margin"): f_parts.append("fa_opermargin_pos")
+
+        de_max = filters.get("debt_equity_max")
+        if de_max is not None:
+            if de_max <= 0.5: f_parts.append("fa_debteq_u0.5")
+            elif de_max <= 1: f_parts.append("fa_debteq_u1")
+
+        sf_min = filters.get("short_float_min")
+        if sf_min is not None:
+            if sf_min >= 20: f_parts.append("sh_short_o20")
+            elif sf_min >= 15: f_parts.append("sh_short_o15")
+            elif sf_min >= 10: f_parts.append("sh_short_o10")
+            elif sf_min >= 5: f_parts.append("sh_short_o5")
+
+        sector = filters.get("sector")
+        if sector:
+            sector_map = {
+                "technology": "sec_technology",
+                "healthcare": "sec_healthcare",
+                "financial": "sec_financial",
+                "energy": "sec_energy",
+                "industrials": "sec_industrials",
+                "consumer cyclical": "sec_consumercyclical",
+                "consumer defensive": "sec_consumerdefensive",
+                "basic materials": "sec_basicmaterials",
+                "real estate": "sec_realestate",
+                "utilities": "sec_utilities",
+                "communication services": "sec_communicationservices",
+            }
+            sec_code = sector_map.get(sector.lower(), "")
+            if sec_code:
+                f_parts.append(sec_code)
+
+        custom = filters.get("custom_finviz_params")
+        if custom:
+            f_parts.append(custom)
+
+        filter_str = ",".join(f_parts) if f_parts else "sh_avgvol_o200"
+        screen_url = f"v=111&f={filter_str}&ft=4&o=-sh_relvol"
+
+        print(f"[AI Screener] Finviz filter: {screen_url}")
+        print(f"[AI Screener] Parsed filters: {filters}")
+
+        screener_results = await self.finviz._custom_screen(screen_url)
+        if isinstance(screener_results, Exception) or not screener_results:
+            return {
+                "filters_applied": filters,
+                "finviz_url": screen_url,
+                "total_results": 0,
+                "results": [],
+                "error": "No stocks matched your criteria. Try loosening some filters.",
+            }
+
+        print(f"[AI Screener] Found {len(screener_results)} matches")
+
+        tickers_to_enrich = screener_results[:30]
+
+        async def enrich_ticker(item):
+            ticker = item.get("ticker", "")
+            if not ticker:
+                return item
+            try:
+                overview, analyst = await asyncio.gather(
+                    self.stockanalysis.get_overview(ticker),
+                    self.stockanalysis.get_analyst_ratings(ticker),
+                    return_exceptions=True,
+                )
+                item["sa_overview"] = overview if not isinstance(overview, Exception) else {}
+                item["sa_analyst"] = analyst if not isinstance(analyst, Exception) else {}
+            except:
+                item["sa_overview"] = {}
+                item["sa_analyst"] = {}
+            return item
+
+        enriched = await asyncio.gather(
+            *[enrich_ticker(item) for item in tickers_to_enrich],
+            return_exceptions=True,
+        )
+
+        clean_results = []
+        for r in enriched:
+            if isinstance(r, Exception):
+                continue
+            if isinstance(r, dict):
+                clean_results.append(r)
+
+        return {
+            "filters_applied": filters,
+            "finviz_url": screen_url,
+            "total_results": len(screener_results),
+            "showing": len(clean_results),
+            "results": clean_results,
+        }
+
     def _analyze_funding_rates(self, derivatives: list) -> dict:
         if not derivatives or not isinstance(derivatives, list):
             return {}
