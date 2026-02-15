@@ -566,6 +566,44 @@ def score_for_bearish(ticker_data: dict) -> float:
     return round(min(score, 100), 1)
 
 
+def score_for_small_cap(ticker_data: dict) -> float:
+    """
+    Score for speculative small cap plays.
+    Same as trades but with heavy market cap filtering.
+    Stocks over $2B get massively penalized.
+    """
+    base_score = score_for_trades(ticker_data)
+
+    details = ticker_data.get("details", {})
+    overview = ticker_data.get("overview", {})
+    market_cap = None
+
+    if isinstance(details, dict):
+        market_cap = details.get("market_cap")
+    if market_cap is None and isinstance(overview, dict):
+        market_cap = overview.get("market_cap")
+
+    if market_cap is not None:
+        try:
+            mc = float(market_cap)
+            if mc > 10e9:
+                return 0
+            elif mc > 2e9:
+                base_score *= 0.3
+            elif mc > 500e6:
+                base_score *= 0.9
+            elif mc > 100e6:
+                base_score *= 1.1
+            elif mc > 50e6:
+                base_score *= 1.0
+            else:
+                base_score *= 0.7
+        except (TypeError, ValueError):
+            pass
+
+    return round(min(base_score, 100), 1)
+
+
 SCORING_FUNCTIONS = {
     "market_scan": score_for_trades,
     "trades": score_for_trades,
@@ -573,7 +611,7 @@ SCORING_FUNCTIONS = {
     "squeeze": score_for_squeeze,
     "fundamentals_scan": score_for_fundamentals,
     "bearish": score_for_bearish,
-    "small_cap_spec": score_for_trades,
+    "small_cap_spec": score_for_small_cap,
     "asymmetric": score_for_investments,
     "volume_spikes": score_for_trades,
     "social_momentum": score_for_trades,

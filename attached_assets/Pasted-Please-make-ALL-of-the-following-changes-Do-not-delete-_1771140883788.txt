@@ -1,0 +1,482 @@
+Please make ALL of the following changes. Do not delete or modify any existing code unless I specifically say "replace."
+PART 1: Add Finviz Fundamental-Oriented Screeners
+In data/finviz_scraper.py, add these methods to the class:
+python    async def get_revenue_growth_leaders(self) -> list:
+        """Stocks with high revenue growth (>25% YoY) and positive price action."""
+        return await self._custom_screen(
+            "v=111&f=fa_salesqoq_o25,sh_avgvol_o300,ta_change_u&ft=4&o=-fa_salesqoq"
+        )
+
+    async def get_earnings_growth_leaders(self) -> list:
+        """Stocks with strong EPS growth and positive momentum."""
+        return await self._custom_screen(
+            "v=111&f=fa_epsqoq_o25,sh_avgvol_o300,ta_change_u&ft=4&o=-fa_epsqoq"
+        )
+
+    async def get_profitable_growth(self) -> list:
+        """Growing stocks that are actually profitable (positive margins + growth)."""
+        return await self._custom_screen(
+            "v=111&f=fa_epsqoq_o15,fa_opermargin_pos,fa_salesqoq_o15,sh_avgvol_o300&ft=4&o=-fa_salesqoq"
+        )
+
+    async def get_low_ps_high_growth(self) -> list:
+        """Undervalued on P/S but growing fast — asymmetric value + growth."""
+        return await self._custom_screen(
+            "v=111&f=fa_ps_u5,fa_salesqoq_o20,sh_avgvol_o200&ft=4&o=-fa_salesqoq"
+        )
+
+    async def get_ebitda_positive_turn(self) -> list:
+        """Stocks with positive operating margins that recently turned profitable."""
+        return await self._custom_screen(
+            "v=111&f=fa_opermargin_pos,fa_salesqoq_o10,sh_avgvol_o200,ta_change_u&ft=4&o=-fa_salesqoq"
+        )
+
+    async def get_low_debt_growth(self) -> list:
+        """Growing companies with low debt — financially healthy growers."""
+        return await self._custom_screen(
+            "v=111&f=fa_debteq_u0.5,fa_salesqoq_o15,sh_avgvol_o200&ft=4&o=-fa_salesqoq"
+        )
+
+    async def get_institutional_accumulation(self) -> list:
+        """Stocks with increasing institutional ownership + positive momentum."""
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o500,sh_instown_o60,ta_change_u,ta_sma50_pa&ft=4&o=-change"
+        )
+
+    async def get_breaking_below_200sma(self) -> list:
+        """Stocks breaking below 200 SMA — Stage 3/4 breakdown candidates."""
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,ta_sma200_pb,ta_change_d&ft=4&o=change"
+        )
+
+    async def get_declining_earnings(self) -> list:
+        """Stocks with declining EPS — fundamental deterioration."""
+        return await self._custom_screen(
+            "v=111&f=fa_epsqoq_d,sh_avgvol_o300&ft=4&o=fa_epsqoq"
+        )
+
+    async def get_high_short_declining(self) -> list:
+        """High short interest + price declining — shorts are winning."""
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,sh_short_o10,ta_change_d,ta_sma50_pb&ft=4&o=-sh_short"
+        )
+PART 2: Update Wide Scan Screener Sets per Category
+In data/market_data_service.py, find the wide_scan_and_rank method's Stage 1 section. Replace the elif category in ["investments", "fundamentals_scan"]: block with:
+python        elif category in ["investments"]:
+            # INVESTMENTS: Fundamentals-first discovery
+            screener_results = await asyncio.gather(
+                self.finviz.get_revenue_growth_leaders(),      # Revenue acceleration
+                self.finviz.get_earnings_growth_leaders(),     # EPS growth
+                self.finviz.get_profitable_growth(),           # Profitable + growing
+                self.finviz.get_low_ps_high_growth(),          # Undervalued growth
+                self.finviz.get_ebitda_positive_turn(),        # EBITDA inflection
+                self.finviz.get_low_debt_growth(),             # Healthy balance sheet
+                self.finviz.get_insider_buying(),              # Smart money
+                self.finviz.get_institutional_accumulation(),  # Institution buying
+                self.finviz.get_analyst_upgrades(),            # Analyst recognition
+                self.finviz.get_stage2_breakouts(),            # Weinstein confirms
+                return_exceptions=True,
+            )
+
+        elif category in ["fundamentals_scan"]:
+            # IMPROVING FUNDAMENTALS: Pure financial improvement scan
+            screener_results = await asyncio.gather(
+                self.finviz.get_revenue_growth_leaders(),
+                self.finviz.get_earnings_growth_leaders(),
+                self.finviz.get_profitable_growth(),
+                self.finviz.get_ebitda_positive_turn(),
+                self.finviz.get_low_ps_high_growth(),
+                self.finviz.get_low_debt_growth(),
+                self.finviz.get_insider_buying(),
+                self.finviz.get_analyst_upgrades(),
+                self.finviz.get_earnings_this_week(),
+                return_exceptions=True,
+            )
+Replace the elif category in ["asymmetric"]: block with:
+python        elif category in ["asymmetric"]:
+            # ASYMMETRIC: Compressed valuation + catalyst + improving fundamentals
+            screener_results = await asyncio.gather(
+                self.finviz.get_low_ps_high_growth(),          # Undervalued + growing
+                self.finviz.get_rsi_recovery(),                # Oversold bounce
+                self.finviz.get_ebitda_positive_turn(),        # EBITDA inflection
+                self.finviz.get_insider_buying(),              # Smart money at lows
+                self.finviz.get_volume_breakouts(),            # Volume confirming
+                self.finviz.get_stage2_breakouts(),            # Stage 2 entry
+                self.finviz.get_low_debt_growth(),             # Clean balance sheet
+                self.finviz.get_accumulation_stocks(),         # Institutional interest
+                return_exceptions=True,
+            )
+Replace the elif category in ["bearish"]: block with:
+python        elif category in ["bearish"]:
+            # BEARISH: Full breakdown detection
+            screener_results = await asyncio.gather(
+                self.finviz.get_top_losers(),                  # Today's biggest losers
+                self.finviz.get_overbought_stocks(),           # RSI > 70, due for pullback
+                self.finviz.get_breaking_below_200sma(),       # Stage 3/4 breakdowns
+                self.finviz.get_declining_earnings(),          # Fundamental deterioration
+                self.finviz.get_high_short_declining(),        # Shorts winning
+                self.finviz.get_most_volatile(),               # High volatility (often bearish)
+                return_exceptions=True,
+            )
+PART 3: Fix the Fundamentals-Blind Scoring Problem
+The core issue is that score_for_investments and score_for_fundamentals try to read StockAnalysis data that doesn't exist during light enrichment. The fix: for investment/fundamental categories, pull a lightweight fundamentals snapshot during the enrichment phase.
+In data/market_data_service.py, find the wide_scan_and_rank method. Find the Stage 3 section where light_enrich is defined. Replace the entire light_enrich function and the enrichment block with:
+python        # ── Stage 3: Enrichment for ALL candidates ──
+        # For fundamentals-heavy categories, include StockAnalysis overview
+        needs_fundamentals = category in [
+            "investments", "fundamentals_scan", "asymmetric",
+            "squeeze",  # needs short_float from overview
+        ]
+        # For social-heavy categories, include StockTwits sentiment
+        needs_social = category in [
+            "social_momentum", "market_scan", "trades",
+            "squeeze", "small_cap_spec",
+        ]
+
+        async def light_enrich(ticker):
+            try:
+                # Always get Polygon basics (fast, sync)
+                snapshot = self.polygon.get_snapshot(ticker)
+                technicals = self.polygon.get_technicals(ticker)
+                details = self.polygon.get_ticker_details(ticker)
+
+                result = {
+                    "snapshot": snapshot,
+                    "technicals": technicals,
+                    "details": details,
+                }
+
+                # Conditionally add fundamentals data for ranking
+                if needs_fundamentals:
+                    try:
+                        overview = await self.stockanalysis.get_overview(ticker)
+                        result["overview"] = overview if not isinstance(overview, Exception) else {}
+                    except:
+                        result["overview"] = {}
+
+                # Conditionally add social data for ranking
+                if needs_social:
+                    try:
+                        st = await self.stocktwits.get_sentiment(ticker)
+                        result["sentiment"] = st if not isinstance(st, Exception) else {}
+                    except:
+                        result["sentiment"] = {}
+
+                return result
+            except Exception as e:
+                return {"error": str(e)}
+
+        # Enrich in parallel — reduce batch size if pulling fundamentals to stay within rate limits
+        max_candidates = 40 if needs_fundamentals else 60
+        ticker_list = list(all_tickers)[:max_candidates]
+
+        enrichment_results = await asyncio.gather(
+            *[light_enrich(t) for t in ticker_list],
+            return_exceptions=True,
+        )
+
+        candidates = {}
+        for ticker, result in zip(ticker_list, enrichment_results):
+            if not isinstance(result, Exception) and isinstance(result, dict) and "error" not in result:
+                candidates[ticker] = result
+
+        print(f"[Wide Scan] {len(candidates)} candidates enriched successfully (fundamentals={needs_fundamentals}, social={needs_social})")
+PART 4: Add Market Cap Filtering to Small Cap Scoring
+In data/scoring_engine.py, replace the line:
+python    "small_cap_spec": score_for_trades,
+with:
+python    "small_cap_spec": score_for_small_cap,
+Then add this new scoring function before the SCORING_FUNCTIONS dict:
+pythondef score_for_small_cap(ticker_data: dict) -> float:
+    """
+    Score for speculative small cap plays.
+    Same as trades but with heavy market cap filtering.
+    Stocks over $2B get massively penalized.
+    """
+    # Start with the trade score
+    base_score = score_for_trades(ticker_data)
+
+    # Apply market cap adjustment
+    details = ticker_data.get("details", {})
+    overview = ticker_data.get("overview", {})
+    market_cap = None
+
+    if isinstance(details, dict):
+        market_cap = details.get("market_cap")
+    if market_cap is None and isinstance(overview, dict):
+        market_cap = overview.get("market_cap")
+
+    if market_cap is not None:
+        try:
+            mc = float(market_cap)
+            if mc > 10e9:
+                return 0  # >$10B = not a small cap, disqualify
+            elif mc > 2e9:
+                base_score *= 0.3  # $2B-$10B = heavy penalty
+            elif mc > 500e6:
+                base_score *= 0.9  # $500M-$2B = slight penalty
+            elif mc > 100e6:
+                base_score *= 1.1  # $100M-$500M = bonus (sweet spot)
+            elif mc > 50e6:
+                base_score *= 1.0  # $50M-$100M = neutral
+            else:
+                base_score *= 0.7  # Under $50M = penny stock risk penalty
+        except (TypeError, ValueError):
+            pass
+
+    return round(min(base_score, 100), 1)
+PART 5: Fix Thematic Scans (AI/Compute, Uranium)
+In data/market_data_service.py, replace the entire get_thematic_scan method with:
+python    async def get_thematic_scan(self, theme: str = "ai_compute") -> dict:
+        """
+        Enhanced thematic scanner with full data per ticker:
+        Polygon snapshot + technicals + StockTwits sentiment + StockAnalysis overview.
+        Ranks by relative strength within the theme.
+        """
+        import asyncio
+
+        THEMES = {
+            "ai_compute": {
+                "name": "AI & Compute Infrastructure",
+                "tickers": ["NVDA", "AMD", "AVGO", "MRVL", "CRDO", "SMCI", "VRT", "ANET", "DELL", "ORCL", "MSFT", "GOOGL", "AMZN", "META", "TSM"],
+            },
+            "energy": {
+                "name": "Energy & Oil/Gas",
+                "tickers": ["XOM", "CVX", "COP", "EOG", "DVN", "FANG", "OXY", "SLB", "HAL", "AR", "EQT", "RRC"],
+            },
+            "uranium": {
+                "name": "Uranium & Nuclear",
+                "tickers": ["CCJ", "UEC", "UUUU", "DNN", "NXE", "LEU", "SMR", "OKLO", "VST", "CEG", "TLN"],
+            },
+            "metals": {
+                "name": "Metals & Mining",
+                "tickers": ["FCX", "NEM", "GOLD", "AEM", "WPM", "RGLD", "SCCO", "VALE", "RIO", "BHP", "TECK", "MP"],
+            },
+            "defense": {
+                "name": "Defense & Aerospace",
+                "tickers": ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "LDOS", "KTOS", "PLTR", "RKLB"],
+            },
+        }
+
+        theme_data = THEMES.get(theme, THEMES["ai_compute"])
+        tickers = theme_data["tickers"]
+
+        async def full_enrich(ticker):
+            try:
+                snapshot = self.polygon.get_snapshot(ticker)
+                technicals = self.polygon.get_technicals(ticker)
+                details = self.polygon.get_ticker_details(ticker)
+
+                st_result, overview = await asyncio.gather(
+                    self.stocktwits.get_sentiment(ticker),
+                    self.stockanalysis.get_overview(ticker),
+                    return_exceptions=True,
+                )
+
+                return {
+                    "snapshot": snapshot,
+                    "technicals": technicals,
+                    "details": details,
+                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
+                    "overview": overview if not isinstance(overview, Exception) else {},
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        results = await asyncio.gather(
+            *[full_enrich(t) for t in tickers],
+            return_exceptions=True,
+        )
+
+        # Score and rank by relative strength within the theme
+        from data.scoring_engine import score_for_trades
+        theme_results = []
+        for ticker, result in zip(tickers, results):
+            if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
+                continue
+            quant_score = score_for_trades(result)
+            result["quant_score"] = quant_score
+            theme_results.append((ticker, quant_score, result))
+
+        # Sort by score descending
+        theme_results.sort(key=lambda x: x[1], reverse=True)
+
+        enriched = {}
+        for ticker, score, data in theme_results:
+            enriched[ticker] = data
+
+        # Get sector ETF for context
+        sector_etf_map = {
+            "ai_compute": "SMH",
+            "energy": "XLE",
+            "uranium": "URA",
+            "metals": "GDX",
+            "defense": "ITA",
+        }
+        sector_etf = sector_etf_map.get(theme)
+        etf_data = {}
+        if sector_etf:
+            try:
+                etf_data = {
+                    "snapshot": self.polygon.get_snapshot(sector_etf),
+                    "technicals": self.polygon.get_technicals(sector_etf),
+                }
+            except:
+                pass
+
+        # Also get SPY for relative strength comparison
+        spy_data = {}
+        try:
+            spy_data = {"snapshot": self.polygon.get_snapshot("SPY")}
+        except:
+            pass
+
+        return {
+            "theme_name": theme_data["name"],
+            "ranked_tickers": [
+                {"ticker": t, "score": s} for t, s, _ in theme_results
+            ],
+            "enriched_data": enriched,
+            "sector_etf": {sector_etf: etf_data} if sector_etf else {},
+            "spy_benchmark": spy_data,
+            "market_news": self.polygon.get_news(limit=10),
+        }
+PART 6: Fix Earnings Watch with Scoring
+In data/market_data_service.py, replace the get_earnings_catalyst_watch method with:
+python    async def get_earnings_catalyst_watch(self) -> dict:
+        """
+        Enhanced earnings watch: pulls all upcoming earnings,
+        enriches with full data, and scores by volatility potential.
+        """
+        import asyncio
+
+        # Get all upcoming earnings
+        upcoming_earnings = self.finnhub.get_upcoming_earnings()
+        market_news = self.polygon.get_news(limit=15)
+
+        # Get ALL earnings tickers (not just first 10)
+        earnings_tickers = [
+            e["ticker"] for e in upcoming_earnings[:30]
+            if e.get("ticker") and len(e["ticker"]) <= 5
+        ]
+
+        # Light enrich all for ranking
+        async def light_enrich_earnings(ticker):
+            try:
+                snapshot = self.polygon.get_snapshot(ticker)
+                technicals = self.polygon.get_technicals(ticker)
+                details = self.polygon.get_ticker_details(ticker)
+                earnings_hist = self.finnhub.get_earnings_surprises(ticker)
+                recommendations = self.finnhub.get_recommendation_trends(ticker)
+                return {
+                    "snapshot": snapshot,
+                    "technicals": technicals,
+                    "details": details,
+                    "earnings_history": earnings_hist,
+                    "recommendations": recommendations,
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        results = await asyncio.gather(
+            *[asyncio.to_thread(lambda t=t: light_enrich_earnings(t)) for t in earnings_tickers],
+            return_exceptions=True,
+        )
+
+        # Score earnings by volatility potential and beat probability
+        scored = []
+        for ticker, result in zip(earnings_tickers, results):
+            if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
+                continue
+            score = 0.0
+
+            # Volume (institutional interest)
+            snapshot = result.get("snapshot", {})
+            details = result.get("details", {})
+            volume = snapshot.get("volume")
+            avg_vol = details.get("avg_volume") if isinstance(details, dict) else None
+            if volume and avg_vol:
+                try:
+                    ratio = float(volume) / float(avg_vol)
+                    if ratio >= 2.0: score += 20
+                    elif ratio >= 1.5: score += 12
+                    elif ratio >= 1.0: score += 5
+                except:
+                    pass
+
+            # Earnings beat streak
+            earnings_hist = result.get("earnings_history", [])
+            if isinstance(earnings_hist, list):
+                beats = sum(1 for e in earnings_hist[:4] if isinstance(e, dict) and e.get("surprise_pct") and e["surprise_pct"] > 0)
+                score += beats * 10  # Up to 40 pts for 4/4 beats
+
+            # Market cap (smaller = more volatility potential)
+            mc = details.get("market_cap") if isinstance(details, dict) else None
+            if mc:
+                try:
+                    mc = float(mc)
+                    if mc < 2e9: score += 20
+                    elif mc < 10e9: score += 12
+                    elif mc < 50e9: score += 5
+                except:
+                    pass
+
+            # Technical setup going into earnings
+            technicals = result.get("technicals", {})
+            rsi = technicals.get("rsi")
+            if rsi:
+                try:
+                    if 45 <= float(rsi) <= 65: score += 10  # Not overbought/oversold
+                except:
+                    pass
+
+            result["quant_score"] = round(score, 1)
+            scored.append((ticker, score, result))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        # Deep enrich top 12
+        top_tickers = [(t, s) for t, s, _ in scored[:12]]
+
+        async def deep_enrich_earnings(ticker):
+            try:
+                st, overview, filings = await asyncio.gather(
+                    self.stocktwits.get_sentiment(ticker),
+                    self.stockanalysis.get_overview(ticker),
+                    self.edgar.get_8k_filings(ticker),
+                    return_exceptions=True,
+                )
+                return {
+                    "sentiment": st if not isinstance(st, Exception) else {},
+                    "overview": overview if not isinstance(overview, Exception) else {},
+                    "recent_8k_filings": filings if not isinstance(filings, Exception) else [],
+                }
+            except:
+                return {}
+
+        deep_results = await asyncio.gather(
+            *[deep_enrich_earnings(t) for t, _ in top_tickers],
+            return_exceptions=True,
+        )
+
+        enriched = {}
+        for (ticker, quant_score), deep, (_, _, base) in zip(top_tickers, deep_results, scored[:12]):
+            if not isinstance(deep, Exception) and isinstance(deep, dict):
+                base.update(deep)
+            base["quant_score"] = quant_score
+            enriched[ticker] = base
+
+        # Find earnings dates for enriched tickers
+        earnings_dates = {}
+        for e in upcoming_earnings:
+            t = e.get("ticker")
+            if t in enriched:
+                earnings_dates[t] = e
+
+        return {
+            "total_earnings_scanned": len(earnings_tickers),
+            "ranked_by_volatility": [{"ticker": t, "score": s} for t, s, _ in scored[:15]],
+            "enriched_data": enriched,
+            "earnings_dates": earnings_dates,
+            "market_news": market_news,
+        }

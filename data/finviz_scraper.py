@@ -281,3 +281,63 @@ class FinvizScraper:
         return await self._custom_screen(
             "v=111&f=cap_smallunder,sh_avgvol_o200,sh_relvol_o2,sh_short_o15,ta_change_u&ft=4&o=-change"
         )
+
+    async def get_revenue_growth_leaders(self) -> list:
+        """Stocks with high revenue growth (>25% YoY) and positive price action."""
+        return await self._custom_screen(
+            "v=111&f=fa_salesqoq_o25,sh_avgvol_o300,ta_change_u&ft=4&o=-fa_salesqoq"
+        )
+
+    async def get_earnings_growth_leaders(self) -> list:
+        """Stocks with strong EPS growth and positive momentum."""
+        return await self._custom_screen(
+            "v=111&f=fa_epsqoq_o25,sh_avgvol_o300,ta_change_u&ft=4&o=-fa_epsqoq"
+        )
+
+    async def get_profitable_growth(self) -> list:
+        """Growing stocks that are actually profitable (positive margins + growth)."""
+        return await self._custom_screen(
+            "v=111&f=fa_epsqoq_o15,fa_opermargin_pos,fa_salesqoq_o15,sh_avgvol_o300&ft=4&o=-fa_salesqoq"
+        )
+
+    async def get_low_ps_high_growth(self) -> list:
+        """Undervalued on P/S but growing fast — asymmetric value + growth."""
+        return await self._custom_screen(
+            "v=111&f=fa_ps_u5,fa_salesqoq_o20,sh_avgvol_o200&ft=4&o=-fa_salesqoq"
+        )
+
+    async def get_ebitda_positive_turn(self) -> list:
+        """Stocks with positive operating margins that recently turned profitable."""
+        return await self._custom_screen(
+            "v=111&f=fa_opermargin_pos,fa_salesqoq_o10,sh_avgvol_o200,ta_change_u&ft=4&o=-fa_salesqoq"
+        )
+
+    async def get_low_debt_growth(self) -> list:
+        """Growing companies with low debt — financially healthy growers."""
+        return await self._custom_screen(
+            "v=111&f=fa_debteq_u0.5,fa_salesqoq_o15,sh_avgvol_o200&ft=4&o=-fa_salesqoq"
+        )
+
+    async def get_institutional_accumulation(self) -> list:
+        """Stocks with increasing institutional ownership + positive momentum."""
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o500,sh_instown_o60,ta_change_u,ta_sma50_pa&ft=4&o=-change"
+        )
+
+    async def get_breaking_below_200sma(self) -> list:
+        """Stocks breaking below 200 SMA — Stage 3/4 breakdown candidates."""
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,ta_sma200_pb,ta_change_d&ft=4&o=change"
+        )
+
+    async def get_declining_earnings(self) -> list:
+        """Stocks with declining EPS — fundamental deterioration."""
+        return await self._custom_screen(
+            "v=111&f=fa_epsqoq_d,sh_avgvol_o300&ft=4&o=fa_epsqoq"
+        )
+
+    async def get_high_short_declining(self) -> list:
+        """High short interest + price declining — shorts are winning."""
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,sh_short_o10,ta_change_d,ta_sma50_pb&ft=4&o=-sh_short"
+        )

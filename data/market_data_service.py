@@ -312,25 +312,44 @@ class MarketDataService:
                 return_exceptions=True,
             )
 
-        elif category in ["investments", "fundamentals_scan"]:
+        elif category in ["investments"]:
             screener_results = await asyncio.gather(
+                self.finviz.get_revenue_growth_leaders(),
+                self.finviz.get_earnings_growth_leaders(),
+                self.finviz.get_profitable_growth(),
+                self.finviz.get_low_ps_high_growth(),
+                self.finviz.get_ebitda_positive_turn(),
+                self.finviz.get_low_debt_growth(),
+                self.finviz.get_insider_buying(),
+                self.finviz.get_institutional_accumulation(),
+                self.finviz.get_analyst_upgrades(),
+                self.finviz.get_stage2_breakouts(),
+                return_exceptions=True,
+            )
+
+        elif category in ["fundamentals_scan"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_revenue_growth_leaders(),
+                self.finviz.get_earnings_growth_leaders(),
+                self.finviz.get_profitable_growth(),
+                self.finviz.get_ebitda_positive_turn(),
+                self.finviz.get_low_ps_high_growth(),
+                self.finviz.get_low_debt_growth(),
                 self.finviz.get_insider_buying(),
                 self.finviz.get_analyst_upgrades(),
                 self.finviz.get_earnings_this_week(),
-                self.finviz.get_accumulation_stocks(),
-                self.finviz.get_stage2_breakouts(),
-                self.finviz.get_new_highs(),
-                self.finviz.get_sma_crossover_stocks(),
                 return_exceptions=True,
             )
 
         elif category in ["asymmetric"]:
             screener_results = await asyncio.gather(
+                self.finviz.get_low_ps_high_growth(),
                 self.finviz.get_rsi_recovery(),
+                self.finviz.get_ebitda_positive_turn(),
                 self.finviz.get_insider_buying(),
                 self.finviz.get_volume_breakouts(),
                 self.finviz.get_stage2_breakouts(),
-                self.finviz.get_sma_crossover_stocks(),
+                self.finviz.get_low_debt_growth(),
                 self.finviz.get_accumulation_stocks(),
                 return_exceptions=True,
             )
@@ -339,7 +358,9 @@ class MarketDataService:
             screener_results = await asyncio.gather(
                 self.finviz.get_top_losers(),
                 self.finviz.get_overbought_stocks(),
-                self.finviz.get_screener_results("ta_toplosers"),
+                self.finviz.get_breaking_below_200sma(),
+                self.finviz.get_declining_earnings(),
+                self.finviz.get_high_short_declining(),
                 self.finviz.get_most_volatile(),
                 return_exceptions=True,
             )
@@ -417,22 +438,50 @@ class MarketDataService:
 
         print(f"[Wide Scan] {category}: {len(all_tickers)} unique candidates found")
 
+        needs_fundamentals = category in [
+            "investments", "fundamentals_scan", "asymmetric",
+            "squeeze",
+        ]
+        needs_social = category in [
+            "social_momentum", "market_scan", "trades",
+            "squeeze", "small_cap_spec",
+        ]
+
         async def light_enrich(ticker):
             try:
                 snapshot = self.polygon.get_snapshot(ticker)
                 technicals = self.polygon.get_technicals(ticker)
                 details = self.polygon.get_ticker_details(ticker)
-                return {
+
+                result = {
                     "snapshot": snapshot,
                     "technicals": technicals,
                     "details": details,
                 }
+
+                if needs_fundamentals:
+                    try:
+                        overview = await self.stockanalysis.get_overview(ticker)
+                        result["overview"] = overview if not isinstance(overview, Exception) else {}
+                    except:
+                        result["overview"] = {}
+
+                if needs_social:
+                    try:
+                        st = await self.stocktwits.get_sentiment(ticker)
+                        result["sentiment"] = st if not isinstance(st, Exception) else {}
+                    except:
+                        result["sentiment"] = {}
+
+                return result
             except Exception as e:
                 return {"error": str(e)}
 
-        ticker_list = list(all_tickers)[:60]
+        max_candidates = 40 if needs_fundamentals else 60
+        ticker_list = list(all_tickers)[:max_candidates]
+
         enrichment_results = await asyncio.gather(
-            *[asyncio.to_thread(lambda t=t: light_enrich(t)) for t in ticker_list],
+            *[light_enrich(t) for t in ticker_list],
             return_exceptions=True,
         )
 
@@ -441,7 +490,7 @@ class MarketDataService:
             if not isinstance(result, Exception) and isinstance(result, dict) and "error" not in result:
                 candidates[ticker] = result
 
-        print(f"[Wide Scan] {len(candidates)} candidates enriched successfully")
+        print(f"[Wide Scan] {len(candidates)} candidates enriched successfully (fundamentals={needs_fundamentals}, social={needs_social})")
 
         top_ranked = rank_candidates(candidates, category, top_n=15)
 
@@ -811,44 +860,130 @@ class MarketDataService:
 
     async def get_earnings_catalyst_watch(self) -> dict:
         """
-        Upcoming earnings and material catalysts in next 7 days.
-        Combines earnings calendar + SEC 8-K filings + news.
+        Enhanced earnings watch: pulls all upcoming earnings,
+        enriches with full data, and scores by volatility potential.
         """
+        import asyncio
+
         upcoming_earnings = self.finnhub.get_upcoming_earnings()
-        market_news = self.polygon.get_news(limit=20)
+        market_news = self.polygon.get_news(limit=15)
 
-        earnings_tickers = [e["ticker"] for e in upcoming_earnings[:10] if e.get("ticker")]
+        earnings_tickers = [
+            e["ticker"] for e in upcoming_earnings[:30]
+            if e.get("ticker") and len(e["ticker"]) <= 5
+        ]
 
-        async def get_catalyst_detail(ticker):
-            overview, filings, sentiment = await asyncio.gather(
-                self.stockanalysis.get_overview(ticker),
-                self.edgar.get_8k_filings(ticker),
-                self.stocktwits.get_sentiment(ticker),
-                return_exceptions=True,
-            )
-            return {
-                "overview": overview if not isinstance(overview, Exception) else {},
-                "recent_8k_filings": filings if not isinstance(filings, Exception) else [],
-                "sentiment": sentiment if not isinstance(sentiment, Exception) else {},
-                "earnings_history": self.finnhub.get_earnings_surprises(ticker),
-                "recommendations": self.finnhub.get_recommendation_trends(ticker),
-                "snapshot": self.polygon.get_snapshot(ticker),
-                "technicals": self.polygon.get_technicals(ticker),
-            }
+        async def light_enrich_earnings(ticker):
+            try:
+                snapshot = self.polygon.get_snapshot(ticker)
+                technicals = self.polygon.get_technicals(ticker)
+                details = self.polygon.get_ticker_details(ticker)
+                earnings_hist = self.finnhub.get_earnings_surprises(ticker)
+                recommendations = self.finnhub.get_recommendation_trends(ticker)
+                return {
+                    "snapshot": snapshot,
+                    "technicals": technicals,
+                    "details": details,
+                    "earnings_history": earnings_hist,
+                    "recommendations": recommendations,
+                }
+            except Exception as e:
+                return {"error": str(e)}
 
-        catalyst_results = await asyncio.gather(
-            *[get_catalyst_detail(t) for t in earnings_tickers[:8]],
+        results = await asyncio.gather(
+            *[asyncio.to_thread(lambda t=t: light_enrich_earnings(t)) for t in earnings_tickers],
             return_exceptions=True,
         )
-        catalyst_data = {}
-        for ticker, result in zip(earnings_tickers[:8], catalyst_results):
-            if not isinstance(result, Exception):
-                catalyst_data[ticker] = result
+
+        scored = []
+        for ticker, result in zip(earnings_tickers, results):
+            if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
+                continue
+            score = 0.0
+
+            snapshot = result.get("snapshot", {})
+            details = result.get("details", {})
+            volume = snapshot.get("volume")
+            avg_vol = details.get("avg_volume") if isinstance(details, dict) else None
+            if volume and avg_vol:
+                try:
+                    ratio = float(volume) / float(avg_vol)
+                    if ratio >= 2.0: score += 20
+                    elif ratio >= 1.5: score += 12
+                    elif ratio >= 1.0: score += 5
+                except:
+                    pass
+
+            earnings_hist = result.get("earnings_history", [])
+            if isinstance(earnings_hist, list):
+                beats = sum(1 for e in earnings_hist[:4] if isinstance(e, dict) and e.get("surprise_pct") and e["surprise_pct"] > 0)
+                score += beats * 10
+
+            mc = details.get("market_cap") if isinstance(details, dict) else None
+            if mc:
+                try:
+                    mc = float(mc)
+                    if mc < 2e9: score += 20
+                    elif mc < 10e9: score += 12
+                    elif mc < 50e9: score += 5
+                except:
+                    pass
+
+            technicals = result.get("technicals", {})
+            rsi = technicals.get("rsi")
+            if rsi:
+                try:
+                    if 45 <= float(rsi) <= 65: score += 10
+                except:
+                    pass
+
+            result["quant_score"] = round(score, 1)
+            scored.append((ticker, score, result))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        top_tickers = [(t, s) for t, s, _ in scored[:12]]
+
+        async def deep_enrich_earnings(ticker):
+            try:
+                st, overview, filings = await asyncio.gather(
+                    self.stocktwits.get_sentiment(ticker),
+                    self.stockanalysis.get_overview(ticker),
+                    self.edgar.get_8k_filings(ticker),
+                    return_exceptions=True,
+                )
+                return {
+                    "sentiment": st if not isinstance(st, Exception) else {},
+                    "overview": overview if not isinstance(overview, Exception) else {},
+                    "recent_8k_filings": filings if not isinstance(filings, Exception) else [],
+                }
+            except:
+                return {}
+
+        deep_results = await asyncio.gather(
+            *[deep_enrich_earnings(t) for t, _ in top_tickers],
+            return_exceptions=True,
+        )
+
+        enriched = {}
+        for (ticker, quant_score), deep, (_, _, base) in zip(top_tickers, deep_results, scored[:12]):
+            if not isinstance(deep, Exception) and isinstance(deep, dict):
+                base.update(deep)
+            base["quant_score"] = quant_score
+            enriched[ticker] = base
+
+        earnings_dates = {}
+        for e in upcoming_earnings:
+            t = e.get("ticker")
+            if t in enriched:
+                earnings_dates[t] = e
 
         return {
-            "upcoming_earnings": upcoming_earnings,
+            "total_earnings_scanned": len(earnings_tickers),
+            "ranked_by_volatility": [{"ticker": t, "score": s} for t, s, _ in scored[:15]],
+            "enriched_data": enriched,
+            "earnings_dates": earnings_dates,
             "market_news": market_news,
-            "catalyst_details": catalyst_data,
         }
 
     async def get_sector_rotation(self) -> dict:
@@ -995,9 +1130,12 @@ class MarketDataService:
 
     async def get_thematic_scan(self, theme: str = "ai_compute") -> dict:
         """
-        Custom thematic scanner for specific sectors the user cares about.
-        Hardcoded watchlists for AI/Compute, Energy, Uranium, etc.
+        Enhanced thematic scanner with full data per ticker:
+        Polygon snapshot + technicals + StockTwits sentiment + StockAnalysis overview.
+        Ranks by relative strength within the theme.
         """
+        import asyncio
+
         THEMES = {
             "ai_compute": {
                 "name": "AI & Compute Infrastructure",
@@ -1005,7 +1143,7 @@ class MarketDataService:
             },
             "energy": {
                 "name": "Energy & Oil/Gas",
-                "tickers": ["XOM", "CVX", "COP", "EOG", "DVN", "PXD", "FANG", "OXY", "SLB", "HAL", "TE", "AR", "EQT", "RRC"],
+                "tickers": ["XOM", "CVX", "COP", "EOG", "DVN", "FANG", "OXY", "SLB", "HAL", "AR", "EQT", "RRC"],
             },
             "uranium": {
                 "name": "Uranium & Nuclear",
@@ -1024,31 +1162,80 @@ class MarketDataService:
         theme_data = THEMES.get(theme, THEMES["ai_compute"])
         tickers = theme_data["tickers"]
 
-        async def get_theme_detail(ticker):
-            snap = self.polygon.get_snapshot(ticker)
-            tech = self.polygon.get_technicals(ticker)
-            details = self.polygon.get_ticker_details(ticker)
-            return {"snapshot": snap, "technicals": tech, "details": details}
+        async def full_enrich(ticker):
+            try:
+                snapshot = self.polygon.get_snapshot(ticker)
+                technicals = self.polygon.get_technicals(ticker)
+                details = self.polygon.get_ticker_details(ticker)
+
+                st_result, overview = await asyncio.gather(
+                    self.stocktwits.get_sentiment(ticker),
+                    self.stockanalysis.get_overview(ticker),
+                    return_exceptions=True,
+                )
+
+                return {
+                    "snapshot": snapshot,
+                    "technicals": technicals,
+                    "details": details,
+                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
+                    "overview": overview if not isinstance(overview, Exception) else {},
+                }
+            except Exception as e:
+                return {"error": str(e)}
 
         results = await asyncio.gather(
-            *[asyncio.to_thread(lambda t=t: get_theme_detail(t)) for t in tickers[:12]],
+            *[full_enrich(t) for t in tickers],
             return_exceptions=True,
         )
 
-        theme_results = {}
-        for ticker, result in zip(tickers[:12], results):
-            if isinstance(result, Exception):
-                try:
-                    theme_results[ticker] = get_theme_detail(ticker)
-                except:
-                    theme_results[ticker] = {"error": str(result)}
-            else:
-                theme_results[ticker] = result
+        from data.scoring_engine import score_for_trades
+        theme_results = []
+        for ticker, result in zip(tickers, results):
+            if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
+                continue
+            quant_score = score_for_trades(result)
+            result["quant_score"] = quant_score
+            theme_results.append((ticker, quant_score, result))
+
+        theme_results.sort(key=lambda x: x[1], reverse=True)
+
+        enriched = {}
+        for ticker, score, data in theme_results:
+            enriched[ticker] = data
+
+        sector_etf_map = {
+            "ai_compute": "SMH",
+            "energy": "XLE",
+            "uranium": "URA",
+            "metals": "GDX",
+            "defense": "ITA",
+        }
+        sector_etf = sector_etf_map.get(theme)
+        etf_data = {}
+        if sector_etf:
+            try:
+                etf_data = {
+                    "snapshot": self.polygon.get_snapshot(sector_etf),
+                    "technicals": self.polygon.get_technicals(sector_etf),
+                }
+            except:
+                pass
+
+        spy_data = {}
+        try:
+            spy_data = {"snapshot": self.polygon.get_snapshot("SPY")}
+        except:
+            pass
 
         return {
             "theme_name": theme_data["name"],
-            "theme_tickers": tickers,
-            "ticker_data": theme_results,
+            "ranked_tickers": [
+                {"ticker": t, "score": s} for t, s, _ in theme_results
+            ],
+            "enriched_data": enriched,
+            "sector_etf": {sector_etf: etf_data} if sector_etf else {},
+            "spy_benchmark": spy_data,
             "market_news": self.polygon.get_news(limit=10),
         }
 
