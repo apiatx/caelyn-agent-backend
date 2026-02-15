@@ -72,8 +72,8 @@ class QueryRequest(BaseModel):
 @app.post("/api/query")
 @limiter.limit("10/minute")
 async def query_agent(
-    request: QueryRequest,
-    req: Request,
+    request: Request,
+    body: QueryRequest,
     api_key: str = Header(None, alias="X-API-Key"),
 ):
     if not api_key or api_key != AGENT_API_KEY:
@@ -83,8 +83,8 @@ async def query_agent(
         )
     try:
         result = await agent.handle_query(
-            request.prompt,
-            history=[h.dict() for h in request.history] if request.history else None,
+            body.prompt,
+            history=[h.dict() for h in body.history] if body.history else None,
         )
         return result
     except Exception as e:

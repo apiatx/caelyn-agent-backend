@@ -134,21 +134,32 @@ class FinvizScraper:
             "o": "-change",
         })
 
-    async def _custom_screen(self, params: dict) -> list:
-        """Run a custom Finviz screener with arbitrary filter parameters."""
+    async def _custom_screen(self, params) -> list:
+        """Run a custom Finviz screener with arbitrary filter parameters.
+        Accepts either a dict of params or a URL query string like 'v=111&f=...'
+        """
         try:
-            url = "https://finviz.com/screener.ashx"
-            all_params = {
-                "v": "111",
-                **params,
-            }
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    url,
-                    params=all_params,
-                    headers=self.HEADERS,
-                    timeout=15,
-                )
+            if isinstance(params, str):
+                url = f"https://finviz.com/screener.ashx?{params}"
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        url,
+                        headers=self.HEADERS,
+                        timeout=15,
+                    )
+            else:
+                url = "https://finviz.com/screener.ashx"
+                all_params = {
+                    "v": "111",
+                    **params,
+                }
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        url,
+                        params=all_params,
+                        headers=self.HEADERS,
+                        timeout=15,
+                    )
 
             if resp.status_code != 200:
                 return []
