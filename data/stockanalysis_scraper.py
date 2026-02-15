@@ -238,27 +238,27 @@ class StockAnalysisScraper:
             tables = self._parse_tables(soup)
             metrics = {}
 
-            label_map = {
-                "revenue": "revenue",
-                "revenue growth": "revenue_growth",
-                "net income": "net_income",
-                "net income growth": "net_income_growth",
-                "eps": "eps",
-                "eps growth": "eps_growth",
-                "profit margin": "profit_margin",
-                "net margin": "profit_margin",
-                "operating margin": "operating_margin",
-                "operating income": "operating_income",
-                "gross profit": "gross_profit",
-                "free cash flow": "free_cash_flow",
-                "ebitda": "ebitda",
-                "cost of revenue": "cost_of_revenue",
-            }
+            label_list = [
+                ("revenue growth", "revenue_growth"),
+                ("net income growth", "net_income_growth"),
+                ("eps growth", "eps_growth"),
+                ("revenue", "revenue"),
+                ("net income", "net_income"),
+                ("eps", "eps"),
+                ("profit margin", "profit_margin"),
+                ("net margin", "profit_margin"),
+                ("operating margin", "operating_margin"),
+                ("operating income", "operating_income"),
+                ("gross profit", "gross_profit"),
+                ("free cash flow", "free_cash_flow"),
+                ("ebitda", "ebitda"),
+                ("cost of revenue", "cost_of_revenue"),
+            ]
 
             for table_rows in tables:
                 for label, value in table_rows:
                     label_lower = label.lower().strip()
-                    for pattern, key in label_map.items():
+                    for pattern, key in label_list:
                         if label_lower.startswith(pattern) or label_lower == pattern:
                             if key not in metrics:
                                 metrics[key] = value
