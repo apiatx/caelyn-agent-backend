@@ -40,6 +40,52 @@ class FMPProvider:
             print(f"FMP request failed ({endpoint}): {e}")
             return []
 
+    async def get_stock_market_gainers(self) -> list:
+        """Get top gaining stocks today."""
+        data = await self._get("stock_market/gainers")
+        results = []
+        for item in (data or [])[:20]:
+            if isinstance(item, dict):
+                results.append({
+                    "ticker": item.get("symbol", ""),
+                    "company": item.get("name", ""),
+                    "price": str(item.get("price", "")),
+                    "change": f"{item.get('changesPercentage', 0):+.2f}%",
+                    "source": "fmp_gainers",
+                })
+        return results
+
+    async def get_stock_market_losers(self) -> list:
+        """Get top losing stocks today."""
+        data = await self._get("stock_market/losers")
+        results = []
+        for item in (data or [])[:20]:
+            if isinstance(item, dict):
+                results.append({
+                    "ticker": item.get("symbol", ""),
+                    "company": item.get("name", ""),
+                    "price": str(item.get("price", "")),
+                    "change": f"{item.get('changesPercentage', 0):+.2f}%",
+                    "source": "fmp_losers",
+                })
+        return results
+
+    async def get_stock_market_actives(self) -> list:
+        """Get most active stocks by volume today."""
+        data = await self._get("stock_market/actives")
+        results = []
+        for item in (data or [])[:20]:
+            if isinstance(item, dict):
+                results.append({
+                    "ticker": item.get("symbol", ""),
+                    "company": item.get("name", ""),
+                    "price": str(item.get("price", "")),
+                    "change": f"{item.get('changesPercentage', 0):+.2f}%",
+                    "volume": str(item.get("volume", "")),
+                    "source": "fmp_actives",
+                })
+        return results
+
     async def get_forex_quotes(self) -> list:
         """Get real-time forex quotes including DXY."""
         return await self._get("quotes/forex")

@@ -110,45 +110,88 @@ class PolygonProvider:
             return {"ticker": ticker, "error": str(e)}
 
     def get_market_movers(self) -> dict:
-        """Get top gainers and losers using snapshot endpoint (may require paid tier)."""
+        """
+        Get top gainers and losers.
+        Tries Polygon snapshot endpoint first (paid tier).
+        Falls back to FMP stock_market/gainers and stock_market/losers (free tier).
+        """
         cache_key = "polygon:movers"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
         try:
             data = self._request("/v2/snapshot/locale/us/markets/stocks/gainers")
-            if "error" in data:
-                print(f"Polygon movers failed (gainers): {data.get('error')} — falling back to empty")
-                return {"gainers": [], "losers": [], "note": "Snapshot endpoint requires paid plan"}
-
-            gainers = []
-            for t in (data.get("tickers") or [])[:15]:
-                day = t.get("day") or {}
-                gainers.append({
-                    "ticker": t.get("ticker"),
-                    "price": day.get("c"),
-                    "change_pct": t.get("todaysChangePerc"),
-                    "volume": day.get("v"),
-                })
-
-            data2 = self._request("/v2/snapshot/locale/us/markets/stocks/losers")
-            losers = []
-            if "error" not in data2:
-                for t in (data2.get("tickers") or [])[:15]:
+            if "error" not in data and data.get("tickers"):
+                gainers = []
+                for t in (data.get("tickers") or [])[:15]:
                     day = t.get("day") or {}
-                    losers.append({
+                    gainers.append({
                         "ticker": t.get("ticker"),
                         "price": day.get("c"),
                         "change_pct": t.get("todaysChangePerc"),
                         "volume": day.get("v"),
                     })
 
-            result = {"gainers": gainers, "losers": losers}
-            cache.set(cache_key, result, POLYGON_SNAPSHOT_TTL)
-            return result
+                data2 = self._request("/v2/snapshot/locale/us/markets/stocks/losers")
+                losers = []
+                if "error" not in data2:
+                    for t in (data2.get("tickers") or [])[:15]:
+                        day = t.get("day") or {}
+                        losers.append({
+                            "ticker": t.get("ticker"),
+                            "price": day.get("c"),
+                            "change_pct": t.get("todaysChangePerc"),
+                            "volume": day.get("v"),
+                        })
+
+                result = {"gainers": gainers, "losers": losers}
+                cache.set(cache_key, result, POLYGON_SNAPSHOT_TTL)
+                return result
+            else:
+                print("[Polygon movers] Snapshot endpoint unavailable (paid tier). Falling back to FMP.")
         except Exception as e:
-            print(f"Error getting market movers: {e}")
-            return {"gainers": [], "losers": [], "error": str(e)}
+            print(f"[Polygon movers] Snapshot failed: {e}. Falling back to FMP.")
+
+        try:
+            import httpx
+            from config import FMP_API_KEY
+            if not FMP_API_KEY:
+                return {"gainers": [], "losers": []}
+
+            base = "https://financialmodelingprep.com/api/v3"
+            gainers = []
+            losers = []
+
+            resp_g = httpx.get(f"{base}/stock_market/gainers", params={"apikey": FMP_API_KEY}, timeout=15)
+            if resp_g.status_code == 200:
+                for item in (resp_g.json() or [])[:15]:
+                    if isinstance(item, dict):
+                        gainers.append({
+                            "ticker": item.get("symbol", ""),
+                            "price": item.get("price"),
+                            "change_pct": item.get("changesPercentage"),
+                            "volume": item.get("volume"),
+                        })
+
+            resp_l = httpx.get(f"{base}/stock_market/losers", params={"apikey": FMP_API_KEY}, timeout=15)
+            if resp_l.status_code == 200:
+                for item in (resp_l.json() or [])[:15]:
+                    if isinstance(item, dict):
+                        losers.append({
+                            "ticker": item.get("symbol", ""),
+                            "price": item.get("price"),
+                            "change_pct": item.get("changesPercentage"),
+                            "volume": item.get("volume"),
+                        })
+
+            result = {"gainers": gainers, "losers": losers}
+            if gainers or losers:
+                print(f"[Polygon movers] FMP fallback: {len(gainers)} gainers, {len(losers)} losers")
+                cache.set(cache_key, result, POLYGON_SNAPSHOT_TTL)
+            return result
+        except Exception as e2:
+            print(f"[Polygon movers] FMP fallback also failed: {e2}")
+            return {"gainers": [], "losers": []}
 
     def get_news(self, ticker: str = None, limit: int = 15) -> list:
         """Get recent news articles, optionally filtered by ticker."""

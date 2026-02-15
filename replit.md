@@ -68,6 +68,12 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-15: Fixed StockAnalysis trending scraper — replaced JS-rendered HTML scraping with FMP stock_market/gainers + actives API
+- 2026-02-15: Fixed Polygon market movers — added FMP fallback when Polygon snapshot endpoint unavailable (paid tier)
+- 2026-02-15: Added FMP gainers/losers/actives methods to FMP provider
+- 2026-02-15: Fixed Claude response formatting — strict JSON-only output rules in system prompt, no markdown headers/bullets
+- 2026-02-15: Improved _parse_response with 4-tier fallback: raw JSON → code block → embedded JSON → chat fallback
+- 2026-02-15: Added concise formatting rules for all JSON string values (dense trading terminal style)
 - 2026-02-15: Added AI custom stock screener (natural language → Finviz filters → StockAnalysis enrichment)
 - 2026-02-15: Added _extract_screener_filters NLP parser for market cap, revenue growth, P/E, RSI, SMA, insider buying, sectors, etc.
 - 2026-02-15: Added screener display format and ai_screener classifier category

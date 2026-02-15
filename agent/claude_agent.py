@@ -342,27 +342,61 @@ class TradingAgent:
 
     def _parse_response(self, raw_response: str) -> dict:
         """
-        Parse Claude's response into text analysis + structured JSON.
-        Passes the structured data through to the frontend as-is,
-        since the frontend knows how to render each display_type.
+        Parse Claude's response into structured JSON.
+        Tries multiple strategies:
+        1. Raw JSON (entire response is a JSON object)
+        2. JSON in ```json``` code block
+        3. JSON object embedded in text
+        4. Fallback: wrap raw text as chat response
         """
-        json_match = re.search(
-            r"```json\s*(\{.*?\})\s*```", raw_response, re.DOTALL
-        )
+        response_text = raw_response.strip()
 
+        if response_text.startswith("{"):
+            try:
+                structured_data = json.loads(response_text)
+                return {
+                    "type": structured_data.get("display_type", "chat"),
+                    "analysis": "",
+                    "structured": structured_data,
+                }
+            except json.JSONDecodeError:
+                pass
+
+        json_match = re.search(
+            r"```json\s*(\{.*?\})\s*```", response_text, re.DOTALL
+        )
         if json_match:
             json_start = json_match.start()
-            analysis_text = raw_response[:json_start].strip()
+            analysis_text = response_text[:json_start].strip()
             try:
                 structured_data = json.loads(json_match.group(1))
+                return {
+                    "type": structured_data.get("display_type", "chat"),
+                    "analysis": analysis_text,
+                    "structured": structured_data,
+                }
             except json.JSONDecodeError:
-                structured_data = {"display_type": "chat"}
-        else:
-            analysis_text = raw_response.strip()
-            structured_data = {"display_type": "chat"}
+                pass
 
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            try:
+                structured_data = json.loads(json_match.group(0))
+                pre_json = response_text[:json_match.start()].strip()
+                return {
+                    "type": structured_data.get("display_type", "chat"),
+                    "analysis": pre_json,
+                    "structured": structured_data,
+                }
+            except json.JSONDecodeError:
+                pass
+
+        structured_data = {
+            "display_type": "chat",
+            "message": response_text,
+        }
         return {
-            "type": structured_data.get("display_type", "chat"),
-            "analysis": analysis_text,
+            "type": "chat",
+            "analysis": response_text,
             "structured": structured_data,
         }

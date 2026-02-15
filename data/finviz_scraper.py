@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 from bs4 import BeautifulSoup
 from data.cache import cache, FINVIZ_TTL
@@ -431,77 +432,57 @@ async def scrape_yahoo_trending() -> list:
 
 async def scrape_stockanalysis_trending() -> list:
     """
-    Scrape StockAnalysis.com most active / trending page.
-    Returns list of dicts with ticker, company, volume, change.
-    StockAnalysis audience = fundamental-focused retail investors.
+    Get most active / trending stocks via FMP API (gainers + actives).
+    Previously scraped StockAnalysis HTML but those pages are JS-rendered.
+    Now uses FMP stock_market endpoints which return clean JSON.
+    Returns list of dicts with ticker, company, source.
     """
-    import httpx
-    from bs4 import BeautifulSoup
     from data.cache import cache
+    from config import FMP_API_KEY
 
     cache_key = "stockanalysis:trending"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
+    if not FMP_API_KEY:
+        print("[StockAnalysis/FMP trending] No FMP_API_KEY, skipping")
+        return []
+
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        }
+        import httpx
         results = []
-
-        for page_url in [
-            "https://stockanalysis.com/markets/active/",
-            "https://stockanalysis.com/markets/gainers/",
-        ]:
-            try:
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(page_url, headers=headers, timeout=15, follow_redirects=True)
-                if resp.status_code != 200:
-                    continue
-
-                soup = BeautifulSoup(resp.text, "html.parser")
-                rows = soup.find_all("tr")
-                for row in rows[:20]:
-                    cells = row.find_all("td")
-                    if len(cells) >= 3:
-                        ticker_el = cells[0].find("a")
-                        ticker = ""
-                        if ticker_el:
-                            href = ticker_el.get("href", "")
-                            text = ticker_el.get_text(strip=True)
-                            if "/stocks/" in href:
-                                ticker = href.split("/stocks/")[-1].strip("/").upper()
-                            elif text and len(text) <= 6:
-                                ticker = text.upper()
-
-                        company = cells[1].get_text(strip=True) if len(cells) > 1 else ""
-                        price = cells[2].get_text(strip=True) if len(cells) > 2 else ""
-                        change = cells[3].get_text(strip=True) if len(cells) > 3 else ""
-                        volume = cells[4].get_text(strip=True) if len(cells) > 4 else ""
-
-                        if ticker and len(ticker) <= 6 and ticker.isalpha():
-                            results.append({
-                                "ticker": ticker,
-                                "company": company,
-                                "price": price,
-                                "change": change,
-                                "volume": volume,
-                                "source": "stockanalysis",
-                            })
-            except Exception as inner_e:
-                print(f"StockAnalysis page error ({page_url}): {inner_e}")
-
         seen = set()
-        deduped = []
-        for r in results:
-            if r["ticker"] not in seen:
-                seen.add(r["ticker"])
-                deduped.append(r)
+        base = "https://financialmodelingprep.com/api/v3"
 
-        cache.set(cache_key, deduped, 300)
-        return deduped
+        async with httpx.AsyncClient(timeout=15) as client:
+            gainers_resp, actives_resp = await asyncio.gather(
+                client.get(f"{base}/stock_market/gainers", params={"apikey": FMP_API_KEY}),
+                client.get(f"{base}/stock_market/actives", params={"apikey": FMP_API_KEY}),
+                return_exceptions=True,
+            )
+
+        for resp in [gainers_resp, actives_resp]:
+            if isinstance(resp, Exception) or resp.status_code != 200:
+                continue
+            for item in (resp.json() or [])[:20]:
+                if not isinstance(item, dict):
+                    continue
+                ticker = (item.get("symbol") or "").upper().strip()
+                if ticker and len(ticker) <= 6 and ticker.isalpha() and ticker not in seen:
+                    seen.add(ticker)
+                    results.append({
+                        "ticker": ticker,
+                        "company": item.get("name", ""),
+                        "price": str(item.get("price", "")),
+                        "change": f"{item.get('changesPercentage', 0):+.2f}%",
+                        "source": "stockanalysis",
+                    })
+
+        print(f"[FMP trending] Got {len(results)} trending tickers from FMP gainers+actives")
+        cache.set(cache_key, results, 300)
+        return results
 
     except Exception as e:
-        print(f"StockAnalysis trending scrape error: {e}")
+        print(f"FMP trending fetch error: {e}")
         return []
