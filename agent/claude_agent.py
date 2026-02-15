@@ -60,16 +60,16 @@ class TradingAgent:
             return results
 
         elif category == "market_scan":
-            return await self.data.scan_market()
+            return await self.data.wide_scan_and_rank("market_scan", filters)
 
         elif category == "dashboard":
             return await self.data.get_dashboard()
 
         elif category == "investments":
-            return await self.data.get_top_fundamental_catalysts()
+            return await self.data.wide_scan_and_rank("investments", filters)
 
         elif category == "fundamentals_scan":
-            return await self.data.get_top_fundamental_catalysts()
+            return await self.data.wide_scan_and_rank("fundamentals_scan", filters)
 
         elif category == "unusual_volume":
             return await self.data.get_unusual_volume()
@@ -96,13 +96,13 @@ class TradingAgent:
             return {"error": "No ticker specified for SEC filings lookup"}
 
         elif category == "squeeze":
-            return await self.data.get_squeeze_candidates()
+            return await self.data.wide_scan_and_rank("squeeze", filters)
 
         elif category == "social_momentum":
-            return await self.data.get_social_momentum()
+            return await self.data.wide_scan_and_rank("social_momentum", filters)
 
         elif category == "volume_spikes":
-            return await self.data.get_volume_spikes()
+            return await self.data.wide_scan_and_rank("volume_spikes", filters)
 
         elif category == "earnings_catalyst":
             return await self.data.get_earnings_catalyst_watch()
@@ -111,17 +111,17 @@ class TradingAgent:
             return await self.data.get_sector_rotation()
 
         elif category == "asymmetric":
-            return await self.data.get_asymmetric_setups()
+            return await self.data.wide_scan_and_rank("asymmetric", filters)
 
         elif category == "bearish":
-            return await self.data.get_bearish_setups()
+            return await self.data.wide_scan_and_rank("bearish", filters)
 
         elif category == "thematic":
             theme = filters.get("theme", "ai_compute")
             return await self.data.get_thematic_scan(theme)
 
         elif category == "small_cap_spec":
-            return await self.data.get_small_cap_spec()
+            return await self.data.wide_scan_and_rank("small_cap_spec", filters)
 
         elif category == "commodities":
             return await self.data.get_commodities_dashboard()

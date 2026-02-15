@@ -269,6 +269,152 @@ class MarketDataService:
             "commodity_sentiment": commodity_sentiment,
         }
 
+    async def wide_scan_and_rank(self, category: str, filters: dict = None) -> dict:
+        """
+        WIDE FUNNEL approach:
+        1. Cast wide net — pull 50-100+ candidates from multiple screeners
+        2. Do lightweight enrichment on all of them
+        3. Score them quantitatively
+        4. Return top 12-15 fully enriched to Claude
+
+        This ensures we never miss a good setup just because it wasn't
+        in the top 5 of one screener.
+        """
+        from data.scoring_engine import rank_candidates
+
+        screener_results = await asyncio.gather(
+            self.finviz.get_screener_results("ta_topgainers"),
+            self.finviz.get_unusual_volume(),
+            self.finviz.get_new_highs(),
+            self.finviz.get_most_active(),
+            self.finviz.get_top_losers() if category == "bearish" else asyncio.sleep(0),
+            self.finviz.get_overbought_stocks() if category == "bearish" else asyncio.sleep(0),
+            self.finviz.get_oversold_stocks() if category in ["trades", "market_scan", "asymmetric"] else asyncio.sleep(0),
+            self.finviz.get_small_cap_gainers() if category in ["small_cap_spec", "trades", "market_scan"] else asyncio.sleep(0),
+            self.finviz.get_high_short_float() if category in ["squeeze", "trades", "market_scan"] else asyncio.sleep(0),
+            self.finviz.get_insider_buying() if category in ["investments", "fundamentals_scan", "asymmetric"] else asyncio.sleep(0),
+            self.finviz.get_analyst_upgrades() if category in ["investments", "fundamentals_scan"] else asyncio.sleep(0),
+            self.finviz.get_earnings_this_week() if category in ["investments", "fundamentals_scan"] else asyncio.sleep(0),
+            return_exceptions=True,
+        )
+
+        trending = []
+        try:
+            trending = await self.stocktwits.get_trending()
+        except:
+            pass
+
+        movers = {}
+        try:
+            movers = self.polygon.get_market_movers()
+        except:
+            pass
+
+        all_tickers = set()
+
+        for result in screener_results:
+            if isinstance(result, list):
+                for item in result:
+                    if isinstance(item, dict) and item.get("ticker"):
+                        ticker = item["ticker"].upper().strip()
+                        if len(ticker) <= 5 and ticker.isalpha():
+                            all_tickers.add(ticker)
+
+        for t in (trending or []):
+            if isinstance(t, dict) and t.get("ticker"):
+                all_tickers.add(t["ticker"].upper().strip())
+
+        for g in (movers.get("gainers") or []):
+            if g.get("ticker"):
+                all_tickers.add(g["ticker"].upper().strip())
+        if category == "bearish":
+            for l in (movers.get("losers") or []):
+                if l.get("ticker"):
+                    all_tickers.add(l["ticker"].upper().strip())
+
+        print(f"[Wide Scan] {category}: {len(all_tickers)} unique candidates found")
+
+        async def light_enrich(ticker):
+            try:
+                snapshot = self.polygon.get_snapshot(ticker)
+                technicals = self.polygon.get_technicals(ticker)
+                details = self.polygon.get_ticker_details(ticker)
+                return {
+                    "snapshot": snapshot,
+                    "technicals": technicals,
+                    "details": details,
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        ticker_list = list(all_tickers)[:60]
+        enrichment_results = await asyncio.gather(
+            *[asyncio.to_thread(lambda t=t: light_enrich(t)) for t in ticker_list],
+            return_exceptions=True,
+        )
+
+        candidates = {}
+        for ticker, result in zip(ticker_list, enrichment_results):
+            if not isinstance(result, Exception) and isinstance(result, dict) and "error" not in result:
+                candidates[ticker] = result
+
+        print(f"[Wide Scan] {len(candidates)} candidates enriched successfully")
+
+        top_ranked = rank_candidates(candidates, category, top_n=15)
+
+        print(f"[Wide Scan] Top 15 scores: {[(t, s) for t, s, _ in top_ranked[:15]]}")
+
+        top_tickers = [(ticker, score) for ticker, score, _ in top_ranked[:12]]
+
+        async def deep_enrich(ticker):
+            """Full enrichment with all data sources."""
+            try:
+                st_result, overview, analyst, insider, earnings, recommendations = (
+                    await asyncio.gather(
+                        self.stocktwits.get_sentiment(ticker),
+                        self.stockanalysis.get_overview(ticker),
+                        self.stockanalysis.get_analyst_ratings(ticker),
+                        asyncio.to_thread(lambda: self.finnhub.get_insider_sentiment(ticker)),
+                        asyncio.to_thread(lambda: self.finnhub.get_earnings_surprises(ticker)),
+                        asyncio.to_thread(lambda: self.finnhub.get_recommendation_trends(ticker)),
+                        return_exceptions=True,
+                    )
+                )
+                return {
+                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
+                    "overview": overview if not isinstance(overview, Exception) else {},
+                    "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
+                    "insider_sentiment": insider if not isinstance(insider, Exception) else {},
+                    "earnings_history": earnings if not isinstance(earnings, Exception) else [],
+                    "recommendations": recommendations if not isinstance(recommendations, Exception) else [],
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        deep_results = await asyncio.gather(
+            *[deep_enrich(t) for t, _ in top_tickers],
+            return_exceptions=True,
+        )
+
+        enriched_candidates = {}
+        for (ticker, quant_score), deep_data in zip(top_tickers, deep_results):
+            base_data = candidates.get(ticker, {})
+            if not isinstance(deep_data, Exception) and isinstance(deep_data, dict):
+                base_data.update(deep_data)
+            base_data["quant_score"] = quant_score
+            enriched_candidates[ticker] = base_data
+
+        return {
+            "total_candidates_scanned": len(all_tickers),
+            "candidates_scored": len(candidates),
+            "top_ranked": [
+                {"ticker": t, "score": s} for t, s, _ in top_ranked[:15]
+            ],
+            "enriched_data": enriched_candidates,
+            "movers": movers,
+            "trending": trending[:10] if trending else [],
+        }
+
     async def get_sec_filings(self, ticker: str) -> dict:
         """
         Dedicated SEC filings lookup.
