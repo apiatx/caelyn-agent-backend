@@ -20,34 +20,42 @@ class StockTwitsProvider:
                     f"{self.BASE_URL}/streams/symbol/{ticker}.json",
                     timeout=15,
                 )
-            data = resp.json()
-
             if resp.status_code != 200:
-                return {"ticker": ticker, "error": "Could not fetch data"}
+                return {"ticker": ticker, "error": f"HTTP {resp.status_code}"}
 
-            symbol_data = data.get("symbol", {})
-            messages = data.get("messages", [])
+            data = resp.json()
+            if not data or not isinstance(data, dict):
+                return {"ticker": ticker, "error": "Empty response"}
 
-            # Count bullish vs bearish sentiment from recent messages
+            symbol_data = data.get("symbol") or {}
+            messages = data.get("messages") or []
+
             bullish = 0
             bearish = 0
             for msg in messages:
-                sentiment = msg.get("entities", {}).get("sentiment", {})
-                if sentiment:
-                    if sentiment.get("basic") == "Bullish":
+                if not msg or not isinstance(msg, dict):
+                    continue
+                entities = msg.get("entities") or {}
+                sentiment = entities.get("sentiment") or {}
+                if isinstance(sentiment, dict):
+                    basic = sentiment.get("basic")
+                    if basic == "Bullish":
                         bullish += 1
-                    elif sentiment.get("basic") == "Bearish":
+                    elif basic == "Bearish":
                         bearish += 1
 
             total_rated = bullish + bearish
             bull_pct = round((bullish / total_rated) * 100) if total_rated > 0 else None
 
-            # Get the most recent messages as context
             recent_messages = []
             for msg in messages[:5]:
+                if not msg or not isinstance(msg, dict):
+                    continue
+                entities = msg.get("entities") or {}
+                sentiment = entities.get("sentiment") or {}
                 recent_messages.append({
-                    "body": msg.get("body", "")[:200],
-                    "sentiment": msg.get("entities", {}).get("sentiment", {}).get("basic"),
+                    "body": (msg.get("body") or "")[:200],
+                    "sentiment": sentiment.get("basic") if isinstance(sentiment, dict) else None,
                     "created_at": msg.get("created_at"),
                 })
 
@@ -78,12 +86,14 @@ class StockTwitsProvider:
                     f"{self.BASE_URL}/trending/symbols.json",
                     timeout=15,
                 )
-            data = resp.json()
-
             if resp.status_code != 200:
                 return []
 
-            symbols = data.get("symbols", [])
+            data = resp.json()
+            if not data or not isinstance(data, dict):
+                return []
+
+            symbols = data.get("symbols") or []
             result = [
                 {
                     "ticker": s.get("symbol"),
@@ -91,6 +101,7 @@ class StockTwitsProvider:
                     "watchlist_count": s.get("watchlist_count"),
                 }
                 for s in symbols[:15]
+                if s and isinstance(s, dict)
             ]
             cache.set(cache_key, result, STOCKTWITS_TTL)
             return result

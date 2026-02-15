@@ -1,0 +1,45 @@
+Please fix ALL of the following issues:1. Fix StockAnalysis scraper to capture all fieldsThe current CSS selectors are only catching a fraction of the data on the page. Please update the StockAnalysis scraper to capture ALL of these fields from the overview page:
+market_cap
+pe_ratio (trailing P/E)
+forward_pe
+ps_ratio (Price/Sales)
+pb_ratio (Price/Book)
+dividend_yield
+week_52_high
+week_52_low
+short_float (short interest as % of float)
+short_interest (total shares short)
+analyst_rating (overall rating like "Buy" or "Strong Buy")
+price_target (consensus target)
+earnings_date (next earnings)
+revenue (TTM or latest)
+revenue_growth (YoY %)
+net_income
+profit_margin
+operating_margin
+ebitda
+eps
+free_cash_flow
+debt_to_equity
+current_ratio
+beta
+avg_volume
+employees
+Go to https://stockanalysis.com/stocks/aapl/ in a browser, inspect the HTML, and update the selectors to match the CURRENT site structure. The page likely uses a table or definition list layout for the stats — find the correct selectors and update accordingly. Test with AAPL and NVDA to make sure the fields are populated.For the analyst ratings page (https://stockanalysis.com/stocks/aapl/ratings/), capture:
+
+consensus (Strong Buy / Buy / Hold / Sell / Strong Sell)
+buy_count
+hold_count
+sell_count
+price_target (consensus)
+price_target_high
+price_target_low
+upside_downside (% upside/downside from current price)
+2. Fix the StockTwits NoneType errorThe logs show StockTwits is throwing a NoneType error. Find the error, add null checks where needed, and make sure get_sentiment() and get_trending() return empty dicts/lists on failure rather than crashing.3. Handle Polygon rate limits gracefullyThe logs show Polygon returning 429 (rate limit) errors. Add retry logic with a small delay (0.5s) and a max of 2 retries. If still rate limited after retries, return empty dict instead of crashing. Also add a small delay (0.1s) between parallel Polygon calls to avoid hitting the rate limit.4. Remove the Finnhub social sentiment callThe logs show Finnhub get_social_sentiment() returns 403 because the free plan doesn't include it. Remove or skip this call everywhere it's used so it doesn't waste time and log errors. We already get social sentiment from StockTwits which works fine.5. Verify the fixesAfter making all changes, restart the server and test with: curl -X POST http://localhost:... /api/query -H "Content-Type: application/json" -H "X-API-Key: YOUR_KEY" -d '{"prompt": "Analyze AAPL"}'Check the logs and confirm:
+
+StockAnalysis overview returns pe_ratio, ps_ratio, short_float, revenue_growth, profit_margin
+StockAnalysis analyst returns consensus, price_target, upside_downside
+StockTwits does not throw NoneType errors
+Polygon retries on 429 instead of failing
+No more Finnhub 403 errors
+Re-deploy after all fixes.

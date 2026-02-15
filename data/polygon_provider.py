@@ -1,3 +1,4 @@
+import time
 from polygon import RESTClient
 from data.cache import cache, POLYGON_SNAPSHOT_TTL, POLYGON_TECHNICALS_TTL, POLYGON_DETAILS_TTL, POLYGON_NEWS_TTL
 
@@ -6,6 +7,18 @@ class PolygonProvider:
     def __init__(self, api_key: str):
         self.client = RESTClient(api_key=api_key)
 
+    def _retry_on_rate_limit(self, func, *args, max_retries=2, delay=0.5, **kwargs):
+        for attempt in range(max_retries + 1):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "too many" in error_str.lower() or "rate" in error_str.lower():
+                    if attempt < max_retries:
+                        time.sleep(delay * (attempt + 1))
+                        continue
+                raise
+
     def get_snapshot(self, ticker: str) -> dict:
         """Get current price, volume, and daily change for a ticker."""
         cache_key = f"polygon:snapshot:{ticker.upper()}"
@@ -13,7 +26,7 @@ class PolygonProvider:
         if cached is not None:
             return cached
         try:
-            snap = self.client.get_snapshot_ticker("stocks", ticker.upper())
+            snap = self._retry_on_rate_limit(self.client.get_snapshot_ticker, "stocks", ticker.upper())
             result = {
                 "ticker": ticker.upper(),
                 "price": snap.day.close if snap.day else None,
@@ -37,8 +50,8 @@ class PolygonProvider:
         if cached is not None:
             return cached
         try:
-            gainers = list(self.client.get_snapshot_direction("stocks", "gainers"))
-            losers = list(self.client.get_snapshot_direction("stocks", "losers"))
+            gainers = list(self._retry_on_rate_limit(self.client.get_snapshot_direction, "stocks", "gainers"))
+            losers = list(self._retry_on_rate_limit(self.client.get_snapshot_direction, "stocks", "losers"))
             result = {
                 "gainers": [
                     {
@@ -75,7 +88,7 @@ class PolygonProvider:
             params = {"limit": limit}
             if ticker:
                 params["ticker"] = ticker.upper()
-            news_items = list(self.client.list_ticker_news(**params))
+            news_items = list(self._retry_on_rate_limit(self.client.list_ticker_news, **params))
             result = [
                 {
                     "title": n.title,
@@ -101,14 +114,14 @@ class PolygonProvider:
         result = {}
         ticker = ticker.upper()
         try:
-            rsi = list(self.client.get_rsi(ticker, timespan="day", limit=1))
+            rsi = list(self._retry_on_rate_limit(self.client.get_rsi, ticker, timespan="day", limit=1))
             result["rsi"] = rsi[0].value if rsi else None
         except Exception:
             result["rsi"] = None
 
         try:
             sma_20 = list(
-                self.client.get_sma(ticker, timespan="day", window=20, limit=1)
+                self._retry_on_rate_limit(self.client.get_sma, ticker, timespan="day", window=20, limit=1)
             )
             result["sma_20"] = sma_20[0].value if sma_20 else None
         except Exception:
@@ -116,14 +129,14 @@ class PolygonProvider:
 
         try:
             sma_50 = list(
-                self.client.get_sma(ticker, timespan="day", window=50, limit=1)
+                self._retry_on_rate_limit(self.client.get_sma, ticker, timespan="day", window=50, limit=1)
             )
             result["sma_50"] = sma_50[0].value if sma_50 else None
         except Exception:
             result["sma_50"] = None
 
         try:
-            macd = list(self.client.get_macd(ticker, timespan="day", limit=1))
+            macd = list(self._retry_on_rate_limit(self.client.get_macd, ticker, timespan="day", limit=1))
             if macd:
                 result["macd"] = macd[0].value
                 result["macd_signal"] = macd[0].signal
@@ -147,7 +160,7 @@ class PolygonProvider:
         if cached is not None:
             return cached
         try:
-            details = self.client.get_ticker_details(ticker.upper())
+            details = self._retry_on_rate_limit(self.client.get_ticker_details, ticker.upper())
             result = {
                 "name": details.name,
                 "sector": getattr(details, "sic_description", "Unknown"),
@@ -160,23 +173,23 @@ class PolygonProvider:
             print(f"Error getting details for {ticker}: {e}")
             return {"name": ticker.upper(), "error": str(e)}
 
-def get_ticker_events(self, ticker: str) -> dict:
-    """Get upcoming earnings, dividends, and recent news catalysts."""
-    ticker = ticker.upper()
-    result = {"earnings": None, "news": []}
+    def get_ticker_events(self, ticker: str) -> dict:
+        """Get upcoming earnings, dividends, and recent news catalysts."""
+        ticker = ticker.upper()
+        result = {"earnings": None, "news": []}
 
-    try:
-        news = list(self.client.list_ticker_news(ticker=ticker, limit=10))
-        result["news"] = [
-            {
-                "title": n.title,
-                "summary": getattr(n, "description", ""),
-                "source": n.publisher.name if n.publisher else "Unknown",
-                "published": str(n.published_utc),
-            }
-            for n in news
-        ]
-    except Exception as e:
-        print(f"Error getting events for {ticker}: {e}")
+        try:
+            news = list(self._retry_on_rate_limit(self.client.list_ticker_news, ticker=ticker, limit=10))
+            result["news"] = [
+                {
+                    "title": n.title,
+                    "summary": getattr(n, "description", ""),
+                    "source": n.publisher.name if n.publisher else "Unknown",
+                    "published": str(n.published_utc),
+                }
+                for n in news
+            ]
+        except Exception as e:
+            print(f"Error getting events for {ticker}: {e}")
 
-    return result
+        return result

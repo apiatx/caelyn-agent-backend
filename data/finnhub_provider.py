@@ -180,7 +180,15 @@ class FinnhubProvider:
         if cached is not None:
             return cached
         try:
-            data = self.client.stock_social_sentiment(ticker)
+            try:
+                data = self.client.stock_social_sentiment(ticker)
+            except Exception as api_err:
+                err_str = str(api_err)
+                if "403" in err_str or "access" in err_str.lower():
+                    result = {"ticker": ticker, "reddit": None, "twitter": None, "note": "Not available on current plan"}
+                    cache.set(cache_key, result, FINNHUB_TTL)
+                    return result
+                raise
             reddit_data = data.get("reddit", [])
             twitter_data = data.get("twitter", [])
 
