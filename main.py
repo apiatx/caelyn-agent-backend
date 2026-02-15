@@ -6,7 +6,7 @@ from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel
 from typing import List, Optional
 
-from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY
+from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY
 from data.market_data_service import MarketDataService
 from agent.claude_agent import TradingAgent
 
@@ -32,7 +32,7 @@ app.add_middleware(
 # ============================================================
 # Wire up the services
 # ============================================================
-data_service = MarketDataService(polygon_key=POLYGON_API_KEY)
+data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY)
 agent = TradingAgent(api_key=ANTHROPIC_API_KEY, data_service=data_service)
 
 # ============================================================

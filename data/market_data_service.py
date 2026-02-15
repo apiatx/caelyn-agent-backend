@@ -6,11 +6,12 @@ from data.stocktwits_provider import StockTwitsProvider
 from data.stockanalysis_scraper import StockAnalysisScraper
 from data.options_scraper import OptionsScraper
 from data.finnhub_provider import FinnhubProvider
-from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY
+from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY, FMP_API_KEY
 from data.alphavantage_provider import AlphaVantageProvider
 from data.fred_provider import FredProvider
 from data.edgar_provider import EdgarProvider
 from data.fear_greed_provider import FearGreedProvider
+from data.fmp_provider import FMPProvider
 
 class MarketDataService:
     """
@@ -18,7 +19,7 @@ class MarketDataService:
     Your agent talks to THIS — never directly to Polygon or scrapers.
     """
 
-    def __init__(self, polygon_key: str):
+    def __init__(self, polygon_key: str, fmp_key: str = None):
         self.polygon = PolygonProvider(polygon_key)
         self.finviz = FinvizScraper()
         self.stocktwits = StockTwitsProvider()
@@ -29,6 +30,7 @@ class MarketDataService:
         self.fred = FredProvider(FRED_API_KEY)
         self.edgar = EdgarProvider()
         self.fear_greed = FearGreedProvider()
+        self.fmp = FMPProvider(fmp_key) if fmp_key else None
 
     async def research_ticker(self, ticker: str) -> dict:
         """
@@ -172,19 +174,31 @@ class MarketDataService:
 
     async def get_macro_overview(self) -> dict:
         """
-        Dedicated macro economics dashboard.
-        Used for "what's happening with the economy" type queries.
-        Returns the full macro dashboard from FRED, Alpha Vantage
-        market news sentiment, and Fear & Greed Index.
+        Comprehensive macro dashboard combining FRED + FMP + Fear & Greed.
+        FRED: Fed rate, CPI, Core PCE, GDP, unemployment, yield curve, VIX, jobless claims
+        FMP: DXY, oil, gold, treasuries, sector performance, economic calendar, indices
+        Fear & Greed: CNN sentiment index
         """
-        fred_data = self.fred.get_full_macro_dashboard()
-        market_sentiment = await self.alphavantage.get_market_news_sentiment(
-            "economy_macro"
-        )
-        fear_greed = await self.fear_greed.get_fear_greed_index()
+        fred_macro = self.fred.get_full_macro_dashboard()
+
+        fmp_data = {}
+        fear_greed = {}
+
+        if self.fmp:
+            fmp_result, fg_result = await asyncio.gather(
+                self.fmp.get_macro_market_data(),
+                self.fear_greed.get_fear_greed_index(),
+                return_exceptions=True,
+            )
+            fmp_data = fmp_result if not isinstance(fmp_result, Exception) else {}
+            fear_greed = fg_result if not isinstance(fg_result, Exception) else {}
+        else:
+            fear_greed_result = await self.fear_greed.get_fear_greed_index()
+            fear_greed = fear_greed_result if not isinstance(fear_greed_result, Exception) else {}
+
         return {
-            "macro_indicators": fred_data,
-            "macro_news_sentiment": market_sentiment,
+            "fred_economic_data": fred_macro,
+            "market_data": fmp_data,
             "fear_greed_index": fear_greed,
         }
 
@@ -543,47 +557,50 @@ class MarketDataService:
 
     async def get_sector_rotation(self) -> dict:
         """
-        Track sector ETF performance for rotation signals.
-        Uses Polygon snapshots for major sector ETFs.
+        Enhanced sector rotation using FMP sector ETF data + FRED macro.
         """
-        sector_etfs = {
-            "XLK": "Technology", "XLV": "Healthcare", "XLF": "Financials",
-            "XLE": "Energy", "XLI": "Industrials", "XLP": "Consumer Staples",
-            "XLY": "Consumer Discretionary", "XLB": "Materials", "XLU": "Utilities",
-            "XLRE": "Real Estate", "XLC": "Communications",
-            "SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000",
-            "URA": "Uranium", "SMH": "Semiconductors", "HACK": "Cybersecurity",
-        }
+        fmp_sectors = {}
+        if self.fmp:
+            fmp_sectors = await self.fmp.get_sector_etf_snapshot()
 
-        async def get_etf_data(ticker):
-            snapshot = self.polygon.get_snapshot(ticker)
-            technicals = self.polygon.get_technicals(ticker)
-            return {"snapshot": snapshot, "technicals": technicals}
+        key_etfs = ["XLK", "XLV", "XLF", "XLE", "XLI", "XLP", "XLY", "XLB", "XLU", "SPY", "QQQ", "IWM", "SMH", "URA"]
 
-        etf_results = await asyncio.gather(
-            *[asyncio.to_thread(lambda t=t: get_etf_data(t)) for t in sector_etfs.keys()],
+        async def get_etf_technicals(ticker):
+            return {
+                "technicals": self.polygon.get_technicals(ticker),
+                "snapshot": self.polygon.get_snapshot(ticker),
+            }
+
+        tech_results = await asyncio.gather(
+            *[asyncio.to_thread(lambda t=t: get_etf_technicals(t)) for t in key_etfs],
             return_exceptions=True,
         )
-
-        sector_data = {}
-        for (ticker, sector), result in zip(sector_etfs.items(), etf_results):
-            if isinstance(result, Exception):
-                try:
-                    snap = self.polygon.get_snapshot(ticker)
-                    tech = self.polygon.get_technicals(ticker)
-                    sector_data[ticker] = {"sector": sector, "snapshot": snap, "technicals": tech}
-                except:
-                    sector_data[ticker] = {"sector": sector, "error": str(result)}
-            else:
-                sector_data[ticker] = {"sector": sector, **result}
+        etf_technicals = {}
+        for ticker, result in zip(key_etfs, tech_results):
+            if not isinstance(result, Exception):
+                etf_technicals[ticker] = result
 
         macro = self.fred.get_quick_macro()
         fear_greed = await self.fear_greed.get_fear_greed_index()
 
+        dxy = {}
+        commodities = {}
+        if self.fmp:
+            dxy_result, comm_result = await asyncio.gather(
+                self.fmp.get_dxy(),
+                self.fmp.get_key_commodities(),
+                return_exceptions=True,
+            )
+            dxy = dxy_result if not isinstance(dxy_result, Exception) else {}
+            commodities = comm_result if not isinstance(comm_result, Exception) else {}
+
         return {
-            "sector_etf_data": sector_data,
+            "fmp_sector_data": fmp_sectors,
+            "etf_technicals": etf_technicals,
             "macro_data": macro,
             "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+            "dxy": dxy,
+            "commodities": commodities,
         }
 
     async def get_asymmetric_setups(self) -> dict:
