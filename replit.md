@@ -1,7 +1,7 @@
 # Trading Analysis Platform - FastAPI Backend
 
 ## Overview
-A comprehensive Python FastAPI backend for a trading analysis platform that combines real-time market data from 13+ sources with Claude AI to provide actionable trading insights. Supports both long-term investment analysis (SQGLP framework) and short-term trading strategies (Weinstein stage analysis, momentum/catalyst-driven).
+A comprehensive Python FastAPI backend for a trading analysis platform that combines real-time market data from 13+ sources with Claude AI to provide actionable trading insights. Claude operates as a "master trader" persona — filtering ruthlessly, leading with conviction picks, and weaving macro context into every analysis. Supports both long-term investment analysis (SQGLP framework) and short-term trading strategies (Weinstein stage analysis, momentum/catalyst-driven).
 
 ## Project Architecture
 ```
@@ -68,6 +68,7 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-15: Rewrote system prompt identity — "master trader" persona with 10 core principles (signal over noise, conviction-based filtering, macro-driven, opinionated, quality over quantity). Kept all 15 display_type format schemas intact.
 - 2026-02-15: Fixed AI Screener — root cause was max_tokens=4096 truncating screener JSON responses (~17K chars). Increased to 16384.
 - 2026-02-15: Rewrote _parse_response JSON parser — fixed nested JSON regex bug, added brace-depth counting, truncated JSON repair
 - 2026-02-15: Added comprehensive debug logging throughout screener flow (API → classifier → filter extraction → Finviz → parser)
