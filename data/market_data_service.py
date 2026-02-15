@@ -442,10 +442,7 @@ class MarketDataService:
             "investments", "fundamentals_scan", "asymmetric",
             "squeeze",
         ]
-        needs_social = category in [
-            "social_momentum", "market_scan", "trades",
-            "squeeze", "small_cap_spec",
-        ]
+        needs_social = True
 
         async def light_enrich(ticker):
             try:

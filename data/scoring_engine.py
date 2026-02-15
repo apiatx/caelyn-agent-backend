@@ -13,6 +13,121 @@ qualitative analysis.
 """
 
 
+DEFAULT_MARKET_CAP_CEILING = 150e9
+
+CATEGORY_MARKET_CAP_CAPS = {
+    "small_cap_spec": 2e9,
+    "squeeze": 10e9,
+    "social_momentum": 50e9,
+    "volume_spikes": 150e9,
+    "market_scan": 150e9,
+    "trades": 150e9,
+    "investments": 150e9,
+    "fundamentals_scan": 150e9,
+    "asymmetric": 50e9,
+    "bearish": 150e9,
+    "blue_chip": None,
+}
+
+CATEGORY_MARKET_CAP_FLOORS = {
+    "small_cap_spec": 50e6,
+    "squeeze": 50e6,
+    "social_momentum": 30e6,
+    "volume_spikes": 50e6,
+    "market_scan": 100e6,
+    "trades": 100e6,
+    "investments": 100e6,
+    "fundamentals_scan": 100e6,
+    "asymmetric": 50e6,
+    "bearish": 100e6,
+    "blue_chip": 50e9,
+}
+
+
+def get_market_cap(ticker_data: dict) -> float | None:
+    """Extract market cap from any available data source."""
+    details = ticker_data.get("details", {})
+    if isinstance(details, dict):
+        mc = details.get("market_cap")
+        if mc is not None:
+            try:
+                return float(mc)
+            except (TypeError, ValueError):
+                pass
+
+    overview = ticker_data.get("overview", {})
+    if isinstance(overview, dict):
+        mc = overview.get("market_cap")
+        if mc is not None:
+            try:
+                return float(mc)
+            except (TypeError, ValueError):
+                pass
+
+    snapshot = ticker_data.get("snapshot", {})
+    if isinstance(snapshot, dict):
+        mc = snapshot.get("market_cap")
+        if mc is not None:
+            try:
+                return float(mc)
+            except (TypeError, ValueError):
+                pass
+
+    return None
+
+
+def passes_market_cap_filter(ticker_data: dict, category: str) -> bool:
+    """
+    Check if a ticker passes the market cap filter for this category.
+    Returns True if it passes, False if it should be excluded.
+    """
+    mc = get_market_cap(ticker_data)
+
+    if mc is None:
+        return True
+
+    ceiling = CATEGORY_MARKET_CAP_CAPS.get(category, DEFAULT_MARKET_CAP_CEILING)
+    floor = CATEGORY_MARKET_CAP_FLOORS.get(category, 0)
+
+    if ceiling is not None and mc > ceiling:
+        return False
+
+    if floor and mc < floor:
+        return False
+
+    return True
+
+
+def apply_market_cap_score_adjustment(base_score: float, ticker_data: dict, category: str) -> float:
+    """
+    Apply market cap-based score adjustments.
+    Smaller caps get bonuses in most categories because they have
+    more upside potential and less analyst coverage (more mispricing).
+    """
+    mc = get_market_cap(ticker_data)
+    if mc is None:
+        return base_score
+
+    if category in ["blue_chip"]:
+        return base_score
+
+    if category in ["small_cap_spec"]:
+        return base_score
+
+    if mc < 500e6:
+        return base_score * 1.15
+    elif mc < 2e9:
+        return base_score * 1.10
+    elif mc < 10e9:
+        return base_score * 1.05
+    elif mc < 50e9:
+        return base_score * 1.0
+    elif mc < 150e9:
+        return base_score * 0.90
+    else:
+        return base_score * 0.70
+
+
 def score_for_trades(ticker_data: dict) -> float:
     """
     Score a ticker for short-term trading setup quality.
@@ -304,6 +419,19 @@ def score_for_investments(ticker_data: dict) -> float:
             except (TypeError, ValueError):
                 pass
 
+    sentiment = ticker_data.get("sentiment", {}) or ticker_data.get("stocktwits", {})
+    if isinstance(sentiment, dict):
+        bull_pct = sentiment.get("bull_pct") or sentiment.get("bullish_pct")
+        if bull_pct is not None:
+            try:
+                bull = float(bull_pct)
+                if bull >= 70:
+                    score += 5
+                elif bull >= 55:
+                    score += 3
+            except (TypeError, ValueError):
+                pass
+
     return round(min(score, 100), 1)
 
 
@@ -372,17 +500,32 @@ def score_for_squeeze(ticker_data: dict) -> float:
             pass
 
     # --- Social Buzz (15 pts max) ---
+    sentiment = ticker_data.get("sentiment", {}) or ticker_data.get("stocktwits", {})
     if isinstance(sentiment, dict):
         bull_pct = sentiment.get("bull_pct") or sentiment.get("bullish_pct")
+        watchers = sentiment.get("watchers") or sentiment.get("watcher_count")
+
         if bull_pct is not None:
             try:
                 bull = float(bull_pct)
                 if bull >= 80:
-                    score += 15
-                elif bull >= 65:
                     score += 10
+                elif bull >= 65:
+                    score += 7
                 elif bull >= 50:
+                    score += 4
+            except (TypeError, ValueError):
+                pass
+
+        if watchers is not None:
+            try:
+                w = int(watchers)
+                if w >= 10000:
                     score += 5
+                elif w >= 5000:
+                    score += 3
+                elif w >= 1000:
+                    score += 1
             except (TypeError, ValueError):
                 pass
 
@@ -493,6 +636,19 @@ def score_for_fundamentals(ticker_data: dict) -> float:
                 score += 3
         except (TypeError, ValueError):
             pass
+
+    sentiment = ticker_data.get("sentiment", {}) or ticker_data.get("stocktwits", {})
+    if isinstance(sentiment, dict):
+        bull_pct = sentiment.get("bull_pct") or sentiment.get("bullish_pct")
+        if bull_pct is not None:
+            try:
+                bull = float(bull_pct)
+                if bull >= 70:
+                    score += 5
+                elif bull >= 55:
+                    score += 3
+            except (TypeError, ValueError):
+                pass
 
     return round(min(score, 100), 1)
 
@@ -620,24 +776,36 @@ SCORING_FUNCTIONS = {
 
 def rank_candidates(candidates: dict, category: str, top_n: int = 12) -> list:
     """
-    Takes a dict of {ticker: raw_data}, scores each ticker
-    for the given category, and returns the top N ranked by score.
+    Takes a dict of {ticker: raw_data}, filters by market cap,
+    scores each ticker for the given category, applies market cap
+    adjustments, and returns the top N ranked by adjusted score.
 
     Returns list of (ticker, score, raw_data) tuples, sorted descending.
     """
     scoring_fn = SCORING_FUNCTIONS.get(category, score_for_trades)
 
     scored = []
+    filtered_out = 0
+
     for ticker, data in candidates.items():
         if not isinstance(data, dict):
             continue
+
+        if not passes_market_cap_filter(data, category):
+            filtered_out += 1
+            continue
+
         try:
-            s = scoring_fn(data)
-            scored.append((ticker, s, data))
+            base_score = scoring_fn(data)
+            adjusted_score = apply_market_cap_score_adjustment(base_score, data, category)
+            scored.append((ticker, round(adjusted_score, 1), data))
         except Exception as e:
             print(f"Scoring error for {ticker}: {e}")
             continue
 
     scored.sort(key=lambda x: x[1], reverse=True)
+
+    if filtered_out > 0:
+        print(f"[Scoring] Filtered out {filtered_out} tickers by market cap for category '{category}'")
 
     return scored[:top_n]
