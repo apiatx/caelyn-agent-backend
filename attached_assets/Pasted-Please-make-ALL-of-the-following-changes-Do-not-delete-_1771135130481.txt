@@ -1,0 +1,51 @@
+Please make ALL of the following changes. Do not delete or modify any existing code unless I specifically say "replace."
+PART 1: Backend — API Key Authentication
+Add a new secret in the Secrets panel (lock icon):
+
+Key: AGENT_API_KEY
+Value: (make up a long random string, something like hippo_ak_7f3x9k2m4p8q1w5t — save this, you'll need it for the frontend)
+
+In config.py, add this line after the existing lines:
+pythonAGENT_API_KEY = os.getenv("AGENT_API_KEY")
+In main.py, add these imports at the top (alongside existing imports):
+pythonfrom fastapi import FastAPI, Request, Header, HTTPException
+from typing import Optional
+from config import AGENT_API_KEY
+In main.py, create an authentication dependency. Add this function BEFORE the endpoint definitions:
+pythonasync def verify_api_key(x_api_key: Optional[str] = Header(None)):
+    """Verify the API key sent in the X-API-Key header."""
+    if not x_api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing API key. Include X-API-Key header.",
+        )
+    if x_api_key != AGENT_API_KEY:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid API key.",
+        )
+    return x_api_key
+Replace the /api/query endpoint with this (adds authentication):
+python@app.post("/api/query")
+@limiter.limit("10/minute")
+async def query_agent(
+    request: QueryRequest,
+    req: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    # Verify API key
+    if not api_key or api_key != AGENT_API_KEY:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or missing API key.",
+        )
+    try:
+        result = await agent.handle_query(
+            request.prompt,
+            history=[h.dict() for h in request.history] if request.history else None,
+        )
+        return result
+    except Exception as e:
+        print(f"Error in /api/query: {e}")
+        return {"error": str(e), "type": "chat", "analysis": f"Error: {str(e)}"}
+Leave the root / and /health endpoints WITHOUT authentication so you can still check if the server is running.

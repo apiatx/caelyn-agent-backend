@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -6,7 +6,7 @@ from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel
 from typing import List, Optional
 
-from config import ANTHROPIC_API_KEY, POLYGON_API_KEY
+from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY
 from data.market_data_service import MarketDataService
 from agent.claude_agent import TradingAgent
 
@@ -46,6 +46,21 @@ async def root():
     return {"status": "running", "message": "Trading Agent API is live"}
 
 
+async def verify_api_key(x_api_key: Optional[str] = Header(None)):
+    """Verify the API key sent in the X-API-Key header."""
+    if not x_api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing API key. Include X-API-Key header.",
+        )
+    if x_api_key != AGENT_API_KEY:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid API key.",
+        )
+    return x_api_key
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -56,7 +71,16 @@ class QueryRequest(BaseModel):
 
 @app.post("/api/query")
 @limiter.limit("10/minute")
-async def query_agent(request: QueryRequest, req: Request):
+async def query_agent(
+    request: QueryRequest,
+    req: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    if not api_key or api_key != AGENT_API_KEY:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or missing API key.",
+        )
     try:
         result = await agent.handle_query(
             request.prompt,
