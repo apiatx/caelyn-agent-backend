@@ -12,6 +12,7 @@ from data.fred_provider import FredProvider
 from data.edgar_provider import EdgarProvider
 from data.fear_greed_provider import FearGreedProvider
 from data.fmp_provider import FMPProvider
+from data.coingecko_provider import CoinGeckoProvider
 
 class MarketDataService:
     """
@@ -19,7 +20,7 @@ class MarketDataService:
     Your agent talks to THIS — never directly to Polygon or scrapers.
     """
 
-    def __init__(self, polygon_key: str, fmp_key: str = None):
+    def __init__(self, polygon_key: str, fmp_key: str = None, coingecko_key: str = None):
         self.polygon = PolygonProvider(polygon_key)
         self.finviz = FinvizScraper()
         self.stocktwits = StockTwitsProvider()
@@ -31,6 +32,7 @@ class MarketDataService:
         self.edgar = EdgarProvider()
         self.fear_greed = FearGreedProvider()
         self.fmp = FMPProvider(fmp_key) if fmp_key else None
+        self.coingecko = CoinGeckoProvider(coingecko_key) if coingecko_key else None
 
     async def research_ticker(self, ticker: str) -> dict:
         """
@@ -1610,4 +1612,108 @@ class MarketDataService:
             "high_short_float": high_short,
             "trending": trending,
             "enriched_data": enriched_data,
+        }
+
+    async def get_crypto_scanner(self) -> dict:
+        import asyncio
+
+        if not self.coingecko:
+            return {"error": "CoinGecko API not configured"}
+
+        cg_dashboard = await self.coingecko.get_crypto_dashboard()
+
+        trending_coins = []
+        if isinstance(cg_dashboard.get("trending"), dict):
+            coins_list = cg_dashboard["trending"].get("coins", [])
+            trending_coins = [c.get("item", {}).get("id", "") for c in coins_list[:6] if c.get("item")]
+
+        top_gainers = []
+        gl = cg_dashboard.get("gainers_losers", {})
+        if isinstance(gl, dict):
+            for g in (gl.get("gainers") or [])[:4]:
+                cid = g.get("id")
+                if cid and cid not in trending_coins:
+                    top_gainers.append(cid)
+
+        deep_dive_ids = list(dict.fromkeys(trending_coins + top_gainers))[:10]
+        deep_dive = {}
+        if deep_dive_ids:
+            deep_dive = await self.coingecko.get_coin_deep_dive(deep_dive_ids)
+
+        derivatives = cg_dashboard.get("derivatives", [])
+        funding_analysis = self._analyze_funding_rates(derivatives)
+
+        fear_greed = {}
+        try:
+            fear_greed = await self.fear_greed.get_fear_greed_index()
+        except:
+            pass
+
+        crypto_news = {}
+        try:
+            crypto_news = await self.alphavantage.get_news_sentiment("CRYPTO:BTC")
+        except:
+            pass
+
+        return {
+            "global_market": cg_dashboard.get("global_market", {}),
+            "top_coins": cg_dashboard.get("top_coins", []),
+            "trending": cg_dashboard.get("trending", {}),
+            "gainers_losers": cg_dashboard.get("gainers_losers", {}),
+            "categories": (cg_dashboard.get("categories") or [])[:20],
+            "derivatives_tickers": derivatives[:30],
+            "funding_analysis": funding_analysis,
+            "deep_dive": deep_dive,
+            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+            "crypto_news": crypto_news if not isinstance(crypto_news, Exception) else {},
+        }
+
+    def _analyze_funding_rates(self, derivatives: list) -> dict:
+        if not derivatives or not isinstance(derivatives, list):
+            return {}
+
+        perps = [d for d in derivatives if d.get("contract_type") == "perpetual" and d.get("funding_rate") is not None]
+
+        if not perps:
+            return {}
+
+        sorted_by_funding = sorted(perps, key=lambda x: x.get("funding_rate", 0), reverse=True)
+
+        highest_funding = [{
+            "symbol": p.get("symbol", ""),
+            "funding_rate": p.get("funding_rate"),
+            "open_interest": p.get("open_interest"),
+            "volume_24h": p.get("h24_volume"),
+            "price": p.get("last"),
+            "change_24h": p.get("h24_percentage_change"),
+            "signal": "Crowded longs — correction risk" if p.get("funding_rate", 0) > 0.03 else "Elevated long bias",
+        } for p in sorted_by_funding[:10]]
+
+        lowest_funding = [{
+            "symbol": p.get("symbol", ""),
+            "funding_rate": p.get("funding_rate"),
+            "open_interest": p.get("open_interest"),
+            "volume_24h": p.get("h24_volume"),
+            "price": p.get("last"),
+            "change_24h": p.get("h24_percentage_change"),
+            "signal": "Crowded shorts — squeeze potential" if p.get("funding_rate", 0) < -0.01 else "Short bias",
+        } for p in sorted_by_funding[-10:]]
+
+        avg_funding = sum(p.get("funding_rate", 0) for p in perps) / len(perps) if perps else 0
+
+        sorted_by_oi = sorted(perps, key=lambda x: x.get("open_interest", 0) or 0, reverse=True)
+        highest_oi = [{
+            "symbol": p.get("symbol", ""),
+            "open_interest": p.get("open_interest"),
+            "funding_rate": p.get("funding_rate"),
+            "volume_24h": p.get("h24_volume"),
+        } for p in sorted_by_oi[:10]]
+
+        return {
+            "total_perps_tracked": len(perps),
+            "avg_funding_rate": round(avg_funding, 6),
+            "market_bias": "Bullish (longs paying)" if avg_funding > 0.005 else "Bearish (shorts paying)" if avg_funding < -0.005 else "Neutral",
+            "highest_funding": highest_funding,
+            "most_negative_funding": lowest_funding,
+            "highest_open_interest": highest_oi,
         }

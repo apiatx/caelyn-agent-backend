@@ -1066,6 +1066,93 @@ RULES FOR PORTFOLIO FORMAT:
 - If the user has more than 12 positions concentrated in one sector, flag it
 - If any position is rated Sell or Short, explain why and what to replace it with
 
+### FORMAT: "crypto" — Crypto Market Scanner
+Use when: user asks about crypto, Bitcoin, altcoins, DeFi, funding rates, perpetuals.
+
+Your analysis should cover:
+1. Global crypto market state (total market cap, BTC dominance, 24h volume change)
+2. Funding rate analysis (are longs or shorts crowded? Squeeze potential? Reversal signals?)
+3. Which categories/narratives are leading (AI tokens, memes, L2s, DeFi, etc.)
+4. Top momentum coins with social buzz acceleration
+5. Asymmetric setups (negative funding + rising price = squeeze; high funding + stalling = long liquidation risk)
+```json
+{
+  "display_type": "crypto",
+  "market_overview": "Total crypto market cap $2.8T, up 3.2% in 24h. BTC dominance 52%, declining — altcoin rotation accelerating. Average funding rate +0.008% — slightly long-biased but not extreme. Risk-on environment.",
+  "btc_eth_summary": {
+    "btc": {"price": "$97,500", "change_24h": "+2.1%", "change_7d": "+8.3%", "dominance": "52%", "funding_rate": "+0.01%", "signal": "Stage 2 uptrend. Funding neutral. Healthy."},
+    "eth": {"price": "$3,850", "change_24h": "+4.2%", "change_7d": "+12.1%", "funding_rate": "+0.015%", "signal": "Outperforming BTC. ETH/BTC ratio recovering. Bullish."}
+  },
+  "funding_rate_analysis": {
+    "market_bias": "Slightly long-biased (avg funding +0.008%)",
+    "crowded_longs": [
+      {"symbol": "DOGEUSDT", "funding": "+0.045%", "signal": "Extremely crowded longs. High liquidation risk on any dip.", "action": "Avoid new longs or take profit"}
+    ],
+    "squeeze_candidates": [
+      {"symbol": "SOLUSDT", "funding": "-0.02%", "oi_change": "+15%", "signal": "Shorts piling in but price holding. Squeeze potential.", "action": "Watch for breakout above $185 as squeeze trigger"}
+    ]
+  },
+  "hot_categories": [
+    {"name": "AI Tokens", "market_cap_change_24h": "+8.2%", "top_coins": "RNDR, FET, OCEAN", "signal": "Leading narrative rotation"},
+    {"name": "Meme Coins", "market_cap_change_24h": "+5.1%", "top_coins": "DOGE, SHIB, PEPE", "signal": "Risk-on indicator — retail FOMO active"}
+  ],
+  "top_momentum": [
+    {
+      "coin": "Solana",
+      "symbol": "SOL",
+      "price": "$185",
+      "change_24h": "+6.8%",
+      "change_7d": "+18.2%",
+      "change_30d": "+42%",
+      "market_cap": "$82B",
+      "volume_24h": "$4.2B",
+      "funding_rate": "-0.02%",
+      "open_interest": "$2.1B",
+      "social": {
+        "twitter_followers": "2.8M",
+        "reddit_subscribers": "180K",
+        "dev_activity": "High (450 commits/month)",
+        "sentiment": "82% bullish"
+      },
+      "conviction": "High",
+      "thesis": "Negative funding despite strong price action = shorts getting squeezed. Dev activity highest in 6 months. DeFi TVL growing. Outperforming ETH on 30d basis.",
+      "setup": "Breakout above $180 resistance on volume. Funding negative = fuel for squeeze.",
+      "risk": "Concentrated in one validator client. Network outage history.",
+      "trade_plan": {
+        "entry": "$180-$186",
+        "stop": "$168",
+        "target_1": "$210",
+        "target_2": "$250",
+        "risk_reward": "1:3.5"
+      }
+    }
+  ],
+  "on_chain_signals": {
+    "exchange_flows": "Net outflows from exchanges — accumulation pattern (bullish)",
+    "stablecoin_supply": "USDT supply at ATH — dry powder on sidelines",
+    "btc_whale_activity": "Wallets >1000 BTC increasing — institutional accumulation"
+  },
+  "upcoming_catalysts": [
+    "ETH Pectra upgrade — March 2025",
+    "BTC halving impact still playing out — supply squeeze",
+    "Fed rate decision Feb 28 — risk-on if dovish"
+  ]
+}
+```
+
+RULES FOR CRYPTO FORMAT:
+- Always start with BTC and ETH summary (they set the market tone)
+- Funding rate analysis is CRITICAL — this is the edge over basic price tracking
+  - Positive funding > 0.03% = crowded longs, correction risk
+  - Negative funding < -0.01% = crowded shorts, squeeze potential
+  - Flat funding near 0 = healthy, trend likely to continue
+- Show which CATEGORIES are leading — AI, memes, L2, DeFi, gaming — this shows narrative rotation
+- For each top momentum coin include: price changes (24h, 7d, 30d), funding rate, OI, social metrics, dev activity
+- Social metrics matter more in crypto than equities — include Twitter followers, Reddit subs, GitHub commits
+- Include on_chain_signals section even if data is limited — stablecoin supply, exchange flows, whale activity (use the global market data and derivatives data to infer these)
+- Flag any coin where funding rate DISAGREES with price action (divergence = strongest signal)
+- Include trade_plan for top conviction picks
+
 ### FORMAT 7: "chat" — General Discussion
 Use when: macro questions, general advice, explanations, or anything that doesn't fit the above.
 ```json
@@ -1111,6 +1198,7 @@ Categories:
 - "sec_filings": User asks about SEC filings, insider transactions, 8-K filings, Form 4 data.
 - "portfolio_review": User provides a list of tickers and wants them all analyzed, rated, and ranked. Also triggered by "review my portfolio", "analyze these stocks", "rate these tickers", "rank my holdings". Extract all tickers mentioned.
 - "briefing": User asks for a morning briefing, daily overview, "what should I do today", "top moves today", "daily snapshot", "what's the play today", "quick overview", or clicks the daily briefing button. This is a combined intelligence report, not a single category scan.
+- "crypto": User asks about cryptocurrency, Bitcoin, Ethereum, altcoins, crypto market, DeFi, funding rates, perpetuals, on-chain data, crypto momentum, meme coins, or any specific crypto token/coin.
 - "general": General market question, strategy question, educational question, no specific data needed.
 
 Also extract these filters when present:
