@@ -1236,6 +1236,229 @@ class MarketDataService:
             "market_news": self.polygon.get_news(limit=10),
         }
 
+    async def get_morning_briefing(self) -> dict:
+        """
+        Combined intelligence briefing pulling the top signal from every data source.
+        Designed to give a full market snapshot + top actionable moves in one call.
+
+        Runs ALL major scans in parallel, takes the #1 result from each,
+        and packages everything for Claude to synthesize into a briefing.
+        """
+        import asyncio
+        from data.scoring_engine import score_for_trades, score_for_investments, score_for_squeeze
+
+        (
+            movers,
+            fear_greed,
+            fred_macro,
+            stage2_breakouts,
+            volume_breakouts,
+            macd_crossovers,
+            unusual_volume,
+            new_highs,
+            high_short,
+            insider_buying,
+            revenue_leaders,
+            rsi_recovery,
+            accumulation,
+            trending,
+            market_news,
+            upcoming_earnings,
+        ) = await asyncio.gather(
+            asyncio.to_thread(self.polygon.get_market_movers),
+            self.fear_greed.get_fear_greed_index(),
+            asyncio.to_thread(self.fred.get_quick_macro),
+            self.finviz.get_stage2_breakouts(),
+            self.finviz.get_volume_breakouts(),
+            self.finviz.get_macd_crossovers(),
+            self.finviz.get_unusual_volume(),
+            self.finviz.get_new_highs(),
+            self.finviz.get_high_short_float(),
+            self.finviz.get_insider_buying(),
+            self.finviz.get_revenue_growth_leaders(),
+            self.finviz.get_rsi_recovery(),
+            self.finviz.get_accumulation_stocks(),
+            self.stocktwits.get_trending(),
+            asyncio.to_thread(lambda: self.polygon.get_news(limit=10)),
+            asyncio.to_thread(self.finnhub.get_upcoming_earnings),
+            return_exceptions=True,
+        )
+
+        def safe(val, default=None):
+            if default is None:
+                default = []
+            return val if not isinstance(val, Exception) else default
+
+        movers = safe(movers, {})
+        fear_greed = safe(fear_greed, {})
+        fred_macro = safe(fred_macro, {})
+        stage2_breakouts = safe(stage2_breakouts)
+        volume_breakouts = safe(volume_breakouts)
+        macd_crossovers = safe(macd_crossovers)
+        unusual_volume = safe(unusual_volume)
+        new_highs = safe(new_highs)
+        high_short = safe(high_short)
+        insider_buying = safe(insider_buying)
+        revenue_leaders = safe(revenue_leaders)
+        rsi_recovery = safe(rsi_recovery)
+        accumulation = safe(accumulation)
+        trending = safe(trending)
+        market_news = safe(market_news)
+        upcoming_earnings = safe(upcoming_earnings)
+
+        fmp_data = {}
+        if self.fmp:
+            try:
+                dxy, commodities, treasuries, sector_perf, indices = await asyncio.gather(
+                    self.fmp.get_dxy(),
+                    self.fmp.get_key_commodities(),
+                    self.fmp.get_treasury_rates(),
+                    self.fmp.get_sector_performance(),
+                    self.fmp.get_market_indices(),
+                    return_exceptions=True,
+                )
+                fmp_data = {
+                    "dxy": dxy if not isinstance(dxy, Exception) else {},
+                    "commodities": commodities if not isinstance(commodities, Exception) else {},
+                    "treasury_yields": treasuries if not isinstance(treasuries, Exception) else {},
+                    "sector_performance": sector_perf if not isinstance(sector_perf, Exception) else [],
+                    "indices": indices if not isinstance(indices, Exception) else {},
+                }
+            except:
+                pass
+
+        all_tickers = set()
+        screener_sources = {}
+
+        source_map = {
+            "stage2_breakout": stage2_breakouts,
+            "volume_breakout": volume_breakouts,
+            "macd_crossover": macd_crossovers,
+            "unusual_volume": unusual_volume,
+            "new_high": new_highs,
+            "high_short_float": high_short,
+            "insider_buying": insider_buying,
+            "revenue_growth": revenue_leaders,
+            "rsi_recovery": rsi_recovery,
+            "accumulation": accumulation,
+        }
+
+        for source_name, source_list in source_map.items():
+            if isinstance(source_list, list):
+                for item in source_list:
+                    if isinstance(item, dict) and item.get("ticker"):
+                        t = item["ticker"].upper().strip()
+                        if len(t) <= 5 and t.isalpha():
+                            all_tickers.add(t)
+                            if t not in screener_sources:
+                                screener_sources[t] = []
+                            screener_sources[t].append(source_name)
+
+        for t in (trending or []):
+            if isinstance(t, dict) and t.get("ticker"):
+                ticker = t["ticker"].upper().strip()
+                all_tickers.add(ticker)
+                if ticker not in screener_sources:
+                    screener_sources[ticker] = []
+                screener_sources[ticker].append("social_trending")
+
+        for g in (movers.get("gainers") or []):
+            if g.get("ticker"):
+                ticker = g["ticker"].upper().strip()
+                all_tickers.add(ticker)
+                if ticker not in screener_sources:
+                    screener_sources[ticker] = []
+                screener_sources[ticker].append("top_gainer")
+
+        print(f"[Briefing] {len(all_tickers)} unique tickers across all sources")
+
+        multi_signal = {t: sources for t, sources in screener_sources.items() if len(sources) >= 2}
+        single_signal = {t: sources for t, sources in screener_sources.items() if len(sources) == 1}
+
+        print(f"[Briefing] {len(multi_signal)} multi-signal tickers: {list(multi_signal.keys())[:10]}")
+
+        priority_tickers = list(multi_signal.keys())[:15]
+        remaining_slots = 20 - len(priority_tickers)
+        if remaining_slots > 0:
+            filler = [t for t in single_signal.keys() if t not in priority_tickers][:remaining_slots]
+            priority_tickers.extend(filler)
+
+        async def enrich_briefing(ticker):
+            try:
+                snapshot = self.polygon.get_snapshot(ticker)
+                technicals = self.polygon.get_technicals(ticker)
+                details = self.polygon.get_ticker_details(ticker)
+
+                st_result, overview = await asyncio.gather(
+                    self.stocktwits.get_sentiment(ticker),
+                    self.stockanalysis.get_overview(ticker),
+                    return_exceptions=True,
+                )
+
+                return {
+                    "snapshot": snapshot,
+                    "technicals": technicals,
+                    "details": details,
+                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
+                    "overview": overview if not isinstance(overview, Exception) else {},
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        enrichment_results = await asyncio.gather(
+            *[enrich_briefing(t) for t in priority_tickers],
+            return_exceptions=True,
+        )
+
+        enriched = {}
+        for ticker, result in zip(priority_tickers, enrichment_results):
+            if not isinstance(result, Exception) and isinstance(result, dict) and "error" not in result:
+                trade_score = score_for_trades(result)
+                invest_score = score_for_investments(result)
+                result["trade_score"] = trade_score
+                result["invest_score"] = invest_score
+                result["signal_count"] = len(screener_sources.get(ticker, []))
+                result["signal_sources"] = screener_sources.get(ticker, [])
+                enriched[ticker] = result
+
+        ranked = sorted(
+            enriched.items(),
+            key=lambda x: (x[1].get("signal_count", 0), x[1].get("trade_score", 0)),
+            reverse=True,
+        )
+
+        return {
+            "total_tickers_detected": len(all_tickers),
+            "multi_signal_tickers": {t: sources for t, sources in list(multi_signal.items())[:10]},
+            "ranked_candidates": [
+                {
+                    "ticker": t,
+                    "trade_score": d.get("trade_score", 0),
+                    "invest_score": d.get("invest_score", 0),
+                    "signal_count": d.get("signal_count", 0),
+                    "signal_sources": d.get("signal_sources", []),
+                }
+                for t, d in ranked[:15]
+            ],
+            "enriched_data": {t: d for t, d in ranked[:12]},
+            "market_movers": movers,
+            "fear_greed": fear_greed,
+            "fred_macro": fred_macro,
+            "fmp_market_data": fmp_data,
+            "highlights": {
+                "stage2_breakouts": stage2_breakouts[:3] if isinstance(stage2_breakouts, list) else [],
+                "volume_breakouts": volume_breakouts[:3] if isinstance(volume_breakouts, list) else [],
+                "macd_crossovers": macd_crossovers[:3] if isinstance(macd_crossovers, list) else [],
+                "high_short_float": high_short[:3] if isinstance(high_short, list) else [],
+                "insider_buying": insider_buying[:3] if isinstance(insider_buying, list) else [],
+                "revenue_growth": revenue_leaders[:3] if isinstance(revenue_leaders, list) else [],
+                "rsi_recovery": rsi_recovery[:3] if isinstance(rsi_recovery, list) else [],
+                "social_trending": [t.get("ticker") for t in trending[:5]] if isinstance(trending, list) else [],
+            },
+            "market_news": market_news[:8] if isinstance(market_news, list) else [],
+            "upcoming_earnings": upcoming_earnings[:5] if isinstance(upcoming_earnings, list) else [],
+        }
+
     async def analyze_portfolio(self, tickers: list) -> dict:
         """
         Full analysis pipeline for a user-provided list of tickers (up to 25).

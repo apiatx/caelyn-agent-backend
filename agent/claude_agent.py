@@ -126,6 +126,9 @@ class TradingAgent:
         elif category == "commodities":
             return await self.data.get_commodities_dashboard()
 
+        elif category == "briefing":
+            return await self.data.get_morning_briefing()
+
         elif category == "portfolio_review":
             tickers = query_info.get("tickers", [])
             if not tickers:

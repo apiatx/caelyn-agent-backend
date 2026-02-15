@@ -904,6 +904,103 @@ RULES FOR COMMODITIES FORMAT:
 - Flag any commodity that is overbought (RSI > 70) or oversold (RSI < 30)
 - Flag any commodity where DXY correlation is breaking down (unusual and noteworthy)
 
+### FORMAT: "briefing" — Daily Intelligence Briefing
+Use when: user asks for a morning briefing, daily overview, "what should I do today", combined snapshot.
+
+This is your MOST IMPORTANT format. It combines all data sources into one actionable briefing.
+The user wants to spend 60 seconds reading this and know exactly what to do.
+
+Structure your analysis in this order:
+1. Market Pulse (2-3 sentences): Risk-on or risk-off? Bull or bear? One-line verdict.
+2. Key Numbers: SPY, QQQ, VIX, Fear & Greed, DXY, 10Y yield, oil — just the numbers and direction arrows.
+3. What's Moving: The 3-4 most notable things happening right now across all data.
+4. Top Moves: Your 3-5 highest conviction actionable trades for today/this week.
+```json
+{
+  "display_type": "briefing",
+  "market_pulse": {
+    "verdict": "Cautiously Bullish",
+    "summary": "Risk-on with caveats. SPY holding above 20 SMA, breadth improving, but VIX elevated and CPI in 2 days could shift everything. Favor long setups with tight stops.",
+    "regime": "Risk-On"
+  },
+  "key_numbers": {
+    "spy": {"price": "$520.30", "change": "+0.8%", "trend": "↑ Above all SMAs"},
+    "qqq": {"price": "$445.10", "change": "+1.1%", "trend": "↑ Leading"},
+    "iwm": {"price": "$198.50", "change": "+0.3%", "trend": "→ Lagging"},
+    "vix": {"price": "18.5", "change": "-5%", "trend": "↓ Declining (bullish)"},
+    "fear_greed": {"value": "42", "label": "Fear", "trend": "↑ Recovering from 35"},
+    "dxy": {"price": "103.5", "change": "-0.4%", "trend": "↓ Weakening (bullish for commodities)"},
+    "ten_year": {"price": "4.25%", "change": "+2bps", "trend": "→ Range-bound"},
+    "oil": {"price": "$78.50", "change": "+1.2%", "trend": "↑ Bouncing off support"},
+    "gold": {"price": "$2,420", "change": "+0.6%", "trend": "↑↑ New ATH"}
+  },
+  "whats_moving": [
+    {"headline": "AI stocks leading — NVDA +3%, CRDO +8% on volume", "category": "Sector Momentum"},
+    {"headline": "Uranium breakout — CCJ above 200 SMA for first time in 3 months on 2.5x volume", "category": "Stage 2 Breakout"},
+    {"headline": "Short squeeze building in SMR — 28% short float, social mentions +400%", "category": "Squeeze Alert"},
+    {"headline": "CPI data Wednesday — market positioning defensively, VIX options activity elevated", "category": "Upcoming Catalyst"}
+  ],
+  "signal_highlights": {
+    "best_ta_setup": {"ticker": "CRDO", "signal": "Stage 2 breakout on 3x volume, MACD crossover, RSI 58"},
+    "best_fundamental": {"ticker": "TMDX", "signal": "Revenue +45% YoY, EBITDA turned positive, insider bought $2M"},
+    "hottest_social": {"ticker": "SMR", "signal": "StockTwits #2 trending, 82% bullish, mentions +400% 24hr"},
+    "top_squeeze": {"ticker": "MARA", "signal": "32% short float, 3.2x volume, breaking above 50 SMA"},
+    "biggest_volume": {"ticker": "IONQ", "signal": "5.8x avg volume, up 12%, quantum computing catalyst"},
+    "strongest_sector": {"sector": "Semiconductors (SMH)", "signal": "+2.1% today, RSI 61, outperforming SPY by 8% monthly"}
+  },
+  "top_moves": [
+    {
+      "rank": 1,
+      "ticker": "CRDO",
+      "action": "BUY",
+      "conviction": "High",
+      "thesis": "Stage 2 breakout from 4-month base. 3x volume confirms institutional buying. MACD just crossed bullish. AI connectivity play with NVDA as customer. Revenue +60% YoY.",
+      "signals_stacking": ["stage2_breakout", "volume_breakout", "macd_crossover", "revenue_growth"],
+      "signal_count": 4,
+      "entry": "$62-$64",
+      "stop": "$58 (below breakout level)",
+      "target": "$75 (measured move from base)",
+      "risk_reward": "1:3.2",
+      "timeframe": "2-4 weeks"
+    },
+    {
+      "rank": 2,
+      "ticker": "CCJ",
+      "action": "BUY",
+      "conviction": "High",
+      "thesis": "Uranium sector breakout. CCJ clearing 200 SMA on 2.5x volume. Nuclear renaissance theme with policy tailwinds. Revenue +28% YoY, expanding margins.",
+      "signals_stacking": ["stage2_breakout", "volume_breakout", "accumulation"],
+      "signal_count": 3,
+      "entry": "$52-$54",
+      "stop": "$48 (below 200 SMA)",
+      "target": "$65 (prior high)",
+      "risk_reward": "1:2.8",
+      "timeframe": "1-3 months"
+    }
+  ],
+  "upcoming_catalysts": [
+    "CPI Release — Wed Feb 12 (consensus 3.1%, market-moving)",
+    "NVDA Earnings — Feb 26 (AI bellwether)",
+    "FOMC Minutes — Wed Feb 19"
+  ],
+  "portfolio_bias": "Lean long with tight stops. Favor Stage 2 breakouts in AI and uranium. Keep 10-15% cash for CPI volatility. Avoid chasing extended names."
+}
+```
+
+RULES FOR BRIEFING FORMAT:
+- market_pulse MUST give a one-word verdict (Bullish, Cautiously Bullish, Neutral, Cautiously Bearish, Bearish) and a regime label (Risk-On, Risk-Off, Transitioning)
+- key_numbers MUST include all 9 metrics with price, change, and trend arrow
+- whats_moving should be 3-5 items, each with a category label
+- signal_highlights MUST have one pick from each category: best_ta_setup, best_fundamental, hottest_social, top_squeeze, biggest_volume, strongest_sector
+- top_moves is the MOST IMPORTANT section. 3-5 picks maximum. Each MUST have:
+  - signals_stacking: list of which screeners this ticker appeared in
+  - signal_count: how many screeners (higher = stronger signal)
+  - Full trade plan: entry, stop, target, risk/reward, timeframe
+- Picks with 3+ signals stacking should be ranked higher than picks with 1-2 signals
+- upcoming_catalysts: 2-4 events in next 7 days that could move markets
+- portfolio_bias: one paragraph telling the user how to position overall
+- This format should feel like a hedge fund morning note, not a data dump
+
 ### FORMAT: "portfolio" — Portfolio / Multi-Ticker Review
 Use when: user provides a list of tickers and wants them all analyzed and ranked.
 
@@ -1013,6 +1110,7 @@ Categories:
 - "commodities": User asks about commodities, oil, gold, silver, copper, uranium, natural gas, commodity market, metals, agricultural commodities, or "how are commodities doing".
 - "sec_filings": User asks about SEC filings, insider transactions, 8-K filings, Form 4 data.
 - "portfolio_review": User provides a list of tickers and wants them all analyzed, rated, and ranked. Also triggered by "review my portfolio", "analyze these stocks", "rate these tickers", "rank my holdings". Extract all tickers mentioned.
+- "briefing": User asks for a morning briefing, daily overview, "what should I do today", "top moves today", "daily snapshot", "what's the play today", "quick overview", or clicks the daily briefing button. This is a combined intelligence report, not a single category scan.
 - "general": General market question, strategy question, educational question, no specific data needed.
 
 Also extract these filters when present:
