@@ -282,21 +282,104 @@ class MarketDataService:
         """
         from data.scoring_engine import rank_candidates
 
-        screener_results = await asyncio.gather(
-            self.finviz.get_screener_results("ta_topgainers"),
-            self.finviz.get_unusual_volume(),
-            self.finviz.get_new_highs(),
-            self.finviz.get_most_active(),
-            self.finviz.get_top_losers() if category == "bearish" else asyncio.sleep(0),
-            self.finviz.get_overbought_stocks() if category == "bearish" else asyncio.sleep(0),
-            self.finviz.get_oversold_stocks() if category in ["trades", "market_scan", "asymmetric"] else asyncio.sleep(0),
-            self.finviz.get_small_cap_gainers() if category in ["small_cap_spec", "trades", "market_scan"] else asyncio.sleep(0),
-            self.finviz.get_high_short_float() if category in ["squeeze", "trades", "market_scan"] else asyncio.sleep(0),
-            self.finviz.get_insider_buying() if category in ["investments", "fundamentals_scan", "asymmetric"] else asyncio.sleep(0),
-            self.finviz.get_analyst_upgrades() if category in ["investments", "fundamentals_scan"] else asyncio.sleep(0),
-            self.finviz.get_earnings_this_week() if category in ["investments", "fundamentals_scan"] else asyncio.sleep(0),
-            return_exceptions=True,
-        )
+        # ── Stage 1: Cast Wide Net Based on Category ──
+        # Different categories need different screeners to find SETUPS, not just movers
+
+        if category in ["market_scan", "trades"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_stage2_breakouts(),
+                self.finviz.get_macd_crossovers(),
+                self.finviz.get_volume_breakouts(),
+                self.finviz.get_sma_crossover_stocks(),
+                self.finviz.get_consolidation_breakouts(),
+                self.finviz.get_accumulation_stocks(),
+                self.finviz.get_small_cap_momentum(),
+                self.finviz.get_gap_up_volume(),
+                self.finviz.get_unusual_volume(),
+                self.finviz.get_new_highs(),
+                self.finviz.get_insider_buying(),
+                return_exceptions=True,
+            )
+
+        elif category in ["squeeze"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_high_short_float(),
+                self.finviz.get_small_cap_squeeze_setups(),
+                self.finviz.get_volume_breakouts(),
+                self.finviz.get_unusual_volume(),
+                self.finviz.get_small_cap_gainers(),
+                self.finviz.get_screener_results("ta_topgainers"),
+                return_exceptions=True,
+            )
+
+        elif category in ["investments", "fundamentals_scan"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_insider_buying(),
+                self.finviz.get_analyst_upgrades(),
+                self.finviz.get_earnings_this_week(),
+                self.finviz.get_accumulation_stocks(),
+                self.finviz.get_stage2_breakouts(),
+                self.finviz.get_new_highs(),
+                self.finviz.get_sma_crossover_stocks(),
+                return_exceptions=True,
+            )
+
+        elif category in ["asymmetric"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_rsi_recovery(),
+                self.finviz.get_insider_buying(),
+                self.finviz.get_volume_breakouts(),
+                self.finviz.get_stage2_breakouts(),
+                self.finviz.get_sma_crossover_stocks(),
+                self.finviz.get_accumulation_stocks(),
+                return_exceptions=True,
+            )
+
+        elif category in ["bearish"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_top_losers(),
+                self.finviz.get_overbought_stocks(),
+                self.finviz.get_screener_results("ta_toplosers"),
+                self.finviz.get_most_volatile(),
+                return_exceptions=True,
+            )
+
+        elif category in ["small_cap_spec"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_small_cap_momentum(),
+                self.finviz.get_small_cap_gainers(),
+                self.finviz.get_small_cap_squeeze_setups(),
+                self.finviz.get_volume_breakouts(),
+                self.finviz.get_penny_stock_gainers(),
+                return_exceptions=True,
+            )
+
+        elif category in ["volume_spikes"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_volume_breakouts(),
+                self.finviz.get_unusual_volume(),
+                self.finviz.get_most_active(),
+                self.finviz.get_gap_up_volume(),
+                return_exceptions=True,
+            )
+
+        elif category in ["social_momentum"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_unusual_volume(),
+                self.finviz.get_screener_results("ta_topgainers"),
+                self.finviz.get_small_cap_gainers(),
+                self.finviz.get_volume_breakouts(),
+                return_exceptions=True,
+            )
+
+        else:
+            screener_results = await asyncio.gather(
+                self.finviz.get_screener_results("ta_topgainers"),
+                self.finviz.get_unusual_volume(),
+                self.finviz.get_new_highs(),
+                self.finviz.get_most_active(),
+                return_exceptions=True,
+            )
 
         trending = []
         try:

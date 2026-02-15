@@ -15,9 +15,18 @@ qualitative analysis.
 
 def score_for_trades(ticker_data: dict) -> float:
     """
-    Score a ticker for short-term trading potential.
-    Weights: momentum (30%), volume (25%), technicals (25%), sentiment (20%)
-    Returns 0-100 score.
+    Score a ticker for short-term trading setup quality.
+
+    This scores SETUPS, not just stocks that already moved.
+    A stock up 15% with no volume and overbought RSI scores LOW.
+    A stock up 3% breaking above 50 SMA on 3x volume with MACD crossover scores HIGH.
+
+    Weights:
+    - Volume confirmation (25 pts): Is volume confirming the move?
+    - Technical alignment (30 pts): Are multiple TA indicators aligned?
+    - Momentum quality (20 pts): Is the move sustainable, not exhausted?
+    - Sentiment tailwind (15 pts): Is social/analyst sentiment supportive?
+    - Setup freshness (10 pts): Is this early-stage or already extended?
     """
     score = 0.0
     snapshot = ticker_data.get("snapshot", {})
@@ -25,98 +34,142 @@ def score_for_trades(ticker_data: dict) -> float:
     sentiment = ticker_data.get("sentiment", {}) or ticker_data.get("stocktwits", {})
     details = ticker_data.get("details", {})
 
-    # --- Momentum (30 pts max) ---
+    price = snapshot.get("price")
     change_pct = snapshot.get("change_pct")
-    if change_pct is not None:
-        try:
-            change = float(change_pct)
-            if change > 0:
-                score += min(change * 1.5, 30)
-            else:
-                score += max(change * 0.5, -10)
-        except (TypeError, ValueError):
-            pass
 
-    # --- Volume (25 pts max) ---
+    # ── Volume Confirmation (25 pts) ──
     volume = snapshot.get("volume")
     avg_vol = None
-    if details:
+    if isinstance(details, dict):
         avg_vol = details.get("avg_volume")
+
+    volume_ratio = 0
     if volume and avg_vol:
         try:
-            ratio = float(volume) / float(avg_vol)
-            if ratio >= 5.0:
-                score += 25
-            elif ratio >= 3.0:
-                score += 20
-            elif ratio >= 2.0:
-                score += 15
-            elif ratio >= 1.5:
-                score += 10
-            elif ratio >= 1.0:
-                score += 5
-            else:
-                score += 0
+            volume_ratio = float(volume) / float(avg_vol)
         except (TypeError, ValueError, ZeroDivisionError):
             pass
 
-    # --- Technicals (25 pts max) ---
+    if volume_ratio >= 5.0:
+        score += 25
+    elif volume_ratio >= 3.0:
+        score += 22
+    elif volume_ratio >= 2.0:
+        score += 17
+    elif volume_ratio >= 1.5:
+        score += 10
+    elif volume_ratio >= 1.0:
+        score += 4
+
+    # ── Technical Alignment (30 pts) ──
+    ta_points = 0
     rsi = technicals.get("rsi")
     sma_20 = technicals.get("sma_20")
     sma_50 = technicals.get("sma_50")
     macd = technicals.get("macd")
     macd_signal = technicals.get("macd_signal")
-    price = snapshot.get("price")
-
-    if rsi is not None:
-        try:
-            rsi = float(rsi)
-            if 40 <= rsi <= 70:
-                score += 8
-            elif 30 <= rsi < 40:
-                score += 5
-            elif rsi > 70:
-                score += 3
-        except (TypeError, ValueError):
-            pass
+    macd_hist = technicals.get("macd_histogram")
 
     if price and sma_20:
         try:
             if float(price) > float(sma_20):
-                score += 6
+                ta_points += 6
         except (TypeError, ValueError):
             pass
 
     if price and sma_50:
         try:
             if float(price) > float(sma_50):
-                score += 5
+                ta_points += 6
         except (TypeError, ValueError):
             pass
 
     if macd is not None and macd_signal is not None:
         try:
             if float(macd) > float(macd_signal):
-                score += 6
+                ta_points += 7
         except (TypeError, ValueError):
             pass
 
-    # --- Sentiment (20 pts max) ---
+    if macd_hist is not None:
+        try:
+            if float(macd_hist) > 0:
+                ta_points += 5
+        except (TypeError, ValueError):
+            pass
+
+    if rsi is not None:
+        try:
+            rsi_val = float(rsi)
+            if 50 <= rsi_val <= 65:
+                ta_points += 6
+            elif 40 <= rsi_val < 50:
+                ta_points += 4
+            elif 65 < rsi_val <= 70:
+                ta_points += 3
+            elif rsi_val > 70:
+                ta_points += 0
+            elif 30 <= rsi_val < 40:
+                ta_points += 2
+        except (TypeError, ValueError):
+            pass
+
+    score += min(ta_points, 30)
+
+    # ── Momentum Quality (20 pts) ──
+    if change_pct is not None:
+        try:
+            change = float(change_pct)
+            if 2 <= change <= 8 and volume_ratio >= 2.0:
+                score += 20
+            elif 1 <= change <= 15 and volume_ratio >= 3.0:
+                score += 18
+            elif 8 < change <= 15 and volume_ratio >= 2.0:
+                score += 14
+            elif 0 < change <= 2 and volume_ratio >= 2.0:
+                score += 12
+            elif change > 15 and volume_ratio >= 2.0:
+                score += 8
+            elif change > 15 and volume_ratio < 2.0:
+                score += 2
+            elif change <= 0:
+                score += 0
+        except (TypeError, ValueError):
+            pass
+
+    # ── Sentiment Tailwind (15 pts) ──
     if isinstance(sentiment, dict):
         bull_pct = sentiment.get("bull_pct") or sentiment.get("bullish_pct")
         if bull_pct is not None:
             try:
                 bull = float(bull_pct)
                 if bull >= 75:
-                    score += 20
-                elif bull >= 60:
-                    score += 14
-                elif bull >= 50:
+                    score += 15
+                elif bull >= 65:
+                    score += 12
+                elif bull >= 55:
                     score += 8
-                else:
-                    score += 2
+                elif bull >= 45:
+                    score += 4
             except (TypeError, ValueError):
                 pass
+
+    # ── Setup Freshness (10 pts) ──
+    if price and sma_20:
+        try:
+            distance_from_sma20 = (float(price) - float(sma_20)) / float(sma_20) * 100
+            if 0 <= distance_from_sma20 <= 3:
+                score += 10
+            elif 3 < distance_from_sma20 <= 6:
+                score += 7
+            elif 6 < distance_from_sma20 <= 10:
+                score += 4
+            elif distance_from_sma20 > 10:
+                score += 1
+            elif distance_from_sma20 < 0:
+                score += 2
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
 
     return round(min(score, 100), 1)
 

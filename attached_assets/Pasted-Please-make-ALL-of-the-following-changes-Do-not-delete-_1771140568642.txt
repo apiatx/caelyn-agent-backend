@@ -1,0 +1,433 @@
+Please make ALL of the following changes. Do not delete or modify any existing code unless I specifically say "replace."
+PART 1: Add Custom Finviz Multi-Indicator Screens
+In data/finviz_scraper.py, add these new methods to the FinvizScraper class. These use the _custom_screen method to run multi-filter screens that find SETUPS, not just movers:
+python    async def get_stage2_breakouts(self) -> list:
+        """
+        Stocks breaking out above the 200-day SMA with volume surge.
+        This is the Weinstein Stage 2 breakout screen.
+        Filters: Price above SMA 200, new high, relative volume > 2x, up today
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o500,sh_relvol_o2,ta_highlow52w_nh,ta_sma200_pa&ft=4&o=-change"
+        )
+
+    async def get_macd_crossovers(self) -> list:
+        """
+        Stocks with recent bullish MACD crossover + positive momentum.
+        Signal line just crossed above — early momentum signal.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,ta_change_u,ta_signal_buy&ft=4&o=-change"
+        )
+
+    async def get_rsi_recovery(self) -> list:
+        """
+        Stocks recovering from oversold (RSI was <30, now moving up).
+        Bounce play candidates.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,ta_rsi_os40,ta_change_u&ft=4&o=-change"
+        )
+
+    async def get_volume_breakouts(self) -> list:
+        """
+        Stocks with massive volume surge (3x+) AND price increase.
+        Volume precedes price — these are early-stage moves.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o200,sh_relvol_o3,ta_change_u5&ft=4&o=-relvol"
+        )
+
+    async def get_sma_crossover_stocks(self) -> list:
+        """
+        Stocks where price just crossed above the 50-day SMA.
+        Medium-term trend change signal.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,ta_sma50_pa,ta_change_u&ft=4&o=-change"
+        )
+
+    async def get_small_cap_momentum(self) -> list:
+        """
+        Small caps (under $2B) with volume surge + price increase + above SMA 20.
+        Your bread and butter for trading.
+        """
+        return await self._custom_screen(
+            "v=111&f=cap_smallunder,sh_avgvol_o200,sh_relvol_o2,ta_sma20_pa,ta_change_u&ft=4&o=-change"
+        )
+
+    async def get_gap_up_volume(self) -> list:
+        """
+        Stocks gapping up today on high volume.
+        Potential catalyst-driven moves.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o500,sh_relvol_o2,ta_change_u3&ft=4&o=-change"
+        )
+
+    async def get_consolidation_breakouts(self) -> list:
+        """
+        Stocks breaking out of tight consolidation (low volatility -> expansion).
+        Bollinger Band squeeze breakouts.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,ta_change_u3,ta_volatility_wo3&ft=4&o=-change"
+        )
+
+    async def get_accumulation_stocks(self) -> list:
+        """
+        Stocks showing accumulation pattern: up on above-average volume over multiple days.
+        Institutional buying signal.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o500,sh_relvol_o1.5,ta_change_u,ta_sma20_pa,ta_sma50_pa&ft=4&o=-relvol"
+        )
+
+    async def get_small_cap_squeeze_setups(self) -> list:
+        """
+        Small caps with high short interest + volume surge.
+        Squeeze candidates specifically.
+        """
+        return await self._custom_screen(
+            "v=111&f=cap_smallunder,sh_avgvol_o200,sh_relvol_o2,sh_short_o15,ta_change_u&ft=4&o=-change"
+        )
+PART 2: Replace the Wide Scan to Use Setup-Based Screeners
+In data/market_data_service.py, find the wide_scan_and_rank method. Replace the ENTIRE Stage 1 section (the screener_results = await asyncio.gather(...) block and everything up to Stage 2) with this:
+python        # ── Stage 1: Cast Wide Net Based on Category ──
+        # Different categories need different screeners to find SETUPS, not just movers
+
+        if category in ["market_scan", "trades"]:
+            # BEST TRADES: Multi-indicator setups, not just top gainers
+            screener_results = await asyncio.gather(
+                self.finviz.get_stage2_breakouts(),         # Weinstein Stage 2
+                self.finviz.get_macd_crossovers(),          # MACD signal buys
+                self.finviz.get_volume_breakouts(),          # 3x+ volume + up
+                self.finviz.get_sma_crossover_stocks(),     # Crossing above 50 SMA
+                self.finviz.get_consolidation_breakouts(),  # Bollinger squeeze breakouts
+                self.finviz.get_accumulation_stocks(),       # Institutional accumulation
+                self.finviz.get_small_cap_momentum(),        # Small cap setups
+                self.finviz.get_gap_up_volume(),             # Gap ups on volume
+                self.finviz.get_unusual_volume(),            # General unusual volume
+                self.finviz.get_new_highs(),                 # 52-week highs (momentum leaders)
+                self.finviz.get_insider_buying(),            # Smart money
+                return_exceptions=True,
+            )
+
+        elif category in ["squeeze"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_high_short_float(),
+                self.finviz.get_small_cap_squeeze_setups(),
+                self.finviz.get_volume_breakouts(),
+                self.finviz.get_unusual_volume(),
+                self.finviz.get_small_cap_gainers(),
+                self.finviz.get_screener_results("ta_topgainers"),
+                return_exceptions=True,
+            )
+
+        elif category in ["investments", "fundamentals_scan"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_insider_buying(),
+                self.finviz.get_analyst_upgrades(),
+                self.finviz.get_earnings_this_week(),
+                self.finviz.get_accumulation_stocks(),
+                self.finviz.get_stage2_breakouts(),
+                self.finviz.get_new_highs(),
+                self.finviz.get_sma_crossover_stocks(),
+                return_exceptions=True,
+            )
+
+        elif category in ["asymmetric"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_rsi_recovery(),             # Oversold bouncing
+                self.finviz.get_insider_buying(),            # Smart money at lows
+                self.finviz.get_volume_breakouts(),          # Volume confirming reversal
+                self.finviz.get_stage2_breakouts(),          # Stage 2 entries
+                self.finviz.get_sma_crossover_stocks(),     # Trend change
+                self.finviz.get_accumulation_stocks(),
+                return_exceptions=True,
+            )
+
+        elif category in ["bearish"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_top_losers(),
+                self.finviz.get_overbought_stocks(),
+                self.finviz.get_screener_results("ta_toplosers"),
+                self.finviz.get_most_volatile(),
+                return_exceptions=True,
+            )
+
+        elif category in ["small_cap_spec"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_small_cap_momentum(),
+                self.finviz.get_small_cap_gainers(),
+                self.finviz.get_small_cap_squeeze_setups(),
+                self.finviz.get_volume_breakouts(),
+                self.finviz.get_penny_stock_gainers(),
+                return_exceptions=True,
+            )
+
+        elif category in ["volume_spikes"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_volume_breakouts(),
+                self.finviz.get_unusual_volume(),
+                self.finviz.get_most_active(),
+                self.finviz.get_gap_up_volume(),
+                return_exceptions=True,
+            )
+
+        elif category in ["social_momentum"]:
+            screener_results = await asyncio.gather(
+                self.finviz.get_unusual_volume(),
+                self.finviz.get_screener_results("ta_topgainers"),
+                self.finviz.get_small_cap_gainers(),
+                self.finviz.get_volume_breakouts(),
+                return_exceptions=True,
+            )
+
+        else:
+            # Fallback: general wide scan
+            screener_results = await asyncio.gather(
+                self.finviz.get_screener_results("ta_topgainers"),
+                self.finviz.get_unusual_volume(),
+                self.finviz.get_new_highs(),
+                self.finviz.get_most_active(),
+                return_exceptions=True,
+            )
+(Keep everything from Stage 2 onwards unchanged — the deduplication, enrichment, scoring, and deep enrichment logic stays the same.)
+PART 3: Update the Scoring Engine for Better Trade Scoring
+In data/scoring_engine.py, replace the entire score_for_trades function with this improved version that rewards SETUPS, not just movers:
+pythondef score_for_trades(ticker_data: dict) -> float:
+    """
+    Score a ticker for short-term trading setup quality.
+
+    This scores SETUPS, not just stocks that already moved.
+    A stock up 15% with no volume and overbought RSI scores LOW.
+    A stock up 3% breaking above 50 SMA on 3x volume with MACD crossover scores HIGH.
+
+    Weights:
+    - Volume confirmation (25 pts): Is volume confirming the move?
+    - Technical alignment (30 pts): Are multiple TA indicators aligned?
+    - Momentum quality (20 pts): Is the move sustainable, not exhausted?
+    - Sentiment tailwind (15 pts): Is social/analyst sentiment supportive?
+    - Setup freshness (10 pts): Is this early-stage or already extended?
+    """
+    score = 0.0
+    snapshot = ticker_data.get("snapshot", {})
+    technicals = ticker_data.get("technicals", {})
+    sentiment = ticker_data.get("sentiment", {}) or ticker_data.get("stocktwits", {})
+    details = ticker_data.get("details", {})
+
+    price = snapshot.get("price")
+    change_pct = snapshot.get("change_pct")
+
+    # ── Volume Confirmation (25 pts) ──
+    volume = snapshot.get("volume")
+    avg_vol = None
+    if isinstance(details, dict):
+        avg_vol = details.get("avg_volume")
+
+    volume_ratio = 0
+    if volume and avg_vol:
+        try:
+            volume_ratio = float(volume) / float(avg_vol)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
+    if volume_ratio >= 5.0:
+        score += 25  # Massive institutional-level volume
+    elif volume_ratio >= 3.0:
+        score += 22  # Very strong volume confirmation
+    elif volume_ratio >= 2.0:
+        score += 17  # Solid above-average volume
+    elif volume_ratio >= 1.5:
+        score += 10  # Slightly elevated
+    elif volume_ratio >= 1.0:
+        score += 4   # Average — not confirming
+    # Below average volume = 0 pts (no conviction)
+
+    # ── Technical Alignment (30 pts) ──
+    # More indicators aligned = higher score
+    ta_points = 0
+    rsi = technicals.get("rsi")
+    sma_20 = technicals.get("sma_20")
+    sma_50 = technicals.get("sma_50")
+    macd = technicals.get("macd")
+    macd_signal = technicals.get("macd_signal")
+    macd_hist = technicals.get("macd_histogram")
+
+    # Price above SMA 20 (short-term trend)
+    if price and sma_20:
+        try:
+            if float(price) > float(sma_20):
+                ta_points += 6
+        except (TypeError, ValueError):
+            pass
+
+    # Price above SMA 50 (medium-term trend)
+    if price and sma_50:
+        try:
+            if float(price) > float(sma_50):
+                ta_points += 6
+        except (TypeError, ValueError):
+            pass
+
+    # MACD above signal line (bullish momentum)
+    if macd is not None and macd_signal is not None:
+        try:
+            if float(macd) > float(macd_signal):
+                ta_points += 7
+        except (TypeError, ValueError):
+            pass
+
+    # MACD histogram expanding (momentum accelerating)
+    if macd_hist is not None:
+        try:
+            if float(macd_hist) > 0:
+                ta_points += 5
+        except (TypeError, ValueError):
+            pass
+
+    # RSI in sweet spot (not overbought, not oversold)
+    if rsi is not None:
+        try:
+            rsi_val = float(rsi)
+            if 50 <= rsi_val <= 65:
+                ta_points += 6  # Sweet spot — momentum without exhaustion
+            elif 40 <= rsi_val < 50:
+                ta_points += 4  # Recovering — early stage
+            elif 65 < rsi_val <= 70:
+                ta_points += 3  # Strong but approaching overbought
+            elif rsi_val > 70:
+                ta_points += 0  # Overbought — risk of pullback
+            elif 30 <= rsi_val < 40:
+                ta_points += 2  # Oversold bounce possible
+            # RSI < 30 = 0 for trades (falling knife)
+        except (TypeError, ValueError):
+            pass
+
+    score += min(ta_points, 30)
+
+    # ── Momentum Quality (20 pts) ──
+    # Reward moderate moves with strong volume (setup)
+    # Penalize huge moves with weak volume (chasing)
+    if change_pct is not None:
+        try:
+            change = float(change_pct)
+            if 2 <= change <= 8 and volume_ratio >= 2.0:
+                score += 20  # Perfect: moderate move + strong volume = early-stage
+            elif 1 <= change <= 15 and volume_ratio >= 3.0:
+                score += 18  # Big volume confirming = strong
+            elif 8 < change <= 15 and volume_ratio >= 2.0:
+                score += 14  # Good move, confirmed
+            elif 0 < change <= 2 and volume_ratio >= 2.0:
+                score += 12  # Early — volume building before price follows
+            elif change > 15 and volume_ratio >= 2.0:
+                score += 8   # Extended but confirmed
+            elif change > 15 and volume_ratio < 2.0:
+                score += 2   # Chasing — extended on weak volume
+            elif change <= 0:
+                score += 0   # Down day
+        except (TypeError, ValueError):
+            pass
+
+    # ── Sentiment Tailwind (15 pts) ──
+    if isinstance(sentiment, dict):
+        bull_pct = sentiment.get("bull_pct") or sentiment.get("bullish_pct")
+        if bull_pct is not None:
+            try:
+                bull = float(bull_pct)
+                if bull >= 75:
+                    score += 15
+                elif bull >= 65:
+                    score += 12
+                elif bull >= 55:
+                    score += 8
+                elif bull >= 45:
+                    score += 4
+            except (TypeError, ValueError):
+                pass
+
+    # ── Setup Freshness (10 pts) ──
+    # Reward stocks near breakout level, not already 20% extended
+    if price and sma_20:
+        try:
+            distance_from_sma20 = (float(price) - float(sma_20)) / float(sma_20) * 100
+            if 0 <= distance_from_sma20 <= 3:
+                score += 10  # Right at breakout — freshest setup
+            elif 3 < distance_from_sma20 <= 6:
+                score += 7   # Recently broke out
+            elif 6 < distance_from_sma20 <= 10:
+                score += 4   # Somewhat extended
+            elif distance_from_sma20 > 10:
+                score += 1   # Very extended — chasing
+            elif distance_from_sma20 < 0:
+                score += 2   # Below SMA — not ideal for trades
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
+    return round(min(score, 100), 1)
+```
+
+## PART 4: Update System Prompt — Tell Claude What "Best Trades" Really Means
+
+**In `agent/prompts.py`, find the existing section in the SYSTEM_PROMPT about MODE 2: TRADING. Add this right after it (or if there's no explicit mode section, add it before the RESPONSE FORMAT section):**
+```
+## WHAT "BEST TRADES" MEANS
+
+When the user asks for "best trades today" or clicks the Best Trades button, they are NOT asking for:
+- Stocks that already pumped 15% today (that's chasing, not trading)
+- The top gainers list from Finviz (that's yesterday's news)
+- Meme stocks that already moved (too late)
+
+They ARE asking for:
+- Stocks with MULTIPLE technical indicators aligning RIGHT NOW
+- Volume surging BEFORE or DURING the breakout (not after the move is done)
+- MACD crossovers, RSI recovering from oversold, breaking above key SMAs
+- Weinstein Stage 2 breakouts with volume confirmation
+- Clean chart patterns (cup & handle, bull flag, consolidation breakout)
+- Favorable risk/reward (defined entry, clear stop, asymmetric upside)
+
+THE SCORING ENGINE HAS PRE-FILTERED FOR THIS. The candidates you receive have been:
+1. Pulled from 11 different setup-specific screeners (not just "top gainers"):
+   - Stage 2 breakouts (price above rising 200 SMA + new high + 2x volume)
+   - MACD signal line crossovers (early momentum signal)
+   - Volume breakouts (3x+ volume with price increase)
+   - SMA 50 crossover stocks (medium-term trend change)
+   - Consolidation breakouts (Bollinger squeeze → expansion)
+   - Institutional accumulation patterns (up on above-avg volume, above both SMAs)
+   - Small cap momentum (under $2B, volume surge, above SMA 20)
+   - Gap ups on volume (catalyst-driven)
+   - Unusual volume (potential early signal)
+   - 52-week highs (momentum leaders with no overhead resistance)
+   - Insider buying (smart money positioning)
+
+2. Deduplicated across all screeners (a stock appearing in multiple screeners = stronger signal)
+
+3. Scored on: volume confirmation (25%), technical alignment (30%), momentum quality (20%), sentiment (15%), setup freshness (10%)
+
+YOUR JOB: Look at the enriched data for the top-ranked candidates and:
+- Identify which ones have the MOST indicators aligned (the more signals stacking, the higher conviction)
+- Write a clear thesis for each (what's the setup, what's the catalyst, why now)
+- Provide specific entry, stop loss, and targets
+- Flag any that are extended/chasing despite a high quant score
+- Rank by your conviction after qualitative review
+```
+
+**Re-publish/deploy the backend.**
+
+---
+
+## What Changed
+
+**Before:**
+```
+"Best Trades" → Finviz top gainers (stocks already up 10-20%) → enrich 5 → Claude picks from 5 movers
+Problem: Chasing, not finding setups
+```
+
+**After:**
+```
+"Best Trades" → 11 setup-specific screeners in parallel → 50-100 unique candidates →
+light enrich all → score on: volume confirmation + TA alignment + momentum quality + sentiment + freshness →
+deep enrich top 12 → Claude analyzes with full data
+Problem solved: Finding setups with multiple indicators stacking, not chasing

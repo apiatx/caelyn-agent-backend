@@ -190,3 +190,94 @@ class FinvizScraper:
         except Exception as e:
             print(f"Finviz custom screen error: {e}")
             return []
+
+    async def get_stage2_breakouts(self) -> list:
+        """
+        Stocks breaking out above the 200-day SMA with volume surge.
+        This is the Weinstein Stage 2 breakout screen.
+        Filters: Price above SMA 200, new high, relative volume > 2x, up today
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o500,sh_relvol_o2,ta_highlow52w_nh,ta_sma200_pa&ft=4&o=-change"
+        )
+
+    async def get_macd_crossovers(self) -> list:
+        """
+        Stocks with recent bullish MACD crossover + positive momentum.
+        Signal line just crossed above — early momentum signal.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,ta_change_u,ta_signal_buy&ft=4&o=-change"
+        )
+
+    async def get_rsi_recovery(self) -> list:
+        """
+        Stocks recovering from oversold (RSI was <30, now moving up).
+        Bounce play candidates.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,ta_rsi_os40,ta_change_u&ft=4&o=-change"
+        )
+
+    async def get_volume_breakouts(self) -> list:
+        """
+        Stocks with massive volume surge (3x+) AND price increase.
+        Volume precedes price — these are early-stage moves.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o200,sh_relvol_o3,ta_change_u5&ft=4&o=-relvol"
+        )
+
+    async def get_sma_crossover_stocks(self) -> list:
+        """
+        Stocks where price just crossed above the 50-day SMA.
+        Medium-term trend change signal.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,ta_sma50_pa,ta_change_u&ft=4&o=-change"
+        )
+
+    async def get_small_cap_momentum(self) -> list:
+        """
+        Small caps (under $2B) with volume surge + price increase + above SMA 20.
+        Your bread and butter for trading.
+        """
+        return await self._custom_screen(
+            "v=111&f=cap_smallunder,sh_avgvol_o200,sh_relvol_o2,ta_sma20_pa,ta_change_u&ft=4&o=-change"
+        )
+
+    async def get_gap_up_volume(self) -> list:
+        """
+        Stocks gapping up today on high volume.
+        Potential catalyst-driven moves.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o500,sh_relvol_o2,ta_change_u3&ft=4&o=-change"
+        )
+
+    async def get_consolidation_breakouts(self) -> list:
+        """
+        Stocks breaking out of tight consolidation (low volatility -> expansion).
+        Bollinger Band squeeze breakouts.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o300,ta_change_u3,ta_volatility_wo3&ft=4&o=-change"
+        )
+
+    async def get_accumulation_stocks(self) -> list:
+        """
+        Stocks showing accumulation pattern: up on above-average volume over multiple days.
+        Institutional buying signal.
+        """
+        return await self._custom_screen(
+            "v=111&f=sh_avgvol_o500,sh_relvol_o1.5,ta_change_u,ta_sma20_pa,ta_sma50_pa&ft=4&o=-relvol"
+        )
+
+    async def get_small_cap_squeeze_setups(self) -> list:
+        """
+        Small caps with high short interest + volume surge.
+        Squeeze candidates specifically.
+        """
+        return await self._custom_screen(
+            "v=111&f=cap_smallunder,sh_avgvol_o200,sh_relvol_o2,sh_short_o15,ta_change_u&ft=4&o=-change"
+        )
