@@ -366,3 +366,142 @@ class FinvizScraper:
         return await self._custom_screen(
             "v=111&f=sh_avgvol_o300,sh_short_o10,ta_change_d,ta_sma50_pb&ft=4&o=-sh_short"
         )
+
+
+async def scrape_yahoo_trending() -> list:
+    """
+    Scrape Yahoo Finance trending tickers page.
+    Returns list of dicts with ticker, company name, price, change.
+    This represents mainstream retail attention — different audience
+    from StockTwits (active traders) or Finviz (screener users).
+    """
+    import httpx
+    from bs4 import BeautifulSoup
+    from data.cache import cache
+
+    cache_key = "yahoo:trending"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://finance.yahoo.com/trending-tickers/",
+                headers=headers,
+                timeout=15,
+                follow_redirects=True,
+            )
+        if resp.status_code != 200:
+            print(f"Yahoo trending scrape failed: {resp.status_code}")
+            return []
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+
+        rows = soup.find_all("tr")
+        for row in rows[:25]:
+            cells = row.find_all("td")
+            if len(cells) >= 5:
+                ticker_link = cells[0].find("a")
+                ticker = ticker_link.get_text(strip=True) if ticker_link else ""
+                company = cells[1].get_text(strip=True) if len(cells) > 1 else ""
+                price = cells[2].get_text(strip=True) if len(cells) > 2 else ""
+                change = cells[4].get_text(strip=True) if len(cells) > 4 else ""
+
+                if ticker and len(ticker) <= 6 and ticker.isalpha():
+                    results.append({
+                        "ticker": ticker.upper(),
+                        "company": company,
+                        "price": price,
+                        "change": change,
+                        "source": "yahoo_trending",
+                    })
+
+        cache.set(cache_key, results, 300)
+        return results
+
+    except Exception as e:
+        print(f"Yahoo trending scrape error: {e}")
+        return []
+
+
+async def scrape_stockanalysis_trending() -> list:
+    """
+    Scrape StockAnalysis.com most active / trending page.
+    Returns list of dicts with ticker, company, volume, change.
+    StockAnalysis audience = fundamental-focused retail investors.
+    """
+    import httpx
+    from bs4 import BeautifulSoup
+    from data.cache import cache
+
+    cache_key = "stockanalysis:trending"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
+        results = []
+
+        for page_url in [
+            "https://stockanalysis.com/markets/active/",
+            "https://stockanalysis.com/markets/gainers/",
+        ]:
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(page_url, headers=headers, timeout=15, follow_redirects=True)
+                if resp.status_code != 200:
+                    continue
+
+                soup = BeautifulSoup(resp.text, "html.parser")
+                rows = soup.find_all("tr")
+                for row in rows[:20]:
+                    cells = row.find_all("td")
+                    if len(cells) >= 3:
+                        ticker_el = cells[0].find("a")
+                        ticker = ""
+                        if ticker_el:
+                            href = ticker_el.get("href", "")
+                            text = ticker_el.get_text(strip=True)
+                            if "/stocks/" in href:
+                                ticker = href.split("/stocks/")[-1].strip("/").upper()
+                            elif text and len(text) <= 6:
+                                ticker = text.upper()
+
+                        company = cells[1].get_text(strip=True) if len(cells) > 1 else ""
+                        price = cells[2].get_text(strip=True) if len(cells) > 2 else ""
+                        change = cells[3].get_text(strip=True) if len(cells) > 3 else ""
+                        volume = cells[4].get_text(strip=True) if len(cells) > 4 else ""
+
+                        if ticker and len(ticker) <= 6 and ticker.isalpha():
+                            results.append({
+                                "ticker": ticker,
+                                "company": company,
+                                "price": price,
+                                "change": change,
+                                "volume": volume,
+                                "source": "stockanalysis",
+                            })
+            except Exception as inner_e:
+                print(f"StockAnalysis page error ({page_url}): {inner_e}")
+
+        seen = set()
+        deduped = []
+        for r in results:
+            if r["ticker"] not in seen:
+                seen.add(r["ticker"])
+                deduped.append(r)
+
+        cache.set(cache_key, deduped, 300)
+        return deduped
+
+    except Exception as e:
+        print(f"StockAnalysis trending scrape error: {e}")
+        return []

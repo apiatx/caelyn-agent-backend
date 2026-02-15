@@ -129,6 +129,9 @@ class TradingAgent:
         elif category == "crypto":
             return await self.data.get_crypto_scanner()
 
+        elif category == "trending":
+            return await self.data.get_cross_platform_trending()
+
         elif category == "briefing":
             return await self.data.get_morning_briefing()
 

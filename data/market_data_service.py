@@ -1,7 +1,7 @@
 import asyncio
 
 from data.polygon_provider import PolygonProvider
-from data.finviz_scraper import FinvizScraper
+from data.finviz_scraper import FinvizScraper, scrape_yahoo_trending, scrape_stockanalysis_trending
 from data.stocktwits_provider import StockTwitsProvider
 from data.stockanalysis_scraper import StockAnalysisScraper
 from data.options_scraper import OptionsScraper
@@ -1615,6 +1615,168 @@ class MarketDataService:
             "high_short_float": high_short,
             "trending": trending,
             "enriched_data": enriched_data,
+        }
+
+    async def get_cross_platform_trending(self) -> dict:
+        """
+        Aggregate trending stocks across ALL available platforms.
+        Cross-references: StockTwits, Yahoo Finance, Finviz, Polygon,
+        StockAnalysis. Counts how many platforms each ticker appears on.
+        Stocks appearing on 3+ platforms = highest conviction trending.
+        Then enriches the top tickers with full data.
+        """
+        from data.scoring_engine import score_for_trades, passes_market_cap_filter
+        from collections import Counter
+
+        (
+            stocktwits_trending,
+            yahoo_trending,
+            stockanalysis_trending,
+            finviz_most_active,
+            finviz_unusual_volume,
+            finviz_top_gainers,
+            polygon_movers,
+        ) = await asyncio.gather(
+            self.stocktwits.get_trending(),
+            scrape_yahoo_trending(),
+            scrape_stockanalysis_trending(),
+            self.finviz.get_most_active(),
+            self.finviz.get_unusual_volume(),
+            self.finviz.get_screener_results("ta_topgainers"),
+            asyncio.to_thread(self.polygon.get_market_movers),
+            return_exceptions=True,
+        )
+
+        if isinstance(stocktwits_trending, Exception): stocktwits_trending = []
+        if isinstance(yahoo_trending, Exception): yahoo_trending = []
+        if isinstance(stockanalysis_trending, Exception): stockanalysis_trending = []
+        if isinstance(finviz_most_active, Exception): finviz_most_active = []
+        if isinstance(finviz_unusual_volume, Exception): finviz_unusual_volume = []
+        if isinstance(finviz_top_gainers, Exception): finviz_top_gainers = []
+        if isinstance(polygon_movers, Exception): polygon_movers = {}
+
+        ticker_sources = {}
+
+        def add_tickers(items, source_name, ticker_key="ticker"):
+            for item in (items or []):
+                if isinstance(item, dict):
+                    t = item.get(ticker_key, "").upper().strip()
+                    if t and len(t) <= 6 and t.isalpha():
+                        if t not in ticker_sources:
+                            ticker_sources[t] = set()
+                        ticker_sources[t].add(source_name)
+
+        add_tickers(stocktwits_trending, "StockTwits")
+        add_tickers(yahoo_trending, "Yahoo Finance")
+        add_tickers(stockanalysis_trending, "StockAnalysis")
+        add_tickers(finviz_most_active, "Finviz Active")
+        add_tickers(finviz_unusual_volume, "Finviz Volume")
+        add_tickers(finviz_top_gainers, "Finviz Gainers")
+
+        for g in (polygon_movers.get("gainers") or []):
+            t = g.get("ticker", "").upper()
+            if t and len(t) <= 6:
+                if t not in ticker_sources:
+                    ticker_sources[t] = set()
+                ticker_sources[t].add("Polygon")
+
+        for l in (polygon_movers.get("losers") or []):
+            t = l.get("ticker", "").upper()
+            if t and len(t) <= 6:
+                if t not in ticker_sources:
+                    ticker_sources[t] = set()
+                ticker_sources[t].add("Polygon")
+
+        ranked = sorted(
+            ticker_sources.items(),
+            key=lambda x: len(x[1]),
+            reverse=True,
+        )
+
+        multi_source = [(t, srcs) for t, srcs in ranked if len(srcs) >= 2]
+
+        top_tickers = [t for t, _ in multi_source[:20]]
+
+        print(f"[Trending] {len(ticker_sources)} unique tickers across all platforms")
+        print(f"[Trending] {len(multi_source)} appear on 2+ platforms")
+        print(f"[Trending] Top multi-platform: {[(t, len(s)) for t, s in multi_source[:10]]}")
+
+        async def full_enrich(ticker):
+            try:
+                snapshot = self.polygon.get_snapshot(ticker)
+                technicals = self.polygon.get_technicals(ticker)
+                details = self.polygon.get_ticker_details(ticker)
+
+                st_result, overview, analyst = await asyncio.gather(
+                    self.stocktwits.get_sentiment(ticker),
+                    self.stockanalysis.get_overview(ticker),
+                    self.stockanalysis.get_analyst_ratings(ticker),
+                    return_exceptions=True,
+                )
+
+                return {
+                    "snapshot": snapshot,
+                    "technicals": technicals,
+                    "details": details,
+                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
+                    "overview": overview if not isinstance(overview, Exception) else {},
+                    "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        enrichment_results = await asyncio.gather(
+            *[full_enrich(t) for t in top_tickers],
+            return_exceptions=True,
+        )
+
+        enriched = {}
+        for ticker, result in zip(top_tickers, enrichment_results):
+            if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
+                continue
+
+            if not passes_market_cap_filter(result, "market_scan"):
+                continue
+
+            quant_score = score_for_trades(result)
+            result["quant_score"] = quant_score
+            result["trending_sources"] = list(ticker_sources.get(ticker, []))
+            result["source_count"] = len(ticker_sources.get(ticker, []))
+            enriched[ticker] = result
+
+        sorted_tickers = sorted(
+            enriched.items(),
+            key=lambda x: (x[1].get("source_count", 0), x[1].get("quant_score", 0)),
+            reverse=True,
+        )
+
+        sorted_enriched = {}
+        for t, d in sorted_tickers:
+            sorted_enriched[t] = d
+
+        return {
+            "total_unique_tickers": len(ticker_sources),
+            "multi_platform_count": len(multi_source),
+            "source_summary": {
+                "StockTwits": len(stocktwits_trending),
+                "Yahoo Finance": len(yahoo_trending),
+                "StockAnalysis": len(stockanalysis_trending),
+                "Finviz Active": len(finviz_most_active),
+                "Finviz Volume": len(finviz_unusual_volume),
+                "Finviz Gainers": len(finviz_top_gainers),
+                "Polygon": len(polygon_movers.get("gainers", [])) + len(polygon_movers.get("losers", [])),
+            },
+            "ranked_tickers": [
+                {
+                    "ticker": t,
+                    "source_count": d.get("source_count", 0),
+                    "sources": d.get("trending_sources", []),
+                    "quant_score": d.get("quant_score", 0),
+                }
+                for t, d in sorted_tickers[:15]
+            ],
+            "enriched_data": sorted_enriched,
+            "market_news": self.polygon.get_news(limit=10),
         }
 
     async def get_crypto_scanner(self) -> dict:
