@@ -30,7 +30,7 @@ The server runs on port 5000 using Uvicorn with hot reload enabled.
 
 ## Key Features
 - **Wide Funnel Approach**: Screens 50-100+ candidates, ranks mathematically, sends top 12 to Claude
-- **10 Scan Types**: Social momentum, sector rotation, squeeze plays, thematic investing, commodities, SQGLP, asymmetric, Weinstein, portfolio review, morning briefing
+- **12+ Scan Types**: Social momentum, sector rotation (Weinstein stage-based), squeeze plays, thematic investing, commodities, SQGLP, asymmetric, Weinstein, portfolio review, morning briefing, cross-platform trending, crypto
 - **Portfolio Review**: Analyze up to 25 tickers with dual scoring (trade + investment metrics)
 - **Morning Briefing**: Hedge-fund-style intelligence report with market pulse, key numbers, top moves
 - **Crypto Scanner**: Full crypto dashboard with CoinGecko data — spot prices, derivatives/funding rates, categories, trending, deep dives with social/dev metrics
@@ -66,6 +66,12 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-15: Added Weinstein Stage-based sector rotation analysis (stage2_pct/stage4_pct per GICS sector, breakout candidates)
+- 2026-02-15: Added cross-platform trending aggregation (StockTwits + Yahoo + StockAnalysis + Finviz + Polygon, multi-source scoring)
+- 2026-02-15: Added Yahoo Finance trending scraper and StockAnalysis trending scraper
+- 2026-02-15: Fixed StockAnalysis nested dict bug (get_overview/get_analyst_ratings/get_financials now return flat dicts)
+- 2026-02-15: Fixed scoring engine percentage parsing (parse_pct handles "18.20%" strings)
+- 2026-02-15: Fixed market cap parsing (parse_market_cap_string handles "$3.45B" format)
 - 2026-02-15: Added CoinGecko crypto provider with full dashboard (spot, derivatives, funding rates, categories, deep dives)
 - 2026-02-15: Added crypto scanner to market_data_service with funding rate analysis
 - 2026-02-15: Added crypto category to classifier and crypto display format to prompts

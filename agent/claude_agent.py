@@ -108,7 +108,7 @@ class TradingAgent:
             return await self.data.get_earnings_catalyst_watch()
 
         elif category == "sector_rotation":
-            return await self.data.get_sector_rotation()
+            return await self.data.get_sector_rotation_with_stages()
 
         elif category == "asymmetric":
             return await self.data.wide_scan_and_rank("asymmetric", filters)

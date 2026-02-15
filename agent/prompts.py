@@ -766,33 +766,88 @@ Use when: user asks about trending stocks, social buzz, what's hot on social med
 }
 ```
 
-### FORMAT: "sector_rotation" — Sector Performance Heatmap
-Use when: user asks about sector rotation, which sectors are hot, where money is flowing.
+### FORMAT: "sector_rotation" — Weinstein Stage-Based Sector Rotation
+Use when: user asks about sector rotation, which sectors to focus on, where money is flowing.
+
+You receive Weinstein Stage Analysis data for all 11 GICS sectors. Each sector shows:
+- stage2_pct: What percentage of stocks in the sector are in Stage 2 (above both SMA50 and SMA200 = uptrend)
+- stage4_pct: What percentage are in Stage 4 (below both = downtrend)
+- sector_stage: Overall classification (Stage 1 through Stage 4)
+- breakout_candidates: Individual stocks from the top sectors showing unusual volume
+
+THE KEY INSIGHT: Sectors with the highest stage2_pct are where money is flowing.
+Per Weinstein's "Forest to Trees" approach:
+1. First identify which SECTORS are in Stage 2 (the forest)
+2. Then find individual STOCKS within those sectors breaking out (the trees)
+3. NEVER buy stocks in Stage 4 sectors — even good stocks get dragged down
 ```json
 {
   "display_type": "sector_rotation",
-  "summary": "Risk-on rotation accelerating. Technology and Semis leading. Utilities and Staples lagging. Money moving from defensive to growth.",
-  "sectors": [
+  "market_regime": "Risk-On. 7 of 11 sectors in Stage 2. Broad-based advance — healthy market.",
+  "sector_rankings": [
     {
-      "etf": "XLK",
+      "rank": 1,
       "sector": "Technology",
-      "change_today": "+1.8%",
-      "rsi": 62,
-      "trend": "Strong uptrend ↑↑",
-      "vs_spy": "Outperforming +0.9%",
-      "signal": "Leading — add exposure",
-      "conviction": "High"
+      "etf": "XLK",
+      "stage2_pct": 72,
+      "stage4_pct": 8,
+      "total_stocks": 245,
+      "sector_stage": "Stage 2 - Advancing",
+      "signal": "STRONG BUY ZONE",
+      "performance_1m": "+5.2%",
+      "interpretation": "72% of tech stocks above both SMAs — strongest sector. AI/semiconductor sub-theme driving leadership. This is where the biggest winners will come from.",
+      "top_breakouts": [
+        {
+          "ticker": "NVDA",
+          "price": "$875",
+          "change": "+3.2%",
+          "rel_volume": "2.8x",
+          "revenue_growth": "+94% YoY",
+          "analyst_consensus": "Strong Buy",
+          "setup": "Stage 2 breakout on massive volume. Revenue accelerating."
+        }
+      ]
+    },
+    {
+      "rank": 11,
+      "sector": "Utilities",
+      "etf": "XLU",
+      "stage2_pct": 18,
+      "stage4_pct": 52,
+      "total_stocks": 78,
+      "sector_stage": "Stage 4 - Declining",
+      "signal": "AVOID",
+      "performance_1m": "-3.1%",
+      "interpretation": "52% of utility stocks in downtrends. Rising rates crushing this sector. Do NOT buy stocks here regardless of how cheap they look."
     }
   ],
-  "macro_context": {
-    "fear_greed": "42 (Fear)",
-    "vix": "18.5",
-    "ten_year_yield": "4.25%",
-    "dxy": "Strengthening"
+  "regime_summary": {
+    "stage2_sectors": ["Technology", "Healthcare", "Industrials", "Consumer Cyclical", "Communication Services"],
+    "stage4_sectors": ["Utilities", "Real Estate"],
+    "transitioning": ["Energy", "Basic Materials"],
+    "market_breadth": "Healthy — 64% of all sectors advancing"
   },
-  "rotation_signal": "Rotation from defensive (Utilities, Staples) into growth (Tech, Semis). Consistent with rate cut expectations."
+  "weinstein_playbook": "With 7/11 sectors in Stage 2, this is a broad Stage 2 advance. Focus positions in Technology (72% Stage 2) and Healthcare (65% Stage 2). The breakout candidates from these sectors have the highest probability of big moves. Avoid Utilities and Real Estate — capital is rotating OUT. Energy is transitioning — watch for Stage 2 confirmation before committing.",
+  "action_plan": [
+    "Concentrate new positions in top 3 Stage 2 sectors (Tech, Healthcare, Industrials)",
+    "The breakout candidates listed have unusual volume + strong sectors = highest probability setups",
+    "Avoid ALL positions in Stage 4 sectors (Utilities, Real Estate) regardless of valuation",
+    "Watch transitioning sectors (Energy, Materials) for Stage 2 breakout confirmation"
+  ]
 }
 ```
+
+RULES FOR SECTOR ROTATION FORMAT:
+- ALWAYS rank sectors by stage2_pct descending — the hottest sectors go first
+- Use Weinstein's language: Stage 1 (Basing), Stage 2 (Advancing), Stage 3 (Topping), Stage 4 (Declining)
+- stage2_pct >= 60% = STRONG BUY ZONE. These are the sectors to concentrate positions in.
+- stage2_pct 40-60% = Emerging/Early Stage 2. Worth watching for confirmation.
+- stage4_pct >= 50% = AVOID. Capital is leaving. Don't fight it.
+- For top Stage 2 sectors, show the breakout candidates with StockAnalysis fundamentals
+- Include weinstein_playbook section that gives a clear, actionable summary
+- Flag regime changes: If most sectors are Stage 2, it's a bull market. If most are Stage 4, it's a bear market. Mixed = rotation/selective market.
+- Include FMP sector performance data for 1d/1w/1m returns where available
+- If a sector is transitioning FROM Stage 4 TO Stage 1 or Stage 2 (stage4 declining, stage2 rising), flag it as "Early Rotation Signal"
 
 ### FORMAT: "earnings_catalyst" — Earnings & Catalyst Calendar
 Use when: user asks about upcoming earnings, catalysts, events.
@@ -1182,6 +1237,77 @@ RULES FOR CRYPTO FORMAT:
 - Flag any coin where funding rate DISAGREES with price action (divergence = strongest signal)
 - Include trade_plan for top conviction picks
 
+### FORMAT: "trending" — Cross-Platform Trending Aggregation
+Use when: user asks what's trending, what's hot, what everyone is watching.
+
+The data you receive has been aggregated across 7 sources:
+- StockTwits (active trader attention)
+- Yahoo Finance (mainstream retail attention)
+- StockAnalysis (fundamental investor attention)
+- Finviz Most Active (highest trading volume)
+- Finviz Unusual Volume (volume spikes vs average)
+- Finviz Top Gainers (biggest price movers)
+- Polygon (market-wide gainers/losers)
+
+Each ticker has a `source_count` — the number of platforms it appears on simultaneously.
+This is the key metric: 5+ sources = maximum conviction trending. 3-4 = strong. 2 = moderate.
+
+A stock appearing on StockTwits + Yahoo + Finviz Active + Polygon = traders AND mainstream AND volume all aligned.
+```json
+{
+  "display_type": "trending",
+  "summary": "Scanned 187 unique tickers across 7 platforms. 23 appear on 2+ platforms. NVDA leads with 6/7 sources — everyone is watching AI.",
+  "source_coverage": {
+    "StockTwits": 30,
+    "Yahoo Finance": 15,
+    "StockAnalysis": 20,
+    "Finviz Active": 20,
+    "Finviz Volume": 20,
+    "Finviz Gainers": 20,
+    "Polygon": 40
+  },
+  "trending_tickers": [
+    {
+      "ticker": "NVDA",
+      "company": "NVIDIA Corporation",
+      "source_count": 6,
+      "sources": ["StockTwits", "Yahoo Finance", "StockAnalysis", "Finviz Active", "Finviz Volume", "Polygon"],
+      "price": "$875",
+      "change": "+3.2%",
+      "volume_vs_avg": "2.8x",
+      "market_cap": "$2.1T",
+      "quant_score": 78,
+      "why_trending": "AI infrastructure demand accelerating. Earnings beat + raised guidance. Every platform watching. Volume 2.8x average confirms institutional participation.",
+      "sentiment": "78% bullish on StockTwits",
+      "ta_summary": "RSI 62 | Above all SMAs | MACD bullish",
+      "fundamental_snapshot": "Rev +94% YoY | EBITDA 65% | P/E 45x",
+      "analyst_consensus": "42 Buy, 5 Hold, 1 Sell",
+      "verdict": "Trending for good reason. AI theme intact. Setup still healthy (RSI not overbought). The consensus is bullish but the technicals confirm it.",
+      "risk": "Already up 180% in 12 months. Any AI narrative shift = sharp pullback.",
+      "conviction": "High"
+    }
+  ],
+  "platform_divergences": [
+    {"observation": "SMCI trending on StockTwits + Finviz but NOT on Yahoo — trader-driven momentum, not mainstream yet. Could be early."},
+    {"observation": "TSLA on Yahoo + Polygon but NOT StockTwits — mainstream curiosity without trader conviction. Be cautious."}
+  ]
+}
+```
+
+RULES FOR TRENDING FORMAT:
+- Sort by source_count descending. The MORE platforms a stock appears on, the higher it should rank.
+- Every ticker MUST show: which specific platforms it's trending on, why it's trending, sentiment, TA summary, fundamental snapshot
+- Include StockAnalysis data where available: revenue growth, margins, analyst ratings, valuation
+- Include platform_divergences: when a stock is trending on some platforms but not others, explain what that means
+  - StockTwits only = trader-driven, speculative
+  - Yahoo only = mainstream/retail curiosity
+  - Finviz Volume only = institutional activity without retail attention (potentially early signal)
+  - All platforms = maximum consensus (strongest signal but also watch for being too crowded)
+- Flag any ticker where source_count is 4+ as "Maximum Attention"
+- Flag any ticker trending on ALL platforms where RSI > 70 as "Overbought + Maximum Attention = Potential Top"
+- Include why_trending for each — this is not just a list, explain the narrative driving attention
+- Use StockAnalysis fundamentals (revenue growth, margins, P/E) to distinguish between trending because of FUNDAMENTALS vs trending because of HYPE
+
 ### FORMAT 7: "chat" — General Discussion
 Use when: macro questions, general advice, explanations, or anything that doesn't fit the above.
 ```json
@@ -1213,7 +1339,8 @@ Categories:
 - "investments": User asks for long-term investment ideas, portfolio ideas, multibaggers, compounders, "what should I invest in".
 - "fundamentals_scan": User asks for improving fundamentals, revenue growth leaders, EBITDA improvement, best financials, margin expansion.
 - "squeeze": User asks about short squeeze setups, high short interest stocks, threshold plays, squeeze candidates, or gamma squeeze potential.
-- "social_momentum": User asks about social media trends, what's trending, meme stocks, social buzz leaders, "what's hot on Twitter/Reddit/StockTwits".
+- "social_momentum": User asks about social media trends, meme stocks, social buzz leaders, "what's hot on Twitter/Reddit/StockTwits".
+- "trending": User asks what's trending, what's hot, what everyone is watching, popular stocks right now, most mentioned stocks, what's getting attention, viral stocks. Cross-references multiple platforms for trending data.
 - "volume_spikes": User asks about unusual volume, volume spikes, institutional volume, "what has big volume today".
 - "earnings_catalyst": User asks about upcoming earnings, catalyst calendar, FDA decisions, upcoming events, "what earnings are this week".
 - "sector_rotation": User asks about sector performance, sector rotation, which sectors are hot, ETF flows, "where is money flowing".
