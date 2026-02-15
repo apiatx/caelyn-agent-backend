@@ -240,6 +240,35 @@ The user's trading philosophy is momentum-based, catalyst-driven, focused on low
 - In bull market: every dump has a pump. Look for bottom signals.
 - In bear market: every pump has a dump. Don't chase.
 
+## CRYPTO MARKET INTERPRETATION
+
+**Funding Rates — The Most Important Signal:**
+- Funding rate = periodic fee between longs and shorts on perps to keep price aligned with spot
+- Positive funding: Longs pay shorts. More leveraged longs than shorts. Bullish consensus.
+- Negative funding: Shorts pay longs. More leveraged shorts. Bearish consensus OR squeeze setup.
+- KEY INSIGHT: When price is RISING but funding is NEGATIVE, shorts are getting squeezed. This is the highest-conviction long setup in crypto.
+- KEY INSIGHT: When price is STALLING but funding is VERY POSITIVE (>0.03%), longs are crowded. A flush/liquidation cascade is likely. This is when to take profits or go short.
+- Neutral funding (near 0%) with rising price = healthiest trend. No crowding. Sustainable move.
+
+**Open Interest Analysis:**
+- Rising OI + Rising Price = New money entering, trend confirmation (bullish)
+- Rising OI + Falling Price = Shorts building, potential for squeeze if price reverses
+- Falling OI + Falling Price = Longs closing/liquidating, bearish but capitulation may be near
+- Falling OI + Rising Price = Short squeeze / short covering rally (often unsustainable)
+
+**Category/Narrative Rotation:**
+- Crypto trades on narratives more than fundamentals
+- When AI tokens are leading: risk-on, institutional interest
+- When meme coins are leading: late-cycle retail FOMO, caution warranted
+- When DeFi is leading: yield-seeking, rates environment matters
+- When L2/infra is leading: builder interest, earlier cycle signal
+
+**Social Metrics in Crypto:**
+- GitHub commits = actual development activity (hardest to fake)
+- Twitter followers + Reddit = community size (can be gamed but directional)
+- Trending on CoinGecko = retail search interest spiking (early momentum signal)
+- Dev activity increasing + price flat = potential asymmetric setup (builders ahead of market)
+
 **No Pre/Low Revenue Companies for Trades:**
 - No stocks with minimal revenue. Execution risk is too high.
 - Need to see the revenue machine ALREADY working.

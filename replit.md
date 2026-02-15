@@ -22,6 +22,7 @@ data/
   fmp_provider.py            - Financial Modeling Prep (optional, 250/day limit)
   fred_provider.py           - FRED economic data
   fear_greed_provider.py     - CNN Fear & Greed Index
+  coingecko_provider.py      - CoinGecko crypto market data (spot, derivatives, social)
 ```
 
 ## Running
@@ -32,7 +33,8 @@ The server runs on port 5000 using Uvicorn with hot reload enabled.
 - **10 Scan Types**: Social momentum, sector rotation, squeeze plays, thematic investing, commodities, SQGLP, asymmetric, Weinstein, portfolio review, morning briefing
 - **Portfolio Review**: Analyze up to 25 tickers with dual scoring (trade + investment metrics)
 - **Morning Briefing**: Hedge-fund-style intelligence report with market pulse, key numbers, top moves
-- **In-Memory TTL Caching**: All 8 providers cached with appropriate TTLs to reduce API calls
+- **Crypto Scanner**: Full crypto dashboard with CoinGecko data — spot prices, derivatives/funding rates, categories, trending, deep dives with social/dev metrics
+- **In-Memory TTL Caching**: All 9 providers cached with appropriate TTLs to reduce API calls
 
 ## Cache TTLs
 - Finviz screener: 5 min
@@ -43,9 +45,10 @@ The server runs on port 5000 using Uvicorn with hot reload enabled.
 - FMP: 5 min
 - FRED: 1 hr
 - Fear & Greed: 10 min
+- CoinGecko: 2 min
 
 ## API Keys Required
-POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY, FMP_API_KEY (optional), AGENT_API_KEY (for cache clear auth)
+POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY, FMP_API_KEY (optional), COINGECKO_API_KEY, AGENT_API_KEY (for cache clear auth)
 
 ## Endpoints
 - `GET /` - Welcome message
@@ -63,6 +66,10 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-15: Added CoinGecko crypto provider with full dashboard (spot, derivatives, funding rates, categories, deep dives)
+- 2026-02-15: Added crypto scanner to market_data_service with funding rate analysis
+- 2026-02-15: Added crypto category to classifier and crypto display format to prompts
+- 2026-02-15: Added crypto market interpretation guide (funding rates, OI analysis, narrative rotation)
 - 2026-02-15: Fixed Finnhub insider_sentiment caching bug (early return before cache.set)
 - 2026-02-15: Added caching to StockAnalysis get_financials method
 - 2026-02-15: Implemented TTL caching across all 8 data providers
