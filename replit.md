@@ -68,6 +68,11 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-15: Fixed AI Screener — root cause was max_tokens=4096 truncating screener JSON responses (~17K chars). Increased to 16384.
+- 2026-02-15: Rewrote _parse_response JSON parser — fixed nested JSON regex bug, added brace-depth counting, truncated JSON repair
+- 2026-02-15: Added comprehensive debug logging throughout screener flow (API → classifier → filter extraction → Finviz → parser)
+- 2026-02-15: Added dividend_yield_min filter support to run_ai_screener
+- 2026-02-15: Improved Finviz _custom_screen with additional table detection fallbacks and diagnostic logging
 - 2026-02-15: Fixed StockAnalysis trending scraper — replaced JS-rendered HTML scraping with FMP stock_market/gainers + actives API
 - 2026-02-15: Fixed Polygon market movers — added FMP fallback when Polygon snapshot endpoint unavailable (paid tier)
 - 2026-02-15: Added FMP gainers/losers/actives methods to FMP provider

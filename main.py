@@ -81,6 +81,7 @@ async def query_agent(
             status_code=403,
             detail="Invalid or missing API key.",
         )
+    print(f"[API] Received query: prompt={body.prompt[:100]}")
     try:
         result = await agent.handle_query(
             body.prompt,
@@ -88,7 +89,9 @@ async def query_agent(
         )
         return result
     except Exception as e:
-        print(f"Error in /api/query: {e}")
+        import traceback
+        print(f"[API] Error in /api/query: {e}")
+        traceback.print_exc()
         return {"error": str(e), "type": "chat", "analysis": f"Error: {str(e)}"}
 
 

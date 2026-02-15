@@ -2248,6 +2248,14 @@ class MarketDataService:
             if sec_code:
                 f_parts.append(sec_code)
 
+        dy = filters.get("dividend_yield_min")
+        if dy is not None:
+            if dy >= 5: f_parts.append("fa_div_o5")
+            elif dy >= 4: f_parts.append("fa_div_o4")
+            elif dy >= 3: f_parts.append("fa_div_o3")
+            elif dy >= 2: f_parts.append("fa_div_o2")
+            elif dy >= 1: f_parts.append("fa_div_o1")
+
         custom = filters.get("custom_finviz_params")
         if custom:
             f_parts.append(custom)
@@ -2255,8 +2263,9 @@ class MarketDataService:
         filter_str = ",".join(f_parts) if f_parts else "sh_avgvol_o200"
         screen_url = f"v=111&f={filter_str}&ft=4&o=-sh_relvol"
 
-        print(f"[AI Screener] Finviz filter: {screen_url}")
+        print(f"[AI Screener] Final Finviz URL: v=111&f={filter_str}&ft=4&o=-sh_relvol")
         print(f"[AI Screener] Parsed filters: {filters}")
+        print(f"[AI Screener] Filter parts: {f_parts}")
 
         screener_results = await self.finviz._custom_screen(screen_url)
         if isinstance(screener_results, Exception) or not screener_results:

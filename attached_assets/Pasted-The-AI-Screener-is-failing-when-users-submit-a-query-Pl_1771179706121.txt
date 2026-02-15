@@ -1,0 +1,42 @@
+The AI Screener is failing when users submit a query. Please debug and fix:
+1. Check if the ai_screener category exists in the classifier
+In agent/prompts.py, check QUERY_CLASSIFIER_PROMPT and verify that "ai_screener" is listed as a valid category. If it's missing, add:
+- "ai_screener": User wants to screen/scan/filter for stocks matching specific custom criteria. They mention specific technical or fundamental requirements like "find stocks with revenue growth >30%", "screen for oversold stocks with insider buying", "show me small caps with low P/E and high growth", or any request that includes multiple specific quantitative filters.
+2. Check if the ai_screener route exists in the agent
+In agent/claude_agent.py, check the _gather_data method and verify there's an elif category == "ai_screener" block. If it's missing, add it. Also verify the _extract_screener_filters method exists on the class. Print the category being classified to logs:
+pythonprint(f"[Agent] Classified category: {category}")
+3. Check if run_ai_screener exists on MarketDataService
+In data/market_data_service.py, verify the run_ai_screener method exists. If it doesn't, it was never implemented from previous instructions.
+4. Check the actual error
+Add a try/except around the entire screener flow and log the full traceback:
+pythonelif category == "ai_screener":
+    try:
+        filters = self._extract_screener_filters(prompt)
+        print(f"[AI Screener] Extracted filters: {filters}")
+        result = await self.data.run_ai_screener(filters)
+        print(f"[AI Screener] Got {result.get('total_results', 0)} results")
+        return result
+    except Exception as e:
+        import traceback
+        print(f"[AI Screener] ERROR: {e}")
+        traceback.print_exc()
+        return {"error": str(e), "filters": {}}
+5. Check the Finviz _custom_screen call
+The most likely failure point is _custom_screen receiving a malformed filter string. Add logging inside run_ai_screener right before the Finviz call:
+pythonprint(f"[AI Screener] Final Finviz URL: v=111&f={filter_str}&ft=4&o=-sh_relvol")
+Also check if _custom_screen expects a full URL string or just the filter params — there was a previous bug where _custom_screen had a signature mismatch between dict params and URL query strings. Make sure the format matches what _custom_screen actually accepts.
+6. Check if the screener prompt is even reaching the backend
+Check the /api/query endpoint logs. When the user submits a screener query, does the request arrive? If not, the issue is on the frontend — the screener textarea might not be wired to the same API call as the buttons.
+Add this log at the top of the /api/query endpoint handler:
+pythonprint(f"[API] Received query: category={request.category if hasattr(request, 'category') else 'N/A'}, prompt={request.prompt[:100]}")
+7. Deploy and test
+After adding all the logging, restart the server and submit this test screener query: "Find me tech stocks with revenue growth over 20% and P/E under 30"
+Check the logs for:
+
+[API] Received query: ... — confirms request arrived
+[Agent] Classified category: ai_screener — confirms classification worked
+[AI Screener] Extracted filters: ... — confirms parsing worked
+[AI Screener] Final Finviz URL: ... — confirms filter building worked
+[AI Screener] Got X results — confirms Finviz returned data
+
+Wherever the chain breaks, that's the bug. Fix it and re-deploy.

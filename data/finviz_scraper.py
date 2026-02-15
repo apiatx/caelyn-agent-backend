@@ -155,6 +155,7 @@ class FinvizScraper:
         try:
             if isinstance(params, str):
                 url = f"https://finviz.com/screener.ashx?{params}"
+                print(f"[Finviz] Custom screen URL: {url}")
                 async with httpx.AsyncClient() as client:
                     resp = await client.get(
                         url,
@@ -167,6 +168,7 @@ class FinvizScraper:
                     "v": "111",
                     **params,
                 }
+                print(f"[Finviz] Custom screen params: {all_params}")
                 async with httpx.AsyncClient() as client:
                     resp = await client.get(
                         url,
@@ -176,9 +178,11 @@ class FinvizScraper:
                     )
 
             if resp.status_code != 200:
+                print(f"[Finviz] Custom screen HTTP {resp.status_code}")
                 return []
 
             soup = BeautifulSoup(resp.text, "html.parser")
+
             table = soup.find("table", class_="screener_table") or soup.find(
                 "table", {"id": "screener-views-table"}
             )
@@ -191,6 +195,21 @@ class FinvizScraper:
                         break
 
             if not table:
+                for t in soup.find_all("table"):
+                    rows = t.find_all("tr")
+                    if len(rows) > 1:
+                        first_row_cells = rows[0].find_all("td")
+                        if any("Ticker" in (c.get_text(strip=True) or "") for c in first_row_cells):
+                            table = t
+                            break
+
+            if not table:
+                title = soup.find("title")
+                page_title = title.get_text(strip=True) if title else "unknown"
+                print(f"[Finviz] No screener table found. Page title: {page_title}. HTML length: {len(resp.text)}")
+                body_text = soup.get_text()[:500] if soup.body else ""
+                if "No matches" in body_text or "0 Total" in body_text:
+                    print("[Finviz] Page indicates no matches for this filter combination")
                 return []
 
             rows = table.find_all("tr")[1:]
@@ -211,10 +230,13 @@ class FinvizScraper:
                         "change": cells[9].get_text(strip=True) if len(cells) > 9 else "",
                         "volume": cells[10].get_text(strip=True) if len(cells) > 10 else "",
                     })
+            print(f"[Finviz] Custom screen returned {len(results)} results")
             cache.set(cache_key, results, FINVIZ_TTL)
             return results
         except Exception as e:
-            print(f"Finviz custom screen error: {e}")
+            import traceback
+            print(f"[Finviz] Custom screen error: {e}")
+            traceback.print_exc()
             return []
 
     async def get_stage2_breakouts(self) -> list:

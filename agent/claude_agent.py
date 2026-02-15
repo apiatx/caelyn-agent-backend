@@ -18,6 +18,7 @@ class TradingAgent:
         """
         query_info = self._classify_query(user_prompt)
         query_info["original_prompt"] = user_prompt
+        print(f"[Agent] Classified category: {query_info.get('category')} | filters: {query_info.get('filters', {})}")
         market_data = await self._gather_data(query_info)
         raw_response = self._ask_claude(user_prompt, market_data, history)
         return self._parse_response(raw_response)
@@ -134,9 +135,18 @@ class TradingAgent:
             return await self.data.get_cross_platform_trending()
 
         elif category == "ai_screener":
-            original_prompt = query_info.get("original_prompt", "")
-            filters = self._extract_screener_filters(original_prompt)
-            return await self.data.run_ai_screener(filters)
+            try:
+                original_prompt = query_info.get("original_prompt", "")
+                filters = self._extract_screener_filters(original_prompt)
+                print(f"[AI Screener] Extracted filters: {filters}")
+                result = await self.data.run_ai_screener(filters)
+                print(f"[AI Screener] Got {result.get('total_results', 0)} results")
+                return result
+            except Exception as e:
+                import traceback
+                print(f"[AI Screener] ERROR: {e}")
+                traceback.print_exc()
+                return {"error": str(e), "filters_applied": {}, "total_results": 0, "results": []}
 
         elif category == "briefing":
             return await self.data.get_morning_briefing()
@@ -334,10 +344,12 @@ class TradingAgent:
 
         response = self.client.messages.create(
             model="claude-sonnet-4-5-20250929",
-            max_tokens=4096,
+            max_tokens=16384,
             system=SYSTEM_PROMPT,
             messages=messages,
         )
+        if response.stop_reason == "max_tokens":
+            print(f"[Agent] WARNING: Response was truncated (hit max_tokens). Length: {len(response.content[0].text)}")
         return response.content[0].text
 
     def _parse_response(self, raw_response: str) -> dict:
@@ -345,52 +357,119 @@ class TradingAgent:
         Parse Claude's response into structured JSON.
         Tries multiple strategies:
         1. Raw JSON (entire response is a JSON object)
-        2. JSON in ```json``` code block
-        3. JSON object embedded in text
+        2. JSON in ```json``` code block (extract full block content, not regex-matched braces)
+        3. Find outermost JSON object by brace-depth counting
         4. Fallback: wrap raw text as chat response
         """
         response_text = raw_response.strip()
+        print(f"[Parser] Response length: {len(response_text)}, starts_with_brace: {response_text[:1] == '{'}")
 
         if response_text.startswith("{"):
             try:
                 structured_data = json.loads(response_text)
+                print("[Parser] Tier 1 success: raw JSON")
+                return {
+                    "type": structured_data.get("display_type", "chat"),
+                    "analysis": "",
+                    "structured": structured_data,
+                }
+            except json.JSONDecodeError as e:
+                print(f"[Parser] Tier 1 failed: {e}")
+
+        json_block_match = re.search(r"```(?:json)?\s*(.*?)\s*```", response_text, re.DOTALL)
+        if json_block_match:
+            json_str = json_block_match.group(1).strip()
+            json_start = json_block_match.start()
+            analysis_text = response_text[:json_start].strip()
+            print(f"[Parser] Tier 2 found code block, extracted {len(json_str)} chars")
+            try:
+                structured_data = json.loads(json_str)
+                print("[Parser] Tier 2 success: code block JSON")
+                return {
+                    "type": structured_data.get("display_type", "chat"),
+                    "analysis": analysis_text,
+                    "structured": structured_data,
+                }
+            except json.JSONDecodeError as e:
+                print(f"[Parser] Tier 2 failed: {e}")
+                print(f"[Parser] Tier 2 extracted starts: {json_str[:100]}...")
+                print(f"[Parser] Tier 2 extracted ends: ...{json_str[-100:]}")
+
+        first_brace = response_text.find("{")
+        if first_brace != -1:
+            depth = 0
+            in_string = False
+            escape_next = False
+            end_pos = -1
+            for i in range(first_brace, len(response_text)):
+                c = response_text[i]
+                if escape_next:
+                    escape_next = False
+                    continue
+                if c == '\\' and in_string:
+                    escape_next = True
+                    continue
+                if c == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if c == '{':
+                    depth += 1
+                elif c == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end_pos = i
+                        break
+            if end_pos != -1:
+                json_str = response_text[first_brace:end_pos + 1]
+                pre_json = response_text[:first_brace].strip()
+                try:
+                    structured_data = json.loads(json_str)
+                    return {
+                        "type": structured_data.get("display_type", "chat"),
+                        "analysis": pre_json,
+                        "structured": structured_data,
+                    }
+                except json.JSONDecodeError:
+                    pass
+
+        first_brace2 = response_text.find("{")
+        if first_brace2 != -1:
+            truncated_json = response_text[first_brace2:]
+            truncated_json = re.sub(r',\s*$', '', truncated_json)
+            open_braces = truncated_json.count('{') - truncated_json.count('}')
+            open_brackets = truncated_json.count('[') - truncated_json.count(']')
+            truncated_json += ']' * max(0, open_brackets)
+            truncated_json += '}' * max(0, open_braces)
+            try:
+                structured_data = json.loads(truncated_json)
+                print(f"[Parser] Tier 4 success: repaired truncated JSON ({open_braces} braces, {open_brackets} brackets closed)")
                 return {
                     "type": structured_data.get("display_type", "chat"),
                     "analysis": "",
                     "structured": structured_data,
                 }
             except json.JSONDecodeError:
-                pass
+                last_valid = max(truncated_json.rfind('}'), truncated_json.rfind(']'))
+                if last_valid > 0:
+                    attempt = truncated_json[:last_valid + 1]
+                    open_b = attempt.count('{') - attempt.count('}')
+                    open_a = attempt.count('[') - attempt.count(']')
+                    attempt += ']' * max(0, open_a)
+                    attempt += '}' * max(0, open_b)
+                    try:
+                        structured_data = json.loads(attempt)
+                        print("[Parser] Tier 4 success: repaired by trimming to last valid delimiter")
+                        return {
+                            "type": structured_data.get("display_type", "chat"),
+                            "analysis": "",
+                            "structured": structured_data,
+                        }
+                    except json.JSONDecodeError:
+                        pass
 
-        json_match = re.search(
-            r"```json\s*(\{.*?\})\s*```", response_text, re.DOTALL
-        )
-        if json_match:
-            json_start = json_match.start()
-            analysis_text = response_text[:json_start].strip()
-            try:
-                structured_data = json.loads(json_match.group(1))
-                return {
-                    "type": structured_data.get("display_type", "chat"),
-                    "analysis": analysis_text,
-                    "structured": structured_data,
-                }
-            except json.JSONDecodeError:
-                pass
-
-        json_match = re.search(r'\{[\s\S]*\}', response_text)
-        if json_match:
-            try:
-                structured_data = json.loads(json_match.group(0))
-                pre_json = response_text[:json_match.start()].strip()
-                return {
-                    "type": structured_data.get("display_type", "chat"),
-                    "analysis": pre_json,
-                    "structured": structured_data,
-                }
-            except json.JSONDecodeError:
-                pass
-
+        print("[Parser] All tiers failed, returning raw text as chat")
         structured_data = {
             "display_type": "chat",
             "message": response_text,
