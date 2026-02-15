@@ -88,6 +88,9 @@ class TradingAgent:
                 return await self.data.get_sec_filings(tickers[0])
             return {"error": "No ticker specified for SEC filings lookup"}
 
+        elif category == "squeeze":
+            return await self.data.get_squeeze_candidates()
+
         else:
             # General question — still provide some market context
             return {

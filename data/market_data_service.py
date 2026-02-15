@@ -200,28 +200,52 @@ class MarketDataService:
         }
 
     async def get_unusual_volume(self) -> dict:
-        """
-        Stocks with unusual volume spikes.
-        Used for "unusual volume" or "what stocks are seeing big volume".
-        """
+        """Scan for unusual volume stocks with enriched data."""
+        unusual_vol = await self.finviz.get_unusual_volume()
         return {
-            "unusual_volume": await self.finviz.get_screener_results(
-                "ta_unusualvolume"
-            ),
+            "unusual_volume_stocks": unusual_vol,
+            "market_news": self.polygon.get_news(limit=10),
         }
 
     async def get_oversold(self) -> dict:
-        """Stocks that are oversold based on RSI."""
+        """Scan for oversold bounce candidates."""
+        oversold = await self.finviz.get_oversold_stocks()
         return {
-            "oversold": await self.finviz.get_screener_results("ta_oversold"),
+            "oversold_stocks": oversold,
+            "market_news": self.polygon.get_news(limit=10),
         }
 
     async def get_overbought(self) -> dict:
-        """Stocks that are overbought based on RSI."""
+        """Scan for overbought stocks."""
+        overbought = await self.finviz.get_overbought_stocks()
         return {
-            "overbought": await self.finviz.get_screener_results(
-                "ta_overbought"
-            ),
+            "overbought_stocks": overbought,
+        }
+
+    async def get_squeeze_candidates(self) -> dict:
+        """Scan for short squeeze setups."""
+        high_short, unusual_vol, new_highs = await asyncio.gather(
+            self.finviz.get_high_short_float(),
+            self.finviz.get_unusual_volume(),
+            self.finviz.get_new_highs(),
+            return_exceptions=True,
+        )
+        if isinstance(high_short, Exception): high_short = []
+        if isinstance(unusual_vol, Exception): unusual_vol = []
+        if isinstance(new_highs, Exception): new_highs = []
+
+        unusual_options = await self.options.get_unusual_options_activity()
+        options_signals = self.options.interpret_flow(unusual_options) if unusual_options else {}
+
+        trending = await self.stocktwits.get_trending()
+
+        return {
+            "high_short_float_stocks": high_short,
+            "unusual_volume_stocks": unusual_vol,
+            "new_highs": new_highs,
+            "unusual_options": unusual_options,
+            "options_signals": options_signals,
+            "stocktwits_trending": trending,
         }
 
     async def get_top_ta_setups(self) -> dict:
@@ -260,9 +284,22 @@ class MarketDataService:
             if not isinstance(result, Exception):
                 ta_data[ticker] = result
 
+        unusual_vol, new_highs, most_active = await asyncio.gather(
+            self.finviz.get_unusual_volume(),
+            self.finviz.get_new_highs(),
+            self.finviz.get_most_active(),
+            return_exceptions=True,
+        )
+        if isinstance(unusual_vol, Exception): unusual_vol = []
+        if isinstance(new_highs, Exception): new_highs = []
+        if isinstance(most_active, Exception): most_active = []
+
         return {
             "movers": movers,
             "screener_gainers": screener_gainers,
+            "unusual_volume": unusual_vol,
+            "new_52_week_highs": new_highs,
+            "most_active": most_active,
             "technical_data": ta_data,
             "options_flow": unusual_options,
             "options_signals": options_signals,
@@ -347,9 +384,19 @@ class MarketDataService:
             if not isinstance(result, Exception):
                 buzz_data[ticker] = result
 
+        small_cap_gainers, insider_buying = await asyncio.gather(
+            self.finviz.get_small_cap_gainers(),
+            self.finviz.get_insider_buying(),
+            return_exceptions=True,
+        )
+        if isinstance(small_cap_gainers, Exception): small_cap_gainers = []
+        if isinstance(insider_buying, Exception): insider_buying = []
+
         return {
             "stocktwits_trending": trending,
             "buzz_details": buzz_data,
+            "small_cap_gainers": small_cap_gainers,
+            "insider_buying": insider_buying,
         }
 
     async def get_dashboard(self) -> dict:

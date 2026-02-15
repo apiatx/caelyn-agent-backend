@@ -354,6 +354,7 @@ Categories:
 - "earnings": User asks about upcoming earnings, earnings calendar, earnings reports, or which companies are reporting soon.
 - "macro": User asks about the economy, interest rates, inflation, CPI, unemployment, federal reserve, macro conditions, or broad economic outlook.
 - "sec_filings": User asks about SEC filings, 8-K filings, insider transactions from SEC, institutional ownership, Form 4, 10-K, 10-Q, or any regulatory filings for a specific stock. Extract the ticker(s).
+- "squeeze": User asks about short squeeze setups, high short interest stocks, threshold plays, squeeze candidates, or gamma squeeze potential.
 - "general": General market question, no specific data needed.
 
 Reply format:

@@ -1,0 +1,265 @@
+Please make ALL of the following changes. Do not delete or modify any existing code unless I specifically say "replace."
+PART 1: Expanded Finviz Screener Filters
+In data/finviz_scraper.py, add these new methods to the FinvizScraper class. Do NOT replace any existing methods:
+python    async def get_oversold_stocks(self) -> list:
+        """Get stocks with RSI below 30 — oversold bounce candidates."""
+        return await self.get_screener_results("ta_oversold")
+
+    async def get_overbought_stocks(self) -> list:
+        """Get stocks with RSI above 70 — potential short or exit candidates."""
+        return await self.get_screener_results("ta_overbought")
+
+    async def get_unusual_volume(self) -> list:
+        """Get stocks with unusual volume — more than 2x average."""
+        return await self.get_screener_results("ta_unusualvolume")
+
+    async def get_new_highs(self) -> list:
+        """Get stocks hitting new 52-week highs — momentum leaders."""
+        return await self.get_screener_results("ta_newhigh")
+
+    async def get_new_lows(self) -> list:
+        """Get stocks hitting new 52-week lows — potential turnaround candidates."""
+        return await self.get_screener_results("ta_newlow")
+
+    async def get_most_volatile(self) -> list:
+        """Get the most volatile stocks today."""
+        return await self.get_screener_results("ta_mostvolatile")
+
+    async def get_most_active(self) -> list:
+        """Get the most actively traded stocks today."""
+        return await self.get_screener_results("ta_mostactive")
+
+    async def get_top_losers(self) -> list:
+        """Get biggest losers today — potential bounce plays."""
+        return await self.get_screener_results("ta_toplosers")
+
+    async def get_small_cap_gainers(self) -> list:
+        """Get small cap stocks (under $2B) with biggest gains today."""
+        return await self._custom_screen({
+            "f": "cap_smallunder,ta_change_u",
+            "o": "-change",
+        })
+
+    async def get_penny_stock_gainers(self) -> list:
+        """Get stocks under $5 with biggest gains today."""
+        return await self._custom_screen({
+            "f": "sh_price_u5,ta_change_u",
+            "o": "-change",
+        })
+
+    async def get_high_short_float(self) -> list:
+        """Get stocks with high short interest — squeeze candidates."""
+        return await self._custom_screen({
+            "f": "sh_short_o20",
+            "o": "-shortinterestshare",
+        })
+
+    async def get_earnings_this_week(self) -> list:
+        """Get stocks with earnings this week."""
+        return await self._custom_screen({
+            "f": "earningsdate_thisweek",
+            "o": "-marketcap",
+        })
+
+    async def get_insider_buying(self) -> list:
+        """Get stocks with recent insider buying."""
+        return await self._custom_screen({
+            "f": "it_latestbuys",
+            "o": "-change",
+        })
+
+    async def get_analyst_upgrades(self) -> list:
+        """Get stocks with recent analyst upgrades."""
+        return await self._custom_screen({
+            "f": "targetprice_a20",
+            "o": "-change",
+        })
+
+    async def _custom_screen(self, params: dict) -> list:
+        """Run a custom Finviz screener with arbitrary filter parameters."""
+        try:
+            url = "https://finviz.com/screener.ashx"
+            all_params = {
+                "v": "111",
+                **params,
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    url,
+                    params=all_params,
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+
+            if resp.status_code != 200:
+                return []
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            table = soup.find("table", class_="screener_table") or soup.find(
+                "table", {"id": "screener-views-table"}
+            )
+
+            if not table:
+                # Try alternate table structure
+                tables = soup.find_all("table")
+                for t in tables:
+                    if t.find("td", class_="screener-body-table-nw"):
+                        table = t
+                        break
+
+            if not table:
+                return []
+
+            rows = table.find_all("tr")[1:]
+            results = []
+            for row in rows[:20]:
+                cells = row.find_all("td")
+                if len(cells) >= 8:
+                    ticker = cells[1].get_text(strip=True)
+                    if not ticker or len(ticker) > 6:
+                        continue
+                    results.append({
+                        "ticker": ticker,
+                        "company": cells[2].get_text(strip=True) if len(cells) > 2 else "",
+                        "sector": cells[3].get_text(strip=True) if len(cells) > 3 else "",
+                        "industry": cells[4].get_text(strip=True) if len(cells) > 4 else "",
+                        "market_cap": cells[6].get_text(strip=True) if len(cells) > 6 else "",
+                        "price": cells[8].get_text(strip=True) if len(cells) > 8 else "",
+                        "change": cells[9].get_text(strip=True) if len(cells) > 9 else "",
+                        "volume": cells[10].get_text(strip=True) if len(cells) > 10 else "",
+                    })
+            return results
+        except Exception as e:
+            print(f"Finviz custom screen error: {e}")
+            return []
+PART 2: Wire New Screeners into Market Data Service
+In data/market_data_service.py, replace the existing get_unusual_volume method (if it exists) or add these methods if they don't exist:
+python    async def get_unusual_volume(self) -> dict:
+        """Scan for unusual volume stocks with enriched data."""
+        unusual_vol = await self.finviz.get_unusual_volume()
+        return {
+            "unusual_volume_stocks": unusual_vol,
+            "market_news": self.polygon.get_news(limit=10),
+        }
+
+    async def get_oversold(self) -> dict:
+        """Scan for oversold bounce candidates."""
+        oversold = await self.finviz.get_oversold_stocks()
+        return {
+            "oversold_stocks": oversold,
+            "market_news": self.polygon.get_news(limit=10),
+        }
+
+    async def get_overbought(self) -> dict:
+        """Scan for overbought stocks."""
+        overbought = await self.finviz.get_overbought_stocks()
+        return {
+            "overbought_stocks": overbought,
+        }
+
+    async def get_squeeze_candidates(self) -> dict:
+        """Scan for short squeeze setups."""
+        high_short, unusual_vol, new_highs = await asyncio.gather(
+            self.finviz.get_high_short_float(),
+            self.finviz.get_unusual_volume(),
+            self.finviz.get_new_highs(),
+            return_exceptions=True,
+        )
+        if isinstance(high_short, Exception): high_short = []
+        if isinstance(unusual_vol, Exception): unusual_vol = []
+        if isinstance(new_highs, Exception): new_highs = []
+
+        unusual_options = await self.options.get_unusual_options_activity()
+        options_signals = self.options.interpret_flow(unusual_options) if unusual_options else {}
+
+        trending = await self.stocktwits.get_trending()
+
+        return {
+            "high_short_float_stocks": high_short,
+            "unusual_volume_stocks": unusual_vol,
+            "new_highs": new_highs,
+            "unusual_options": unusual_options,
+            "options_signals": options_signals,
+            "stocktwits_trending": trending,
+        }
+Also update the get_top_ta_setups method to include more screener data. Find the return statement in get_top_ta_setups and replace it with:
+python        # Fetch additional screener data in parallel
+        unusual_vol, new_highs, most_active = await asyncio.gather(
+            self.finviz.get_unusual_volume(),
+            self.finviz.get_new_highs(),
+            self.finviz.get_most_active(),
+            return_exceptions=True,
+        )
+        if isinstance(unusual_vol, Exception): unusual_vol = []
+        if isinstance(new_highs, Exception): new_highs = []
+        if isinstance(most_active, Exception): most_active = []
+
+        return {
+            "movers": movers,
+            "screener_gainers": screener_gainers,
+            "unusual_volume": unusual_vol,
+            "new_52_week_highs": new_highs,
+            "most_active": most_active,
+            "technical_data": ta_data,
+            "options_flow": unusual_options,
+            "options_signals": options_signals,
+        }
+Update get_social_buzz to also include insider buying and small cap gainers. Find the return statement in get_social_buzz and replace it with:
+python        # Also get small cap gainers and insider buying for cross-referencing
+        small_cap_gainers, insider_buying = await asyncio.gather(
+            self.finviz.get_small_cap_gainers(),
+            self.finviz.get_insider_buying(),
+            return_exceptions=True,
+        )
+        if isinstance(small_cap_gainers, Exception): small_cap_gainers = []
+        if isinstance(insider_buying, Exception): insider_buying = []
+
+        return {
+            "stocktwits_trending": trending,
+            "buzz_details": buzz_data,
+            "small_cap_gainers": small_cap_gainers,
+            "insider_buying": insider_buying,
+        }
+PART 3: Add Squeeze Route in Agent
+In agent/claude_agent.py, find the _gather_data method. Add this block after the existing elif blocks (before the else):
+python        elif category == "squeeze":
+            return await self.data.get_squeeze_candidates()
+```
+
+**In `agent/prompts.py`, in the `QUERY_CLASSIFIER_PROMPT`, add this line after the existing categories:**
+```
+- "squeeze": User asks about short squeeze setups, high short interest stocks, threshold plays, squeeze candidates, or gamma squeeze potential.
+PART 4: Rate Limiting
+Install the rate limiting package by running in the Shell:
+bashpip install slowapi
+In main.py, add these imports at the top of the file:
+pythonfrom slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+In main.py, add this right after the app = FastAPI() line (before the CORS middleware):
+pythonlimiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+In main.py, add the rate limit decorator to the query endpoint. Find the /api/query endpoint and add the decorator. It should look like this:
+python@app.post("/api/query")
+@limiter.limit("10/minute")
+async def query_agent(request: QueryRequest, req: Request):
+    try:
+        result = await agent.handle_query(
+            request.prompt,
+            history=[h.dict() for h in request.history] if request.history else None,
+        )
+        return result
+    except Exception as e:
+        print(f"Error in /api/query: {e}")
+        return {"error": str(e), "type": "chat", "analysis": f"Error: {str(e)}"}
+IMPORTANT: You need to add the Request import. Find the existing FastAPI imports and add Request:
+pythonfrom fastapi import FastAPI, Request
+Also add rate limits to the health endpoint to prevent abuse:
+python@app.get("/health")
+@limiter.limit("30/minute")
+async def health(req: Request):
+    return {
+        "anthropic_key_set": bool(ANTHROPIC_API_KEY),
+        "polygon_key_set": bool(POLYGON_API_KEY),
+    }

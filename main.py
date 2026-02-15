@@ -1,5 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -11,6 +14,10 @@ from agent.claude_agent import TradingAgent
 # Initialize the app
 # ============================================================
 app = FastAPI(title="Trading Agent API")
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS: Allow your website to call this backend.
 # IMPORTANT: Replace these URLs with YOUR actual website URLs.
@@ -48,7 +55,8 @@ class QueryRequest(BaseModel):
     history: Optional[List[ChatMessage]] = None
 
 @app.post("/api/query")
-async def query_agent(request: QueryRequest):
+@limiter.limit("10/minute")
+async def query_agent(request: QueryRequest, req: Request):
     try:
         result = await agent.handle_query(
             request.prompt,
@@ -61,9 +69,10 @@ async def query_agent(request: QueryRequest):
 
 
 @app.get("/api/health")
-async def health_check():
+@limiter.limit("30/minute")
+async def health_check(request: Request):
     """Detailed health check — tests if API keys are configured."""
     return {
-        "anthropic_key_set": ANTHROPIC_API_KEY is not None,
-        "polygon_key_set": POLYGON_API_KEY is not None,
+        "anthropic_key_set": bool(ANTHROPIC_API_KEY),
+        "polygon_key_set": bool(POLYGON_API_KEY),
     }
