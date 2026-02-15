@@ -1,7 +1,7 @@
 # Trading Analysis Platform - FastAPI Backend
 
 ## Overview
-A comprehensive Python FastAPI backend for a trading analysis platform that combines real-time market data from 12+ sources with Claude AI to provide actionable trading insights. Supports both long-term investment analysis (SQGLP framework) and short-term trading strategies (Weinstein stage analysis, momentum/catalyst-driven).
+A comprehensive Python FastAPI backend for a trading analysis platform that combines real-time market data from 13+ sources with Claude AI to provide actionable trading insights. Supports both long-term investment analysis (SQGLP framework) and short-term trading strategies (Weinstein stage analysis, momentum/catalyst-driven).
 
 ## Project Architecture
 ```
@@ -23,6 +23,7 @@ data/
   fred_provider.py           - FRED economic data
   fear_greed_provider.py     - CNN Fear & Greed Index
   coingecko_provider.py      - CoinGecko crypto market data (spot, derivatives, social)
+  cmc_provider.py            - CoinMarketCap trending, most-visited, new listings, metadata
 ```
 
 ## Running
@@ -33,8 +34,8 @@ The server runs on port 5000 using Uvicorn with hot reload enabled.
 - **12+ Scan Types**: Social momentum, sector rotation (Weinstein stage-based), squeeze plays, thematic investing, commodities, SQGLP, asymmetric, Weinstein, portfolio review, morning briefing, cross-platform trending, crypto
 - **Portfolio Review**: Analyze up to 25 tickers with dual scoring (trade + investment metrics)
 - **Morning Briefing**: Hedge-fund-style intelligence report with market pulse, key numbers, top moves
-- **Crypto Scanner**: Full crypto dashboard with CoinGecko data — spot prices, derivatives/funding rates, categories, trending, deep dives with social/dev metrics
-- **In-Memory TTL Caching**: All 9 providers cached with appropriate TTLs to reduce API calls
+- **Crypto Scanner**: Dual-source crypto dashboard (CoinGecko + CoinMarketCap) — funding rates, dual-trending, most-visited FOMO signals, volume acceleration, new listings, deep dives with social/dev metrics
+- **In-Memory TTL Caching**: All 10 providers cached with appropriate TTLs to reduce API calls
 
 ## Cache TTLs
 - Finviz screener: 5 min
@@ -46,9 +47,10 @@ The server runs on port 5000 using Uvicorn with hot reload enabled.
 - FRED: 1 hr
 - Fear & Greed: 10 min
 - CoinGecko: 2 min
+- CoinMarketCap: 2 min
 
 ## API Keys Required
-POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY, FMP_API_KEY (optional), COINGECKO_API_KEY, AGENT_API_KEY (for cache clear auth)
+POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY, FMP_API_KEY (optional), COINGECKO_API_KEY, CMC_API_KEY, AGENT_API_KEY (for cache clear auth)
 
 ## Endpoints
 - `GET /` - Welcome message
@@ -66,6 +68,10 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-15: Added CoinMarketCap provider (trending, most-visited, new listings, gainers/losers, categories, metadata, global metrics)
+- 2026-02-15: Combined crypto scanner now cross-references CoinGecko + CMC trending (dual_trending = strongest signal)
+- 2026-02-15: Added volume acceleration, most-visited divergence, new listings watch, and attention signals to crypto format
+- 2026-02-15: Updated crypto interpretation guide with signal hierarchy, volume change interpretation, most-visited interpretation
 - 2026-02-15: Added Weinstein Stage-based sector rotation analysis (stage2_pct/stage4_pct per GICS sector, breakout candidates)
 - 2026-02-15: Added cross-platform trending aggregation (StockTwits + Yahoo + StockAnalysis + Finviz + Polygon, multi-source scoring)
 - 2026-02-15: Added Yahoo Finance trending scraper and StockAnalysis trending scraper

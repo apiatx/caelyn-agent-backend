@@ -20,7 +20,7 @@ class MarketDataService:
     Your agent talks to THIS — never directly to Polygon or scrapers.
     """
 
-    def __init__(self, polygon_key: str, fmp_key: str = None, coingecko_key: str = None):
+    def __init__(self, polygon_key: str, fmp_key: str = None, coingecko_key: str = None, cmc_key: str = None):
         self.polygon = PolygonProvider(polygon_key)
         self.finviz = FinvizScraper()
         self.stocktwits = StockTwitsProvider()
@@ -33,6 +33,8 @@ class MarketDataService:
         self.fear_greed = FearGreedProvider()
         self.fmp = FMPProvider(fmp_key) if fmp_key else None
         self.coingecko = CoinGeckoProvider(coingecko_key) if coingecko_key else None
+        from data.cmc_provider import CMCProvider
+        self.cmc = CMCProvider(cmc_key) if cmc_key else None
 
     async def research_ticker(self, ticker: str) -> dict:
         """
@@ -1960,57 +1962,143 @@ class MarketDataService:
         }
 
     async def get_crypto_scanner(self) -> dict:
+        """
+        Combined crypto scanner pulling from BOTH CoinGecko and CoinMarketCap.
+
+        CoinGecko provides: derivatives/funding rates, social/dev metrics, trending
+        CMC provides: most-visited (FOMO signal), new listings, richer metadata, volume change
+
+        Cross-referencing trending from both platforms = strongest momentum signal.
+        """
         import asyncio
 
-        if not self.coingecko:
-            return {"error": "CoinGecko API not configured"}
+        tasks = {}
 
-        cg_dashboard = await self.coingecko.get_crypto_dashboard()
+        if self.coingecko:
+            tasks["cg_dashboard"] = self.coingecko.get_crypto_dashboard()
 
-        trending_coins = []
-        if isinstance(cg_dashboard.get("trending"), dict):
-            coins_list = cg_dashboard["trending"].get("coins", [])
-            trending_coins = [c.get("item", {}).get("id", "") for c in coins_list[:6] if c.get("item")]
+        if self.cmc:
+            tasks["cmc_dashboard"] = self.cmc.get_full_dashboard()
 
-        top_gainers = []
-        gl = cg_dashboard.get("gainers_losers", {})
-        if isinstance(gl, dict):
-            for g in (gl.get("gainers") or [])[:4]:
+        tasks["fear_greed"] = self.fear_greed.get_fear_greed_index()
+        tasks["crypto_news"] = self.alphavantage.get_news_sentiment("CRYPTO:BTC")
+
+        task_names = list(tasks.keys())
+        results = await asyncio.gather(
+            *tasks.values(),
+            return_exceptions=True,
+        )
+        data = {}
+        for name, result in zip(task_names, results):
+            data[name] = result if not isinstance(result, Exception) else {}
+
+        cg = data.get("cg_dashboard", {})
+        cmc = data.get("cmc_dashboard", {})
+
+        cg_trending_symbols = set()
+        cg_trending_data = cg.get("trending", {})
+        if isinstance(cg_trending_data, dict):
+            for coin in cg_trending_data.get("coins", []):
+                item = coin.get("item", {})
+                sym = item.get("symbol", "").upper()
+                if sym:
+                    cg_trending_symbols.add(sym)
+
+        cmc_trending_symbols = set()
+        for coin in (cmc.get("trending") or []):
+            sym = coin.get("symbol", "").upper()
+            if sym:
+                cmc_trending_symbols.add(sym)
+
+        cmc_most_visited_symbols = set()
+        for coin in (cmc.get("most_visited") or []):
+            sym = coin.get("symbol", "").upper()
+            if sym:
+                cmc_most_visited_symbols.add(sym)
+
+        dual_trending = cg_trending_symbols & cmc_trending_symbols
+        high_attention = (cg_trending_symbols | cmc_trending_symbols) & cmc_most_visited_symbols
+
+        volume_acceleration = {}
+        for coin in (cmc.get("listings") or []):
+            sym = coin.get("symbol", "")
+            quote = coin.get("quote", {}).get("USD", {})
+            vol_change = quote.get("volume_change_24h")
+            if vol_change is not None and sym:
+                volume_acceleration[sym] = {
+                    "volume_24h": quote.get("volume_24h"),
+                    "volume_change_24h": vol_change,
+                    "market_cap_dominance": quote.get("market_cap_dominance"),
+                }
+
+        deep_dive_ids = []
+        if isinstance(cg_trending_data, dict):
+            for coin in cg_trending_data.get("coins", [])[:6]:
+                cid = coin.get("item", {}).get("id")
+                if cid:
+                    deep_dive_ids.append(cid)
+
+        cg_gl = cg.get("gainers_losers", {})
+        if isinstance(cg_gl, dict):
+            for g in (cg_gl.get("gainers") or [])[:4]:
                 cid = g.get("id")
-                if cid and cid not in trending_coins:
-                    top_gainers.append(cid)
+                if cid and cid not in deep_dive_ids:
+                    deep_dive_ids.append(cid)
 
-        deep_dive_ids = list(dict.fromkeys(trending_coins + top_gainers))[:10]
         deep_dive = {}
-        if deep_dive_ids:
-            deep_dive = await self.coingecko.get_coin_deep_dive(deep_dive_ids)
+        if deep_dive_ids and self.coingecko:
+            deep_dive = await self.coingecko.get_coin_deep_dive(deep_dive_ids[:10])
 
-        derivatives = cg_dashboard.get("derivatives", [])
-        funding_analysis = self._analyze_funding_rates(derivatives)
+        derivatives = cg.get("derivatives", [])
+        funding_analysis = self._analyze_funding_rates(derivatives) if derivatives else {}
 
-        fear_greed = {}
-        try:
-            fear_greed = await self.fear_greed.get_fear_greed_index()
-        except:
-            pass
+        cg_categories = (cg.get("categories") or [])[:15]
+        cmc_categories = (cmc.get("categories") or [])[:15]
 
-        crypto_news = {}
-        try:
-            crypto_news = await self.alphavantage.get_news_sentiment("CRYPTO:BTC")
-        except:
-            pass
+        new_listings = cmc.get("new_listings", [])
+
+        cmc_gainers_losers = cmc.get("gainers_losers", {})
+
+        trending_symbols = list(dual_trending | high_attention)[:15]
+        coin_metadata = {}
+        if trending_symbols and self.cmc:
+            try:
+                coin_metadata = await self.cmc.get_coin_info(trending_symbols)
+            except:
+                pass
 
         return {
-            "global_market": cg_dashboard.get("global_market", {}),
-            "top_coins": cg_dashboard.get("top_coins", []),
-            "trending": cg_dashboard.get("trending", {}),
-            "gainers_losers": cg_dashboard.get("gainers_losers", {}),
-            "categories": (cg_dashboard.get("categories") or [])[:20],
-            "derivatives_tickers": derivatives[:30],
+            "cg_global": cg.get("global_market", {}),
+            "cmc_global": cmc.get("global_metrics", {}),
+
+            "cg_top_coins": cg.get("top_coins", []),
+            "cmc_listings": (cmc.get("listings") or [])[:30],
+
+            "cg_trending": cg_trending_data,
+            "cmc_trending": cmc.get("trending", []),
+            "cmc_most_visited": cmc.get("most_visited", []),
+            "dual_trending": list(dual_trending),
+            "high_attention": list(high_attention),
+
+            "cg_gainers_losers": cg.get("gainers_losers", {}),
+            "cmc_gainers_losers": cmc_gainers_losers,
+
+            "derivatives_tickers": (derivatives or [])[:30],
             "funding_analysis": funding_analysis,
+
+            "cg_categories": cg_categories,
+            "cmc_categories": cmc_categories,
+
+            "volume_acceleration": volume_acceleration,
+
+            "new_listings": new_listings,
+
             "deep_dive": deep_dive,
-            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
-            "crypto_news": crypto_news if not isinstance(crypto_news, Exception) else {},
+
+            "coin_metadata": coin_metadata if not isinstance(coin_metadata, Exception) else {},
+
+            "fear_greed": data.get("fear_greed", {}),
+            "crypto_news": data.get("crypto_news", {}),
         }
 
     def _analyze_funding_rates(self, derivatives: list) -> dict:
