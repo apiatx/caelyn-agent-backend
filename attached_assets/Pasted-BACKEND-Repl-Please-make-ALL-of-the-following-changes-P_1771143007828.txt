@@ -1,0 +1,249 @@
+BACKEND Repl — Please make ALL of the following changes.
+PART 1: Create a Simple In-Memory Cache
+Create a new file data/cache.py with this content:
+python"""
+Simple in-memory TTL cache.
+Stores API responses with expiration times.
+Different data types get different TTLs based on how fast they change.
+"""
+import time
+from typing import Any
+
+
+class TTLCache:
+    def __init__(self):
+        self._store: dict[str, tuple[Any, float]] = {}
+
+    def get(self, key: str) -> Any | None:
+        """Get a value if it exists and hasn't expired."""
+        if key in self._store:
+            value, expires_at = self._store[key]
+            if time.time() < expires_at:
+                return value
+            else:
+                del self._store[key]
+        return None
+
+    def set(self, key: str, value: Any, ttl_seconds: int):
+        """Store a value with a TTL in seconds."""
+        self._store[key] = (value, time.time() + ttl_seconds)
+
+    def clear(self):
+        """Clear all cached values."""
+        self._store.clear()
+
+    def cleanup(self):
+        """Remove expired entries."""
+        now = time.time()
+        expired = [k for k, (_, exp) in self._store.items() if now >= exp]
+        for k in expired:
+            del self._store[k]
+
+    @property
+    def size(self):
+        return len(self._store)
+
+
+# Global cache instance
+cache = TTLCache()
+
+# TTL constants (in seconds)
+FINVIZ_TTL = 300        # 5 minutes — screener results don't change fast
+POLYGON_SNAPSHOT_TTL = 60   # 1 minute — price data
+POLYGON_TECHNICALS_TTL = 300  # 5 minutes — RSI/MACD don't change fast
+POLYGON_DETAILS_TTL = 3600   # 1 hour — company details rarely change
+STOCKTWITS_TTL = 120     # 2 minutes — sentiment shifts faster
+STOCKANALYSIS_TTL = 900  # 15 minutes — fundamentals don't change intraday
+FINNHUB_TTL = 600        # 10 minutes
+ALPHAVANTAGE_TTL = 600   # 10 minutes
+FMP_TTL = 300            # 5 minutes
+FRED_TTL = 3600          # 1 hour — macro data updates daily
+FEAR_GREED_TTL = 600     # 10 minutes
+POLYGON_NEWS_TTL = 300   # 5 minutes
+EARNINGS_TTL = 3600      # 1 hour — earnings calendar doesn't change intraday
+PART 2: Add Caching to Finviz Scraper
+In data/finviz_scraper.py, add this import at the top:
+pythonfrom data.cache import cache, FINVIZ_TTL
+Find the get_screener_results method. Wrap the existing logic with a cache check. Replace the entire method with:
+python    async def get_screener_results(self, screener_type: str) -> list:
+        cache_key = f"finviz:screener:{screener_type}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # ... existing implementation here (keep ALL existing code) ...
+        # At the very end, before the return statement, add:
+        # cache.set(cache_key, results, FINVIZ_TTL)
+        # return results
+IMPORTANT: I can't see your exact get_screener_results implementation, so here's what to tell Replit Agent more clearly:
+Add caching to get_screener_results: at the start of the method, check cache.get(f"finviz:screener:{screener_type}") — if it returns something, return that immediately. At the end of the method, before returning results, call cache.set(f"finviz:screener:{screener_type}", results, FINVIZ_TTL).
+Do the same for _custom_screen. Add caching:
+At the start of _custom_screen, create a cache key from the params:
+python        # At the top of _custom_screen:
+        if isinstance(params, str):
+            cache_key = f"finviz:custom:{params[:100]}"
+        else:
+            cache_key = f"finviz:custom:{str(sorted(params.items()))[:100]}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+At the end, before returning:
+python        cache.set(cache_key, results, FINVIZ_TTL)
+        return results
+PART 3: Add Caching to Polygon Provider
+In your Polygon provider file (likely data/polygon_provider.py), add this import at the top:
+pythonfrom data.cache import cache, POLYGON_SNAPSHOT_TTL, POLYGON_TECHNICALS_TTL, POLYGON_DETAILS_TTL, POLYGON_NEWS_TTL
+Add caching to get_snapshot:
+python    def get_snapshot(self, ticker: str) -> dict:
+        cache_key = f"polygon:snapshot:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # ... existing implementation ...
+
+        # Before return:
+        cache.set(cache_key, result, POLYGON_SNAPSHOT_TTL)
+        return result
+Add caching to get_technicals:
+python    def get_technicals(self, ticker: str) -> dict:
+        cache_key = f"polygon:technicals:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # ... existing implementation ...
+
+        cache.set(cache_key, result, POLYGON_TECHNICALS_TTL)
+        return result
+Add caching to get_ticker_details:
+python    def get_ticker_details(self, ticker: str) -> dict:
+        cache_key = f"polygon:details:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # ... existing implementation ...
+
+        cache.set(cache_key, result, POLYGON_DETAILS_TTL)
+        return result
+Add caching to get_market_movers:
+python    def get_market_movers(self) -> dict:
+        cache_key = "polygon:movers"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # ... existing implementation ...
+
+        cache.set(cache_key, result, POLYGON_SNAPSHOT_TTL)
+        return result
+Add caching to get_news:
+python    def get_news(self, limit: int = 10) -> list:
+        cache_key = f"polygon:news:{limit}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # ... existing implementation ...
+
+        cache.set(cache_key, result, POLYGON_NEWS_TTL)
+        return result
+PART 4: Add Caching to StockTwits Provider
+In your StockTwits provider file, add:
+pythonfrom data.cache import cache, STOCKTWITS_TTL
+Add caching to get_sentiment:
+python    async def get_sentiment(self, ticker: str) -> dict:
+        cache_key = f"stocktwits:sentiment:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # ... existing implementation ...
+
+        cache.set(cache_key, result, STOCKTWITS_TTL)
+        return result
+Add caching to get_trending:
+python    async def get_trending(self) -> list:
+        cache_key = "stocktwits:trending"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # ... existing implementation ...
+
+        cache.set(cache_key, result, STOCKTWITS_TTL)
+        return result
+PART 5: Add Caching to StockAnalysis Provider
+In your StockAnalysis provider file, add:
+pythonfrom data.cache import cache, STOCKANALYSIS_TTL
+Add caching to get_overview:
+python    async def get_overview(self, ticker: str) -> dict:
+        cache_key = f"stockanalysis:overview:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # ... existing implementation ...
+
+        cache.set(cache_key, result, STOCKANALYSIS_TTL)
+        return result
+Add caching to get_analyst_ratings:
+python    async def get_analyst_ratings(self, ticker: str) -> dict:
+        cache_key = f"stockanalysis:analyst:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # ... existing implementation ...
+
+        cache.set(cache_key, result, STOCKANALYSIS_TTL)
+        return result
+PART 6: Add Caching to Finnhub Provider
+In your Finnhub provider file, add:
+pythonfrom data.cache import cache, FINNHUB_TTL, EARNINGS_TTL
+Add caching to these methods with the same pattern:
+
+get_insider_sentiment(ticker) → cache key finnhub:insider:{ticker}, TTL = FINNHUB_TTL
+get_earnings_surprises(ticker) → cache key finnhub:earnings:{ticker}, TTL = EARNINGS_TTL
+get_recommendation_trends(ticker) → cache key finnhub:recommendations:{ticker}, TTL = FINNHUB_TTL
+get_social_sentiment(ticker) → cache key finnhub:social:{ticker}, TTL = FINNHUB_TTL
+get_upcoming_earnings() → cache key finnhub:upcoming_earnings, TTL = EARNINGS_TTL
+
+PART 7: Add Caching to FMP Provider
+In data/fmp_provider.py, add:
+pythonfrom data.cache import cache, FMP_TTL
+Add caching to the _get method itself (this caches ALL FMP calls automatically):
+python    async def _get(self, endpoint: str, params: dict = None) -> dict | list:
+        cache_key = f"fmp:{endpoint}:{str(params)[:80]}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # ... existing implementation ...
+
+        # Before return:
+        cache.set(cache_key, result, FMP_TTL)
+        return result
+PART 8: Add Caching to FRED and Fear & Greed
+FRED provider — add:
+pythonfrom data.cache import cache, FRED_TTL
+Cache get_quick_macro() and get_full_macro_dashboard() with key fred:quick_macro / fred:full_macro, TTL = FRED_TTL.
+Fear & Greed provider — add:
+pythonfrom data.cache import cache, FEAR_GREED_TTL
+Cache get_fear_greed_index() with key fear_greed:index, TTL = FEAR_GREED_TTL.
+PART 9: Reduce Light Enrichment Batch Size
+In data/market_data_service.py, find the wide_scan_and_rank method. Find the line that sets max_candidates. Replace it with:
+python        max_candidates = 30 if needs_fundamentals else 40
+This reduces the number of tickers we enrich from 40-60 to 30-40. Combined with caching, most of these will be cache hits on the second click anyway.
+PART 10: Add Cache Clear Endpoint
+In main.py, add this endpoint:
+python@app.post("/api/cache/clear")
+@limiter.limit("5/minute")
+async def clear_cache(req: Request, api_key: str = Header(None, alias="X-API-Key")):
+    if not api_key or api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    from data.cache import cache
+    cache.clear()
+    return {"status": "Cache cleared"}
+Re-publish/deploy the backend.
