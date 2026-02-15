@@ -426,3 +426,368 @@ class MarketDataService:
             "macro_data": macro,
             "fear_greed_index": fear_greed,
         }
+
+    async def get_social_momentum(self) -> dict:
+        """
+        Scan for stocks with accelerating social media mentions
+        and positive sentiment in the last 24-48 hours.
+        """
+        trending = await self.stocktwits.get_trending()
+        trending_tickers = [t["ticker"] for t in trending[:12] if t.get("ticker")]
+
+        async def get_social_detail(ticker):
+            st_result, finn_result, av_result = await asyncio.gather(
+                self.stocktwits.get_sentiment(ticker),
+                asyncio.to_thread(self.finnhub.get_social_sentiment, ticker),
+                self.alphavantage.get_news_sentiment(ticker),
+                return_exceptions=True,
+            )
+            return {
+                "stocktwits": st_result if not isinstance(st_result, Exception) else {},
+                "reddit_twitter": finn_result if not isinstance(finn_result, Exception) else {},
+                "news_sentiment": av_result if not isinstance(av_result, Exception) else {},
+                "snapshot": self.polygon.get_snapshot(ticker),
+                "details": self.polygon.get_ticker_details(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+            }
+
+        results = await asyncio.gather(
+            *[get_social_detail(t) for t in trending_tickers],
+            return_exceptions=True,
+        )
+        social_data = {}
+        for ticker, result in zip(trending_tickers, results):
+            if not isinstance(result, Exception):
+                social_data[ticker] = result
+
+        return {
+            "stocktwits_trending": trending,
+            "social_details": social_data,
+        }
+
+    async def get_volume_spikes(self) -> dict:
+        """Scan for stocks with unusual volume vs 30-day average."""
+        unusual_vol, most_active = await asyncio.gather(
+            self.finviz.get_unusual_volume(),
+            self.finviz.get_most_active(),
+            return_exceptions=True,
+        )
+        if isinstance(unusual_vol, Exception): unusual_vol = []
+        if isinstance(most_active, Exception): most_active = []
+
+        vol_tickers = [s["ticker"] for s in (unusual_vol or [])[:8]]
+
+        async def enrich_volume(ticker):
+            return {
+                "snapshot": self.polygon.get_snapshot(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+                "details": self.polygon.get_ticker_details(ticker),
+            }
+
+        enriched = await asyncio.gather(
+            *[enrich_volume(t) for t in vol_tickers],
+            return_exceptions=True,
+        )
+        enriched_data = {}
+        for ticker, result in zip(vol_tickers, enriched):
+            if not isinstance(result, Exception):
+                enriched_data[ticker] = result
+
+        return {
+            "unusual_volume_stocks": unusual_vol,
+            "most_active": most_active,
+            "enriched_data": enriched_data,
+        }
+
+    async def get_earnings_catalyst_watch(self) -> dict:
+        """
+        Upcoming earnings and material catalysts in next 7 days.
+        Combines earnings calendar + SEC 8-K filings + news.
+        """
+        upcoming_earnings = self.finnhub.get_upcoming_earnings()
+        market_news = self.polygon.get_news(limit=20)
+
+        earnings_tickers = [e["ticker"] for e in upcoming_earnings[:10] if e.get("ticker")]
+
+        async def get_catalyst_detail(ticker):
+            overview, filings, sentiment = await asyncio.gather(
+                self.stockanalysis.get_overview(ticker),
+                self.edgar.get_8k_filings(ticker),
+                self.stocktwits.get_sentiment(ticker),
+                return_exceptions=True,
+            )
+            return {
+                "overview": overview if not isinstance(overview, Exception) else {},
+                "recent_8k_filings": filings if not isinstance(filings, Exception) else [],
+                "sentiment": sentiment if not isinstance(sentiment, Exception) else {},
+                "earnings_history": self.finnhub.get_earnings_surprises(ticker),
+                "recommendations": self.finnhub.get_recommendation_trends(ticker),
+                "snapshot": self.polygon.get_snapshot(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+            }
+
+        catalyst_results = await asyncio.gather(
+            *[get_catalyst_detail(t) for t in earnings_tickers[:8]],
+            return_exceptions=True,
+        )
+        catalyst_data = {}
+        for ticker, result in zip(earnings_tickers[:8], catalyst_results):
+            if not isinstance(result, Exception):
+                catalyst_data[ticker] = result
+
+        return {
+            "upcoming_earnings": upcoming_earnings,
+            "market_news": market_news,
+            "catalyst_details": catalyst_data,
+        }
+
+    async def get_sector_rotation(self) -> dict:
+        """
+        Track sector ETF performance for rotation signals.
+        Uses Polygon snapshots for major sector ETFs.
+        """
+        sector_etfs = {
+            "XLK": "Technology", "XLV": "Healthcare", "XLF": "Financials",
+            "XLE": "Energy", "XLI": "Industrials", "XLP": "Consumer Staples",
+            "XLY": "Consumer Discretionary", "XLB": "Materials", "XLU": "Utilities",
+            "XLRE": "Real Estate", "XLC": "Communications",
+            "SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000",
+            "URA": "Uranium", "SMH": "Semiconductors", "HACK": "Cybersecurity",
+        }
+
+        async def get_etf_data(ticker):
+            snapshot = self.polygon.get_snapshot(ticker)
+            technicals = self.polygon.get_technicals(ticker)
+            return {"snapshot": snapshot, "technicals": technicals}
+
+        etf_results = await asyncio.gather(
+            *[asyncio.to_thread(lambda t=t: get_etf_data(t)) for t in sector_etfs.keys()],
+            return_exceptions=True,
+        )
+
+        sector_data = {}
+        for (ticker, sector), result in zip(sector_etfs.items(), etf_results):
+            if isinstance(result, Exception):
+                try:
+                    snap = self.polygon.get_snapshot(ticker)
+                    tech = self.polygon.get_technicals(ticker)
+                    sector_data[ticker] = {"sector": sector, "snapshot": snap, "technicals": tech}
+                except:
+                    sector_data[ticker] = {"sector": sector, "error": str(result)}
+            else:
+                sector_data[ticker] = {"sector": sector, **result}
+
+        macro = self.fred.get_quick_macro()
+        fear_greed = await self.fear_greed.get_fear_greed_index()
+
+        return {
+            "sector_etf_data": sector_data,
+            "macro_data": macro,
+            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+        }
+
+    async def get_asymmetric_setups(self) -> dict:
+        """
+        Scan for asymmetric setups: compressed valuation + catalyst + volume.
+        Focus on stocks where downside is capped and upside is uncapped.
+        """
+        gainers, unusual_vol, new_highs, insider_buys = await asyncio.gather(
+            self.finviz.get_screener_results("ta_topgainers"),
+            self.finviz.get_unusual_volume(),
+            self.finviz.get_new_highs(),
+            self.finviz.get_insider_buying(),
+            return_exceptions=True,
+        )
+        if isinstance(gainers, Exception): gainers = []
+        if isinstance(unusual_vol, Exception): unusual_vol = []
+        if isinstance(new_highs, Exception): new_highs = []
+        if isinstance(insider_buys, Exception): insider_buys = []
+
+        all_tickers = list(dict.fromkeys(
+            [s["ticker"] for s in (gainers or [])[:5]] +
+            [s["ticker"] for s in (unusual_vol or [])[:5]] +
+            [s["ticker"] for s in (new_highs or [])[:5]] +
+            [s["ticker"] for s in (insider_buys or [])[:5]]
+        ))[:12]
+
+        async def get_asymmetric_detail(ticker):
+            overview, analyst = await asyncio.gather(
+                self.stockanalysis.get_overview(ticker),
+                self.stockanalysis.get_analyst_ratings(ticker),
+                return_exceptions=True,
+            )
+            return {
+                "overview": overview if not isinstance(overview, Exception) else {},
+                "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
+                "snapshot": self.polygon.get_snapshot(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+                "details": self.polygon.get_ticker_details(ticker),
+                "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
+                "earnings_history": self.finnhub.get_earnings_surprises(ticker),
+            }
+
+        detail_results = await asyncio.gather(
+            *[get_asymmetric_detail(t) for t in all_tickers],
+            return_exceptions=True,
+        )
+        detail_data = {}
+        for ticker, result in zip(all_tickers, detail_results):
+            if not isinstance(result, Exception):
+                detail_data[ticker] = result
+
+        return {
+            "screener_gainers": gainers,
+            "unusual_volume": unusual_vol,
+            "new_highs": new_highs,
+            "insider_buying": insider_buys,
+            "detail_data": detail_data,
+        }
+
+    async def get_bearish_setups(self) -> dict:
+        """Scan for breakdown / bearish plays — weakest stocks and sectors."""
+        losers, overbought = await asyncio.gather(
+            self.finviz.get_top_losers(),
+            self.finviz.get_overbought_stocks(),
+            return_exceptions=True,
+        )
+        if isinstance(losers, Exception): losers = []
+        if isinstance(overbought, Exception): overbought = []
+
+        movers = self.polygon.get_market_movers()
+
+        loser_tickers = [s["ticker"] for s in (losers or [])[:6]]
+
+        async def enrich_loser(ticker):
+            return {
+                "snapshot": self.polygon.get_snapshot(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+                "details": self.polygon.get_ticker_details(ticker),
+            }
+
+        enriched = await asyncio.gather(
+            *[enrich_loser(t) for t in loser_tickers],
+            return_exceptions=True,
+        )
+        enriched_data = {}
+        for ticker, result in zip(loser_tickers, enriched):
+            if not isinstance(result, Exception):
+                enriched_data[ticker] = result
+
+        return {
+            "top_losers": losers,
+            "overbought_stocks": overbought,
+            "market_losers": movers.get("losers", []),
+            "enriched_data": enriched_data,
+        }
+
+    async def get_thematic_scan(self, theme: str = "ai_compute") -> dict:
+        """
+        Custom thematic scanner for specific sectors the user cares about.
+        Hardcoded watchlists for AI/Compute, Energy, Uranium, etc.
+        """
+        THEMES = {
+            "ai_compute": {
+                "name": "AI & Compute Infrastructure",
+                "tickers": ["NVDA", "AMD", "AVGO", "MRVL", "CRDO", "SMCI", "VRT", "ANET", "DELL", "ORCL", "MSFT", "GOOGL", "AMZN", "META", "TSM"],
+            },
+            "energy": {
+                "name": "Energy & Oil/Gas",
+                "tickers": ["XOM", "CVX", "COP", "EOG", "DVN", "PXD", "FANG", "OXY", "SLB", "HAL", "TE", "AR", "EQT", "RRC"],
+            },
+            "uranium": {
+                "name": "Uranium & Nuclear",
+                "tickers": ["CCJ", "UEC", "UUUU", "DNN", "NXE", "LEU", "SMR", "OKLO", "VST", "CEG", "TLN"],
+            },
+            "metals": {
+                "name": "Metals & Mining",
+                "tickers": ["FCX", "NEM", "GOLD", "AEM", "WPM", "RGLD", "SCCO", "VALE", "RIO", "BHP", "TECK", "MP"],
+            },
+            "defense": {
+                "name": "Defense & Aerospace",
+                "tickers": ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "LDOS", "KTOS", "PLTR", "RKLB"],
+            },
+        }
+
+        theme_data = THEMES.get(theme, THEMES["ai_compute"])
+        tickers = theme_data["tickers"]
+
+        async def get_theme_detail(ticker):
+            snap = self.polygon.get_snapshot(ticker)
+            tech = self.polygon.get_technicals(ticker)
+            details = self.polygon.get_ticker_details(ticker)
+            return {"snapshot": snap, "technicals": tech, "details": details}
+
+        results = await asyncio.gather(
+            *[asyncio.to_thread(lambda t=t: get_theme_detail(t)) for t in tickers[:12]],
+            return_exceptions=True,
+        )
+
+        theme_results = {}
+        for ticker, result in zip(tickers[:12], results):
+            if isinstance(result, Exception):
+                try:
+                    theme_results[ticker] = get_theme_detail(ticker)
+                except:
+                    theme_results[ticker] = {"error": str(result)}
+            else:
+                theme_results[ticker] = result
+
+        return {
+            "theme_name": theme_data["name"],
+            "theme_tickers": tickers,
+            "ticker_data": theme_results,
+            "market_news": self.polygon.get_news(limit=10),
+        }
+
+    async def get_small_cap_spec(self) -> dict:
+        """
+        Speculative small cap scanner: high volatility, increasing volume,
+        positive sentiment, market cap < $2B.
+        """
+        small_gainers, unusual_vol, high_short = await asyncio.gather(
+            self.finviz.get_small_cap_gainers(),
+            self.finviz.get_unusual_volume(),
+            self.finviz.get_high_short_float(),
+            return_exceptions=True,
+        )
+        if isinstance(small_gainers, Exception): small_gainers = []
+        if isinstance(unusual_vol, Exception): unusual_vol = []
+        if isinstance(high_short, Exception): high_short = []
+
+        trending = await self.stocktwits.get_trending()
+
+        all_tickers = list(dict.fromkeys(
+            [s["ticker"] for s in (small_gainers or [])[:6]] +
+            [s["ticker"] for s in (high_short or [])[:4]]
+        ))[:10]
+
+        async def enrich_small(ticker):
+            st, overview = await asyncio.gather(
+                self.stocktwits.get_sentiment(ticker),
+                self.stockanalysis.get_overview(ticker),
+                return_exceptions=True,
+            )
+            return {
+                "sentiment": st if not isinstance(st, Exception) else {},
+                "overview": overview if not isinstance(overview, Exception) else {},
+                "snapshot": self.polygon.get_snapshot(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+                "details": self.polygon.get_ticker_details(ticker),
+            }
+
+        enriched = await asyncio.gather(
+            *[enrich_small(t) for t in all_tickers],
+            return_exceptions=True,
+        )
+        enriched_data = {}
+        for ticker, result in zip(all_tickers, enriched):
+            if not isinstance(result, Exception):
+                enriched_data[ticker] = result
+
+        return {
+            "small_cap_gainers": small_gainers,
+            "unusual_volume": unusual_vol,
+            "high_short_float": high_short,
+            "trending": trending,
+            "enriched_data": enriched_data,
+        }

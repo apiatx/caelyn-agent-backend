@@ -50,6 +50,7 @@ class TradingAgent:
     async def _gather_data(self, query_info: dict) -> dict:
         """Fetch the appropriate data based on query classification."""
         category = query_info.get("category", "general")
+        filters = query_info.get("filters", {})
 
         if category == "ticker_analysis":
             tickers = query_info.get("tickers", [])
@@ -63,6 +64,12 @@ class TradingAgent:
 
         elif category == "dashboard":
             return await self.data.get_dashboard()
+
+        elif category == "investments":
+            return await self.data.get_top_fundamental_catalysts()
+
+        elif category == "fundamentals_scan":
+            return await self.data.get_top_fundamental_catalysts()
 
         elif category == "unusual_volume":
             return await self.data.get_unusual_volume()
@@ -90,6 +97,31 @@ class TradingAgent:
 
         elif category == "squeeze":
             return await self.data.get_squeeze_candidates()
+
+        elif category == "social_momentum":
+            return await self.data.get_social_momentum()
+
+        elif category == "volume_spikes":
+            return await self.data.get_volume_spikes()
+
+        elif category == "earnings_catalyst":
+            return await self.data.get_earnings_catalyst_watch()
+
+        elif category == "sector_rotation":
+            return await self.data.get_sector_rotation()
+
+        elif category == "asymmetric":
+            return await self.data.get_asymmetric_setups()
+
+        elif category == "bearish":
+            return await self.data.get_bearish_setups()
+
+        elif category == "thematic":
+            theme = filters.get("theme", "ai_compute")
+            return await self.data.get_thematic_scan(theme)
+
+        elif category == "small_cap_spec":
+            return await self.data.get_small_cap_spec()
 
         else:
             # General question — still provide some market context

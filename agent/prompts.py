@@ -576,6 +576,113 @@ Use when: user asks about one specific ticker like "analyze NVDA", "what do you 
 }
 ```
 
+### FORMAT: "social_momentum" — Social Media Leaders
+Use when: user asks about trending stocks, social buzz, what's hot on social media.
+```json
+{
+  "display_type": "trades",
+  "market_context": "Social momentum scan — top trending tickers with accelerating mentions",
+  "picks": [
+    {
+      "ticker": "ABCD",
+      "company": "Company Name",
+      "price": "$12.50",
+      "change": "+15.3%",
+      "market_cap": "$1.2B",
+      "conviction": "Medium",
+      "thesis": "Trending #1 on StockTwits with 85% bullish sentiment. Reddit mentions up 500% in 24hrs. Volume surging 4x average.",
+      "catalyst": "Short squeeze narrative gaining traction + earnings beat",
+      "ta": {
+        "stage": "Stage 2 Continuation",
+        "rsi": 68,
+        "rsi_signal": "Strong momentum, not yet overbought",
+        "volume": "12M",
+        "volume_vs_avg": "+400%",
+        "macd": "Bullish, expanding",
+        "sma_20": "Above, rising",
+        "sma_50": "Above, rising",
+        "sma_200": "Above, rising",
+        "pattern": "Bull flag breakout on volume"
+      },
+      "sentiment": {
+        "buzz_level": "Extreme",
+        "bull_pct": 85,
+        "bull_thesis": "Short squeeze with 28% short float, rising borrow cost",
+        "bear_thesis": "Pure momentum play, no fundamental support. Could dump fast.",
+        "trending": "StockTwits #1, Reddit WSB frontpage, Twitter trending"
+      },
+      "trade_plan": {
+        "entry": "$12.00-$12.50",
+        "stop": "$10.80",
+        "target_1": "$16.00",
+        "target_2": "$20.00",
+        "risk_reward": "1:3.5"
+      }
+    }
+  ]
+}
+```
+
+### FORMAT: "sector_rotation" — Sector Performance Heatmap
+Use when: user asks about sector rotation, which sectors are hot, where money is flowing.
+```json
+{
+  "display_type": "sector_rotation",
+  "summary": "Risk-on rotation accelerating. Technology and Semis leading. Utilities and Staples lagging. Money moving from defensive to growth.",
+  "sectors": [
+    {
+      "etf": "XLK",
+      "sector": "Technology",
+      "change_today": "+1.8%",
+      "rsi": 62,
+      "trend": "Strong uptrend ↑↑",
+      "vs_spy": "Outperforming +0.9%",
+      "signal": "Leading — add exposure",
+      "conviction": "High"
+    }
+  ],
+  "macro_context": {
+    "fear_greed": "42 (Fear)",
+    "vix": "18.5",
+    "ten_year_yield": "4.25%",
+    "dxy": "Strengthening"
+  },
+  "rotation_signal": "Rotation from defensive (Utilities, Staples) into growth (Tech, Semis). Consistent with rate cut expectations."
+}
+```
+
+### FORMAT: "earnings_catalyst" — Earnings & Catalyst Calendar
+Use when: user asks about upcoming earnings, catalysts, events.
+```json
+{
+  "display_type": "earnings_catalyst",
+  "upcoming": [
+    {
+      "ticker": "NVDA",
+      "company": "NVIDIA",
+      "earnings_date": "Feb 26",
+      "days_away": 12,
+      "market_cap": "$2.1T",
+      "eps_estimate": "$0.85",
+      "revenue_estimate": "$38.5B",
+      "beat_streak": "6 consecutive beats",
+      "avg_move_on_earnings": "+/-8.2%",
+      "implied_move": "6.5% (options pricing)",
+      "sentiment": "78% bullish",
+      "pre_earnings_trend": "Consolidating in bull flag",
+      "risk_level": "High volatility expected",
+      "play": "Long calls 2 weeks out if holding above $850 support"
+    }
+  ]
+}
+```
+
+NOTE: For "asymmetric", "bearish", "small_cap_spec", and "volume_spikes" queries, use the "trades" display_type format but tailor the data to the specific scan. For example:
+- "asymmetric": Focus thesis on valuation compression, P/S vs peers, floor/ceiling math. Must show risk/reward of 4:1+ minimum.
+- "bearish": Focus on breakdown patterns, Stage 3/4 transitions, weakening fundamentals, heavy insider selling.
+- "small_cap_spec": Only stocks under $2B market cap. Focus on volume surge + social buzz + catalyst.
+- "volume_spikes": Focus on unusual volume ratios and what's likely causing the spike (news, insider, institutional).
+
 ### FORMAT 7: "chat" — General Discussion
 Use when: macro questions, general advice, explanations, or anything that doesn't fit the above.
 ```json
@@ -602,24 +709,35 @@ would be most relevant. Reply with ONLY a JSON object, nothing else.
 
 Categories:
 - "ticker_analysis": User is asking about specific stock(s). Extract the ticker(s).
-- "market_scan": User wants broad market overview, best trades, top movers.
-- "dashboard": User asks for a full dashboard, overview of opportunities, "what should I trade", "show me everything", or asks to see TA setups AND fundamentals AND social buzz together.
-- "unusual_volume": User asks about volume spikes or unusual activity.
-- "oversold": User asks about oversold stocks or bounce plays.
-- "overbought": User asks about overbought stocks or short candidates.
-- "options_flow": User asks about options activity, options flow, unusual options, put/call ratios, or what smart money is doing.
-- "earnings": User asks about upcoming earnings, earnings calendar, earnings reports, or which companies are reporting soon.
-- "macro": User asks about the economy, interest rates, inflation, CPI, unemployment, federal reserve, macro conditions, or broad economic outlook.
-- "sec_filings": User asks about SEC filings, 8-K filings, insider transactions from SEC, institutional ownership, Form 4, 10-K, 10-Q, or any regulatory filings for a specific stock. Extract the ticker(s).
+- "market_scan": User wants broad market overview, best trades, top movers, or momentum plays. Extract filters if present.
+- "dashboard": User asks for a full dashboard, overview of opportunities, "show me everything", or asks to see TA setups AND fundamentals AND social buzz together.
+- "investments": User asks for long-term investment ideas, portfolio ideas, multibaggers, compounders, "what should I invest in".
+- "fundamentals_scan": User asks for improving fundamentals, revenue growth leaders, EBITDA improvement, best financials, margin expansion.
 - "squeeze": User asks about short squeeze setups, high short interest stocks, threshold plays, squeeze candidates, or gamma squeeze potential.
-- "general": General market question, no specific data needed.
+- "social_momentum": User asks about social media trends, what's trending, meme stocks, social buzz leaders, "what's hot on Twitter/Reddit/StockTwits".
+- "volume_spikes": User asks about unusual volume, volume spikes, institutional volume, "what has big volume today".
+- "earnings_catalyst": User asks about upcoming earnings, catalyst calendar, FDA decisions, upcoming events, "what earnings are this week".
+- "sector_rotation": User asks about sector performance, sector rotation, which sectors are hot, ETF flows, "where is money flowing".
+- "asymmetric": User asks for asymmetric setups, best risk/reward, "4:1 setups", compressed valuations, "mispriced stocks".
+- "bearish": User asks for bearish plays, breakdown setups, weakest stocks, stocks to short or avoid, "what's breaking down".
+- "thematic": User asks about specific themes like AI stocks, uranium, energy, defense, metals. Extract theme as filter.
+- "small_cap_spec": User asks for speculative small caps, penny stocks, low-cap momentum, "high risk high reward small caps".
+- "macro": User asks about macro overview, Fed, interest rates, inflation, yield curve, VIX, economic outlook, risk-on vs risk-off.
+- "options_flow": User asks about unusual options activity, put/call ratios, options volume, gamma squeeze.
+- "sec_filings": User asks about SEC filings, insider transactions, 8-K filings, Form 4 data.
+- "general": General market question, strategy question, educational question, no specific data needed.
+
+Also extract these filters when present:
+- market_cap: "small_cap" (<$2B), "mid_cap" ($2B-$10B), "large_cap" (>$10B), "mega_cap" (>$200B)
+- sector: technology, healthcare, energy, financials, industrials, materials, utilities, etc.
+- style: "day_trade" (intraday), "swing" (days to weeks), "position" (weeks to months)
+- timeframe: "short" (1-4 weeks), "medium" (1-12 months), "long" (1-3 years)
+- theme: "ai_compute", "energy", "uranium", "metals", "defense"
 
 Reply format:
+{"category": "market_scan", "filters": {"style": "swing", "market_cap": "small_cap"}}
+or
 {"category": "ticker_analysis", "tickers": ["NVDA", "AAPL"]}
 or
-{"category": "sec_filings", "tickers": ["AAPL"]}
-or
-{"category": "market_scan"}
-or
-{"category": "general"}
+{"category": "thematic", "filters": {"theme": "uranium"}}
 """
