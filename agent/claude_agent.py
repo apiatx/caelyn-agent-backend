@@ -156,19 +156,17 @@ class TradingAgent:
 
     def _parse_response(self, raw_response: str) -> dict:
         """
-        Split Claude's response into the text analysis and the
-        structured JSON data for the frontend.
+        Parse Claude's response into text analysis + structured JSON.
+        Passes the structured data through to the frontend as-is,
+        since the frontend knows how to render each display_type.
         """
-        # Find the JSON block at the end of the response
         json_match = re.search(
             r"```json\s*(\{.*?\})\s*```", raw_response, re.DOTALL
         )
 
         if json_match:
-            # Split: everything before JSON is the analysis text
             json_start = json_match.start()
             analysis_text = raw_response[:json_start].strip()
-
             try:
                 structured_data = json.loads(json_match.group(1))
             except json.JSONDecodeError:
@@ -177,21 +175,8 @@ class TradingAgent:
             analysis_text = raw_response.strip()
             structured_data = {"display_type": "chat"}
 
-        display_type = structured_data.get("display_type", "chat")
-
-        result = {
-            "type": display_type,
+        return {
+            "type": structured_data.get("display_type", "chat"),
             "analysis": analysis_text,
-            "data": structured_data.get("rows"),
-            "tickers": structured_data.get("tickers"),
-            "technicals": structured_data.get("technicals"),
-            "key_stats": structured_data.get("key_stats"),
+            "structured": structured_data,
         }
-
-        if display_type == "dashboard":
-            result["ta_setups"] = structured_data.get("ta_setups")
-            result["fundamental_catalysts"] = structured_data.get("fundamental_catalysts")
-            result["social_buzz"] = structured_data.get("social_buzz")
-            result["triple_threats"] = structured_data.get("triple_threats")
-
-        return result
