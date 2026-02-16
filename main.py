@@ -150,6 +150,66 @@ async def clear_cache(request: Request, api_key: str = Header(None, alias="X-API
     return {"status": "Cache cleared"}
 
 
+class WatchlistRequest(BaseModel):
+    tickers: List[str]
+    conversation_id: Optional[str] = None
+
+@app.post("/api/watchlist")
+@limiter.limit("10/minute")
+async def review_watchlist(
+    request: Request,
+    body: WatchlistRequest,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    import asyncio
+    if not api_key or api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    if not body.tickers:
+        raise HTTPException(status_code=400, detail="No tickers provided.")
+
+    tickers = [t.strip().upper() for t in body.tickers if t.strip()][:25]
+    print(f"[API] Watchlist review request: {tickers}")
+
+    try:
+        result = await asyncio.wait_for(
+            agent.review_watchlist(tickers),
+            timeout=90.0,
+        )
+
+        if body.conversation_id:
+            try:
+                save_messages(body.conversation_id, [
+                    {"role": "user", "content": f"Review my watchlist: {', '.join(tickers)}"},
+                    {"role": "assistant", "content": _json.dumps(result, default=str)},
+                ])
+            except Exception as e:
+                print(f"[API] Failed to save watchlist conversation: {e}")
+
+        return result
+    except asyncio.TimeoutError:
+        print("[API] Watchlist review timed out after 90s")
+        return {
+            "type": "chat",
+            "analysis": "",
+            "structured": {
+                "display_type": "chat",
+                "message": "Watchlist review timed out. Try fewer tickers.",
+            },
+        }
+    except Exception as e:
+        import traceback
+        print(f"[API] Error in /api/watchlist: {e}")
+        traceback.print_exc()
+        return {
+            "type": "chat",
+            "analysis": "",
+            "structured": {
+                "display_type": "chat",
+                "message": f"Error reviewing watchlist: {str(e)}",
+            },
+        }
+
+
 class CreateConversationRequest(BaseModel):
     first_query: str = "New conversation"
 

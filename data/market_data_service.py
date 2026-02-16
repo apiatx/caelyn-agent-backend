@@ -1617,67 +1617,112 @@ class MarketDataService:
     async def analyze_portfolio(self, tickers: list) -> dict:
         """
         Full analysis pipeline for a user-provided list of tickers (up to 25).
-        Fetches all data sources for every ticker, scores each one,
-        and ranks them for portfolio decision-making.
+        Fetches all data sources for every ticker with per-ticker timeouts,
+        scores each one, and ranks them for portfolio decision-making.
         """
-        import asyncio
+        import time
+        start = time.time()
         from data.scoring_engine import score_for_trades, score_for_investments
 
         tickers = [t.upper().strip() for t in tickers[:25] if t.strip()]
+        print(f"[PORTFOLIO] Analyzing {len(tickers)} tickers: {tickers}")
 
         async def full_enrich(ticker):
+            data = {"ticker": ticker}
             try:
-                snapshot = self.polygon.get_snapshot(ticker)
-                technicals = self.polygon.get_technicals(ticker)
-                details = self.polygon.get_ticker_details(ticker)
-
-                st_result, overview, analyst, insider, earnings, recommendations, news_sent = (
-                    await asyncio.gather(
-                        self.stocktwits.get_sentiment(ticker),
-                        self.stockanalysis.get_overview(ticker),
-                        self.stockanalysis.get_analyst_ratings(ticker),
-                        asyncio.to_thread(lambda: self.finnhub.get_insider_sentiment(ticker)),
-                        asyncio.to_thread(lambda: self.finnhub.get_earnings_surprises(ticker)),
-                        asyncio.to_thread(lambda: self.finnhub.get_recommendation_trends(ticker)),
-                        self.alphavantage.get_news_sentiment(ticker),
-                        return_exceptions=True,
-                    )
-                )
-
-                return {
-                    "snapshot": snapshot,
-                    "technicals": technicals,
-                    "details": details,
-                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
-                    "overview": overview if not isinstance(overview, Exception) else {},
-                    "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
-                    "insider_sentiment": insider if not isinstance(insider, Exception) else {},
-                    "earnings_history": earnings if not isinstance(earnings, Exception) else [],
-                    "recommendations": recommendations if not isinstance(recommendations, Exception) else [],
-                    "news_sentiment": news_sent if not isinstance(news_sent, Exception) else {},
-                }
+                data["snapshot"] = self.polygon.get_snapshot(ticker)
+                data["technicals"] = self.polygon.get_technicals(ticker)
             except Exception as e:
-                return {"error": str(e)}
+                print(f"[PORTFOLIO] {ticker} polygon failed: {e}")
 
-        results = await asyncio.gather(
-            *[full_enrich(t) for t in tickers],
-            return_exceptions=True,
-        )
+            try:
+                overview = await asyncio.wait_for(
+                    self.stockanalysis.get_overview(ticker), timeout=8.0,
+                )
+                if overview:
+                    data["overview"] = overview
+            except Exception as e:
+                print(f"[PORTFOLIO] {ticker} overview failed: {e}")
+
+            try:
+                analyst = await asyncio.wait_for(
+                    self.stockanalysis.get_analyst_ratings(ticker), timeout=8.0,
+                )
+                if analyst:
+                    data["analyst_ratings"] = analyst
+            except Exception as e:
+                print(f"[PORTFOLIO] {ticker} analyst failed: {e}")
+
+            try:
+                sentiment = await asyncio.wait_for(
+                    self.stocktwits.get_sentiment(ticker), timeout=6.0,
+                )
+                if sentiment:
+                    data["sentiment"] = sentiment
+            except Exception as e:
+                print(f"[PORTFOLIO] {ticker} sentiment failed: {e}")
+
+            try:
+                insider = await asyncio.to_thread(
+                    lambda: self.finnhub.get_insider_sentiment(ticker)
+                )
+                if insider:
+                    data["insider_sentiment"] = insider
+            except Exception as e:
+                print(f"[PORTFOLIO] {ticker} insider failed: {e}")
+
+            try:
+                earnings = await asyncio.to_thread(
+                    lambda: self.finnhub.get_earnings_surprises(ticker)
+                )
+                if earnings:
+                    data["earnings_history"] = earnings
+            except Exception as e:
+                print(f"[PORTFOLIO] {ticker} earnings failed: {e}")
+
+            try:
+                recs = await asyncio.to_thread(
+                    lambda: self.finnhub.get_recommendation_trends(ticker)
+                )
+                if recs:
+                    data["recommendations"] = recs
+            except Exception as e:
+                print(f"[PORTFOLIO] {ticker} recommendations failed: {e}")
+
+            return data
+
+        all_data = []
+        for i in range(0, len(tickers), 5):
+            batch = tickers[i:i+5]
+            batch_results = await asyncio.gather(
+                *[asyncio.wait_for(full_enrich(t), timeout=15.0) for t in batch],
+                return_exceptions=True,
+            )
+            for ticker, result in zip(batch, batch_results):
+                if isinstance(result, Exception):
+                    print(f"[PORTFOLIO] {ticker} fully failed: {result}")
+                    all_data.append({"ticker": ticker, "error": "Failed to fetch data"})
+                else:
+                    all_data.append(result)
+
+            if i + 5 < len(tickers):
+                await asyncio.sleep(0.3)
+
+            print(f"[PORTFOLIO] Enriched {min(i+5, len(tickers))}/{len(tickers)} tickers ({time.time()-start:.1f}s)")
 
         enriched = {}
-        for ticker, result in zip(tickers, results):
-            if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
-                enriched[ticker] = {"error": "Failed to fetch data"}
+        for data in all_data:
+            ticker = data.get("ticker", "?")
+            if "error" in data:
+                enriched[ticker] = data
                 continue
-
-            trade_score = score_for_trades(result)
-            invest_score = score_for_investments(result)
+            trade_score = score_for_trades(data)
+            invest_score = score_for_investments(data)
             combined = round((invest_score * 0.4) + (trade_score * 0.4) + ((invest_score + trade_score) / 2 * 0.2), 1)
-
-            result["trade_score"] = trade_score
-            result["invest_score"] = invest_score
-            result["combined_score"] = combined
-            enriched[ticker] = result
+            data["trade_score"] = trade_score
+            data["invest_score"] = invest_score
+            data["combined_score"] = combined
+            enriched[ticker] = data
 
         ranked = sorted(
             [(t, d) for t, d in enriched.items() if "error" not in d],
@@ -1687,18 +1732,13 @@ class MarketDataService:
 
         fear_greed = {}
         try:
-            fear_greed = await self.fear_greed.get_fear_greed_index()
+            fear_greed = await asyncio.wait_for(
+                self.fear_greed.get_fear_greed_index(), timeout=8.0,
+            )
         except:
             pass
 
-        spy_data = {}
-        try:
-            spy_data = {
-                "snapshot": self.polygon.get_snapshot("SPY"),
-                "technicals": self.polygon.get_technicals("SPY"),
-            }
-        except:
-            pass
+        print(f"[PORTFOLIO] Complete: {len(enriched)} tickers enriched ({time.time()-start:.1f}s)")
 
         return {
             "tickers_analyzed": len(tickers),
@@ -1709,7 +1749,6 @@ class MarketDataService:
                 for t, d in ranked
             ],
             "enriched_data": enriched,
-            "spy_benchmark": spy_data,
             "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
             "macro": self.fred.get_quick_macro(),
         }

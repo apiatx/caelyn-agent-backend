@@ -56,6 +56,7 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - `GET /` - Welcome message
 - `GET /api/health` - Health check (verifies Claude API)
 - `POST /api/query` - Main agent query (supports conversation_id for auto-save)
+- `POST /api/watchlist` - Dedicated watchlist review (body: {tickers: string[], conversation_id?: string})
 - `POST /api/cache/clear` - Clear cache (requires X-API-Key header)
 - `GET /api/conversations` - List all recent conversations (metadata, sorted by most recent)
 - `GET /api/conversations/{id}` - Get full conversation with messages
@@ -71,6 +72,7 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-16: Added dedicated /api/watchlist endpoint — bypasses classifier, fetches data per-ticker with timeouts (8s overview, 6s sentiment), batches of 5, sends to Claude for portfolio-style analysis. Fixed analyze_portfolio with per-ticker timeouts and batch processing.
 - 2026-02-16: Tightened Finviz screener filters — CATEGORY_FILTERS dict with per-category filter strings, limits, and enrich_top caps. Single Finviz screen per category instead of 4-11 parallel screens. Per-ticker enrichment timeouts (6s light, 8s deep). Categories: trades, investments, fundamentals, squeeze, asymmetric, social_momentum, volume_spikes, bearish, small_cap_spec, market_scan.
 - 2026-02-16: Rewrote sector rotation scan — 3 broad Finviz screens (stage2/stage4/total) instead of 33 per-sector calls. Counts by sector from results. Breakout candidates pulled from stage2 stocks in top sectors. Much faster and avoids Finviz rate limiting.
 - 2026-02-16: Added "breakout" keyword to sector_rotation classifier.

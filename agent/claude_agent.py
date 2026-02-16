@@ -313,6 +313,141 @@ class TradingAgent:
                 "market_news": self.data.polygon.get_news(limit=10),
             }
 
+    async def review_watchlist(self, tickers: list) -> dict:
+        """Dedicated watchlist review — bypasses the classifier entirely."""
+        import time
+        start = time.time()
+
+        tickers = [t.strip().upper() for t in tickers if t.strip()][:25]
+        print(f"[WATCHLIST] Reviewing {len(tickers)} tickers: {tickers}")
+
+        async def fetch_ticker_data(ticker):
+            data = {"ticker": ticker}
+
+            try:
+                overview = await asyncio.wait_for(
+                    self.data.stockanalysis.get_overview(ticker), timeout=8.0,
+                )
+                if overview:
+                    data.update(overview)
+            except Exception as e:
+                print(f"[WATCHLIST] {ticker} overview failed: {e}")
+
+            try:
+                ratings = await asyncio.wait_for(
+                    self.data.stockanalysis.get_analyst_ratings(ticker), timeout=8.0,
+                )
+                if ratings:
+                    data["analyst_ratings"] = ratings
+            except Exception as e:
+                print(f"[WATCHLIST] {ticker} ratings failed: {e}")
+
+            try:
+                data["technicals"] = self.data.polygon.get_technicals(ticker)
+            except Exception as e:
+                print(f"[WATCHLIST] {ticker} technicals failed: {e}")
+
+            try:
+                data["snapshot"] = self.data.polygon.get_snapshot(ticker)
+            except Exception as e:
+                print(f"[WATCHLIST] {ticker} snapshot failed: {e}")
+
+            try:
+                sentiment = await asyncio.wait_for(
+                    self.data.stocktwits.get_sentiment(ticker), timeout=6.0,
+                )
+                if sentiment:
+                    data["social_sentiment"] = sentiment
+            except Exception as e:
+                print(f"[WATCHLIST] {ticker} sentiment failed: {e}")
+
+            return data
+
+        all_ticker_data = []
+        for i in range(0, len(tickers), 5):
+            batch = tickers[i:i+5]
+            batch_results = await asyncio.gather(
+                *[fetch_ticker_data(t) for t in batch],
+                return_exceptions=True,
+            )
+            for result in batch_results:
+                if isinstance(result, Exception):
+                    print(f"[WATCHLIST] Batch item failed: {result}")
+                else:
+                    all_ticker_data.append(result)
+
+            if i + 5 < len(tickers):
+                await asyncio.sleep(0.5)
+
+        print(f"[WATCHLIST] Data fetched for {len(all_ticker_data)} tickers ({time.time()-start:.1f}s)")
+
+        compressed = compress_data({"watchlist": all_ticker_data})
+        data_str = json.dumps(compressed, default=str)
+        print(f"[WATCHLIST] Compressed data: {len(data_str)} chars")
+
+        messages = [{
+            "role": "user",
+            "content": f"""[WATCHLIST DATA]
+{data_str}
+
+[USER REQUEST]
+Review my watchlist: {', '.join(tickers)}
+
+For EACH ticker, give me:
+1. TECHNICAL ANALYSIS: Current stage (Weinstein), trend direction, RSI reading, key support/resistance levels, SMA positioning, MACD signal. Is this in a buyable position right now?
+2. FUNDAMENTAL ANALYSIS: Revenue growth, margins, valuation (P/E, P/S), debt levels, earnings trajectory. Is the business improving or deteriorating?
+3. CATALYSTS & THESIS: What's the bull case? Any upcoming earnings, product launches, regulatory events, or sector tailwinds? What could move this stock in the next 1-3 months?
+4. YOUR VERDICT: Buy, hold, trim, or sell — and why. Be specific about entry points if it's a buy, or exit points if it's a sell.
+5. POSITION SIZING: Given the risk/reward, what conviction level (high/medium/low) and how would you size this?
+
+After analyzing each ticker individually, give me an OVERALL PORTFOLIO ASSESSMENT:
+- What's the portfolio's biggest strength and biggest weakness?
+- Any concentration risk (too many correlated positions)?
+- What would you add or remove to improve the portfolio?
+- What's your #1 action item for me right now?
+
+Be direct and opinionated. Tell me what you actually think."""
+        }]
+
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.client.messages.create,
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=16384,
+                    system=SYSTEM_PROMPT,
+                    messages=messages,
+                ),
+                timeout=60.0,
+            )
+
+            response_text = response.content[0].text
+            print(f"[WATCHLIST] Claude responded: {len(response_text)} chars ({time.time()-start:.1f}s)")
+
+            parsed = self._parse_response(response_text)
+            return parsed
+
+        except asyncio.TimeoutError:
+            print(f"[WATCHLIST] Claude timed out ({time.time()-start:.1f}s)")
+            return {
+                "type": "chat",
+                "analysis": "",
+                "structured": {
+                    "display_type": "chat",
+                    "message": "Claude timed out analyzing your watchlist. Try fewer tickers.",
+                },
+            }
+        except Exception as e:
+            print(f"[WATCHLIST] Claude error: {e}")
+            return {
+                "type": "chat",
+                "analysis": "",
+                "structured": {
+                    "display_type": "chat",
+                    "message": f"Error analyzing watchlist: {str(e)}",
+                },
+            }
+
     def _extract_screener_filters(self, prompt: str) -> dict:
         """
         Parse natural language screener request into structured filters.
