@@ -71,6 +71,8 @@ class MarketDataService:
         from data.cmc_provider import CMCProvider
         self.cmc = CMCProvider(cmc_key) if cmc_key else None
         self.reddit = RedditSentimentProvider()
+        from data.hyperliquid_provider import HyperliquidProvider
+        self.hyperliquid = HyperliquidProvider()
 
     NEGATIVE_NEWS_KEYWORDS = [
         "fraud", "lawsuit", "sued", "investigation", "sec probe",
@@ -2020,6 +2022,7 @@ class MarketDataService:
         if self.cmc:
             tasks["cmc_dashboard"] = self.cmc.get_full_dashboard()
 
+        tasks["hyperliquid"] = self.hyperliquid.get_crypto_dashboard()
         tasks["fear_greed"] = self.fear_greed.get_fear_greed_index()
         tasks["crypto_news"] = self.alphavantage.get_news_sentiment("CRYPTO:BTC")
 
@@ -2125,6 +2128,8 @@ class MarketDataService:
 
             "derivatives_tickers": (derivatives or [])[:30],
             "funding_analysis": funding_analysis,
+
+            "hyperliquid": data.get("hyperliquid", {}),
 
             "cg_categories": cg_categories,
             "cmc_categories": cmc_categories,

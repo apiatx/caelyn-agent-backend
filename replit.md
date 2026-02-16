@@ -16,6 +16,7 @@ data/
   scoring_engine.py          - Quantitative pre-scoring engine
   finviz_scraper.py          - Finviz screener integration
   reddit_provider.py         - Reddit/WSB sentiment via ApeWisdom (free)
+  hyperliquid_provider.py    - Hyperliquid perp DEX data (funding rates, OI, volume — free, no key)
   polygon_provider.py        - Polygon.io market data (snapshots, technicals, news)
   stocktwits_provider.py     - StockTwits social sentiment
   stockanalysis_scraper.py   - StockAnalysis financials/overview
@@ -75,8 +76,11 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 ## Cache TTLs (continued)
 - Reddit/ApeWisdom: 5 min
 - Economic calendar (Nasdaq): 5 min
+- Hyperliquid perps: 1 min (real-time data)
+- Hyperliquid funding history: 5 min
 
 ## Recent Changes
+- 2026-02-16: Added Hyperliquid provider (data/hyperliquid_provider.py) — real-time perpetual futures data from the largest on-chain perp DEX. No API key required. Single POST call returns funding rates, OI, volume, prices for 229 perps. Pre-computed analysis: crowded longs, squeeze candidates, funding divergences. BTC/ETH 72-hour funding trend. Integrated into crypto scanner as primary derivatives data source (3 API calls total per scan).
 - 2026-02-16: Added "chat" fast path — conversational queries (opinions, explanations, "what do you think about X?") skip the heavy data pipeline. Only fetches fear & greed + quick ticker data for mentioned tickers (overview, sentiment, analyst ratings). "What do you think about CRDO?" now responds in ~25s vs 60+ seconds. Keyword classifier detects 30+ conversational signals. Claude classifier also supports "chat" category. Full scans still triggered for "find me best trades" etc.
 - 2026-02-16: Added Reddit/WSB sentiment via ApeWisdom API (free, no key). Tracks WSB, r/stocks, r/options, r/investing, r/daytrading trending. Includes mention_change_pct for momentum detection. Integrated into get_market_news_context() and cross-platform trending aggregator.
 - 2026-02-16: Added economic calendar via Nasdaq free API (FMP endpoint 403 on free tier). Fetches high-impact US events (Fed, CPI, NFP, GDP, etc.) for next 3 days. Integrated into news context pipeline.

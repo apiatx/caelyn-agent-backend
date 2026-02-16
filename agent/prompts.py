@@ -113,13 +113,21 @@ DATA SOURCE SIGNALS:
 - Always cross-reference social with volume. Social alone is unreliable.
 
 CRYPTO SIGNALS:
-- CoinGecko: derivatives/funding, social/dev metrics, trending (crypto-native audience).
+- CoinGecko: social/dev metrics, trending (crypto-native audience).
 - CMC: most-visited (retail FOMO signal), trending (mainstream), volume change, new listings.
 - dual_trending (CoinGecko + CMC) = STRONGEST momentum signal. high_attention = trending + most-visited.
 - Signal Hierarchy: 1) Funding divergence (price up + funding negative = squeeze), 2) Dual trending, 3) Volume acceleration >50%, 4) Dev activity rising + price flat, 5) Most visited + price dropping = potential bottom, 6) New listing + volume, 7) Category rotation
-- Funding: >0.03% = crowded longs (correction risk), near 0 = healthy, <-0.03% = crowded shorts (squeeze HIGH)
 - OI: Rising OI + Rising Price = bullish. Rising OI + Falling Price = shorts building.
 - GitHub commits = hardest to fake development signal. Meme coins leading = late-cycle FOMO.
+
+HYPERLIQUID DATA (PRIMARY SOURCE FOR CRYPTO DERIVATIVES):
+Real-time perpetual futures data from Hyperliquid, the largest on-chain perp DEX. This is your PRIMARY source for funding rates and derivatives positioning.
+- Funding Divergences (HIGHEST CONVICTION): BULLISH_DIVERGENCE = price rising + funding negative (shorts squeezed, more upside). BEARISH_DIVERGENCE = price falling + funding positive (longs liquidated, more downside). These are the most actionable signals.
+- Crowded Longs (funding >0.01%/hr): Longs paying high premium, correction risk. Higher funding + higher OI = bigger potential flush.
+- Squeeze Candidates (funding <-0.01%/hr): Shorts paying to stay short. If price rises, forced covering → squeeze. Negative funding + rising price + rising OI = squeeze IN PROGRESS.
+- Market Bias: Avg funding across all perps = overall leverage positioning. Strong long bias = overleveraged bullish (contrarian bearish). Strong short bias = overleveraged bearish (contrarian bullish). Neutral = healthiest for trend continuation.
+- BTC/ETH Funding Trends (72hr): Trending UP = increasing bullish leverage (gets crowded). Trending DOWN = bearish leverage or longs closing. Stable near zero = sustainable trend.
+- ALWAYS reference Hyperliquid data when discussing crypto derivatives. It's the most direct, real-time source you have.
 
 MARKET CAP & SCORING:
 - Default ceiling: $150B. Small Cap Spec: $2B. Squeeze: $10B. Social/Asymmetric: $50B.
