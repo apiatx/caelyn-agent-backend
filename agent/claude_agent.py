@@ -34,8 +34,13 @@ class TradingAgent:
             category = query_info.get("category", "general")
             print(f"[AGENT] Classified as: {category} | filters: {query_info.get('filters', {})} ({time.time() - start_time:.1f}s)")
 
-            market_data = await self._gather_data_safe(query_info)
-            print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
+            if category == "chat":
+                market_data = await self._gather_chat_context(user_prompt, query_info)
+                data_size = len(json.dumps(market_data, default=str)) if market_data else 0
+                print(f"[AGENT] Chat context gathered: {data_size:,} chars ({time.time() - start_time:.1f}s)")
+            else:
+                market_data = await self._gather_data_safe(query_info)
+                print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
 
         raw_response = await self._ask_claude_with_timeout(user_prompt, market_data, history, is_followup=is_followup)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
@@ -99,7 +104,47 @@ class TradingAgent:
             return self._keyword_classify(prompt)
 
     def _keyword_classify(self, query: str) -> dict:
-        q = query.lower()
+        q = query.lower().strip()
+
+        scan_keywords = [
+            "scan", "screen", "trending", "best trades", "briefing", "watchlist",
+            "crypto scan", "macro overview", "sector rotation", "find me",
+            "show me", "pull up", "run a", "search for", "morning briefing",
+            "what's hot", "trending now", "stage 2 breakouts", "best investments",
+            "improving fundamentals", "asymmetric only", "social momentum",
+            "bearish setups", "small cap spec", "crypto scanner", "best stocks",
+            "top movers", "momentum plays", "short squeeze", "volume spike",
+            "earnings watch", "commodities dashboard", "full dashboard",
+            "best swing", "swing trades", "swing setups", "best setups",
+            "trade setups", "breakout", "what's moving", "daily brief",
+            "top picks", "top stocks", "movers today", "analyze my",
+            "review my", "portfolio review", "dashboard",
+        ]
+
+        conversational_signals = [
+            "what do you think", "your opinion", "how would you",
+            "why is", "why are", "what's the difference", "should i",
+            "would you", "tell me about", "how does", "what happens if",
+            "compare", "pros and cons", "risk of", "is it worth",
+            "help me understand", "what's your take", "do you like",
+            "what would you do", "thoughts on",
+            "can you explain", "walk me through",
+            "how do i", "when should", "is it too late", "is it a good time",
+            "bull case", "bear case", "how risky",
+            "is the market", "are we in", "what signals", "your read on",
+            "how do you feel", "where do you see",
+            "opinion on", "view on",
+        ]
+
+        is_conversational = any(signal in q for signal in conversational_signals)
+        has_scan_keyword = any(kw in q for kw in scan_keywords)
+
+        if is_conversational and not has_scan_keyword:
+            tickers = self._extract_tickers(query)
+            if tickers:
+                return {"category": "chat", "tickers": tickers}
+            return {"category": "chat"}
+
         if any(w in q for w in ["crypto", "bitcoin", "btc", "eth", "solana", "altcoin", "defi", "funding rate"]):
             return {"category": "crypto"}
         if any(w in q for w in ["macro", "fed", "interest rate", "inflation", "gdp", "economy", "dollar"]):
@@ -136,6 +181,25 @@ class TradingAgent:
             return {"category": "market_scan"}
         return {"category": "market_scan"}
 
+    def _extract_tickers(self, query: str) -> list:
+        ticker_pattern = re.findall(r'\$?([A-Z]{2,5})\b', query)
+        common = {
+            "THE", "AND", "FOR", "ARE", "BUT", "NOT", "YOU", "ALL", "CAN",
+            "WAS", "ONE", "OUR", "OUT", "HAS", "HOW", "ITS", "MAY", "NEW",
+            "NOW", "OLD", "WAY", "WHO", "DID", "GET", "LET", "SAY", "SHE",
+            "TOO", "USE", "CEO", "IPO", "ETF", "IMO", "FYI", "JUST", "LIKE",
+            "THIS", "THAT", "WITH", "HAVE", "FROM", "BEEN", "WILL", "MORE",
+            "WHEN", "SOME", "THAN", "VERY", "WHAT", "OVER", "GOOD", "BACK",
+            "ALSO", "INTO", "YOUR", "NEXT", "LONG", "BEST", "BUY", "SELL",
+            "HOLD", "SHORT", "PUT", "CALL", "GDP", "CPI", "FED", "SEC",
+            "FDA", "RSI", "SMA", "ATH", "ATL", "YOY", "QOQ", "NYSE",
+            "GIVE", "HIGH", "LOW", "TOP", "YES", "THEY", "THEM", "MUCH",
+            "ONLY", "SURE", "YEAH", "RATE", "TELL", "WHY", "ABOUT",
+            "THINK", "WOULD", "SHOULD", "COULD", "STILL", "WORTH",
+            "RISK", "TAKE", "PROS", "CONS",
+        }
+        return [t for t in ticker_pattern if t not in common]
+
     def _classify_query(self, prompt: str) -> dict:
         try:
             response = self.client.messages.create(
@@ -171,6 +235,67 @@ class TradingAgent:
         except Exception as e:
             print(f"[AGENT] Data gathering error: {e}")
             return {"error": f"Data gathering failed: {str(e)}"}
+
+    async def _gather_chat_context(self, query: str, query_info: dict) -> dict:
+        context = {}
+
+        try:
+            fg = await asyncio.wait_for(
+                self.data.fear_greed.get_fear_greed_index(),
+                timeout=5.0,
+            )
+            if fg:
+                context["fear_greed"] = fg
+        except Exception:
+            pass
+
+        tickers = query_info.get("tickers", [])
+        if not tickers:
+            tickers = self._extract_tickers(query)
+
+        if tickers:
+            print(f"[Chat] Fetching quick data for mentioned tickers: {tickers[:3]}")
+            for ticker in tickers[:3]:
+                ticker_data = {"ticker": ticker}
+
+                try:
+                    overview = await asyncio.wait_for(
+                        self.data.stockanalysis.get_overview(ticker),
+                        timeout=6.0,
+                    )
+                    if overview:
+                        ticker_data.update(overview)
+                except Exception:
+                    pass
+
+                try:
+                    sentiment = await asyncio.wait_for(
+                        self.data.stocktwits.get_sentiment(ticker),
+                        timeout=5.0,
+                    )
+                    if sentiment:
+                        ticker_data["social_sentiment"] = sentiment
+                except Exception:
+                    pass
+
+                try:
+                    ratings = await asyncio.wait_for(
+                        self.data.stockanalysis.get_analyst_ratings(ticker),
+                        timeout=6.0,
+                    )
+                    if ratings:
+                        ticker_data["analyst_ratings"] = ratings
+                except Exception:
+                    pass
+
+                context[f"ticker_{ticker}"] = ticker_data
+                if len(tickers) > 1:
+                    await asyncio.sleep(0.5)
+
+        if not context:
+            return None
+
+        return context
 
     async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False) -> str:
         try:
@@ -306,6 +431,12 @@ class TradingAgent:
                                "FULL", "HIGH", "LOW", "TOP"}
                 tickers = [t for t in ticker_pattern if t not in common_words][:25]
             return await self.data.analyze_portfolio(tickers)
+
+        elif category == "chat":
+            return await self._gather_chat_context(
+                query_info.get("original_prompt", ""),
+                query_info,
+            ) or {}
 
         else:
             return {}

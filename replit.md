@@ -77,6 +77,7 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Economic calendar (Nasdaq): 5 min
 
 ## Recent Changes
+- 2026-02-16: Added "chat" fast path — conversational queries (opinions, explanations, "what do you think about X?") skip the heavy data pipeline. Only fetches fear & greed + quick ticker data for mentioned tickers (overview, sentiment, analyst ratings). "What do you think about CRDO?" now responds in ~25s vs 60+ seconds. Keyword classifier detects 30+ conversational signals. Claude classifier also supports "chat" category. Full scans still triggered for "find me best trades" etc.
 - 2026-02-16: Added Reddit/WSB sentiment via ApeWisdom API (free, no key). Tracks WSB, r/stocks, r/options, r/investing, r/daytrading trending. Includes mention_change_pct for momentum detection. Integrated into get_market_news_context() and cross-platform trending aggregator.
 - 2026-02-16: Added economic calendar via Nasdaq free API (FMP endpoint 403 on free tier). Fetches high-impact US events (Fed, CPI, NFP, GDP, etc.) for next 3 days. Integrated into news context pipeline.
 - 2026-02-16: Updated system prompt with economic calendar and Reddit/WSB interpretation guides.
