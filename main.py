@@ -8,6 +8,8 @@ from typing import List, Optional
 
 import json as _json
 
+from pathlib import Path
+
 from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY
 from data.market_data_service import MarketDataService
 from agent.claude_agent import TradingAgent
@@ -302,3 +304,177 @@ async def health_check(request: Request):
         "errors": errors,
         "status": "ok" if (claude_ok and finviz_ok and sa_ok) else "degraded",
     }
+
+
+# ============================================================
+# Portfolio Holdings CRUD
+# ============================================================
+
+PORTFOLIO_FILE = Path("data/portfolio_holdings.json")
+
+
+@app.get("/api/portfolio/holdings")
+async def get_holdings(api_key: str = Header(None, alias="X-API-Key")):
+    """Return saved portfolio holdings (JSON file, same approach as chat history)."""
+    if not api_key or api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    if not PORTFOLIO_FILE.exists():
+        return {"holdings": []}
+    try:
+        with open(PORTFOLIO_FILE) as f:
+            data = _json.load(f)
+        if isinstance(data, dict) and "holdings" in data:
+            return data
+        return {"holdings": []}
+    except Exception:
+        return {"holdings": []}
+
+
+@app.post("/api/portfolio/holdings")
+async def save_holdings(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """Save portfolio holdings. Expects {holdings: [{ticker, shares, avg_cost, ...}]}."""
+    if not api_key or api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    body = await request.json()
+    if not isinstance(body, dict) or "holdings" not in body:
+        raise HTTPException(status_code=400, detail="Body must be {holdings: [...]}")
+    if not isinstance(body["holdings"], list):
+        raise HTTPException(status_code=400, detail="holdings must be a list")
+    PORTFOLIO_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(PORTFOLIO_FILE, "w") as f:
+        _json.dump(body, f)
+    return {"success": True}
+
+
+# ============================================================
+# Portfolio Quotes (batch price lookup)
+# ============================================================
+
+@app.get("/api/portfolio/quotes")
+async def get_portfolio_quotes(request: Request, tickers: str = "", api_key: str = Header(None, alias="X-API-Key")):
+    """Get current quotes for a list of tickers — 1 API call for all tickers."""
+    import httpx
+
+    if not api_key or api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    tickers_list = request.query_params.get("tickers", "")
+    if not tickers_list:
+        return {"quotes": {}}
+
+    ticker_str = ",".join(tickers_list.split(",")[:25])
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"https://financialmodelingprep.com/api/v3/quote/{ticker_str}",
+                params={"apikey": FMP_API_KEY},
+            )
+
+        if resp.status_code != 200:
+            return {"quotes": {}, "error": f"FMP returned {resp.status_code}"}
+
+        data = resp.json()
+        quotes = {}
+        for item in data:
+            symbol = item.get("symbol", "")
+            quotes[symbol] = {
+                "price": item.get("price"),
+                "change": item.get("change"),
+                "change_pct": item.get("changesPercentage"),
+                "day_high": item.get("dayHigh"),
+                "day_low": item.get("dayLow"),
+                "year_high": item.get("yearHigh"),
+                "year_low": item.get("yearLow"),
+                "market_cap": item.get("marketCap"),
+                "volume": item.get("volume"),
+                "avg_volume": item.get("avgVolume"),
+                "pe": item.get("pe"),
+                "eps": item.get("eps"),
+                "earnings_date": item.get("earningsAnnouncement"),
+                "sector": item.get("sector", ""),
+            }
+
+        return {"quotes": quotes}
+
+    except Exception as e:
+        return {"quotes": {}, "error": str(e)}
+
+
+# ============================================================
+# Portfolio Events (earnings + dividends for holdings)
+# ============================================================
+
+@app.get("/api/portfolio/events")
+async def get_portfolio_events(api_key: str = Header(None, alias="X-API-Key")):
+    """Get upcoming earnings and dividend dates for portfolio holdings."""
+    import httpx
+    from datetime import datetime, timedelta
+
+    if not api_key or api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    if not PORTFOLIO_FILE.exists():
+        return {"events": []}
+    try:
+        with open(PORTFOLIO_FILE) as f:
+            data = _json.load(f)
+    except Exception:
+        return {"events": []}
+
+    tickers = [t["ticker"] for t in data.get("holdings", []) if "ticker" in t]
+    if not tickers:
+        return {"events": []}
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    future = (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d")
+
+    events = []
+    errors = []
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://financialmodelingprep.com/api/v3/earning_calendar",
+                params={"from": today, "to": future, "apikey": FMP_API_KEY},
+            )
+        if resp.status_code == 200:
+            for item in resp.json():
+                if item.get("symbol") in tickers:
+                    events.append({
+                        "ticker": item["symbol"],
+                        "type": "earnings",
+                        "date": item.get("date"),
+                        "eps_estimated": item.get("epsEstimated"),
+                        "revenue_estimate": item.get("revenueEstimated"),
+                    })
+        else:
+            errors.append(f"earnings_calendar: FMP {resp.status_code}")
+    except Exception as e:
+        errors.append(f"earnings_calendar: {str(e)}")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://financialmodelingprep.com/api/v3/stock_dividend_calendar",
+                params={"from": today, "to": future, "apikey": FMP_API_KEY},
+            )
+        if resp.status_code == 200:
+            for item in resp.json():
+                if item.get("symbol") in tickers:
+                    events.append({
+                        "ticker": item["symbol"],
+                        "type": "dividend",
+                        "date": item.get("date"),
+                        "yield": item.get("yield"),
+                    })
+        else:
+            errors.append(f"dividend_calendar: FMP {resp.status_code}")
+    except Exception as e:
+        errors.append(f"dividend_calendar: {str(e)}")
+
+    events.sort(key=lambda x: x.get("date", ""))
+    result = {"events": events}
+    if errors:
+        result["errors"] = errors
+    return result
