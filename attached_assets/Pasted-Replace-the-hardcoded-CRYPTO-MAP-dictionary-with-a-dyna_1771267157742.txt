@@ -1,0 +1,170 @@
+Replace the hardcoded CRYPTO_MAP dictionary with a dynamic lookup that supports ALL CoinGecko coins. Instead of mapping 25 coins manually, fetch CoinGecko's full coin list, cache it, and look up any ticker the user enters.
+Add this helper method that runs once on startup and caches the full symbol-to-ID mapping:
+python# In a new file or at the top of the portfolio route file:
+
+import asyncio
+import httpx
+from data.cache import cache
+
+COINGECKO_COIN_LIST_CACHE_KEY = "cg:coin_list"
+COINGECKO_COIN_LIST_TTL = 86400  # Cache for 24 hours — the list barely changes
+
+async def get_coingecko_symbol_map() -> dict:
+    """
+    Fetch CoinGecko's full coin list and build a symbol -> id mapping.
+    Returns: {"BTC": "bitcoin", "ETH": "ethereum", "HYPE": "hyperliquid", ...}
+    Cached for 24 hours. ~14,000 coins.
+    """
+    cached = cache.get(COINGECKO_COIN_LIST_CACHE_KEY)
+    if cached is not None:
+        return cached
+    
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get("https://api.coingecko.com/api/v3/coins/list")
+        
+        if resp.status_code != 200:
+            print(f"[COINGECKO] Coin list fetch failed: {resp.status_code}")
+            return {}
+        
+        coins = resp.json()
+        
+        # Build symbol -> id mapping
+        # CoinGecko returns: [{"id": "bitcoin", "symbol": "btc", "name": "Bitcoin"}, ...]
+        symbol_map = {}
+        for coin in coins:
+            symbol = coin.get("symbol", "").upper()
+            coin_id = coin.get("id", "")
+            
+            # If there's a conflict (multiple coins with same symbol),
+            # prefer the one with highest market cap (which is usually listed first)
+            # CoinGecko lists them roughly by popularity
+            if symbol not in symbol_map:
+                symbol_map[symbol] = coin_id
+        
+        print(f"[COINGECKO] Loaded {len(symbol_map)} coin symbols")
+        cache.set(COINGECKO_COIN_LIST_CACHE_KEY, symbol_map, COINGECKO_COIN_LIST_TTL)
+        return symbol_map
+    
+    except Exception as e:
+        print(f"[COINGECKO] Error fetching coin list: {e}")
+        return {}
+Then update the crypto lookup section in /api/portfolio/quotes to use this dynamic map instead of the hardcoded CRYPTO_MAP:
+python    # Step 3: Try CoinGecko for missing tickers
+    if missing_tickers:
+        # Get the full symbol map (cached for 24h)
+        symbol_map = await get_coingecko_symbol_map()
+        
+        crypto_ids_to_fetch = {}  # coingecko_id -> original_ticker
+        still_unresolved = []
+        
+        for ticker in missing_tickers:
+            # Check direct symbol match
+            cg_id = symbol_map.get(ticker)
+            if cg_id:
+                crypto_ids_to_fetch[cg_id] = ticker
+            # Check without "USD" suffix (e.g., HYPEUSD -> HYPE)
+            elif ticker.endswith("USD") and symbol_map.get(ticker[:-3]):
+                cg_id = symbol_map.get(ticker[:-3])
+                crypto_ids_to_fetch[cg_id] = ticker
+            # Check without "USDT" suffix
+            elif ticker.endswith("USDT") and symbol_map.get(ticker[:-4]):
+                cg_id = symbol_map.get(ticker[:-4])
+                crypto_ids_to_fetch[cg_id] = ticker
+            else:
+                still_unresolved.append(ticker)
+        
+        # Fetch prices from CoinGecko in batches of 50
+        if crypto_ids_to_fetch:
+            ids_list = list(crypto_ids_to_fetch.keys())
+            
+            for i in range(0, len(ids_list), 50):
+                batch = ids_list[i:i+50]
+                ids_str = ",".join(batch)
+                
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        resp = await client.get(
+                            "https://api.coingecko.com/api/v3/simple/price",
+                            params={
+                                "ids": ids_str,
+                                "vs_currencies": "usd",
+                                "include_24hr_change": "true",
+                                "include_24hr_vol": "true",
+                                "include_market_cap": "true",
+                            },
+                        )
+                    if resp.status_code == 200:
+                        cg_data = resp.json()
+                        for cg_id, price_data in cg_data.items():
+                            original_ticker = crypto_ids_to_fetch.get(cg_id, cg_id.upper())
+                            price = price_data.get("usd", 0)
+                            change_pct = price_data.get("usd_24h_change", 0)
+                            
+                            quotes[original_ticker] = {
+                                "price": price,
+                                "change": round(price * (change_pct / 100), 4) if change_pct else 0,
+                                "change_pct": round(change_pct, 2) if change_pct else 0,
+                                "market_cap": price_data.get("usd_market_cap", 0),
+                                "volume": price_data.get("usd_24h_vol", 0),
+                                "source": "coingecko",
+                                "asset_type": "crypto",
+                            }
+                            print(f"[PORTFOLIO] CoinGecko: {original_ticker} = ${price}")
+                except Exception as e:
+                    print(f"[PORTFOLIO] CoinGecko batch error: {e}")
+                
+                # Rate limit between batches
+                if i + 50 < len(ids_list):
+                    await asyncio.sleep(1.0)
+        
+        # For still unresolved tickers, try FMP commodity/forex endpoints
+        COMMODITY_SYMBOLS = {
+            "SILVER": "SIUSD",
+            "GOLD": "GCUSD",
+            "OIL": "CLUSD",
+            "CRUDE": "CLUSD",
+            "NATGAS": "NGUSD",
+            "COPPER": "HGUSD",
+            "PLATINUM": "PLUSD",
+            "PALLADIUM": "PAUSD",
+            "WHEAT": "ZSUSD",
+            "CORN": "ZCUSD",
+        }
+        
+        for ticker in still_unresolved:
+            fmp_symbol = COMMODITY_SYMBOLS.get(ticker)
+            if fmp_symbol:
+                try:
+                    async with httpx.AsyncClient(timeout=8.0) as client:
+                        resp = await client.get(
+                            f"https://financialmodelingprep.com/api/v3/quote/{fmp_symbol}",
+                            params={"apikey": FMP_API_KEY},
+                        )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data:
+                            item = data[0]
+                            quotes[ticker] = {
+                                "price": item.get("price"),
+                                "change": item.get("change"),
+                                "change_pct": item.get("changesPercentage"),
+                                "source": "fmp_commodity",
+                                "asset_type": "commodity",
+                            }
+                            print(f"[PORTFOLIO] Commodity: {ticker} = ${item.get('price')}")
+                except Exception as e:
+                    print(f"[PORTFOLIO] Commodity {ticker} error: {e}")
+        
+        # Final log of what we couldn't find
+        final_missing = [t for t in tickers if t.upper() not in quotes]
+        if final_missing:
+            print(f"[PORTFOLIO] No price data found for: {final_missing}")
+This means users can enter ANY crypto ticker — HYPE, PEPE, WIF, TAO, RENDER, whatever — and it will automatically resolve to the correct CoinGecko ID and fetch the price. No hardcoding needed. The full CoinGecko coin list gets fetched once per day and cached.
+The lookup order is now:
+
+FMP batch quote (stocks, ETFs) — 1 API call for all tickers
+CoinGecko dynamic lookup (any crypto) — 1 API call per batch of 50
+FMP commodities (gold, silver, oil, etc.) — 1 call per commodity
+
+Re-deploy after changes.

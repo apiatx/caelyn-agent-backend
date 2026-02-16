@@ -350,83 +350,190 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
 # Portfolio Quotes (batch price lookup)
 # ============================================================
 
+CRYPTO_MAP = {
+    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
+    "HYPE": "hyperliquid", "HYPEUSD": "hyperliquid",
+    "DOGE": "dogecoin", "ADA": "cardano", "XRP": "ripple",
+    "AVAX": "avalanche-2", "DOT": "polkadot", "MATIC": "matic-network",
+    "LINK": "chainlink", "UNI": "uniswap", "AAVE": "aave",
+    "NEAR": "near", "SUI": "sui", "APT": "aptos",
+    "ARB": "arbitrum", "OP": "optimism", "INJ": "injective-protocol",
+    "TIA": "celestia", "SEI": "sei-network", "PEPE": "pepe",
+    "WIF": "dogwifcoin", "RENDER": "render-token", "FET": "fetch-ai",
+    "TAO": "bittensor", "ATOM": "cosmos", "FIL": "filecoin",
+    "LTC": "litecoin", "BCH": "bitcoin-cash", "SHIB": "shiba-inu",
+}
+
+COMMODITY_MAP = {
+    "SILVER": "SIUSD", "GOLD": "GCUSD",
+}
+
+
 @app.post("/api/portfolio/quotes")
 async def get_portfolio_quotes(request: Request, api_key: str = Header(None, alias="X-API-Key")):
-    """Get current quotes for a list of tickers — 1 API call for all tickers."""
+    """Get current quotes for a list of tickers — stocks via FMP, crypto via CoinGecko, commodities via FMP symbols."""
     import httpx
+    import asyncio
 
     if not api_key or api_key != AGENT_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
 
     body = await request.json()
-    tickers = body.get("tickers", [])
+    tickers = [t.upper() for t in body.get("tickers", []) if t][:25]
     print(f"[PORTFOLIO] Quotes requested for: {tickers}")
 
     if not tickers:
-        print("[PORTFOLIO] No tickers provided")
         return {"quotes": {}}
 
-    import asyncio
+    quotes = {}
 
-    ticker_str = ",".join(tickers[:25])
+    stock_tickers = []
+    crypto_tickers = []
+    commodity_tickers = []
+    for t in tickers:
+        if t in COMMODITY_MAP:
+            commodity_tickers.append(t)
+        elif t in CRYPTO_MAP:
+            crypto_tickers.append(t)
+        else:
+            stock_tickers.append(t)
 
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            full_resp = await client.get(
-                "https://financialmodelingprep.com/stable/quote",
-                params={"symbol": ticker_str, "apikey": FMP_API_KEY},
-            )
+    print(f"[PORTFOLIO] Stocks: {stock_tickers}, Crypto: {crypto_tickers}, Commodities: {commodity_tickers}")
 
-            if full_resp.status_code == 200:
-                data = full_resp.json()
-                print(f"[PORTFOLIO] FMP stable/quote returned {len(data)} quotes")
-            else:
-                print(f"[PORTFOLIO] stable/quote returned {full_resp.status_code}, fetching individual quote-short")
-                async def fetch_one(c, sym):
-                    try:
-                        r = await c.get(
-                            "https://financialmodelingprep.com/stable/quote-short",
-                            params={"symbol": sym, "apikey": FMP_API_KEY},
-                        )
-                        if r.status_code == 200:
-                            items = r.json()
-                            return items[0] if items else None
-                    except Exception:
-                        pass
-                    return None
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        if stock_tickers:
+            ticker_str = ",".join(stock_tickers)
+            try:
+                full_resp = await client.get(
+                    "https://financialmodelingprep.com/stable/quote",
+                    params={"symbol": ticker_str, "apikey": FMP_API_KEY},
+                )
+                if full_resp.status_code == 200:
+                    for item in full_resp.json():
+                        symbol = item.get("symbol", "")
+                        quotes[symbol] = {
+                            "price": item.get("price"),
+                            "change": item.get("change"),
+                            "change_pct": item.get("changesPercentage"),
+                            "day_high": item.get("dayHigh"),
+                            "day_low": item.get("dayLow"),
+                            "year_high": item.get("yearHigh"),
+                            "year_low": item.get("yearLow"),
+                            "market_cap": item.get("marketCap"),
+                            "volume": item.get("volume"),
+                            "avg_volume": item.get("avgVolume"),
+                            "pe": item.get("pe"),
+                            "eps": item.get("eps"),
+                            "earnings_date": item.get("earningsAnnouncement"),
+                            "sector": item.get("sector", ""),
+                            "source": "fmp",
+                        }
+                    print(f"[PORTFOLIO] FMP stable/quote returned {len(quotes)} quotes")
+                else:
+                    print(f"[PORTFOLIO] stable/quote returned {full_resp.status_code}, trying quote-short")
+                    async def fetch_one(sym):
+                        try:
+                            r = await client.get(
+                                "https://financialmodelingprep.com/stable/quote-short",
+                                params={"symbol": sym, "apikey": FMP_API_KEY},
+                            )
+                            if r.status_code == 200:
+                                items = r.json()
+                                return items[0] if items else None
+                        except Exception:
+                            pass
+                        return None
 
-                results = await asyncio.gather(*[fetch_one(client, t) for t in tickers[:25]])
-                data = [r for r in results if r]
-                print(f"[PORTFOLIO] FMP quote-short returned {len(data)} quotes (individual calls)")
+                    results = await asyncio.gather(*[fetch_one(t) for t in stock_tickers])
+                    for item in results:
+                        if item:
+                            symbol = item.get("symbol", "")
+                            quotes[symbol] = {
+                                "price": item.get("price"),
+                                "change": item.get("change"),
+                                "change_pct": item.get("changesPercentage"),
+                                "volume": item.get("volume"),
+                                "source": "fmp_short",
+                            }
+                    print(f"[PORTFOLIO] FMP quote-short returned {sum(1 for r in results if r)} quotes")
+            except Exception as e:
+                print(f"[PORTFOLIO] FMP error: {e}")
 
-        quotes = {}
-        for item in data:
-            symbol = item.get("symbol", "")
-            quotes[symbol] = {
-                "price": item.get("price"),
-                "change": item.get("change"),
-                "change_pct": item.get("changesPercentage"),
-                "day_high": item.get("dayHigh"),
-                "day_low": item.get("dayLow"),
-                "year_high": item.get("yearHigh"),
-                "year_low": item.get("yearLow"),
-                "market_cap": item.get("marketCap"),
-                "volume": item.get("volume"),
-                "avg_volume": item.get("avgVolume"),
-                "pe": item.get("pe"),
-                "eps": item.get("eps"),
-                "earnings_date": item.get("earningsAnnouncement"),
-                "sector": item.get("sector", ""),
-            }
+            missing_stocks = [t for t in stock_tickers if t not in quotes]
+            if missing_stocks:
+                print(f"[PORTFOLIO] FMP missed stocks, trying as crypto: {missing_stocks}")
+                for t in missing_stocks:
+                    crypto_tickers.append(t)
 
-        print(f"[PORTFOLIO] Returning quotes for: {list(quotes.keys())}")
-        return {"quotes": quotes}
+        if crypto_tickers:
+            coingecko_ids = []
+            id_to_ticker = {}
+            for t in crypto_tickers:
+                cg_id = CRYPTO_MAP.get(t, t.lower())
+                coingecko_ids.append(cg_id)
+                id_to_ticker[cg_id] = t
 
-    except Exception as e:
-        print(f"[PORTFOLIO] Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"quotes": {}, "error": str(e)}
+            try:
+                ids_str = ",".join(coingecko_ids)
+                resp = await client.get(
+                    "https://api.coingecko.com/api/v3/simple/price",
+                    params={
+                        "ids": ids_str,
+                        "vs_currencies": "usd",
+                        "include_24hr_change": "true",
+                        "include_24hr_vol": "true",
+                        "include_market_cap": "true",
+                    },
+                )
+                if resp.status_code == 200:
+                    cg_data = resp.json()
+                    for cg_id, price_data in cg_data.items():
+                        ticker = id_to_ticker.get(cg_id, cg_id.upper())
+                        price = price_data.get("usd", 0)
+                        change_pct = price_data.get("usd_24h_change", 0)
+                        quotes[ticker] = {
+                            "price": price,
+                            "change": round(price * (change_pct / 100), 4) if change_pct else 0,
+                            "change_pct": round(change_pct, 2) if change_pct else 0,
+                            "market_cap": price_data.get("usd_market_cap"),
+                            "volume": price_data.get("usd_24h_vol"),
+                            "source": "coingecko",
+                        }
+                        print(f"[PORTFOLIO] CoinGecko: {ticker} = ${price}")
+                else:
+                    print(f"[PORTFOLIO] CoinGecko error: {resp.status_code}")
+            except Exception as e:
+                print(f"[PORTFOLIO] CoinGecko error: {e}")
+
+        if commodity_tickers:
+            for ticker in commodity_tickers:
+                fmp_symbol = COMMODITY_MAP[ticker]
+                try:
+                    resp = await client.get(
+                        "https://financialmodelingprep.com/stable/quote-short",
+                        params={"symbol": fmp_symbol, "apikey": FMP_API_KEY},
+                    )
+                    if resp.status_code == 200:
+                        items = resp.json()
+                        if items:
+                            item = items[0]
+                            quotes[ticker] = {
+                                "price": item.get("price"),
+                                "change": item.get("change"),
+                                "change_pct": item.get("changesPercentage"),
+                                "volume": item.get("volume"),
+                                "source": "fmp_commodity",
+                            }
+                            print(f"[PORTFOLIO] Commodity: {ticker} = ${item.get('price')}")
+                except Exception as e:
+                    print(f"[PORTFOLIO] Commodity {ticker} error: {e}")
+
+    still_missing = [t for t in tickers if t not in quotes]
+    if still_missing:
+        print(f"[PORTFOLIO] Still no price data for: {still_missing}")
+
+    print(f"[PORTFOLIO] Returning quotes for: {list(quotes.keys())}")
+    return {"quotes": quotes}
 
 
 # ============================================================
@@ -523,9 +630,13 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
 
     body = await request.json()
+    print(f"[PORTFOLIO_REVIEW] === ENDPOINT HIT ===")
+    print(f"[PORTFOLIO_REVIEW] Request keys: {list(body.keys())}")
     holdings = body.get("holdings", [])
+    print(f"[PORTFOLIO_REVIEW] Holdings count: {len(holdings)}")
 
     if not holdings:
+        print("[PORTFOLIO_REVIEW] No holdings found in request!")
         return {
             "type": "chat",
             "analysis": "",
@@ -535,7 +646,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             },
         }
 
-    print(f"[PORTFOLIO_REVIEW] Reviewing {len(holdings)} holdings")
+    print(f"[PORTFOLIO_REVIEW] Reviewing {len(holdings)} holdings: {[h.get('ticker') for h in holdings]}")
 
     holdings_text = ""
     for h in holdings:

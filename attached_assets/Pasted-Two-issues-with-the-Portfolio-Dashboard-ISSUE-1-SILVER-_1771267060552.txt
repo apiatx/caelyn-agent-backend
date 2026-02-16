@@ -1,0 +1,219 @@
+Two issues with the Portfolio Dashboard:
+ISSUE 1: SILVER and HYPEUSD show no price data
+The portfolio quotes endpoint only checks FMP (stocks). It needs to also check CoinGecko for crypto assets. When FMP returns no data for a ticker, fall back to CoinGecko.
+Update /api/portfolio/quotes:
+python@app.post("/api/portfolio/quotes")
+async def get_portfolio_quotes(request: dict):
+    tickers = request.get("tickers", [])
+    if not tickers:
+        return {"quotes": {}}
+    
+    quotes = {}
+    missing_tickers = []
+    
+    # Step 1: Try FMP for all tickers (batch call)
+    ticker_str = ",".join(tickers[:25])
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"https://financialmodelingprep.com/api/v3/quote/{ticker_str}",
+                params={"apikey": FMP_API_KEY},
+            )
+        if resp.status_code == 200:
+            data = resp.json()
+            for item in data:
+                symbol = item.get("symbol", "")
+                quotes[symbol] = {
+                    "price": item.get("price"),
+                    "change": item.get("change"),
+                    "change_pct": item.get("changesPercentage"),
+                    "day_high": item.get("dayHigh"),
+                    "day_low": item.get("dayLow"),
+                    "year_high": item.get("yearHigh"),
+                    "year_low": item.get("yearLow"),
+                    "market_cap": item.get("marketCap"),
+                    "volume": item.get("volume"),
+                    "avg_volume": item.get("avgVolume"),
+                    "pe": item.get("pe"),
+                    "eps": item.get("eps"),
+                    "earnings_date": item.get("earningsAnnouncement"),
+                    "sector": item.get("sector", ""),
+                    "source": "fmp",
+                }
+    except Exception as e:
+        print(f"[PORTFOLIO] FMP error: {e}")
+    
+    # Step 2: Find tickers FMP didn't return
+    for ticker in tickers:
+        if ticker.upper() not in quotes:
+            missing_tickers.append(ticker.upper())
+    
+    print(f"[PORTFOLIO] FMP returned: {list(quotes.keys())}, Missing: {missing_tickers}")
+    
+    # Step 3: Try CoinGecko for missing tickers (they might be crypto)
+    # Map common crypto ticker names to CoinGecko IDs
+    CRYPTO_MAP = {
+        "BTC": "bitcoin",
+        "ETH": "ethereum",
+        "SOL": "solana",
+        "HYPE": "hyperliquid",
+        "HYPEUSD": "hyperliquid",
+        "DOGE": "dogecoin",
+        "ADA": "cardano",
+        "XRP": "ripple",
+        "AVAX": "avalanche-2",
+        "DOT": "polkadot",
+        "MATIC": "matic-network",
+        "LINK": "chainlink",
+        "UNI": "uniswap",
+        "AAVE": "aave",
+        "NEAR": "near",
+        "SUI": "sui",
+        "APT": "aptos",
+        "ARB": "arbitrum",
+        "OP": "optimism",
+        "INJ": "injective-protocol",
+        "TIA": "celestia",
+        "SEI": "sei-network",
+        "PEPE": "pepe",
+        "WIF": "dogwifcoin",
+        "RENDER": "render-token",
+        "FET": "fetch-ai",
+        "TAO": "bittensor",
+        "SILVER": None,  # Not crypto — handle separately
+        "GOLD": None,
+        "SLV": None,  # This is a stock ETF
+        "GLD": None,
+    }
+    
+    # Also map commodity-like tickers to FMP commodity endpoints
+    COMMODITY_MAP = {
+        "SILVER": "SIUSD",   # Silver futures
+        "GOLD": "GCUSD",     # Gold futures
+    }
+    
+    crypto_to_fetch = []
+    commodity_to_fetch = []
+    
+    for ticker in missing_tickers:
+        if ticker in COMMODITY_MAP:
+            commodity_to_fetch.append(ticker)
+        elif ticker in CRYPTO_MAP and CRYPTO_MAP[ticker] is not None:
+            crypto_to_fetch.append(ticker)
+        else:
+            # Try a fuzzy match — search CoinGecko by symbol
+            crypto_to_fetch.append(ticker)
+    
+    # Fetch crypto prices from CoinGecko
+    if crypto_to_fetch:
+        coingecko_ids = []
+        ticker_to_cg_id = {}
+        
+        for ticker in crypto_to_fetch:
+            cg_id = CRYPTO_MAP.get(ticker)
+            if cg_id:
+                coingecko_ids.append(cg_id)
+                ticker_to_cg_id[cg_id] = ticker
+            else:
+                # Try using ticker as-is (lowercase) as CoinGecko ID
+                coingecko_ids.append(ticker.lower())
+                ticker_to_cg_id[ticker.lower()] = ticker
+        
+        if coingecko_ids:
+            try:
+                ids_str = ",".join(coingecko_ids)
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(
+                        "https://api.coingecko.com/api/v3/simple/price",
+                        params={
+                            "ids": ids_str,
+                            "vs_currencies": "usd",
+                            "include_24hr_change": "true",
+                            "include_24hr_vol": "true",
+                            "include_market_cap": "true",
+                        },
+                    )
+                if resp.status_code == 200:
+                    cg_data = resp.json()
+                    for cg_id, price_data in cg_data.items():
+                        original_ticker = ticker_to_cg_id.get(cg_id, cg_id.upper())
+                        price = price_data.get("usd", 0)
+                        change_pct = price_data.get("usd_24h_change", 0)
+                        
+                        quotes[original_ticker] = {
+                            "price": price,
+                            "change": round(price * (change_pct / 100), 4) if change_pct else 0,
+                            "change_pct": round(change_pct, 2) if change_pct else 0,
+                            "market_cap": price_data.get("usd_market_cap", 0),
+                            "volume": price_data.get("usd_24h_vol", 0),
+                            "source": "coingecko",
+                        }
+                        print(f"[PORTFOLIO] CoinGecko: {original_ticker} = ${price}")
+                else:
+                    print(f"[PORTFOLIO] CoinGecko error: {resp.status_code}")
+            except Exception as e:
+                print(f"[PORTFOLIO] CoinGecko error: {e}")
+    
+    # Fetch commodity prices from FMP
+    if commodity_to_fetch:
+        for ticker in commodity_to_fetch:
+            fmp_symbol = COMMODITY_MAP.get(ticker)
+            if fmp_symbol:
+                try:
+                    async with httpx.AsyncClient(timeout=8.0) as client:
+                        resp = await client.get(
+                            f"https://financialmodelingprep.com/api/v3/quote/{fmp_symbol}",
+                            params={"apikey": FMP_API_KEY},
+                        )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data:
+                            item = data[0]
+                            quotes[ticker] = {
+                                "price": item.get("price"),
+                                "change": item.get("change"),
+                                "change_pct": item.get("changesPercentage"),
+                                "source": "fmp_commodity",
+                            }
+                            print(f"[PORTFOLIO] FMP commodity: {ticker} = ${item.get('price')}")
+                except Exception as e:
+                    print(f"[PORTFOLIO] Commodity {ticker} error: {e}")
+    
+    # Log what's still missing
+    still_missing = [t for t in tickers if t.upper() not in quotes]
+    if still_missing:
+        print(f"[PORTFOLIO] Still no price data for: {still_missing}")
+    
+    return {"quotes": quotes}
+```
+
+### ISSUE 2: AI Portfolio Review still returns "No Analysis Returned"
+
+**Please verify:**
+
+1. **Does the `/api/portfolio/review` endpoint exist?** Search for `portfolio/review` in `main.py`. If it doesn't exist, add it using the code from the previous prompt I gave.
+
+2. **Is the frontend calling `/api/portfolio/review` or is it still calling `/api/watchlist`?** Check the frontend code for the AI Portfolio Review button's onClick handler. It should be calling:
+```
+   POST /api/portfolio/review
+   body: { "holdings": [ {"ticker": "IREN", "shares": 100, "avg_cost": 10.00}, ... ] }
+
+Add logging at the very start of the endpoint to confirm it's being hit:
+
+python   @app.post("/api/portfolio/review")
+   async def review_portfolio(request: dict):
+       print(f"[PORTFOLIO_REVIEW] === ENDPOINT HIT ===")
+       print(f"[PORTFOLIO_REVIEW] Request: {request}")
+       holdings = request.get("holdings", [])
+       print(f"[PORTFOLIO_REVIEW] Holdings count: {len(holdings)}")
+       
+       if not holdings:
+           print("[PORTFOLIO_REVIEW] No holdings found in request!")
+           return {"display_type": "chat", "message": "No holdings to review."}
+       # ... rest of the code
+
+Check server logs after clicking the button. If you see "ENDPOINT HIT" but "No holdings found", the frontend is sending the data in a different format. If you don't see "ENDPOINT HIT" at all, the frontend is calling the wrong URL.
+The frontend might be checking for a field that doesn't exist in the response. Make sure the frontend displays the message field from the response. The response will be:
+
+json   {"display_type": "chat", "message": "## IREN - BUY MORE\n\nStrong AI infrastructure play..."}
+Re-deploy and test. Check server logs for the [PORTFOLIO] and [PORTFOLIO_REVIEW] print statements to see exactly what's happening.
