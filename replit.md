@@ -20,6 +20,7 @@ The platform is built on FastAPI, offering a robust and scalable backend.
 - **Error Handling & Reliability**: Includes comprehensive timeout mechanisms (global request, classifier, data gathering, Claude API) and keyword-based fallback classification for enhanced robustness.
 - **UI/UX Considerations**: The API is designed to deliver concise, dense trading terminal-style JSON output. Analysis results consistently include TradingView chart links for easy visualization.
 - **Portfolio Management**: Features include portfolio review capabilities for up to 25 tickers with dual scoring (trade + investment metrics) and endpoints for managing holdings and events.
+- **Portfolio Quotes**: Dynamic multi-source pricing — FMP for stocks/ETFs, CoinGecko for any crypto (dynamic coin list cached 24h, ~14k coins), FMP commodity symbols for metals/energy. Priority overrides ensure major crypto (BTC, ETH, etc.) resolve correctly. Lookup order: FMP batch → commodities → CoinGecko dynamic.
 
 ## External Dependencies
 The platform integrates with a wide array of third-party services and APIs to gather comprehensive market data and provide AI capabilities:
