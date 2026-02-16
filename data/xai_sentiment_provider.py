@@ -1,0 +1,284 @@
+"""
+xAI Grok X Sentiment Provider
+
+Uses Grok's native x_search tool to scan X/Twitter for real-time
+social sentiment on stocks and crypto. Grok searches X autonomously
+and returns structured sentiment analysis.
+
+This is an OpenAI-compatible API — xAI uses the same interface.
+"""
+
+import json
+import httpx
+import asyncio
+import re
+
+
+class XAISentimentProvider:
+    """Fetch real-time X/Twitter sentiment via Grok's x_search tool."""
+
+    BASE_URL = "https://api.x.ai/v1"
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.model = "grok-4-1-fast-non-reasoning"
+        self.headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+
+    async def get_ticker_sentiment(self, ticker: str, asset_type: str = "stock") -> dict:
+        """
+        Get X/Twitter sentiment for a single ticker.
+        Returns structured sentiment data that Claude can use.
+        """
+        if asset_type == "crypto":
+            search_context = f"${ticker} OR #{ticker} cryptocurrency crypto"
+        else:
+            search_context = f"${ticker} stock"
+
+        prompt = f"""Search X for recent posts about {search_context} from the last 24 hours.
+
+Analyze the sentiment and return ONLY a JSON object (no markdown, no backticks):
+{{
+    "ticker": "{ticker}",
+    "asset_type": "{asset_type}",
+    "overall_sentiment": "bullish" | "bearish" | "neutral" | "mixed",
+    "sentiment_score": -1.0 to 1.0,
+    "confidence": 0.0 to 1.0,
+    "bullish_pct": 0-100,
+    "bearish_pct": 0-100,
+    "neutral_pct": 0-100,
+    "post_volume": "high" | "medium" | "low",
+    "volume_trend": "surging" | "rising" | "stable" | "declining",
+    "key_themes": ["theme1", "theme2", "theme3"],
+    "notable_signals": [
+        {{"signal": "description of notable post or pattern", "sentiment": "bullish/bearish", "influence": "high/medium/low"}}
+    ],
+    "catalysts_mentioned": ["catalyst1", "catalyst2"],
+    "risk_flags": ["flag1", "flag2"],
+    "influencer_sentiment": "bullish" | "bearish" | "neutral" | "mixed",
+    "retail_vs_smart_money": "Brief note on whether chatter seems retail-driven or informed",
+    "summary": "2-3 sentence summary of what X is saying about this ticker right now"
+}}
+
+Be direct and opinionated. If sentiment is strongly one-directional, say so.
+If posts are mostly noise with no real signal, flag that.
+Focus on posts from accounts with real followers, not bots.
+Flag any sarcasm you detect."""
+
+        return await self._call_grok_with_x_search(prompt)
+
+    async def get_batch_sentiment(self, tickers: list, asset_type: str = "stock") -> dict:
+        """
+        Get X sentiment for multiple tickers. Runs concurrently in batches.
+        """
+        results = {}
+        batch_size = 3
+
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i:i + batch_size]
+            tasks = [self.get_ticker_sentiment(t, asset_type) for t in batch]
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for ticker, result in zip(batch, batch_results):
+                if isinstance(result, Exception):
+                    print(f"[XAI] {ticker} sentiment failed: {result}")
+                    results[ticker] = {"ticker": ticker, "error": str(result)}
+                else:
+                    results[ticker] = result
+
+            if i + batch_size < len(tickers):
+                await asyncio.sleep(1.0)
+
+        return results
+
+    async def get_trending_tickers(
+        self,
+        asset_type: str = "stock",
+        sectors: list = None,
+        max_market_cap: str = None,
+    ) -> dict:
+        """
+        Ask Grok to find the most talked-about tickers on X right now.
+        Optionally filter by sectors and market cap.
+        """
+        sector_filter = ""
+        if sectors:
+            sector_filter = f"\nFocus specifically on these sectors: {', '.join(sectors)}."
+
+        cap_filter = ""
+        if max_market_cap:
+            cap_filter = f"\nOnly include tickers with market cap below {max_market_cap}."
+
+        if asset_type == "crypto":
+            asset_context = "cryptocurrencies, tokens, and DeFi projects"
+            examples = "$BTC, $ETH, $SOL, altcoins, meme coins"
+        else:
+            asset_context = "stocks and ETFs"
+            examples = "$NVDA, $TSLA, $AAPL, small caps, penny stocks"
+
+        prompt = f"""Search X for the most actively discussed {asset_context} right now (last 12 hours).
+{sector_filter}{cap_filter}
+
+I want tickers that are BUZZING — not just mentioned once, but actively debated, hyped, or feared.
+Look for: cashtags like {examples}, earnings reactions, breaking news, momentum plays, squeeze chatter.
+
+Return ONLY a JSON object (no markdown, no backticks):
+{{
+    "scan_type": "x_trending_{asset_type}",
+    "timestamp": "now",
+    "market_mood": "risk-on" | "risk-off" | "mixed" | "euphoric" | "fearful",
+    "trending_tickers": [
+        {{
+            "ticker": "SYMBOL",
+            "mention_intensity": "extreme" | "high" | "medium",
+            "sentiment": "bullish" | "bearish" | "mixed" | "neutral",
+            "sentiment_score": -1.0 to 1.0,
+            "why_trending": "2-3 sentence explanation of WHY this is being talked about",
+            "key_narratives": ["narrative1", "narrative2"],
+            "catalyst": "The specific event or news driving discussion",
+            "risk_flag": "Any red flag (pump & dump signals, bot activity, etc.) or null",
+            "influencer_driven": true/false,
+            "estimated_market_cap_tier": "mega" | "large" | "mid" | "small" | "micro" | "unknown",
+            "trade_sentiment": "strong_buy" | "buy" | "hold" | "sell" | "strong_sell" | "speculative"
+        }}
+    ],
+    "sector_heat": [
+        {{"sector": "name", "buzz_level": "hot/warm/cold", "direction": "bullish/bearish"}}
+    ],
+    "notable_themes": ["theme1", "theme2"],
+    "contrarian_signals": ["Any cases where X sentiment diverges from price action"],
+    "summary": "3-4 sentence overview of what X is talking about in markets right now"
+}}
+
+Return the top 10-15 most actively discussed tickers, sorted by mention intensity.
+Be ruthless about quality — skip bot-driven noise and focus on real human discussion.
+If you see signs of coordinated pumping, FLAG IT.
+Don't be risk-averse about small caps — if they're hot and the thesis is real, include them.
+If a low-cap stock has genuine momentum and a real catalyst, say so directly."""
+
+        return await self._call_grok_with_x_search(prompt)
+
+    async def compare_sentiment(self, tickers: list) -> dict:
+        """Compare X sentiment head-to-head across multiple tickers."""
+        tickers_str = ", ".join([f"${t}" for t in tickers])
+
+        prompt = f"""Search X for recent discussion (last 24 hours) about these tickers: {tickers_str}
+
+Compare the sentiment and buzz level for each. Return ONLY a JSON object:
+{{
+    "comparison": [
+        {{
+            "ticker": "SYMBOL",
+            "sentiment_score": -1.0 to 1.0,
+            "buzz_volume": "high" | "medium" | "low",
+            "trend_direction": "improving" | "stable" | "deteriorating",
+            "dominant_narrative": "Brief description",
+            "x_consensus": "What does X think you should do with this?"
+        }}
+    ],
+    "strongest_sentiment": "Ticker with most bullish X sentiment",
+    "most_controversial": "Ticker with most divided opinion",
+    "highest_buzz": "Ticker with most discussion volume",
+    "insights": ["Key cross-ticker insight 1", "Key insight 2"]
+}}
+
+Be direct. Which of these does X like best right now and why?"""
+
+        return await self._call_grok_with_x_search(prompt)
+
+    async def _call_grok_with_x_search(self, prompt: str) -> dict:
+        """Call the xAI Responses API with x_search enabled."""
+        payload = {
+            "model": self.model,
+            "tools": [
+                {
+                    "type": "x_search",
+                    "x_search": {}
+                }
+            ],
+            "input": [
+                {"role": "user", "content": prompt}
+            ],
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.post(
+                    f"{self.BASE_URL}/responses",
+                    headers=self.headers,
+                    json=payload,
+                )
+
+            if response.status_code != 200:
+                error_text = response.text[:500]
+                print(f"[XAI] API error {response.status_code}: {error_text}")
+                return {"error": f"xAI API returned {response.status_code}", "detail": error_text}
+
+            data = response.json()
+
+            text = self._extract_text(data)
+
+            if not text:
+                print(f"[XAI] No text in response. Keys: {list(data.keys())}")
+                return {"error": "No text in Grok response", "raw": str(data)[:500]}
+
+            return self._parse_json_response(text)
+
+        except httpx.TimeoutException:
+            print("[XAI] Request timed out after 45s")
+            return {"error": "xAI request timed out"}
+        except Exception as e:
+            print(f"[XAI] Error: {e}")
+            return {"error": str(e)}
+
+    def _extract_text(self, data: dict) -> str:
+        """Extract text content from xAI Responses API output."""
+        output = data.get("output", [])
+        texts = []
+        for item in output:
+            if item.get("type") == "message":
+                for content_block in item.get("content", []):
+                    if content_block.get("type") == "output_text":
+                        texts.append(content_block.get("text", ""))
+                    elif content_block.get("type") == "text":
+                        texts.append(content_block.get("text", ""))
+        return "\n".join(texts).strip()
+
+    def _parse_json_response(self, text: str) -> dict:
+        """Parse JSON from Grok's response, handling various formats."""
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        cleaned = re.sub(r"```json\s*", "", text)
+        cleaned = re.sub(r"```\s*", "", cleaned)
+        cleaned = cleaned.strip()
+
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        first_brace = cleaned.find("{")
+        if first_brace != -1:
+            depth = 0
+            for i in range(first_brace, len(cleaned)):
+                if cleaned[i] == "{":
+                    depth += 1
+                elif cleaned[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(cleaned[first_brace:i + 1])
+                        except json.JSONDecodeError:
+                            break
+
+        print(f"[XAI] Could not parse JSON, returning raw text")
+        return {
+            "error": "Could not parse structured response",
+            "raw_text": text[:2000],
+            "overall_sentiment": "unknown",
+        }

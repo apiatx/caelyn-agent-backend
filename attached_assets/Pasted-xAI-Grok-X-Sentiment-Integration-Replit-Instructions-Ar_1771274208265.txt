@@ -1,0 +1,540 @@
+xAI Grok X Sentiment Integration — Replit Instructions
+Architecture Overview
+Grok = X Scout → scans X/Twitter for real-time social sentiment using its native x_search tool
+Claude = Master Analyst → receives Grok's sentiment data alongside all other data sources, makes the final call
+Grok's x_search is a server-side tool — you send a prompt, Grok autonomously searches X posts (keyword, semantic, user search, date-filtered), analyzes sentiment, and returns structured results. You do NOT need a separate Twitter/X API key.
+Cost
+
+Model: grok-4-1-fast — $0.20/M input tokens, $0.50/M output tokens
+x_search tool: small per-invocation fee on top of token costs
+Each sentiment scan will cost roughly $0.01-0.05 depending on complexity
+Budget ~$5-10/month for moderate usage
+
+
+STEP 1: Add the xAI API Key Secret
+In your backend Replit project, go to the Secrets panel (lock icon in the sidebar).
+Add a new secret:
+
+Key: XAI_API_KEY
+Value: Your xAI API key from https://console.x.ai
+
+
+STEP 2: Update config.py
+Add the xAI key to your config imports.
+Find this in config.py:
+pythonALTFINS_API_KEY = os.getenv("ALTFINS_API_KEY")
+Add after it:
+pythonXAI_API_KEY = os.getenv("XAI_API_KEY")
+
+STEP 3: Create data/xai_sentiment_provider.py
+Create a new file data/xai_sentiment_provider.py with this content:
+python"""
+xAI Grok X Sentiment Provider
+
+Uses Grok's native x_search tool to scan X/Twitter for real-time
+social sentiment on stocks and crypto. Grok searches X autonomously
+and returns structured sentiment analysis.
+
+This is an OpenAI-compatible API — xAI uses the same interface.
+"""
+
+import json
+import httpx
+import asyncio
+from typing import Optional
+
+
+class XAISentimentProvider:
+    """Fetch real-time X/Twitter sentiment via Grok's x_search tool."""
+
+    BASE_URL = "https://api.x.ai/v1"
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.model = "grok-4-1-fast"
+        self.headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+
+    # ------------------------------------------------------------------
+    # Core: scan X for sentiment on a single ticker
+    # ------------------------------------------------------------------
+    async def get_ticker_sentiment(self, ticker: str, asset_type: str = "stock") -> dict:
+        """
+        Get X/Twitter sentiment for a single ticker.
+        Returns structured sentiment data that Claude can use.
+        """
+        if asset_type == "crypto":
+            search_context = f"${ticker} OR #{ticker} cryptocurrency crypto"
+        else:
+            search_context = f"${ticker} stock"
+
+        prompt = f"""Search X for recent posts about {search_context} from the last 24 hours.
+
+Analyze the sentiment and return ONLY a JSON object (no markdown, no backticks):
+{{
+    "ticker": "{ticker}",
+    "asset_type": "{asset_type}",
+    "overall_sentiment": "bullish" | "bearish" | "neutral" | "mixed",
+    "sentiment_score": -1.0 to 1.0,
+    "confidence": 0.0 to 1.0,
+    "bullish_pct": 0-100,
+    "bearish_pct": 0-100,
+    "neutral_pct": 0-100,
+    "post_volume": "high" | "medium" | "low",
+    "volume_trend": "surging" | "rising" | "stable" | "declining",
+    "key_themes": ["theme1", "theme2", "theme3"],
+    "notable_signals": [
+        {{"signal": "description of notable post or pattern", "sentiment": "bullish/bearish", "influence": "high/medium/low"}}
+    ],
+    "catalysts_mentioned": ["catalyst1", "catalyst2"],
+    "risk_flags": ["flag1", "flag2"],
+    "influencer_sentiment": "bullish" | "bearish" | "neutral" | "mixed",
+    "retail_vs_smart_money": "Brief note on whether chatter seems retail-driven or informed",
+    "summary": "2-3 sentence summary of what X is saying about this ticker right now"
+}}
+
+Be direct and opinionated. If sentiment is strongly one-directional, say so.
+If posts are mostly noise with no real signal, flag that.
+Focus on posts from accounts with real followers, not bots.
+Flag any sarcasm you detect."""
+
+        return await self._call_grok_with_x_search(prompt)
+
+    # ------------------------------------------------------------------
+    # Batch: scan X for multiple tickers at once
+    # ------------------------------------------------------------------
+    async def get_batch_sentiment(self, tickers: list, asset_type: str = "stock") -> dict:
+        """
+        Get X sentiment for multiple tickers. Runs concurrently in batches.
+        """
+        results = {}
+        batch_size = 3  # Keep concurrent requests reasonable
+
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i:i + batch_size]
+            tasks = [self.get_ticker_sentiment(t, asset_type) for t in batch]
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for ticker, result in zip(batch, batch_results):
+                if isinstance(result, Exception):
+                    print(f"[XAI] {ticker} sentiment failed: {result}")
+                    results[ticker] = {"ticker": ticker, "error": str(result)}
+                else:
+                    results[ticker] = result
+
+            # Rate limit buffer between batches
+            if i + batch_size < len(tickers):
+                await asyncio.sleep(1.0)
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Trending scan: what stocks/crypto are hot on X right now
+    # ------------------------------------------------------------------
+    async def get_trending_tickers(
+        self,
+        asset_type: str = "stock",
+        sectors: list = None,
+        max_market_cap: str = None,
+    ) -> dict:
+        """
+        Ask Grok to find the most talked-about tickers on X right now.
+        Optionally filter by sectors and market cap.
+        """
+        sector_filter = ""
+        if sectors:
+            sector_filter = f"\nFocus specifically on these sectors: {', '.join(sectors)}."
+
+        cap_filter = ""
+        if max_market_cap:
+            cap_filter = f"\nOnly include tickers with market cap below {max_market_cap}."
+
+        if asset_type == "crypto":
+            asset_context = "cryptocurrencies, tokens, and DeFi projects"
+            examples = "$BTC, $ETH, $SOL, altcoins, meme coins"
+        else:
+            asset_context = "stocks and ETFs"
+            examples = "$NVDA, $TSLA, $AAPL, small caps, penny stocks"
+
+        prompt = f"""Search X for the most actively discussed {asset_context} right now (last 12 hours).
+{sector_filter}{cap_filter}
+
+I want tickers that are BUZZING — not just mentioned once, but actively debated, hyped, or feared.
+Look for: cashtags like {examples}, earnings reactions, breaking news, momentum plays, squeeze chatter.
+
+Return ONLY a JSON object (no markdown, no backticks):
+{{
+    "scan_type": "x_trending_{asset_type}",
+    "timestamp": "now",
+    "market_mood": "risk-on" | "risk-off" | "mixed" | "euphoric" | "fearful",
+    "trending_tickers": [
+        {{
+            "ticker": "SYMBOL",
+            "mention_intensity": "extreme" | "high" | "medium",
+            "sentiment": "bullish" | "bearish" | "mixed" | "neutral",
+            "sentiment_score": -1.0 to 1.0,
+            "why_trending": "2-3 sentence explanation of WHY this is being talked about",
+            "key_narratives": ["narrative1", "narrative2"],
+            "catalyst": "The specific event or news driving discussion",
+            "risk_flag": "Any red flag (pump & dump signals, bot activity, etc.) or null",
+            "influencer_driven": true/false,
+            "estimated_market_cap_tier": "mega" | "large" | "mid" | "small" | "micro" | "unknown",
+            "trade_sentiment": "strong_buy" | "buy" | "hold" | "sell" | "strong_sell" | "speculative"
+        }}
+    ],
+    "sector_heat": [
+        {{"sector": "name", "buzz_level": "hot/warm/cold", "direction": "bullish/bearish"}}
+    ],
+    "notable_themes": ["theme1", "theme2"],
+    "contrarian_signals": ["Any cases where X sentiment diverges from price action"],
+    "summary": "3-4 sentence overview of what X is talking about in markets right now"
+}}
+
+Return the top 10-15 most actively discussed tickers, sorted by mention intensity.
+Be ruthless about quality — skip bot-driven noise and focus on real human discussion.
+If you see signs of coordinated pumping, FLAG IT.
+Don't be risk-averse about small caps — if they're hot and the thesis is real, include them.
+If a low-cap stock has genuine momentum and a real catalyst, say so directly."""
+
+        return await self._call_grok_with_x_search(prompt)
+
+    # ------------------------------------------------------------------
+    # Compare sentiment across tickers
+    # ------------------------------------------------------------------
+    async def compare_sentiment(self, tickers: list) -> dict:
+        """Compare X sentiment head-to-head across multiple tickers."""
+        tickers_str = ", ".join([f"${t}" for t in tickers])
+
+        prompt = f"""Search X for recent discussion (last 24 hours) about these tickers: {tickers_str}
+
+Compare the sentiment and buzz level for each. Return ONLY a JSON object:
+{{
+    "comparison": [
+        {{
+            "ticker": "SYMBOL",
+            "sentiment_score": -1.0 to 1.0,
+            "buzz_volume": "high" | "medium" | "low",
+            "trend_direction": "improving" | "stable" | "deteriorating",
+            "dominant_narrative": "Brief description",
+            "x_consensus": "What does X think you should do with this?"
+        }}
+    ],
+    "strongest_sentiment": "Ticker with most bullish X sentiment",
+    "most_controversial": "Ticker with most divided opinion",
+    "highest_buzz": "Ticker with most discussion volume",
+    "insights": ["Key cross-ticker insight 1", "Key insight 2"]
+}}
+
+Be direct. Which of these does X like best right now and why?"""
+
+        return await self._call_grok_with_x_search(prompt)
+
+    # ------------------------------------------------------------------
+    # Internal: call Grok API with x_search tool enabled
+    # ------------------------------------------------------------------
+    async def _call_grok_with_x_search(self, prompt: str) -> dict:
+        """Call the xAI Responses API with x_search enabled."""
+        payload = {
+            "model": self.model,
+            "tools": [
+                {
+                    "type": "x_search",
+                    "x_search": {}  # default settings, Grok decides how to search
+                }
+            ],
+            "input": [
+                {"role": "user", "content": prompt}
+            ],
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.post(
+                    f"{self.BASE_URL}/responses",
+                    headers=self.headers,
+                    json=payload,
+                )
+
+            if response.status_code != 200:
+                error_text = response.text[:500]
+                print(f"[XAI] API error {response.status_code}: {error_text}")
+                return {"error": f"xAI API returned {response.status_code}", "detail": error_text}
+
+            data = response.json()
+
+            # Extract text from the response output
+            text = self._extract_text(data)
+
+            if not text:
+                print(f"[XAI] No text in response. Keys: {list(data.keys())}")
+                return {"error": "No text in Grok response", "raw": str(data)[:500]}
+
+            # Parse JSON from Grok's response
+            return self._parse_json_response(text)
+
+        except httpx.TimeoutException:
+            print("[XAI] Request timed out after 45s")
+            return {"error": "xAI request timed out"}
+        except Exception as e:
+            print(f"[XAI] Error: {e}")
+            return {"error": str(e)}
+
+    def _extract_text(self, data: dict) -> str:
+        """Extract text content from xAI Responses API output."""
+        output = data.get("output", [])
+        texts = []
+        for item in output:
+            if item.get("type") == "message":
+                for content_block in item.get("content", []):
+                    if content_block.get("type") == "output_text":
+                        texts.append(content_block.get("text", ""))
+                    elif content_block.get("type") == "text":
+                        texts.append(content_block.get("text", ""))
+        return "\n".join(texts).strip()
+
+    def _parse_json_response(self, text: str) -> dict:
+        """Parse JSON from Grok's response, handling various formats."""
+        import re
+
+        # Try raw parse first
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Strip markdown code blocks
+        cleaned = re.sub(r"```json\s*", "", text)
+        cleaned = re.sub(r"```\s*", "", cleaned)
+        cleaned = cleaned.strip()
+
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # Find JSON object by braces
+        first_brace = cleaned.find("{")
+        if first_brace != -1:
+            depth = 0
+            for i in range(first_brace, len(cleaned)):
+                if cleaned[i] == "{":
+                    depth += 1
+                elif cleaned[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(cleaned[first_brace:i + 1])
+                        except json.JSONDecodeError:
+                            break
+
+        # Fallback: return as unstructured text
+        print(f"[XAI] Could not parse JSON, returning raw text")
+        return {
+            "error": "Could not parse structured response",
+            "raw_text": text[:2000],
+            "overall_sentiment": "unknown",
+        }
+
+STEP 4: Update config.py import in main.py
+Find this line in main.py:
+pythonfrom config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY
+Replace with:
+pythonfrom config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY, XAI_API_KEY
+
+STEP 5: Wire up xAI in data/market_data_service.py
+5a. Add the import
+Find the imports section at the top of market_data_service.py (near the other provider imports).
+Add:
+pythonfrom data.xai_sentiment_provider import XAISentimentProvider
+5b. Add to __init__
+Find the __init__ method of MarketDataService. Look for where other providers are initialized (you'll see lines like self.altfins = ...).
+Add after the altfins initialization:
+python        # xAI Grok X/Twitter Sentiment
+        from config import XAI_API_KEY
+        self.xai = XAISentimentProvider(XAI_API_KEY) if XAI_API_KEY else None
+        if self.xai:
+            print("[INIT] xAI Grok X sentiment provider initialized")
+        else:
+            print("[INIT] xAI Grok X sentiment provider SKIPPED (no XAI_API_KEY)")
+5c. Add xAI to get_cross_platform_trending
+Find the get_cross_platform_trending method. This is where trending data from multiple sources gets combined. Add xAI as another source.
+Find the section where results from different sources are gathered (you'll see asyncio.gather calls or sequential fetches for StockTwits, Reddit, Finviz, etc.).
+Add an xAI trending fetch alongside the existing sources:
+python        # xAI X/Twitter trending
+        xai_trending = {}
+        if self.xai:
+            try:
+                xai_trending = await asyncio.wait_for(
+                    self.xai.get_trending_tickers("stock"),
+                    timeout=30.0,
+                )
+                print(f"[TRENDING] xAI returned {len(xai_trending.get('trending_tickers', []))} trending tickers from X")
+            except Exception as e:
+                print(f"[TRENDING] xAI trending failed: {e}")
+Then merge xAI results into the combined trending data. Find where trending tickers from other sources are merged/scored, and add:
+python        # Merge X/Twitter trending into combined results
+        if xai_trending and "trending_tickers" in xai_trending:
+            for item in xai_trending["trending_tickers"]:
+                ticker = item.get("ticker", "").upper()
+                if ticker and ticker in combined:
+                    combined[ticker]["sources"].append("x_twitter")
+                    combined[ticker]["x_sentiment"] = item.get("sentiment")
+                    combined[ticker]["x_sentiment_score"] = item.get("sentiment_score")
+                    combined[ticker]["x_why_trending"] = item.get("why_trending")
+                    combined[ticker]["x_catalyst"] = item.get("catalyst")
+                    combined[ticker]["x_trade_sentiment"] = item.get("trade_sentiment")
+                elif ticker:
+                    combined[ticker] = {
+                        "ticker": ticker,
+                        "sources": ["x_twitter"],
+                        "x_sentiment": item.get("sentiment"),
+                        "x_sentiment_score": item.get("sentiment_score"),
+                        "x_why_trending": item.get("why_trending"),
+                        "x_catalyst": item.get("catalyst"),
+                        "x_trade_sentiment": item.get("trade_sentiment"),
+                        "x_risk_flag": item.get("risk_flag"),
+                    }
+5d. Add xAI to research_ticker
+Find the research_ticker method (used for single-ticker deep dives). Add xAI sentiment as another data source.
+Add alongside the other data fetches (StockTwits sentiment, etc.):
+python        # xAI X/Twitter sentiment
+        if self.xai:
+            try:
+                x_sentiment = await asyncio.wait_for(
+                    self.xai.get_ticker_sentiment(ticker),
+                    timeout=20.0,
+                )
+                if x_sentiment and "error" not in x_sentiment:
+                    result["x_sentiment"] = x_sentiment
+            except Exception as e:
+                print(f"[RESEARCH] {ticker} xAI sentiment failed: {e}")
+5e. Add xAI to get_crypto_scanner
+Find the get_crypto_scanner method. Add X sentiment for crypto.
+Add a crypto-specific X trending scan:
+python        # xAI X/Twitter crypto sentiment
+        if self.xai:
+            try:
+                x_crypto = await asyncio.wait_for(
+                    self.xai.get_trending_tickers("crypto"),
+                    timeout=30.0,
+                )
+                if x_crypto and "trending_tickers" in x_crypto:
+                    result["x_twitter_crypto"] = x_crypto
+                    print(f"[CRYPTO] xAI returned {len(x_crypto['trending_tickers'])} trending crypto from X")
+            except Exception as e:
+                print(f"[CRYPTO] xAI crypto sentiment failed: {e}")
+5f. Add xAI to _gather_chat_context in claude_agent.py
+This ensures conversational queries about specific tickers also get X sentiment.
+In claude_agent.py, in the _gather_chat_context method, find the section where individual ticker data is gathered (the for ticker in tickers[:3]: loop).
+Add after the altfins block but still inside the ticker loop:
+python                # xAI X/Twitter sentiment
+                if self.data.xai:
+                    try:
+                        x_sent = await asyncio.wait_for(
+                            self.data.xai.get_ticker_sentiment(ticker),
+                            timeout=15.0,
+                        )
+                        if x_sent and "error" not in x_sent:
+                            ticker_data["x_sentiment"] = x_sent
+                    except Exception:
+                        pass
+
+STEP 6: Add xAI to the wide_scan_and_rank pipeline
+Find the wide_scan_and_rank method in market_data_service.py. This is the main pipeline for scan-type queries. Find where the top candidates get enriched with additional data (after scoring).
+Add X sentiment enrichment for the top candidates:
+python        # Enrich top candidates with X/Twitter sentiment
+        if self.xai and top_tickers:
+            try:
+                x_batch = await asyncio.wait_for(
+                    self.xai.get_batch_sentiment(top_tickers[:10]),
+                    timeout=30.0,
+                )
+                for ticker, x_data in x_batch.items():
+                    if ticker in enriched and "error" not in x_data:
+                        enriched[ticker]["x_sentiment"] = x_data
+                print(f"[SCAN] xAI enriched {len(x_batch)} tickers with X sentiment")
+            except Exception as e:
+                print(f"[SCAN] xAI batch sentiment failed: {e}")
+
+STEP 7: Update the System Prompt
+In agent/prompts.py, add xAI X sentiment instructions to the SYSTEM_PROMPT. Find the section with data source signals (look for DATA SOURCE SIGNALS:).
+Add this new section after the existing data source signals:
+## X/TWITTER SENTIMENT (via Grok x_search)
+Real-time sentiment analysis from X/Twitter — the fastest social signal source. This data comes from Grok scanning live X posts.
+- x_sentiment score: -1.0 (max bearish) to +1.0 (max bullish). >0.5 = strong bullish, <-0.5 = strong bearish.
+- post_volume + volume_trend: "surging" volume = something just happened. Investigate the catalyst.
+- key_themes: What narratives are driving discussion. Cross-reference with news.
+- risk_flags: Watch for pump & dump signals, bot activity, coordinated campaigns.
+- influencer_sentiment: Smart money / large accounts may diverge from retail chatter.
+- X sentiment is FASTEST but also NOISIEST. Always cross-reference with StockTwits, fundamentals, and technicals.
+- SIGNAL HIERARCHY: X trending + StockTwits bullish + volume surge + clean chart = HIGHEST CONVICTION social signal.
+- X bearish + StockTwits bearish + price dropping = AVOID regardless of fundamentals.
+- X bullish + price flat/down = potential early signal OR bagholders coping. Check volume to differentiate.
+- When X sentiment strongly diverges from price action, that's a CONTRARIAN signal worth investigating.
+- For crypto: X is the PRIMARY social signal (more relevant than StockTwits). Meme coin hype on X precedes price moves by hours.
+- Don't be risk-averse about small caps that are genuinely trending on X with real catalysts. If the buzz is real and the thesis is solid, recommend them confidently.
+
+STEP 8: Install the dependency
+In your Replit shell, run:
+bashpip install httpx
+(httpx is likely already installed since your other providers use it, but verify.)
+
+STEP 9: Test it
+After deploying, test with these queries from your frontend:
+
+"What are the most talked about stocks on X today?" — Should trigger the trending scan
+"What's X saying about NVDA right now?" — Should get single-ticker X sentiment
+"What are the hottest stocks on X below $100B market cap in tech and healthcare?" — The full query you described
+"Crypto scanner" — Should now include X/Twitter crypto sentiment alongside CoinGecko/CMC/Hyperliquid
+
+
+STEP 10: Update the Query Classifier (optional but recommended)
+In agent/prompts.py, update the QUERY_CLASSIFIER_PROMPT to recognize X-specific queries.
+Find the categories list and add to the trending description:
+- "trending": What's trending/hot, popular stocks, most mentioned, cross-platform, what's buzzing on X/Twitter.
+In claude_agent.py, in _keyword_classify, add X-specific keywords to the trending triggers:
+python        if any(w in q for w in ["trending", "trend", "what's hot", "popular", "buzzing on x", "twitter sentiment", "x sentiment", "what's x saying"]):
+            return {"category": "trending"}
+
+How It All Flows Together
+User: "What are the most talked about stocks on X below $100B in tech and energy with great trade sentiment?"
+
+1. Claude Agent classifies → "trending" (or "ai_screener" with filters)
+
+2. Data gathering triggers:
+   - Finviz screener (tech + energy filters)
+   - StockTwits trending
+   - Reddit trending  
+   - xAI Grok x_search → scans X posts, returns trending tickers + sentiment
+   - Scoring engine ranks candidates
+
+3. Top candidates get enriched:
+   - StockAnalysis fundamentals
+   - Polygon technicals
+   - xAI per-ticker X sentiment
+   - StockTwits per-ticker sentiment
+
+4. All data sent to Claude (master analyst):
+   - Claude sees: fundamentals + technicals + StockTwits + Reddit + X sentiment + scoring
+   - Claude applies its trader framework
+   - Claude returns structured response with high-conviction picks
+
+5. Frontend renders the response
+The key insight: Grok does what it's best at (real-time X access, less risk-averse analysis of trending small caps) and Claude does what IT'S best at (synthesizing all data sources, applying the trading framework, generating the structured response with trade plans).
+
+API Reference
+xAI Responses API endpoint
+POST https://api.x.ai/v1/responses
+x_search tool configuration
+json{
+    "type": "x_search",
+    "x_search": {
+        "allowed_x_handles": ["handle1", "handle2"],  // optional, max 10
+        "excluded_x_handles": ["handle1"],              // optional, max 10
+        "from_date": "2025-02-15",                      // optional ISO date
+        "to_date": "2025-02-16",                        // optional ISO date
+        "enable_image_understanding": true               // optional
+    }
+}
