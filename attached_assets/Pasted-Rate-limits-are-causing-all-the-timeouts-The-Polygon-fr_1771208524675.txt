@@ -1,0 +1,65 @@
+Rate limits are causing all the timeouts. The Polygon free tier only allows 5 calls per minute, but we're making 20-30 Polygon calls per scan. This needs to stop.
+1. Remove Polygon from all bulk scan enrichment. Polygon should ONLY be called when a user asks about a SINGLE specific ticker (like "Analyze NVDA"). For all button scans that return multiple tickers, do NOT call Polygon at all. Zero Polygon calls for bulk scans.
+Find everywhere in the enrichment pipeline where Polygon's get_previous_close or get_computed_technicals is called in a loop over multiple tickers, and remove those calls. The data we need is available from Finviz (price, change, volume, RSI, SMA positioning) and StockAnalysis (fundamentals, analyst ratings) — both of which have no strict rate limits.
+2. Make sure Finviz screener results already include technical data. When calling the Finviz screener, use view v=171 (technical view) which returns RSI, SMA20, SMA50, SMA200, volume, relative volume, and price change — all without any additional API calls. This replaces everything we were getting from Polygon.
+3. Reduce StockAnalysis enrichment to top 8 tickers max per scan (not 12-15). And add a 1-second delay between each StockAnalysis call to avoid getting blocked:
+pythonfor i, ticker in enumerate(tickers_to_enrich[:8]):
+    try:
+        overview = await asyncio.wait_for(
+            self.stockanalysis.get_overview(ticker),
+            timeout=6.0,
+        )
+        if overview:
+            ticker_data.update(overview)
+    except:
+        pass
+    
+    # Delay between calls to avoid rate limiting
+    if i < len(tickers_to_enrich) - 1:
+        await asyncio.sleep(0.8)
+4. For the watchlist review endpoint, limit Polygon to the first 3 tickers only:
+python# In review_watchlist, only call Polygon for the first 3 tickers
+use_polygon = (index < 3)
+
+if use_polygon:
+    try:
+        technicals = await asyncio.wait_for(
+            self.data.polygon.get_computed_technicals(ticker),
+            timeout=8.0,
+        )
+        if technicals:
+            data["technicals"] = technicals
+    except:
+        pass
+    await asyncio.sleep(1.0)  # Respect 5/min limit
+5. Add a simple rate limiter for Polygon calls to prevent ever exceeding 5/min:
+python# In the Polygon provider class, add a simple rate limiter:
+import time
+
+class PolygonProvider:
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self._call_times = []
+        self._max_per_minute = 4  # Stay under the 5/min limit
+    
+    async def _rate_limited_get(self, url, params=None):
+        # Clean up old timestamps
+        now = time.time()
+        self._call_times = [t for t in self._call_times if now - t < 60]
+        
+        # If at limit, skip instead of waiting
+        if len(self._call_times) >= self._max_per_minute:
+            print(f"[POLYGON] Rate limit reached ({self._max_per_minute}/min), skipping")
+            return {}
+        
+        self._call_times.append(now)
+        # ... proceed with actual request
+After these changes, a typical button scan should make:
+
+0 Polygon calls (was 20-30)
+1-3 Finviz calls (unchanged)
+8-16 StockAnalysis calls with delays (was 24-30 rapid-fire)
+1-2 Claude calls (unchanged)
+
+Expected response time: 20-40 seconds instead of 3-5 minutes.
+Re-deploy and test "Best Trades" — it should respond within 45 seconds.

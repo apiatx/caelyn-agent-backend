@@ -14,6 +14,40 @@ from data.fear_greed_provider import FearGreedProvider
 from data.fmp_provider import FMPProvider
 from data.coingecko_provider import CoinGeckoProvider
 
+
+def _parse_num(val):
+    if val is None:
+        return None
+    try:
+        return float(str(val).replace(",", "").replace("%", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+def _parse_pct(val):
+    if val is None:
+        return None
+    try:
+        s = str(val).replace("%", "").replace(",", "").strip()
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+def _parse_vol(val):
+    if val is None:
+        return None
+    try:
+        s = str(val).replace(",", "").strip()
+        if s.endswith("M"):
+            return float(s[:-1]) * 1_000_000
+        elif s.endswith("K"):
+            return float(s[:-1]) * 1_000
+        elif s.endswith("B"):
+            return float(s[:-1]) * 1_000_000_000
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
 class MarketDataService:
     """
     Unified interface for all market data.
@@ -81,40 +115,12 @@ class MarketDataService:
 
     async def scan_market(self) -> dict:
         """Broad market overview — parallelized for speed."""
-        movers = self.polygon.get_market_movers()
-
-        top_gainer_tickers = [
-            g["ticker"] for g in movers.get("gainers", [])[:5]
-        ]
-
-        async def get_catalyst(ticker):
-            async_results = await asyncio.gather(
-                self.stocktwits.get_sentiment(ticker),
-                self.stockanalysis.get_overview(ticker),
-                self.stockanalysis.get_analyst_ratings(ticker),
-                self.edgar.get_8k_filings(ticker),
-                return_exceptions=True,
-            )
-            return {
-                "details": self.polygon.get_ticker_details(ticker),
-                "technicals": self.polygon.get_technicals(ticker),
-                "news": self.polygon.get_ticker_events(ticker)["news"],
-                "sentiment": async_results[0] if not isinstance(async_results[0], Exception) else {},
-                "fundamentals": async_results[1] if not isinstance(async_results[1], Exception) else {},
-                "analyst_ratings": async_results[2] if not isinstance(async_results[2], Exception) else {},
-                "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
-                "earnings_upcoming": self.finnhub.get_earnings_calendar(ticker),
-                "recent_sec_filings": async_results[3] if not isinstance(async_results[3], Exception) else [],
-            }
-
-        catalyst_results = await asyncio.gather(
-            *[get_catalyst(t) for t in top_gainer_tickers],
-            return_exceptions=True,
-        )
-        catalyst_data = {}
-        for ticker, result in zip(top_gainer_tickers, catalyst_results):
-            if not isinstance(result, Exception):
-                catalyst_data[ticker] = result
+        movers = {}
+        if self.fmp:
+            try:
+                movers = await self.fmp.get_gainers_losers()
+            except:
+                pass
 
         trending, unusual_options, options_volume_leaders, upcoming_earnings, fear_greed = (
             await asyncio.gather(
@@ -140,9 +146,9 @@ class MarketDataService:
 
         return {
             "movers": movers,
-            "market_news": self.polygon.get_news(limit=15),
+            "market_news": [],
             "screener_gainers": screener_gainers,
-            "catalyst_data": catalyst_data,
+            "catalyst_data": {},
             "stocktwits_trending": trending,
             "unusual_options_activity": unusual_options,
             "options_flow_signals": options_signals,
@@ -233,24 +239,6 @@ class MarketDataService:
 
         fear_greed = await self.fear_greed.get_fear_greed_index()
 
-        commodity_news = self.polygon.get_news(limit=8)
-
-        commodity_etfs = ["USO", "GLD", "SLV", "URA", "UNG", "COPX", "GDX", "XLE"]
-        async def get_etf_ta(ticker):
-            return {
-                "technicals": self.polygon.get_technicals(ticker),
-                "snapshot": self.polygon.get_snapshot(ticker),
-            }
-
-        etf_ta_results = await asyncio.gather(
-            *[asyncio.to_thread(lambda t=t: get_etf_ta(t)) for t in commodity_etfs],
-            return_exceptions=True,
-        )
-        etf_technicals = {}
-        for ticker, result in zip(commodity_etfs, etf_ta_results):
-            if not isinstance(result, Exception):
-                etf_technicals[ticker] = result
-
         commodity_sentiment = {}
         commodity_tickers_social = ["USO", "GLD", "URA", "XLE"]
         social_results = await asyncio.gather(
@@ -268,8 +256,8 @@ class MarketDataService:
             "treasury_yields": fmp_treasuries,
             "fred_macro": fred_macro,
             "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
-            "commodity_news": commodity_news,
-            "etf_technicals": etf_technicals,
+            "commodity_news": [],
+            "etf_technicals": {},
             "commodity_sentiment": commodity_sentiment,
         }
 
@@ -358,12 +346,6 @@ class MarketDataService:
         except:
             pass
 
-        movers = {}
-        try:
-            movers = self.polygon.get_market_movers()
-        except:
-            pass
-
         all_tickers = set()
 
         if isinstance(screener_results, list):
@@ -377,14 +359,6 @@ class MarketDataService:
             if isinstance(t, dict) and t.get("ticker"):
                 all_tickers.add(t["ticker"].upper().strip())
 
-        for g in (movers.get("gainers") or []):
-            if g.get("ticker"):
-                all_tickers.add(g["ticker"].upper().strip())
-        if category == "bearish":
-            for l in (movers.get("losers") or []):
-                if l.get("ticker"):
-                    all_tickers.add(l["ticker"].upper().strip())
-
         print(f"[Wide Scan] {category}: {len(all_tickers)} unique candidates found ({time.time()-scan_start:.1f}s)")
 
         needs_fundamentals = category in [
@@ -393,12 +367,27 @@ class MarketDataService:
 
         async def light_enrich(ticker):
             try:
-                snapshot = self.polygon.get_snapshot(ticker)
-                technicals = self.polygon.get_technicals(ticker)
+                finviz_data = {}
+                for item in (screener_results if isinstance(screener_results, list) else []):
+                    if isinstance(item, dict) and item.get("ticker", "").upper() == ticker.upper():
+                        finviz_data = item
+                        break
+
                 result = {
-                    "snapshot": snapshot,
-                    "technicals": technicals,
-                    "details": {},
+                    "snapshot": {
+                        "price": _parse_num(finviz_data.get("price")),
+                        "change_pct": _parse_pct(finviz_data.get("change")),
+                        "volume": _parse_vol(finviz_data.get("volume")),
+                    },
+                    "technicals": {
+                        "rsi": _parse_num(finviz_data.get("rsi")),
+                        "sma_20": _parse_num(finviz_data.get("sma20")),
+                        "sma_50": _parse_num(finviz_data.get("sma50")),
+                        "sma_200": _parse_num(finviz_data.get("sma200")),
+                    },
+                    "details": {
+                        "market_cap": finviz_data.get("market_cap"),
+                    },
                 }
                 async_tasks = []
                 if needs_fundamentals:
@@ -441,7 +430,7 @@ class MarketDataService:
 
         print(f"[Wide Scan] Top scores: {[(t, s) for t, s, _ in top_ranked[:enrich_top]]}")
 
-        top_tickers = [(ticker, score) for ticker, score, _ in top_ranked[:enrich_top]]
+        top_tickers = [(ticker, score) for ticker, score, _ in top_ranked[:min(enrich_top, 8)]]
 
         async def deep_enrich(ticker):
             try:
@@ -467,10 +456,15 @@ class MarketDataService:
             except Exception as e:
                 return {"error": str(e)}
 
-        deep_results = await asyncio.gather(
-            *[asyncio.wait_for(deep_enrich(t), timeout=8.0) for t, _ in top_tickers],
-            return_exceptions=True,
-        )
+        deep_results = []
+        for i, (ticker, score) in enumerate(top_tickers):
+            try:
+                result = await asyncio.wait_for(deep_enrich(ticker), timeout=8.0)
+            except Exception as e:
+                result = {"error": str(e)}
+            deep_results.append(result)
+            if i < len(top_tickers) - 1:
+                await asyncio.sleep(0.8)
 
         enriched_candidates = {}
         for (ticker, quant_score), deep_data in zip(top_tickers, deep_results):
@@ -489,7 +483,6 @@ class MarketDataService:
                 {"ticker": t, "score": s} for t, s, _ in top_ranked[:enrich_top]
             ],
             "enriched_data": enriched_candidates,
-            "movers": movers,
             "trending": trending[:10] if trending else [],
         }
 
@@ -509,7 +502,7 @@ class MarketDataService:
         unusual_vol = await self.finviz.get_unusual_volume()
         return {
             "unusual_volume_stocks": unusual_vol,
-            "market_news": self.polygon.get_news(limit=10),
+            "market_news": [],
         }
 
     async def get_oversold(self) -> dict:
@@ -517,7 +510,7 @@ class MarketDataService:
         oversold = await self.finviz.get_oversold_stocks()
         return {
             "oversold_stocks": oversold,
-            "market_news": self.polygon.get_news(limit=10),
+            "market_news": [],
         }
 
     async def get_overbought(self) -> dict:
@@ -558,7 +551,6 @@ class MarketDataService:
         Scan for the best technical analysis setups across stocks.
         Looks for Stage 2 breakouts, volume surges, and momentum.
         """
-        movers = self.polygon.get_market_movers()
         screener_gainers = await self.finviz.get_screener_results("ta_topgainers")
 
         unusual_options, options_volume_leaders = await asyncio.gather(
@@ -571,24 +563,6 @@ class MarketDataService:
 
         options_signals = self.options.interpret_flow(unusual_options) if unusual_options else {}
 
-        top_tickers = [g["ticker"] for g in movers.get("gainers", [])[:10]]
-
-        async def get_ta_for_ticker(ticker):
-            return {
-                "snapshot": self.polygon.get_snapshot(ticker),
-                "technicals": self.polygon.get_technicals(ticker),
-                "details": self.polygon.get_ticker_details(ticker),
-            }
-
-        ta_results = await asyncio.gather(
-            *[get_ta_for_ticker(t) for t in top_tickers],
-            return_exceptions=True,
-        )
-        ta_data = {}
-        for ticker, result in zip(top_tickers, ta_results):
-            if not isinstance(result, Exception):
-                ta_data[ticker] = result
-
         unusual_vol, new_highs, most_active = await asyncio.gather(
             self.finviz.get_unusual_volume(),
             self.finviz.get_new_highs(),
@@ -600,12 +574,10 @@ class MarketDataService:
         if isinstance(most_active, Exception): most_active = []
 
         return {
-            "movers": movers,
             "screener_gainers": screener_gainers,
             "unusual_volume": unusual_vol,
             "new_52_week_highs": new_highs,
             "most_active": most_active,
-            "technical_data": ta_data,
             "options_flow": unusual_options,
             "options_signals": options_signals,
         }
@@ -616,14 +588,11 @@ class MarketDataService:
         revenue growth, insider buying, analyst upgrades.
         """
         upcoming_earnings = self.finnhub.get_upcoming_earnings()
-        market_news = self.polygon.get_news(limit=15)
-        movers = self.polygon.get_market_movers()
 
         earnings_tickers = [
             e["ticker"] for e in upcoming_earnings[:8] if e.get("ticker")
         ]
-        mover_tickers = [g["ticker"] for g in movers.get("gainers", [])[:5]]
-        all_tickers = list(dict.fromkeys(earnings_tickers[:5] + mover_tickers))
+        all_tickers = list(dict.fromkeys(earnings_tickers[:8]))
 
         async def get_fundamentals(ticker):
             async_results = await asyncio.gather(
@@ -652,7 +621,7 @@ class MarketDataService:
 
         return {
             "upcoming_earnings": upcoming_earnings,
-            "market_news": market_news,
+            "market_news": [],
             "fundamental_data": fundamental_data,
         }
 
@@ -675,8 +644,6 @@ class MarketDataService:
             return {
                 "stocktwits": async_results[0] if not isinstance(async_results[0], Exception) else {},
                 "social_sentiment": self.finnhub.get_social_sentiment(ticker),
-                "snapshot": self.polygon.get_snapshot(ticker),
-                "details": self.polygon.get_ticker_details(ticker),
                 "news_sentiment": async_results[1] if not isinstance(async_results[1], Exception) else {},
             }
 
@@ -751,9 +718,6 @@ class MarketDataService:
                 "stocktwits": st_result if not isinstance(st_result, Exception) else {},
                 "reddit_twitter": finn_result if not isinstance(finn_result, Exception) else {},
                 "news_sentiment": av_result if not isinstance(av_result, Exception) else {},
-                "snapshot": self.polygon.get_snapshot(ticker),
-                "details": self.polygon.get_ticker_details(ticker),
-                "technicals": self.polygon.get_technicals(ticker),
             }
 
         results = await asyncio.gather(
@@ -780,28 +744,9 @@ class MarketDataService:
         if isinstance(unusual_vol, Exception): unusual_vol = []
         if isinstance(most_active, Exception): most_active = []
 
-        vol_tickers = [s["ticker"] for s in (unusual_vol or [])[:8]]
-
-        async def enrich_volume(ticker):
-            return {
-                "snapshot": self.polygon.get_snapshot(ticker),
-                "technicals": self.polygon.get_technicals(ticker),
-                "details": self.polygon.get_ticker_details(ticker),
-            }
-
-        enriched = await asyncio.gather(
-            *[enrich_volume(t) for t in vol_tickers],
-            return_exceptions=True,
-        )
-        enriched_data = {}
-        for ticker, result in zip(vol_tickers, enriched):
-            if not isinstance(result, Exception):
-                enriched_data[ticker] = result
-
         return {
             "unusual_volume_stocks": unusual_vol,
             "most_active": most_active,
-            "enriched_data": enriched_data,
         }
 
     async def get_earnings_catalyst_watch(self) -> dict:
@@ -812,7 +757,6 @@ class MarketDataService:
         import asyncio
 
         upcoming_earnings = self.finnhub.get_upcoming_earnings()
-        market_news = self.polygon.get_news(limit=15)
 
         earnings_tickers = [
             e["ticker"] for e in upcoming_earnings[:30]
@@ -821,15 +765,12 @@ class MarketDataService:
 
         async def light_enrich_earnings(ticker):
             try:
-                snapshot = self.polygon.get_snapshot(ticker)
-                technicals = self.polygon.get_technicals(ticker)
-                details = self.polygon.get_ticker_details(ticker)
                 earnings_hist = self.finnhub.get_earnings_surprises(ticker)
                 recommendations = self.finnhub.get_recommendation_trends(ticker)
                 return {
-                    "snapshot": snapshot,
-                    "technicals": technicals,
-                    "details": details,
+                    "snapshot": {},
+                    "technicals": {},
+                    "details": {},
                     "earnings_history": earnings_hist,
                     "recommendations": recommendations,
                 }
@@ -929,7 +870,7 @@ class MarketDataService:
             "ranked_by_volatility": [{"ticker": t, "score": s} for t, s, _ in scored[:15]],
             "enriched_data": enriched,
             "earnings_dates": earnings_dates,
-            "market_news": market_news,
+            "market_news": [],
         }
 
     async def get_sector_rotation(self) -> dict:
@@ -939,23 +880,6 @@ class MarketDataService:
         fmp_sectors = {}
         if self.fmp:
             fmp_sectors = await self.fmp.get_sector_etf_snapshot()
-
-        key_etfs = ["XLK", "XLV", "XLF", "XLE", "XLI", "XLP", "XLY", "XLB", "XLU", "SPY", "QQQ", "IWM", "SMH", "URA"]
-
-        async def get_etf_technicals(ticker):
-            return {
-                "technicals": self.polygon.get_technicals(ticker),
-                "snapshot": self.polygon.get_snapshot(ticker),
-            }
-
-        tech_results = await asyncio.gather(
-            *[asyncio.to_thread(lambda t=t: get_etf_technicals(t)) for t in key_etfs],
-            return_exceptions=True,
-        )
-        etf_technicals = {}
-        for ticker, result in zip(key_etfs, tech_results):
-            if not isinstance(result, Exception):
-                etf_technicals[ticker] = result
 
         macro = self.fred.get_quick_macro()
         fear_greed = await self.fear_greed.get_fear_greed_index()
@@ -973,7 +897,6 @@ class MarketDataService:
 
         return {
             "fmp_sector_data": fmp_sectors,
-            "etf_technicals": etf_technicals,
             "macro_data": macro,
             "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
             "dxy": dxy,
@@ -1219,9 +1142,6 @@ class MarketDataService:
             return {
                 "overview": overview if not isinstance(overview, Exception) else {},
                 "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
-                "snapshot": self.polygon.get_snapshot(ticker),
-                "technicals": self.polygon.get_technicals(ticker),
-                "details": self.polygon.get_ticker_details(ticker),
                 "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
                 "earnings_history": self.finnhub.get_earnings_surprises(ticker),
             }
@@ -1253,31 +1173,9 @@ class MarketDataService:
         if isinstance(losers, Exception): losers = []
         if isinstance(overbought, Exception): overbought = []
 
-        movers = self.polygon.get_market_movers()
-
-        loser_tickers = [s["ticker"] for s in (losers or [])[:6]]
-
-        async def enrich_loser(ticker):
-            return {
-                "snapshot": self.polygon.get_snapshot(ticker),
-                "technicals": self.polygon.get_technicals(ticker),
-                "details": self.polygon.get_ticker_details(ticker),
-            }
-
-        enriched = await asyncio.gather(
-            *[enrich_loser(t) for t in loser_tickers],
-            return_exceptions=True,
-        )
-        enriched_data = {}
-        for ticker, result in zip(loser_tickers, enriched):
-            if not isinstance(result, Exception):
-                enriched_data[ticker] = result
-
         return {
             "top_losers": losers,
             "overbought_stocks": overbought,
-            "market_losers": movers.get("losers", []),
-            "enriched_data": enriched_data,
         }
 
     async def get_thematic_scan(self, theme: str = "ai_compute") -> dict:
@@ -1316,10 +1214,6 @@ class MarketDataService:
 
         async def full_enrich(ticker):
             try:
-                snapshot = self.polygon.get_snapshot(ticker)
-                technicals = self.polygon.get_technicals(ticker)
-                details = self.polygon.get_ticker_details(ticker)
-
                 st_result, overview = await asyncio.gather(
                     self.stocktwits.get_sentiment(ticker),
                     self.stockanalysis.get_overview(ticker),
@@ -1327,9 +1221,6 @@ class MarketDataService:
                 )
 
                 return {
-                    "snapshot": snapshot,
-                    "technicals": technicals,
-                    "details": details,
                     "sentiment": st_result if not isinstance(st_result, Exception) else {},
                     "overview": overview if not isinstance(overview, Exception) else {},
                 }
@@ -1356,39 +1247,13 @@ class MarketDataService:
         for ticker, score, data in theme_results:
             enriched[ticker] = data
 
-        sector_etf_map = {
-            "ai_compute": "SMH",
-            "energy": "XLE",
-            "uranium": "URA",
-            "metals": "GDX",
-            "defense": "ITA",
-        }
-        sector_etf = sector_etf_map.get(theme)
-        etf_data = {}
-        if sector_etf:
-            try:
-                etf_data = {
-                    "snapshot": self.polygon.get_snapshot(sector_etf),
-                    "technicals": self.polygon.get_technicals(sector_etf),
-                }
-            except:
-                pass
-
-        spy_data = {}
-        try:
-            spy_data = {"snapshot": self.polygon.get_snapshot("SPY")}
-        except:
-            pass
-
         return {
             "theme_name": theme_data["name"],
             "ranked_tickers": [
                 {"ticker": t, "score": s} for t, s, _ in theme_results
             ],
             "enriched_data": enriched,
-            "sector_etf": {sector_etf: etf_data} if sector_etf else {},
-            "spy_benchmark": spy_data,
-            "market_news": self.polygon.get_news(limit=10),
+            "market_news": [],
         }
 
     async def get_morning_briefing(self) -> dict:
@@ -1403,7 +1268,6 @@ class MarketDataService:
         from data.scoring_engine import score_for_trades, score_for_investments, score_for_squeeze
 
         (
-            movers,
             fear_greed,
             fred_macro,
             stage2_breakouts,
@@ -1417,10 +1281,8 @@ class MarketDataService:
             rsi_recovery,
             accumulation,
             trending,
-            market_news,
             upcoming_earnings,
         ) = await asyncio.gather(
-            asyncio.to_thread(self.polygon.get_market_movers),
             self.fear_greed.get_fear_greed_index(),
             asyncio.to_thread(self.fred.get_quick_macro),
             self.finviz.get_stage2_breakouts(),
@@ -1434,7 +1296,6 @@ class MarketDataService:
             self.finviz.get_rsi_recovery(),
             self.finviz.get_accumulation_stocks(),
             self.stocktwits.get_trending(),
-            asyncio.to_thread(lambda: self.polygon.get_news(limit=10)),
             asyncio.to_thread(self.finnhub.get_upcoming_earnings),
             return_exceptions=True,
         )
@@ -1444,7 +1305,6 @@ class MarketDataService:
                 default = []
             return val if not isinstance(val, Exception) else default
 
-        movers = safe(movers, {})
         fear_greed = safe(fear_greed, {})
         fred_macro = safe(fred_macro, {})
         stage2_breakouts = safe(stage2_breakouts)
@@ -1458,7 +1318,6 @@ class MarketDataService:
         rsi_recovery = safe(rsi_recovery)
         accumulation = safe(accumulation)
         trending = safe(trending)
-        market_news = safe(market_news)
         upcoming_earnings = safe(upcoming_earnings)
 
         fmp_data = {}
@@ -1517,14 +1376,6 @@ class MarketDataService:
                     screener_sources[ticker] = []
                 screener_sources[ticker].append("social_trending")
 
-        for g in (movers.get("gainers") or []):
-            if g.get("ticker"):
-                ticker = g["ticker"].upper().strip()
-                all_tickers.add(ticker)
-                if ticker not in screener_sources:
-                    screener_sources[ticker] = []
-                screener_sources[ticker].append("top_gainer")
-
         print(f"[Briefing] {len(all_tickers)} unique tickers across all sources")
 
         multi_signal = {t: sources for t, sources in screener_sources.items() if len(sources) >= 2}
@@ -1540,10 +1391,6 @@ class MarketDataService:
 
         async def enrich_briefing(ticker):
             try:
-                snapshot = self.polygon.get_snapshot(ticker)
-                technicals = self.polygon.get_technicals(ticker)
-                details = self.polygon.get_ticker_details(ticker)
-
                 st_result, overview = await asyncio.gather(
                     self.stocktwits.get_sentiment(ticker),
                     self.stockanalysis.get_overview(ticker),
@@ -1551,9 +1398,6 @@ class MarketDataService:
                 )
 
                 return {
-                    "snapshot": snapshot,
-                    "technicals": technicals,
-                    "details": details,
                     "sentiment": st_result if not isinstance(st_result, Exception) else {},
                     "overview": overview if not isinstance(overview, Exception) else {},
                 }
@@ -1596,7 +1440,6 @@ class MarketDataService:
                 for t, d in ranked[:15]
             ],
             "enriched_data": {t: d for t, d in ranked[:10]},
-            "market_movers": movers,
             "fear_greed": fear_greed,
             "fred_macro": fred_macro,
             "fmp_market_data": fmp_data,
@@ -1610,7 +1453,6 @@ class MarketDataService:
                 "rsi_recovery": rsi_recovery[:3] if isinstance(rsi_recovery, list) else [],
                 "social_trending": [t.get("ticker") for t in trending[:5]] if isinstance(trending, list) else [],
             },
-            "market_news": market_news[:8] if isinstance(market_news, list) else [],
             "upcoming_earnings": upcoming_earnings[:5] if isinstance(upcoming_earnings, list) else [],
         }
 
@@ -1629,11 +1471,6 @@ class MarketDataService:
 
         async def full_enrich(ticker):
             data = {"ticker": ticker}
-            try:
-                data["snapshot"] = self.polygon.get_snapshot(ticker)
-                data["technicals"] = self.polygon.get_technicals(ticker)
-            except Exception as e:
-                print(f"[PORTFOLIO] {ticker} polygon failed: {e}")
 
             try:
                 overview = await asyncio.wait_for(
@@ -1784,9 +1621,6 @@ class MarketDataService:
             return {
                 "sentiment": st if not isinstance(st, Exception) else {},
                 "overview": overview if not isinstance(overview, Exception) else {},
-                "snapshot": self.polygon.get_snapshot(ticker),
-                "technicals": self.polygon.get_technicals(ticker),
-                "details": self.polygon.get_ticker_details(ticker),
             }
 
         enriched = await asyncio.gather(
@@ -1824,7 +1658,6 @@ class MarketDataService:
             finviz_most_active,
             finviz_unusual_volume,
             finviz_top_gainers,
-            polygon_movers,
         ) = await asyncio.gather(
             self.stocktwits.get_trending(),
             scrape_yahoo_trending(),
@@ -1832,7 +1665,6 @@ class MarketDataService:
             self.finviz.get_most_active(),
             self.finviz.get_unusual_volume(),
             self.finviz.get_screener_results("ta_topgainers"),
-            asyncio.to_thread(self.polygon.get_market_movers),
             return_exceptions=True,
         )
 
@@ -1842,7 +1674,6 @@ class MarketDataService:
         if isinstance(finviz_most_active, Exception): finviz_most_active = []
         if isinstance(finviz_unusual_volume, Exception): finviz_unusual_volume = []
         if isinstance(finviz_top_gainers, Exception): finviz_top_gainers = []
-        if isinstance(polygon_movers, Exception): polygon_movers = {}
 
         ticker_sources = {}
 
@@ -1862,20 +1693,6 @@ class MarketDataService:
         add_tickers(finviz_unusual_volume, "Finviz Volume")
         add_tickers(finviz_top_gainers, "Finviz Gainers")
 
-        for g in (polygon_movers.get("gainers") or []):
-            t = g.get("ticker", "").upper()
-            if t and len(t) <= 6:
-                if t not in ticker_sources:
-                    ticker_sources[t] = set()
-                ticker_sources[t].add("Polygon")
-
-        for l in (polygon_movers.get("losers") or []):
-            t = l.get("ticker", "").upper()
-            if t and len(t) <= 6:
-                if t not in ticker_sources:
-                    ticker_sources[t] = set()
-                ticker_sources[t].add("Polygon")
-
         ranked = sorted(
             ticker_sources.items(),
             key=lambda x: len(x[1]),
@@ -1892,10 +1709,6 @@ class MarketDataService:
 
         async def full_enrich(ticker):
             try:
-                snapshot = self.polygon.get_snapshot(ticker)
-                technicals = self.polygon.get_technicals(ticker)
-                details = self.polygon.get_ticker_details(ticker)
-
                 st_result, overview, analyst = await asyncio.gather(
                     self.stocktwits.get_sentiment(ticker),
                     self.stockanalysis.get_overview(ticker),
@@ -1904,9 +1717,6 @@ class MarketDataService:
                 )
 
                 return {
-                    "snapshot": snapshot,
-                    "technicals": technicals,
-                    "details": details,
                     "sentiment": st_result if not isinstance(st_result, Exception) else {},
                     "overview": overview if not isinstance(overview, Exception) else {},
                     "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
@@ -1953,7 +1763,6 @@ class MarketDataService:
                 "Finviz Active": len(finviz_most_active),
                 "Finviz Volume": len(finviz_unusual_volume),
                 "Finviz Gainers": len(finviz_top_gainers),
-                "Polygon": len(polygon_movers.get("gainers", [])) + len(polygon_movers.get("losers", [])),
             },
             "ranked_tickers": [
                 {
@@ -1965,7 +1774,7 @@ class MarketDataService:
                 for t, d in sorted_tickers[:15]
             ],
             "enriched_data": sorted_enriched,
-            "market_news": self.polygon.get_news(limit=10),
+            "market_news": [],
         }
 
     async def get_crypto_scanner(self) -> dict:

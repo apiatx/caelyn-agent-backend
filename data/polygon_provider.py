@@ -10,8 +10,8 @@ class PolygonProvider:
         self.api_key = api_key
         self.base_url = "https://api.polygon.io"
         self._rate_lock = threading.Lock()
-        self._last_call = 0
-        self._min_interval = 0.25
+        self._call_times = []
+        self._max_per_minute = 4
 
     def _request(self, path: str, params: dict = None, timeout: int = 8) -> dict:
         if params is None:
@@ -20,10 +20,13 @@ class PolygonProvider:
 
         with self._rate_lock:
             now = time.time()
-            elapsed = now - self._last_call
-            if elapsed < self._min_interval:
-                time.sleep(self._min_interval - elapsed)
-            self._last_call = time.time()
+            self._call_times = [t for t in self._call_times if now - t < 60]
+
+            if len(self._call_times) >= self._max_per_minute:
+                print(f"[Polygon] Rate limit reached ({self._max_per_minute}/min), skipping")
+                return {}
+
+            self._call_times.append(now)
 
         try:
             resp = requests.get(f"{self.base_url}{path}", params=params, timeout=timeout)

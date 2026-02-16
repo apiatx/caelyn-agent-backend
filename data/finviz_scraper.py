@@ -212,24 +212,46 @@ class FinvizScraper:
                     print("[Finviz] Page indicates no matches for this filter combination")
                 return []
 
+            header_row = table.find("tr")
+            headers = []
+            if header_row:
+                for cell in header_row.find_all("td"):
+                    headers.append(cell.get_text(strip=True).lower())
+
+            is_technical = "rsi" in headers or "sma20" in headers
+
+            header_map = {}
+            for i, h in enumerate(headers):
+                header_map[h] = i
+
             rows = table.find_all("tr")[1:]
             results = []
             for row in rows[:20]:
                 cells = row.find_all("td")
                 if len(cells) >= 8:
-                    ticker = cells[1].get_text(strip=True)
+                    ticker_idx = header_map.get("ticker", 1)
+                    ticker = cells[ticker_idx].get_text(strip=True) if len(cells) > ticker_idx else ""
                     if not ticker or len(ticker) > 6:
                         continue
-                    results.append({
+
+                    item = {
                         "ticker": ticker,
-                        "company": cells[2].get_text(strip=True) if len(cells) > 2 else "",
-                        "sector": cells[3].get_text(strip=True) if len(cells) > 3 else "",
-                        "industry": cells[4].get_text(strip=True) if len(cells) > 4 else "",
-                        "market_cap": cells[6].get_text(strip=True) if len(cells) > 6 else "",
-                        "price": cells[8].get_text(strip=True) if len(cells) > 8 else "",
-                        "change": cells[9].get_text(strip=True) if len(cells) > 9 else "",
-                        "volume": cells[10].get_text(strip=True) if len(cells) > 10 else "",
-                    })
+                        "company": cells[header_map.get("company", 2)].get_text(strip=True) if "company" in header_map and len(cells) > header_map["company"] else "",
+                        "sector": cells[header_map.get("sector", 3)].get_text(strip=True) if "sector" in header_map and len(cells) > header_map["sector"] else "",
+                        "industry": cells[header_map.get("industry", 4)].get_text(strip=True) if "industry" in header_map and len(cells) > header_map["industry"] else "",
+                        "market_cap": cells[header_map.get("market cap", 6)].get_text(strip=True) if "market cap" in header_map and len(cells) > header_map["market cap"] else "",
+                        "price": cells[header_map.get("price", 8)].get_text(strip=True) if "price" in header_map and len(cells) > header_map["price"] else "",
+                        "change": cells[header_map.get("change", 9)].get_text(strip=True) if "change" in header_map and len(cells) > header_map["change"] else "",
+                        "volume": cells[header_map.get("volume", 10)].get_text(strip=True) if "volume" in header_map and len(cells) > header_map["volume"] else "",
+                    }
+
+                    if is_technical:
+                        for tech_field in ["rsi", "sma20", "sma50", "sma200", "rel volume", "avg volume", "perf week", "perf month", "perf quart", "perf half", "perf year", "volatility"]:
+                            if tech_field in header_map and len(cells) > header_map[tech_field]:
+                                key = tech_field.replace(" ", "_")
+                                item[key] = cells[header_map[tech_field]].get_text(strip=True)
+
+                    results.append(item)
             print(f"[Finviz] Custom screen returned {len(results)} results")
             cache.set(cache_key, results, FINVIZ_TTL)
             return results

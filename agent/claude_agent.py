@@ -308,10 +308,7 @@ class TradingAgent:
             return await self.data.analyze_portfolio(tickers)
 
         else:
-            # General question — still provide some market context
-            return {
-                "market_news": self.data.polygon.get_news(limit=10),
-            }
+            return {}
 
     async def review_watchlist(self, tickers: list) -> dict:
         """Dedicated watchlist review — bypasses the classifier entirely."""
@@ -321,8 +318,9 @@ class TradingAgent:
         tickers = [t.strip().upper() for t in tickers if t.strip()][:25]
         print(f"[WATCHLIST] Reviewing {len(tickers)} tickers: {tickers}")
 
-        async def fetch_ticker_data(ticker):
+        async def fetch_ticker_data(ticker, index):
             data = {"ticker": ticker}
+            use_polygon = (index < 3)
 
             try:
                 overview = await asyncio.wait_for(
@@ -342,15 +340,24 @@ class TradingAgent:
             except Exception as e:
                 print(f"[WATCHLIST] {ticker} ratings failed: {e}")
 
-            try:
-                data["technicals"] = self.data.polygon.get_technicals(ticker)
-            except Exception as e:
-                print(f"[WATCHLIST] {ticker} technicals failed: {e}")
+            if use_polygon:
+                try:
+                    data["technicals"] = await asyncio.wait_for(
+                        asyncio.to_thread(self.data.polygon.get_technicals, ticker),
+                        timeout=8.0,
+                    )
+                except Exception as e:
+                    print(f"[WATCHLIST] {ticker} technicals failed: {e}")
 
-            try:
-                data["snapshot"] = self.data.polygon.get_snapshot(ticker)
-            except Exception as e:
-                print(f"[WATCHLIST] {ticker} snapshot failed: {e}")
+                try:
+                    data["snapshot"] = await asyncio.wait_for(
+                        asyncio.to_thread(self.data.polygon.get_snapshot, ticker),
+                        timeout=8.0,
+                    )
+                except Exception as e:
+                    print(f"[WATCHLIST] {ticker} snapshot failed: {e}")
+
+                await asyncio.sleep(1.0)
 
             try:
                 sentiment = await asyncio.wait_for(
@@ -364,12 +371,14 @@ class TradingAgent:
             return data
 
         all_ticker_data = []
+        flat_index = 0
         for i in range(0, len(tickers), 5):
             batch = tickers[i:i+5]
             batch_results = await asyncio.gather(
-                *[fetch_ticker_data(t) for t in batch],
+                *[fetch_ticker_data(t, flat_index + j) for j, t in enumerate(batch)],
                 return_exceptions=True,
             )
+            flat_index += len(batch)
             for result in batch_results:
                 if isinstance(result, Exception):
                     print(f"[WATCHLIST] Batch item failed: {result}")
