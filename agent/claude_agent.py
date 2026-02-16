@@ -17,22 +17,76 @@ class TradingAgent:
 
     async def handle_query(self, user_prompt: str, history: list = None) -> dict:
         start_time = time.time()
-        print(f"[AGENT] === NEW REQUEST ===")
+        if history is None:
+            history = []
+        is_followup = len(history) > 0
+
+        print(f"[AGENT] === NEW REQUEST === (followup={is_followup}, history_turns={len(history)})")
         print(f"[AGENT] Query: {user_prompt[:100]}")
 
-        query_info = await self._classify_with_timeout(user_prompt)
-        query_info["original_prompt"] = user_prompt
-        print(f"[AGENT] Classified as: {query_info.get('category')} | filters: {query_info.get('filters', {})} ({time.time() - start_time:.1f}s)")
+        if is_followup and not self._needs_fresh_data(user_prompt):
+            category = "followup"
+            market_data = None
+            print(f"[AGENT] Follow-up detected, skipping data gathering ({time.time() - start_time:.1f}s)")
+        else:
+            query_info = await self._classify_with_timeout(user_prompt)
+            query_info["original_prompt"] = user_prompt
+            category = query_info.get("category", "general")
+            print(f"[AGENT] Classified as: {category} | filters: {query_info.get('filters', {})} ({time.time() - start_time:.1f}s)")
 
-        market_data = await self._gather_data_safe(query_info)
-        print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
+            market_data = await self._gather_data_safe(query_info)
+            print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
 
-        raw_response = await self._ask_claude_with_timeout(user_prompt, market_data, history)
+        raw_response = await self._ask_claude_with_timeout(user_prompt, market_data, history, is_followup=is_followup)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
 
         result = self._parse_response(raw_response)
         print(f"[AGENT] Response parsed, display_type: {result.get('structured', {}).get('display_type', result.get('type', 'unknown'))} ({time.time() - start_time:.1f}s)")
         return result
+
+    def _needs_fresh_data(self, query: str) -> bool:
+        q = query.lower().strip()
+
+        new_scan_triggers = [
+            "scan", "screen", "what's trending", "best trades", "macro overview",
+            "crypto scan", "sector rotation", "daily briefing", "earnings watch",
+            "commodities", "volume spikes", "short squeeze", "show me",
+            "run a", "pull up", "find me", "search for", "morning briefing",
+            "what's hot", "trending now", "stage 2 breakouts", "best investments",
+            "improving fundamentals", "asymmetric only", "social momentum",
+            "bearish setups", "small cap spec", "ai/compute", "uranium",
+            "crypto scanner", "watchlist review",
+            "analyze", "check", "look at", "price action", "how is",
+            "what about ticker", "deep dive",
+        ]
+
+        for trigger in new_scan_triggers:
+            if trigger in q:
+                return True
+
+        import re
+        ticker_pattern = re.findall(r'\b([A-Z]{1,5})\b', query)
+        common_words = {
+            "I", "A", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
+            "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON", "OR",
+            "SO", "TO", "UP", "US", "WE", "THE", "AND", "FOR", "ARE",
+            "BUT", "NOT", "YOU", "ALL", "CAN", "HAD", "HER", "WAS",
+            "ONE", "OUR", "OUT", "HAS", "HIS", "HOW", "ITS", "MAY",
+            "NEW", "NOW", "OLD", "SEE", "WAY", "WHO", "DID", "GET",
+            "HIM", "LET", "SAY", "SHE", "TOO", "USE", "BUY", "SELL",
+            "HOLD", "LONG", "SHORT", "PUT", "CALL", "ETF", "IPO",
+            "CEO", "CFO", "COO", "EPS", "GDP", "CPI", "FED", "SEC",
+            "FDA", "RSI", "SMA", "ATH", "ATL", "YOY", "QOQ", "EBITDA",
+            "NYSE", "WHAT", "WHICH", "RATE", "WHY", "TELL", "MORE",
+            "GIVE", "BEST", "HIGH", "LOW", "TOP", "YES", "THAT", "THIS",
+            "THEY", "THEM", "WILL", "WITH", "JUST", "ALSO", "BEEN",
+            "LIKE", "MUCH", "WHEN", "ONLY", "VERY", "SURE", "YEAH",
+        }
+        real_tickers = [t for t in ticker_pattern if t not in common_words]
+        if real_tickers:
+            return True
+
+        return False
 
     async def _classify_with_timeout(self, prompt: str) -> dict:
         try:
@@ -118,10 +172,10 @@ class TradingAgent:
             print(f"[AGENT] Data gathering error: {e}")
             return {"error": f"Data gathering failed: {str(e)}"}
 
-    async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None) -> str:
+    async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False) -> str:
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(self._ask_claude, user_prompt, market_data, history),
+                asyncio.to_thread(self._ask_claude, user_prompt, market_data, history, is_followup),
                 timeout=60.0,
             )
         except asyncio.TimeoutError:
@@ -375,76 +429,123 @@ class TradingAgent:
         print(f"[AI Screener] Extracted filters from prompt: {filters}")
         return filters
 
-    def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None) -> str:
+    def _trim_history(self, messages: list, max_chars: int = 100000) -> list:
+        total = sum(len(m.get("content", "")) for m in messages)
+        while total > max_chars and len(messages) > 2:
+            oldest = messages[0]
+            content_len = len(oldest.get("content", ""))
+            if content_len > 5000:
+                truncated = oldest["content"][:2000] + "\n...[truncated for context window]..."
+                saved = content_len - len(truncated)
+                oldest["content"] = truncated
+                total -= saved
+                print(f"[Agent] Truncated oldest message from {content_len:,} to {len(truncated):,} chars")
+            else:
+                messages.pop(0)
+                total -= content_len
+                print(f"[Agent] Removed oldest message ({content_len:,} chars) to fit context window")
+        return messages
+
+    def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False) -> str:
         """Send the user's question + market data to Claude with conversation history."""
-        compressed = compress_data(market_data)
-        data_str = json.dumps(compressed, default=str)
-        raw_size = len(json.dumps(market_data, default=str))
-        print(f"[Agent] Data compression: {raw_size:,} → {len(data_str):,} chars ({100 - len(data_str)*100//max(raw_size,1)}% reduction)")
 
-        if len(data_str) > 80000:
-            from agent.data_compressor import _aggressive_truncate
-            compressed = _aggressive_truncate(compressed, 75000)
-            data_str = json.dumps(compressed, default=str)
-            print(f"[Agent] WARNING: Data still over 80K after initial compression, aggressive truncation → {len(data_str):,}")
-
-        total_prompt_len = len(SYSTEM_PROMPT) + len(user_prompt) + len(data_str)
-        if total_prompt_len > 600000:
-            allowed = max(10000, 600000 - len(SYSTEM_PROMPT) - len(user_prompt) - 1000)
-            from agent.data_compressor import _aggressive_truncate
-            compressed = _aggressive_truncate(compressed, allowed)
-            data_str = json.dumps(compressed, default=str)
-            print(f"[Agent] WARNING: Total prompt was {total_prompt_len:,} chars, re-truncated data to {len(data_str):,}")
-
-        filters = market_data.get("user_filters", {})
+        data_str = None
         filter_instructions = ""
-        if filters:
-            if filters.get("market_cap"):
-                cap = filters["market_cap"]
-                if cap == "small_cap":
-                    filter_instructions += "\n⚠️ USER WANTS SMALL CAP STOCKS ONLY (under $2B market cap). Do NOT recommend any stock with a market cap above $2B. Filter out all large caps like RIVN, NVDA, AAPL, etc."
-                elif cap == "mid_cap":
-                    filter_instructions += "\n⚠️ USER WANTS MID CAP STOCKS ONLY ($2B-$10B market cap). Filter out small caps and large caps."
-                elif cap == "large_cap":
-                    filter_instructions += "\n⚠️ USER WANTS LARGE CAP STOCKS ONLY (over $10B market cap). Filter out small and mid caps."
-                elif cap == "mega_cap":
-                    filter_instructions += "\n⚠️ USER WANTS MEGA CAP STOCKS ONLY (over $200B market cap)."
-            if filters.get("sector"):
-                filter_instructions += f"\n⚠️ USER WANTS {filters['sector'].upper()} SECTOR ONLY. Only recommend stocks in this sector."
-            if filters.get("style"):
-                style = filters["style"]
-                if style == "day_trade":
-                    filter_instructions += "\n⚠️ USER WANTS DAY TRADES. Focus on high volume, high volatility stocks with intraday setups. Mention specific entry/exit levels and timeframes."
-                elif style == "swing":
-                    filter_instructions += "\n⚠️ USER WANTS SWING TRADES (days to weeks). Focus on stocks with developing technical patterns and upcoming catalysts."
-                elif style == "position":
-                    filter_instructions += "\n⚠️ USER WANTS POSITION TRADES (weeks to months). Focus on fundamental value and longer-term technical trends."
+
+        if market_data is not None:
+            compressed = compress_data(market_data)
+            data_str = json.dumps(compressed, default=str)
+            raw_size = len(json.dumps(market_data, default=str))
+            print(f"[Agent] Data compression: {raw_size:,} → {len(data_str):,} chars ({100 - len(data_str)*100//max(raw_size,1)}% reduction)")
+
+            if len(data_str) > 80000:
+                from agent.data_compressor import _aggressive_truncate
+                compressed = _aggressive_truncate(compressed, 75000)
+                data_str = json.dumps(compressed, default=str)
+                print(f"[Agent] WARNING: Data still over 80K after initial compression, aggressive truncation → {len(data_str):,}")
+
+            filters = market_data.get("user_filters", {})
+            if filters:
+                if filters.get("market_cap"):
+                    cap = filters["market_cap"]
+                    if cap == "small_cap":
+                        filter_instructions += "\n⚠️ USER WANTS SMALL CAP STOCKS ONLY (under $2B market cap). Do NOT recommend any stock with a market cap above $2B. Filter out all large caps like RIVN, NVDA, AAPL, etc."
+                    elif cap == "mid_cap":
+                        filter_instructions += "\n⚠️ USER WANTS MID CAP STOCKS ONLY ($2B-$10B market cap). Filter out small caps and large caps."
+                    elif cap == "large_cap":
+                        filter_instructions += "\n⚠️ USER WANTS LARGE CAP STOCKS ONLY (over $10B market cap). Filter out small and mid caps."
+                    elif cap == "mega_cap":
+                        filter_instructions += "\n⚠️ USER WANTS MEGA CAP STOCKS ONLY (over $200B market cap)."
+                if filters.get("sector"):
+                    filter_instructions += f"\n⚠️ USER WANTS {filters['sector'].upper()} SECTOR ONLY. Only recommend stocks in this sector."
+                if filters.get("style"):
+                    style = filters["style"]
+                    if style == "day_trade":
+                        filter_instructions += "\n⚠️ USER WANTS DAY TRADES. Focus on high volume, high volatility stocks with intraday setups. Mention specific entry/exit levels and timeframes."
+                    elif style == "swing":
+                        filter_instructions += "\n⚠️ USER WANTS SWING TRADES (days to weeks). Focus on stocks with developing technical patterns and upcoming catalysts."
+                    elif style == "position":
+                        filter_instructions += "\n⚠️ USER WANTS POSITION TRADES (weeks to months). Focus on fundamental value and longer-term technical trends."
 
         messages = []
 
         if history:
-            recent_history = history[-20:]
+            recent_history = history[-10:]
             for msg in recent_history:
                 messages.append({
                     "role": msg["role"],
                     "content": msg["content"],
                 })
 
-        messages.append({
-            "role": "user",
-            "content": (
-                f"## Real-Time Market Data\n"
+        if data_str:
+            user_content = (
+                f"[MARKET DATA — use this to inform your analysis]\n"
                 f"{data_str}\n\n"
                 f"{filter_instructions}\n\n"
-                f"## User Question\n"
+                f"[USER QUERY]\n"
                 f"{user_prompt}"
-            ),
-        })
+            )
+        else:
+            user_content = user_prompt
+
+        messages.append({"role": "user", "content": user_content})
+
+        messages = self._trim_history(messages, max_chars=100000)
+
+        total_prompt_len = len(SYSTEM_PROMPT) + sum(len(m["content"]) for m in messages)
+        if data_str and total_prompt_len > 600000:
+            allowed = max(10000, 600000 - len(SYSTEM_PROMPT) - len(user_prompt) - 1000)
+            from agent.data_compressor import _aggressive_truncate
+            compressed = _aggressive_truncate(compressed, allowed)
+            data_str = json.dumps(compressed, default=str)
+            messages[-1]["content"] = (
+                f"[MARKET DATA — use this to inform your analysis]\n"
+                f"{data_str}\n\n"
+                f"{filter_instructions}\n\n"
+                f"[USER QUERY]\n"
+                f"{user_prompt}"
+            )
+            print(f"[Agent] WARNING: Total prompt was {total_prompt_len:,} chars, re-truncated data to {len(data_str):,}")
+
+        system = SYSTEM_PROMPT
+        if is_followup:
+            system += """
+
+FOLLOW-UP MODE: The user is continuing a conversation. You have the full conversation history above.
+- If the user asks about a specific ticker or pick from your previous response, go deeper on that specific item.
+- If the user asks a general question, answer it using your trading expertise and any data from the conversation.
+- You can respond conversationally — you don't need to use a structured JSON display_type for follow-ups.
+- For follow-up responses, use display_type "chat" with a "message" field containing your analysis.
+- BUT if the user asks you to analyze a new ticker or run a new type of scan, use the appropriate display_type.
+- Keep your trader personality — be direct, opinionated, and cut through noise.
+- You still have access to all the data from the original scan in the conversation history. Reference specific data points when relevant."""
+
+        print(f"[Agent] Sending {len(messages)} messages to Claude (followup={is_followup})")
 
         response = self.client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=16384,
-            system=SYSTEM_PROMPT,
+            system=system,
             messages=messages,
         )
         if response.stop_reason == "max_tokens":

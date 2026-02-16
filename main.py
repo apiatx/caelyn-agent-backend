@@ -61,13 +61,15 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)):
     return x_api_key
 
 
-class ChatMessage(BaseModel):
+class Message(BaseModel):
     role: str
     content: str
 
 class QueryRequest(BaseModel):
-    prompt: str
-    history: Optional[List[ChatMessage]] = None
+    query: Optional[str] = None
+    prompt: Optional[str] = None
+    conversation_history: Optional[List[Message]] = []
+    history: Optional[List[Message]] = None
 
 @app.post("/api/query")
 @limiter.limit("10/minute")
@@ -82,12 +84,17 @@ async def query_agent(
             status_code=403,
             detail="Invalid or missing API key.",
         )
-    print(f"[API] Received query: prompt={body.prompt[:100]}")
+    user_query = body.query or body.prompt or ""
+    if not user_query.strip():
+        raise HTTPException(status_code=400, detail="No query provided. Send 'query' or 'prompt' field.")
+    hist_source = body.conversation_history if body.conversation_history else (body.history if body.history else [])
+    history = [h.dict() for h in hist_source] if hist_source else []
+    print(f"[API] Received query: query={user_query[:100]}, history_turns={len(history)}")
     try:
         result = await asyncio.wait_for(
             agent.handle_query(
-                body.prompt,
-                history=[h.dict() for h in body.history] if body.history else None,
+                user_query,
+                history=history,
             ),
             timeout=90.0,
         )

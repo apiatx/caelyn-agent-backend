@@ -68,6 +68,7 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-16: Made agent fully conversational with multi-turn support. Claude now receives conversation history and can answer follow-ups using prior context without re-fetching data. New scans mid-conversation (including ticker mentions like "analyze NVDA") correctly trigger fresh data gathering. API accepts both old (prompt/history) and new (query/conversation_history) field names for backward compatibility. History trimmed to 100K chars with smart truncation (truncates large messages before dropping).
 - 2026-02-15: Added comprehensive timeout/reliability layer: 90s global request timeout, 10s classifier timeout with keyword fallback, 45s data gathering timeout, 60s Claude API timeout. All failures return valid JSON chat responses.
 - 2026-02-15: Removed Polygon retry logic on 429 (was causing 90s+ delays). Now returns empty immediately.
 - 2026-02-15: Reduced all provider HTTP timeouts (15s→10s, 20s→12s, Polygon 10s→8s) to prevent cascading delays.
