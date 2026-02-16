@@ -1040,37 +1040,13 @@ class MarketDataService:
 
     async def get_sector_rotation_with_stages(self) -> dict:
         """
-        Sector rotation analysis using Weinstein Stage Analysis.
-
-        For each sector, determines what % of stocks are in Stage 2 (advancing).
-        Sectors with the highest % of Stage 2 stocks are the "hot" sectors
-        where money is flowing — these are where you want to fish for trades.
-
-        Weinstein Stage Classification:
-        - Stage 1 (Basing): Price near flattening 150-day SMA
-        - Stage 2 (Advancing): Price ABOVE rising 150-day SMA (BUY zone)
-        - Stage 3 (Topping): Price near 150-day SMA after advance, flattening
-        - Stage 4 (Declining): Price BELOW falling 150-day SMA (AVOID)
-
-        We approximate using Finviz filters:
-        - Above SMA200 + Above SMA50 + SMA50 above SMA200 = Stage 2
-        - Above SMA200 + Below SMA50 = Stage 3 (potential topping)
-        - Below SMA200 + Below SMA50 = Stage 4 (declining)
-        - Below SMA200 + Above SMA50 = Stage 1 (potential basing/recovery)
+        Simplified Weinstein sector rotation.
+        Instead of 33 individual Finviz calls (3 per sector x 11), do 3 broad screens
+        and count by sector. Much faster and avoids Finviz rate limiting.
         """
-        sectors = {
-            "Technology": "sec_technology",
-            "Healthcare": "sec_healthcare",
-            "Financial": "sec_financial",
-            "Consumer Cyclical": "sec_consumercyclical",
-            "Consumer Defensive": "sec_consumerdefensive",
-            "Industrials": "sec_industrials",
-            "Energy": "sec_energy",
-            "Basic Materials": "sec_basicmaterials",
-            "Real Estate": "sec_realestate",
-            "Utilities": "sec_utilities",
-            "Communication Services": "sec_communicationservices",
-        }
+        import time
+        start = time.time()
+        print("[SECTOR] Starting sector rotation scan...")
 
         sector_etfs = {
             "Technology": "XLK",
@@ -1086,137 +1062,187 @@ class MarketDataService:
             "Communication Services": "XLC",
         }
 
-        async def analyze_sector(sector_name, finviz_code):
-            try:
-                stage2_screen = f"v=111&f={finviz_code},ta_sma200_pa,ta_sma50_pa,sh_avgvol_o200&ft=4"
-                stage4_screen = f"v=111&f={finviz_code},ta_sma200_pb,ta_sma50_pb,sh_avgvol_o200&ft=4"
-                total_screen = f"v=111&f={finviz_code},sh_avgvol_o200&ft=4"
+        try:
+            stage2_task = self.finviz._custom_screen(
+                "v=111&f=ta_sma200_pa,ta_sma50_pa,sh_avgvol_o300&ft=4"
+            )
+            stage4_task = self.finviz._custom_screen(
+                "v=111&f=ta_sma200_pb,ta_sma50_pb,sh_avgvol_o300&ft=4"
+            )
+            total_task = self.finviz._custom_screen(
+                "v=111&f=sh_avgvol_o300&ft=4"
+            )
 
-                stage2_results, stage4_results, total_results = await asyncio.gather(
-                    self.finviz._custom_screen(stage2_screen),
-                    self.finviz._custom_screen(stage4_screen),
-                    self.finviz._custom_screen(total_screen),
-                    return_exceptions=True,
-                )
+            stage2_stocks, stage4_stocks, total_stocks = await asyncio.gather(
+                stage2_task, stage4_task, total_task,
+                return_exceptions=True,
+            )
 
-                stage2_count = len(stage2_results) if not isinstance(stage2_results, Exception) and stage2_results else 0
-                stage4_count = len(stage4_results) if not isinstance(stage4_results, Exception) and stage4_results else 0
-                total_count = len(total_results) if not isinstance(total_results, Exception) and total_results else 1
+            if isinstance(stage2_stocks, Exception):
+                print(f"[SECTOR] Stage 2 screen failed: {stage2_stocks}")
+                stage2_stocks = []
+            if isinstance(stage4_stocks, Exception):
+                print(f"[SECTOR] Stage 4 screen failed: {stage4_stocks}")
+                stage4_stocks = []
+            if isinstance(total_stocks, Exception):
+                print(f"[SECTOR] Total screen failed: {total_stocks}")
+                total_stocks = []
 
-                stage1_3_count = max(0, total_count - stage2_count - stage4_count)
+            print(f"[SECTOR] Raw counts: Stage2={len(stage2_stocks)}, Stage4={len(stage4_stocks)}, Total={len(total_stocks)} ({time.time()-start:.1f}s)")
 
-                stage2_pct = round((stage2_count / max(total_count, 1)) * 100, 1)
-                stage4_pct = round((stage4_count / max(total_count, 1)) * 100, 1)
+            if not stage2_stocks and not stage4_stocks and not total_stocks:
+                print("[SECTOR] WARNING: All Finviz screens returned empty. Finviz may be blocking requests.")
+                return {
+                    "error": "Finviz screener returned no data. The service may be temporarily unavailable.",
+                    "sectors": [],
+                    "breakout_candidates": [],
+                }
 
-                if stage2_pct >= 60:
-                    sector_stage = "Stage 2 - Advancing"
-                    signal = "STRONG BUY ZONE — Majority of stocks in uptrends. Fish here for trades."
-                elif stage2_pct >= 40:
-                    sector_stage = "Early Stage 2 / Late Stage 1"
-                    signal = "EMERGING — Sector transitioning to uptrend. Watch for breakouts."
-                elif stage4_pct >= 50:
-                    sector_stage = "Stage 4 - Declining"
-                    signal = "AVOID — Majority of stocks in downtrends. Don't fight the trend."
-                elif stage4_pct >= 30:
-                    sector_stage = "Stage 3 - Topping / Early Stage 4"
-                    signal = "CAUTION — Distribution in progress. Take profits, tighten stops."
+            sectors_map = {}
+
+            for stock in total_stocks:
+                sector = stock.get("sector") or stock.get("Sector") or "Unknown"
+                if sector in ("Unknown", ""):
+                    continue
+                if sector not in sectors_map:
+                    sectors_map[sector] = {"total": 0, "stage2": 0, "stage4": 0}
+                sectors_map[sector]["total"] += 1
+
+            for stock in stage2_stocks:
+                sector = stock.get("sector") or stock.get("Sector") or "Unknown"
+                if sector in sectors_map:
+                    sectors_map[sector]["stage2"] += 1
+
+            for stock in stage4_stocks:
+                sector = stock.get("sector") or stock.get("Sector") or "Unknown"
+                if sector in sectors_map:
+                    sectors_map[sector]["stage4"] += 1
+
+            sectors = []
+            for sector_name, counts in sectors_map.items():
+                total = counts["total"]
+                if total == 0:
+                    continue
+
+                s2_pct = round(counts["stage2"] / total * 100, 1)
+                s4_pct = round(counts["stage4"] / total * 100, 1)
+
+                if s2_pct >= 60:
+                    stage = "Stage 2 - Advancing"
+                    signal = "STRONG — Fish here for breakouts"
+                elif s2_pct >= 40:
+                    stage = "Early Stage 2 / Late Stage 1"
+                    signal = "EMERGING — Watch for breakout confirmation"
+                elif s4_pct >= 50:
+                    stage = "Stage 4 - Declining"
+                    signal = "AVOID — Don't buy stocks in this sector"
+                elif s4_pct >= 30:
+                    stage = "Stage 3 - Topping"
+                    signal = "CAUTION — Reduce exposure"
                 else:
-                    sector_stage = "Stage 1 - Basing"
-                    signal = "WATCH — Sector consolidating. Not ready yet but building a base."
+                    stage = "Stage 1 - Basing"
+                    signal = "WATCH — Not ready yet"
 
-                return {
+                sectors.append({
                     "sector": sector_name,
                     "etf": sector_etfs.get(sector_name, ""),
-                    "total_stocks": total_count,
-                    "stage2_count": stage2_count,
-                    "stage2_pct": stage2_pct,
-                    "stage4_count": stage4_count,
-                    "stage4_pct": stage4_pct,
-                    "stage1_3_count": stage1_3_count,
-                    "sector_stage": sector_stage,
+                    "stage2_pct": s2_pct,
+                    "stage4_pct": s4_pct,
+                    "stage2_count": counts["stage2"],
+                    "stage4_count": counts["stage4"],
+                    "total_count": total,
+                    "sector_stage": stage,
                     "signal": signal,
-                }
-            except Exception as e:
-                print(f"Sector analysis error for {sector_name}: {e}")
-                return {
-                    "sector": sector_name,
-                    "etf": sector_etfs.get(sector_name, ""),
-                    "error": str(e),
-                }
+                })
 
-        sector_results = await asyncio.gather(
-            *[analyze_sector(name, code) for name, code in sectors.items()],
-            return_exceptions=True,
-        )
+            sectors.sort(key=lambda x: x["stage2_pct"], reverse=True)
 
-        sector_data = []
-        for result in sector_results:
-            if isinstance(result, Exception):
-                continue
-            if isinstance(result, dict):
-                sector_data.append(result)
+            print(f"[SECTOR] Processed {len(sectors)} sectors ({time.time()-start:.1f}s)")
+            for s in sectors:
+                print(f"[SECTOR]   {s['sector']}: {s['stage2_pct']}% Stage 2, {s['stage4_pct']}% Stage 4 — {s['sector_stage']}")
 
-        sector_data.sort(key=lambda x: x.get("stage2_pct", 0), reverse=True)
+            top_sectors = [s["sector"] for s in sectors[:3] if s["stage2_pct"] >= 40]
+            breakout_candidates = []
 
-        top_sector_etfs = [s["etf"] for s in sector_data[:6] if s.get("etf")]
-        etf_data = {}
-        for etf in top_sector_etfs:
+            if top_sectors:
+                for stock in stage2_stocks:
+                    sector = stock.get("sector") or stock.get("Sector")
+                    if sector in top_sectors:
+                        ticker = stock.get("ticker") or stock.get("Ticker")
+                        if ticker:
+                            breakout_candidates.append({
+                                "ticker": ticker,
+                                "company": stock.get("company") or stock.get("Company", ""),
+                                "sector": sector,
+                                "price": stock.get("price") or stock.get("Price"),
+                                "change": stock.get("change") or stock.get("Change"),
+                                "volume": stock.get("volume") or stock.get("Volume"),
+                            })
+
+                breakout_candidates = breakout_candidates[:15]
+                print(f"[SECTOR] Found {len(breakout_candidates)} breakout candidates from top sectors: {top_sectors} ({time.time()-start:.1f}s)")
+
+                enriched = []
+                for candidate in breakout_candidates[:8]:
+                    ticker = candidate["ticker"]
+                    try:
+                        overview = await asyncio.wait_for(
+                            self.stockanalysis.get_overview(ticker),
+                            timeout=8.0,
+                        )
+                        candidate.update(overview or {})
+                    except Exception as e:
+                        print(f"[SECTOR] Failed to enrich {ticker}: {e}")
+                    enriched.append(candidate)
+
+                breakout_candidates = enriched
+                print(f"[SECTOR] Enriched {len(breakout_candidates)} candidates ({time.time()-start:.1f}s)")
+
+            fear_greed = {}
             try:
-                overview = await self.stockanalysis.get_overview(etf)
-                if overview and not isinstance(overview, Exception):
-                    etf_data[etf] = overview
-            except:
+                fear_greed = await asyncio.wait_for(
+                    self.fear_greed.get_fear_greed_index(),
+                    timeout=8.0,
+                )
+            except Exception:
                 pass
 
-        top_sectors = [s["sector"] for s in sector_data[:3] if s.get("stage2_pct", 0) >= 40]
-        breakout_candidates = []
-        for sector_name in top_sectors:
-            try:
-                finviz_code = sectors[sector_name]
-                breakout_screen = f"v=111&f={finviz_code},ta_sma200_pa,ta_sma50_pa,sh_relvol_o1.5,sh_avgvol_o300&ft=4&o=-sh_relvol"
-                results = await self.finviz._custom_screen(breakout_screen)
-                if results and not isinstance(results, Exception):
-                    for r in results[:5]:
-                        r["from_sector"] = sector_name
-                        breakout_candidates.append(r)
-            except:
-                pass
+            fmp_sectors = {}
+            if self.fmp:
+                try:
+                    fmp_sectors = await asyncio.wait_for(
+                        self.fmp.get_sector_performance(),
+                        timeout=8.0,
+                    )
+                except Exception:
+                    pass
 
-        enriched_breakouts = {}
-        for candidate in breakout_candidates[:15]:
-            ticker = candidate.get("ticker", "")
-            if not ticker:
-                continue
-            try:
-                overview = await self.stockanalysis.get_overview(ticker)
-                analyst = await self.stockanalysis.get_analyst_ratings(ticker)
-                enriched_breakouts[ticker] = {
-                    "finviz": candidate,
-                    "overview": overview if not isinstance(overview, Exception) else {},
-                    "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
-                }
-            except:
-                enriched_breakouts[ticker] = {"finviz": candidate}
+            result = {
+                "sector_stages": sectors,
+                "breakout_candidates": breakout_candidates,
+                "top_sectors": top_sectors,
+                "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+                "fmp_sector_performance": fmp_sectors if not isinstance(fmp_sectors, Exception) else {},
+                "scan_summary": {
+                    "total_stocks_scanned": len(total_stocks),
+                    "stage2_total": len(stage2_stocks),
+                    "stage4_total": len(stage4_stocks),
+                    "sectors_analyzed": len(sectors),
+                },
+            }
 
-        fear_greed = {}
-        try:
-            fear_greed = await self.fear_greed.get_fear_greed_index()
-        except:
-            pass
+            print(f"[SECTOR] Final result: {len(str(result)):,} chars ({time.time()-start:.1f}s)")
+            return result
 
-        fmp_sectors = {}
-        try:
-            fmp_sectors = await self.fmp.get_sector_performance()
-        except:
-            pass
-
-        return {
-            "sector_stages": sector_data,
-            "etf_data": etf_data,
-            "breakout_candidates": enriched_breakouts,
-            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
-            "fmp_sector_performance": fmp_sectors if not isinstance(fmp_sectors, Exception) else {},
-        }
+        except Exception as e:
+            print(f"[SECTOR] Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "error": f"Sector rotation scan failed: {str(e)}",
+                "sectors": [],
+                "breakout_candidates": [],
+            }
 
     async def get_asymmetric_setups(self) -> dict:
         """

@@ -110,7 +110,7 @@ class TradingAgent:
             return {"category": "commodities"}
         if any(w in q for w in ["trending", "trend", "what's hot", "popular"]):
             return {"category": "trending"}
-        if any(w in q for w in ["sector", "rotation", "stage 2", "weinstein"]):
+        if any(w in q for w in ["sector", "rotation", "stage 2", "weinstein", "breakout"]):
             return {"category": "sector_rotation"}
         if any(w in q for w in ["squeeze", "short squeeze", "short interest", "short float"]):
             return {"category": "squeeze"}
