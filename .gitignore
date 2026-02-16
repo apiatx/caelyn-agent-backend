@@ -9,3 +9,6 @@ wheels/
 # Virtual environments
 .venv
 .pythonlibs/
+
+# Chat history storage
+data/chat_history_store/

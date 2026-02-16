@@ -54,11 +54,14 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 
 ## Endpoints
 - `GET /` - Welcome message
-- `GET /health` - Health check
-- `POST /api/scan` - Run trading scans
-- `POST /api/portfolio` - Portfolio review
-- `POST /api/briefing` - Morning briefing
+- `GET /api/health` - Health check (verifies Claude API)
+- `POST /api/query` - Main agent query (supports conversation_id for auto-save)
 - `POST /api/cache/clear` - Clear cache (requires X-API-Key header)
+- `GET /api/conversations` - List all recent conversations (metadata, sorted by most recent)
+- `GET /api/conversations/{id}` - Get full conversation with messages
+- `POST /api/conversations` - Create new conversation (body: {first_query: string})
+- `PUT /api/conversations/{id}` - Update conversation messages
+- `DELETE /api/conversations/{id}` - Delete a conversation
 
 ## User Preferences
 - SQGLP framework for investments, Weinstein stage analysis for trades
@@ -68,6 +71,7 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-16: Added chat history persistence with file-based storage (data/chat_history.py). Conversations auto-delete after 3 days. CRUD endpoints: list, get, create, update, delete. /api/query auto-saves when conversation_id is provided.
 - 2026-02-16: Made agent fully conversational with multi-turn support. Claude now receives conversation history and can answer follow-ups using prior context without re-fetching data. New scans mid-conversation (including ticker mentions like "analyze NVDA") correctly trigger fresh data gathering. API accepts both old (prompt/history) and new (query/conversation_history) field names for backward compatibility. History trimmed to 100K chars with smart truncation (truncates large messages before dropping).
 - 2026-02-15: Added comprehensive timeout/reliability layer: 90s global request timeout, 10s classifier timeout with keyword fallback, 45s data gathering timeout, 60s Claude API timeout. All failures return valid JSON chat responses.
 - 2026-02-15: Removed Polygon retry logic on 429 (was causing 90s+ delays). Now returns empty immediately.

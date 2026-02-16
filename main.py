@@ -6,9 +6,15 @@ from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel
 from typing import List, Optional
 
+import json as _json
+
 from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY
 from data.market_data_service import MarketDataService
 from agent.claude_agent import TradingAgent
+from data.chat_history import (
+    create_conversation, save_messages, get_conversation,
+    list_conversations, delete_conversation,
+)
 
 # ============================================================
 # Initialize the app
@@ -70,6 +76,7 @@ class QueryRequest(BaseModel):
     prompt: Optional[str] = None
     conversation_history: Optional[List[Message]] = []
     history: Optional[List[Message]] = None
+    conversation_id: Optional[str] = None
 
 @app.post("/api/query")
 @limiter.limit("10/minute")
@@ -98,6 +105,16 @@ async def query_agent(
             ),
             timeout=90.0,
         )
+
+        if body.conversation_id:
+            try:
+                updated_messages = list(history)
+                updated_messages.append({"role": "user", "content": user_query})
+                updated_messages.append({"role": "assistant", "content": _json.dumps(result, default=str)})
+                save_messages(body.conversation_id, updated_messages)
+            except Exception as e:
+                print(f"[API] Failed to save conversation: {e}")
+
         return result
     except asyncio.TimeoutError:
         print("[API] Request timed out after 90s")
@@ -132,6 +149,45 @@ async def clear_cache(request: Request, api_key: str = Header(None, alias="X-API
     cache.clear()
     return {"status": "Cache cleared"}
 
+
+class CreateConversationRequest(BaseModel):
+    first_query: str = "New conversation"
+
+class UpdateConversationRequest(BaseModel):
+    messages: List[dict] = []
+
+@app.get("/api/conversations")
+@limiter.limit("30/minute")
+async def get_conversations(request: Request):
+    return {"conversations": list_conversations()}
+
+@app.get("/api/conversations/{conv_id}")
+@limiter.limit("30/minute")
+async def get_conversation_detail(request: Request, conv_id: str):
+    conv = get_conversation(conv_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conv
+
+@app.post("/api/conversations")
+@limiter.limit("30/minute")
+async def create_new_conversation(request: Request, body: CreateConversationRequest):
+    conv = create_conversation(body.first_query)
+    return conv
+
+@app.put("/api/conversations/{conv_id}")
+@limiter.limit("30/minute")
+async def update_conversation(request: Request, conv_id: str, body: UpdateConversationRequest):
+    success = save_messages(conv_id, body.messages)
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"success": success}
+
+@app.delete("/api/conversations/{conv_id}")
+@limiter.limit("30/minute")
+async def delete_conv(request: Request, conv_id: str):
+    success = delete_conversation(conv_id)
+    return {"success": success}
 
 @app.get("/api/health")
 @limiter.limit("30/minute")
