@@ -1,7 +1,7 @@
 # Trading Analysis Platform - FastAPI Backend
 
 ## Overview
-A comprehensive Python FastAPI backend for a trading analysis platform that combines real-time market data from 13+ sources with Claude AI to provide actionable trading insights. Claude operates as a "master trader" persona — filtering ruthlessly, leading with conviction picks, and weaving macro context into every analysis. Supports both long-term investment analysis (SQGLP framework) and short-term trading strategies (Weinstein stage analysis, momentum/catalyst-driven).
+A comprehensive Python FastAPI backend for a trading analysis platform that combines real-time market data from 15+ sources with Claude AI to provide actionable trading insights. Claude operates as a "master trader" persona — filtering ruthlessly, leading with conviction picks, and weaving macro context into every analysis. Supports both long-term investment analysis (SQGLP framework) and short-term trading strategies (Weinstein stage analysis, momentum/catalyst-driven).
 
 ## Project Architecture
 ```
@@ -15,6 +15,7 @@ data/
   market_data_service.py     - Orchestrator: wide scanning, enrichment, scoring
   scoring_engine.py          - Quantitative pre-scoring engine
   finviz_scraper.py          - Finviz screener integration
+  reddit_provider.py         - Reddit/WSB sentiment via ApeWisdom (free)
   polygon_provider.py        - Polygon.io market data (snapshots, technicals, news)
   stocktwits_provider.py     - StockTwits social sentiment
   stockanalysis_scraper.py   - StockAnalysis financials/overview
@@ -71,7 +72,14 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - "Best Trades" = finding SETUPS (multiple indicators aligning), not chasing momentum
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
+## Cache TTLs (continued)
+- Reddit/ApeWisdom: 5 min
+- Economic calendar (Nasdaq): 5 min
+
 ## Recent Changes
+- 2026-02-16: Added Reddit/WSB sentiment via ApeWisdom API (free, no key). Tracks WSB, r/stocks, r/options, r/investing, r/daytrading trending. Includes mention_change_pct for momentum detection. Integrated into get_market_news_context() and cross-platform trending aggregator.
+- 2026-02-16: Added economic calendar via Nasdaq free API (FMP endpoint 403 on free tier). Fetches high-impact US events (Fed, CPI, NFP, GDP, etc.) for next 3 days. Integrated into news context pipeline.
+- 2026-02-16: Updated system prompt with economic calendar and Reddit/WSB interpretation guides.
 - 2026-02-16: News-first analysis pipeline — get_market_news_context() fetches Alpha Vantage news in parallel with Finviz screens (no time penalty). enrich_with_sentiment_filter() runs fully parallel StockTwits calls (10 tickers in ~0.8s vs 7.3s sequential). Negative catalyst keyword detection on news. Added "ANALYSIS ORDER" to system prompt: news→sentiment→narrative→FA/TA→recommend only if aligned.
 - 2026-02-16: Switched primary news source from FMP (403 on free tier) to Alpha Vantage news sentiment. FMP 403 errors now suppressed in logs. Per-ticker news uses broad market context (1 AV call) instead of per-ticker AV calls (conserves 25/day limit).
 - 2026-02-16: Added TradingView chart links to all format schemas (trades, investments, technicals, analysis). Claude now includes "chart": "https://www.tradingview.com/chart/?symbol=TICKER" in every pick.

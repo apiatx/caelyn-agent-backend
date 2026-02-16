@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 from data.cache import cache, FMP_TTL
 
@@ -373,6 +374,69 @@ class FMPProvider:
             "metals_etfs": metal_etfs if not isinstance(metal_etfs, Exception) else {},
             "agriculture_etfs": agri_etfs if not isinstance(agri_etfs, Exception) else {},
         }
+
+    async def get_economic_calendar(self, days_ahead: int = 7) -> list:
+        """
+        Get upcoming US economic events for the next N days.
+        Uses Nasdaq free calendar API as primary source.
+        """
+        from datetime import datetime, timedelta
+
+        cache_key = f"econ_calendar:{datetime.now().strftime('%Y-%m-%d')}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        important_keywords = [
+            "fed", "fomc", "interest rate", "cpi", "inflation", "ppi",
+            "nonfarm", "payroll", "employment", "unemployment", "jobs",
+            "gdp", "retail sales", "consumer confidence", "pce",
+            "ism", "manufacturing", "housing", "home sales",
+            "trade balance", "treasury", "powell",
+        ]
+
+        high_impact = []
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                for day_offset in range(days_ahead):
+                    date_str = (datetime.now() + timedelta(days=day_offset)).strftime("%Y-%m-%d")
+                    resp = await client.get(
+                        f"https://api.nasdaq.com/api/calendar/economicevents?date={date_str}",
+                        headers={"User-Agent": "Mozilla/5.0"},
+                    )
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+                    rows = data.get("data", {}).get("rows", []) or []
+                    for event in rows:
+                        country = (event.get("country") or "").lower()
+                        name = (event.get("eventName") or "").lower()
+                        if "united states" not in country and country != "us":
+                            continue
+                        is_important = any(kw in name for kw in important_keywords)
+                        if is_important:
+                            def clean(v):
+                                if not v:
+                                    return None
+                                s = str(v).replace("&nbsp;", "").strip()
+                                return s if s else None
+                            high_impact.append({
+                                "event": event.get("eventName", ""),
+                                "date": date_str,
+                                "time_gmt": event.get("gmt", ""),
+                                "previous": clean(event.get("previous")),
+                                "consensus": clean(event.get("consensus")),
+                                "actual": clean(event.get("actual")),
+                            })
+                    if day_offset < days_ahead - 1:
+                        await asyncio.sleep(0.3)
+        except Exception as e:
+            print(f"[ECON] Calendar fetch failed: {e}")
+
+        result = high_impact[:20]
+        if result:
+            cache.set(cache_key, result, FMP_TTL)
+        return result
 
     async def get_commodity_historical(self, symbol: str, days: int = 30) -> list:
         """Get historical daily prices for a commodity."""

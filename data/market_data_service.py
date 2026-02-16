@@ -13,6 +13,7 @@ from data.edgar_provider import EdgarProvider
 from data.fear_greed_provider import FearGreedProvider
 from data.fmp_provider import FMPProvider
 from data.coingecko_provider import CoinGeckoProvider
+from data.reddit_provider import RedditSentimentProvider
 
 
 def _parse_num(val):
@@ -69,6 +70,7 @@ class MarketDataService:
         self.coingecko = CoinGeckoProvider(coingecko_key) if coingecko_key else None
         from data.cmc_provider import CMCProvider
         self.cmc = CMCProvider(cmc_key) if cmc_key else None
+        self.reddit = RedditSentimentProvider()
 
     NEGATIVE_NEWS_KEYWORDS = [
         "fraud", "lawsuit", "sued", "investigation", "sec probe",
@@ -82,8 +84,8 @@ class MarketDataService:
 
     async def get_market_news_context(self, tickers: list = None) -> dict:
         """
-        Pull recent news and sentiment data BEFORE individual ticker analysis.
-        Uses Alpha Vantage news sentiment as primary source (with FMP fallback).
+        Pull recent news, sentiment, Reddit, and economic calendar data
+        BEFORE individual ticker analysis.
         Called at the start of every scan pipeline.
         """
         news_data = {}
@@ -100,6 +102,8 @@ class MarketDataService:
         if self.fmp:
             tasks.append(asyncio.wait_for(self.fmp.get_market_news(limit=10), timeout=8.0))
             task_keys.append("fmp_news")
+            tasks.append(asyncio.wait_for(self.fmp.get_economic_calendar(days_ahead=3), timeout=6.0))
+            task_keys.append("economic_calendar")
 
         tasks.append(asyncio.wait_for(self.stocktwits.get_trending(), timeout=6.0))
         task_keys.append("stocktwits_trending")
@@ -107,9 +111,15 @@ class MarketDataService:
         tasks.append(asyncio.wait_for(self.fear_greed.get_fear_greed_index(), timeout=5.0))
         task_keys.append("fear_greed")
 
+        tasks.append(asyncio.wait_for(self.reddit.get_full_reddit_dashboard(), timeout=8.0))
+        task_keys.append("reddit")
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for key, result in zip(task_keys, results):
-            news_data[key] = result if not isinstance(result, Exception) else []
+            if isinstance(result, Exception):
+                news_data[key] = {} if key == "reddit" else []
+            else:
+                news_data[key] = result
 
         av_news = news_data.get("market_news", {})
         if isinstance(av_news, dict) and av_news.get("articles"):
@@ -117,6 +127,13 @@ class MarketDataService:
         elif not isinstance(av_news, list):
             fmp_news = news_data.pop("fmp_news", [])
             news_data["market_news"] = fmp_news if isinstance(fmp_news, list) else []
+
+        reddit_data = news_data.get("reddit", {})
+        if isinstance(reddit_data, dict):
+            wsb = reddit_data.get("wsb_trending", [])
+            all_reddit = reddit_data.get("all_stocks_trending", [])
+            news_data["reddit_wsb_trending"] = wsb[:15] if wsb else []
+            news_data["reddit_all_trending"] = all_reddit[:15] if all_reddit else []
 
         return news_data
 
@@ -1861,6 +1878,7 @@ class MarketDataService:
             finviz_most_active,
             finviz_unusual_volume,
             finviz_top_gainers,
+            reddit_trending,
         ) = await asyncio.gather(
             self.stocktwits.get_trending(),
             scrape_yahoo_trending(),
@@ -1868,6 +1886,7 @@ class MarketDataService:
             self.finviz.get_most_active(),
             self.finviz.get_unusual_volume(),
             self.finviz.get_screener_results("ta_topgainers"),
+            self.reddit.get_all_stocks_trending(),
             return_exceptions=True,
         )
 
@@ -1877,6 +1896,7 @@ class MarketDataService:
         if isinstance(finviz_most_active, Exception): finviz_most_active = []
         if isinstance(finviz_unusual_volume, Exception): finviz_unusual_volume = []
         if isinstance(finviz_top_gainers, Exception): finviz_top_gainers = []
+        if isinstance(reddit_trending, Exception): reddit_trending = []
 
         ticker_sources = {}
 
@@ -1895,6 +1915,7 @@ class MarketDataService:
         add_tickers(finviz_most_active, "Finviz Active")
         add_tickers(finviz_unusual_volume, "Finviz Volume")
         add_tickers(finviz_top_gainers, "Finviz Gainers")
+        add_tickers(reddit_trending, "Reddit")
 
         ranked = sorted(
             ticker_sources.items(),
