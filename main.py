@@ -350,31 +350,55 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
 # Portfolio Quotes (batch price lookup)
 # ============================================================
 
-@app.get("/api/portfolio/quotes")
-async def get_portfolio_quotes(request: Request, tickers: str = "", api_key: str = Header(None, alias="X-API-Key")):
+@app.post("/api/portfolio/quotes")
+async def get_portfolio_quotes(request: Request, api_key: str = Header(None, alias="X-API-Key")):
     """Get current quotes for a list of tickers — 1 API call for all tickers."""
     import httpx
 
     if not api_key or api_key != AGENT_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
 
-    tickers_list = request.query_params.get("tickers", "")
-    if not tickers_list:
+    body = await request.json()
+    tickers = body.get("tickers", [])
+    print(f"[PORTFOLIO] Quotes requested for: {tickers}")
+
+    if not tickers:
+        print("[PORTFOLIO] No tickers provided")
         return {"quotes": {}}
 
-    ticker_str = ",".join(tickers_list.split(",")[:25])
+    import asyncio
+
+    ticker_str = ",".join(tickers[:25])
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"https://financialmodelingprep.com/api/v3/quote/{ticker_str}",
-                params={"apikey": FMP_API_KEY},
+            full_resp = await client.get(
+                "https://financialmodelingprep.com/stable/quote",
+                params={"symbol": ticker_str, "apikey": FMP_API_KEY},
             )
 
-        if resp.status_code != 200:
-            return {"quotes": {}, "error": f"FMP returned {resp.status_code}"}
+            if full_resp.status_code == 200:
+                data = full_resp.json()
+                print(f"[PORTFOLIO] FMP stable/quote returned {len(data)} quotes")
+            else:
+                print(f"[PORTFOLIO] stable/quote returned {full_resp.status_code}, fetching individual quote-short")
+                async def fetch_one(c, sym):
+                    try:
+                        r = await c.get(
+                            "https://financialmodelingprep.com/stable/quote-short",
+                            params={"symbol": sym, "apikey": FMP_API_KEY},
+                        )
+                        if r.status_code == 200:
+                            items = r.json()
+                            return items[0] if items else None
+                    except Exception:
+                        pass
+                    return None
 
-        data = resp.json()
+                results = await asyncio.gather(*[fetch_one(client, t) for t in tickers[:25]])
+                data = [r for r in results if r]
+                print(f"[PORTFOLIO] FMP quote-short returned {len(data)} quotes (individual calls)")
+
         quotes = {}
         for item in data:
             symbol = item.get("symbol", "")
@@ -395,9 +419,13 @@ async def get_portfolio_quotes(request: Request, tickers: str = "", api_key: str
                 "sector": item.get("sector", ""),
             }
 
+        print(f"[PORTFOLIO] Returning quotes for: {list(quotes.keys())}")
         return {"quotes": quotes}
 
     except Exception as e:
+        print(f"[PORTFOLIO] Error: {e}")
+        import traceback
+        traceback.print_exc()
         return {"quotes": {}, "error": str(e)}
 
 
@@ -435,7 +463,7 @@ async def get_portfolio_events(api_key: str = Header(None, alias="X-API-Key")):
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
-                "https://financialmodelingprep.com/api/v3/earning_calendar",
+                "https://financialmodelingprep.com/stable/earnings-calendar",
                 params={"from": today, "to": future, "apikey": FMP_API_KEY},
             )
         if resp.status_code == 200:
@@ -456,7 +484,7 @@ async def get_portfolio_events(api_key: str = Header(None, alias="X-API-Key")):
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
-                "https://financialmodelingprep.com/api/v3/stock_dividend_calendar",
+                "https://financialmodelingprep.com/stable/dividends-calendar",
                 params={"from": today, "to": future, "apikey": FMP_API_KEY},
             )
         if resp.status_code == 200:
@@ -478,3 +506,174 @@ async def get_portfolio_events(api_key: str = Header(None, alias="X-API-Key")):
     if errors:
         result["errors"] = errors
     return result
+
+
+# ============================================================
+# Portfolio Review (AI-powered Buy/Hold/Sell analysis)
+# ============================================================
+
+@app.post("/api/portfolio/review")
+@limiter.limit("5/minute")
+async def review_portfolio(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """AI Portfolio Review — takes holdings with cost basis, returns Buy/Hold/Sell for each."""
+    import asyncio
+    import httpx
+
+    if not api_key or api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    body = await request.json()
+    holdings = body.get("holdings", [])
+
+    if not holdings:
+        return {
+            "type": "chat",
+            "analysis": "",
+            "structured": {
+                "display_type": "chat",
+                "message": "No holdings to review. Add some positions to your portfolio first.",
+            },
+        }
+
+    print(f"[PORTFOLIO_REVIEW] Reviewing {len(holdings)} holdings")
+
+    holdings_text = ""
+    for h in holdings:
+        ticker = h.get("ticker", "")
+        shares = h.get("shares", 0)
+        avg_cost = h.get("avg_cost", 0) or h.get("avgCost", 0)
+        holdings_text += f"- {ticker}: {shares} shares @ ${avg_cost} avg cost\n"
+
+    tickers = [h.get("ticker", "").upper() for h in holdings if h.get("ticker")]
+
+    ticker_data = {}
+    for ticker in tickers[:25]:
+        data_item = {"ticker": ticker}
+
+        try:
+            overview = await asyncio.wait_for(
+                agent.data.stockanalysis.get_overview(ticker),
+                timeout=6.0,
+            )
+            if overview:
+                data_item.update(overview)
+        except Exception as e:
+            print(f"[PORTFOLIO_REVIEW] {ticker} overview failed: {e}")
+
+        try:
+            sentiment = await asyncio.wait_for(
+                agent.data.stocktwits.get_sentiment(ticker),
+                timeout=5.0,
+            )
+            if sentiment:
+                data_item["social_sentiment"] = sentiment
+        except Exception:
+            pass
+
+        try:
+            if agent.data.fmp:
+                news = await asyncio.wait_for(
+                    agent.data.fmp.get_stock_news(ticker, limit=3),
+                    timeout=5.0,
+                )
+                if news:
+                    data_item["recent_news"] = news
+        except Exception:
+            pass
+
+        ticker_data[ticker] = data_item
+        await asyncio.sleep(0.3)
+
+    print(f"[PORTFOLIO_REVIEW] Data gathered for {len(ticker_data)} tickers")
+
+    from agent.data_compressor import compress_data
+    compressed = compress_data({"portfolio_data": ticker_data})
+    data_str = _json.dumps(compressed, default=str)
+
+    from agent.prompts import SYSTEM_PROMPT
+    messages = [{
+        "role": "user",
+        "content": f"""[PORTFOLIO HOLDINGS]
+{holdings_text}
+
+[MARKET DATA FOR HOLDINGS]
+{data_str}
+
+[REQUEST]
+Review my portfolio and give me a clear VERDICT for each position. For EACH holding provide:
+
+1. **VERDICT**: BUY MORE / HOLD / TRIM / SELL — be decisive, pick one
+2. **REASONING** (2-3 sentences max): Why this verdict? Reference specific data — recent news, sentiment shift, fundamental trend, technical setup, or valuation concern
+3. **KEY RISK**: The single biggest risk to this position right now
+4. **CATALYST**: The next potential catalyst (earnings date, product launch, sector trend, macro event)
+
+Then provide an OVERALL PORTFOLIO ASSESSMENT:
+- Portfolio grade (A through F)
+- Biggest strength
+- Biggest weakness
+- Concentration risk (are positions too correlated?)
+- Top 1-2 action items I should take this week
+- If you had to add ONE new position to improve this portfolio, what would it be and why?
+
+Be direct. Be opinionated. No hedge-everything disclaimers in the body — just one disclaimer at the very bottom.
+
+IMPORTANT: Respond with display_type "chat" and put your full analysis in the "message" field as formatted text.""",
+    }]
+
+    try:
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                agent.client.messages.create,
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                messages=messages,
+            ),
+            timeout=60.0,
+        )
+
+        response_text = response.content[0].text.strip()
+        print(f"[PORTFOLIO_REVIEW] Claude responded: {len(response_text)} chars")
+
+        try:
+            if response_text.startswith("```"):
+                response_text = response_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            parsed = _json.loads(response_text)
+            if "structured" in parsed:
+                return parsed
+            return {
+                "type": "chat",
+                "analysis": parsed.get("message", response_text),
+                "structured": parsed,
+            }
+        except _json.JSONDecodeError:
+            return {
+                "type": "chat",
+                "analysis": response_text,
+                "structured": {
+                    "display_type": "chat",
+                    "message": response_text,
+                },
+            }
+
+    except asyncio.TimeoutError:
+        return {
+            "type": "chat",
+            "analysis": "",
+            "structured": {
+                "display_type": "chat",
+                "message": "Portfolio review timed out. Try with fewer holdings.",
+            },
+        }
+    except Exception as e:
+        print(f"[PORTFOLIO_REVIEW] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "type": "chat",
+            "analysis": "",
+            "structured": {
+                "display_type": "chat",
+                "message": f"Error reviewing portfolio: {str(e)}",
+            },
+        }
