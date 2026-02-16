@@ -145,6 +145,39 @@ class TradingAgent:
                 return {"category": "chat", "tickers": tickers}
             return {"category": "chat"}
 
+        sector_scans = {
+            "energy sector": "energy", "energy scan": "energy",
+            "ai sector": "technology", "ai/compute": "technology", "compute sector": "technology",
+            "materials sector": "basic materials", "mining sector": "basic materials",
+            "quantum": "technology", "quantum computing": "technology",
+            "aerospace": "industrials", "defense sector": "industrials",
+            "tech sector": "technology", "technology sector": "technology",
+            "finance sector": "financial", "financial sector": "financial", "bank sector": "financial",
+            "healthcare sector": "healthcare", "pharma": "healthcare", "biotech": "healthcare",
+            "real estate sector": "real estate", "reit": "real estate",
+        }
+        for trigger, sector in sector_scans.items():
+            if trigger in q:
+                return {"category": "market_scan", "filters": {"sector": sector}}
+
+        ta_scan_triggers = [
+            "bullish breakout", "bearish breakdown", "oversold bounce",
+            "overbought warning", "crossover signal", "golden cross", "death cross",
+            "ema crossover", "macd crossover", "momentum shift", "momentum inflection",
+            "trend status", "trend upgrade", "strong uptrend", "strong downtrend",
+            "volume & movers", "volume spike", "unusual volume", "top gainers", "top losers",
+            "new local high", "new local low", "pattern breakout",
+            "bollinger", "oversold near support", "pullback in uptrend",
+            "overbought", "oversold",
+        ]
+        if any(t in q for t in ta_scan_triggers):
+            return {"category": "market_scan"}
+
+        if any(w in q for w in ["news headline", "headline leaders", "dominating the news", "breaking developments"]):
+            return {"category": "trending"}
+        if any(w in q for w in ["upcoming catalyst", "biggest upcoming", "catalyst calendar", "how should i position"]):
+            return {"category": "earnings_catalyst"}
+
         if any(w in q for w in ["crypto", "bitcoin", "btc", "eth", "solana", "altcoin", "defi", "funding rate"]):
             return {"category": "crypto"}
         if any(w in q for w in ["macro", "fed", "interest rate", "inflation", "gdp", "economy", "dollar"]):

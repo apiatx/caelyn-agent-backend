@@ -1,0 +1,43 @@
+Classifier Routing
+Most new buttons already map to existing data pipelines through the keyword classifier. Here are the updates needed in agent/claude_agent.py in the _keyword_classify method to make sure all new prompts route correctly.
+Add sector keywords
+Find the section with scan_keywords in _keyword_classify. Add these keywords so sector-specific prompts route to the right pipeline:
+In the _keyword_classify method, add a new check BEFORE the existing category checks:
+python        # Sector-specific scans → market_scan with sector context
+        sector_scans = {
+            "energy sector": "energy", "energy scan": "energy",
+            "ai sector": "technology", "ai/compute": "technology", "compute sector": "technology",
+            "materials sector": "basic materials", "mining sector": "basic materials",
+            "quantum": "technology", "quantum computing": "technology",
+            "aerospace": "industrials", "defense sector": "industrials",
+            "tech sector": "technology", "technology sector": "technology",
+            "finance sector": "financial", "financial sector": "financial", "bank sector": "financial",
+            "healthcare sector": "healthcare", "pharma": "healthcare", "biotech": "healthcare",
+            "real estate sector": "real estate", "reit": "real estate",
+        }
+        for trigger, sector in sector_scans.items():
+            if trigger in q:
+                return {"category": "market_scan", "filters": {"sector": sector}}
+Add TA scan keyword routing
+These new TA buttons should route to market_scan which feeds through the scoring engine and wide scan pipeline:
+python        # TA scan prompts → market_scan
+        ta_scan_triggers = [
+            "bullish breakout", "bearish breakdown", "oversold bounce",
+            "overbought warning", "crossover signal", "golden cross", "death cross",
+            "ema crossover", "macd crossover", "momentum shift", "momentum inflection",
+            "trend status", "trend upgrade", "strong uptrend", "strong downtrend",
+            "volume & movers", "volume spike", "unusual volume", "top gainers", "top losers",
+            "new local high", "new local low", "pattern breakout",
+            "bollinger", "oversold near support", "pullback in uptrend",
+            "overbought", "oversold",
+        ]
+        if any(t in q for t in ta_scan_triggers):
+            return {"category": "market_scan"}
+Add buzz keyword routing
+python        # Buzz prompts
+        if any(w in q for w in ["news headline", "headline leaders", "dominating the news", "breaking developments"]):
+            return {"category": "trending"}
+        if any(w in q for w in ["upcoming catalyst", "biggest upcoming", "catalyst calendar", "how should i position"]):
+            return {"category": "earnings_catalyst"}
+Make sure the LLM classifier also knows about these
+In agent/prompts.py, in the QUERY_CLASSIFIER_PROMPT, the existing categories already cover most of these routes. The keyword classifier acts as a fallback, so no changes needed to the LLM classifier — it's smart enough to route "scan the energy sector" to the right place.
