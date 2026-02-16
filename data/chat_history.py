@@ -1,13 +1,10 @@
 import json
-import os
 import re
-import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 HISTORY_DIR = Path("data/chat_history_store")
-MAX_AGE_DAYS = 3
 _VALID_ID_PATTERN = re.compile(r'^[a-f0-9]{8}-[a-f0-9]{3}$')
 
 
@@ -22,24 +19,8 @@ def _ensure_dir():
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _cleanup_old():
-    _ensure_dir()
-    cutoff = time.time() - (MAX_AGE_DAYS * 86400)
-    deleted = 0
-    for f in HISTORY_DIR.glob("*.json"):
-        try:
-            if f.stat().st_mtime < cutoff:
-                f.unlink()
-                deleted += 1
-        except Exception:
-            pass
-    if deleted:
-        print(f"[CHAT_HISTORY] Cleaned up {deleted} old conversations")
-
-
 def create_conversation(first_query: str) -> dict:
     _ensure_dir()
-    _cleanup_old()
 
     conv_id = str(uuid.uuid4())[:12]
     now = datetime.now()
@@ -112,7 +93,6 @@ def get_conversation(conv_id: str) -> dict:
 
 def list_conversations() -> list:
     _ensure_dir()
-    _cleanup_old()
 
     conversations = []
     for f in HISTORY_DIR.glob("*.json"):
