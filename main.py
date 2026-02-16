@@ -252,25 +252,53 @@ async def delete_conv(request: Request, conv_id: str):
 @app.get("/api/health")
 @limiter.limit("30/minute")
 async def health_check(request: Request):
-    """Smoke test — verifies Claude API is reachable and responding."""
+    """Full diagnostic — tests Claude, Finviz, and StockAnalysis."""
     import asyncio
-    health = {
-        "anthropic_key_set": bool(ANTHROPIC_API_KEY),
-        "polygon_key_set": bool(POLYGON_API_KEY),
-        "api_working": False,
-    }
+    errors = []
+
+    claude_ok = False
     try:
         response = await asyncio.wait_for(
             asyncio.to_thread(
                 agent.client.messages.create,
-                model="claude-sonnet-4-5-20250929",
-                max_tokens=50,
-                messages=[{"role": "user", "content": "Say 'ok' and nothing else."}],
+                model="claude-sonnet-4-20250514",
+                max_tokens=20,
+                messages=[{"role": "user", "content": "Say ok"}],
             ),
             timeout=15.0,
         )
-        health["api_working"] = True
-        health["claude_says"] = response.content[0].text.strip()
+        claude_ok = True
     except Exception as e:
-        health["error"] = str(e)
-    return health
+        errors.append(f"Claude API: {str(e)}")
+
+    finviz_ok = False
+    try:
+        result = await asyncio.wait_for(
+            agent.data.finviz.get_screener_results("ta_topgainers"),
+            timeout=10.0,
+        )
+        finviz_ok = isinstance(result, list) and len(result) > 0
+        if not finviz_ok:
+            errors.append(f"Finviz returned {len(result) if isinstance(result, list) else 'non-list'} results")
+    except Exception as e:
+        errors.append(f"Finviz: {str(e)}")
+
+    sa_ok = False
+    try:
+        result = await asyncio.wait_for(
+            agent.data.stockanalysis.get_overview("AAPL"),
+            timeout=10.0,
+        )
+        sa_ok = result is not None and len(result) > 0
+        if not sa_ok:
+            errors.append("StockAnalysis returned empty for AAPL")
+    except Exception as e:
+        errors.append(f"StockAnalysis: {str(e)}")
+
+    return {
+        "claude_api": claude_ok,
+        "finviz": finviz_ok,
+        "stockanalysis": sa_ok,
+        "errors": errors,
+        "status": "ok" if (claude_ok and finviz_ok and sa_ok) else "degraded",
+    }
