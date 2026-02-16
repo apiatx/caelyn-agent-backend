@@ -273,138 +273,84 @@ class MarketDataService:
             "commodity_sentiment": commodity_sentiment,
         }
 
+    CATEGORY_FILTERS = {
+        "market_scan": {
+            "filters": "sh_avgvol_o300,sh_price_o5,ta_sma200_pa",
+            "limit": 50,
+            "enrich_top": 15,
+        },
+        "trades": {
+            "filters": "sh_avgvol_o300,ta_sma200_pa,ta_rsi_nos,sh_price_o5",
+            "limit": 40,
+            "enrich_top": 12,
+        },
+        "investments": {
+            "filters": "sh_avgvol_o300,fa_salesqoq_o10,fa_epsqoq_o10,ta_sma200_pa,sh_price_o10",
+            "limit": 40,
+            "enrich_top": 12,
+        },
+        "fundamentals_scan": {
+            "filters": "sh_avgvol_o300,fa_salesqoq_o20,fa_opermargin_pos,sh_price_o5",
+            "limit": 40,
+            "enrich_top": 12,
+        },
+        "squeeze": {
+            "filters": "sh_avgvol_o200,sh_short_o15,ta_sma20_pa,sh_price_o2",
+            "limit": 30,
+            "enrich_top": 10,
+        },
+        "asymmetric": {
+            "filters": "sh_avgvol_o200,ta_rsi_ob30,ta_sma200_pa,sh_price_o5",
+            "limit": 30,
+            "enrich_top": 10,
+        },
+        "social_momentum": {
+            "filters": "sh_avgvol_o500,sh_relvol_o1.5,sh_price_o3",
+            "limit": 30,
+            "enrich_top": 10,
+        },
+        "volume_spikes": {
+            "filters": "sh_avgvol_o200,sh_relvol_o2,sh_price_o2",
+            "limit": 30,
+            "enrich_top": 10,
+        },
+        "bearish": {
+            "filters": "sh_avgvol_o300,ta_sma200_pb,ta_sma50_pb,sh_price_o5",
+            "limit": 30,
+            "enrich_top": 10,
+        },
+        "small_cap_spec": {
+            "filters": "sh_avgvol_o200,cap_microover,cap_smallunder,ta_sma50_pa,sh_price_o1",
+            "limit": 40,
+            "enrich_top": 10,
+        },
+    }
+
     async def wide_scan_and_rank(self, category: str, filters: dict = None) -> dict:
         """
-        WIDE FUNNEL approach:
-        1. Cast wide net — pull 50-100+ candidates from multiple screeners
-        2. Do lightweight enrichment on all of them
-        3. Score them quantitatively
-        4. Return top 12-15 fully enriched to Claude
-
-        This ensures we never miss a good setup just because it wasn't
-        in the top 5 of one screener.
+        Focused scan approach:
+        1. Single targeted Finviz screen per category (tight filters)
+        2. Light enrichment on top candidates only
+        3. Score quantitatively
+        4. Deep enrich top 10-15 for Claude
         """
+        import time
+        scan_start = time.time()
         from data.scoring_engine import rank_candidates
 
-        # ── Stage 1: Cast Wide Net Based on Category ──
-        # Different categories need different screeners to find SETUPS, not just movers
+        cat_config = self.CATEGORY_FILTERS.get(category, self.CATEGORY_FILTERS["market_scan"])
+        finviz_filters = cat_config["filters"]
+        limit = cat_config["limit"]
+        enrich_top = cat_config["enrich_top"]
 
-        if category in ["market_scan", "trades"]:
-            screener_results = await asyncio.gather(
-                self.finviz.get_stage2_breakouts(),
-                self.finviz.get_macd_crossovers(),
-                self.finviz.get_volume_breakouts(),
-                self.finviz.get_sma_crossover_stocks(),
-                self.finviz.get_consolidation_breakouts(),
-                self.finviz.get_accumulation_stocks(),
-                self.finviz.get_small_cap_momentum(),
-                self.finviz.get_gap_up_volume(),
-                self.finviz.get_unusual_volume(),
-                self.finviz.get_new_highs(),
-                self.finviz.get_insider_buying(),
-                return_exceptions=True,
-            )
+        print(f"[Wide Scan] {category}: filters={finviz_filters}, limit={limit}, enrich_top={enrich_top}")
 
-        elif category in ["squeeze"]:
-            screener_results = await asyncio.gather(
-                self.finviz.get_high_short_float(),
-                self.finviz.get_small_cap_squeeze_setups(),
-                self.finviz.get_volume_breakouts(),
-                self.finviz.get_unusual_volume(),
-                self.finviz.get_small_cap_gainers(),
-                self.finviz.get_screener_results("ta_topgainers"),
-                return_exceptions=True,
-            )
-
-        elif category in ["investments"]:
-            screener_results = await asyncio.gather(
-                self.finviz.get_revenue_growth_leaders(),
-                self.finviz.get_earnings_growth_leaders(),
-                self.finviz.get_profitable_growth(),
-                self.finviz.get_low_ps_high_growth(),
-                self.finviz.get_ebitda_positive_turn(),
-                self.finviz.get_low_debt_growth(),
-                self.finviz.get_insider_buying(),
-                self.finviz.get_institutional_accumulation(),
-                self.finviz.get_analyst_upgrades(),
-                self.finviz.get_stage2_breakouts(),
-                return_exceptions=True,
-            )
-
-        elif category in ["fundamentals_scan"]:
-            screener_results = await asyncio.gather(
-                self.finviz.get_revenue_growth_leaders(),
-                self.finviz.get_earnings_growth_leaders(),
-                self.finviz.get_profitable_growth(),
-                self.finviz.get_ebitda_positive_turn(),
-                self.finviz.get_low_ps_high_growth(),
-                self.finviz.get_low_debt_growth(),
-                self.finviz.get_insider_buying(),
-                self.finviz.get_analyst_upgrades(),
-                self.finviz.get_earnings_this_week(),
-                return_exceptions=True,
-            )
-
-        elif category in ["asymmetric"]:
-            screener_results = await asyncio.gather(
-                self.finviz.get_low_ps_high_growth(),
-                self.finviz.get_rsi_recovery(),
-                self.finviz.get_ebitda_positive_turn(),
-                self.finviz.get_insider_buying(),
-                self.finviz.get_volume_breakouts(),
-                self.finviz.get_stage2_breakouts(),
-                self.finviz.get_low_debt_growth(),
-                self.finviz.get_accumulation_stocks(),
-                return_exceptions=True,
-            )
-
-        elif category in ["bearish"]:
-            screener_results = await asyncio.gather(
-                self.finviz.get_top_losers(),
-                self.finviz.get_overbought_stocks(),
-                self.finviz.get_breaking_below_200sma(),
-                self.finviz.get_declining_earnings(),
-                self.finviz.get_high_short_declining(),
-                self.finviz.get_most_volatile(),
-                return_exceptions=True,
-            )
-
-        elif category in ["small_cap_spec"]:
-            screener_results = await asyncio.gather(
-                self.finviz.get_small_cap_momentum(),
-                self.finviz.get_small_cap_gainers(),
-                self.finviz.get_small_cap_squeeze_setups(),
-                self.finviz.get_volume_breakouts(),
-                self.finviz.get_penny_stock_gainers(),
-                return_exceptions=True,
-            )
-
-        elif category in ["volume_spikes"]:
-            screener_results = await asyncio.gather(
-                self.finviz.get_volume_breakouts(),
-                self.finviz.get_unusual_volume(),
-                self.finviz.get_most_active(),
-                self.finviz.get_gap_up_volume(),
-                return_exceptions=True,
-            )
-
-        elif category in ["social_momentum"]:
-            screener_results = await asyncio.gather(
-                self.finviz.get_unusual_volume(),
-                self.finviz.get_screener_results("ta_topgainers"),
-                self.finviz.get_small_cap_gainers(),
-                self.finviz.get_volume_breakouts(),
-                return_exceptions=True,
-            )
-
-        else:
-            screener_results = await asyncio.gather(
-                self.finviz.get_screener_results("ta_topgainers"),
-                self.finviz.get_unusual_volume(),
-                self.finviz.get_new_highs(),
-                self.finviz.get_most_active(),
-                return_exceptions=True,
-            )
+        screener_results = await self.finviz._custom_screen(
+            f"v=111&f={finviz_filters}&ft=4&o=-change"
+        )
+        if isinstance(screener_results, Exception):
+            print(f"[Wide Scan] Screener failed: {screener_results}")
+            screener_results = []
 
         trending = []
         try:
@@ -420,15 +366,12 @@ class MarketDataService:
 
         all_tickers = set()
 
-        for result in screener_results:
-            if isinstance(result, list):
-                for item in result:
-                    if isinstance(item, dict) and item.get("ticker"):
-                        ticker = item["ticker"].upper().strip()
-                        if ".X" in ticker or ".U" in ticker:
-                            continue
-                        if len(ticker) <= 5 and ticker.isalpha():
-                            all_tickers.add(ticker)
+        if isinstance(screener_results, list):
+            for item in screener_results:
+                if isinstance(item, dict) and item.get("ticker"):
+                    ticker = item["ticker"].upper().strip()
+                    if ".X" not in ticker and ".U" not in ticker and len(ticker) <= 5 and ticker.isalpha():
+                        all_tickers.add(ticker)
 
         for t in (trending or []):
             if isinstance(t, dict) and t.get("ticker"):
@@ -442,30 +385,25 @@ class MarketDataService:
                 if l.get("ticker"):
                     all_tickers.add(l["ticker"].upper().strip())
 
-        print(f"[Wide Scan] {category}: {len(all_tickers)} unique candidates found")
+        print(f"[Wide Scan] {category}: {len(all_tickers)} unique candidates found ({time.time()-scan_start:.1f}s)")
 
         needs_fundamentals = category in [
-            "investments", "fundamentals_scan", "asymmetric",
-            "squeeze",
+            "investments", "fundamentals_scan", "asymmetric", "squeeze",
         ]
-        needs_social = True
 
         async def light_enrich(ticker):
             try:
                 snapshot = self.polygon.get_snapshot(ticker)
                 technicals = self.polygon.get_technicals(ticker)
-
                 result = {
                     "snapshot": snapshot,
                     "technicals": technicals,
                     "details": {},
                 }
-
                 async_tasks = []
                 if needs_fundamentals:
                     async_tasks.append(("overview", self.stockanalysis.get_overview(ticker)))
-                if needs_social:
-                    async_tasks.append(("sentiment", self.stocktwits.get_sentiment(ticker)))
+                async_tasks.append(("sentiment", self.stocktwits.get_sentiment(ticker)))
 
                 if async_tasks:
                     async_results = await asyncio.gather(
@@ -479,31 +417,33 @@ class MarketDataService:
             except Exception as e:
                 return {"error": str(e)}
 
-        max_candidates = 30 if needs_fundamentals else 40
-        ticker_list = list(all_tickers)[:max_candidates]
+        ticker_list = list(all_tickers)[:limit]
 
         enrichment_results = []
         for i, ticker in enumerate(ticker_list):
-            result = await light_enrich(ticker)
+            try:
+                result = await asyncio.wait_for(light_enrich(ticker), timeout=6.0)
+            except asyncio.TimeoutError:
+                print(f"[Wide Scan] {ticker} light enrich timed out, skipping")
+                result = {"error": "timeout"}
             enrichment_results.append(result)
-            if (i + 1) % 5 == 0 or i == len(ticker_list) - 1:
-                print(f"[Wide Scan] Enriched {i + 1}/{len(ticker_list)} tickers")
+            if (i + 1) % 10 == 0 or i == len(ticker_list) - 1:
+                print(f"[Wide Scan] Light enriched {i + 1}/{len(ticker_list)} tickers ({time.time()-scan_start:.1f}s)")
 
         candidates = {}
         for ticker, result in zip(ticker_list, enrichment_results):
-            if not isinstance(result, Exception) and isinstance(result, dict) and "error" not in result:
+            if isinstance(result, dict) and "error" not in result:
                 candidates[ticker] = result
 
-        print(f"[Wide Scan] {len(candidates)} candidates enriched successfully (fundamentals={needs_fundamentals}, social={needs_social})")
+        print(f"[Wide Scan] {len(candidates)} candidates enriched successfully ({time.time()-scan_start:.1f}s)")
 
-        top_ranked = rank_candidates(candidates, category, top_n=15)
+        top_ranked = rank_candidates(candidates, category, top_n=enrich_top + 3)
 
-        print(f"[Wide Scan] Top 15 scores: {[(t, s) for t, s, _ in top_ranked[:15]]}")
+        print(f"[Wide Scan] Top scores: {[(t, s) for t, s, _ in top_ranked[:enrich_top]]}")
 
-        top_tickers = [(ticker, score) for ticker, score, _ in top_ranked[:12]]
+        top_tickers = [(ticker, score) for ticker, score, _ in top_ranked[:enrich_top]]
 
         async def deep_enrich(ticker):
-            """Full enrichment with all data sources."""
             try:
                 st_result, overview, analyst, insider, earnings, recommendations = (
                     await asyncio.gather(
@@ -528,23 +468,25 @@ class MarketDataService:
                 return {"error": str(e)}
 
         deep_results = await asyncio.gather(
-            *[deep_enrich(t) for t, _ in top_tickers],
+            *[asyncio.wait_for(deep_enrich(t), timeout=8.0) for t, _ in top_tickers],
             return_exceptions=True,
         )
 
         enriched_candidates = {}
         for (ticker, quant_score), deep_data in zip(top_tickers, deep_results):
             base_data = candidates.get(ticker, {})
-            if not isinstance(deep_data, Exception) and isinstance(deep_data, dict):
+            if not isinstance(deep_data, Exception) and isinstance(deep_data, dict) and "error" not in deep_data:
                 base_data.update(deep_data)
             base_data["quant_score"] = quant_score
             enriched_candidates[ticker] = base_data
+
+        print(f"[Wide Scan] Complete: {len(enriched_candidates)} enriched candidates ({time.time()-scan_start:.1f}s)")
 
         return {
             "total_candidates_scanned": len(all_tickers),
             "candidates_scored": len(candidates),
             "top_ranked": [
-                {"ticker": t, "score": s} for t, s, _ in top_ranked[:15]
+                {"ticker": t, "score": s} for t, s, _ in top_ranked[:enrich_top]
             ],
             "enriched_data": enriched_candidates,
             "movers": movers,

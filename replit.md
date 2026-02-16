@@ -71,6 +71,9 @@ POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
 
 ## Recent Changes
+- 2026-02-16: Tightened Finviz screener filters — CATEGORY_FILTERS dict with per-category filter strings, limits, and enrich_top caps. Single Finviz screen per category instead of 4-11 parallel screens. Per-ticker enrichment timeouts (6s light, 8s deep). Categories: trades, investments, fundamentals, squeeze, asymmetric, social_momentum, volume_spikes, bearish, small_cap_spec, market_scan.
+- 2026-02-16: Rewrote sector rotation scan — 3 broad Finviz screens (stage2/stage4/total) instead of 33 per-sector calls. Counts by sector from results. Breakout candidates pulled from stage2 stocks in top sectors. Much faster and avoids Finviz rate limiting.
+- 2026-02-16: Added "breakout" keyword to sector_rotation classifier.
 - 2026-02-16: Added chat history persistence with file-based storage (data/chat_history.py). Conversations auto-delete after 3 days. CRUD endpoints: list, get, create, update, delete. /api/query auto-saves when conversation_id is provided.
 - 2026-02-16: Made agent fully conversational with multi-turn support. Claude now receives conversation history and can answer follow-ups using prior context without re-fetching data. New scans mid-conversation (including ticker mentions like "analyze NVDA") correctly trigger fresh data gathering. API accepts both old (prompt/history) and new (query/conversation_history) field names for backward compatibility. History trimmed to 100K chars with smart truncation (truncates large messages before dropping).
 - 2026-02-15: Added comprehensive timeout/reliability layer: 90s global request timeout, 10s classifier timeout with keyword fallback, 45s data gathering timeout, 60s Claude API timeout. All failures return valid JSON chat responses.
