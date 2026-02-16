@@ -1,11 +1,14 @@
 """
 altFINS API provider for crypto technical analysis data.
-Free tier: 1,000 credits/month, 30 requests/minute.
 Provides: 90+ technical indicators, trend scores, chart patterns,
 candlestick patterns, signals, support/resistance per coin.
 
-Swagger docs: https://altfins.com/swagger-ui/index.html?urls.primaryName=publicApiV1
-API base: https://api.altfins.com/v1
+Real API endpoints (discovered from Swagger):
+  Base: https://altfins.com
+  Signals: GET /api/v1/public/signals-feed
+  Signal keys: GET /api/v1/public/signals-feed/signal-keys
+  Screener: GET /api/v1/nonauth/marketData/screener
+  Coins list: GET /api/v1/nonauth/marketData/screener/coins
 """
 import asyncio
 import httpx
@@ -14,9 +17,35 @@ from data.cache import cache
 ALTFINS_CACHE_TTL = 600
 ALTFINS_SIGNALS_CACHE_TTL = 900
 
+SCREENER_VALUE_TYPES = [
+    "MARKET_CAP", "DOLLAR_VOLUME",
+    "PRICE_CHANGE_1D", "PRICE_CHANGE_1W", "PRICE_CHANGE_1M", "PRICE_CHANGE_3M",
+    "SMA10", "SMA20", "SMA50", "SMA200",
+    "RSI14", "MACD",
+    "HIGH", "LOW",
+]
+
+SIGNAL_KEYS_BULLISH = [
+    ("golden_cross", "SIGNALS_SUMMARY_SMA_50_200.TXT", "BULLISH"),
+    ("macd_bullish", "SIGNALS_SUMMARY_MACD_SL.TXT", "BULLISH"),
+    ("ema_12_50_bullish", "SIGNALS_SUMMARY_EMA_12_50.TXT", "BULLISH"),
+    ("oversold_momentum", "SIGNALS_SUMMARY_OVERSOLD_OVERBOUGHT_MOMENTUM.TXT", "BULLISH"),
+    ("support_approaching", "SUPPORT_RESISTANCE_APPROACHING.TXT", "BULLISH"),
+    ("resistance_breakout", "SUPPORT_RESISTANCE_BREAKOUT.TXT", "BULLISH"),
+    ("trend_upgrade", "SIGNALS_SUMMARY_SHORT_TERM_TREND_UPGRADE_DOWNGRADE.TXT", "BULLISH"),
+    ("momentum_uptrend", "MOMENTUM_UP_DOWN_TREND.TXT", "BULLISH"),
+]
+
+SIGNAL_KEYS_BEARISH = [
+    ("death_cross", "SIGNALS_SUMMARY_SMA_50_200.TXT", "BEARISH"),
+    ("overbought_momentum", "SIGNALS_SUMMARY_OVERSOLD_OVERBOUGHT_MOMENTUM.TXT", "BEARISH"),
+    ("support_breakdown", "SUPPORT_RESISTANCE_BREAKOUT.TXT", "BEARISH"),
+    ("trend_downgrade", "SIGNALS_SUMMARY_SHORT_TERM_TREND_UPGRADE_DOWNGRADE.TXT", "BEARISH"),
+]
+
 
 class AltFINSProvider:
-    BASE_URL = "https://api.altfins.com/v1"
+    BASE_URL = "https://altfins.com"
 
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -35,7 +64,7 @@ class AltFINSProvider:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(
-                    f"{self.BASE_URL}/{endpoint}",
+                    f"{self.BASE_URL}{endpoint}",
                     params=params or {},
                     headers=headers,
                 )
@@ -59,108 +88,114 @@ class AltFINSProvider:
             print(f"[ALTFINS] Request failed ({endpoint}): {e}")
             return []
 
-    async def get_coin_analytics(self, symbol: str, interval: str = "1d") -> dict:
+    async def get_coin_analytics(self, symbol: str, interval: str = "DAILY") -> dict:
         """
-        Get full analytics for a specific coin.
-        Returns: 150+ fields including all indicators, trend scores,
-        support/resistance, performance, etc.
+        Get full screener data for a specific coin.
+        Returns: price, market cap, SMAs, RSI, MACD, volume, performance.
 
-        Intervals: 15m, 1h, 4h, 12h, 1d
-        Symbol format: uppercase, e.g. "BTC", "ETH", "SOL"
-
-        Cost: ~1-3 credits depending on response size.
+        Intervals: MINUTES15, HOURLY, HOURS4, HOURS12, DAILY
         """
+        interval_map = {
+            "1d": "DAILY", "4h": "HOURS4", "1h": "HOURLY",
+            "15m": "MINUTES15", "12h": "HOURS12",
+        }
+        ti = interval_map.get(interval, interval)
+
         data = await self._get(
-            "coins/analytics",
+            "/api/v1/nonauth/marketData/screener",
             params={
-                "symbol": symbol.upper(),
-                "interval": interval,
+                "symbols": symbol.upper(),
+                "valueTypeIds": ",".join(SCREENER_VALUE_TYPES),
+                "timeInterval": ti,
+                "page": 0,
+                "size": 1,
             },
-            cache_key=f"altfins:analytics:{symbol}:{interval}",
+            cache_key=f"altfins:analytics:{symbol}:{ti}",
             ttl=ALTFINS_CACHE_TTL,
         )
-        return data
 
-    async def get_screener(self, filter_type: str = "BULLISH_PATTERN_BREAKOUTS", limit: int = 20) -> list:
+        if not data or not isinstance(data, dict):
+            return {}
+
+        formatted = data.get("formattedValues", [])
+        raw_values = data.get("values", [])
+        headers_list = data.get("headerNames", [])
+        value_ids = data.get("valueTypeIds", SCREENER_VALUE_TYPES)
+
+        if not formatted and not raw_values:
+            return {}
+
+        result = {"symbol": symbol.upper(), "interval": ti}
+
+        if raw_values:
+            entry = raw_values[0] if isinstance(raw_values, list) and raw_values else {}
+            vals = entry.get("values", [])
+            for i, vid in enumerate(value_ids):
+                if i < len(vals):
+                    result[vid.lower()] = vals[i]
+
+        if formatted:
+            entry = formatted[0] if isinstance(formatted, list) and formatted else {}
+            vals = entry.get("values", [])
+            fmt = {}
+            for i, vid in enumerate(value_ids):
+                if i < len(vals):
+                    fmt[vid.lower()] = vals[i]
+            result["formatted"] = fmt
+            if entry.get("symbolUrlName"):
+                result["url"] = f"https://altfins.com/crypto-screener/{entry['symbolUrlName']}"
+
+        return result
+
+    async def get_signals_feed(self, signal_key: str, trend: str = "BULLISH", limit: int = 15) -> list:
         """
-        Get coins matching a pre-built signal/filter.
-
-        Key filter types:
-        - BULLISH_PATTERN_BREAKOUTS: Coins breaking out of bullish chart patterns
-        - BEARISH_PATTERN_BREAKOUTS: Bearish breakouts
-        - BULLISH_EMERGING_PATTERNS: Patterns forming, not yet broken out
-        - FRESH_BULLISH_EMA_CROSSOVER: Recent bullish EMA crossovers
-        - FRESH_BULLISH_MACD_SIGNAL_LINE_CROSSOVER: MACD just turned bullish
-        - FRESH_GOLDEN_CROSSOVER: SMA 50 crossed above SMA 200
-        - FRESH_DEATH_CROSSOVER: SMA 50 crossed below SMA 200 (bearish)
-        - BULLISH_MOMENTUM_RSI_CONFIRMATION: RSI confirming bullish momentum
-        - EARLY_BULLISH_MOMENTUM_INFLECTION: Early signs of momentum shift up
-        - EARLY_BEARISH_MOMENTUM_INFLECTION: Early signs of momentum shift down
-        - BOLLINGER_BAND_BREAKOUT_ABOVE: Breaking above upper Bollinger band
-        - BOLLINGER_BAND_BREAKOUT_BELOW: Breaking below lower Bollinger band
-        - NEW_ATH: New all-time highs
-        - ATH_NOT_OVERBOUGHT: Near ATH but RSI not overbought
-        - TOP_GAINERS: Biggest price gainers
-        - TOP_LOSERS: Biggest price losers
-        - OVERSOLD_NEAR_SUPPORT: Oversold coins near support levels
-        - STRONG_UPTREND: Coins in established strong uptrends
-        - PULLBACK_IN_UPTREND: Uptrending coins pulling back (buy the dip candidates)
-
-        Cost: ~1-5 credits per call depending on result size.
+        Get recent signals from the signals feed.
+        Returns coins that recently triggered a specific signal.
         """
         data = await self._get(
-            "screener",
+            "/api/v1/public/signals-feed",
             params={
-                "type": filter_type,
-                "limit": limit,
+                "signalKey": signal_key,
+                "trend": trend,
+                "page": 0,
+                "size": limit,
             },
-            cache_key=f"altfins:screener:{filter_type}:{limit}",
+            cache_key=f"altfins:signals:{signal_key}:{trend}:{limit}",
             ttl=ALTFINS_SIGNALS_CACHE_TTL,
         )
-        return data
 
-    async def get_signals_summary(self) -> dict:
-        """
-        Get a summary of all signal counts across all filter types.
-        Shows how many coins match each signal at each timeframe.
-        Great for market breadth analysis.
-
-        Cost: ~1 credit.
-        """
-        data = await self._get(
-            "signals/summary",
-            cache_key="altfins:signals_summary",
-            ttl=ALTFINS_SIGNALS_CACHE_TTL,
-        )
-        return data
+        if isinstance(data, dict):
+            return data.get("content", [])
+        return data if isinstance(data, list) else []
 
     async def get_crypto_scanner_data(self) -> dict:
         """
-        Main method for the crypto scanner button.
-        Pulls the most actionable signals in a single pass.
-        Uses ~5-8 credits total, cached for 15 minutes.
+        Main method for the crypto scanner.
+        Pulls the most actionable bullish + bearish signals.
+        Cached for 15 minutes.
         """
-        signal_types = [
-            ("bullish_breakouts", "BULLISH_PATTERN_BREAKOUTS"),
-            ("fresh_bullish_macd", "FRESH_BULLISH_MACD_SIGNAL_LINE_CROSSOVER"),
-            ("oversold_near_support", "OVERSOLD_NEAR_SUPPORT"),
-            ("pullback_in_uptrend", "PULLBACK_IN_UPTREND"),
-            ("strong_uptrend", "STRONG_UPTREND"),
-            ("early_bullish_momentum", "EARLY_BULLISH_MOMENTUM_INFLECTION"),
-            ("bearish_breakouts", "BEARISH_PATTERN_BREAKOUTS"),
-        ]
-
         results = {}
-        for name, filter_type in signal_types:
+
+        for name, signal_key, trend in SIGNAL_KEYS_BULLISH:
             try:
                 results[name] = await asyncio.wait_for(
-                    self.get_screener(filter_type, limit=10),
+                    self.get_signals_feed(signal_key, trend, limit=10),
                     timeout=10.0,
                 )
             except Exception as e:
                 print(f"[ALTFINS] {name} failed: {e}")
                 results[name] = []
+            await asyncio.sleep(2.5)
 
+        for name, signal_key, trend in SIGNAL_KEYS_BEARISH:
+            try:
+                results[name] = await asyncio.wait_for(
+                    self.get_signals_feed(signal_key, trend, limit=10),
+                    timeout=10.0,
+                )
+            except Exception as e:
+                print(f"[ALTFINS] {name} failed: {e}")
+                results[name] = []
             await asyncio.sleep(2.5)
 
         coin_signal_count = {}
@@ -168,13 +203,16 @@ class AltFINSProvider:
             if not isinstance(coins, list):
                 continue
             for coin in coins:
-                symbol = coin.get("symbol") or coin.get("coin") or coin.get("ticker") or ""
+                symbol = coin.get("symbol", "")
                 if symbol:
                     if symbol not in coin_signal_count:
                         coin_signal_count[symbol] = {
                             "symbol": symbol,
+                            "name": coin.get("symbolName", ""),
                             "signals": [],
-                            "data": coin,
+                            "last_price": coin.get("lastPrice", ""),
+                            "market_cap": coin.get("marketCap", ""),
+                            "price_change": coin.get("priceChange", ""),
                         }
                     coin_signal_count[symbol]["signals"].append(signal_name)
 
@@ -196,18 +234,26 @@ class AltFINSProvider:
 
     async def get_coin_deep_dive(self, symbol: str) -> dict:
         """
-        Full deep dive on a single coin — daily + 4h analytics.
-        Used for watchlist review and single-ticker analysis.
-        Cost: ~2-4 credits.
+        Full deep dive on a single coin — daily + 4h screener data + recent signals.
         """
-        daily, four_hour = await asyncio.gather(
-            self.get_coin_analytics(symbol, "1d"),
-            self.get_coin_analytics(symbol, "4h"),
+        daily_task = self.get_coin_analytics(symbol, "DAILY")
+        four_hour_task = self.get_coin_analytics(symbol, "HOURS4")
+        signals_task = self.get_signals_feed(
+            "SIGNALS_SUMMARY_SMA_50_200.TXT", "BULLISH", limit=50
+        )
+
+        daily, four_hour, all_signals = await asyncio.gather(
+            daily_task, four_hour_task, signals_task,
             return_exceptions=True,
         )
+
+        coin_signals = []
+        if isinstance(all_signals, list):
+            coin_signals = [s for s in all_signals if s.get("symbol", "").upper() == symbol.upper()]
 
         return {
             "symbol": symbol.upper(),
             "daily": daily if not isinstance(daily, Exception) else {},
             "four_hour": four_hour if not isinstance(four_hour, Exception) else {},
+            "recent_signals": coin_signals[:5],
         }
