@@ -153,6 +153,8 @@ class TradingAgent:
             return {"category": "briefing"}
         if any(w in q for w in ["commodity", "commodities", "oil", "gold", "uranium", "copper", "natural gas"]):
             return {"category": "commodities"}
+        if any(w in q for w in ["twitter", "x sentiment", "what's x saying", "x/twitter", "x says"]):
+            return {"category": "trending"}
         if any(w in q for w in ["trending", "trend", "what's hot", "popular"]):
             return {"category": "trending"}
         if any(w in q for w in ["sector", "rotation", "stage 2", "weinstein", "breakout"]):
@@ -304,6 +306,20 @@ class TradingAgent:
                         )
                         if altfins_data:
                             ticker_data["altfins"] = altfins_data
+                    except Exception:
+                        pass
+
+                if self.data.xai:
+                    try:
+                        x_sent = await asyncio.wait_for(
+                            self.data.xai.get_ticker_sentiment(
+                                ticker,
+                                "crypto" if ticker.upper() in CRYPTO_SYMBOLS else "stock",
+                            ),
+                            timeout=15.0,
+                        )
+                        if x_sent and "error" not in x_sent:
+                            ticker_data["x_sentiment"] = x_sent
                     except Exception:
                         pass
 

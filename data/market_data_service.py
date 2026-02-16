@@ -15,6 +15,7 @@ from data.fmp_provider import FMPProvider
 from data.coingecko_provider import CoinGeckoProvider
 from data.reddit_provider import RedditSentimentProvider
 from data.altfins_provider import AltFINSProvider
+from data.xai_sentiment_provider import XAISentimentProvider
 
 
 def _parse_num(val):
@@ -56,7 +57,7 @@ class MarketDataService:
     Your agent talks to THIS — never directly to Polygon or scrapers.
     """
 
-    def __init__(self, polygon_key: str, fmp_key: str = None, coingecko_key: str = None, cmc_key: str = None, altfins_key: str = None):
+    def __init__(self, polygon_key: str, fmp_key: str = None, coingecko_key: str = None, cmc_key: str = None, altfins_key: str = None, xai_key: str = None):
         self.polygon = PolygonProvider(polygon_key)
         self.finviz = FinvizScraper()
         self.stocktwits = StockTwitsProvider()
@@ -75,6 +76,11 @@ class MarketDataService:
         from data.hyperliquid_provider import HyperliquidProvider
         self.hyperliquid = HyperliquidProvider()
         self.altfins = AltFINSProvider(altfins_key) if altfins_key else None
+        self.xai = XAISentimentProvider(xai_key) if xai_key else None
+        if self.xai:
+            print("[INIT] xAI Grok X sentiment provider initialized")
+        else:
+            print("[INIT] xAI Grok X sentiment provider SKIPPED (no XAI_API_KEY)")
 
     NEGATIVE_NEWS_KEYWORDS = [
         "fraud", "lawsuit", "sued", "investigation", "sec probe",
@@ -265,6 +271,17 @@ class MarketDataService:
                 sync_data["sentiment_flag"] = "BEARISH"
             else:
                 sync_data["sentiment_flag"] = "OK"
+
+        if self.xai:
+            try:
+                x_sentiment = await asyncio.wait_for(
+                    self.xai.get_ticker_sentiment(ticker),
+                    timeout=20.0,
+                )
+                if x_sentiment and "error" not in x_sentiment:
+                    sync_data["x_sentiment"] = x_sentiment
+            except Exception as e:
+                print(f"[RESEARCH] {ticker} xAI sentiment failed: {e}")
 
         return sync_data
 
@@ -643,6 +660,19 @@ class MarketDataService:
             if i < len(deep_tickers) - 1:
                 await asyncio.sleep(0.8)
 
+        if self.xai and deep_tickers:
+            try:
+                x_batch = await asyncio.wait_for(
+                    self.xai.get_batch_sentiment(deep_tickers[:10]),
+                    timeout=30.0,
+                )
+                print(f"[SCAN] xAI enriched {len(x_batch)} tickers with X sentiment")
+            except Exception as e:
+                print(f"[SCAN] xAI batch sentiment failed: {e}")
+                x_batch = {}
+        else:
+            x_batch = {}
+
         enriched_candidates = {}
         sentiment_map = {td["ticker"]: td for td in sentiment_filtered}
 
@@ -661,6 +691,8 @@ class MarketDataService:
                 base_data["news_warning"] = sent_data["news_warning"]
             if not isinstance(deep_data, Exception) and isinstance(deep_data, dict) and "error" not in deep_data:
                 base_data.update(deep_data)
+            if ticker in x_batch and "error" not in x_batch.get(ticker, {}):
+                base_data["x_sentiment"] = x_batch[ticker]
             base_data["quant_score"] = top_scores.get(ticker, 0)
             enriched_candidates[ticker] = base_data
 
@@ -1921,6 +1953,25 @@ class MarketDataService:
         add_tickers(finviz_top_gainers, "Finviz Gainers")
         add_tickers(reddit_trending, "Reddit")
 
+        xai_trending = {}
+        if self.xai:
+            try:
+                xai_trending = await asyncio.wait_for(
+                    self.xai.get_trending_tickers("stock"),
+                    timeout=30.0,
+                )
+                print(f"[TRENDING] xAI returned {len(xai_trending.get('trending_tickers', []))} trending tickers from X")
+            except Exception as e:
+                print(f"[TRENDING] xAI trending failed: {e}")
+
+        if xai_trending and "trending_tickers" in xai_trending:
+            for item in xai_trending["trending_tickers"]:
+                ticker_val = item.get("ticker", "").upper().strip()
+                if ticker_val and len(ticker_val) <= 6 and ticker_val.isalpha():
+                    if ticker_val not in ticker_sources:
+                        ticker_sources[ticker_val] = set()
+                    ticker_sources[ticker_val].add("X_Twitter")
+
         ranked = sorted(
             ticker_sources.items(),
             key=lambda x: len(x[1]),
@@ -1991,7 +2042,9 @@ class MarketDataService:
                 "Finviz Active": len(finviz_most_active),
                 "Finviz Volume": len(finviz_unusual_volume),
                 "Finviz Gainers": len(finviz_top_gainers),
+                "X_Twitter": len(xai_trending.get("trending_tickers", [])) if xai_trending else 0,
             },
+            "x_twitter_data": xai_trending if xai_trending else {},
             "ranked_tickers": [
                 {
                     "ticker": t,
@@ -2030,6 +2083,9 @@ class MarketDataService:
 
         if self.altfins:
             tasks["altfins"] = self.altfins.get_crypto_scanner_data()
+
+        if self.xai:
+            tasks["x_twitter_crypto"] = self.xai.get_trending_tickers("crypto")
 
         task_names = list(tasks.keys())
         results = await asyncio.gather(
@@ -2151,6 +2207,8 @@ class MarketDataService:
             "crypto_news": data.get("crypto_news", {}),
 
             "altfins": data.get("altfins", {}),
+
+            "x_twitter_crypto": data.get("x_twitter_crypto", {}),
         }
 
     async def run_ai_screener(self, filters: dict) -> dict:

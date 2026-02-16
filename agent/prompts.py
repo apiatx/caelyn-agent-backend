@@ -146,6 +146,24 @@ HOW TO USE altFINS vs OTHER CRYPTO SOURCES:
 - CMC: New listings, trending, social buzz
 Cross-reference all four: altFINS says "bullish breakout" + Hyperliquid shows "negative funding" (shorts crowded) + CoinGecko shows "trending" = maximum conviction setup.
 
+X/TWITTER SENTIMENT (via Grok x_search):
+Real-time social sentiment from X/Twitter powered by xAI's Grok with native x_search. When x_sentiment data is present:
+- sentiment_score: -1.0 (max bearish) to +1.0 (max bullish)
+- post_volume: how much chatter (high/medium/low)
+- volume_trend: whether buzz is surging, rising, stable, or declining
+- key_themes: what X is actually talking about
+- notable_signals: high-influence posts or patterns
+- catalysts_mentioned: specific events driving discussion
+- risk_flags: pump signals, bot activity, coordinated campaigns
+- influencer_sentiment: what accounts with real followers think
+HOW TO USE X SENTIMENT:
+- X sentiment CONFIRMS or CONTRADICTS other signals — it's a multiplier, not a standalone signal
+- High buzz + bullish X + strong technicals = higher conviction
+- Surging volume_trend + new catalyst = potential early mover
+- Risk flags like "pump & dump signals" or "bot activity" = REDUCE conviction immediately
+- Divergence between X sentiment and price action = contrarian opportunity OR warning
+- X sentiment is most valuable for small/mid caps where institutional coverage is thin
+
 MARKET CAP & SCORING:
 - Default ceiling: $150B. Small Cap Spec: $2B. Squeeze: $10B. Social/Asymmetric: $50B.
 - Score bonus: <$500M +15%, $500M-$2B +10%, $2B-$10B +5%, $50B-$150B -10%.
@@ -168,7 +186,7 @@ display_type determines rendering. Choose the BEST match. Schemas below — foll
 {"display_type":"technicals","picks":[{"ticker":"","company":"","price":"","change":"","market_cap":"","conviction":"","setup_name":"","chart":"https://www.tradingview.com/chart/?symbol=TICKER","indicators":{"stage":"","rsi_14":0,"rsi_signal":"","macd":"","sma_20":"","sma_50":"","sma_200":"","volume_today":"","volume_avg":"","volume_ratio":"","support":"","resistance":""},"pattern":"","trade_plan":{"entry":"","stop":"","target_1":"","target_2":"","risk_reward":""}}]}
 
 ### "analysis" — Single Stock Deep Dive
-{"display_type":"analysis","ticker":"","company":"","price":"","change":"","market_cap":"","stage":"","verdict":"","chart":"https://www.tradingview.com/chart/?symbol=TICKER","ta":{"rsi_14":0,"macd":"","sma_20":"","sma_50":"","sma_200":"","volume":"","support":"","resistance":"","pattern":""},"fundamentals":{"revenue_yoy":"","ebitda_margin":"","pe_ratio":"","next_earnings":"","analyst_target":"","insider_activity":""},"sentiment":{"buzz_level":"","bull_pct":0,"fear_greed":0,"put_call":""},"trade_plan":{"entry":"","stop":"","target_1":"","target_2":"","risk_reward":"","timeframe":""}}
+{"display_type":"analysis","ticker":"","company":"","price":"","change":"","market_cap":"","stage":"","verdict":"","chart":"https://www.tradingview.com/chart/?symbol=TICKER","ta":{"rsi_14":0,"macd":"","sma_20":"","sma_50":"","sma_200":"","volume":"","support":"","resistance":"","pattern":""},"fundamentals":{"revenue_yoy":"","ebitda_margin":"","pe_ratio":"","next_earnings":"","analyst_target":"","insider_activity":""},"sentiment":{"buzz_level":"","bull_pct":0,"fear_greed":0,"put_call":""},"x_sentiment":{"score":0,"direction":"","post_volume":"","key_themes":[],"risk_flags":[]},"trade_plan":{"entry":"","stop":"","target_1":"","target_2":"","risk_reward":"","timeframe":""}}
 
 ### "dashboard" — Full Dashboard (3 columns)
 Use for "show me everything" / "full dashboard". Include ta_setups, fundamental_catalysts, social_buzz, and triple_threats arrays.

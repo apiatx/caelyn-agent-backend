@@ -10,7 +10,7 @@ import json as _json
 
 from pathlib import Path
 
-from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY
+from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY, XAI_API_KEY
 from data.market_data_service import MarketDataService
 from agent.claude_agent import TradingAgent
 from data.chat_history import (
@@ -40,7 +40,7 @@ app.add_middleware(
 # ============================================================
 # Wire up the services
 # ============================================================
-data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY, coingecko_key=COINGECKO_API_KEY, cmc_key=CMC_API_KEY, altfins_key=ALTFINS_API_KEY)
+data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY, coingecko_key=COINGECKO_API_KEY, cmc_key=CMC_API_KEY, altfins_key=ALTFINS_API_KEY, xai_key=XAI_API_KEY)
 agent = TradingAgent(api_key=ANTHROPIC_API_KEY, data_service=data_service)
 
 # ============================================================

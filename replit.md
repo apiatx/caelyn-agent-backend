@@ -36,6 +36,7 @@ The platform integrates with a wide array of third-party services and APIs to ga
     - Reddit/ApeWisdom (WSB, r/stocks, r/options, r/investing, r/daytrading sentiment)
     - StockTwits (social sentiment)
     - Yahoo Finance (trending)
+    - xAI Grok (real-time X/Twitter sentiment via x_search tool, model: grok-4-1-fast-non-reasoning)
 - **Financial Analysis**:
     - StockAnalysis (financials, overview, analyst ratings)
 - **Economic Data**:
