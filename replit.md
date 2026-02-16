@@ -45,3 +45,4 @@ The platform integrates with a wide array of third-party services and APIs to ga
     - CoinGecko (spot, derivatives, social, categories, deep dives)
     - CoinMarketCap (trending, most-visited, new listings, metadata)
     - Hyperliquid (real-time perpetual futures data, funding rates, OI, volume)
+    - altFINS (90+ pre-computed technical indicators, trend scores, chart patterns, screener signals, support/resistance — primary crypto TA source)

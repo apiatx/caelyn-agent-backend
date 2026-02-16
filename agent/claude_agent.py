@@ -288,6 +288,25 @@ class TradingAgent:
                 except Exception:
                     pass
 
+                CRYPTO_SYMBOLS = {
+                    "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "DOT",
+                    "MATIC", "LINK", "UNI", "AAVE", "ATOM", "NEAR", "ARB",
+                    "OP", "SUI", "APT", "SEI", "TIA", "INJ", "FET", "RENDER",
+                    "TAO", "WIF", "PEPE", "BONK", "JUP", "ONDO", "HYPE",
+                    "SHIB", "LTC", "BCH", "FIL", "ICP", "STX", "MKR",
+                    "RUNE", "PENDLE", "ENA", "W", "STRK", "ZRO", "PYTH",
+                }
+                if self.data.altfins and ticker.upper() in CRYPTO_SYMBOLS:
+                    try:
+                        altfins_data = await asyncio.wait_for(
+                            self.data.altfins.get_coin_deep_dive(ticker),
+                            timeout=10.0,
+                        )
+                        if altfins_data:
+                            ticker_data["altfins"] = altfins_data
+                    except Exception:
+                        pass
+
                 context[f"ticker_{ticker}"] = ticker_data
                 if len(tickers) > 1:
                     await asyncio.sleep(0.5)

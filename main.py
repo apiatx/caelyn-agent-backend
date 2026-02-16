@@ -10,7 +10,7 @@ import json as _json
 
 from pathlib import Path
 
-from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY
+from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY
 from data.market_data_service import MarketDataService
 from agent.claude_agent import TradingAgent
 from data.chat_history import (
@@ -40,7 +40,7 @@ app.add_middleware(
 # ============================================================
 # Wire up the services
 # ============================================================
-data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY, coingecko_key=COINGECKO_API_KEY, cmc_key=CMC_API_KEY)
+data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY, coingecko_key=COINGECKO_API_KEY, cmc_key=CMC_API_KEY, altfins_key=ALTFINS_API_KEY)
 agent = TradingAgent(api_key=ANTHROPIC_API_KEY, data_service=data_service)
 
 # ============================================================
@@ -825,3 +825,24 @@ IMPORTANT: Respond with display_type "chat" and put your full analysis in the "m
                 "message": f"Error reviewing portfolio: {str(e)}",
             },
         }
+
+
+@app.get("/api/test-altfins")
+async def test_altfins(symbol: str = "BTC", api_key: str = Header(None, alias="X-API-Key")):
+    await verify_api_key(api_key)
+    if not data_service.altfins:
+        return {"error": "altFINS API key not configured"}
+    try:
+        import asyncio
+        result = await asyncio.wait_for(
+            data_service.altfins.get_coin_analytics(symbol.upper(), "1d"),
+            timeout=15.0,
+        )
+        return {
+            "status": "ok",
+            "symbol": symbol.upper(),
+            "data_keys": list(result.keys()) if isinstance(result, dict) else f"type={type(result).__name__}, len={len(result) if isinstance(result, list) else 'N/A'}",
+            "sample": result,
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}

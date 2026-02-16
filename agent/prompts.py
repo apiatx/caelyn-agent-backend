@@ -129,6 +129,23 @@ Real-time perpetual futures data from Hyperliquid, the largest on-chain perp DEX
 - BTC/ETH Funding Trends (72hr): Trending UP = increasing bullish leverage (gets crowded). Trending DOWN = bearish leverage or longs closing. Stable near zero = sustainable trend.
 - ALWAYS reference Hyperliquid data when discussing crypto derivatives. It's the most direct, real-time source you have.
 
+ALTFINS DATA (PRIMARY CRYPTO TECHNICAL ANALYSIS):
+Pre-computed technical analysis from altFINS covering 2,000+ crypto assets. This is your PRIMARY source for crypto TA — do not calculate indicators yourself.
+altFINS provides per coin: Trend scores (short/medium/long-term, each Strong Up/Up/Neutral/Down/Strong Down), RSI (9, 14, 25), MACD + signal + histogram, SMA (5, 10, 20, 50, 100, 200), EMA (9, 12, 26, 50, 100, 200), Stochastic, CCI, OBV, ADX, Bollinger Bands, Williams %R, ATR, momentum, chart patterns (26 types), candlestick patterns (30+ types), support/resistance levels, performance (1d-1y).
+KEY ALTFINS SIGNALS:
+1. Multi-signal coins (appearing in multiple signal lists) = HIGHEST CONVICTION. Bullish MACD crossover + pullback in uptrend + oversold near support = strong buy setup.
+2. Bullish pattern breakouts = Active trading opportunities with defined targets.
+3. Oversold near support = Potential bounce candidates (asymmetric risk/reward).
+4. Pullback in uptrend = Buy-the-dip opportunities in established uptrends.
+5. Fresh EMA/MACD crossovers = Early momentum shifts.
+6. Strong uptrend = Trend-following candidates.
+HOW TO USE altFINS vs OTHER CRYPTO SOURCES:
+- altFINS: Technical analysis, indicators, patterns, signals, trend scores
+- Hyperliquid: Funding rates, open interest, derivatives positioning
+- CoinGecko: Market cap, prices, market overview, trending coins
+- CMC: New listings, trending, social buzz
+Cross-reference all four: altFINS says "bullish breakout" + Hyperliquid shows "negative funding" (shorts crowded) + CoinGecko shows "trending" = maximum conviction setup.
+
 MARKET CAP & SCORING:
 - Default ceiling: $150B. Small Cap Spec: $2B. Squeeze: $10B. Social/Asymmetric: $50B.
 - Score bonus: <$500M +15%, $500M-$2B +10%, $2B-$10B +5%, $50B-$150B -10%.

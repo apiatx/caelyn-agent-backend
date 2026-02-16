@@ -14,6 +14,7 @@ from data.fear_greed_provider import FearGreedProvider
 from data.fmp_provider import FMPProvider
 from data.coingecko_provider import CoinGeckoProvider
 from data.reddit_provider import RedditSentimentProvider
+from data.altfins_provider import AltFINSProvider
 
 
 def _parse_num(val):
@@ -55,7 +56,7 @@ class MarketDataService:
     Your agent talks to THIS — never directly to Polygon or scrapers.
     """
 
-    def __init__(self, polygon_key: str, fmp_key: str = None, coingecko_key: str = None, cmc_key: str = None):
+    def __init__(self, polygon_key: str, fmp_key: str = None, coingecko_key: str = None, cmc_key: str = None, altfins_key: str = None):
         self.polygon = PolygonProvider(polygon_key)
         self.finviz = FinvizScraper()
         self.stocktwits = StockTwitsProvider()
@@ -73,6 +74,7 @@ class MarketDataService:
         self.reddit = RedditSentimentProvider()
         from data.hyperliquid_provider import HyperliquidProvider
         self.hyperliquid = HyperliquidProvider()
+        self.altfins = AltFINSProvider(altfins_key) if altfins_key else None
 
     NEGATIVE_NEWS_KEYWORDS = [
         "fraud", "lawsuit", "sued", "investigation", "sec probe",
@@ -2026,6 +2028,9 @@ class MarketDataService:
         tasks["fear_greed"] = self.fear_greed.get_fear_greed_index()
         tasks["crypto_news"] = self.alphavantage.get_news_sentiment("CRYPTO:BTC")
 
+        if self.altfins:
+            tasks["altfins"] = self.altfins.get_crypto_scanner_data()
+
         task_names = list(tasks.keys())
         results = await asyncio.gather(
             *tasks.values(),
@@ -2144,6 +2149,8 @@ class MarketDataService:
 
             "fear_greed": data.get("fear_greed", {}),
             "crypto_news": data.get("crypto_news", {}),
+
+            "altfins": data.get("altfins", {}),
         }
 
     async def run_ai_screener(self, filters: dict) -> dict:
