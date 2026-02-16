@@ -48,7 +48,3 @@ run = ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "50
 [userenv]
 
 [userenv.shared]
-ANTHROPIC_API_KEY = "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"
-POLYGON_API_KEY = "NMo6zd2dyFSySx0OUe8FnYM2ArivT5PY"
-
-run = "uvicorn main:app --host 0.0.0.0 --port 8080"
