@@ -31,7 +31,8 @@ class FMPProvider:
                     timeout=10,
                 )
             if resp.status_code != 200:
-                print(f"FMP error {resp.status_code}: {endpoint}")
+                if resp.status_code != 403:
+                    print(f"FMP error {resp.status_code}: {endpoint}")
                 return []
             result = resp.json()
             cache.set(cache_key, result, FMP_TTL)
@@ -83,6 +84,42 @@ class FMPProvider:
                     "change": f"{item.get('changesPercentage', 0):+.2f}%",
                     "volume": str(item.get("volume", "")),
                     "source": "fmp_actives",
+                })
+        return results
+
+    async def get_market_news(self, limit: int = 20) -> list:
+        """Get general market news."""
+        data = await self._get("stock_news", {"limit": limit})
+        if not isinstance(data, list):
+            return []
+        results = []
+        for item in data[:limit]:
+            if isinstance(item, dict):
+                results.append({
+                    "title": item.get("title", ""),
+                    "text": item.get("text", "")[:200],
+                    "symbol": item.get("symbol", ""),
+                    "source": item.get("site", ""),
+                    "published": item.get("publishedDate", ""),
+                    "url": item.get("url", ""),
+                })
+        return results
+
+    async def get_stock_news(self, ticker: str, limit: int = 5) -> list:
+        """Get news for a specific stock."""
+        data = await self._get("stock_news", {"tickers": ticker, "limit": limit})
+        if not isinstance(data, list):
+            return []
+        results = []
+        for item in data[:limit]:
+            if isinstance(item, dict):
+                results.append({
+                    "title": item.get("title", ""),
+                    "text": item.get("text", "")[:200],
+                    "symbol": item.get("symbol", ""),
+                    "source": item.get("site", ""),
+                    "published": item.get("publishedDate", ""),
+                    "url": item.get("url", ""),
                 })
         return results
 

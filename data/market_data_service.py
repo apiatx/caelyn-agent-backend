@@ -70,6 +70,109 @@ class MarketDataService:
         from data.cmc_provider import CMCProvider
         self.cmc = CMCProvider(cmc_key) if cmc_key else None
 
+    NEGATIVE_NEWS_KEYWORDS = [
+        "fraud", "lawsuit", "sued", "investigation", "sec probe",
+        "recall", "scandal", "exposed", "fake", "misleading",
+        "class action", "downgrade", "bankruptcy", "default",
+        "fda reject", "failed trial", "data breach", "ceo resign",
+        "accounting", "restatement", "delisted", "indictment",
+        "ponzi", "embezzlement", "whistleblower", "sec charges",
+        "criminal", "subpoena", "material weakness",
+    ]
+
+    async def get_market_news_context(self, tickers: list = None) -> dict:
+        """
+        Pull recent news and sentiment data BEFORE individual ticker analysis.
+        Uses Alpha Vantage news sentiment as primary source (with FMP fallback).
+        Called at the start of every scan pipeline.
+        """
+        news_data = {}
+
+        tasks = []
+        task_keys = []
+
+        tasks.append(asyncio.wait_for(
+            self.alphavantage.get_news_sentiment(topics="financial_markets"),
+            timeout=8.0
+        ))
+        task_keys.append("market_news")
+
+        if self.fmp:
+            tasks.append(asyncio.wait_for(self.fmp.get_market_news(limit=10), timeout=8.0))
+            task_keys.append("fmp_news")
+
+        tasks.append(asyncio.wait_for(self.stocktwits.get_trending(), timeout=6.0))
+        task_keys.append("stocktwits_trending")
+
+        tasks.append(asyncio.wait_for(self.fear_greed.get_fear_greed_index(), timeout=5.0))
+        task_keys.append("fear_greed")
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for key, result in zip(task_keys, results):
+            news_data[key] = result if not isinstance(result, Exception) else []
+
+        av_news = news_data.get("market_news", {})
+        if isinstance(av_news, dict) and av_news.get("articles"):
+            news_data["market_news"] = av_news["articles"]
+        elif not isinstance(av_news, list):
+            fmp_news = news_data.pop("fmp_news", [])
+            news_data["market_news"] = fmp_news if isinstance(fmp_news, list) else []
+
+        return news_data
+
+    async def enrich_with_sentiment_filter(self, ticker_list: list, screener_results: list = None) -> list:
+        """
+        Enrich tickers with sentiment data and FLAG/WARN on negative catalysts.
+        Uses StockTwits sentiment in PARALLEL for speed.
+        Returns list of dicts with sentiment_flag and warning fields.
+        """
+        async def check_one(ticker):
+            ticker_data = {"ticker": ticker}
+            if screener_results:
+                for item in screener_results:
+                    if isinstance(item, dict) and item.get("ticker", "").upper() == ticker.upper():
+                        ticker_data.update(item)
+                        break
+            try:
+                sentiment = await asyncio.wait_for(
+                    self.stocktwits.get_sentiment(ticker), timeout=5.0
+                )
+                if isinstance(sentiment, Exception):
+                    sentiment = {}
+            except Exception:
+                sentiment = {}
+
+            if sentiment:
+                ticker_data["social_sentiment"] = sentiment
+                bearish_pct = sentiment.get("bearish_pct", 0) or 0
+                if bearish_pct > 70:
+                    ticker_data["sentiment_flag"] = "EXTREME_BEARISH"
+                    ticker_data["sentiment_warning"] = f"{bearish_pct}% bearish on StockTwits"
+                elif bearish_pct > 50:
+                    ticker_data["sentiment_flag"] = "BEARISH"
+                    ticker_data["sentiment_warning"] = f"{bearish_pct}% bearish — sentiment headwind"
+                else:
+                    ticker_data["sentiment_flag"] = "OK"
+            else:
+                ticker_data["sentiment_flag"] = "NO_DATA"
+
+            ticker_data["news_flag"] = "NO_DATA"
+            return ticker_data
+
+        results = await asyncio.gather(
+            *[check_one(t) for t in ticker_list],
+            return_exceptions=True,
+        )
+
+        enriched = []
+        for r in results:
+            if isinstance(r, Exception):
+                enriched.append({"ticker": "?", "sentiment_flag": "NO_DATA", "news_flag": "NO_DATA"})
+            else:
+                enriched.append(r)
+
+        return enriched
+
     async def research_ticker(self, ticker: str) -> dict:
         """
         Get everything about a single stock — all sources in parallel.
@@ -90,7 +193,7 @@ class MarketDataService:
             "peer_companies": self.finnhub.get_company_peers(ticker),
         }
 
-        async_results = await asyncio.gather(
+        async_tasks = [
             self.stocktwits.get_sentiment(ticker),
             self.stockanalysis.get_overview(ticker),
             self.stockanalysis.get_financials(ticker),
@@ -98,18 +201,49 @@ class MarketDataService:
             self.options.get_put_call_ratio(ticker),
             self.alphavantage.get_news_sentiment(ticker),
             self.edgar.get_company_summary(ticker),
-            return_exceptions=True,
-        )
-
+        ]
         async_keys = [
             "sentiment", "fundamentals", "financials", "analyst_ratings",
             "options_put_call", "news_sentiment_ai", "sec_filings",
         ]
+
+        async_results = await asyncio.gather(*async_tasks, return_exceptions=True)
+
         for key, result in zip(async_keys, async_results):
             if isinstance(result, Exception):
                 sync_data[key] = {"error": str(result)}
             else:
                 sync_data[key] = result
+
+        av_news = sync_data.get("news_sentiment_ai", {})
+        news_articles = []
+        if isinstance(av_news, dict) and av_news.get("articles"):
+            news_articles = av_news["articles"]
+        elif isinstance(av_news, list):
+            news_articles = av_news
+
+        if news_articles:
+            news_text = " ".join(
+                (n.get("title", "") + " " + n.get("summary", "") + " " + n.get("text", "")).lower()
+                for n in news_articles
+            )
+            found_negatives = [kw for kw in self.NEGATIVE_NEWS_KEYWORDS if kw in news_text]
+            if found_negatives:
+                sync_data["news_flag"] = "NEGATIVE_CATALYST"
+                sync_data["news_warning"] = f"Negative news detected: {', '.join(found_negatives)}"
+            else:
+                sync_data["news_flag"] = "OK"
+
+        sentiment = sync_data.get("sentiment", {})
+        if isinstance(sentiment, dict):
+            bearish_pct = sentiment.get("bearish_pct", 0) or 0
+            if bearish_pct > 70:
+                sync_data["sentiment_flag"] = "EXTREME_BEARISH"
+                sync_data["sentiment_warning"] = f"{bearish_pct}% bearish on StockTwits"
+            elif bearish_pct > 50:
+                sync_data["sentiment_flag"] = "BEARISH"
+            else:
+                sync_data["sentiment_flag"] = "OK"
 
         return sync_data
 
@@ -316,11 +450,12 @@ class MarketDataService:
 
     async def wide_scan_and_rank(self, category: str, filters: dict = None) -> dict:
         """
-        Focused scan approach:
-        1. Single targeted Finviz screen per category (tight filters)
-        2. Light enrichment on top candidates only
-        3. Score quantitatively
-        4. Deep enrich top 10-15 for Claude
+        News-first scan pipeline:
+        1. Finviz screen + market news context IN PARALLEL
+        2. Light enrichment for scoring
+        3. Score quantitatively → top candidates
+        4. Sentiment + news filter on top candidates (flags/warns)
+        5. Deep enrich survivors with fundamentals
         """
         import time
         scan_start = time.time()
@@ -333,18 +468,22 @@ class MarketDataService:
 
         print(f"[Wide Scan] {category}: filters={finviz_filters}, limit={limit}, enrich_top={enrich_top}")
 
-        screener_results = await self.finviz._custom_screen(
+        screener_task = self.finviz._custom_screen(
             f"v=111&f={finviz_filters}&ft=4&o=-change"
         )
+        news_task = self.get_market_news_context()
+
+        screener_results, news_context = await asyncio.gather(
+            screener_task, news_task, return_exceptions=True
+        )
+
         if isinstance(screener_results, Exception):
             print(f"[Wide Scan] Screener failed: {screener_results}")
             screener_results = []
+        if isinstance(news_context, Exception):
+            news_context = {}
 
-        trending = []
-        try:
-            trending = await self.stocktwits.get_trending()
-        except:
-            pass
+        print(f"[Wide Scan] News context: {len(news_context.get('market_news', []))} headlines, trending: {len(news_context.get('stocktwits_trending', []))} ({time.time()-scan_start:.1f}s)")
 
         all_tickers = set()
 
@@ -355,6 +494,7 @@ class MarketDataService:
                     if ".X" not in ticker and ".U" not in ticker and len(ticker) <= 5 and ticker.isalpha():
                         all_tickers.add(ticker)
 
+        trending = news_context.get("stocktwits_trending", [])
         for t in (trending or []):
             if isinstance(t, dict) and t.get("ticker"):
                 all_tickers.add(t["ticker"].upper().strip())
@@ -392,7 +532,6 @@ class MarketDataService:
                 async_tasks = []
                 if needs_fundamentals:
                     async_tasks.append(("overview", self.stockanalysis.get_overview(ticker)))
-                async_tasks.append(("sentiment", self.stocktwits.get_sentiment(ticker)))
 
                 if async_tasks:
                     async_results = await asyncio.gather(
@@ -430,13 +569,31 @@ class MarketDataService:
 
         print(f"[Wide Scan] Top scores: {[(t, s) for t, s, _ in top_ranked[:enrich_top]]}")
 
-        top_tickers = [(ticker, score) for ticker, score, _ in top_ranked[:min(enrich_top, 8)]]
+        top_ticker_names = [ticker for ticker, score, _ in top_ranked[:min(enrich_top, 10)]]
+        top_scores = {ticker: score for ticker, score, _ in top_ranked[:min(enrich_top, 10)]}
+
+        print(f"[Wide Scan] Running sentiment + news filter on {len(top_ticker_names)} candidates ({time.time()-scan_start:.1f}s)")
+        sentiment_filtered = await self.enrich_with_sentiment_filter(
+            top_ticker_names, screener_results
+        )
+        print(f"[Wide Scan] Sentiment filter complete ({time.time()-scan_start:.1f}s)")
+
+        flagged = []
+        clean = []
+        for td in sentiment_filtered:
+            t = td.get("ticker", "")
+            if td.get("sentiment_flag") == "EXTREME_BEARISH" or td.get("news_flag") == "NEGATIVE_CATALYST":
+                flagged.append(td)
+                print(f"[Wide Scan] FLAGGED {t}: sentiment={td.get('sentiment_flag')} news={td.get('news_flag')} warn={td.get('sentiment_warning', td.get('news_warning', ''))}")
+            else:
+                clean.append(td)
+
+        deep_tickers = [td["ticker"] for td in clean[:8]]
 
         async def deep_enrich(ticker):
             try:
-                st_result, overview, analyst, insider, earnings, recommendations = (
+                overview, analyst, insider, earnings, recommendations = (
                     await asyncio.gather(
-                        self.stocktwits.get_sentiment(ticker),
                         self.stockanalysis.get_overview(ticker),
                         self.stockanalysis.get_analyst_ratings(ticker),
                         asyncio.to_thread(lambda: self.finnhub.get_insider_sentiment(ticker)),
@@ -446,7 +603,6 @@ class MarketDataService:
                     )
                 )
                 return {
-                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
                     "overview": overview if not isinstance(overview, Exception) else {},
                     "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
                     "insider_sentiment": insider if not isinstance(insider, Exception) else {},
@@ -457,28 +613,67 @@ class MarketDataService:
                 return {"error": str(e)}
 
         deep_results = []
-        for i, (ticker, score) in enumerate(top_tickers):
+        for i, ticker in enumerate(deep_tickers):
             try:
                 result = await asyncio.wait_for(deep_enrich(ticker), timeout=8.0)
             except Exception as e:
                 result = {"error": str(e)}
             deep_results.append(result)
-            if i < len(top_tickers) - 1:
+            if i < len(deep_tickers) - 1:
                 await asyncio.sleep(0.8)
 
         enriched_candidates = {}
-        for (ticker, quant_score), deep_data in zip(top_tickers, deep_results):
+        sentiment_map = {td["ticker"]: td for td in sentiment_filtered}
+
+        for ticker, deep_data in zip(deep_tickers, deep_results):
             base_data = candidates.get(ticker, {})
+            sent_data = sentiment_map.get(ticker, {})
+            if sent_data.get("social_sentiment"):
+                base_data["sentiment"] = sent_data["social_sentiment"]
+            if sent_data.get("recent_news"):
+                base_data["recent_news"] = sent_data["recent_news"]
+            base_data["sentiment_flag"] = sent_data.get("sentiment_flag", "NO_DATA")
+            base_data["news_flag"] = sent_data.get("news_flag", "NO_DATA")
+            if sent_data.get("sentiment_warning"):
+                base_data["sentiment_warning"] = sent_data["sentiment_warning"]
+            if sent_data.get("news_warning"):
+                base_data["news_warning"] = sent_data["news_warning"]
             if not isinstance(deep_data, Exception) and isinstance(deep_data, dict) and "error" not in deep_data:
                 base_data.update(deep_data)
-            base_data["quant_score"] = quant_score
+            base_data["quant_score"] = top_scores.get(ticker, 0)
             enriched_candidates[ticker] = base_data
 
-        print(f"[Wide Scan] Complete: {len(enriched_candidates)} enriched candidates ({time.time()-scan_start:.1f}s)")
+        for td in flagged:
+            ticker = td["ticker"]
+            base_data = candidates.get(ticker, {})
+            base_data["sentiment_flag"] = td.get("sentiment_flag", "UNKNOWN")
+            base_data["news_flag"] = td.get("news_flag", "UNKNOWN")
+            if td.get("sentiment_warning"):
+                base_data["sentiment_warning"] = td["sentiment_warning"]
+            if td.get("news_warning"):
+                base_data["news_warning"] = td["news_warning"]
+            if td.get("social_sentiment"):
+                base_data["sentiment"] = td["social_sentiment"]
+            if td.get("recent_news"):
+                base_data["recent_news"] = td["recent_news"]
+            base_data["quant_score"] = top_scores.get(ticker, 0)
+            enriched_candidates[f"FLAGGED_{ticker}"] = base_data
+
+        print(f"[Wide Scan] Complete: {len(enriched_candidates)} candidates ({len(flagged)} flagged) ({time.time()-scan_start:.1f}s)")
 
         return {
+            "news_context": news_context,
             "total_candidates_scanned": len(all_tickers),
             "candidates_scored": len(candidates),
+            "flagged_tickers": [
+                {
+                    "ticker": td["ticker"],
+                    "sentiment_flag": td.get("sentiment_flag"),
+                    "news_flag": td.get("news_flag"),
+                    "warning": td.get("sentiment_warning", td.get("news_warning", "")),
+                }
+                for td in flagged
+            ],
             "top_ranked": [
                 {"ticker": t, "score": s} for t, s, _ in top_ranked[:enrich_top]
             ],
@@ -1267,6 +1462,27 @@ class MarketDataService:
         import asyncio
         from data.scoring_engine import score_for_trades, score_for_investments, score_for_squeeze
 
+        briefing_tasks = [
+            self.fear_greed.get_fear_greed_index(),
+            asyncio.to_thread(self.fred.get_quick_macro),
+            self.finviz.get_stage2_breakouts(),
+            self.finviz.get_volume_breakouts(),
+            self.finviz.get_macd_crossovers(),
+            self.finviz.get_unusual_volume(),
+            self.finviz.get_new_highs(),
+            self.finviz.get_high_short_float(),
+            self.finviz.get_insider_buying(),
+            self.finviz.get_revenue_growth_leaders(),
+            self.finviz.get_rsi_recovery(),
+            self.finviz.get_accumulation_stocks(),
+            self.stocktwits.get_trending(),
+            asyncio.to_thread(self.finnhub.get_upcoming_earnings),
+        ]
+        if self.fmp:
+            briefing_tasks.append(self.fmp.get_market_news(limit=15))
+        else:
+            briefing_tasks.append(asyncio.sleep(0))
+
         (
             fear_greed,
             fred_macro,
@@ -1282,29 +1498,15 @@ class MarketDataService:
             accumulation,
             trending,
             upcoming_earnings,
-        ) = await asyncio.gather(
-            self.fear_greed.get_fear_greed_index(),
-            asyncio.to_thread(self.fred.get_quick_macro),
-            self.finviz.get_stage2_breakouts(),
-            self.finviz.get_volume_breakouts(),
-            self.finviz.get_macd_crossovers(),
-            self.finviz.get_unusual_volume(),
-            self.finviz.get_new_highs(),
-            self.finviz.get_high_short_float(),
-            self.finviz.get_insider_buying(),
-            self.finviz.get_revenue_growth_leaders(),
-            self.finviz.get_rsi_recovery(),
-            self.finviz.get_accumulation_stocks(),
-            self.stocktwits.get_trending(),
-            asyncio.to_thread(self.finnhub.get_upcoming_earnings),
-            return_exceptions=True,
-        )
+            market_news_raw,
+        ) = await asyncio.gather(*briefing_tasks, return_exceptions=True)
 
         def safe(val, default=None):
             if default is None:
                 default = []
             return val if not isinstance(val, Exception) else default
 
+        market_news = safe(market_news_raw)
         fear_greed = safe(fear_greed, {})
         fred_macro = safe(fred_macro, {})
         stage2_breakouts = safe(stage2_breakouts)
@@ -1427,6 +1629,7 @@ class MarketDataService:
         )
 
         return {
+            "news_context": {"market_news": market_news},
             "total_tickers_detected": len(all_tickers),
             "multi_signal_tickers": {t: sources for t, sources in list(multi_signal.items())[:10]},
             "ranked_candidates": [
