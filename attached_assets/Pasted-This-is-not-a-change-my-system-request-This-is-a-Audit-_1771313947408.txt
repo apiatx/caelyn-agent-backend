@@ -1,0 +1,176 @@
+This is not a “change my system” request.
+
+This is a:
+
+Audit the architecture. Confirm cost discipline. Do not touch anything.
+
+You want Replit to:
+
+Verify you are not dumping raw JSON into high-tier models
+
+Verify you are not using expensive models for extraction
+
+Verify prompt caching or instruction reuse is handled intelligently
+
+Confirm waterfall architecture exists
+
+Make ZERO behavioral changes
+
+Good. That’s a surgical audit request.
+
+Below is the exact instruction block you should paste into Replit.
+
+🔒 REPLIT INSTRUCTION – ARCHITECTURE AUDIT ONLY
+
+You are performing a non-invasive audit of the existing AI agent architecture.
+
+You are NOT allowed to:
+
+Refactor any code
+
+Modify prompts
+
+Change workflows
+
+Change model assignments
+
+Update token limits
+
+Change reasoning logic
+
+Alter orchestration
+
+Modify API integrations
+
+Improve formatting
+
+Touch any Claude prompts
+
+Touch any OpenAI prompts
+
+Touch Grok logic
+
+This is strictly a verification pass.
+
+OBJECTIVE
+
+Verify whether the system currently follows a cost-efficient waterfall architecture consistent with the following principles:
+
+1. JSON Bloat Prevention
+
+Check whether:
+
+Raw JSON responses from financial APIs (FMP, CMC, CoinGecko, etc.) are passed directly into high-tier reasoning models (Claude Sonnet / Opus or GPT flagship models).
+
+If raw JSON is being passed directly:
+Flag it.
+
+If condensed/parsed data is passed instead:
+Confirm it.
+
+Do NOT modify anything.
+
+2. Model Role Separation
+
+Verify whether the system uses:
+
+A lightweight model for extraction / parsing (if applicable)
+
+A higher-tier model only for reasoning
+
+If the same expensive model is used for:
+
+Raw JSON parsing
+
+Cleaning
+
+Metric extraction
+
+Flag it.
+
+Do NOT change it.
+
+3. Prompt Caching / Instruction Reuse
+
+Verify whether:
+
+System prompts are reused efficiently
+
+Large static instruction blocks are resent every request unnecessarily
+
+If instructions are re-sent fully each time:
+Flag it.
+
+Do NOT optimize.
+
+4. Waterfall Architecture Check
+
+Determine whether the architecture currently resembles:
+
+User Prompt
+→ Orchestrator
+→ Data Fetch
+→ Extraction / Condensing
+→ Sentiment
+→ Reasoning Layer
+
+Or whether it resembles:
+
+User Prompt
+→ Fetch Massive JSON
+→ Dump everything into reasoning model
+
+Report which pattern exists.
+
+OUTPUT FORMAT
+
+Return a structured audit summary:
+
+{
+"json_bloat_risk": "low | medium | high",
+"model_role_separation": "correct | mixed | inefficient",
+"prompt_caching_efficiency": "efficient | redundant",
+"waterfall_architecture": "present | partial | absent",
+"cost_risk_assessment": "low | moderate | high",
+"notes": ""
+}
+
+Do not recommend changes.
+Do not modify any files.
+Do not rewrite any prompts.
+
+This is strictly a verification report.
+
+🧠 Why This Is Important
+
+You’re protecting:
+
+Your existing logic
+
+Your tested reasoning prompts
+
+Your workflow integrity
+
+Your performance stability
+
+You are asking for confirmation, not intervention.
+
+That’s exactly right.
+
+⚠️ Reality Check For You
+
+Gemini’s advice is directionally correct.
+
+The biggest silent killer in financial agents is:
+
+Dumping 40KB JSON blobs into a flagship model.
+
+If you are already condensing data before reasoning,
+you’re fine.
+
+If you are not,
+cost will scale badly with traffic.
+
+But you don’t want Replit “optimizing” anything yet.
+
+You want clarity first.
