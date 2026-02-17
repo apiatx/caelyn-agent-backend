@@ -12,7 +12,7 @@ from data.market_data_service import MarketDataService
 
 class TradingAgent:
     def __init__(self, api_key: str, data_service: MarketDataService):
-        self.client = anthropic.Anthropic(api_key=api_key, timeout=60.0)
+        self.client = anthropic.Anthropic(api_key=api_key, timeout=120.0)
         self.data = data_service
 
     async def handle_query(self, user_prompt: str, history: list = None) -> dict:
@@ -262,10 +262,10 @@ class TradingAgent:
         try:
             return await asyncio.wait_for(
                 self._gather_data(query_info),
-                timeout=45.0,
+                timeout=60.0,
             )
         except asyncio.TimeoutError:
-            print("[AGENT] Data gathering timed out after 45s, returning partial data")
+            print("[AGENT] Data gathering timed out after 60s, returning partial data")
             return {"error": "Data gathering timed out. Some sources may be slow."}
         except Exception as e:
             print(f"[AGENT] Data gathering error: {e}")
@@ -369,10 +369,10 @@ class TradingAgent:
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(self._ask_claude, user_prompt, market_data, history, is_followup),
-                timeout=60.0,
+                timeout=120.0,
             )
         except asyncio.TimeoutError:
-            print("[AGENT] Claude API timed out after 60s")
+            print("[AGENT] Claude API timed out after 120s")
             return json.dumps({"display_type": "chat", "message": "The AI took too long to respond. Please try again — sometimes the model is under heavy load."})
         except Exception as e:
             print(f"[AGENT] Claude API error: {e}")

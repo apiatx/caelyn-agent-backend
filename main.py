@@ -105,7 +105,7 @@ async def query_agent(
                 user_query,
                 history=history,
             ),
-            timeout=90.0,
+            timeout=180.0,
         )
 
         if body.conversation_id:
