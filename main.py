@@ -569,6 +569,15 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
         if final_missing:
             print(f"[PORTFOLIO] No price data found for: {final_missing}")
 
+    for sym, q in quotes.items():
+        source = q.get("source", "")
+        if source == "coingecko":
+            q["sector"] = "Crypto"
+        elif source == "fmp_commodity":
+            q["sector"] = "Commodities"
+        elif not q.get("sector"):
+            q["sector"] = "Other"
+
     print(f"[PORTFOLIO] Returning {len(quotes)} quotes for: {list(quotes.keys())}")
     return {"quotes": quotes}
 
