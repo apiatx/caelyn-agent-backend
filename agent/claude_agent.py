@@ -7,7 +7,7 @@ import anthropic
 import openai
 
 from agent.data_compressor import compress_data
-from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, TRENDING_VALIDATION_PROMPT
+from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, TRENDING_VALIDATION_PROMPT
 from data.market_data_service import MarketDataService
 
 
@@ -31,17 +31,19 @@ class TradingAgent:
             market_data = None
             print(f"[AGENT] Follow-up detected, skipping data gathering ({time.time() - start_time:.1f}s)")
         else:
-            query_info = await self._classify_with_timeout(user_prompt)
+            query_info = await self._orchestrate_with_timeout(user_prompt)
             query_info["original_prompt"] = user_prompt
             category = query_info.get("category", "general")
 
-            cross_market_override = self._detect_cross_market(user_prompt.lower().strip())
-            if cross_market_override and category != "cross_market":
-                print(f"[AGENT] Cross-market override: {category} → cross_market")
-                category = "cross_market"
-                query_info["category"] = "cross_market"
+            plan = query_info.get("orchestration_plan")
+            if not plan:
+                cross_market_override = self._detect_cross_market(user_prompt.lower().strip())
+                if cross_market_override and category != "cross_market":
+                    print(f"[AGENT] Cross-market override: {category} → cross_market")
+                    category = "cross_market"
+                    query_info["category"] = "cross_market"
 
-            print(f"[AGENT] Classified as: {category} | filters: {query_info.get('filters', {})} ({time.time() - start_time:.1f}s)")
+            print(f"[AGENT] Routed as: {category} | intent: {plan.get('intent', 'n/a') if plan else 'keyword_fallback'} | filters: {query_info.get('filters', {})} ({time.time() - start_time:.1f}s)")
 
             if category == "chat":
                 market_data = await self._gather_chat_context(user_prompt, query_info)
@@ -333,10 +335,273 @@ class TradingAgent:
             print(f"[AGENT] Classification API error: {e}")
             return self._keyword_classify(prompt)
 
+    INTENT_TO_CATEGORY = {
+        "cross_asset_trending": "trending",
+        "single_asset_scan": "market_scan",
+        "deep_dive": "ticker_analysis",
+        "sector_rotation": "sector_rotation",
+        "macro_outlook": "macro",
+        "portfolio_review": "portfolio_review",
+        "event_driven": "earnings_catalyst",
+        "thematic": "thematic",
+        "investment_ideas": "investments",
+        "briefing": "briefing",
+        "custom_screen": "ai_screener",
+        "short_setup": "bearish",
+        "chat": "chat",
+    }
+
+    ASSET_CLASS_CATEGORY_MAP = {
+        "equities": "market_scan",
+        "crypto": "crypto",
+        "commodities": "commodities",
+        "macro": "macro",
+    }
+
+    VALID_INTENTS = set(INTENT_TO_CATEGORY.keys())
+
+    DEFAULT_PLAN = {
+        "intent": "cross_asset_trending",
+        "asset_classes": ["equities", "crypto", "commodities", "macro"],
+        "modules": {
+            "x_sentiment": True,
+            "social_sentiment": True,
+            "technical_scan": True,
+            "fundamental_validation": True,
+            "macro_context": True,
+            "liquidity_filter": True,
+            "earnings_data": False,
+            "ticker_research": False,
+        },
+        "risk_framework": "neutral",
+        "response_style": "institutional_brief",
+        "priority_depth": "medium",
+        "filters": {},
+        "tickers": [],
+    }
+
+    def _orchestrate_query_openai(self, prompt: str) -> dict:
+        if not self.openai_client:
+            print(f"[ORCHESTRATOR] No OpenAI client, using default plan")
+            return dict(self.DEFAULT_PLAN)
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                max_tokens=500,
+                temperature=0.1,
+                response_format={"type": "json_object"},
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a trading system orchestrator. Reply with ONLY a valid JSON object matching the schema described. No narrative text.",
+                    },
+                    {
+                        "role": "user",
+                        "content": f"{ORCHESTRATION_PROMPT}\n\nUser query: {prompt}",
+                    },
+                ],
+            )
+            text = response.choices[0].message.content.strip()
+            plan = json.loads(text)
+            return self._validate_plan(plan, prompt)
+        except Exception as e:
+            print(f"[ORCHESTRATOR] OpenAI orchestration error: {e}, using default plan")
+            return dict(self.DEFAULT_PLAN)
+
+    def _validate_plan(self, plan: dict, prompt: str) -> dict:
+        if not isinstance(plan, dict):
+            print(f"[ORCHESTRATOR] Invalid plan type: {type(plan)}, using default")
+            return dict(self.DEFAULT_PLAN)
+
+        intent = plan.get("intent", "")
+        if intent not in self.VALID_INTENTS:
+            print(f"[ORCHESTRATOR] Unknown intent '{intent}', using default")
+            return dict(self.DEFAULT_PLAN)
+
+        if "modules" not in plan or not isinstance(plan.get("modules"), dict):
+            plan["modules"] = dict(self.DEFAULT_PLAN["modules"])
+
+        if "asset_classes" not in plan or not isinstance(plan.get("asset_classes"), list):
+            plan["asset_classes"] = ["equities"]
+
+        if "filters" not in plan:
+            plan["filters"] = {}
+        if "tickers" not in plan:
+            plan["tickers"] = []
+        if "risk_framework" not in plan:
+            plan["risk_framework"] = "neutral"
+        if "response_style" not in plan:
+            plan["response_style"] = "institutional_brief"
+        if "priority_depth" not in plan:
+            plan["priority_depth"] = "medium"
+
+        plan = self._apply_priority_overrides(plan, prompt)
+        return plan
+
+    def _apply_priority_overrides(self, plan: dict, prompt: str) -> dict:
+        q = prompt.lower().strip()
+
+        cross_asset_signals = [
+            "across all markets", "cross asset", "cross-asset", "global opportunities",
+            "stocks, crypto", "crypto, stock", "stocks and crypto", "crypto and stock",
+            "all asset", "every asset class", "every market",
+        ]
+        if any(s in q for s in cross_asset_signals):
+            plan["asset_classes"] = ["equities", "crypto", "commodities", "macro"]
+            if plan["intent"] == "single_asset_scan":
+                plan["intent"] = "cross_asset_trending"
+
+        institutional_signals = [
+            "highest conviction", "institutional", "serious", "not hype",
+            "real opportunities", "quality only", "no memes", "no hype",
+        ]
+        if any(s in q for s in institutional_signals):
+            plan["modules"]["liquidity_filter"] = True
+            plan["modules"]["fundamental_validation"] = True
+            plan["modules"]["macro_context"] = True
+
+        return plan
+
+    def _plan_to_query_info(self, plan: dict) -> dict:
+        intent = plan.get("intent", "cross_asset_trending")
+        category = self.INTENT_TO_CATEGORY.get(intent, "market_scan")
+
+        asset_classes = plan.get("asset_classes", ["equities"])
+
+        if intent == "single_asset_scan" and len(asset_classes) == 1:
+            ac = asset_classes[0]
+            category = self.ASSET_CLASS_CATEGORY_MAP.get(ac, "market_scan")
+
+        if intent == "cross_asset_trending":
+            if len(asset_classes) >= 2 and set(asset_classes) != {"equities"}:
+                trending_intent = plan.get("_is_trending", False)
+                modules = plan.get("modules", {})
+                has_social = modules.get("x_sentiment") or modules.get("social_sentiment")
+                if has_social:
+                    category = "trending"
+                else:
+                    category = "cross_market"
+            else:
+                category = "trending"
+
+        if intent == "single_asset_scan":
+            modules = plan.get("modules", {})
+            if modules.get("social_sentiment") or modules.get("x_sentiment"):
+                if category == "market_scan":
+                    category = "social_momentum"
+
+        filters = plan.get("filters", {})
+        tickers = plan.get("tickers", [])
+
+        query_info = {
+            "category": category,
+            "filters": filters,
+            "orchestration_plan": plan,
+        }
+        if tickers:
+            query_info["tickers"] = tickers
+
+        return query_info
+
+    async def _orchestrate_with_timeout(self, prompt: str) -> dict:
+        try:
+            plan = await asyncio.wait_for(
+                asyncio.to_thread(self._orchestrate_query_openai, prompt),
+                timeout=10.0,
+            )
+            query_info = self._plan_to_query_info(plan)
+            print(f"[ORCHESTRATOR] Intent: {plan.get('intent')} → Category: {query_info['category']} | "
+                  f"Assets: {plan.get('asset_classes')} | "
+                  f"Modules: {[k for k, v in plan.get('modules', {}).items() if v]} | "
+                  f"Depth: {plan.get('priority_depth')}")
+            return query_info
+        except (asyncio.TimeoutError, Exception) as e:
+            print(f"[ORCHESTRATOR] Orchestration failed/timed out: {e}, using keyword fallback")
+            return self._keyword_classify(prompt)
+
+    async def _execute_orchestration_plan(self, query_info: dict) -> dict:
+        plan = query_info.get("orchestration_plan")
+        if not plan:
+            return await self._gather_data(query_info)
+
+        category = query_info.get("category", "general")
+        intent = plan.get("intent", "")
+        modules = plan.get("modules", {})
+        asset_classes = plan.get("asset_classes", ["equities"])
+
+        primary_data = await self._gather_data(query_info)
+
+        overlay_tasks = []
+
+        if modules.get("macro_context") and category not in ("macro", "briefing", "cross_market"):
+            async def fetch_macro():
+                try:
+                    return await asyncio.wait_for(
+                        self.data.get_macro_overview(),
+                        timeout=15.0,
+                    )
+                except Exception as e:
+                    print(f"[ORCHESTRATOR] Macro overlay failed: {e}")
+                    return None
+            overlay_tasks.append(("macro_context", fetch_macro()))
+
+        if modules.get("x_sentiment") and category not in ("trending", "social_momentum", "cross_market"):
+            tickers = plan.get("tickers", [])
+            if tickers and self.data.xai:
+                async def fetch_x_sentiment():
+                    try:
+                        results = {}
+                        for ticker in tickers[:3]:
+                            sent = await asyncio.wait_for(
+                                self.data.xai.get_ticker_sentiment(ticker, "stock"),
+                                timeout=15.0,
+                            )
+                            if sent and "error" not in sent:
+                                results[ticker] = sent
+                        return results or None
+                    except Exception as e:
+                        print(f"[ORCHESTRATOR] X sentiment overlay failed: {e}")
+                        return None
+                overlay_tasks.append(("x_sentiment_overlay", fetch_x_sentiment()))
+
+        if overlay_tasks:
+            overlay_results = await asyncio.gather(
+                *[task for _, task in overlay_tasks],
+                return_exceptions=True,
+            )
+            for (name, _), result in zip(overlay_tasks, overlay_results):
+                if isinstance(result, Exception):
+                    print(f"[ORCHESTRATOR] Overlay '{name}' exception: {result}")
+                    continue
+                if result:
+                    if isinstance(primary_data, dict):
+                        primary_data[name] = result
+                    print(f"[ORCHESTRATOR] Added overlay: {name}")
+
+        if isinstance(primary_data, dict):
+            primary_data["orchestration_metadata"] = {
+                "intent": intent,
+                "asset_classes": asset_classes,
+                "active_modules": [k for k, v in modules.items() if v],
+                "risk_framework": plan.get("risk_framework", "neutral"),
+                "response_style": plan.get("response_style", "institutional_brief"),
+                "priority_depth": plan.get("priority_depth", "medium"),
+            }
+
+        return primary_data
+
     async def _gather_data_safe(self, query_info: dict) -> dict:
         category = query_info.get("category", "general")
+        has_plan = "orchestration_plan" in query_info
         gather_timeout = 40.0 if category == "cross_market" else 55.0
+        if has_plan and query_info.get("orchestration_plan", {}).get("modules", {}).get("macro_context"):
+            gather_timeout = min(gather_timeout + 10.0, 65.0)
         try:
+            if has_plan:
+                return await asyncio.wait_for(
+                    self._execute_orchestration_plan(query_info),
+                    timeout=gather_timeout,
+                )
             return await asyncio.wait_for(
                 self._gather_data(query_info),
                 timeout=gather_timeout,

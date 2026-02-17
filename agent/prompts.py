@@ -389,6 +389,97 @@ or
 {"category": "chat", "tickers": ["NVDA"]}
 """
 
+ORCHESTRATION_PROMPT = """You are the CONTROL BRAIN of a trading analysis system. Your job is to parse the user's intent at a portfolio-manager level and produce an ORCHESTRATION PLAN that tells the system exactly what data to gather.
+
+You must output ONLY a valid JSON object. No narrative text, no markdown, no explanation.
+
+INTENTS — choose the one that best matches the user's SEMANTIC intent:
+- "cross_asset_trending": What's hot/trending/buzzing across markets. Social momentum discovery. "What's moving?" "Best trades right now?"
+- "single_asset_scan": Focus on ONE asset class — equities screening, crypto scanning, or commodities dashboard. "Best stock setups" "Crypto scanner" "Gold outlook"
+- "deep_dive": Deep research on specific ticker(s). "Analyze NVDA" "What about AAPL?" "Deep dive on BTC"
+- "sector_rotation": Sector/industry performance, rotation analysis, Weinstein stages, money flow between sectors.
+- "macro_outlook": Macro/economic overview — Fed, rates, inflation, yield curve, VIX, dollar, economic cycle.
+- "portfolio_review": User provides a list of tickers to review/analyze/rate. "Review my portfolio: AAPL, MSFT, NVDA"
+- "event_driven": Earnings catalysts, FDA decisions, upcoming catalysts, catalyst calendar, event-driven trading.
+- "thematic": Specific sector/theme deep scan — AI/compute, uranium, energy, defense, quantum, biotech.
+- "investment_ideas": Long-term investment ideas, multibaggers, SQGLP, improving fundamentals.
+- "briefing": Daily/morning briefing, "what should I know today", market overview snapshot.
+- "custom_screen": User specifies quantitative filters — "find stocks with revenue >30% and RSI <40". Specific screening criteria.
+- "short_setup": Short squeeze, bearish plays, breakdowns, stocks to avoid, puts.
+- "chat": Conversational/opinion question that does NOT need a full data scan. "What do you think about X?" "Should I take profits?"
+
+ASSET CLASSES — which asset classes are relevant:
+- "equities": Stocks, ETFs, indices
+- "crypto": Cryptocurrency, Bitcoin, altcoins, DeFi, funding rates
+- "commodities": Oil, gold, silver, copper, uranium, natural gas
+- "macro": Economic data, Fed policy, rates, inflation, yield curve, VIX
+
+MODULES — which data gathering modules should execute. Set true ONLY for what's needed:
+- "x_sentiment": Real-time X/Twitter sentiment via Grok. Essential for trending/social scans. Not needed for macro or pure fundamental analysis.
+- "social_sentiment": StockTwits, Reddit (WSB, r/stocks), Yahoo trending. Essential for social/trending scans.
+- "technical_scan": Run broad screening — equities screener (Finviz + scoring), crypto scanner (CoinGecko + CMC + altFINS), commodities dashboard. Set for discovery scans.
+- "fundamental_validation": Pull fundamental data — StockAnalysis, Finnhub profiles, FMP financials. Set when FA matters.
+- "macro_context": FRED economic data, Fear & Greed index, treasury rates, economic calendar. Essential for macro views, helpful for context in other scans.
+- "liquidity_filter": Apply market cap floors and volume minimums. Set for institutional-grade filtering.
+- "earnings_data": Earnings calendar, upcoming reports, analyst estimates. Set for earnings/catalyst queries.
+- "ticker_research": Deep single-ticker research via Polygon, Finnhub, StockAnalysis, insider data. Set for deep_dive on specific tickers.
+
+RISK FRAMEWORK:
+- "risk_on": Bullish environment — favor growth, momentum, speculation
+- "risk_off": Defensive environment — favor quality, value, hedges
+- "neutral": Balanced / unclear regime
+
+RESPONSE STYLE — how should the final analysis be formatted:
+- "institutional_brief": Tight, conviction-ranked, institutional quality
+- "full_thesis": Deep analysis with full fundamental/technical backing
+- "ranked_list": Ranked list of opportunities with quick verdicts
+- "tactical_trade": Specific trade setups with entries, stops, targets
+
+PRIORITY DEPTH — how much data to gather:
+- "light": Fast response, minimal enrichment (30 candidates max)
+- "medium": Standard enrichment (40 candidates)
+- "deep": Maximum enrichment, more sources, deeper analysis
+
+FILTERS — extract any user-specified filters:
+- market_cap: "small_cap" (<$2B), "mid_cap" ($2B-$10B), "large_cap" (>$10B), "mega_cap" (>$200B)
+- sector: technology, healthcare, energy, financials, etc.
+- style: "day_trade", "swing", "position"
+- theme: "ai_compute", "energy", "uranium", "metals", "defense", "quantum", "biotech"
+
+TICKERS — extract any specific tickers mentioned. Return empty array if none.
+
+OUTPUT FORMAT (strict JSON, no other text):
+{
+  "intent": "cross_asset_trending",
+  "asset_classes": ["equities", "crypto"],
+  "modules": {
+    "x_sentiment": true,
+    "social_sentiment": true,
+    "technical_scan": true,
+    "fundamental_validation": true,
+    "macro_context": false,
+    "liquidity_filter": false,
+    "earnings_data": false,
+    "ticker_research": false
+  },
+  "risk_framework": "neutral",
+  "response_style": "ranked_list",
+  "priority_depth": "medium",
+  "filters": {},
+  "tickers": []
+}
+
+RULES:
+1. If the user mentions "across all markets", "cross asset", "stocks AND crypto", "global opportunities" — set asset_classes to ALL available classes.
+2. If the user says "highest conviction", "institutional", "serious", "not hype" — automatically enable liquidity_filter, fundamental_validation, and macro_context.
+3. For trending/social queries — ALWAYS enable x_sentiment and social_sentiment.
+4. For specific ticker analysis — enable ticker_research, set intent to deep_dive.
+5. For portfolio review with ticker list — set intent to portfolio_review, extract ALL tickers.
+6. Chat/opinion questions — set intent to chat, minimal modules (all false or near-false).
+7. Never set ALL modules to true unless the user explicitly asks for "everything" or "full dashboard".
+8. Be precise — don't activate modules that aren't relevant to the user's actual question.
+"""
+
 TRENDING_VALIDATION_PROMPT = """You are receiving HYBRID trending data with TWO-TIER quantitative scoring:
 
 DATA SOURCES:
