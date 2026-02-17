@@ -114,9 +114,34 @@ async def query_agent(
     user_query = body.query or body.prompt or ""
     if not user_query.strip():
         raise HTTPException(status_code=400, detail="No query provided. Send 'query' or 'prompt' field.")
+
+    from data.chat_history import create_conversation, get_conversation, save_messages as _save_msgs
+
+    conv_id = body.conversation_id
+    stored_history = []
+
+    if conv_id:
+        conv = get_conversation(conv_id)
+        if conv and conv.get("messages"):
+            stored_history = conv["messages"]
+        elif conv is None:
+            print(f"[API] Conversation {conv_id} not found, creating new one")
+            conv_id = None
+
     hist_source = body.conversation_history if body.conversation_history else (body.history if body.history else [])
-    history = [h.dict() for h in hist_source] if hist_source else []
-    print(f"[API] Received query: query={user_query[:100]}, history_turns={len(history)}")
+    frontend_history = [h.dict() for h in hist_source] if hist_source else []
+
+    history = stored_history if stored_history else frontend_history
+
+    if not conv_id:
+        try:
+            conv = create_conversation(user_query)
+            conv_id = conv["id"]
+        except Exception as e:
+            print(f"[API] Failed to create conversation: {e}")
+            conv_id = None
+
+    print(f"[API] Received query: query={user_query[:100]}, history_turns={len(history)}, conv_id={conv_id}")
     try:
         result = await asyncio.wait_for(
             agent.handle_query(
@@ -157,22 +182,24 @@ async def query_agent(
                 },
             }
 
-        if body.conversation_id:
+        if conv_id:
             try:
                 updated_messages = list(history)
                 updated_messages.append({"role": "user", "content": user_query})
                 updated_messages.append({"role": "assistant", "content": _json.dumps(result, default=str)})
-                from data.chat_history import save_messages as _save
-                _save(body.conversation_id, updated_messages)
+                _save_msgs(conv_id, updated_messages)
             except Exception as e:
                 print(f"[API] Failed to save conversation: {e}")
 
+        if isinstance(result, dict):
+            result["conversation_id"] = conv_id
         return result
     except asyncio.TimeoutError:
         print("[API] Request timed out after 150s")
         return {
             "type": "chat",
             "analysis": "",
+            "conversation_id": conv_id,
             "structured": {
                 "display_type": "chat",
                 "message": "Request timed out. The data sources may be slow or rate-limited — please wait a minute and try again.",
@@ -185,6 +212,7 @@ async def query_agent(
         return {
             "type": "chat",
             "analysis": "",
+            "conversation_id": conv_id,
             "structured": {
                 "display_type": "chat",
                 "message": f"Something went wrong: {str(e)}",
