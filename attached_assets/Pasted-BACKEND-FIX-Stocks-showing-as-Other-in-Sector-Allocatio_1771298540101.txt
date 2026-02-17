@@ -1,0 +1,40 @@
+BACKEND FIX: Stocks showing as "Other" in Sector Allocation
+
+In main.py, in the /api/portfolio/quotes endpoint, the FMP /stable/quote response does not include a "sector" field for stocks. The sector field in the quote comes back empty or undefined, so all stocks default to "Other" in the sector chart.
+
+Fix: After the main FMP quote lookup, do a SECOND lookup using FMP's /stable/profile endpoint for any stock that has no sector. This endpoint reliably returns sector and industry.
+
+Find the section where FMP stock quotes are populated (after the for loop that processes full_resp.json()). Add this code right after that loop, still inside the "if stock_tickers:" block and still inside the "async with httpx.AsyncClient" block:
+
+        # Fetch sector data from FMP profile for stocks missing sector
+        stocks_needing_sector = [t for t in stock_tickers if t in quotes and not quotes[t].get("sector")]
+        if stocks_needing_sector:
+            print(f"[PORTFOLIO] Fetching sector via /stable/profile for: {stocks_needing_sector}")
+            for ticker in stocks_needing_sector:
+                try:
+                    profile_resp = await client.get(
+                        "https://financialmodelingprep.com/stable/profile",
+                        params={"symbol": ticker, "apikey": FMP_API_KEY},
+                    )
+                    if profile_resp.status_code == 200:
+                        profile_data = profile_resp.json()
+                        if isinstance(profile_data, list) and len(profile_data) > 0:
+                            sector = profile_data[0].get("sector", "")
+                            industry = profile_data[0].get("industry", "")
+                            company_name = profile_data[0].get("companyName", "")
+                            if sector:
+                                quotes[ticker]["sector"] = sector
+                                quotes[ticker]["industry"] = industry
+                                quotes[ticker]["company_name"] = company_name
+                                print(f"[PORTFOLIO] {ticker} sector: {sector}, industry: {industry}")
+                            else:
+                                quotes[ticker]["sector"] = "Other"
+                        else:
+                            quotes[ticker]["sector"] = "Other"
+                except Exception as e:
+                    print(f"[PORTFOLIO] {ticker} profile error: {e}")
+                    quotes[ticker]["sector"] = "Other"
+
+This will make IREN show as "Technology" (or whatever its actual sector is), CIFR as "Technology", etc. The chart will then correctly show the real allocation instead of "Other 92.2%".
+
+Note: This adds one FMP API call per stock ticker that's missing sector data. For a portfolio of 5-10 stocks, that's 5-10 extra calls. On FMP's free tier (250 calls/day) this is fine.
