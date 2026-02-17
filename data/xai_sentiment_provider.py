@@ -156,7 +156,8 @@ Return the top 10-15 most actively discussed tickers, sorted by mention intensit
 Be ruthless about quality — skip bot-driven noise and focus on real human discussion.
 If you see signs of coordinated pumping, FLAG IT.
 Don't be risk-averse about small caps — if they're hot and the thesis is real, include them.
-If a low-cap stock has genuine momentum and a real catalyst, say so directly."""
+If a low-cap stock has genuine momentum and a real catalyst, say so directly.
+Also flag any tickers seeing surging mainstream retail interest beyond just financial social media — Google search trends, mainstream news coverage, TikTok/YouTube buzz. If a ticker is crossing over from financial Twitter into mainstream public awareness, that's a significant signal worth highlighting. Also note any references to Substack newsletters, research reports, or long-form analysis being widely shared on X — these often contain deeper thesis work that precedes major moves."""
 
         return await self._call_grok_with_x_search(prompt)
 
