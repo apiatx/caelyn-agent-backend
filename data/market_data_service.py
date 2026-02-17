@@ -2110,20 +2110,36 @@ class MarketDataService:
             stock_task, crypto_task, commodity_task, macro_task,
         )
 
+        stock_data = stock_data if stock_data else {"error": "Stock data unavailable"}
+        crypto_data = crypto_data if crypto_data else {"error": "Crypto data unavailable"}
+        commodity_data = commodity_data if commodity_data else {"error": "Commodity data unavailable"}
+        macro_data = macro_data if macro_data else {"error": "Macro data unavailable"}
+
+        from data.cross_asset_ranker import rank_cross_market
+        try:
+            ranking_result = rank_cross_market(stock_data, crypto_data, commodity_data, macro_data)
+        except Exception as e:
+            print(f"[CROSS-MARKET] Ranker failed: {e}")
+            ranking_result = {"ranked_candidates": [], "ranking_debug": {"error": str(e)}}
+
         result = {
             "scan_type": "cross_market",
             "instructions": (
-                "CROSS-MARKET SCAN: You received data from stocks, crypto, AND commodities. "
-                "You MUST rank the best opportunities across ALL asset classes and select the "
-                "strongest 3-5 regardless of asset class. Do NOT default to one asset class. "
-                "Apply macro regime filter: if an asset class is in a downtrend or risk-off, "
-                "penalize speculative picks from that class. A safe-haven commodity in a fear "
-                "environment outranks a speculative altcoin in a bleeding crypto market."
+                "CROSS-MARKET SCAN — PRE-RANKED DATA. Candidates have been quantitatively scored, "
+                "normalized across asset classes, and filtered. The ranking_debug shows WHY each was selected. "
+                "Your job: (1) Use the pre-ranked list as your starting point — do NOT re-rank from scratch. "
+                "(2) Add qualitative analysis the math can't capture (narrative, timing, regime context). "
+                "(3) You may promote or demote candidates by 1-2 positions based on qualitative factors, but "
+                "explain why. (4) MUST include at least one stock and one commodity if they appear in ranked list. "
+                "(5) If macro regime is risk_off, do NOT recommend speculative small-cap crypto. "
+                "(6) Present your final 3-5 picks with conviction level and specific entry thesis."
             ),
-            "stock_trending": stock_data if stock_data else {"error": "Stock data unavailable"},
-            "crypto_scanner": crypto_data if crypto_data else {"error": "Crypto data unavailable"},
-            "commodities": commodity_data if commodity_data else {"error": "Commodity data unavailable"},
-            "macro_context": macro_data if macro_data else {"error": "Macro data unavailable"},
+            "ranked_candidates": ranking_result.get("ranked_candidates", []),
+            "ranking_debug": ranking_result.get("ranking_debug", {}),
+            "stock_trending": stock_data,
+            "crypto_scanner": crypto_data,
+            "commodities": commodity_data,
+            "macro_context": macro_data,
         }
 
         return result

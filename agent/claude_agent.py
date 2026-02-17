@@ -1106,54 +1106,84 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         return response.content[0].text
 
     def _slim_cross_market_data(self, data: dict) -> dict:
-        """Pre-compress cross-market data by keeping only essential fields for ranking."""
+        """Pre-compress cross-market data. Now prioritizes pre-ranked candidates over raw dumps."""
         try:
             slim = {
                 "scan_type": "cross_market",
                 "instructions": data.get("instructions", ""),
             }
 
+            ranked = data.get("ranked_candidates") or []
+            ranking_debug = data.get("ranking_debug") or {}
+
+            if ranked:
+                slim["ranked_candidates"] = ranked
+                slim["ranking_debug"] = {
+                    "macro_regime": ranking_debug.get("macro_regime", "unknown"),
+                    "candidates_per_class": ranking_debug.get("candidates_per_class", {}),
+                    "regime_penalty_applied": ranking_debug.get("regime_penalty_applied", False),
+                    "quota_adjustments": ranking_debug.get("quota_adjustments", []),
+                    "selection_reasons": ranking_debug.get("selection_reasons", {}),
+                }
+
+            ranked_symbols = {c.get("symbol") for c in ranked if isinstance(c, dict)}
+            has_ranked = len(ranked) > 0
+
             stock = data.get("stock_trending") or {}
             if isinstance(stock, dict) and "error" not in stock:
                 slim["stocks"] = {
-                    "top_trending": (stock.get("top_trending") or [])[:10],
-                    "enriched": {}
+                    "top_trending": (stock.get("top_trending") or [])[:8],
                 }
                 enriched_data = stock.get("enriched_data")
                 if isinstance(enriched_data, dict):
-                    for ticker, info in list(enriched_data.items())[:6]:
-                        if not isinstance(info, dict):
-                            continue
-                        slim["stocks"]["enriched"][ticker] = {
-                            k: v for k, v in info.items()
-                            if k in {"market_cap", "pe_ratio", "price_target", "revenue_growth",
-                                     "week_52_range", "analyst_rating", "upside_downside",
-                                     "trending_sources", "source_count", "beta", "avg_volume"}
+                    if has_ranked:
+                        relevant = {k: v for k, v in enriched_data.items() if k in ranked_symbols}
+                    else:
+                        relevant = dict(list(enriched_data.items())[:6])
+                    if relevant:
+                        slim["stocks"]["enriched_ranked"] = {
+                            ticker: {k: v for k, v in info.items()
+                                     if k in {"market_cap", "pe_ratio", "price_target", "revenue_growth",
+                                              "analyst_rating", "upside_downside", "beta", "avg_volume"}}
+                            for ticker, info in relevant.items() if isinstance(info, dict)
                         }
             else:
-                slim["stocks"] = stock if isinstance(stock, dict) else {"error": "unavailable"}
+                slim["stocks"] = {"error": "unavailable"}
 
-            crypto = data.get("crypto_scanner") or {}
-            if isinstance(crypto, dict) and "error" not in crypto:
-                slim_crypto = {}
-                for key, val in crypto.items():
-                    if isinstance(val, dict):
-                        val_str = json.dumps(val, default=str)
-                        if "trending" in key.lower() or "top" in key.lower() or len(val_str) < 3000:
+            if not has_ranked:
+                crypto = data.get("crypto_scanner") or {}
+                if isinstance(crypto, dict) and "error" not in crypto:
+                    slim_crypto = {}
+                    for key, val in crypto.items():
+                        if isinstance(val, dict):
+                            val_str = json.dumps(val, default=str)
+                            if "trending" in key.lower() or "top" in key.lower() or len(val_str) < 3000:
+                                slim_crypto[key] = val
+                        elif isinstance(val, list):
+                            slim_crypto[key] = val[:6]
+                        else:
                             slim_crypto[key] = val
-                    elif isinstance(val, list):
-                        slim_crypto[key] = val[:8]
-                    else:
-                        slim_crypto[key] = val
-                slim["crypto"] = slim_crypto
-            else:
-                slim["crypto"] = crypto if isinstance(crypto, dict) else {"error": "unavailable"}
+                    slim["crypto"] = slim_crypto
+                else:
+                    slim["crypto"] = {"error": "unavailable"}
 
-            commodities = data.get("commodities") or {}
-            slim["commodities"] = commodities if isinstance(commodities, dict) else {"error": "unavailable"}
+                commodities = data.get("commodities") or {}
+                slim["commodities"] = commodities if isinstance(commodities, dict) else {"error": "unavailable"}
 
             macro = data.get("macro_context") or {}
-            slim["macro"] = macro if isinstance(macro, dict) else {"error": "unavailable"}
+            if isinstance(macro, dict) and "error" not in macro:
+                slim_macro = {}
+                fg = macro.get("fear_greed_index")
+                if fg:
+                    slim_macro["fear_greed"] = fg
+                fred = macro.get("fred_economic_data") or {}
+                if isinstance(fred, dict):
+                    slim_macro["key_rates"] = {k: v for k, v in fred.items()
+                                               if k in {"fed_rate", "vix", "cpi", "gdp", "unemployment",
+                                                         "yield_curve", "VIX", "fed_funds_rate"}}
+                slim["macro"] = slim_macro if slim_macro else {"error": "unavailable"}
+            else:
+                slim["macro"] = {"error": "unavailable"}
 
             return slim
         except Exception as e:
