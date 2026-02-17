@@ -7,28 +7,18 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 import json as _json
+import os
 
 from pathlib import Path
 
-from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY, XAI_API_KEY, FINNHUB_API_KEY, OPENAI_API_KEY
-from data.market_data_service import MarketDataService
-from agent.claude_agent import TradingAgent
-from data.chat_history import (
-    create_conversation, save_messages, get_conversation,
-    list_conversations, delete_conversation,
-)
+AGENT_API_KEY = os.getenv("AGENT_API_KEY")
 
-# ============================================================
-# Initialize the app
-# ============================================================
 app = FastAPI(title="Trading Agent API")
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS: Allow your website to call this backend.
-# IMPORTANT: Replace these URLs with YOUR actual website URLs.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,19 +27,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============================================================
-# Wire up the services (deferred init so health check passes fast)
-# ============================================================
 data_service = None
 agent = None
 _init_done = False
 
 def _do_init():
     global data_service, agent, _init_done
-    data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY, coingecko_key=COINGECKO_API_KEY, cmc_key=CMC_API_KEY, altfins_key=ALTFINS_API_KEY, xai_key=XAI_API_KEY)
-    agent = TradingAgent(api_key=ANTHROPIC_API_KEY, data_service=data_service, openai_api_key=OPENAI_API_KEY)
-    _init_done = True
-    print("[INIT] All services initialized successfully")
+    try:
+        from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY, XAI_API_KEY, OPENAI_API_KEY
+        from data.market_data_service import MarketDataService
+        from agent.claude_agent import TradingAgent
+        data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY, coingecko_key=COINGECKO_API_KEY, cmc_key=CMC_API_KEY, altfins_key=ALTFINS_API_KEY, xai_key=XAI_API_KEY)
+        agent = TradingAgent(api_key=ANTHROPIC_API_KEY, data_service=data_service, openai_api_key=OPENAI_API_KEY)
+        _init_done = True
+        print("[INIT] All services initialized successfully")
+    except Exception as e:
+        print(f"[INIT] ERROR during initialization: {e}")
+        import traceback
+        traceback.print_exc()
+        _init_done = True
 
 @app.on_event("startup")
 async def startup_event():
@@ -135,7 +131,8 @@ async def query_agent(
                 updated_messages = list(history)
                 updated_messages.append({"role": "user", "content": user_query})
                 updated_messages.append({"role": "assistant", "content": _json.dumps(result, default=str)})
-                save_messages(body.conversation_id, updated_messages)
+                from data.chat_history import save_messages as _save
+                _save(body.conversation_id, updated_messages)
             except Exception as e:
                 print(f"[API] Failed to save conversation: {e}")
 
@@ -203,7 +200,8 @@ async def review_watchlist(
 
         if body.conversation_id:
             try:
-                save_messages(body.conversation_id, [
+                from data.chat_history import save_messages as _save2
+                _save2(body.conversation_id, [
                     {"role": "user", "content": f"Review my watchlist: {', '.join(tickers)}"},
                     {"role": "assistant", "content": _json.dumps(result, default=str)},
                 ])
@@ -244,11 +242,13 @@ class UpdateConversationRequest(BaseModel):
 @app.get("/api/conversations")
 @limiter.limit("30/minute")
 async def get_conversations(request: Request):
+    from data.chat_history import list_conversations
     return {"conversations": list_conversations()}
 
 @app.get("/api/conversations/{conv_id}")
 @limiter.limit("30/minute")
 async def get_conversation_detail(request: Request, conv_id: str):
+    from data.chat_history import get_conversation
     conv = get_conversation(conv_id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -257,12 +257,14 @@ async def get_conversation_detail(request: Request, conv_id: str):
 @app.post("/api/conversations")
 @limiter.limit("30/minute")
 async def create_new_conversation(request: Request, body: CreateConversationRequest):
+    from data.chat_history import create_conversation
     conv = create_conversation(body.first_query)
     return conv
 
 @app.put("/api/conversations/{conv_id}")
 @limiter.limit("30/minute")
 async def update_conversation(request: Request, conv_id: str, body: UpdateConversationRequest):
+    from data.chat_history import save_messages
     success = save_messages(conv_id, body.messages)
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -271,6 +273,7 @@ async def update_conversation(request: Request, conv_id: str, body: UpdateConver
 @app.delete("/api/conversations/{conv_id}")
 @limiter.limit("30/minute")
 async def delete_conv(request: Request, conv_id: str):
+    from data.chat_history import delete_conversation
     success = delete_conversation(conv_id)
     return {"success": success}
 
@@ -504,7 +507,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                 try:
                     r = await client.get(
                         "https://finnhub.io/api/v1/quote",
-                        params={"symbol": sym, "token": FINNHUB_API_KEY},
+                        params={"symbol": sym, "token": os.getenv("FINNHUB_API_KEY", "")},
                     )
                     if r.status_code == 200:
                         d = r.json()
@@ -522,7 +525,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                 try:
                     r = await client.get(
                         "https://finnhub.io/api/v1/stock/profile2",
-                        params={"symbol": sym, "token": FINNHUB_API_KEY},
+                        params={"symbol": sym, "token": os.getenv("FINNHUB_API_KEY", "")},
                     )
                     if r.status_code == 200:
                         d = r.json()
