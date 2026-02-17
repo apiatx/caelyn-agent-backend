@@ -356,6 +356,18 @@ COMMODITY_SYMBOLS = {
     "PALLADIUM": "PAUSD", "WHEAT": "ZSUSD", "CORN": "ZCUSD",
 }
 
+INDEX_YAHOO_SYMBOLS = {
+    "SPX": "^GSPC",
+    "SPY": "SPY",
+    "DJI": "^DJI",
+    "IXIC": "^IXIC",
+    "NDX": "^NDX",
+    "QQQ": "QQQ",
+    "RUT": "^RUT",
+    "VIX": "^VIX",
+    "DXY": "DX-Y.NYB",
+}
+
 COINGECKO_COIN_LIST_TTL = 86400
 
 
@@ -411,11 +423,12 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
     if not tickers:
         return {"quotes": {}}
 
-    stock_tickers = [t for t in tickers if asset_types.get(t, "stock") in ("stock", "etf", "index")]
+    index_tickers = [t for t in tickers if asset_types.get(t) == "index"]
+    stock_tickers = [t for t in tickers if asset_types.get(t, "stock") in ("stock", "etf") and t not in index_tickers]
     crypto_tickers = [t for t in tickers if asset_types.get(t) == "crypto"]
     commodity_tickers = [t for t in tickers if asset_types.get(t) == "commodity"]
 
-    print(f"[PORTFOLIO] Routing: stocks={stock_tickers}, crypto={crypto_tickers}, commodities={commodity_tickers}")
+    print(f"[PORTFOLIO] Routing: stocks={stock_tickers}, crypto={crypto_tickers}, commodities={commodity_tickers}, indices={index_tickers}")
 
     quotes = {}
 
@@ -519,6 +532,41 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                     except Exception as e:
                         print(f"[PORTFOLIO] {ticker} profile error: {e}")
                         quotes[ticker]["sector"] = "Other"
+
+        if index_tickers:
+            for ticker in index_tickers:
+                yahoo_symbol = INDEX_YAHOO_SYMBOLS.get(ticker, ticker)
+                try:
+                    resp = await client.get(
+                        "https://query1.finance.yahoo.com/v8/finance/chart/" + yahoo_symbol,
+                        params={"interval": "1d", "range": "2d"},
+                        headers={"User-Agent": "Mozilla/5.0"},
+                    )
+                    if resp.status_code == 200:
+                        chart_data = resp.json()
+                        result = chart_data.get("chart", {}).get("result", [])
+                        if result:
+                            meta = result[0].get("meta", {})
+                            price = meta.get("regularMarketPrice", 0)
+                            prev_close = meta.get("chartPreviousClose", meta.get("previousClose", 0))
+                            change = round(price - prev_close, 2) if prev_close else 0
+                            change_pct = round((change / prev_close) * 100, 2) if prev_close else 0
+                            quotes[ticker] = {
+                                "price": price,
+                                "change": change,
+                                "change_pct": change_pct,
+                                "day_high": meta.get("regularMarketDayHigh"),
+                                "day_low": meta.get("regularMarketDayLow"),
+                                "volume": meta.get("regularMarketVolume"),
+                                "source": "yahoo",
+                                "asset_type": "index",
+                                "sector": "Index",
+                            }
+                            print(f"[PORTFOLIO] Index: {ticker} ({yahoo_symbol}) = ${price}")
+                    else:
+                        print(f"[PORTFOLIO] Yahoo index {ticker} ({yahoo_symbol}) returned {resp.status_code}")
+                except Exception as e:
+                    print(f"[PORTFOLIO] Index {ticker} ({yahoo_symbol}) error: {e}")
 
         if crypto_tickers:
             symbol_map = await get_coingecko_symbol_map()
