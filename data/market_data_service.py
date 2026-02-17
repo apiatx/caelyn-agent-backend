@@ -2082,6 +2082,56 @@ class MarketDataService:
             "market_news": [],
         }
 
+    async def get_cross_market_scan(self) -> dict:
+        """
+        Pull data from ALL asset classes in parallel: stocks, crypto, commodities, macro.
+        Used when the user asks about trends/opportunities across multiple markets.
+        Returns a unified dataset so Claude can rank across asset classes fairly.
+        """
+        stock_task = self.get_cross_platform_trending()
+        crypto_task = self.get_crypto_scanner()
+        commodity_task = self.get_commodities_dashboard()
+        macro_task = self.get_macro_overview()
+
+        stock_data, crypto_data, commodity_data, macro_data = await asyncio.gather(
+            stock_task, crypto_task, commodity_task, macro_task,
+            return_exceptions=True,
+        )
+
+        result = {
+            "scan_type": "cross_market",
+            "instructions": (
+                "CROSS-MARKET SCAN: You received data from stocks, crypto, AND commodities. "
+                "You MUST rank the best opportunities across ALL asset classes and select the "
+                "strongest 3-5 regardless of asset class. Do NOT default to one asset class. "
+                "Apply macro regime filter: if an asset class is in a downtrend or risk-off, "
+                "penalize speculative picks from that class. A safe-haven commodity in a fear "
+                "environment outranks a speculative altcoin in a bleeding crypto market."
+            ),
+        }
+
+        if not isinstance(stock_data, Exception) and stock_data:
+            result["stock_trending"] = stock_data
+        else:
+            result["stock_trending"] = {"error": "Stock data unavailable"}
+
+        if not isinstance(crypto_data, Exception) and crypto_data:
+            result["crypto_scanner"] = crypto_data
+        else:
+            result["crypto_scanner"] = {"error": "Crypto data unavailable"}
+
+        if not isinstance(commodity_data, Exception) and commodity_data:
+            result["commodities"] = commodity_data
+        else:
+            result["commodities"] = {"error": "Commodity data unavailable"}
+
+        if not isinstance(macro_data, Exception) and macro_data:
+            result["macro_context"] = macro_data
+        else:
+            result["macro_context"] = {"error": "Macro data unavailable"}
+
+        return result
+
     async def get_crypto_scanner(self) -> dict:
         """
         Combined crypto scanner pulling from BOTH CoinGecko and CoinMarketCap.

@@ -34,6 +34,13 @@ class TradingAgent:
             query_info = await self._classify_with_timeout(user_prompt)
             query_info["original_prompt"] = user_prompt
             category = query_info.get("category", "general")
+
+            cross_market_override = self._detect_cross_market(user_prompt.lower().strip())
+            if cross_market_override and category != "cross_market":
+                print(f"[AGENT] Cross-market override: {category} → cross_market")
+                category = "cross_market"
+                query_info["category"] = "cross_market"
+
             print(f"[AGENT] Classified as: {category} | filters: {query_info.get('filters', {})} ({time.time() - start_time:.1f}s)")
 
             if category == "chat":
@@ -107,6 +114,10 @@ class TradingAgent:
 
     def _keyword_classify(self, query: str) -> dict:
         q = query.lower().strip()
+
+        cross_market = self._detect_cross_market(q)
+        if cross_market:
+            return cross_market
 
         scan_keywords = [
             "scan", "screen", "trending", "best trades", "briefing", "watchlist",
@@ -217,6 +228,27 @@ class TradingAgent:
         if any(w in q for w in ["trade", "best trade", "setup", "swing"]):
             return {"category": "market_scan"}
         return {"category": "market_scan"}
+
+    def _detect_cross_market(self, q: str) -> dict | None:
+        stock_signals = ["stock", "stocks", "equit", "equity", "equities", "s&p", "spy", "nasdaq"]
+        crypto_signals = ["crypto", "bitcoin", "btc", "altcoin", "defi"]
+        commodity_signals = ["commodit", "oil", "gold", "silver", "copper", "uranium",
+                             "natural gas", "metals", "precious metal"]
+        broad_signals = ["all markets", "across markets", "every market", "cross market",
+                         "all asset", "across asset", "every asset class", "cross asset",
+                         "stocks, crypto", "crypto, stock", "stocks and crypto",
+                         "crypto and stock"]
+
+        has_stock = any(s in q for s in stock_signals)
+        has_crypto = any(s in q for s in crypto_signals)
+        has_commodity = any(s in q for s in commodity_signals)
+        has_broad = any(s in q for s in broad_signals)
+
+        asset_count = sum([has_stock, has_crypto, has_commodity])
+
+        if has_broad or asset_count >= 2:
+            return {"category": "cross_market"}
+        return None
 
     def _extract_tickers(self, query: str) -> list:
         ticker_pattern = re.findall(r'\$?([A-Z]{2,5})\b', query)
@@ -497,6 +529,9 @@ class TradingAgent:
 
         elif category == "trending":
             return await self.data.get_cross_platform_trending()
+
+        elif category == "cross_market":
+            return await self.data.get_cross_market_scan()
 
         elif category == "ai_screener":
             try:
