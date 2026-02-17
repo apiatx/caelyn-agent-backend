@@ -492,6 +492,25 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
             except Exception as e:
                 print(f"[PORTFOLIO] FMP error: {e}")
 
+            stocks_missing_sector = [t for t in stock_tickers if t in quotes and not quotes[t].get("sector")]
+            if stocks_missing_sector:
+                print(f"[PORTFOLIO] Fetching sector from /stable/profile for: {stocks_missing_sector}")
+                for ticker in stocks_missing_sector:
+                    try:
+                        profile_resp = await client.get(
+                            "https://financialmodelingprep.com/stable/profile",
+                            params={"symbol": ticker, "apikey": FMP_API_KEY},
+                        )
+                        if profile_resp.status_code == 200:
+                            profile_data = profile_resp.json()
+                            if profile_data and isinstance(profile_data, list) and len(profile_data) > 0:
+                                sector = profile_data[0].get("sector", "")
+                                if sector:
+                                    quotes[ticker]["sector"] = sector
+                                    print(f"[PORTFOLIO] {ticker} sector from profile: {sector}")
+                    except Exception as e:
+                        print(f"[PORTFOLIO] {ticker} profile lookup error: {e}")
+
         if crypto_tickers:
             symbol_map = await get_coingecko_symbol_map()
 
@@ -670,8 +689,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
             elif not quote.get("sector"):
                 quote["sector"] = "Other"
 
-    sector_debug = {sym: q.get("sector", "MISSING") for sym, q in quotes.items()}
-    print(f"[PORTFOLIO] Sector allocation: {sector_debug}")
+    print(f"[PORTFOLIO] Final sectors: {[(t, q.get('sector')) for t, q in quotes.items()]}")
     print(f"[PORTFOLIO] Returning {len(quotes)} quotes for: {list(quotes.keys())}")
     return {"quotes": quotes}
 
