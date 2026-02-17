@@ -20,8 +20,7 @@ class TradingAgent:
     def _build_plan_from_preset(self, preset_intent: str) -> dict:
         profile = self.INTENT_PROFILES.get(preset_intent)
         if not profile:
-            print(f"[ORCHESTRATOR] Unknown preset_intent '{preset_intent}', using default plan")
-            return dict(self.DEFAULT_PLAN)
+            return None
 
         plan = {
             "intent": profile["intent"],
@@ -34,6 +33,164 @@ class TradingAgent:
             "tickers": [],
         }
         return plan
+
+    def _refine_plan_with_query(self, base_plan: dict, query: str) -> dict:
+        q = query.lower().strip()
+        plan = {
+            "intent": base_plan["intent"],
+            "asset_classes": list(base_plan["asset_classes"]),
+            "modules": dict(base_plan["modules"]),
+            "risk_framework": base_plan.get("risk_framework", "neutral"),
+            "response_style": base_plan.get("response_style", "institutional_brief"),
+            "priority_depth": base_plan.get("priority_depth", "medium"),
+            "filters": dict(base_plan.get("filters", {})),
+            "tickers": list(base_plan.get("tickers", [])),
+        }
+
+        if any(w in q for w in ["deep", "detailed", "thorough", "in-depth"]):
+            plan["priority_depth"] = "deep"
+            plan["response_style"] = "deep_thesis"
+
+        if any(w in q for w in ["quick", "brief", "summary", "tldr"]):
+            plan["priority_depth"] = "shallow"
+            plan["response_style"] = "institutional_brief"
+
+        if any(w in q for w in ["small cap", "micro cap", "microcap", "small-cap", "under $2b"]):
+            plan["filters"]["market_cap_max"] = 2000000000
+            plan["risk_framework"] = "asymmetric"
+
+        if "crypto" in q and "crypto" not in plan["asset_classes"]:
+            plan["asset_classes"].append("crypto")
+        if any(w in q for w in ["stocks", "equities"]) and "equities" not in plan["asset_classes"]:
+            plan["asset_classes"].append("equities")
+        if any(w in q for w in ["commodities", "gold", "oil", "silver"]) and "commodities" not in plan["asset_classes"]:
+            plan["asset_classes"].append("commodities")
+
+        if any(w in q for w in ["twitter", "x sentiment", "social"]):
+            plan["modules"]["x_sentiment"] = True
+            plan["modules"]["social_sentiment"] = True
+        if any(w in q for w in ["earnings", "revenue", "eps"]):
+            plan["modules"]["earnings_data"] = True
+        if any(w in q for w in ["macro", "fed", "rates", "inflation"]):
+            plan["modules"]["macro_context"] = True
+
+        import re
+        ticker_pattern = re.findall(r'\b([A-Z]{1,5})\b', query)
+        common_words = {
+            "I", "A", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
+            "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON", "OR",
+            "SO", "TO", "UP", "US", "WE", "THE", "AND", "FOR", "ARE",
+            "BUT", "NOT", "YOU", "ALL", "CAN", "HAD", "HER", "WAS",
+            "ONE", "OUR", "OUT", "HAS", "HIS", "HOW", "ITS", "MAY",
+            "NEW", "NOW", "OLD", "SEE", "WAY", "WHO", "DID", "GET",
+            "BUY", "SELL", "HOLD", "LONG", "SHORT", "PUT", "CALL",
+            "ETF", "IPO", "CEO", "CFO", "EPS", "GDP", "CPI", "FED",
+            "SEC", "FDA", "RSI", "SMA", "ATH", "ATL", "YOY", "QOQ",
+        }
+        real_tickers = [t for t in ticker_pattern if t not in common_words]
+        if real_tickers:
+            plan["tickers"] = real_tickers
+            plan["modules"]["ticker_research"] = True
+
+        return plan
+
+    def _heuristic_fallback_plan(self, prompt: str) -> dict:
+        q = prompt.lower().strip()
+
+        import re
+        ticker_pattern = re.findall(r'\b([A-Z]{1,5})\b', prompt)
+        common_words = {
+            "I", "A", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
+            "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON", "OR",
+            "SO", "TO", "UP", "US", "WE", "THE", "AND", "FOR", "ARE",
+            "BUT", "NOT", "YOU", "ALL", "CAN", "HAD", "HER", "WAS",
+            "ONE", "OUR", "OUT", "HAS", "HIS", "HOW", "ITS", "MAY",
+            "NEW", "NOW", "OLD", "SEE", "WAY", "WHO", "DID", "GET",
+            "BUY", "SELL", "HOLD", "LONG", "SHORT", "PUT", "CALL",
+            "ETF", "IPO", "CEO", "CFO", "EPS", "GDP", "CPI", "FED",
+            "SEC", "FDA", "RSI", "SMA", "ATH", "ATL", "YOY", "QOQ",
+        }
+        real_tickers = [t for t in ticker_pattern if t not in common_words]
+
+        if real_tickers:
+            plan = dict(self.DEFAULT_PLAN)
+            plan["intent"] = "deep_dive"
+            plan["tickers"] = real_tickers
+            plan["modules"] = dict(self.DEFAULT_PLAN["modules"])
+            plan["modules"]["ticker_research"] = True
+            plan["asset_classes"] = ["equities"]
+            print(f"[FALLBACK] Ticker detected ({real_tickers}) → deep_dive")
+            return plan
+
+        if any(w in q for w in ["earning", "eps", "revenue", "guidance", "report"]):
+            plan = dict(self.DEFAULT_PLAN)
+            plan["intent"] = "event_driven"
+            plan["modules"] = dict(self.DEFAULT_PLAN["modules"])
+            plan["modules"]["earnings_data"] = True
+            plan["modules"]["fundamental_validation"] = True
+            plan["asset_classes"] = ["equities"]
+            print(f"[FALLBACK] Earnings keywords → event_driven")
+            return plan
+
+        if any(w in q for w in ["macro", "fed", "rate", "inflation", "gdp", "cpi", "treasury", "yield"]):
+            plan = dict(self.DEFAULT_PLAN)
+            plan["intent"] = "macro_outlook"
+            plan["modules"] = dict(self.DEFAULT_PLAN["modules"])
+            plan["modules"]["macro_context"] = True
+            plan["modules"]["earnings_data"] = True
+            plan["asset_classes"] = ["equities", "commodities", "macro"]
+            print(f"[FALLBACK] Macro keywords → macro_outlook")
+            return plan
+
+        if any(w in q for w in ["crypto", "bitcoin", "btc", "eth", "altcoin", "defi"]):
+            plan = dict(self.DEFAULT_PLAN)
+            plan["intent"] = "single_asset_scan"
+            plan["modules"] = dict(self.DEFAULT_PLAN["modules"])
+            plan["modules"]["x_sentiment"] = True
+            plan["modules"]["social_sentiment"] = True
+            plan["asset_classes"] = ["crypto"]
+            print(f"[FALLBACK] Crypto keywords → single_asset_scan (crypto)")
+            return plan
+
+        if any(w in q for w in ["sector", "rotation", "industry"]):
+            plan = dict(self.DEFAULT_PLAN)
+            plan["intent"] = "sector_rotation"
+            plan["modules"] = dict(self.DEFAULT_PLAN["modules"])
+            plan["modules"]["macro_context"] = True
+            plan["asset_classes"] = ["equities"]
+            print(f"[FALLBACK] Sector keywords → sector_rotation")
+            return plan
+
+        if any(w in q for w in ["portfolio", "holdings", "my positions", "review my"]):
+            plan = dict(self.DEFAULT_PLAN)
+            plan["intent"] = "portfolio_review"
+            plan["modules"] = dict(self.DEFAULT_PLAN["modules"])
+            plan["modules"]["fundamental_validation"] = True
+            plan["modules"]["macro_context"] = True
+            plan["asset_classes"] = ["equities", "crypto"]
+            print(f"[FALLBACK] Portfolio keywords → portfolio_review")
+            return plan
+
+        if any(w in q for w in ["brief", "morning", "daily", "overview", "update"]):
+            plan = dict(self.DEFAULT_PLAN)
+            plan["intent"] = "briefing"
+            plan["modules"] = dict(self.DEFAULT_PLAN["modules"])
+            plan["asset_classes"] = ["equities", "crypto", "commodities", "macro"]
+            print(f"[FALLBACK] Briefing keywords → briefing")
+            return plan
+
+        if any(w in q for w in ["short", "bearish", "puts", "downside"]):
+            plan = dict(self.DEFAULT_PLAN)
+            plan["intent"] = "short_setup"
+            plan["modules"] = dict(self.DEFAULT_PLAN["modules"])
+            plan["modules"]["technical_scan"] = True
+            plan["modules"]["social_sentiment"] = True
+            plan["asset_classes"] = ["equities"]
+            print(f"[FALLBACK] Bearish keywords → short_setup")
+            return plan
+
+        print(f"[FALLBACK] No keyword match → cross_asset_trending (default)")
+        return dict(self.DEFAULT_PLAN)
 
     async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None) -> dict:
         start_time = time.time()
@@ -50,21 +207,30 @@ class TradingAgent:
             print(f"[AGENT] Follow-up detected, skipping data gathering ({time.time() - start_time:.1f}s)")
         elif preset_intent:
             plan = self._build_plan_from_preset(preset_intent)
-            query_info = self._plan_to_query_info(plan)
+            if plan is None:
+                print(f"[ROUTING] Unknown preset_intent '{preset_intent}', falling back to OpenAI classifier")
+                query_info = await self._orchestrate_with_timeout(user_prompt)
+            else:
+                if user_prompt.strip():
+                    plan = self._refine_plan_with_query(plan, user_prompt)
+                query_info = self._plan_to_query_info(plan)
+
             query_info["original_prompt"] = user_prompt
             category = query_info.get("category", "general")
-            print(f"[ORCHESTRATOR] Preset intent: {preset_intent} → Category: {category} | "
-                  f"Assets: {plan.get('asset_classes')} | "
-                  f"Modules: {[k for k, v in plan.get('modules', {}).items() if v]} | "
-                  f"Depth: {plan.get('priority_depth')}")
 
-            plan = query_info.get("orchestration_plan")
-            if not plan:
+            orch_plan = query_info.get("orchestration_plan")
+            if orch_plan:
                 cross_market_override = self._detect_cross_market(user_prompt.lower().strip())
                 if cross_market_override and category != "cross_market":
                     print(f"[AGENT] Cross-market override: {category} → cross_market")
                     category = "cross_market"
                     query_info["category"] = "cross_market"
+
+            print(f"[ROUTING] preset={preset_intent} | query={user_prompt[:80]} | "
+                  f"category={category} | "
+                  f"asset_classes={orch_plan.get('asset_classes') if orch_plan else '?'} | "
+                  f"modules={[k for k, v in (orch_plan.get('modules', {}) if orch_plan else {}).items() if v]} | "
+                  f"response_style={orch_plan.get('response_style') if orch_plan else '?'}")
 
             if category == "chat":
                 market_data = await self._gather_chat_context(user_prompt, query_info)
@@ -86,7 +252,11 @@ class TradingAgent:
                     category = "cross_market"
                     query_info["category"] = "cross_market"
 
-            print(f"[AGENT] Routed as: {category} | intent: {plan.get('intent', 'n/a') if plan else 'keyword_fallback'} | filters: {query_info.get('filters', {})} ({time.time() - start_time:.1f}s)")
+            print(f"[ROUTING] preset=none | query={user_prompt[:80]} | "
+                  f"category={category} | "
+                  f"asset_classes={plan.get('asset_classes') if plan else '?'} | "
+                  f"modules={[k for k, v in (plan.get('modules', {}) if plan else {}).items() if v]} | "
+                  f"response_style={plan.get('response_style') if plan else '?'}")
 
             if category == "chat":
                 market_data = await self._gather_chat_context(user_prompt, query_info)
@@ -673,8 +843,8 @@ class TradingAgent:
             plan = json.loads(text)
             return self._validate_plan(plan, prompt)
         except Exception as e:
-            print(f"[ORCHESTRATOR] OpenAI orchestration error: {e}, using default plan")
-            return dict(self.DEFAULT_PLAN)
+            print(f"[ORCHESTRATOR] OpenAI orchestration error: {e}, using heuristic fallback")
+            return self._heuristic_fallback_plan(prompt)
 
     def _validate_plan(self, plan: dict, prompt: str) -> dict:
         if not isinstance(plan, dict):

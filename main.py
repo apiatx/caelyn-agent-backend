@@ -86,15 +86,9 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)):
     return x_api_key
 
 
-class Message(BaseModel):
-    role: str
-    content: str
-
 class QueryRequest(BaseModel):
     query: Optional[str] = None
     prompt: Optional[str] = None
-    conversation_history: Optional[List[Message]] = []
-    history: Optional[List[Message]] = None
     conversation_id: Optional[str] = None
     preset_intent: Optional[str] = None
 
@@ -119,20 +113,15 @@ async def query_agent(
     from data.chat_history import create_conversation, get_conversation, save_messages as _save_msgs
 
     conv_id = body.conversation_id
-    stored_history = []
+    history = []
 
     if conv_id:
         conv = get_conversation(conv_id)
         if conv and conv.get("messages"):
-            stored_history = conv["messages"]
+            history = conv["messages"]
         elif conv is None:
             print(f"[API] Conversation {conv_id} not found, creating new one")
             conv_id = None
-
-    hist_source = body.conversation_history if body.conversation_history else (body.history if body.history else [])
-    frontend_history = [h.dict() for h in hist_source] if hist_source else []
-
-    history = stored_history if stored_history else frontend_history
 
     if not conv_id:
         try:
