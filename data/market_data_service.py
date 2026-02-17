@@ -2366,14 +2366,67 @@ class MarketDataService:
             elif dy >= 2: f_parts.append("fa_div_o2")
             elif dy >= 1: f_parts.append("fa_div_o1")
 
+        perf_week = filters.get("perf_week")
+        if perf_week is not None:
+            if perf_week >= 20: f_parts.append("ta_perf_w20o")
+            elif perf_week >= 10: f_parts.append("ta_perf_w10o")
+            elif perf_week >= 5: f_parts.append("ta_perf_w5o")
+
+        perf_month = filters.get("perf_month")
+        if perf_month is not None:
+            if perf_month >= 30: f_parts.append("ta_perf_4w30o")
+            elif perf_month >= 20: f_parts.append("ta_perf_4w20o")
+            elif perf_month >= 10: f_parts.append("ta_perf_4w10o")
+
+        perf_week_down = filters.get("perf_week_down")
+        if perf_week_down is not None:
+            if perf_week_down >= 20: f_parts.append("ta_perf_w20u")
+            elif perf_week_down >= 10: f_parts.append("ta_perf_w10u")
+
+        perf_month_down = filters.get("perf_month_down")
+        if perf_month_down is not None:
+            if perf_month_down >= 20: f_parts.append("ta_perf_4w20u")
+            elif perf_month_down >= 10: f_parts.append("ta_perf_4w10u")
+
+        if filters.get("earnings_this_week"): f_parts.append("earningsdate_thisweek")
+        if filters.get("earnings_next_week"): f_parts.append("earningsdate_nextweek")
+        if filters.get("earnings_today"): f_parts.append("earningsdate_today")
+
+        upside = filters.get("analyst_upside_min")
+        if upside is not None:
+            if upside >= 50: f_parts.append("targetprice_a50")
+            elif upside >= 30: f_parts.append("targetprice_a30")
+            elif upside >= 20: f_parts.append("targetprice_a20")
+            elif upside >= 10: f_parts.append("targetprice_a10")
+
+        if filters.get("gap_up"): f_parts.append("ta_gap_u")
+        if filters.get("gap_down"): f_parts.append("ta_gap_d")
+
+        if filters.get("low_float"): f_parts.append("sh_float_u20")
+        float_max = filters.get("float_max_m")
+        if float_max is not None:
+            if float_max <= 10: f_parts.append("sh_float_u10")
+            elif float_max <= 20: f_parts.append("sh_float_u20")
+            elif float_max <= 50: f_parts.append("sh_float_u50")
+            elif float_max <= 100: f_parts.append("sh_float_u100")
+
         custom = filters.get("custom_finviz_params")
         if custom:
             f_parts.append(custom)
 
         filter_str = ",".join(f_parts) if f_parts else "sh_avgvol_o200"
-        screen_url = f"v=111&f={filter_str}&ft=4&o=-sh_relvol"
 
-        print(f"[AI Screener] Final Finviz URL: v=111&f={filter_str}&ft=4&o=-sh_relvol")
+        is_ta_focused = any(k in filters for k in [
+            "rsi_max", "rsi_min", "above_sma200", "above_sma50",
+            "below_sma200", "below_sma50", "unusual_volume",
+            "relative_volume_min", "gap_up", "gap_down",
+        ])
+        view = "171" if is_ta_focused else "111"
+
+        sort_order = filters.get("sort", "-sh_relvol")
+        screen_url = f"v={view}&f={filter_str}&ft=4&o={sort_order}"
+
+        print(f"[AI Screener] Final Finviz URL: v={view}&f={filter_str}&ft=4&o={sort_order}")
         print(f"[AI Screener] Parsed filters: {filters}")
         print(f"[AI Screener] Filter parts: {f_parts}")
 
@@ -2396,13 +2449,19 @@ class MarketDataService:
             if not ticker:
                 return item
             try:
-                overview, analyst = await asyncio.gather(
+                tasks = [
                     self.stockanalysis.get_overview(ticker),
                     self.stockanalysis.get_analyst_ratings(ticker),
-                    return_exceptions=True,
-                )
-                item["sa_overview"] = overview if not isinstance(overview, Exception) else {}
-                item["sa_analyst"] = analyst if not isinstance(analyst, Exception) else {}
+                ]
+                if self.stocktwits:
+                    tasks.append(self.stocktwits.get_sentiment(ticker))
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                item["sa_overview"] = results[0] if not isinstance(results[0], Exception) else {}
+                item["sa_analyst"] = results[1] if not isinstance(results[1], Exception) else {}
+                if len(results) > 2 and not isinstance(results[2], Exception) and results[2]:
+                    item["sentiment"] = results[2]
             except:
                 item["sa_overview"] = {}
                 item["sa_analyst"] = {}

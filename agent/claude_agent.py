@@ -659,13 +659,13 @@ Be direct and opinionated. Tell me what you actually think."""
     def _extract_screener_filters(self, prompt: str) -> dict:
         """
         Parse natural language screener request into structured filters.
-        Uses keyword matching for common criteria.
+        Handles both explicit quantitative filters AND conversational descriptions.
         """
         import re
         filters = {}
         p = prompt.lower()
 
-        cap_match = re.search(r'(?:market\s*cap|mcap).*?(?:under|below|<|max)\s*\$?(\d+\.?\d*)\s*([bmtBMT])', p)
+        cap_match = re.search(r'(?:market\s*cap|mcap).*?(?:under|below|<|max)\s*\$?([\d.]+)\s*([bmtBMT])', p)
         if cap_match:
             val = float(cap_match.group(1))
             unit = cap_match.group(2).lower()
@@ -673,7 +673,7 @@ Be direct and opinionated. Tell me what you actually think."""
             elif unit == 't': val *= 1000
             filters["market_cap_max"] = val
 
-        cap_match2 = re.search(r'(?:market\s*cap|mcap).*?(?:over|above|>|min|at least)\s*\$?(\d+\.?\d*)\s*([bmtBMT])', p)
+        cap_match2 = re.search(r'(?:market\s*cap|mcap).*?(?:over|above|>|min|at least)\s*\$?([\d.]+)\s*([bmtBMT])', p)
         if cap_match2:
             val = float(cap_match2.group(1))
             unit = cap_match2.group(2).lower()
@@ -681,27 +681,36 @@ Be direct and opinionated. Tell me what you actually think."""
             elif unit == 't': val *= 1000
             filters["market_cap_min"] = val
 
-        if "small cap" in p and "market_cap_max" not in filters:
-            filters["market_cap_max"] = 2
-        if "micro cap" in p and "market_cap_max" not in filters:
+        if any(w in p for w in ["penny stock", "penny stocks", "nano cap"]) and "market_cap_max" not in filters:
             filters["market_cap_max"] = 0.3
-        if "mid cap" in p:
+            filters.setdefault("price_max", 5)
+        elif any(w in p for w in ["micro cap", "micro-cap"]) and "market_cap_max" not in filters:
+            filters["market_cap_max"] = 0.3
+        elif any(w in p for w in ["small cap", "small-cap", "smallcap"]) and "market_cap_max" not in filters:
+            filters["market_cap_max"] = 2
+        elif "mid cap" in p or "mid-cap" in p or "midcap" in p:
             filters.setdefault("market_cap_min", 2)
             filters.setdefault("market_cap_max", 10)
-        if "large cap" in p:
+        elif any(w in p for w in ["large cap", "large-cap", "largecap", "blue chip"]):
             filters.setdefault("market_cap_min", 10)
+        elif any(w in p for w in ["mega cap", "mega-cap"]):
+            filters.setdefault("market_cap_min", 200)
 
-        rev_match = re.search(r'(?:revenue|sales)\s*(?:growth)?\s*(?:>|over|above|at least|min)?\s*(\d+)\s*%', p)
+        rev_match = re.search(r'(?:revenue|sales)\s*(?:growth)?\s*(?:>|over|above|at least|min|greater than)?\s*(\d+)\s*%', p)
         if rev_match:
             filters["revenue_growth_min"] = int(rev_match.group(1))
-        elif "revenue growth" in p or "sales growth" in p:
-            filters["revenue_growth_min"] = 10
+        elif any(w in p for w in ["fast growing", "fast-growing", "rapid growth", "high growth", "growing fast", "revenue growth", "sales growth", "growing revenue"]):
+            filters.setdefault("revenue_growth_min", 15)
+        elif any(w in p for w in ["hyper growth", "hypergrowth", "explosive growth"]):
+            filters.setdefault("revenue_growth_min", 30)
 
         eps_match = re.search(r'(?:eps|earnings)\s*(?:growth)?\s*(?:>|over|above)?\s*(\d+)\s*%', p)
         if eps_match:
             filters["eps_growth_min"] = int(eps_match.group(1))
+        elif any(w in p for w in ["earnings growth", "growing earnings", "eps growth", "profit growth"]):
+            filters.setdefault("eps_growth_min", 15)
 
-        pe_match = re.search(r'(?:p/?e|pe ratio)\s*(?:<|under|below|max)?\s*(\d+)', p)
+        pe_match = re.search(r'(?:p/?e|pe ratio|price.to.earnings)\s*(?:<|under|below|max)?\s*(\d+)', p)
         if pe_match:
             filters["pe_max"] = int(pe_match.group(1))
 
@@ -709,65 +718,165 @@ Be direct and opinionated. Tell me what you actually think."""
         if ps_match:
             filters["ps_max"] = int(ps_match.group(1))
 
+        if any(w in p for w in ["cheap", "undervalued", "bargain", "value stock", "value play", "deep value"]):
+            filters.setdefault("pe_max", 20)
+            filters.setdefault("ps_max", 3)
+        elif "fairly valued" in p or "reasonable valuation" in p:
+            filters.setdefault("pe_max", 30)
+
         rsi_low = re.search(r'rsi\s*(?:<|under|below)\s*(\d+)', p)
         if rsi_low:
             filters["rsi_max"] = int(rsi_low.group(1))
         rsi_high = re.search(r'rsi\s*(?:>|over|above)\s*(\d+)', p)
         if rsi_high:
             filters["rsi_min"] = int(rsi_high.group(1))
-        if "oversold" in p and "rsi_max" not in filters:
+
+        if any(w in p for w in ["oversold", "beaten down", "crushed", "hammered"]) and "rsi_max" not in filters:
             filters["rsi_max"] = 30
-        if "overbought" in p and "rsi_min" not in filters:
+        if any(w in p for w in ["overbought", "overextended", "stretched"]) and "rsi_min" not in filters:
             filters["rsi_min"] = 70
 
-        if "above 200" in p or "above sma200" in p or "above 200 sma" in p:
+        if any(w in p for w in ["above 200", "above sma200", "above 200 sma", "above 200-day", "above the 200"]):
             filters["above_sma200"] = True
-        if "above 50" in p or "above sma50" in p or "above 50 sma" in p:
+        if any(w in p for w in ["above 50", "above sma50", "above 50 sma", "above 50-day", "above the 50"]):
             filters["above_sma50"] = True
-        if "below 200" in p or "below sma200" in p:
+        if any(w in p for w in ["below 200", "below sma200", "below 200 sma", "below 200-day"]):
             filters["below_sma200"] = True
-        if "below 50" in p or "below sma50" in p:
+        if any(w in p for w in ["below 50", "below sma50", "below 50 sma", "below 50-day"]):
             filters["below_sma50"] = True
-        if "stage 2" in p:
+
+        if any(w in p for w in ["stage 2", "weinstein stage 2", "confirmed uptrend", "above all moving averages", "above all sma"]):
             filters["above_sma200"] = True
             filters["above_sma50"] = True
+        if any(w in p for w in ["breaking out", "breakout", "breaking above"]):
+            filters["above_sma50"] = True
+            filters.setdefault("unusual_volume", True)
+        if any(w in p for w in ["breaking down", "breakdown", "stage 4"]):
+            filters["below_sma200"] = True
+            filters["below_sma50"] = True
 
-        if "insider buy" in p or "insider purchas" in p:
-            filters["insider_buying"] = True
-
-        if "unusual volume" in p or "volume spike" in p:
+        if any(w in p for w in ["unusual volume", "volume spike", "volume surge", "heavy volume", "big volume"]):
             filters["unusual_volume"] = True
-        rv_match = re.search(r'(?:relative|rel)\s*(?:volume|vol)\s*(?:>|over|above)?\s*(\d+\.?\d*)', p)
+        rv_match = re.search(r'(?:relative|rel)\s*(?:volume|vol)\s*(?:>|over|above)?\s*([\d.]+)', p)
         if rv_match:
             filters["relative_volume_min"] = float(rv_match.group(1))
 
-        if "profitable" in p or "positive margin" in p or "positive ebitda" in p:
+        avg_vol_match = re.search(r'(?:avg|average)\s*(?:volume|vol)\s*(?:>|over|above|min)?\s*([\d,]+)', p)
+        if avg_vol_match:
+            val = avg_vol_match.group(1).replace(",", "")
+            filters["avg_volume_min"] = int(int(val) / 1000)
+
+        if any(w in p for w in ["profitable", "positive margin", "positive ebitda", "making money", "positive earnings", "actually profitable"]):
             filters["positive_margin"] = True
 
-        de_match = re.search(r'(?:debt.to.equity|d/?e)\s*(?:<|under|below)\s*(\d+\.?\d*)', p)
+        de_match = re.search(r'(?:debt.to.equity|d/?e)\s*(?:<|under|below)\s*([\d.]+)', p)
         if de_match:
             filters["debt_equity_max"] = float(de_match.group(1))
-        if "low debt" in p and "debt_equity_max" not in filters:
+        if any(w in p for w in ["low debt", "no debt", "debt free", "clean balance sheet", "healthy balance sheet"]) and "debt_equity_max" not in filters:
             filters["debt_equity_max"] = 0.5
 
         sf_match = re.search(r'short\s*(?:float|interest)\s*(?:>|over|above)\s*(\d+)', p)
         if sf_match:
             filters["short_float_min"] = int(sf_match.group(1))
+        if any(w in p for w in ["high short", "heavily shorted", "most shorted", "squeeze candidate"]) and "short_float_min" not in filters:
+            filters["short_float_min"] = 15
+
+        if any(w in p for w in ["insider buy", "insider purchas", "insider buying", "insiders buying", "insider accumulation"]):
+            filters["insider_buying"] = True
+
+        div_match = re.search(r'dividend\s*(?:yield)?\s*(?:>|over|above|at least)\s*([\d.]+)', p)
+        if div_match:
+            filters["dividend_yield_min"] = float(div_match.group(1))
+        if any(w in p for w in ["dividend stock", "dividend play", "income stock", "high yield", "dividend payer"]) and "dividend_yield_min" not in filters:
+            filters["dividend_yield_min"] = 2
 
         sector_keywords = {
-            "tech": "technology", "healthcare": "healthcare", "health care": "healthcare",
-            "financial": "financial", "bank": "financial", "energy": "energy",
-            "industrial": "industrials", "consumer": "consumer cyclical",
-            "real estate": "real estate", "utilities": "utilities", "materials": "basic materials",
+            "tech": "technology", "technology": "technology", "software": "technology", "saas": "technology",
+            "semiconductor": "technology", "chip": "technology",
+            "healthcare": "healthcare", "health care": "healthcare", "pharma": "healthcare",
+            "biotech": "healthcare", "medical": "healthcare",
+            "financial": "financial", "bank": "financial", "insurance": "financial", "fintech": "financial",
+            "energy": "energy", "oil": "energy", "solar": "energy", "renewable": "energy",
+            "industrial": "industrials", "manufacturing": "industrials", "defense": "industrials",
+            "aerospace": "industrials",
+            "consumer cyclical": "consumer cyclical", "retail": "consumer cyclical",
+            "consumer defensive": "consumer defensive", "staples": "consumer defensive",
+            "real estate": "real estate", "reit": "real estate",
+            "utilities": "utilities", "utility": "utilities",
+            "materials": "basic materials", "mining": "basic materials", "metals": "basic materials",
+            "communication": "communication services", "media": "communication services",
+            "telecom": "communication services",
         }
         for kw, sec in sector_keywords.items():
             if kw in p:
                 filters["sector"] = sec
                 break
 
-        div_match = re.search(r'dividend\s*(?:yield)?\s*(?:>|over|above|at least)\s*(\d+\.?\d*)', p)
-        if div_match:
-            filters["dividend_yield_min"] = float(div_match.group(1))
+        perf_match = re.search(r'(?:up|gained|rose)\s*(?:more than\s*)?(\d+)%?\s*(?:this|in the last|past)\s*(week|month|quarter|year)', p)
+        if perf_match:
+            pct = int(perf_match.group(1))
+            period = perf_match.group(2)
+            period_map = {"week": "perf_week", "month": "perf_month", "quarter": "perf_quarter", "year": "perf_year"}
+            key = period_map.get(period)
+            if key:
+                filters[key] = pct
+
+        perf_down_match = re.search(r'(?:down|dropped|fell|lost)\s*(?:more than\s*)?(\d+)%?\s*(?:this|in the last|past)\s*(week|month|quarter|year)', p)
+        if perf_down_match:
+            pct = int(perf_down_match.group(1))
+            period = perf_down_match.group(2)
+            period_map = {"week": "perf_week_down", "month": "perf_month_down", "quarter": "perf_quarter_down", "year": "perf_year_down"}
+            key = period_map.get(period)
+            if key:
+                filters[key] = pct
+
+        if any(w in p for w in ["earnings this week", "reporting this week", "earnings coming up"]):
+            filters["earnings_this_week"] = True
+        if any(w in p for w in ["earnings next week", "reporting next week"]):
+            filters["earnings_next_week"] = True
+        if any(w in p for w in ["earnings today", "reporting today"]):
+            filters["earnings_today"] = True
+
+        upside_match = re.search(r'(?:analyst|price)\s*(?:target|upside)\s*(?:>|over|above|at least)\s*(\d+)\s*%', p)
+        if upside_match:
+            filters["analyst_upside_min"] = int(upside_match.group(1))
+        if any(w in p for w in ["analyst upgrade", "upgraded", "buy rating"]):
+            filters["analyst_upgrades"] = True
+
+        if any(w in p for w in ["gap up", "gapping up", "gapped up"]):
+            filters["gap_up"] = True
+        if any(w in p for w in ["gap down", "gapping down", "gapped down"]):
+            filters["gap_down"] = True
+
+        if any(w in p for w in ["low float", "small float", "tiny float"]):
+            filters["low_float"] = True
+        float_match = re.search(r'float\s*(?:<|under|below)\s*(\d+)\s*[mM]', p)
+        if float_match:
+            filters["float_max_m"] = int(float_match.group(1))
+
+        price_under_match = re.search(r'(?:price|priced|stock(?:s)?)\s*(?:under|below|<)\s*\$?(\d+)', p)
+        if price_under_match:
+            filters["price_max"] = int(price_under_match.group(1))
+        price_over_match = re.search(r'(?:price|priced|stock(?:s)?)\s*(?:over|above|>)\s*\$?(\d+)', p)
+        if price_over_match:
+            filters["price_min"] = int(price_over_match.group(1))
+        if "under $5" in p or "below $5" in p:
+            filters["price_max"] = 5
+        if "under $10" in p or "below $10" in p:
+            filters.setdefault("price_max", 10)
+
+        if any(w in p for w in ["biggest gain", "top gainer", "best performer", "most up"]):
+            filters["sort"] = "-change"
+        elif any(w in p for w in ["most volume", "highest volume", "most active", "most traded"]):
+            filters["sort"] = "-volume"
+        elif any(w in p for w in ["cheapest", "lowest p/e", "most undervalued"]):
+            filters["sort"] = "pe"
+        elif any(w in p for w in ["fastest growing", "highest growth", "best growth"]):
+            filters["sort"] = "-fa_salesqoq"
+        elif any(w in p for w in ["most shorted", "highest short"]):
+            filters["sort"] = "-shortinterestshare"
+        elif any(w in p for w in ["biggest loss", "top loser", "worst performer", "most down"]):
+            filters["sort"] = "change"
 
         print(f"[AI Screener] Extracted filters from prompt: {filters}")
         return filters
