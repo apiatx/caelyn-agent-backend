@@ -1,0 +1,80 @@
+BACKEND FIX: Restructure portfolio quote fetching with proper API fallback chain
+
+The portfolio quotes are failing because we're over-relying on CoinGecko (rate limited) and FMP (rate limited) when we have better options available. Here are ALL the API keys available — add them to the environment/config if not already present:
+
+FINNHUB_API_KEY (already in config)
+POLYGON_API_KEY (already in config) 
+COINMARKETCAP_API_KEY (needs to be added if not present)
+
+=== CHANGE 1: Use Finnhub as PRIMARY source for stock quotes + profiles ===
+
+Finnhub has 60 calls/min on free tier and returns quote + profile in separate endpoints. For the portfolio, use Finnhub instead of Yahoo for stocks.
+
+For stock quotes, use Finnhub's quote endpoint:
+GET https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}
+Returns: { c: currentPrice, d: change, dp: percentChange, h: high, l: low, o: open, pc: previousClose }
+
+For stock profiles (sector, market cap, industry, company name), use:
+GET https://finnhub.io/api/v1/stock/profile2?symbol={ticker}&token={FINNHUB_API_KEY}
+Returns: { name, sector (called "finnhubIndustry"), marketCapitalization, logo, industry (called "finnhubIndustry"), ... }
+
+NOTE: Finnhub calls the sector field "finnhubIndustry". Map it to "sector" in the quote response.
+
+Update the stock quote fetching logic:
+1. Try Finnhub first for ALL stock tickers
+2. For each stock, make TWO Finnhub calls: /quote for price + /stock/profile2 for sector/marketCap
+3. Can batch these concurrently (Promise.all for both calls per ticker)
+4. If Finnhub fails (429 or error), fall back to Yahoo
+5. If Yahoo also fails, fall back to FMP as last resort
+
+Cache Finnhub profile data for 24 hours (sector/marketCap don't change).
+Cache Finnhub quotes for 60 seconds.
+
+=== CHANGE 2: Add CoinMarketCap as crypto fallback ===
+
+When CoinGecko returns 429, fall back to CoinMarketCap instead of Yahoo (which returns wrong tokens).
+
+CoinMarketCap quote endpoint:
+GET https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol={symbols}&CMC_PRO_API_KEY={key}
+Header: X-CMC_PRO_API_KEY: {COINMARKETCAP_API_KEY}
+
+This accepts comma-separated symbols: symbol=BTC,ETH,HYPE,SOL
+
+Returns price, market_cap, volume_24h, percent_change_24h for each.
+
+Update the crypto quote fetching logic:
+1. Try CoinGecko first (batch all crypto in one call)
+2. If CoinGecko returns 429, try CoinMarketCap as fallback
+3. CoinMarketCap accepts symbols directly (no need for ID mapping like CoinGecko)
+4. Map the CMC response fields to match the existing quote format:
+   - quote.USD.price → price
+   - quote.USD.percent_change_24h → change_pct
+   - quote.USD.volume_24h → volume
+   - quote.USD.market_cap → market_cap
+   - Set sector to "Crypto"
+
+=== CHANGE 3: Reduce CoinGecko background service usage ===
+
+The background real-time price service hammers CoinGecko. Since we now have CoinMarketCap as fallback, reduce the background CoinGecko polling to once every 120 seconds instead of every 5-60 seconds. This leaves more rate limit headroom for portfolio requests.
+
+=== CHANGE 4: Stop using FMP for profile enrichment ===
+
+Remove or disable the FMP /stable/profile call for stock sector/marketCap. Finnhub /stock/profile2 now handles this and has a much higher rate limit (60/min vs FMP's ~250/day). Save FMP's daily budget for the AI screener which actually needs it.
+
+=== SUMMARY OF API ROUTING ===
+
+Portfolio quotes endpoint should now route like this:
+
+STOCKS:
+  Quote: Finnhub /quote → Yahoo fallback → FMP fallback
+  Profile: Finnhub /stock/profile2 (cached 24h) → FMP /stable/profile fallback
+
+CRYPTO:
+  CoinGecko /simple/price (batch) → CoinMarketCap /quotes/latest fallback
+  Skip Yahoo for crypto entirely (returns wrong tokens)
+
+COMMODITIES:
+  Yahoo futures symbols (already working)
+
+INDICES:
+  Yahoo index symbols (already working, ^GSPC, ^DJI etc)

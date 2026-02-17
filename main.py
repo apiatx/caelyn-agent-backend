@@ -10,7 +10,7 @@ import json as _json
 
 from pathlib import Path
 
-from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY, XAI_API_KEY
+from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, AGENT_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY, XAI_API_KEY, FINNHUB_API_KEY
 from data.market_data_service import MarketDataService
 from agent.claude_agent import TradingAgent
 from data.chat_history import (
@@ -455,67 +455,159 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
     }
 
     async with httpx.AsyncClient(timeout=10.0) as client:
+        # ---- STOCKS: Finnhub primary → Yahoo fallback → FMP last resort ----
         if stock_tickers:
-            ticker_str = ",".join(stock_tickers)
-            try:
-                full_resp = await client.get(
-                    "https://financialmodelingprep.com/stable/quote",
-                    params={"symbol": ticker_str, "apikey": FMP_API_KEY},
-                )
-                if full_resp.status_code == 200:
-                    for item in full_resp.json():
-                        symbol = item.get("symbol", "")
-                        quotes[symbol] = {
-                            "price": item.get("price"),
-                            "change": item.get("change"),
-                            "change_pct": item.get("changesPercentage"),
-                            "day_high": item.get("dayHigh"),
-                            "day_low": item.get("dayLow"),
-                            "year_high": item.get("yearHigh"),
-                            "year_low": item.get("yearLow"),
-                            "market_cap": item.get("marketCap"),
-                            "volume": item.get("volume"),
-                            "avg_volume": item.get("avgVolume"),
-                            "pe": item.get("pe"),
-                            "eps": item.get("eps"),
-                            "earnings_date": item.get("earningsAnnouncement"),
-                            "sector": item.get("sector", ""),
-                            "source": "fmp",
-                        }
-                    print(f"[PORTFOLIO] FMP stable/quote returned {len(quotes)} quotes")
-                else:
-                    print(f"[PORTFOLIO] stable/quote returned {full_resp.status_code}, trying quote-short")
-                    async def fetch_one(sym):
-                        try:
-                            r = await client.get(
-                                "https://financialmodelingprep.com/stable/quote-short",
-                                params={"symbol": sym, "apikey": FMP_API_KEY},
-                            )
-                            if r.status_code == 200:
-                                items = r.json()
-                                return items[0] if items else None
-                        except Exception:
-                            pass
-                        return None
+            async def _finnhub_quote(sym):
+                try:
+                    r = await client.get(
+                        "https://finnhub.io/api/v1/quote",
+                        params={"symbol": sym, "token": FINNHUB_API_KEY},
+                    )
+                    if r.status_code == 200:
+                        d = r.json()
+                        if d.get("c") and d["c"] > 0:
+                            return sym, d
+                except Exception:
+                    pass
+                return sym, None
 
-                    results = await asyncio.gather(*[fetch_one(t) for t in stock_tickers])
-                    for item in results:
-                        if item:
+            async def _finnhub_profile(sym):
+                sector_cache_key = f"sector:{sym}"
+                cached = _cache.get(sector_cache_key)
+                if cached is not None:
+                    return sym, cached
+                try:
+                    r = await client.get(
+                        "https://finnhub.io/api/v1/stock/profile2",
+                        params={"symbol": sym, "token": FINNHUB_API_KEY},
+                    )
+                    if r.status_code == 200:
+                        d = r.json()
+                        if d.get("name"):
+                            profile = {
+                                "sector": d.get("finnhubIndustry", ""),
+                                "industry": d.get("finnhubIndustry", ""),
+                                "company_name": d.get("name", ""),
+                                "market_cap": d.get("marketCapitalization", 0),
+                                "logo": d.get("logo", ""),
+                            }
+                            if profile.get("market_cap"):
+                                profile["market_cap"] = profile["market_cap"] * 1_000_000
+                            _cache.set(sector_cache_key, profile, 86400)
+                            return sym, profile
+                except Exception:
+                    pass
+                return sym, None
+
+            tasks = []
+            for sym in stock_tickers:
+                tasks.append(_finnhub_quote(sym))
+                tasks.append(_finnhub_profile(sym))
+            results = await asyncio.gather(*tasks)
+
+            finnhub_quotes = {}
+            finnhub_profiles = {}
+            for i in range(0, len(results), 2):
+                sym, quote_data = results[i]
+                _, profile_data = results[i + 1]
+                if quote_data:
+                    finnhub_quotes[sym] = quote_data
+                if profile_data:
+                    finnhub_profiles[sym] = profile_data
+
+            for sym in stock_tickers:
+                q = finnhub_quotes.get(sym)
+                p = finnhub_profiles.get(sym, {})
+                if q:
+                    quotes[sym] = {
+                        "price": q.get("c"),
+                        "change": q.get("d"),
+                        "change_pct": q.get("dp"),
+                        "day_high": q.get("h"),
+                        "day_low": q.get("l"),
+                        "market_cap": p.get("market_cap"),
+                        "volume": None,
+                        "sector": p.get("sector", ""),
+                        "industry": p.get("industry", ""),
+                        "company_name": p.get("company_name", ""),
+                        "source": "finnhub",
+                    }
+
+            finnhub_found = [t for t in stock_tickers if t in quotes]
+            finnhub_missing = [t for t in stock_tickers if t not in quotes]
+            print(f"[PORTFOLIO] Finnhub returned {len(finnhub_found)} quotes, missing: {finnhub_missing}")
+
+            if finnhub_missing:
+                print(f"[PORTFOLIO] Trying Yahoo for: {finnhub_missing}")
+                for sym in finnhub_missing:
+                    try:
+                        resp = await client.get(
+                            "https://query1.finance.yahoo.com/v8/finance/chart/" + sym,
+                            params={"interval": "1d", "range": "2d"},
+                            headers={"User-Agent": "Mozilla/5.0"},
+                        )
+                        if resp.status_code == 200:
+                            chart_data = resp.json()
+                            result = chart_data.get("chart", {}).get("result", [])
+                            if result:
+                                meta = result[0].get("meta", {})
+                                price = meta.get("regularMarketPrice", 0)
+                                if price and price > 0:
+                                    prev_close = meta.get("chartPreviousClose", meta.get("previousClose", 0))
+                                    change = round(price - prev_close, 2) if prev_close else 0
+                                    change_pct = round((change / prev_close) * 100, 2) if prev_close else 0
+                                    p = finnhub_profiles.get(sym, {})
+                                    quotes[sym] = {
+                                        "price": price,
+                                        "change": change,
+                                        "change_pct": change_pct,
+                                        "day_high": meta.get("regularMarketDayHigh"),
+                                        "day_low": meta.get("regularMarketDayLow"),
+                                        "volume": meta.get("regularMarketVolume"),
+                                        "sector": p.get("sector", ""),
+                                        "industry": p.get("industry", ""),
+                                        "company_name": p.get("company_name", ""),
+                                        "source": "yahoo",
+                                    }
+                                    print(f"[PORTFOLIO] Yahoo: {sym} = ${price}")
+                    except Exception as e:
+                        print(f"[PORTFOLIO] Yahoo {sym} error: {e}")
+
+            yahoo_missing = [t for t in stock_tickers if t not in quotes]
+            if yahoo_missing:
+                print(f"[PORTFOLIO] FMP last resort for: {yahoo_missing}")
+                ticker_str = ",".join(yahoo_missing)
+                try:
+                    full_resp = await client.get(
+                        "https://financialmodelingprep.com/stable/quote",
+                        params={"symbol": ticker_str, "apikey": FMP_API_KEY},
+                    )
+                    if full_resp.status_code == 200:
+                        for item in full_resp.json():
                             symbol = item.get("symbol", "")
                             quotes[symbol] = {
                                 "price": item.get("price"),
                                 "change": item.get("change"),
                                 "change_pct": item.get("changesPercentage"),
+                                "day_high": item.get("dayHigh"),
+                                "day_low": item.get("dayLow"),
+                                "year_high": item.get("yearHigh"),
+                                "year_low": item.get("yearLow"),
+                                "market_cap": item.get("marketCap"),
                                 "volume": item.get("volume"),
-                                "source": "fmp_short",
+                                "avg_volume": item.get("avgVolume"),
+                                "pe": item.get("pe"),
+                                "eps": item.get("eps"),
+                                "sector": item.get("sector", ""),
+                                "source": "fmp",
                             }
-                    print(f"[PORTFOLIO] FMP quote-short returned {sum(1 for r in results if r)} quotes")
-            except Exception as e:
-                print(f"[PORTFOLIO] FMP error: {e}")
+                        print(f"[PORTFOLIO] FMP fallback returned {len([t for t in yahoo_missing if t in quotes])} quotes")
+                except Exception as e:
+                    print(f"[PORTFOLIO] FMP fallback error: {e}")
 
             stocks_needing_sector = [t for t in stock_tickers if t in quotes and not quotes[t].get("sector")]
             if stocks_needing_sector:
-                print(f"[PORTFOLIO] Fetching sector via /stable/profile for: {stocks_needing_sector}")
+                print(f"[PORTFOLIO] Fetching sector via FMP /stable/profile for: {stocks_needing_sector}")
                 for ticker in stocks_needing_sector:
                     sector_cache_key = f"sector:{ticker}"
                     cached_sector = _cache.get(sector_cache_key)
@@ -523,7 +615,6 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                         quotes[ticker]["sector"] = cached_sector.get("sector", "Other")
                         quotes[ticker]["industry"] = cached_sector.get("industry", "")
                         quotes[ticker]["company_name"] = cached_sector.get("company_name", "")
-                        print(f"[PORTFOLIO] {ticker} sector from cache: {cached_sector.get('sector')}")
                         continue
                     try:
                         profile_resp = await client.get(
@@ -541,15 +632,15 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                     quotes[ticker]["industry"] = industry
                                     quotes[ticker]["company_name"] = company_name
                                     _cache.set(sector_cache_key, {"sector": sector, "industry": industry, "company_name": company_name}, 86400)
-                                    print(f"[PORTFOLIO] {ticker} sector: {sector}, industry: {industry}")
                                 else:
                                     quotes[ticker]["sector"] = "Other"
                             else:
                                 quotes[ticker]["sector"] = "Other"
                     except Exception as e:
-                        print(f"[PORTFOLIO] {ticker} profile error: {e}")
+                        print(f"[PORTFOLIO] FMP profile {ticker} error: {e}")
                         quotes[ticker]["sector"] = "Other"
 
+        # ---- INDICES: Yahoo index symbols ----
         if index_tickers:
             for ticker in index_tickers:
                 yahoo_symbol = INDEX_YAHOO_SYMBOLS.get(ticker, ticker)
@@ -585,15 +676,19 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                 except Exception as e:
                     print(f"[PORTFOLIO] Index {ticker} ({yahoo_symbol}) error: {e}")
 
+        # ---- CRYPTO: CoinGecko primary → CoinMarketCap fallback ----
         if crypto_tickers:
+            cg_success = False
             symbol_map = await get_coingecko_symbol_map()
 
             crypto_ids_to_fetch = {}
+            cg_unfound = []
             for ticker in crypto_tickers:
                 cg_id = PRIORITY_OVERRIDES.get(ticker) or symbol_map.get(ticker)
                 if cg_id:
                     crypto_ids_to_fetch[cg_id] = ticker
                 else:
+                    cg_unfound.append(ticker)
                     print(f"[PORTFOLIO] No CoinGecko ID found for crypto ticker: {ticker}")
 
             if crypto_ids_to_fetch:
@@ -631,13 +726,53 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                     "sector": "Crypto",
                                 }
                                 print(f"[PORTFOLIO] CoinGecko: {original_ticker} = ${price}")
+                            cg_success = True
+                        elif resp.status_code == 429:
+                            print(f"[PORTFOLIO] CoinGecko rate limited (429), will try CoinMarketCap")
                         else:
-                            print(f"[PORTFOLIO] CoinGecko batch error: {resp.status_code}")
+                            print(f"[PORTFOLIO] CoinGecko error: {resp.status_code}")
                     except Exception as e:
-                        print(f"[PORTFOLIO] CoinGecko batch error: {e}")
+                        print(f"[PORTFOLIO] CoinGecko error: {e}")
                     if i + 50 < len(ids_list):
                         await asyncio.sleep(1.0)
 
+            crypto_still_missing = [t for t in crypto_tickers if t not in quotes]
+            if crypto_still_missing and CMC_API_KEY:
+                print(f"[PORTFOLIO] CoinMarketCap fallback for: {crypto_still_missing}")
+                try:
+                    cmc_symbols = ",".join(crypto_still_missing)
+                    resp = await client.get(
+                        "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
+                        params={"symbol": cmc_symbols, "convert": "USD"},
+                        headers={"X-CMC_PRO_API_KEY": CMC_API_KEY},
+                    )
+                    if resp.status_code == 200:
+                        cmc_data = resp.json().get("data", {})
+                        for sym_key, token_data in cmc_data.items():
+                            sym = sym_key.upper()
+                            if isinstance(token_data, list):
+                                token_data = token_data[0]
+                            usd_quote = token_data.get("quote", {}).get("USD", {})
+                            price = usd_quote.get("price", 0)
+                            if price:
+                                change_pct = usd_quote.get("percent_change_24h", 0)
+                                quotes[sym] = {
+                                    "price": round(price, 6) if price < 1 else round(price, 2),
+                                    "change": round(price * (change_pct / 100), 4) if change_pct else 0,
+                                    "change_pct": round(change_pct, 2) if change_pct else 0,
+                                    "market_cap": usd_quote.get("market_cap", 0),
+                                    "volume": usd_quote.get("volume_24h", 0),
+                                    "source": "coinmarketcap",
+                                    "asset_type": "crypto",
+                                    "sector": "Crypto",
+                                }
+                                print(f"[PORTFOLIO] CMC: {sym} = ${price}")
+                    else:
+                        print(f"[PORTFOLIO] CoinMarketCap error: {resp.status_code}")
+                except Exception as e:
+                    print(f"[PORTFOLIO] CoinMarketCap error: {e}")
+
+        # ---- COMMODITIES: FMP commodity symbols ----
         if commodity_tickers:
             for ticker in commodity_tickers:
                 fmp_symbol = COMMODITY_SYMBOLS.get(ticker)
