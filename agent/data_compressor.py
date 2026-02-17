@@ -117,6 +117,12 @@ def _truncate_value(val):
     return val
 
 
+PROTECTED_KEYS = {
+    "two_tier_analysis", "grok_x_analysis", "scan_type",
+    "source_summary", "x_market_mood", "total_unique_tickers",
+}
+
+
 def _aggressive_truncate(data: dict, max_chars: int) -> dict:
     result = json.loads(json.dumps(data, default=str))
 
@@ -128,6 +134,8 @@ def _aggressive_truncate(data: dict, max_chars: int) -> dict:
         avg_budget = max_chars // max(len(result), 1)
         truncated_any = False
         for k, v in list(result.items()):
+            if k in PROTECTED_KEYS:
+                continue
             size = len(json.dumps(v, default=str))
             if size > avg_budget and size > 20:
                 result[k] = _truncate_value(v)

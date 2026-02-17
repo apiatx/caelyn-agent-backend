@@ -41,21 +41,15 @@ def parse_market_cap_string(value) -> float | None:
     except (TypeError, ValueError):
         pass
     try:
+        import re
         s = str(value).strip().replace("$", "").replace(",", "")
-        multiplier = 1
-        if s.endswith("T"):
-            multiplier = 1e12
-            s = s[:-1]
-        elif s.endswith("B"):
-            multiplier = 1e9
-            s = s[:-1]
-        elif s.endswith("M"):
-            multiplier = 1e6
-            s = s[:-1]
-        elif s.endswith("K"):
-            multiplier = 1e3
-            s = s[:-1]
-        return float(s) * multiplier
+        match = re.match(r'^([0-9.]+)\s*([TBMK])', s, re.IGNORECASE)
+        if match:
+            num = float(match.group(1))
+            suffix = match.group(2).upper()
+            multipliers = {"T": 1e12, "B": 1e9, "M": 1e6, "K": 1e3}
+            return num * multipliers.get(suffix, 1)
+        return float(s)
     except (TypeError, ValueError):
         return None
 

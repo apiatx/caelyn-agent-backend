@@ -2031,15 +2031,23 @@ class MarketDataService:
 
         async def full_enrich(ticker):
             try:
-                st_result, overview, analyst = await asyncio.gather(
+                st_result, overview, analyst, profile = await asyncio.gather(
                     self.stocktwits.get_sentiment(ticker),
                     self.stockanalysis.get_overview(ticker),
                     self.stockanalysis.get_analyst_ratings(ticker),
+                    asyncio.to_thread(lambda t=ticker: self.finnhub.get_company_profile(t)),
                     return_exceptions=True,
                 )
+                ov = overview if not isinstance(overview, Exception) and isinstance(overview, dict) else {}
+                prof = profile if not isinstance(profile, Exception) and isinstance(profile, dict) else {}
+                if prof and not ov.get("sector"):
+                    ov["sector"] = prof.get("finnhubIndustry") or prof.get("sector") or ""
+                    ov["industry"] = prof.get("finnhubIndustry") or ""
+                    if not ov.get("company_name"):
+                        ov["company_name"] = prof.get("name") or ""
                 return {
                     "stocktwits_sentiment": st_result if not isinstance(st_result, Exception) else {},
-                    "overview": overview if not isinstance(overview, Exception) else {},
+                    "overview": ov,
                     "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
                 }
             except Exception as e:
@@ -2065,22 +2073,69 @@ class MarketDataService:
                 result["x_analysis"] = xai_pick
             enriched[ticker] = result
 
+        from data.microcap_scorer import score_trending_tickers
+        microcap_results = score_trending_tickers(enriched, xai_top_picks, ticker_sources)
+
+        microcap_scores = {}
+        for bucket in ["asymmetric_opportunities", "institutional_plays", "rejected"]:
+            for r in microcap_results[bucket]:
+                microcap_scores[r["ticker"]] = r
+
+        for ticker, data in enriched.items():
+            if ticker in microcap_scores:
+                data["microcap_analysis"] = microcap_scores[ticker]
+
+        asymmetric_count = len(microcap_results["asymmetric_opportunities"])
+        institutional_count = len(microcap_results["institutional_plays"])
+        rejected_count = len(microcap_results["rejected"])
+        power_law_tickers = [r["ticker"] for r in microcap_results["power_law_candidates"]]
+        print(f"[Trending] Two-tier scoring: {asymmetric_count} asymmetric, {institutional_count} institutional, {rejected_count} rejected, power_law={power_law_tickers}")
+
         sorted_tickers = sorted(
             enriched.items(),
             key=lambda x: (
                 1 if x[0] in xai_ticker_set else 0,
                 x[1].get("source_count", 0),
-                x[1].get("quant_score", 0),
+                x[1].get("microcap_analysis", {}).get("microcap_score") or x[1].get("quant_score", 0),
             ),
             reverse=True,
         )
 
         sorted_enriched = {}
         for t, d in sorted_tickers:
-            sorted_enriched[t] = d
+            d_copy = dict(d)
+            d_copy.pop("microcap_analysis", None)
+            sorted_enriched[t] = d_copy
+
+        scoring_summary = []
+        for r in microcap_results["asymmetric_opportunities"]:
+            b = r.get("breakdown", {})
+            compact = {
+                "ticker": r["ticker"],
+                "tier": r["tier"],
+                "mcap": r.get("mcap_formatted", "?"),
+                "score": r["microcap_score"],
+                "power_law": r.get("power_law_flag", False),
+                "catalyst": b.get("catalyst", {}).get("score", 0),
+                "catalyst_signals": " | ".join(b.get("catalyst", {}).get("details", {}).get("signals", [])[:3]),
+                "sector": b.get("sector_alignment", {}).get("score", 0),
+                "sector_detail": b.get("sector_alignment", {}).get("details", {}).get("alignment", ""),
+                "technical": b.get("early_technical", {}).get("score", 0),
+                "social": b.get("social_momentum", {}).get("score", 0),
+                "liquidity": b.get("liquidity", {}).get("score", 0),
+            }
+            scoring_summary.append(compact)
 
         return {
             "scan_type": "hybrid_trending",
+            "two_tier_analysis": {
+                "INSTRUCTION": "PRIORITIZE asymmetric small-caps below. Power-law candidates deserve HIGHEST conviction.",
+                "asymmetric_opportunities": asymmetric_count,
+                "power_law_candidates": power_law_tickers,
+                "scoring_summary": scoring_summary,
+                "institutional_plays_count": institutional_count,
+                "rejected_count": rejected_count,
+            },
             "total_unique_tickers": len(ticker_sources),
             "x_market_mood": xai_market_mood,
             "grok_x_analysis": {
@@ -2107,6 +2162,8 @@ class MarketDataService:
                     "sources": d.get("trending_sources", []),
                     "quant_score": d.get("quant_score", 0),
                     "on_x": t in xai_ticker_set,
+                    "microcap_score": d.get("microcap_analysis", {}).get("microcap_score"),
+                    "tier": d.get("microcap_analysis", {}).get("tier", "unknown"),
                 }
                 for t, d in sorted_tickers[:15]
             ],

@@ -13,7 +13,7 @@ Microcap Score Formula:
 Hard sanity filters:
   - Market cap floor: $50M (no OTC penny trash)
   - Must have at least one verifiable catalyst signal
-  - Catalyst score >= 40 AND SectorAlignment >= 35 (relaxed for discovery, Claude validates)
+  - Catalyst score >= 20 AND SectorAlignment >= 25 (relaxed for discovery, Claude validates)
 """
 
 from data.scoring_engine import parse_pct, parse_market_cap_string, get_market_cap
@@ -22,6 +22,13 @@ from data.scoring_engine import parse_pct, parse_market_cap_string, get_market_c
 MCAP_FLOOR = 50_000_000
 MCAP_MICRO_CEILING = 500_000_000
 MCAP_SMALL_CEILING = 2_000_000_000
+
+ETF_TICKERS = {
+    "SPY", "QQQ", "IWM", "DIA", "VOO", "VTI", "ARKK", "ARKW", "XLF", "XLK",
+    "XLE", "XLV", "XLI", "XLY", "XLP", "XLB", "XLU", "XLRE", "VNQ", "GLD",
+    "SLV", "TLT", "HYG", "LQD", "BITO", "SOXL", "TQQQ", "SQQQ", "UVXY",
+    "VXX", "SPXL", "SPXS", "LABU", "LABD", "JNUG", "JDST", "EEM", "EFA",
+}
 
 HOT_SECTORS = {
     "technology", "information technology", "software", "semiconductors",
@@ -52,6 +59,17 @@ CATALYST_KEYWORDS = [
 
 def score_microcap(ticker: str, enriched_data: dict, x_analysis: dict = None,
                    source_count: int = 0, sources: list = None) -> dict:
+    if ticker in ETF_TICKERS:
+        return {
+            "ticker": ticker,
+            "tier": "rejected",
+            "mcap": None,
+            "microcap_score": 0,
+            "scoring_mode": "rejected",
+            "reason": "ETF/Index — not a stock pick",
+            "disqualified": True,
+        }
+
     overview = enriched_data.get("overview", {})
     if not isinstance(overview, dict):
         overview = {}
@@ -91,8 +109,8 @@ def score_microcap(ticker: str, enriched_data: dict, x_analysis: dict = None,
             "disqualified": True,
         }
 
-    catalyst_score, catalyst_details = _score_catalyst(ticker, overview, analyst, x_analysis)
-    sector_score, sector_details = _score_sector_alignment(overview)
+    catalyst_score, catalyst_details = _score_catalyst(ticker, overview, analyst, x_analysis, source_count)
+    sector_score, sector_details = _score_sector_alignment(overview, x_analysis)
     technical_score, technical_details = _score_early_technical(overview, enriched_data)
     social_score, social_details = _score_social_momentum(st_sentiment, source_count, sources, x_analysis)
     liquidity_score, liquidity_details = _score_liquidity(overview)
@@ -106,7 +124,7 @@ def score_microcap(ticker: str, enriched_data: dict, x_analysis: dict = None,
         1
     )
 
-    passes_filters = catalyst_score >= 40 and sector_score >= 35
+    passes_filters = catalyst_score >= 20 and sector_score >= 25
 
     return {
         "ticker": ticker,
@@ -147,7 +165,7 @@ def _format_mcap(mcap: float = None) -> str:
 
 
 def _score_catalyst(ticker: str, overview: dict, analyst: dict,
-                    x_analysis: dict = None) -> tuple[float, dict]:
+                    x_analysis: dict = None, source_count: int = 0) -> tuple[float, dict]:
     score = 0
     signals = []
 
@@ -179,6 +197,13 @@ def _score_catalyst(ticker: str, overview: dict, analyst: dict,
         if intensity in ("high", "very_high", "extreme"):
             score += 10
             signals.append(f"High mention intensity")
+    else:
+        if source_count >= 3:
+            score += 20
+            signals.append(f"Multi-platform buzz ({source_count} sources, no X data)")
+        elif source_count >= 2:
+            score += 15
+            signals.append(f"Cross-platform presence ({source_count} sources)")
 
     rev_growth = parse_pct(overview.get("revenue_growth"))
     if rev_growth is not None:
@@ -217,7 +242,7 @@ def _score_catalyst(ticker: str, overview: dict, analyst: dict,
     return min(score, 100), {"signals": signals, "raw_score": score}
 
 
-def _score_sector_alignment(overview: dict) -> tuple[float, dict]:
+def _score_sector_alignment(overview: dict, x_analysis: dict = None) -> tuple[float, dict]:
     score = 0
     details = {}
 
@@ -226,6 +251,14 @@ def _score_sector_alignment(overview: dict) -> tuple[float, dict]:
     company = (overview.get("company_name") or overview.get("name") or "").lower()
 
     combined = f"{sector} {industry} {company}"
+
+    if x_analysis:
+        x_catalyst = (x_analysis.get("x_catalyst") or "").lower()
+        x_why = (x_analysis.get("x_why_trending") or "").lower()
+        x_sector = (x_analysis.get("x_sector") or "").lower()
+        x_narratives = " ".join(str(n).lower() for n in x_analysis.get("x_narratives", []))
+        combined += f" {x_catalyst} {x_why} {x_sector} {x_narratives}"
+
     details["sector"] = sector or "unknown"
     details["industry"] = industry or "unknown"
 
@@ -455,11 +488,17 @@ def score_trending_tickers(enriched_data: dict, xai_top_picks: list,
 
         result = score_microcap(ticker, data, x_analysis, source_count, sources)
 
+        if result["tier"] not in ("institutional", "rejected"):
+            b = result.get("breakdown", {})
+            cat_s = b.get("catalyst", {}).get("score", 0)
+            sec_s = b.get("sector_alignment", {}).get("score", 0)
+            print(f"[MicrocapScorer] {ticker}: mcap={result.get('mcap_formatted','?')} score={result.get('microcap_score',0)} catalyst={cat_s} sector={sec_s} passes={result.get('passes_sanity')} power_law={result.get('power_law_flag')}")
+
         if result.get("disqualified"):
             if result["tier"] == "rejected":
                 results["rejected"].append(result)
             else:
-                result["reason"] = "Failed sanity filters (catalyst or sector too weak)"
+                result["reason"] = f"Failed sanity filters (catalyst={b.get('catalyst',{}).get('score',0)}<40 or sector={b.get('sector_alignment',{}).get('score',0)}<35)"
                 results["rejected"].append(result)
         elif result["tier"] == "institutional":
             results["institutional_plays"].append(result)

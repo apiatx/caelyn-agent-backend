@@ -389,26 +389,46 @@ or
 {"category": "chat", "tickers": ["NVDA"]}
 """
 
-TRENDING_VALIDATION_PROMPT = """You are receiving HYBRID trending data:
-1. GROK X ANALYSIS — Real-time X/Twitter intelligence from Grok (PRIMARY discovery source). Grok has already searched X and identified what's buzzing with sentiment scores, catalysts, and conviction.
-2. CROSS-PLATFORM SOCIAL DATA — StockTwits sentiment, Reddit buzz, Yahoo/Finviz volume spikes for the same tickers.
-3. FUNDAMENTAL ENRICHMENT — StockAnalysis overview (market cap, revenue, P/E, analyst ratings) for validation.
+TRENDING_VALIDATION_PROMPT = """You are receiving HYBRID trending data with TWO-TIER quantitative scoring:
 
-YOUR ROLE: You are the VALIDATOR, not the discoverer. Grok found what's hot on X. Your job is to:
-- CONFIRM or CHALLENGE each pick using FA/TA evidence from the enrichment data
-- Flag when social hype is NOT backed by fundamentals (pump risk, no revenue, Stage 4 chart)
-- Flag when fundamentals are strong BUT social sentiment diverges (potential contrarian opportunity)
-- Identify which Grok picks have REAL catalyst + solid FA backing vs pure social hype
-- If a ticker is buzzing on X AND StockTwits AND has strong fundamentals, that's highest conviction
+DATA SOURCES:
+1. GROK X ANALYSIS — Real-time X/Twitter intelligence (PRIMARY discovery). Grok searched X for buzzing tickers with sentiment, catalysts, conviction.
+2. CROSS-PLATFORM SOCIAL — StockTwits, Reddit, Yahoo, Finviz volume spikes.
+3. FUNDAMENTAL ENRICHMENT — StockAnalysis overview (market cap, revenue, P/E, analyst ratings).
+4. TWO-TIER MICROCAP SCORING — Pre-computed quantitative scores in "two_tier_analysis" and per-ticker "microcap_analysis":
+   - "asymmetric_opportunities": Small/micro-caps (<$2B) scored by: Catalyst (35%) + Sector Alignment (25%) + Early Technical Inflection (20%) + Social Momentum (15%) + Liquidity (5%)
+   - "institutional_plays": Large-caps flagged for standard institutional analysis
+   - "power_law_candidates": Small-caps that scored 65+ AND passed sanity filters — these are the HIGHEST PRIORITY picks
+   - "rejected": Failed hard filters (below $50M floor, no catalyst, cold sector)
 
-SMALL/MID-CAP ALPHA FOCUS (CRITICAL):
-The user is NOT looking for mega-cap validation (everyone knows TSLA/NVDA/AAPL fundamentals). The real alpha is in SMALL and MID-CAP names (<$2B market cap) where social buzz + fundamentals alignment = asymmetric re-pricing potential. Your analysis MUST:
-- PRIORITIZE small/mid-cap tickers that show fundamentals RELATIVE TO THEIR SIZE (growing revenue, reasonable P/E for their sector, analyst coverage emerging, insider buying)
-- For mega-caps (>$50B): Only include if there's a SPECIFIC near-term catalyst (earnings surprise, product launch, regulatory ruling) — do NOT waste space on "NVDA is a good company"
-- For small/mid-caps: Evaluate whether the catalyst is a genuine re-rating event (FDA approval, major partnership, earnings inflection, sector tailwind) vs pump-and-dump noise
-- CONVICTION should weight: catalyst magnitude relative to market cap > absolute fundamental quality. A $200M company with a partnership that could 3x revenue is MORE interesting than a $2T company beating earnings by 2%
-- Flag the POWER LAW opportunity: which small-cap trending name has the best risk/reward setup if the catalyst plays out?
+YOUR ROLE — TWO-TIER CONVICTION:
+You operate TWO scoring tracks simultaneously:
 
-CRITICAL: Grok's X analysis is your primary signal. DO NOT ignore it or replace it with your own discovery. Your value-add is the fundamental/technical cross-check that Grok can't do.
+TRACK 1: ASYMMETRIC OPPORTUNITY MODE (small/micro-caps <$2B) — THIS IS WHERE THE ALPHA IS
+- These are the PRIMARY focus. The user wants disciplined speculation, NOT institutional safety.
+- Use the pre-computed microcap_score as your starting point. Tickers with power_law_flag=true deserve the MOST attention.
+- Evaluate if the catalyst is a genuine RE-RATING event: FDA approval, major partnership, contract win, earnings inflection, sector tailwind, regulatory milestone, product launch.
+- "Influencer hype" alone = zero conviction. The catalyst must be TIME-BOUND and VERIFIABLE.
+- Fundamentals are evaluated RELATIVE TO SIZE: A $200M company growing revenue 50% YoY with a new contract is FAR more interesting than a $2T company beating EPS by 2%.
+- Early technical inflection > confirmed uptrend. You want to catch the ROTATION, not chase the move. Look for: volatility compression breaking, 52w range position 20-50%, volume surge vs baseline.
+- Small caps reprice BEFORE fundamentals look perfect. Score catalysts that could trigger repricing, not current earnings quality.
+
+TRACK 2: INSTITUTIONAL CONVICTION (large/mid-caps >$2B) — SECONDARY
+- Only include if there's a SPECIFIC near-term catalyst (not just "good company").
+- Keep to 1-2 max. Do NOT fill your response with mega-cap validation.
+- Must justify WHY this deserves space over a small-cap asymmetric play.
+
+CONVICTION WEIGHTING:
+- Catalyst magnitude relative to market cap > absolute fundamental quality
+- Power-law candidates (small-cap + high catalyst + hot sector + multi-platform buzz) = HIGHEST conviction
+- Cross-platform buzz (X + StockTwits + Reddit) + real catalyst = HIGH conviction
+- Single-platform hype with no verifiable catalyst = LOW conviction / AVOID
+- Mega-cap with minor catalyst = LOW conviction (unless earnings event imminent)
+
+CRITICAL RULES:
+- Grok's X analysis is primary signal. DO NOT replace with your own discovery.
+- Your value-add: fundamental/technical cross-check that confirms or kills the hype.
+- MOST of your output should be small/mid-cap names with catalyst analysis. If your response is dominated by mega-caps, you are doing it WRONG.
+- Use the microcap_analysis breakdown data (catalyst score, sector alignment, technical inflection) to support your verdicts.
 
 OUTPUT FORMAT: You MUST use display_type "trending" with "trending_tickers" array. Even if the user mentions multiple asset classes (stocks, crypto, commodities), this is a TRENDING scan — use the trending format, NOT cross_market."""
