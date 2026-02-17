@@ -191,6 +191,11 @@ class TradingAgent:
         if any(w in q for w in ["upcoming catalyst", "biggest upcoming", "catalyst calendar", "how should i position"]):
             return {"category": "earnings_catalyst"}
 
+        if any(w in q for w in ["twitter", "x sentiment", "what's x saying", "x/twitter", "x says"]):
+            return {"category": "trending"}
+        if any(w in q for w in ["trending", "what's trending", "trend", "what's hot", "popular", "buzzing", "what's buzzing"]):
+            return {"category": "trending"}
+
         if any(w in q for w in ["crypto", "bitcoin", "btc", "eth", "solana", "altcoin", "defi", "funding rate"]):
             return {"category": "crypto"}
         if any(w in q for w in ["macro", "fed", "interest rate", "inflation", "gdp", "economy", "dollar"]):
@@ -199,10 +204,6 @@ class TradingAgent:
             return {"category": "briefing"}
         if any(w in q for w in ["commodity", "commodities", "oil", "gold", "uranium", "copper", "natural gas"]):
             return {"category": "commodities"}
-        if any(w in q for w in ["twitter", "x sentiment", "what's x saying", "x/twitter", "x says"]):
-            return {"category": "trending"}
-        if any(w in q for w in ["trending", "trend", "what's hot", "popular"]):
-            return {"category": "trending"}
         if any(w in q for w in ["sector", "rotation", "stage 2", "weinstein", "breakout"]):
             return {"category": "sector_rotation"}
         if any(w in q for w in ["squeeze", "short squeeze", "short interest", "short float"]):
@@ -230,6 +231,13 @@ class TradingAgent:
         return {"category": "market_scan"}
 
     def _detect_cross_market(self, q: str) -> dict | None:
+        trending_intent = ["trending", "what's hot", "what's trending", "buzzing",
+                           "what's buzzing", "what's moving", "movers", "momentum",
+                           "social momentum", "top picks", "best trades", "best setups",
+                           "highest-conviction", "highest conviction"]
+        if any(t in q for t in trending_intent):
+            return None
+
         stock_signals = ["stock", "stocks", "equit", "equity", "equities", "s&p", "spy", "nasdaq"]
         crypto_signals = ["crypto", "bitcoin", "btc", "altcoin", "defi"]
         commodity_signals = ["commodit", "oil", "gold", "silver", "copper", "uranium",
