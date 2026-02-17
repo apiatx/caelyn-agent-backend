@@ -405,26 +405,33 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
     tickers = [t.upper() for t in body.get("tickers", []) if t][:25]
     asset_types = body.get("asset_types", {})
     asset_types = {k.upper(): v for k, v in asset_types.items()} if asset_types else {}
-    print(f"[PORTFOLIO] Quotes requested for: {tickers}, asset_types: {asset_types}")
+    print(f"[PORTFOLIO] Quotes requested for: {tickers}")
+    print(f"[PORTFOLIO] Asset types: {asset_types}")
 
     if not tickers:
         return {"quotes": {}}
 
-    stock_tickers = []
-    crypto_tickers = []
-    commodity_tickers = []
-    for t in tickers:
-        at = asset_types.get(t, "").lower()
-        if at == "crypto":
-            crypto_tickers.append(t)
-        elif at == "commodity" or t in COMMODITY_SYMBOLS:
-            commodity_tickers.append(t)
-        else:
-            stock_tickers.append(t)
+    stock_tickers = [t for t in tickers if asset_types.get(t, "stock") in ("stock", "etf", "index")]
+    crypto_tickers = [t for t in tickers if asset_types.get(t) == "crypto"]
+    commodity_tickers = [t for t in tickers if asset_types.get(t) == "commodity"]
 
-    print(f"[PORTFOLIO] Routed: stocks={stock_tickers}, crypto={crypto_tickers}, commodities={commodity_tickers}")
+    print(f"[PORTFOLIO] Routing: stocks={stock_tickers}, crypto={crypto_tickers}, commodities={commodity_tickers}")
 
     quotes = {}
+
+    PRIORITY_OVERRIDES = {
+        "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
+        "DOGE": "dogecoin", "ADA": "cardano", "XRP": "ripple",
+        "DOT": "polkadot", "LINK": "chainlink", "AVAX": "avalanche-2",
+        "MATIC": "matic-network", "UNI": "uniswap", "AAVE": "aave",
+        "ATOM": "cosmos", "LTC": "litecoin", "BCH": "bitcoin-cash",
+        "SHIB": "shiba-inu", "NEAR": "near", "SUI": "sui",
+        "APT": "aptos", "ARB": "arbitrum", "OP": "optimism",
+        "INJ": "injective-protocol", "TIA": "celestia", "SEI": "sei-network",
+        "PEPE": "pepe", "WIF": "dogwifcoin", "RENDER": "render-token",
+        "FET": "fetch-ai", "TAO": "bittensor", "FIL": "filecoin",
+        "HYPE": "hyperliquid",
+    }
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         if stock_tickers:
@@ -485,67 +492,20 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
             except Exception as e:
                 print(f"[PORTFOLIO] FMP error: {e}")
 
-        all_commodity_tickers = commodity_tickers + [t for t in stock_tickers if t not in quotes and t in COMMODITY_SYMBOLS]
-        for ticker in all_commodity_tickers:
-            if ticker in quotes:
-                continue
-            fmp_symbol = COMMODITY_SYMBOLS.get(ticker)
-            if fmp_symbol:
-                try:
-                    resp = await client.get(
-                        "https://financialmodelingprep.com/stable/quote-short",
-                        params={"symbol": fmp_symbol, "apikey": FMP_API_KEY},
-                    )
-                    if resp.status_code == 200:
-                        items = resp.json()
-                        if items:
-                            item = items[0]
-                            quotes[ticker] = {
-                                "price": item.get("price"),
-                                "change": item.get("change"),
-                                "change_pct": item.get("changesPercentage"),
-                                "volume": item.get("volume"),
-                                "source": "fmp_commodity",
-                                "asset_type": "commodity",
-                            }
-                            print(f"[PORTFOLIO] Commodity: {ticker} = ${item.get('price')}")
-                except Exception as e:
-                    print(f"[PORTFOLIO] Commodity {ticker} error: {e}")
-
-        if asset_types:
-            crypto_missing = [t for t in crypto_tickers if t not in quotes]
-        else:
-            crypto_missing = [t for t in tickers if t not in quotes]
-        if crypto_missing:
+        if crypto_tickers:
             symbol_map = await get_coingecko_symbol_map()
 
-            PRIORITY_OVERRIDES = {
-                "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
-                "DOGE": "dogecoin", "ADA": "cardano", "XRP": "ripple",
-                "DOT": "polkadot", "LINK": "chainlink", "AVAX": "avalanche-2",
-                "MATIC": "matic-network", "UNI": "uniswap", "AAVE": "aave",
-                "ATOM": "cosmos", "LTC": "litecoin", "BCH": "bitcoin-cash",
-                "SHIB": "shiba-inu", "NEAR": "near", "SUI": "sui",
-                "APT": "aptos", "ARB": "arbitrum", "OP": "optimism",
-                "INJ": "injective-protocol", "TIA": "celestia", "SEI": "sei-network",
-                "PEPE": "pepe", "WIF": "dogwifcoin", "RENDER": "render-token",
-                "FET": "fetch-ai", "TAO": "bittensor", "FIL": "filecoin",
-                "HYPE": "hyperliquid",
-            }
-
             crypto_ids_to_fetch = {}
-            for ticker in crypto_missing:
+            for ticker in crypto_tickers:
                 cg_id = PRIORITY_OVERRIDES.get(ticker) or symbol_map.get(ticker)
                 if cg_id:
                     crypto_ids_to_fetch[cg_id] = ticker
-                elif ticker.endswith("USD") and (PRIORITY_OVERRIDES.get(ticker[:-3]) or symbol_map.get(ticker[:-3])):
-                    crypto_ids_to_fetch[PRIORITY_OVERRIDES.get(ticker[:-3]) or symbol_map[ticker[:-3]]] = ticker
-                elif ticker.endswith("USDT") and (PRIORITY_OVERRIDES.get(ticker[:-4]) or symbol_map.get(ticker[:-4])):
-                    crypto_ids_to_fetch[PRIORITY_OVERRIDES.get(ticker[:-4]) or symbol_map[ticker[:-4]]] = ticker
+                else:
+                    print(f"[PORTFOLIO] No CoinGecko ID found for crypto ticker: {ticker}")
 
             if crypto_ids_to_fetch:
                 ids_list = list(crypto_ids_to_fetch.keys())
-                print(f"[PORTFOLIO] CoinGecko resolving {len(ids_list)} crypto tickers")
+                print(f"[PORTFOLIO] CoinGecko direct lookup for {len(ids_list)} crypto tickers")
 
                 for i in range(0, len(ids_list), 50):
                     batch = ids_list[i:i+50]
@@ -575,6 +535,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                     "volume": price_data.get("usd_24h_vol", 0),
                                     "source": "coingecko",
                                     "asset_type": "crypto",
+                                    "sector": "Crypto",
                                 }
                                 print(f"[PORTFOLIO] CoinGecko: {original_ticker} = ${price}")
                         else:
@@ -584,21 +545,133 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                     if i + 50 < len(ids_list):
                         await asyncio.sleep(1.0)
 
+        if commodity_tickers:
+            for ticker in commodity_tickers:
+                fmp_symbol = COMMODITY_SYMBOLS.get(ticker)
+                if fmp_symbol:
+                    try:
+                        resp = await client.get(
+                            "https://financialmodelingprep.com/stable/quote-short",
+                            params={"symbol": fmp_symbol, "apikey": FMP_API_KEY},
+                        )
+                        if resp.status_code == 200:
+                            items = resp.json()
+                            if items:
+                                item = items[0]
+                                quotes[ticker] = {
+                                    "price": item.get("price"),
+                                    "change": item.get("change"),
+                                    "change_pct": item.get("changesPercentage"),
+                                    "volume": item.get("volume"),
+                                    "source": "fmp_commodity",
+                                    "asset_type": "commodity",
+                                    "sector": "Commodities",
+                                }
+                                print(f"[PORTFOLIO] Commodity: {ticker} = ${item.get('price')}")
+                    except Exception as e:
+                        print(f"[PORTFOLIO] Commodity {ticker} error: {e}")
+                else:
+                    print(f"[PORTFOLIO] No commodity symbol mapping for: {ticker}")
+
+        missing_tickers = [t for t in tickers if t not in quotes]
+        if missing_tickers:
+            print(f"[PORTFOLIO] Fallback for unresolved tickers: {missing_tickers}")
+
+            for ticker in list(missing_tickers):
+                if ticker in quotes:
+                    continue
+                fmp_symbol = COMMODITY_SYMBOLS.get(ticker)
+                if fmp_symbol:
+                    try:
+                        resp = await client.get(
+                            "https://financialmodelingprep.com/stable/quote-short",
+                            params={"symbol": fmp_symbol, "apikey": FMP_API_KEY},
+                        )
+                        if resp.status_code == 200:
+                            items = resp.json()
+                            if items:
+                                item = items[0]
+                                quotes[ticker] = {
+                                    "price": item.get("price"),
+                                    "change": item.get("change"),
+                                    "change_pct": item.get("changesPercentage"),
+                                    "volume": item.get("volume"),
+                                    "source": "fmp_commodity",
+                                    "asset_type": "commodity",
+                                    "sector": "Commodities",
+                                }
+                    except Exception:
+                        pass
+
+            still_missing = [t for t in tickers if t not in quotes]
+            if still_missing:
+                symbol_map = await get_coingecko_symbol_map()
+                crypto_ids_to_fetch = {}
+                for ticker in still_missing:
+                    cg_id = PRIORITY_OVERRIDES.get(ticker) or symbol_map.get(ticker)
+                    if cg_id:
+                        crypto_ids_to_fetch[cg_id] = ticker
+                    elif ticker.endswith("USD") and (PRIORITY_OVERRIDES.get(ticker[:-3]) or symbol_map.get(ticker[:-3])):
+                        crypto_ids_to_fetch[PRIORITY_OVERRIDES.get(ticker[:-3]) or symbol_map[ticker[:-3]]] = ticker
+                    elif ticker.endswith("USDT") and (PRIORITY_OVERRIDES.get(ticker[:-4]) or symbol_map.get(ticker[:-4])):
+                        crypto_ids_to_fetch[PRIORITY_OVERRIDES.get(ticker[:-4]) or symbol_map[ticker[:-4]]] = ticker
+
+                if crypto_ids_to_fetch:
+                    ids_list = list(crypto_ids_to_fetch.keys())
+                    print(f"[PORTFOLIO] CoinGecko fallback resolving {len(ids_list)} tickers")
+                    for i in range(0, len(ids_list), 50):
+                        batch = ids_list[i:i+50]
+                        ids_str = ",".join(batch)
+                        try:
+                            resp = await client.get(
+                                "https://api.coingecko.com/api/v3/simple/price",
+                                params={
+                                    "ids": ids_str,
+                                    "vs_currencies": "usd",
+                                    "include_24hr_change": "true",
+                                    "include_24hr_vol": "true",
+                                    "include_market_cap": "true",
+                                },
+                            )
+                            if resp.status_code == 200:
+                                cg_data = resp.json()
+                                for cg_id, price_data in cg_data.items():
+                                    original_ticker = crypto_ids_to_fetch.get(cg_id, cg_id.upper())
+                                    price = price_data.get("usd", 0)
+                                    change_pct = price_data.get("usd_24h_change", 0)
+                                    quotes[original_ticker] = {
+                                        "price": price,
+                                        "change": round(price * (change_pct / 100), 4) if change_pct else 0,
+                                        "change_pct": round(change_pct, 2) if change_pct else 0,
+                                        "market_cap": price_data.get("usd_market_cap", 0),
+                                        "volume": price_data.get("usd_24h_vol", 0),
+                                        "source": "coingecko",
+                                        "asset_type": "crypto",
+                                        "sector": "Crypto",
+                                    }
+                                    print(f"[PORTFOLIO] CoinGecko fallback: {original_ticker} = ${price}")
+                            else:
+                                print(f"[PORTFOLIO] CoinGecko fallback error: {resp.status_code}")
+                        except Exception as e:
+                            print(f"[PORTFOLIO] CoinGecko fallback error: {e}")
+                        if i + 50 < len(ids_list):
+                            await asyncio.sleep(1.0)
+
         final_missing = [t for t in tickers if t not in quotes]
         if final_missing:
             print(f"[PORTFOLIO] No price data found for: {final_missing}")
 
-    for sym, q in quotes.items():
-        source = q.get("source", "")
-        if source == "coingecko":
-            q["sector"] = "Crypto"
-        elif source == "fmp_commodity":
-            q["sector"] = "Commodities"
-        elif not q.get("sector"):
-            q["sector"] = "Other"
+    for ticker, quote in quotes.items():
+        if not quote.get("sector"):
+            if quote.get("asset_type") == "crypto" or quote.get("source") == "coingecko":
+                quote["sector"] = "Crypto"
+            elif quote.get("asset_type") == "commodity" or quote.get("source") == "fmp_commodity":
+                quote["sector"] = "Commodities"
+            elif not quote.get("sector"):
+                quote["sector"] = "Other"
 
     sector_debug = {sym: q.get("sector", "MISSING") for sym, q in quotes.items()}
-    print(f"[PORTFOLIO] Sector allocation data: {sector_debug}")
+    print(f"[PORTFOLIO] Sector allocation: {sector_debug}")
     print(f"[PORTFOLIO] Returning {len(quotes)} quotes for: {list(quotes.keys())}")
     return {"quotes": quotes}
 
