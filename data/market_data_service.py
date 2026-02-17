@@ -2087,15 +2087,27 @@ class MarketDataService:
         Pull data from ALL asset classes in parallel: stocks, crypto, commodities, macro.
         Used when the user asks about trends/opportunities across multiple markets.
         Returns a unified dataset so Claude can rank across asset classes fairly.
+        Each sub-scan has its own timeout to prevent one slow source from blocking everything.
         """
-        stock_task = self.get_cross_platform_trending()
-        crypto_task = self.get_crypto_scanner()
-        commodity_task = self.get_commodities_dashboard()
-        macro_task = self.get_macro_overview()
+        async def _timed(coro, label, timeout=25.0):
+            try:
+                result = await asyncio.wait_for(coro, timeout=timeout)
+                print(f"[CROSS-MARKET] {label} completed")
+                return result
+            except asyncio.TimeoutError:
+                print(f"[CROSS-MARKET] {label} timed out after {timeout}s")
+                return {"error": f"{label} timed out"}
+            except Exception as e:
+                print(f"[CROSS-MARKET] {label} error: {e}")
+                return {"error": str(e)}
+
+        stock_task = _timed(self._get_stock_trending_light(), "stocks", 25.0)
+        crypto_task = _timed(self._get_crypto_light(), "crypto", 25.0)
+        commodity_task = _timed(self._get_commodities_light(), "commodities", 15.0)
+        macro_task = _timed(self.get_macro_overview(), "macro", 15.0)
 
         stock_data, crypto_data, commodity_data, macro_data = await asyncio.gather(
             stock_task, crypto_task, commodity_task, macro_task,
-            return_exceptions=True,
         )
 
         result = {
@@ -2108,29 +2120,120 @@ class MarketDataService:
                 "penalize speculative picks from that class. A safe-haven commodity in a fear "
                 "environment outranks a speculative altcoin in a bleeding crypto market."
             ),
+            "stock_trending": stock_data if stock_data else {"error": "Stock data unavailable"},
+            "crypto_scanner": crypto_data if crypto_data else {"error": "Crypto data unavailable"},
+            "commodities": commodity_data if commodity_data else {"error": "Commodity data unavailable"},
+            "macro_context": macro_data if macro_data else {"error": "Macro data unavailable"},
         }
 
-        if not isinstance(stock_data, Exception) and stock_data:
-            result["stock_trending"] = stock_data
-        else:
-            result["stock_trending"] = {"error": "Stock data unavailable"}
-
-        if not isinstance(crypto_data, Exception) and crypto_data:
-            result["crypto_scanner"] = crypto_data
-        else:
-            result["crypto_scanner"] = {"error": "Crypto data unavailable"}
-
-        if not isinstance(commodity_data, Exception) and commodity_data:
-            result["commodities"] = commodity_data
-        else:
-            result["commodities"] = {"error": "Commodity data unavailable"}
-
-        if not isinstance(macro_data, Exception) and macro_data:
-            result["macro_context"] = macro_data
-        else:
-            result["macro_context"] = {"error": "Macro data unavailable"}
-
         return result
+
+    async def _get_stock_trending_light(self) -> dict:
+        """Lighter stock trending for cross-market scan — skip heavy enrichment."""
+        from collections import Counter
+
+        stocktwits_trending, yahoo_trending, finviz_most_active, reddit_trending = await asyncio.gather(
+            self.stocktwits.get_trending(),
+            scrape_yahoo_trending(),
+            self.finviz.get_most_active(),
+            self.reddit.get_all_stocks_trending(),
+            return_exceptions=True,
+        )
+
+        if isinstance(stocktwits_trending, Exception): stocktwits_trending = []
+        if isinstance(yahoo_trending, Exception): yahoo_trending = []
+        if isinstance(finviz_most_active, Exception): finviz_most_active = []
+        if isinstance(reddit_trending, Exception): reddit_trending = []
+
+        ticker_sources = {}
+
+        def add_tickers(items, source_name, ticker_key="ticker"):
+            for item in (items or []):
+                if isinstance(item, dict):
+                    t = item.get(ticker_key, "").upper().strip()
+                    if t and len(t) <= 6 and t.isalpha():
+                        if t not in ticker_sources:
+                            ticker_sources[t] = set()
+                        ticker_sources[t].add(source_name)
+
+        add_tickers(stocktwits_trending, "StockTwits")
+        add_tickers(yahoo_trending, "Yahoo Finance")
+        add_tickers(finviz_most_active, "Finviz Active")
+        add_tickers(reddit_trending, "Reddit")
+
+        ranked = sorted(ticker_sources.items(), key=lambda x: len(x[1]), reverse=True)
+        multi_source = [(t, srcs) for t, srcs in ranked if len(srcs) >= 2]
+        top_tickers = [t for t, _ in multi_source[:10]]
+
+        light_enrichment = await asyncio.gather(
+            *[self.stockanalysis.get_overview(t) for t in top_tickers[:8]],
+            return_exceptions=True,
+        )
+
+        enriched = {}
+        for ticker, result in zip(top_tickers[:8], light_enrichment):
+            if isinstance(result, Exception) or not isinstance(result, dict):
+                continue
+            result["trending_sources"] = list(ticker_sources.get(ticker, []))
+            result["source_count"] = len(ticker_sources.get(ticker, []))
+            enriched[ticker] = result
+
+        return {
+            "total_unique_tickers": len(ticker_sources),
+            "multi_platform_count": len(multi_source),
+            "top_trending": [
+                {"ticker": t, "source_count": len(s), "sources": list(s)}
+                for t, s in multi_source[:15]
+            ],
+            "enriched_data": enriched,
+        }
+
+    async def _get_crypto_light(self) -> dict:
+        """Lighter crypto scan for cross-market — skip xAI and altFINS to save time."""
+        tasks = {}
+
+        if self.coingecko:
+            tasks["cg_dashboard"] = self.coingecko.get_crypto_dashboard()
+
+        if self.cmc:
+            tasks["cmc_dashboard"] = self.cmc.get_full_dashboard()
+
+        tasks["hyperliquid"] = self.hyperliquid.get_crypto_dashboard()
+        tasks["fear_greed"] = self.fear_greed.get_fear_greed_index()
+
+        task_names = list(tasks.keys())
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+        output = {}
+        for name, result in zip(task_names, results):
+            if isinstance(result, Exception):
+                print(f"[CROSS-MARKET] crypto {name} failed: {result}")
+                output[name] = {"error": str(result)}
+            else:
+                output[name] = result
+
+        return output
+
+    async def _get_commodities_light(self) -> dict:
+        """Lighter commodities for cross-market — just prices and macro context."""
+        fmp_commodities = {}
+        fmp_treasuries = {}
+        if self.fmp:
+            comm_result, treasury_result = await asyncio.gather(
+                self.fmp.get_full_commodity_dashboard(),
+                self.fmp.get_treasury_rates(),
+                return_exceptions=True,
+            )
+            fmp_commodities = comm_result if not isinstance(comm_result, Exception) else {}
+            fmp_treasuries = treasury_result if not isinstance(treasury_result, Exception) else {}
+
+        fred_macro = self.fred.get_quick_macro()
+
+        return {
+            "commodity_prices": fmp_commodities,
+            "treasury_rates": fmp_treasuries,
+            "fred_macro": fred_macro,
+        }
 
     async def get_crypto_scanner(self) -> dict:
         """

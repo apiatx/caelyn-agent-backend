@@ -326,14 +326,16 @@ class TradingAgent:
             return self._keyword_classify(prompt)
 
     async def _gather_data_safe(self, query_info: dict) -> dict:
+        category = query_info.get("category", "general")
+        gather_timeout = 40.0 if category == "cross_market" else 55.0
         try:
             return await asyncio.wait_for(
                 self._gather_data(query_info),
-                timeout=60.0,
+                timeout=gather_timeout,
             )
         except asyncio.TimeoutError:
-            print("[AGENT] Data gathering timed out after 60s, returning partial data")
-            return {"error": "Data gathering timed out. Some sources may be slow."}
+            print(f"[AGENT] Data gathering timed out after {gather_timeout}s for {category}, returning partial data")
+            return {"error": f"Data gathering timed out after {gather_timeout}s. Some sources may be slow or rate-limited."}
         except Exception as e:
             print(f"[AGENT] Data gathering error: {e}")
             return {"error": f"Data gathering failed: {str(e)}"}
@@ -433,13 +435,15 @@ class TradingAgent:
         return context
 
     async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False) -> str:
+        data_size = len(json.dumps(market_data, default=str)) if market_data else 0
+        print(f"[AGENT] Sending to Claude: {data_size:,} chars of market data")
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(self._ask_claude, user_prompt, market_data, history, is_followup),
-                timeout=120.0,
+                timeout=70.0,
             )
         except asyncio.TimeoutError:
-            print("[AGENT] Claude API timed out after 120s")
+            print(f"[AGENT] Claude API timed out after 70s (data was {data_size:,} chars)")
             return json.dumps({"display_type": "chat", "message": "The AI took too long to respond. Please try again — sometimes the model is under heavy load."})
         except Exception as e:
             print(f"[AGENT] Claude API error: {e}")

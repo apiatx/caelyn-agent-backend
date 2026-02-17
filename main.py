@@ -123,8 +123,19 @@ async def query_agent(
                 user_query,
                 history=history,
             ),
-            timeout=180.0,
+            timeout=120.0,
         )
+
+        if not result or (isinstance(result, dict) and not result.get("analysis") and not result.get("structured", {}).get("message")):
+            print(f"[API] WARNING: Empty/blank result returned for query: {user_query[:80]}")
+            result = {
+                "type": "chat",
+                "analysis": "",
+                "structured": {
+                    "display_type": "chat",
+                    "message": "The analysis returned empty. This usually means data sources were rate-limited. Please wait a minute and try again.",
+                },
+            }
 
         if body.conversation_id:
             try:
@@ -138,13 +149,13 @@ async def query_agent(
 
         return result
     except asyncio.TimeoutError:
-        print("[API] Request timed out after 90s")
+        print("[API] Request timed out after 120s")
         return {
             "type": "chat",
             "analysis": "",
             "structured": {
                 "display_type": "chat",
-                "message": "Request timed out after 90 seconds. The data sources may be slow — please try again.",
+                "message": "Request timed out. The data sources may be slow or rate-limited — please wait a minute and try again.",
             },
         }
     except Exception as e:
