@@ -1,0 +1,189 @@
+This is exactly the kind of thing we handle surgically.
+
+You do NOT want:
+
+Refactors
+
+Prompt rewrites
+
+Behavior changes
+
+Logic changes
+
+Model swaps
+
+“Improvements”
+
+You want:
+
+Enable prompt caching for static system prompts
+Without changing a single word of your existing prompts
+Without touching reasoning logic
+Without altering workflows
+
+Good.
+
+Below is the exact instruction block to paste into Replit.
+
+🔒 REPLIT INSTRUCTION — ENABLE PROMPT CACHING ONLY
+
+You are authorized to make a minimal infrastructure update.
+
+You are NOT allowed to:
+
+Modify any prompt text (SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, follow-up prompts)
+
+Rewrite or optimize prompts
+
+Change model selection
+
+Change token limits
+
+Refactor logic
+
+Modify data flow
+
+Change workflow sequencing
+
+Alter schemas
+
+Adjust temperature
+
+Change reasoning structure
+
+Modify frontend behavior
+
+You may ONLY implement prompt caching for static system prompts.
+
+OBJECTIVE
+
+Enable Anthropic prompt caching for the Claude reasoning SYSTEM_PROMPT.
+
+If supported, also enable OpenAI system-level caching for the QUERY_CLASSIFIER_PROMPT.
+
+No behavioral changes.
+
+No prompt edits.
+
+No restructuring.
+
+IMPLEMENTATION REQUIREMENTS
+1. Claude (Anthropic) Prompt Caching
+
+When sending SYSTEM_PROMPT to Claude:
+
+Wrap the static system prompt in a cache_control block.
+
+Use Anthropic’s prompt caching feature.
+
+Cache the static portion only.
+
+Ensure conversation messages remain dynamic and uncached.
+
+Do NOT modify SYSTEM_PROMPT content.
+Do NOT split or rewrite it.
+
+Only apply caching metadata.
+
+Example pattern (adapt to existing structure, do not refactor):
+
+system=[
+{
+"type": "text",
+"text": SYSTEM_PROMPT,
+"cache_control": { "type": "ephemeral" }
+}
+]
+
+Ensure compatibility with current Anthropic SDK usage.
+
+2. Follow-Up Instructions
+
+If follow-up instructions are appended dynamically:
+
+Do NOT cache the dynamic portion.
+
+Only cache the base SYSTEM_PROMPT.
+
+Maintain identical message assembly logic.
+
+3. OpenAI Classifier Prompt
+
+If supported by current OpenAI SDK version:
+
+Use persistent system instruction caching if available.
+
+Otherwise leave unchanged.
+
+Do NOT attempt creative workarounds.
+
+If caching is not supported cleanly, skip it.
+
+Claude caching is priority.
+
+4. Verification
+
+After implementation:
+
+Confirm that prompt caching headers are being sent.
+
+Confirm no change in output behavior.
+
+Confirm no schema changes.
+
+Confirm identical reasoning output structure.
+
+Confirm no token limit changes.
+
+Confirm no workflow changes.
+
+Return a short verification summary only.
+
+STRICT CONSTRAINT
+
+If implementing caching requires:
+
+Editing prompt text
+
+Refactoring call structure
+
+Rewriting message arrays
+
+Changing function signatures
+
+Abort and report incompatibility.
+
+Do not improvise.
+
+🧠 Why This Is Safe
+
+This:
+
+Reduces input token cost
+
+Does not change reasoning
+
+Does not change outputs
+
+Does not affect logic
+
+Does not affect orchestration
+
+Does not affect classification
+
+Does not affect frontend
+
+It only reduces how often static instructions are billed.
+
+💰 What This Will Do
+
+Your ~7,900-token SYSTEM_PROMPT currently gets billed every request.
+
+With Anthropic prompt caching:
+
+First call → full price
+Subsequent calls (within TTL) → ~10% input cost for cached tokens
+
+That meaningfully reduces scaling cost.
+
+Without touching your trading logic.

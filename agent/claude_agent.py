@@ -658,7 +658,13 @@ Be direct and opinionated. Tell me what you actually think."""
                     self.client.messages.create,
                     model="claude-sonnet-4-20250514",
                     max_tokens=16384,
-                    system=SYSTEM_PROMPT,
+                    system=[
+                        {
+                            "type": "text",
+                            "text": SYSTEM_PROMPT,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
                     messages=messages,
                 ),
                 timeout=60.0,
@@ -1014,10 +1020,17 @@ Be direct and opinionated. Tell me what you actually think."""
             )
             print(f"[Agent] WARNING: Total prompt was {total_prompt_len:,} chars, re-truncated data to {len(data_str):,}")
 
-        system = SYSTEM_PROMPT
+        system_blocks = [
+            {
+                "type": "text",
+                "text": SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
         if is_followup:
-            system += """
-
+            system_blocks.append({
+                "type": "text",
+                "text": """
 FOLLOW-UP MODE: The user is continuing a conversation. You have the full conversation history above.
 - If the user asks about a specific ticker or pick from your previous response, go deeper on that specific item.
 - If the user asks a general question, answer it using your trading expertise and any data from the conversation.
@@ -1025,14 +1038,15 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
 - For follow-up responses, use display_type "chat" with a "message" field containing your analysis.
 - BUT if the user asks you to analyze a new ticker or run a new type of scan, use the appropriate display_type.
 - Keep your trader personality — be direct, opinionated, and cut through noise.
-- You still have access to all the data from the original scan in the conversation history. Reference specific data points when relevant."""
+- You still have access to all the data from the original scan in the conversation history. Reference specific data points when relevant.""",
+            })
 
         print(f"[Agent] Sending {len(messages)} messages to Claude (followup={is_followup})")
 
         response = self.client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=16384,
-            system=system,
+            system=system_blocks,
             messages=messages,
         )
         if response.stop_reason == "max_tokens":
