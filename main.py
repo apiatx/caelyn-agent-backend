@@ -413,6 +413,8 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
     if not api_key or api_key != AGENT_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
 
+    from data.cache import cache as _cache
+
     body = await request.json()
     tickers = [t.upper() for t in body.get("tickers", []) if t][:25]
     asset_types = body.get("asset_types", {})
@@ -422,6 +424,12 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
 
     if not tickers:
         return {"quotes": {}}
+
+    cache_key = f"portfolio:quotes:{','.join(sorted(tickers))}"
+    cached_quotes = _cache.get(cache_key)
+    if cached_quotes is not None:
+        print(f"[PORTFOLIO] Returning cached quotes for {len(tickers)} tickers")
+        return {"quotes": cached_quotes}
 
     index_tickers = [t for t in tickers if asset_types.get(t) == "index"]
     stock_tickers = [t for t in tickers if asset_types.get(t, "stock") in ("stock", "etf") and t not in index_tickers]
@@ -509,6 +517,14 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
             if stocks_needing_sector:
                 print(f"[PORTFOLIO] Fetching sector via /stable/profile for: {stocks_needing_sector}")
                 for ticker in stocks_needing_sector:
+                    sector_cache_key = f"sector:{ticker}"
+                    cached_sector = _cache.get(sector_cache_key)
+                    if cached_sector is not None:
+                        quotes[ticker]["sector"] = cached_sector.get("sector", "Other")
+                        quotes[ticker]["industry"] = cached_sector.get("industry", "")
+                        quotes[ticker]["company_name"] = cached_sector.get("company_name", "")
+                        print(f"[PORTFOLIO] {ticker} sector from cache: {cached_sector.get('sector')}")
+                        continue
                     try:
                         profile_resp = await client.get(
                             "https://financialmodelingprep.com/stable/profile",
@@ -524,6 +540,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                     quotes[ticker]["sector"] = sector
                                     quotes[ticker]["industry"] = industry
                                     quotes[ticker]["company_name"] = company_name
+                                    _cache.set(sector_cache_key, {"sector": sector, "industry": industry, "company_name": company_name}, 86400)
                                     print(f"[PORTFOLIO] {ticker} sector: {sector}, industry: {industry}")
                                 else:
                                     quotes[ticker]["sector"] = "Other"
@@ -746,6 +763,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
             elif not quote.get("sector"):
                 quote["sector"] = "Other"
 
+    _cache.set(cache_key, quotes, 60)
     print(f"[PORTFOLIO] Final sectors: {[(t, q.get('sector')) for t, q in quotes.items()]}")
     print(f"[PORTFOLIO] Returning {len(quotes)} quotes for: {list(quotes.keys())}")
     return {"quotes": quotes}
