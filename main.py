@@ -38,15 +38,36 @@ app.add_middleware(
 )
 
 # ============================================================
-# Wire up the services
+# Wire up the services (deferred init so health check passes fast)
 # ============================================================
-data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY, coingecko_key=COINGECKO_API_KEY, cmc_key=CMC_API_KEY, altfins_key=ALTFINS_API_KEY, xai_key=XAI_API_KEY)
-agent = TradingAgent(api_key=ANTHROPIC_API_KEY, data_service=data_service, openai_api_key=OPENAI_API_KEY)
+data_service = None
+agent = None
+_init_done = False
+
+def _do_init():
+    global data_service, agent, _init_done
+    data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY, coingecko_key=COINGECKO_API_KEY, cmc_key=CMC_API_KEY, altfins_key=ALTFINS_API_KEY, xai_key=XAI_API_KEY)
+    agent = TradingAgent(api_key=ANTHROPIC_API_KEY, data_service=data_service, openai_api_key=OPENAI_API_KEY)
+    _init_done = True
+    print("[INIT] All services initialized successfully")
+
+@app.on_event("startup")
+async def startup_event():
+    import threading
+    threading.Thread(target=_do_init, daemon=True).start()
 
 # ============================================================
 # API Routes
 # ============================================================
 
+
+async def _wait_for_init():
+    import asyncio
+    for _ in range(60):
+        if _init_done:
+            return
+        await asyncio.sleep(0.5)
+    raise HTTPException(status_code=503, detail="Server is still starting up. Please try again in a moment.")
 
 @app.get("/")
 async def root():
@@ -93,6 +114,7 @@ async def query_agent(
             status_code=403,
             detail="Invalid or missing API key.",
         )
+    await _wait_for_init()
     user_query = body.query or body.prompt or ""
     if not user_query.strip():
         raise HTTPException(status_code=400, detail="No query provided. Send 'query' or 'prompt' field.")
@@ -168,6 +190,7 @@ async def review_watchlist(
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
     if not body.tickers:
         raise HTTPException(status_code=400, detail="No tickers provided.")
+    await _wait_for_init()
 
     tickers = [t.strip().upper() for t in body.tickers if t.strip()][:25]
     print(f"[API] Watchlist review request: {tickers}")
@@ -256,6 +279,7 @@ async def delete_conv(request: Request, conv_id: str):
 async def health_check(request: Request):
     """Full diagnostic — tests Claude, Finviz, and StockAnalysis."""
     import asyncio
+    await _wait_for_init()
     errors = []
 
     openai_ok = False
@@ -1028,6 +1052,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
     if not api_key or api_key != AGENT_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
 
+    await _wait_for_init()
     body = await request.json()
     print(f"[PORTFOLIO_REVIEW] === ENDPOINT HIT ===")
     print(f"[PORTFOLIO_REVIEW] Request keys: {list(body.keys())}")
