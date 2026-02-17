@@ -122,6 +122,7 @@ PROTECTED_KEYS = {
     "source_summary", "x_market_mood", "total_unique_tickers",
     "ranked_tickers", "orchestration_metadata",
     "ranked_candidates", "ranking_debug",
+    "institutional_scoring", "prior_score",
 }
 
 

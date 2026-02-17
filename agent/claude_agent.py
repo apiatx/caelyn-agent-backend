@@ -7,6 +7,7 @@ import anthropic
 import openai
 
 from agent.data_compressor import compress_data
+from agent.institutional_scorer import apply_institutional_scoring
 from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, TRENDING_VALIDATION_PROMPT
 from data.market_data_service import MarketDataService
 
@@ -294,6 +295,16 @@ class TradingAgent:
             else:
                 market_data = await self._gather_data_safe(query_info)
                 print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
+
+        SCORING_CATEGORIES = {
+            "market_scan", "trending", "investments", "fundamentals_scan",
+            "squeeze", "social_momentum", "volume_spikes", "earnings_catalyst",
+            "sector_rotation", "asymmetric", "bearish", "thematic",
+            "small_cap_spec", "briefing", "crypto", "cross_market",
+            "commodities", "dashboard",
+        }
+        if market_data and isinstance(market_data, dict) and category in SCORING_CATEGORIES:
+            market_data = apply_institutional_scoring(market_data)
 
         raw_response = await self._ask_claude_with_timeout(user_prompt, market_data, history, is_followup=is_followup, category=category)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")

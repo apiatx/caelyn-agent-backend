@@ -52,6 +52,20 @@ For each candidate asset, internally score using these weights to guide your ran
 
 Do NOT show weight math explicitly. Use it internally to guide ranking order and conviction assignment.
 
+QUANTITATIVE PRIOR SCORES:
+
+You are receiving candidates pre-ranked by a quantitative prior score (prior_score). Each candidate includes an institutional_scoring breakdown with: technical_score, catalyst_score, sector_alignment_score, social_score, liquidity_score, and market_cap_category.
+
+Important rules for using prior_score:
+- The prior score is a structured bias, not absolute truth. It provides a quantitative baseline for your ranking.
+- You SHOULD generally respect the prior ranking — higher prior_score candidates deserve more attention and analysis.
+- You MAY re-rank if justified. If you deviate from the prior_score ranking, you MUST explain why.
+- You MAY promote one lower-ranked asset if it represents asymmetric upside, has early narrative momentum, has sector inflection potential, or reflects non-consensus positioning.
+- Do NOT blindly follow prior_score. Use it as a baseline, then apply your qualitative judgment.
+- When evaluating microcaps or early-stage names: if catalyst strength is high, sector tailwind is strong, and narrative acceleration is evident, you may elevate conviction even if technical confirmation is incomplete. Label this as an "Asymmetric Early-Stage Play."
+- If top-ranked assets by prior_score are overcrowded or consensus-heavy, you MUST include at least one contrarian or under-owned idea with explanation. Label as "Non-Consensus Angle."
+- NEVER hard-reject a candidate solely because of a low prior_score. The score is guidance, not a filter.
+
 CONVICTION SCORING (0–100):
 
 Conviction reflects clarity of catalyst, alignment with macro regime, institutional participation likelihood, clean technical structure, and risk asymmetry.

@@ -1,0 +1,241 @@
+OBJECTIVE
+
+Implement a lightweight institutional scoring layer before Claude sees candidates.
+
+This scoring layer must:
+
+Improve ranking consistency
+
+Reduce noise
+
+Preserve creative edge
+
+Preserve early narrative detection
+
+Preserve microcap discovery
+
+Allow non-consensus promotion
+
+This is a soft prior, not a hard filter.
+
+STEP 1 — ADD SOFT SCORING FUNCTION
+
+Create a new module:
+
+scoring_engine.py
+
+Add:
+
+def score_candidate(asset: dict) -> dict:
+    """
+    Returns asset enriched with scoring metadata.
+    Does NOT filter assets out.
+    """
+
+    technical = asset.get("technical_score", 50)
+    catalyst = asset.get("catalyst_score", 50)
+    sector = asset.get("sector_alignment_score", 50)
+    social = asset.get("social_score", 50)
+    liquidity = asset.get("liquidity_score", 50)
+
+    # Soft weighting (institutional baseline)
+    final_score = (
+        0.30 * technical +
+        0.30 * catalyst +
+        0.20 * sector +
+        0.10 * social +
+        0.10 * liquidity
+    )
+
+    # Add asymmetry boost for early-stage microcaps
+    if asset.get("market_cap_category") in ["micro", "small"]:
+        if catalyst >= 70 and sector >= 65:
+            final_score += 5  # small asymmetry boost
+
+    asset["prior_score"] = round(final_score, 1)
+    return asset
+
+
+Important:
+Do NOT remove any candidates here.
+
+No hard thresholds.
+
+No exclusions.
+
+This is enrichment only.
+
+STEP 2 — SCORE BUT DO NOT FILTER
+
+In the pipeline right before calling Claude:
+
+Instead of:
+
+candidates = gather_data(...)
+
+
+Do:
+
+candidates = gather_data(...)
+
+scored = [score_candidate(a) for a in candidates]
+
+# Sort but do NOT truncate aggressively
+scored = sorted(scored, key=lambda x: x["prior_score"], reverse=True)
+
+
+Pass top 7–10 to Claude.
+
+Do NOT pass only top 3.
+
+We preserve discovery optionality.
+
+STEP 3 — PASS SCORE METADATA TO CLAUDE
+
+When building the structured dataset for Claude:
+
+Include:
+
+{
+    ticker,
+    prior_score,
+    technical_score,
+    catalyst_score,
+    sector_alignment_score,
+    social_score,
+    liquidity_score
+}
+
+
+Claude must see the breakdown.
+
+STEP 4 — MODIFY CLAUDE SYSTEM PROMPT (ADD THIS SECTION ONLY)
+
+Append to existing system prompt:
+
+You are receiving candidates pre-ranked by a quantitative prior score.
+
+Important:
+
+The prior score is a structured bias, not absolute truth.
+
+You may re-rank if justified.
+
+You may promote one lower-ranked asset if:
+
+It represents asymmetric upside.
+
+It has early narrative momentum.
+
+It has sector inflection potential.
+
+It reflects non-consensus positioning.
+
+You must explain why any deviation from prior_score ranking occurs.
+
+Do not blindly follow prior_score.
+
+Use it as a baseline.
+
+STEP 5 — PROTECT CREATIVE EDGE
+
+Add this rule inside Claude prompt:
+
+When evaluating microcaps or early-stage names:
+
+If:
+
+Catalyst strength is high
+
+Sector tailwind is strong
+
+Narrative acceleration is evident
+
+You may elevate conviction even if technical confirmation is incomplete.
+
+Explicitly label this as:
+
+"Asymmetric Early-Stage Play"
+
+STEP 6 — PRESERVE NON-CONSENSUS THINKING
+
+Add this rule:
+
+If top-ranked assets are overcrowded or consensus-heavy:
+
+You must include at least one contrarian or under-owned idea with explanation.
+
+Label as:
+
+"Non-Consensus Angle"
+
+STEP 7 — DO NOT HARD REJECT LOW SCORES
+
+Remove any logic that says:
+
+if prior_score < X: exclude
+
+
+Do NOT implement hard floors.
+
+The matrix is guidance only.
+
+WHAT THIS DOES
+
+You now have:
+
+Quant structure
++
+Narrative flexibility
++
+Asymmetry allowance
++
+Microcap support
++
+Contrarian channel
+
+WHAT YOU DO NOT LOSE
+
+Creative edge — preserved via re-ranking freedom
+Early narrative detection — preserved via asymmetry boost
+Microcap discovery — preserved via soft boost + no filtering
+Non-consensus thinking — preserved via required contrarian slot
+
+WHAT IMPROVES
+
+Consistency
+Noise reduction
+Debuggability
+Conviction clarity
+Institutional feel
+
+FINAL SAFETY CHECK
+
+After implementation, verify:
+
+Same query twice → similar ranking
+
+Microcap with real catalyst still appears
+
+Claude sometimes overrides ranking with explanation
+
+No candidates fully disappear unless data empty
+
+No routing logic changed
+
+ARCHITECTURE AFTER CHANGE
+
+Prompt
+→ Orchestrator
+→ Data
+→ Soft Scoring Prior
+→ Claude Strategic Reasoning
+→ Structured Output
+
+Not:
+
+Prompt
+→ Quant Dictator
+→ Mechanical Output
+
+This is the correct hybrid architecture.
