@@ -4,6 +4,7 @@ import time
 import asyncio
 
 import anthropic
+import openai
 
 from agent.data_compressor import compress_data
 from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT
@@ -11,8 +12,9 @@ from data.market_data_service import MarketDataService
 
 
 class TradingAgent:
-    def __init__(self, api_key: str, data_service: MarketDataService):
+    def __init__(self, api_key: str, data_service: MarketDataService, openai_api_key: str = None):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=120.0)
+        self.openai_client = openai.OpenAI(api_key=openai_api_key) if openai_api_key else None
         self.data = data_service
 
     async def handle_query(self, user_prompt: str, history: list = None) -> dict:
@@ -236,6 +238,39 @@ class TradingAgent:
         return [t for t in ticker_pattern if t not in common]
 
     def _classify_query(self, prompt: str) -> dict:
+        if self.openai_client:
+            return self._classify_query_openai(prompt)
+        return self._classify_query_claude(prompt)
+
+    def _classify_query_openai(self, prompt: str) -> dict:
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                max_tokens=200,
+                temperature=0.1,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a query classifier. Reply with ONLY a valid JSON object, nothing else.",
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"{QUERY_CLASSIFIER_PROMPT}\n\n"
+                            f"User query: {prompt}"
+                        ),
+                    },
+                ],
+            )
+            text = response.choices[0].message.content.strip()
+            text = re.sub(r"```json\s*", "", text)
+            text = re.sub(r"```\s*", "", text)
+            return json.loads(text)
+        except Exception as e:
+            print(f"[AGENT] OpenAI classification error: {e}, falling back to keyword classifier")
+            return self._keyword_classify(prompt)
+
+    def _classify_query_claude(self, prompt: str) -> dict:
         try:
             response = self.client.messages.create(
                 model="claude-sonnet-4-5-20250929",

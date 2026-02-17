@@ -28,7 +28,7 @@ The platform is built on FastAPI, offering a robust and scalable backend.
 
 ## External Dependencies
 The platform integrates with a wide array of third-party services and APIs to gather comprehensive market data and provide AI capabilities:
-- **AI**: Anthropic (Claude AI)
+- **AI**: OpenAI GPT-4o (orchestrator/query classifier, temperature 0.1) + Anthropic Claude Sonnet (reasoning/analysis layer). Dual-LLM architecture: OpenAI handles deterministic query classification, Claude handles deep market analysis.
 - **Market Data & Screening**:
     - Finviz (screener)
     - Polygon.io (technicals from bar data, news - used for single-ticker research)
