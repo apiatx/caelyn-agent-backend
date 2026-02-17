@@ -1,0 +1,138 @@
+Do the routing fix first.
+
+Right now you’re trying to improve the quality of a system that still doesn’t know what it’s supposed to fetch.
+
+That’s backwards.
+
+What’s Actually Happening
+
+Your current response:
+
+“AI/semis ahead of NVDA earnings… small-cap momentum explodes…”
+
+That’s not a reasoning failure.
+
+That’s a data starvation failure.
+
+Claude can’t give you:
+
+tickers
+
+catalysts
+
+thesis
+
+sector-relative setups
+
+if it wasn’t given structured candidates.
+
+When it only gets high-level summaries or fragmented cross-market context, it defaults to macro narrative commentary.
+
+That’s exactly what you’re seeing.
+
+The Order Matters
+Step 1 → Fix orchestration (intent-driven)
+
+Make sure:
+
+“Trending now” triggers cross-asset scan
+
+It explicitly selects modules
+
+It gathers structured candidates (stocks, crypto, commodities)
+
+It pulls FA + TA + catalyst data
+
+It builds a dataset before Claude writes
+
+If this isn’t correct, improving Claude output is cosmetic.
+
+Step 2 → Enforce structured output requirements
+
+Once orchestration works, then enforce:
+
+Every “trending” response MUST include:
+
+Ticker
+
+Asset class
+
+Catalyst (verified)
+
+Technical state
+
+Risk level
+
+Thesis
+
+Why now
+
+What invalidates
+
+Without structured candidate inputs, Claude cannot satisfy that.
+
+Why It’s Currently Weak
+
+Your current flow likely does:
+
+“Trending” → classification
+→ maybe pulls social + high-level dashboard
+→ Claude writes summary
+
+It does NOT:
+
+Generate ranked candidate list first
+
+Score them
+
+Pass structured dataset
+
+Then ask Claude to synthesize
+
+So Claude writes like a strategist, not like a trader.
+
+If You Fix Quality First…
+
+You’ll be layering rules on top of a routing flaw.
+
+Then once you switch to intent orchestration,
+everything breaks again.
+
+Do the foundation first.
+
+Correct Sequence
+
+Implement intent-driven OpenAI orchestration
+
+Confirm cross-asset module activation
+
+Confirm structured candidate dataset is passed to Claude
+
+Then enforce mandatory structured output format
+
+Then refine microcap vs institutional modes
+
+Quick Diagnostic
+
+Before changing anything:
+
+Ask your system:
+
+“List the exact tickers you evaluated before producing this answer.”
+
+If it can’t respond with a structured evaluated list,
+your orchestration layer is not working correctly.
+
+That’s the core issue.
+
+Final Answer
+
+Do the orchestration refactor first.
+
+Then fix response structure.
+
+Then refine scoring.
+
+You’re trying to tune the engine while the steering wheel isn’t connected yet.
+
+Fix steering first.
