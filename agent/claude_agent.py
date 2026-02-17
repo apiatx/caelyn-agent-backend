@@ -440,10 +440,10 @@ class TradingAgent:
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(self._ask_claude, user_prompt, market_data, history, is_followup),
-                timeout=70.0,
+                timeout=90.0,
             )
         except asyncio.TimeoutError:
-            print(f"[AGENT] Claude API timed out after 70s (data was {data_size:,} chars)")
+            print(f"[AGENT] Claude API timed out after 90s (data was {data_size:,} chars)")
             return json.dumps({"display_type": "chat", "message": "The AI took too long to respond. Please try again — sometimes the model is under heavy load."})
         except Exception as e:
             print(f"[AGENT] Claude API error: {e}")
@@ -985,18 +985,22 @@ Be direct and opinionated. Tell me what you actually think."""
         filter_instructions = ""
 
         if market_data is not None:
+            is_cross_market_data = market_data.get("scan_type") == "cross_market"
+
+            if is_cross_market_data:
+                market_data = self._slim_cross_market_data(market_data)
+
             compressed = compress_data(market_data)
             data_str = json.dumps(compressed, default=str)
             raw_size = len(json.dumps(market_data, default=str))
             print(f"[Agent] Data compression: {raw_size:,} → {len(data_str):,} chars ({100 - len(data_str)*100//max(raw_size,1)}% reduction)")
 
-            is_cross_market_data = '"scan_type": "cross_market"' in data_str
-            data_cap = 50000 if is_cross_market_data else 80000
+            data_cap = 25000 if is_cross_market_data else 80000
             if len(data_str) > data_cap:
                 from agent.data_compressor import _aggressive_truncate
                 compressed = _aggressive_truncate(compressed, data_cap - 5000)
                 data_str = json.dumps(compressed, default=str)
-                print(f"[Agent] WARNING: Data over {data_cap//1000}K after compression, aggressive truncation → {len(data_str):,}")
+                print(f"[Agent] Data over {data_cap//1000}K after compression, aggressive truncation → {len(data_str):,}")
 
             filters = market_data.get("user_filters", {})
             if filters:
@@ -1083,11 +1087,16 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             })
 
         is_cross_market = data_str and '"scan_type": "cross_market"' in data_str
-        token_limit = 8192 if is_cross_market else 16384
-        print(f"[Agent] Sending {len(messages)} messages to Claude (followup={is_followup}, max_tokens={token_limit})")
+        if is_cross_market:
+            model = "claude-sonnet-4-20250514"
+            token_limit = 4096
+        else:
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 16384
+        print(f"[Agent] Sending {len(messages)} messages to Claude (model={model}, followup={is_followup}, max_tokens={token_limit})")
 
         response = self.client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+            model=model,
             max_tokens=token_limit,
             system=system_blocks,
             messages=messages,
@@ -1095,6 +1104,61 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         if response.stop_reason == "max_tokens":
             print(f"[Agent] WARNING: Response was truncated (hit max_tokens). Length: {len(response.content[0].text)}")
         return response.content[0].text
+
+    def _slim_cross_market_data(self, data: dict) -> dict:
+        """Pre-compress cross-market data by keeping only essential fields for ranking."""
+        try:
+            slim = {
+                "scan_type": "cross_market",
+                "instructions": data.get("instructions", ""),
+            }
+
+            stock = data.get("stock_trending") or {}
+            if isinstance(stock, dict) and "error" not in stock:
+                slim["stocks"] = {
+                    "top_trending": (stock.get("top_trending") or [])[:10],
+                    "enriched": {}
+                }
+                enriched_data = stock.get("enriched_data")
+                if isinstance(enriched_data, dict):
+                    for ticker, info in list(enriched_data.items())[:6]:
+                        if not isinstance(info, dict):
+                            continue
+                        slim["stocks"]["enriched"][ticker] = {
+                            k: v for k, v in info.items()
+                            if k in {"market_cap", "pe_ratio", "price_target", "revenue_growth",
+                                     "week_52_range", "analyst_rating", "upside_downside",
+                                     "trending_sources", "source_count", "beta", "avg_volume"}
+                        }
+            else:
+                slim["stocks"] = stock if isinstance(stock, dict) else {"error": "unavailable"}
+
+            crypto = data.get("crypto_scanner") or {}
+            if isinstance(crypto, dict) and "error" not in crypto:
+                slim_crypto = {}
+                for key, val in crypto.items():
+                    if isinstance(val, dict):
+                        val_str = json.dumps(val, default=str)
+                        if "trending" in key.lower() or "top" in key.lower() or len(val_str) < 3000:
+                            slim_crypto[key] = val
+                    elif isinstance(val, list):
+                        slim_crypto[key] = val[:8]
+                    else:
+                        slim_crypto[key] = val
+                slim["crypto"] = slim_crypto
+            else:
+                slim["crypto"] = crypto if isinstance(crypto, dict) else {"error": "unavailable"}
+
+            commodities = data.get("commodities") or {}
+            slim["commodities"] = commodities if isinstance(commodities, dict) else {"error": "unavailable"}
+
+            macro = data.get("macro_context") or {}
+            slim["macro"] = macro if isinstance(macro, dict) else {"error": "unavailable"}
+
+            return slim
+        except Exception as e:
+            print(f"[Agent] _slim_cross_market_data error: {e}, passing raw data")
+            return data
 
     def _parse_response(self, raw_response: str) -> dict:
         """

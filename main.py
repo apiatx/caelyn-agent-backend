@@ -123,7 +123,7 @@ async def query_agent(
                 user_query,
                 history=history,
             ),
-            timeout=120.0,
+            timeout=150.0,
         )
 
         if not result or (isinstance(result, dict) and not result.get("analysis") and not result.get("structured", {}).get("message")):
@@ -149,7 +149,7 @@ async def query_agent(
 
         return result
     except asyncio.TimeoutError:
-        print("[API] Request timed out after 120s")
+        print("[API] Request timed out after 150s")
         return {
             "type": "chat",
             "analysis": "",
