@@ -1922,14 +1922,19 @@ class MarketDataService:
 
     async def get_cross_platform_trending(self) -> dict:
         """
-        Aggregate trending stocks across ALL available platforms.
-        Cross-references: StockTwits, Yahoo Finance, Finviz, Polygon,
-        StockAnalysis. Counts how many platforms each ticker appears on.
-        Stocks appearing on 3+ platforms = highest conviction trending.
-        Then enriches the top tickers with full data.
+        Hybrid Grok+Claude trending architecture:
+        Phase 1: Grok searches X (PRIMARY discovery) in parallel with StockTwits/Reddit/Yahoo/Finviz
+        Phase 2: Merge tickers with Grok priority boost, rank by cross-platform presence
+        Phase 3: Enrich top 12 with StockAnalysis fundamentals
+        Phase 4: Package Grok's full X analysis + social data + FA for Claude to validate
         """
         from data.scoring_engine import score_for_trades, passes_market_cap_filter
-        from collections import Counter
+
+        xai_task = None
+        if self.xai:
+            xai_task = asyncio.create_task(
+                asyncio.wait_for(self.xai.get_trending_tickers("stock"), timeout=35.0)
+            )
 
         (
             stocktwits_trending,
@@ -1958,6 +1963,32 @@ class MarketDataService:
         if isinstance(finviz_top_gainers, Exception): finviz_top_gainers = []
         if isinstance(reddit_trending, Exception): reddit_trending = []
 
+        xai_trending = {}
+        xai_top_picks = []
+        xai_market_mood = "unknown"
+        if xai_task:
+            try:
+                xai_trending = await xai_task
+                xai_tickers_raw = xai_trending.get("trending_tickers", [])
+                print(f"[TRENDING] xAI Grok returned {len(xai_tickers_raw)} trending tickers from X")
+                xai_market_mood = xai_trending.get("market_mood", "unknown")
+                for item in xai_tickers_raw:
+                    t = item.get("ticker", "").upper().strip()
+                    if t and len(t) <= 6:
+                        xai_top_picks.append({
+                            "ticker": t,
+                            "x_sentiment": item.get("sentiment", "unknown"),
+                            "x_sentiment_score": item.get("sentiment_score", 0),
+                            "x_why_trending": item.get("why_trending", ""),
+                            "x_catalyst": item.get("catalyst", ""),
+                            "x_mention_intensity": item.get("mention_intensity", "medium"),
+                            "x_trade_sentiment": item.get("trade_sentiment", "hold"),
+                            "x_risk_flag": item.get("risk_flag"),
+                            "x_narratives": item.get("key_narratives", []),
+                        })
+            except Exception as e:
+                print(f"[TRENDING] xAI Grok trending failed: {e}")
+
         ticker_sources = {}
 
         def add_tickers(items, source_name, ticker_key="ticker"):
@@ -1977,38 +2008,26 @@ class MarketDataService:
         add_tickers(finviz_top_gainers, "Finviz Gainers")
         add_tickers(reddit_trending, "Reddit")
 
-        xai_trending = {}
-        if self.xai:
-            try:
-                xai_trending = await asyncio.wait_for(
-                    self.xai.get_trending_tickers("stock"),
-                    timeout=30.0,
-                )
-                print(f"[TRENDING] xAI returned {len(xai_trending.get('trending_tickers', []))} trending tickers from X")
-            except Exception as e:
-                print(f"[TRENDING] xAI trending failed: {e}")
+        for pick in xai_top_picks:
+            t = pick["ticker"]
+            if t not in ticker_sources:
+                ticker_sources[t] = set()
+            ticker_sources[t].add("X_Twitter")
 
-        if xai_trending and "trending_tickers" in xai_trending:
-            for item in xai_trending["trending_tickers"]:
-                ticker_val = item.get("ticker", "").upper().strip()
-                if ticker_val and len(ticker_val) <= 6 and ticker_val.isalpha():
-                    if ticker_val not in ticker_sources:
-                        ticker_sources[ticker_val] = set()
-                    ticker_sources[ticker_val].add("X_Twitter")
+        xai_ticker_set = {p["ticker"] for p in xai_top_picks}
 
-        ranked = sorted(
-            ticker_sources.items(),
-            key=lambda x: len(x[1]),
-            reverse=True,
-        )
+        def sort_key(item):
+            t, srcs = item
+            source_count = len(srcs)
+            xai_boost = 2 if t in xai_ticker_set else 0
+            return source_count + xai_boost
 
-        multi_source = [(t, srcs) for t, srcs in ranked if len(srcs) >= 2]
-
-        top_tickers = [t for t, _ in multi_source[:12]]
+        ranked = sorted(ticker_sources.items(), key=sort_key, reverse=True)
+        top_tickers = [t for t, _ in ranked[:12]]
 
         print(f"[Trending] {len(ticker_sources)} unique tickers across all platforms")
-        print(f"[Trending] {len(multi_source)} appear on 2+ platforms")
-        print(f"[Trending] Top multi-platform: {[(t, len(s)) for t, s in multi_source[:10]]}")
+        xai_in_top = len([t for t in top_tickers if t in xai_ticker_set])
+        print(f"[Trending] Top 12 selected ({xai_in_top} from X): {top_tickers}")
 
         async def full_enrich(ticker):
             try:
@@ -2018,9 +2037,8 @@ class MarketDataService:
                     self.stockanalysis.get_analyst_ratings(ticker),
                     return_exceptions=True,
                 )
-
                 return {
-                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
+                    "stocktwits_sentiment": st_result if not isinstance(st_result, Exception) else {},
                     "overview": overview if not isinstance(overview, Exception) else {},
                     "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
                 }
@@ -2035,20 +2053,25 @@ class MarketDataService:
         enriched = {}
         for ticker, result in zip(top_tickers, enrichment_results):
             if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
-                continue
-
-            if not passes_market_cap_filter(result, "market_scan"):
+                enriched[ticker] = {"overview": {}, "stocktwits_sentiment": {}, "analyst_ratings": {}}
                 continue
 
             quant_score = score_for_trades(result)
             result["quant_score"] = quant_score
             result["trending_sources"] = list(ticker_sources.get(ticker, []))
             result["source_count"] = len(ticker_sources.get(ticker, []))
+            xai_pick = next((p for p in xai_top_picks if p["ticker"] == ticker), None)
+            if xai_pick:
+                result["x_analysis"] = xai_pick
             enriched[ticker] = result
 
         sorted_tickers = sorted(
             enriched.items(),
-            key=lambda x: (x[1].get("source_count", 0), x[1].get("quant_score", 0)),
+            key=lambda x: (
+                1 if x[0] in xai_ticker_set else 0,
+                x[1].get("source_count", 0),
+                x[1].get("quant_score", 0),
+            ),
             reverse=True,
         )
 
@@ -2057,29 +2080,37 @@ class MarketDataService:
             sorted_enriched[t] = d
 
         return {
+            "scan_type": "hybrid_trending",
             "total_unique_tickers": len(ticker_sources),
-            "multi_platform_count": len(multi_source),
+            "x_market_mood": xai_market_mood,
+            "grok_x_analysis": {
+                "summary": xai_trending.get("summary", ""),
+                "sector_heat": xai_trending.get("sector_heat", []),
+                "notable_themes": xai_trending.get("notable_themes", []),
+                "contrarian_signals": xai_trending.get("contrarian_signals", []),
+                "top_picks": xai_top_picks,
+            },
             "source_summary": {
+                "X_Twitter": len(xai_top_picks),
                 "StockTwits": len(stocktwits_trending),
                 "Yahoo Finance": len(yahoo_trending),
+                "Reddit": len(reddit_trending),
                 "StockAnalysis": len(stockanalysis_trending),
                 "Finviz Active": len(finviz_most_active),
                 "Finviz Volume": len(finviz_unusual_volume),
                 "Finviz Gainers": len(finviz_top_gainers),
-                "X_Twitter": len(xai_trending.get("trending_tickers", [])) if xai_trending else 0,
             },
-            "x_twitter_data": xai_trending if xai_trending else {},
             "ranked_tickers": [
                 {
                     "ticker": t,
                     "source_count": d.get("source_count", 0),
                     "sources": d.get("trending_sources", []),
                     "quant_score": d.get("quant_score", 0),
+                    "on_x": t in xai_ticker_set,
                 }
                 for t, d in sorted_tickers[:15]
             ],
             "enriched_data": sorted_enriched,
-            "market_news": [],
         }
 
     async def get_cross_market_scan(self) -> dict:

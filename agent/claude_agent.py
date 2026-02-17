@@ -7,7 +7,7 @@ import anthropic
 import openai
 
 from agent.data_compressor import compress_data
-from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT
+from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, TRENDING_VALIDATION_PROMPT
 from data.market_data_service import MarketDataService
 
 
@@ -1089,6 +1089,13 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
 - BUT if the user asks you to analyze a new ticker or run a new type of scan, use the appropriate display_type.
 - Keep your trader personality — be direct, opinionated, and cut through noise.
 - You still have access to all the data from the original scan in the conversation history. Reference specific data points when relevant.""",
+            })
+
+        is_hybrid_trending = data_str and '"scan_type": "hybrid_trending"' in data_str
+        if is_hybrid_trending or category in ("trending", "social_momentum"):
+            system_blocks.append({
+                "type": "text",
+                "text": TRENDING_VALIDATION_PROMPT,
             })
 
         use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES
