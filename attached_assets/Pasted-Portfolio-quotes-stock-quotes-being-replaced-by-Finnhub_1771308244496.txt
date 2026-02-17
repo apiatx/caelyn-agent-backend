@@ -1,0 +1,80 @@
+Portfolio quotes: stock quotes (being replaced by Finnhub)
+Profile enrichment: /stable/profile for sector/market cap (being replaced by Finnhub)
+Screener: run_ai_screener() enriches results with StockAnalysis (not FMP)
+Trending: stock_market/gainers + stock_market/actives in scrape_stockanalysis_trending()
+
+Fix: Prioritize FMP for what ONLY FMP does well:
+
+Commodities pricing (unique — Yahoo futures can supplement)
+Economic calendar
+Treasury rates
+Keep trending (gainers/actives) since it's only 2 calls
+
+Move these AWAY from FMP:
+
+Stock profiles → Finnhub (60/min vs 250/day)
+Stock quotes → Finnhub
+DXY → FRED or Yahoo (free)
+
+7. TaoStats and GetLate are not wired in
+You're paying for/have keys for TaoStats (Bittensor network data) and GetLate but neither appears in your codebase. Either wire them in or don't carry the keys.
+TaoStats could be useful if you trade TAO — subnet data, validator stats, emission rates. Could add a taostats_provider.py that feeds into the crypto scanner when TAO is specifically queried.
+
+RECOMMENDED API ROUTING (OPTIMIZED)
+Stock Quote + Profile
+PRIMARY: Finnhub /quote + /stock/profile2 (60/min)
+FALLBACK: Yahoo Finance (free, unofficial)
+LAST RESORT: FMP /stable/quote + /stable/profile (save budget)
+Stock Deep Dive (research_ticker)
+Quote: Finnhub /quote
+Profile: Finnhub /stock/profile2 (cache 24h)
+Technicals: Polygon get_technicals (unique — calculated from bars)
+News: Polygon get_news + Alpha Vantage get_news_sentiment
+Insider: Finnhub insider_sentiment + insider_transactions  
+Earnings: Finnhub earnings_calendar + earnings_surprises
+Social: StockTwits + Finnhub social_sentiment
+Fundamentals: StockAnalysis (scraper, free)
+Filings: Edgar (free)
+Options: Options scraper (free)
+Crypto
+Prices: CoinGecko (batch, PRIMARY) → CoinMarketCap (FALLBACK)
+Trending: CoinGecko + CoinMarketCap (cross-reference)
+TA Signals: AltFINS (unique)
+Funding/Perps: Hyperliquid (unique, unlimited)
+News: Alpha Vantage get_news_sentiment("CRYPTO:BTC")
+Deep dive: CoinGecko coin detail
+X Sentiment: Grok/xAI (pending)
+Macro
+Economic data: FRED (120/min — primary for everything macro)
+Fear & Greed: CNN scraper (free)
+Commodities: FMP commodity dashboard (unique)
+Treasury rates: FMP (unique) OR FRED get_ten_year_yield/get_two_year_yield
+Economic calendar: FMP (unique)
+DXY: FRED or FMP
+Screener
+Stock screen: Finviz (scraper, free, unlimited)
+Enrichment: StockAnalysis (scraper) + Finnhub profile (for sector/mcap)
+Scoring: Your scoring engine (local, free)
+
+PRIORITY CHANGES (Backend Prompts)
+Priority 1: Add Finnhub quote + profile methods
+Add get_quote() and get_company_profile() to finnhub_provider.py. Use Finnhub as primary for stock quotes and profiles throughout the codebase.
+Priority 2: Stop using Alpha Vantage for macro
+Remove AV macro calls from get_macro_overview(). FRED already covers this. Save AV's 25/day limit for news sentiment only.
+Priority 3: Replace FMP profile with Finnhub profile in portfolio quotes
+The portfolio backend should use Finnhub for sector/market cap, not FMP. This saves ~5-10 FMP calls per portfolio refresh.
+Priority 4: Wire in xAI/Grok (from your existing instructions doc)
+This is already documented. When implemented, it adds X/Twitter sentiment as a data layer.
+Priority 5: Cache aggressively
+
+Finnhub profiles: 24 hours
+FRED macro data: 1 hour
+Fear & Greed: 15 minutes
+Finviz screens: 5 minutes (already done)
+CoinGecko trending: 5 minutes
+StockAnalysis fundamentals: 1 hour
+
+
+CALLS PER TYPICAL USER SESSION (After Optimization)
+ActionAPI CallsProviders HitOpen Portfolio (5 stocks, 3 crypto, 2 commodities)~12Finnhub (5 quote + 5 profile), CoinGecko (1 batch), Yahoo (2 commodity)"Best Trades" scan~35Finviz (1), StockAnalysis (15), Finnhub (10), StockTwits (5), Polygon (3-5 technicals)"Crypto Scanner"~8CoinGecko (3), CMC (3), Hyperliquid (1), AltFINS (1)"Macro Overview"~5FRED (1 batch), FMP (2), Fear & Greed (1)Single ticker research~15Polygon (2), Finnhub (7), StockAnalysis (3), StockTwits (1), AV (1 news), Edgar (1)
+Total for a busy hour: ~150-200 calls spread across providers. No single provider gets hammered.
