@@ -990,11 +990,13 @@ Be direct and opinionated. Tell me what you actually think."""
             raw_size = len(json.dumps(market_data, default=str))
             print(f"[Agent] Data compression: {raw_size:,} → {len(data_str):,} chars ({100 - len(data_str)*100//max(raw_size,1)}% reduction)")
 
-            if len(data_str) > 80000:
+            is_cross_market_data = '"scan_type": "cross_market"' in data_str
+            data_cap = 50000 if is_cross_market_data else 80000
+            if len(data_str) > data_cap:
                 from agent.data_compressor import _aggressive_truncate
-                compressed = _aggressive_truncate(compressed, 75000)
+                compressed = _aggressive_truncate(compressed, data_cap - 5000)
                 data_str = json.dumps(compressed, default=str)
-                print(f"[Agent] WARNING: Data still over 80K after initial compression, aggressive truncation → {len(data_str):,}")
+                print(f"[Agent] WARNING: Data over {data_cap//1000}K after compression, aggressive truncation → {len(data_str):,}")
 
             filters = market_data.get("user_filters", {})
             if filters:
@@ -1080,11 +1082,13 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
 - You still have access to all the data from the original scan in the conversation history. Reference specific data points when relevant.""",
             })
 
-        print(f"[Agent] Sending {len(messages)} messages to Claude (followup={is_followup})")
+        is_cross_market = data_str and '"scan_type": "cross_market"' in data_str
+        token_limit = 8192 if is_cross_market else 16384
+        print(f"[Agent] Sending {len(messages)} messages to Claude (followup={is_followup}, max_tokens={token_limit})")
 
         response = self.client.messages.create(
             model="claude-sonnet-4-5-20250929",
-            max_tokens=16384,
+            max_tokens=token_limit,
             system=system_blocks,
             messages=messages,
         )
