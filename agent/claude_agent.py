@@ -109,6 +109,7 @@ class TradingAgent:
             "BUY", "SELL", "HOLD", "LONG", "SHORT", "PUT", "CALL",
             "ETF", "IPO", "CEO", "CFO", "EPS", "GDP", "CPI", "FED",
             "SEC", "FDA", "RSI", "SMA", "ATH", "ATL", "YOY", "QOQ",
+            "MACD", "VWAP", "EMA", "EBITDA", "DOJI", "OI", "IV",
         }
         real_tickers = [t for t in ticker_pattern if t not in common_words]
 
@@ -189,8 +190,26 @@ class TradingAgent:
             print(f"[FALLBACK] Bearish keywords → short_setup")
             return plan
 
-        print(f"[FALLBACK] No keyword match → cross_asset_trending (default)")
-        return dict(self.DEFAULT_PLAN)
+        print(f"[FALLBACK] No keyword match → chat (lightweight, no heavy scans)")
+        return {
+            "intent": "chat",
+            "asset_classes": [],
+            "modules": {
+                "x_sentiment": False,
+                "social_sentiment": False,
+                "technical_scan": False,
+                "fundamental_validation": False,
+                "macro_context": False,
+                "liquidity_filter": False,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "institutional_brief",
+            "priority_depth": "shallow",
+            "filters": {},
+            "tickers": [],
+        }
 
     async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None) -> dict:
         start_time = time.time()
@@ -204,16 +223,22 @@ class TradingAgent:
         if is_followup and not self._needs_fresh_data(user_prompt):
             category = "followup"
             market_data = None
+            routing_source = "followup"
+            routing_confidence = "high"
             print(f"[AGENT] Follow-up detected, skipping data gathering ({time.time() - start_time:.1f}s)")
         elif preset_intent:
             plan = self._build_plan_from_preset(preset_intent)
             if plan is None:
-                print(f"[ROUTING] Unknown preset_intent '{preset_intent}', falling back to OpenAI classifier")
+                print(f"[ROUTING] Unknown preset_intent '{preset_intent}', falling back to classifier")
                 query_info = await self._orchestrate_with_timeout(user_prompt)
+                routing_source = query_info.pop("_routing_source", "heuristic")
+                routing_confidence = query_info.pop("_routing_confidence", "low")
             else:
                 if user_prompt.strip():
                     plan = self._refine_plan_with_query(plan, user_prompt)
                 query_info = self._plan_to_query_info(plan)
+                routing_source = "preset"
+                routing_confidence = "high"
 
             query_info["original_prompt"] = user_prompt
             category = query_info.get("category", "general")
@@ -226,7 +251,8 @@ class TradingAgent:
                     category = "cross_market"
                     query_info["category"] = "cross_market"
 
-            print(f"[ROUTING] preset={preset_intent} | query={user_prompt[:80]} | "
+            print(f"[ROUTING] source={routing_source} | confidence={routing_confidence} | "
+                  f"preset={preset_intent} | query={user_prompt[:80]} | "
                   f"category={category} | "
                   f"asset_classes={orch_plan.get('asset_classes') if orch_plan else '?'} | "
                   f"modules={[k for k, v in (orch_plan.get('modules', {}) if orch_plan else {}).items() if v]} | "
@@ -241,6 +267,8 @@ class TradingAgent:
                 print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
         else:
             query_info = await self._orchestrate_with_timeout(user_prompt)
+            routing_source = query_info.pop("_routing_source", "heuristic")
+            routing_confidence = query_info.pop("_routing_confidence", "low")
             query_info["original_prompt"] = user_prompt
             category = query_info.get("category", "general")
 
@@ -252,7 +280,8 @@ class TradingAgent:
                     category = "cross_market"
                     query_info["category"] = "cross_market"
 
-            print(f"[ROUTING] preset=none | query={user_prompt[:80]} | "
+            print(f"[ROUTING] source={routing_source} | confidence={routing_confidence} | "
+                  f"preset=none | query={user_prompt[:80]} | "
                   f"category={category} | "
                   f"asset_classes={plan.get('asset_classes') if plan else '?'} | "
                   f"modules={[k for k, v in (plan.get('modules', {}) if plan else {}).items() if v]} | "
@@ -489,6 +518,7 @@ class TradingAgent:
             "ONLY", "SURE", "YEAH", "RATE", "TELL", "WHY", "ABOUT",
             "THINK", "WOULD", "SHOULD", "COULD", "STILL", "WORTH",
             "RISK", "TAKE", "PROS", "CONS",
+            "MACD", "VWAP", "EMA", "EBITDA", "DOJI", "OI", "IV",
         }
         return [t for t in ticker_pattern if t not in common]
 
@@ -844,7 +874,9 @@ class TradingAgent:
             return self._validate_plan(plan, prompt)
         except Exception as e:
             print(f"[ORCHESTRATOR] OpenAI orchestration error: {e}, using heuristic fallback")
-            return self._heuristic_fallback_plan(prompt)
+            plan = self._heuristic_fallback_plan(prompt)
+            plan["_from_heuristic"] = True
+            return plan
 
     def _validate_plan(self, plan: dict, prompt: str) -> dict:
         if not isinstance(plan, dict):
@@ -947,7 +979,15 @@ class TradingAgent:
                 asyncio.to_thread(self._orchestrate_query_openai, prompt),
                 timeout=10.0,
             )
+            from_heuristic = plan.pop("_from_heuristic", False)
             query_info = self._plan_to_query_info(plan)
+            if from_heuristic:
+                query_info["_routing_source"] = "heuristic"
+                is_chat = plan.get("intent") == "chat"
+                query_info["_routing_confidence"] = "low" if is_chat else "medium"
+            else:
+                query_info["_routing_source"] = "classifier"
+                query_info["_routing_confidence"] = "high"
             print(f"[ORCHESTRATOR] Intent: {plan.get('intent')} → Category: {query_info['category']} | "
                   f"Assets: {plan.get('asset_classes')} | "
                   f"Modules: {[k for k, v in plan.get('modules', {}).items() if v]} | "
@@ -955,7 +995,10 @@ class TradingAgent:
             return query_info
         except (asyncio.TimeoutError, Exception) as e:
             print(f"[ORCHESTRATOR] Orchestration failed/timed out: {e}, using keyword fallback")
-            return self._keyword_classify(prompt)
+            fallback = self._keyword_classify(prompt)
+            fallback["_routing_source"] = "heuristic"
+            fallback["_routing_confidence"] = "medium"
+            return fallback
 
     async def _execute_orchestration_plan(self, query_info: dict) -> dict:
         plan = query_info.get("orchestration_plan")
