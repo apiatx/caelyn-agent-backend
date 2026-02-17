@@ -20,7 +20,11 @@ The platform is built on FastAPI, offering a robust and scalable backend.
 - **Error Handling & Reliability**: Includes comprehensive timeout mechanisms (global request, classifier, data gathering, Claude API) and keyword-based fallback classification for enhanced robustness.
 - **UI/UX Considerations**: The API is designed to deliver concise, dense trading terminal-style JSON output. Analysis results consistently include TradingView chart links for easy visualization.
 - **Portfolio Management**: Features include portfolio review capabilities for up to 25 tickers with dual scoring (trade + investment metrics) and endpoints for managing holdings and events.
-- **Portfolio Quotes**: Asset-type-aware routing — tickers are separated by asset_type (stock/crypto/commodity) BEFORE any API calls. Stocks go to FMP, crypto goes directly to CoinGecko (never FMP), commodities use FMP commodity symbols. This prevents misclassification (e.g., BTC matching Grayscale ETF instead of Bitcoin). Request format: `{tickers: [...], asset_types: {TICKER: "crypto"|"stock"|"commodity"}}`. Legacy requests without asset_types fall back to FMP-first → commodity check → CoinGecko. Priority overrides ensure major crypto (BTC, ETH, HYPE, etc.) resolve to correct CoinGecko IDs. Every quote includes a guaranteed `sector` field for portfolio charts.
+- **Portfolio Quotes**: Asset-type-aware routing — tickers are separated by asset_type (stock/crypto/commodity/index) BEFORE any API calls. Request format: `{tickers: [...], asset_types: {TICKER: "crypto"|"stock"|"commodity"|"index"}}`. Priority overrides ensure major crypto (BTC, ETH, HYPE, etc.) resolve to correct CoinGecko IDs. Every quote includes a guaranteed `sector` field for portfolio charts.
+  - **Stock quote pipeline**: Finnhub primary (parallel quote + profile fetch, profile cached 24h) → Yahoo Finance fallback for missing tickers → FMP last resort. Sector/industry/company_name enriched via Finnhub profile first, then FMP profile fallback.
+  - **Crypto quote pipeline**: CoinGecko primary (batched /simple/price) → CoinMarketCap fallback ONLY when CoinGecko returns 429 rate limit. USD/USDT suffix handling for pair-style tickers (e.g., BTCUSD → BTC).
+  - **Index pipeline**: Yahoo Finance chart API with proper symbol mapping (SPX→^GSPC, DJI→^DJI, VIX→^VIX, DXY→DX-Y.NYB).
+  - **Cache strategy**: 60-second cache on full quote responses, 24-hour cache on sector/profile data.
 
 ## External Dependencies
 The platform integrates with a wide array of third-party services and APIs to gather comprehensive market data and provide AI capabilities:
@@ -28,8 +32,8 @@ The platform integrates with a wide array of third-party services and APIs to ga
 - **Market Data & Screening**:
     - Finviz (screener)
     - Polygon.io (market data snapshots, technicals, news - used for single-ticker research)
-    - Finnhub (insider trading, earnings, recommendations)
-    - Financial Modeling Prep (FMP) (quotes, portfolio events, gainers/losers/actives)
+    - Finnhub (primary stock quotes, company profiles, insider trading, earnings, recommendations)
+    - Financial Modeling Prep (FMP) (fallback quotes, portfolio events, gainers/losers/actives)
     - Alpha Vantage (news sentiment)
     - Nasdaq (economic calendar)
 - **Social Sentiment & Trending**:

@@ -676,19 +676,21 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                 except Exception as e:
                     print(f"[PORTFOLIO] Index {ticker} ({yahoo_symbol}) error: {e}")
 
-        # ---- CRYPTO: CoinGecko primary → CoinMarketCap fallback ----
+        # ---- CRYPTO: CoinGecko primary → CoinMarketCap fallback on 429 ----
         if crypto_tickers:
-            cg_success = False
+            cg_rate_limited = False
             symbol_map = await get_coingecko_symbol_map()
 
             crypto_ids_to_fetch = {}
-            cg_unfound = []
             for ticker in crypto_tickers:
                 cg_id = PRIORITY_OVERRIDES.get(ticker) or symbol_map.get(ticker)
+                if not cg_id and ticker.endswith("USD"):
+                    cg_id = PRIORITY_OVERRIDES.get(ticker[:-3]) or symbol_map.get(ticker[:-3])
+                if not cg_id and ticker.endswith("USDT"):
+                    cg_id = PRIORITY_OVERRIDES.get(ticker[:-4]) or symbol_map.get(ticker[:-4])
                 if cg_id:
                     crypto_ids_to_fetch[cg_id] = ticker
                 else:
-                    cg_unfound.append(ticker)
                     print(f"[PORTFOLIO] No CoinGecko ID found for crypto ticker: {ticker}")
 
             if crypto_ids_to_fetch:
@@ -726,8 +728,8 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                     "sector": "Crypto",
                                 }
                                 print(f"[PORTFOLIO] CoinGecko: {original_ticker} = ${price}")
-                            cg_success = True
                         elif resp.status_code == 429:
+                            cg_rate_limited = True
                             print(f"[PORTFOLIO] CoinGecko rate limited (429), will try CoinMarketCap")
                         else:
                             print(f"[PORTFOLIO] CoinGecko error: {resp.status_code}")
@@ -737,10 +739,18 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                         await asyncio.sleep(1.0)
 
             crypto_still_missing = [t for t in crypto_tickers if t not in quotes]
-            if crypto_still_missing and CMC_API_KEY:
-                print(f"[PORTFOLIO] CoinMarketCap fallback for: {crypto_still_missing}")
+            if crypto_still_missing and CMC_API_KEY and cg_rate_limited:
+                print(f"[PORTFOLIO] CoinMarketCap fallback (CoinGecko 429) for: {crypto_still_missing}")
                 try:
-                    cmc_symbols = ",".join(crypto_still_missing)
+                    cmc_lookup = {}
+                    for t in crypto_still_missing:
+                        sym = t
+                        if sym.endswith("USD"):
+                            sym = sym[:-3]
+                        elif sym.endswith("USDT"):
+                            sym = sym[:-4]
+                        cmc_lookup[sym] = t
+                    cmc_symbols = ",".join(cmc_lookup.keys())
                     resp = await client.get(
                         "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
                         params={"symbol": cmc_symbols, "convert": "USD"},
@@ -749,14 +759,14 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                     if resp.status_code == 200:
                         cmc_data = resp.json().get("data", {})
                         for sym_key, token_data in cmc_data.items():
-                            sym = sym_key.upper()
+                            original_ticker = cmc_lookup.get(sym_key.upper(), sym_key.upper())
                             if isinstance(token_data, list):
                                 token_data = token_data[0]
                             usd_quote = token_data.get("quote", {}).get("USD", {})
                             price = usd_quote.get("price", 0)
                             if price:
                                 change_pct = usd_quote.get("percent_change_24h", 0)
-                                quotes[sym] = {
+                                quotes[original_ticker] = {
                                     "price": round(price, 6) if price < 1 else round(price, 2),
                                     "change": round(price * (change_pct / 100), 4) if change_pct else 0,
                                     "change_pct": round(change_pct, 2) if change_pct else 0,
@@ -766,11 +776,13 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                     "asset_type": "crypto",
                                     "sector": "Crypto",
                                 }
-                                print(f"[PORTFOLIO] CMC: {sym} = ${price}")
+                                print(f"[PORTFOLIO] CMC: {original_ticker} = ${price}")
                     else:
                         print(f"[PORTFOLIO] CoinMarketCap error: {resp.status_code}")
                 except Exception as e:
                     print(f"[PORTFOLIO] CoinMarketCap error: {e}")
+            elif crypto_still_missing and not CMC_API_KEY:
+                print(f"[PORTFOLIO] CMC_API_KEY not set, cannot fallback for: {crypto_still_missing}")
 
         # ---- COMMODITIES: FMP commodity symbols ----
         if commodity_tickers:
