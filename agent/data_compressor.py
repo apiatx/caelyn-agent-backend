@@ -120,6 +120,8 @@ def _truncate_value(val):
 PROTECTED_KEYS = {
     "two_tier_analysis", "grok_x_analysis", "scan_type",
     "source_summary", "x_market_mood", "total_unique_tickers",
+    "ranked_tickers", "orchestration_metadata",
+    "ranked_candidates", "ranking_debug",
 }
 
 

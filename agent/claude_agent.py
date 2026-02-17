@@ -536,10 +536,21 @@ class TradingAgent:
         if modules.get("macro_context") and category not in ("macro", "briefing", "cross_market"):
             async def fetch_macro():
                 try:
-                    return await asyncio.wait_for(
+                    full_macro = await asyncio.wait_for(
                         self.data.get_macro_overview(),
                         timeout=15.0,
                     )
+                    if not isinstance(full_macro, dict):
+                        return None
+                    slim_macro = {}
+                    for key in ("fear_greed", "treasury_rates", "market_summary",
+                                "key_indicators", "regime", "macro_regime"):
+                        if key in full_macro:
+                            slim_macro[key] = full_macro[key]
+                    econ = full_macro.get("economic_calendar", [])
+                    if econ and isinstance(econ, list):
+                        slim_macro["upcoming_events"] = econ[:5]
+                    return slim_macro or None
                 except Exception as e:
                     print(f"[ORCHESTRATOR] Macro overlay failed: {e}")
                     return None

@@ -2103,9 +2103,51 @@ class MarketDataService:
 
         sorted_enriched = {}
         for t, d in sorted_tickers:
-            d_copy = dict(d)
-            d_copy.pop("microcap_analysis", None)
-            sorted_enriched[t] = d_copy
+            ov = d.get("overview", {})
+            slim = {
+                "market_cap": ov.get("market_cap", ""),
+                "revenue": ov.get("revenue", ""),
+                "revenue_growth": ov.get("revenue_growth", ""),
+                "eps": ov.get("eps", ""),
+                "pe_ratio": ov.get("pe_ratio", ""),
+                "forward_pe": ov.get("forward_pe", ""),
+                "analyst_rating": ov.get("analyst_rating", ""),
+                "price_target": ov.get("price_target", ""),
+                "upside_downside": ov.get("upside_downside", ""),
+                "earnings_date": ov.get("earnings_date", ""),
+                "sector": ov.get("sector", ""),
+                "industry": ov.get("industry", ""),
+                "week_52_range": ov.get("week_52_range", ""),
+                "beta": ov.get("beta", ""),
+                "avg_volume": ov.get("avg_volume", ""),
+                "company_name": ov.get("company_name", ""),
+            }
+            slim = {k: v for k, v in slim.items() if v}
+
+            st = d.get("stocktwits_sentiment", {})
+            if st:
+                slim["social_sentiment"] = {
+                    "sentiment": st.get("sentiment"),
+                    "bullish_pct": st.get("bullish_pct"),
+                    "volume_change": st.get("volume_change"),
+                }
+
+            ar = d.get("analyst_ratings", {})
+            if ar and ar.get("total_analysts"):
+                slim["analyst_consensus"] = ar.get("consensus", "")
+                slim["analyst_count"] = ar.get("total_analysts", 0)
+
+            slim["quant_score"] = d.get("quant_score", 0)
+            slim["sources"] = d.get("trending_sources", [])
+            slim["source_count"] = d.get("source_count", 0)
+
+            x = d.get("x_analysis")
+            if x:
+                slim["x_catalyst"] = x.get("x_catalyst", "")
+                slim["x_sentiment"] = x.get("x_sentiment", "")
+                slim["x_why_trending"] = x.get("x_why_trending", "")
+
+            sorted_enriched[t] = slim
 
         scoring_summary = []
         for r in microcap_results["asymmetric_opportunities"]:
