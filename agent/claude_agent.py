@@ -17,19 +17,62 @@ class TradingAgent:
         self.openai_client = openai.OpenAI(api_key=openai_api_key) if openai_api_key else None
         self.data = data_service
 
-    async def handle_query(self, user_prompt: str, history: list = None) -> dict:
+    def _build_plan_from_preset(self, preset_intent: str) -> dict:
+        profile = self.INTENT_PROFILES.get(preset_intent)
+        if not profile:
+            print(f"[ORCHESTRATOR] Unknown preset_intent '{preset_intent}', using default plan")
+            return dict(self.DEFAULT_PLAN)
+
+        plan = {
+            "intent": profile["intent"],
+            "asset_classes": list(profile["asset_classes"]),
+            "modules": dict(profile["modules"]),
+            "risk_framework": profile.get("risk_framework", "neutral"),
+            "response_style": profile.get("response_style", "institutional_brief"),
+            "priority_depth": profile.get("priority_depth", "medium"),
+            "filters": dict(profile.get("filters", {})),
+            "tickers": [],
+        }
+        return plan
+
+    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None) -> dict:
         start_time = time.time()
         if history is None:
             history = []
         is_followup = len(history) > 0
 
-        print(f"[AGENT] === NEW REQUEST === (followup={is_followup}, history_turns={len(history)})")
+        print(f"[AGENT] === NEW REQUEST === (followup={is_followup}, history_turns={len(history)}, preset={preset_intent or 'none'})")
         print(f"[AGENT] Query: {user_prompt[:100]}")
 
         if is_followup and not self._needs_fresh_data(user_prompt):
             category = "followup"
             market_data = None
             print(f"[AGENT] Follow-up detected, skipping data gathering ({time.time() - start_time:.1f}s)")
+        elif preset_intent:
+            plan = self._build_plan_from_preset(preset_intent)
+            query_info = self._plan_to_query_info(plan)
+            query_info["original_prompt"] = user_prompt
+            category = query_info.get("category", "general")
+            print(f"[ORCHESTRATOR] Preset intent: {preset_intent} → Category: {category} | "
+                  f"Assets: {plan.get('asset_classes')} | "
+                  f"Modules: {[k for k, v in plan.get('modules', {}).items() if v]} | "
+                  f"Depth: {plan.get('priority_depth')}")
+
+            plan = query_info.get("orchestration_plan")
+            if not plan:
+                cross_market_override = self._detect_cross_market(user_prompt.lower().strip())
+                if cross_market_override and category != "cross_market":
+                    print(f"[AGENT] Cross-market override: {category} → cross_market")
+                    category = "cross_market"
+                    query_info["category"] = "cross_market"
+
+            if category == "chat":
+                market_data = await self._gather_chat_context(user_prompt, query_info)
+                data_size = len(json.dumps(market_data, default=str)) if market_data else 0
+                print(f"[AGENT] Chat context gathered: {data_size:,} chars ({time.time() - start_time:.1f}s)")
+            else:
+                market_data = await self._gather_data_safe(query_info)
+                print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
         else:
             query_info = await self._orchestrate_with_timeout(user_prompt)
             query_info["original_prompt"] = user_prompt
@@ -334,6 +377,231 @@ class TradingAgent:
         except Exception as e:
             print(f"[AGENT] Classification API error: {e}")
             return self._keyword_classify(prompt)
+
+    INTENT_PROFILES = {
+        "daily_briefing": {
+            "intent": "briefing",
+            "asset_classes": ["equities", "crypto", "commodities", "macro"],
+            "modules": {
+                "x_sentiment": True,
+                "social_sentiment": True,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": True,
+                "liquidity_filter": True,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "institutional_brief",
+            "priority_depth": "medium",
+        },
+        "cross_asset_trending": {
+            "intent": "cross_asset_trending",
+            "asset_classes": ["equities", "crypto", "commodities"],
+            "modules": {
+                "x_sentiment": True,
+                "social_sentiment": True,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": False,
+                "liquidity_filter": False,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "high_conviction_ranked",
+            "priority_depth": "medium",
+        },
+        "microcap_asymmetry": {
+            "intent": "cross_asset_trending",
+            "asset_classes": ["equities", "crypto"],
+            "modules": {
+                "x_sentiment": True,
+                "social_sentiment": True,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": False,
+                "liquidity_filter": False,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "filters": {"market_cap_max": 2000000000},
+            "risk_framework": "asymmetric",
+            "response_style": "deep_thesis",
+            "priority_depth": "deep",
+        },
+        "sector_rotation": {
+            "intent": "sector_rotation",
+            "asset_classes": ["equities"],
+            "modules": {
+                "x_sentiment": False,
+                "social_sentiment": False,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": True,
+                "liquidity_filter": True,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "institutional_brief",
+            "priority_depth": "medium",
+        },
+        "macro_outlook": {
+            "intent": "macro_outlook",
+            "asset_classes": ["equities", "commodities", "macro"],
+            "modules": {
+                "x_sentiment": False,
+                "social_sentiment": False,
+                "technical_scan": False,
+                "fundamental_validation": False,
+                "macro_context": True,
+                "liquidity_filter": False,
+                "earnings_data": True,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "institutional_brief",
+            "priority_depth": "deep",
+        },
+        "earnings_catalyst": {
+            "intent": "event_driven",
+            "asset_classes": ["equities"],
+            "modules": {
+                "x_sentiment": True,
+                "social_sentiment": True,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": False,
+                "liquidity_filter": False,
+                "earnings_data": True,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "high_conviction_ranked",
+            "priority_depth": "medium",
+        },
+        "crypto_scanner": {
+            "intent": "single_asset_scan",
+            "asset_classes": ["crypto"],
+            "modules": {
+                "x_sentiment": True,
+                "social_sentiment": True,
+                "technical_scan": True,
+                "fundamental_validation": False,
+                "macro_context": False,
+                "liquidity_filter": True,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "high_conviction_ranked",
+            "priority_depth": "medium",
+        },
+        "commodity_scan": {
+            "intent": "single_asset_scan",
+            "asset_classes": ["commodities"],
+            "modules": {
+                "x_sentiment": False,
+                "social_sentiment": False,
+                "technical_scan": True,
+                "fundamental_validation": False,
+                "macro_context": True,
+                "liquidity_filter": False,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "institutional_brief",
+            "priority_depth": "medium",
+        },
+        "social_momentum": {
+            "intent": "cross_asset_trending",
+            "asset_classes": ["equities", "crypto"],
+            "modules": {
+                "x_sentiment": True,
+                "social_sentiment": True,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": False,
+                "liquidity_filter": False,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "high_conviction_ranked",
+            "priority_depth": "medium",
+        },
+        "investment_ideas": {
+            "intent": "investment_ideas",
+            "asset_classes": ["equities"],
+            "modules": {
+                "x_sentiment": False,
+                "social_sentiment": False,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": True,
+                "liquidity_filter": True,
+                "earnings_data": True,
+                "ticker_research": False,
+            },
+            "risk_framework": "conservative",
+            "response_style": "deep_thesis",
+            "priority_depth": "deep",
+        },
+        "bearish_setups": {
+            "intent": "short_setup",
+            "asset_classes": ["equities"],
+            "modules": {
+                "x_sentiment": True,
+                "social_sentiment": True,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": False,
+                "liquidity_filter": True,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "bearish",
+            "response_style": "high_conviction_ranked",
+            "priority_depth": "medium",
+        },
+        "thematic_scan": {
+            "intent": "thematic",
+            "asset_classes": ["equities", "crypto"],
+            "modules": {
+                "x_sentiment": True,
+                "social_sentiment": True,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": False,
+                "liquidity_filter": False,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "institutional_brief",
+            "priority_depth": "medium",
+        },
+        "portfolio_review": {
+            "intent": "portfolio_review",
+            "asset_classes": ["equities", "crypto"],
+            "modules": {
+                "x_sentiment": False,
+                "social_sentiment": False,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": True,
+                "liquidity_filter": False,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "deep_thesis",
+            "priority_depth": "deep",
+        },
+    }
 
     INTENT_TO_CATEGORY = {
         "cross_asset_trending": "trending",

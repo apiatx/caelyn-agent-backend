@@ -96,6 +96,7 @@ class QueryRequest(BaseModel):
     conversation_history: Optional[List[Message]] = []
     history: Optional[List[Message]] = None
     conversation_id: Optional[str] = None
+    preset_intent: Optional[str] = None
 
 @app.post("/api/query")
 @limiter.limit("10/minute")
@@ -147,6 +148,7 @@ async def query_agent(
             agent.handle_query(
                 user_query,
                 history=history,
+                preset_intent=body.preset_intent,
             ),
             timeout=150.0,
         )
