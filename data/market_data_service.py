@@ -206,10 +206,34 @@ class MarketDataService:
         """
         ticker = ticker.upper()
 
+        finnhub_quote = self.finnhub.get_quote(ticker)
+        finnhub_profile = self.finnhub.get_company_profile(ticker)
+
+        snapshot_compat = {}
+        if finnhub_quote:
+            snapshot_compat = {
+                "price": finnhub_quote.get("price"),
+                "change": finnhub_quote.get("change"),
+                "change_pct": finnhub_quote.get("change_pct"),
+                "day_high": finnhub_quote.get("high"),
+                "day_low": finnhub_quote.get("low"),
+                "prev_close": finnhub_quote.get("prev_close"),
+            }
+        details_compat = {}
+        if finnhub_profile:
+            details_compat = {
+                "name": finnhub_profile.get("name"),
+                "sector": finnhub_profile.get("sector"),
+                "industry": finnhub_profile.get("industry"),
+                "market_cap": finnhub_profile.get("market_cap"),
+            }
+
         sync_data = {
-            "snapshot": self.polygon.get_snapshot(ticker),
+            "quote": finnhub_quote,
+            "company_profile": finnhub_profile,
+            "snapshot": snapshot_compat,
+            "details": details_compat,
             "technicals": self.polygon.get_technicals(ticker),
-            "details": self.polygon.get_ticker_details(ticker),
             "news": self.polygon.get_news(ticker, limit=10),
             "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
             "insider_transactions": self.finnhub.get_insider_transactions(ticker),

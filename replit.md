@@ -31,10 +31,10 @@ The platform integrates with a wide array of third-party services and APIs to ga
 - **AI**: Anthropic (Claude AI)
 - **Market Data & Screening**:
     - Finviz (screener)
-    - Polygon.io (market data snapshots, technicals, news - used for single-ticker research)
-    - Finnhub (primary stock quotes, company profiles, insider trading, earnings, recommendations)
-    - Financial Modeling Prep (FMP) (fallback quotes, portfolio events, gainers/losers/actives)
-    - Alpha Vantage (news sentiment)
+    - Polygon.io (technicals from bar data, news - used for single-ticker research)
+    - Finnhub (primary stock quotes, company profiles, insider trading, earnings, recommendations, social sentiment)
+    - Financial Modeling Prep (FMP) (fallback quotes, commodities, portfolio events, economic calendar, treasury rates, gainers/losers/actives)
+    - Alpha Vantage (AI-powered news sentiment ONLY — macro methods removed, FRED handles all macro data)
     - Nasdaq (economic calendar)
 - **Social Sentiment & Trending**:
     - Reddit/ApeWisdom (WSB, r/stocks, r/options, r/investing, r/daytrading sentiment)

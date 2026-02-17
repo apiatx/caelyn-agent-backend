@@ -13,6 +13,56 @@ class FinnhubProvider:
     def __init__(self, api_key: str):
         self.client = finnhub.Client(api_key=api_key)
 
+    def get_quote(self, ticker: str) -> dict:
+        ticker = ticker.upper()
+        cache_key = f"finnhub:quote:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            data = self.client.quote(ticker)
+            if data.get("c") and data["c"] > 0:
+                result = {
+                    "price": data.get("c"),
+                    "change": data.get("d"),
+                    "change_pct": data.get("dp"),
+                    "high": data.get("h"),
+                    "low": data.get("l"),
+                    "open": data.get("o"),
+                    "prev_close": data.get("pc"),
+                }
+                cache.set(cache_key, result, 60)
+                return result
+        except Exception as e:
+            print(f"Finnhub quote error for {ticker}: {e}")
+        return {}
+
+    def get_company_profile(self, ticker: str) -> dict:
+        ticker = ticker.upper()
+        cache_key = f"finnhub:profile:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            data = self.client.company_profile2(symbol=ticker)
+            if data.get("name"):
+                result = {
+                    "name": data.get("name"),
+                    "sector": data.get("finnhubIndustry"),
+                    "market_cap": (data.get("marketCapitalization") or 0) * 1_000_000,
+                    "industry": data.get("finnhubIndustry"),
+                    "logo": data.get("logo"),
+                    "exchange": data.get("exchange"),
+                    "ipo_date": data.get("ipo"),
+                    "country": data.get("country"),
+                    "web_url": data.get("weburl"),
+                }
+                cache.set(cache_key, result, 86400)
+                return result
+        except Exception as e:
+            print(f"Finnhub profile error for {ticker}: {e}")
+        return {}
+
     def get_insider_sentiment(self, ticker: str) -> dict:
         """
         Get insider sentiment (MSPR) for a ticker.
