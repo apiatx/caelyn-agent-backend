@@ -9,6 +9,7 @@ dependencies = [
     "finnhub-python>=2.4.27",
     "fredapi>=0.5.2",
     "httpx>=0.28.1",
+    "openai>=2.21.0",
     "pydantic>=2.12.5",
     "slowapi>=0.1.9",
     "uvicorn>=0.40.0",
