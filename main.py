@@ -126,7 +126,27 @@ async def query_agent(
             timeout=150.0,
         )
 
-        if not result or (isinstance(result, dict) and not result.get("analysis") and not result.get("structured", {}).get("message")):
+        def _is_truly_empty(r):
+            if not r:
+                return True
+            if not isinstance(r, dict):
+                return True
+            structured = r.get("structured", {})
+            if not isinstance(structured, dict) or not structured:
+                analysis = r.get("analysis", "")
+                return not analysis or len(str(analysis).strip()) == 0
+            meaningful_keys = {"message", "summary", "picks", "conviction_picks",
+                               "recommendations", "tickers", "sectors", "results",
+                               "analysis_text", "briefing", "holdings", "top_picks",
+                               "opportunities", "ranked_candidates", "watchlist"}
+            has_content = any(structured.get(k) for k in meaningful_keys)
+            if has_content:
+                return False
+            non_meta = {k: v for k, v in structured.items()
+                        if k not in {"display_type", "type", "scan_type"} and v}
+            return len(non_meta) == 0
+
+        if _is_truly_empty(result):
             print(f"[API] WARNING: Empty/blank result returned for query: {user_query[:80]}")
             result = {
                 "type": "chat",

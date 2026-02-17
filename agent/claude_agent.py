@@ -1206,9 +1206,10 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             try:
                 structured_data = json.loads(response_text)
                 print("[Parser] Tier 1 success: raw JSON")
+                analysis_text = structured_data.get("summary", "") or structured_data.get("message", "") or ""
                 return {
                     "type": structured_data.get("display_type", "chat"),
-                    "analysis": "",
+                    "analysis": analysis_text,
                     "structured": structured_data,
                 }
             except json.JSONDecodeError as e:
