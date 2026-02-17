@@ -51,7 +51,7 @@ class TradingAgent:
                 market_data = await self._gather_data_safe(query_info)
                 print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
 
-        raw_response = await self._ask_claude_with_timeout(user_prompt, market_data, history, is_followup=is_followup)
+        raw_response = await self._ask_claude_with_timeout(user_prompt, market_data, history, is_followup=is_followup, category=category)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
 
         result = self._parse_response(raw_response)
@@ -434,12 +434,16 @@ class TradingAgent:
 
         return context
 
-    async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False) -> str:
+    DEEP_ANALYSIS_CATEGORIES = {
+        "ticker_analysis", "investments", "portfolio_review", "followup",
+    }
+
+    async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "") -> str:
         data_size = len(json.dumps(market_data, default=str)) if market_data else 0
-        print(f"[AGENT] Sending to Claude: {data_size:,} chars of market data")
+        print(f"[AGENT] Sending to Claude: {data_size:,} chars of market data (category={category})")
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(self._ask_claude, user_prompt, market_data, history, is_followup),
+                asyncio.to_thread(self._ask_claude, user_prompt, market_data, history, is_followup, category),
                 timeout=90.0,
             )
         except asyncio.TimeoutError:
@@ -978,7 +982,7 @@ Be direct and opinionated. Tell me what you actually think."""
                 print(f"[Agent] Removed oldest message ({content_len:,} chars) to fit context window")
         return messages
 
-    def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False) -> str:
+    def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "") -> str:
         """Send the user's question + market data to Claude with conversation history."""
 
         data_str = None
@@ -995,7 +999,8 @@ Be direct and opinionated. Tell me what you actually think."""
             raw_size = len(json.dumps(market_data, default=str))
             print(f"[Agent] Data compression: {raw_size:,} → {len(data_str):,} chars ({100 - len(data_str)*100//max(raw_size,1)}% reduction)")
 
-            data_cap = 25000 if is_cross_market_data else 80000
+            is_fast_scan = category not in self.DEEP_ANALYSIS_CATEGORIES
+            data_cap = 25000 if (is_cross_market_data or is_fast_scan) else 80000
             if len(data_str) > data_cap:
                 from agent.data_compressor import _aggressive_truncate
                 compressed = _aggressive_truncate(compressed, data_cap - 5000)
@@ -1086,14 +1091,14 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
 - You still have access to all the data from the original scan in the conversation history. Reference specific data points when relevant.""",
             })
 
-        is_cross_market = data_str and '"scan_type": "cross_market"' in data_str
-        if is_cross_market:
+        use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES
+        if use_fast_model:
             model = "claude-sonnet-4-20250514"
             token_limit = 4096
         else:
             model = "claude-sonnet-4-5-20250929"
             token_limit = 16384
-        print(f"[Agent] Sending {len(messages)} messages to Claude (model={model}, followup={is_followup}, max_tokens={token_limit})")
+        print(f"[Agent] Sending {len(messages)} messages to Claude (model={model}, category={category}, followup={is_followup}, max_tokens={token_limit})")
 
         response = self.client.messages.create(
             model=model,
@@ -1103,6 +1108,9 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         )
         if response.stop_reason == "max_tokens":
             print(f"[Agent] WARNING: Response was truncated (hit max_tokens). Length: {len(response.content[0].text)}")
+        if not response.content or not response.content[0].text.strip():
+            print(f"[Agent] WARNING: Claude returned empty content (stop_reason={response.stop_reason})")
+            return json.dumps({"display_type": "chat", "message": "The AI returned an empty response. Please try again."})
         return response.content[0].text
 
     def _slim_cross_market_data(self, data: dict) -> dict:

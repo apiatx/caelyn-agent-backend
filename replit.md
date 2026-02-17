@@ -29,7 +29,7 @@ The platform is built on FastAPI, offering a robust and scalable backend.
 
 ## External Dependencies
 The platform integrates with a wide array of third-party services and APIs to gather comprehensive market data and provide AI capabilities:
-- **AI**: OpenAI GPT-4o (orchestrator/query classifier, temperature 0.1) + Anthropic Claude Sonnet (reasoning/analysis layer). Dual-LLM architecture: OpenAI handles deterministic query classification, Claude handles deep market analysis. Cross-market scans use faster Claude Sonnet 4 (non-thinking) for speed; all other scans use Claude Sonnet 4.5 (thinking model) for depth.
+- **AI**: OpenAI GPT-4o (orchestrator/query classifier, temperature 0.1) + Anthropic Claude Sonnet (reasoning/analysis layer). Dual-LLM architecture: OpenAI handles deterministic query classification, Claude handles deep market analysis. Smart model selection: scan-type categories (trending, market_scan, crypto, commodities, etc.) use Claude Sonnet 4 (fast, non-thinking) with 4K max_tokens and 25K data cap for speed; deep research categories (ticker_analysis, investments, portfolio_review, followups) use Claude Sonnet 4.5 (thinking model) with 16K max_tokens for depth. Defined via DEEP_ANALYSIS_CATEGORIES set in claude_agent.py.
 - **Cross-Market Performance**: Lightweight data gathering methods with per-source timeouts (25s stocks/crypto, 15s commodities/macro), pre-slimming via `_slim_cross_market_data()`, 25K char data cap, 4096 max_tokens. Total budget: 40s data + 90s Claude < 150s request timeout.
 - **Market Data & Screening**:
     - Finviz (screener)

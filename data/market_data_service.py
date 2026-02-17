@@ -2004,7 +2004,7 @@ class MarketDataService:
 
         multi_source = [(t, srcs) for t, srcs in ranked if len(srcs) >= 2]
 
-        top_tickers = [t for t, _ in multi_source[:20]]
+        top_tickers = [t for t, _ in multi_source[:12]]
 
         print(f"[Trending] {len(ticker_sources)} unique tickers across all platforms")
         print(f"[Trending] {len(multi_source)} appear on 2+ platforms")
