@@ -1,0 +1,162 @@
+You already found the Grok integration in data/xai_sentiment_provider.py and added run_x_social_scan(mode, query, constraints) plus an x_social_scan module flag.
+
+Now we need to upgrade it to match the intended “Trending Now” behavior and fix output quality. Do NOT refactor or rename existing architecture. This is an additive upgrade.
+
+1) Add the missing mode + schema
+
+Add a new mode to run_x_social_scan:
+
+mode = cross_asset
+
+This mode must return strict JSON in this exact schema (and validate it server-side):
+
+{
+"as_of_utc": "<ISO timestamp>",
+"market_direction_call": "...",
+"sector_focus": ["..."],
+"top_traders_view": ["..."],
+"your_opinion": "...",
+"data_quality_flag": "high|medium|low",
+"equities": {
+"large_caps": [<item>],
+"mid_caps": [<item>],
+"small_micro_caps": [<item>]
+},
+"crypto": [<item>],
+"commodities": [<commodity_item>]
+}
+
+<item> = {
+"symbol": "TSLA",
+"asset_class": "equities|crypto",
+"category": "large_cap|mid_cap|small_micro_cap|major|alt",
+"reason": "1-2 sentences explaining WHY trending now",
+"social_velocity": "low|medium|high|extreme",
+"receipts": [
+{"source":"x","stance":"bullish|bearish","text":"<=20 words verbatim excerpt"},
+{"source":"x","stance":"bullish|bearish","text":"<=20 words verbatim excerpt"}
+]
+}
+
+<commodity_item> = {
+"commodity": "Silver",
+"related_equity": "EXK",
+"reason": "...",
+"social_velocity": "low|medium|high|extreme",
+"receipts": [...]
+}
+
+Rules:
+
+Output must be JSON only.
+
+Receipts must be short verbatim excerpts (<= 20 words). No usernames, no links.
+
+Do NOT claim “accredited traders.” Use “high-signal accounts” language.
+
+If spam dominates, set data_quality_flag="low" and say so in your_opinion.
+
+2) The Grok prompt for cross_asset (use exactly)
+
+SYSTEM:
+You are a market social intelligence analyst. Scan X for real-time trading chatter and extract high-signal tradable assets with evidence.
+Rules:
+
+Output valid JSON only. No markdown.
+
+Do not hallucinate tickers, catalysts, or posts.
+
+Receipts must be short verbatim excerpts from real posts (max 20 words). Do not include usernames. Do not include links.
+
+Label each receipt with source="x" and stance="bullish" or "bearish".
+
+Use credibility heuristics (verified/high engagement/consistent trading content). You cannot claim “accredited”.
+
+Avoid spam; if spam is dominant, explicitly flag it via data_quality_flag and your_opinion.
+
+USER:
+Scan X in real time for what is trending across markets and return a structured cross-asset shortlist.
+
+Equities buckets and counts:
+
+large_caps: 1-3 tickers with market cap >= $100B
+
+mid_caps: 2-5 tickers with market cap $15B-$100B
+
+small_micro_caps: 2-5 tickers with market cap $50M-$15B
+
+Crypto:
+
+2-4 tickers
+
+Include BTC only if meaningfully relevant (breakout/breakdown/major catalyst/dominant velocity)
+
+If BTC sideways and alts have accelerating velocity, focus on alts
+
+Emphasize velocity/acceleration, not raw mention count
+
+Commodities:
+
+2-4 hot commodities/themes
+
+Include a related equity proxy where appropriate (miner/producer/ETF), e.g. Silver -> EXK
+
+Return each item with: symbol/commodity, category, reason, social_velocity, and 2 receipts.
+Also return: sector_focus (3-6), top_traders_view (3-6 summaries, no usernames), market_direction_call (1-3 sentences), your_opinion (2-4 sentences).
+If insufficient high-quality data, return fewer items and set data_quality_flag="low".
+
+3) Wire it to the right preset (IMPORTANT)
+
+When preset_intent is cross_asset_trending:
+
+Run run_x_social_scan(mode="cross_asset", query="", constraints={...}) FIRST
+
+Cache the result 2-5 minutes
+
+Strict schema-validate. If invalid: retry once with “return JSON only” reminder. If still invalid: proceed without Grok but set a flag.
+
+Do NOT map cross_asset_trending to “social_momentum” category if that makes it slow or crypto-skewed. It should be its own trending profile that pulls equities+crypto+commodities and uses Grok shortlist as seed candidates.
+
+4) Apply x_social_scan automatically for social prompts
+
+In freeform OpenAI orchestration, enable x_social_scan when query includes: trending, hype, sentiment, most talked about, X, stocktwits, velocity, what’s moving.
+Disable for TA-only educational questions unless user explicitly requests social confirmation.
+
+5) Force Claude output contract for cross_asset_trending
+
+For the cross_asset_trending response style, Claude MUST output:
+
+Grouped lists: Equities (large/mid/small), Crypto, Commodities
+
+Each item includes: ticker/commodity, rating (Strong Buy/Buy/Hold/Sell), confidence 0-100, thesis (why trending + 1 receipt, catalyst check, TA setup, FA sanity vs market cap), risks/counter-argument, position size guidance.
+
+No vague narrative-only answers. If tickers exist in inputs, Claude must list them.
+
+Add one short Data gaps section at end if needed. Do not repeat the same buzzwords.
+
+6) Candidate minimums + broadening
+
+Before Claude:
+
+Require minimum candidates: equities 8, crypto 6, commodities 4 (from Grok + scanners combined)
+
+If below: run a light broadening scan (not deep dive), relax missing-data penalties, rescore, continue.
+
+7) Logging + tests
+
+Add logs for cross_asset_trending:
+
+grok bucket counts + receipts count
+
+shortlist totals by asset class
+
+candidate totals after broadening
+Test:
+
+Preset cross_asset_trending with empty query returns tickers + receipts.
+
+Freeform “what’s trending across markets” triggers x_social_scan.
+
+Pure TA explainer does not trigger x_social_scan.
+
+After implementing: confirm server runs clean and tell me exactly what files/lines you changed. No other presets should be modified.

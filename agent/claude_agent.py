@@ -9,7 +9,7 @@ import openai
 
 from agent.data_compressor import compress_data
 from agent.institutional_scorer import apply_institutional_scoring
-from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, TRENDING_VALIDATION_PROMPT
+from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT
 from data.market_data_service import MarketDataService
 
 
@@ -87,6 +87,8 @@ class TradingAgent:
             "filters": dict(profile.get("filters", {})),
             "tickers": [],
         }
+        if "x_social_scan_mode" in profile:
+            plan["x_social_scan_mode"] = profile["x_social_scan_mode"]
         return plan
 
     def _refine_plan_with_query(self, base_plan: dict, query: str) -> dict:
@@ -124,6 +126,17 @@ class TradingAgent:
         if any(w in q for w in ["twitter", "x sentiment", "social"]):
             plan["modules"]["x_sentiment"] = True
             plan["modules"]["social_sentiment"] = True
+        social_scan_triggers = ["trending", "hype", "sentiment", "most talked about",
+                                "x sentiment", "stocktwits", "velocity", "what's moving",
+                                "what's hot", "buzzing", "social momentum"]
+        ta_only_signals = ["rsi", "macd", "sma", "ema", "fibonacci", "chart pattern",
+                           "support resistance", "bollinger", "stochastic", "ichimoku",
+                           "explain", "tutorial", "how does", "what is a"]
+        is_ta_only = any(w in q for w in ta_only_signals) and not any(w in q for w in ["confirm", "validate", "check sentiment"])
+        if any(w in q for w in social_scan_triggers) and not is_ta_only:
+            plan["modules"]["x_social_scan"] = True
+            if not plan.get("x_social_scan_mode"):
+                plan["x_social_scan_mode"] = "trending"
         if any(w in q for w in ["earnings", "revenue", "eps"]):
             plan["modules"]["earnings_data"] = True
         if any(w in q for w in ["macro", "fed", "rates", "inflation"]):
@@ -355,7 +368,7 @@ class TradingAgent:
             "squeeze", "social_momentum", "volume_spikes", "earnings_catalyst",
             "sector_rotation", "asymmetric", "bearish", "thematic",
             "small_cap_spec", "briefing", "crypto", "cross_market",
-            "commodities", "dashboard",
+            "commodities", "dashboard", "cross_asset_trending",
         }
         if market_data and isinstance(market_data, dict) and category in SCORING_CATEGORIES:
             try:
@@ -691,7 +704,8 @@ class TradingAgent:
             "intent": "cross_asset_trending",
             "asset_classes": ["equities", "crypto", "commodities"],
             "modules": {
-                "x_sentiment": True,
+                "x_sentiment": False,
+                "x_social_scan": True,
                 "social_sentiment": True,
                 "technical_scan": True,
                 "fundamental_validation": True,
@@ -701,8 +715,9 @@ class TradingAgent:
                 "ticker_research": False,
             },
             "risk_framework": "neutral",
-            "response_style": "high_conviction_ranked",
+            "response_style": "cross_asset_ranked",
             "priority_depth": "medium",
+            "x_social_scan_mode": "cross_asset",
         },
         "microcap_asymmetry": {
             "intent": "cross_asset_trending",
@@ -913,7 +928,7 @@ class TradingAgent:
     }
 
     INTENT_TO_CATEGORY = {
-        "cross_asset_trending": "trending",
+        "cross_asset_trending": "cross_asset_trending",
         "single_asset_scan": "market_scan",
         "deep_dive": "ticker_analysis",
         "sector_rotation": "sector_rotation",
@@ -1053,7 +1068,9 @@ class TradingAgent:
             category = self.ASSET_CLASS_CATEGORY_MAP.get(ac, "market_scan")
 
         if intent == "cross_asset_trending":
-            if len(asset_classes) >= 2 and set(asset_classes) != {"equities"}:
+            if plan.get("x_social_scan_mode") == "cross_asset":
+                category = "cross_asset_trending"
+            elif len(asset_classes) >= 2 and set(asset_classes) != {"equities"}:
                 trending_intent = plan.get("_is_trending", False)
                 modules = plan.get("modules", {})
                 has_social = modules.get("x_sentiment") or modules.get("social_sentiment")
@@ -1091,6 +1108,19 @@ class TradingAgent:
             )
             from_heuristic = plan.pop("_from_heuristic", False)
             query_info = self._plan_to_query_info(plan)
+            q_lower = prompt.lower()
+            social_triggers = ["trending", "hype", "sentiment", "most talked about",
+                               "x sentiment", "stocktwits", "velocity", "what's moving",
+                               "what's hot", "buzzing", "social momentum"]
+            ta_only = ["rsi", "macd", "sma", "ema", "fibonacci", "chart pattern",
+                       "explain", "tutorial", "how does", "what is a"]
+            is_ta = any(w in q_lower for w in ta_only) and not any(w in q_lower for w in ["confirm", "validate"])
+            if any(w in q_lower for w in social_triggers) and not is_ta:
+                orch_plan = query_info.get("orchestration_plan", {})
+                if orch_plan:
+                    orch_plan.setdefault("modules", {})["x_social_scan"] = True
+                    if "x_social_scan_mode" not in orch_plan:
+                        orch_plan["x_social_scan_mode"] = "trending"
             if from_heuristic:
                 query_info["_routing_source"] = "heuristic"
                 is_chat = plan.get("intent") == "chat"
@@ -1419,6 +1449,9 @@ class TradingAgent:
         elif category == "crypto":
             return await self.data.get_crypto_scanner()
 
+        elif category == "cross_asset_trending":
+            return await self._gather_cross_asset_trending_data(query_info)
+
         elif category == "trending":
             return await self.data.get_cross_platform_trending()
 
@@ -1470,6 +1503,159 @@ class TradingAgent:
 
         else:
             return {}
+
+    async def _gather_cross_asset_trending_data(self, query_info: dict) -> dict:
+        from data.cache import cache, XAI_CROSS_ASSET_TTL
+
+        grok_shortlist = None
+        grok_available = False
+
+        cached = cache.get("xai_cross_asset")
+        if cached:
+            grok_shortlist = cached
+            grok_available = True
+            print("[CROSS_ASSET_TRENDING] Using cached Grok shortlist")
+        elif self.data.xai:
+            try:
+                raw = await asyncio.wait_for(
+                    self.data.xai.run_x_social_scan(mode="cross_asset"),
+                    timeout=40.0,
+                )
+                if raw and "error" not in raw:
+                    grok_shortlist = raw
+                    grok_available = True
+                    cache.set("xai_cross_asset", raw, XAI_CROSS_ASSET_TTL)
+                    eq = raw.get("equities", {})
+                    eq_count = len(eq.get("large_caps", [])) + len(eq.get("mid_caps", [])) + len(eq.get("small_micro_caps", []))
+                    print(f"[CROSS_ASSET_TRENDING] Grok shortlist: equities={eq_count} crypto={len(raw.get('crypto', []))} commodities={len(raw.get('commodities', []))}")
+                else:
+                    print(f"[CROSS_ASSET_TRENDING] Grok returned error: {raw.get('error', 'unknown')}")
+            except Exception as e:
+                print(f"[CROSS_ASSET_TRENDING] Grok scan failed: {e}")
+
+        primary_data = await asyncio.wait_for(
+            self.data.get_cross_market_scan(),
+            timeout=45.0,
+        )
+
+        if grok_shortlist:
+            primary_data["grok_shortlist"] = grok_shortlist
+            primary_data["grok_available"] = True
+        else:
+            primary_data["grok_available"] = False
+
+        eq_count = self._count_candidates(primary_data, "equities")
+        crypto_count = self._count_candidates(primary_data, "crypto")
+        commodity_count = self._count_candidates(primary_data, "commodities")
+
+        print(f"[CROSS_ASSET_TRENDING] Pre-broadening candidates: equities={eq_count} crypto={crypto_count} commodities={commodity_count}")
+
+        needs_broadening = []
+        if eq_count < 8:
+            needs_broadening.append("equities")
+        if crypto_count < 6:
+            needs_broadening.append("crypto")
+        if commodity_count < 4:
+            needs_broadening.append("commodities")
+
+        if needs_broadening:
+            print(f"[CROSS_ASSET_TRENDING] Broadening needed for: {needs_broadening}")
+            broadened = await self._broaden_candidates(primary_data, needs_broadening)
+            primary_data.update(broadened)
+            eq_count = self._count_candidates(primary_data, "equities")
+            crypto_count = self._count_candidates(primary_data, "crypto")
+            commodity_count = self._count_candidates(primary_data, "commodities")
+
+        print(f"[CROSS_ASSET_TRENDING] Final candidates: equities={eq_count} crypto={crypto_count} commodities={commodity_count}")
+
+        primary_data["candidate_summary"] = {
+            "equities": eq_count,
+            "crypto": crypto_count,
+            "commodities": commodity_count,
+            "grok_available": grok_available,
+            "broadened": needs_broadening,
+        }
+
+        return primary_data
+
+    def _count_candidates(self, data: dict, asset_class: str) -> int:
+        count = 0
+        if asset_class == "equities":
+            stock = data.get("stock_trending") or {}
+            if isinstance(stock, dict):
+                count += len(stock.get("top_trending", []))
+                enriched = stock.get("enriched_data")
+                if isinstance(enriched, dict):
+                    count = max(count, len(enriched))
+            grok = data.get("grok_shortlist", {}).get("equities", {})
+            if isinstance(grok, dict):
+                count += len(grok.get("large_caps", [])) + len(grok.get("mid_caps", [])) + len(grok.get("small_micro_caps", []))
+        elif asset_class == "crypto":
+            crypto = data.get("crypto_scanner") or {}
+            if isinstance(crypto, dict):
+                for key in ["coingecko_trending", "cmc_trending", "top_coins"]:
+                    count += len(crypto.get(key, []))
+                count = max(count, 1) if crypto and "error" not in crypto else count
+            grok_crypto = data.get("grok_shortlist", {}).get("crypto", [])
+            count += len(grok_crypto)
+        elif asset_class == "commodities":
+            comm = data.get("commodities") or {}
+            if isinstance(comm, dict) and "error" not in comm:
+                count += len(comm.get("commodities", comm.get("data", [])))
+            grok_comm = data.get("grok_shortlist", {}).get("commodities", [])
+            count += len(grok_comm)
+        return count
+
+    async def _broaden_candidates(self, data: dict, needs: list) -> dict:
+        broadened = {}
+        tasks = []
+
+        if "equities" in needs:
+            async def broaden_eq():
+                try:
+                    result = await asyncio.wait_for(
+                        self.data.wide_scan_and_rank("market_scan", {"limit": 20}),
+                        timeout=15.0,
+                    )
+                    return ("broadened_equities", result)
+                except Exception as e:
+                    print(f"[CROSS_ASSET_TRENDING] Equity broadening failed: {e}")
+                    return ("broadened_equities", None)
+            tasks.append(broaden_eq())
+
+        if "crypto" in needs:
+            async def broaden_crypto():
+                try:
+                    result = await asyncio.wait_for(
+                        self.data.get_crypto_scanner(),
+                        timeout=15.0,
+                    )
+                    return ("broadened_crypto", result)
+                except Exception as e:
+                    print(f"[CROSS_ASSET_TRENDING] Crypto broadening failed: {e}")
+                    return ("broadened_crypto", None)
+            tasks.append(broaden_crypto())
+
+        if "commodities" in needs:
+            async def broaden_comm():
+                try:
+                    result = await asyncio.wait_for(
+                        self.data.get_commodities_dashboard(),
+                        timeout=15.0,
+                    )
+                    return ("broadened_commodities", result)
+                except Exception as e:
+                    print(f"[CROSS_ASSET_TRENDING] Commodity broadening failed: {e}")
+                    return ("broadened_commodities", None)
+            tasks.append(broaden_comm())
+
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, tuple) and r[1] is not None:
+                    broadened[r[0]] = r[1]
+
+        return broadened
 
     async def review_watchlist(self, tickers: list) -> dict:
         """Dedicated watchlist review — bypasses the classifier entirely."""
@@ -1980,6 +2166,12 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             system_blocks.append({
                 "type": "text",
                 "text": TRENDING_VALIDATION_PROMPT,
+            })
+
+        if category == "cross_asset_trending":
+            system_blocks.append({
+                "type": "text",
+                "text": CROSS_ASSET_TRENDING_CONTRACT,
             })
 
         use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES

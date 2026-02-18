@@ -273,7 +273,109 @@ Be direct and opinionated. Separate signal from noise. Flag bot activity or coor
             result["_scan_mode"] = "narrative"
             return result
 
+        if mode == "cross_asset":
+            prompt = """You are a market social intelligence analyst. Scan X for real-time trading chatter and extract high-signal tradable assets with evidence.
+Rules:
+- Output valid JSON only. No markdown.
+- Do not hallucinate tickers, catalysts, or posts.
+- Receipts must be short verbatim excerpts from real posts (max 20 words). Do not include usernames. Do not include links.
+- Label each receipt with source="x" and stance="bullish" or "bearish".
+- Use credibility heuristics (verified/high engagement/consistent trading content). You cannot claim "accredited".
+- Avoid spam; if spam is dominant, explicitly flag it via data_quality_flag and your_opinion.
+
+Scan X in real time for what is trending across markets and return a structured cross-asset shortlist.
+
+Equities buckets and counts:
+- large_caps: 1-3 tickers with market cap >= $100B
+- mid_caps: 2-5 tickers with market cap $15B-$100B
+- small_micro_caps: 2-5 tickers with market cap $50M-$15B
+
+Crypto:
+- 2-4 tickers
+- Include BTC only if meaningfully relevant (breakout/breakdown/major catalyst/dominant velocity)
+- If BTC sideways and alts have accelerating velocity, focus on alts
+- Emphasize velocity/acceleration, not raw mention count
+
+Commodities:
+- 2-4 hot commodities/themes
+- Include a related equity proxy where appropriate (miner/producer/ETF), e.g. Silver -> EXK
+
+Return each item with: symbol/commodity, category, reason, social_velocity, and 2 receipts.
+Also return: sector_focus (3-6), top_traders_view (3-6 summaries, no usernames), market_direction_call (1-3 sentences), your_opinion (2-4 sentences).
+If insufficient high-quality data, return fewer items and set data_quality_flag="low".
+
+Return ONLY a JSON object matching this exact schema:
+{
+  "as_of_utc": "<ISO timestamp>",
+  "market_direction_call": "...",
+  "sector_focus": ["..."],
+  "top_traders_view": ["..."],
+  "your_opinion": "...",
+  "data_quality_flag": "high|medium|low",
+  "equities": {
+    "large_caps": [{"symbol":"...","asset_class":"equities","category":"large_cap","reason":"...","social_velocity":"low|medium|high|extreme","receipts":[{"source":"x","stance":"bullish|bearish","text":"<=20 words"}]}],
+    "mid_caps": [<same item format with category="mid_cap">],
+    "small_micro_caps": [<same item format with category="small_micro_cap">]
+  },
+  "crypto": [{"symbol":"...","asset_class":"crypto","category":"major|alt","reason":"...","social_velocity":"...","receipts":[...]}],
+  "commodities": [{"commodity":"...","related_equity":"...","reason":"...","social_velocity":"...","receipts":[...]}]
+}"""
+
+            result = await self._call_grok_with_x_search(prompt)
+
+            if "error" not in result:
+                is_valid, errors = self._validate_cross_asset_schema(result)
+                if not is_valid:
+                    print(f"[X_CROSS_ASSET] Schema validation failed (attempt 1): {errors}")
+                    retry_prompt = prompt + "\n\nIMPORTANT: Return ONLY valid JSON. No markdown, no extra text. Just the JSON object."
+                    result = await self._call_grok_with_x_search(retry_prompt)
+                    if "error" not in result:
+                        is_valid, errors = self._validate_cross_asset_schema(result)
+                        if not is_valid:
+                            print(f"[X_CROSS_ASSET] Schema validation failed (attempt 2): {errors}")
+                            return {"error": "schema_validation_failed", "grok_available": False, "raw": str(result)[:500]}
+
+            if "error" not in result:
+                eq = result.get("equities", {})
+                eq_count = len(eq.get("large_caps", [])) + len(eq.get("mid_caps", [])) + len(eq.get("small_micro_caps", []))
+                crypto = result.get("crypto", [])
+                commodities = result.get("commodities", [])
+                print(f"[X_CROSS_ASSET] Grok returned: equities={eq_count} crypto={len(crypto)} commodities={len(commodities)}")
+
+            result["_scan_mode"] = "cross_asset"
+            return result
+
         return {"error": f"Unknown x_social_scan mode: {mode}", "_scan_mode": mode}
+
+    def _validate_cross_asset_schema(self, data: dict) -> tuple[bool, list]:
+        errors = []
+        required_keys = ["as_of_utc", "market_direction_call", "sector_focus",
+                         "top_traders_view", "your_opinion", "data_quality_flag",
+                         "equities", "crypto", "commodities"]
+        for key in required_keys:
+            if key not in data:
+                errors.append(f"missing top-level key: {key}")
+
+        equities = data.get("equities")
+        if isinstance(equities, dict):
+            for sub_key in ["large_caps", "mid_caps", "small_micro_caps"]:
+                val = equities.get(sub_key)
+                if not isinstance(val, list):
+                    errors.append(f"equities.{sub_key} must be a list")
+        elif "equities" in data:
+            errors.append("equities must be a dict with large_caps, mid_caps, small_micro_caps")
+
+        if "crypto" in data and not isinstance(data.get("crypto"), list):
+            errors.append("crypto must be a list")
+
+        if "commodities" in data and not isinstance(data.get("commodities"), list):
+            errors.append("commodities must be a list")
+
+        dqf = data.get("data_quality_flag")
+        if dqf is not None and dqf not in ("high", "medium", "low"):
+            errors.append(f"data_quality_flag must be high/medium/low, got: {dqf}")
+
+        return (len(errors) == 0, errors)
 
     async def _call_grok_with_x_search(self, prompt: str) -> dict:
         """Call the xAI Responses API with x_search enabled."""

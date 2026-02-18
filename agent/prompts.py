@@ -629,3 +629,35 @@ CRITICAL RULES:
 - Assign conviction_score (0-100) and position_tier (Tier 1-4) to every pick.
 
 OUTPUT FORMAT: You MUST use display_type "trending" with "trending_tickers" array. Even if the user mentions multiple asset classes (stocks, crypto, commodities), this is a TRENDING scan — use the trending format, NOT cross_market."""
+
+CROSS_ASSET_TRENDING_CONTRACT = """CROSS-ASSET TRENDING OUTPUT CONTRACT (MANDATORY for cross_asset_trending):
+
+You MUST output grouped lists in this exact structure:
+
+## EQUITIES
+### Large Caps
+- For each: ticker, rating (Strong Buy/Buy/Hold/Sell), confidence 0-100, thesis (why trending + 1 receipt from Grok data, catalyst check, TA setup, FA sanity vs market cap), risks/counter-argument, position size guidance
+
+### Mid Caps
+- Same format as above
+
+### Small/Micro Caps
+- Same format as above
+
+## CRYPTO
+- Same item format: symbol, rating, confidence 0-100, thesis with receipt, risks, sizing
+
+## COMMODITIES
+- Each: commodity name + related equity proxy, rating, confidence 0-100, thesis with receipt, risks, sizing
+
+## DATA GAPS
+- One short section at end listing any missing data or caveats. Do not repeat buzzwords.
+
+RULES:
+- Every item MUST have: ticker/commodity, rating, numeric confidence, thesis, risk, sizing
+- Thesis MUST reference at least 1 Grok receipt (verbatim excerpt from X) if grok_shortlist data is present
+- No vague narrative-only answers. If tickers exist in inputs, you MUST list them with ratings
+- Do NOT use the same generic thesis for multiple items
+- Maintain your trader personality — be direct and opinionated about each pick
+- If grok_shortlist shows data_quality_flag="low", mention this in DATA GAPS
+"""
