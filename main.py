@@ -198,7 +198,7 @@ def _error_envelope(code: str, message: str, meta: dict, details=None, partial=N
 
 def _resp_log(req_id: str, status: int, resp_type: str, resp: dict):
     resp_bytes = len(_json.dumps(resp, default=str).encode("utf-8"))
-    print(f"[RESP] request_id={req_id} status={status} type={resp_type} bytes={resp_bytes}")
+    print(f"[RESP] id={req_id} status={status} type={resp_type} bytes={resp_bytes}")
 
 
 @app.post("/api/query")
@@ -212,9 +212,8 @@ async def query_agent(
     import time as _time
     t0 = _time.time()
     req_id = str(_uuid.uuid4())
-    print(f"[REQ_META] request_id={req_id} method={request.method} path={request.url.path} content-type={request.headers.get('content-type')} content-length={request.headers.get('content-length')}")
     user_query = body.query or body.prompt or ""
-    print(f"[REQ_BODY] request_id={req_id} query_len={len(user_query)} preset_intent={body.preset_intent} conversation_id={body.conversation_id}")
+    print(f"[REQ] id={req_id} query_len={len(user_query)} preset={body.preset_intent} conversation_id={body.conversation_id}")
 
     meta = _build_meta(req_id, preset_intent=body.preset_intent, conv_id=body.conversation_id)
 
@@ -308,7 +307,7 @@ async def query_agent(
                 "CLAUDE_JSON_PARSE_FAIL",
                 "Claude returned a response that could not be parsed as structured JSON.",
                 meta,
-                details={"preview": parse_err.get("preview", "")[:500]},
+                details={"preview": parse_err.get("preview", "")[:800]},
             )
             _resp_log(req_id, 200, "error", resp)
             if conv_id:
@@ -371,7 +370,7 @@ async def query_agent(
         traceback.print_exc()
         meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
         resp = _error_envelope(
-            "INTERNAL_ERROR",
+            "UNHANDLED_EXCEPTION",
             f"Something went wrong: {str(e)}",
             meta,
         )

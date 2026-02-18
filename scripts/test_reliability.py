@@ -103,7 +103,7 @@ def test_resp_log_format():
 
     output = captured.getvalue()
     assert "[RESP]" in output
-    assert "request_id=test-log" in output
+    assert "id=test-log" in output
     assert "status=200" in output
     assert "type=ok" in output
     assert "bytes=" in output

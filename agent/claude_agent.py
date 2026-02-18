@@ -2327,7 +2327,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         """
         response_text = raw_response.strip()
         print(f"[Parser] Response length: {len(response_text)}, starts_with_brace: {response_text[:1] == '{'}")
-        print(f"[CLAUDE_RAW] request_id={request_id} len={len(response_text)} first_500={response_text[:500]}")
+        print(f"[CLAUDE_RAW] id={request_id} len={len(response_text)} first_800={response_text[:800]}")
 
         if response_text.startswith("{"):
             try:
@@ -2435,7 +2435,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
                     except json.JSONDecodeError:
                         pass
 
-        print(f"[PARSE_FAIL] request_id={request_id} error=all_tiers_exhausted len={len(response_text)}")
+        print(f"[PARSE_FAIL] id={request_id} error=all_tiers_exhausted len={len(response_text)}")
         structured_data = {
             "display_type": "chat",
             "message": response_text,
@@ -2444,5 +2444,5 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             "type": "chat",
             "analysis": response_text,
             "structured": structured_data,
-            "_parse_error": {"preview": response_text[:500]},
+            "_parse_error": {"preview": response_text[:800]},
         }
