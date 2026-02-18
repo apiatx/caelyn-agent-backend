@@ -541,7 +541,10 @@ class MarketDataService:
             fear_greed_result = await self.fear_greed.get_fear_greed_index()
             fear_greed = fear_greed_result if not isinstance(fear_greed_result, Exception) else {}
 
+        macro_snapshot = await self._build_macro_snapshot()
+
         result = {
+            "macro_snapshot": macro_snapshot,
             "fred_economic_data": fred_macro,
             "market_data": fmp_data,
             "fear_greed_index": fear_greed,
@@ -1686,6 +1689,162 @@ class MarketDataService:
             "market_news": [],
         }
 
+    async def _build_macro_snapshot(self) -> dict:
+        """
+        Lightweight macro snapshot for daily briefing key_numbers.
+        Fetches SPY/QQQ/IWM/GLD/USO via Finnhub quotes,
+        VIX/10Y via FRED, DXY via FMP. Cached 90s.
+        Runs BEFORE heavy scans and is NOT subject to BudgetTracker.
+        """
+        cached = cache.get("macro_snapshot_v1")
+        if cached is not None:
+            print("[MACRO_SNAPSHOT] cache hit")
+            return cached
+
+        import asyncio
+
+        async def _finnhub_quote(symbol: str) -> tuple:
+            try:
+                q = await asyncio.to_thread(self.finnhub.get_quote, symbol)
+                if q and q.get("price"):
+                    chg = q.get("change")
+                    chg_pct = q.get("change_pct")
+                    if chg is not None and chg > 0:
+                        trend = "↑"
+                    elif chg is not None and chg < 0:
+                        trend = "↓"
+                    else:
+                        trend = "→"
+                    return (symbol, {
+                        "price": round(q["price"], 2),
+                        "change": f"{chg:+.2f}" if chg is not None else "N/A",
+                        "change_pct": f"{chg_pct:+.2f}%" if chg_pct is not None else "",
+                        "trend": trend,
+                    })
+            except Exception as e:
+                print(f"[MACRO_SNAPSHOT] Finnhub {symbol} error: {e}")
+            return (symbol, None)
+
+        async def _fred_vix() -> dict:
+            try:
+                vix = await asyncio.to_thread(self.fred.get_vix)
+                if isinstance(vix, dict) and "current_vix" in vix:
+                    level = vix["current_vix"]
+                    trend_data = vix.get("trend", [])
+                    delta = None
+                    if len(trend_data) >= 2:
+                        delta = round(trend_data[-1].get("vix", 0) - trend_data[-2].get("vix", 0), 2)
+                    if delta is not None and delta > 0:
+                        trend = "↑"
+                    elif delta is not None and delta < 0:
+                        trend = "↓"
+                    else:
+                        trend = "→"
+                    return {
+                        "price": level,
+                        "change": f"{delta:+.2f}" if delta is not None else "N/A",
+                        "trend": trend,
+                        "signal": vix.get("signal", ""),
+                    }
+            except Exception as e:
+                print(f"[MACRO_SNAPSHOT] FRED VIX error: {e}")
+            return None
+
+        async def _fred_10y() -> dict:
+            try:
+                y10 = await asyncio.to_thread(self.fred.get_ten_year_yield)
+                if isinstance(y10, dict) and "current_yield" in y10:
+                    level = y10["current_yield"]
+                    trend_data = y10.get("trend", [])
+                    delta = None
+                    if len(trend_data) >= 2:
+                        delta = round(trend_data[-1].get("yield", 0) - trend_data[-2].get("yield", 0), 2)
+                    if delta is not None and delta > 0:
+                        trend = "↑"
+                    elif delta is not None and delta < 0:
+                        trend = "↓"
+                    else:
+                        trend = "→"
+                    return {
+                        "yield": f"{level:.2f}%",
+                        "change": f"{delta:+.2f}" if delta is not None else "N/A",
+                        "trend": trend,
+                    }
+            except Exception as e:
+                print(f"[MACRO_SNAPSHOT] FRED 10Y error: {e}")
+            return None
+
+        async def _fmp_dxy() -> dict:
+            try:
+                if self.fmp:
+                    dxy = await asyncio.wait_for(self.fmp.get_dxy(), timeout=8.0)
+                    if isinstance(dxy, dict) and dxy.get("price"):
+                        chg = dxy.get("change")
+                        if chg is not None and chg > 0:
+                            trend = "↑"
+                        elif chg is not None and chg < 0:
+                            trend = "↓"
+                        else:
+                            trend = "→"
+                        return {
+                            "price": round(dxy["price"], 2),
+                            "change": f"{chg:+.2f}" if chg is not None else "N/A",
+                            "trend": trend,
+                        }
+            except Exception as e:
+                print(f"[MACRO_SNAPSHOT] FMP DXY error: {e}")
+            try:
+                sym, q = await _finnhub_quote("UUP")
+                if q:
+                    q["note"] = "UUP proxy"
+                    return q
+            except Exception as e:
+                print(f"[MACRO_SNAPSHOT] Finnhub UUP fallback error: {e}")
+            return None
+
+        quote_symbols = ["SPY", "QQQ", "IWM", "GLD", "USO"]
+        quote_tasks = [_finnhub_quote(s) for s in quote_symbols]
+        all_results = await asyncio.gather(
+            *quote_tasks, _fred_vix(), _fred_10y(), _fmp_dxy(),
+            return_exceptions=True,
+        )
+
+        quotes = {}
+        for r in all_results[:len(quote_symbols)]:
+            if isinstance(r, tuple) and r[1] is not None:
+                quotes[r[0]] = r[1]
+
+        vix_result = all_results[len(quote_symbols)]
+        ten_y_result = all_results[len(quote_symbols) + 1]
+        dxy_result = all_results[len(quote_symbols) + 2]
+        if isinstance(vix_result, Exception):
+            vix_result = None
+        if isinstance(ten_y_result, Exception):
+            ten_y_result = None
+        if isinstance(dxy_result, Exception):
+            dxy_result = None
+
+        def _na():
+            return {"price": "N/A", "change": "N/A", "trend": "→"}
+
+        snapshot = {
+            "spy": quotes.get("SPY") or _na(),
+            "qqq": quotes.get("QQQ") or _na(),
+            "iwm": quotes.get("IWM") or _na(),
+            "vix": vix_result or _na(),
+            "dxy": dxy_result or _na(),
+            "ten_year": ten_y_result or {"yield": "N/A", "change": "N/A", "trend": "→"},
+            "oil": quotes.get("USO") or _na(),
+            "gold": quotes.get("GLD") or _na(),
+        }
+
+        filled = [k for k, v in snapshot.items() if v.get("price", v.get("yield", "N/A")) != "N/A"]
+        missing = [k for k, v in snapshot.items() if v.get("price", v.get("yield", "N/A")) == "N/A"]
+        print(f"[MACRO_SNAPSHOT] filled={','.join(filled)} missing={','.join(missing) if missing else 'none'}")
+
+        cache.set("macro_snapshot_v1", snapshot, 90)
+        return snapshot
+
     async def get_morning_briefing(self) -> dict:
         """
         Combined intelligence briefing pulling the top signal from every data source.
@@ -1696,6 +1855,8 @@ class MarketDataService:
         """
         import asyncio
         from data.scoring_engine import score_for_trades, score_for_investments, score_for_squeeze
+
+        macro_snapshot = await self._build_macro_snapshot()
 
         briefing_tasks = [
             self.fear_greed.get_fear_greed_index(),
@@ -1864,6 +2025,7 @@ class MarketDataService:
         )
 
         return {
+            "macro_snapshot": macro_snapshot,
             "news_context": {"market_news": market_news},
             "total_tickers_detected": len(all_tickers),
             "multi_signal_tickers": {t: sources for t, sources in list(multi_signal.items())[:10]},

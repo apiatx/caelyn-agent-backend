@@ -68,6 +68,7 @@ The platform integrates with a wide array of third-party services and APIs:
 - **Tiered Data Sources**: `fetch_with_fallback()` wrapper tries primary source with timeout, falls back to secondary. Config: equity_price (Finnhub), crypto (CoinGecko+CMC parallel), macro (FRED).
 - **Scan Budgeting**: `BudgetTracker` uses weighted points (MAX_BUDGET_POINTS=50) with per-call-type weights (macro=1, quote=1, candle=2, fundamentals=3, crypto=4). Adaptive per-preset budgets: macro_outlook (25pts, no deep dive), microcap_asymmetry (60pts, 12s). Graceful degradation: attaches `data_completeness: "partial"` metadata when budget exhausts so Claude can disclose limited data.
 - **TA Fallback Chain**: Finnhub stock_candles→local TA (primary) → Polygon bars→local TA (fallback).
-- **Cache TTLs**: Macro overview 10min, sector ETF performance 5min, Fear & Greed 5min, FRED 10min. Candles cached 5min.
+- **Cache TTLs**: Macro overview 10min, sector ETF performance 5min, Fear & Greed 5min, FRED 10min. Candles cached 5min. Macro snapshot (key_numbers) cached 90s.
+- **Macro Snapshot**: `_build_macro_snapshot()` runs BEFORE heavy scans in daily_briefing and macro_overview. Fetches SPY/QQQ/IWM/GLD/USO via Finnhub quotes, VIX/10Y via FRED, DXY via FMP (fallback: UUP via Finnhub). Not subject to BudgetTracker. Logged as `[MACRO_SNAPSHOT] filled=... missing=...`.
 - **Social→FA Discipline**: Backend enforces that high social scores (>=60) without supporting technical (>=45) or catalyst (>=45) scores get a 15% penalty + `SOCIAL_UNCONFIRMED` flag. Prevents hype-only recommendations.
 - **altFINS Restriction**: Only used in crypto_scanner pipeline, removed from general chat context.

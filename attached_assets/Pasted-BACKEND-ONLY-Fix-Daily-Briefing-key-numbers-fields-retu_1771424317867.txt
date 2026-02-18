@@ -1,0 +1,53 @@
+BACKEND ONLY: Fix Daily Briefing key_numbers fields returning N/A, without changing response structure or quality.
+
+Goal:
+- Keep the daily_briefing response EXACTLY the same format, wording, and JSON keys.
+- Only fix the data population so key_numbers shows real values instead of "N/A" where possible.
+
+Problem:
+In daily_briefing / macro_overview, key_numbers currently returns N/A for SPY/QQQ/IWM/VIX/FearGreed/DXY/TenYear/Oil/Gold.
+
+Requirements:
+1) Implement a dedicated macro snapshot builder that always runs for daily_briefing (and any macro/briefing output), with minimal API calls and high priority.
+2) Populate these fields in key_numbers (same schema as today):
+   - spy: price, change, trend
+   - qqq: price, change, trend
+   - iwm: price, change, trend
+   - vix: price (or level), change (or delta), trend
+   - fear_greed: already works, keep it
+   - dxy: price/level, change/delta, trend
+   - ten_year: yield, change/delta, trend ("Normal Curve" etc can stay if already computed)
+   - oil: price, change, trend
+   - gold: price, change, trend
+3) Do NOT change Claude prompts, scoring, or narrative. Only change data-fetch/population.
+
+Implementation guidance:
+A) Use reliable sources by category (tiered fallback):
+   - SPY/QQQ/IWM/Oil/Gold: use quote proxies via Finnhub first
+     Symbols:
+       SPY, QQQ, IWM, GLD (gold proxy), USO (oil proxy)
+     If Finnhub quote fails: fall back to Polygon aggregates (if available) or any existing secondary quote source already in the project.
+   - VIX: use FRED series (preferred) to get VIX level and daily change
+     (If you already have VIX from FRED in regime engine, reuse that function)
+   - DXY: use FRED series for DXY (or trade-weighted dollar index) and compute delta
+     If you already use a proxy like UUP in regime engine, keep it consistent.
+   - Ten Year: use FRED 10Y yield series and compute delta and label/trend.
+B) Trend logic:
+   - If you have 1d change: trend can be "↑" / "↓" / "→" or any existing label you already use.
+   - Keep current trend strings if present. Only replace N/A in price/change where possible.
+C) Caching:
+   - Cache macro snapshot for 60-120 seconds so repeated prompts do not spam APIs.
+D) Budget:
+   - Ensure macro snapshot runs before any heavy scans and is not skipped by BudgetTracker.
+   - Reserve a small fixed budget for these 5-9 snapshot calls.
+
+Logging + verification:
+1) Add a single log line showing which snapshot fields were filled:
+   [MACRO_SNAPSHOT] filled=spy,qqq,iwm,gld,uso,vix,dxy,ten_year missing=...
+2) Add a warning log per failed symbol fetch with provider + error, but still return N/A for that field rather than failing the whole request.
+3) Test:
+   - Run daily_briefing preset twice within 60s and confirm the second call hits cache
+   - Confirm key_numbers no longer shows N/A for SPY/QQQ/IWM/GLD/USO and shows real level numbers for VIX/DXY/ten_year when available.
+
+After tests pass:
+- Republish the FastAPI backend project (the public URL one).
