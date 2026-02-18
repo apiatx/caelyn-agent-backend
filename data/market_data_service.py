@@ -1148,11 +1148,29 @@ class MarketDataService:
                 signals.append("volume_expansion")
                 signal_details["vol_ratio"] = round(vol_ratio, 1)
 
+            if len(volumes) >= 5 and avg_vol > 0:
+                prev_day_vol = volumes[-2] if len(volumes) >= 2 else 0
+                if prev_day_vol > 0:
+                    vol_pct_increase = ((current_vol - prev_day_vol) / prev_day_vol) * 100
+                    if vol_pct_increase >= 100:
+                        signals.append("volume_surge")
+                        signal_details["vol_pct_increase"] = round(vol_pct_increase, 0)
+
             if len(closes) >= 20:
                 recent_range = max(highs[-20:]) - min(lows[-20:]) if highs[-20:] and lows[-20:] else 0
                 prior_range = max(highs[-40:-20]) - min(lows[-40:-20]) if len(highs) >= 40 else recent_range
                 if prior_range > 0 and recent_range < prior_range * 0.5:
                     signals.append("volatility_contraction")
+                range_high = max(highs[-20:]) if highs[-20:] else 0
+                range_low = min(lows[-20:]) if lows[-20:] else 0
+                if range_high > 0 and range_low > 0:
+                    range_width = (range_high - range_low) / range_low
+                    if 0.03 <= range_width <= 0.15 and current_price > range_high * 0.99:
+                        signals.append("range_breakout")
+
+            if sma_20 and current_price > sma_20:
+                if len(closes) >= 2 and closes[-2] < (sma_20 * 0.995 if sma_20 else 0):
+                    signals.append("sma20_reclaim")
 
             source_info = ticker_sources.get(ticker, {})
             source_list = source_info.get("sources", [])
@@ -1285,6 +1303,8 @@ class MarketDataService:
         print(f"[BEST_TRADES] candidates={len(all_candidates)} selected={len(top_trades)} bearish={len(bearish_list)} missing_ohlc={missing_ohlc} ({elapsed:.1f}s)")
 
         return {
+            "scan_type": "best_trades",
+            "display_type": "trades",
             "market_pulse": macro,
             "top_trades": top_trades,
             "bearish_setups": bearish_list,

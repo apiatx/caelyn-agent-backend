@@ -373,7 +373,7 @@ class TradingAgent:
             "squeeze", "social_momentum", "volume_spikes", "earnings_catalyst",
             "sector_rotation", "asymmetric", "bearish", "thematic",
             "small_cap_spec", "briefing", "crypto", "cross_market",
-            "commodities", "dashboard", "cross_asset_trending",
+            "commodities", "dashboard", "cross_asset_trending", "best_trades",
         }
         if market_data and isinstance(market_data, dict) and category in SCORING_CATEGORIES:
             try:
@@ -393,7 +393,42 @@ class TradingAgent:
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
 
         result = self._parse_response(raw_response, request_id=request_id)
-        print(f"[AGENT] Response parsed, display_type: {result.get('structured', {}).get('display_type', result.get('type', 'unknown'))} ({time.time() - start_time:.1f}s)")
+        parsed_display = result.get("structured", {}).get("display_type", result.get("type", "unknown"))
+        print(f"[AGENT] Response parsed, display_type: {parsed_display} ({time.time() - start_time:.1f}s)")
+
+        if category == "best_trades" and market_data and isinstance(market_data, dict):
+            if parsed_display != "trades":
+                print(f"[BEST_TRADES] Claude returned display_type={parsed_display}, enforcing structured trades output")
+                claude_text = result.get("analysis", "") or result.get("structured", {}).get("message", "") or ""
+                top_trades = market_data.get("top_trades", [])
+                bearish_setups = market_data.get("bearish_setups", [])
+                macro = market_data.get("market_pulse", {})
+                for t in top_trades:
+                    if not t.get("thesis"):
+                        t["thesis"] = t.get("pattern", "Technical setup") + " with " + str(len(t.get("signals_stacking", []))) + " signals stacking"
+                    if not t.get("why_could_fail"):
+                        t["why_could_fail"] = "Breakdown below stop level would invalidate setup"
+                for t in bearish_setups:
+                    if not t.get("thesis"):
+                        t["thesis"] = "Bearish breakdown with multiple confirming signals"
+                    if not t.get("why_could_fail"):
+                        t["why_could_fail"] = "Reversal above resistance would invalidate short thesis"
+                structured = {
+                    "display_type": "trades",
+                    "market_pulse": {
+                        "verdict": macro.get("regime", "Neutral") if isinstance(macro, dict) else "Neutral",
+                        "regime": macro.get("regime", "") if isinstance(macro, dict) else "",
+                        "summary": claude_text[:300] if claude_text else "Market scan complete",
+                    },
+                    "top_trades": top_trades,
+                    "bearish_setups": bearish_setups,
+                    "notes": ["TA-first scan with deterministic trade plans", "Trade plan numbers are pre-computed from OHLCV data"],
+                }
+                result = {
+                    "type": "trades",
+                    "analysis": claude_text,
+                    "structured": structured,
+                }
 
         if market_data and isinstance(market_data, dict) and market_data.get("pre_computed_highlights"):
             pch = market_data["pre_computed_highlights"]
@@ -2487,8 +2522,14 @@ Be direct and opinionated. Tell me what you actually think."""
             raw_size = len(json.dumps(market_data, default=str))
             print(f"[Agent] Data compression: {raw_size:,} → {len(data_str):,} chars ({100 - len(data_str)*100//max(raw_size,1)}% reduction)")
 
+            is_best_trades = category == "best_trades"
             is_fast_scan = category not in self.DEEP_ANALYSIS_CATEGORIES
-            data_cap = 25000 if (is_cross_market_data or is_fast_scan) else 80000
+            if is_best_trades:
+                data_cap = 50000
+            elif is_cross_market_data or is_fast_scan:
+                data_cap = 25000
+            else:
+                data_cap = 80000
             if len(data_str) > data_cap:
                 from agent.data_compressor import _aggressive_truncate
                 compressed = _aggressive_truncate(compressed, data_cap - 5000)
@@ -2601,7 +2642,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES
         if use_fast_model:
             model = "claude-sonnet-4-20250514"
-            token_limit = 4096
+            token_limit = 8192 if category == "best_trades" else 4096
         else:
             model = "claude-sonnet-4-5-20250929"
             token_limit = 16384
