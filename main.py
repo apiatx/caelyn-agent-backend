@@ -162,9 +162,10 @@ async def query_agent(
     api_key: str = Header(None, alias="X-API-Key"),
 ):
     import asyncio
-    print(f"[REQ_META] method={request.method} path={request.url.path} content-type={request.headers.get('content-type')} content-length={request.headers.get('content-length')}")
+    req_id = str(_uuid.uuid4())
+    print(f"[REQ_META] request_id={req_id} method={request.method} path={request.url.path} content-type={request.headers.get('content-type')} content-length={request.headers.get('content-length')}")
     user_query = body.query or body.prompt or ""
-    print(f"[REQ_BODY] query_len={len(user_query)} preset_intent={body.preset_intent} conversation_id={body.conversation_id}")
+    print(f"[REQ_BODY] request_id={req_id} query_len={len(user_query)} preset_intent={body.preset_intent} conversation_id={body.conversation_id}")
     if not api_key or api_key != AGENT_API_KEY:
         raise HTTPException(
             status_code=403,
@@ -195,7 +196,7 @@ async def query_agent(
             print(f"[API] Failed to create conversation: {e}")
             conv_id = None
 
-    print(f"[API] Received query: query={user_query[:100]}, history_turns={len(history)}, conv_id={conv_id}")
+    print(f"[API] request_id={req_id} query={user_query[:100]}, history_turns={len(history)}, conv_id={conv_id}")
     try:
         result = await asyncio.wait_for(
             agent.handle_query(
@@ -248,16 +249,17 @@ async def query_agent(
 
         if isinstance(result, dict):
             result["conversation_id"] = conv_id
-            result["request_id"] = str(_uuid.uuid4())
+            result["request_id"] = req_id
             result["as_of"] = _dt.now(_tz.utc).isoformat()
+        print(f"[API] request_id={req_id} status=200 response_keys={list(result.keys()) if isinstance(result, dict) else 'non-dict'}")
         return result
     except asyncio.TimeoutError:
-        print("[API] Request timed out after 150s")
+        print(f"[API] request_id={req_id} status=timeout after 150s")
         return {
             "type": "chat",
             "analysis": "",
             "conversation_id": conv_id,
-            "request_id": str(_uuid.uuid4()),
+            "request_id": req_id,
             "as_of": _dt.now(_tz.utc).isoformat(),
             "structured": {
                 "display_type": "chat",
@@ -266,13 +268,13 @@ async def query_agent(
         }
     except Exception as e:
         import traceback
-        print(f"[API] Error in /api/query: {e}")
+        print(f"[API] request_id={req_id} status=error error={e}")
         traceback.print_exc()
         return {
             "type": "chat",
             "analysis": "",
             "conversation_id": conv_id,
-            "request_id": str(_uuid.uuid4()),
+            "request_id": req_id,
             "as_of": _dt.now(_tz.utc).isoformat(),
             "structured": {
                 "display_type": "chat",
