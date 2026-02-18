@@ -632,30 +632,41 @@ OUTPUT FORMAT: You MUST use display_type "trending" with "trending_tickers" arra
 
 CROSS_ASSET_TRENDING_CONTRACT = """CROSS-ASSET TRENDING OUTPUT CONTRACT (MANDATORY for cross_asset_trending):
 
-You MUST output grouped lists in this exact structure:
+HARD RULES (violations = broken contract):
+1. You MUST output ALL groups: Equities (Large/Mid/Small), Crypto, Commodities. NEVER skip a group.
+2. You MUST output AT LEAST: 5 equities total (across L/M/S), 2 crypto, 2 commodities. These are MINIMUMS.
+3. NEVER answer with a single-pick-only response. Always provide cross-asset context + full shortlist.
+4. If a bucket has fewer items than minimum, still list what you have AND add watchlist items: "Only N met confirmation; others are watchlist due to [reason]."
+5. Items marked is_backfill=true or confirmation_status="unconfirmed" should be labeled as "Watchlist" with lower confidence.
 
-## EQUITIES
-### Large Caps
-- For each: ticker, rating (Strong Buy/Buy/Hold/Sell), confidence 0-100, thesis (why trending + 1 receipt from Grok data, catalyst check, TA setup, FA sanity vs market cap), risks/counter-argument, position size guidance
+OUTPUT STRUCTURE (inside the cross_market JSON schema):
+Each top_pick MUST include:
+- ticker/commodity name
+- asset_class (stock/crypto/commodity)
+- WHY trending: reference 1 Grok receipt excerpt if available, else cite the trending source
+- TA check: even if partial, state what's known (RSI, trend, volume). If missing: "TA: unconfirmed (data gap)"
+- FA sanity check: even if partial. If missing: "FA: unconfirmed (data gap)"
+- Catalyst check: explicitly "confirmed" (with reason) or "unconfirmed" (with reason)
+- Rating: Strong Buy / Buy / Hold / Sell
+- Confidence: 0-100 numeric
+- data_gaps line if any checks are unconfirmed
 
-### Mid Caps
-- Same format as above
+CONFIDENCE ADJUSTMENTS:
+- Full confirmation (TA+FA+catalyst all present): base confidence
+- Missing TA: reduce confidence by 10pts
+- Missing FA: reduce confidence by 10pts
+- Missing catalyst: reduce confidence by 5pts
+- is_backfill=true: reduce confidence by 15pts and label "Watchlist"
+- confirmation_status="unconfirmed": cap confidence at 55 max
 
-### Small/Micro Caps
-- Same format as above
+COMMODITY RULES:
+- For each commodity, include equity proxy ETF where possible (e.g., Gold → GLD, Oil → USO)
+- Commodities always have a rating even if TA/FA are sparse — use price action + macro alignment
 
-## CRYPTO
-- Same item format: symbol, rating, confidence 0-100, thesis with receipt, risks, sizing
-
-## COMMODITIES
-- Each: commodity name + related equity proxy, rating, confidence 0-100, thesis with receipt, risks, sizing
-
-## DATA COVERAGE
-- One short note (1-2 sentences max) at the end.
-- If module_status shows all modules "ok": say "Full coverage across social, technical, and fundamental data."
-- If some modules timed out or failed: say "Social scan is live. Some market-data modules were unavailable, so TA/FA validation is partial today." Then list which modules were unavailable.
-- NEVER say "data feed timed out" or "based on current conditions" without listing specific tickers.
-- NEVER produce a narrative-only response with no tickers. If you have tickers, you MUST list them.
+DATA COVERAGE (end section):
+- If module_status shows all modules "ok": "Full coverage across social, technical, and fundamental data."
+- If some modules timed out or failed: list which were unavailable, note TA/FA validation is partial
+- NEVER say "data feed timed out" or produce narrative-only responses without tickers
 
 RULES:
 - Every item MUST have: ticker/commodity, rating, numeric confidence, thesis, risk, sizing
@@ -664,7 +675,6 @@ RULES:
 - Do NOT use the same generic thesis for multiple items
 - Maintain your trader personality — be direct and opinionated about each pick
 - If grok_shortlist shows data_quality_flag="low", mention this in DATA GAPS
-- If TA/FA data is missing for a ticker, still rate it using social velocity + receipts + catalyst language as primary signals, but reduce confidence by 10-20 points vs full-data picks
-- You MUST output tickers. A response with zero tickers is NEVER acceptable for cross_asset_trending.
+- You MUST output tickers. A response with zero tickers is NEVER acceptable.
 - If social_scan_unavailable is true in the data, include a note: "X social scan was unavailable for this request" and rate using available market data only.
 """

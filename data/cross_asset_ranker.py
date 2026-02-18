@@ -2,15 +2,11 @@
 Cross-Asset Ranking Engine for cross-market scans.
 Runs BEFORE Claude — pure math, no AI calls.
 
-Solves the "crypto floods everything" problem by:
-1. Extracting individual candidates from each asset class
-2. Scoring within each class independently (intra-class normalization)
-3. Normalizing across classes (0-100 scale)
-4. Applying hard filters (market cap floor, liquidity minimum)
-5. Enforcing multi-factor confluence (3/5 minimum)
-6. Applying macro regime penalty (risk-off = penalize speculative assets)
-7. Enforcing asset-class quotas (at least 1 stock + 1 commodity if available)
-8. Logging everything for diagnostics
+Philosophy: SCORING RANKS, NOT FILTERS.
+- Discovery shortlist is locked first (breadth)
+- Scoring applies penalties for missing data, not removal
+- Coverage quotas ensure multi-asset output
+- Only truly invalid symbols are removed
 """
 
 import json
@@ -22,6 +18,15 @@ CRYPTO_MCAP_FLOOR = 100_000_000
 STOCK_VOLUME_FLOOR = 1_000_000
 CRYPTO_VOLUME_FLOOR = 50_000_000
 
+STOCK_LARGE_CAP = 10_000_000_000
+STOCK_MID_CAP = 2_000_000_000
+
+COMMODITY_PROXY_ETFS = {
+    "gold": "GLD", "silver": "SLV", "oil": "USO", "natural gas": "UNG",
+    "uranium": "URA", "copper": "COPX", "agriculture": "DBA",
+    "energy": "XLE", "metals": "GDX",
+}
+
 MAJOR_COMMODITIES = {
     "gold", "silver", "platinum", "palladium", "copper",
     "oil", "crude", "natural gas", "wti", "brent",
@@ -31,6 +36,16 @@ MAJOR_COMMODITIES = {
     "DBA", "CORN", "WEAT", "SOYB", "MOO", "COW",
 }
 
+COVERAGE_QUOTAS = {
+    "equities_large": 1,
+    "equities_mid": 2,
+    "equities_small": 2,
+    "crypto": 2,
+    "commodities": 2,
+}
+
+MAX_FINAL_PICKS = 18
+
 
 def rank_cross_market(stock_data: dict, crypto_data: dict,
                       commodity_data: dict, macro_data: dict) -> dict:
@@ -38,10 +53,14 @@ def rank_cross_market(stock_data: dict, crypto_data: dict,
         "asset_classes_pulled": [],
         "candidates_per_class": {},
         "filter_rejections": {"stocks": [], "crypto": [], "commodities": []},
+        "soft_penalties": {"stocks": [], "crypto": []},
         "macro_regime": "unknown",
         "regime_penalty_applied": False,
         "quota_adjustments": [],
         "selection_reasons": {},
+        "coverage_backfills": [],
+        "pre_score_counts": {},
+        "post_score_counts": {},
     }
 
     macro_regime = _detect_macro_regime(macro_data)
@@ -61,8 +80,21 @@ def rank_cross_market(stock_data: dict, crypto_data: dict,
         "commodities_raw": len(commodities),
     }
 
-    stocks = _apply_hard_filters(stocks, "stock", debug)
-    cryptos = _apply_hard_filters(cryptos, "crypto", debug)
+    stocks = _apply_soft_filters(stocks, "stock", debug)
+    cryptos = _apply_soft_filters(cryptos, "crypto", debug)
+
+    large = [s for s in stocks if _cap_tier(s) == "large"]
+    mid = [s for s in stocks if _cap_tier(s) == "mid"]
+    small = [s for s in stocks if _cap_tier(s) == "small"]
+
+    debug["pre_score_counts"] = {
+        "equities_large": len(large),
+        "equities_mid": len(mid),
+        "equities_small": len(small),
+        "crypto": len(cryptos),
+        "commodities": len(commodities),
+    }
+    print(f"[CANDIDATES] pre_score equities=L{len(large)}/M{len(mid)}/S{len(small)}, crypto={len(cryptos)}, commodities={len(commodities)}")
 
     _score_candidates(stocks, "stock")
     _score_candidates(cryptos, "crypto")
@@ -72,41 +104,70 @@ def rank_cross_market(stock_data: dict, crypto_data: dict,
     _normalize_within_class(cryptos)
     _normalize_within_class(commodities)
 
-    if macro_regime == "risk_off":
+    if macro_regime in ("risk_off", "cautious"):
         debug["regime_penalty_applied"] = True
         _apply_regime_penalty(stocks, cryptos, commodities, macro_regime)
 
-    stocks = [c for c in stocks if c["factors_met"] >= 3]
-    cryptos = [c for c in cryptos if c["factors_met"] >= 3]
+    debug["candidates_per_class"]["stocks_after_score"] = len(stocks)
+    debug["candidates_per_class"]["crypto_after_score"] = len(cryptos)
+    debug["candidates_per_class"]["commodities_after_score"] = len(commodities)
 
-    debug["candidates_per_class"]["stocks_after_filter"] = len(stocks)
-    debug["candidates_per_class"]["crypto_after_filter"] = len(cryptos)
-    debug["candidates_per_class"]["commodities_after_filter"] = len(commodities)
+    large = [s for s in stocks if _cap_tier(s) == "large"]
+    mid = [s for s in stocks if _cap_tier(s) == "mid"]
+    small = [s for s in stocks if _cap_tier(s) == "small"]
 
-    final = _assemble_final_ranking(stocks, cryptos, commodities, debug)
+    debug["post_score_counts"] = {
+        "equities_large": len(large),
+        "equities_mid": len(mid),
+        "equities_small": len(small),
+        "crypto": len(cryptos),
+        "commodities": len(commodities),
+    }
+
+    final = _assemble_with_quotas(stocks, cryptos, commodities, debug)
 
     for c in final:
         debug["selection_reasons"][c["symbol"]] = {
             "asset_class": c["asset_class"],
-            "normalized_score": round(c["normalized_score"], 1),
-            "factors_met": c["factors_met"],
+            "cap_tier": c.get("cap_tier", ""),
+            "normalized_score": round(c.get("normalized_score", 0), 1),
+            "factors_met": c.get("factors_met", 0),
             "factor_detail": c.get("factor_detail", {}),
+            "confirmation_status": c.get("confirmation_status", "unconfirmed"),
+            "is_backfill": c.get("is_backfill", False),
         }
 
+    eq_final = [c for c in final if c["asset_class"] == "stock"]
+    cr_final = [c for c in final if c["asset_class"] == "crypto"]
+    co_final = [c for c in final if c["asset_class"] == "commodity"]
+
     print(f"[CROSS-RANKER] Regime: {macro_regime} | "
-          f"Stocks: {debug['candidates_per_class'].get('stocks_raw', 0)}→{debug['candidates_per_class'].get('stocks_after_filter', 0)} | "
-          f"Crypto: {debug['candidates_per_class'].get('crypto_raw', 0)}→{debug['candidates_per_class'].get('crypto_after_filter', 0)} | "
-          f"Commodities: {debug['candidates_per_class'].get('commodities_after_filter', 0)} | "
-          f"Final picks: {len(final)}")
+          f"Stocks: {debug['candidates_per_class'].get('stocks_raw', 0)}→{len(eq_final)} | "
+          f"Crypto: {debug['candidates_per_class'].get('crypto_raw', 0)}→{len(cr_final)} | "
+          f"Commodities: {debug['candidates_per_class'].get('commodities_raw', 0)}→{len(co_final)} | "
+          f"Final picks: {len(final)} (backfilled={len(debug['coverage_backfills'])})")
 
     for c in final:
-        print(f"  → {c['symbol']} ({c['asset_class']}): score={c['normalized_score']:.1f}, "
-              f"factors={c['factors_met']}/5, {c.get('factor_detail', {})}")
+        tag = " [BACKFILL]" if c.get("is_backfill") else ""
+        tag += f" [{c.get('confirmation_status', '')}]" if c.get("confirmation_status") != "confirmed" else ""
+        print(f"  → {c['symbol']} ({c['asset_class']}/{c.get('cap_tier', '')}): score={c.get('normalized_score', 0):.1f}, "
+              f"factors={c.get('factors_met', 0)}/5, {c.get('factor_detail', {})}{tag}")
 
     return {
         "ranked_candidates": final,
         "ranking_debug": debug,
     }
+
+
+def _cap_tier(candidate: dict) -> str:
+    mcap = candidate.get("market_cap")
+    if mcap is None:
+        return "small"
+    if mcap >= STOCK_LARGE_CAP:
+        return "large"
+    elif mcap >= STOCK_MID_CAP:
+        return "mid"
+    return "small"
 
 
 def _detect_macro_regime(macro_data: dict) -> str:
@@ -199,6 +260,9 @@ def _extract_stock_candidates(stock_data: dict, debug: dict) -> list:
                     "trending_sources": item.get("sources", []),
                     "raw_data": {},
                 })
+
+    for c in candidates:
+        c["cap_tier"] = _cap_tier(c)
 
     return candidates
 
@@ -382,50 +446,55 @@ def _extract_commodity_candidates(commodity_data: dict, debug: dict) -> list:
     return candidates
 
 
-def _apply_hard_filters(candidates: list, asset_type: str, debug: dict) -> list:
-    filtered = []
+def _apply_soft_filters(candidates: list, asset_type: str, debug: dict) -> list:
+    kept = []
     rejection_key = "stocks" if asset_type == "stock" else "crypto"
+    penalty_key = rejection_key
 
     mcap_floor = STOCK_MCAP_FLOOR if asset_type == "stock" else CRYPTO_MCAP_FLOOR
     vol_floor = STOCK_VOLUME_FLOOR if asset_type == "stock" else CRYPTO_VOLUME_FLOOR
 
     for c in candidates:
+        symbol = c.get("symbol", "")
+        if not symbol or len(symbol) > 10:
+            debug["filter_rejections"][rejection_key].append(f"{symbol}: invalid symbol")
+            continue
+
         mcap = c.get("market_cap")
         vol = c.get("volume")
 
         if mcap is not None and mcap < mcap_floor:
-            debug["filter_rejections"][rejection_key].append(
-                f"{c['symbol']}: mcap ${mcap/1e6:.0f}M < ${mcap_floor/1e6:.0f}M floor"
-            )
-            continue
+            c["_penalty"] = c.get("_penalty", 1.0) * 0.6
+            c["_penalty_reasons"] = c.get("_penalty_reasons", [])
+            c["_penalty_reasons"].append(f"mcap ${mcap/1e6:.0f}M below ${mcap_floor/1e6:.0f}M floor")
+            debug["soft_penalties"][penalty_key].append(f"{symbol}: mcap penalty (${mcap/1e6:.0f}M)")
 
         if vol is not None and vol < vol_floor:
-            debug["filter_rejections"][rejection_key].append(
-                f"{c['symbol']}: volume {vol:,.0f} < {vol_floor:,.0f} floor"
-            )
-            continue
+            c["_penalty"] = c.get("_penalty", 1.0) * 0.7
+            c["_penalty_reasons"] = c.get("_penalty_reasons", [])
+            c["_penalty_reasons"].append(f"volume {vol:,.0f} below {vol_floor:,.0f} floor")
+            debug["soft_penalties"][penalty_key].append(f"{symbol}: volume penalty")
 
         if mcap is None and vol is None:
             c["_unknown_fundamentals"] = True
-            c["_penalty"] = 0.5
-            debug["filter_rejections"][rejection_key].append(
-                f"{c['symbol']}: missing mcap+volume, penalized 50%"
-            )
+            c["_penalty"] = c.get("_penalty", 1.0) * 0.5
+            c["_penalty_reasons"] = c.get("_penalty_reasons", [])
+            c["_penalty_reasons"].append("missing mcap+volume")
+            debug["soft_penalties"][penalty_key].append(f"{symbol}: missing mcap+volume, penalized 50%")
 
-        filtered.append(c)
+        kept.append(c)
 
-    return filtered
+    return kept
 
 
 def _score_candidates(candidates: list, asset_type: str):
     for c in candidates:
         factors = {}
         met = 0
+        data_gaps = []
 
         sc = c.get("source_count") or 0
-        if asset_type == "stock":
-            factors["social_momentum"] = min(sc / 3.0, 1.0) if sc else 0
-        elif asset_type == "crypto":
+        if asset_type in ("stock", "crypto"):
             factors["social_momentum"] = min(sc / 3.0, 1.0) if sc else 0
         else:
             factors["social_momentum"] = 0.3
@@ -453,13 +522,18 @@ def _score_candidates(candidates: list, asset_type: str):
                     factors["technical"] = 0
         else:
             factors["technical"] = 0
+            data_gaps.append("price_change")
 
         if asset_type == "stock":
             has_catalyst = bool(c.get("analyst_rating") or c.get("price_target_upside"))
-            factors["catalyst"] = 0.8 if has_catalyst else 0
+            factors["catalyst"] = 0.8 if has_catalyst else 0.2
+            if not has_catalyst:
+                data_gaps.append("catalyst")
         elif asset_type == "crypto":
             has_catalyst = (sc or 0) >= 2
-            factors["catalyst"] = 0.7 if has_catalyst else 0
+            factors["catalyst"] = 0.7 if has_catalyst else 0.2
+            if not has_catalyst:
+                data_gaps.append("catalyst")
         else:
             factors["catalyst"] = 0.5
 
@@ -479,6 +553,8 @@ def _score_candidates(candidates: list, asset_type: str):
                 factors["liquidity"] = 0.7
             else:
                 factors["liquidity"] = 0.3
+                if not vol and not mcap:
+                    data_gaps.append("liquidity")
         elif asset_type == "crypto":
             if vol and vol > 500_000_000:
                 factors["liquidity"] = 1.0
@@ -488,6 +564,8 @@ def _score_candidates(candidates: list, asset_type: str):
                 factors["liquidity"] = 0.5
             else:
                 factors["liquidity"] = 0.2
+                if not vol and not mcap:
+                    data_gaps.append("liquidity")
         else:
             factors["liquidity"] = 0.7 if c.get("is_major") else 0.4
 
@@ -503,11 +581,22 @@ def _score_candidates(candidates: list, asset_type: str):
 
         if c.get("_penalty"):
             raw_score *= c["_penalty"]
-            factors["unknown_data_penalty"] = c["_penalty"]
+            factors["penalty_applied"] = round(c["_penalty"], 2)
+
+        if met >= 4:
+            confirmation = "confirmed"
+        elif met >= 3:
+            confirmation = "partial"
+        else:
+            confirmation = "unconfirmed"
 
         c["raw_score"] = raw_score
         c["factors_met"] = met
         c["factor_detail"] = {k: round(v, 2) for k, v in factors.items()}
+        c["confirmation_status"] = confirmation
+        c["data_gaps"] = data_gaps
+        if asset_type == "stock":
+            c["cap_tier"] = _cap_tier(c)
 
 
 def _normalize_within_class(candidates: list):
@@ -554,53 +643,118 @@ def _apply_regime_penalty(stocks: list, cryptos: list, commodities: list, regime
                 c["factor_detail"]["regime_penalty"] = -0.3
 
 
-def _assemble_final_ranking(stocks: list, cryptos: list,
-                            commodities: list, debug: dict) -> list:
-    stocks_sorted = sorted(stocks, key=lambda x: x.get("normalized_score", 0), reverse=True)
+def _assemble_with_quotas(stocks: list, cryptos: list,
+                          commodities: list, debug: dict) -> list:
+    large = sorted([s for s in stocks if _cap_tier(s) == "large"], key=lambda x: x.get("normalized_score", 0), reverse=True)
+    mid = sorted([s for s in stocks if _cap_tier(s) == "mid"], key=lambda x: x.get("normalized_score", 0), reverse=True)
+    small = sorted([s for s in stocks if _cap_tier(s) == "small"], key=lambda x: x.get("normalized_score", 0), reverse=True)
     crypto_sorted = sorted(cryptos, key=lambda x: x.get("normalized_score", 0), reverse=True)
     commodity_sorted = sorted(commodities, key=lambda x: x.get("normalized_score", 0), reverse=True)
 
     final = []
     used_symbols = set()
 
-    if stocks_sorted:
-        best = stocks_sorted[0]
-        final.append(best)
-        used_symbols.add(best["symbol"])
-        debug["quota_adjustments"].append(f"Quota: reserved slot for stock {best['symbol']}")
+    def _add(candidate, is_backfill=False):
+        if candidate["symbol"] in used_symbols:
+            return False
+        candidate["is_backfill"] = is_backfill
+        if is_backfill:
+            debug["coverage_backfills"].append(candidate["symbol"])
+        final.append(candidate)
+        used_symbols.add(candidate["symbol"])
+        return True
 
-    if commodity_sorted:
-        best = commodity_sorted[0]
-        if best["symbol"] not in used_symbols:
-            final.append(best)
-            used_symbols.add(best["symbol"])
-            debug["quota_adjustments"].append(f"Quota: reserved slot for commodity {best['symbol']}")
+    q_large = COVERAGE_QUOTAS["equities_large"]
+    q_mid = COVERAGE_QUOTAS["equities_mid"]
+    q_small = COVERAGE_QUOTAS["equities_small"]
+    q_crypto = COVERAGE_QUOTAS["crypto"]
+    q_commodity = COVERAGE_QUOTAS["commodities"]
 
-    all_remaining = []
-    for c in stocks_sorted:
-        if c["symbol"] not in used_symbols:
-            all_remaining.append(c)
-    for c in crypto_sorted:
-        if c["symbol"] not in used_symbols:
-            all_remaining.append(c)
-    for c in commodity_sorted:
-        if c["symbol"] not in used_symbols:
-            all_remaining.append(c)
+    for c in large[:q_large]:
+        _add(c)
+    for c in mid[:q_mid]:
+        _add(c)
+    for c in small[:q_small]:
+        _add(c)
+    for c in crypto_sorted[:q_crypto]:
+        _add(c)
+    for c in commodity_sorted[:q_commodity]:
+        _add(c)
 
-    all_remaining.sort(key=lambda x: x.get("normalized_score", 0), reverse=True)
+    actual_large = sum(1 for c in final if c["asset_class"] == "stock" and _cap_tier(c) == "large")
+    actual_mid = sum(1 for c in final if c["asset_class"] == "stock" and _cap_tier(c) == "mid")
+    actual_small = sum(1 for c in final if c["asset_class"] == "stock" and _cap_tier(c) == "small")
+    actual_crypto = sum(1 for c in final if c["asset_class"] == "crypto")
+    actual_commodity = sum(1 for c in final if c["asset_class"] == "commodity")
 
-    slots_left = 7 - len(final)
-    for c in all_remaining[:slots_left]:
-        final.append(c)
-        used_symbols.add(c["symbol"])
+    if actual_large < q_large:
+        for c in mid[q_mid:] + small[q_small:]:
+            if actual_large >= q_large:
+                break
+            if _add(c, is_backfill=True):
+                actual_large += 1
+                debug["quota_adjustments"].append(f"Backfill large with {c['symbol']} ({_cap_tier(c)})")
+
+    if actual_mid < q_mid:
+        for c in large[q_large:] + small[q_small:]:
+            if actual_mid >= q_mid:
+                break
+            if c["symbol"] not in used_symbols:
+                if _add(c, is_backfill=True):
+                    actual_mid += 1
+                    debug["quota_adjustments"].append(f"Backfill mid with {c['symbol']}")
+
+    if actual_small < q_small:
+        for c in mid[q_mid:] + large[q_large:]:
+            if actual_small >= q_small:
+                break
+            if c["symbol"] not in used_symbols:
+                if _add(c, is_backfill=True):
+                    actual_small += 1
+                    debug["quota_adjustments"].append(f"Backfill small with {c['symbol']}")
+
+    if actual_crypto < q_crypto:
+        for c in crypto_sorted[q_crypto:]:
+            if actual_crypto >= q_crypto:
+                break
+            if _add(c, is_backfill=True):
+                actual_crypto += 1
+                debug["quota_adjustments"].append(f"Backfill crypto with {c['symbol']}")
+
+    if actual_commodity < q_commodity:
+        for c in commodity_sorted[q_commodity:]:
+            if actual_commodity >= q_commodity:
+                break
+            if _add(c, is_backfill=True):
+                actual_commodity += 1
+                debug["quota_adjustments"].append(f"Backfill commodity with {c['symbol']}")
+
+    remaining_slots = MAX_FINAL_PICKS - len(final)
+    if remaining_slots > 0:
+        all_remaining = []
+        for pool in [large, mid, small, crypto_sorted, commodity_sorted]:
+            for c in pool:
+                if c["symbol"] not in used_symbols:
+                    all_remaining.append(c)
+        all_remaining.sort(key=lambda x: x.get("normalized_score", 0), reverse=True)
+        for c in all_remaining[:remaining_slots]:
+            _add(c)
 
     final.sort(key=lambda x: x.get("normalized_score", 0), reverse=True)
+
+    eq_count = sum(1 for c in final if c["asset_class"] == "stock")
+    cr_count = sum(1 for c in final if c["asset_class"] == "crypto")
+    co_count = sum(1 for c in final if c["asset_class"] == "commodity")
+    bf_count = len(debug["coverage_backfills"])
+    print(f"[SHORTLIST] post_score equities=L{actual_large}/M{actual_mid}/S{actual_small}, crypto={cr_count}, commodities={co_count}, backfilled={bf_count}")
 
     for c in final:
         clean_keys = {"symbol", "asset_class", "name", "market_cap", "volume",
                       "price_change_pct", "normalized_score", "factors_met",
                       "factor_detail", "source_count", "trending_sources", "sources",
-                      "price", "is_major", "analyst_rating", "price_target_upside"}
+                      "price", "is_major", "analyst_rating", "price_target_upside",
+                      "confirmation_status", "data_gaps", "cap_tier", "is_backfill",
+                      "_penalty_reasons"}
         to_remove = [k for k in c if k not in clean_keys and k != "raw_data"]
         for k in to_remove:
             del c[k]
@@ -614,20 +768,20 @@ def _parse_num(value) -> Optional[float]:
         return None
     try:
         return float(value)
-    except (TypeError, ValueError):
-        pass
-    try:
-        s = str(value).strip().replace(",", "").replace("$", "")
-        if s.endswith("T"):
-            return float(s[:-1]) * 1e12
-        elif s.endswith("B"):
-            return float(s[:-1]) * 1e9
-        elif s.endswith("M"):
-            return float(s[:-1]) * 1e6
-        elif s.endswith("K"):
-            return float(s[:-1]) * 1e3
-        return float(s)
-    except (TypeError, ValueError):
+    except (ValueError, TypeError):
+        if isinstance(value, str):
+            clean = value.replace(",", "").replace("$", "").replace("%", "").strip()
+            suffixes = {"B": 1e9, "M": 1e6, "K": 1e3, "T": 1e12}
+            for s, mul in suffixes.items():
+                if clean.upper().endswith(s):
+                    try:
+                        return float(clean[:-1]) * mul
+                    except ValueError:
+                        pass
+            try:
+                return float(clean)
+            except ValueError:
+                return None
         return None
 
 
@@ -635,12 +789,12 @@ def _parse_pct(value) -> Optional[float]:
     if value is None:
         return None
     try:
-        s = str(value).strip().replace(",", "")
-        if s.endswith("%"):
-            return float(s[:-1])
-        v = float(s)
-        if abs(v) < 5:
-            return v * 100
-        return v
-    except (TypeError, ValueError):
+        return float(value)
+    except (ValueError, TypeError):
+        if isinstance(value, str):
+            clean = value.replace("%", "").replace(",", "").strip()
+            try:
+                return float(clean)
+            except ValueError:
+                return None
         return None

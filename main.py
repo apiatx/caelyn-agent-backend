@@ -422,6 +422,8 @@ async def query_agent(
             timing_meta = result.pop("_timing")
         if isinstance(result, dict) and result.get("_routing"):
             meta["routing"] = result.pop("_routing")
+        if isinstance(result, dict) and result.get("_cross_asset_debug"):
+            meta["cross_asset_debug"] = result.pop("_cross_asset_debug")
         if timing_meta:
             meta["timing_ms"] = timing_meta
 

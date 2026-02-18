@@ -421,6 +421,9 @@ class TradingAgent:
                     else:
                         result["debug_scoring"] = scoring_debug
 
+        if market_data and isinstance(market_data, dict) and market_data.get("cross_asset_debug"):
+            result["_cross_asset_debug"] = market_data["cross_asset_debug"]
+
         _locals = locals()
         result["_routing"] = {
             "source": _locals.get("routing_source", "unknown"),
@@ -1676,14 +1679,14 @@ class TradingAgent:
 
         remaining = deadline - _t.time()
         needs_broadening = []
-        if eq_count < 3:
+        if eq_count < 5:
             needs_broadening.append("equities")
-        if crypto_count < 1:
+        if crypto_count < 2:
             needs_broadening.append("crypto")
-        if commodity_count < 1:
+        if commodity_count < 2:
             needs_broadening.append("commodities")
 
-        if needs_broadening and remaining > 5 and not grok_shortlist:
+        if needs_broadening and remaining > 5:
             print(f"[CROSS_ASSET_TRENDING] Broadening needed for: {needs_broadening} ({remaining:.0f}s remaining)")
             try:
                 broadened = await asyncio.wait_for(
@@ -1698,19 +1701,24 @@ class TradingAgent:
             eq_count = self._count_candidates(primary_data, "equities")
             crypto_count = self._count_candidates(primary_data, "crypto")
             commodity_count = self._count_candidates(primary_data, "commodities")
-        elif needs_broadening and not grok_shortlist:
+        elif needs_broadening:
             print(f"[CROSS_ASSET_TRENDING] Skipping broadening, only {remaining:.0f}s remaining (wall clock)")
 
         grok_has_receipts = 0
+        grok_counts = {"equities": 0, "crypto": 0, "commodities": 0}
         if grok_shortlist:
-            for section in [grok_shortlist.get("equities", {}), grok_shortlist.get("crypto", []), grok_shortlist.get("commodities", [])]:
-                if isinstance(section, dict):
-                    for group in section.values():
-                        if isinstance(group, list):
-                            for item in group:
-                                if isinstance(item, dict) and item.get("receipts"):
-                                    grok_has_receipts += len(item["receipts"]) if isinstance(item["receipts"], list) else 1
-                elif isinstance(section, list):
+            eq_gs = grok_shortlist.get("equities", {})
+            if isinstance(eq_gs, dict):
+                for group in eq_gs.values():
+                    if isinstance(group, list):
+                        grok_counts["equities"] += len(group)
+                        for item in group:
+                            if isinstance(item, dict) and item.get("receipts"):
+                                grok_has_receipts += len(item["receipts"]) if isinstance(item["receipts"], list) else 1
+            for asset_key in ["crypto", "commodities"]:
+                section = grok_shortlist.get(asset_key, [])
+                if isinstance(section, list):
+                    grok_counts[asset_key] = len(section)
                     for item in section:
                         if isinstance(item, dict) and item.get("receipts"):
                             grok_has_receipts += len(item["receipts"]) if isinstance(item["receipts"], list) else 1
@@ -1737,6 +1745,23 @@ class TradingAgent:
             "grok_available": grok_available,
             "broadened": needs_broadening,
             "module_status": module_status,
+        }
+
+        primary_data["cross_asset_debug"] = {
+            "grok_counts": grok_counts,
+            "pre_score_counts": {
+                "equities": eq_count,
+                "crypto": crypto_count,
+                "commodities": commodity_count,
+            },
+            "receipts_count": grok_has_receipts,
+            "receipts_missing": grok_has_receipts == 0 and grok_available,
+            "timeouts": {k: v for k, v in module_status.items() if v in ("timeout", "error")},
+            "data_gaps_summary": {
+                "ta_covered": ta_covered,
+                "fa_covered": fa_covered,
+                "grok_receipts": grok_has_receipts,
+            },
         }
 
         if not grok_available:
@@ -2431,6 +2456,9 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
                     "regime_penalty_applied": ranking_debug.get("regime_penalty_applied", False),
                     "quota_adjustments": ranking_debug.get("quota_adjustments", []),
                     "selection_reasons": ranking_debug.get("selection_reasons", {}),
+                    "coverage_backfills": ranking_debug.get("coverage_backfills", []),
+                    "pre_score_counts": ranking_debug.get("pre_score_counts", {}),
+                    "post_score_counts": ranking_debug.get("post_score_counts", {}),
                 }
 
             ranked_symbols = {c.get("symbol") for c in ranked if isinstance(c, dict)}
