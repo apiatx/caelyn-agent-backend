@@ -175,8 +175,15 @@ class FMPProvider:
         return result
 
     async def get_sector_performance(self) -> list:
-        """Get real-time sector performance (S&P 500 sectors)."""
-        return await self._get("sectors-performance")
+        """Get real-time sector performance (S&P 500 sectors). Cached 5 min."""
+        from data.cache import cache, SECTOR_ETF_TTL
+        cached = cache.get("fmp:sector_performance")
+        if cached is not None:
+            return cached
+        result = await self._get("sectors-performance")
+        if result:
+            cache.set("fmp:sector_performance", result, SECTOR_ETF_TTL)
+        return result
 
     async def get_sector_performance_historical(self) -> list:
         """Get historical sector performance."""

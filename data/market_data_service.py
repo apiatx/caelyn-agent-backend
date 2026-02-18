@@ -1,4 +1,5 @@
 import asyncio
+import time as _time
 
 from data.polygon_provider import PolygonProvider
 from data.finviz_scraper import FinvizScraper, scrape_yahoo_trending, scrape_stockanalysis_trending
@@ -16,6 +17,70 @@ from data.coingecko_provider import CoinGeckoProvider
 from data.reddit_provider import RedditSentimentProvider
 from data.altfins_provider import AltFINSProvider
 from data.xai_sentiment_provider import XAISentimentProvider
+from data.cache import cache, MACRO_TTL, SECTOR_ETF_TTL
+
+
+DATA_SOURCES = {
+    "equity_price": {"primary": "finnhub", "secondary": "fmp"},
+    "fundamentals": {"primary": "fmp", "secondary": "finnhub"},
+    "crypto": {"primary": "coingecko", "secondary": "cmc"},
+    "macro": {"primary": "fred", "secondary": None},
+}
+
+MAX_TICKERS_DEEP_DIVE = 10
+MAX_EXTERNAL_CALLS = 40
+MAX_DATA_GATHER_SECONDS = 10
+
+
+class BudgetTracker:
+    """Lightweight tracker for scan budgets: elapsed time + external call count."""
+
+    def __init__(self, max_calls: int = MAX_EXTERNAL_CALLS, max_seconds: float = MAX_DATA_GATHER_SECONDS):
+        self._start = _time.time()
+        self._calls = 0
+        self._max_calls = max_calls
+        self._max_seconds = max_seconds
+
+    @property
+    def elapsed(self) -> float:
+        return _time.time() - self._start
+
+    @property
+    def calls(self) -> int:
+        return self._calls
+
+    def tick(self, n: int = 1):
+        self._calls += n
+
+    def can_continue(self) -> bool:
+        return self._calls < self._max_calls and self.elapsed < self._max_seconds
+
+    def status(self) -> str:
+        return f"calls={self._calls}/{self._max_calls} elapsed={self.elapsed:.1f}s/{self._max_seconds}s"
+
+
+async def fetch_with_fallback(category: str, fetch_primary, fetch_secondary=None, timeout: float = 3.0):
+    """
+    Tiered data source fetcher. Tries primary with timeout, falls back to secondary.
+    Returns result dict or empty dict on total failure.
+    """
+    try:
+        result = await asyncio.wait_for(fetch_primary(), timeout=timeout)
+        if result and (not isinstance(result, dict) or "error" not in result):
+            return result
+    except Exception as e:
+        print(f"[FALLBACK] {category} primary failed: {e}")
+
+    if fetch_secondary:
+        try:
+            result = await asyncio.wait_for(fetch_secondary(), timeout=timeout)
+            if result:
+                print(f"[FALLBACK] {category} secondary succeeded")
+                return result
+        except Exception as e:
+            print(f"[FALLBACK] {category} secondary also failed: {e}")
+
+    return {}
 
 
 def _parse_num(val):
@@ -203,11 +268,20 @@ class MarketDataService:
     async def research_ticker(self, ticker: str) -> dict:
         """
         Get everything about a single stock — all sources in parallel.
+        Uses tiered data sources: Finnhub primary, FMP/Polygon secondary.
         """
         ticker = ticker.upper()
 
-        finnhub_quote = self.finnhub.get_quote(ticker)
-        finnhub_profile = self.finnhub.get_company_profile(ticker)
+        finnhub_quote = await fetch_with_fallback(
+            "equity_price",
+            lambda: asyncio.to_thread(self.finnhub.get_quote, ticker),
+            timeout=3.0,
+        )
+        finnhub_profile = await fetch_with_fallback(
+            "company_profile",
+            lambda: asyncio.to_thread(self.finnhub.get_company_profile, ticker),
+            timeout=3.0,
+        )
 
         snapshot_compat = {}
         if finnhub_quote:
@@ -228,12 +302,16 @@ class MarketDataService:
                 "market_cap": finnhub_profile.get("market_cap"),
             }
 
+        technicals = self.finnhub.get_technicals(ticker)
+        if not technicals:
+            technicals = self.polygon.get_technicals(ticker)
+
         sync_data = {
             "quote": finnhub_quote,
             "company_profile": finnhub_profile,
             "snapshot": snapshot_compat,
             "details": details_compat,
-            "technicals": self.polygon.get_technicals(ticker),
+            "technicals": technicals,
             "news": self.polygon.get_news(ticker, limit=10),
             "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
             "insider_transactions": self.finnhub.get_insider_transactions(ticker),
@@ -384,7 +462,12 @@ class MarketDataService:
         FRED: Fed rate, CPI, Core PCE, GDP, unemployment, yield curve, VIX, jobless claims
         FMP: DXY, oil, gold, treasuries, sector performance, economic calendar, indices
         Fear & Greed: CNN sentiment index
+        Cached at MACRO_TTL (10 min).
         """
+        cached_macro = cache.get("macro_overview_full")
+        if cached_macro is not None:
+            return cached_macro
+
         fred_macro = self.fred.get_full_macro_dashboard()
 
         fmp_data = {}
@@ -402,11 +485,13 @@ class MarketDataService:
             fear_greed_result = await self.fear_greed.get_fear_greed_index()
             fear_greed = fear_greed_result if not isinstance(fear_greed_result, Exception) else {}
 
-        return {
+        result = {
             "fred_economic_data": fred_macro,
             "market_data": fmp_data,
             "fear_greed_index": fear_greed,
         }
+        cache.set("macro_overview_full", result, MACRO_TTL)
+        return result
 
     async def get_commodities_dashboard(self) -> dict:
         """
@@ -517,10 +602,11 @@ class MarketDataService:
         2. Light enrichment for scoring
         3. Score quantitatively → top candidates
         4. Sentiment + news filter on top candidates (flags/warns)
-        5. Deep enrich survivors with fundamentals
+        5. Deep enrich survivors with fundamentals (capped by budget)
         """
         import time
         scan_start = time.time()
+        budget = BudgetTracker(max_calls=MAX_EXTERNAL_CALLS, max_seconds=MAX_DATA_GATHER_SECONDS)
         from data.scoring_engine import rank_candidates
 
         cat_config = self.CATEGORY_FILTERS.get(category, self.CATEGORY_FILTERS["market_scan"])
@@ -611,8 +697,12 @@ class MarketDataService:
 
         enrichment_results = []
         for i, ticker in enumerate(ticker_list):
+            if not budget.can_continue():
+                print(f"[Wide Scan] Budget exhausted during light enrichment at ticker {i}/{len(ticker_list)} ({budget.status()})")
+                break
             try:
                 result = await asyncio.wait_for(light_enrich(ticker), timeout=6.0)
+                budget.tick()
             except asyncio.TimeoutError:
                 print(f"[Wide Scan] {ticker} light enrich timed out, skipping")
                 result = {"error": "timeout"}
@@ -650,7 +740,7 @@ class MarketDataService:
             else:
                 clean.append(td)
 
-        deep_tickers = [td["ticker"] for td in clean[:8]]
+        deep_tickers = [td["ticker"] for td in clean[:min(8, MAX_TICKERS_DEEP_DIVE)]]
 
         async def deep_enrich(ticker):
             try:
@@ -676,8 +766,12 @@ class MarketDataService:
 
         deep_results = []
         for i, ticker in enumerate(deep_tickers):
+            if not budget.can_continue():
+                print(f"[Wide Scan] Budget exhausted during deep enrichment at ticker {i}/{len(deep_tickers)} ({budget.status()})")
+                break
             try:
                 result = await asyncio.wait_for(deep_enrich(ticker), timeout=8.0)
+                budget.tick(5)
             except Exception as e:
                 result = {"error": str(e)}
             deep_results.append(result)

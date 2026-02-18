@@ -1176,17 +1176,6 @@ class TradingAgent:
                     "SHIB", "LTC", "BCH", "FIL", "ICP", "STX", "MKR",
                     "RUNE", "PENDLE", "ENA", "W", "STRK", "ZRO", "PYTH",
                 }
-                if self.data.altfins and ticker.upper() in CRYPTO_SYMBOLS:
-                    try:
-                        altfins_data = await asyncio.wait_for(
-                            self.data.altfins.get_coin_deep_dive(ticker),
-                            timeout=10.0,
-                        )
-                        if altfins_data:
-                            ticker_data["altfins"] = altfins_data
-                    except Exception:
-                        pass
-
                 if self.data.xai:
                     try:
                         x_sent = await asyncio.wait_for(

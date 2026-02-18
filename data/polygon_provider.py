@@ -223,7 +223,8 @@ class PolygonProvider:
             return []
 
     def get_technicals(self, ticker: str) -> dict:
-        """Calculate technicals from daily bars (works on free Polygon tier)."""
+        """Calculate technicals from daily bars using shared ta_utils (works on free Polygon tier)."""
+        from data.ta_utils import compute_technicals_from_bars
         ticker = ticker.upper()
         cache_key = f"polygon:technicals:{ticker}"
         cached = cache.get(cache_key)
@@ -235,59 +236,18 @@ class PolygonProvider:
             if len(bars) < 20:
                 return {}
 
-            closes = [b["c"] for b in bars]
-            volumes = [b.get("v", 0) for b in bars]
-
-            rsi = None
-            if len(closes) >= 15:
-                deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-                gains = [d if d > 0 else 0 for d in deltas[-14:]]
-                losses = [-d if d < 0 else 0 for d in deltas[-14:]]
-                avg_gain = sum(gains) / 14
-                avg_loss = sum(losses) / 14
-                if avg_loss > 0:
-                    rs = avg_gain / avg_loss
-                    rsi = round(100 - (100 / (1 + rs)), 2)
-                else:
-                    rsi = 100.0
-
-            sma_20 = round(sum(closes[-20:]) / 20, 2) if len(closes) >= 20 else None
-            sma_50 = round(sum(closes[-50:]) / 50, 2) if len(closes) >= 50 else None
-
-            macd = None
-            macd_signal = None
-            macd_histogram = None
-            if len(closes) >= 35:
-                def ema(data_list, period):
-                    multiplier = 2 / (period + 1)
-                    ema_val = sum(data_list[:period]) / period
-                    for price in data_list[period:]:
-                        ema_val = (price - ema_val) * multiplier + ema_val
-                    return ema_val
-
-                ema_12 = ema(closes, 12)
-                ema_26 = ema(closes, 26)
-                macd = round(ema_12 - ema_26, 4)
-
-                macd_values = []
-                for i in range(26, len(closes)):
-                    e12 = ema(closes[: i + 1], 12)
-                    e26 = ema(closes[: i + 1], 26)
-                    macd_values.append(e12 - e26)
-                if len(macd_values) >= 9:
-                    macd_signal = round(ema(macd_values, 9), 4)
-                    macd_histogram = round(macd - macd_signal, 4)
-
-            avg_volume = round(sum(volumes[-30:]) / min(len(volumes), 30)) if volumes else None
+            result = compute_technicals_from_bars(bars)
+            if not result:
+                return {}
 
             result = {
-                "rsi": rsi,
-                "sma_20": sma_20,
-                "sma_50": sma_50,
-                "macd": macd,
-                "macd_signal": macd_signal,
-                "macd_histogram": macd_histogram,
-                "avg_volume": avg_volume,
+                "rsi": result.get("rsi"),
+                "sma_20": result.get("sma_20"),
+                "sma_50": result.get("sma_50"),
+                "macd": result.get("macd"),
+                "macd_signal": result.get("macd_signal"),
+                "macd_histogram": result.get("macd_histogram"),
+                "avg_volume": result.get("avg_volume"),
             }
             cache.set(cache_key, result, POLYGON_TECHNICALS_TTL)
             return result

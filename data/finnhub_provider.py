@@ -344,6 +344,49 @@ class FinnhubProvider:
             print(f"Finnhub upcoming earnings error: {e}")
             return []
 
+    def get_stock_candles(self, ticker: str, days: int = 120) -> list:
+        """Fetch daily OHLCV candles from Finnhub. Returns list of bar dicts."""
+        ticker = ticker.upper()
+        cache_key = f"finnhub:candles:{ticker}:{days}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            end = int(datetime.now().timestamp())
+            start = int((datetime.now() - timedelta(days=days)).timestamp())
+            data = self.client.stock_candles(ticker, 'D', start, end)
+            if not data or data.get("s") != "ok":
+                return []
+            bars = []
+            closes = data.get("c", [])
+            opens = data.get("o", [])
+            highs = data.get("h", [])
+            lows = data.get("l", [])
+            volumes = data.get("v", [])
+            timestamps = data.get("t", [])
+            for i in range(len(closes)):
+                bars.append({
+                    "c": closes[i],
+                    "o": opens[i] if i < len(opens) else None,
+                    "h": highs[i] if i < len(highs) else None,
+                    "l": lows[i] if i < len(lows) else None,
+                    "v": volumes[i] if i < len(volumes) else 0,
+                    "t": timestamps[i] if i < len(timestamps) else None,
+                })
+            cache.set(cache_key, bars, 300)
+            return bars
+        except Exception as e:
+            print(f"Finnhub candles error for {ticker}: {e}")
+            return []
+
+    def get_technicals(self, ticker: str) -> dict:
+        """Compute technicals locally from Finnhub candle data."""
+        from data.ta_utils import compute_technicals_from_bars
+        bars = self.get_stock_candles(ticker)
+        if not bars:
+            return {}
+        return compute_technicals_from_bars(bars)
+
     def _interpret_mspr(self, mspr) -> str:
         """Interpret the insider sentiment MSPR score."""
         if mspr is None:
