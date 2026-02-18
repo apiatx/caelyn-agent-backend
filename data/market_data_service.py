@@ -172,6 +172,12 @@ def _parse_vol(val):
         return None
 
 
+def _log_provider_stats(phase: str, stats: dict):
+    for provider, s in stats.items():
+        if s["attempted"] > 0:
+            print(f"[BEST_TRADES] [{phase}] {provider}: {s['attempted']} attempted, {s['success']} ok, {s['auth_fail']} auth_fail, {s['rate_limit']} rate_limit, {s['timeout']} timeout, {s['error']} error")
+
+
 class MarketDataService:
     """
     Unified interface for all market data.
@@ -1018,12 +1024,85 @@ class MarketDataService:
     async def get_best_trades_scan(self) -> dict:
         """
         TA-first scanner for best trade setups.
-        Runs parallel Finviz screens, fetches OHLCV, stacks signals,
-        builds deterministic trade plans, and returns structured candidates.
+        Two-phase pipeline:
+          Phase 1: Candidate discovery (cheap Finviz screens) + rank/shortlist (max 8)
+          Phase 2: Critical OHLCV fetch for shortlist only with concurrency control,
+                   exponential backoff, and recovery mode.
         """
         import time
         from data.ta_utils import compute_technicals_from_bars, compute_rsi, compute_sma, compute_ema
         scan_start = time.time()
+
+        provider_stats = {
+            "finnhub": {"attempted": 0, "success": 0, "auth_fail": 0, "rate_limit": 0, "timeout": 0, "error": 0},
+            "polygon": {"attempted": 0, "success": 0, "auth_fail": 0, "rate_limit": 0, "timeout": 0, "error": 0},
+        }
+        candle_source_used = set()
+        ohlc_semaphore = asyncio.Semaphore(3)
+
+        async def _fetch_candles_with_backoff(ticker: str) -> list:
+            bars = []
+            async with ohlc_semaphore:
+                provider_stats["finnhub"]["attempted"] += 1
+                try:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(self.finnhub.get_stock_candles, ticker, 120),
+                        timeout=10.0,
+                    )
+                    if result and len(result) >= 20:
+                        provider_stats["finnhub"]["success"] += 1
+                        candle_source_used.add("finnhub")
+                        return result
+                    elif not result:
+                        provider_stats["finnhub"]["auth_fail"] += 1
+                except asyncio.TimeoutError:
+                    provider_stats["finnhub"]["timeout"] += 1
+                except Exception as e:
+                    err_str = str(e)
+                    if "403" in err_str or "401" in err_str:
+                        provider_stats["finnhub"]["auth_fail"] += 1
+                    elif "429" in err_str:
+                        provider_stats["finnhub"]["rate_limit"] += 1
+                    else:
+                        provider_stats["finnhub"]["error"] += 1
+
+                for attempt in range(2):
+                    provider_stats["polygon"]["attempted"] += 1
+                    try:
+                        poly_bars = await asyncio.wait_for(
+                            asyncio.to_thread(self.polygon.get_daily_bars, ticker, 120),
+                            timeout=10.0,
+                        )
+                        if poly_bars and len(poly_bars) >= 20:
+                            provider_stats["polygon"]["success"] += 1
+                            candle_source_used.add("polygon")
+                            bars = [{"o": b.get("o"), "h": b.get("h"), "l": b.get("l"),
+                                     "c": b.get("c"), "v": b.get("v", 0), "t": b.get("t")}
+                                    for b in poly_bars]
+                            return bars
+                        elif poly_bars is not None and isinstance(poly_bars, list) and len(poly_bars) == 0:
+                            provider_stats["polygon"]["error"] += 1
+                            break
+                        else:
+                            provider_stats["polygon"]["error"] += 1
+                            break
+                    except asyncio.TimeoutError:
+                        provider_stats["polygon"]["timeout"] += 1
+                        if attempt < 1:
+                            await asyncio.sleep(0.8 * (2 ** attempt))
+                    except Exception as e:
+                        err_str = str(e)
+                        if "429" in err_str or "rate" in err_str.lower():
+                            provider_stats["polygon"]["rate_limit"] += 1
+                            if attempt < 1:
+                                await asyncio.sleep(0.8 * (2 ** attempt))
+                        elif "403" in err_str or "401" in err_str:
+                            provider_stats["polygon"]["auth_fail"] += 1
+                            break
+                        else:
+                            provider_stats["polygon"]["error"] += 1
+                            break
+            return []
 
         new_highs_task = self.finviz.get_new_highs()
         unusual_vol_task = self.finviz.get_unusual_volume()
@@ -1060,29 +1139,27 @@ class MarketDataService:
 
         print(f"[BEST_TRADES] {len(ticker_sources)} unique candidates from {len(new_highs)} highs, {len(unusual_vol)} vol, {len(gainers)} gainers, {len(breakout)} breakout, {len(vol_screen)} vol_screen")
 
-        candidates = []
-        missing_ohlc = 0
-        tickers_to_scan = list(ticker_sources.keys())[:40]
+        def _pre_rank_score(ticker: str) -> int:
+            info = ticker_sources.get(ticker, {})
+            src = info.get("sources", [])
+            score = len(src) * 10
+            if "new_high" in src:
+                score += 15
+            if "breakout" in src:
+                score += 12
+            if "unusual_vol" in src:
+                score += 10
+            if "gainer" in src:
+                score += 8
+            return score
 
-        async def fetch_and_analyze(ticker):
-            nonlocal missing_ohlc
-            bars = await asyncio.to_thread(self.finnhub.get_stock_candles, ticker, 120)
-            if not bars or len(bars) < 20:
-                try:
-                    poly_bars = await asyncio.to_thread(self.polygon.get_daily_bars, ticker, 120)
-                    if poly_bars:
-                        bars = [{"o": b.get("o"), "h": b.get("h"), "l": b.get("l"),
-                                 "c": b.get("c"), "v": b.get("v", 0), "t": b.get("t")}
-                                for b in poly_bars]
-                except Exception:
-                    pass
-            if not bars or len(bars) < 20:
-                missing_ohlc += 1
-                return None
+        ranked_tickers = sorted(ticker_sources.keys(), key=_pre_rank_score, reverse=True)
+        shortlist = ranked_tickers[:8]
+        print(f"[BEST_TRADES] Shortlisted {len(shortlist)} tickers from {len(ranked_tickers)} (pre-ranked)")
 
+        async def _analyze_ticker(ticker, bars):
             ta = compute_technicals_from_bars(bars)
             if not ta:
-                missing_ohlc += 1
                 return None
 
             closes = [b["c"] for b in bars if b.get("c") is not None]
@@ -1148,13 +1225,12 @@ class MarketDataService:
                 signals.append("volume_expansion")
                 signal_details["vol_ratio"] = round(vol_ratio, 1)
 
-            if len(volumes) >= 5 and avg_vol > 0:
-                prev_day_vol = volumes[-2] if len(volumes) >= 2 else 0
-                if prev_day_vol > 0:
-                    vol_pct_increase = ((current_vol - prev_day_vol) / prev_day_vol) * 100
-                    if vol_pct_increase >= 100:
+            if avg_vol > 0 and current_vol > 0:
+                vol_pct_vs_avg = (current_vol / avg_vol) * 100
+                if vol_pct_vs_avg >= 200:
+                    if "volume_surge" not in signals:
                         signals.append("volume_surge")
-                        signal_details["vol_pct_increase"] = round(vol_pct_increase, 0)
+                    signal_details["vol_pct_increase"] = round(vol_pct_vs_avg - 100, 0)
 
             if len(closes) >= 20:
                 recent_range = max(highs[-20:]) - min(lows[-20:]) if highs[-20:] and lows[-20:] else 0
@@ -1214,22 +1290,11 @@ class MarketDataService:
                     rr_2 = round(abs(entry - target_2) / risk, 1) if risk > 0 else 0
 
             volume_confirmed = vol_ratio >= 1.5
+            if avg_vol <= 1 or current_vol <= 0:
+                volume_confirmed = False
             catalyst_confirmed = "new_high" in source_list or "unusual_vol" in source_list
             ta_confirmed = signal_count >= 3
             fa_sane = True
-
-            overview = None
-            try:
-                overview = await asyncio.wait_for(
-                    self.stockanalysis.get_overview(ticker), timeout=5.0
-                )
-            except Exception:
-                pass
-
-            if overview and isinstance(overview, dict):
-                pe = overview.get("pe_ratio")
-                if pe and isinstance(pe, (int, float)) and pe < 0:
-                    fa_sane = False
 
             pattern = "Stage 2 breakout" if "stage2_uptrend" in signals else \
                       "Range breakout" if "breakout_attempt" in signals else \
@@ -1239,15 +1304,12 @@ class MarketDataService:
                       "Volume expansion" if "volume_expansion" in signals else \
                       "Technical setup"
 
-            exchange = ""
-            if overview and isinstance(overview, dict):
-                exchange = overview.get("exchange", "")
-            tv_sym = f"{exchange}:{ticker}" if exchange else ticker
+            tv_sym = ticker
 
             candidate = {
                 "ticker": ticker,
-                "name": finviz_data.get("company", overview.get("name", "") if overview else ""),
-                "exchange": exchange,
+                "name": finviz_data.get("company", ""),
+                "exchange": "",
                 "direction": "short" if bearish else "long",
                 "action": "SELL" if bearish else "BUY",
                 "confidence_score": min(95, tech_score + (10 if volume_confirmed else 0) + (5 if catalyst_confirmed else 0)),
@@ -1269,23 +1331,52 @@ class MarketDataService:
                 "tv_url": f"https://www.tradingview.com/chart/?symbol={tv_sym}",
                 "price": f"${current_price:.2f}",
                 "change": finviz_data.get("change", ""),
-                "market_cap": finviz_data.get("market_cap", overview.get("market_cap", "") if overview else ""),
+                "market_cap": finviz_data.get("market_cap", ""),
                 "rsi": rsi,
                 "volume_ratio": round(vol_ratio, 1),
                 "data_gaps": [],
                 "is_bearish": bearish,
             }
-            if not overview:
-                candidate["data_gaps"].append("fundamentals")
             return candidate
 
-        tasks = [fetch_and_analyze(t) for t in tickers_to_scan]
-        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+        ohlc_results = {}
+        missing_ohlc = 0
+        async def _fetch_ohlc_for_ticker(ticker):
+            nonlocal missing_ohlc
+            bars = await _fetch_candles_with_backoff(ticker)
+            if bars and len(bars) >= 20:
+                ohlc_results[ticker] = bars
+            else:
+                missing_ohlc += 1
+
+        fetch_tasks = [_fetch_ohlc_for_ticker(t) for t in shortlist]
+        await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+        print(f"[BEST_TRADES] OHLCV phase: {len(ohlc_results)}/{len(shortlist)} tickers got data, {missing_ohlc} missing")
+        _log_provider_stats("OHLCV", provider_stats)
+
+        if len(ohlc_results) == 0 and len(shortlist) > 0:
+            print("[BEST_TRADES] RECOVERY MODE: 0 tickers got OHLCV, retrying top 3 sequentially")
+            recovery_tickers = shortlist[:3]
+            for ticker in recovery_tickers:
+                try:
+                    bars = await _fetch_candles_with_backoff(ticker)
+                    if bars and len(bars) >= 20:
+                        ohlc_results[ticker] = bars
+                        print(f"[BEST_TRADES] RECOVERY: {ticker} succeeded")
+                except Exception as e:
+                    print(f"[BEST_TRADES] RECOVERY: {ticker} failed: {e}")
+            print(f"[BEST_TRADES] RECOVERY result: {len(ohlc_results)} tickers with data")
+            _log_provider_stats("RECOVERY", provider_stats)
 
         all_candidates = []
-        for r in raw_results:
-            if isinstance(r, dict):
-                all_candidates.append(r)
+        for ticker, bars in ohlc_results.items():
+            try:
+                candidate = await _analyze_ticker(ticker, bars)
+                if candidate:
+                    all_candidates.append(candidate)
+            except Exception as e:
+                print(f"[BEST_TRADES] Analysis error for {ticker}: {e}")
 
         bullish = sorted([c for c in all_candidates if not c.get("is_bearish")],
                          key=lambda x: x["confidence_score"], reverse=True)
@@ -1293,6 +1384,16 @@ class MarketDataService:
                               key=lambda x: x["confidence_score"], reverse=True)[:2]
 
         top_trades = bullish[:8]
+
+        if top_trades and len(top_trades) > 0:
+            enrich_tasks = []
+            for c in top_trades:
+                enrich_tasks.append(self._enrich_trade_candidate(c))
+            enriched = await asyncio.gather(*enrich_tasks, return_exceptions=True)
+            for i, result in enumerate(enriched):
+                if isinstance(result, dict):
+                    top_trades[i] = result
+
         for c in top_trades + bearish_list:
             c.pop("is_bearish", None)
             c.pop("signal_count", None)
@@ -1300,7 +1401,33 @@ class MarketDataService:
         macro = await self._build_macro_snapshot()
 
         elapsed = time.time() - scan_start
+        any_rate_limited = (provider_stats["finnhub"]["rate_limit"] > 0 or
+                            provider_stats["polygon"]["rate_limit"] > 0)
+        any_auth_fail = (provider_stats["finnhub"]["auth_fail"] > 0 or
+                         provider_stats["polygon"]["auth_fail"] > 0)
+
+        data_health = {
+            "quote_source": "finnhub" if provider_stats["finnhub"]["success"] > 0 else "fallback",
+            "candles_source": ",".join(sorted(candle_source_used)) if candle_source_used else "none",
+            "rate_limited": any_rate_limited,
+            "auth_errors": any_auth_fail,
+            "budget_exhausted": False,
+            "providers": provider_stats,
+            "recovery_mode_triggered": len(ohlc_results) == 0 and len(shortlist) > 0,
+        }
+
+        if len(top_trades) == 0 and len(bearish_list) == 0:
+            reasons = []
+            if any_auth_fail:
+                reasons.append("Provider auth failing (403)")
+            if any_rate_limited:
+                reasons.append("Rate limited on quote/candles")
+            if missing_ohlc > 0:
+                reasons.append(f"OHLCV unavailable for {missing_ohlc} tickers")
+            data_health["empty_reason"] = "; ".join(reasons) if reasons else "No qualifying setups found"
+
         print(f"[BEST_TRADES] candidates={len(all_candidates)} selected={len(top_trades)} bearish={len(bearish_list)} missing_ohlc={missing_ohlc} ({elapsed:.1f}s)")
+        print(f"[BEST_TRADES] data_health: candles_source={data_health['candles_source']} rate_limited={any_rate_limited} auth_errors={any_auth_fail}")
 
         return {
             "scan_type": "best_trades",
@@ -1310,11 +1437,39 @@ class MarketDataService:
             "bearish_setups": bearish_list,
             "scan_stats": {
                 "total_screened": len(ticker_sources),
+                "shortlisted": len(shortlist),
+                "ohlc_fetched": len(ohlc_results),
                 "ohlc_analyzed": len(all_candidates),
                 "missing_ohlc": missing_ohlc,
                 "elapsed_s": round(elapsed, 1),
             },
+            "data_health": data_health,
         }
+
+    async def _enrich_trade_candidate(self, candidate: dict) -> dict:
+        ticker = candidate.get("ticker", "")
+        try:
+            overview = await asyncio.wait_for(
+                self.stockanalysis.get_overview(ticker), timeout=5.0
+            )
+        except Exception:
+            overview = None
+
+        if overview and isinstance(overview, dict):
+            pe = overview.get("pe_ratio")
+            if pe and isinstance(pe, (int, float)) and pe < 0:
+                candidate["confirmations"]["fa"] = False
+            exchange = overview.get("exchange", "")
+            if exchange:
+                candidate["exchange"] = exchange
+                candidate["tv_url"] = f"https://www.tradingview.com/chart/?symbol={exchange}:{ticker}"
+            if not candidate.get("name"):
+                candidate["name"] = overview.get("name", "")
+            if not candidate.get("market_cap") or candidate["market_cap"] == "":
+                candidate["market_cap"] = overview.get("market_cap", "")
+        else:
+            candidate["data_gaps"].append("fundamentals")
+        return candidate
 
     async def get_top_fundamental_catalysts(self) -> dict:
         """

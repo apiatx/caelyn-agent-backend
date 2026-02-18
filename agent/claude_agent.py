@@ -430,6 +430,13 @@ class TradingAgent:
                     "structured": structured,
                 }
 
+        if category == "best_trades" and market_data and isinstance(market_data, dict):
+            data_health = market_data.get("data_health")
+            if data_health:
+                structured = result.get("structured")
+                if isinstance(structured, dict):
+                    structured.setdefault("meta", {})["data_health"] = data_health
+
         if market_data and isinstance(market_data, dict) and market_data.get("pre_computed_highlights"):
             pch = market_data["pre_computed_highlights"]
             structured = result.get("structured") or result

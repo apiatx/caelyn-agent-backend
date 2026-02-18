@@ -1,0 +1,82 @@
+BACKEND FIX: Best Trades returning “missing everything”. Make critical market data (quote + candles) reliable.
+
+Do NOT change Daily Briefing or Trending Now output or schemas.
+Do NOT remove fallbacks, scoring, regime, or Claude narrator.
+
+Goal:
+For best_trades preset, always return trade cards with real entry/stop/targets whenever possible.
+If rate-limited, degrade by reducing candidate count and retrying critical fetches, instead of returning “no data” for all tickers.
+
+A) Add provider diagnostics (to logs + response meta)
+1) For best_trades runs, log per-provider status summary:
+   - provider name
+   - calls attempted
+   - successes
+   - 429 count
+   - 401/403 count
+   - timeout count
+   - parse error count
+2) Include a compact meta field in response (structured.meta.data_health):
+   {
+     "quote_source":"finnhub|fallback",
+     "candles_source":"finnhub|polygon|fallback",
+     "rate_limited": true/false,
+     "budget_exhausted": true/false,
+     "errors":[...]
+   }
+This is for debugging only, do not render in chat bubble.
+
+B) Force critical fetch ordering for best_trades
+1) Pipeline order for best_trades must be:
+   i) candidate discovery (cheap)
+   ii) pick shortlist first (max 8 tickers, bullish first)
+   iii) fetch CRITICAL fields for shortlist only:
+       - quote
+       - candles/bars with volume (at least 60-120 bars)
+       - compute TA locally
+   iv) only then, if budget remains:
+       - news density
+       - fundamentals
+       - social overlay
+2) Do not attempt OHLC for 12+ tickers. Hard cap shortlist at 8 before any OHLC calls.
+
+C) Concurrency and rate limit protection
+1) Wrap all external calls for quote/candles in a shared asyncio.Semaphore:
+   - max_concurrent=3 for free tiers
+2) Add exponential backoff on 429 for critical calls:
+   - retry 2 times: wait 0.8s then 1.6s
+3) Increase critical call timeout (quote/candles) to 8-10s for best_trades only.
+   Keep non-critical calls at existing lower timeout.
+
+D) Provider selection (avoid tiny free-tier bottlenecks)
+1) For best_trades critical data:
+   - Primary: Finnhub quote + candles (if available in your plan)
+   - Secondary: Polygon bars ONLY if Finnhub fails
+   - Do not use Massive as primary for anything in best_trades (5/min will break scans).
+2) If Finnhub candle endpoint is not available or unreliable:
+   - Use an alternative free source that you already have wired (or switch best_trades candles to whichever provider actually works in deployment).
+   - Log clearly which source is used.
+
+E) “All missing” recovery mode
+If after critical fetch step, 0 tickers have BOTH quote and candles:
+1) Run recovery mode:
+   - reduce shortlist to top 3 candidates
+   - fetch sequentially (concurrency=1)
+   - retry with backoff
+2) If still 0, return trades schema with empty list AND a short reason:
+   - “Rate limited on quote/candles” or “Provider auth failing”
+   - Do NOT return generic narrative advice in place of trades.
+
+F) Volume feature fix
+Your “biggest volume” highlight must be “biggest volume % increase” computed as:
+   last_bar_volume / avg_volume_30d
+If candles include volume, compute locally.
+If volume missing, mark confirmations.volume=N and do not select “biggest volume” from empty data.
+
+G) Tests
+Add one test for best_trades:
+- Ensures response display_type="trades"
+- Ensures at least one returned trade has non-empty entry/stop/targets when provider calls succeed
+- Ensures if providers return 429, recovery mode triggers and response is still structured (not plain text)
+
+After tests pass: Publish backend.
