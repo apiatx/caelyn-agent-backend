@@ -304,7 +304,14 @@ class TradingAgent:
             "commodities", "dashboard",
         }
         if market_data and isinstance(market_data, dict) and category in SCORING_CATEGORIES:
-            market_data = apply_institutional_scoring(market_data)
+            try:
+                from core.regime_engine import detect_market_regime
+                regime_data = detect_market_regime(self.data)
+                print(f"[REGIME] Detected: {regime_data.get('regime')} (confidence={regime_data.get('confidence', 0)})")
+            except Exception as e:
+                print(f"[REGIME] Detection failed, defaulting to neutral: {e}")
+                regime_data = {"regime": "neutral", "confidence": 0}
+            market_data = apply_institutional_scoring(market_data, regime_data=regime_data)
 
         raw_response = await self._ask_claude_with_timeout(user_prompt, market_data, history, is_followup=is_followup, category=category)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")

@@ -2,20 +2,20 @@
 Institutional Prior Scoring Engine.
 Runs AFTER data gathering, BEFORE Claude sees candidates.
 
-This is a SOFT scoring layer — enrichment only, no filtering.
-It adds prior_score metadata to help Claude rank consistently
-while preserving creative edge and discovery optionality.
+Regime-aware deterministic scoring pipeline:
+  1. Compute sub-scores: technical, fundamental/catalyst, sentiment, catalyst_strength
+  2. Detect market regime (risk_on / risk_off / inflationary / neutral)
+  3. Apply regime-specific weight matrix to sub-scores
+  4. Apply cross-asset weight adjustment (mcap tier, sector, asset class)
+  5. Enforce social→FA discipline
+  6. Attach structured scorecard + position sizing guidance
 
-Scoring Formula (institutional baseline):
-  prior_score = 0.30 * technical + 0.30 * catalyst + 0.20 * sector
-              + 0.10 * social + 0.10 * liquidity
-
-Asymmetry boost: +5 for micro/small caps with strong catalyst + sector alignment.
-
-Claude receives the breakdown and may re-rank with justification.
+Claude receives the final scorecard and interprets — does NOT rescore.
 """
 
 from data.scoring_engine import parse_pct, parse_market_cap_string, get_market_cap
+from core.catalyst_engine import calculate_catalyst_score
+from core.asset_weight_engine import apply_asset_weights
 
 
 MCAP_SMALL_CEILING = 2_000_000_000
@@ -271,70 +271,161 @@ def _get_market_cap_category(data: dict) -> str:
     return "large"
 
 
-def score_candidate(ticker: str, asset: dict) -> dict:
+REGIME_WEIGHT_MATRIX = {
+    "risk_on": {
+        "technical": 0.30,
+        "sentiment": 0.30,
+        "fundamentals": 0.20,
+        "catalyst": 0.20,
+    },
+    "risk_off": {
+        "technical": 0.20,
+        "sentiment": 0.15,
+        "fundamentals": 0.40,
+        "catalyst": 0.25,
+    },
+    "inflationary": {
+        "technical": 0.25,
+        "sentiment": 0.20,
+        "fundamentals": 0.30,
+        "catalyst": 0.25,
+    },
+    "neutral": {
+        "technical": 0.30,
+        "sentiment": 0.20,
+        "fundamentals": 0.25,
+        "catalyst": 0.25,
+    },
+}
+
+POSITION_SIZING = {
+    "risk_on": {"max_position_pct": "5-8%", "sizing_note": "Full conviction sizing allowed"},
+    "risk_off": {"max_position_pct": "2-3%", "sizing_note": "Defensive sizing — protect capital"},
+    "inflationary": {"max_position_pct": "3-5%", "sizing_note": "Moderate sizing — inflation hedges favored"},
+    "neutral": {"max_position_pct": "3-5%", "sizing_note": "Standard sizing — no regime edge"},
+}
+
+
+def score_candidate(ticker: str, asset: dict, regime_data: dict = None) -> dict:
     """
-    Enrich a single candidate with institutional prior scoring metadata.
-    Does NOT filter assets out. This is enrichment only.
+    Regime-aware deterministic scoring for a single candidate.
+    Computes sub-scores, applies regime weight matrix, cross-asset adjustment,
+    social discipline, and position sizing guidance.
+    Returns structured scorecard — Claude interprets, does NOT rescore.
     """
+    regime = (regime_data or {}).get("regime", "neutral")
+    weights = REGIME_WEIGHT_MATRIX.get(regime, REGIME_WEIGHT_MATRIX["neutral"])
+
     technical = _compute_technical_score(asset)
-    catalyst = _compute_catalyst_score(asset)
     sector = _compute_sector_score(asset)
     social = _compute_social_score(asset)
     liquidity = _compute_liquidity_score(asset)
 
-    final_score = (
-        0.30 * technical +
-        0.30 * catalyst +
-        0.20 * sector +
-        0.10 * social +
-        0.10 * liquidity
+    catalyst_result = calculate_catalyst_score(asset)
+    catalyst_strength = catalyst_result["catalyst_score"]
+
+    fundamental = _compute_catalyst_score(asset)
+
+    raw_score = (
+        weights["technical"] * technical +
+        weights["sentiment"] * social +
+        weights["fundamentals"] * fundamental +
+        weights["catalyst"] * catalyst_strength
     )
 
     mcap_category = _get_market_cap_category(asset)
     if mcap_category in ("micro", "small"):
-        if catalyst >= 70 and sector >= 65:
-            final_score += 5
+        if fundamental >= 70 and sector >= 65:
+            raw_score += 5
 
     social_discipline_flag = None
     if social >= 60:
-        if technical < 45 and catalyst < 45:
-            final_score *= 0.85
+        if technical < 45 and fundamental < 45:
+            raw_score *= 0.85
             social_discipline_flag = "SOCIAL_UNCONFIRMED"
 
-    asset["prior_score"] = round(final_score, 1)
-    scoring_meta = {
-        "prior_score": round(final_score, 1),
+    asset_metadata = {
+        "asset_class": _detect_asset_class(asset),
+        "market_cap_tier": mcap_category,
+        "sector": _extract_sector(asset),
+    }
+    weight_result = apply_asset_weights(raw_score, asset_metadata, regime)
+    adjusted_score = weight_result["adjusted_score"]
+
+    creative_override = False
+    if adjusted_score < 50 and social > 85 and catalyst_strength > 60:
+        creative_override = True
+
+    position_guide = POSITION_SIZING.get(regime, POSITION_SIZING["neutral"])
+
+    asset["prior_score"] = adjusted_score
+    scorecard = {
+        "prior_score": adjusted_score,
         "technical_score": round(technical, 1),
-        "catalyst_score": round(catalyst, 1),
+        "fundamental_score": round(fundamental, 1),
+        "sentiment_score": round(social, 1),
+        "catalyst_score": catalyst_strength,
+        "catalyst_breakdown": catalyst_result["components"],
         "sector_alignment_score": round(sector, 1),
-        "social_score": round(social, 1),
         "liquidity_score": round(liquidity, 1),
         "market_cap_category": mcap_category,
+        "regime": regime,
+        "regime_confidence": (regime_data or {}).get("confidence", 0),
+        "weight_matrix": weights,
+        "regime_multiplier": weight_result["regime_multiplier"],
+        "raw_score": weight_result["raw_score"],
+        "adjusted_final_score": adjusted_score,
+        "position_sizing": position_guide,
     }
     if social_discipline_flag:
-        scoring_meta["social_discipline_flag"] = social_discipline_flag
-    asset["institutional_scoring"] = scoring_meta
+        scorecard["social_discipline_flag"] = social_discipline_flag
+    if creative_override:
+        scorecard["creative_discovery_override"] = True
+    asset["institutional_scoring"] = scorecard
 
     return asset
 
 
-def apply_institutional_scoring(market_data: dict) -> dict:
-    """
-    Apply soft institutional scoring to all candidates in market_data.
-    Works on the enriched_data dict returned by wide_scan_and_rank
-    and similar data gathering functions.
+def _detect_asset_class(data: dict) -> str:
+    for source in [data.get("overview", {}), data.get("details", {}), data.get("profile", {})]:
+        if isinstance(source, dict):
+            if source.get("asset_type"):
+                return source["asset_type"].lower()
+    ticker = data.get("ticker", "")
+    if isinstance(ticker, str) and ticker.upper() in {
+        "BTC", "ETH", "SOL", "DOGE", "ADA", "XRP", "AVAX", "LINK", "DOT",
+        "MATIC", "NEAR", "ARB", "OP", "SUI", "APT", "SEI", "TIA", "INJ",
+    }:
+        return "crypto"
+    return "equity"
 
-    Sorts by prior_score descending but does NOT remove any candidates.
-    Returns the market_data dict with scoring metadata injected.
+
+def _extract_sector(data: dict) -> str:
+    for source in [data.get("overview", {}), data.get("details", {}), data.get("profile", {})]:
+        if isinstance(source, dict):
+            sector = source.get("sector") or source.get("industry")
+            if sector:
+                return sector
+    return ""
+
+
+def apply_institutional_scoring(market_data: dict, regime_data: dict = None) -> dict:
+    """
+    Apply regime-aware institutional scoring to all candidates in market_data.
+    Sorts by adjusted_final_score descending but does NOT remove any candidates.
+    Attaches regime context and position sizing guidance to the market_data.
     """
     enriched = market_data.get("enriched_data")
     if not enriched or not isinstance(enriched, dict):
         return market_data
 
+    if regime_data is None:
+        regime_data = {"regime": "neutral", "confidence": 0}
+
     scored_count = 0
     for ticker, data in enriched.items():
         if isinstance(data, dict) and "error" not in data:
-            score_candidate(ticker.replace("FLAGGED_", ""), data)
+            score_candidate(ticker.replace("FLAGGED_", ""), data, regime_data)
             scored_count += 1
 
     if scored_count > 0:
@@ -352,7 +443,12 @@ def apply_institutional_scoring(market_data: dict) -> dict:
             for t in sorted_tickers[:10]
             if isinstance(enriched[t], dict)
         ]
-        print(f"[PRIOR SCORING] Scored {scored_count} candidates | "
+        print(f"[SCORING] Regime={regime_data.get('regime')} | Scored {scored_count} | "
               f"Top: {scores[:5]}")
+
+    market_data["regime_context"] = regime_data
+    market_data["position_sizing"] = POSITION_SIZING.get(
+        regime_data.get("regime", "neutral"), POSITION_SIZING["neutral"]
+    )
 
     return market_data

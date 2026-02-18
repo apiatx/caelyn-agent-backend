@@ -124,6 +124,9 @@ PROTECTED_KEYS = {
     "ranked_candidates", "ranking_debug",
     "institutional_scoring", "prior_score",
     "data_completeness", "budget_exhausted_at", "social_discipline_flag",
+    "regime_context", "position_sizing", "catalyst_breakdown",
+    "adjusted_final_score", "regime", "regime_multiplier",
+    "creative_discovery_override", "weight_matrix",
 }
 
 
