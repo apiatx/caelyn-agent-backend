@@ -1,0 +1,99 @@
+Do NOT change:
+
+API schema
+
+frontend payloads
+
+routing presets
+
+Claude system prompt text (unless explicitly requested below)
+
+existing provider integrations
+
+Add only validation logs and safe guardrails.
+
+Task 1: Add “Data Availability” flags to every candidate
+
+For each candidate in the scored output, include:
+
+has_price_data
+
+has_ohlc
+
+has_fundamentals
+
+has_news
+
+has_social
+
+has_volume
+
+catalyst_components_present: [list]
+
+If a component is missing, keep score component at 0 and mark it missing.
+
+Task 2: Add scoring debug block to final response metadata
+
+Return (in backend JSON response) a debug object:
+
+regime: {name, confidence, inputs_used}
+
+scoring_weights_used
+
+cross_asset_multiplier_used per candidate
+
+top 10 candidates with score breakdown
+
+This must not change the existing response format used by UI. Add to an existing metadata/debug field if present.
+
+Task 3: Enforce Social→Validation rule in Python
+
+Before recommending as “BUY / High Conviction” enforce:
+
+Require at least 2 of 3:
+
+TA confirmation (breakout / trend / momentum threshold)
+
+catalyst_score >= threshold and at least one real component present (earnings proximity OR news spike OR revenue acceleration)
+
+liquidity check (min volume and min market cap tier OR spreads proxy)
+
+If rule fails:
+Return as “WATCH” not “BUY” and explain why.
+
+Task 4: Guardrail the “creative discovery override”
+
+If override triggers (social>85 & catalyst>60), require:
+
+liquidity not “low”
+
+and TA not “broken” (avoid downtrend catch)
+Otherwise label explicitly as:
+“Speculative / Lottery” and cap sizing guidance to <=1%.
+
+Task 5: Regime inputs reliability check
+
+Log when any regime input fails:
+
+SPY candles
+
+VIX proxy
+
+UUP proxy
+
+BTC proxy
+
+If 2+ inputs missing:
+Set regime=neutral with low confidence and log it.
+
+Task 6: Add a one-line [SCORING] log per request
+
+Include:
+
+regime + confidence
+
+how many candidates were fully scored vs partially scored
+
+whether override triggered
+
+whether budget exhausted and led to partial results
