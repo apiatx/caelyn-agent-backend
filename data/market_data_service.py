@@ -28,35 +28,91 @@ DATA_SOURCES = {
 }
 
 MAX_TICKERS_DEEP_DIVE = 10
-MAX_EXTERNAL_CALLS = 40
+MAX_BUDGET_POINTS = 50
 MAX_DATA_GATHER_SECONDS = 10
+
+CALL_WEIGHTS = {
+    "macro": 1,
+    "quote": 1,
+    "candle": 2,
+    "fundamentals": 3,
+    "crypto_market_scan": 4,
+    "light_enrich": 1,
+    "deep_enrich": 3,
+    "sentiment": 1,
+    "news": 1,
+}
+
+PRESET_BUDGETS = {
+    "macro_outlook": {"max_points": 25, "max_seconds": 8, "allow_deep_dive": False},
+    "morning_briefing": {"max_points": 30, "max_seconds": 8, "allow_deep_dive": False},
+    "social_momentum": {"max_points": 45, "max_seconds": 10, "allow_deep_dive": True},
+    "microcap_asymmetry": {"max_points": 60, "max_seconds": 12, "allow_deep_dive": True},
+    "asymmetric": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
+    "investments": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
+    "fundamentals_scan": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
+    "small_cap_spec": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
+    "squeeze": {"max_points": 50, "max_seconds": 10, "allow_deep_dive": True},
+}
 
 
 class BudgetTracker:
-    """Lightweight tracker for scan budgets: elapsed time + external call count."""
+    """Weighted budget tracker for scan operations.
+    Uses cost weights per call type instead of flat counting.
+    Tracks elapsed time and whether budget was exhausted for graceful degradation."""
 
-    def __init__(self, max_calls: int = MAX_EXTERNAL_CALLS, max_seconds: float = MAX_DATA_GATHER_SECONDS):
+    def __init__(self, max_points: int = MAX_BUDGET_POINTS, max_seconds: float = MAX_DATA_GATHER_SECONDS, allow_deep_dive: bool = True):
         self._start = _time.time()
-        self._calls = 0
-        self._max_calls = max_calls
+        self._points = 0
+        self._max_points = max_points
         self._max_seconds = max_seconds
+        self._exhausted = False
+        self._exhausted_phase = None
+        self.allow_deep_dive = allow_deep_dive
+
+    @classmethod
+    def for_preset(cls, preset: str) -> "BudgetTracker":
+        config = PRESET_BUDGETS.get(preset, {})
+        return cls(
+            max_points=config.get("max_points", MAX_BUDGET_POINTS),
+            max_seconds=config.get("max_seconds", MAX_DATA_GATHER_SECONDS),
+            allow_deep_dive=config.get("allow_deep_dive", True),
+        )
 
     @property
     def elapsed(self) -> float:
         return _time.time() - self._start
 
     @property
-    def calls(self) -> int:
-        return self._calls
+    def points(self) -> int:
+        return self._points
 
-    def tick(self, n: int = 1):
-        self._calls += n
+    def tick(self, call_type: str = "light_enrich", n: int = 1):
+        weight = CALL_WEIGHTS.get(call_type, 1)
+        self._points += weight * n
 
     def can_continue(self) -> bool:
-        return self._calls < self._max_calls and self.elapsed < self._max_seconds
+        return self._points < self._max_points and self.elapsed < self._max_seconds
+
+    def mark_exhausted(self, phase: str):
+        self._exhausted = True
+        self._exhausted_phase = phase
+
+    @property
+    def was_exhausted(self) -> bool:
+        return self._exhausted
+
+    def degradation_metadata(self) -> dict:
+        if not self._exhausted:
+            return {"data_completeness": "full"}
+        return {
+            "data_completeness": "partial",
+            "budget_exhausted_at": self._exhausted_phase,
+            "budget_status": self.status(),
+        }
 
     def status(self) -> str:
-        return f"calls={self._calls}/{self._max_calls} elapsed={self.elapsed:.1f}s/{self._max_seconds}s"
+        return f"points={self._points}/{self._max_points} elapsed={self.elapsed:.1f}s/{self._max_seconds}s"
 
 
 async def fetch_with_fallback(category: str, fetch_primary, fetch_secondary=None, timeout: float = 3.0):
@@ -606,7 +662,7 @@ class MarketDataService:
         """
         import time
         scan_start = time.time()
-        budget = BudgetTracker(max_calls=MAX_EXTERNAL_CALLS, max_seconds=MAX_DATA_GATHER_SECONDS)
+        budget = BudgetTracker.for_preset(category)
         from data.scoring_engine import rank_candidates
 
         cat_config = self.CATEGORY_FILTERS.get(category, self.CATEGORY_FILTERS["market_scan"])
@@ -699,10 +755,11 @@ class MarketDataService:
         for i, ticker in enumerate(ticker_list):
             if not budget.can_continue():
                 print(f"[Wide Scan] Budget exhausted during light enrichment at ticker {i}/{len(ticker_list)} ({budget.status()})")
+                budget.mark_exhausted("light_enrichment")
                 break
             try:
                 result = await asyncio.wait_for(light_enrich(ticker), timeout=6.0)
-                budget.tick()
+                budget.tick("light_enrich")
             except asyncio.TimeoutError:
                 print(f"[Wide Scan] {ticker} light enrich timed out, skipping")
                 result = {"error": "timeout"}
@@ -740,7 +797,11 @@ class MarketDataService:
             else:
                 clean.append(td)
 
-        deep_tickers = [td["ticker"] for td in clean[:min(8, MAX_TICKERS_DEEP_DIVE)]]
+        if budget.allow_deep_dive:
+            deep_tickers = [td["ticker"] for td in clean[:min(8, MAX_TICKERS_DEEP_DIVE)]]
+        else:
+            deep_tickers = []
+            print(f"[Wide Scan] Deep dive skipped — budget preset disables deep enrichment for {category}")
 
         async def deep_enrich(ticker):
             try:
@@ -768,10 +829,11 @@ class MarketDataService:
         for i, ticker in enumerate(deep_tickers):
             if not budget.can_continue():
                 print(f"[Wide Scan] Budget exhausted during deep enrichment at ticker {i}/{len(deep_tickers)} ({budget.status()})")
+                budget.mark_exhausted("deep_enrichment")
                 break
             try:
                 result = await asyncio.wait_for(deep_enrich(ticker), timeout=8.0)
-                budget.tick(5)
+                budget.tick("deep_enrich")
             except Exception as e:
                 result = {"error": str(e)}
             deep_results.append(result)
@@ -830,9 +892,9 @@ class MarketDataService:
             base_data["quant_score"] = top_scores.get(ticker, 0)
             enriched_candidates[f"FLAGGED_{ticker}"] = base_data
 
-        print(f"[Wide Scan] Complete: {len(enriched_candidates)} candidates ({len(flagged)} flagged) ({time.time()-scan_start:.1f}s)")
+        print(f"[Wide Scan] Complete: {len(enriched_candidates)} candidates ({len(flagged)} flagged) ({time.time()-scan_start:.1f}s) Budget: {budget.status()}")
 
-        return {
+        scan_result = {
             "news_context": news_context,
             "total_candidates_scanned": len(all_tickers),
             "candidates_scored": len(candidates),
@@ -851,6 +913,8 @@ class MarketDataService:
             "enriched_data": enriched_candidates,
             "trending": trending[:10] if trending else [],
         }
+        scan_result.update(budget.degradation_metadata())
+        return scan_result
 
     async def get_sec_filings(self, ticker: str) -> dict:
         """

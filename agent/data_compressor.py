@@ -123,6 +123,7 @@ PROTECTED_KEYS = {
     "ranked_tickers", "orchestration_metadata",
     "ranked_candidates", "ranking_debug",
     "institutional_scoring", "prior_score",
+    "data_completeness", "budget_exhausted_at", "social_discipline_flag",
 }
 
 

@@ -295,8 +295,14 @@ def score_candidate(ticker: str, asset: dict) -> dict:
         if catalyst >= 70 and sector >= 65:
             final_score += 5
 
+    social_discipline_flag = None
+    if social >= 60:
+        if technical < 45 and catalyst < 45:
+            final_score *= 0.85
+            social_discipline_flag = "SOCIAL_UNCONFIRMED"
+
     asset["prior_score"] = round(final_score, 1)
-    asset["institutional_scoring"] = {
+    scoring_meta = {
         "prior_score": round(final_score, 1),
         "technical_score": round(technical, 1),
         "catalyst_score": round(catalyst, 1),
@@ -305,6 +311,9 @@ def score_candidate(ticker: str, asset: dict) -> dict:
         "liquidity_score": round(liquidity, 1),
         "market_cap_category": mcap_category,
     }
+    if social_discipline_flag:
+        scoring_meta["social_discipline_flag"] = social_discipline_flag
+    asset["institutional_scoring"] = scoring_meta
 
     return asset
 
