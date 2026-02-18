@@ -154,6 +154,53 @@ class QueryRequest(BaseModel):
     conversation_id: Optional[str] = None
     preset_intent: Optional[str] = None
 
+def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, timing_ms=None):
+    return {
+        "request_id": req_id,
+        "preset_intent": preset_intent,
+        "conversation_id": conv_id,
+        "routing": routing or {"source": "unknown", "confidence": "low", "category": "unknown"},
+        "timing_ms": timing_ms or {"total": 0, "grok": 0, "data": 0, "claude": 0},
+    }
+
+
+def _ok_envelope(result: dict, meta: dict) -> dict:
+    if not isinstance(result, dict):
+        result = {"analysis": str(result) if result else "", "structured": {}}
+    result.setdefault("analysis", "")
+    result.setdefault("structured", {})
+    result["type"] = "ok"
+    result["meta"] = meta
+    result["error"] = None
+    result["conversation_id"] = meta.get("conversation_id")
+    result["request_id"] = meta.get("request_id")
+    result["as_of"] = _dt.now(_tz.utc).isoformat()
+    return result
+
+
+def _error_envelope(code: str, message: str, meta: dict, details=None, partial=None) -> dict:
+    env = {
+        "type": "error",
+        "analysis": "",
+        "structured": partial or {},
+        "meta": meta,
+        "error": {
+            "code": code,
+            "message": message,
+            "details": details or {},
+        },
+        "conversation_id": meta.get("conversation_id"),
+        "request_id": meta.get("request_id"),
+        "as_of": _dt.now(_tz.utc).isoformat(),
+    }
+    return env
+
+
+def _resp_log(req_id: str, status: int, resp_type: str, resp: dict):
+    resp_bytes = len(_json.dumps(resp, default=str).encode("utf-8"))
+    print(f"[RESP] request_id={req_id} status={status} type={resp_type} bytes={resp_bytes}")
+
+
 @app.post("/api/query")
 @limiter.limit("10/minute")
 async def query_agent(
@@ -162,18 +209,31 @@ async def query_agent(
     api_key: str = Header(None, alias="X-API-Key"),
 ):
     import asyncio
+    import time as _time
+    t0 = _time.time()
     req_id = str(_uuid.uuid4())
     print(f"[REQ_META] request_id={req_id} method={request.method} path={request.url.path} content-type={request.headers.get('content-type')} content-length={request.headers.get('content-length')}")
     user_query = body.query or body.prompt or ""
     print(f"[REQ_BODY] request_id={req_id} query_len={len(user_query)} preset_intent={body.preset_intent} conversation_id={body.conversation_id}")
+
+    meta = _build_meta(req_id, preset_intent=body.preset_intent, conv_id=body.conversation_id)
+
     if not api_key or api_key != AGENT_API_KEY:
-        raise HTTPException(
-            status_code=403,
-            detail="Invalid or missing API key.",
-        )
-    await _wait_for_init()
+        resp = _error_envelope("AUTH_FAILED", "Invalid or missing API key.", meta)
+        _resp_log(req_id, 403, "error", resp)
+        return JSONResponse(status_code=403, content=resp)
+
+    try:
+        await _wait_for_init()
+    except HTTPException:
+        resp = _error_envelope("SERVER_STARTING", "Server is still starting up. Please try again in a moment.", meta)
+        _resp_log(req_id, 503, "error", resp)
+        return JSONResponse(status_code=503, content=resp)
+
     if not user_query.strip() and not body.preset_intent:
-        raise HTTPException(status_code=400, detail="No query provided. Send query or use preset_intent.")
+        resp = _error_envelope("NO_QUERY", "No query provided. Send query or use preset_intent.", meta)
+        _resp_log(req_id, 400, "error", resp)
+        return JSONResponse(status_code=400, content=resp)
 
     from data.chat_history import create_conversation, get_conversation, save_messages as _save_msgs
 
@@ -196,22 +256,36 @@ async def query_agent(
             print(f"[API] Failed to create conversation: {e}")
             conv_id = None
 
+    meta["conversation_id"] = conv_id
+
     print(f"[API] request_id={req_id} query={user_query[:100]}, history_turns={len(history)}, conv_id={conv_id}")
+
     try:
         result = await asyncio.wait_for(
             agent.handle_query(
                 user_query,
                 history=history,
                 preset_intent=body.preset_intent,
+                request_id=req_id,
             ),
             timeout=150.0,
         )
+
+        timing_meta = None
+        if isinstance(result, dict) and result.get("_timing"):
+            timing_meta = result.pop("_timing")
+        if isinstance(result, dict) and result.get("_routing"):
+            meta["routing"] = result.pop("_routing")
+        if timing_meta:
+            meta["timing_ms"] = timing_meta
 
         def _is_truly_empty(r):
             if not r:
                 return True
             if not isinstance(r, dict):
                 return True
+            if r.get("type") == "error":
+                return False
             structured = r.get("structured", {})
             if not isinstance(structured, dict) or not structured:
                 analysis = r.get("analysis", "")
@@ -227,16 +301,44 @@ async def query_agent(
                         if k not in {"display_type", "type", "scan_type"} and v}
             return len(non_meta) == 0
 
+        if isinstance(result, dict) and result.get("_parse_error"):
+            parse_err = result.pop("_parse_error")
+            meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
+            resp = _error_envelope(
+                "CLAUDE_JSON_PARSE_FAIL",
+                "Claude returned a response that could not be parsed as structured JSON.",
+                meta,
+                details={"preview": parse_err.get("preview", "")[:500]},
+            )
+            _resp_log(req_id, 200, "error", resp)
+            if conv_id:
+                try:
+                    updated_messages = list(history)
+                    updated_messages.append({"role": "user", "content": user_query})
+                    updated_messages.append({"role": "assistant", "content": _json.dumps(resp, default=str)})
+                    _save_msgs(conv_id, updated_messages)
+                except Exception:
+                    pass
+            return JSONResponse(content=resp)
+
         if _is_truly_empty(result):
             print(f"[API] WARNING: Empty/blank result returned for query: {user_query[:80]}")
-            result = {
-                "type": "chat",
-                "analysis": "",
-                "structured": {
-                    "display_type": "chat",
-                    "message": "The analysis returned empty. This usually means data sources were rate-limited. Please wait a minute and try again.",
-                },
-            }
+            meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
+            resp = _error_envelope(
+                "EMPTY_RESPONSE",
+                "The analysis returned empty. This usually means data sources were rate-limited. Please wait a minute and try again.",
+                meta,
+            )
+            _resp_log(req_id, 200, "error", resp)
+            if conv_id:
+                try:
+                    updated_messages = list(history)
+                    updated_messages.append({"role": "user", "content": user_query})
+                    updated_messages.append({"role": "assistant", "content": _json.dumps(resp, default=str)})
+                    _save_msgs(conv_id, updated_messages)
+                except Exception:
+                    pass
+            return JSONResponse(content=resp)
 
         if conv_id:
             try:
@@ -247,40 +349,34 @@ async def query_agent(
             except Exception as e:
                 print(f"[API] Failed to save conversation: {e}")
 
-        if isinstance(result, dict):
-            result["conversation_id"] = conv_id
-            result["request_id"] = req_id
-            result["as_of"] = _dt.now(_tz.utc).isoformat()
-        print(f"[API] request_id={req_id} status=200 response_keys={list(result.keys()) if isinstance(result, dict) else 'non-dict'}")
-        return result
+        meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
+        resp = _ok_envelope(result, meta)
+        _resp_log(req_id, 200, "ok", resp)
+        return JSONResponse(content=resp)
+
     except asyncio.TimeoutError:
         print(f"[API] request_id={req_id} status=timeout after 150s")
-        return {
-            "type": "chat",
-            "analysis": "",
-            "conversation_id": conv_id,
-            "request_id": req_id,
-            "as_of": _dt.now(_tz.utc).isoformat(),
-            "structured": {
-                "display_type": "chat",
-                "message": "Request timed out. The data sources may be slow or rate-limited — please wait a minute and try again.",
-            },
-        }
+        meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
+        resp = _error_envelope(
+            "REQUEST_TIMEOUT",
+            "Request timed out. The data sources may be slow or rate-limited — please wait a minute and try again.",
+            meta,
+        )
+        _resp_log(req_id, 200, "error", resp)
+        return JSONResponse(content=resp)
+
     except Exception as e:
         import traceback
         print(f"[API] request_id={req_id} status=error error={e}")
         traceback.print_exc()
-        return {
-            "type": "chat",
-            "analysis": "",
-            "conversation_id": conv_id,
-            "request_id": req_id,
-            "as_of": _dt.now(_tz.utc).isoformat(),
-            "structured": {
-                "display_type": "chat",
-                "message": f"Something went wrong: {str(e)}",
-            },
-        }
+        meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
+        resp = _error_envelope(
+            "INTERNAL_ERROR",
+            f"Something went wrong: {str(e)}",
+            meta,
+        )
+        _resp_log(req_id, 500, "error", resp)
+        return JSONResponse(content=resp)
 
 
 @app.post("/api/cache/clear")

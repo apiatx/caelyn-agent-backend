@@ -279,7 +279,7 @@ class TradingAgent:
             "tickers": [],
         }
 
-    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None) -> dict:
+    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "") -> dict:
         start_time = time.time()
         if history is None:
             history = []
@@ -380,10 +380,14 @@ class TradingAgent:
                 regime_data = {"regime": "neutral", "confidence": 0}
             market_data = apply_institutional_scoring(market_data, regime_data=regime_data)
 
+        data_done_time = time.time()
+        data_ms = int((data_done_time - start_time) * 1000)
+
         raw_response = await self._ask_claude_with_timeout(user_prompt, market_data, history, is_followup=is_followup, category=category)
+        claude_ms = int((time.time() - data_done_time) * 1000)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
 
-        result = self._parse_response(raw_response)
+        result = self._parse_response(raw_response, request_id=request_id)
         print(f"[AGENT] Response parsed, display_type: {result.get('structured', {}).get('display_type', result.get('type', 'unknown'))} ({time.time() - start_time:.1f}s)")
 
         if market_data and isinstance(market_data, dict):
@@ -403,6 +407,19 @@ class TradingAgent:
                         structured["debug_scoring"] = scoring_debug
                     else:
                         result["debug_scoring"] = scoring_debug
+
+        _locals = locals()
+        result["_routing"] = {
+            "source": _locals.get("routing_source", "unknown"),
+            "confidence": _locals.get("routing_confidence", "low"),
+            "category": _locals.get("category", "unknown"),
+        }
+        result["_timing"] = {
+            "total": int((time.time() - start_time) * 1000),
+            "grok": 0,
+            "data": data_ms,
+            "claude": claude_ms,
+        }
 
         return result
 
@@ -1506,6 +1523,10 @@ class TradingAgent:
 
     async def _gather_cross_asset_trending_data(self, query_info: dict) -> dict:
         from data.cache import cache, XAI_CROSS_ASSET_TTL
+        import time as _t
+
+        WALL_CLOCK_LIMIT = 45.0
+        deadline = _t.time() + WALL_CLOCK_LIMIT
 
         grok_shortlist = None
         grok_available = False
@@ -1516,26 +1537,31 @@ class TradingAgent:
             grok_available = True
             print("[CROSS_ASSET_TRENDING] Using cached Grok shortlist")
         elif self.data.xai:
-            try:
-                raw = await asyncio.wait_for(
-                    self.data.xai.run_x_social_scan(mode="cross_asset"),
-                    timeout=40.0,
-                )
-                if raw and "error" not in raw:
-                    grok_shortlist = raw
-                    grok_available = True
-                    cache.set("xai_cross_asset", raw, XAI_CROSS_ASSET_TTL)
-                    eq = raw.get("equities", {})
-                    eq_count = len(eq.get("large_caps", [])) + len(eq.get("mid_caps", [])) + len(eq.get("small_micro_caps", []))
-                    print(f"[CROSS_ASSET_TRENDING] Grok shortlist: equities={eq_count} crypto={len(raw.get('crypto', []))} commodities={len(raw.get('commodities', []))}")
-                else:
-                    print(f"[CROSS_ASSET_TRENDING] Grok returned error: {raw.get('error', 'unknown')}")
-            except Exception as e:
-                print(f"[CROSS_ASSET_TRENDING] Grok scan failed: {e}")
+            remaining = deadline - _t.time()
+            if remaining > 10:
+                try:
+                    raw = await asyncio.wait_for(
+                        self.data.xai.run_x_social_scan(mode="cross_asset"),
+                        timeout=min(40.0, remaining - 5),
+                    )
+                    if raw and "error" not in raw:
+                        grok_shortlist = raw
+                        grok_available = True
+                        cache.set("xai_cross_asset", raw, XAI_CROSS_ASSET_TTL)
+                        eq = raw.get("equities", {})
+                        eq_count = len(eq.get("large_caps", [])) + len(eq.get("mid_caps", [])) + len(eq.get("small_micro_caps", []))
+                        print(f"[CROSS_ASSET_TRENDING] Grok shortlist: equities={eq_count} crypto={len(raw.get('crypto', []))} commodities={len(raw.get('commodities', []))}")
+                    else:
+                        print(f"[CROSS_ASSET_TRENDING] Grok returned error: {raw.get('error', 'unknown')}")
+                except Exception as e:
+                    print(f"[CROSS_ASSET_TRENDING] Grok scan failed: {e}")
+            else:
+                print(f"[CROSS_ASSET_TRENDING] Skipping Grok scan, only {remaining:.0f}s remaining")
 
+        remaining = deadline - _t.time()
         primary_data = await asyncio.wait_for(
             self.data.get_cross_market_scan(),
-            timeout=45.0,
+            timeout=max(remaining, 10.0),
         )
 
         if grok_shortlist:
@@ -1550,6 +1576,7 @@ class TradingAgent:
 
         print(f"[CROSS_ASSET_TRENDING] Pre-broadening candidates: equities={eq_count} crypto={crypto_count} commodities={commodity_count}")
 
+        remaining = deadline - _t.time()
         needs_broadening = []
         if eq_count < 8:
             needs_broadening.append("equities")
@@ -1558,13 +1585,21 @@ class TradingAgent:
         if commodity_count < 4:
             needs_broadening.append("commodities")
 
-        if needs_broadening:
-            print(f"[CROSS_ASSET_TRENDING] Broadening needed for: {needs_broadening}")
-            broadened = await self._broaden_candidates(primary_data, needs_broadening)
-            primary_data.update(broadened)
+        if needs_broadening and remaining > 5:
+            print(f"[CROSS_ASSET_TRENDING] Broadening needed for: {needs_broadening} ({remaining:.0f}s remaining)")
+            try:
+                broadened = await asyncio.wait_for(
+                    self._broaden_candidates(primary_data, needs_broadening),
+                    timeout=min(15.0, remaining - 2),
+                )
+                primary_data.update(broadened)
+            except asyncio.TimeoutError:
+                print(f"[CROSS_ASSET_TRENDING] Broadening timed out, proceeding with available data")
             eq_count = self._count_candidates(primary_data, "equities")
             crypto_count = self._count_candidates(primary_data, "crypto")
             commodity_count = self._count_candidates(primary_data, "commodities")
+        elif needs_broadening:
+            print(f"[CROSS_ASSET_TRENDING] Skipping broadening, only {remaining:.0f}s remaining (wall clock)")
 
         print(f"[CROSS_ASSET_TRENDING] Final candidates: equities={eq_count} crypto={crypto_count} commodities={commodity_count}")
 
@@ -2281,7 +2316,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             print(f"[Agent] _slim_cross_market_data error: {e}, passing raw data")
             return data
 
-    def _parse_response(self, raw_response: str) -> dict:
+    def _parse_response(self, raw_response: str, request_id: str = "") -> dict:
         """
         Parse Claude's response into structured JSON.
         Tries multiple strategies:
@@ -2292,6 +2327,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         """
         response_text = raw_response.strip()
         print(f"[Parser] Response length: {len(response_text)}, starts_with_brace: {response_text[:1] == '{'}")
+        print(f"[CLAUDE_RAW] request_id={request_id} len={len(response_text)} first_500={response_text[:500]}")
 
         if response_text.startswith("{"):
             try:
@@ -2399,7 +2435,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
                     except json.JSONDecodeError:
                         pass
 
-        print("[Parser] All tiers failed, returning raw text as chat")
+        print(f"[PARSE_FAIL] request_id={request_id} error=all_tiers_exhausted len={len(response_text)}")
         structured_data = {
             "display_type": "chat",
             "message": response_text,
@@ -2408,4 +2444,5 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             "type": "chat",
             "analysis": response_text,
             "structured": structured_data,
+            "_parse_error": {"preview": response_text[:500]},
         }
