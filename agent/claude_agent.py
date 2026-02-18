@@ -390,6 +390,17 @@ class TradingAgent:
         result = self._parse_response(raw_response, request_id=request_id)
         print(f"[AGENT] Response parsed, display_type: {result.get('structured', {}).get('display_type', result.get('type', 'unknown'))} ({time.time() - start_time:.1f}s)")
 
+        if market_data and isinstance(market_data, dict) and market_data.get("pre_computed_highlights"):
+            pch = market_data["pre_computed_highlights"]
+            structured = result.get("structured") or result
+            sh = structured.get("signal_highlights")
+            if isinstance(sh, dict):
+                for key in ("best_ta_setup", "biggest_volume"):
+                    existing = sh.get(key, {})
+                    if not isinstance(existing, dict) or existing.get("ticker") in (None, "", "N/A") or existing.get("signal") in (None, "", "N/A"):
+                        if pch.get(key, {}).get("ticker") not in (None, "", "N/A"):
+                            sh[key] = pch[key]
+
         if market_data and isinstance(market_data, dict):
             scoring_summary = market_data.get("scoring_summary")
             if scoring_summary:

@@ -1845,6 +1845,169 @@ class MarketDataService:
         cache.set("macro_snapshot_v1", snapshot, 90)
         return snapshot
 
+    def _compute_signal_highlights(
+        self, screener_sources, raw_screener_data, enriched,
+        stage2_breakouts, macd_crossovers, new_highs, volume_breakouts, unusual_volume,
+    ) -> dict:
+        def _parse_float(val):
+            if val is None:
+                return None
+            s = str(val).replace(",", "").replace("%", "").strip()
+            try:
+                return float(s)
+            except (ValueError, TypeError):
+                return None
+
+        ta_sources = {"stage2_breakout", "macd_crossover", "new_high", "accumulation", "rsi_recovery"}
+
+        candidates_ta = []
+        for ticker, sources in screener_sources.items():
+            ta_signals = [s for s in sources if s in ta_sources]
+            raw = raw_screener_data.get(ticker, {})
+            enr = enriched.get(ticker, {})
+            trade_score = enr.get("trade_score", 0) or 0
+
+            is_stage2 = "stage2_breakout" in sources
+            has_macd = "macd_crossover" in sources
+            is_new_high = "new_high" in sources
+
+            ta_score = trade_score
+            if not ta_score:
+                ta_score = len(ta_signals) * 25
+
+            signal_parts = []
+            if is_stage2:
+                signal_parts.append("Stage 2 breakout")
+            if has_macd:
+                signal_parts.append("MACD crossover")
+            if is_new_high:
+                signal_parts.append("52W high")
+            if "accumulation" in sources:
+                signal_parts.append("accumulation")
+            if "rsi_recovery" in sources:
+                signal_parts.append("RSI recovery")
+
+            tier = "C"
+            if ta_score >= 70 or is_stage2 or (has_macd and is_new_high):
+                tier = "A"
+            elif ta_score >= 60:
+                tier = "B"
+
+            if ta_signals or ta_score > 0:
+                candidates_ta.append({
+                    "ticker": ticker,
+                    "ta_score": ta_score,
+                    "tier": tier,
+                    "signal_parts": signal_parts,
+                    "is_stage2": is_stage2,
+                })
+
+        best_ta = {"ticker": "N/A", "signal": "N/A"}
+        best_ta_score = 0
+        if candidates_ta:
+            tier_a = [c for c in candidates_ta if c["tier"] == "A"]
+            tier_b = [c for c in candidates_ta if c["tier"] == "B"]
+            tier_c = [c for c in candidates_ta if c["tier"] == "C"]
+
+            pool = tier_a or tier_b or tier_c
+            winner = max(pool, key=lambda c: c["ta_score"])
+            best_ta_score = winner["ta_score"]
+
+            if winner["signal_parts"]:
+                sig = " + ".join(winner["signal_parts"][:3])
+            elif winner["ta_score"] >= 60:
+                sig = "Strong trend (price > key MAs) despite low breakout count"
+            else:
+                sig = "Best relative strength in scan (no clean breakouts today)"
+
+            best_ta = {"ticker": winner["ticker"], "signal": sig}
+
+        vol_source_min_rvol = {
+            "volume_breakout": 3.0,
+            "unusual_volume": 2.0,
+            "stage2_breakout": 2.0,
+            "accumulation": 1.5,
+        }
+
+        candidates_vol = []
+        for ticker, sources in screener_sources.items():
+            raw = raw_screener_data.get(ticker, {})
+            enr = enriched.get(ticker, {})
+            overview = enr.get("overview", {}) if enr else {}
+
+            rvol = _parse_float(raw.get("rel_volume"))
+            raw_vol_str = raw.get("volume")
+            raw_vol = _parse_float(raw_vol_str)
+            avg_vol = _parse_float(overview.get("avg_volume")) if overview else None
+            if avg_vol is None:
+                avg_vol = _parse_float(raw.get("avg_volume"))
+
+            if not rvol:
+                for src, min_rv in vol_source_min_rvol.items():
+                    if src in sources:
+                        rvol = max(rvol or 0, min_rv)
+
+            vol_pct = None
+            vol_source = None
+
+            if rvol and rvol > 1:
+                vol_pct = (rvol - 1) * 100
+                vol_source = "rvol"
+            elif raw_vol and avg_vol and avg_vol > 0:
+                vol_pct = ((raw_vol / avg_vol) - 1) * 100
+                vol_source = "computed"
+
+            if vol_pct is not None and vol_pct > 0:
+                candidates_vol.append({
+                    "ticker": ticker,
+                    "vol_pct": vol_pct,
+                    "rvol": rvol,
+                    "source": vol_source,
+                })
+            elif raw_vol and raw_vol > 0:
+                candidates_vol.append({
+                    "ticker": ticker,
+                    "vol_pct": 0,
+                    "rvol": None,
+                    "source": "raw_only",
+                    "raw_vol": raw_vol,
+                })
+
+        biggest_vol = {"ticker": "N/A", "signal": "N/A"}
+        biggest_vol_pct = "NA"
+        if candidates_vol:
+            real_vol = [c for c in candidates_vol if c["source"] != "raw_only" and c["vol_pct"] > 0]
+            if real_vol:
+                winner = max(real_vol, key=lambda c: c["vol_pct"])
+            else:
+                winner = max(candidates_vol, key=lambda c: c.get("raw_vol", 0))
+
+            pct = winner["vol_pct"]
+            biggest_vol_pct = f"{pct:.0f}%"
+            rvol_val = winner.get("rvol")
+
+            if pct > 0 and rvol_val:
+                sig = f"Volume +{pct:.0f}% vs 30D avg ({rvol_val:.1f}x)"
+            elif pct > 0:
+                sig = f"Volume +{pct:.0f}% vs 30D avg"
+            elif rvol_val:
+                sig = f"RVOL {rvol_val:.1f}x (approx +{(rvol_val-1)*100:.0f}% vs avg)"
+            else:
+                raw_v = winner.get("raw_vol", 0)
+                if raw_v >= 1_000_000:
+                    sig = f"High raw volume ({raw_v/1_000_000:.1f}M shares)"
+                else:
+                    sig = f"Elevated volume ({raw_v:,.0f} shares)"
+
+            biggest_vol = {"ticker": winner["ticker"], "signal": sig}
+
+        print(f"[HIGHLIGHTS] best_ta={best_ta['ticker']} biggest_vol={biggest_vol['ticker']} vol_pct={biggest_vol_pct} ta_score={best_ta_score}")
+
+        return {
+            "best_ta_setup": best_ta,
+            "biggest_volume": biggest_vol,
+        }
+
     async def get_morning_briefing(self) -> dict:
         """
         Combined intelligence briefing pulling the top signal from every data source.
@@ -1941,6 +2104,7 @@ class MarketDataService:
 
         all_tickers = set()
         screener_sources = {}
+        raw_screener_data = {}
 
         source_map = {
             "stage2_breakout": stage2_breakouts,
@@ -1965,6 +2129,12 @@ class MarketDataService:
                             if t not in screener_sources:
                                 screener_sources[t] = []
                             screener_sources[t].append(source_name)
+                            if t not in raw_screener_data:
+                                raw_screener_data[t] = item
+                            else:
+                                for k, v in item.items():
+                                    if k != "ticker" and v and not raw_screener_data[t].get(k):
+                                        raw_screener_data[t][k] = v
 
         for t in (trending or []):
             if isinstance(t, dict) and t.get("ticker"):
@@ -2024,7 +2194,13 @@ class MarketDataService:
             reverse=True,
         )
 
+        pre_computed_highlights = self._compute_signal_highlights(
+            screener_sources, raw_screener_data, enriched,
+            stage2_breakouts, macd_crossovers, new_highs, volume_breakouts, unusual_volume,
+        )
+
         return {
+            "pre_computed_highlights": pre_computed_highlights,
             "macro_snapshot": macro_snapshot,
             "news_context": {"market_news": market_news},
             "total_tickers_detected": len(all_tickers),
