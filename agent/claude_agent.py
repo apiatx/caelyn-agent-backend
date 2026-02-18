@@ -318,6 +318,16 @@ class TradingAgent:
 
         result = self._parse_response(raw_response)
         print(f"[AGENT] Response parsed, display_type: {result.get('structured', {}).get('display_type', result.get('type', 'unknown'))} ({time.time() - start_time:.1f}s)")
+
+        if os.environ.get("SCORING_DEBUG") == "1" and market_data and isinstance(market_data, dict):
+            scoring_debug = market_data.get("scoring_debug")
+            if scoring_debug:
+                structured = result.get("structured")
+                if isinstance(structured, dict):
+                    structured["debug_scoring"] = scoring_debug
+                else:
+                    result["debug_scoring"] = scoring_debug
+
         return result
 
     def _needs_fresh_data(self, query: str) -> bool:
