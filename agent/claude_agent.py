@@ -48,6 +48,11 @@ class TradingAgent:
         "themes": "thematic_scan",
         "portfolio": "portfolio_review",
         "holdings": "portfolio_review",
+        "x_scan": "x_social_scan",
+        "twitter_scan": "x_social_scan",
+        "x_sentiment_scan": "x_social_scan",
+        "grok_scan": "x_social_scan",
+        "x_social": "x_social_scan",
     }
 
     def _resolve_preset(self, preset_intent: str) -> str:
@@ -887,6 +892,24 @@ class TradingAgent:
             "response_style": "deep_thesis",
             "priority_depth": "deep",
         },
+        "x_social_scan": {
+            "intent": "x_social_scan",
+            "asset_classes": ["equities", "crypto"],
+            "modules": {
+                "x_sentiment": False,
+                "x_social_scan": True,
+                "social_sentiment": False,
+                "technical_scan": False,
+                "fundamental_validation": False,
+                "macro_context": False,
+                "liquidity_filter": False,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "high_conviction_ranked",
+            "priority_depth": "medium",
+        },
     }
 
     INTENT_TO_CATEGORY = {
@@ -900,6 +923,7 @@ class TradingAgent:
         "thematic": "thematic",
         "investment_ideas": "investments",
         "briefing": "briefing",
+        "x_social_scan": "social_momentum",
         "custom_screen": "ai_screener",
         "short_setup": "bearish",
         "chat": "chat",
@@ -1141,6 +1165,26 @@ class TradingAgent:
                         print(f"[ORCHESTRATOR] X sentiment overlay failed: {e}")
                         return None
                 overlay_tasks.append(("x_sentiment_overlay", fetch_x_sentiment()))
+
+        if modules.get("x_social_scan") and self.data.xai:
+            scan_mode = plan.get("x_social_scan_mode", "trending")
+            scan_query = plan.get("x_social_scan_query", "")
+            scan_constraints = {
+                "tickers": plan.get("tickers", []),
+                "asset_type": "crypto" if "crypto" in asset_classes else "stock",
+                "sectors": plan.get("filters", {}).get("sectors"),
+                "max_market_cap": plan.get("filters", {}).get("market_cap_max"),
+            }
+            async def fetch_x_social_scan():
+                try:
+                    return await asyncio.wait_for(
+                        self.data.xai.run_x_social_scan(scan_mode, scan_query, scan_constraints),
+                        timeout=40.0,
+                    )
+                except Exception as e:
+                    print(f"[ORCHESTRATOR] x_social_scan failed: {e}")
+                    return None
+            overlay_tasks.append(("x_social_scan", fetch_x_social_scan()))
 
         if overlay_tasks:
             overlay_results = await asyncio.gather(

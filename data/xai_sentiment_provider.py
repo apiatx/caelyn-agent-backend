@@ -189,6 +189,92 @@ Be direct. Which of these does X like best right now and why?"""
 
         return await self._call_grok_with_x_search(prompt)
 
+    async def run_x_social_scan(self, mode: str, query: str = "", constraints: dict = None) -> dict:
+        """
+        Unified entry point for x_social_scan module.
+
+        Modes:
+          - trending: discover what's buzzing on X right now
+          - sentiment: get sentiment for specific tickers (pass tickers in constraints)
+          - compare: head-to-head sentiment comparison across tickers
+          - narrative: free-form query — ask Grok anything about X market chatter
+
+        constraints dict may include:
+          - tickers: list of ticker symbols
+          - asset_type: "stock" | "crypto" (default "stock")
+          - sectors: list of sector strings
+          - max_market_cap: str like "2B"
+          - lookback: str like "24h" or "7d"
+        """
+        if constraints is None:
+            constraints = {}
+
+        tickers = constraints.get("tickers", [])
+        asset_type = constraints.get("asset_type", "stock")
+        sectors = constraints.get("sectors")
+        max_market_cap = constraints.get("max_market_cap")
+        lookback = constraints.get("lookback", "24h")
+
+        print(f"[X_SOCIAL_SCAN] mode={mode} query={query[:80]} tickers={tickers[:5]} asset_type={asset_type}")
+
+        if mode == "trending":
+            result = await self.get_trending_tickers(
+                asset_type=asset_type,
+                sectors=sectors,
+                max_market_cap=max_market_cap,
+            )
+            result["_scan_mode"] = "trending"
+            return result
+
+        if mode == "sentiment":
+            if not tickers:
+                return {"error": "sentiment mode requires tickers in constraints", "_scan_mode": "sentiment"}
+            if len(tickers) == 1:
+                result = await self.get_ticker_sentiment(tickers[0], asset_type)
+            else:
+                result = await self.get_batch_sentiment(tickers[:10], asset_type)
+            if isinstance(result, dict):
+                result["_scan_mode"] = "sentiment"
+            return result
+
+        if mode == "compare":
+            if not tickers or len(tickers) < 2:
+                return {"error": "compare mode requires at least 2 tickers", "_scan_mode": "compare"}
+            result = await self.compare_sentiment(tickers[:8])
+            result["_scan_mode"] = "compare"
+            return result
+
+        if mode == "narrative":
+            narrative_prompt = f"""Search X for recent posts ({lookback}) related to: {query}
+
+Analyze what people on X are saying about this topic in the context of financial markets and trading.
+
+Return ONLY a JSON object (no markdown, no backticks):
+{{
+    "query": "{query}",
+    "scan_mode": "narrative",
+    "market_relevance": "high" | "medium" | "low",
+    "sentiment_direction": "bullish" | "bearish" | "neutral" | "mixed",
+    "confidence": 0.0 to 1.0,
+    "key_narratives": ["narrative1", "narrative2", "narrative3"],
+    "mentioned_tickers": [
+        {{"ticker": "SYMBOL", "sentiment": "bullish/bearish/neutral", "context": "why mentioned"}}
+    ],
+    "catalysts_discussed": ["catalyst1", "catalyst2"],
+    "risk_flags": ["flag1"],
+    "contrarian_signals": ["any divergence between X sentiment and price action"],
+    "influencer_consensus": "What are credible accounts saying vs retail noise",
+    "summary": "3-4 sentence synthesis of what X thinks about this topic right now"
+}}
+
+Be direct and opinionated. Separate signal from noise. Flag bot activity or coordinated pumping."""
+
+            result = await self._call_grok_with_x_search(narrative_prompt)
+            result["_scan_mode"] = "narrative"
+            return result
+
+        return {"error": f"Unknown x_social_scan mode: {mode}", "_scan_mode": mode}
+
     async def _call_grok_with_x_search(self, prompt: str) -> dict:
         """Call the xAI Responses API with x_search enabled."""
         payload = {
