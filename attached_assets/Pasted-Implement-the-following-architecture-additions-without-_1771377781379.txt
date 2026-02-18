@@ -1,0 +1,252 @@
+Implement the following architecture additions without modifying existing orchestration flow.
+
+Do NOT remove current data gathering.
+Do NOT remove Claude reasoning.
+Add a structured scoring layer before Claude final reasoning.
+
+1️⃣ Create Regime Detector
+
+Create new file:
+
+core/regime_engine.py
+
+Implement:
+
+Function: detect_market_regime()
+
+Inputs:
+
+SPY daily candles (200DMA check)
+
+VIX current value
+
+10Y yield (FRED)
+
+DXY trend (via Finnhub candles)
+
+BTC trend
+
+Return one of:
+
+"risk_on"
+"risk_off"
+"inflationary"
+"neutral"
+
+Basic logic:
+
+If SPY > 200DMA AND VIX < 18 → risk_on
+
+If SPY < 200DMA OR VIX > 25 → risk_off
+
+If 10Y rising AND DXY rising → inflationary
+
+Else neutral
+
+Return both:
+{
+"regime": "...",
+"confidence": 0-1
+}
+
+Cache result for 5 minutes.
+
+2️⃣ Create Cross-Asset Weight Engine
+
+Create file:
+
+core/asset_weight_engine.py
+
+Function:
+
+apply_asset_weights(raw_score, asset_metadata, regime)
+
+Asset metadata includes:
+
+asset_class (equity, crypto, commodity)
+
+market_cap
+
+sector
+
+Example weighting logic:
+
+If regime == risk_off:
+microcaps × 0.8
+large cap defensive × 1.1
+commodities × 1.15
+crypto × 0.75
+
+If regime == risk_on:
+microcaps × 1.2
+AI/semis × 1.15
+crypto × 1.2
+
+Return adjusted_score.
+
+3️⃣ Create Catalyst Strength Scorer
+
+Create:
+
+core/catalyst_engine.py
+
+Function:
+
+calculate_catalyst_score(data_bundle)
+
+Use:
+
+Earnings within 14 days
+
+Revenue growth > 20%
+
+Volume 2x 30d avg
+
+Social acceleration > baseline
+
+News count spike
+
+Regulatory event
+
+Insider buying
+
+Score 0-100.
+
+Return structured breakdown:
+
+{
+"catalyst_score": 74,
+"components": {
+"earnings_proximity": 15,
+"social_acceleration": 18,
+"volume_expansion": 12,
+"fundamental_acceleration": 20,
+...
+}
+}
+
+4️⃣ Modify Scoring Pipeline
+
+In wide_scan_and_rank()
+
+Before Claude sees ranked candidates:
+
+For each ticker:
+
+Compute:
+
+technical_score
+
+fundamental_score
+
+sentiment_score
+
+catalyst_score
+
+Get regime:
+regime_data = detect_market_regime()
+
+Apply regime-aware weight matrix:
+
+If regime == risk_on:
+sentiment_weight = 0.30
+technical_weight = 0.30
+fundamentals_weight = 0.20
+catalyst_weight = 0.20
+
+If regime == risk_off:
+fundamentals_weight = 0.40
+catalyst_weight = 0.25
+technical_weight = 0.20
+sentiment_weight = 0.15
+
+Compute:
+
+raw_score = weighted_sum
+
+Apply cross-asset adjustment:
+
+final_score = apply_asset_weights(raw_score, asset_metadata, regime)
+
+5️⃣ Pass Structured Scorecard to Claude
+
+Do NOT let Claude invent scoring.
+
+Pass structured object:
+
+{
+ticker: "XYZ",
+technical_score: 78,
+fundamental_score: 64,
+sentiment_score: 85,
+catalyst_score: 72,
+regime: "risk_on",
+adjusted_final_score: 81
+}
+
+Claude's job becomes:
+
+Interpret
+
+Provide thesis
+
+Provide counterargument
+
+Provide sizing guidance
+
+Claude should NOT rescore.
+
+6️⃣ Add Position Sizing Guidance Logic
+
+Before Claude:
+
+If regime == risk_off:
+max_position = 2-3%
+
+If regime == risk_on:
+max_position = 5-8%
+
+Pass suggested size bracket to Claude.
+
+7️⃣ Preserve Creative Discovery
+
+Important:
+
+Do NOT filter out high social microcaps automatically.
+
+Instead:
+
+If final_score > threshold
+OR sentiment_score > 85 AND catalyst_score > 60
+
+Allow inclusion even if fundamentals weak.
+
+This preserves asymmetry hunting.
+
+What This Changes
+
+Your system becomes:
+
+Prompt → Orchestration → Data → Structured Deterministic Scoring → Regime Adjustment → Claude Interpretation
+
+Instead of:
+
+Prompt → Claude guesses → Ranking.
+
+Will This Break Anything?
+
+No — if implemented as additive layer.
+
+You are not removing:
+
+XAI sentiment
+
+Finnhub
+
+CoinGecko
+
+Social momentum
+
+TA scans
+
+You are structuring them.
