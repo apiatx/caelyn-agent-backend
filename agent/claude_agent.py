@@ -378,7 +378,7 @@ class TradingAgent:
         if market_data and isinstance(market_data, dict) and category in SCORING_CATEGORIES:
             try:
                 from core.regime_engine import detect_market_regime
-                regime_data = detect_market_regime(self.data)
+                regime_data = await detect_market_regime(self.data)
                 print(f"[REGIME] Detected: {regime_data.get('regime')} (confidence={regime_data.get('confidence', 0)})")
             except Exception as e:
                 print(f"[REGIME] Detection failed, defaulting to neutral: {e}")

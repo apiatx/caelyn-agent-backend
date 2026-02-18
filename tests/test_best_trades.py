@@ -8,6 +8,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from unittest.mock import AsyncMock, MagicMock, patch
 from data.market_data_service import MarketDataService
+from data.cache import cache
+import data.market_data_service as mds
 
 
 def _make_bars(n=60, base_price=50.0):
@@ -71,7 +73,7 @@ def mock_service():
     svc.finviz._custom_screen = mock_custom_screen
 
     svc.finnhub.get_stock_candles = MagicMock(return_value=_make_bars(60))
-    svc.polygon.get_daily_bars = MagicMock(return_value=[])
+    svc.polygon.get_daily_bars = MagicMock(return_value=_make_bars(60))
 
     async def mock_get_overview(ticker):
         return {"name": f"{ticker} Corp", "exchange": "NASDAQ", "market_cap": "150B", "pe_ratio": 25.0}
@@ -125,9 +127,10 @@ async def test_best_trades_trade_has_required_fields(mock_service):
 
 
 @pytest.mark.asyncio
-async def test_best_trades_shortlist_capped_at_8(mock_service):
+async def test_best_trades_shortlist_capped(mock_service):
     result = await mock_service.get_best_trades_scan()
-    assert result["scan_stats"]["shortlisted"] <= 8
+    assert result["scan_stats"]["shortlisted"] <= 12
+    assert result["scan_stats"]["candle_targets"] <= 8
 
 
 @pytest.mark.asyncio
@@ -135,15 +138,15 @@ async def test_best_trades_data_health_present(mock_service):
     result = await mock_service.get_best_trades_scan()
     dh = result["data_health"]
     assert "candles_source" in dh
-    assert "rate_limited" in dh
-    assert "auth_errors" in dh
-    assert "providers" in dh
-    assert "finnhub" in dh["providers"]
-    assert "polygon" in dh["providers"]
+    assert "candle_stats" in dh
+    assert "finnhub_circuit_breaker" in dh
 
 
 @pytest.mark.asyncio
-async def test_best_trades_recovery_mode_on_all_failures(mock_service):
+async def test_best_trades_all_candles_fail_still_structured(mock_service):
+    cache.clear()
+    mds._finnhub_candle_disabled_until = 0.0
+
     def fail_candles(ticker, days=120):
         raise Exception("FinnhubAPIException(status_code: 403): You don't have access")
 
@@ -155,26 +158,27 @@ async def test_best_trades_recovery_mode_on_all_failures(mock_service):
     assert result["display_type"] == "trades"
     assert isinstance(result["top_trades"], list)
     assert isinstance(result["bearish_setups"], list)
-    assert result["data_health"]["auth_errors"] is True
 
 
 @pytest.mark.asyncio
-async def test_best_trades_recovery_mode_still_structured(mock_service):
-    call_count = {"n": 0}
-    def fail_then_succeed(ticker, days=120):
-        call_count["n"] += 1
-        if call_count["n"] <= 8:
+async def test_best_trades_circuit_breaker_triggers(mock_service):
+    cache.clear()
+    old_val = mds._finnhub_candle_disabled_until
+    try:
+        mds._finnhub_candle_disabled_until = 0.0
+
+        def fail_403(ticker, days=120):
             raise Exception("FinnhubAPIException(status_code: 403)")
-        return _make_bars(60)
 
-    mock_service.finnhub.get_stock_candles = MagicMock(side_effect=fail_then_succeed)
-    mock_service.polygon.get_daily_bars = MagicMock(return_value=[])
+        mock_service.finnhub.get_stock_candles = MagicMock(side_effect=fail_403)
+        mock_service.polygon.get_daily_bars = MagicMock(return_value=_make_bars(60))
 
-    result = await mock_service.get_best_trades_scan()
+        result = await mock_service.get_best_trades_scan()
 
-    assert result["display_type"] == "trades"
-    assert isinstance(result["top_trades"], list)
-    assert result["data_health"] is not None
+        assert mds._finnhub_candle_disabled_until > 0
+        assert result["data_health"]["finnhub_circuit_breaker"] is True
+    finally:
+        mds._finnhub_candle_disabled_until = old_val
 
 
 @pytest.mark.asyncio
@@ -192,23 +196,10 @@ async def test_best_trades_volume_pct_uses_avg(mock_service):
 
 
 @pytest.mark.asyncio
-async def test_best_trades_429_triggers_backoff(mock_service):
-    def rate_limited_candles(ticker, days=120):
-        raise Exception("429 Too Many Requests")
-
-    mock_service.finnhub.get_stock_candles = MagicMock(side_effect=rate_limited_candles)
-    mock_service.polygon.get_daily_bars = MagicMock(return_value=[])
-
-    result = await mock_service.get_best_trades_scan()
-
-    assert result["display_type"] == "trades"
-    assert result["data_health"]["rate_limited"] is True
-    dh = result["data_health"]
-    assert dh["providers"]["finnhub"]["rate_limit"] > 0
-
-
-@pytest.mark.asyncio
 async def test_best_trades_empty_returns_reason(mock_service):
+    cache.clear()
+    mds._finnhub_candle_disabled_until = 0.0
+
     def fail_candles(ticker, days=120):
         raise Exception("FinnhubAPIException(status_code: 403)")
 
@@ -221,3 +212,26 @@ async def test_best_trades_empty_returns_reason(mock_service):
     assert len(result["top_trades"]) == 0
     assert "empty_reason" in result["data_health"]
     assert len(result["data_health"]["empty_reason"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_best_trades_budget_limits_polygon_calls(mock_service):
+    cache.clear()
+    mds._finnhub_candle_disabled_until = 0.0
+
+    def fail_candles(ticker, days=120):
+        raise Exception("FinnhubAPIException(status_code: 403)")
+
+    call_count = {"n": 0}
+
+    def counting_bars(ticker, days=120):
+        call_count["n"] += 1
+        return _make_bars(60)
+
+    mock_service.finnhub.get_stock_candles = MagicMock(side_effect=fail_candles)
+    mock_service.polygon.get_daily_bars = MagicMock(side_effect=counting_bars)
+
+    result = await mock_service.get_best_trades_scan()
+
+    assert call_count["n"] <= 5
+    assert result["display_type"] == "trades"

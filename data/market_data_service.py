@@ -17,7 +17,7 @@ from data.coingecko_provider import CoinGeckoProvider
 from data.reddit_provider import RedditSentimentProvider
 from data.altfins_provider import AltFINSProvider
 from data.xai_sentiment_provider import XAISentimentProvider
-from data.cache import cache, MACRO_TTL, SECTOR_ETF_TTL
+from data.cache import cache, MACRO_TTL, SECTOR_ETF_TTL, CANDLE_TTL, REGIME_CANDLE_TTL
 
 
 DATA_SOURCES = {
@@ -115,6 +115,48 @@ class BudgetTracker:
         return f"points={self._points}/{self._max_points} elapsed={self.elapsed:.1f}s/{self._max_seconds}s"
 
 
+class CandleBudget:
+    def __init__(self, max_calls: int = 5):
+        self._max = max_calls
+        self._used = 0
+        self._cache_hits = 0
+        self._blocked = 0
+        self._provider_used = 0
+        self._finnhub_blocked = 0
+
+    def can_spend(self) -> bool:
+        return self._used < self._max
+
+    def spend(self):
+        self._used += 1
+        self._provider_used += 1
+
+    def record_cache_hit(self):
+        self._cache_hits += 1
+
+    def record_blocked(self):
+        self._blocked += 1
+
+    def record_finnhub_blocked(self):
+        self._finnhub_blocked += 1
+
+    def summary(self) -> str:
+        return f"polygon_used={self._provider_used} cache_hits={self._cache_hits} blocked={self._blocked} finnhub_disabled={self._finnhub_blocked}"
+
+
+_finnhub_candle_disabled_until = 0.0
+
+
+def _is_finnhub_candles_disabled() -> bool:
+    return _time.time() < _finnhub_candle_disabled_until
+
+
+def _disable_finnhub_candles():
+    global _finnhub_candle_disabled_until
+    _finnhub_candle_disabled_until = _time.time() + 3600
+    print("[CIRCUIT_BREAKER] Finnhub candles disabled for 60 minutes (403)")
+
+
 async def fetch_with_fallback(category: str, fetch_primary, fetch_secondary=None, timeout: float = 3.0):
     """
     Tiered data source fetcher. Tries primary with timeout, falls back to secondary.
@@ -208,6 +250,63 @@ class MarketDataService:
             print("[INIT] xAI Grok X sentiment provider initialized")
         else:
             print("[INIT] xAI Grok X sentiment provider SKIPPED (no XAI_API_KEY)")
+
+    async def get_candles(self, symbol: str, days: int = 120, budget: CandleBudget = None, ttl: int = None) -> list:
+        symbol = symbol.upper()
+        cache_key = f"candles:{symbol}:1d:{days}"
+        use_ttl = ttl or CANDLE_TTL
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            if budget:
+                budget.record_cache_hit()
+            return cached
+
+        if _is_finnhub_candles_disabled():
+            if budget:
+                budget.record_finnhub_blocked()
+        else:
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(self.finnhub.get_stock_candles, symbol, days),
+                    timeout=10.0,
+                )
+                if result and len(result) >= 20:
+                    cache.set(cache_key, result, use_ttl)
+                    return result
+                elif not result:
+                    _disable_finnhub_candles()
+            except Exception as e:
+                err_str = str(e)
+                if "403" in err_str or "401" in err_str:
+                    _disable_finnhub_candles()
+                else:
+                    print(f"[CANDLES] Finnhub {symbol} error: {e}")
+
+        if budget and not budget.can_spend():
+            if budget:
+                budget.record_blocked()
+            return []
+
+        try:
+            if budget:
+                budget.spend()
+            poly_bars = await asyncio.wait_for(
+                asyncio.to_thread(self.polygon.get_daily_bars, symbol, days),
+                timeout=10.0,
+            )
+            if poly_bars and len(poly_bars) >= 20:
+                bars = [{"o": b.get("o"), "h": b.get("h"), "l": b.get("l"),
+                         "c": b.get("c"), "v": b.get("v", 0), "t": b.get("t")}
+                        for b in poly_bars]
+                cache.set(cache_key, bars, use_ttl)
+                return bars
+        except asyncio.TimeoutError:
+            print(f"[CANDLES] Polygon {symbol} timeout")
+        except Exception as e:
+            print(f"[CANDLES] Polygon {symbol} error: {e}")
+
+        return []
 
     NEGATIVE_NEWS_KEYWORDS = [
         "fraud", "lawsuit", "sued", "investigation", "sec probe",
@@ -1033,76 +1132,7 @@ class MarketDataService:
         from data.ta_utils import compute_technicals_from_bars, compute_rsi, compute_sma, compute_ema
         scan_start = time.time()
 
-        provider_stats = {
-            "finnhub": {"attempted": 0, "success": 0, "auth_fail": 0, "rate_limit": 0, "timeout": 0, "error": 0},
-            "polygon": {"attempted": 0, "success": 0, "auth_fail": 0, "rate_limit": 0, "timeout": 0, "error": 0},
-        }
-        candle_source_used = set()
-        ohlc_semaphore = asyncio.Semaphore(3)
-
-        async def _fetch_candles_with_backoff(ticker: str) -> list:
-            bars = []
-            async with ohlc_semaphore:
-                provider_stats["finnhub"]["attempted"] += 1
-                try:
-                    result = await asyncio.wait_for(
-                        asyncio.to_thread(self.finnhub.get_stock_candles, ticker, 120),
-                        timeout=10.0,
-                    )
-                    if result and len(result) >= 20:
-                        provider_stats["finnhub"]["success"] += 1
-                        candle_source_used.add("finnhub")
-                        return result
-                    elif not result:
-                        provider_stats["finnhub"]["auth_fail"] += 1
-                except asyncio.TimeoutError:
-                    provider_stats["finnhub"]["timeout"] += 1
-                except Exception as e:
-                    err_str = str(e)
-                    if "403" in err_str or "401" in err_str:
-                        provider_stats["finnhub"]["auth_fail"] += 1
-                    elif "429" in err_str:
-                        provider_stats["finnhub"]["rate_limit"] += 1
-                    else:
-                        provider_stats["finnhub"]["error"] += 1
-
-                for attempt in range(2):
-                    provider_stats["polygon"]["attempted"] += 1
-                    try:
-                        poly_bars = await asyncio.wait_for(
-                            asyncio.to_thread(self.polygon.get_daily_bars, ticker, 120),
-                            timeout=10.0,
-                        )
-                        if poly_bars and len(poly_bars) >= 20:
-                            provider_stats["polygon"]["success"] += 1
-                            candle_source_used.add("polygon")
-                            bars = [{"o": b.get("o"), "h": b.get("h"), "l": b.get("l"),
-                                     "c": b.get("c"), "v": b.get("v", 0), "t": b.get("t")}
-                                    for b in poly_bars]
-                            return bars
-                        elif poly_bars is not None and isinstance(poly_bars, list) and len(poly_bars) == 0:
-                            provider_stats["polygon"]["error"] += 1
-                            break
-                        else:
-                            provider_stats["polygon"]["error"] += 1
-                            break
-                    except asyncio.TimeoutError:
-                        provider_stats["polygon"]["timeout"] += 1
-                        if attempt < 1:
-                            await asyncio.sleep(0.8 * (2 ** attempt))
-                    except Exception as e:
-                        err_str = str(e)
-                        if "429" in err_str or "rate" in err_str.lower():
-                            provider_stats["polygon"]["rate_limit"] += 1
-                            if attempt < 1:
-                                await asyncio.sleep(0.8 * (2 ** attempt))
-                        elif "403" in err_str or "401" in err_str:
-                            provider_stats["polygon"]["auth_fail"] += 1
-                            break
-                        else:
-                            provider_stats["polygon"]["error"] += 1
-                            break
-            return []
+        candle_budget = CandleBudget(max_calls=5)
 
         new_highs_task = self.finviz.get_new_highs()
         unusual_vol_task = self.finviz.get_unusual_volume()
@@ -1154,8 +1184,9 @@ class MarketDataService:
             return score
 
         ranked_tickers = sorted(ticker_sources.keys(), key=_pre_rank_score, reverse=True)
-        shortlist = ranked_tickers[:8]
-        print(f"[BEST_TRADES] Shortlisted {len(shortlist)} tickers from {len(ranked_tickers)} (pre-ranked)")
+        shortlist = ranked_tickers[:12]
+        candle_targets = shortlist[:8]
+        print(f"[BEST_TRADES] Shortlisted {len(shortlist)} tickers, fetching candles for top {len(candle_targets)} (pre-ranked)")
 
         async def _analyze_ticker(ticker, bars):
             ta = compute_technicals_from_bars(bars)
@@ -1340,34 +1371,22 @@ class MarketDataService:
             return candidate
 
         ohlc_results = {}
-        missing_ohlc = 0
-        async def _fetch_ohlc_for_ticker(ticker):
-            nonlocal missing_ohlc
-            bars = await _fetch_candles_with_backoff(ticker)
-            if bars and len(bars) >= 20:
-                ohlc_results[ticker] = bars
-            else:
-                missing_ohlc += 1
+        no_ta_tickers = []
+        ohlc_semaphore = asyncio.Semaphore(3)
 
-        fetch_tasks = [_fetch_ohlc_for_ticker(t) for t in shortlist]
+        async def _fetch_ohlc_for_ticker(ticker):
+            async with ohlc_semaphore:
+                bars = await self.get_candles(ticker, days=120, budget=candle_budget)
+                if bars and len(bars) >= 20:
+                    ohlc_results[ticker] = bars
+                else:
+                    no_ta_tickers.append(ticker)
+
+        fetch_tasks = [_fetch_ohlc_for_ticker(t) for t in candle_targets]
         await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
-        print(f"[BEST_TRADES] OHLCV phase: {len(ohlc_results)}/{len(shortlist)} tickers got data, {missing_ohlc} missing")
-        _log_provider_stats("OHLCV", provider_stats)
-
-        if len(ohlc_results) == 0 and len(shortlist) > 0:
-            print("[BEST_TRADES] RECOVERY MODE: 0 tickers got OHLCV, retrying top 3 sequentially")
-            recovery_tickers = shortlist[:3]
-            for ticker in recovery_tickers:
-                try:
-                    bars = await _fetch_candles_with_backoff(ticker)
-                    if bars and len(bars) >= 20:
-                        ohlc_results[ticker] = bars
-                        print(f"[BEST_TRADES] RECOVERY: {ticker} succeeded")
-                except Exception as e:
-                    print(f"[BEST_TRADES] RECOVERY: {ticker} failed: {e}")
-            print(f"[BEST_TRADES] RECOVERY result: {len(ohlc_results)} tickers with data")
-            _log_provider_stats("RECOVERY", provider_stats)
+        print(f"[BEST_TRADES] OHLCV phase: {len(ohlc_results)}/{len(candle_targets)} tickers got data, {len(no_ta_tickers)} missing")
+        print(f"[BEST_TRADES] candles: {candle_budget.summary()}")
 
         all_candidates = []
         for ticker, bars in ohlc_results.items():
@@ -1401,33 +1420,25 @@ class MarketDataService:
         macro = await self._build_macro_snapshot()
 
         elapsed = time.time() - scan_start
-        any_rate_limited = (provider_stats["finnhub"]["rate_limit"] > 0 or
-                            provider_stats["polygon"]["rate_limit"] > 0)
-        any_auth_fail = (provider_stats["finnhub"]["auth_fail"] > 0 or
-                         provider_stats["polygon"]["auth_fail"] > 0)
+        finnhub_disabled = _is_finnhub_candles_disabled()
+        budget_exhausted = not candle_budget.can_spend()
 
         data_health = {
-            "quote_source": "finnhub" if provider_stats["finnhub"]["success"] > 0 else "fallback",
-            "candles_source": ",".join(sorted(candle_source_used)) if candle_source_used else "none",
-            "rate_limited": any_rate_limited,
-            "auth_errors": any_auth_fail,
-            "budget_exhausted": False,
-            "providers": provider_stats,
-            "recovery_mode_triggered": len(ohlc_results) == 0 and len(shortlist) > 0,
+            "candles_source": "polygon" if candle_budget._provider_used > 0 else ("cache" if candle_budget._cache_hits > 0 else "none"),
+            "finnhub_circuit_breaker": finnhub_disabled,
+            "budget_exhausted": budget_exhausted,
+            "candle_stats": candle_budget.summary(),
         }
 
         if len(top_trades) == 0 and len(bearish_list) == 0:
             reasons = []
-            if any_auth_fail:
-                reasons.append("Provider auth failing (403)")
-            if any_rate_limited:
-                reasons.append("Rate limited on quote/candles")
-            if missing_ohlc > 0:
-                reasons.append(f"OHLCV unavailable for {missing_ohlc} tickers")
+            if budget_exhausted:
+                reasons.append("Candle budget exhausted")
+            if len(no_ta_tickers) > 0:
+                reasons.append(f"OHLCV unavailable for {len(no_ta_tickers)} tickers")
             data_health["empty_reason"] = "; ".join(reasons) if reasons else "No qualifying setups found"
 
-        print(f"[BEST_TRADES] candidates={len(all_candidates)} selected={len(top_trades)} bearish={len(bearish_list)} missing_ohlc={missing_ohlc} ({elapsed:.1f}s)")
-        print(f"[BEST_TRADES] data_health: candles_source={data_health['candles_source']} rate_limited={any_rate_limited} auth_errors={any_auth_fail}")
+        print(f"[BEST_TRADES] candidates={len(all_candidates)} selected={len(top_trades)} bearish={len(bearish_list)} no_ta={len(no_ta_tickers)} ({elapsed:.1f}s)")
 
         return {
             "scan_type": "best_trades",
@@ -1438,9 +1449,10 @@ class MarketDataService:
             "scan_stats": {
                 "total_screened": len(ticker_sources),
                 "shortlisted": len(shortlist),
+                "candle_targets": len(candle_targets),
                 "ohlc_fetched": len(ohlc_results),
                 "ohlc_analyzed": len(all_candidates),
-                "missing_ohlc": missing_ohlc,
+                "no_ta": len(no_ta_tickers),
                 "elapsed_s": round(elapsed, 1),
             },
             "data_health": data_health,
