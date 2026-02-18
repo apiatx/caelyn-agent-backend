@@ -164,11 +164,158 @@ def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, tim
     }
 
 
+def _render_cross_market_analysis(s: dict) -> str:
+    parts = []
+    regime = s.get("macro_regime", {})
+    if regime:
+        verdict = regime.get("verdict", "N/A")
+        summary = regime.get("summary", "")
+        fg = regime.get("fear_greed", "")
+        vix = regime.get("vix", "")
+        parts.append(f"MACRO REGIME: {verdict}")
+        if summary:
+            parts.append(summary)
+        indicators = []
+        if fg:
+            indicators.append(f"Fear & Greed: {fg}")
+        if vix:
+            indicators.append(f"VIX: {vix}")
+        if indicators:
+            parts.append(" | ".join(indicators))
+        parts.append("")
+
+    assessments = s.get("asset_class_assessment", [])
+    if assessments:
+        parts.append("ASSET CLASS OUTLOOK:")
+        for a in assessments:
+            ac = a.get("asset_class", "")
+            reg = a.get("regime", "")
+            rat = a.get("rationale", "")
+            parts.append(f"  {ac}: {reg} — {rat}")
+        parts.append("")
+
+    picks = s.get("top_picks", [])
+    if picks:
+        equities = [p for p in picks if p.get("asset_class") in ("stock", "equities", "equity")]
+        crypto = [p for p in picks if p.get("asset_class") in ("crypto", "cryptocurrency")]
+        commodities = [p for p in picks if p.get("asset_class") in ("commodity", "commodities")]
+        other = [p for p in picks if p not in equities and p not in crypto and p not in commodities]
+
+        def _render_group(label, items):
+            if not items:
+                return
+            parts.append(f"--- {label} ---")
+            for p in items:
+                ticker = p.get("ticker", "?")
+                company = p.get("company", "")
+                conv = p.get("conviction", "")
+                score = p.get("conviction_score", "")
+                change = p.get("change", "")
+                mcap = p.get("market_cap", "")
+                header = f"{ticker}"
+                if company:
+                    header += f" ({company})"
+                detail_parts = []
+                if conv:
+                    detail_parts.append(f"Conviction: {conv}")
+                if score:
+                    detail_parts.append(f"Score: {score}")
+                if change:
+                    detail_parts.append(f"Change: {change}")
+                if mcap:
+                    detail_parts.append(f"MCap: {mcap}")
+                if detail_parts:
+                    header += " | " + " | ".join(detail_parts)
+                parts.append(header)
+                thesis = p.get("thesis", "")
+                if thesis:
+                    parts.append(f"  {thesis}")
+                catalyst = p.get("catalyst", "")
+                if catalyst:
+                    parts.append(f"  Catalyst: {catalyst}")
+                fail = p.get("why_could_fail", "")
+                if fail:
+                    parts.append(f"  Risk: {fail}")
+                parts.append("")
+
+        _render_group("EQUITIES", equities)
+        _render_group("CRYPTO", crypto)
+        _render_group("COMMODITIES", commodities)
+        _render_group("OTHER", other)
+
+    excluded = s.get("excluded_with_reason", [])
+    if excluded:
+        parts.append("EXCLUDED:")
+        for ex in excluded:
+            parts.append(f"  {ex.get('ticker', '?')} — {ex.get('reason', '')}")
+        parts.append("")
+
+    positioning = s.get("portfolio_positioning", "")
+    if positioning:
+        parts.append(f"POSITIONING: {positioning}")
+
+    bias = s.get("portfolio_bias", {})
+    if bias and isinstance(bias, dict):
+        regime_b = bias.get("risk_regime", "")
+        cash = bias.get("cash_guidance", "")
+        if regime_b or cash:
+            bias_parts = []
+            if regime_b:
+                bias_parts.append(f"Regime: {regime_b}")
+            if cash:
+                bias_parts.append(f"Cash: {cash}")
+            parts.append("PORTFOLIO BIAS: " + " | ".join(bias_parts))
+
+    disclaimer = s.get("disclaimer", "")
+    if disclaimer:
+        parts.append("")
+        parts.append(disclaimer)
+
+    return "\n".join(parts).strip()
+
+
+_NARRATIVE_KEYS = ("summary", "narrative", "analysis", "report", "text", "message")
+_RENDERERS = {
+    "cross_market": _render_cross_market_analysis,
+}
+
+
+def _ensure_analysis(result: dict, meta: dict = None) -> dict:
+    analysis = result.get("analysis", "")
+    structured = result.get("structured", {})
+    if not isinstance(structured, dict):
+        return result
+
+    display_type = structured.get("display_type", "")
+    req_id = (meta or {}).get("request_id", "")
+    has_narrative = False
+
+    if not analysis:
+        for key in _NARRATIVE_KEYS:
+            val = structured.get(key, "")
+            if val and isinstance(val, str) and len(val) > 10:
+                analysis = val
+                has_narrative = True
+                break
+
+    if not analysis and display_type in _RENDERERS:
+        analysis = _RENDERERS[display_type](structured)
+
+    if analysis:
+        result["analysis"] = analysis
+
+    s_keys = [k for k in structured.keys() if k != "display_type"][:8]
+    print(f"[RENDER] id={req_id} display_type={display_type} analysis_len={len(analysis)} has_structured_message={has_narrative} structured_keys={s_keys}")
+
+    return result
+
+
 def _ok_envelope(result: dict, meta: dict) -> dict:
     if not isinstance(result, dict):
         result = {"analysis": str(result) if result else "", "structured": {}}
     result.setdefault("analysis", "")
     result.setdefault("structured", {})
+    result = _ensure_analysis(result, meta)
     result["type"] = "ok"
     result["meta"] = meta
     result["error"] = None
