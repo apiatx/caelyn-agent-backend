@@ -44,7 +44,7 @@ externalPort = 8081
 
 [deployment]
 deploymentTarget = "autoscale"
-run = ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
+run = ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port"]
 build = ["bash", "-c", "python -c 'import anthropic, openai, httpx, fastapi, slowapi, pydantic'"]
 
 [userenv]
