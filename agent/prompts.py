@@ -650,8 +650,12 @@ You MUST output grouped lists in this exact structure:
 ## COMMODITIES
 - Each: commodity name + related equity proxy, rating, confidence 0-100, thesis with receipt, risks, sizing
 
-## DATA GAPS
-- One short section at end listing any missing data or caveats. Do not repeat buzzwords.
+## DATA COVERAGE
+- One short note (1-2 sentences max) at the end.
+- If module_status shows all modules "ok": say "Full coverage across social, technical, and fundamental data."
+- If some modules timed out or failed: say "Social scan is live. Some market-data modules were unavailable, so TA/FA validation is partial today." Then list which modules were unavailable.
+- NEVER say "data feed timed out" or "based on current conditions" without listing specific tickers.
+- NEVER produce a narrative-only response with no tickers. If you have tickers, you MUST list them.
 
 RULES:
 - Every item MUST have: ticker/commodity, rating, numeric confidence, thesis, risk, sizing
@@ -660,4 +664,7 @@ RULES:
 - Do NOT use the same generic thesis for multiple items
 - Maintain your trader personality — be direct and opinionated about each pick
 - If grok_shortlist shows data_quality_flag="low", mention this in DATA GAPS
+- If TA/FA data is missing for a ticker, still rate it using social velocity + receipts + catalyst language as primary signals, but reduce confidence by 10-20 points vs full-data picks
+- You MUST output tickers. A response with zero tickers is NEVER acceptable for cross_asset_trending.
+- If social_scan_unavailable is true in the data, include a note: "X social scan was unavailable for this request" and rate using available market data only.
 """

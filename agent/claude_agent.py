@@ -103,6 +103,8 @@ class TradingAgent:
             "filters": dict(base_plan.get("filters", {})),
             "tickers": list(base_plan.get("tickers", [])),
         }
+        if "x_social_scan_mode" in base_plan:
+            plan["x_social_scan_mode"] = base_plan["x_social_scan_mode"]
 
         if any(w in q for w in ["deep", "detailed", "thorough", "in-depth"]):
             plan["priority_depth"] = "deep"
@@ -1149,6 +1151,7 @@ class TradingAgent:
                     orch_plan.setdefault("modules", {})["x_social_scan"] = True
                     if "x_social_scan_mode" not in orch_plan:
                         orch_plan["x_social_scan_mode"] = "trending"
+                    print(f"[SOCIAL_REQUIRED] preset=freeform_social enabled=True query={prompt[:60]}")
             if from_heuristic:
                 query_info["_routing_source"] = "heuristic"
                 is_chat = plan.get("intent") == "chat"
@@ -1273,6 +1276,14 @@ class TradingAgent:
     async def _gather_data_safe(self, query_info: dict) -> dict:
         category = query_info.get("category", "general")
         has_plan = "orchestration_plan" in query_info
+
+        if category == "cross_asset_trending":
+            try:
+                return await self._gather_cross_asset_trending_data(query_info)
+            except Exception as e:
+                print(f"[AGENT] Cross-asset trending data gathering error: {e}")
+                return {"error": f"Data gathering failed: {str(e)}", "scan_type": "cross_asset_trending_error"}
+
         gather_timeout = 40.0 if category == "cross_market" else 55.0
         if has_plan and query_info.get("orchestration_plan", {}).get("modules", {}).get("macro_context"):
             gather_timeout = min(gather_timeout + 10.0, 65.0)
@@ -1537,7 +1548,20 @@ class TradingAgent:
         import time as _t
 
         WALL_CLOCK_LIMIT = 45.0
+        GROK_TIMEOUT = 25.0
+        MARKET_SCAN_TIMEOUT = 25.0
+        LIGHT_ENRICHMENT_TIMEOUT = 12.0
+
         deadline = _t.time() + WALL_CLOCK_LIMIT
+
+        module_status = {
+            "x_social_scan": "pending",
+            "market_scan": "pending",
+            "light_enrichment": "skipped",
+            "broadening": "skipped",
+        }
+
+        print(f"[SOCIAL_REQUIRED] preset=cross_asset_trending enabled=True")
 
         grok_shortlist = None
         grok_available = False
@@ -1546,40 +1570,103 @@ class TradingAgent:
         if cached:
             grok_shortlist = cached
             grok_available = True
+            module_status["x_social_scan"] = "ok_cached"
             print("[CROSS_ASSET_TRENDING] Using cached Grok shortlist")
-        elif self.data.xai:
-            remaining = deadline - _t.time()
-            if remaining > 10:
-                try:
-                    raw = await asyncio.wait_for(
-                        self.data.xai.run_x_social_scan(mode="cross_asset"),
-                        timeout=min(40.0, remaining - 5),
-                    )
-                    if raw and "error" not in raw:
-                        grok_shortlist = raw
-                        grok_available = True
-                        cache.set("xai_cross_asset", raw, XAI_CROSS_ASSET_TTL)
-                        eq = raw.get("equities", {})
-                        eq_count = len(eq.get("large_caps", [])) + len(eq.get("mid_caps", [])) + len(eq.get("small_micro_caps", []))
-                        print(f"[CROSS_ASSET_TRENDING] Grok shortlist: equities={eq_count} crypto={len(raw.get('crypto', []))} commodities={len(raw.get('commodities', []))}")
-                    else:
-                        print(f"[CROSS_ASSET_TRENDING] Grok returned error: {raw.get('error', 'unknown')}")
-                except Exception as e:
-                    print(f"[CROSS_ASSET_TRENDING] Grok scan failed: {e}")
-            else:
-                print(f"[CROSS_ASSET_TRENDING] Skipping Grok scan, only {remaining:.0f}s remaining")
 
-        remaining = deadline - _t.time()
-        primary_data = await asyncio.wait_for(
-            self.data.get_cross_market_scan(),
-            timeout=max(remaining, 10.0),
-        )
+        async def _fetch_grok():
+            nonlocal grok_shortlist, grok_available
+            if grok_shortlist:
+                return
+            if not self.data.xai:
+                module_status["x_social_scan"] = "unavailable"
+                print("[CROSS_ASSET_TRENDING] xAI provider not configured")
+                return
+            try:
+                raw = await asyncio.wait_for(
+                    self.data.xai.run_x_social_scan(mode="cross_asset"),
+                    timeout=GROK_TIMEOUT,
+                )
+                if raw and "error" not in raw:
+                    grok_shortlist = raw
+                    grok_available = True
+                    module_status["x_social_scan"] = "ok"
+                    cache.set("xai_cross_asset", raw, XAI_CROSS_ASSET_TTL)
+                    eq = raw.get("equities", {})
+                    eq_count = len(eq.get("large_caps", [])) + len(eq.get("mid_caps", [])) + len(eq.get("small_micro_caps", []))
+                    print(f"[CROSS_ASSET_TRENDING] Grok shortlist: equities={eq_count} crypto={len(raw.get('crypto', []))} commodities={len(raw.get('commodities', []))}")
+                else:
+                    module_status["x_social_scan"] = "error"
+                    print(f"[CROSS_ASSET_TRENDING] Grok returned error: {raw.get('error', 'unknown') if raw else 'empty'}")
+            except asyncio.TimeoutError:
+                module_status["x_social_scan"] = "timeout"
+                print(f"[CROSS_ASSET_TRENDING] Grok scan timed out after {GROK_TIMEOUT}s")
+            except Exception as e:
+                module_status["x_social_scan"] = "error"
+                print(f"[CROSS_ASSET_TRENDING] Grok scan failed: {e}")
+
+        market_data_result = None
+
+        async def _fetch_market_data():
+            nonlocal market_data_result
+            try:
+                market_data_result = await asyncio.wait_for(
+                    self.data.get_cross_market_scan(),
+                    timeout=MARKET_SCAN_TIMEOUT,
+                )
+                if market_data_result and "error" not in market_data_result:
+                    module_status["market_scan"] = "ok"
+                else:
+                    module_status["market_scan"] = "partial"
+            except asyncio.TimeoutError:
+                module_status["market_scan"] = "timeout"
+                print(f"[CROSS_ASSET_TRENDING] Market scan timed out after {MARKET_SCAN_TIMEOUT}s")
+            except Exception as e:
+                module_status["market_scan"] = "error"
+                print(f"[CROSS_ASSET_TRENDING] Market scan failed: {e}")
+
+        market_task = _fetch_market_data()
+
+        if grok_shortlist:
+            await market_task
+        else:
+            grok_task = _fetch_grok()
+            await asyncio.gather(grok_task, market_task, return_exceptions=True)
+
+        market_scan_ok = module_status["market_scan"] == "ok"
+
+        if market_scan_ok and market_data_result:
+            primary_data = market_data_result
+        elif market_data_result and isinstance(market_data_result, dict):
+            primary_data = market_data_result
+        else:
+            primary_data = {"scan_type": "cross_asset_trending_social_first"}
 
         if grok_shortlist:
             primary_data["grok_shortlist"] = grok_shortlist
             primary_data["grok_available"] = True
         else:
             primary_data["grok_available"] = False
+
+        if not market_scan_ok and grok_shortlist:
+            remaining = deadline - _t.time()
+            if remaining > 8:
+                print(f"[CROSS_ASSET_TRENDING] Social-first fallback: market scan failed, enriching Grok tickers lightly ({remaining:.0f}s remaining)")
+                try:
+                    light_data = await asyncio.wait_for(
+                        self._light_enrich_grok_shortlist(grok_shortlist),
+                        timeout=min(LIGHT_ENRICHMENT_TIMEOUT, remaining - 3),
+                    )
+                    if light_data:
+                        primary_data["light_enrichment"] = light_data
+                        module_status["light_enrichment"] = "ok"
+                except asyncio.TimeoutError:
+                    module_status["light_enrichment"] = "timeout"
+                    print("[CROSS_ASSET_TRENDING] Light enrichment timed out")
+                except Exception as e:
+                    module_status["light_enrichment"] = "error"
+                    print(f"[CROSS_ASSET_TRENDING] Light enrichment failed: {e}")
+            else:
+                print(f"[CROSS_ASSET_TRENDING] Skipping light enrichment, only {remaining:.0f}s remaining")
 
         eq_count = self._count_candidates(primary_data, "equities")
         crypto_count = self._count_candidates(primary_data, "crypto")
@@ -1589,40 +1676,123 @@ class TradingAgent:
 
         remaining = deadline - _t.time()
         needs_broadening = []
-        if eq_count < 8:
+        if eq_count < 3:
             needs_broadening.append("equities")
-        if crypto_count < 6:
+        if crypto_count < 1:
             needs_broadening.append("crypto")
-        if commodity_count < 4:
+        if commodity_count < 1:
             needs_broadening.append("commodities")
 
-        if needs_broadening and remaining > 5:
+        if needs_broadening and remaining > 5 and not grok_shortlist:
             print(f"[CROSS_ASSET_TRENDING] Broadening needed for: {needs_broadening} ({remaining:.0f}s remaining)")
             try:
                 broadened = await asyncio.wait_for(
                     self._broaden_candidates(primary_data, needs_broadening),
-                    timeout=min(15.0, remaining - 2),
+                    timeout=min(12.0, remaining - 2),
                 )
                 primary_data.update(broadened)
+                module_status["broadening"] = "ok"
             except asyncio.TimeoutError:
+                module_status["broadening"] = "timeout"
                 print(f"[CROSS_ASSET_TRENDING] Broadening timed out, proceeding with available data")
             eq_count = self._count_candidates(primary_data, "equities")
             crypto_count = self._count_candidates(primary_data, "crypto")
             commodity_count = self._count_candidates(primary_data, "commodities")
-        elif needs_broadening:
+        elif needs_broadening and not grok_shortlist:
             print(f"[CROSS_ASSET_TRENDING] Skipping broadening, only {remaining:.0f}s remaining (wall clock)")
 
+        grok_has_receipts = 0
+        if grok_shortlist:
+            for section in [grok_shortlist.get("equities", {}), grok_shortlist.get("crypto", []), grok_shortlist.get("commodities", [])]:
+                if isinstance(section, dict):
+                    for group in section.values():
+                        if isinstance(group, list):
+                            for item in group:
+                                if isinstance(item, dict) and item.get("receipts"):
+                                    grok_has_receipts += len(item["receipts"]) if isinstance(item["receipts"], list) else 1
+                elif isinstance(section, list):
+                    for item in section:
+                        if isinstance(item, dict) and item.get("receipts"):
+                            grok_has_receipts += len(item["receipts"]) if isinstance(item["receipts"], list) else 1
+
+        ta_covered = 0
+        fa_covered = 0
+        if market_scan_ok and market_data_result:
+            stock_data = market_data_result.get("stock_trending", {})
+            if isinstance(stock_data, dict):
+                enriched = stock_data.get("enriched_data", {})
+                if isinstance(enriched, dict):
+                    fa_covered = len(enriched)
+                    ta_covered = sum(1 for v in enriched.values() if isinstance(v, dict) and v.get("market_cap"))
+
+        print(f"[MODULE_STATUS] x_social_scan={module_status['x_social_scan']} market_scan={module_status['market_scan']} light_enrichment={module_status['light_enrichment']} broadening={module_status['broadening']}")
+        print(f"[TRENDING_OUTPUT] equities={eq_count} crypto={crypto_count} commodities={commodity_count} receipts={grok_has_receipts} ta_covered={ta_covered} fa_covered={fa_covered}")
         print(f"[CROSS_ASSET_TRENDING] Final candidates: equities={eq_count} crypto={crypto_count} commodities={commodity_count}")
 
+        primary_data["module_status"] = module_status
         primary_data["candidate_summary"] = {
             "equities": eq_count,
             "crypto": crypto_count,
             "commodities": commodity_count,
             "grok_available": grok_available,
             "broadened": needs_broadening,
+            "module_status": module_status,
         }
 
+        if not grok_available:
+            primary_data["social_scan_unavailable"] = True
+            primary_data["social_scan_notice"] = "X social scan was unavailable for this request. Results are based on market data scanners only."
+
         return primary_data
+
+    async def _light_enrich_grok_shortlist(self, grok_shortlist: dict) -> dict:
+        enriched = {}
+        equity_tickers = []
+        equities = grok_shortlist.get("equities", {})
+        if isinstance(equities, dict):
+            for group_name in ["large_caps", "mid_caps", "small_micro_caps"]:
+                for item in equities.get(group_name, []):
+                    if isinstance(item, dict):
+                        ticker = item.get("ticker", "").upper().strip()
+                        if ticker and len(ticker) <= 6:
+                            equity_tickers.append(ticker)
+
+        crypto_symbols = []
+        for item in grok_shortlist.get("crypto", []):
+            if isinstance(item, dict):
+                sym = item.get("symbol", item.get("ticker", "")).upper().strip()
+                if sym:
+                    crypto_symbols.append(sym)
+
+        async def _quick_equity_quote(ticker):
+            try:
+                overview = await asyncio.wait_for(
+                    self.data.stockanalysis.get_overview(ticker),
+                    timeout=6.0,
+                )
+                return (ticker, overview)
+            except Exception:
+                return (ticker, None)
+
+        if equity_tickers:
+            results = await asyncio.gather(
+                *[_quick_equity_quote(t) for t in equity_tickers[:10]],
+                return_exceptions=True,
+            )
+            for r in results:
+                if isinstance(r, tuple) and r[1]:
+                    enriched[r[0]] = r[1]
+
+        if crypto_symbols:
+            try:
+                from data.cache import cache
+                cached_crypto = cache.get("crypto_scanner_light")
+                if cached_crypto:
+                    enriched["crypto_context"] = cached_crypto
+            except Exception:
+                pass
+
+        return enriched
 
     def _count_candidates(self, data: dict, asset_class: str) -> int:
         count = 0

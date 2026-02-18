@@ -1,0 +1,102 @@
+BACKEND ONLY. DO NOT CHANGE FRONTEND. DO NOT CHANGE RESPONSE SCHEMA KEYS.
+
+Problem:
+When market data modules time out, Trending Now returns a generic “data feed timed out” macro narrative with no tickers or X receipts. This is unacceptable for monetization. Even if scanners fail, we MUST still return a Grok-driven cross-asset trending list with tickers + receipts + thesis.
+
+Goal:
+For cross_asset_trending (and any request where x_social_scan is enabled), the response must still include:
+- Specific tickers grouped (large, mid, small/micro, crypto, commodities)
+- At least 1 receipt per item if Grok returns it
+- A thesis and rating/confidence per item from Claude
+Even if market data (TA/FA/macro) times out or rate-limits.
+
+Implement the following changes:
+
+1) Make x_social_scan “hard-required” for social intents
+For presets:
+- cross_asset_trending MUST always run x_social_scan first or in parallel, but its results must be available before Claude is called.
+For freeform:
+- If social keywords trigger x_social_scan, treat it as required.
+
+If x_social_scan fails entirely:
+- Return a structured error panel that says X social scan unavailable.
+- Do NOT return generic macro commentary.
+- Still return any tickers from other scanners if available.
+
+2) Decouple module failures from whole-request failure
+Right now: a timeout in data gathering causes the whole response to degrade.
+
+Change:
+- Execute data modules with independent timeouts and capture partial results.
+- Never let a failure in TA/FA/macro modules remove the Grok shortlist.
+- Continue to Claude with whatever succeeded.
+
+Implementation detail:
+- Use asyncio.gather(..., return_exceptions=True) for module tasks.
+- Build a module_status object like:
+  module_status = { "x_social_scan":"ok", "technicals":"timeout", "fundamentals":"ok", ... }
+- Pass module_status into Claude as metadata.
+
+3) Add a “social-first fallback path” for Trending Now
+For cross_asset_trending:
+- If TA/FA modules time out, skip heavy enrichment and proceed with:
+  - Grok shortlist
+  - Light enrichment only (fast quote, basic trend, liquidity) capped to top N tickers
+- Then call Claude.
+
+This means:
+- Never block on full cross-market scans to answer Trending Now.
+- Treat the heavy scans as optional enrichers, not prerequisites.
+
+4) Claude prompt update to eliminate “data feed timed out” language
+Do NOT let Claude say “data feed timed out” or “based on current conditions” without tickers.
+Replace with a controlled phrasing that still sounds premium:
+- “Social scan is live. Some market-data modules were unavailable, so TA/FA validation is partial today.”
+But only include this once, in a short Data Coverage note at the end.
+
+Hard rules for Claude in cross_asset_trending:
+- Must output tickers. No narrative-only responses.
+- Must include Grok receipts when provided.
+- Must still produce rating + confidence per item using:
+  - Social velocity + receipts + catalyst language as primary
+  - TA/FA as secondary if present
+- If TA/FA missing, still rate using social + catalyst + liquidity guardrails, but reduce confidence.
+
+5) Add a minimum-output guarantee
+For cross_asset_trending:
+- If Grok returns equities >= 3, crypto >= 1, commodities >= 1, you must output at least those.
+- If Grok returns fewer, output all it returned and then broaden using ONE quick backup social source (Stocktwits trending) or your existing “light broadening” scan, but do not exceed time budget.
+
+6) Tighten time budgets specifically for Trending Now
+Goal is consistent response instead of occasional 80-90s slogs.
+
+Set:
+- Grok x_social_scan timeout: 20-30s max
+- Light enrichment timeout: 10-15s total
+- Heavy scans: run in background of the request only if they can complete quickly, otherwise skip for this response
+- Total request target: 30-45s typical
+
+If the request exceeds total budget:
+- Return with what you have.
+- Never return blank.
+
+7) Logging to debug quality
+Add logs:
+- [SOCIAL_REQUIRED] preset=... enabled=...
+- [MODULE_STATUS] x_social_scan=ok technicals=timeout fundamentals=ok macro=timeout ...
+- [TRENDING_OUTPUT] equities=X crypto=Y commodities=Z receipts=K ta_covered=N fa_covered=M
+
+Testing:
+A) Force a market data timeout (simulate by lowering provider timeout) and call cross_asset_trending.
+Expected:
+- Response still contains tickers + receipts + thesis.
+- No “data feed timed out” phrasing.
+B) Force Grok failure only.
+Expected:
+- Response uses other scanners, clearly says X social scan unavailable, still outputs tickers if any.
+C) Normal run.
+Expected:
+- Same high quality as before, but more reliable and faster.
+
+Publish:
+After tests pass, publish the FastAPI backend project serving the public URL.
