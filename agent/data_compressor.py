@@ -124,11 +124,13 @@ PROTECTED_KEYS = {
     "ranked_candidates", "ranking_debug",
     "institutional_scoring", "prior_score",
     "data_completeness", "budget_exhausted_at", "social_discipline_flag",
-    "regime_context", "position_sizing", "catalyst_breakdown",
-    "adjusted_final_score", "regime", "regime_multiplier",
+    "regime_context", "position_sizing", "catalyst_components",
+    "adjusted_final_score", "regime", "asset_multiplier",
     "creative_discovery_override", "weight_matrix",
-    "data_availability", "conviction_validation", "scoring_debug",
-    "creative_discovery_label", "conviction_label", "failed_inputs",
+    "data_flags", "conviction_validation", "scoring_debug",
+    "labels", "conviction_label", "failed_inputs",
+    "completeness_penalty", "position_size_guidance", "liquidity_tier",
+    "catalyst_present_components", "market_cap_category",
 }
 
 

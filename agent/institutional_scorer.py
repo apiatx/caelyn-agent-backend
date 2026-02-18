@@ -3,19 +3,24 @@ Institutional Prior Scoring Engine.
 Runs AFTER data gathering, BEFORE Claude sees candidates.
 
 Regime-aware deterministic scoring pipeline:
-  1. Compute sub-scores: technical, fundamental/catalyst, sentiment, catalyst_strength
-  2. Detect market regime (risk_on / risk_off / inflationary / neutral)
-  3. Apply regime-specific weight matrix to sub-scores
-  4. Apply cross-asset weight adjustment (mcap tier, sector, asset class)
-  5. Enforce social→FA discipline
-  6. Attach structured scorecard + position sizing guidance
+  1. Build normalized scorecard (unified contract)
+  2. Compute sub-scores with data completeness awareness
+  3. Detect market regime → blend weights by confidence
+  4. Apply cross-asset weight adjustment (bounded [0.75, 1.25])
+  5. Enforce social→FA discipline + conviction validation
+  6. Microcap guardrails: liquidity gating + sizing caps
+  7. Creative discovery exception (requires verifiable catalysts)
+  8. Attach structured scorecard + position sizing guidance
 
 Claude receives the final scorecard and interprets — does NOT rescore.
 """
 
 from data.scoring_engine import parse_pct, parse_market_cap_string, get_market_cap
 from core.catalyst_engine import calculate_catalyst_score
-from core.asset_weight_engine import apply_asset_weights
+from core.asset_weight_engine import (
+    apply_asset_weights, compute_avg_dollar_volume,
+    get_liquidity_tier, get_mcap_tier,
+)
 
 
 MCAP_SMALL_CEILING = 2_000_000_000
@@ -46,8 +51,70 @@ CATALYST_KEYWORDS = [
     "ai", "gpu", "infrastructure",
 ]
 
+BASE_WEIGHTS = {
+    "technical": 0.25,
+    "sentiment": 0.20,
+    "fundamentals": 0.30,
+    "catalyst": 0.25,
+}
 
-def _compute_technical_score(data: dict) -> float:
+REGIME_WEIGHT_MATRIX = {
+    "risk_on": {
+        "technical": 0.30,
+        "sentiment": 0.30,
+        "fundamentals": 0.20,
+        "catalyst": 0.20,
+    },
+    "risk_off": {
+        "technical": 0.20,
+        "sentiment": 0.15,
+        "fundamentals": 0.40,
+        "catalyst": 0.25,
+    },
+    "inflationary": {
+        "technical": 0.20,
+        "sentiment": 0.15,
+        "fundamentals": 0.35,
+        "catalyst": 0.30,
+    },
+    "neutral": BASE_WEIGHTS.copy(),
+}
+
+COMPLETENESS_PENALTIES = {
+    "has_fundamentals": 0.10,
+    "has_ohlc": 0.08,
+    "has_volume": 0.07,
+    "has_news": 0.05,
+    "has_social": 0.05,
+}
+
+POSITION_SIZING_BY_TIER = {
+    "nano_low": {"max_pct": 0.5, "tier": "nano_low"},
+    "nano_medium": {"max_pct": 1.0, "tier": "nano_medium"},
+    "nano_high": {"max_pct": 1.5, "tier": "nano_high"},
+    "micro_low": {"max_pct": 1.0, "tier": "micro_low"},
+    "micro_medium": {"max_pct": 2.0, "tier": "micro_medium"},
+    "micro_high": {"max_pct": 3.0, "tier": "micro_high"},
+    "small_low": {"max_pct": 2.0, "tier": "small_low"},
+    "small_medium": {"max_pct": 3.0, "tier": "small_medium"},
+    "small_high": {"max_pct": 4.0, "tier": "small_high"},
+    "large_low": {"max_pct": 3.0, "tier": "large_low"},
+    "large_medium": {"max_pct": 4.0, "tier": "large_medium"},
+    "large_high": {"max_pct": 5.0, "tier": "large_high"},
+}
+
+REGIME_MAX_PCT = {
+    "risk_on": 8.0,
+    "risk_off": 3.0,
+    "inflationary": 5.0,
+    "neutral": 5.0,
+}
+
+
+def _compute_technical_score(data: dict, has_ohlc: bool) -> float:
+    if not has_ohlc:
+        return 50.0
+
     score = 50.0
     snapshot = data.get("snapshot", {})
     technicals = data.get("technicals", {})
@@ -109,7 +176,10 @@ def _compute_technical_score(data: dict) -> float:
     return max(0, min(100, score))
 
 
-def _compute_catalyst_score(data: dict) -> float:
+def _compute_fundamental_score(data: dict, has_fundamentals: bool) -> float:
+    if not has_fundamentals:
+        return 50.0
+
     score = 30.0
 
     news = data.get("recent_news", [])
@@ -178,7 +248,10 @@ def _compute_sector_score(data: dict) -> float:
     return max(0, min(100, score))
 
 
-def _compute_social_score(data: dict) -> float:
+def _compute_social_score(data: dict, has_social: bool) -> float:
+    if not has_social:
+        return 50.0
+
     score = 30.0
 
     sentiment = data.get("sentiment", {})
@@ -260,53 +333,7 @@ def _compute_liquidity_score(data: dict) -> float:
     return max(0, min(100, score))
 
 
-def _get_market_cap_category(data: dict) -> str:
-    mc = get_market_cap(data)
-    if mc is None:
-        return "unknown"
-    if mc < MCAP_MICRO_CEILING:
-        return "micro"
-    if mc < MCAP_SMALL_CEILING:
-        return "small"
-    return "large"
-
-
-REGIME_WEIGHT_MATRIX = {
-    "risk_on": {
-        "technical": 0.30,
-        "sentiment": 0.30,
-        "fundamentals": 0.20,
-        "catalyst": 0.20,
-    },
-    "risk_off": {
-        "technical": 0.20,
-        "sentiment": 0.15,
-        "fundamentals": 0.40,
-        "catalyst": 0.25,
-    },
-    "inflationary": {
-        "technical": 0.25,
-        "sentiment": 0.20,
-        "fundamentals": 0.30,
-        "catalyst": 0.25,
-    },
-    "neutral": {
-        "technical": 0.30,
-        "sentiment": 0.20,
-        "fundamentals": 0.25,
-        "catalyst": 0.25,
-    },
-}
-
-POSITION_SIZING = {
-    "risk_on": {"max_position_pct": "5-8%", "sizing_note": "Full conviction sizing allowed"},
-    "risk_off": {"max_position_pct": "2-3%", "sizing_note": "Defensive sizing — protect capital"},
-    "inflationary": {"max_position_pct": "3-5%", "sizing_note": "Moderate sizing — inflation hedges favored"},
-    "neutral": {"max_position_pct": "3-5%", "sizing_note": "Standard sizing — no regime edge"},
-}
-
-
-def _build_data_availability(asset: dict, catalyst_result: dict) -> dict:
+def _build_data_flags(asset: dict) -> dict:
     snapshot = asset.get("snapshot", {})
     technicals = asset.get("technicals", {})
     overview = asset.get("overview", {})
@@ -322,157 +349,38 @@ def _build_data_availability(asset: dict, catalyst_result: dict) -> dict:
     has_social = bool(asset.get("sentiment") or asset.get("x_sentiment"))
     has_volume = bool(snapshot.get("volume") and details.get("avg_volume"))
 
-    components = catalyst_result.get("components", {})
-    catalyst_present = [k for k, v in components.items() if v > 0]
-
-    return {
-        "has_price_data": has_price,
+    flags = {
+        "has_price": has_price,
         "has_ohlc": has_ohlc,
         "has_fundamentals": has_fundamentals,
         "has_news": has_news,
         "has_social": has_social,
         "has_volume": has_volume,
-        "catalyst_components_present": catalyst_present,
     }
+    flags["missing"] = [k.replace("has_", "") for k, v in flags.items() if k.startswith("has_") and not v]
+    return flags
 
 
-def _apply_conviction_validation(
-    technical: float, catalyst_strength: int, catalyst_result: dict,
-    liquidity: float, mcap_category: str
-) -> dict:
-    confirmations = 0
-    reasons = []
-
-    ta_confirmed = technical >= 55
-    if ta_confirmed:
-        confirmations += 1
-        reasons.append("TA_CONFIRMED")
-
-    cat_components = catalyst_result.get("components", {})
-    real_catalysts = (
-        cat_components.get("earnings_proximity", 0) > 0
-        or cat_components.get("news_density", 0) > 0
-        or cat_components.get("fundamental_acceleration", 0) > 0
-    )
-    catalyst_confirmed = catalyst_strength >= 40 and real_catalysts
-    if catalyst_confirmed:
-        confirmations += 1
-        reasons.append("CATALYST_CONFIRMED")
-
-    liq_ok = liquidity >= 40 and mcap_category != "unknown"
-    if liq_ok:
-        confirmations += 1
-        reasons.append("LIQUIDITY_OK")
-
-    passed = confirmations >= 2
-    return {
-        "validation_passed": passed,
-        "confirmations": confirmations,
-        "reasons": reasons,
-        "conviction_label": "BUY" if passed else "WATCH",
-        "validation_note": (
-            None if passed
-            else f"Only {confirmations}/3 confirmations met — downgraded to WATCH"
-        ),
-    }
+def _completeness_penalty(data_flags: dict) -> float:
+    penalty = 0.0
+    for flag_key, weight in COMPLETENESS_PENALTIES.items():
+        if not data_flags.get(flag_key, True):
+            penalty += weight
+    return min(penalty, 0.25)
 
 
-def score_candidate(ticker: str, asset: dict, regime_data: dict = None) -> dict:
-    """
-    Regime-aware deterministic scoring for a single candidate.
-    Computes sub-scores, applies regime weight matrix, cross-asset adjustment,
-    social discipline, conviction validation, and position sizing guidance.
-    Returns structured scorecard — Claude interprets, does NOT rescore.
-    """
-    regime = (regime_data or {}).get("regime", "neutral")
-    weights = REGIME_WEIGHT_MATRIX.get(regime, REGIME_WEIGHT_MATRIX["neutral"])
-
-    technical = _compute_technical_score(asset)
-    sector = _compute_sector_score(asset)
-    social = _compute_social_score(asset)
-    liquidity = _compute_liquidity_score(asset)
-
-    catalyst_result = calculate_catalyst_score(asset)
-    catalyst_strength = catalyst_result["catalyst_score"]
-
-    fundamental = _compute_catalyst_score(asset)
-
-    raw_score = (
-        weights["technical"] * technical +
-        weights["sentiment"] * social +
-        weights["fundamentals"] * fundamental +
-        weights["catalyst"] * catalyst_strength
-    )
-
-    mcap_category = _get_market_cap_category(asset)
-    if mcap_category in ("micro", "small"):
-        if fundamental >= 70 and sector >= 65:
-            raw_score += 5
-
-    social_discipline_flag = None
-    if social >= 60:
-        if technical < 45 and fundamental < 45:
-            raw_score *= 0.85
-            social_discipline_flag = "SOCIAL_UNCONFIRMED"
-
-    asset_metadata = {
-        "asset_class": _detect_asset_class(asset),
-        "market_cap_tier": mcap_category,
-        "sector": _extract_sector(asset),
-    }
-    weight_result = apply_asset_weights(raw_score, asset_metadata, regime)
-    adjusted_score = weight_result["adjusted_score"]
-
-    creative_override = False
-    creative_label = None
-    if adjusted_score < 50 and social > 85 and catalyst_strength > 60:
-        liq_ok = liquidity >= 40 and mcap_category != "unknown"
-        ta_not_broken = technical >= 40
-        if liq_ok and ta_not_broken:
-            creative_override = True
-        else:
-            creative_label = "Speculative / Lottery"
-
-    position_guide = POSITION_SIZING.get(regime, POSITION_SIZING["neutral"])
-    if creative_label == "Speculative / Lottery":
-        position_guide = {"max_position_pct": "<=1%", "sizing_note": "Speculative — capped sizing"}
-
-    conviction_check = _apply_conviction_validation(
-        technical, catalyst_strength, catalyst_result, liquidity, mcap_category
-    )
-
-    data_flags = _build_data_availability(asset, catalyst_result)
-
-    asset["prior_score"] = adjusted_score
-    scorecard = {
-        "prior_score": adjusted_score,
-        "technical_score": round(technical, 1),
-        "fundamental_score": round(fundamental, 1),
-        "sentiment_score": round(social, 1),
-        "catalyst_score": catalyst_strength,
-        "catalyst_breakdown": catalyst_result["components"],
-        "sector_alignment_score": round(sector, 1),
-        "liquidity_score": round(liquidity, 1),
-        "market_cap_category": mcap_category,
-        "regime": regime,
-        "regime_confidence": (regime_data or {}).get("confidence", 0),
-        "weight_matrix": weights,
-        "regime_multiplier": weight_result["regime_multiplier"],
-        "raw_score": weight_result["raw_score"],
-        "adjusted_final_score": adjusted_score,
-        "position_sizing": position_guide,
-        "data_availability": data_flags,
-        "conviction_validation": conviction_check,
-    }
-    if social_discipline_flag:
-        scorecard["social_discipline_flag"] = social_discipline_flag
-    if creative_override:
-        scorecard["creative_discovery_override"] = True
-    if creative_label:
-        scorecard["creative_discovery_label"] = creative_label
-    asset["institutional_scoring"] = scorecard
-
-    return asset
+def _blend_weights(regime: str, confidence: float) -> dict:
+    regime_weights = REGIME_WEIGHT_MATRIX.get(regime, BASE_WEIGHTS)
+    if regime == "neutral" or confidence <= 0:
+        return BASE_WEIGHTS.copy()
+    conf = max(0.0, min(1.0, confidence))
+    blended = {}
+    for key in BASE_WEIGHTS:
+        blended[key] = round(
+            BASE_WEIGHTS[key] * (1 - conf) + regime_weights[key] * conf,
+            4,
+        )
+    return blended
 
 
 def _detect_asset_class(data: dict) -> str:
@@ -498,11 +406,233 @@ def _extract_sector(data: dict) -> str:
     return ""
 
 
+def _compute_position_sizing(mcap_tier: str, liq_tier: str, regime: str, labels: list, **kwargs) -> dict:
+    tier_key = f"{mcap_tier}_{liq_tier}"
+    base = POSITION_SIZING_BY_TIER.get(tier_key, {"max_pct": 3.0, "tier": tier_key})
+    regime_cap = REGIME_MAX_PCT.get(regime, 5.0)
+    max_pct = min(base["max_pct"], regime_cap)
+
+    if "speculative" in labels or "lottery" in labels:
+        max_pct = min(max_pct, 1.0)
+    if "override_candidate" in labels:
+        fundamental_score = kwargs.get("fundamental_score", 0)
+        liq = kwargs.get("liquidity_tier", "medium")
+        if fundamental_score >= 70 and liq == "high":
+            pass
+        elif fundamental_score >= 55:
+            max_pct = min(max_pct, 3.0)
+        else:
+            max_pct = min(max_pct, 2.0)
+
+    return {"max_pct": max_pct, "tier": base["tier"]}
+
+
+def _apply_conviction_validation(
+    technical: float, catalyst_result: dict,
+    liq_tier: str, mcap_tier: str, avg_dollar_vol: float
+) -> dict:
+    confirmations = 0
+    reasons = []
+
+    ta_confirmed = technical >= 65
+    if ta_confirmed:
+        confirmations += 1
+        reasons.append("TA_CONFIRMED")
+
+    present_count = catalyst_result.get("present_count", 0)
+    catalyst_confirmed = present_count >= 1
+    if catalyst_confirmed:
+        confirmations += 1
+        reasons.append("CATALYST_PRESENT")
+
+    liq_ok = avg_dollar_vol >= 2_000_000 or liq_tier in ("medium", "high")
+    if liq_ok:
+        confirmations += 1
+        reasons.append("LIQUIDITY_OK")
+
+    passed = confirmations >= 2
+
+    is_micro = mcap_tier in ("nano", "micro")
+    if is_micro and not liq_ok:
+        passed = False
+        if "LIQUIDITY_FAIL" not in reasons:
+            reasons.append("LIQUIDITY_FAIL_MICRO")
+
+    return {
+        "validation_passed": passed,
+        "confirmations": confirmations,
+        "reasons": reasons,
+        "conviction_label": "BUY" if passed else "WATCH",
+        "validation_note": (
+            None if passed
+            else f"Only {confirmations}/3 confirmations — downgraded to WATCH"
+        ),
+    }
+
+
+def score_candidate(ticker: str, asset: dict, regime_data: dict = None) -> dict:
+    """
+    Institutional-grade deterministic scoring for a single candidate.
+    Produces a normalized scorecard with:
+      - Data completeness penalties
+      - Confidence-blended regime weights
+      - Bounded cross-asset multipliers
+      - Liquidity-aware position sizing
+      - Conviction validation
+      - Creative discovery with verifiable catalyst gates
+    """
+    regime = (regime_data or {}).get("regime", "neutral")
+    regime_confidence = (regime_data or {}).get("confidence", 0)
+
+    data_flags = _build_data_flags(asset)
+    penalty = _completeness_penalty(data_flags)
+
+    technical = _compute_technical_score(asset, data_flags["has_ohlc"])
+    fundamental = _compute_fundamental_score(asset, data_flags["has_fundamentals"])
+    social = _compute_social_score(asset, data_flags["has_social"])
+    sector = _compute_sector_score(asset)
+    liquidity = _compute_liquidity_score(asset)
+
+    catalyst_result = calculate_catalyst_score(asset)
+    catalyst_strength = catalyst_result["catalyst_score"]
+    catalyst_present_count = catalyst_result["present_count"]
+
+    weights = _blend_weights(regime, regime_confidence)
+
+    raw_score = (
+        weights["technical"] * technical +
+        weights["sentiment"] * social +
+        weights["fundamentals"] * fundamental +
+        weights["catalyst"] * catalyst_strength
+    )
+
+    raw_score = raw_score * (1.0 - penalty)
+
+    mc = get_market_cap(asset)
+    mcap_tier = get_mcap_tier(mc)
+    avg_dollar_vol = compute_avg_dollar_volume(asset)
+    liq_tier = get_liquidity_tier(avg_dollar_vol)
+
+    social_discipline_flag = None
+    if social >= 60:
+        if technical < 45 and fundamental < 45:
+            raw_score *= 0.85
+            social_discipline_flag = "SOCIAL_UNCONFIRMED"
+
+    asset_class = _detect_asset_class(asset)
+    asset_metadata = {
+        "asset_class": asset_class,
+        "market_cap_tier": mcap_tier,
+        "liquidity_tier": liq_tier,
+        "sector": _extract_sector(asset),
+    }
+    weight_result = apply_asset_weights(raw_score, asset_metadata, regime)
+    adjusted_score = weight_result["adjusted_score"]
+
+    labels = []
+
+    cat_components = catalyst_result.get("components", {})
+    vol_expansion_present = cat_components.get("volume_expansion", {}).get("present", False)
+    vol_expansion_score = cat_components.get("volume_expansion", {}).get("score", 0)
+    has_real_catalyst = (
+        cat_components.get("news_density", {}).get("present", False)
+        or cat_components.get("earnings_proximity", {}).get("present", False)
+        or cat_components.get("fundamental_acceleration", {}).get("present", False)
+    )
+
+    creative_override = False
+    if social >= 85 and catalyst_strength > 60:
+        override_eligible = (
+            vol_expansion_present and vol_expansion_score >= 10
+            and has_real_catalyst
+            and liq_tier != "low"
+        )
+        if override_eligible:
+            creative_override = True
+            labels.append("override_candidate")
+            if fundamental < 55:
+                labels.append("speculative")
+        else:
+            labels.append("speculative")
+            labels.append("lottery")
+
+    is_micro = mcap_tier in ("nano", "micro")
+    if is_micro and liq_tier == "low":
+        if "speculative" not in labels:
+            labels.append("speculative")
+
+    conviction = _apply_conviction_validation(
+        technical, catalyst_result, liq_tier, mcap_tier, avg_dollar_vol
+    )
+    if not conviction["validation_passed"] and "speculative" not in labels:
+        if is_micro:
+            labels.append("speculative")
+
+    position_guide = _compute_position_sizing(
+        mcap_tier, liq_tier, regime, labels,
+        fundamental_score=fundamental, liquidity_tier=liq_tier,
+    )
+
+    catalyst_components_out = {}
+    for comp_name, comp_data in cat_components.items():
+        if isinstance(comp_data, dict):
+            catalyst_components_out[comp_name] = comp_data
+        else:
+            catalyst_components_out[comp_name] = {"score": comp_data, "present": comp_data > 0}
+
+    snapshot = asset.get("snapshot", {})
+    asset["prior_score"] = adjusted_score
+    scorecard = {
+        "ticker": ticker,
+        "asset_class": asset_class,
+        "market_cap": mc,
+        "avg_dollar_volume": round(avg_dollar_vol, 0) if avg_dollar_vol else None,
+        "price": snapshot.get("price"),
+
+        "sentiment_score": round(social, 1),
+        "technical_score": round(technical, 1),
+        "fundamental_score": round(fundamental, 1),
+        "catalyst_score": catalyst_strength,
+
+        "data_flags": data_flags,
+        "completeness_penalty": round(penalty, 3),
+
+        "catalyst_components": catalyst_components_out,
+        "catalyst_present_components": catalyst_present_count,
+
+        "raw_score": round(raw_score, 1),
+        "adjusted_final_score": adjusted_score,
+        "prior_score": adjusted_score,
+
+        "regime": regime,
+        "regime_confidence": regime_confidence,
+        "weight_matrix": weights,
+        "asset_multiplier": weight_result["regime_multiplier"],
+
+        "market_cap_category": mcap_tier,
+        "liquidity_tier": liq_tier,
+        "position_size_guidance": position_guide,
+
+        "conviction_validation": conviction,
+        "labels": labels,
+
+        "sector_alignment_score": round(sector, 1),
+        "liquidity_score": round(liquidity, 1),
+    }
+    if social_discipline_flag:
+        scorecard["social_discipline_flag"] = social_discipline_flag
+    if creative_override:
+        scorecard["creative_discovery_override"] = True
+
+    asset["institutional_scoring"] = scorecard
+    return asset
+
+
 def apply_institutional_scoring(market_data: dict, regime_data: dict = None) -> dict:
     """
     Apply regime-aware institutional scoring to all candidates in market_data.
     Sorts by adjusted_final_score descending but does NOT remove any candidates.
-    Attaches regime context, position sizing, and scoring debug block.
+    Attaches regime context, position sizing, scoring debug block, and summary log.
     """
     enriched = market_data.get("enriched_data")
     if not enriched or not isinstance(enriched, dict):
@@ -519,11 +649,11 @@ def apply_institutional_scoring(market_data: dict, regime_data: dict = None) -> 
             score_candidate(ticker.replace("FLAGGED_", ""), data, regime_data)
             scored_count += 1
             sc = data.get("institutional_scoring", {})
-            da = sc.get("data_availability", {})
-            missing = sum(1 for k in ["has_price_data", "has_ohlc", "has_fundamentals", "has_news", "has_social", "has_volume"] if not da.get(k))
-            if missing >= 3:
+            df = sc.get("data_flags", {})
+            missing = df.get("missing", [])
+            if len(missing) >= 3:
                 partial_count += 1
-            if sc.get("creative_discovery_override") or sc.get("creative_discovery_label"):
+            if sc.get("creative_discovery_override"):
                 override_count += 1
 
     budget_exhausted = market_data.get("data_completeness") == "partial"
@@ -551,16 +681,25 @@ def apply_institutional_scoring(market_data: dict, regime_data: dict = None) -> 
                 "fundamental_score": sc.get("fundamental_score"),
                 "sentiment_score": sc.get("sentiment_score"),
                 "catalyst_score": sc.get("catalyst_score"),
-                "regime_multiplier": sc.get("regime_multiplier"),
+                "asset_multiplier": sc.get("asset_multiplier"),
                 "conviction_label": sc.get("conviction_validation", {}).get("conviction_label"),
-                "data_availability": sc.get("data_availability"),
+                "completeness_penalty": sc.get("completeness_penalty"),
+                "labels": sc.get("labels", []),
+                "missing": sc.get("data_flags", {}).get("missing", []),
             })
 
         regime_name = regime_data.get("regime", "neutral")
         regime_conf = regime_data.get("confidence", 0)
-        print(f"[SCORING] regime={regime_name}({regime_conf}) | "
-              f"scored={scored_count} fully={scored_count - partial_count} partial={partial_count} | "
-              f"overrides={override_count} | budget_exhausted={budget_exhausted}")
+
+        top5_summary = " ".join(
+            f"{e['ticker']}:{e['adjusted_final_score']}" +
+            (f"(missing_{'_'.join(e['missing'][:2])})" if e.get("missing") else "")
+            for e in top_10_debug[:5]
+        )
+        print(f"[SCORING] regime={regime_name}({regime_conf}) "
+              f"full={scored_count - partial_count} partial={partial_count} "
+              f"overrides={override_count} "
+              f"top=[{top5_summary}]")
 
     else:
         top_10_debug = []
@@ -568,9 +707,10 @@ def apply_institutional_scoring(market_data: dict, regime_data: dict = None) -> 
         regime_conf = regime_data.get("confidence", 0)
 
     market_data["regime_context"] = regime_data
-    market_data["position_sizing"] = POSITION_SIZING.get(
-        regime_data.get("regime", "neutral"), POSITION_SIZING["neutral"]
-    )
+    market_data["position_sizing"] = {
+        "regime": regime_name,
+        "regime_max_pct": REGIME_MAX_PCT.get(regime_name, 5.0),
+    }
 
     market_data["scoring_debug"] = {
         "regime": {
@@ -578,7 +718,7 @@ def apply_institutional_scoring(market_data: dict, regime_data: dict = None) -> 
             "confidence": regime_conf,
             "inputs_used": list((regime_data.get("signals") or {}).keys()),
         },
-        "scoring_weights_used": REGIME_WEIGHT_MATRIX.get(regime_name, REGIME_WEIGHT_MATRIX["neutral"]),
+        "scoring_weights_used": _blend_weights(regime_name, regime_conf),
         "candidates_scored": scored_count,
         "candidates_partial": partial_count,
         "override_triggered": override_count > 0,

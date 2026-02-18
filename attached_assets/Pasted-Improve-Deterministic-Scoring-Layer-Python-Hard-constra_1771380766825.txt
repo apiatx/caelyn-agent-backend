@@ -1,0 +1,365 @@
+Improve Deterministic Scoring Layer (Python)
+Hard constraints
+
+Do not change: API request/response schema, endpoints, preset intent keys, OpenAI orchestrator logic, Claude system prompts, existing data gathering modules, caching/budget system.
+
+Only change/add code in the deterministic scoring layer and its immediate helpers.
+
+Preserve: creative edge, early narrative detection, microcap discovery, non-consensus thinking.
+
+Goal
+
+Make the scoring layer institutional-grade by adding:
+
+Data completeness awareness
+
+Cross-asset weighting multipliers tuned and bounded
+
+Regime-aware dynamic weight matrix with confidence blending
+
+Catalyst scoring based only on verifiable inputs
+
+Microcap guardrails (liquidity gating + sizing caps)
+
+Creative discovery exception that cannot be triggered by hype-only data
+
+Step 1 — Add a normalized scorecard contract (single source of truth)
+
+Create/ensure a unified score object for each candidate:
+
+Scorecard = {
+  "ticker": str,
+  "asset_class": "equity|crypto|commodity|etf",
+  "market_cap": float|None,
+  "avg_dollar_volume": float|None,
+  "price": float|None,
+
+  "sentiment_score": int,     # 0-100
+  "technical_score": int,     # 0-100
+  "fundamental_score": int,   # 0-100
+  "catalyst_score": int,      # 0-100
+
+  "data_flags": {
+     "has_price": bool,
+     "has_ohlc": bool,
+     "has_volume": bool,
+     "has_fundamentals": bool,
+     "has_social": bool,
+     "has_news": bool,
+     "missing": [str]
+  },
+
+  "catalyst_components": {
+     "earnings_proximity": {"score": int, "present": bool},
+     "fundamental_acceleration": {"score": int, "present": bool},
+     "volume_expansion": {"score": int, "present": bool},
+     "social_acceleration": {"score": int, "present": bool},
+     "news_density": {"score": int, "present": bool},
+     "insider_signal": {"score": int, "present": bool},
+     "regulatory": {"score": int, "present": bool}
+  },
+
+  "raw_score": float,          # before multipliers
+  "adjusted_score": float,     # after multipliers
+  "regime": str,
+  "regime_confidence": float,  # 0-1
+  "position_size_guidance": {"max_pct": float, "tier": str},
+  "labels": [str]              # e.g., ["speculative", "override_candidate"]
+}
+
+
+This must be created before Claude is invoked, and passed to Claude as structured context.
+
+Step 2 — Implement data completeness penalties (critical)
+
+Add a deterministic penalty so missing inputs don’t masquerade as certainty.
+
+Rules:
+
+If fundamentals missing, fundamental_score must be neutral (50) not 0 and add a penalty.
+
+If OHLC missing, technical_score must be neutral (50) and add a penalty.
+
+If volume missing, liquidity tier must default to low and add a penalty.
+
+If social missing, sentiment_score must be neutral (50) and add a penalty.
+
+Create:
+
+def completeness_penalty(data_flags) -> float:
+    # returns 0.0 to 0.25
+
+
+Suggested penalty weights:
+
+missing fundamentals: +0.10
+
+missing ohlc: +0.08
+
+missing volume: +0.07
+
+missing news: +0.05
+
+missing social: +0.05
+
+Then:
+
+raw_score = raw_score * (1.0 - completeness_penalty)
+
+
+Also add data_flags["missing"] for transparency and debugging.
+
+Step 3 — Regime-aware weight matrix with confidence blending
+
+You already have regimes + confidence. Use that confidence correctly.
+
+Define base weights (neutral):
+
+fundamentals 0.30
+
+technical 0.25
+
+sentiment 0.20
+
+catalyst 0.25
+
+Define regime weights:
+
+risk_on: fundamentals 0.20, technical 0.30, sentiment 0.30, catalyst 0.20
+
+risk_off: fundamentals 0.40, technical 0.20, sentiment 0.15, catalyst 0.25
+
+inflationary: fundamentals 0.35, technical 0.20, sentiment 0.15, catalyst 0.30
+
+neutral: use base
+
+Then blend based on confidence:
+
+weights = blend_weights(base_weights, regime_weights[regime], regime_confidence)
+
+
+Where confidence 0 → base weights, confidence 1 → regime weights.
+
+This prevents regime misclassification from swinging rankings too hard.
+
+Step 4 — Cross-asset multipliers must be bounded and liquidity-aware
+
+Implement cross-asset adjustments AFTER raw_score:
+
+Liquidity tiering (for equities)
+
+Compute:
+
+avg_dollar_volume = price * avg_volume_20d (or fallback to last known)
+
+market cap tier:
+
+nano: < 50M
+
+micro: 50–300M
+
+small: 300M–2B
+
+mid/large: >2B
+
+Liquidity tier:
+
+low: avg_dollar_volume < $2M/day
+
+medium: $2M–$20M/day
+
+high: > $20M/day
+
+Multipliers (bounded)
+
+Multipliers should be conservative:
+
+overall multiplier range: 0.75 to 1.25 max
+
+microcap multiplier depends on regime AND liquidity tier
+
+Example (risk_off):
+
+nano/micro + low liquidity: 0.75
+
+micro + medium liquidity: 0.85
+
+large defensive/quality: 1.10
+
+commodities: 1.15
+
+crypto: 0.80
+
+Example (risk_on):
+
+micro + medium/high liquidity: 1.10–1.20
+
+large growth/semis: 1.10–1.15
+
+crypto: 1.10–1.20
+
+Never let multipliers exceed 1.25.
+
+Add the chosen multiplier to the scorecard:
+scorecard["asset_multiplier"] = X
+
+Step 5 — Catalyst scoring: only verifiable inputs; missing components = present:false
+
+This is where you prevent “hype-only catalysts.”
+
+Modify catalyst_engine so:
+
+A component can only contribute if it has a real underlying data input.
+
+For each component:
+
+Earnings proximity
+
+present only if you have an earnings date
+
+score higher if <=14 days
+
+Fundamental acceleration
+
+present only if you have YoY revenue growth and/or EPS trend
+
+score based on thresholds (e.g., rev_yoy > 20% = strong)
+
+Volume expansion
+
+present only if you have current volume and 20/30d avg volume
+
+score based on ratio (2x avg = strong)
+
+Social acceleration
+
+present only if you have XAI momentum delta and/or StockTwits trend velocity
+
+do NOT treat raw mention count as acceleration unless you have a baseline
+
+News density
+
+present only if you have news count for 24–72h and a baseline (7d avg)
+
+otherwise present:false and score 0
+
+Insider signal
+
+If you do not have insider API: set present:false always (do NOT guess)
+
+Regulatory
+
+If you do not have a reliable regulatory feed: set present:false always (do NOT guess)
+
+Then:
+
+catalyst_score = sum(component scores) capped 0-100
+
+require at least 1 present component for catalyst_score to be considered “strong”
+
+Add:
+scorecard["catalyst_present_components"] = count_present
+
+Step 6 — Microcap guardrails: sizing caps + buy gating
+
+Implement deterministic rules:
+
+Position size caps
+
+nano/low liquidity: max_pct <= 0.5%
+
+micro/low liquidity: max_pct <= 1%
+
+micro/medium liquidity: max_pct <= 2%
+
+small/medium: max_pct <= 3%
+
+large/high: use regime bracket (risk_on 5–8%, risk_off 2–3%) but cap at 5% unless explicitly “core”
+
+Return:
+position_size_guidance = {"max_pct": ..., "tier": "nano_low|micro_med|large_high|..."}
+
+Buy gating for microcaps
+
+To label as “BUY / High Conviction” (or top recommendations list), require at least:
+
+(technical_score >= 65 OR catalyst_present_components >= 1) AND
+
+avg_dollar_volume >= $2M/day (or else must be labeled “Speculative”)
+
+If it fails gating:
+
+keep it surfaced (don’t kill creativity)
+
+but label as “Speculative / Watch”
+
+apply strict sizing cap
+
+Step 7 — Creative discovery exception: tighten it so memes can’t sneak through
+
+Current override is: social>85 AND catalyst>60
+
+Replace with a safer rule:
+
+Override eligibility requires ALL:
+
+sentiment_score >= 85
+
+AND volume_expansion present:true with score >= 10
+
+AND (news_density present:true OR earnings_proximity present:true OR fundamental_acceleration present:true)
+
+AND liquidity tier not “low”
+
+If override triggers:
+
+label: ["override_candidate", "speculative"] unless fundamentals >= 55
+
+never allow sizing >2% on override candidates unless fundamentals >= 70 and liquidity high
+
+This keeps non-consensus discovery but blocks pure hype.
+
+Step 8 — Add scoring debug logs (one-liner per request)
+
+Add a single [SCORING] log per request:
+
+regime + confidence
+
+candidates_scored_full vs partial
+
+number of override candidates
+
+top 5 tickers with adjusted_score and missing flags summary
+
+Example:
+[SCORING] regime=risk_off(0.72) full=18 partial=7 overrides=2 top=[NVDA:83, XLE:80, ABCD:78(missing_fa)]
+
+No frontend changes.
+
+Step 9 — Confirm Claude is interpreting, not rescore-inventing
+
+Pass the scorecards to Claude and add a short instruction block (do not rewrite existing prompts) that says:
+
+Use adjusted_score as ranking baseline
+
+Do not invent missing data
+
+If data_flags missing, explicitly caveat
+
+Always include: catalyst, TA, FA, why-now, invalidation trigger, sizing guidance
+
+If you already have this instruction, do not change.
+
+Deliverable requirements
+
+Unit tests or quick script verifying:
+
+Missing data gets neutral score + penalty
+
+Regime confidence blending works
+
+Multipliers are bounded [0.75, 1.25]
+
+Override cannot trigger without volume expansion + at least one real catalyst component
+
+No changes to endpoints or frontend payloads.
