@@ -1,0 +1,158 @@
+BACKEND PROMPT: Upgrade cross_asset_trending output quality without removing deterministic scoring
+
+Do NOT remove the deterministic scoring layer, regime engine, caching, tiered sources, or budget tracker.
+
+Goal: Make cross_asset_trending always return tickers, thesis, catalysts, TA/FA validation, rating, confidence, and social receipts. No vague narrative-only answers.
+
+1) Enforce a minimum candidate set per asset class
+
+In the cross_asset_trending preset execution:
+
+Require at least:
+
+equities: 8 candidates
+
+crypto: 6 candidates
+
+commodities: 4 candidates
+
+If any asset class has fewer than the minimum after initial gathering:
+
+run a “broadening pass” that increases candidate pool size (not deep dives)
+
+relax missing-data penalties for candidates in that asset class
+
+then rescore
+
+still respect scan budget by reducing deep dives, not the candidate pool
+
+2) Two-pass scoring and validation
+
+Pass A: Broad gather + light scoring
+
+Pull social momentum sources first (Grok, Stocktwits trending, Finnhub sentiment if available)
+
+Generate a candidate universe
+
+Light score using sentiment + simple TA proxies + liquidity gating
+
+Pass B: Validate top shortlist
+
+Select a shortlist:
+
+1 to 3 large caps
+
+2 to 5 mid caps
+
+2 to 5 small or micro caps
+
+2 to 4 crypto
+
+2 to 4 commodities
+
+Only for this shortlist: run deeper FA/TA and catalyst validation
+
+Rescore final list and send to Claude
+
+3) Add “Social Receipts” field to the structured payload sent to Claude
+
+For each shortlisted ticker, attach:
+
+social_momentum_summary:
+
+mention_velocity (up or down)
+
+sentiment_score
+
+why_trending (one sentence)
+
+social_receipts: 2 to 4 short snippets max
+
+Each snippet <= 20 words
+
+Include whether bullish or bearish
+
+Include source label (X or Stocktwits), do not include usernames
+This must come from Grok for X and Stocktwits API for Stocktwits.
+
+4) Update Grok module to return a structured cross-asset list
+
+When preset_intent is cross_asset_trending, call Grok with a structured request:
+Return:
+
+1 to 3 large caps
+
+2 to 5 mid caps
+
+2 to 5 small/micro caps
+
+2 to 4 crypto
+
+2 to 4 commodities
+Each with:
+
+ticker
+
+reason in one sentence
+
+2 short social receipts
+
+5) Tighten Claude output contract for cross_asset_trending
+
+Update the Claude system prompt or the cross_asset_trending “response_style” instructions:
+
+Claude MUST output:
+
+A ranked list grouped by asset class
+
+For each asset:
+
+Ticker
+
+Rating: Strong Buy / Buy / Hold / Sell
+
+Confidence score 0-100
+
+One-paragraph thesis grounded in:
+
+Social momentum (include 1 to 2 receipts)
+
+Catalyst
+
+TA setup (breakout, volume, trend, key indicators)
+
+FA sanity check relative to market cap
+
+Key risks / counter-argument (1 to 2 bullets)
+
+Suggested position size range (use the position sizing guidance)
+
+Hard rules:
+
+If fewer than 6 total tickers are present, Claude must explicitly say “candidate shortage” and include what sources failed and what it did to broaden.
+
+Ban repetitive buzzwords: do not repeat “buzzing”, “regime”, “catalyst” more than once per section.
+
+If missing inputs exist, list them once in a short “Data gaps” section, not repeated.
+
+6) Make sure the response includes tickers even if data is partial
+
+If FA/TA missing for a candidate but social momentum is extreme:
+
+still include it but label it “Speculative”
+
+confidence must be lower
+
+sizing must be capped by your microcap guardrails
+
+7) Add one debug line for Trending Now
+
+Log:
+
+candidate counts by asset class before shortlist
+
+counts after shortlist
+
+how many had social receipts attached
+
+Do not change other presets.
