@@ -1987,17 +1987,17 @@ class MarketDataService:
             rvol_val = winner.get("rvol")
 
             if pct > 0 and rvol_val:
-                sig = f"Volume +{pct:.0f}% vs 30D avg ({rvol_val:.1f}x)"
+                sig = f"Volume +{pct:.0f}% vs avg ({rvol_val:.1f}x relative volume)"
             elif pct > 0:
-                sig = f"Volume +{pct:.0f}% vs 30D avg"
+                sig = f"Volume +{pct:.0f}% vs avg"
             elif rvol_val:
-                sig = f"RVOL {rvol_val:.1f}x (approx +{(rvol_val-1)*100:.0f}% vs avg)"
+                sig = f"Volume +{(rvol_val-1)*100:.0f}% vs avg ({rvol_val:.1f}x RVOL)"
             else:
                 raw_v = winner.get("raw_vol", 0)
                 if raw_v >= 1_000_000:
-                    sig = f"High raw volume ({raw_v/1_000_000:.1f}M shares)"
+                    sig = f"{raw_v/1_000_000:.1f}M shares (volume data limited — avg unavailable)"
                 else:
-                    sig = f"Elevated volume ({raw_v:,.0f} shares)"
+                    sig = f"{raw_v:,.0f} shares (volume data limited — avg unavailable)"
 
             biggest_vol = {"ticker": winner["ticker"], "signal": sig}
 

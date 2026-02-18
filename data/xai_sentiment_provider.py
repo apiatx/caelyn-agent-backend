@@ -300,7 +300,15 @@ Commodities:
 - 2-4 hot commodities/themes
 - Include a related equity proxy where appropriate (miner/producer/ETF), e.g. Silver -> EXK
 
-Return each item with: symbol/commodity, category, reason, social_velocity, and 2 receipts.
+For EACH item you MUST include:
+- symbol/commodity, category, reason
+- social_velocity: "low"|"medium"|"high"|"extreme"
+- mention_velocity_score: 0-100 (how fast mentions are accelerating vs prior hours; 0=no change, 100=explosive spike)
+- mention_velocity_label: "low"|"medium"|"high"|"extreme"
+- source_mix: {"x": 0-100} (percentage of signal from X; set stocktwits and reddit to null unless you have cross-platform evidence)
+- catalyst_hint: short string if a catalyst is evident from posts/news chatter (e.g. "FDA approval", "earnings beat", "short squeeze"), else null
+- 2 receipts (one bullish, one bearish if available; both bullish if no bearish exists)
+
 Also return: sector_focus (3-6), top_traders_view (3-6 summaries, no usernames), market_direction_call (1-3 sentences), your_opinion (2-4 sentences).
 If insufficient high-quality data, return fewer items and set data_quality_flag="low".
 
@@ -313,12 +321,12 @@ Return ONLY a JSON object matching this exact schema:
   "your_opinion": "...",
   "data_quality_flag": "high|medium|low",
   "equities": {
-    "large_caps": [{"symbol":"...","asset_class":"equities","category":"large_cap","reason":"...","social_velocity":"low|medium|high|extreme","receipts":[{"source":"x","stance":"bullish|bearish","text":"<=20 words"}]}],
+    "large_caps": [{"symbol":"...","asset_class":"equities","category":"large_cap","reason":"...","social_velocity":"low|medium|high|extreme","mention_velocity_score":0,"mention_velocity_label":"low|medium|high|extreme","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[{"source":"x","stance":"bullish|bearish","text":"<=20 words"}]}],
     "mid_caps": [<same item format with category="mid_cap">],
     "small_micro_caps": [<same item format with category="small_micro_cap">]
   },
-  "crypto": [{"symbol":"...","asset_class":"crypto","category":"major|alt","reason":"...","social_velocity":"...","receipts":[...]}],
-  "commodities": [{"commodity":"...","related_equity":"...","reason":"...","social_velocity":"...","receipts":[...]}]
+  "crypto": [{"symbol":"...","asset_class":"crypto","category":"major|alt","reason":"...","social_velocity":"...","mention_velocity_score":0,"mention_velocity_label":"...","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[...]}],
+  "commodities": [{"commodity":"...","related_equity":"...","reason":"...","social_velocity":"...","mention_velocity_score":0,"mention_velocity_label":"...","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[...]}]
 }"""
 
             result = await self._call_grok_with_x_search(prompt)

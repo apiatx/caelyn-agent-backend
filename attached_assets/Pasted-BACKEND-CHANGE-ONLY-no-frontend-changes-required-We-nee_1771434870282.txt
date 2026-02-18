@@ -1,0 +1,84 @@
+BACKEND CHANGE ONLY (no frontend changes required)
+
+We need to improve cross_asset_trending output quality:
+- Remove the EXCLUDED section entirely (it’s noise).
+- Add a mandatory “SOCIAL TRADING SIGNAL” section that highlights the single best real-time social velocity explosion with confirmation checks.
+- Enforce “signal > hype” labeling (trade idea vs watchlist).
+
+Do NOT change daily_briefing.
+
+A) Update Grok x_social_scan cross_asset schema to include velocity and source mix
+Add fields per item:
+- mention_velocity_score: 0-100 (relative acceleration vs last N hours)
+- mention_velocity_label: low/medium/high/extreme
+- source_mix: {x: %, stocktwits: %, reddit: %} (if available; otherwise x-only with nulls)
+- catalyst_hint: short string if a catalyst is evident from posts/news chatter, else null
+
+Grok must still return receipts (2 short excerpts). No usernames/links.
+
+B) In cross_asset_trending pipeline, compute a “social signal rank”
+For each candidate from Grok:
+Compute social_signal_rank = weighted sum:
+- mention_velocity_score (50%)
+- engagement proxy (20%) (likes/reposts if available from tool; else infer from x_search metadata)
+- cross-platform confirmation (20%) (x + stocktwits + reddit if present)
+- catalyst_hint present (10%)
+
+Select:
+- social_spike_primary = top 1 overall across ALL assets by social_signal_rank
+- social_spike_secondary = next 1-2 if they also pass minimum confirmation OR if they’re marked as watchlist
+
+Log:
+[SOCIAL_SPIKE] primary=<symbol> vel=<label> rank=<n> confirmed=<yes/no>
+
+C) Add confirmation logic (do not filter out, annotate)
+For social_spike_primary and for all shortlist items:
+Add flags:
+- ta_confirmed (true if TA score >= threshold OR breakout conditions met)
+- volume_confirmed (true if volume_pct_increase available and >= threshold)
+- catalyst_confirmed (true if catalyst engine present flag OR reliable news headline exists)
+- fa_sane (true if fundamentals score >= 50 OR market cap tier matches risk)
+
+Then assign:
+- classification = "TRADE IDEA" if (social_velocity high/extreme) AND (ta_confirmed OR volume_confirmed OR catalyst_confirmed)
+- classification = "WATCHLIST" otherwise
+Confidence should be higher for TRADE IDEA, lower for WATCHLIST.
+
+D) Claude output contract update for display_type=cross_asset_trending
+Keep current structure but enforce these rules:
+
+1) Add at top:
+“SOCIAL TRADING SIGNAL (Highest velocity right now)”
+Include:
+- Symbol
+- Classification: TRADE IDEA or WATCHLIST
+- Rating: Strong Buy/Buy/Hold/Sell
+- Confidence 0-100
+- 2 receipts (one bullish, one bearish if available)
+- Confirmation grid (TA/Volume/Catalyst/FA) shown as Confirmed/Unconfirmed
+- 2-4 bullet thesis grounded in data + social
+- 1-2 risk bullets
+- Position size guidance
+
+2) Remove EXCLUDED section entirely.
+Do not list assets that were excluded.
+
+3) If commodities bucket is empty, say:
+“Commodities: No high-signal trends detected in current scan” (1 line) and move on.
+
+4) For each bucket (equities/crypto/commodities), list only shortlist items. No extra commentary dump.
+
+5) Tone: professional, natural, minimal buzzwords.
+Do not repeat “regime/catalyst/buzzing” excessively.
+
+E) Biggest volume field
+Update “biggest volume” logic for any scan that shows it:
+Use “biggest volume % increase” not absolute volume.
+If volume_pct_increase missing for all, choose next best available and label “volume data limited”.
+
+Testing:
+- Trending Now returns SOCIAL TRADING SIGNAL section always.
+- No EXCLUDED section appears.
+- At least 1 TRADE IDEA or explicit statement “No confirmed trade ideas; all are watchlist due to missing confirmations”.
+- Daily briefing unchanged.
+After passing: publish backend.

@@ -1764,6 +1764,10 @@ class TradingAgent:
             },
         }
 
+        social_signal = self._compute_social_signal_rank(grok_shortlist, market_data_result, primary_data)
+        if social_signal:
+            primary_data["social_signal"] = social_signal
+
         if not grok_available:
             primary_data["social_scan_unavailable"] = True
             primary_data["social_scan_notice"] = "X social scan was unavailable for this request. Results are based on market data scanners only."
@@ -1818,6 +1822,152 @@ class TradingAgent:
                 pass
 
         return enriched
+
+    def _compute_social_signal_rank(self, grok_shortlist: dict, market_data_result: dict, primary_data: dict) -> dict:
+        if not grok_shortlist:
+            return {}
+
+        VELOCITY_MAP = {"extreme": 100, "high": 75, "medium": 45, "low": 20}
+
+        all_items = []
+
+        equities = grok_shortlist.get("equities", {})
+        if isinstance(equities, dict):
+            for group_name, group_list in equities.items():
+                if isinstance(group_list, list):
+                    for item in group_list:
+                        if isinstance(item, dict):
+                            item["_asset_class"] = "stock"
+                            item["_group"] = group_name
+                            all_items.append(item)
+
+        for item in grok_shortlist.get("crypto", []):
+            if isinstance(item, dict):
+                item["_asset_class"] = "crypto"
+                all_items.append(item)
+
+        for item in grok_shortlist.get("commodities", []):
+            if isinstance(item, dict):
+                item["_asset_class"] = "commodity"
+                all_items.append(item)
+
+        if not all_items:
+            return {}
+
+        enriched = {}
+        if market_data_result and isinstance(market_data_result, dict):
+            stock_data = market_data_result.get("stock_trending", {})
+            if isinstance(stock_data, dict):
+                enriched = stock_data.get("enriched_data", {}) or {}
+
+        ranked = []
+        for item in all_items:
+            symbol = item.get("symbol", item.get("ticker", item.get("commodity", ""))).upper().strip()
+            if not symbol:
+                continue
+
+            vel_score = item.get("mention_velocity_score")
+            if vel_score is None:
+                vel_label = (item.get("mention_velocity_label") or item.get("social_velocity") or "low").lower()
+                vel_score = VELOCITY_MAP.get(vel_label, 20)
+
+            source_mix = item.get("source_mix", {}) or {}
+            cross_platform = 0
+            if isinstance(source_mix, dict):
+                platforms_with_data = sum(1 for v in source_mix.values() if v is not None and v > 0)
+                cross_platform = min(platforms_with_data / 3.0, 1.0) * 100
+
+            receipts = item.get("receipts", [])
+            engagement_proxy = min(len(receipts) * 30, 60) if receipts else 10
+            vel_label_raw = (item.get("mention_velocity_label") or item.get("social_velocity") or "low").lower()
+            if vel_label_raw in ("high", "extreme"):
+                engagement_proxy = min(engagement_proxy + 30, 100)
+
+            catalyst_hint = item.get("catalyst_hint")
+            catalyst_score = 100 if catalyst_hint else 0
+
+            social_signal_rank = (
+                vel_score * 0.50 +
+                engagement_proxy * 0.20 +
+                cross_platform * 0.20 +
+                catalyst_score * 0.10
+            )
+
+            enr = enriched.get(symbol, {}) if isinstance(enriched, dict) else {}
+            ta_score = enr.get("trade_score", 0) or 0
+            volume_pct = None
+            avg_vol = enr.get("avg_volume")
+            cur_vol = enr.get("volume")
+            if avg_vol and cur_vol:
+                try:
+                    volume_pct = ((float(cur_vol) / float(avg_vol)) - 1) * 100
+                except (ValueError, TypeError, ZeroDivisionError):
+                    pass
+
+            fa_score = 0
+            mcap = enr.get("market_cap")
+            if mcap:
+                fa_score = 50
+
+            ta_confirmed = ta_score >= 55
+            volume_confirmed = volume_pct is not None and volume_pct >= 30
+            catalyst_confirmed = bool(catalyst_hint)
+            fa_sane = fa_score >= 50
+
+            vel_is_high = vel_label_raw in ("high", "extreme")
+            has_confirmation = ta_confirmed or volume_confirmed or catalyst_confirmed
+
+            if vel_is_high and has_confirmation:
+                classification = "TRADE IDEA"
+            else:
+                classification = "WATCHLIST"
+
+            ranked.append({
+                "symbol": symbol,
+                "asset_class": item["_asset_class"],
+                "group": item.get("_group", ""),
+                "social_signal_rank": round(social_signal_rank, 1),
+                "mention_velocity_score": vel_score,
+                "mention_velocity_label": vel_label_raw,
+                "catalyst_hint": catalyst_hint,
+                "receipts": receipts[:2] if receipts else [],
+                "classification": classification,
+                "confirmations": {
+                    "ta_confirmed": ta_confirmed,
+                    "volume_confirmed": volume_confirmed,
+                    "catalyst_confirmed": catalyst_confirmed,
+                    "fa_sane": fa_sane,
+                },
+                "reason": item.get("reason", ""),
+            })
+
+        ranked.sort(key=lambda x: x["social_signal_rank"], reverse=True)
+
+        primary = ranked[0] if ranked else None
+        secondaries = []
+        for r in ranked[1:3]:
+            if r["social_signal_rank"] >= 30 or r["classification"] == "WATCHLIST":
+                secondaries.append(r)
+
+        if primary:
+            print(f"[SOCIAL_SPIKE] primary={primary['symbol']} vel={primary['mention_velocity_label']} "
+                  f"rank={primary['social_signal_rank']} confirmed={'yes' if primary['classification']=='TRADE IDEA' else 'no'} "
+                  f"classification={primary['classification']}")
+            for s in secondaries:
+                print(f"[SOCIAL_SPIKE] secondary={s['symbol']} vel={s['mention_velocity_label']} "
+                      f"rank={s['social_signal_rank']} classification={s['classification']}")
+
+        result = {
+            "social_spike_primary": primary,
+            "social_spike_secondaries": secondaries,
+            "all_ranked": ranked,
+        }
+
+        for item in all_items:
+            item.pop("_asset_class", None)
+            item.pop("_group", None)
+
+        return result
 
     def _count_candidates(self, data: dict, asset_class: str) -> int:
         count = 0

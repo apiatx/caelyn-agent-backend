@@ -212,9 +212,12 @@ def _render_cross_market_analysis(s: dict) -> str:
                 score = p.get("conviction_score", "")
                 change = p.get("change", "")
                 mcap = p.get("market_cap", "")
+                classification = p.get("classification", "")
                 header = f"{ticker}"
                 if company:
                     header += f" ({company})"
+                if classification:
+                    header += f" [{classification}]"
                 detail_parts = []
                 if conv:
                     detail_parts.append(f"Conviction: {conv}")
@@ -243,12 +246,31 @@ def _render_cross_market_analysis(s: dict) -> str:
         _render_group("COMMODITIES", commodities)
         _render_group("OTHER", other)
 
-    excluded = s.get("excluded_with_reason", [])
-    if excluded:
-        parts.append("EXCLUDED:")
-        for ex in excluded:
-            parts.append(f"  {ex.get('ticker', '?')} — {ex.get('reason', '')}")
-        parts.append("")
+    sts = s.get("social_trading_signal", {})
+    if sts and isinstance(sts, dict) and sts.get("symbol"):
+        parts.insert(0, "")
+        sym = sts.get("symbol", "?")
+        classification = sts.get("classification", "WATCHLIST")
+        rating = sts.get("rating", "")
+        conf = sts.get("confidence", "")
+        signal_header = f"SOCIAL TRADING SIGNAL — {sym} [{classification}]"
+        if rating:
+            signal_header += f" | {rating}"
+        if conf:
+            signal_header += f" | Confidence: {conf}"
+        parts.insert(0, signal_header)
+        grid = sts.get("confirmation_grid", {})
+        if grid:
+            grid_parts = []
+            for k, v in grid.items():
+                grid_parts.append(f"{k.upper()}: {v}")
+            parts.insert(1, "  " + " | ".join(grid_parts))
+        receipts = sts.get("receipts", [])
+        for r in receipts[:2]:
+            if isinstance(r, dict):
+                parts.insert(2, f"  [{r.get('stance', '?')}] \"{r.get('text', '')}\"")
+            elif isinstance(r, str):
+                parts.insert(2, f"  \"{r}\"")
 
     positioning = s.get("portfolio_positioning", "")
     if positioning:
