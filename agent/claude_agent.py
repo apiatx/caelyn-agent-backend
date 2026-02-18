@@ -19,10 +19,58 @@ class TradingAgent:
         self.openai_client = openai.OpenAI(api_key=openai_api_key) if openai_api_key else None
         self.data = data_service
 
+    PRESET_ALIASES = {
+        "morning_briefing": "daily_briefing",
+        "briefing": "daily_briefing",
+        "daily": "daily_briefing",
+        "trending": "cross_asset_trending",
+        "cross_asset": "cross_asset_trending",
+        "whats_hot": "cross_asset_trending",
+        "microcap": "microcap_asymmetry",
+        "asymmetric": "microcap_asymmetry",
+        "small_cap": "microcap_asymmetry",
+        "sector": "sector_rotation",
+        "rotation": "sector_rotation",
+        "macro": "macro_outlook",
+        "economy": "macro_outlook",
+        "earnings": "earnings_catalyst",
+        "crypto": "crypto_scanner",
+        "commodities": "commodity_scan",
+        "commodity": "commodity_scan",
+        "social": "social_momentum",
+        "wsb": "social_momentum",
+        "reddit": "social_momentum",
+        "investments": "investment_ideas",
+        "sqglp": "investment_ideas",
+        "bearish": "bearish_setups",
+        "shorts": "bearish_setups",
+        "thematic": "thematic_scan",
+        "themes": "thematic_scan",
+        "portfolio": "portfolio_review",
+        "holdings": "portfolio_review",
+    }
+
+    def _resolve_preset(self, preset_intent: str) -> str:
+        if preset_intent in self.INTENT_PROFILES:
+            return preset_intent
+        resolved = self.PRESET_ALIASES.get(preset_intent)
+        if resolved:
+            print(f"[ROUTING] Resolved preset alias '{preset_intent}' → '{resolved}'")
+            return resolved
+        normalized = preset_intent.lower().replace("-", "_").replace(" ", "_")
+        if normalized in self.INTENT_PROFILES:
+            return normalized
+        resolved = self.PRESET_ALIASES.get(normalized)
+        if resolved:
+            print(f"[ROUTING] Resolved normalized preset '{normalized}' → '{resolved}'")
+            return resolved
+        return None
+
     def _build_plan_from_preset(self, preset_intent: str) -> dict:
-        profile = self.INTENT_PROFILES.get(preset_intent)
-        if not profile:
+        resolved = self._resolve_preset(preset_intent)
+        if not resolved:
             return None
+        profile = self.INTENT_PROFILES[resolved]
 
         plan = {
             "intent": profile["intent"],
