@@ -117,6 +117,21 @@ async def root():
     return {"status": "running", "message": "Trading Agent API is live"}
 
 
+@app.get("/ping")
+async def ping():
+    return {"status": "ok"}
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "init_complete": _init_done,
+        "agent_loaded": agent is not None,
+        "data_service_loaded": data_service is not None,
+    }
+
+
 async def verify_api_key(x_api_key: Optional[str] = Header(None)):
     """Verify the API key sent in the X-API-Key header."""
     if not x_api_key:
@@ -155,8 +170,8 @@ async def query_agent(
         )
     await _wait_for_init()
     user_query = body.query or body.prompt or ""
-    if not user_query.strip():
-        raise HTTPException(status_code=400, detail="No query provided. Send 'query' or 'prompt' field.")
+    if not user_query.strip() and not body.preset_intent:
+        raise HTTPException(status_code=400, detail="No query provided. Send 'query' or 'prompt' field (or use 'preset_intent').")
 
     from data.chat_history import create_conversation, get_conversation, save_messages as _save_msgs
 
