@@ -172,7 +172,7 @@ async def query_agent(
         )
     await _wait_for_init()
     if not user_query.strip() and not body.preset_intent:
-        raise HTTPException(status_code=400, detail="No query provided. Send 'query' or 'prompt' field (or use 'preset_intent').")
+        raise HTTPException(status_code=400, detail="No query provided. Send query or use preset_intent.")
 
     from data.chat_history import create_conversation, get_conversation, save_messages as _save_msgs
 
