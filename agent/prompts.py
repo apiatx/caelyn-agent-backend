@@ -413,6 +413,10 @@ CRITICAL: You MUST populate equities.large_caps, equities.mid_caps, equities.sma
 ### "screener" — AI Custom Screener
 {"display_type":"screener","query_interpretation":"","filters_applied":{},"total_matches":0,"results":[{"ticker":"","company":"","price":"","change_pct":"","market_cap":"","pe_ratio":"","revenue_growth":"","rsi":0,"sma50":"","sma200":"","rel_volume":"","analyst_rating":"","price_target":"","upside":"","highlight":false,"note":""}],"top_picks":[{"ticker":"","why":"","conviction_score":0,"position_tier":"","why_could_fail":"","trade_plan":{"entry":"","stop":"","target":"","risk_reward":""}}],"observations":""}
 
+### "trades" — Best Trade Setups (TA-first)
+{"display_type":"trades","market_pulse":{"verdict":"Risk-On/Risk-Off/Neutral","regime":"","summary":"1-2 sentence macro context for today's setups"},"top_trades":[{"ticker":"","name":"","exchange":"","direction":"long or short","action":"BUY or SELL or WATCH","confidence_score":0,"technical_score":0,"pattern":"Stage 2 breakout / Range breakout / EMA cross / etc","signals_stacking":["signal1","signal2"],"entry":"$XX.XX","stop":"$XX.XX","targets":["$XX.XX","$XX.XX"],"risk_reward":"2.1:1","timeframe":"days–2 weeks","thesis":"1-2 sentence thesis grounded in the TA data","why_could_fail":"1-2 sentence risk","confirmations":{"ta":true,"volume":true,"catalyst":false,"fa":true},"tv_url":"https://www.tradingview.com/chart/?symbol=EXCHANGE:TICKER","data_gaps":[]}],"bearish_setups":[{"ticker":"","name":"","exchange":"","direction":"short","action":"SELL","confidence_score":0,"technical_score":0,"pattern":"","signals_stacking":[],"entry":"","stop":"","targets":[],"risk_reward":"","timeframe":"","thesis":"","why_could_fail":"","confirmations":{"ta":true,"volume":true,"catalyst":false,"fa":true},"tv_url":"","data_gaps":[]}],"notes":["1-3 bullet observations about today's tape"]}
+Use for "best trades", "trade setups", "what should I trade today" type queries. Each trade MUST have entry/stop/targets from the pre-computed trade plan — do NOT invent new numbers. Polish the thesis and risk but keep the trade plan numbers intact.
+
 ### "chat" — General Discussion / Conversational Mode
 {"display_type":"chat","message":"your response here"}
 
@@ -448,7 +452,8 @@ would be most relevant. Reply with ONLY a JSON object, nothing else.
 
 Categories:
 - "ticker_analysis": Asking about specific stock(s). Extract tickers.
-- "market_scan": Broad market overview, best trades, top movers, momentum plays.
+- "best_trades": Trade setups, "best trades", "what should I trade", "trade ideas", signal stacking, TA-first setups.
+- "market_scan": Broad market overview, top movers, momentum plays.
 - "dashboard": Full dashboard, "show me everything", TA + fundamentals + social.
 - "investments": Long-term investment ideas, portfolio ideas, multibaggers.
 - "fundamentals_scan": Improving fundamentals, revenue growth leaders, EBITDA improvement.
@@ -629,6 +634,26 @@ CRITICAL RULES:
 - Assign conviction_score (0-100) and position_tier (Tier 1-4) to every pick.
 
 OUTPUT FORMAT: You MUST use display_type "trending" with "trending_tickers" array. Even if the user mentions multiple asset classes (stocks, crypto, commodities), this is a TRENDING scan — use the trending format, NOT cross_market."""
+
+BEST_TRADES_CONTRACT = """BEST TRADES OUTPUT CONTRACT (MANDATORY for best_trades scans):
+
+You are receiving pre-scored trade candidates with deterministic trade plans (entry/stop/targets/R:R).
+Your job is to POLISH presentation — NOT to rescore or invent new numbers.
+
+HARD RULES:
+1. Use display_type "trades" — NEVER "chat" or any other type.
+2. Keep ALL trade plan numbers exactly as provided: entry, stop, targets, risk_reward. Do NOT round, change, or invent.
+3. Each item in top_trades[] must have ALL fields from the schema. No missing fields.
+4. Write a concise 1-2 sentence thesis per trade that references the signals_stacking data and pattern.
+5. Write a concise 1-2 sentence why_could_fail that is specific to this ticker (not generic market risk).
+6. Sort top_trades by confidence_score descending (highest conviction first).
+7. If bearish_setups exist in the data, include them. If empty, return empty array [].
+8. market_pulse.verdict and summary should reference the macro data provided.
+9. notes: 1-3 short bullet observations about today's tape (volume, breadth, sector rotation, etc).
+10. MINIMUM 3 top_trades if candidates exist. If fewer than 3 candidates, include all of them.
+11. tv_url must remain exactly as provided — do not modify TradingView links.
+12. Do NOT add trades that aren't in the input data. Only polish what's provided.
+"""
 
 CROSS_ASSET_TRENDING_CONTRACT = """CROSS-ASSET TRENDING OUTPUT CONTRACT (MANDATORY for cross_asset_trending):
 

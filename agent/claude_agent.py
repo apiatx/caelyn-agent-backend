@@ -9,7 +9,7 @@ import openai
 
 from agent.data_compressor import compress_data
 from agent.institutional_scorer import apply_institutional_scoring
-from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT
+from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT
 from data.market_data_service import MarketDataService
 
 
@@ -50,6 +50,9 @@ class TradingAgent:
         "holdings": "portfolio_review",
         "x_scan": "x_social_scan",
         "twitter_scan": "x_social_scan",
+        "trades": "best_trades",
+        "setups": "best_trades",
+        "trade_setups": "best_trades",
         "x_sentiment_scan": "x_social_scan",
         "grok_scan": "x_social_scan",
         "x_social": "x_social_scan",
@@ -607,7 +610,9 @@ class TradingAgent:
             return {"category": "asymmetric"}
         if any(w in q for w in ["fundamental", "revenue growth", "improving"]):
             return {"category": "fundamentals_scan"}
-        if any(w in q for w in ["trade", "best trade", "setup", "swing"]):
+        if any(w in q for w in ["best trade", "trade setup", "trade idea", "what should i trade"]):
+            return {"category": "best_trades"}
+        if any(w in q for w in ["trade", "setup", "swing"]):
             return {"category": "market_scan"}
         return {"category": "market_scan"}
 
@@ -940,6 +945,24 @@ class TradingAgent:
             "response_style": "deep_thesis",
             "priority_depth": "deep",
         },
+        "best_trades": {
+            "intent": "best_trades",
+            "asset_classes": ["equities"],
+            "modules": {
+                "x_sentiment": False,
+                "x_social_scan": False,
+                "social_sentiment": False,
+                "technical_scan": True,
+                "fundamental_validation": False,
+                "macro_context": True,
+                "liquidity_filter": True,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "high_conviction_ranked",
+            "priority_depth": "medium",
+        },
         "x_social_scan": {
             "intent": "x_social_scan",
             "asset_classes": ["equities", "crypto"],
@@ -974,6 +997,7 @@ class TradingAgent:
         "x_social_scan": "social_momentum",
         "custom_screen": "ai_screener",
         "short_setup": "bearish",
+        "best_trades": "best_trades",
         "chat": "chat",
     }
 
@@ -1474,6 +1498,9 @@ class TradingAgent:
 
         elif category == "asymmetric":
             return await self.data.wide_scan_and_rank("asymmetric", filters)
+
+        elif category == "best_trades":
+            return await self.data.get_best_trades_scan()
 
         elif category == "bearish":
             return await self.data.wide_scan_and_rank("bearish", filters)
@@ -2563,6 +2590,12 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             system_blocks.append({
                 "type": "text",
                 "text": CROSS_ASSET_TRENDING_CONTRACT,
+            })
+
+        if category == "best_trades":
+            system_blocks.append({
+                "type": "text",
+                "text": BEST_TRADES_CONTRACT,
             })
 
         use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES

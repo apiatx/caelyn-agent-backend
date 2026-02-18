@@ -1015,6 +1015,287 @@ class MarketDataService:
             "options_signals": options_signals,
         }
 
+    async def get_best_trades_scan(self) -> dict:
+        """
+        TA-first scanner for best trade setups.
+        Runs parallel Finviz screens, fetches OHLCV, stacks signals,
+        builds deterministic trade plans, and returns structured candidates.
+        """
+        import time
+        from data.ta_utils import compute_technicals_from_bars, compute_rsi, compute_sma, compute_ema
+        scan_start = time.time()
+
+        new_highs_task = self.finviz.get_new_highs()
+        unusual_vol_task = self.finviz.get_unusual_volume()
+        gainers_task = self.finviz.get_screener_results("ta_topgainers")
+        breakout_task = self.finviz._custom_screen(
+            "v=111&f=sh_avgvol_o300,ta_sma200_pa,ta_rsi_nos,sh_price_o5&ft=4&o=-change"
+        )
+        volume_task = self.finviz._custom_screen(
+            "v=111&f=sh_avgvol_o200,sh_relvol_o2,ta_sma50_pa,sh_price_o3&ft=4&o=-volume"
+        )
+
+        results = await asyncio.gather(
+            new_highs_task, unusual_vol_task, gainers_task, breakout_task, volume_task,
+            return_exceptions=True,
+        )
+        new_highs = results[0] if not isinstance(results[0], Exception) else []
+        unusual_vol = results[1] if not isinstance(results[1], Exception) else []
+        gainers = results[2] if not isinstance(results[2], Exception) else []
+        breakout = results[3] if not isinstance(results[3], Exception) else []
+        vol_screen = results[4] if not isinstance(results[4], Exception) else []
+
+        ticker_sources = {}
+        for src_name, src_list in [("new_high", new_highs), ("unusual_vol", unusual_vol),
+                                     ("gainer", gainers), ("breakout", breakout), ("vol_screen", vol_screen)]:
+            if not isinstance(src_list, list):
+                continue
+            for item in src_list:
+                if isinstance(item, dict) and item.get("ticker"):
+                    t = item["ticker"].upper().strip()
+                    if ".X" not in t and ".U" not in t and len(t) <= 5 and t.isalpha():
+                        if t not in ticker_sources:
+                            ticker_sources[t] = {"sources": [], "finviz": item}
+                        ticker_sources[t]["sources"].append(src_name)
+
+        print(f"[BEST_TRADES] {len(ticker_sources)} unique candidates from {len(new_highs)} highs, {len(unusual_vol)} vol, {len(gainers)} gainers, {len(breakout)} breakout, {len(vol_screen)} vol_screen")
+
+        candidates = []
+        missing_ohlc = 0
+        tickers_to_scan = list(ticker_sources.keys())[:40]
+
+        async def fetch_and_analyze(ticker):
+            nonlocal missing_ohlc
+            bars = await asyncio.to_thread(self.finnhub.get_stock_candles, ticker, 120)
+            if not bars or len(bars) < 20:
+                try:
+                    poly_bars = await asyncio.to_thread(self.polygon.get_daily_bars, ticker, 120)
+                    if poly_bars:
+                        bars = [{"o": b.get("o"), "h": b.get("h"), "l": b.get("l"),
+                                 "c": b.get("c"), "v": b.get("v", 0), "t": b.get("t")}
+                                for b in poly_bars]
+                except Exception:
+                    pass
+            if not bars or len(bars) < 20:
+                missing_ohlc += 1
+                return None
+
+            ta = compute_technicals_from_bars(bars)
+            if not ta:
+                missing_ohlc += 1
+                return None
+
+            closes = [b["c"] for b in bars if b.get("c") is not None]
+            highs = [b["h"] for b in bars if b.get("h") is not None]
+            lows = [b["l"] for b in bars if b.get("l") is not None]
+            volumes = [b.get("v", 0) for b in bars]
+            current_price = closes[-1] if closes else 0
+            current_vol = volumes[-1] if volumes else 0
+            avg_vol = ta.get("avg_volume", 0) or 1
+
+            signals = []
+            signal_details = {}
+
+            rsi = ta.get("rsi")
+            sma_20 = ta.get("sma_20")
+            sma_50 = ta.get("sma_50")
+            sma_200 = ta.get("sma_200")
+            ema_9 = ta.get("ema_9")
+            ema_21 = ta.get("ema_21")
+            macd = ta.get("macd")
+            macd_signal = ta.get("macd_signal")
+            macd_hist = ta.get("macd_histogram")
+
+            if sma_200 and sma_50 and current_price > sma_200 and current_price > sma_50:
+                if sma_50 > sma_200:
+                    signals.append("stage2_uptrend")
+
+            if sma_50 and current_price > sma_50:
+                recent_lows = lows[-10:] if len(lows) >= 10 else lows
+                swing_low = min(recent_lows) if recent_lows else 0
+                if swing_low > 0 and (current_price - swing_low) / swing_low > 0.05:
+                    recent_high = max(highs[-20:]) if len(highs) >= 20 else max(highs) if highs else 0
+                    if recent_high > 0 and current_price >= recent_high * 0.97:
+                        signals.append("breakout_attempt")
+
+            if len(highs) >= 52:
+                high_52w = max(highs[-252:]) if len(highs) >= 252 else max(highs)
+                if current_price >= high_52w * 0.95:
+                    signals.append("near_52w_high")
+
+            if ema_9 and ema_21 and ema_9 > ema_21:
+                ema_9_prev = compute_ema(closes[:-1], 9)
+                ema_21_prev = compute_ema(closes[:-1], 21)
+                if ema_9_prev and ema_21_prev and ema_9_prev <= ema_21_prev:
+                    signals.append("ema_cross_bullish")
+                elif ema_9 > ema_21:
+                    signals.append("ema_aligned_bullish")
+
+            if macd is not None and macd_signal is not None:
+                if macd > macd_signal and macd_hist and macd_hist > 0:
+                    signals.append("macd_bullish")
+
+            if rsi and 40 <= rsi <= 70:
+                if rsi >= 50:
+                    signals.append("rsi_healthy")
+            elif rsi and 30 <= rsi < 40:
+                prev_rsi = compute_rsi(closes[:-1])
+                if prev_rsi and prev_rsi < 30:
+                    signals.append("rsi_reclaim_30")
+
+            vol_ratio = current_vol / avg_vol if avg_vol > 0 else 0
+            if vol_ratio >= 1.5:
+                signals.append("volume_expansion")
+                signal_details["vol_ratio"] = round(vol_ratio, 1)
+
+            if len(closes) >= 20:
+                recent_range = max(highs[-20:]) - min(lows[-20:]) if highs[-20:] and lows[-20:] else 0
+                prior_range = max(highs[-40:-20]) - min(lows[-40:-20]) if len(highs) >= 40 else recent_range
+                if prior_range > 0 and recent_range < prior_range * 0.5:
+                    signals.append("volatility_contraction")
+
+            source_info = ticker_sources.get(ticker, {})
+            source_list = source_info.get("sources", [])
+            if "new_high" in source_list:
+                signals.append("finviz_new_high")
+            if "unusual_vol" in source_list:
+                signals.append("finviz_unusual_vol")
+
+            signal_count = len(signals)
+            tech_score = min(100, signal_count * 15 + (5 if rsi and rsi > 50 else 0) +
+                            (5 if sma_200 and current_price > sma_200 else 0) +
+                            (5 if vol_ratio >= 2 else 0))
+
+            if signal_count < 2:
+                return None
+
+            recent_lows_5 = lows[-5:] if len(lows) >= 5 else lows
+            swing_low = min(recent_lows_5) if recent_lows_5 else current_price * 0.95
+            recent_high = max(highs[-20:]) if len(highs) >= 20 else max(highs) if highs else current_price * 1.05
+
+            entry = current_price
+            stop = round(swing_low * 0.98, 2)
+            risk = entry - stop if entry > stop else entry * 0.05
+            target_1 = round(entry + risk * 2, 2)
+            target_2 = round(entry + risk * 3, 2)
+            rr_1 = round((target_1 - entry) / risk, 1) if risk > 0 else 0
+            rr_2 = round((target_2 - entry) / risk, 1) if risk > 0 else 0
+
+            finviz_data = source_info.get("finviz", {})
+
+            bearish = False
+            if sma_200 and current_price < sma_200 and sma_50 and current_price < sma_50:
+                if rsi and rsi > 60 and macd_hist and macd_hist < 0:
+                    bearish = True
+                    entry = current_price
+                    stop = round(recent_high * 1.02, 2)
+                    risk = stop - entry if stop > entry else entry * 0.05
+                    target_1 = round(entry - risk * 2, 2)
+                    target_2 = round(entry - risk * 3, 2)
+                    rr_1 = round(abs(entry - target_1) / risk, 1) if risk > 0 else 0
+                    rr_2 = round(abs(entry - target_2) / risk, 1) if risk > 0 else 0
+
+            volume_confirmed = vol_ratio >= 1.5
+            catalyst_confirmed = "new_high" in source_list or "unusual_vol" in source_list
+            ta_confirmed = signal_count >= 3
+            fa_sane = True
+
+            overview = None
+            try:
+                overview = await asyncio.wait_for(
+                    self.stockanalysis.get_overview(ticker), timeout=5.0
+                )
+            except Exception:
+                pass
+
+            if overview and isinstance(overview, dict):
+                pe = overview.get("pe_ratio")
+                if pe and isinstance(pe, (int, float)) and pe < 0:
+                    fa_sane = False
+
+            pattern = "Stage 2 breakout" if "stage2_uptrend" in signals else \
+                      "Range breakout" if "breakout_attempt" in signals else \
+                      "EMA cross" if "ema_cross_bullish" in signals else \
+                      "Momentum continuation" if "macd_bullish" in signals else \
+                      "RSI reclaim" if "rsi_reclaim_30" in signals else \
+                      "Volume expansion" if "volume_expansion" in signals else \
+                      "Technical setup"
+
+            exchange = ""
+            if overview and isinstance(overview, dict):
+                exchange = overview.get("exchange", "")
+            tv_sym = f"{exchange}:{ticker}" if exchange else ticker
+
+            candidate = {
+                "ticker": ticker,
+                "name": finviz_data.get("company", overview.get("name", "") if overview else ""),
+                "exchange": exchange,
+                "direction": "short" if bearish else "long",
+                "action": "SELL" if bearish else "BUY",
+                "confidence_score": min(95, tech_score + (10 if volume_confirmed else 0) + (5 if catalyst_confirmed else 0)),
+                "technical_score": tech_score,
+                "pattern": pattern,
+                "signals_stacking": signals,
+                "signal_count": signal_count,
+                "entry": f"${entry:.2f}",
+                "stop": f"${stop:.2f}",
+                "targets": [f"${target_1:.2f}", f"${target_2:.2f}"],
+                "risk_reward": f"{rr_1}:1",
+                "timeframe": "days–2 weeks",
+                "confirmations": {
+                    "ta": ta_confirmed,
+                    "volume": volume_confirmed,
+                    "catalyst": catalyst_confirmed,
+                    "fa": fa_sane,
+                },
+                "tv_url": f"https://www.tradingview.com/chart/?symbol={tv_sym}",
+                "price": f"${current_price:.2f}",
+                "change": finviz_data.get("change", ""),
+                "market_cap": finviz_data.get("market_cap", overview.get("market_cap", "") if overview else ""),
+                "rsi": rsi,
+                "volume_ratio": round(vol_ratio, 1),
+                "data_gaps": [],
+                "is_bearish": bearish,
+            }
+            if not overview:
+                candidate["data_gaps"].append("fundamentals")
+            return candidate
+
+        tasks = [fetch_and_analyze(t) for t in tickers_to_scan]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_candidates = []
+        for r in raw_results:
+            if isinstance(r, dict):
+                all_candidates.append(r)
+
+        bullish = sorted([c for c in all_candidates if not c.get("is_bearish")],
+                         key=lambda x: x["confidence_score"], reverse=True)
+        bearish_list = sorted([c for c in all_candidates if c.get("is_bearish") and c["technical_score"] >= 80],
+                              key=lambda x: x["confidence_score"], reverse=True)[:2]
+
+        top_trades = bullish[:8]
+        for c in top_trades + bearish_list:
+            c.pop("is_bearish", None)
+            c.pop("signal_count", None)
+
+        macro = await self._build_macro_snapshot()
+
+        elapsed = time.time() - scan_start
+        print(f"[BEST_TRADES] candidates={len(all_candidates)} selected={len(top_trades)} bearish={len(bearish_list)} missing_ohlc={missing_ohlc} ({elapsed:.1f}s)")
+
+        return {
+            "market_pulse": macro,
+            "top_trades": top_trades,
+            "bearish_setups": bearish_list,
+            "scan_stats": {
+                "total_screened": len(ticker_sources),
+                "ohlc_analyzed": len(all_candidates),
+                "missing_ohlc": missing_ohlc,
+                "elapsed_s": round(elapsed, 1),
+            },
+        }
+
     async def get_top_fundamental_catalysts(self) -> dict:
         """
         Scan for the best fundamental catalysts — earnings beats,

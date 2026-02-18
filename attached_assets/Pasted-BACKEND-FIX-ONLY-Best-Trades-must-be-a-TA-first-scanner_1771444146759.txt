@@ -1,0 +1,99 @@
+BACKEND FIX ONLY — “Best Trades” must be a TA-first scanner with structured output.
+Do NOT change Daily Briefing or Trending Now behavior. Keep existing routing, caching, budgets, regime, scoring, and Claude narrator.
+
+Problem:
+best_trades preset is returning plain-text “chat” style analysis instead of structured trade cards, so UI can’t render pretty.
+
+Goal:
+Best Trades should run TA scans (bullish first, bearish only if high confidence), build actionable trade plans (entry/stop/targets/timeframe/R:R), and return a structured schema that matches what the frontend already renders (like Trending Now cards and TradingView links).
+
+A) Routing & preset profile
+1) Ensure preset_intent="best_trades" maps to category="best_trades" (not chat/social_momentum).
+2) In the preset profile for best_trades, force modules:
+   - technical_scan (REQUIRED)
+   - volume_scan (REQUIRED, should support “biggest volume % increase” logic)
+   - liquidity_filter (REQUIRED)
+   - optional: fundamental_validation (LIGHT) and news_density (LIGHT) only for sanity checks; do NOT let missing FA block a TA trade.
+   - x_social_scan should be OPTIONAL overlay only if user asks for social confirmation; do not make it primary for best_trades.
+
+B) TA scan behavior (data layer)
+1) Best Trades must generate candidates from TA, not social.
+2) Use existing TA engine / local TA utils:
+   - detect: Stage 2 breakout, new highs, MA cross, MACD cross, RSI reclaim, VWAP reclaim, range breakout, squeeze/volatility contraction + expansion.
+3) Add a “signal stacking” concept:
+   - each candidate gets signals_stacking[] and signal_count
+   - produce a technical_score 0-100 based on strength + stacking + trend alignment
+4) Add bearish setups only if:
+   - technical_score >= 80 AND downside catalysts/confirmations (trend breakdown, rejection at resistance, lower lows, rising volume on red days)
+   - limit bearish list to max 1-2 tickers
+
+C) Trade plan builder (backend deterministic layer BEFORE Claude)
+For each selected candidate (top 3-8):
+Return:
+- entry: price range (string)
+- stop: price (string)
+- targets: array of 1-2 targets (strings)
+- timeframe: string (e.g., “days–2 weeks”)
+- risk_reward: string (e.g., “2.1:1”)
+- pattern: short label (e.g., “Stage 2 breakout”)
+- confirmations: { ta: Y/N, volume: Y/N, catalyst: Y/N, fa: Y/N }
+- confidence_score 0-100
+- direction: “long” or “short”
+- tv_url: TradingView link for the ticker (and exchange if known). Must be stable. Example:
+  https://www.tradingview.com/chart/?symbol=NASDAQ:IBRX
+
+Entry/Stop/Targets should be computed from available OHLC:
+- entry near breakout level / reclaim level
+- stop below recent swing low / breakdown level
+- targets based on recent resistance or measured move
+If OHLC missing, degrade gracefully:
+- still return candidate but mark data_gaps and lower confidence; DO NOT output vague text only.
+
+D) Response schema (critical)
+Best Trades MUST return a display_type that your frontend can render as cards (NOT plain analysis).
+Implement or reuse a schema like:
+
+display_type: "trades"
+structured: {
+  market_pulse: { verdict, regime, summary }
+  top_trades: [
+    {
+      ticker, name, exchange,
+      direction, action: "BUY|SELL|WATCH",
+      confidence_score,
+      technical_score,
+      pattern,
+      signals_stacking: [],
+      entry, stop, targets: [],
+      risk_reward, timeframe,
+      thesis, why_could_fail,
+      confirmations,
+      tv_url,
+      data_gaps: []
+    }
+  ],
+  bearish_setups: [same shape, optional, max 2],
+  notes: "1-3 bullets"
+}
+
+Important:
+- ALWAYS include at least 3 top_trades if any candidates exist; if none, return empty arrays plus a short reason.
+
+E) Claude contract (presentation only; no ranking “from scratch”)
+1) Claude receives:
+   - candidates + scorecard + trade plans + market_pulse
+2) Claude’s job:
+   - polish thesis/risks
+   - keep trade plan numbers intact (do not invent)
+3) Claude output must populate structured.top_trades with full fields.
+No narrative-only answers.
+
+F) Logs & tests
+Add logs:
+[BEST_TRADES] candidates=<n> selected=<n> bearish=<n> missing_ohlc=<n>
+Test:
+- Clicking Best Trades returns display_type="trades" with 3-8 trade cards and TradingView URLs.
+- UI shows cards (no plain paragraph).
+Do not change other presets.
+
+After tests pass: Publish the FastAPI backend.

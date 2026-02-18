@@ -371,9 +371,117 @@ def _render_cross_market_analysis(s: dict) -> str:
     return "\n".join(parts).strip()
 
 
+def _render_trades_analysis(s: dict) -> str:
+    parts = []
+    pulse = s.get("market_pulse", {})
+    if pulse:
+        verdict = pulse.get("verdict", "N/A")
+        summary = pulse.get("summary", "")
+        parts.append(f"MARKET PULSE: {verdict}")
+        if summary:
+            parts.append(summary)
+        parts.append("")
+
+    def _render_trade(t):
+        ticker = t.get("ticker", "?")
+        name = t.get("name", "")
+        direction = t.get("direction", "long").upper()
+        action = t.get("action", "")
+        conf = t.get("confidence_score", "")
+        tech = t.get("technical_score", "")
+        pattern = t.get("pattern", "")
+        header = f"{ticker}"
+        if name:
+            header += f" ({name})"
+        header += f" [{direction}]"
+        if action:
+            header += f" — {action}"
+        detail_parts = []
+        if conf:
+            detail_parts.append(f"Confidence: {conf}")
+        if tech:
+            detail_parts.append(f"TA Score: {tech}")
+        if pattern:
+            detail_parts.append(f"Pattern: {pattern}")
+        if detail_parts:
+            header += " | " + " | ".join(detail_parts)
+        parts.append(header)
+        signals = t.get("signals_stacking", [])
+        if signals:
+            parts.append(f"  Signals: {', '.join(signals)}")
+        entry = t.get("entry", "")
+        stop = t.get("stop", "")
+        targets = t.get("targets", [])
+        rr = t.get("risk_reward", "")
+        tf = t.get("timeframe", "")
+        plan_parts = []
+        if entry:
+            plan_parts.append(f"Entry: {entry}")
+        if stop:
+            plan_parts.append(f"Stop: {stop}")
+        if targets:
+            plan_parts.append(f"Targets: {', '.join(targets)}")
+        if rr:
+            plan_parts.append(f"R:R {rr}")
+        if tf:
+            plan_parts.append(f"Timeframe: {tf}")
+        if plan_parts:
+            parts.append(f"  {' | '.join(plan_parts)}")
+        confs = t.get("confirmations", {})
+        if confs and isinstance(confs, dict):
+            conf_strs = []
+            for k in ("ta", "volume", "catalyst", "fa"):
+                v = confs.get(k)
+                if v is True:
+                    conf_strs.append(f"{k.upper()}:Y")
+                elif v is False:
+                    conf_strs.append(f"{k.upper()}:N")
+            if conf_strs:
+                parts.append(f"  Confirmations: {' | '.join(conf_strs)}")
+        thesis = t.get("thesis", "")
+        if thesis:
+            parts.append(f"  {thesis}")
+        fail = t.get("why_could_fail", "")
+        if fail:
+            parts.append(f"  Risk: {fail}")
+        tv = t.get("tv_url", "")
+        if tv:
+            parts.append(f"  Chart: {tv}")
+        gaps = t.get("data_gaps", [])
+        if gaps:
+            parts.append(f"  Data gaps: {', '.join(gaps)}")
+        parts.append("")
+
+    top = s.get("top_trades", [])
+    if top:
+        parts.append("--- TOP TRADES ---")
+        for t in top:
+            _render_trade(t)
+
+    bearish = s.get("bearish_setups", [])
+    if bearish:
+        parts.append("--- BEARISH SETUPS ---")
+        for t in bearish:
+            _render_trade(t)
+
+    notes = s.get("notes", [])
+    if notes:
+        parts.append("NOTES:")
+        for n in notes:
+            parts.append(f"  • {n}")
+
+    disclaimer = s.get("disclaimer", "")
+    if disclaimer:
+        parts.append("")
+        parts.append(disclaimer)
+
+    return "\n".join(parts).strip()
+
+
 _NARRATIVE_KEYS = ("summary", "narrative", "analysis", "report", "text", "message")
 _RENDERERS = {
     "cross_market": _render_cross_market_analysis,
+    "trades": _render_trades_analysis,
 }
 
 
@@ -539,7 +647,8 @@ async def query_agent(
                                "recommendations", "tickers", "sectors", "results",
                                "analysis_text", "briefing", "holdings", "top_picks",
                                "opportunities", "ranked_candidates", "watchlist",
-                               "equities", "crypto", "commodities", "social_trading_signal"}
+                               "equities", "crypto", "commodities", "social_trading_signal",
+                               "top_trades", "bearish_setups"}
             has_content = any(structured.get(k) for k in meaningful_keys)
             if has_content:
                 return False
