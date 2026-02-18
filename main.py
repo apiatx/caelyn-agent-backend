@@ -1,9 +1,11 @@
 from fastapi import FastAPI, Request, Header, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 
 import json as _json
@@ -20,6 +22,48 @@ app = FastAPI(title="Trading Agent API")
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    body = None
+    try:
+        body = (await request.body()).decode("utf-8", errors="replace")[:2000]
+    except Exception:
+        body = "<unreadable>"
+    print(f"[VALIDATION_ERROR] path={request.url.path} method={request.method}")
+    print(f"[VALIDATION_ERROR] errors={exc.errors()}")
+    print(f"[VALIDATION_ERROR] body={body}")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "message": "Request validation failed — check field names and types.",
+            "request_id": str(_uuid.uuid4()),
+            "as_of": _dt.now(_tz.utc).isoformat(),
+        },
+    )
+
+
+@app.exception_handler(_json.JSONDecodeError)
+async def json_decode_exception_handler(request: Request, exc: _json.JSONDecodeError):
+    body = None
+    try:
+        body = (await request.body()).decode("utf-8", errors="replace")[:2000]
+    except Exception:
+        body = "<unreadable>"
+    print(f"[JSON_DECODE_ERROR] path={request.url.path} method={request.method}")
+    print(f"[JSON_DECODE_ERROR] error={exc}")
+    print(f"[JSON_DECODE_ERROR] raw_body={body}")
+    return JSONResponse(
+        status_code=400,
+        content={
+            "detail": f"Malformed JSON: {str(exc)}",
+            "message": "Could not parse request body as JSON.",
+            "request_id": str(_uuid.uuid4()),
+            "as_of": _dt.now(_tz.utc).isoformat(),
+        },
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -89,6 +133,7 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)):
 
 
 class QueryRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     query: Optional[str] = None
     prompt: Optional[str] = None
     conversation_id: Optional[str] = None
@@ -102,6 +147,7 @@ async def query_agent(
     api_key: str = Header(None, alias="X-API-Key"),
 ):
     import asyncio
+    print(f"[REQUEST] {request.method} {request.url.path} content-type={request.headers.get('content-type')} content-length={request.headers.get('content-length')}")
     if not api_key or api_key != AGENT_API_KEY:
         raise HTTPException(
             status_code=403,
