@@ -150,6 +150,14 @@ def test_a_missing_fundamentals():
           sc["raw_score"] < base_sc["raw_score"] * 1.01,
           f"penalized={sc['raw_score']:.1f} vs baseline={base_sc['raw_score']:.1f}")
 
+    check("recommendation_tier is Python-enforced (present on scorecard)",
+          sc["recommendation_tier"] in ("buy", "watch", "speculative"),
+          f"tier={sc['recommendation_tier']}")
+
+    check("recommendation_tier reflects conviction gate, not data completeness",
+          (sc["recommendation_tier"] == "buy") == sc["conviction_validation"]["validation_passed"],
+          f"tier={sc['recommendation_tier']}, conviction_passed={sc['conviction_validation']['validation_passed']}")
+
 
 def test_b_override_blocked_hype_only():
     print("\n" + "=" * 60)
@@ -187,6 +195,10 @@ def test_b_override_blocked_hype_only():
     check("no creative_discovery_override flag",
           not sc.get("creative_discovery_override", False),
           f"creative_discovery_override={sc.get('creative_discovery_override')}")
+
+    check("recommendation_tier is 'speculative' (hype-only)",
+          sc["recommendation_tier"] == "speculative",
+          f"tier={sc['recommendation_tier']}")
 
 
 def test_c_microcap_gating():
@@ -231,6 +243,10 @@ def test_c_microcap_gating():
           max_pct <= 1.0,
           f"max_pct={max_pct}")
 
+    check("micro+low_liq: recommendation_tier is 'speculative' (Python-enforced)",
+          sc_low["recommendation_tier"] == "speculative",
+          f"tier={sc_low['recommendation_tier']}")
+
     print("\n  --- C.2: micro + medium liquidity ---")
     asset_med = _make_candidate(
         market_cap=150_000_000,
@@ -262,6 +278,10 @@ def test_c_microcap_gating():
     check("micro+med_liq: sizing follows tier rules",
           max_pct_med <= 5.0,
           f"max_pct={max_pct_med}")
+
+    check("micro+med_liq: recommendation_tier can be 'buy' with medium liquidity",
+          sc_med["recommendation_tier"] == "buy",
+          f"tier={sc_med['recommendation_tier']}")
 
 
 def test_d_regime_blending():

@@ -619,6 +619,14 @@ def score_candidate(ticker: str, asset: dict, regime_data: dict = None) -> dict:
         "sector_alignment_score": round(sector, 1),
         "liquidity_score": round(liquidity, 1),
     }
+    if "speculative" in labels:
+        recommendation_tier = "speculative"
+    elif conviction["validation_passed"]:
+        recommendation_tier = "buy"
+    else:
+        recommendation_tier = "watch"
+    scorecard["recommendation_tier"] = recommendation_tier
+
     if social_discipline_flag:
         scorecard["social_discipline_flag"] = social_discipline_flag
     if creative_override:
@@ -683,6 +691,7 @@ def apply_institutional_scoring(market_data: dict, regime_data: dict = None) -> 
                 "catalyst_score": sc.get("catalyst_score"),
                 "asset_multiplier": sc.get("asset_multiplier"),
                 "conviction_label": sc.get("conviction_validation", {}).get("conviction_label"),
+                "recommendation_tier": sc.get("recommendation_tier"),
                 "completeness_penalty": sc.get("completeness_penalty"),
                 "labels": sc.get("labels", []),
                 "missing": sc.get("data_flags", {}).get("missing", []),
@@ -724,6 +733,23 @@ def apply_institutional_scoring(market_data: dict, regime_data: dict = None) -> 
         "override_triggered": override_count > 0,
         "budget_exhausted": budget_exhausted,
         "top_10_candidates": top_10_debug,
+    }
+
+    market_data["scoring_summary"] = {
+        "regime": regime_name,
+        "confidence": regime_conf,
+        "full_candidates": scored_count - partial_count,
+        "partial_candidates": partial_count,
+        "override_count": override_count,
+        "top5": [
+            {
+                "ticker": e["ticker"],
+                "score": e["adjusted_final_score"],
+                "tier": e.get("recommendation_tier", "watch"),
+                "missing": e.get("missing", []),
+            }
+            for e in top_10_debug[:5]
+        ],
     }
 
     return market_data

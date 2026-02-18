@@ -131,6 +131,7 @@ PROTECTED_KEYS = {
     "labels", "conviction_label", "failed_inputs",
     "completeness_penalty", "position_size_guidance", "liquidity_tier",
     "catalyst_present_components", "market_cap_category",
+    "recommendation_tier", "scoring_summary",
 }
 
 

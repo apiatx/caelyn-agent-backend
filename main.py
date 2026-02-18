@@ -8,6 +8,8 @@ from typing import List, Optional
 
 import json as _json
 import os
+import uuid as _uuid
+from datetime import datetime as _dt, timezone as _tz
 
 from pathlib import Path
 
@@ -184,6 +186,8 @@ async def query_agent(
 
         if isinstance(result, dict):
             result["conversation_id"] = conv_id
+            result["request_id"] = str(_uuid.uuid4())
+            result["as_of"] = _dt.now(_tz.utc).isoformat()
         return result
     except asyncio.TimeoutError:
         print("[API] Request timed out after 150s")
@@ -191,6 +195,8 @@ async def query_agent(
             "type": "chat",
             "analysis": "",
             "conversation_id": conv_id,
+            "request_id": str(_uuid.uuid4()),
+            "as_of": _dt.now(_tz.utc).isoformat(),
             "structured": {
                 "display_type": "chat",
                 "message": "Request timed out. The data sources may be slow or rate-limited — please wait a minute and try again.",
@@ -204,6 +210,8 @@ async def query_agent(
             "type": "chat",
             "analysis": "",
             "conversation_id": conv_id,
+            "request_id": str(_uuid.uuid4()),
+            "as_of": _dt.now(_tz.utc).isoformat(),
             "structured": {
                 "display_type": "chat",
                 "message": f"Something went wrong: {str(e)}",
