@@ -127,6 +127,8 @@ PROTECTED_KEYS = {
     "regime_context", "position_sizing", "catalyst_breakdown",
     "adjusted_final_score", "regime", "regime_multiplier",
     "creative_discovery_override", "weight_matrix",
+    "data_availability", "conviction_validation", "scoring_debug",
+    "creative_discovery_label", "conviction_label", "failed_inputs",
 }
 
 

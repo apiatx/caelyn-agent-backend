@@ -26,8 +26,17 @@ def detect_market_regime(market_data_service) -> dict:
         return _regime_cache["result"]
 
     signals = _gather_regime_signals(market_data_service)
-    result = _classify_regime(signals)
+
+    failed_inputs = [k for k, v in signals.items() if v is None]
+    if failed_inputs:
+        print(f"[REGIME] Failed inputs: {failed_inputs}")
+    if len(failed_inputs) >= 2:
+        print(f"[REGIME] {len(failed_inputs)}/5 inputs missing — forcing neutral with low confidence")
+        result = {"regime": "neutral", "confidence": 0.2, "degraded": True, "failed_inputs": failed_inputs}
+    else:
+        result = _classify_regime(signals)
     result["signals"] = signals
+    result.setdefault("failed_inputs", failed_inputs)
 
     _regime_cache["result"] = result
     _regime_cache["expires"] = now + REGIME_CACHE_TTL
