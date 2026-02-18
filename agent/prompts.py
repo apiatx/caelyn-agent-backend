@@ -407,8 +407,8 @@ Sort by source_count desc. 5+ sources = max conviction. Flag StockTwits-only as 
 
 ### "cross_market" — Cross-Asset Market Scan
 Use for any query asking about multiple asset classes (stocks + crypto + commodities). You receive data from ALL markets. Apply CROSS-MARKET RANKING RULES strictly.
-{"display_type":"cross_market","macro_regime":{"verdict":"Risk-On/Risk-Off/Neutral","fear_greed":"","vix":"","dxy":"","crypto_fear_greed":"","summary":"2-3 sentence macro verdict that DRIVES your picks"},"asset_class_assessment":[{"asset_class":"Equities/Crypto/Commodities","regime":"Bullish/Bearish/Neutral","rationale":"why this class is favored or not right now"}],"top_picks":[{"rank":1,"ticker":"","asset_class":"stock/crypto/commodity","company":"","price":"","change":"","market_cap":"","conviction":"High/Medium","conviction_score":0,"position_tier":"","confluence_score":"3/5 or 4/5 or 5/5","confluence_factors":["factor1","factor2","factor3"],"classification":"TRADE IDEA or WATCHLIST","thesis":"","catalyst":"","macro_alignment":"why this pick fits the current macro regime","why_could_fail":"","chart":"https://www.tradingview.com/chart/?symbol=TICKER","trade_plan":{"entry":"","stop":"","target_1":"","risk_reward":""}}],"social_trading_signal":{"symbol":"","classification":"TRADE IDEA or WATCHLIST","rating":"","confidence":0,"receipts":[],"confirmation_grid":{"ta":"Confirmed/Unconfirmed","volume":"Confirmed/Unconfirmed","catalyst":"Confirmed/Unconfirmed","fa":"Sane/Unconfirmed"},"thesis":[""],"risks":[""],"position_size":""},"portfolio_positioning":"","portfolio_bias":{"risk_regime":"","asset_class_bias":"","cash_guidance":"","hedge_considerations":""}}
-CRITICAL: top_picks MUST contain assets from at least 2 different asset classes. If all your picks are from one class, you are doing it wrong. Do NOT include an excluded_with_reason section. Each pick must have a classification field: "TRADE IDEA" or "WATCHLIST".
+{"display_type":"cross_market","macro_regime":{"verdict":"Risk-On/Risk-Off/Neutral","fear_greed":"","vix":"","dxy":"","crypto_fear_greed":"","summary":"2-3 sentence macro verdict that DRIVES your picks"},"asset_class_assessment":[{"asset_class":"Equities/Crypto/Commodities","regime":"Bullish/Bearish/Neutral","rationale":"why this class is favored or not right now"}],"social_trading_signal":{"symbol":"","classification":"TRADE IDEA or WATCHLIST","rating":"Strong Buy/Buy/Hold/Sell","confidence":0,"thesis_bullets":["data-grounded bullet 1","bullet 2"],"risks":["risk 1"],"confirmations":{"ta":false,"volume":false,"catalyst":false,"fa":false},"receipts":[{"stance":"bullish","text":"excerpt"},{"stance":"bearish","text":"excerpt"}],"position_size":"","score":0,"social_velocity_label":"low/medium/high/extreme","mention_velocity_score":0},"equities":{"large_caps":[{"symbol":"","company":"","price":"","change":"","market_cap":"","classification":"TRADE IDEA or WATCHLIST","rating":"Strong Buy/Buy/Hold/Sell","confidence":0,"thesis_bullets":[""],"confirmations":{"ta":false,"volume":false,"catalyst":false,"fa":false},"receipts":[],"position_size":"","why_could_fail":"","catalyst":"","chart":"https://www.tradingview.com/chart/?symbol=TICKER","trade_plan":{"entry":"","stop":"","target_1":"","risk_reward":""},"score":0,"social_velocity_label":"","mention_velocity_score":0}],"mid_caps":[{"symbol":"","company":"","price":"","change":"","market_cap":"","classification":"TRADE IDEA or WATCHLIST","rating":"","confidence":0,"thesis_bullets":[""],"confirmations":{"ta":false,"volume":false,"catalyst":false,"fa":false},"receipts":[],"position_size":"","why_could_fail":"","catalyst":"","chart":"","trade_plan":{"entry":"","stop":"","target_1":"","risk_reward":""},"score":0,"social_velocity_label":"","mention_velocity_score":0}],"small_micro_caps":[{"symbol":"","company":"","price":"","change":"","market_cap":"","classification":"TRADE IDEA or WATCHLIST","rating":"","confidence":0,"thesis_bullets":[""],"confirmations":{"ta":false,"volume":false,"catalyst":false,"fa":false},"receipts":[],"position_size":"","why_could_fail":"","catalyst":"","chart":"","trade_plan":{"entry":"","stop":"","target_1":"","risk_reward":""},"score":0,"social_velocity_label":"","mention_velocity_score":0}]},"crypto":[{"symbol":"","company":"","price":"","change":"","market_cap":"","classification":"TRADE IDEA or WATCHLIST","rating":"","confidence":0,"thesis_bullets":[""],"confirmations":{"ta":false,"volume":false,"catalyst":false,"fa":false},"receipts":[],"position_size":"","why_could_fail":"","catalyst":"","chart":"","score":0,"social_velocity_label":"","mention_velocity_score":0}],"commodities":[{"symbol":"","company":"","price":"","change":"","market_cap":"","classification":"TRADE IDEA or WATCHLIST","rating":"","confidence":0,"thesis_bullets":[""],"confirmations":{"ta":false,"volume":false,"catalyst":false,"fa":false},"receipts":[],"position_size":"","why_could_fail":"","catalyst":"","chart":"","score":0,"social_velocity_label":"","mention_velocity_score":0}],"portfolio_positioning":"","portfolio_bias":{"risk_regime":"","asset_class_bias":"","cash_guidance":"","hedge_considerations":""}}
+CRITICAL: You MUST populate equities.large_caps, equities.mid_caps, equities.small_micro_caps, crypto, and commodities as separate grouped lists. Do NOT use a flat top_picks array. Each item uses "symbol" (not "ticker"). Each item MUST have classification ("TRADE IDEA" or "WATCHLIST"), confirmations (boolean object), and thesis_bullets (array). The social_trading_signal is a single object for the highest-velocity social pick. Fields score, social_velocity_label, mention_velocity_score are optional — include when social data is available.
 
 ### "screener" — AI Custom Screener
 {"display_type":"screener","query_interpretation":"","filters_applied":{},"total_matches":0,"results":[{"ticker":"","company":"","price":"","change_pct":"","market_cap":"","pe_ratio":"","revenue_growth":"","rsi":0,"sma50":"","sma200":"","rel_volume":"","analyst_rating":"","price_target":"","upside":"","highlight":false,"note":""}],"top_picks":[{"ticker":"","why":"","conviction_score":0,"position_tier":"","why_could_fail":"","trade_plan":{"entry":"","stop":"","target":"","risk_reward":""}}],"observations":""}
@@ -641,43 +641,47 @@ HARD RULES (violations = broken contract):
 6. Do NOT include an EXCLUDED section. Do not list excluded/filtered-out tickers.
 7. Each item MUST be classified as either "TRADE IDEA" or "WATCHLIST" based on confirmation data.
 
-SOCIAL TRADING SIGNAL (MANDATORY — always include as first section):
-If social_signal.social_spike_primary exists in the data, output this section FIRST:
+SOCIAL TRADING SIGNAL (MANDATORY — populate social_trading_signal object):
+If social_signal.social_spike_primary exists in the data, populate the social_trading_signal JSON object:
+- symbol: from social_spike_primary.symbol
+- classification: "TRADE IDEA" or "WATCHLIST" (from social_spike_primary.classification)
+- rating: "Strong Buy" / "Buy" / "Hold" / "Sell"
+- confidence: 0-100 integer (higher if classification=TRADE IDEA)
+- thesis_bullets: 2-4 data-grounded bullets referencing social velocity
+- risks: 1-2 risk bullets
+- confirmations: boolean object from social_spike_primary.confirmations:
+  ta: true/false (from ta_confirmed)
+  volume: true/false (from volume_confirmed)
+  catalyst: true/false (from catalyst_confirmed)
+  fa: true/false (from fa_sane)
+- receipts: array of 2 objects [{stance:"bullish",text:"excerpt"},{stance:"bearish",text:"excerpt"}]
+- position_size: sizing guidance string
+- score: numeric score if available from social_spike_primary.social_signal_rank (optional, 0 if unavailable)
+- social_velocity_label: from social_spike_primary.velocity_label (optional, "" if unavailable)
+- mention_velocity_score: from social_spike_primary.velocity_score (optional, 0 if unavailable)
 
-"SOCIAL TRADING SIGNAL (Highest velocity right now)"
-- Symbol: from social_spike_primary.symbol
-- Classification: TRADE IDEA or WATCHLIST (from social_spike_primary.classification)
-- Rating: Strong Buy / Buy / Hold / Sell
-- Confidence: 0-100 (higher if classification=TRADE IDEA)
-- 2 receipts: include the receipts from social_spike_primary (one bullish, one bearish if available)
-- Confirmation Grid:
-  TA: Confirmed/Unconfirmed (from social_spike_primary.confirmations.ta_confirmed)
-  Volume: Confirmed/Unconfirmed (from social_spike_primary.confirmations.volume_confirmed)
-  Catalyst: Confirmed/Unconfirmed (from social_spike_primary.confirmations.catalyst_confirmed)
-  FA: Sane/Unconfirmed (from social_spike_primary.confirmations.fa_sane)
-- 2-4 bullet thesis grounded in data + social velocity
-- 1-2 risk bullets
-- Position size guidance
-
-If no social_signal data: write "SOCIAL TRADING SIGNAL: No high-velocity social spikes detected in current scan."
+If no social_signal data: set social_trading_signal.symbol to "" and leave other fields at defaults.
 
 CLASSIFICATION RULES (signal > hype):
 - "TRADE IDEA": social velocity is high/extreme AND at least one confirmation (TA, volume, or catalyst) is true
 - "WATCHLIST": everything else — still list it but label clearly as watchlist with lower confidence
-- If NO items qualify as TRADE IDEA, explicitly state: "No confirmed trade ideas; all items are watchlist due to missing confirmations."
+- If NO items qualify as TRADE IDEA, explicitly state in thesis_bullets: "No confirmed trade ideas; all items are watchlist due to missing confirmations."
 
-OUTPUT STRUCTURE (inside the cross_market JSON schema):
-Each top_pick MUST include:
-- ticker/commodity name
-- asset_class (stock/crypto/commodity)
+OUTPUT STRUCTURE (grouped lists — NOT flat top_picks):
+Populate equities.large_caps[], equities.mid_caps[], equities.small_micro_caps[], crypto[], commodities[] arrays.
+Each item in these arrays MUST include:
+- symbol: ticker or commodity name (use "symbol" NOT "ticker")
 - classification: "TRADE IDEA" or "WATCHLIST"
-- WHY trending: reference 1 Grok receipt excerpt if available, else cite the trending source
-- TA check: even if partial, state what's known (RSI, trend, volume). If missing: "TA: unconfirmed (data gap)"
-- FA sanity check: even if partial. If missing: "FA: unconfirmed (data gap)"
-- Catalyst check: explicitly "confirmed" (with reason) or "unconfirmed" (with reason)
-- Rating: Strong Buy / Buy / Hold / Sell
-- Confidence: 0-100 numeric
-- data_gaps line if any checks are unconfirmed
+- rating: "Strong Buy" / "Buy" / "Hold" / "Sell"
+- confidence: 0-100 integer
+- thesis_bullets: array of 1-3 data-grounded strings (reference Grok receipt if available)
+- confirmations: {ta: bool, volume: bool, catalyst: bool, fa: bool}
+- receipts: array of receipt objects (if social data available, else empty [])
+- position_size: sizing guidance string
+- why_could_fail: 1-2 sentence risk
+- catalyst: catalyst description or "unconfirmed"
+- chart: TradingView link
+- score, social_velocity_label, mention_velocity_score: optional — include when social data is present
 
 CONFIDENCE ADJUSTMENTS:
 - Full confirmation (TA+FA+catalyst all present): base confidence
@@ -699,13 +703,13 @@ DATA COVERAGE (end section):
 - NEVER say "data feed timed out" or produce narrative-only responses without tickers
 
 RULES:
-- Every item MUST have: ticker/commodity, classification, rating, numeric confidence, thesis, risk, sizing
-- Thesis MUST reference at least 1 Grok receipt (verbatim excerpt from X) if grok_shortlist data is present
-- No vague narrative-only answers. If tickers exist in inputs, you MUST list them with ratings
+- Every item MUST have: symbol, classification, rating, numeric confidence, thesis_bullets, why_could_fail, position_size, confirmations
+- thesis_bullets MUST reference at least 1 Grok receipt (verbatim excerpt from X) if grok_shortlist data is present
+- No vague narrative-only answers. If symbols exist in inputs, you MUST list them with ratings
 - Do NOT use the same generic thesis for multiple items
 - Tone: professional, natural, direct. Minimal buzzwords. Do not repeat "regime/catalyst/buzzing" excessively.
-- For each bucket (equities/crypto/commodities), list only shortlist items. No extra commentary dump.
-- If grok_shortlist shows data_quality_flag="low", mention this in DATA GAPS
-- You MUST output tickers. A response with zero tickers is NEVER acceptable.
+- For each bucket (equities.large_caps/mid_caps/small_micro_caps, crypto, commodities), list only shortlist items. No extra commentary dump.
+- If grok_shortlist shows data_quality_flag="low", mention this in thesis_bullets or as a risk
+- You MUST output symbols. A response with zero symbols is NEVER acceptable.
 - If social_scan_unavailable is true in the data, include a note: "X social scan was unavailable for this request" and rate using available market data only.
 """

@@ -194,61 +194,104 @@ def _render_cross_market_analysis(s: dict) -> str:
             parts.append(f"  {ac}: {reg} — {rat}")
         parts.append("")
 
-    picks = s.get("top_picks", [])
-    if picks:
-        equities = [p for p in picks if p.get("asset_class") in ("stock", "equities", "equity")]
-        crypto = [p for p in picks if p.get("asset_class") in ("crypto", "cryptocurrency")]
-        commodities = [p for p in picks if p.get("asset_class") in ("commodity", "commodities")]
-        other = [p for p in picks if p not in equities and p not in crypto and p not in commodities]
+    def _render_item(p):
+        sym = p.get("symbol", p.get("ticker", "?"))
+        company = p.get("company", "")
+        classification = p.get("classification", "")
+        rating = p.get("rating", "")
+        confidence = p.get("confidence", "")
+        change = p.get("change", "")
+        mcap = p.get("market_cap", "")
+        header = f"{sym}"
+        if company:
+            header += f" ({company})"
+        if classification:
+            header += f" [{classification}]"
+        detail_parts = []
+        if rating:
+            detail_parts.append(f"Rating: {rating}")
+        if confidence:
+            detail_parts.append(f"Confidence: {confidence}")
+        if change:
+            detail_parts.append(f"Change: {change}")
+        if mcap:
+            detail_parts.append(f"MCap: {mcap}")
+        vel = p.get("social_velocity_label", "")
+        if vel:
+            detail_parts.append(f"Velocity: {vel}")
+        if detail_parts:
+            header += " | " + " | ".join(detail_parts)
+        parts.append(header)
+        bullets = p.get("thesis_bullets", [])
+        thesis_str = p.get("thesis", "")
+        if bullets:
+            for b in bullets:
+                parts.append(f"  • {b}")
+        elif thesis_str:
+            parts.append(f"  {thesis_str}")
+        catalyst = p.get("catalyst", "")
+        if catalyst:
+            parts.append(f"  Catalyst: {catalyst}")
+        confs = p.get("confirmations", {})
+        if confs and isinstance(confs, dict):
+            conf_strs = []
+            for k in ("ta", "volume", "catalyst", "fa"):
+                v = confs.get(k)
+                if v is True:
+                    conf_strs.append(f"{k.upper()}:Y")
+                elif v is False:
+                    conf_strs.append(f"{k.upper()}:N")
+            if conf_strs:
+                parts.append(f"  Confirmations: {' | '.join(conf_strs)}")
+        fail = p.get("why_could_fail", "")
+        if fail:
+            parts.append(f"  Risk: {fail}")
+        ps = p.get("position_size", "")
+        if ps:
+            parts.append(f"  Position: {ps}")
+        parts.append("")
 
-        def _render_group(label, items):
-            if not items:
-                return
-            parts.append(f"--- {label} ---")
-            for p in items:
-                ticker = p.get("ticker", "?")
-                company = p.get("company", "")
-                conv = p.get("conviction", "")
-                score = p.get("conviction_score", "")
-                change = p.get("change", "")
-                mcap = p.get("market_cap", "")
-                classification = p.get("classification", "")
-                header = f"{ticker}"
-                if company:
-                    header += f" ({company})"
-                if classification:
-                    header += f" [{classification}]"
-                detail_parts = []
-                if conv:
-                    detail_parts.append(f"Conviction: {conv}")
-                if score:
-                    detail_parts.append(f"Score: {score}")
-                if change:
-                    detail_parts.append(f"Change: {change}")
-                if mcap:
-                    detail_parts.append(f"MCap: {mcap}")
-                if detail_parts:
-                    header += " | " + " | ".join(detail_parts)
-                parts.append(header)
-                thesis = p.get("thesis", "")
-                if thesis:
-                    parts.append(f"  {thesis}")
-                catalyst = p.get("catalyst", "")
-                if catalyst:
-                    parts.append(f"  Catalyst: {catalyst}")
-                fail = p.get("why_could_fail", "")
-                if fail:
-                    parts.append(f"  Risk: {fail}")
-                parts.append("")
+    def _render_group(label, items):
+        if not items:
+            return
+        parts.append(f"--- {label} ---")
+        for p in items:
+            _render_item(p)
 
+    equities = s.get("equities", {})
+    if isinstance(equities, dict):
+        _render_group("EQUITIES — LARGE CAPS", equities.get("large_caps", []))
+        _render_group("EQUITIES — MID CAPS", equities.get("mid_caps", []))
+        _render_group("EQUITIES — SMALL/MICRO CAPS", equities.get("small_micro_caps", []))
+    elif isinstance(equities, list):
         _render_group("EQUITIES", equities)
-        _render_group("CRYPTO", crypto)
-        _render_group("COMMODITIES", commodities)
-        _render_group("OTHER", other)
+
+    picks = s.get("top_picks", [])
+    if picks and not equities:
+        eq = [p for p in picks if p.get("asset_class") in ("stock", "equities", "equity")]
+        cr = [p for p in picks if p.get("asset_class") in ("crypto", "cryptocurrency")]
+        co = [p for p in picks if p.get("asset_class") in ("commodity", "commodities")]
+        ot = [p for p in picks if p not in eq and p not in cr and p not in co]
+        _render_group("EQUITIES", eq)
+        _render_group("CRYPTO", cr)
+        _render_group("COMMODITIES", co)
+        _render_group("OTHER", ot)
+
+    crypto_list = s.get("crypto", [])
+    if isinstance(crypto_list, list) and crypto_list:
+        _render_group("CRYPTO", crypto_list)
+
+    commodities_list = s.get("commodities", [])
+    if isinstance(commodities_list, list) and commodities_list:
+        _render_group("COMMODITIES", commodities_list)
+    elif isinstance(commodities_list, str) and commodities_list:
+        parts.append(f"--- COMMODITIES ---")
+        parts.append(commodities_list)
+        parts.append("")
 
     sts = s.get("social_trading_signal", {})
     if sts and isinstance(sts, dict) and sts.get("symbol"):
-        parts.insert(0, "")
+        sts_parts = []
         sym = sts.get("symbol", "?")
         classification = sts.get("classification", "WATCHLIST")
         rating = sts.get("rating", "")
@@ -258,19 +301,51 @@ def _render_cross_market_analysis(s: dict) -> str:
             signal_header += f" | {rating}"
         if conf:
             signal_header += f" | Confidence: {conf}"
-        parts.insert(0, signal_header)
-        grid = sts.get("confirmation_grid", {})
-        if grid:
-            grid_parts = []
-            for k, v in grid.items():
-                grid_parts.append(f"{k.upper()}: {v}")
-            parts.insert(1, "  " + " | ".join(grid_parts))
+        vel = sts.get("social_velocity_label", "")
+        vel_score = sts.get("mention_velocity_score", 0)
+        if vel:
+            signal_header += f" | Velocity: {vel}"
+        if vel_score:
+            signal_header += f" ({vel_score})"
+        sts_parts.append(signal_header)
+        confs = sts.get("confirmations", {})
+        if confs and isinstance(confs, dict):
+            conf_strs = []
+            for k in ("ta", "volume", "catalyst", "fa"):
+                v = confs.get(k)
+                if v is True:
+                    conf_strs.append(f"{k.upper()}:Y")
+                elif v is False:
+                    conf_strs.append(f"{k.upper()}:N")
+            if conf_strs:
+                sts_parts.append(f"  Confirmations: {' | '.join(conf_strs)}")
+        else:
+            grid = sts.get("confirmation_grid", {})
+            if grid:
+                grid_parts = []
+                for k, v in grid.items():
+                    grid_parts.append(f"{k.upper()}: {v}")
+                sts_parts.append("  " + " | ".join(grid_parts))
+        bullets = sts.get("thesis_bullets", sts.get("thesis", []))
+        if isinstance(bullets, list):
+            for b in bullets:
+                sts_parts.append(f"  • {b}")
+        elif isinstance(bullets, str) and bullets:
+            sts_parts.append(f"  {bullets}")
+        risks = sts.get("risks", [])
+        for r in risks:
+            sts_parts.append(f"  ⚠ {r}")
         receipts = sts.get("receipts", [])
         for r in receipts[:2]:
             if isinstance(r, dict):
-                parts.insert(2, f"  [{r.get('stance', '?')}] \"{r.get('text', '')}\"")
+                sts_parts.append(f"  [{r.get('stance', '?')}] \"{r.get('text', '')}\"")
             elif isinstance(r, str):
-                parts.insert(2, f"  \"{r}\"")
+                sts_parts.append(f"  \"{r}\"")
+        ps = sts.get("position_size", "")
+        if ps:
+            sts_parts.append(f"  Position: {ps}")
+        sts_parts.append("")
+        parts = sts_parts + parts
 
     positioning = s.get("portfolio_positioning", "")
     if positioning:
@@ -463,7 +538,8 @@ async def query_agent(
             meaningful_keys = {"message", "summary", "picks", "conviction_picks",
                                "recommendations", "tickers", "sectors", "results",
                                "analysis_text", "briefing", "holdings", "top_picks",
-                               "opportunities", "ranked_candidates", "watchlist"}
+                               "opportunities", "ranked_candidates", "watchlist",
+                               "equities", "crypto", "commodities", "social_trading_signal"}
             has_content = any(structured.get(k) for k in meaningful_keys)
             if has_content:
                 return False
