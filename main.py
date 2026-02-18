@@ -162,14 +162,15 @@ async def query_agent(
     api_key: str = Header(None, alias="X-API-Key"),
 ):
     import asyncio
-    print(f"[REQUEST] {request.method} {request.url.path} content-type={request.headers.get('content-type')} content-length={request.headers.get('content-length')}")
+    print(f"[REQ_META] method={request.method} path={request.url.path} content-type={request.headers.get('content-type')} content-length={request.headers.get('content-length')}")
+    user_query = body.query or body.prompt or ""
+    print(f"[REQ_BODY] query_len={len(user_query)} preset_intent={body.preset_intent} conversation_id={body.conversation_id}")
     if not api_key or api_key != AGENT_API_KEY:
         raise HTTPException(
             status_code=403,
             detail="Invalid or missing API key.",
         )
     await _wait_for_init()
-    user_query = body.query or body.prompt or ""
     if not user_query.strip() and not body.preset_intent:
         raise HTTPException(status_code=400, detail="No query provided. Send 'query' or 'prompt' field (or use 'preset_intent').")
 

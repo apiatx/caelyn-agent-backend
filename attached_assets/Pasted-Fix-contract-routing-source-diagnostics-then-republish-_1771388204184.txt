@@ -1,0 +1,74 @@
+Fix contract + routing source + diagnostics, then republish
+
+You are working in the FastAPI backend project that is deployed at:
+https://fast-api-server-trading-agent-aidanpilon.replit.app
+
+Do NOT change prompts, scoring logic, module logic, or response JSON schemas. This is contract/validation/logging/routing-source correctness only.
+
+1) Ensure request schema is stable and backward compatible
+
+The /api/query POST request body must accept ONLY:
+
+query: str
+
+preset_intent: Optional[str]
+
+conversation_id: Optional[str]
+
+Also set Pydantic to ignore unknown fields (extra="ignore") so older clients sending history won’t break.
+
+2) Fix the empty query guard
+
+Validation must be:
+
+If preset_intent is present and valid: allow query="" (empty string).
+
+If preset_intent is null/absent: require query.strip() length > 0, else return 400 with clear message telling the user to send query or use preset_intent.
+
+3) Add request-entry logging for debugging
+
+At the start of /api/query, log:
+
+[REQ_META] method=<...> path=<...> content-type=<...> content-length=<...>
+
+[REQ_BODY] query_len=<int> preset_intent=<value> conversation_id=<value>
+
+4) Fix routing source labeling
+
+If preset_intent is present and valid, the routing log must show:
+
+source=preset
+It must NOT show source=classifier in the preset path.
+
+5) Keep /ping and /health
+
+Ensure:
+
+/ping returns 200 JSON: {"status":"ok"}
+
+/health returns 200 JSON with init flags (agent_loaded, data_service_loaded, init_complete)
+
+6) Keep descriptive error handling
+
+Ensure RequestValidationError produces a descriptive response and logs exc.errors().
+Ensure malformed JSON produces descriptive 400 and logs raw body best-effort.
+
+7) Run these local tests (before publish)
+
+A) Preset button request:
+{"query":"", "preset_intent":"daily_briefing", "conversation_id":null}
+Must not return 400/422.
+
+B) Freeform:
+{"query":"Explain RSI vs MACD", "preset_intent":null, "conversation_id":null}
+Must return 200.
+
+C) Empty freeform:
+{"query":"", "preset_intent":null, "conversation_id":null}
+Must return 400 with clear message.
+
+Paste the exact log lines for A/B/C, including [REQ_BODY] and [ROUTING].
+
+8) Publish backend
+
+After tests pass locally, republish the FastAPI app so the deployed URL reflects the fixes.
