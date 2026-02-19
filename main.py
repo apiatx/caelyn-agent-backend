@@ -1654,8 +1654,12 @@ async def get_portfolio_events(api_key: str = Header(None, alias="X-API-Key")):
 async def review_portfolio(request: Request, api_key: str = Header(None, alias="X-API-Key")):
     """AI Portfolio Review — comprehensive analysis with Buy/Hold/Sell verdicts."""
     import asyncio
+    import sys
     import time as _time
     from fastapi.responses import JSONResponse
+
+    def _log(msg):
+        print(msg, flush=True)
 
     if not api_key or api_key != AGENT_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
@@ -1665,9 +1669,9 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
     start = _time.time()
     DEADLINE = 55.0
 
-    print(f"[PORTFOLIO_REVIEW] === ENDPOINT HIT ===")
+    _log(f"[PORTFOLIO_REVIEW] === ENDPOINT HIT ===")
     holdings = body.get("holdings", [])
-    print(f"[PORTFOLIO_REVIEW] Holdings: {[h.get('ticker') for h in holdings]}")
+    _log(f"[PORTFOLIO_REVIEW] Holdings: {[h.get('ticker') for h in holdings]}")
 
     if not holdings:
         return {
@@ -1752,7 +1756,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
 
             for key, res in zip(task_keys, results):
                 if isinstance(res, Exception):
-                    print(f"[PORTFOLIO_REVIEW] {ticker}/{key} failed: {type(res).__name__}: {res}")
+                    _log(f"[PORTFOLIO_REVIEW] {ticker}/{key} failed: {type(res).__name__}: {res}")
                     continue
                 if not res:
                     continue
@@ -1770,7 +1774,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
                             from data.ta_utils import compute_technicals_from_bars
                             result["technicals"] = compute_technicals_from_bars(res)
                         except Exception as ta_err:
-                            print(f"[PORTFOLIO_REVIEW] {ticker}/ta compute failed: {ta_err}")
+                            _log(f"[PORTFOLIO_REVIEW] {ticker}/ta compute failed: {ta_err}")
                         result["current_price"] = result.get("current_price") or res[-1].get("c")
                 elif key == "analyst":
                     result["analyst_ratings"] = res
@@ -1779,7 +1783,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
 
             return result
 
-        print(f"[PORTFOLIO_REVIEW] Starting parallel fetch for {len(tickers)} tickers + macro...")
+        _log(f"[PORTFOLIO_REVIEW] Starting parallel fetch for {len(tickers)} tickers + macro...")
 
         async def _fetch_all_tickers():
             ticker_tasks = [fetch_ticker_data(t) for t in tickers[:15]]
@@ -1789,7 +1793,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             try:
                 return await asyncio.wait_for(agent.data._build_macro_snapshot(), timeout=6.0)
             except Exception as e:
-                print(f"[PORTFOLIO_REVIEW] Macro snapshot failed: {e}")
+                _log(f"[PORTFOLIO_REVIEW] Macro snapshot failed: {e}")
                 return {}
 
         async def _fetch_grok():
@@ -1799,7 +1803,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
                 return await asyncio.wait_for(
                     agent.data.xai.get_batch_sentiment(tickers[:3]), timeout=10.0)
             except Exception as e:
-                print(f"[PORTFOLIO_REVIEW] Grok sentiment failed: {e}")
+                _log(f"[PORTFOLIO_REVIEW] Grok sentiment failed: {e}")
                 return {}
 
         all_results = await asyncio.gather(
@@ -1812,26 +1816,26 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
         grok_sentiment = all_results[2] if not isinstance(all_results[2], Exception) else {}
 
         if isinstance(ticker_results, Exception):
-            print(f"[PORTFOLIO_REVIEW] Ticker fetch FATAL: {ticker_results}")
+            _log(f"[PORTFOLIO_REVIEW] Ticker fetch FATAL: {ticker_results}")
             ticker_results = []
 
         ticker_data = {}
         for res in ticker_results:
             if isinstance(res, Exception):
-                print(f"[PORTFOLIO_REVIEW] Ticker fetch exception: {res}")
+                _log(f"[PORTFOLIO_REVIEW] Ticker fetch exception: {res}")
                 continue
             if isinstance(res, dict) and res.get("ticker"):
                 ticker_data[res["ticker"]] = res
 
         elapsed = _time.time() - start
-        print(f"[PORTFOLIO_REVIEW] Data gathered for {len(ticker_data)}/{len(tickers)} tickers ({elapsed:.1f}s)")
+        _log(f"[PORTFOLIO_REVIEW] Data gathered for {len(ticker_data)}/{len(tickers)} tickers ({elapsed:.1f}s)")
 
         if isinstance(grok_sentiment, dict):
             for ticker, grok_data in grok_sentiment.items():
                 if ticker in ticker_data and isinstance(grok_data, dict) and "error" not in grok_data:
                     ticker_data[ticker]["x_sentiment"] = grok_data
             if grok_sentiment:
-                print(f"[PORTFOLIO_REVIEW] Grok sentiment merged: {len(grok_sentiment)} tickers")
+                _log(f"[PORTFOLIO_REVIEW] Grok sentiment merged: {len(grok_sentiment)} tickers")
 
         total_cost_basis = sum(h["cost_basis"] for h in holdings_context)
 
@@ -1926,7 +1930,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             }
 
         elapsed = _time.time() - start
-        print(f"[PORTFOLIO_REVIEW] Portfolio context built ({elapsed:.1f}s)")
+        _log(f"[PORTFOLIO_REVIEW] Portfolio context built ({elapsed:.1f}s)")
 
         from agent.data_compressor import compress_data
         try:
@@ -1935,46 +1939,40 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             compressed = portfolio_summary
         data_str = _json.dumps(compressed, default=str)
 
-        print(f"[PORTFOLIO_REVIEW] Sending {len(data_str):,} chars to Claude")
+        _log(f"[PORTFOLIO_REVIEW] Sending {len(data_str):,} chars to Claude")
 
         time_remaining = DEADLINE - (_time.time() - start)
         claude_timeout = max(15.0, min(45.0, time_remaining - 2.0))
-        print(f"[PORTFOLIO_REVIEW] Claude timeout: {claude_timeout:.0f}s (elapsed: {_time.time()-start:.1f}s)")
+        _log(f"[PORTFOLIO_REVIEW] Claude timeout: {claude_timeout:.0f}s (elapsed: {_time.time()-start:.1f}s)")
 
         if claude_timeout < 10:
-            print(f"[PORTFOLIO_REVIEW] Not enough time for Claude, returning data summary")
+            _log(f"[PORTFOLIO_REVIEW] Not enough time for Claude, returning data summary")
             return _err_response("Portfolio review ran out of time gathering data. Please try again — cached data should make it faster on retry.")
 
         from agent.prompts import SYSTEM_PROMPT
         messages = [{
             "role": "user",
-            "content": f"""[PORTFOLIO REVIEW REQUEST]
+            "content": f"""[PORTFOLIO REVIEW]
 
 {data_str}
 
-You are reviewing my personal investment portfolio. This is my real money. Be direct and honest.
+Review my portfolio. For EACH position give:
+- **VERDICT**: BUY MORE / HOLD / TRIM / SELL
+- **THESIS** (2 sentences): Why? Reference price vs cost, P&L, fundamentals, TA (RSI, SMAs), sentiment
+- **KEY RISK**: Single biggest risk
+- **CATALYST**: Next catalyst
+- **POSITION SIZE**: Current weight appropriate?
 
-For EACH position, provide:
+OVERALL:
+- Portfolio grade (A-F)
+- Concentration/correlation risk
+- Macro alignment (Fear & Greed, VIX, regime)
+- Top 1-2 action items this week
+- One new ticker to add with brief thesis
 
-1. **VERDICT**: BUY MORE / HOLD / TRIM / SELL — pick one, be decisive
-2. **THESIS** (2-3 sentences): Why this verdict? Reference the specific data — current price vs avg cost, P&L, fundamentals (revenue growth, margins, PE), technical setup (RSI, SMA position, MACD), social sentiment, and recent news.
-3. **KEY RISK**: The single biggest risk to this position right now
-4. **CATALYST**: Next potential catalyst that could move the price (earnings, product launch, macro event, sector rotation)
-5. **TIMEFRAME**: How long to hold before re-evaluating (days, weeks, months, quarters)
-6. **POSITION SIZE**: Is my current allocation appropriate? Should I increase/decrease weight?
+Be direct. No disclaimers except one line at bottom. Keep response concise.
 
-Then provide OVERALL PORTFOLIO ASSESSMENT:
-- Portfolio grade (A through F) with justification
-- Sector/theme exposure — am I too concentrated or well-diversified?
-- Correlation risk — if one position drops, what happens to others?
-- Macro alignment — does my portfolio fit the current regime (Fear & Greed, rates, VIX)?
-- REBALANCING RECOMMENDATION: Specific percentage allocations I should target
-- TOP ACTION ITEMS: The 1-3 most important things I should do this week
-- If you had to add ONE new position to improve this portfolio, what would it be and why? Give a specific ticker with thesis.
-
-Be my portfolio advisor. No generic disclaimers in the body. One brief disclaimer at the very bottom.
-
-IMPORTANT: Respond with display_type "chat" and put your full analysis in the "message" field as formatted text.""",
+IMPORTANT: Return plain text analysis (not JSON). Be formatted with markdown headers and bullets.""",
         }]
 
         try:
@@ -1982,7 +1980,7 @@ IMPORTANT: Respond with display_type "chat" and put your full analysis in the "m
                 asyncio.to_thread(
                     agent.client.messages.create,
                     model="claude-sonnet-4-20250514",
-                    max_tokens=4096,
+                    max_tokens=2000,
                     system=SYSTEM_PROMPT,
                     messages=messages,
                 ),
@@ -1990,7 +1988,7 @@ IMPORTANT: Respond with display_type "chat" and put your full analysis in the "m
             )
 
             response_text = response.content[0].text.strip()
-            print(f"[PORTFOLIO_REVIEW] Claude responded: {len(response_text)} chars ({_time.time()-start:.1f}s total)")
+            _log(f"[PORTFOLIO_REVIEW] Claude responded: {len(response_text)} chars ({_time.time()-start:.1f}s total)")
 
             try:
                 clean = response_text
@@ -2004,7 +2002,7 @@ IMPORTANT: Respond with display_type "chat" and put your full analysis in the "m
                     "analysis": parsed.get("message", response_text),
                     "structured": parsed,
                 }
-            except (_json.JSONDecodeError, Exception):
+            except Exception:
                 return {
                     "type": "chat",
                     "analysis": response_text,
@@ -2015,17 +2013,17 @@ IMPORTANT: Respond with display_type "chat" and put your full analysis in the "m
                 }
 
         except asyncio.TimeoutError:
-            print(f"[PORTFOLIO_REVIEW] Claude timed out after {claude_timeout:.0f}s")
+            _log(f"[PORTFOLIO_REVIEW] Claude timed out after {claude_timeout:.0f}s")
             return _err_response("Portfolio review timed out waiting for AI analysis. Please try again — cached data should make it faster on retry.")
         except Exception as claude_err:
-            print(f"[PORTFOLIO_REVIEW] Claude error: {claude_err}")
+            _log(f"[PORTFOLIO_REVIEW] Claude error: {claude_err}")
             import traceback; traceback.print_exc()
             return _err_response(f"AI analysis failed: {str(claude_err)[:200]}")
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"[PORTFOLIO_REVIEW] FATAL ERROR: {e}")
+        _log(f"[PORTFOLIO_REVIEW] FATAL ERROR: {e}")
         return _err_response(f"Portfolio review encountered an error: {str(e)[:200]}. Please try again.")
 
 

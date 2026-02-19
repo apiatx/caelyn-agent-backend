@@ -1,0 +1,72 @@
+## URGENT: /api/portfolio/review still returning 502 — need actual server logs NOW
+
+I've asked twice to fix this and it still 502s. I need you to actually look at what's happening.
+
+### Step 1: Test the endpoint directly
+
+Run this command in the shell to test the endpoint directly and see the actual error:
+```bash
+curl -X POST http://localhost:5000/api/portfolio/review \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $(grep AGENT_API_KEY .env | cut -d= -f2)" \
+  -d '{"holdings": [{"ticker": "NVDA", "shares": 10, "avg_cost": 300}]}' \
+  2>&1 | head -100
+```
+
+If the server runs on a different port, adjust accordingly. Check what port the app runs on first:
+```bash
+grep -r "port\|PORT\|uvicorn\|8000\|5000\|3001" main.py .env pyproject.toml | head -10
+```
+
+### Step 2: Check the actual server logs
+```bash
+# Look at the last 100 lines of server output for any PORTFOLIO_REVIEW logs or tracebacks
+# If using replit, check the Console output
+```
+
+Look for:
+- Any `ImportError` or `ModuleNotFoundError` 
+- Any `AttributeError` (method doesn't exist on an object)
+- Any `TypeError` (wrong arguments)
+- The EXACT traceback
+
+### Step 3: The most likely cause
+
+The 502 is almost certainly one of these:
+
+A) **Wrong import paths** — The rewrite uses imports like `from data.ta_utils import compute_technicals_from_bars` or `from agent.data_compressor import compress_data` but the actual import paths in this project may be different. Check what works:
+```bash
+# Find the actual module locations
+find . -name "ta_utils.py" -not -path "*/node_modules/*"
+find . -name "data_compressor.py" -not -path "*/node_modules/*"  
+find . -name "prompts.py" -not -path "*/node_modules/*"
+grep -r "def compute_technicals" --include="*.py" | head -5
+grep -r "def compress_data" --include="*.py" | head -5
+grep -r "SYSTEM_PROMPT" --include="*.py" | head -5
+```
+
+B) **Method doesn't exist** — Check these specific methods exist:
+```bash
+grep -r "def get_quote" --include="*.py" | head -5
+grep -r "def get_candles" --include="*.py" | head -5  
+grep -r "def _build_macro_snapshot" --include="*.py" | head -5
+grep -r "def get_analyst_ratings" --include="*.py" | head -5
+grep -r "def get_batch_sentiment" --include="*.py" | head -5
+```
+
+C) **Server crashed on startup** — The endpoint rewrite may have introduced a syntax error that prevents the server from starting at all:
+```bash
+python -c "import main" 2>&1 | tail -20
+```
+
+### Step 4: Fix whatever you find
+
+Fix the actual error, then test with curl BEFORE telling me it works. I want to see the curl output showing a successful JSON response.
+
+### Step 5: Verify
+
+After fixing, test:
+1. curl the endpoint directly — must return JSON, not 502
+2. Click "AI Portfolio Review" in the UI — must show analysis, not error
+3. All other presets still work
+4. `python -m pytest` passes
