@@ -438,7 +438,9 @@ class TradingAgent:
                 print(f"[COMPRESS] {compression.get('raw_size', 0):,} → {compression.get('compressed_size', 0):,} chars "
                       f"({compression.get('ratio', 1)}x reduction) for category={category}")
             except Exception as e:
-                print(f"[COMPRESS] Compression failed, using raw data: {e}")
+                print(f"[COMPRESS] Compression FAILED for category={category}, using raw data: {e}")
+                import traceback
+                traceback.print_exc()
                 claude_data = market_data
 
         if reasoning_brief and isinstance(claude_data, dict):
@@ -2818,7 +2820,10 @@ Be direct and opinionated. Tell me what you actually think."""
             if is_cross_market_data:
                 market_data = self._slim_cross_market_data(market_data)
 
-            compressed = compress_data(market_data)
+            if market_data.get("_compression"):
+                compressed = market_data
+            else:
+                compressed = compress_data(market_data)
             data_str = json.dumps(compressed, default=str)
             raw_size = len(json.dumps(market_data, default=str))
             print(f"[Agent] Data compression: {raw_size:,} → {len(data_str):,} chars ({100 - len(data_str)*100//max(raw_size,1)}% reduction)")

@@ -168,7 +168,7 @@ def compress_for_claude(market_data: dict, category: str) -> dict:
     compressors = {
         "best_trades": _compress_best_trades,
         "briefing": _compress_briefing,
-        "cross_asset_trending": _compress_trending,
+        "cross_asset_trending": _compress_cross_asset_trending,
         "trending": _compress_trending,
         "cross_market": _compress_trending,
         "deterministic_screener": _compress_screener,
@@ -327,6 +327,51 @@ def _compress_briefing(data: dict) -> dict:
         "highlights": highlights,
         "upcoming_earnings": data.get("upcoming_earnings", []),
     }
+
+
+def _compress_cross_asset_trending(data: dict) -> dict:
+    compressed = {}
+
+    for key, value in data.items():
+        if key in ("cross_asset_debug", "_cross_asset_debug"):
+            continue
+
+        if key == "grok_shortlist" and isinstance(value, dict):
+            trimmed_grok = {}
+            for gk, gv in value.items():
+                if gk == "equities" and isinstance(gv, dict):
+                    trimmed_eq = {}
+                    for bucket_name, bucket_items in gv.items():
+                        if isinstance(bucket_items, list):
+                            trimmed_eq[bucket_name] = bucket_items[:8]
+                        else:
+                            trimmed_eq[bucket_name] = bucket_items
+                    trimmed_grok[gk] = trimmed_eq
+                elif isinstance(gv, list):
+                    trimmed_grok[gk] = gv[:10]
+                else:
+                    trimmed_grok[gk] = gv
+            compressed[key] = trimmed_grok
+            continue
+
+        if key == "stock_trending" and isinstance(value, dict):
+            trimmed_stock = dict(value)
+            enriched = trimmed_stock.get("enriched_data", {})
+            if isinstance(enriched, dict) and len(enriched) > 10:
+                top_keys = list(enriched.keys())[:10]
+                trimmed_stock["enriched_data"] = {k: enriched[k] for k in top_keys}
+            compressed[key] = trimmed_stock
+            continue
+
+        if key == "news_context" and isinstance(value, dict):
+            compressed[key] = _trim_news(value)
+            continue
+
+        compressed[key] = value
+
+    compressed = {k: v for k, v in compressed.items() if v is not None}
+
+    return compressed
 
 
 def _compress_trending(data: dict) -> dict:
