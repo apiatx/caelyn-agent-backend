@@ -1206,7 +1206,7 @@ class MarketDataService:
         from core.ta_signal_engine import analyze_bars
         scan_start = time.time()
 
-        candle_budget = CandleBudget(max_calls=8)
+        candle_budget = CandleBudget(max_calls=15)
 
         new_highs_task = self.finviz.get_new_highs()
         unusual_vol_task = self.finviz.get_unusual_volume()
@@ -1217,9 +1217,13 @@ class MarketDataService:
         volume_task = self.finviz._custom_screen(
             "v=111&f=sh_avgvol_o200,sh_relvol_o2,ta_sma50_pa,sh_price_o3&ft=4&o=-volume"
         )
+        most_active_task = self.finviz.get_most_active()
+        oversold_task = self.finviz.get_oversold_stocks()
+        volatile_task = self.finviz.get_most_volatile()
 
         results = await asyncio.gather(
             new_highs_task, unusual_vol_task, gainers_task, breakout_task, volume_task,
+            most_active_task, oversold_task, volatile_task,
             return_exceptions=True,
         )
         new_highs = results[0] if not isinstance(results[0], Exception) else []
@@ -1227,10 +1231,14 @@ class MarketDataService:
         gainers = results[2] if not isinstance(results[2], Exception) else []
         breakout = results[3] if not isinstance(results[3], Exception) else []
         vol_screen = results[4] if not isinstance(results[4], Exception) else []
+        most_active = results[5] if not isinstance(results[5], Exception) else []
+        oversold = results[6] if not isinstance(results[6], Exception) else []
+        volatile = results[7] if not isinstance(results[7], Exception) else []
 
         ticker_sources = {}
         for src_name, src_list in [("new_high", new_highs), ("unusual_vol", unusual_vol),
-                                     ("gainer", gainers), ("breakout", breakout), ("vol_screen", vol_screen)]:
+                                     ("gainer", gainers), ("breakout", breakout), ("vol_screen", vol_screen),
+                                     ("most_active", most_active), ("oversold", oversold), ("volatile", volatile)]:
             if not isinstance(src_list, list):
                 continue
             for item in src_list:
@@ -1241,33 +1249,81 @@ class MarketDataService:
                             ticker_sources[t] = {"sources": [], "finviz": item}
                         ticker_sources[t]["sources"].append(src_name)
 
-        print(f"[BEST_TRADES] Phase 1: {len(ticker_sources)} unique candidates from {len(new_highs)} highs, {len(unusual_vol)} vol, {len(gainers)} gainers, {len(breakout)} breakout, {len(vol_screen)} vol_screen")
+        print(f"[BEST_TRADES] Phase 1: {len(ticker_sources)} unique candidates from {len(new_highs)} highs, {len(unusual_vol)} vol, {len(gainers)} gainers, {len(breakout)} breakout, {len(vol_screen)} vol_screen, {len(most_active)} active, {len(oversold)} oversold, {len(volatile)} volatile")
 
-        def _pre_rank_score(ticker: str) -> int:
+        def _pre_rank_score(ticker: str) -> float:
             info = ticker_sources.get(ticker, {})
             src = info.get("sources", [])
-            score = len(src) * 10
+            finviz = info.get("finviz", {})
+            score = len(src) * 12
             if "new_high" in src:
-                score += 15
+                score += 18
             if "breakout" in src:
-                score += 12
+                score += 15
             if "unusual_vol" in src:
-                score += 10
+                score += 12
             if "gainer" in src:
+                score += 10
+            if "most_active" in src:
+                score += 6
+            if "volatile" in src:
+                score += 4
+            if "oversold" in src:
                 score += 8
+            try:
+                chg = float(str(finviz.get("change", "0")).replace("%", "").replace("+", ""))
+                if chg > 5:
+                    score += 8
+                elif chg > 2:
+                    score += 4
+            except (ValueError, TypeError):
+                pass
+            vol_str = finviz.get("volume", "")
+            try:
+                vol_num = int(vol_str.replace(",", "")) if vol_str else 0
+                if vol_num > 5_000_000:
+                    score += 6
+                elif vol_num > 1_000_000:
+                    score += 3
+            except (ValueError, TypeError):
+                pass
             return score
 
-        ranked_tickers = sorted(ticker_sources.keys(), key=_pre_rank_score, reverse=True)
-        shortlist = ranked_tickers[:25]
-        candle_targets = shortlist[:12]
-        print(f"[BEST_TRADES] Phase 1: Shortlisted {len(shortlist)}, fetching candles for top {len(candle_targets)}")
+        SHORTLIST_SIZE = 40
+        all_ranked = sorted(ticker_sources.keys(), key=_pre_rank_score, reverse=True)
 
+        bucket_volume = [t for t in all_ranked if "unusual_vol" in ticker_sources[t]["sources"] or "vol_screen" in ticker_sources[t]["sources"]][:10]
+        bucket_breakout = [t for t in all_ranked if "breakout" in ticker_sources[t]["sources"] or "new_high" in ticker_sources[t]["sources"]][:10]
+        bucket_gainer = [t for t in all_ranked if "gainer" in ticker_sources[t]["sources"]][:10]
+        bucket_score = all_ranked[:10]
+
+        shortlist_set = set()
+        for bucket in [bucket_volume, bucket_breakout, bucket_gainer, bucket_score]:
+            shortlist_set.update(bucket)
+
+        if len(shortlist_set) < SHORTLIST_SIZE:
+            for t in all_ranked:
+                if t not in shortlist_set:
+                    shortlist_set.add(t)
+                    if len(shortlist_set) >= SHORTLIST_SIZE:
+                        break
+
+        shortlist = sorted(shortlist_set, key=_pre_rank_score, reverse=True)
+        candle_targets = shortlist[:20]
+        print(f"[BEST_TRADES] Phase 1: Shortlisted {len(shortlist)} (buckets: vol={len(bucket_volume)} brk={len(bucket_breakout)} gain={len(bucket_gainer)} score={len(bucket_score)}), fetching candles for top {len(candle_targets)}")
+
+        import random as _random
         ohlc_results = {}
         no_ta_tickers = []
         ohlc_semaphore = asyncio.Semaphore(3)
+        _td_fetch_count = 0
 
         async def _fetch_ohlc_for_ticker(ticker):
+            nonlocal _td_fetch_count
             async with ohlc_semaphore:
+                if _td_fetch_count >= 6 and not _is_twelvedata_disabled():
+                    await asyncio.sleep(_random.uniform(0.15, 0.25))
+                _td_fetch_count += 1
                 bars = await self.get_candles(ticker, days=120, budget=candle_budget)
                 if bars and len(bars) >= 20:
                     ohlc_results[ticker] = bars
@@ -1279,9 +1335,9 @@ class MarketDataService:
 
         print(f"[BEST_TRADES] Phase 2: OHLCV {len(ohlc_results)}/{len(candle_targets)} fetched, {len(no_ta_tickers)} missing | {candle_budget.summary()}")
 
-        if len(ohlc_results) < 6 and candle_budget.can_spend():
+        if len(ohlc_results) < 8 and candle_budget.can_spend():
             already_fetched = set(ohlc_results.keys()) | set(no_ta_tickers)
-            retry_targets = [t for t in shortlist if t not in already_fetched][:6]
+            retry_targets = [t for t in shortlist if t not in already_fetched][:10]
             if retry_targets:
                 print(f"[BEST_TRADES] Phase 2b: Broadening — fetching {len(retry_targets)} additional candles")
                 retry_tasks = [_fetch_ohlc_for_ticker(t) for t in retry_targets]
@@ -1362,6 +1418,7 @@ class MarketDataService:
             "twelvedata_circuit_breaker": _is_twelvedata_disabled(),
             "budget_exhausted": budget_exhausted,
             "candle_stats": candle_budget.summary(),
+            "api_usage": candle_budget.stats_dict(),
         }
 
         if len(top_trades) == 0 and len(bearish_list) == 0:
@@ -3583,6 +3640,39 @@ class MarketDataService:
             "x_twitter_crypto": data.get("x_twitter_crypto", {}),
         }
 
+    async def get_quotes_batch(self, symbols: list[str]) -> dict:
+        results = {}
+        quote_semaphore = asyncio.Semaphore(5)
+
+        async def _fetch_one(ticker):
+            async with quote_semaphore:
+                try:
+                    quote = await asyncio.to_thread(self.finnhub.get_quote, ticker)
+                    if quote and quote.get("price"):
+                        results[ticker] = {
+                            "price": quote["price"],
+                            "change_pct": quote.get("change_pct"),
+                            "prev_close": quote.get("prev_close"),
+                        }
+                        return
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, 'fmp') and self.fmp:
+                        fmp_quote = await self.fmp.get_quote(ticker)
+                        if fmp_quote and fmp_quote.get("price"):
+                            results[ticker] = {
+                                "price": fmp_quote["price"],
+                                "change_pct": fmp_quote.get("changesPercentage"),
+                                "prev_close": fmp_quote.get("previousClose"),
+                            }
+                except Exception:
+                    pass
+
+        tasks = [_fetch_one(t) for t in symbols]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return results
+
     async def enrich_with_edgar(self, tickers: list[str], mode: str = "light") -> dict:
         """
         Enrich tickers with SEC EDGAR data.
@@ -3864,6 +3954,25 @@ class MarketDataService:
             if isinstance(r, dict) and r.get("ticker"):
                 enriched_rows.append(r)
 
+        missing_price_tickers = [r["ticker"] for r in enriched_rows if not r.get("price")]
+        if missing_price_tickers:
+            try:
+                batch_quotes = await asyncio.wait_for(
+                    self.get_quotes_batch(missing_price_tickers),
+                    timeout=8.0,
+                )
+                for r in enriched_rows:
+                    t = r["ticker"]
+                    if not r.get("price") and t in batch_quotes:
+                        r["price"] = batch_quotes[t]["price"]
+                        if not r.get("chg_pct") and batch_quotes[t].get("change_pct") is not None:
+                            r["chg_pct"] = batch_quotes[t]["change_pct"]
+                print(f"[SCREENER] Quote backfill: {len(batch_quotes)}/{len(missing_price_tickers)} filled")
+            except asyncio.TimeoutError:
+                print("[SCREENER] Quote backfill timed out")
+            except Exception as e:
+                print(f"[SCREENER] Quote backfill error: {e}")
+
         print(f"[SCREENER] Phase B: {len(enriched_rows)} enriched (budget: {candle_budget.summary()})")
 
         # --- Phase C: Filter + Rank ---
@@ -4043,6 +4152,7 @@ class MarketDataService:
                 "qualified": len(qualified),
                 "returned": len(final_rows),
                 "elapsed_s": elapsed,
+                "api_usage": candle_budget.stats_dict(),
             },
         }
 

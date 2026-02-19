@@ -55,6 +55,7 @@ def mock_service():
     svc.cmc = MagicMock()
     svc.altfins = MagicMock()
     svc.xai = MagicMock()
+    svc.sec_edgar = MagicMock()
     svc.twelvedata = None
 
     tickers = ["AAPL", "MSFT", "GOOG", "TSLA", "NVDA", "AMD", "META", "NFLX", "AMZN", "CRM"]
@@ -68,11 +69,20 @@ def mock_service():
         return finviz_results[4:9]
     async def mock_custom_screen(params=""):
         return finviz_results[1:6]
+    async def mock_get_most_active():
+        return finviz_results[3:8]
+    async def mock_get_oversold():
+        return finviz_results[5:10]
+    async def mock_get_most_volatile():
+        return finviz_results[0:5]
 
     svc.finviz.get_new_highs = mock_get_new_highs
     svc.finviz.get_unusual_volume = mock_get_unusual_volume
     svc.finviz.get_screener_results = mock_get_screener_results
     svc.finviz._custom_screen = mock_custom_screen
+    svc.finviz.get_most_active = mock_get_most_active
+    svc.finviz.get_oversold_stocks = mock_get_oversold
+    svc.finviz.get_most_volatile = mock_get_most_volatile
 
     svc.finnhub.get_stock_candles = MagicMock(return_value=_make_bars(60))
     svc.polygon.get_daily_bars = MagicMock(return_value=_make_bars(60))
@@ -136,8 +146,8 @@ async def test_best_trades_trade_has_required_fields(mock_service):
 @pytest.mark.asyncio
 async def test_best_trades_shortlist_capped(mock_service):
     result = await mock_service.get_best_trades_scan()
-    assert result["scan_stats"]["shortlisted"] <= 25
-    assert result["scan_stats"]["candle_targets"] <= 12
+    assert result["scan_stats"]["shortlisted"] <= 40
+    assert result["scan_stats"]["candle_targets"] <= 20
 
 
 @pytest.mark.asyncio
@@ -251,7 +261,7 @@ async def test_best_trades_budget_limits_polygon_calls(mock_service):
 
     result = await mock_service.get_best_trades_scan()
 
-    assert call_count["n"] <= 8
+    assert call_count["n"] <= 15
     assert result["display_type"] == "trades"
 
 
@@ -352,3 +362,47 @@ def test_ta_engine_action_strong_buy():
     )
     if result and result["confidence_score"] >= 80:
         assert result["action"] == "Strong Buy"
+
+
+@pytest.mark.asyncio
+async def test_best_trades_returns_at_least_3_setups(mock_service):
+    cache.clear()
+    result = await mock_service.get_best_trades_scan()
+    total = len(result["top_trades"]) + len(result["bearish_setups"])
+    assert total >= 3, f"Expected >=3 total setups, got {total}"
+
+
+@pytest.mark.asyncio
+async def test_best_trades_candle_budget_15(mock_service):
+    cache.clear()
+    result = await mock_service.get_best_trades_scan()
+    api_usage = result["data_health"].get("api_usage", {})
+    assert api_usage.get("budget_max", 0) == 15
+
+
+@pytest.mark.asyncio
+async def test_best_trades_api_usage_in_data_health(mock_service):
+    cache.clear()
+    result = await mock_service.get_best_trades_scan()
+    assert "api_usage" in result["data_health"]
+    usage = result["data_health"]["api_usage"]
+    assert "total_api_calls" in usage
+    assert "cache_hits" in usage
+    assert "budget_max" in usage
+
+
+@pytest.mark.asyncio
+async def test_best_trades_wide_discovery_more_candidates(mock_service):
+    cache.clear()
+    result = await mock_service.get_best_trades_scan()
+    assert result["scan_stats"]["candidates_total"] >= 8
+
+
+@pytest.mark.asyncio
+async def test_best_trades_no_schema_changes(mock_service):
+    cache.clear()
+    result = await mock_service.get_best_trades_scan()
+    required_keys = {"scan_type", "display_type", "market_pulse", "top_trades", "bearish_setups", "scan_stats", "data_health"}
+    assert required_keys.issubset(set(result.keys()))
+    assert result["display_type"] == "trades"
+    assert result["scan_type"] == "best_trades"

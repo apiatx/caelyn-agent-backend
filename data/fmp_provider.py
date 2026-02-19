@@ -42,6 +42,18 @@ class FMPProvider:
             print(f"FMP request failed ({endpoint}): {e}")
             return []
 
+    async def get_quote(self, symbol: str) -> dict:
+        data = await self._get(f"quote/{symbol}")
+        if data and isinstance(data, list) and len(data) > 0:
+            item = data[0]
+            return {
+                "price": item.get("price"),
+                "changesPercentage": item.get("changesPercentage"),
+                "previousClose": item.get("previousClose"),
+                "volume": item.get("volume"),
+            }
+        return {}
+
     async def get_stock_market_gainers(self) -> list:
         """Get top gaining stocks today."""
         data = await self._get("stock_market/gainers")

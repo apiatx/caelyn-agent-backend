@@ -249,3 +249,57 @@ def _validate_rows(rows):
 
     assert price_count >= min(8, len(rows)), f"Only {price_count}/{len(rows)} rows have price"
     assert chg_count >= min(8, len(rows)), f"Only {chg_count}/{len(rows)} rows have chg_pct"
+
+
+@pytest.mark.asyncio
+async def test_screener_api_usage_in_scan_stats(mock_service):
+    cache.clear()
+    result = await mock_service.run_deterministic_screener("oversold_growing")
+    stats = result["scan_stats"]
+    assert "api_usage" in stats
+    usage = stats["api_usage"]
+    assert "total_api_calls" in usage
+    assert "budget_max" in usage
+    assert "cache_hits" in usage
+
+
+@pytest.mark.asyncio
+async def test_screener_no_schema_changes(mock_service):
+    cache.clear()
+    result = await mock_service.run_deterministic_screener("value_momentum")
+    required_keys = {"display_type", "screen_name", "preset", "explain", "top_picks", "rows", "scan_stats"}
+    assert required_keys.issubset(set(result.keys()))
+    assert result["display_type"] == "screener"
+
+
+@pytest.mark.asyncio
+async def test_quotes_batch_populates_prices(mock_service):
+    cache.clear()
+
+    def mock_quote(ticker):
+        return {"price": 100.5, "change_pct": 2.3, "prev_close": 98.2}
+    mock_service.finnhub.get_quote = MagicMock(side_effect=mock_quote)
+
+    quotes = await mock_service.get_quotes_batch(["AAPL", "MSFT", "GOOG"])
+    assert len(quotes) == 3
+    for ticker in ["AAPL", "MSFT", "GOOG"]:
+        assert ticker in quotes
+        assert quotes[ticker]["price"] == 100.5
+        assert quotes[ticker]["change_pct"] == 2.3
+
+
+@pytest.mark.asyncio
+async def test_quotes_batch_fallback_on_failure(mock_service):
+    cache.clear()
+
+    def fail_quote(ticker):
+        raise Exception("Finnhub down")
+    mock_service.finnhub.get_quote = MagicMock(side_effect=fail_quote)
+
+    async def mock_fmp_quote(ticker):
+        return {"price": 99.0, "changesPercentage": 1.5, "previousClose": 97.5}
+    mock_service.fmp.get_quote = mock_fmp_quote
+
+    quotes = await mock_service.get_quotes_batch(["AAPL"])
+    assert "AAPL" in quotes
+    assert quotes["AAPL"]["price"] == 99.0

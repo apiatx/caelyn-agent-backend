@@ -48,7 +48,7 @@ class FinvizScraper:
                 )
 
             results = []
-            for row in rows[:20]:
+            for row in rows[:60]:
                 cols = row.find_all("td")
                 if len(cols) >= 10:
                     results.append(
@@ -226,7 +226,7 @@ class FinvizScraper:
 
             rows = table.find_all("tr")[1:]
             results = []
-            for row in rows[:20]:
+            for row in rows[:60]:
                 cells = row.find_all("td")
                 if len(cells) >= 8:
                     ticker_idx = header_map.get("ticker", 1)
