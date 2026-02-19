@@ -3229,26 +3229,175 @@ class MarketDataService:
 
         return output
 
-    async def _get_commodities_light(self) -> dict:
-        """Lighter commodities for cross-market — just prices and macro context."""
-        fmp_commodities = {}
+    COMMODITY_UNIVERSE = {
+        "oil":          {"proxy": "USO",  "name": "Crude Oil",        "type": "energy"},
+        "nat_gas":      {"proxy": "UNG",  "name": "Natural Gas",      "type": "energy"},
+        "gold":         {"proxy": "GLD",  "name": "Gold",             "type": "precious_metals"},
+        "silver":       {"proxy": "SLV",  "name": "Silver",           "type": "precious_metals"},
+        "platinum":     {"proxy": "PPLT", "name": "Platinum",         "type": "precious_metals"},
+        "copper":       {"proxy": "CPER", "name": "Copper",           "type": "base_metals"},
+        "base_metals":  {"proxy": "DBB",  "name": "Base Metals",      "type": "base_metals"},
+        "steel":        {"proxy": "SLX",  "name": "Steel",            "type": "base_metals",   "equity_proxy": "CLF"},
+        "aluminum":     {"proxy": "AA",   "name": "Aluminum (Alcoa)", "type": "base_metals"},
+        "uranium":      {"proxy": "URA",  "name": "Uranium",          "type": "energy"},
+        "uranium_alt":  {"proxy": "URNM", "name": "Uranium Miners",   "type": "energy"},
+        "lithium":      {"proxy": "LIT",  "name": "Lithium",          "type": "battery_metals", "equity_proxy": "ALB"},
+        "rare_earth":   {"proxy": "REMX", "name": "Rare Earth",       "type": "battery_metals", "equity_proxy": "MP"},
+        "wheat":        {"proxy": "WEAT", "name": "Wheat",            "type": "agriculture"},
+        "corn":         {"proxy": "CORN", "name": "Corn",             "type": "agriculture"},
+        "soybeans":     {"proxy": "SOYB", "name": "Soybeans",         "type": "agriculture"},
+        "agriculture":  {"proxy": "DBA",  "name": "Agriculture Basket","type": "agriculture"},
+        "carbon":       {"proxy": "KRBN", "name": "Carbon Credits",   "type": "carbon"},
+        "energy_eq":    {"proxy": "XLE",  "name": "Energy Sector",    "type": "energy"},
+        "gold_miners":  {"proxy": "GDX",  "name": "Gold Miners",      "type": "precious_metals"},
+        "jr_gold":      {"proxy": "GDXJ", "name": "Jr Gold Miners",   "type": "precious_metals"},
+        "clean_energy": {"proxy": "ICLN", "name": "Clean Energy",     "type": "energy"},
+        "timber":       {"proxy": "WOOD", "name": "Timber",            "type": "agriculture"},
+    }
+
+    COMMODITY_THEME_KEYWORDS = {
+        "oil": ["oil", "crude", "brent", "wti", "petroleum"],
+        "nat_gas": ["natural gas", "nat gas", "natgas", "lng"],
+        "gold": ["gold", "bullion", "xauusd"],
+        "silver": ["silver", "xagusd"],
+        "copper": ["copper", "hg futures"],
+        "uranium": ["uranium", "nuclear", "u3o8"],
+        "lithium": ["lithium", "battery metals", "ev metals"],
+        "rare_earth": ["rare earth", "rare earths"],
+        "wheat": ["wheat"],
+        "corn": ["corn", "maize"],
+        "soybeans": ["soybean", "soybeans", "soy"],
+        "steel": ["steel", "iron ore"],
+        "platinum": ["platinum", "palladium", "pgm"],
+        "carbon": ["carbon", "carbon credits", "emissions"],
+        "agriculture": ["agriculture", "agri", "soft commodities"],
+        "base_metals": ["base metals", "industrial metals"],
+        "energy_eq": ["energy sector", "energy stocks"],
+        "clean_energy": ["clean energy", "solar", "wind energy", "renewables"],
+    }
+
+    MAX_COMMODITY_QUOTES = 20
+
+    async def _get_commodities_light(self, grok_themes: list[str] | None = None) -> dict:
+        """
+        Commodity universe quote sampling for cross-market trending.
+        Fetches quotes for up to MAX_COMMODITY_QUOTES liquid proxies,
+        ranks by absolute % change, and selects top movers.
+        Grok themes force-include matching proxies.
+        """
+        from data.cache import cache
+
+        theme_suffix = "_".join(sorted(grok_themes)) if grok_themes else "base"
+        CACHE_KEY = f"commodity_universe_quotes:{theme_suffix}"
+        CACHE_TTL = 180
+
+        cached = cache.get(CACHE_KEY)
+        if cached is not None:
+            print(f"[COMMODITIES] Using cached universe quotes ({len(cached.get('commodity_proxies', []))} items) key={theme_suffix}")
+            return cached
+
+        grok_themes = grok_themes or []
+        force_include_themes = set()
+        for theme_key, keywords in self.COMMODITY_THEME_KEYWORDS.items():
+            for gt in grok_themes:
+                gt_lower = gt.lower()
+                if any(kw in gt_lower for kw in keywords):
+                    force_include_themes.add(theme_key)
+
+        all_proxies = []
+        seen_symbols = set()
+        for theme_key, info in self.COMMODITY_UNIVERSE.items():
+            sym = info["proxy"]
+            if sym not in seen_symbols:
+                all_proxies.append({"symbol": sym, "theme": theme_key, **info})
+                seen_symbols.add(sym)
+            eq = info.get("equity_proxy")
+            if eq and eq not in seen_symbols and len(all_proxies) < self.MAX_COMMODITY_QUOTES + 3:
+                all_proxies.append({"symbol": eq, "theme": theme_key, "name": f"{info['name']} (equity)", "type": info["type"]})
+                seen_symbols.add(eq)
+
+        quote_symbols = [p["symbol"] for p in all_proxies[:self.MAX_COMMODITY_QUOTES]]
+
+        fmp_quotes = {}
         fmp_treasuries = {}
         if self.fmp:
-            comm_result, treasury_result = await asyncio.gather(
-                self.fmp.get_full_commodity_dashboard(),
-                self.fmp.get_treasury_rates(),
-                return_exceptions=True,
-            )
-            fmp_commodities = comm_result if not isinstance(comm_result, Exception) else {}
-            fmp_treasuries = treasury_result if not isinstance(treasury_result, Exception) else {}
+            batch_size = 20
+            quote_tasks = []
+            for i in range(0, len(quote_symbols), batch_size):
+                batch = quote_symbols[i:i+batch_size]
+                quote_tasks.append(self.fmp.get_etf_quotes(batch))
+            treasury_task = self.fmp.get_treasury_rates()
+
+            results = await asyncio.gather(*quote_tasks, treasury_task, return_exceptions=True)
+            for r in results[:-1]:
+                if isinstance(r, dict):
+                    fmp_quotes.update(r)
+            fmp_treasuries = results[-1] if not isinstance(results[-1], Exception) else {}
 
         fred_macro = self.fred.get_quick_macro()
 
-        return {
-            "commodity_prices": fmp_commodities,
+        commodity_proxies = []
+        missing = []
+        for p in all_proxies[:self.MAX_COMMODITY_QUOTES]:
+            sym = p["symbol"]
+            quote = fmp_quotes.get(sym, {})
+            if not quote or not quote.get("price"):
+                missing.append(sym)
+                continue
+            commodity_proxies.append({
+                "symbol": sym,
+                "name": p.get("name", sym),
+                "theme": p.get("theme", ""),
+                "type": p.get("type", ""),
+                "price": quote.get("price"),
+                "change": quote.get("change"),
+                "change_pct": quote.get("change_pct"),
+                "volume": quote.get("volume"),
+                "avg_volume": quote.get("avg_volume"),
+                "year_high": quote.get("year_high"),
+                "year_low": quote.get("year_low"),
+                "abs_change_pct": abs(quote.get("change_pct") or 0),
+                "grok_theme_match": p.get("theme", "") in force_include_themes,
+            })
+
+        commodity_proxies.sort(key=lambda x: (x["grok_theme_match"], x["abs_change_pct"]), reverse=True)
+
+        selected = []
+        selected_themes = set()
+        for cp in commodity_proxies:
+            if cp["grok_theme_match"] and cp["theme"] not in selected_themes:
+                selected.append(cp)
+                selected_themes.add(cp["theme"])
+                if len(selected) >= 4:
+                    break
+        for cp in commodity_proxies:
+            if cp["symbol"] not in {s["symbol"] for s in selected}:
+                selected.append(cp)
+                if len(selected) >= 4:
+                    break
+
+        grok_theme_names = list(force_include_themes) if force_include_themes else []
+        print(f"[COMMODITIES] universe={len(all_proxies)} fetched={len(commodity_proxies)} selected={len(selected)} grok_themes={grok_theme_names} missing={missing[:5]}")
+
+        result = {
+            "commodity_proxies": selected,
+            "all_commodity_quotes": commodity_proxies,
+            "commodity_prices": {
+                "all_commodities": commodity_proxies,
+            },
             "treasury_rates": fmp_treasuries,
             "fred_macro": fred_macro,
+            "coverage": {
+                "universe_size": len(all_proxies),
+                "quotes_fetched": len(commodity_proxies),
+                "selected": len(selected),
+                "grok_themes": grok_theme_names,
+                "missing_symbols": missing[:5],
+            },
         }
+
+        cache.set(CACHE_KEY, result, CACHE_TTL)
+        return result
 
     async def get_crypto_scanner(self) -> dict:
         """

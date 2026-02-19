@@ -25,7 +25,7 @@ The platform is built on FastAPI, offering a robust and scalable backend.
 - **Scan Types**: Supports over 14 diverse scan types including best trades, social momentum, sector rotation, squeeze plays, thematic investing, commodities, and crypto scanning.
 - **Hybrid Trending Architecture**: Combines Grok (xAI) and Claude for trending/social momentum analysis, utilizing two-tier conviction scoring, prioritizing small/micro-caps.
 - **Cross-Market Scan**: Triggers parallel data pulling across all asset classes and uses a quantitative pre-ranker.
-- **Resilient Cross-Asset Trending Pipeline**: Parallel execution of Grok and market scan with module-level status tracking, social-first fallback, and minimum output guarantees across asset classes.
+- **Resilient Cross-Asset Trending Pipeline**: Parallel execution of Grok and market scan with module-level status tracking, social-first fallback, and minimum output guarantees across asset classes. Commodity coverage uses a 23-entry COMMODITY_UNIVERSE mapping (ETF/equity proxies across energy, metals, agriculture, battery metals, carbon) with bounded quote sampling (MAX_COMMODITY_QUOTES=20), Grok theme force-inclusion, and 3-minute caching keyed by theme suffix.
 - **Conversational AI**: Fully conversational with persistent, server-side stored conversation threads supporting multi-turn interactions and intelligent data gathering.
 - **Candle Provider Chain**: cache → TwelveData (8/min, 15min circuit breaker on auth) → Finnhub (60min circuit breaker on 403) → Polygon (budget-tracked). CandleBudget tracks per-provider usage (twelvedata_used, polygon_used). Debug endpoint: GET /api/candle_stats.
 - **Caching**: An in-memory TTL caching system optimizes API calls across all data providers.

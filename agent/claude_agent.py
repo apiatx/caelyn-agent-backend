@@ -2038,6 +2038,36 @@ class TradingAgent:
 
         return result
 
+    def _extract_grok_commodity_themes(self, grok_shortlist: dict | None) -> list[str]:
+        if not grok_shortlist or not isinstance(grok_shortlist, dict):
+            return []
+        themes = []
+        comm_section = grok_shortlist.get("commodities", [])
+        if isinstance(comm_section, list):
+            for item in comm_section:
+                if isinstance(item, dict):
+                    sym = (item.get("symbol") or item.get("name") or "").lower()
+                    receipts = item.get("receipts", [])
+                    themes.append(sym)
+                    if isinstance(receipts, list):
+                        for r in receipts:
+                            if isinstance(r, dict):
+                                themes.append((r.get("text") or "").lower())
+        raw_text = " ".join(themes)
+        found = []
+        commodity_keywords = {
+            "gold": ["gold"], "silver": ["silver"], "oil": ["oil", "crude"],
+            "copper": ["copper"], "uranium": ["uranium", "nuclear"],
+            "nat_gas": ["natural gas", "nat gas"], "lithium": ["lithium"],
+            "wheat": ["wheat"], "corn": ["corn"], "steel": ["steel"],
+            "platinum": ["platinum"], "rare_earth": ["rare earth"],
+            "carbon": ["carbon credit"],
+        }
+        for theme, keywords in commodity_keywords.items():
+            if any(kw in raw_text for kw in keywords):
+                found.append(theme)
+        return found
+
     def _count_candidates(self, data: dict, asset_class: str) -> int:
         count = 0
         if asset_class == "equities":
@@ -2061,7 +2091,9 @@ class TradingAgent:
         elif asset_class == "commodities":
             comm = data.get("commodities") or {}
             if isinstance(comm, dict) and "error" not in comm:
-                count += len(comm.get("commodities", comm.get("data", [])))
+                count += len(comm.get("commodity_proxies", comm.get("commodities", comm.get("data", []))))
+                if not count:
+                    count += len(comm.get("all_commodity_quotes", []))
             grok_comm = data.get("grok_shortlist", {}).get("commodities", [])
             count += len(grok_comm)
         return count
@@ -2097,16 +2129,17 @@ class TradingAgent:
             tasks.append(broaden_crypto())
 
         if "commodities" in needs:
+            grok_themes = self._extract_grok_commodity_themes(data.get("grok_shortlist"))
             async def broaden_comm():
                 try:
                     result = await asyncio.wait_for(
-                        self.data.get_commodities_dashboard(),
+                        self.data._get_commodities_light(grok_themes=grok_themes),
                         timeout=15.0,
                     )
-                    return ("broadened_commodities", result)
+                    return ("commodities", result)
                 except Exception as e:
                     print(f"[CROSS_ASSET_TRENDING] Commodity broadening failed: {e}")
-                    return ("broadened_commodities", None)
+                    return ("commodities", None)
             tasks.append(broaden_comm())
 
         if tasks:
