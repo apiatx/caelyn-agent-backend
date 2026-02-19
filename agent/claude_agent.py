@@ -477,6 +477,7 @@ class TradingAgent:
             "sector_rotation", "asymmetric", "bearish", "thematic",
             "small_cap_spec", "briefing", "crypto", "cross_market",
             "commodities", "dashboard", "cross_asset_trending", "best_trades",
+            "custom_screen",
         }
         if market_data and isinstance(market_data, dict) and category in SCORING_CATEGORIES:
             try:
@@ -1277,7 +1278,7 @@ class TradingAgent:
         "investment_ideas": "investments",
         "briefing": "briefing",
         "x_social_scan": "social_momentum",
-        "custom_screen": "ai_screener",
+        "custom_screen": "custom_screen",
         "short_setup": "bearish",
         "best_trades": "best_trades",
         "deterministic_screener": "deterministic_screener",
@@ -1889,6 +1890,9 @@ class TradingAgent:
         elif category == "cross_market":
             return await self.data.get_cross_market_scan()
 
+        elif category == "custom_screen":
+            return await self._gather_custom_screen_data(query_info)
+
         elif category == "ai_screener":
             try:
                 original_prompt = query_info.get("original_prompt", "")
@@ -1934,6 +1938,80 @@ class TradingAgent:
 
         else:
             return {}
+
+    async def _gather_custom_screen_data(self, query_info: dict) -> dict:
+        plan = query_info.get("orchestration_plan", {})
+        filters = plan.get("filters", {})
+        screen_desc = filters.get("screen_description", query_info.get("original_prompt", ""))
+        fund_criteria = filters.get("fundamental_criteria", [])
+        tech_criteria = filters.get("technical_criteria", [])
+
+        finviz_parts = ["sh_avgvol_o300", "sh_price_o5"]
+
+        desc_lower = (screen_desc + " " + " ".join(fund_criteria)).lower()
+
+        if any(w in desc_lower for w in ["revenue growth", "sales growth", "increasing revenue", "improving revenue", "accelerating revenue", "biggest increase"]):
+            finviz_parts.append("fa_salesqoq_o10")
+        if any(w in desc_lower for w in ["earnings growth", "eps growth", "improving earnings", "increasing eps"]):
+            finviz_parts.append("fa_epsqoq_o10")
+        if any(w in desc_lower for w in ["high growth", "fast growing", "fastest growing"]):
+            finviz_parts.append("fa_salesqoq_o20")
+        if any(w in desc_lower for w in ["profitable", "positive earnings", "positive margin"]):
+            finviz_parts.append("fa_opermargin_pos")
+        if any(w in desc_lower for w in ["undervalued", "low pe", "value"]):
+            finviz_parts.append("fa_pe_u30")
+        if any(w in desc_lower for w in ["small cap", "micro cap"]):
+            finviz_parts.append("cap_smallover")
+        if any(w in desc_lower for w in ["large cap", "mega cap", "blue chip"]):
+            finviz_parts.append("cap_largeover")
+
+        tech_lower = (screen_desc + " " + " ".join(tech_criteria)).lower()
+
+        if any(w in tech_lower for w in ["breakout", "new high", "52 week high", "price move", "imminent move"]):
+            finviz_parts.append("ta_highlow52w_nh")
+        elif any(w in tech_lower for w in ["above sma50", "uptrend", "momentum"]):
+            finviz_parts.append("ta_sma50_pa")
+        elif any(w in tech_lower for w in ["above sma200", "long term uptrend"]):
+            finviz_parts.append("ta_sma200_pa")
+
+        if any(w in tech_lower for w in ["oversold", "rsi low", "rsi below"]):
+            finviz_parts.append("ta_rsi_ob30")
+        if any(w in tech_lower for w in ["volume", "volume spike", "unusual volume"]):
+            finviz_parts.append("sh_relvol_o1.5")
+        if any(w in tech_lower for w in ["technical indicator", "flashing", "signal", "imminent"]):
+            if "ta_sma50_pa" not in finviz_parts and "ta_highlow52w_nh" not in finviz_parts:
+                finviz_parts.append("ta_sma50_pa")
+
+        if len(finviz_parts) <= 2:
+            finviz_parts.extend(["fa_salesqoq_o10", "ta_sma50_pa"])
+
+        finviz_filter_str = ",".join(finviz_parts)
+        print(f"[CUSTOM_SCREEN] Translated: '{screen_desc[:80]}' → Finviz: {finviz_filter_str}")
+        print(f"[CUSTOM_SCREEN] Fund criteria: {fund_criteria}")
+        print(f"[CUSTOM_SCREEN] Tech criteria: {tech_criteria}")
+
+        original_filters = self.data.CATEGORY_FILTERS.get("custom_screen")
+        self.data.CATEGORY_FILTERS["custom_screen"] = {
+            "filters": finviz_filter_str,
+            "limit": 40,
+            "enrich_top": 12,
+            "fallback_filters": [
+                finviz_filter_str.replace("fa_salesqoq_o20", "fa_salesqoq_o10") if "fa_salesqoq_o20" in finviz_filter_str else finviz_filter_str.replace("ta_highlow52w_nh", "ta_sma50_pa"),
+            ],
+        }
+
+        try:
+            result = await self.data.wide_scan_and_rank("custom_screen", filters)
+            result["screen_description"] = screen_desc
+            result["fundamental_criteria"] = fund_criteria
+            result["technical_criteria"] = tech_criteria
+            result["finviz_filters_used"] = finviz_filter_str
+            return result
+        finally:
+            if original_filters:
+                self.data.CATEGORY_FILTERS["custom_screen"] = original_filters
+            else:
+                self.data.CATEGORY_FILTERS.pop("custom_screen", None)
 
     async def _gather_cross_asset_trending_data(self, query_info: dict) -> dict:
         from data.cache import cache, XAI_CROSS_ASSET_TTL

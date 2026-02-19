@@ -56,6 +56,7 @@ PRESET_BUDGETS = {
     "fundamentals_scan": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
     "small_cap_spec": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
     "squeeze": {"max_points": 50, "max_seconds": 10, "allow_deep_dive": True},
+    "custom_screen": {"max_points": 70, "max_seconds": 16, "allow_deep_dive": True},
 }
 
 
@@ -1097,6 +1098,53 @@ class MarketDataService:
                 base_data["news_warning"] = sent_data["news_warning"]
             if not isinstance(deep_data, Exception) and isinstance(deep_data, dict) and "error" not in deep_data:
                 base_data.update(deep_data)
+
+                overview = deep_data.get("overview", {})
+                if isinstance(overview, dict):
+                    field_mapping = {
+                        "revenue": "revenue_latest_q",
+                        "revenue_quarterly": "revenue_latest_q",
+                        "revenueGrowthYoY": "revenue_yoy",
+                        "revenue_growth_yoy": "revenue_yoy",
+                        "revenueGrowth": "revenue_yoy",
+                        "ebitda": "ebitda",
+                        "ebitdaMargin": "ebitda_margin",
+                        "ebitda_margin": "ebitda_margin",
+                        "netIncome": "net_income",
+                        "net_income": "net_income",
+                        "epsSurprise": "eps_surprise",
+                        "eps_surprise": "eps_surprise",
+                        "freeCashFlow": "fcf",
+                        "free_cash_flow": "fcf",
+                        "fcf": "fcf",
+                        "peRatio": "pe_ratio",
+                        "pe_ratio": "pe_ratio",
+                        "forwardPE": "pe_ratio",
+                        "psRatio": "ps_ratio",
+                        "ps_ratio": "ps_ratio",
+                        "priceToSales": "ps_ratio",
+                        "evToEbitda": "ev_ebitda",
+                        "ev_ebitda": "ev_ebitda",
+                        "enterpriseToEbitda": "ev_ebitda",
+                        "analystTarget": "analyst_target",
+                        "analyst_target": "analyst_target",
+                        "priceTarget": "analyst_target",
+                        "price_target": "analyst_target",
+                        "targetPrice": "analyst_target",
+                    }
+                    for source_key, target_key in field_mapping.items():
+                        if source_key in overview and overview[source_key] is not None:
+                            if target_key not in base_data or base_data[target_key] is None:
+                                base_data[target_key] = overview[source_key]
+
+                    for key in ["market_cap", "sector", "industry", "pe_ratio", "ps_ratio",
+                                "revenue_growth", "eps_growth", "profit_margin", "beta",
+                                "52_week_high", "52_week_low", "avg_volume", "shares_outstanding",
+                                "dividend_yield", "analyst_rating", "price_target", "analyst_count"]:
+                        if key in overview and overview[key] is not None:
+                            if key not in base_data or base_data[key] is None:
+                                base_data[key] = overview[key]
+
             if ticker in x_batch and "error" not in x_batch.get(ticker, {}):
                 base_data["x_sentiment"] = x_batch[ticker]
             base_data["quant_score"] = top_scores.get(ticker, 0)
@@ -1120,7 +1168,7 @@ class MarketDataService:
 
         print(f"[Wide Scan] Complete: {len(enriched_candidates)} candidates ({len(flagged)} flagged) ({time.time()-scan_start:.1f}s) Budget: {budget.status()}")
 
-        if category in ("investments", "fundamentals_scan", "asymmetric"):
+        if category in ("investments", "fundamentals_scan", "asymmetric", "custom_screen"):
             print(f"[Wide Scan] Starting quote+TA phase for {category} (main budget: {budget.status()})")
 
             quote_tickers = list(enriched_candidates.keys())[:12]

@@ -552,7 +552,7 @@ INTENTS — choose the one that best matches the user's SEMANTIC intent:
 - "thematic": Specific sector/theme deep scan — AI/compute, uranium, energy, defense, quantum, biotech.
 - "investment_ideas": Long-term investment ideas, multibaggers, SQGLP, improving fundamentals.
 - "briefing": Daily/morning briefing, "what should I know today", market overview snapshot.
-- "custom_screen": User specifies quantitative filters — "find stocks with revenue >30% and RSI <40". Specific screening criteria.
+- "custom_screen": User specifies quantitative screening criteria — "find stocks with revenue >30% and RSI <40", "stocks with improving fundamentals and breakout signals", "best growth stocks with momentum". When the user describes WHAT KIND of stocks they want using fundamental AND/OR technical criteria, use this intent. Include a "screen_description" field in filters that describes what the user wants in plain English.
 - "short_setup": Short squeeze, bearish plays, breakdowns, stocks to avoid, puts.
 - "chat": Conversational/opinion question that does NOT need a full data scan. "What do you think about X?" "Should I take profits?"
 
@@ -593,6 +593,9 @@ FILTERS — extract any user-specified filters:
 - sector: technology, healthcare, energy, financials, etc.
 - style: "day_trade", "swing", "position"
 - theme: "ai_compute", "energy", "uranium", "metals", "defense", "quantum", "biotech"
+- screen_description: Plain English description of what the user wants (for custom_screen intent only). Example: "stocks with accelerating revenue growth that are also showing technical breakout signals"
+- fundamental_criteria: Array of fundamental requirements. Example: ["revenue_growth_yoy > 20%", "eps_growth > 15%", "positive_earnings"]
+- technical_criteria: Array of technical requirements. Example: ["rsi_below_70", "above_sma50", "volume_expansion", "macd_bullish"]
 
 TICKERS — extract any specific tickers mentioned. Return empty array if none.
 
