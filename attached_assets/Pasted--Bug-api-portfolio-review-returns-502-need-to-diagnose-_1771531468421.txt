@@ -1,0 +1,69 @@
+## Bug: /api/portfolio/review returns 502 — need to diagnose from server logs
+
+The "AI Portfolio Review" button still returns Status 502 after the endpoint rewrite.
+
+### Step 1: Check the server logs
+
+Look at the server logs for the most recent request to /api/portfolio/review. Find:
+1. Does the `[PORTFOLIO_REVIEW] === ENDPOINT HIT ===` line appear? If not, the request never reaches the handler — it's a proxy/timeout issue.
+2. If it does appear, what's the last log line before the 502? This tells us where it crashes.
+3. Is there a Python traceback? Copy the full traceback.
+4. Does `[PORTFOLIO_REVIEW] Data gathered` appear? If not, the parallel fetch is crashing.
+5. Does `[PORTFOLIO_REVIEW] Sending X chars to Claude` appear? If not, the data assembly is crashing.
+6. Does `[PORTFOLIO_REVIEW] Claude responded` appear? If not, the Claude API call is failing or timing out.
+
+### Step 2: Common 502 causes and fixes
+
+**Cause A: Import error** — The rewritten endpoint may reference a function or module that doesn't exist or has a different import path. Check that ALL imports work:
+- `from data.ta_utils import compute_technicals_from_bars` — does this function exist? Check the actual function name in ta_utils.py.
+- `agent.data.finnhub.get_quote` — does this method exist on the finnhub provider?
+- `agent.data.get_candles` — does this accept `days=120` as a parameter? Check the actual signature.
+- `agent.data._build_macro_snapshot` — does this method exist? Check if it's a public or private method, and the exact name.
+- `agent.data.xai.get_batch_sentiment` — does this exist?
+- `agent.data.stockanalysis.get_analyst_ratings` — does this method exist?
+- `from agent.data_compressor import compress_data` — is this the correct import path? Or is it `from data_compressor import compress_data`? Check the actual module location.
+- `from agent.prompts import SYSTEM_PROMPT` — is it `agent.prompts` or just `prompts`?
+
+**Cause B: Timeout** — Replit has a response timeout (often 30-60 seconds). If the total time exceeds this, Replit returns 502 before the endpoint can respond. Fix: Add an overall timeout wrapper around the entire handler, and if approaching the limit, return a partial response instead of letting it 502.
+
+**Cause C: Memory/serialization error** — The compress_data or json.dumps call may fail on certain data types. Wrap in try/except.
+
+### Step 3: Add defensive wrapper
+
+Wrap the ENTIRE handler body in a master try/except that catches absolutely everything and returns a proper error response instead of letting the server 502:
+
+At the very start of the handler, after the API key check:
+```python
+    try:
+        # ... entire handler body ...
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[PORTFOLIO_REVIEW] FATAL ERROR: {e}")
+        return JSONResponse(
+            status_code=200,  # Return 200 with error message, not 502
+            content={
+                "type": "chat",
+                "analysis": "",
+                "structured": {
+                    "display_type": "chat",
+                    "message": f"Portfolio review encountered an error: {str(e)}. Check server logs for details.",
+                },
+            }
+        )
+```
+
+This ensures the endpoint NEVER returns 502 — it always returns a 200 with either the analysis or an error message.
+
+### Step 4: Fix whatever the logs reveal
+
+Once you identify the actual error from the logs/traceback:
+- If it's an import path issue, fix the import
+- If it's a missing method, find the correct method name
+- If it's a timeout, reduce the individual timeouts (e.g., candles from 8s to 5s, overall Claude from 60s to 45s)
+- If it's a serialization error, add default=str to all json.dumps calls
+
+### Testing
+1. Click "AI Portfolio Review" — should NOT return 502 under any circumstances
+2. If data gathering partially fails, should still return a response with whatever data was available
+3. Check logs for the full pipeline executing: ENDPOINT HIT → Data gathered → Claude responded

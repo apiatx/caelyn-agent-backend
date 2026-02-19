@@ -1655,6 +1655,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
     """AI Portfolio Review — comprehensive analysis with Buy/Hold/Sell verdicts."""
     import asyncio
     import time as _time
+    from fastapi.responses import JSONResponse
 
     if not api_key or api_key != AGENT_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
@@ -1662,6 +1663,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
     await _wait_for_init()
     body = await request.json()
     start = _time.time()
+    DEADLINE = 55.0
 
     print(f"[PORTFOLIO_REVIEW] === ENDPOINT HIT ===")
     holdings = body.get("holdings", [])
@@ -1677,67 +1679,83 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             },
         }
 
-    tickers = [h.get("ticker", "").upper().strip() for h in holdings if h.get("ticker")]
-
-    holdings_context = []
-    for h in holdings:
-        ticker = h.get("ticker", "").upper().strip()
-        shares = float(h.get("shares", 0) or 0)
-        avg_cost = float(h.get("avg_cost", 0) or h.get("avgCost", 0) or 0)
-        asset_type = h.get("type", h.get("asset_type", "stock")).lower()
-        holdings_context.append({
-            "ticker": ticker,
-            "shares": shares,
-            "avg_cost": avg_cost,
-            "cost_basis": round(shares * avg_cost, 2),
-            "asset_type": asset_type,
+    def _err_response(msg):
+        return JSONResponse(status_code=200, content={
+            "type": "chat", "analysis": "",
+            "structured": {"display_type": "chat", "message": msg},
         })
 
-    async def fetch_ticker_data(ticker, asset_type="stock"):
-        result = {"ticker": ticker, "asset_type": asset_type}
+    try:
+        tickers = [h.get("ticker", "").upper().strip() for h in holdings if h.get("ticker")]
 
-        tasks = {}
+        holdings_context = []
+        for h in holdings:
+            ticker = h.get("ticker", "").upper().strip()
+            shares = float(h.get("shares", 0) or 0)
+            avg_cost = float(h.get("avg_cost", 0) or h.get("avgCost", 0) or 0)
+            asset_type = h.get("type", h.get("asset_type", "stock")).lower()
+            holdings_context.append({
+                "ticker": ticker,
+                "shares": shares,
+                "avg_cost": avg_cost,
+                "cost_basis": round(shares * avg_cost, 2),
+                "asset_type": asset_type,
+            })
 
-        tasks["overview"] = asyncio.wait_for(
-            agent.data.stockanalysis.get_overview(ticker),
-            timeout=6.0,
-        )
+        async def fetch_ticker_data(ticker, asset_type="stock"):
+            result = {"ticker": ticker, "asset_type": asset_type}
+            tasks = {}
 
-        tasks["quote"] = asyncio.wait_for(
-            asyncio.to_thread(agent.data.finnhub.get_quote, ticker),
-            timeout=5.0,
-        )
+            try:
+                tasks["overview"] = asyncio.wait_for(
+                    agent.data.stockanalysis.get_overview(ticker), timeout=5.0)
+            except Exception:
+                pass
 
-        tasks["sentiment"] = asyncio.wait_for(
-            agent.data.stocktwits.get_sentiment(ticker),
-            timeout=5.0,
-        )
+            try:
+                tasks["quote"] = asyncio.wait_for(
+                    asyncio.to_thread(agent.data.finnhub.get_quote, ticker), timeout=4.0)
+            except Exception:
+                pass
 
-        tasks["candles"] = asyncio.wait_for(
-            agent.data.get_candles(ticker, days=120),
-            timeout=8.0,
-        )
+            try:
+                tasks["sentiment"] = asyncio.wait_for(
+                    agent.data.stocktwits.get_sentiment(ticker), timeout=4.0)
+            except Exception:
+                pass
 
-        tasks["analyst"] = asyncio.wait_for(
-            agent.data.stockanalysis.get_analyst_ratings(ticker),
-            timeout=5.0,
-        )
+            try:
+                tasks["candles"] = asyncio.wait_for(
+                    agent.data.get_candles(ticker, days=120), timeout=6.0)
+            except Exception:
+                pass
 
-        if agent.data.fmp:
-            tasks["news"] = asyncio.wait_for(
-                agent.data.fmp.get_stock_news(ticker, limit=3),
-                timeout=5.0,
-            )
+            try:
+                tasks["analyst"] = asyncio.wait_for(
+                    agent.data.stockanalysis.get_analyst_ratings(ticker), timeout=4.0)
+            except Exception:
+                pass
 
-        task_keys = list(tasks.keys())
-        task_coros = list(tasks.values())
-        results = await asyncio.gather(*task_coros, return_exceptions=True)
+            try:
+                if agent.data.fmp:
+                    tasks["news"] = asyncio.wait_for(
+                        agent.data.fmp.get_stock_news(ticker, limit=3), timeout=4.0)
+            except Exception:
+                pass
 
-        for key, res in zip(task_keys, results):
-            if isinstance(res, Exception):
-                print(f"[PORTFOLIO_REVIEW] {ticker}/{key} failed: {res}")
-                continue
-            if res:
+            if not tasks:
+                return result
+
+            task_keys = list(tasks.keys())
+            task_coros = list(tasks.values())
+            results = await asyncio.gather(*task_coros, return_exceptions=True)
+
+            for key, res in zip(task_keys, results):
+                if isinstance(res, Exception):
+                    print(f"[PORTFOLIO_REVIEW] {ticker}/{key} failed: {type(res).__name__}: {res}")
+                    continue
+                if not res:
+                    continue
                 if key == "overview":
                     result["overview"] = res
                 elif key == "quote":
@@ -1748,157 +1766,189 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
                     result["social_sentiment"] = res
                 elif key == "candles":
                     if isinstance(res, list) and len(res) >= 20:
-                        from data.ta_utils import compute_technicals_from_bars
-                        result["technicals"] = compute_technicals_from_bars(res)
+                        try:
+                            from data.ta_utils import compute_technicals_from_bars
+                            result["technicals"] = compute_technicals_from_bars(res)
+                        except Exception as ta_err:
+                            print(f"[PORTFOLIO_REVIEW] {ticker}/ta compute failed: {ta_err}")
                         result["current_price"] = result.get("current_price") or res[-1].get("c")
                 elif key == "analyst":
                     result["analyst_ratings"] = res
                 elif key == "news":
                     result["recent_news"] = res[:3] if isinstance(res, list) else res
 
-        return result
+            return result
 
-    ticker_tasks = [fetch_ticker_data(t) for t in tickers[:15]]
-    ticker_results = await asyncio.gather(*ticker_tasks, return_exceptions=True)
+        print(f"[PORTFOLIO_REVIEW] Starting parallel fetch for {len(tickers)} tickers + macro...")
 
-    ticker_data = {}
-    for res in ticker_results:
-        if isinstance(res, Exception):
-            print(f"[PORTFOLIO_REVIEW] Ticker fetch exception: {res}")
-            continue
-        if isinstance(res, dict) and res.get("ticker"):
-            ticker_data[res["ticker"]] = res
+        async def _fetch_all_tickers():
+            ticker_tasks = [fetch_ticker_data(t) for t in tickers[:15]]
+            return await asyncio.gather(*ticker_tasks, return_exceptions=True)
 
-    print(f"[PORTFOLIO_REVIEW] Data gathered for {len(ticker_data)}/{len(tickers)} tickers ({_time.time()-start:.1f}s)")
+        async def _fetch_macro():
+            try:
+                return await asyncio.wait_for(agent.data._build_macro_snapshot(), timeout=6.0)
+            except Exception as e:
+                print(f"[PORTFOLIO_REVIEW] Macro snapshot failed: {e}")
+                return {}
 
-    grok_sentiment = {}
-    if agent.data.xai and tickers:
-        try:
-            grok_sentiment = await asyncio.wait_for(
-                agent.data.xai.get_batch_sentiment(tickers[:5]),
-                timeout=20.0,
-            )
-            print(f"[PORTFOLIO_REVIEW] Grok sentiment: {len(grok_sentiment)} tickers")
-        except Exception as e:
-            print(f"[PORTFOLIO_REVIEW] Grok sentiment failed: {e}")
+        async def _fetch_grok():
+            if not agent.data.xai or not tickers:
+                return {}
+            try:
+                return await asyncio.wait_for(
+                    agent.data.xai.get_batch_sentiment(tickers[:3]), timeout=10.0)
+            except Exception as e:
+                print(f"[PORTFOLIO_REVIEW] Grok sentiment failed: {e}")
+                return {}
 
-    for ticker, grok_data in grok_sentiment.items():
-        if ticker in ticker_data and "error" not in grok_data:
-            ticker_data[ticker]["x_sentiment"] = grok_data
-
-    macro_snapshot = {}
-    try:
-        macro_snapshot = await asyncio.wait_for(
-            agent.data._build_macro_snapshot(),
-            timeout=8.0,
+        all_results = await asyncio.gather(
+            _fetch_all_tickers(), _fetch_macro(), _fetch_grok(),
+            return_exceptions=True,
         )
-    except Exception as e:
-        print(f"[PORTFOLIO_REVIEW] Macro snapshot failed: {e}")
 
-    total_cost_basis = sum(h["cost_basis"] for h in holdings_context)
+        ticker_results = all_results[0] if not isinstance(all_results[0], Exception) else []
+        macro_snapshot = all_results[1] if not isinstance(all_results[1], Exception) else {}
+        grok_sentiment = all_results[2] if not isinstance(all_results[2], Exception) else {}
 
-    portfolio_summary = {
-        "total_holdings": len(holdings_context),
-        "total_cost_basis": total_cost_basis,
-        "holdings": [],
-    }
+        if isinstance(ticker_results, Exception):
+            print(f"[PORTFOLIO_REVIEW] Ticker fetch FATAL: {ticker_results}")
+            ticker_results = []
 
-    for h in holdings_context:
-        ticker = h["ticker"]
-        td = ticker_data.get(ticker, {})
-        current_price = td.get("current_price")
+        ticker_data = {}
+        for res in ticker_results:
+            if isinstance(res, Exception):
+                print(f"[PORTFOLIO_REVIEW] Ticker fetch exception: {res}")
+                continue
+            if isinstance(res, dict) and res.get("ticker"):
+                ticker_data[res["ticker"]] = res
 
-        position = {
-            "ticker": ticker,
-            "shares": h["shares"],
-            "avg_cost": h["avg_cost"],
-            "cost_basis": h["cost_basis"],
-            "weight_pct": round(h["cost_basis"] / total_cost_basis * 100, 1) if total_cost_basis else 0,
+        elapsed = _time.time() - start
+        print(f"[PORTFOLIO_REVIEW] Data gathered for {len(ticker_data)}/{len(tickers)} tickers ({elapsed:.1f}s)")
+
+        if isinstance(grok_sentiment, dict):
+            for ticker, grok_data in grok_sentiment.items():
+                if ticker in ticker_data and isinstance(grok_data, dict) and "error" not in grok_data:
+                    ticker_data[ticker]["x_sentiment"] = grok_data
+            if grok_sentiment:
+                print(f"[PORTFOLIO_REVIEW] Grok sentiment merged: {len(grok_sentiment)} tickers")
+
+        total_cost_basis = sum(h["cost_basis"] for h in holdings_context)
+
+        portfolio_summary = {
+            "total_holdings": len(holdings_context),
+            "total_cost_basis": total_cost_basis,
+            "holdings": [],
         }
 
-        if current_price:
-            position["current_price"] = current_price
-            position["market_value"] = round(h["shares"] * current_price, 2)
-            position["unrealized_pnl"] = round((current_price - h["avg_cost"]) * h["shares"], 2)
-            position["unrealized_pnl_pct"] = round((current_price - h["avg_cost"]) / h["avg_cost"] * 100, 1) if h["avg_cost"] else 0
-            position["change_today_pct"] = td.get("change_pct")
+        for h in holdings_context:
+            ticker = h["ticker"]
+            td = ticker_data.get(ticker, {})
+            current_price = td.get("current_price")
 
-        overview = td.get("overview", {})
-        if isinstance(overview, dict):
-            for key in ["pe_ratio", "ps_ratio", "market_cap", "revenue_growth", "eps_growth",
-                        "profit_margin", "sector", "industry", "beta", "52_week_high", "52_week_low",
-                        "dividend_yield", "analyst_rating", "price_target"]:
-                val = overview.get(key)
-                if val is not None:
-                    position[key] = val
-
-        technicals = td.get("technicals", {})
-        if technicals:
-            position["ta"] = {
-                "rsi": technicals.get("rsi") or technicals.get("rsi_14"),
-                "sma_20": technicals.get("sma_20"),
-                "sma_50": technicals.get("sma_50"),
-                "sma_200": technicals.get("sma_200"),
-                "macd_signal": technicals.get("macd_signal"),
+            position = {
+                "ticker": ticker,
+                "shares": h["shares"],
+                "avg_cost": h["avg_cost"],
+                "cost_basis": h["cost_basis"],
+                "weight_pct": round(h["cost_basis"] / total_cost_basis * 100, 1) if total_cost_basis else 0,
             }
 
-        social = td.get("social_sentiment", {})
-        if social and isinstance(social, dict):
-            position["sentiment"] = social.get("sentiment", "unknown")
-            position["sentiment_score"] = social.get("bullish_pct")
+            if current_price:
+                position["current_price"] = current_price
+                position["market_value"] = round(h["shares"] * current_price, 2)
+                position["unrealized_pnl"] = round((current_price - h["avg_cost"]) * h["shares"], 2)
+                position["unrealized_pnl_pct"] = round((current_price - h["avg_cost"]) / h["avg_cost"] * 100, 1) if h["avg_cost"] else 0
+                position["change_today_pct"] = td.get("change_pct")
 
-        x_sent = td.get("x_sentiment", {})
-        if x_sent and isinstance(x_sent, dict):
-            position["x_sentiment"] = x_sent.get("overall_sentiment")
-            position["x_summary"] = x_sent.get("summary")
+            overview = td.get("overview", {})
+            if isinstance(overview, dict):
+                for key in ["pe_ratio", "ps_ratio", "market_cap", "revenue_growth", "eps_growth",
+                            "profit_margin", "sector", "industry", "beta", "52_week_high", "52_week_low",
+                            "dividend_yield", "analyst_rating", "price_target"]:
+                    val = overview.get(key)
+                    if val is not None:
+                        position[key] = val
 
-        analyst = td.get("analyst_ratings", {})
-        if analyst and isinstance(analyst, dict):
-            position["analyst_consensus"] = analyst.get("consensus") or analyst.get("rating")
-            position["analyst_target"] = analyst.get("price_target") or analyst.get("target_price")
+            technicals = td.get("technicals", {})
+            if technicals:
+                position["ta"] = {
+                    "rsi": technicals.get("rsi") or technicals.get("rsi_14"),
+                    "sma_20": technicals.get("sma_20"),
+                    "sma_50": technicals.get("sma_50"),
+                    "sma_200": technicals.get("sma_200"),
+                    "macd_signal": technicals.get("macd_signal"),
+                }
 
-        news = td.get("recent_news", [])
-        if news and isinstance(news, list):
-            position["news_headlines"] = [
-                n.get("title", n.get("headline", "")) for n in news[:3] if isinstance(n, dict)
-            ]
+            social = td.get("social_sentiment", {})
+            if social and isinstance(social, dict):
+                position["sentiment"] = social.get("sentiment", "unknown")
+                position["sentiment_score"] = social.get("bullish_pct")
 
-        portfolio_summary["holdings"].append(position)
+            x_sent = td.get("x_sentiment", {})
+            if x_sent and isinstance(x_sent, dict):
+                position["x_sentiment"] = x_sent.get("overall_sentiment")
+                position["x_summary"] = x_sent.get("summary")
 
-    total_market_value = sum(
-        p.get("market_value", p.get("cost_basis", 0))
-        for p in portfolio_summary["holdings"]
-    )
-    portfolio_summary["total_market_value"] = total_market_value
-    portfolio_summary["total_unrealized_pnl"] = round(total_market_value - total_cost_basis, 2)
-    portfolio_summary["total_return_pct"] = round(
-        (total_market_value - total_cost_basis) / total_cost_basis * 100, 1
-    ) if total_cost_basis else 0
+            analyst = td.get("analyst_ratings", {})
+            if analyst and isinstance(analyst, dict):
+                position["analyst_consensus"] = analyst.get("consensus") or analyst.get("rating")
+                position["analyst_target"] = analyst.get("price_target") or analyst.get("target_price")
 
-    weights = [p.get("weight_pct", 0) for p in portfolio_summary["holdings"]]
-    portfolio_summary["max_weight"] = max(weights) if weights else 0
-    portfolio_summary["hhi"] = round(sum(w**2 for w in weights), 1)
+            news = td.get("recent_news", [])
+            if news and isinstance(news, list):
+                position["news_headlines"] = [
+                    n.get("title", n.get("headline", "")) for n in news[:3] if isinstance(n, dict)
+                ]
 
-    if macro_snapshot:
-        portfolio_summary["macro_context"] = {
-            "fear_greed": macro_snapshot.get("fear_greed"),
-            "vix": macro_snapshot.get("vix"),
-            "treasury_10y": macro_snapshot.get("treasury_rates", {}).get("10y"),
-            "regime": macro_snapshot.get("regime"),
-        }
+            portfolio_summary["holdings"].append(position)
 
-    print(f"[PORTFOLIO_REVIEW] Portfolio context built ({_time.time()-start:.1f}s)")
+        total_market_value = sum(
+            p.get("market_value", p.get("cost_basis", 0))
+            for p in portfolio_summary["holdings"]
+        )
+        portfolio_summary["total_market_value"] = total_market_value
+        portfolio_summary["total_unrealized_pnl"] = round(total_market_value - total_cost_basis, 2)
+        portfolio_summary["total_return_pct"] = round(
+            (total_market_value - total_cost_basis) / total_cost_basis * 100, 1
+        ) if total_cost_basis else 0
 
-    from agent.data_compressor import compress_data
-    compressed = compress_data(portfolio_summary)
-    data_str = _json.dumps(compressed, default=str)
+        weights = [p.get("weight_pct", 0) for p in portfolio_summary["holdings"]]
+        portfolio_summary["max_weight"] = max(weights) if weights else 0
+        portfolio_summary["hhi"] = round(sum(w**2 for w in weights), 1)
 
-    print(f"[PORTFOLIO_REVIEW] Sending {len(data_str):,} chars to Claude")
+        if isinstance(macro_snapshot, dict) and macro_snapshot:
+            portfolio_summary["macro_context"] = {
+                "fear_greed": macro_snapshot.get("fear_greed"),
+                "vix": macro_snapshot.get("vix"),
+                "treasury_10y": macro_snapshot.get("treasury_rates", {}).get("10y") if isinstance(macro_snapshot.get("treasury_rates"), dict) else None,
+                "regime": macro_snapshot.get("regime"),
+            }
 
-    from agent.prompts import SYSTEM_PROMPT
-    messages = [{
-        "role": "user",
-        "content": f"""[PORTFOLIO REVIEW REQUEST]
+        elapsed = _time.time() - start
+        print(f"[PORTFOLIO_REVIEW] Portfolio context built ({elapsed:.1f}s)")
+
+        from agent.data_compressor import compress_data
+        try:
+            compressed = compress_data(portfolio_summary)
+        except Exception:
+            compressed = portfolio_summary
+        data_str = _json.dumps(compressed, default=str)
+
+        print(f"[PORTFOLIO_REVIEW] Sending {len(data_str):,} chars to Claude")
+
+        time_remaining = DEADLINE - (_time.time() - start)
+        claude_timeout = max(15.0, min(45.0, time_remaining - 2.0))
+        print(f"[PORTFOLIO_REVIEW] Claude timeout: {claude_timeout:.0f}s (elapsed: {_time.time()-start:.1f}s)")
+
+        if claude_timeout < 10:
+            print(f"[PORTFOLIO_REVIEW] Not enough time for Claude, returning data summary")
+            return _err_response("Portfolio review ran out of time gathering data. Please try again — cached data should make it faster on retry.")
+
+        from agent.prompts import SYSTEM_PROMPT
+        messages = [{
+            "role": "user",
+            "content": f"""[PORTFOLIO REVIEW REQUEST]
 
 {data_str}
 
@@ -1925,66 +1975,58 @@ Then provide OVERALL PORTFOLIO ASSESSMENT:
 Be my portfolio advisor. No generic disclaimers in the body. One brief disclaimer at the very bottom.
 
 IMPORTANT: Respond with display_type "chat" and put your full analysis in the "message" field as formatted text.""",
-    }]
-
-    try:
-        response = await asyncio.wait_for(
-            asyncio.to_thread(
-                agent.client.messages.create,
-                model="claude-sonnet-4-20250514",
-                max_tokens=4096,
-                system=SYSTEM_PROMPT,
-                messages=messages,
-            ),
-            timeout=60.0,
-        )
-
-        response_text = response.content[0].text.strip()
-        print(f"[PORTFOLIO_REVIEW] Claude responded: {len(response_text)} chars ({_time.time()-start:.1f}s total)")
+        }]
 
         try:
-            if response_text.startswith("```"):
-                response_text = response_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            parsed = _json.loads(response_text)
-            if "structured" in parsed:
-                return parsed
-            return {
-                "type": "chat",
-                "analysis": parsed.get("message", response_text),
-                "structured": parsed,
-            }
-        except _json.JSONDecodeError:
-            return {
-                "type": "chat",
-                "analysis": response_text,
-                "structured": {
-                    "display_type": "chat",
-                    "message": response_text,
-                },
-            }
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    agent.client.messages.create,
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=4096,
+                    system=SYSTEM_PROMPT,
+                    messages=messages,
+                ),
+                timeout=claude_timeout,
+            )
 
-    except asyncio.TimeoutError:
-        print(f"[PORTFOLIO_REVIEW] Claude timed out after 60s")
-        return {
-            "type": "chat",
-            "analysis": "",
-            "structured": {
-                "display_type": "chat",
-                "message": "Portfolio review timed out. Please try again.",
-            },
-        }
+            response_text = response.content[0].text.strip()
+            print(f"[PORTFOLIO_REVIEW] Claude responded: {len(response_text)} chars ({_time.time()-start:.1f}s total)")
+
+            try:
+                clean = response_text
+                if clean.startswith("```"):
+                    clean = clean.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+                parsed = _json.loads(clean)
+                if "structured" in parsed:
+                    return parsed
+                return {
+                    "type": "chat",
+                    "analysis": parsed.get("message", response_text),
+                    "structured": parsed,
+                }
+            except (_json.JSONDecodeError, Exception):
+                return {
+                    "type": "chat",
+                    "analysis": response_text,
+                    "structured": {
+                        "display_type": "chat",
+                        "message": response_text,
+                    },
+                }
+
+        except asyncio.TimeoutError:
+            print(f"[PORTFOLIO_REVIEW] Claude timed out after {claude_timeout:.0f}s")
+            return _err_response("Portfolio review timed out waiting for AI analysis. Please try again — cached data should make it faster on retry.")
+        except Exception as claude_err:
+            print(f"[PORTFOLIO_REVIEW] Claude error: {claude_err}")
+            import traceback; traceback.print_exc()
+            return _err_response(f"AI analysis failed: {str(claude_err)[:200]}")
+
     except Exception as e:
-        print(f"[PORTFOLIO_REVIEW] Error: {e}")
         import traceback
         traceback.print_exc()
-        return {
-            "type": "chat",
-            "analysis": "",
-            "structured": {
-                "display_type": "chat",
-                "message": f"Error reviewing portfolio: {str(e)}",
-            },
-        }
+        print(f"[PORTFOLIO_REVIEW] FATAL ERROR: {e}")
+        return _err_response(f"Portfolio review encountered an error: {str(e)[:200]}. Please try again.")
 
 
 @app.get("/api/test-altfins")
