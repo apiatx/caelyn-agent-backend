@@ -1,0 +1,35 @@
+Goal: Add SEC EDGAR (free) catalyst grounding across the app without changing any existing response schemas or frontend contracts. Zero breaking changes.
+
+Scope: Implement a new edgar_provider that can, given a ticker, fetch and summarize the most recent relevant filings and insider activity to support “why now.” Use it as optional enrichment only. If EDGAR fails, proceed normally.
+
+Requirements:
+
+Ticker → CIK mapping (free): Implement a local cached mapping using SEC’s published ticker/CIK JSON (cache to disk + in-memory, refresh 1x/day).
+
+Filings to support “why now”: For each equity ticker, fetch and parse the latest filings (last 7–30 days, configurable) and extract:
+
+Form 4 (insider buys/sells): summarize net buying vs selling, number of insiders, most recent date, largest transaction.
+
+8-K (material events): summarize item type and 1–3 bullet “what happened.”
+
+S-1 / S-3 / 424B (offerings): flag dilution/registration events clearly.
+
+Optionally 10-Q/10-K if very recent.
+
+Rate-limit safe:
+
+Add aggressive caching (CIK map 24h; per-ticker filings 10–30 min).
+
+Use conditional requests if possible; throttle to avoid hammering SEC (max 1–2 req/sec).
+
+Integration points (no schema changes):
+
+Add an edgar enrichment object inside existing structured.meta or existing debug/enrichment container already used by other providers. Do not add new top-level fields that the frontend depends on.
+
+For these categories only, attach EDGAR enrichment when tickers are equities: cross_asset_trending, best_trades, and all screener presets (especially Insider+Breakout and Short Squeeze).
+
+Use in reasoning: Update the LLM prompt context so that when EDGAR data exists, the model must cite it as the “why now” catalyst (ex: “Form 4 net buying this week,” “8-K announced X”), but if it’s missing, it must not mention EDGAR.
+
+Testing: Add unit tests for: ticker→CIK resolution, filings fetch caching, and Form 4/8-K parsing producing stable summaries.
+
+Definition of done: Existing UX responses remain identical in structure, but now trade ideas/screener rows can include verified filing-based catalysts and insider validation when available.
