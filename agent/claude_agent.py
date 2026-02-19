@@ -401,7 +401,19 @@ class TradingAgent:
         data_done_time = time.time()
         data_ms = int((data_done_time - start_time) * 1000)
 
-        raw_response = await self._ask_claude_with_timeout(user_prompt, market_data, history, is_followup=is_followup, category=category)
+        claude_data = market_data
+        if market_data and isinstance(market_data, dict) and category != "followup":
+            try:
+                from agent.data_compressor import compress_for_claude
+                claude_data = compress_for_claude(market_data, category)
+                compression = claude_data.get("_compression", {})
+                print(f"[COMPRESS] {compression.get('raw_size', 0):,} → {compression.get('compressed_size', 0):,} chars "
+                      f"({compression.get('ratio', 1)}x reduction) for category={category}")
+            except Exception as e:
+                print(f"[COMPRESS] Compression failed, using raw data: {e}")
+                claude_data = market_data
+
+        raw_response = await self._ask_claude_with_timeout(user_prompt, claude_data, history, is_followup=is_followup, category=category)
         claude_ms = int((time.time() - data_done_time) * 1000)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
 
