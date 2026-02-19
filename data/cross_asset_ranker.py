@@ -573,6 +573,28 @@ def _score_candidates(candidates: list, asset_type: str):
         else:
             factors["liquidity"] = 0.7 if c.get("is_major") else 0.4
 
+        if asset_type == "stock":
+            analyst_upside = c.get("price_target_upside") or c.get("analyst_upside")
+            if analyst_upside is not None:
+                try:
+                    from data.scoring_engine import parse_pct
+                    upside = parse_pct(analyst_upside)
+                    if upside and upside > 1.0:
+                        if not c.get("_reversal_confirmed"):
+                            c["_penalty"] = c.get("_penalty", 1.0) * 0.6
+                            c["_falling_knife"] = True
+                            c["_suspected_falling_knife"] = True
+                            c["_note"] = "Analyst upside >100% without reversal confirmation suggests price collapse"
+                    elif upside and upside > 0.5:
+                        if not c.get("_reversal_confirmed"):
+                            c["_penalty"] = c.get("_penalty", 1.0) * 0.8
+                            c["_suspected_falling_knife"] = True
+                except (TypeError, ValueError):
+                    pass
+
+            if c.get("_falling_knife") or c.get("_suspected_falling_knife"):
+                factors["catalyst"] = min(factors.get("catalyst", 0), 0.3)
+
         met = sum(1 for v in factors.values() if v >= 0.4)
 
         raw_score = (
@@ -758,7 +780,10 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
                       "factor_detail", "source_count", "trending_sources", "sources",
                       "price", "is_major", "analyst_rating", "price_target_upside",
                       "confirmation_status", "data_gaps", "cap_tier", "is_backfill",
-                      "_penalty_reasons", "tradingview_symbol"}
+                      "_penalty_reasons", "tradingview_symbol",
+                      "_falling_knife", "_falling_knife_flag", "_suspected_falling_knife",
+                      "_reversal_confirmed", "_drawdown_pct",
+                      "_reversal_signals", "_reversal_details", "_note"}
         to_remove = [k for k in c if k not in clean_keys and k != "raw_data"]
         for k in to_remove:
             del c[k]

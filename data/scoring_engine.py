@@ -305,7 +305,81 @@ def score_for_trades(ticker_data: dict) -> float:
         except (TypeError, ValueError, ZeroDivisionError):
             pass
 
-    return round(min(score, 100), 1)
+    high_52w = details.get("high_52w") or details.get("52_week_high") or details.get("yearHigh")
+    drawdown = None
+    if high_52w and price:
+        try:
+            h = float(str(high_52w).replace(",", "").replace("$", ""))
+            p = float(price)
+            if h > 0 and p > 0:
+                drawdown = (h - p) / h
+        except (TypeError, ValueError):
+            pass
+
+    if drawdown is not None and drawdown > 0.25:
+        reversal_signals = 0
+        reversal_details = []
+
+        if price and sma_20:
+            try:
+                if float(price) > float(sma_20):
+                    reversal_signals += 1
+                    reversal_details.append("above_sma20")
+            except (TypeError, ValueError):
+                pass
+
+        if price and sma_50:
+            try:
+                if float(price) > float(sma_50):
+                    reversal_signals += 1
+                    reversal_details.append("above_sma50")
+            except (TypeError, ValueError):
+                pass
+
+        if rsi is not None:
+            try:
+                r = float(rsi)
+                if r > 40:
+                    reversal_signals += 1
+                    reversal_details.append(f"rsi_{r:.0f}")
+                elif r < 30:
+                    reversal_signals += 1
+                    reversal_details.append(f"oversold_rsi_{r:.0f}")
+            except (TypeError, ValueError):
+                pass
+
+        if volume_ratio >= 1.5:
+            reversal_signals += 1
+            reversal_details.append(f"vol_{volume_ratio:.1f}x")
+
+        if change_pct is not None:
+            try:
+                chg = float(change_pct)
+                if chg > 2:
+                    reversal_signals += 1
+                    reversal_details.append(f"up_{chg:.1f}%")
+            except (TypeError, ValueError):
+                pass
+
+        required_signals = 1 if drawdown <= 0.50 else 2
+
+        if reversal_signals >= required_signals:
+            score += 5
+            ticker_data["_reversal_confirmed"] = True
+            ticker_data["_reversal_signals"] = reversal_details
+            ticker_data["_drawdown_pct"] = round(drawdown * 100, 1)
+        else:
+            if drawdown > 0.50:
+                score -= 25
+            else:
+                score -= 12
+            ticker_data["_falling_knife"] = True
+            ticker_data["_drawdown_pct"] = round(drawdown * 100, 1)
+            ticker_data["_reversal_signals_found"] = reversal_signals
+            ticker_data["_reversal_signals_required"] = required_signals
+            ticker_data["_reversal_details"] = reversal_details
+
+    return round(min(max(score, 0), 100), 1)
 
 
 def score_for_investments(ticker_data: dict) -> float:

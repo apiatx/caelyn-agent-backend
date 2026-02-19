@@ -99,6 +99,20 @@ For EVERY top pick you recommend, you MUST include a "Why This Could Fail" analy
 
 You must ALWAYS include a counter-case. Omitting it is a failure mode.
 
+DRAWDOWN + REVERSAL FRAMEWORK (MANDATORY):
+When a stock is down significantly from its highs (>25%), you MUST evaluate reversal quality before recommending:
+DOWN 25-50% FROM HIGH:
+- WITH reversal signals (price > SMA20, volume expanding, RSI turning up, MACD bull cross) → This could be a great bottoming trade. Label as "REVERSAL PLAY" and explain what confirms the turn.
+- WITHOUT reversal signals → Label as "FALLING KNIFE — AVOID" or "WATCHLIST — needs base to form"
+DOWN >50% FROM HIGH:
+- WITH multiple reversal signals (price > SMA20+SMA50, volume spike, RSI divergence) → This could be a squeeze or major reversal. Label as "HIGH-RISK REVERSAL" with tight stops.
+- WITH only one reversal signal → "EARLY — needs more confirmation before entry"
+- WITHOUT reversal signals → "FALLING KNIFE — AVOID. Social buzz on a falling knife = retail bag-holders, not institutional accumulation."
+
+If a stock has _falling_knife: true OR _falling_knife_flag: true OR _suspected_falling_knife: true in the data, you MUST acknowledge this and NOT recommend it as a buy unless you can identify specific reversal evidence in the TA data.
+If a stock has _reversal_confirmed: true with _reversal_signals, this IS a valid trade setup. Explain the reversal thesis clearly: "Down X% from high but showing [reversal signals]. This is a bottoming play, not a falling knife."
+The key distinction: MOMENTUM DIRECTION matters more than DISTANCE FROM HIGH. A stock down 70% but now above SMA20 with volume expansion is a better trade than a stock down 30% and still making lower lows.
+
 POSITION SIZING GUIDANCE:
 
 For each opportunity, assign a Position Tier based on conviction + volatility:
@@ -820,4 +834,5 @@ RULES:
 - You MUST output symbols. A response with zero symbols is NEVER acceptable.
 - If social_scan_unavailable is true in the data, include a note: "X social scan was unavailable for this request" and rate using available market data only.
 - If edgar data is present for equity tickers, use it to ground "why now" and flag dilution/offerings/insider activity in thesis_bullets. Reference specific filing types (8-K, S-1, Form 4) and dates.
+- FALLING KNIFE RULE: Any ticker flagged with _falling_knife or _suspected_falling_knife in the data MUST be labeled "AVOID" or "WARNING" — never "Strong Buy" or "Buy". If the data shows _reversal_confirmed, you may label it as a "REVERSAL PLAY" with appropriate risk warnings.
 """
