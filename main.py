@@ -80,10 +80,10 @@ _init_done = False
 def _do_init():
     global data_service, agent, _init_done
     try:
-        from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY, XAI_API_KEY, OPENAI_API_KEY
+        from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY, XAI_API_KEY, OPENAI_API_KEY, TWELVEDATA_API_KEY
         from data.market_data_service import MarketDataService
         from agent.claude_agent import TradingAgent
-        data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY, coingecko_key=COINGECKO_API_KEY, cmc_key=CMC_API_KEY, altfins_key=ALTFINS_API_KEY, xai_key=XAI_API_KEY)
+        data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY, coingecko_key=COINGECKO_API_KEY, cmc_key=CMC_API_KEY, altfins_key=ALTFINS_API_KEY, xai_key=XAI_API_KEY, twelvedata_key=TWELVEDATA_API_KEY)
         agent = TradingAgent(api_key=ANTHROPIC_API_KEY, data_service=data_service, openai_api_key=OPENAI_API_KEY)
         _init_done = True
         print("[INIT] All services initialized successfully")
@@ -923,6 +923,19 @@ async def health_check(request: Request):
         "errors": errors,
         "status": "ok" if (openai_ok and claude_ok and finviz_ok and sa_ok) else "degraded",
     }
+
+
+# ============================================================
+# Candle Stats Debug Endpoint
+# ============================================================
+
+@app.get("/api/candle_stats")
+async def candle_stats(request: Request):
+    from data.market_data_service import get_last_candle_stats, _is_finnhub_candles_disabled, _is_twelvedata_disabled
+    stats = get_last_candle_stats()
+    stats["finnhub_circuit_open"] = _is_finnhub_candles_disabled()
+    stats["twelvedata_circuit_open"] = _is_twelvedata_disabled()
+    return stats
 
 
 # ============================================================

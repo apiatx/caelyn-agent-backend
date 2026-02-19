@@ -2,12 +2,13 @@ import asyncio
 import time as _time
 
 from data.polygon_provider import PolygonProvider
+from data.twelvedata_provider import TwelveDataProvider
 from data.finviz_scraper import FinvizScraper, scrape_yahoo_trending, scrape_stockanalysis_trending
 from data.stocktwits_provider import StockTwitsProvider
 from data.stockanalysis_scraper import StockAnalysisScraper
 from data.options_scraper import OptionsScraper
 from data.finnhub_provider import FinnhubProvider
-from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY, FMP_API_KEY
+from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY, FMP_API_KEY, TWELVEDATA_API_KEY
 from data.alphavantage_provider import AlphaVantageProvider
 from data.fred_provider import FredProvider
 from data.edgar_provider import EdgarProvider
@@ -121,15 +122,20 @@ class CandleBudget:
         self._used = 0
         self._cache_hits = 0
         self._blocked = 0
-        self._provider_used = 0
+        self._twelvedata_used = 0
+        self._twelvedata_rate_limited = 0
+        self._polygon_used = 0
         self._finnhub_blocked = 0
 
     def can_spend(self) -> bool:
         return self._used < self._max
 
-    def spend(self):
+    def spend(self, provider: str = "polygon"):
         self._used += 1
-        self._provider_used += 1
+        if provider == "twelvedata":
+            self._twelvedata_used += 1
+        else:
+            self._polygon_used += 1
 
     def record_cache_hit(self):
         self._cache_hits += 1
@@ -140,11 +146,28 @@ class CandleBudget:
     def record_finnhub_blocked(self):
         self._finnhub_blocked += 1
 
+    def record_twelvedata_rate_limited(self):
+        self._twelvedata_rate_limited += 1
+
     def summary(self) -> str:
-        return f"polygon_used={self._provider_used} cache_hits={self._cache_hits} blocked={self._blocked} finnhub_disabled={self._finnhub_blocked}"
+        return f"twelvedata={self._twelvedata_used} td_rate_limited={self._twelvedata_rate_limited} polygon={self._polygon_used} cache_hits={self._cache_hits} blocked={self._blocked} finnhub_disabled={self._finnhub_blocked}"
+
+    def stats_dict(self) -> dict:
+        return {
+            "twelvedata_used": self._twelvedata_used,
+            "twelvedata_rate_limited": self._twelvedata_rate_limited,
+            "polygon_used": self._polygon_used,
+            "cache_hits": self._cache_hits,
+            "blocked": self._blocked,
+            "finnhub_disabled": self._finnhub_blocked,
+            "total_api_calls": self._used,
+            "budget_max": self._max,
+        }
 
 
 _finnhub_candle_disabled_until = 0.0
+_twelvedata_disabled_until = 0.0
+_last_candle_budget = None
 
 
 def _is_finnhub_candles_disabled() -> bool:
@@ -155,6 +178,22 @@ def _disable_finnhub_candles():
     global _finnhub_candle_disabled_until
     _finnhub_candle_disabled_until = _time.time() + 3600
     print("[CIRCUIT_BREAKER] Finnhub candles disabled for 60 minutes (403)")
+
+
+def _is_twelvedata_disabled() -> bool:
+    return _time.time() < _twelvedata_disabled_until
+
+
+def _disable_twelvedata():
+    global _twelvedata_disabled_until
+    _twelvedata_disabled_until = _time.time() + 900
+    print("[CIRCUIT_BREAKER] TwelveData disabled for 15 minutes (auth error)")
+
+
+def get_last_candle_stats() -> dict:
+    if _last_candle_budget:
+        return _last_candle_budget.stats_dict()
+    return {}
 
 
 async def fetch_with_fallback(category: str, fetch_primary, fetch_secondary=None, timeout: float = 3.0):
@@ -226,8 +265,14 @@ class MarketDataService:
     Your agent talks to THIS — never directly to Polygon or scrapers.
     """
 
-    def __init__(self, polygon_key: str, fmp_key: str = None, coingecko_key: str = None, cmc_key: str = None, altfins_key: str = None, xai_key: str = None):
+    def __init__(self, polygon_key: str, fmp_key: str = None, coingecko_key: str = None, cmc_key: str = None, altfins_key: str = None, xai_key: str = None, twelvedata_key: str = None):
         self.polygon = PolygonProvider(polygon_key)
+        td_key = twelvedata_key or TWELVEDATA_API_KEY
+        self.twelvedata = TwelveDataProvider(td_key) if td_key else None
+        if self.twelvedata:
+            print("[INIT] TwelveData candle provider initialized (8/min)")
+        else:
+            print("[INIT] TwelveData provider SKIPPED (no TWELVEDATA_API_KEY)")
         self.finviz = FinvizScraper()
         self.stocktwits = StockTwitsProvider()
         self.stockanalysis = StockAnalysisScraper()
@@ -252,9 +297,12 @@ class MarketDataService:
             print("[INIT] xAI Grok X sentiment provider SKIPPED (no XAI_API_KEY)")
 
     async def get_candles(self, symbol: str, days: int = 120, budget: CandleBudget = None, ttl: int = None) -> list:
+        global _last_candle_budget
         symbol = symbol.upper()
         cache_key = f"candles:{symbol}:1d:{days}"
         use_ttl = ttl or CANDLE_TTL
+        if budget:
+            _last_candle_budget = budget
 
         cached = cache.get(cache_key)
         if cached is not None:
@@ -262,10 +310,35 @@ class MarketDataService:
                 budget.record_cache_hit()
             return cached
 
-        if _is_finnhub_candles_disabled():
-            if budget:
-                budget.record_finnhub_blocked()
-        else:
+        if budget and not budget.can_spend():
+            budget.record_blocked()
+            return []
+
+        if self.twelvedata and not _is_twelvedata_disabled():
+            try:
+                td_bars = await asyncio.wait_for(
+                    asyncio.to_thread(self.twelvedata.get_daily_bars, symbol, days),
+                    timeout=12.0,
+                )
+                if isinstance(td_bars, dict) and td_bars.get("error"):
+                    if td_bars["error"] == "auth":
+                        _disable_twelvedata()
+                    elif td_bars["error"] == "rate_limited":
+                        if budget:
+                            budget.record_twelvedata_rate_limited()
+                        print(f"[CANDLES] TwelveData {symbol} rate limited, falling through to Finnhub/Polygon")
+                elif td_bars and len(td_bars) >= 20:
+                    if budget:
+                        budget.spend("twelvedata")
+                    cache.set(cache_key, td_bars, use_ttl)
+                    print(f"[CANDLES] TwelveData {symbol} OK ({len(td_bars)} bars)")
+                    return td_bars
+            except asyncio.TimeoutError:
+                print(f"[CANDLES] TwelveData {symbol} timeout")
+            except Exception as e:
+                print(f"[CANDLES] TwelveData {symbol} error: {e}")
+
+        if not _is_finnhub_candles_disabled():
             try:
                 result = await asyncio.wait_for(
                     asyncio.to_thread(self.finnhub.get_stock_candles, symbol, days),
@@ -282,15 +355,13 @@ class MarketDataService:
                     _disable_finnhub_candles()
                 else:
                     print(f"[CANDLES] Finnhub {symbol} error: {e}")
-
-        if budget and not budget.can_spend():
+        else:
             if budget:
-                budget.record_blocked()
-            return []
+                budget.record_finnhub_blocked()
 
         try:
             if budget:
-                budget.spend()
+                budget.spend("polygon")
             poly_bars = await asyncio.wait_for(
                 asyncio.to_thread(self.polygon.get_daily_bars, symbol, days),
                 timeout=10.0,
@@ -1424,8 +1495,9 @@ class MarketDataService:
         budget_exhausted = not candle_budget.can_spend()
 
         data_health = {
-            "candles_source": "polygon" if candle_budget._provider_used > 0 else ("cache" if candle_budget._cache_hits > 0 else "none"),
+            "candles_source": "twelvedata" if candle_budget._twelvedata_used > 0 else ("polygon" if candle_budget._polygon_used > 0 else ("cache" if candle_budget._cache_hits > 0 else "none")),
             "finnhub_circuit_breaker": finnhub_disabled,
+            "twelvedata_circuit_breaker": _is_twelvedata_disabled(),
             "budget_exhausted": budget_exhausted,
             "candle_stats": candle_budget.summary(),
         }

@@ -27,6 +27,7 @@ The platform is built on FastAPI, offering a robust and scalable backend.
 - **Cross-Market Scan**: Triggers parallel data pulling across all asset classes and uses a quantitative pre-ranker.
 - **Resilient Cross-Asset Trending Pipeline**: Parallel execution of Grok and market scan with module-level status tracking, social-first fallback, and minimum output guarantees across asset classes.
 - **Conversational AI**: Fully conversational with persistent, server-side stored conversation threads supporting multi-turn interactions and intelligent data gathering.
+- **Candle Provider Chain**: cache → TwelveData (8/min, 15min circuit breaker on auth) → Finnhub (60min circuit breaker on 403) → Polygon (budget-tracked). CandleBudget tracks per-provider usage (twelvedata_used, polygon_used). Debug endpoint: GET /api/candle_stats.
 - **Caching**: An in-memory TTL caching system optimizes API calls across all data providers.
 - **Error Handling & Reliability**: Standardized JSON response envelope with error codes, never-empty guarantee, logging of raw Claude output and parse failures, and a wall-clock data-gathering deadline for cross-asset trending.
 - **UI/UX Considerations**: Delivers concise, dense trading terminal-style JSON output, including TradingView chart links.
@@ -37,7 +38,7 @@ The platform is built on FastAPI, offering a robust and scalable backend.
 
 ## External Dependencies
 - **AI**: OpenAI (GPT-4o for orchestration/classification), Anthropic (Claude Sonnet for reasoning/analysis).
-- **Market Data & Screening**: Finviz, Polygon.io, Finnhub, Financial Modeling Prep (FMP), Alpha Vantage, Nasdaq.
+- **Market Data & Screening**: Finviz, TwelveData (primary candles, 8/min), Polygon.io (fallback candles, 4/min), Finnhub (circuit-broken), Financial Modeling Prep (FMP), Alpha Vantage, Nasdaq.
 - **Social Sentiment & Trending**: Reddit/ApeWisdom, StockTwits, Yahoo Finance, xAI Grok.
 - **Financial Analysis**: StockAnalysis.
 - **Economic Data**: FRED (Federal Reserve Economic Data), CNN (Fear & Greed Index).

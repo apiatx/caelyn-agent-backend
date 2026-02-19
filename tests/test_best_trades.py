@@ -54,6 +54,7 @@ def mock_service():
     svc.cmc = MagicMock()
     svc.altfins = MagicMock()
     svc.xai = MagicMock()
+    svc.twelvedata = None
 
     tickers = ["AAPL", "MSFT", "GOOG", "TSLA", "NVDA", "AMD", "META", "NFLX", "AMZN", "CRM"]
     finviz_results = _make_finviz_results(tickers)

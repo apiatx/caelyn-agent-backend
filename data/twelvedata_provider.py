@@ -26,7 +26,7 @@ class TwelveDataProvider:
 
         if not self._check_rate_limit():
             print(f"[TwelveData] Rate limit reached ({self._max_per_minute}/min), skipping {symbol}")
-            return []
+            return {"error": "rate_limited", "status": 429}
 
         try:
             resp = requests.get(
