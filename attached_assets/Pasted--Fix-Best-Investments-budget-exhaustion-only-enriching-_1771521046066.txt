@@ -1,0 +1,174 @@
+## Fix: "Best Investments" budget exhaustion — only enriching 1 out of 32 tickers
+
+### Problem
+The Best Investments pipeline found 32 candidates but the BudgetTracker ran out of points before the quote + candle enrichment phase could run. The math:
+- Light enrichment: 32 tickers × 1 point = 32 points
+- Deep enrichment: 8 tickers × 3 points = 24 points  
+- Total: 56 points — EXCEEDS the 55 point budget
+- Quote + candle phase: never even starts because budget is already exhausted
+
+The user saw "orchestrator burned through its budget early and only managed to partially score ONE ticker."
+
+### Root Cause
+The `PRESET_BUDGETS` for investments was supposed to be updated to 60 points / 14 seconds (per our earlier instructions) but is still at 55/12. Even 60 wouldn't be enough because after light + deep enrichment, the quote/candle phase needs additional room.
+
+More importantly: the quote + candle phase that was just added uses `budget.can_continue()` checks inherited from the main BudgetTracker. Since the main budget is already exhausted from light + deep enrichment, the quote/candle phase gets zero work done.
+
+### Fix: Three changes
+
+#### 1. Increase the investments budget significantly
+
+In `market_data_service.py`, find `PRESET_BUDGETS` (around line 48) and update investments:
+```python
+    "investments": {"max_points": 90, "max_seconds": 20, "allow_deep_dive": True},
+```
+
+Why 90/20: Light enrich (32 × 1 = 32) + Deep enrich (8 × 3 = 24) + Quotes (12 × 1 = 12) + Candles (8 × 2 = 16) = 84 points max. 90 gives headroom. 20 seconds because candle fetches need time.
+
+#### 2. Make the quote + candle phase use its own CandleBudget, not the main BudgetTracker
+
+The quote + candle enrichment phase that was added to `wide_scan_and_rank` should NOT check `budget.can_continue()` before running. It should use its own independent `CandleBudget` (which the Replit agent already created). But make sure the quote fetching via `get_quotes_batch` doesn't check the main budget either.
+
+Find the quote + candle enrichment code that was added to `wide_scan_and_rank` (it was inserted after deep enrichment). Make sure:
+
+a) The `get_quotes_batch()` call is NOT gated by `budget.can_continue()` — it should always run for investment scans regardless of main budget state
+
+b) The candle fetching uses its own `CandleBudget(max_calls=8)` which is independent of the main `BudgetTracker`
+
+c) Add a log line showing what the main budget looks like when the quote/candle phase starts:
+```python
+print(f"[Wide Scan] Starting quote+TA phase for {category} (main budget: {budget.status()})")
+```
+
+The structure should be:
+```python
+        # Phase 2.5: Quote + TA enrichment — runs with own budget, independent of main BudgetTracker
+        if category in ("investments", "fundamentals_scan", "asymmetric"):
+            print(f"[Wide Scan] Starting quote+TA phase for {category} (main budget: {budget.status()})")
+            
+            # Quote backfill — always runs, not gated by main budget
+            quote_tickers = list(enriched_candidates.keys())[:12]
+            # Strip FLAGGED_ prefix for quote lookup
+            quote_tickers_clean = [t.replace("FLAGGED_", "") for t in quote_tickers]
+            
+            if quote_tickers_clean:
+                try:
+                    batch_quotes = await asyncio.wait_for(
+                        self.get_quotes_batch(quote_tickers_clean),
+                        timeout=8.0,
+                    )
+                    filled = 0
+                    for ticker in quote_tickers:
+                        clean_ticker = ticker.replace("FLAGGED_", "")
+                        if clean_ticker in batch_quotes and ticker in enriched_candidates:
+                            q = batch_quotes[clean_ticker]
+                            if not enriched_candidates[ticker].get("snapshot"):
+                                enriched_candidates[ticker]["snapshot"] = {}
+                            if q.get("price"):
+                                enriched_candidates[ticker]["snapshot"]["price"] = q["price"]
+                                enriched_candidates[ticker]["snapshot"]["change_pct"] = q.get("change_pct")
+                                filled += 1
+                    print(f"[Wide Scan] Quote backfill: {filled}/{len(quote_tickers_clean)} prices filled")
+                except Exception as e:
+                    print(f"[Wide Scan] Quote backfill failed: {e}")
+
+            # TA enrichment — uses own CandleBudget, not main BudgetTracker
+            candle_budget_inv = CandleBudget(max_calls=8)
+            candle_tickers = [t.replace("FLAGGED_", "") for t in list(enriched_candidates.keys())[:8] if not t.startswith("FLAGGED_")]
+            
+            if candle_tickers:
+                from data.ta_utils import compute_technicals_from_bars
+                candle_semaphore = asyncio.Semaphore(3)
+                
+                async def _fetch_inv_candle(t):
+                    async with candle_semaphore:
+                        bars = await self.get_candles(t, days=120, budget=candle_budget_inv)
+                        return t, bars
+                
+                candle_results = await asyncio.gather(
+                    *[_fetch_inv_candle(t) for t in candle_tickers],
+                    return_exceptions=True,
+                )
+                
+                ta_filled = 0
+                for result in candle_results:
+                    if isinstance(result, Exception):
+                        continue
+                    ticker, bars = result
+                    if bars and len(bars) >= 20 and ticker in enriched_candidates:
+                        ta_data = compute_technicals_from_bars(bars)
+                        if not enriched_candidates[ticker].get("technicals"):
+                            enriched_candidates[ticker]["technicals"] = {}
+                        enriched_candidates[ticker]["technicals"].update(ta_data)
+                        # Backup price from candle close
+                        last_close = bars[-1].get("c")
+                        if last_close and not enriched_candidates[ticker].get("snapshot", {}).get("price"):
+                            enriched_candidates[ticker].setdefault("snapshot", {})["price"] = last_close
+                        ta_filled += 1
+                
+                print(f"[Wide Scan] TA enrichment: {ta_filled}/{len(candle_tickers)} candles OK ({candle_budget_inv.summary()})")
+```
+
+#### 3. Also add FRED macro data to the investments return
+
+Claude mentioned "missing VIX levels and yield curve data." The investments pipeline returns `news_context` which may include fear_greed but not the full FRED macro data. Add a quick macro fetch.
+
+In `wide_scan_and_rank`, right after the screener_task and news_task are created (around line 857-860), add a macro task:
+```python
+        screener_task = self.finviz._custom_screen(
+            f"v=111&f={finviz_filters}&ft=4&o=-change"
+        )
+        news_task = self.get_market_news_context()
+        
+        # Macro context for investment-grade analysis
+        macro_task = None
+        if category in ("investments", "fundamentals_scan"):
+            macro_task = self._build_macro_snapshot()
+```
+
+Then in the gather:
+```python
+        if macro_task:
+            screener_results, news_context, macro_snapshot = await asyncio.gather(
+                screener_task, news_task, macro_task, return_exceptions=True
+            )
+            if isinstance(macro_snapshot, Exception):
+                macro_snapshot = {}
+        else:
+            screener_results, news_context = await asyncio.gather(
+                screener_task, news_task, return_exceptions=True
+            )
+            macro_snapshot = {}
+```
+
+Then include it in the return dict (around line 1079-1098):
+```python
+        scan_result = {
+            "news_context": news_context,
+            "macro_snapshot": macro_snapshot,  # ADD THIS
+            ...
+        }
+```
+
+### Testing Checklist
+
+1. **"Best Investments"** — Click it. Verify:
+   - Returns 5+ tickers with actual prices and TA data
+   - Check logs for `[Wide Scan] Starting quote+TA phase` 
+   - Check logs for `[Wide Scan] Quote backfill: X/12 prices filled` — X should be > 0
+   - Check logs for `[Wide Scan] TA enrichment: X/8 candles OK` — X should be > 0
+   - Claude should give specific theses with price levels, not "data quality issue"
+   - Claude should reference macro context (Fear & Greed, VIX, yield curve)
+
+2. **"Trending Now"** — Must still work (no regression)
+3. **"Best Trades"** — Must still work
+4. **"Daily Briefing"** — Must still work
+5. **All 6 screener presets** — Must still work
+6. **`python -m pytest`** — All tests pass
+
+### Success Criteria
+- `[Wide Scan] Quote backfill` shows prices filled for most tickers
+- `[Wide Scan] TA enrichment` shows candles fetched for 4+ tickers
+- Claude gives actual investment theses with entry levels, growth metrics, and TA confirmation
+- No "data quality issue" or "missing price data" complaints from Claude
+- Macro data (Fear & Greed, rates, VIX) appears in Claude's analysis

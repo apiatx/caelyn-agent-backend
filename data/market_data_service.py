@@ -52,7 +52,7 @@ PRESET_BUDGETS = {
     "social_momentum": {"max_points": 45, "max_seconds": 10, "allow_deep_dive": True},
     "microcap_asymmetry": {"max_points": 60, "max_seconds": 12, "allow_deep_dive": True},
     "asymmetric": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
-    "investments": {"max_points": 60, "max_seconds": 14, "allow_deep_dive": True},
+    "investments": {"max_points": 90, "max_seconds": 20, "allow_deep_dive": True},
     "fundamentals_scan": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
     "small_cap_spec": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
     "squeeze": {"max_points": 50, "max_seconds": 10, "allow_deep_dive": True},
@@ -870,9 +870,22 @@ class MarketDataService:
         )
         news_task = self.get_market_news_context()
 
-        screener_results, news_context = await asyncio.gather(
-            screener_task, news_task, return_exceptions=True
-        )
+        macro_task = None
+        if category in ("investments", "fundamentals_scan"):
+            macro_task = self._build_macro_snapshot()
+
+        if macro_task:
+            screener_results, news_context, macro_snapshot = await asyncio.gather(
+                screener_task, news_task, macro_task, return_exceptions=True
+            )
+            if isinstance(macro_snapshot, Exception):
+                print(f"[Wide Scan] Macro snapshot failed: {macro_snapshot}")
+                macro_snapshot = {}
+        else:
+            screener_results, news_context = await asyncio.gather(
+                screener_task, news_task, return_exceptions=True
+            )
+            macro_snapshot = {}
 
         if isinstance(screener_results, Exception):
             print(f"[Wide Scan] Screener failed: {screener_results}")
@@ -1107,47 +1120,68 @@ class MarketDataService:
 
         print(f"[Wide Scan] Complete: {len(enriched_candidates)} candidates ({len(flagged)} flagged) ({time.time()-scan_start:.1f}s) Budget: {budget.status()}")
 
-        if category in ("investments", "fundamentals_scan", "asymmetric") and enriched_candidates and budget.can_continue():
-            try:
-                quote_tickers = [t for t in enriched_candidates if not t.startswith("FLAGGED_")][:15]
-                if quote_tickers:
-                    quotes = await asyncio.wait_for(
-                        self.get_quotes_batch(quote_tickers),
+        if category in ("investments", "fundamentals_scan", "asymmetric"):
+            print(f"[Wide Scan] Starting quote+TA phase for {category} (main budget: {budget.status()})")
+
+            quote_tickers = list(enriched_candidates.keys())[:12]
+            quote_tickers_clean = [t.replace("FLAGGED_", "") for t in quote_tickers]
+
+            if quote_tickers_clean:
+                try:
+                    batch_quotes = await asyncio.wait_for(
+                        self.get_quotes_batch(quote_tickers_clean),
                         timeout=8.0,
                     )
-                    for t, q in quotes.items():
-                        if t in enriched_candidates and isinstance(q, dict) and "error" not in q:
-                            snap = enriched_candidates[t].get("snapshot", {})
-                            if not snap.get("price") and q.get("price"):
-                                snap["price"] = q["price"]
-                            if not snap.get("change_pct") and q.get("change_pct"):
-                                snap["change_pct"] = q["change_pct"]
-                            enriched_candidates[t]["snapshot"] = snap
-                    print(f"[Wide Scan] Quote batch backfilled {len(quotes)} tickers")
+                    filled = 0
+                    for ticker in quote_tickers:
+                        clean_ticker = ticker.replace("FLAGGED_", "")
+                        if clean_ticker in batch_quotes and ticker in enriched_candidates:
+                            q = batch_quotes[clean_ticker]
+                            if isinstance(q, dict) and "error" not in q:
+                                if not enriched_candidates[ticker].get("snapshot"):
+                                    enriched_candidates[ticker]["snapshot"] = {}
+                                if q.get("price"):
+                                    enriched_candidates[ticker]["snapshot"]["price"] = q["price"]
+                                    enriched_candidates[ticker]["snapshot"]["change_pct"] = q.get("change_pct")
+                                    filled += 1
+                    print(f"[Wide Scan] Quote backfill: {filled}/{len(quote_tickers_clean)} prices filled")
+                except Exception as e:
+                    print(f"[Wide Scan] Quote backfill failed: {e}")
 
+            candle_budget_inv = CandleBudget(max_calls=8)
+            candle_tickers = [t for t in list(enriched_candidates.keys())[:8] if not t.startswith("FLAGGED_")]
+
+            if candle_tickers:
                 from data.ta_utils import compute_technicals_from_bars
-                ta_tickers = quote_tickers[:8]
-                candle_budget = CandleBudget(max_calls=8)
-                ta_count = 0
-                for t in ta_tickers:
-                    if not candle_budget.can_spend():
-                        break
-                    try:
-                        bars = await asyncio.wait_for(
-                            self.get_candles(t, days=120, budget=candle_budget),
-                            timeout=5.0,
-                        )
-                        if bars and len(bars) >= 20:
-                            ta = compute_technicals_from_bars(bars)
-                            if ta and isinstance(ta, dict):
-                                enriched_candidates[t]["computed_ta"] = ta
-                                ta_count += 1
-                    except Exception:
-                        pass
-                    budget.tick("investment_ta")
-                print(f"[Wide Scan] TA computed for {ta_count}/{len(ta_tickers)} investment candidates")
-            except Exception as e:
-                print(f"[Wide Scan] Quote/TA enrichment error: {e}")
+                candle_semaphore = asyncio.Semaphore(3)
+
+                async def _fetch_inv_candle(t):
+                    async with candle_semaphore:
+                        bars = await self.get_candles(t, days=120, budget=candle_budget_inv)
+                        return t, bars
+
+                candle_results = await asyncio.gather(
+                    *[_fetch_inv_candle(t) for t in candle_tickers],
+                    return_exceptions=True,
+                )
+
+                ta_filled = 0
+                for result in candle_results:
+                    if isinstance(result, Exception):
+                        continue
+                    ticker, bars = result
+                    if bars and len(bars) >= 20 and ticker in enriched_candidates:
+                        ta_data = compute_technicals_from_bars(bars)
+                        if ta_data and isinstance(ta_data, dict):
+                            if not enriched_candidates[ticker].get("technicals"):
+                                enriched_candidates[ticker]["technicals"] = {}
+                            enriched_candidates[ticker]["technicals"].update(ta_data)
+                            last_close = bars[-1].get("c")
+                            if last_close and not enriched_candidates[ticker].get("snapshot", {}).get("price"):
+                                enriched_candidates[ticker].setdefault("snapshot", {})["price"] = last_close
+                            ta_filled += 1
+
+                print(f"[Wide Scan] TA enrichment: {ta_filled}/{len(candle_tickers)} candles OK ({candle_budget_inv.summary()})")
 
         scan_result = {
             "news_context": news_context,
@@ -1168,6 +1202,8 @@ class MarketDataService:
             "enriched_data": enriched_candidates,
             "trending": trending[:10] if trending else [],
         }
+        if macro_snapshot:
+            scan_result["macro_snapshot"] = macro_snapshot
         scan_result.update(budget.degradation_metadata())
         return scan_result
 
