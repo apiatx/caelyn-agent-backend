@@ -278,6 +278,7 @@ def _compress_best_trades(data: dict) -> dict:
         "bearish_setups": bearish_digest,
         "scan_stats": data.get("scan_stats", {}),
         "data_health": data.get("data_health", {}),
+        "market_mood_social": data.get("market_mood_social"),
     }
 
 
@@ -374,6 +375,7 @@ def _compress_screener(data: dict) -> dict:
         "rows": rows,
         "scan_stats": data.get("scan_stats", {}),
         "meta": data.get("meta", {}),
+        "market_mood_social": data.get("market_mood_social"),
     }
 
 

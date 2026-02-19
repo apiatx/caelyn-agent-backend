@@ -1228,11 +1228,20 @@ class MarketDataService:
         oversold_task = self.finviz.get_oversold_stocks()
         volatile_task = self.finviz.get_most_volatile()
 
-        results = await asyncio.gather(
-            new_highs_task, unusual_vol_task, gainers_task, breakout_task, volume_task,
-            most_active_task, oversold_task, volatile_task,
-            return_exceptions=True,
-        )
+        mood_task = None
+        if hasattr(self, 'xai') and self.xai:
+            mood_task = asyncio.wait_for(
+                self.xai.get_market_mood_snapshot(),
+                timeout=10.0,
+            )
+
+        all_tasks = [new_highs_task, unusual_vol_task, gainers_task, breakout_task, volume_task,
+                     most_active_task, oversold_task, volatile_task]
+        if mood_task:
+            all_tasks.append(mood_task)
+
+        results = await asyncio.gather(*all_tasks, return_exceptions=True)
+
         new_highs = results[0] if not isinstance(results[0], Exception) else []
         unusual_vol = results[1] if not isinstance(results[1], Exception) else []
         gainers = results[2] if not isinstance(results[2], Exception) else []
@@ -1241,6 +1250,15 @@ class MarketDataService:
         most_active = results[5] if not isinstance(results[5], Exception) else []
         oversold = results[6] if not isinstance(results[6], Exception) else []
         volatile = results[7] if not isinstance(results[7], Exception) else []
+
+        market_mood = None
+        if mood_task and len(results) > 8:
+            mood_result = results[8]
+            if not isinstance(mood_result, Exception) and isinstance(mood_result, dict):
+                market_mood = mood_result
+                print(f"[BEST_TRADES] Grok market mood: {mood_result.get('mood', '?')} (score={mood_result.get('mood_score', '?')})")
+            else:
+                print(f"[BEST_TRADES] Grok mood unavailable: {mood_result if isinstance(mood_result, Exception) else 'empty'}")
 
         ticker_sources = {}
         for src_name, src_list in [("new_high", new_highs), ("unusual_vol", unusual_vol),
@@ -1456,6 +1474,7 @@ class MarketDataService:
                 "elapsed_s": round(elapsed, 1),
             },
             "data_health": data_health,
+            "market_mood_social": market_mood,
         }
 
     async def _enrich_trade_candidate(self, candidate: dict) -> dict:
@@ -3782,11 +3801,33 @@ class MarketDataService:
         screen_url = f"v=111&f={finviz_filter_str}&ft=4&o={finviz_sort}"
         print(f"[SCREENER] Phase A: Finviz URL: {screen_url}")
 
+        mood_task = None
+        if hasattr(self, 'xai') and self.xai:
+            mood_task = asyncio.wait_for(
+                self.xai.get_market_mood_snapshot(),
+                timeout=10.0,
+            )
+
         try:
-            candidates = await self.finviz._custom_screen(screen_url)
+            if mood_task:
+                candidates, market_mood = await asyncio.gather(
+                    self.finviz._custom_screen(screen_url),
+                    mood_task,
+                    return_exceptions=True,
+                )
+                if isinstance(candidates, Exception):
+                    candidates = []
+                if isinstance(market_mood, Exception) or not isinstance(market_mood, dict):
+                    market_mood = None
+                else:
+                    print(f"[SCREENER] Grok mood: {market_mood.get('mood', '?')}")
+            else:
+                candidates = await self.finviz._custom_screen(screen_url)
+                market_mood = None
         except Exception as e:
             print(f"[SCREENER] Finviz discovery error: {e}")
             candidates = []
+            market_mood = None
 
         if not candidates:
             fallback_filter = finviz_filter_str.split(",")[0] if "," in finviz_filter_str else finviz_filter_str
@@ -4191,6 +4232,7 @@ class MarketDataService:
                 "elapsed_s": elapsed,
                 "api_usage": candle_budget.stats_dict(),
             },
+            "market_mood_social": market_mood,
         }
 
     async def run_ai_screener(self, filters: dict) -> dict:

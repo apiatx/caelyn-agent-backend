@@ -9,7 +9,7 @@ import openai
 
 from agent.data_compressor import compress_data
 from agent.institutional_scorer import apply_institutional_scoring
-from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT
+from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, REASONING_BRIEF_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT
 from data.market_data_service import MarketDataService
 
 
@@ -306,6 +306,8 @@ class TradingAgent:
         print(f"[AGENT] === NEW REQUEST === (followup={is_followup}, history_turns={len(history)}, preset={preset_intent or 'none'})")
         print(f"[AGENT] Query: {user_prompt[:100]}")
 
+        reasoning_brief = None
+
         if is_followup and not self._needs_fresh_data(user_prompt):
             category = "followup"
             market_data = None
@@ -349,7 +351,20 @@ class TradingAgent:
                 data_size = len(json.dumps(market_data, default=str)) if market_data else 0
                 print(f"[AGENT] Chat context gathered: {data_size:,} chars ({time.time() - start_time:.1f}s)")
             else:
-                market_data = await self._gather_data_safe(query_info)
+                data_task = self._gather_data_safe(query_info)
+                if not is_followup:
+                    plan = query_info.get("orchestration_plan", {})
+                    brief_task = self._generate_reasoning_brief(user_prompt, plan)
+                    market_data, reasoning_brief = await asyncio.gather(
+                        data_task, brief_task, return_exceptions=True
+                    )
+                    if isinstance(reasoning_brief, Exception):
+                        reasoning_brief = None
+                else:
+                    market_data = await data_task
+                if isinstance(market_data, Exception):
+                    print(f"[AGENT] Data gathering exception: {market_data}")
+                    market_data = {"error": str(market_data)}
                 print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
         else:
             query_info = await self._orchestrate_with_timeout(user_prompt)
@@ -378,7 +393,20 @@ class TradingAgent:
                 data_size = len(json.dumps(market_data, default=str)) if market_data else 0
                 print(f"[AGENT] Chat context gathered: {data_size:,} chars ({time.time() - start_time:.1f}s)")
             else:
-                market_data = await self._gather_data_safe(query_info)
+                data_task = self._gather_data_safe(query_info)
+                if not is_followup:
+                    orch_plan = query_info.get("orchestration_plan", {})
+                    brief_task = self._generate_reasoning_brief(user_prompt, orch_plan)
+                    market_data, reasoning_brief = await asyncio.gather(
+                        data_task, brief_task, return_exceptions=True
+                    )
+                    if isinstance(reasoning_brief, Exception):
+                        reasoning_brief = None
+                else:
+                    market_data = await data_task
+                if isinstance(market_data, Exception):
+                    print(f"[AGENT] Data gathering exception: {market_data}")
+                    market_data = {"error": str(market_data)}
                 print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
 
         SCORING_CATEGORIES = {
@@ -412,6 +440,10 @@ class TradingAgent:
             except Exception as e:
                 print(f"[COMPRESS] Compression failed, using raw data: {e}")
                 claude_data = market_data
+
+        if reasoning_brief and isinstance(claude_data, dict):
+            claude_data["_reasoning_brief"] = reasoning_brief
+            print(f"[AGENT] Reasoning brief injected into Claude context")
 
         raw_response = await self._ask_claude_with_timeout(user_prompt, claude_data, history, is_followup=is_followup, category=category)
         claude_ms = int((time.time() - data_done_time) * 1000)
@@ -1341,6 +1373,45 @@ class TradingAgent:
             query_info["_screener_preset"] = plan["_screener_preset"]
 
         return query_info
+
+    async def _generate_reasoning_brief(self, user_prompt: str, plan: dict) -> dict | None:
+        if not self.openai_client:
+            return None
+        try:
+            plan_summary = json.dumps({
+                "intent": plan.get("intent"),
+                "asset_classes": plan.get("asset_classes"),
+                "active_modules": [k for k, v in plan.get("modules", {}).items() if v],
+                "risk_framework": plan.get("risk_framework"),
+                "response_style": plan.get("response_style"),
+                "filters": plan.get("filters", {}),
+            }, default=str)
+
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.openai_client.chat.completions.create,
+                    model="gpt-4o-mini",
+                    max_tokens=300,
+                    temperature=0.2,
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": "Reply with ONLY valid JSON. No other text."},
+                        {"role": "user", "content": (
+                            f"{REASONING_BRIEF_PROMPT}\n\n"
+                            f"User query: {user_prompt}\n"
+                            f"Orchestration plan: {plan_summary}"
+                        )},
+                    ],
+                ),
+                timeout=5.0,
+            )
+            text = response.choices[0].message.content.strip()
+            brief = json.loads(text)
+            print(f"[REASONING_BRIEF] Generated: focus={brief.get('analysis_focus', [])[:3]} lens={brief.get('lens', '?')}")
+            return brief
+        except Exception as e:
+            print(f"[REASONING_BRIEF] Generation failed (non-fatal): {e}")
+            return None
 
     async def _orchestrate_with_timeout(self, prompt: str) -> dict:
         try:

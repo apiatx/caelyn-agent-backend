@@ -385,6 +385,36 @@ Return ONLY a JSON object matching this exact schema:
 
         return (len(errors) == 0, errors)
 
+    async def get_market_mood_snapshot(self) -> dict:
+        from data.cache import cache
+
+        cache_key = "xai:market_mood_snapshot"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        prompt = """Search X for the overall stock market mood RIGHT NOW. What is the dominant sentiment among traders on X today?
+
+Return ONLY a JSON object (no markdown, no backticks):
+{
+    "mood": "risk-on" | "risk-off" | "mixed" | "euphoric" | "fearful" | "choppy",
+    "mood_score": -1.0 to 1.0,
+    "dominant_narratives": ["narrative1", "narrative2", "narrative3"],
+    "hot_sectors": ["sector1", "sector2"],
+    "avoid_sectors": ["sector1"],
+    "trader_consensus": "1-2 sentence summary of what traders on X are focused on right now",
+    "contrarian_note": "Anything where X consensus looks wrong, or null"
+}
+
+Keep it tight. This is a mood check, not a full scan."""
+
+        result = await self._call_grok_with_x_search(prompt)
+
+        if result and isinstance(result, dict) and "error" not in result:
+            cache.set(cache_key, result, 180)
+
+        return result
+
     async def _call_grok_with_x_search(self, prompt: str) -> dict:
         """Call the xAI Responses API with x_search enabled."""
         payload = {
