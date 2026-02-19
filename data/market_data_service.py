@@ -20,6 +20,7 @@ from data.reddit_provider import RedditSentimentProvider
 from data.altfins_provider import AltFINSProvider
 from data.xai_sentiment_provider import XAISentimentProvider
 from data.cache import cache, MACRO_TTL, SECTOR_ETF_TTL, CANDLE_TTL, REGIME_CANDLE_TTL
+from api_budget import daily_budget
 
 
 DATA_SOURCES = {
@@ -317,7 +318,7 @@ class MarketDataService:
             budget.record_blocked()
             return []
 
-        if self.twelvedata and not _is_twelvedata_disabled():
+        if self.twelvedata and not _is_twelvedata_disabled() and daily_budget.can_spend("twelvedata"):
             try:
                 td_bars = await asyncio.wait_for(
                     asyncio.to_thread(self.twelvedata.get_daily_bars, symbol, days),
@@ -331,6 +332,7 @@ class MarketDataService:
                             budget.record_twelvedata_rate_limited()
                         print(f"[CANDLES] TwelveData {symbol} rate limited, falling through to Finnhub/Polygon")
                 elif td_bars and len(td_bars) >= 20:
+                    daily_budget.spend("twelvedata")
                     if budget:
                         budget.spend("twelvedata")
                     cache.set(cache_key, td_bars, use_ttl)
@@ -341,13 +343,14 @@ class MarketDataService:
             except Exception as e:
                 print(f"[CANDLES] TwelveData {symbol} error: {e}")
 
-        if not _is_finnhub_candles_disabled():
+        if not _is_finnhub_candles_disabled() and daily_budget.can_spend("finnhub"):
             try:
                 result = await asyncio.wait_for(
                     asyncio.to_thread(self.finnhub.get_stock_candles, symbol, days),
                     timeout=10.0,
                 )
                 if result and len(result) >= 20:
+                    daily_budget.spend("finnhub")
                     cache.set(cache_key, result, use_ttl)
                     return result
                 elif not result:
@@ -507,16 +510,20 @@ class MarketDataService:
         """
         ticker = ticker.upper()
 
-        finnhub_quote = await fetch_with_fallback(
-            "equity_price",
-            lambda: asyncio.to_thread(self.finnhub.get_quote, ticker),
-            timeout=3.0,
-        )
-        finnhub_profile = await fetch_with_fallback(
-            "company_profile",
-            lambda: asyncio.to_thread(self.finnhub.get_company_profile, ticker),
-            timeout=3.0,
-        )
+        finnhub_quote = None
+        finnhub_profile = None
+        if daily_budget.can_spend("finnhub", 2):
+            finnhub_quote = await fetch_with_fallback(
+                "equity_price",
+                lambda: asyncio.to_thread(self.finnhub.get_quote, ticker),
+                timeout=3.0,
+            )
+            finnhub_profile = await fetch_with_fallback(
+                "company_profile",
+                lambda: asyncio.to_thread(self.finnhub.get_company_profile, ticker),
+                timeout=3.0,
+            )
+            daily_budget.spend("finnhub", 2)
 
         snapshot_compat = {}
         if finnhub_quote:
@@ -2166,7 +2173,10 @@ class MarketDataService:
 
         async def _finnhub_quote(symbol: str) -> tuple:
             try:
+                if not daily_budget.can_spend("finnhub"):
+                    return (symbol, None)
                 q = await asyncio.to_thread(self.finnhub.get_quote, symbol)
+                daily_budget.spend("finnhub")
                 if q and q.get("price"):
                     chg = q.get("change")
                     chg_pct = q.get("change_pct")
@@ -3646,28 +3656,31 @@ class MarketDataService:
 
         async def _fetch_one(ticker):
             async with quote_semaphore:
-                try:
-                    quote = await asyncio.to_thread(self.finnhub.get_quote, ticker)
-                    if quote and quote.get("price"):
-                        results[ticker] = {
-                            "price": quote["price"],
-                            "change_pct": quote.get("change_pct"),
-                            "prev_close": quote.get("prev_close"),
-                        }
-                        return
-                except Exception:
-                    pass
-                try:
-                    if hasattr(self, 'fmp') and self.fmp:
+                if daily_budget.can_spend("finnhub"):
+                    try:
+                        quote = await asyncio.to_thread(self.finnhub.get_quote, ticker)
+                        daily_budget.spend("finnhub")
+                        if quote and quote.get("price"):
+                            results[ticker] = {
+                                "price": quote["price"],
+                                "change_pct": quote.get("change_pct"),
+                                "prev_close": quote.get("prev_close"),
+                            }
+                            return
+                    except Exception:
+                        pass
+                if hasattr(self, 'fmp') and self.fmp and daily_budget.can_spend("fmp"):
+                    try:
                         fmp_quote = await self.fmp.get_quote(ticker)
+                        daily_budget.spend("fmp")
                         if fmp_quote and fmp_quote.get("price"):
                             results[ticker] = {
                                 "price": fmp_quote["price"],
                                 "change_pct": fmp_quote.get("changesPercentage"),
                                 "prev_close": fmp_quote.get("previousClose"),
                             }
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
 
         tasks = [_fetch_one(t) for t in symbols]
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -3811,6 +3824,22 @@ class MarketDataService:
             if not ticker or len(ticker) > 6:
                 return None
 
+            def _parse_num(val):
+                if val is None:
+                    return None
+                try:
+                    return float(str(val).replace(",", "").strip())
+                except (ValueError, TypeError):
+                    return None
+
+            def _parse_pct(val):
+                if val is None:
+                    return None
+                try:
+                    return float(str(val).replace("%", "").replace("+", "").replace(",", "").strip())
+                except (ValueError, TypeError):
+                    return None
+
             row = {
                 "ticker": ticker,
                 "company": item.get("company", "").strip() or None,
@@ -3828,13 +3857,21 @@ class MarketDataService:
             if row["company"] and len(row["company"]) <= 1:
                 row["company"] = None
 
-            try:
-                quote = await asyncio.to_thread(self.finnhub.get_quote, ticker)
-                if quote and quote.get("price"):
-                    row["price"] = quote["price"]
-                    row["chg_pct"] = quote.get("change_pct")
-            except Exception:
-                pass
+            finviz_price = _parse_num(item.get("price"))
+            finviz_chg = _parse_pct(item.get("change"))
+            if finviz_price and finviz_price > 0:
+                row["price"] = finviz_price
+                row["chg_pct"] = finviz_chg
+                print(f"[SCREENER] using Finviz price for {ticker}: ${finviz_price}")
+            elif daily_budget.can_spend("finnhub"):
+                try:
+                    quote = await asyncio.to_thread(self.finnhub.get_quote, ticker)
+                    daily_budget.spend("finnhub")
+                    if quote and quote.get("price"):
+                        row["price"] = quote["price"]
+                        row["chg_pct"] = quote.get("change_pct")
+                except Exception:
+                    pass
 
             try:
                 overview = await self.stockanalysis.get_overview(ticker)

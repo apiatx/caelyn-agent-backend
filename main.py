@@ -945,6 +945,12 @@ async def candle_stats(request: Request):
     return stats
 
 
+@app.get("/api/health/budget")
+async def health_budget(request: Request):
+    from api_budget import daily_budget
+    return daily_budget.status()
+
+
 # ============================================================
 # Portfolio Holdings CRUD
 # ============================================================
