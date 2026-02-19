@@ -1043,8 +1043,9 @@ class TradingAgent:
             "intent": "investment_ideas",
             "asset_classes": ["equities"],
             "modules": {
-                "x_sentiment": False,
-                "social_sentiment": False,
+                "x_sentiment": True,
+                "x_social_scan": False,
+                "social_sentiment": True,
                 "technical_scan": True,
                 "fundamental_validation": True,
                 "macro_context": True,

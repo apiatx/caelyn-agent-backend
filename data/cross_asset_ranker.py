@@ -37,8 +37,8 @@ MAJOR_COMMODITIES = {
 }
 
 COVERAGE_QUOTAS = {
-    "equities_large": 1,
-    "equities_mid": 2,
+    "equities_large": 0,
+    "equities_mid": 3,
     "equities_small": 2,
     "crypto": 2,
     "commodities": 2,

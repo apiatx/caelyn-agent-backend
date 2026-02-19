@@ -52,7 +52,7 @@ PRESET_BUDGETS = {
     "social_momentum": {"max_points": 45, "max_seconds": 10, "allow_deep_dive": True},
     "microcap_asymmetry": {"max_points": 60, "max_seconds": 12, "allow_deep_dive": True},
     "asymmetric": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
-    "investments": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
+    "investments": {"max_points": 60, "max_seconds": 14, "allow_deep_dive": True},
     "fundamentals_scan": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
     "small_cap_spec": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
     "squeeze": {"max_points": 50, "max_seconds": 10, "allow_deep_dive": True},
@@ -799,9 +799,13 @@ class MarketDataService:
             "enrich_top": 12,
         },
         "investments": {
-            "filters": "sh_avgvol_o300,fa_salesqoq_o10,fa_epsqoq_o10,ta_sma200_pa,sh_price_o10",
-            "limit": 40,
-            "enrich_top": 12,
+            "filters": "sh_avgvol_o300,fa_salesqoq_o10,ta_sma50_pa,sh_price_o5",
+            "limit": 50,
+            "enrich_top": 15,
+            "fallback_filters": [
+                "sh_avgvol_o200,fa_salesqoq_o5,ta_sma200_pa,sh_price_o5",
+                "sh_avgvol_o200,fa_epsqoq_o10,ta_sma50_pa,sh_price_o3",
+            ],
         },
         "fundamentals_scan": {
             "filters": "sh_avgvol_o300,fa_salesqoq_o20,fa_opermargin_pos,sh_price_o5",
@@ -873,6 +877,26 @@ class MarketDataService:
         if isinstance(screener_results, Exception):
             print(f"[Wide Scan] Screener failed: {screener_results}")
             screener_results = []
+
+        if len(screener_results) < 5 and cat_config.get("fallback_filters"):
+            for fallback_filter in cat_config["fallback_filters"]:
+                print(f"[Wide Scan] Primary returned only {len(screener_results)} results, trying fallback: {fallback_filter}")
+                try:
+                    fallback_results = await self.finviz._custom_screen(
+                        f"v=111&f={fallback_filter}&ft=4&o=-change"
+                    )
+                    if isinstance(fallback_results, list) and fallback_results:
+                        existing_tickers = {item.get("ticker", "").upper() for item in screener_results if isinstance(item, dict)}
+                        for item in fallback_results:
+                            if isinstance(item, dict) and item.get("ticker", "").upper() not in existing_tickers:
+                                screener_results.append(item)
+                                existing_tickers.add(item.get("ticker", "").upper())
+                        print(f"[Wide Scan] Fallback added results, total now {len(screener_results)}")
+                        if len(screener_results) >= 15:
+                            break
+                except Exception as e:
+                    print(f"[Wide Scan] Fallback screen failed: {e}")
+
         if isinstance(news_context, Exception):
             news_context = {}
 

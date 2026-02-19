@@ -286,9 +286,9 @@ Rules:
 Scan X in real time for what is trending across markets and return a structured cross-asset shortlist.
 
 Equities buckets and counts:
-- large_caps: 1-3 tickers with market cap >= $100B
-- mid_caps: 2-5 tickers with market cap $15B-$100B
-- small_micro_caps: 2-5 tickers with market cap $50M-$15B
+- large_caps: 0-2 tickers with market cap >= $100B — ONLY include a large cap if it has a SPECIFIC catalyst driving unusual social activity RIGHT NOW (earnings surprise, major news, regulatory event, technical breakout to new highs). Do NOT include a large cap just because it gets mentioned a lot — AAPL, MSFT, NVDA are always discussed. Include them ONLY if something NEW and material is happening today.
+- mid_caps: 3-6 tickers with market cap $15B-$100B — This is your sweet spot. Mid-caps with momentum and catalysts are where the best trending signals live.
+- small_micro_caps: 3-6 tickers with market cap $50M-$15B — High-conviction small caps with real catalysts, not pump-and-dump noise. Flag any that look like coordinated pumps.
 
 Crypto:
 - 2-4 tickers
@@ -310,6 +310,7 @@ For EACH item you MUST include:
 - 2 receipts (one bullish, one bearish if available; both bullish if no bearish exists)
 
 Also return: sector_focus (3-6), top_traders_view (3-6 summaries, no usernames), market_direction_call (1-3 sentences), your_opinion (2-4 sentences).
+IMPORTANT BIAS: Favor tickers where social velocity is ACCELERATING (new catalysts, breaking news, fresh momentum) over tickers that are ALWAYS discussed (mega-caps with no new catalyst). The user wants to discover what's NEWLY hot, not what's always popular. If you can only find 1 genuine large-cap catalyst, return only 1 large cap. Zero large caps is acceptable if nothing meaningful is happening in mega-cap land.
 If insufficient high-quality data, return fewer items and set data_quality_flag="low".
 
 Return ONLY a JSON object matching this exact schema:

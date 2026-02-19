@@ -439,6 +439,37 @@ def score_for_investments(ticker_data: dict) -> float:
             except (TypeError, ValueError):
                 pass
 
+    if rg is not None:
+        if rg > 0.40:
+            score += 25
+        elif rg > 0.20:
+            score += 15
+
+    if isinstance(earnings, list) and len(earnings) > 0:
+        last_e = earnings[0] if isinstance(earnings[0], dict) else {}
+        sp = last_e.get("surprise_pct")
+        if sp is not None:
+            try:
+                if float(sp) > 0:
+                    score += 10
+            except (TypeError, ValueError):
+                pass
+
+    analyst = overview.get("analyst_recommendation") or overview.get("recommendation")
+    if analyst and isinstance(analyst, str):
+        al = analyst.lower().strip()
+        if al in ("buy", "strong buy", "strong_buy", "outperform"):
+            score += 10
+        elif al in ("overweight",):
+            score += 5
+
+    sector = (overview.get("sector") or overview.get("industry") or "").lower()
+    growth_sectors = {"technology", "semiconductors", "software", "electronic technology",
+                      "information technology", "communications", "health technology",
+                      "ai", "cloud", "artificial intelligence", "machine learning"}
+    if any(gs in sector for gs in growth_sectors):
+        score += 5
+
     return round(min(score, 100), 1)
 
 
