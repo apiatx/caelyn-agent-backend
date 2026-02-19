@@ -3779,7 +3779,7 @@ class MarketDataService:
             except:
                 pass
 
-        return {
+        result = {
             "cg_global": cg.get("global_market", {}),
             "cmc_global": cmc.get("global_metrics", {}),
 
@@ -3795,13 +3795,13 @@ class MarketDataService:
             "cg_gainers_losers": cg.get("gainers_losers", {}),
             "cmc_gainers_losers": cmc_gainers_losers,
 
-            "derivatives_tickers": (derivatives or [])[:30],
+            "derivatives_tickers": (derivatives or [])[:15],
             "funding_analysis": funding_analysis,
 
             "hyperliquid": data.get("hyperliquid", {}),
 
-            "cg_categories": cg_categories,
-            "cmc_categories": cmc_categories,
+            "cg_categories": cg_categories[:5],
+            "cmc_categories": cmc_categories[:5],
 
             "volume_acceleration": dict(sorted(volume_acceleration.items(), key=lambda x: abs(x[1].get("volume_change_24h", 0)), reverse=True)[:15]),
 
@@ -3818,6 +3818,14 @@ class MarketDataService:
 
             "x_twitter_crypto": data.get("x_twitter_crypto", {}),
         }
+        import json as _json
+        total_size = len(_json.dumps(result, default=str))
+        print(f"[CRYPTO_SCANNER] Total raw data size: {total_size:,} chars", flush=True)
+        for k, v in result.items():
+            ks = len(_json.dumps(v, default=str))
+            if ks > 2000:
+                print(f"[CRYPTO_SCANNER]   {k}: {ks:,} chars", flush=True)
+        return result
 
     async def get_quotes_batch(self, symbols: list[str]) -> dict:
         results = {}

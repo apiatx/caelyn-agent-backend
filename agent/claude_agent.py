@@ -1743,6 +1743,8 @@ class TradingAgent:
         "ticker_analysis", "investments", "portfolio_review", "followup",
     }
 
+    MEDIUM_DATA_CAP_CATEGORIES = {"crypto", "cross_market"}
+
     async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "") -> str:
         data_size = len(json.dumps(market_data, default=str)) if market_data else 0
         print(f"[AGENT] Sending to Claude: {data_size:,} chars of market data (category={category})")
@@ -2994,6 +2996,8 @@ Be direct and opinionated. Tell me what you actually think."""
             is_fast_scan = category not in self.DEEP_ANALYSIS_CATEGORIES
             if is_best_trades:
                 data_cap = 50000
+            elif category in self.MEDIUM_DATA_CAP_CATEGORIES:
+                data_cap = 50000
             elif is_cross_market_data or is_fast_scan:
                 data_cap = 25000
             else:
@@ -3159,7 +3163,12 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES
         if use_fast_model:
             model = "claude-sonnet-4-20250514"
-            token_limit = 8192 if category == "best_trades" else 4096
+            if category == "best_trades":
+                token_limit = 8192
+            elif category in ("crypto", "cross_market"):
+                token_limit = 8192
+            else:
+                token_limit = 4096
         else:
             model = "claude-sonnet-4-5-20250929"
             token_limit = 16384

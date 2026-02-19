@@ -492,7 +492,217 @@ def _compress_screener(data: dict) -> dict:
 
 
 def _compress_crypto(data: dict) -> dict:
-    return _compress_generic(data)
+    compressed = {}
+
+    cg_global = data.get("cg_global", {})
+    if isinstance(cg_global, dict) and "data" in cg_global:
+        gd = cg_global["data"]
+        compressed["cg_global"] = {
+            "total_market_cap_usd": gd.get("total_market_cap", {}).get("usd"),
+            "total_volume_usd": gd.get("total_volume", {}).get("usd"),
+            "btc_dominance": gd.get("market_cap_percentage", {}).get("btc"),
+            "eth_dominance": gd.get("market_cap_percentage", {}).get("eth"),
+            "market_cap_change_24h": gd.get("market_cap_change_percentage_24h_usd"),
+            "active_cryptos": gd.get("active_cryptocurrencies"),
+        }
+    else:
+        compressed["cg_global"] = cg_global
+
+    cmc_g = data.get("cmc_global", {})
+    if isinstance(cmc_g, dict) and "data" in cmc_g:
+        gd = cmc_g["data"]
+        q = gd.get("quote", {}).get("USD", {})
+        compressed["cmc_global"] = {
+            "btc_dominance": gd.get("btc_dominance"),
+            "eth_dominance": gd.get("eth_dominance"),
+            "total_market_cap": q.get("total_market_cap"),
+            "total_volume_24h": q.get("total_volume_24h"),
+            "total_volume_change_24h": q.get("total_volume_24h_yesterday_percentage_change"),
+        }
+    else:
+        compressed["cmc_global"] = cmc_g
+
+    top_coins = data.get("cg_top_coins", [])
+    compressed["top_coins"] = [
+        {
+            "symbol": c.get("symbol", "").upper(),
+            "name": c.get("name"),
+            "price": c.get("current_price"),
+            "change_24h": c.get("price_change_percentage_24h"),
+            "change_7d": c.get("price_change_percentage_7d_in_currency"),
+            "market_cap": c.get("market_cap"),
+            "volume_24h": c.get("total_volume"),
+            "mcap_rank": c.get("market_cap_rank"),
+        }
+        for c in (top_coins or [])[:15]
+    ]
+
+    cmc_listings = data.get("cmc_listings", [])
+    compressed["cmc_top"] = [
+        {
+            "symbol": c.get("symbol"),
+            "name": c.get("name"),
+            "price": c.get("quote", {}).get("USD", {}).get("price"),
+            "change_24h": c.get("quote", {}).get("USD", {}).get("percent_change_24h"),
+            "change_7d": c.get("quote", {}).get("USD", {}).get("percent_change_7d"),
+            "volume_24h": c.get("quote", {}).get("USD", {}).get("volume_24h"),
+            "market_cap": c.get("quote", {}).get("USD", {}).get("market_cap"),
+        }
+        for c in (cmc_listings or [])[:12]
+    ]
+
+    compressed["dual_trending"] = data.get("dual_trending", [])
+    compressed["high_attention"] = data.get("high_attention", [])
+
+    cg_trending = data.get("cg_trending", {})
+    if isinstance(cg_trending, dict):
+        coins = cg_trending.get("coins", [])
+        compressed["cg_trending"] = [
+            {
+                "symbol": c.get("item", {}).get("symbol", ""),
+                "name": c.get("item", {}).get("name", ""),
+                "mcap_rank": c.get("item", {}).get("market_cap_rank"),
+                "price_btc": c.get("item", {}).get("price_btc"),
+            }
+            for c in coins[:10]
+        ]
+    else:
+        compressed["cg_trending"] = []
+
+    cmc_trending = data.get("cmc_trending", [])
+    compressed["cmc_trending"] = [
+        {"symbol": c.get("symbol"), "name": c.get("name")}
+        for c in (cmc_trending or [])[:10]
+    ]
+
+    cmc_most_visited = data.get("cmc_most_visited", [])
+    compressed["cmc_most_visited"] = [
+        {"symbol": c.get("symbol"), "name": c.get("name")}
+        for c in (cmc_most_visited or [])[:10]
+    ]
+
+    cg_gl = data.get("cg_gainers_losers", {})
+    if isinstance(cg_gl, dict):
+        compressed["gainers"] = [
+            {"symbol": g.get("symbol", "").upper(), "name": g.get("name"), "change_24h": g.get("price_change_percentage_24h")}
+            for g in (cg_gl.get("gainers") or [])[:6]
+        ]
+        compressed["losers"] = [
+            {"symbol": g.get("symbol", "").upper(), "name": g.get("name"), "change_24h": g.get("price_change_percentage_24h")}
+            for g in (cg_gl.get("losers") or [])[:5]
+        ]
+
+    cmc_gl = data.get("cmc_gainers_losers", {})
+    if isinstance(cmc_gl, dict):
+        compressed["cmc_gainers"] = [
+            {"symbol": g.get("symbol"), "change_24h": g.get("quote", {}).get("USD", {}).get("percent_change_24h")}
+            for g in (cmc_gl.get("gainers") or [])[:5]
+        ]
+
+    compressed["funding_analysis"] = data.get("funding_analysis", {})
+
+    hl = data.get("hyperliquid", {})
+    if isinstance(hl, dict) and not hl.get("error"):
+        hl_compressed = {}
+        for k in ("top_funding", "open_interest_leaders", "volume_leaders"):
+            v = hl.get(k)
+            if isinstance(v, list):
+                hl_compressed[k] = v[:8]
+        for k in ("market_summary", "funding_analysis", "btc_funding_trend", "eth_funding_trend"):
+            if k in hl:
+                hl_compressed[k] = hl[k]
+        compressed["hyperliquid"] = hl_compressed
+
+    compressed["volume_acceleration"] = dict(list(data.get("volume_acceleration", {}).items())[:10])
+
+    cg_cats = data.get("cg_categories", [])
+    compressed["hot_categories"] = [
+        {"name": c.get("name"), "change_24h": c.get("market_cap_change_24h"), "volume_24h": c.get("volume_24h"), "top_coins": c.get("top_3_coins_id", c.get("top_3_coins", []))[:3]}
+        for c in (cg_cats or [])[:8]
+    ] if cg_cats else [
+        {"name": c.get("name"), "title": c.get("title")}
+        for c in (data.get("cmc_categories", []) or [])[:8]
+    ]
+
+    new_listings = data.get("new_listings", [])
+    compressed["new_listings"] = [
+        {"symbol": c.get("symbol"), "name": c.get("name"), "date": c.get("date_added", "")[:10]}
+        for c in (new_listings or [])[:5]
+    ]
+
+    deep = data.get("deep_dive", {})
+    if isinstance(deep, dict):
+        compressed["deep_dive"] = {}
+        for coin_id, coin_data in list(deep.items())[:5]:
+            if isinstance(coin_data, dict):
+                md = coin_data.get("market_data", {})
+                def _usd(field):
+                    val = md.get(field, {})
+                    return val.get("usd") if isinstance(val, dict) else val
+                compressed["deep_dive"][coin_id] = {
+                    "symbol": coin_data.get("symbol", "").upper(),
+                    "price": _usd("current_price"),
+                    "change_24h": md.get("price_change_percentage_24h"),
+                    "change_7d": md.get("price_change_percentage_7d"),
+                    "change_30d": md.get("price_change_percentage_30d"),
+                    "market_cap": _usd("market_cap"),
+                    "volume": _usd("total_volume"),
+                    "ath": _usd("ath"),
+                    "ath_change_pct": md.get("ath_change_percentage", {}).get("usd") if isinstance(md.get("ath_change_percentage"), dict) else md.get("ath_change_percentage"),
+                    "circulating_supply": md.get("circulating_supply"),
+                    "max_supply": md.get("max_supply"),
+                }
+
+    altfins = data.get("altfins", {})
+    if isinstance(altfins, dict) and not altfins.get("error"):
+        compressed["altfins"] = {}
+        for k in ("bullish_signals", "bearish_signals", "breakouts", "top_picks", "signals"):
+            v = altfins.get(k)
+            if isinstance(v, list):
+                compressed["altfins"][k] = v[:5]
+            elif v is not None:
+                compressed["altfins"][k] = v
+        if "summary" in altfins:
+            compressed["altfins"]["summary"] = altfins["summary"]
+
+    compressed["fear_greed"] = data.get("fear_greed", {})
+
+    news = data.get("crypto_news", {})
+    if isinstance(news, dict):
+        articles = news.get("feed", news.get("articles", []))
+        if isinstance(articles, list):
+            compressed["news"] = []
+            for a in articles[:6]:
+                if not isinstance(a, dict):
+                    continue
+                tickers = []
+                ts = a.get("ticker_sentiment")
+                if isinstance(ts, list):
+                    tickers = [t.get("ticker") for t in ts[:3] if isinstance(t, dict)]
+                compressed["news"].append({
+                    "title": a.get("title"),
+                    "sentiment": a.get("overall_sentiment_label"),
+                    "tickers": tickers,
+                })
+
+    compressed["x_sentiment"] = data.get("x_twitter_crypto", {})
+
+    coin_metadata = data.get("coin_metadata", {})
+    if isinstance(coin_metadata, dict):
+        compressed["coin_metadata"] = {}
+        for k, v in list(coin_metadata.items())[:8]:
+            if isinstance(v, dict):
+                entry = {mk: mv for mk, mv in v.items() if mk in ("symbol", "name", "category", "tags")}
+                desc = v.get("description", "")
+                if isinstance(desc, str) and desc:
+                    entry["description"] = desc[:200]
+                compressed["coin_metadata"][k] = entry
+
+    import json as _json
+    size = len(_json.dumps(compressed, default=str))
+    print(f"[COMPRESS] crypto: {size:,} chars (from raw data)", flush=True)
+
+    return compressed
 
 
 def _compress_sector(data: dict) -> dict:
