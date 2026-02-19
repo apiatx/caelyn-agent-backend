@@ -1,0 +1,131 @@
+## Fix: Crypto tickers resolve to wrong stock on TradingView charts
+
+### Problem
+When the Trending Now or crypto scans return crypto assets like TRX (TRON) or LINK (Chainlink), the TradingView chart embed shows the stock with the same ticker (TRX Gold Corporation, Interlink Electronics). The backend needs to provide a correctly formatted TradingView symbol for each asset.
+
+### Solution
+Add a `tradingview_symbol` field to crypto picks that uses the correct TradingView exchange prefix (e.g., `BINANCE:TRXUSDT` instead of just `TRX`).
+
+### Implementation
+
+#### 1. Add a crypto symbol mapper utility
+
+Create a mapping in `coingecko_provider.py` (or add to an existing utils file) that maps common crypto symbols to their TradingView-compatible symbols:
+```python
+# TradingView crypto symbol mapping
+# Format: EXCHANGE:PAIRUSDT or EXCHANGE:PAIRUSD
+CRYPTO_TV_SYMBOLS = {
+    "BTC": "BINANCE:BTCUSDT",
+    "ETH": "BINANCE:ETHUSDT",
+    "SOL": "BINANCE:SOLUSDT",
+    "BNB": "BINANCE:BNBUSDT",
+    "XRP": "BINANCE:XRPUSDT",
+    "ADA": "BINANCE:ADAUSDT",
+    "DOGE": "BINANCE:DOGEUSDT",
+    "DOT": "BINANCE:DOTUSDT",
+    "LINK": "BINANCE:LINKUSDT",
+    "AVAX": "BINANCE:AVAXUSDT",
+    "MATIC": "BINANCE:MATICUSDT",
+    "UNI": "BINANCE:UNIUSDT",
+    "ATOM": "BINANCE:ATOMUSDT",
+    "LTC": "BINANCE:LTCUSDT",
+    "TRX": "BINANCE:TRXUSDT",
+    "NEAR": "BINANCE:NEARUSDT",
+    "APT": "BINANCE:APTUSDT",
+    "OP": "BINANCE:OPUSDT",
+    "ARB": "BINANCE:ARBUSDT",
+    "SUI": "BINANCE:SUIUSDT",
+    "SEI": "BINANCE:SEIUSDT",
+    "INJ": "BINANCE:INJUSDT",
+    "FET": "BINANCE:FETUSDT",
+    "RENDER": "BINANCE:RENDERUSDT",
+    "RNDR": "BINANCE:RENDERUSDT",
+    "FIL": "BINANCE:FILUSDT",
+    "AAVE": "BINANCE:AAVEUSDT",
+    "MKR": "BINANCE:MKRUSDT",
+    "PEPE": "BINANCE:PEPEUSDT",
+    "SHIB": "BINANCE:SHIBUSDT",
+    "WIF": "BINANCE:WIFUSDT",
+    "BONK": "BINANCE:BONKUSDT",
+    "FLOKI": "BINANCE:FLOKIUSDT",
+    "STX": "BINANCE:STXUSDT",
+    "IMX": "BINANCE:IMXUSDT",
+    "GRT": "BINANCE:GRTUSDT",
+    "HBAR": "BINANCE:HBARUSDT",
+    "VET": "BINANCE:VETUSDT",
+    "ALGO": "BINANCE:ALGOUSDT",
+    "FTM": "BINANCE:FTMUSDT",
+    "SAND": "BINANCE:SANDUSDT",
+    "MANA": "BINANCE:MANAUSDT",
+    "AXS": "BINANCE:AXSUSDT",
+    "CRV": "BINANCE:CRVUSDT",
+    "LDO": "BINANCE:LDOUSDT",
+    "RUNE": "BINANCE:RUNEUSDT",
+    "ENS": "BINANCE:ENSUSDT",
+    "COMP": "BINANCE:COMPUSDT",
+    "SNX": "BINANCE:SNXUSDT",
+    "THETA": "BINANCE:THETAUSDT",
+    "EOS": "BINANCE:EOSUSDT",
+    "XLM": "BINANCE:XLMUSDT",
+    "ICP": "BINANCE:ICPUSDT",
+    "TIA": "BINANCE:TIAUSDT",
+    "JUP": "BINANCE:JUPUSDT",
+    "WLD": "BINANCE:WLDUSDT",
+    "TAO": "BINANCE:TAOUSDT",
+    "KAS": "KUCOIN:KASUSDT",
+    "TON": "OKX:TONUSDT",
+}
+
+def get_crypto_tv_symbol(ticker: str) -> str:
+    """Get TradingView-compatible symbol for a crypto ticker.
+    Returns EXCHANGE:PAIRUSDT format, or fallback to BINANCE:TICKERUSDT."""
+    ticker = ticker.upper().strip()
+    if ticker in CRYPTO_TV_SYMBOLS:
+        return CRYPTO_TV_SYMBOLS[ticker]
+    # Fallback: assume Binance USDT pair
+    return f"BINANCE:{ticker}USDT"
+```
+
+#### 2. Inject tradingview_symbol into crypto picks in cross_asset_ranker.py
+
+Find the `_extract_crypto_candidates` function in `cross_asset_ranker.py`. After each crypto candidate dict is built, add:
+```python
+from data.coingecko_provider import get_crypto_tv_symbol
+
+# Inside the candidate dict construction for each crypto:
+candidate["tradingview_symbol"] = get_crypto_tv_symbol(candidate.get("ticker", candidate.get("symbol", "")))
+candidate["asset_class"] = "crypto"
+```
+
+Also find anywhere in `cross_asset_ranker.py` where crypto picks are assembled into the final output and make sure `tradingview_symbol` and `asset_class` are preserved in the output dict.
+
+#### 3. Inject tradingview_symbol into crypto scan results
+
+In `market_data_service.py`, find where crypto scan results are assembled (in methods like `get_crypto_scan`, `get_cross_market_scan`, or wherever crypto data is returned to the frontend). For each crypto ticker in the output, add:
+```python
+from data.coingecko_provider import get_crypto_tv_symbol
+
+# When building crypto result items:
+item["tradingview_symbol"] = get_crypto_tv_symbol(item.get("symbol", item.get("ticker", "")))
+item["asset_class"] = "crypto"
+```
+
+Search for all places where crypto results are built and returned. Key locations:
+- `get_cross_market_scan()` — where crypto_scanner results are included
+- Any crypto-specific scan method
+- The cross_asset_trending data assembly in `claude_agent.py` (`_gather_cross_asset_trending_data`)
+
+#### 4. Also tag commodity ETF picks with correct TradingView symbols
+
+For commodity proxy ETFs (GLD, SLV, USO, etc.), these are actual stock tickers and resolve correctly on TradingView. No change needed for commodities. But add `asset_class: "commodity"` to commodity picks for frontend reference.
+
+#### 5. Ensure Claude's output preserves the tradingview_symbol
+
+In `prompts.py`, in the CROSS_ASSET_TRENDING_CONTRACT or wherever Claude is instructed on the trending output format, make sure the schema includes `tradingview_symbol` as a passthrough field. Add to the trending ticker schema:
+"tradingview_symbol": "Pass through from data if present — this is the exchange-prefixed symbol for TradingView charts (e.g., BINANCE:TRXUSDT for crypto). Do NOT modify this field."
+
+### Testing
+1. Run "Trending Now" — any crypto picks should have `tradingview_symbol` like `BINANCE:TRXUSDT`
+2. Run "Crypto" scan — all picks should have correct TradingView symbols
+3. Verify stock picks still have normal tickers (AAPL, NVDA, etc.) without exchange prefix
+4. Run `python -m pytest` — all tests pass
