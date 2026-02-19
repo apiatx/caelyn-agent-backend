@@ -403,16 +403,22 @@ class TradingAgent:
                 top_trades = market_data.get("top_trades", [])
                 bearish_setups = market_data.get("bearish_setups", [])
                 macro = market_data.get("market_pulse", {})
+                scan_stats = market_data.get("scan_stats", {})
                 for t in top_trades:
                     if not t.get("thesis"):
-                        t["thesis"] = t.get("pattern", "Technical setup") + " with " + str(len(t.get("signals_stacking", []))) + " signals stacking"
+                        sigs = t.get("indicator_signals", t.get("signals_stacking", []))
+                        t["thesis"] = t.get("pattern", "Technical setup") + " — " + ", ".join(sigs[:3])
                     if not t.get("why_could_fail"):
                         t["why_could_fail"] = "Breakdown below stop level would invalidate setup"
+                    if not t.get("risk"):
+                        t["risk"] = t.get("why_could_fail", "")
                 for t in bearish_setups:
                     if not t.get("thesis"):
                         t["thesis"] = "Bearish breakdown with multiple confirming signals"
                     if not t.get("why_could_fail"):
                         t["why_could_fail"] = "Reversal above resistance would invalidate short thesis"
+                    if not t.get("risk"):
+                        t["risk"] = t.get("why_could_fail", "")
                 structured = {
                     "display_type": "trades",
                     "market_pulse": {
@@ -422,6 +428,7 @@ class TradingAgent:
                     },
                     "top_trades": top_trades,
                     "bearish_setups": bearish_setups,
+                    "scan_stats": scan_stats,
                     "notes": ["TA-first scan with deterministic trade plans", "Trade plan numbers are pre-computed from OHLCV data"],
                 }
                 result = {
@@ -431,6 +438,17 @@ class TradingAgent:
                 }
 
         if category == "best_trades" and market_data and isinstance(market_data, dict):
+            structured = result.get("structured")
+            if isinstance(structured, dict):
+                for t in structured.get("top_trades", []):
+                    if isinstance(t, dict):
+                        if not t.get("risk"):
+                            t["risk"] = t.get("why_could_fail", "Breakdown below stop level would invalidate setup")
+                        if not t.get("indicator_signals") and t.get("signals_stacking"):
+                            t["indicator_signals"] = [s.replace("_", " ").title() for s in t["signals_stacking"]]
+                for t in structured.get("bearish_setups", []):
+                    if isinstance(t, dict) and not t.get("risk"):
+                        t["risk"] = t.get("why_could_fail", "Reversal above resistance would invalidate short thesis")
             data_health = market_data.get("data_health")
             if data_health:
                 structured = result.get("structured")

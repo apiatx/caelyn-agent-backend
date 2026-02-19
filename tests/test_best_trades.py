@@ -112,9 +112,10 @@ async def test_best_trades_trade_has_required_fields(mock_service):
     trade = result["top_trades"][0]
     required_fields = [
         "ticker", "name", "direction", "action", "confidence_score",
-        "technical_score", "pattern", "signals_stacking", "entry", "stop",
-        "targets", "risk_reward", "timeframe", "confirmations", "tv_url",
-        "data_gaps"
+        "technical_score", "setup_type", "pattern", "signals_stacking",
+        "indicator_signals", "entry", "stop", "targets", "risk_reward",
+        "timeframe", "confirmations", "tradingview_url", "tv_url",
+        "catalyst_check", "data_gaps"
     ]
     for field in required_fields:
         assert field in trade, f"Missing field: {field}"
@@ -125,14 +126,29 @@ async def test_best_trades_trade_has_required_fields(mock_service):
     assert trade["targets"][0].startswith("$")
     assert ":" in trade["risk_reward"]
     assert trade["direction"] in ("long", "short")
-    assert trade["action"] in ("BUY", "SELL")
+    assert trade["action"] in ("Strong Buy", "Buy", "Hold", "Sell")
+    assert trade["setup_type"] in ("breakout", "trend_continuation", "momentum", "breakdown_short", "technical_setup")
+    assert isinstance(trade["indicator_signals"], list)
+    assert len(trade["indicator_signals"]) >= 1
+    assert trade["tradingview_url"].startswith("https://www.tradingview.com/")
 
 
 @pytest.mark.asyncio
 async def test_best_trades_shortlist_capped(mock_service):
     result = await mock_service.get_best_trades_scan()
-    assert result["scan_stats"]["shortlisted"] <= 12
-    assert result["scan_stats"]["candle_targets"] <= 8
+    assert result["scan_stats"]["shortlisted"] <= 25
+    assert result["scan_stats"]["candle_targets"] <= 12
+
+
+@pytest.mark.asyncio
+async def test_best_trades_scan_stats_fields(mock_service):
+    result = await mock_service.get_best_trades_scan()
+    stats = result["scan_stats"]
+    assert "candidates_total" in stats
+    assert "candles_ok" in stats
+    assert "candles_blocked" in stats
+    assert "cache_hits" in stats
+    assert "ta_qualified" in stats
 
 
 @pytest.mark.asyncio
@@ -235,7 +251,7 @@ async def test_best_trades_budget_limits_polygon_calls(mock_service):
 
     result = await mock_service.get_best_trades_scan()
 
-    assert call_count["n"] <= 5
+    assert call_count["n"] <= 8
     assert result["display_type"] == "trades"
 
 
@@ -246,6 +262,7 @@ async def test_best_trades_no_social_only_narrative(mock_service):
         assert "signals_stacking" in trade
         assert len(trade["signals_stacking"]) >= 1
         assert trade["pattern"] != ""
+        assert "indicator_signals" in trade
 
 
 def test_ta_engine_returns_signals_on_uptrend():
@@ -254,6 +271,7 @@ def test_ta_engine_returns_signals_on_uptrend():
     assert result is not None
     assert result["ticker"] == "TEST"
     assert result["direction"] in ("long", "short")
+    assert result["action"] in ("Strong Buy", "Buy", "Hold", "Sell")
     assert result["entry"].startswith("$")
     assert result["stop"].startswith("$")
     assert len(result["targets"]) == 2
@@ -261,6 +279,10 @@ def test_ta_engine_returns_signals_on_uptrend():
     assert result["technical_score"] > 0
     assert len(result["signals_stacking"]) >= 1
     assert len(result["ta_signals"]) >= 1
+    assert result["setup_type"] in ("breakout", "trend_continuation", "momentum", "breakdown_short", "technical_setup")
+    assert isinstance(result["indicator_signals"], list)
+    assert len(result["indicator_signals"]) >= 1
+    assert result["tradingview_url"].startswith("https://www.tradingview.com/")
     for sig in result["ta_signals"]:
         assert "name" in sig
         assert "direction" in sig
@@ -309,3 +331,24 @@ def test_ta_engine_volume_spike_detected():
     if result:
         signal_names = [s["name"] for s in result["ta_signals"]]
         assert "volume_spike_2x" in signal_names or "volume_expansion" in signal_names
+
+
+def test_ta_engine_indicator_signals_format():
+    bars = _make_bars(60, base_price=50.0)
+    result = analyze_bars(bars, ticker="FMTTEST")
+    if result:
+        assert isinstance(result["indicator_signals"], list)
+        for sig_str in result["indicator_signals"]:
+            assert isinstance(sig_str, str)
+            assert len(sig_str) > 0
+
+
+def test_ta_engine_action_strong_buy():
+    bars = _make_bars(80, base_price=50.0)
+    bars[-1]["v"] = 5000000
+    result = analyze_bars(
+        bars, ticker="STRONGTEST",
+        source_list=["new_high", "unusual_vol", "breakout"],
+    )
+    if result and result["confidence_score"] >= 80:
+        assert result["action"] == "Strong Buy"

@@ -22,6 +22,9 @@ The platform is built on FastAPI, offering a robust and scalable backend.
 - **Creative Discovery Exception**: Allows overrides for specific high-conviction setups with strong sentiment, volume expansion, real catalysts, and adequate liquidity, with capped sizing.
 - **Data Pipeline**: Employs a "wide funnel" approach, screening numerous candidates, mathematically ranking them, and sending the top for deep AI analysis.
 - **Best Trades Scanner**: A three-phase TA-first pipeline: (1) Finviz discovery screens, (2) OHLCV fetch via candle provider chain, (3) core/ta_signal_engine.py computes structured TA signals (name/direction/strength/evidence), ATR-based trade plans (entry/stop/targets/R:R), and ta_score ranking. Social is disabled by default; Claude polishes TA output but cannot alter trade plan numbers.
+  - **Candle Budget**: CandleBudget(max_calls=8), shortlist=25, candle_targets=12, with Phase 2b broadening retry when <6 candles have data.
+  - **Output Fields**: setup_type, indicator_signals (human-readable list), tradingview_url, action (Strong Buy/Buy/Hold/Sell), catalyst_check, risk, atr preserved. scan_stats includes candidates_total, candles_ok, candles_blocked, cache_hits.
+  - **Hard Enforcement**: Backend enforces display_type=trades, non-empty risk field, and indicator_signals even when Claude returns wrong format.
 - **Scan Types**: Supports over 14 diverse scan types including best trades, social momentum, sector rotation, squeeze plays, thematic investing, commodities, and crypto scanning.
 - **Hybrid Trending Architecture**: Combines Grok (xAI) and Claude for trending/social momentum analysis, utilizing two-tier conviction scoring, prioritizing small/micro-caps.
 - **Cross-Market Scan**: Triggers parallel data pulling across all asset classes and uses a quantitative pre-ranker.

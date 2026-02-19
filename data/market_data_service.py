@@ -1203,7 +1203,7 @@ class MarketDataService:
         from core.ta_signal_engine import analyze_bars
         scan_start = time.time()
 
-        candle_budget = CandleBudget(max_calls=5)
+        candle_budget = CandleBudget(max_calls=8)
 
         new_highs_task = self.finviz.get_new_highs()
         unusual_vol_task = self.finviz.get_unusual_volume()
@@ -1255,8 +1255,8 @@ class MarketDataService:
             return score
 
         ranked_tickers = sorted(ticker_sources.keys(), key=_pre_rank_score, reverse=True)
-        shortlist = ranked_tickers[:12]
-        candle_targets = shortlist[:8]
+        shortlist = ranked_tickers[:25]
+        candle_targets = shortlist[:12]
         print(f"[BEST_TRADES] Phase 1: Shortlisted {len(shortlist)}, fetching candles for top {len(candle_targets)}")
 
         ohlc_results = {}
@@ -1275,6 +1275,15 @@ class MarketDataService:
         await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
         print(f"[BEST_TRADES] Phase 2: OHLCV {len(ohlc_results)}/{len(candle_targets)} fetched, {len(no_ta_tickers)} missing | {candle_budget.summary()}")
+
+        if len(ohlc_results) < 6 and candle_budget.can_spend():
+            already_fetched = set(ohlc_results.keys()) | set(no_ta_tickers)
+            retry_targets = [t for t in shortlist if t not in already_fetched][:6]
+            if retry_targets:
+                print(f"[BEST_TRADES] Phase 2b: Broadening — fetching {len(retry_targets)} additional candles")
+                retry_tasks = [_fetch_ohlc_for_ticker(t) for t in retry_targets]
+                await asyncio.gather(*retry_tasks, return_exceptions=True)
+                print(f"[BEST_TRADES] Phase 2b: After retry OHLCV {len(ohlc_results)} total | {candle_budget.summary()}")
 
         all_candidates = []
         for ticker, bars in ohlc_results.items():
@@ -1300,7 +1309,7 @@ class MarketDataService:
         bearish_list = sorted([c for c in all_candidates if c.get("is_bearish") and c["technical_score"] >= 70],
                               key=lambda x: x["confidence_score"], reverse=True)[:2]
 
-        top_trades = bullish[:8]
+        top_trades = bullish[:10]
 
         if top_trades:
             enrich_tasks = [self._enrich_trade_candidate(c) for c in top_trades]
@@ -1313,13 +1322,13 @@ class MarketDataService:
         top5_debug = []
         for c in (top_trades + bearish_list)[:5]:
             top5_debug.append(f"{c['ticker']}(ta={c['technical_score']},sigs={','.join(c['signals_stacking'][:3])})")
-        print(f"[BEST_TRADES] Phase 3: discovered={len(ticker_sources)} with_candles={len(ohlc_results)} ta_qualified={ta_qualified} top5=[{' | '.join(top5_debug)}]")
+
+        top_tickers = [c["ticker"] for c in (top_trades + bearish_list)[:10]]
+        print(f"[BEST_TRADES] candidates={len(ticker_sources)} shortlist={len(shortlist)} candles_ok={len(ohlc_results)} blocked={candle_budget._blocked} cache_hits={candle_budget._cache_hits} top={top_tickers}")
 
         for c in top_trades + bearish_list:
             c.pop("is_bearish", None)
             c.pop("ta_signals", None)
-            c.pop("setup_type", None)
-            c.pop("atr", None)
 
         macro = await self._build_macro_snapshot()
 
@@ -1352,10 +1361,12 @@ class MarketDataService:
             "top_trades": top_trades,
             "bearish_setups": bearish_list,
             "scan_stats": {
-                "total_screened": len(ticker_sources),
+                "candidates_total": len(ticker_sources),
                 "shortlisted": len(shortlist),
                 "candle_targets": len(candle_targets),
-                "ohlc_fetched": len(ohlc_results),
+                "candles_ok": len(ohlc_results),
+                "candles_blocked": candle_budget._blocked,
+                "cache_hits": candle_budget._cache_hits,
                 "ta_qualified": ta_qualified,
                 "no_ta": len(no_ta_tickers),
                 "elapsed_s": round(elapsed, 1),

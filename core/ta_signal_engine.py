@@ -387,19 +387,41 @@ def analyze_bars(
 
     confidence = min(95, ta_score + (10 if volume_confirmed else 0) + (5 if catalyst_confirmed else 0))
 
+    if is_short:
+        action = "Sell"
+    elif confidence >= 80:
+        action = "Strong Buy"
+    elif confidence >= 60:
+        action = "Buy"
+    else:
+        action = "Hold"
+
+    indicator_signals = _format_indicator_signals(signals, indicators, vol_ratio)
+
     tv_sym = ticker
     exchange = finviz_data.get("exchange", "") if finviz_data else ""
+    tv_url = f"https://www.tradingview.com/chart/?symbol={exchange + ':' if exchange else ''}{tv_sym}"
+
+    catalyst_check = None
+    if "new_high" in source_list:
+        catalyst_check = "52-week high breakout (Finviz new highs screen)"
+    elif "unusual_vol" in source_list:
+        catalyst_check = "Unusual volume detected (Finviz volume screen)"
+    elif "breakout" in source_list:
+        catalyst_check = "Technical breakout candidate (Finviz breakout screen)"
 
     return {
         "ticker": ticker,
         "name": finviz_data.get("company", ""),
         "exchange": exchange,
         "direction": "short" if is_short else "long",
-        "action": "SELL" if is_short else "BUY",
+        "action": action,
         "confidence_score": confidence,
         "technical_score": ta_score,
+        "setup_type": setup_type,
         "pattern": pattern,
         "signals_stacking": signal_names,
+        "indicator_signals": indicator_signals,
         "ta_signals": signals,
         "entry": trade_plan["entry"],
         "stop": trade_plan["stop"],
@@ -413,16 +435,46 @@ def analyze_bars(
             "catalyst": catalyst_confirmed,
             "fa": True,
         },
-        "tv_url": f"https://www.tradingview.com/chart/?symbol={exchange + ':' if exchange else ''}{tv_sym}",
+        "tradingview_url": tv_url,
+        "tv_url": tv_url,
         "price": f"${price:.2f}",
         "change": finviz_data.get("change", ""),
         "market_cap": finviz_data.get("market_cap", ""),
         "rsi": indicators.get("rsi"),
         "volume_ratio": round(vol_ratio, 1),
+        "catalyst_check": catalyst_check,
+        "risk": "",
         "data_gaps": [],
         "is_bearish": is_short,
-        "setup_type": setup_type,
     }
+
+
+def _format_indicator_signals(signals: list[dict], indicators: dict, vol_ratio: float) -> list[str]:
+    formatted = []
+    name_map = {
+        "price_above_sma50": lambda: f"Price > SMA50",
+        "sma50_above_sma200": lambda: f"SMA50 > SMA200 (Golden Cross)",
+        "macd_bull_cross": lambda: f"MACD bull cross",
+        "rsi_bull_zone": lambda: f"RSI {indicators.get('rsi', 0):.0f} (bull zone)" if indicators.get("rsi") else "RSI bull zone",
+        "breakout_pivot": lambda: "20D pivot breakout",
+        "volume_spike_2x": lambda: f"RelVol +{int((vol_ratio - 1) * 100)}%",
+        "volume_expansion": lambda: f"RelVol +{int((vol_ratio - 1) * 100)}%",
+        "ema20_cross_ema50": lambda: "EMA20 > EMA50 cross",
+        "stage2_uptrend": lambda: "Stage 2 uptrend",
+        "range_breakout": lambda: "Range breakout",
+        "volatility_contraction": lambda: "Volatility squeeze",
+        "price_below_sma50": lambda: "Price < SMA50",
+        "sma50_below_sma200": lambda: "SMA50 < SMA200 (Death Cross)",
+        "macd_bear_cross": lambda: "MACD bear cross",
+        "breakdown_support": lambda: "Support breakdown",
+    }
+    for s in signals:
+        name = s["name"]
+        if name in name_map:
+            formatted.append(name_map[name]())
+        else:
+            formatted.append(s["name"].replace("_", " ").title())
+    return formatted
 
 
 def _pick_pattern_label(signals: list[dict], setup_type: str) -> str:
