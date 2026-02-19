@@ -777,6 +777,7 @@ OUTPUT STRUCTURE (grouped lists — NOT flat top_picks):
 Populate equities.large_caps[], equities.mid_caps[], equities.small_micro_caps[], crypto[], commodities[] arrays.
 Each item in these arrays MUST include:
 - symbol: ticker or commodity name (use "symbol" NOT "ticker")
+- tradingview_symbol: Pass through from data if present — this is the exchange-prefixed symbol for TradingView charts (e.g., BINANCE:TRXUSDT for crypto). Do NOT modify this field. If not present in the data, omit it.
 - classification: "TRADE IDEA" or "WATCHLIST"
 - rating: "Strong Buy" / "Buy" / "Hold" / "Sell"
 - confidence: 0-100 integer
@@ -786,7 +787,7 @@ Each item in these arrays MUST include:
 - position_size: sizing guidance string
 - why_could_fail: 1-2 sentence risk
 - catalyst: catalyst description or "unconfirmed"
-- chart: TradingView link
+- chart: TradingView link (for crypto, use the tradingview_symbol if available to build the correct link)
 - score, social_velocity_label, mention_velocity_score: optional — include when social data is present
 
 CONFIDENCE ADJUSTMENTS:

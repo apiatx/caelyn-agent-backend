@@ -1860,7 +1860,25 @@ class TradingAgent:
             return await self.data.get_commodities_dashboard()
 
         elif category == "crypto":
-            return await self.data.get_crypto_scanner()
+            result = await self.data.get_crypto_scanner()
+            if isinstance(result, dict):
+                from data.coingecko_provider import get_crypto_tv_symbol
+                for key in ("cg_top_coins", "cg_trending", "cmc_trending", "cmc_most_visited", "cmc_listings"):
+                    items = result.get(key)
+                    if isinstance(items, list):
+                        for item in items:
+                            if isinstance(item, dict):
+                                sym = (item.get("symbol") or "").upper()
+                                if sym:
+                                    item["tradingview_symbol"] = get_crypto_tv_symbol(sym)
+                    elif isinstance(items, dict):
+                        coins = items.get("coins", [])
+                        for coin in coins:
+                            ci = coin.get("item", coin) if isinstance(coin, dict) else {}
+                            sym = (ci.get("symbol") or "").upper()
+                            if sym:
+                                ci["tradingview_symbol"] = get_crypto_tv_symbol(sym)
+            return result
 
         elif category == "cross_asset_trending":
             return await self._gather_cross_asset_trending_data(query_info)

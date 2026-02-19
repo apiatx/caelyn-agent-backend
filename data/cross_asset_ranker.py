@@ -374,6 +374,10 @@ def _extract_crypto_candidates(crypto_data: dict, debug: dict) -> list:
                         "raw_data": {},
                     }
 
+    from data.coingecko_provider import get_crypto_tv_symbol
+    for c in seen.values():
+        c["tradingview_symbol"] = get_crypto_tv_symbol(c.get("symbol", ""))
+
     return list(seen.values())
 
 
@@ -754,7 +758,7 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
                       "factor_detail", "source_count", "trending_sources", "sources",
                       "price", "is_major", "analyst_rating", "price_target_upside",
                       "confirmation_status", "data_gaps", "cap_tier", "is_backfill",
-                      "_penalty_reasons"}
+                      "_penalty_reasons", "tradingview_symbol"}
         to_remove = [k for k in c if k not in clean_keys and k != "raw_data"]
         for k in to_remove:
             del c[k]
