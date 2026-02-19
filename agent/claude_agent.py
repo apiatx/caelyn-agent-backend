@@ -9,7 +9,7 @@ import openai
 
 from agent.data_compressor import compress_data
 from agent.institutional_scorer import apply_institutional_scoring
-from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT
+from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT
 from data.market_data_service import MarketDataService
 
 
@@ -56,6 +56,17 @@ class TradingAgent:
         "x_sentiment_scan": "x_social_scan",
         "grok_scan": "x_social_scan",
         "x_social": "x_social_scan",
+        "oversold": "oversold_growing",
+        "oversold_bounce": "oversold_growing",
+        "value": "value_momentum",
+        "insider": "insider_breakout",
+        "high_growth": "high_growth_sc",
+        "growth_small_cap": "high_growth_sc",
+        "dividend": "dividend_value",
+        "dividends": "dividend_value",
+        "income": "dividend_value",
+        "squeeze": "short_squeeze",
+        "short_squeeze_scan": "short_squeeze",
     }
 
     def _resolve_preset(self, preset_intent: str) -> str:
@@ -92,6 +103,8 @@ class TradingAgent:
         }
         if "x_social_scan_mode" in profile:
             plan["x_social_scan_mode"] = profile["x_social_scan_mode"]
+        if "_screener_preset" in profile:
+            plan["_screener_preset"] = profile["_screener_preset"]
         return plan
 
     def _refine_plan_with_query(self, base_plan: dict, query: str) -> dict:
@@ -454,6 +467,49 @@ class TradingAgent:
                 structured = result.get("structured")
                 if isinstance(structured, dict):
                     structured.setdefault("meta", {})["data_health"] = data_health
+
+        if category == "deterministic_screener" and market_data and isinstance(market_data, dict):
+            if parsed_display != "screener":
+                print(f"[SCREENER] Claude returned display_type={parsed_display}, enforcing screener output")
+                claude_text = result.get("analysis", "") or result.get("structured", {}).get("message", "") or ""
+                structured = {
+                    "display_type": "screener",
+                    "screen_name": market_data.get("screen_name", ""),
+                    "preset": market_data.get("preset", ""),
+                    "explain": market_data.get("explain", []),
+                    "top_picks": market_data.get("top_picks", []),
+                    "rows": market_data.get("rows", []),
+                    "scan_stats": market_data.get("scan_stats", {}),
+                    "observations": claude_text[:500] if claude_text else "Screener scan complete",
+                }
+                result = {
+                    "type": "screener",
+                    "analysis": claude_text,
+                    "structured": structured,
+                }
+            structured = result.get("structured")
+            if isinstance(structured, dict):
+                if structured.get("display_type") != "screener":
+                    structured["display_type"] = "screener"
+                if not structured.get("rows") and market_data.get("rows"):
+                    structured["rows"] = market_data["rows"]
+                if not structured.get("top_picks") and market_data.get("top_picks"):
+                    structured["top_picks"] = market_data["top_picks"]
+                if not structured.get("screen_name") and market_data.get("screen_name"):
+                    structured["screen_name"] = market_data["screen_name"]
+                if not structured.get("scan_stats") and market_data.get("scan_stats"):
+                    structured["scan_stats"] = market_data["scan_stats"]
+                if not structured.get("explain") and market_data.get("explain"):
+                    structured["explain"] = market_data["explain"]
+                for row in structured.get("rows", []):
+                    if isinstance(row, dict):
+                        if row.get("company") and len(str(row["company"])) <= 1:
+                            row["company"] = None
+                        for key, val in list(row.items()):
+                            if val == "N/A" or val == "n/a":
+                                row[key] = None
+            elif not isinstance(structured, dict):
+                result["structured"] = market_data
 
         if market_data and isinstance(market_data, dict) and market_data.get("pre_computed_highlights"):
             pch = market_data["pre_computed_highlights"]
@@ -1041,6 +1097,60 @@ class TradingAgent:
             "response_style": "high_conviction_ranked",
             "priority_depth": "medium",
         },
+        "oversold_growing": {
+            "intent": "deterministic_screener",
+            "asset_classes": ["equities"],
+            "modules": {"technical_scan": True, "fundamental_validation": True},
+            "risk_framework": "neutral",
+            "response_style": "screener_table",
+            "priority_depth": "medium",
+            "_screener_preset": "oversold_growing",
+        },
+        "value_momentum": {
+            "intent": "deterministic_screener",
+            "asset_classes": ["equities"],
+            "modules": {"technical_scan": True, "fundamental_validation": True},
+            "risk_framework": "neutral",
+            "response_style": "screener_table",
+            "priority_depth": "medium",
+            "_screener_preset": "value_momentum",
+        },
+        "insider_breakout": {
+            "intent": "deterministic_screener",
+            "asset_classes": ["equities"],
+            "modules": {"technical_scan": True, "fundamental_validation": False},
+            "risk_framework": "neutral",
+            "response_style": "screener_table",
+            "priority_depth": "medium",
+            "_screener_preset": "insider_breakout",
+        },
+        "high_growth_sc": {
+            "intent": "deterministic_screener",
+            "asset_classes": ["equities"],
+            "modules": {"technical_scan": True, "fundamental_validation": True},
+            "risk_framework": "neutral",
+            "response_style": "screener_table",
+            "priority_depth": "medium",
+            "_screener_preset": "high_growth_sc",
+        },
+        "dividend_value": {
+            "intent": "deterministic_screener",
+            "asset_classes": ["equities"],
+            "modules": {"technical_scan": True, "fundamental_validation": True},
+            "risk_framework": "neutral",
+            "response_style": "screener_table",
+            "priority_depth": "medium",
+            "_screener_preset": "dividend_value",
+        },
+        "short_squeeze": {
+            "intent": "deterministic_screener",
+            "asset_classes": ["equities"],
+            "modules": {"technical_scan": True, "fundamental_validation": False},
+            "risk_framework": "neutral",
+            "response_style": "screener_table",
+            "priority_depth": "medium",
+            "_screener_preset": "short_squeeze",
+        },
     }
 
     INTENT_TO_CATEGORY = {
@@ -1058,6 +1168,7 @@ class TradingAgent:
         "custom_screen": "ai_screener",
         "short_setup": "bearish",
         "best_trades": "best_trades",
+        "deterministic_screener": "deterministic_screener",
         "chat": "chat",
     }
 
@@ -1214,6 +1325,8 @@ class TradingAgent:
         }
         if tickers:
             query_info["tickers"] = tickers
+        if plan.get("_screener_preset"):
+            query_info["_screener_preset"] = plan["_screener_preset"]
 
         return query_info
 
@@ -1561,6 +1674,13 @@ class TradingAgent:
 
         elif category == "best_trades":
             return await self.data.get_best_trades_scan()
+
+        elif category == "deterministic_screener":
+            preset = query_info.get("_screener_preset", "")
+            if not preset:
+                plan = query_info.get("orchestration_plan", {})
+                preset = plan.get("_screener_preset", "value_momentum")
+            return await self.data.run_deterministic_screener(preset)
 
         elif category == "bearish":
             return await self.data.wide_scan_and_rank("bearish", filters)
@@ -2695,6 +2815,12 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             system_blocks.append({
                 "type": "text",
                 "text": BEST_TRADES_CONTRACT,
+            })
+
+        if category == "deterministic_screener":
+            system_blocks.append({
+                "type": "text",
+                "text": DETERMINISTIC_SCREENER_CONTRACT,
             })
 
         use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES

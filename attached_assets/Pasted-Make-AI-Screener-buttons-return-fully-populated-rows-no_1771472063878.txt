@@ -1,0 +1,198 @@
+Make AI Screener buttons return fully populated rows (no N/A), using deterministic screen definitions + enrichment. Do not change Trending Now, Daily Briefing, Best Trades. Do not break existing response contracts.
+
+Goal
+
+When preset_intent is any of:
+
+oversold_growing
+
+value_momentum
+
+insider_breakout
+
+high_growth_sc
+
+dividend_value
+
+short_squeeze
+
+Return a display_type = "screener" (or the existing display_type your frontend expects for table render) with:
+
+top_picks (2-5 tickers)
+
+rows table with fields populated: ticker, company, price, chg_pct, mkt_cap, rev_growth, plus optional signal badges
+
+No random letters. No N/A unless truly missing after fallback.
+
+1) Add deterministic screen definitions (no LLM needed to pick which screen)
+
+Create a SCREENS map in backend (config/constants) keyed by preset_intent. Each screen includes:
+
+min/max thresholds (fundamental + technical)
+
+which scanners to run
+
+which enrichment fields are required
+
+Example definitions (use these exact intents and rules):
+
+Oversold+Growing (oversold_growing)
+
+Fundamentals: rev_growth_yoy >= 15%, market_cap >= 50M
+
+Technical: RSI14 <= 35 AND price above SMA20 OR bullish RSI turn (RSI rising 2-3 days)
+
+Prefer: rel_vol >= 1.5
+
+Value+Momentum (value_momentum)
+
+Fundamentals: PE <= 20 (or forward PE <= 20), rev_growth_yoy >= 10%
+
+Technical: price above SMA50, SMA50 trending up, MACD histogram >= 0 or MACD bull cross in last 10 bars
+
+Exclude: avg_dollar_vol < $2M
+
+Insider+Breakout (insider_breakout)
+
+Catalyst: insider activity flag if available (if not available, treat as optional)
+
+Technical: 20D high breakout OR close > upper BB AND rel_vol >= 2.0
+
+Fundamentals: not required but add sanity checks if present
+
+High Growth SC (high_growth_sc)
+
+Fundamentals: rev_growth_yoy >= 30% OR qoq >= 15%
+
+Technical: price above SMA20 and SMA50, strong trend (SMA20 > SMA50)
+
+Prefer: positive price change today or last week
+
+Dividend Value (dividend_value)
+
+Fundamentals: dividend_yield >= 2.5%, payout ratio reasonable if available, PE <= 20
+
+Technical: price above SMA200 OR reclaiming SMA200 with improving RSI
+
+Exclude: severe downtrends (price below SMA200 AND SMA200 down)
+
+Short Squeeze (short_squeeze)
+
+Squeeze metrics if available (short_float, borrow fee) else approximate using: high rel_vol + strong gap + low float if you have it
+
+Technical: breakout + rel_vol >= 3.0 OR multi-day squeeze continuation pattern
+
+Must have liquidity: avg_dollar_vol >= $5M
+
+2) Pipeline structure (must be consistent across all screeners)
+
+For each screener preset:
+
+Phase A: Candidate discovery (cheap)
+
+Use Finviz screens + any existing scanners to build a candidate list (50-200 tickers)
+
+DO NOT attempt quotes/candles yet
+
+Phase B: Enrichment (fill the table)
+For the top 30 candidates (ranked by cheap heuristics: rel_vol, change %, trend flags):
+
+Quote fields: price, chg_pct, mkt_cap
+
+Primary: Finnhub quote (works)
+
+Fallback: FMP quote endpoint if you have one, otherwise TwelveData quote (if available) or last-close from candles
+
+Fundamentals: rev_growth_yoy, PE, dividend yield
+
+Primary: StockAnalysis (workhorse)
+
+Fallback: FMP profile/ratios if needed
+
+TA signals from candles:
+
+Use your centralized get_candles() (TwelveData primary now)
+
+Compute RSI/MACD/SMA/rel_vol locally (no extra API calls beyond candles)
+
+Budgeting:
+
+CandleBudget for screeners: max_calls=8 (match TwelveData free tier rate)
+
+Enrichment limit: stop after 30 enriched or after 12 seconds, whichever first
+
+Cache all quote/fundamental results for 5-10 minutes (you already do caching elsewhere)
+
+Phase C: Filter + rank
+Apply the screen rules to enriched candidates.
+Rank by a deterministic score:
+
+40% technical fit
+
+40% fundamental fit
+
+20% liquidity/volume confirmation
+Return top 10-25 rows.
+
+3) Output schema (must match terminal table needs)
+
+Return structured payload for screeners like:
+
+display_type: "screener"
+
+screen_name
+
+explain (3-6 bullets explaining WHY these picks qualified, referencing real data points)
+
+top_picks: list of {ticker, confidence, reason}
+
+rows: list of rows with strict keys:
+
+ticker
+
+company
+
+price
+
+chg_pct
+
+mkt_cap
+
+rev_growth_yoy
+
+pe (optional)
+
+div_yield (optional)
+
+signals: ["RSI<35", "MACD bull", "Above SMA50", "RelVol 2.1x"] etc
+
+If a field is missing after all fallbacks, set it to null and include missing_fields in meta. Do not put “N/A” strings in backend.
+
+4) LLM collaboration (use models only where they add value)
+
+OpenAI: can generate the explain block and interpret why the screen qualifies, but it should NOT decide the rules.
+
+Grok: only used if the user typed a custom screener asking for “what’s hot on X” or “social confirms”; NOT for standard screener buttons.
+
+Claude: final narrator for the response, but must render the screener in the schema above, not free text.
+
+5) Fix the “random letter” bug
+
+That “T/S/M” is almost certainly a field like sector_initial or cap_tier leaking into company column.
+Audit the row mapping where company is set:
+
+Ensure company comes from profile/company_name only
+
+If missing, set company=null, don’t substitute other fields
+
+6) Tests
+
+Add one test per preset:
+
+rows length >= 10
+
+at least 8 rows have price and chg_pct not null
+
+company is not a 1-character string
+
+After implementing: run tests, run one screener call (value_momentum), confirm table fields populated, then tell me to republish backend.

@@ -665,6 +665,29 @@ HARD RULES:
 20. Keep setup_type exactly as provided: breakout, trend_continuation, momentum, breakdown_short, or technical_setup.
 """
 
+DETERMINISTIC_SCREENER_CONTRACT = """DETERMINISTIC SCREENER OUTPUT CONTRACT (MANDATORY for screener presets):
+
+You are receiving pre-screened, enriched, and ranked rows from a deterministic screener pipeline. The backend already applied Finviz filters, computed TA indicators, pulled fundamentals, and scored every row.
+
+Your job: Format the output and write the explain/observations. Do NOT rescore or reorder rows.
+
+HARD RULES:
+1. Use display_type "screener" — NEVER "chat" or any other type.
+2. Keep screen_name and preset exactly as provided.
+3. Keep rows in the order provided (pre-ranked by composite_score).
+4. Each row must have: ticker, company, price, chg_pct, mkt_cap, signals. Keep values exactly as provided.
+5. Optional fields (rev_growth_yoy, pe, div_yield) — keep if present, omit key if null.
+6. Do NOT put "N/A" strings in any field. If a value is null, omit the key entirely.
+7. company must be a real company name (2+ characters), never a single letter or abbreviation like "T" or "S".
+8. top_picks: 2-5 tickers with confidence and a 1-sentence reason referencing actual signals from the row.
+9. explain: 3-6 bullets explaining WHY these picks qualified, referencing real data points from the rows.
+10. observations: 1-3 sentences about what the screen reveals about the current market.
+11. Do NOT add tickers that aren't in the input rows. Only format what's provided.
+12. Do NOT generate narrative-only responses. Always output the structured screener format.
+13. Include scan_stats in output exactly as provided.
+14. If rows is empty, explain why and suggest loosening criteria. Still use display_type "screener".
+"""
+
 CROSS_ASSET_TRENDING_CONTRACT = """CROSS-ASSET TRENDING OUTPUT CONTRACT (MANDATORY for cross_asset_trending):
 
 HARD RULES (violations = broken contract):

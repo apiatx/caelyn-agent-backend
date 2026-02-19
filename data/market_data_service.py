@@ -3563,6 +3563,389 @@ class MarketDataService:
             "x_twitter_crypto": data.get("x_twitter_crypto", {}),
         }
 
+    async def run_deterministic_screener(self, preset_name: str) -> dict:
+        """
+        Deterministic screener pipeline for preset buttons.
+        Phase A: Finviz discovery (cheap, 50-200 candidates)
+        Phase B: Enrichment (quotes, fundamentals, TA from candles) — max 30 or 12s
+        Phase C: Filter by screen rules + rank deterministically
+        """
+        import time as _t
+        from screener_definitions import SCREENER_DEFINITIONS
+        from data.ta_utils import compute_technicals_from_bars, compute_sma
+
+        definition = SCREENER_DEFINITIONS.get(preset_name)
+        if not definition:
+            return {
+                "display_type": "screener",
+                "screen_name": preset_name,
+                "error": f"Unknown screener preset: {preset_name}",
+                "top_picks": [],
+                "rows": [],
+            }
+
+        start_time = _t.time()
+        ENRICHMENT_LIMIT = 30
+        ENRICHMENT_TIMEOUT = 12.0
+
+        print(f"[SCREENER] Starting preset={preset_name} label={definition['screen_label']}")
+
+        # --- Phase A: Finviz discovery ---
+        finviz_filter_str = definition["finviz_filters"]
+        finviz_sort = definition.get("finviz_sort", "-change")
+        screen_url = f"v=111&f={finviz_filter_str}&ft=4&o={finviz_sort}"
+        print(f"[SCREENER] Phase A: Finviz URL: {screen_url}")
+
+        try:
+            candidates = await self.finviz._custom_screen(screen_url)
+        except Exception as e:
+            print(f"[SCREENER] Finviz discovery error: {e}")
+            candidates = []
+
+        if not candidates:
+            fallback_filter = finviz_filter_str.split(",")[0] if "," in finviz_filter_str else finviz_filter_str
+            fallback_url = f"v=111&f={fallback_filter},sh_avgvol_o200&ft=4&o={finviz_sort}"
+            print(f"[SCREENER] Phase A fallback: {fallback_url}")
+            try:
+                candidates = await self.finviz._custom_screen(fallback_url)
+            except Exception:
+                candidates = []
+
+        candidates_total = len(candidates)
+        print(f"[SCREENER] Phase A: {candidates_total} candidates found")
+
+        if not candidates:
+            return {
+                "display_type": "screener",
+                "screen_name": definition["screen_label"],
+                "preset": preset_name,
+                "explain": definition["explain_template"],
+                "top_picks": [],
+                "rows": [],
+                "scan_stats": {"candidates_total": 0, "enriched": 0, "qualified": 0},
+                "meta": {"empty_reason": "No candidates matched Finviz screen criteria"},
+            }
+
+        to_enrich = candidates[:ENRICHMENT_LIMIT]
+
+        # --- Phase B: Enrichment ---
+        candle_budget = CandleBudget(max_calls=8)
+        enriched_rows = []
+        enrichment_start = _t.time()
+
+        async def _enrich_one(item):
+            ticker = item.get("ticker", "").strip()
+            if not ticker or len(ticker) > 6:
+                return None
+
+            row = {
+                "ticker": ticker,
+                "company": item.get("company", "").strip() or None,
+                "sector": item.get("sector", "").strip() or None,
+                "price": None,
+                "chg_pct": None,
+                "mkt_cap": item.get("market_cap", "").strip() or None,
+                "rev_growth_yoy": None,
+                "pe": None,
+                "div_yield": None,
+                "signals": [],
+                "missing_fields": [],
+            }
+
+            if row["company"] and len(row["company"]) <= 1:
+                row["company"] = None
+
+            try:
+                quote = await asyncio.to_thread(self.finnhub.get_quote, ticker)
+                if quote and quote.get("price"):
+                    row["price"] = quote["price"]
+                    row["chg_pct"] = quote.get("change_pct")
+            except Exception:
+                pass
+
+            try:
+                overview = await self.stockanalysis.get_overview(ticker)
+                if overview and not overview.get("error"):
+                    if not row["company"] or len(row["company"] or "") <= 1:
+                        sa_name = overview.get("ticker", "")
+                        if overview.get("market_cap"):
+                            row["company"] = f"{ticker} Corp"
+                    pe_raw = overview.get("pe_ratio") or overview.get("forward_pe")
+                    if pe_raw:
+                        try:
+                            row["pe"] = float(str(pe_raw).replace(",", "").replace("x", ""))
+                        except (ValueError, TypeError):
+                            pass
+                    div_raw = overview.get("dividend_yield")
+                    if div_raw and div_raw not in ("N/A", "-", "n/a"):
+                        try:
+                            row["div_yield"] = float(str(div_raw).replace("%", "").replace(",", ""))
+                        except (ValueError, TypeError):
+                            pass
+                    rg_raw = overview.get("revenue_growth")
+                    if rg_raw:
+                        try:
+                            row["rev_growth_yoy"] = float(str(rg_raw).replace("%", "").replace("+", "").replace(",", ""))
+                        except (ValueError, TypeError):
+                            pass
+                    if not row["mkt_cap"] and overview.get("market_cap"):
+                        row["mkt_cap"] = overview["market_cap"]
+            except Exception as e:
+                print(f"[SCREENER] StockAnalysis enrich error {ticker}: {e}")
+
+            if not row["price"]:
+                try:
+                    price_str = item.get("price", "")
+                    if price_str:
+                        row["price"] = float(str(price_str).replace(",", ""))
+                except (ValueError, TypeError):
+                    pass
+            if not row["chg_pct"]:
+                try:
+                    chg_str = item.get("change", "")
+                    if chg_str:
+                        row["chg_pct"] = float(str(chg_str).replace("%", "").replace("+", ""))
+                except (ValueError, TypeError):
+                    pass
+
+            ta_data = {}
+            if _t.time() - enrichment_start < ENRICHMENT_TIMEOUT:
+                try:
+                    bars = await self.get_candles(ticker, days=120, budget=candle_budget)
+                    if bars and len(bars) >= 20:
+                        ta_data = compute_technicals_from_bars(bars)
+                        closes = [b["c"] for b in bars if b.get("c") is not None]
+                        volumes = [b.get("v", 0) for b in bars]
+
+                        if ta_data.get("rsi") is not None:
+                            row["signals"].append(f"RSI {ta_data['rsi']:.0f}")
+                        if ta_data.get("sma_50") and row.get("price"):
+                            price = row["price"]
+                            if price > ta_data["sma_50"]:
+                                row["signals"].append("Above SMA50")
+                            else:
+                                row["signals"].append("Below SMA50")
+                        if ta_data.get("sma_200") and row.get("price"):
+                            price = row["price"]
+                            if price > ta_data["sma_200"]:
+                                row["signals"].append("Above SMA200")
+                        if ta_data.get("macd_histogram") is not None:
+                            if ta_data["macd_histogram"] > 0:
+                                row["signals"].append("MACD positive")
+                            else:
+                                row["signals"].append("MACD negative")
+                        if ta_data.get("macd") is not None and ta_data.get("macd_signal") is not None:
+                            if ta_data["macd"] > ta_data["macd_signal"]:
+                                row["signals"].append("MACD bull cross")
+                        avg_vol = ta_data.get("avg_volume") or 0
+                        if avg_vol > 0 and volumes:
+                            last_vol = volumes[-1]
+                            rel_vol = last_vol / avg_vol
+                            row["rel_vol"] = round(rel_vol, 1)
+                            if rel_vol >= 1.5:
+                                row["signals"].append(f"RelVol {rel_vol:.1f}x")
+
+                        if len(closes) >= 50:
+                            sma50_prev = compute_sma(closes[:-5], 50)
+                            sma50_now = ta_data.get("sma_50")
+                            if sma50_prev and sma50_now and sma50_now > sma50_prev:
+                                row["_sma50_trending_up"] = True
+                        if len(closes) >= 20:
+                            high_20 = max(closes[-20:])
+                            if closes[-1] >= high_20 * 0.99:
+                                row["_breakout_20d"] = True
+                        if ta_data.get("rsi") is not None and len(closes) >= 5:
+                            row["_rsi_value"] = ta_data["rsi"]
+
+                        row["_ta"] = ta_data
+                except Exception as e:
+                    print(f"[SCREENER] TA enrich error {ticker}: {e}")
+
+            for field in ["price", "chg_pct", "mkt_cap"]:
+                if row.get(field) is None:
+                    row["missing_fields"].append(field)
+
+            return row
+
+        enrich_tasks = [_enrich_one(item) for item in to_enrich]
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*enrich_tasks, return_exceptions=True),
+                timeout=ENRICHMENT_TIMEOUT + 2.0,
+            )
+        except asyncio.TimeoutError:
+            results = []
+            print(f"[SCREENER] Enrichment timeout after {ENRICHMENT_TIMEOUT}s")
+
+        for r in results:
+            if isinstance(r, dict) and r.get("ticker"):
+                enriched_rows.append(r)
+
+        print(f"[SCREENER] Phase B: {len(enriched_rows)} enriched (budget: {candle_budget.summary()})")
+
+        # --- Phase C: Filter + Rank ---
+        ta_rules = definition.get("ta_rules", {})
+        fund_rules = definition.get("fundamental_rules", {})
+        weights = definition.get("ranking_weights", {"technical": 0.4, "fundamental": 0.4, "liquidity": 0.2})
+
+        scored_rows = []
+        for row in enriched_rows:
+            tech_score = 50
+            fund_score = 50
+            liq_score = 50
+            ta = row.get("_ta", {})
+            passes = True
+
+            rsi_val = row.get("_rsi_value") or (ta.get("rsi") if ta else None)
+            rsi_max = ta_rules.get("rsi_max")
+            if rsi_max is not None and rsi_val is not None:
+                if rsi_val <= rsi_max:
+                    tech_score += 20
+                else:
+                    tech_score -= 10
+
+            if ta_rules.get("above_sma50") and ta.get("sma_50") and row.get("price"):
+                if row["price"] > ta["sma_50"]:
+                    tech_score += 15
+                else:
+                    tech_score -= 15
+
+            if ta_rules.get("above_sma20") and ta.get("sma_20") and row.get("price"):
+                if row["price"] > ta["sma_20"]:
+                    tech_score += 10
+
+            if ta_rules.get("sma50_trending_up") and row.get("_sma50_trending_up"):
+                tech_score += 10
+
+            if ta_rules.get("sma20_above_sma50") and ta.get("sma_20") and ta.get("sma_50"):
+                if ta["sma_20"] > ta["sma_50"]:
+                    tech_score += 10
+
+            if ta_rules.get("macd_histogram_positive_or_cross"):
+                hist = ta.get("macd_histogram")
+                if hist is not None and hist > 0:
+                    tech_score += 10
+                macd_val = ta.get("macd")
+                macd_sig = ta.get("macd_signal")
+                if macd_val is not None and macd_sig is not None and macd_val > macd_sig:
+                    tech_score += 5
+
+            if ta_rules.get("breakout_20d_high") or ta_rules.get("breakout_or_gap_up"):
+                if row.get("_breakout_20d"):
+                    tech_score += 15
+                elif ta_rules.get("breakout_20d_high"):
+                    tech_score -= 10
+
+            rel_vol_min = ta_rules.get("rel_vol_min") or ta_rules.get("prefer_rel_vol")
+            if rel_vol_min and row.get("rel_vol"):
+                if row["rel_vol"] >= rel_vol_min:
+                    tech_score += 10
+                    liq_score += 10
+
+            if ta_rules.get("above_sma200_or_reclaiming") and ta.get("sma_200") and row.get("price"):
+                if row["price"] > ta["sma_200"]:
+                    tech_score += 15
+                elif ta.get("rsi") and ta["rsi"] > 40:
+                    tech_score += 5
+                else:
+                    tech_score -= 10
+
+            if ta_rules.get("not_severe_downtrend") and ta.get("sma_200") and row.get("price"):
+                if row["price"] < ta["sma_200"] * 0.95:
+                    if row.get("_sma50_trending_up") is not True:
+                        passes = False
+
+            rev_min = fund_rules.get("rev_growth_yoy_min")
+            if rev_min is not None:
+                if row.get("rev_growth_yoy") is not None:
+                    if row["rev_growth_yoy"] >= rev_min:
+                        fund_score += 20
+                    else:
+                        fund_score -= 10
+                else:
+                    fund_score -= 5
+
+            pe_max = fund_rules.get("pe_max")
+            if pe_max is not None:
+                if row.get("pe") is not None:
+                    if row["pe"] <= pe_max and row["pe"] > 0:
+                        fund_score += 15
+                    elif row["pe"] > pe_max:
+                        fund_score -= 10
+
+            div_min = fund_rules.get("dividend_yield_min")
+            if div_min is not None:
+                if row.get("div_yield") is not None:
+                    if row["div_yield"] >= div_min:
+                        fund_score += 15
+                    else:
+                        fund_score -= 10
+
+            min_dollar_vol = ta_rules.get("min_avg_dollar_vol_m")
+            if min_dollar_vol and ta.get("avg_volume") and row.get("price"):
+                dollar_vol = ta["avg_volume"] * row["price"] / 1_000_000
+                if dollar_vol >= min_dollar_vol:
+                    liq_score += 15
+                else:
+                    liq_score -= 10
+
+            if row.get("price") and row.get("chg_pct") is not None:
+                liq_score += 10
+
+            tech_score = max(0, min(100, tech_score))
+            fund_score = max(0, min(100, fund_score))
+            liq_score = max(0, min(100, liq_score))
+
+            composite = (
+                tech_score * weights["technical"]
+                + fund_score * weights["fundamental"]
+                + liq_score * weights["liquidity"]
+            )
+
+            if not passes:
+                composite = 0
+
+            clean_row = {k: v for k, v in row.items() if not k.startswith("_")}
+            clean_row["composite_score"] = round(composite, 1)
+            clean_row["tech_score"] = tech_score
+            clean_row["fund_score"] = fund_score
+            clean_row["liq_score"] = liq_score
+            scored_rows.append(clean_row)
+
+        scored_rows.sort(key=lambda r: r["composite_score"], reverse=True)
+        qualified = [r for r in scored_rows if r["composite_score"] > 20]
+        final_rows = qualified[:25]
+
+        top_picks = []
+        for r in final_rows[:5]:
+            top_picks.append({
+                "ticker": r["ticker"],
+                "confidence": r["composite_score"],
+                "reason": ", ".join(r.get("signals", [])[:3]) or "Qualified on screen criteria",
+            })
+
+        elapsed = round(_t.time() - start_time, 1)
+        print(f"[SCREENER] Phase C: {len(final_rows)} qualified from {len(enriched_rows)} enriched in {elapsed}s")
+
+        return {
+            "display_type": "screener",
+            "screen_name": definition["screen_label"],
+            "preset": preset_name,
+            "explain": definition["explain_template"],
+            "top_picks": top_picks,
+            "rows": final_rows,
+            "scan_stats": {
+                "candidates_total": candidates_total,
+                "enriched": len(enriched_rows),
+                "candles_ok": candle_budget._used,
+                "candles_blocked": candle_budget._blocked,
+                "cache_hits": candle_budget._cache_hits,
+                "qualified": len(qualified),
+                "returned": len(final_rows),
+                "elapsed_s": elapsed,
+            },
+        }
+
     async def run_ai_screener(self, filters: dict) -> dict:
         """
         AI-powered custom screener. Takes parsed filter criteria and
