@@ -1,0 +1,93 @@
+## Fix: VIX and other indices still show no price data in portfolio
+
+### Problem
+VIX shows dashes for Price, Daily P&L, Total P&L, Weight%. The index quote resolution we added isn't working — either Finnhub's ^VIX endpoint returns nothing on free tier, or the fallback proxy isn't triggering.
+
+### Step 1: Diagnose
+
+Test the actual quote fetching in the shell:
+```bash
+# Test if Finnhub returns data for ^VIX
+python3 -c "
+import os, requests
+key = os.environ.get('FINNHUB_API_KEY', '')
+for sym in ['^VIX', '^GSPC', 'VIXY', 'VXX', 'UVXY']:
+    r = requests.get(f'https://finnhub.io/api/v1/quote?symbol={sym}&token={key}')
+    data = r.json()
+    print(f'{sym}: price={data.get(\"c\")}, status={r.status_code}')
+"
+```
+
+This will tell us which symbols actually return data on Finnhub free tier.
+
+### Step 2: Fix the quote resolution
+
+The issue is that indices like VIX aren't tradeable stocks — they're calculated values. Most free-tier stock APIs don't serve index quotes. The reliable approach is to use **tradeable ETF proxies** that closely track the index:
+
+Update the INDEX_MAP to use proxies that definitely work on Finnhub free tier:
+```python
+INDEX_QUOTE_PROXIES = {
+    "VIX": {"proxy": "VIXY", "name": "CBOE Volatility Index", "tv_symbol": "CBOE:VIX"},
+    "SPX": {"proxy": "SPY", "name": "S&P 500", "tv_symbol": "FOREXCOM:SPXUSD"},
+    "DJI": {"proxy": "DIA", "name": "Dow Jones", "tv_symbol": "FOREXCOM:DJI"},
+    "IXIC": {"proxy": "QQQ", "name": "NASDAQ Composite", "tv_symbol": "NASDAQ:IXIC"},
+    "NDX": {"proxy": "QQQ", "name": "NASDAQ 100", "tv_symbol": "NASDAQ:NDX"},
+    "RUT": {"proxy": "IWM", "name": "Russell 2000", "tv_symbol": "FOREXCOM:RUTUSD"},
+    "DXY": {"proxy": "UUP", "name": "US Dollar Index", "tv_symbol": "TVC:DXY"},
+    "TNX": {"proxy": "TLT", "name": "10-Year Treasury Yield", "tv_symbol": "TVC:TNX"},
+}
+```
+
+Note: For VIX specifically, VIXY may have been delisted or have low volume. Test which VIX proxy actually returns data. Alternatives: `UVXY`, `VXX`, `SVXY`. Run the diagnostic in Step 1 to find which one works.
+
+### Step 3: Fix the /api/portfolio/quotes endpoint
+
+Find the `/api/portfolio/quotes` endpoint in `main.py`. In the quote fetching loop, add index detection:
+```python
+    for holding in holdings:
+        ticker = holding.get("ticker", "").upper().strip()
+        
+        # Check if this is an index
+        index_info = INDEX_QUOTE_PROXIES.get(ticker)
+        if index_info:
+            # Fetch quote using the ETF proxy
+            quote_ticker = index_info["proxy"]
+            try:
+                quote = await asyncio.wait_for(
+                    asyncio.to_thread(agent.data.finnhub.get_quote, quote_ticker),
+                    timeout=5.0,
+                )
+                if quote and isinstance(quote, dict) and quote.get("c"):
+                    # For VIX: the proxy price won't match VIX value
+                    # Return the proxy price but note it's a proxy
+                    results[ticker] = {
+                        "price": quote["c"],
+                        "change": quote.get("d"),
+                        "change_pct": quote.get("dp"),
+                        "prev_close": quote.get("pc"),
+                        "is_index": True,
+                        "proxy_ticker": quote_ticker,
+                        "tradingview_symbol": index_info["tv_symbol"],
+                        "name": index_info["name"],
+                    }
+                else:
+                    results[ticker] = {"price": None, "is_index": True, "error": f"Proxy {quote_ticker} returned no data"}
+            except Exception as e:
+                results[ticker] = {"price": None, "is_index": True, "error": str(e)}
+            continue
+        
+        # Normal stock/ETF/crypto quote logic continues...
+```
+
+If VIXY doesn't return data, try UVXY. If no VIX proxy works on Finnhub, try the macro snapshot — the FRED provider or Fear & Greed provider might already have VIX data. Check:
+```bash
+grep -r "vix\|VIX" --include="*.py" fred_provider.py fear_greed_provider.py | head -10
+```
+
+If the macro snapshot includes VIX, extract it from there as a fallback.
+
+### Testing
+1. Add VIX to portfolio — Price column should show a value (either actual VIX or proxy ETF price)
+2. Add SPX to portfolio — should show SPY price as proxy
+3. Regular stocks still show their own prices
+4. Run `python -m pytest` — all tests pass

@@ -1302,15 +1302,44 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                         print(f"[PORTFOLIO] FMP profile {ticker} error: {e}")
                         quotes[ticker]["sector"] = "Other"
 
-        # ---- INDICES: Yahoo primary → Finnhub proxy fallback ----
+        # ---- INDICES: Finnhub proxy ETF primary → Yahoo fallback ----
         if index_tickers:
-            for ticker in index_tickers:
+            async def _fetch_index_quote(ticker):
                 idx_info = INDEX_MAP.get(ticker, {})
-                yahoo_symbol = idx_info.get("yahoo", INDEX_YAHOO_SYMBOLS.get(ticker, ticker))
                 tv_symbol = idx_info.get("tv", f"TVC:{ticker}")
                 idx_name = idx_info.get("name", ticker)
                 proxy_etf = idx_info.get("proxy")
-                got_quote = False
+                yahoo_symbol = idx_info.get("yahoo") or INDEX_YAHOO_SYMBOLS.get(ticker, ticker)
+
+                if proxy_etf:
+                    try:
+                        r = await client.get(
+                            "https://finnhub.io/api/v1/quote",
+                            params={"symbol": proxy_etf, "token": os.getenv("FINNHUB_API_KEY", "")},
+                            timeout=5.0,
+                        )
+                        if r.status_code == 200:
+                            d = r.json()
+                            if d.get("c") and d["c"] > 0:
+                                quotes[ticker] = {
+                                    "price": d.get("c"),
+                                    "change": d.get("d"),
+                                    "change_pct": d.get("dp"),
+                                    "day_high": d.get("h"),
+                                    "day_low": d.get("l"),
+                                    "prev_close": d.get("pc"),
+                                    "source": f"finnhub_proxy({proxy_etf})",
+                                    "asset_type": "index",
+                                    "sector": "Index",
+                                    "company_name": f"{idx_name} (via {proxy_etf})",
+                                    "tradingview_symbol": tv_symbol,
+                                    "proxy_ticker": proxy_etf,
+                                    "is_proxy": True,
+                                }
+                                print(f"[PORTFOLIO] Index: {ticker} via proxy {proxy_etf} = ${d['c']}", flush=True)
+                                return
+                    except Exception as e:
+                        print(f"[PORTFOLIO] Finnhub proxy {proxy_etf} for {ticker} error: {e}", flush=True)
 
                 try:
                     resp = await client.get(
@@ -1342,54 +1371,26 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                     "company_name": idx_name,
                                     "tradingview_symbol": tv_symbol,
                                 }
-                                got_quote = True
-                                print(f"[PORTFOLIO] Index: {ticker} ({yahoo_symbol}) = ${price}")
-                    if not got_quote:
-                        print(f"[PORTFOLIO] Yahoo index {ticker} ({yahoo_symbol}) returned {resp.status_code if resp else 'no response'}")
+                                print(f"[PORTFOLIO] Index: {ticker} via Yahoo = ${price}", flush=True)
+                                return
+                    print(f"[PORTFOLIO] Yahoo index {ticker} returned {resp.status_code}", flush=True)
                 except Exception as e:
-                    print(f"[PORTFOLIO] Yahoo index {ticker} ({yahoo_symbol}) error: {e}")
+                    print(f"[PORTFOLIO] Yahoo index {ticker} error: {e}", flush=True)
 
-                if not got_quote and proxy_etf:
-                    try:
-                        r = await client.get(
-                            "https://finnhub.io/api/v1/quote",
-                            params={"symbol": proxy_etf, "token": os.getenv("FINNHUB_API_KEY", "")},
-                            timeout=5.0,
-                        )
-                        if r.status_code == 200:
-                            d = r.json()
-                            if d.get("c") and d["c"] > 0:
-                                quotes[ticker] = {
-                                    "price": d.get("c"),
-                                    "change": d.get("d"),
-                                    "change_pct": d.get("dp"),
-                                    "day_high": d.get("h"),
-                                    "day_low": d.get("l"),
-                                    "source": f"finnhub_proxy({proxy_etf})",
-                                    "asset_type": "index",
-                                    "sector": "Index",
-                                    "company_name": f"{idx_name} (via {proxy_etf})",
-                                    "tradingview_symbol": tv_symbol,
-                                    "is_proxy": True,
-                                }
-                                got_quote = True
-                                print(f"[PORTFOLIO] Index fallback: {ticker} via {proxy_etf} = ${d['c']}")
-                    except Exception as e:
-                        print(f"[PORTFOLIO] Index proxy {ticker} ({proxy_etf}) error: {e}")
+                quotes[ticker] = {
+                    "price": None,
+                    "change": None,
+                    "change_pct": None,
+                    "source": "unavailable",
+                    "asset_type": "index",
+                    "sector": "Index",
+                    "company_name": idx_name,
+                    "tradingview_symbol": tv_symbol,
+                    "error": f"Could not fetch quote for index {ticker}",
+                }
+                print(f"[PORTFOLIO] Index {ticker}: no quote available", flush=True)
 
-                if not got_quote:
-                    quotes[ticker] = {
-                        "price": None,
-                        "change": None,
-                        "change_pct": None,
-                        "source": "unavailable",
-                        "asset_type": "index",
-                        "sector": "Index",
-                        "company_name": idx_name,
-                        "tradingview_symbol": tv_symbol,
-                        "error": f"Could not fetch quote for index {ticker}",
-                    }
-                    print(f"[PORTFOLIO] Index {ticker}: no quote available")
+            await asyncio.gather(*[_fetch_index_quote(t) for t in index_tickers])
 
         # ---- CRYPTO: CoinGecko primary → CoinMarketCap fallback on 429 ----
         if crypto_tickers:
