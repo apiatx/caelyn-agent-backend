@@ -1,0 +1,107 @@
+BACKEND TASK: Add SEC EDGAR integration (free) to ground catalysts + “why now” across relevant presets, without breaking anything.
+
+Non-negotiables:
+- Do NOT change any existing request/response schemas, panel contracts, display_type values, or frontend payloads.
+- Do NOT remove/alter existing provider chains (TwelveData/Finnhub/Polygon/FMP/etc). EDGAR is additive enrichment only.
+- Must be rate-limit safe (EDGAR is strict). Use caching + per-request budgets.
+- If EDGAR is unavailable, degrade gracefully with a data_quality_flag and continue.
+
+Goal:
+Use SEC EDGAR to validate catalysts (Form 4 insider trades, 8-Ks, S-1s, 10-Q/10-K, press-relevant filings) and feed Claude reliable “why now” grounding for:
+- Trending Now / cross_asset_trending (equities + any equity proxies)
+- Best Trades (equities)
+- AI Screener presets (especially Insider+Breakout, High Growth SC, Short Squeeze)
+- Any freeform prompt that asks for “catalyst”, “why now”, “insider”, “filings”, “S-1”, “8-K”, “offering”, “dilution”, “secondary”, “lockup”, “guidance”, etc.
+
+Implementation plan (do this exactly):
+1) New provider: data/sec_edgar_provider.py
+   - Uses SEC EDGAR APIs (data.sec.gov) with required headers:
+     - User-Agent: "<your email or app name> (contact: <email>)"
+     - Accept-Encoding: gzip, deflate
+   - Implement:
+     a) resolve_cik(symbol) -> cik (cache 7 days)
+        - Use SEC company_tickers.json mapping (download once, cache locally/in-memory)
+     b) get_recent_filings(cik, form_types, lookback_days, limit) -> list[filing]
+        - Pull from /submissions/CIK##########.json
+        - Filter by form type and date
+     c) get_form4_insider_summary(cik, lookback_days=30, limit=10) -> summary
+        - Use recent filings filtered for "4"
+        - For each Form 4, fetch filing index JSON only if needed (don’t parse full XML unless absolutely necessary)
+        - Return: count, net_buying_signal (buy/sell/mixed/unknown), last_filed_date, top_line (1–2 sentences)
+     d) get_8k_s1_catalysts(cik, lookback_days=14, limit=10) -> catalysts
+        - Filter forms: 8-K, S-1, S-3, 424B*, 10-Q, 10-K
+        - Return bullet catalysts with filed_at, form, short_title (derive from primaryDocDescription if available), and url
+
+   - Add strict rate limiting:
+     - Global EDGAR token bucket: max 8 requests/sec is too high; be conservative:
+       - Max 2 requests/sec, burst 2
+     - Per-request budget: max 3 EDGAR fetches per API call (excluding cache hits)
+   - Add caching:
+     - cik cache: 7 days
+     - recent filings per cik+filters: 15 minutes
+     - insider summary: 30 minutes
+     - catalysts list: 15 minutes
+
+2) Wire into MarketDataService (or equivalent orchestration service):
+   - Initialize SecEdgarProvider once.
+   - Add method:
+     enrich_with_edgar(tickers: list[str], mode: "light"|"standard"|"insider_focus") -> dict
+     - light: for up to 5 tickers, only do cik resolve + recent forms list (no deep fetches)
+     - standard: for up to 8 tickers, include catalysts from 8-K/S-1/10-Q/K (cached)
+     - insider_focus: for up to 10 tickers, include Form 4 summary (cached)
+   - Always cap by budgets; if tickers > cap, prioritize:
+     - Best Trades: top-ranked shortlist first
+     - Screener: rows that passed deterministic filters first
+     - Trending: items with highest social_velocity or score first
+
+3) Add EDGAR enrichment to these pipelines WITHOUT blocking:
+   - cross_asset_trending:
+     - After Grok shortlist and initial candidate merge, call enrich_with_edgar on equities only (mode="standard", max 6 tickers)
+   - best_trades:
+     - After technical scoring shortlist is set (top 6–8), call enrich_with_edgar(mode="standard", max 6)
+   - screener presets:
+     - Insider+Breakout: enrich_with_edgar(mode="insider_focus", max 8)
+     - All others: enrich_with_edgar(mode="light", max 8)
+   - freeform:
+     - If query contains filing/catalyst/insider keywords, enable EDGAR enrichment on identified tickers (max 5)
+
+4) Pass EDGAR data to Claude cleanly:
+   - Do NOT dump raw filings JSON to Claude.
+   - Provide a compact structure in the data bundle:
+     edgar: {
+       "<TICKER>": {
+         cik: "...",
+         filings_recent: [{form, filed_at, url}],
+         catalysts: [{form, filed_at, title, url}],
+         insider: {signal, last_filed_at, summary}
+       }
+     }
+   - Add one sentence to the relevant Claude system prompt blocks:
+     “If edgar data is present, use it to ground ‘why now’ and flag dilution/offerings/insider activity.”
+
+5) Output behavior rules:
+   - Never say “data feed timed out” if EDGAR exists; instead:
+     - If price/TA is missing but EDGAR + social exists, still provide tickers and cite filings as catalyst grounding.
+   - If EDGAR has no relevant filings in lookback, silently omit or say “No recent filings in last X days” per ticker (short).
+
+6) Logging + health:
+   - Add log prefix:
+     [EDGAR] tickers=N cache_hits=.. requests=.. budget_blocked=..
+   - Add provider health summary in existing /health (non-breaking):
+     - edgar: {enabled: true, last_error: null|..., circuit: open/closed}
+     - This is extra keys only; do not change existing ones.
+
+7) Tests:
+   - Add unit tests with mocked HTTP responses for:
+     - ticker->CIK resolve
+     - filings filter
+     - budget/caching behavior
+   - Ensure all existing tests still pass.
+
+Deliverable:
+- Commit the provider + wiring + tests
+- Confirm server starts clean
+- Provide 3 quick manual test examples:
+  1) Insider+Breakout screener returns at least one row with insider summary when available
+  2) Best Trades includes “why now” grounded by an 8-K or offering filing when present
+  3) Trending Now equities include a catalyst line referencing a recent filing when present

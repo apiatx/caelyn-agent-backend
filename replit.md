@@ -45,5 +45,6 @@ The platform is built on FastAPI, offering a robust and scalable backend.
 - **Market Data & Screening**: Finviz, TwelveData (primary candles, 8/min), Polygon.io (fallback candles, 4/min), Finnhub (circuit-broken), Financial Modeling Prep (FMP), Alpha Vantage, Nasdaq.
 - **Social Sentiment & Trending**: Reddit/ApeWisdom, StockTwits, Yahoo Finance, xAI Grok.
 - **Financial Analysis**: StockAnalysis.
+- **SEC Filings**: SEC EDGAR (data.sec.gov) — free, no API key. SecEdgarProvider in data/sec_edgar_provider.py with rate limiting (2 req/s, 5min circuit breaker on 429), per-request budgets (EdgarBudget, max 3 fetches), and multi-tier caching (CIK 7d, filings 15min, insider 30min, catalysts 15min). Enriches best_trades (standard mode, top 6), cross_asset_trending (standard, top 6 equities), screener presets (insider_focus for insider_breakout, light for others, top 8), and freeform queries with catalyst/insider keywords (insider_focus, top 5). Provides resolve_cik(), get_recent_filings(), get_form4_insider_summary(), get_8k_s1_catalysts(). Health at /api/health.edgar.
 - **Economic Data**: FRED (Federal Reserve Economic Data), CNN (Fear & Greed Index).
 - **Cryptocurrency Data**: CoinGecko, CoinMarketCap, Hyperliquid, altFINS (crypto scanner only).

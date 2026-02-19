@@ -663,6 +663,7 @@ HARD RULES:
 18. Include scan_stats in output with candidates_total, candles_ok, candles_blocked, cache_hits.
 19. Keep action values exactly as provided: "Strong Buy", "Buy", "Hold", or "Sell".
 20. Keep setup_type exactly as provided: breakout, trend_continuation, momentum, breakdown_short, or technical_setup.
+21. If edgar data is present for a ticker, use it to ground "why now" and flag dilution/offerings/insider activity in the thesis. Reference specific filing types and dates.
 """
 
 DETERMINISTIC_SCREENER_CONTRACT = """DETERMINISTIC SCREENER OUTPUT CONTRACT (MANDATORY for screener presets):
@@ -686,6 +687,7 @@ HARD RULES:
 12. Do NOT generate narrative-only responses. Always output the structured screener format.
 13. Include scan_stats in output exactly as provided.
 14. If rows is empty, explain why and suggest loosening criteria. Still use display_type "screener".
+15. If edgar data is present in rows, use it to ground "why now" and flag dilution/offerings/insider activity in top_picks reasons and explain bullets. Reference specific filing types and dates.
 """
 
 CROSS_ASSET_TRENDING_CONTRACT = """CROSS-ASSET TRENDING OUTPUT CONTRACT (MANDATORY for cross_asset_trending):
@@ -770,4 +772,5 @@ RULES:
 - If grok_shortlist shows data_quality_flag="low", mention this in thesis_bullets or as a risk
 - You MUST output symbols. A response with zero symbols is NEVER acceptable.
 - If social_scan_unavailable is true in the data, include a note: "X social scan was unavailable for this request" and rate using available market data only.
+- If edgar data is present for equity tickers, use it to ground "why now" and flag dilution/offerings/insider activity in thesis_bullets. Reference specific filing types (8-K, S-1, Form 4) and dates.
 """

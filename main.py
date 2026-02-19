@@ -915,11 +915,18 @@ async def health_check(request: Request):
     except Exception as e:
         errors.append(f"StockAnalysis: {str(e)}")
 
+    edgar_health = {}
+    try:
+        edgar_health = agent.data.sec_edgar.get_health()
+    except Exception as e:
+        edgar_health = {"enabled": True, "last_error": str(e), "circuit": "unknown"}
+
     return {
         "openai_orchestrator": openai_ok,
         "claude_reasoning": claude_ok,
         "finviz": finviz_ok,
         "stockanalysis": sa_ok,
+        "edgar": edgar_health,
         "errors": errors,
         "status": "ok" if (openai_ok and claude_ok and finviz_ok and sa_ok) else "degraded",
     }

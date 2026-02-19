@@ -12,6 +12,7 @@ from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY, FMP_API
 from data.alphavantage_provider import AlphaVantageProvider
 from data.fred_provider import FredProvider
 from data.edgar_provider import EdgarProvider
+from data.sec_edgar_provider import SecEdgarProvider, EdgarBudget
 from data.fear_greed_provider import FearGreedProvider
 from data.fmp_provider import FMPProvider
 from data.coingecko_provider import CoinGeckoProvider
@@ -281,6 +282,8 @@ class MarketDataService:
         self.alphavantage = AlphaVantageProvider(ALPHA_VANTAGE_API_KEY)
         self.fred = FredProvider(FRED_API_KEY)
         self.edgar = EdgarProvider()
+        self.sec_edgar = SecEdgarProvider()
+        print("[INIT] SEC EDGAR provider initialized (rate-limited, cached)")
         self.fear_greed = FearGreedProvider()
         self.fmp = FMPProvider(fmp_key) if fmp_key else None
         self.coingecko = CoinGeckoProvider(coingecko_key) if coingecko_key else None
@@ -1317,6 +1320,23 @@ class MarketDataService:
             for i, result in enumerate(enriched):
                 if isinstance(result, dict):
                     top_trades[i] = result
+
+        edgar_data = {}
+        try:
+            edgar_tickers = [c["ticker"] for c in top_trades[:6]]
+            if edgar_tickers:
+                edgar_data = await asyncio.wait_for(
+                    self.enrich_with_edgar(edgar_tickers, mode="standard"),
+                    timeout=8.0,
+                )
+                for c in top_trades:
+                    t = c["ticker"]
+                    if t in edgar_data:
+                        c["edgar"] = edgar_data[t]
+        except asyncio.TimeoutError:
+            print("[BEST_TRADES] EDGAR enrichment timed out")
+        except Exception as e:
+            print(f"[BEST_TRADES] EDGAR enrichment error: {e}")
 
         ta_qualified = len(all_candidates)
         top5_debug = []
@@ -3563,6 +3583,69 @@ class MarketDataService:
             "x_twitter_crypto": data.get("x_twitter_crypto", {}),
         }
 
+    async def enrich_with_edgar(self, tickers: list[str], mode: str = "light") -> dict:
+        """
+        Enrich tickers with SEC EDGAR data.
+        Modes:
+          light: CIK resolve + recent filings list only (up to 5 tickers)
+          standard: + catalysts from 8-K/S-1/10-Q/K (up to 8 tickers)
+          insider_focus: + Form 4 insider summary (up to 10 tickers)
+        Returns: {TICKER: {cik, filings_recent, catalysts, insider}}
+        """
+        caps = {"light": 5, "standard": 8, "insider_focus": 10}
+        cap = caps.get(mode, 5)
+        to_process = tickers[:cap]
+
+        budget = EdgarBudget(max_requests=3)
+        result = {}
+        processed = 0
+
+        for ticker in to_process:
+            ticker = ticker.upper().strip()
+            if not ticker:
+                continue
+
+            cik = await self.sec_edgar.resolve_cik(ticker)
+            if not cik:
+                continue
+
+            entry = {"cik": cik, "filings_recent": [], "catalysts": [], "insider": None}
+
+            try:
+                entry["filings_recent"] = await self.sec_edgar.get_recent_filings(
+                    cik, lookback_days=14, limit=5, budget=budget,
+                )
+            except Exception as e:
+                print(f"[EDGAR] Filings error for {ticker}: {e}")
+
+            if mode in ("standard", "insider_focus"):
+                try:
+                    entry["catalysts"] = await self.sec_edgar.get_8k_s1_catalysts(
+                        cik, lookback_days=14, limit=5, budget=budget,
+                    )
+                except Exception as e:
+                    print(f"[EDGAR] Catalysts error for {ticker}: {e}")
+
+            if mode == "insider_focus":
+                try:
+                    entry["insider"] = await self.sec_edgar.get_form4_insider_summary(
+                        cik, lookback_days=30, limit=10, budget=budget,
+                    )
+                except Exception as e:
+                    print(f"[EDGAR] Insider error for {ticker}: {e}")
+
+            if entry["filings_recent"] or entry["catalysts"] or entry.get("insider"):
+                result[ticker] = entry
+                processed += 1
+
+            if not budget.can_spend() and not any(
+                cache.get(f"edgar:filings:{cik}:all:14") for _ in [1]
+            ):
+                break
+
+        print(f"[EDGAR] tickers={len(to_process)} mode={mode} enriched={processed} {budget.summary()}")
+        return result
+
     async def run_deterministic_screener(self, preset_name: str) -> dict:
         """
         Deterministic screener pipeline for preset buttons.
@@ -3923,6 +4006,23 @@ class MarketDataService:
                 "confidence": r["composite_score"],
                 "reason": ", ".join(r.get("signals", [])[:3]) or "Qualified on screen criteria",
             })
+
+        edgar_mode = "insider_focus" if preset_name == "insider_breakout" else "light"
+        try:
+            edgar_tickers = [r["ticker"] for r in final_rows[:8]]
+            if edgar_tickers:
+                edgar_data = await asyncio.wait_for(
+                    self.enrich_with_edgar(edgar_tickers, mode=edgar_mode),
+                    timeout=8.0,
+                )
+                for r in final_rows:
+                    t = r["ticker"]
+                    if t in edgar_data:
+                        r["edgar"] = edgar_data[t]
+        except asyncio.TimeoutError:
+            print(f"[SCREENER] EDGAR enrichment timed out for {preset_name}")
+        except Exception as e:
+            print(f"[SCREENER] EDGAR enrichment error for {preset_name}: {e}")
 
         elapsed = round(_t.time() - start_time, 1)
         print(f"[SCREENER] Phase C: {len(final_rows)} qualified from {len(enriched_rows)} enriched in {elapsed}s")

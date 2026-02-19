@@ -1614,8 +1614,21 @@ class TradingAgent:
         if category == "ticker_analysis":
             tickers = query_info.get("tickers", [])
             results = {}
-            for ticker in tickers[:5]:  # Limit to 5 tickers
+            for ticker in tickers[:5]:
                 results[ticker] = await self.data.research_ticker(ticker)
+            original = query_info.get("original_prompt", "").lower()
+            edgar_keywords = ["catalyst", "why now", "insider", "filings", "s-1", "8-k",
+                              "offering", "dilution", "secondary", "lockup", "guidance", "sec"]
+            if any(kw in original for kw in edgar_keywords) and tickers:
+                try:
+                    edgar_data = await asyncio.wait_for(
+                        self.data.enrich_with_edgar(tickers[:5], mode="insider_focus"),
+                        timeout=8.0,
+                    )
+                    if edgar_data:
+                        results["edgar"] = edgar_data
+                except Exception as e:
+                    print(f"[EDGAR] Freeform enrichment error: {e}")
             return results
 
         elif category == "market_scan":
@@ -1970,6 +1983,33 @@ class TradingAgent:
                 "grok_receipts": grok_has_receipts,
             },
         }
+
+        try:
+            eq_tickers = []
+            if grok_shortlist:
+                eq_gs = grok_shortlist.get("equities", {})
+                if isinstance(eq_gs, dict):
+                    for group in eq_gs.values():
+                        if isinstance(group, list):
+                            for item in group:
+                                if isinstance(item, dict) and item.get("ticker"):
+                                    eq_tickers.append(item["ticker"])
+            if not eq_tickers and market_data_result and isinstance(market_data_result, dict):
+                stock_data = market_data_result.get("stock_trending", {})
+                if isinstance(stock_data, dict):
+                    for t in list(stock_data.get("enriched_data", {}).keys())[:6]:
+                        eq_tickers.append(t)
+            if eq_tickers:
+                edgar_enrichment = await asyncio.wait_for(
+                    self.data.enrich_with_edgar(eq_tickers[:6], mode="standard"),
+                    timeout=8.0,
+                )
+                if edgar_enrichment:
+                    primary_data["edgar"] = edgar_enrichment
+        except asyncio.TimeoutError:
+            print("[CROSS_ASSET_TRENDING] EDGAR enrichment timed out")
+        except Exception as e:
+            print(f"[CROSS_ASSET_TRENDING] EDGAR enrichment error: {e}")
 
         social_signal = self._compute_social_signal_rank(grok_shortlist, market_data_result, primary_data)
         if social_signal:
