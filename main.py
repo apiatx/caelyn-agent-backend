@@ -1006,17 +1006,25 @@ COMMODITY_SYMBOLS = {
     "PALLADIUM": "PAUSD", "WHEAT": "ZSUSD", "CORN": "ZCUSD",
 }
 
-INDEX_YAHOO_SYMBOLS = {
-    "SPX": "^GSPC",
-    "SPY": "SPY",
-    "DJI": "^DJI",
-    "IXIC": "^IXIC",
-    "NDX": "^NDX",
-    "QQQ": "QQQ",
-    "RUT": "^RUT",
-    "VIX": "^VIX",
-    "DXY": "DX-Y.NYB",
+INDEX_MAP = {
+    "VIX": {"yahoo": "^VIX", "proxy": "VIXY", "tv": "TVC:VIX", "name": "CBOE Volatility Index"},
+    "SPX": {"yahoo": "^GSPC", "proxy": "SPY", "tv": "SP:SPX", "name": "S&P 500"},
+    "DJI": {"yahoo": "^DJI", "proxy": "DIA", "tv": "TVC:DJI", "name": "Dow Jones Industrial Average"},
+    "DJIA": {"yahoo": "^DJI", "proxy": "DIA", "tv": "TVC:DJI", "name": "Dow Jones Industrial Average"},
+    "IXIC": {"yahoo": "^IXIC", "proxy": "QQQ", "tv": "NASDAQ:IXIC", "name": "NASDAQ Composite"},
+    "NDX": {"yahoo": "^NDX", "proxy": "QQQ", "tv": "NASDAQ:NDX", "name": "NASDAQ 100"},
+    "RUT": {"yahoo": "^RUT", "proxy": "IWM", "tv": "TVC:RUT", "name": "Russell 2000"},
+    "DXY": {"yahoo": "DX-Y.NYB", "proxy": "UUP", "tv": "TVC:DXY", "name": "US Dollar Index"},
+    "TNX": {"yahoo": "^TNX", "proxy": "TLT", "tv": "TVC:TNX", "name": "10-Year Treasury Yield"},
+    "GSPC": {"yahoo": "^GSPC", "proxy": "SPY", "tv": "SP:SPX", "name": "S&P 500"},
 }
+
+INDEX_YAHOO_SYMBOLS = {k: v["yahoo"] for k, v in INDEX_MAP.items()}
+INDEX_YAHOO_SYMBOLS["SPY"] = "SPY"
+INDEX_YAHOO_SYMBOLS["QQQ"] = "QQQ"
+
+def _is_known_index(ticker: str) -> bool:
+    return ticker.upper().strip() in INDEX_MAP
 
 COINGECKO_COIN_LIST_TTL = 86400
 
@@ -1080,6 +1088,10 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
     if cached_quotes is not None:
         print(f"[PORTFOLIO] Returning cached quotes for {len(tickers)} tickers")
         return {"quotes": cached_quotes}
+
+    for t in tickers:
+        if _is_known_index(t) and asset_types.get(t) != "crypto":
+            asset_types[t] = "index"
 
     index_tickers = [t for t in tickers if asset_types.get(t) == "index"]
     stock_tickers = [t for t in tickers if asset_types.get(t, "stock") in ("stock", "etf") and t not in index_tickers]
@@ -1290,15 +1302,22 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                         print(f"[PORTFOLIO] FMP profile {ticker} error: {e}")
                         quotes[ticker]["sector"] = "Other"
 
-        # ---- INDICES: Yahoo index symbols ----
+        # ---- INDICES: Yahoo primary → Finnhub proxy fallback ----
         if index_tickers:
             for ticker in index_tickers:
-                yahoo_symbol = INDEX_YAHOO_SYMBOLS.get(ticker, ticker)
+                idx_info = INDEX_MAP.get(ticker, {})
+                yahoo_symbol = idx_info.get("yahoo", INDEX_YAHOO_SYMBOLS.get(ticker, ticker))
+                tv_symbol = idx_info.get("tv", f"TVC:{ticker}")
+                idx_name = idx_info.get("name", ticker)
+                proxy_etf = idx_info.get("proxy")
+                got_quote = False
+
                 try:
                     resp = await client.get(
                         "https://query1.finance.yahoo.com/v8/finance/chart/" + yahoo_symbol,
                         params={"interval": "1d", "range": "2d"},
                         headers={"User-Agent": "Mozilla/5.0"},
+                        timeout=6.0,
                     )
                     if resp.status_code == 200:
                         chart_data = resp.json()
@@ -1306,25 +1325,71 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                         if result:
                             meta = result[0].get("meta", {})
                             price = meta.get("regularMarketPrice", 0)
-                            prev_close = meta.get("chartPreviousClose", meta.get("previousClose", 0))
-                            change = round(price - prev_close, 2) if prev_close else 0
-                            change_pct = round((change / prev_close) * 100, 2) if prev_close else 0
-                            quotes[ticker] = {
-                                "price": price,
-                                "change": change,
-                                "change_pct": change_pct,
-                                "day_high": meta.get("regularMarketDayHigh"),
-                                "day_low": meta.get("regularMarketDayLow"),
-                                "volume": meta.get("regularMarketVolume"),
-                                "source": "yahoo",
-                                "asset_type": "index",
-                                "sector": "Index",
-                            }
-                            print(f"[PORTFOLIO] Index: {ticker} ({yahoo_symbol}) = ${price}")
-                    else:
-                        print(f"[PORTFOLIO] Yahoo index {ticker} ({yahoo_symbol}) returned {resp.status_code}")
+                            if price and price > 0:
+                                prev_close = meta.get("chartPreviousClose", meta.get("previousClose", 0))
+                                change = round(price - prev_close, 2) if prev_close else 0
+                                change_pct = round((change / prev_close) * 100, 2) if prev_close else 0
+                                quotes[ticker] = {
+                                    "price": price,
+                                    "change": change,
+                                    "change_pct": change_pct,
+                                    "day_high": meta.get("regularMarketDayHigh"),
+                                    "day_low": meta.get("regularMarketDayLow"),
+                                    "volume": meta.get("regularMarketVolume"),
+                                    "source": "yahoo",
+                                    "asset_type": "index",
+                                    "sector": "Index",
+                                    "company_name": idx_name,
+                                    "tradingview_symbol": tv_symbol,
+                                }
+                                got_quote = True
+                                print(f"[PORTFOLIO] Index: {ticker} ({yahoo_symbol}) = ${price}")
+                    if not got_quote:
+                        print(f"[PORTFOLIO] Yahoo index {ticker} ({yahoo_symbol}) returned {resp.status_code if resp else 'no response'}")
                 except Exception as e:
-                    print(f"[PORTFOLIO] Index {ticker} ({yahoo_symbol}) error: {e}")
+                    print(f"[PORTFOLIO] Yahoo index {ticker} ({yahoo_symbol}) error: {e}")
+
+                if not got_quote and proxy_etf:
+                    try:
+                        r = await client.get(
+                            "https://finnhub.io/api/v1/quote",
+                            params={"symbol": proxy_etf, "token": os.getenv("FINNHUB_API_KEY", "")},
+                            timeout=5.0,
+                        )
+                        if r.status_code == 200:
+                            d = r.json()
+                            if d.get("c") and d["c"] > 0:
+                                quotes[ticker] = {
+                                    "price": d.get("c"),
+                                    "change": d.get("d"),
+                                    "change_pct": d.get("dp"),
+                                    "day_high": d.get("h"),
+                                    "day_low": d.get("l"),
+                                    "source": f"finnhub_proxy({proxy_etf})",
+                                    "asset_type": "index",
+                                    "sector": "Index",
+                                    "company_name": f"{idx_name} (via {proxy_etf})",
+                                    "tradingview_symbol": tv_symbol,
+                                    "is_proxy": True,
+                                }
+                                got_quote = True
+                                print(f"[PORTFOLIO] Index fallback: {ticker} via {proxy_etf} = ${d['c']}")
+                    except Exception as e:
+                        print(f"[PORTFOLIO] Index proxy {ticker} ({proxy_etf}) error: {e}")
+
+                if not got_quote:
+                    quotes[ticker] = {
+                        "price": None,
+                        "change": None,
+                        "change_pct": None,
+                        "source": "unavailable",
+                        "asset_type": "index",
+                        "sector": "Index",
+                        "company_name": idx_name,
+                        "tradingview_symbol": tv_symbol,
+                        "error": f"Could not fetch quote for index {ticker}",
+                    }
+                    print(f"[PORTFOLIO] Index {ticker}: no quote available")
 
         # ---- CRYPTO: CoinGecko primary → CoinMarketCap fallback on 429 ----
         if crypto_tickers:
@@ -1707,45 +1772,65 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             })
 
         async def fetch_ticker_data(ticker, asset_type="stock"):
+            if _is_known_index(ticker):
+                asset_type = "index"
             result = {"ticker": ticker, "asset_type": asset_type}
             tasks = {}
 
-            try:
-                tasks["overview"] = asyncio.wait_for(
-                    agent.data.stockanalysis.get_overview(ticker), timeout=5.0)
-            except Exception:
-                pass
+            if asset_type == "index":
+                idx_info = INDEX_MAP.get(ticker, {})
+                proxy_etf = idx_info.get("proxy")
+                result["company_name"] = idx_info.get("name", ticker)
+                result["tradingview_symbol"] = idx_info.get("tv", f"TVC:{ticker}")
 
-            try:
-                tasks["quote"] = asyncio.wait_for(
-                    asyncio.to_thread(agent.data.finnhub.get_quote, ticker), timeout=4.0)
-            except Exception:
-                pass
+                if proxy_etf:
+                    try:
+                        tasks["quote"] = asyncio.wait_for(
+                            asyncio.to_thread(agent.data.finnhub.get_quote, proxy_etf), timeout=4.0)
+                    except Exception:
+                        pass
+                    try:
+                        tasks["candles"] = asyncio.wait_for(
+                            agent.data.get_candles(proxy_etf, days=120), timeout=6.0)
+                    except Exception:
+                        pass
+            else:
+                try:
+                    tasks["overview"] = asyncio.wait_for(
+                        agent.data.stockanalysis.get_overview(ticker), timeout=5.0)
+                except Exception:
+                    pass
 
-            try:
-                tasks["sentiment"] = asyncio.wait_for(
-                    agent.data.stocktwits.get_sentiment(ticker), timeout=4.0)
-            except Exception:
-                pass
+                try:
+                    tasks["quote"] = asyncio.wait_for(
+                        asyncio.to_thread(agent.data.finnhub.get_quote, ticker), timeout=4.0)
+                except Exception:
+                    pass
 
-            try:
-                tasks["candles"] = asyncio.wait_for(
-                    agent.data.get_candles(ticker, days=120), timeout=6.0)
-            except Exception:
-                pass
+                try:
+                    tasks["sentiment"] = asyncio.wait_for(
+                        agent.data.stocktwits.get_sentiment(ticker), timeout=4.0)
+                except Exception:
+                    pass
 
-            try:
-                tasks["analyst"] = asyncio.wait_for(
-                    agent.data.stockanalysis.get_analyst_ratings(ticker), timeout=4.0)
-            except Exception:
-                pass
+                try:
+                    tasks["candles"] = asyncio.wait_for(
+                        agent.data.get_candles(ticker, days=120), timeout=6.0)
+                except Exception:
+                    pass
 
-            try:
-                if agent.data.fmp:
-                    tasks["news"] = asyncio.wait_for(
-                        agent.data.fmp.get_stock_news(ticker, limit=3), timeout=4.0)
-            except Exception:
-                pass
+                try:
+                    tasks["analyst"] = asyncio.wait_for(
+                        agent.data.stockanalysis.get_analyst_ratings(ticker), timeout=4.0)
+                except Exception:
+                    pass
+
+                try:
+                    if agent.data.fmp:
+                        tasks["news"] = asyncio.wait_for(
+                            agent.data.fmp.get_stock_news(ticker, limit=3), timeout=4.0)
+                except Exception:
+                    pass
 
             if not tasks:
                 return result
@@ -1786,7 +1871,8 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
         _log(f"[PORTFOLIO_REVIEW] Starting parallel fetch for {len(tickers)} tickers + macro...")
 
         async def _fetch_all_tickers():
-            ticker_tasks = [fetch_ticker_data(t) for t in tickers[:15]]
+            ticker_asset_map = {h["ticker"]: h.get("asset_type", "stock") for h in holdings_context}
+            ticker_tasks = [fetch_ticker_data(t, ticker_asset_map.get(t, "stock")) for t in tickers[:15]]
             return await asyncio.gather(*ticker_tasks, return_exceptions=True)
 
         async def _fetch_macro():
