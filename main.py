@@ -1302,7 +1302,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                         print(f"[PORTFOLIO] FMP profile {ticker} error: {e}")
                         quotes[ticker]["sector"] = "Other"
 
-        # ---- INDICES: Finnhub proxy ETF primary → Yahoo fallback ----
+        # ---- INDICES: VIX via FRED (actual value), others via Yahoo → unavailable with note ----
         if index_tickers:
             async def _fetch_index_quote(ticker):
                 idx_info = INDEX_MAP.get(ticker, {})
@@ -1311,35 +1311,32 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                 proxy_etf = idx_info.get("proxy")
                 yahoo_symbol = idx_info.get("yahoo") or INDEX_YAHOO_SYMBOLS.get(ticker, ticker)
 
-                if proxy_etf:
+                if ticker == "VIX":
                     try:
-                        r = await client.get(
-                            "https://finnhub.io/api/v1/quote",
-                            params={"symbol": proxy_etf, "token": os.getenv("FINNHUB_API_KEY", "")},
-                            timeout=5.0,
-                        )
-                        if r.status_code == 200:
-                            d = r.json()
-                            if d.get("c") and d["c"] > 0:
-                                quotes[ticker] = {
-                                    "price": d.get("c"),
-                                    "change": d.get("d"),
-                                    "change_pct": d.get("dp"),
-                                    "day_high": d.get("h"),
-                                    "day_low": d.get("l"),
-                                    "prev_close": d.get("pc"),
-                                    "source": f"finnhub_proxy({proxy_etf})",
-                                    "asset_type": "index",
-                                    "sector": "Index",
-                                    "company_name": f"{idx_name} (via {proxy_etf})",
-                                    "tradingview_symbol": tv_symbol,
-                                    "proxy_ticker": proxy_etf,
-                                    "is_proxy": True,
-                                }
-                                print(f"[PORTFOLIO] Index: {ticker} via proxy {proxy_etf} = ${d['c']}", flush=True)
-                                return
+                        from data.fred_provider import FredProvider
+                        fred = FredProvider(api_key=os.getenv("FRED_API_KEY", ""))
+                        vix_data = await asyncio.to_thread(fred.get_vix)
+                        if isinstance(vix_data, dict) and vix_data.get("current_vix"):
+                            vix_price = vix_data["current_vix"]
+                            trend = vix_data.get("trend", [])
+                            prev_vix = trend[-2]["vix"] if len(trend) >= 2 else vix_price
+                            change = round(vix_price - prev_vix, 2)
+                            change_pct = round((change / prev_vix) * 100, 2) if prev_vix else 0
+                            quotes[ticker] = {
+                                "price": vix_price,
+                                "change": change,
+                                "change_pct": change_pct,
+                                "source": "fred",
+                                "asset_type": "index",
+                                "sector": "Index",
+                                "company_name": "CBOE Volatility Index",
+                                "tradingview_symbol": "TVC:VIX",
+                                "signal": vix_data.get("signal", ""),
+                            }
+                            print(f"[PORTFOLIO] VIX from FRED: {vix_price} ({vix_data.get('signal', '')})", flush=True)
+                            return
                     except Exception as e:
-                        print(f"[PORTFOLIO] Finnhub proxy {proxy_etf} for {ticker} error: {e}", flush=True)
+                        print(f"[PORTFOLIO] FRED VIX failed: {e}", flush=True)
 
                 try:
                     resp = await client.get(
@@ -1377,6 +1374,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                 except Exception as e:
                     print(f"[PORTFOLIO] Yahoo index {ticker} error: {e}", flush=True)
 
+                etf_note = f"Consider tracking {proxy_etf} instead for real-time data." if proxy_etf else ""
                 quotes[ticker] = {
                     "price": None,
                     "change": None,
@@ -1386,9 +1384,9 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                     "sector": "Index",
                     "company_name": idx_name,
                     "tradingview_symbol": tv_symbol,
-                    "error": f"Could not fetch quote for index {ticker}",
+                    "note": f"Live {ticker} index data unavailable on free API tier. {etf_note}".strip(),
                 }
-                print(f"[PORTFOLIO] Index {ticker}: no quote available", flush=True)
+                print(f"[PORTFOLIO] Index {ticker}: no actual index quote available", flush=True)
 
             await asyncio.gather(*[_fetch_index_quote(t) for t in index_tickers])
 
@@ -1784,7 +1782,15 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
                 result["company_name"] = idx_info.get("name", ticker)
                 result["tradingview_symbol"] = idx_info.get("tv", f"TVC:{ticker}")
 
-                if proxy_etf:
+                if ticker == "VIX":
+                    try:
+                        from data.fred_provider import FredProvider
+                        fred = FredProvider(api_key=os.getenv("FRED_API_KEY", ""))
+                        tasks["vix_fred"] = asyncio.wait_for(
+                            asyncio.to_thread(fred.get_vix), timeout=5.0)
+                    except Exception:
+                        pass
+                elif proxy_etf:
                     try:
                         tasks["quote"] = asyncio.wait_for(
                             asyncio.to_thread(agent.data.finnhub.get_quote, proxy_etf), timeout=4.0)
@@ -1846,7 +1852,15 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
                     continue
                 if not res:
                     continue
-                if key == "overview":
+                if key == "vix_fred":
+                    if isinstance(res, dict) and res.get("current_vix"):
+                        result["current_price"] = res["current_vix"]
+                        trend = res.get("trend", [])
+                        if len(trend) >= 2:
+                            prev = trend[-2]["vix"]
+                            result["change_pct"] = round(((res["current_vix"] - prev) / prev) * 100, 2) if prev else 0
+                        result["vix_signal"] = res.get("signal", "")
+                elif key == "overview":
                     result["overview"] = res
                 elif key == "quote":
                     if isinstance(res, dict) and res.get("price"):
