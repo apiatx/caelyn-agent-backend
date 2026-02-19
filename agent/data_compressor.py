@@ -332,42 +332,109 @@ def _compress_briefing(data: dict) -> dict:
 def _compress_cross_asset_trending(data: dict) -> dict:
     compressed = {}
 
+    KEEP_FIELDS = {
+        "scan_type", "instructions", "ranked_candidates", "ranking_debug",
+        "grok_shortlist", "grok_available", "social_signal", "edgar",
+        "module_status", "candidate_summary", "orchestration_metadata",
+        "social_scan_unavailable", "social_scan_notice",
+        "light_enrichment", "market_mood_social",
+    }
+    SKIP_FIELDS = {
+        "cross_asset_debug", "_cross_asset_debug",
+    }
+
+    _ENRICHED_KEEP = {
+        "market_cap", "pe_ratio", "revenue_growth", "eps_growth",
+        "analyst_rating", "price_target", "upside_downside", "sector",
+        "avg_volume", "beta", "price", "change", "ticker",
+        "dividend_yield", "forward_pe", "week_52_high", "week_52_low",
+    }
+
     for key, value in data.items():
-        if key in ("cross_asset_debug", "_cross_asset_debug"):
+        if key in SKIP_FIELDS or key.startswith("_"):
             continue
 
-        if key == "grok_shortlist" and isinstance(value, dict):
-            trimmed_grok = {}
-            for gk, gv in value.items():
-                if gk == "equities" and isinstance(gv, dict):
-                    trimmed_eq = {}
-                    for bucket_name, bucket_items in gv.items():
-                        if isinstance(bucket_items, list):
-                            trimmed_eq[bucket_name] = bucket_items[:8]
-                        else:
-                            trimmed_eq[bucket_name] = bucket_items
-                    trimmed_grok[gk] = trimmed_eq
-                elif isinstance(gv, list):
-                    trimmed_grok[gk] = gv[:10]
-                else:
-                    trimmed_grok[gk] = gv
-            compressed[key] = trimmed_grok
+        if key in KEEP_FIELDS:
+            if key == "grok_shortlist" and isinstance(value, dict):
+                trimmed_grok = {}
+                for gk, gv in value.items():
+                    if gk == "equities" and isinstance(gv, dict):
+                        trimmed_eq = {}
+                        for bucket_name, bucket_items in gv.items():
+                            if isinstance(bucket_items, list):
+                                trimmed_eq[bucket_name] = bucket_items[:8]
+                            else:
+                                trimmed_eq[bucket_name] = bucket_items
+                        trimmed_grok[gk] = trimmed_eq
+                    elif isinstance(gv, list):
+                        trimmed_grok[gk] = gv[:10]
+                    else:
+                        trimmed_grok[gk] = gv
+                compressed[key] = trimmed_grok
+            elif key == "ranked_candidates" and isinstance(value, list):
+                compressed[key] = value[:18]
+            elif key == "ranking_debug" and isinstance(value, dict):
+                slim_debug = {}
+                for dk, dv in value.items():
+                    if dk in ("selection_reasons", "macro_regime", "quota_adjustments",
+                              "coverage_backfills", "candidates_per_class", "post_score_counts"):
+                        slim_debug[dk] = dv
+                compressed[key] = slim_debug
+            else:
+                compressed[key] = value
             continue
 
         if key == "stock_trending" and isinstance(value, dict):
-            trimmed_stock = dict(value)
-            enriched = trimmed_stock.get("enriched_data", {})
-            if isinstance(enriched, dict) and len(enriched) > 10:
-                top_keys = list(enriched.keys())[:10]
-                trimmed_stock["enriched_data"] = {k: enriched[k] for k in top_keys}
-            compressed[key] = trimmed_stock
+            enriched = value.get("enriched_data", {})
+            compact_enriched = {}
+            if isinstance(enriched, dict):
+                for ticker, info in list(enriched.items())[:12]:
+                    if isinstance(info, dict):
+                        compact_enriched[ticker] = {k: v for k, v in info.items() if k in _ENRICHED_KEEP}
+            top_trending = value.get("top_trending", [])
+            compressed[key] = {
+                "top_trending": top_trending[:15] if isinstance(top_trending, list) else [],
+                "enriched_data": compact_enriched,
+            }
+            continue
+
+        if key == "crypto_scanner" and isinstance(value, dict):
+            if "error" in value:
+                compressed[key] = {"error": value["error"]}
+            else:
+                compact_crypto = {}
+                for ck in ("coingecko_trending", "cmc_trending", "top_coins"):
+                    items = value.get(ck, [])
+                    if isinstance(items, list) and items:
+                        compact_crypto[ck] = items[:8]
+                compressed[key] = compact_crypto or {"summary": "no crypto data"}
+            continue
+
+        if key == "commodities" and isinstance(value, dict):
+            if "error" in value:
+                compressed[key] = {"error": value["error"]}
+            else:
+                compact_comm = {}
+                for ck in ("commodity_proxies", "all_commodity_quotes", "commodities", "data"):
+                    items = value.get(ck, [])
+                    if isinstance(items, list) and items:
+                        compact_comm[ck] = items[:10]
+                        break
+                compressed[key] = compact_comm or {"summary": "no commodity data"}
+            continue
+
+        if key == "macro_context" and isinstance(value, dict):
+            slim_macro = {}
+            for mk in ("fear_greed", "market_summary", "regime", "macro_regime",
+                        "treasury_rates", "key_indicators"):
+                if mk in value:
+                    slim_macro[mk] = value[mk]
+            compressed[key] = slim_macro
             continue
 
         if key == "news_context" and isinstance(value, dict):
             compressed[key] = _trim_news(value)
             continue
-
-        compressed[key] = value
 
     compressed = {k: v for k, v in compressed.items() if v is not None}
 

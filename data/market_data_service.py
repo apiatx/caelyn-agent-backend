@@ -1107,6 +1107,48 @@ class MarketDataService:
 
         print(f"[Wide Scan] Complete: {len(enriched_candidates)} candidates ({len(flagged)} flagged) ({time.time()-scan_start:.1f}s) Budget: {budget.status()}")
 
+        if category in ("investments", "fundamentals_scan", "asymmetric") and enriched_candidates and budget.can_continue():
+            try:
+                quote_tickers = [t for t in enriched_candidates if not t.startswith("FLAGGED_")][:15]
+                if quote_tickers:
+                    quotes = await asyncio.wait_for(
+                        self.get_quotes_batch(quote_tickers),
+                        timeout=8.0,
+                    )
+                    for t, q in quotes.items():
+                        if t in enriched_candidates and isinstance(q, dict) and "error" not in q:
+                            snap = enriched_candidates[t].get("snapshot", {})
+                            if not snap.get("price") and q.get("price"):
+                                snap["price"] = q["price"]
+                            if not snap.get("change_pct") and q.get("change_pct"):
+                                snap["change_pct"] = q["change_pct"]
+                            enriched_candidates[t]["snapshot"] = snap
+                    print(f"[Wide Scan] Quote batch backfilled {len(quotes)} tickers")
+
+                from data.ta_utils import compute_technicals_from_bars
+                ta_tickers = quote_tickers[:8]
+                candle_budget = CandleBudget(max_calls=8)
+                ta_count = 0
+                for t in ta_tickers:
+                    if not candle_budget.can_spend():
+                        break
+                    try:
+                        bars = await asyncio.wait_for(
+                            self.get_candles(t, days=120, budget=candle_budget),
+                            timeout=5.0,
+                        )
+                        if bars and len(bars) >= 20:
+                            ta = compute_technicals_from_bars(bars)
+                            if ta and isinstance(ta, dict):
+                                enriched_candidates[t]["computed_ta"] = ta
+                                ta_count += 1
+                    except Exception:
+                        pass
+                    budget.tick("investment_ta")
+                print(f"[Wide Scan] TA computed for {ta_count}/{len(ta_tickers)} investment candidates")
+            except Exception as e:
+                print(f"[Wide Scan] Quote/TA enrichment error: {e}")
+
         scan_result = {
             "news_context": news_context,
             "total_candidates_scanned": len(all_tickers),

@@ -40,6 +40,7 @@ class TradingAgent:
         "social": "social_momentum",
         "wsb": "social_momentum",
         "reddit": "social_momentum",
+        "long_term_conviction": "investment_ideas",
         "investments": "investment_ideas",
         "sqglp": "investment_ideas",
         "bearish": "bearish_setups",
