@@ -315,6 +315,67 @@ class TradingAgent:
             routing_source = "followup"
             routing_confidence = "high"
             print(f"[AGENT] Follow-up detected, skipping data gathering ({time.time() - start_time:.1f}s)")
+
+            q_lower = user_prompt.lower()
+            needs_social = any(w in q_lower for w in ["social", "momentum", "sentiment", "buzz", "hype", "x say", "twitter", "reddit"])
+            needs_price = any(w in q_lower for w in ["price", "entry", "stop", "target", "chart", "technical"])
+
+            if needs_social or needs_price:
+                import re as _re
+                prior_tickers = []
+                _common = {
+                    "I", "A", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
+                    "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON", "OR",
+                    "SO", "TO", "UP", "US", "WE", "THE", "AND", "FOR", "ARE",
+                    "BUT", "NOT", "YOU", "ALL", "BUY", "SELL", "HOLD", "LONG",
+                    "SHORT", "PUT", "CALL", "ETF", "IPO", "NOW", "OUT", "TOP",
+                    "NEW", "HAS", "MOST", "BEST", "HIGH", "LOW", "RISK", "STOP",
+                    "ENTRY", "WHICH", "THESE", "THOSE", "WHAT", "THAT", "FEAR",
+                    "CEO", "CFO", "EPS", "GDP", "CPI", "FED", "SEC", "RSI", "SMA",
+                    "AI", "FOMC", "NAV", "DCF", "ATH", "ATL", "YOY", "QOQ",
+                    "MACD", "TA", "FA", "PE", "PB", "ROE", "ROI", "YTD",
+                    "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "NZD",
+                    "OK", "YES", "HEY", "WOW", "ANY", "MAY", "CAN", "LET",
+                    "SAY", "GET", "USE", "SET", "RUN", "TRY", "ADD",
+                }
+                for msg in history:
+                    c = str(msg.get("content", ""))
+                    found = _re.findall(r'\b([A-Z]{1,5})\b', c)
+                    prior_tickers.extend([t for t in found if t not in _common])
+                seen = set()
+                unique_tickers = []
+                for t in prior_tickers:
+                    if t not in seen:
+                        seen.add(t)
+                        unique_tickers.append(t)
+                prior_tickers = unique_tickers[:10]
+
+                if prior_tickers:
+                    market_data = {}
+                    if needs_social and self.data.xai:
+                        try:
+                            social = await asyncio.wait_for(
+                                self.data.xai.get_batch_sentiment(prior_tickers[:5]),
+                                timeout=20.0,
+                            )
+                            if social:
+                                market_data["social_sentiment_comparison"] = social
+                                print(f"[FOLLOWUP] Social comparison: {list(social.keys())}")
+                        except Exception as e:
+                            print(f"[FOLLOWUP] Social fetch failed: {e}")
+                    if needs_price:
+                        try:
+                            quotes = await asyncio.wait_for(
+                                self.data.get_quotes_batch(prior_tickers[:10]),
+                                timeout=8.0,
+                            )
+                            if quotes:
+                                market_data["price_quotes"] = quotes
+                                print(f"[FOLLOWUP] Price quotes: {list(quotes.keys())}")
+                        except Exception as e:
+                            print(f"[FOLLOWUP] Price fetch failed: {e}")
+                    if not market_data:
+                        market_data = None
         elif preset_intent:
             plan = self._build_plan_from_preset(preset_intent)
             if plan is None:
@@ -619,6 +680,9 @@ class TradingAgent:
             "crypto scanner", "watchlist review",
             "analyze", "check", "look at", "price action", "how is",
             "what about ticker", "deep dive",
+            "social momentum", "sentiment", "which has", "most momentum",
+            "most bullish", "compare", "what does x say", "what does twitter say",
+            "reddit says", "stocktwits",
         ]
 
         for trigger in new_scan_triggers:
@@ -2872,9 +2936,52 @@ Be direct and opinionated. Tell me what you actually think."""
         if history:
             recent_history = history[-10:]
             for msg in recent_history:
+                content = msg.get("content", "")
+                if isinstance(content, dict):
+                    text_parts = []
+                    if content.get("analysis"):
+                        text_parts.append(str(content["analysis"]))
+                    if content.get("structured", {}).get("message"):
+                        text_parts.append(str(content["structured"]["message"]))
+                    if content.get("structured", {}).get("market_pulse", {}).get("summary"):
+                        text_parts.append(str(content["structured"]["market_pulse"]["summary"]))
+                    for trade in content.get("structured", {}).get("top_trades", [])[:5]:
+                        if isinstance(trade, dict):
+                            ticker = trade.get("ticker", "?")
+                            thesis = trade.get("thesis", trade.get("pattern", ""))
+                            entry = trade.get("entry", "")
+                            text_parts.append(f"{ticker}: {thesis} (Entry: {entry})")
+                    for pick in content.get("structured", {}).get("trending_tickers", [])[:5]:
+                        if isinstance(pick, dict):
+                            ticker = pick.get("ticker", "?")
+                            why = pick.get("why_trending", pick.get("thesis", ""))
+                            text_parts.append(f"{ticker}: {why}")
+                    for row in content.get("structured", {}).get("rows", [])[:5]:
+                        if isinstance(row, dict):
+                            ticker = row.get("ticker", "?")
+                            signals = ", ".join(row.get("signals", [])[:3])
+                            text_parts.append(f"{ticker}: {signals}")
+                    content = "\n".join(text_parts) if text_parts else json.dumps(content, default=str)[:5000]
+                elif isinstance(content, (list, tuple)):
+                    content = json.dumps(content, default=str)[:5000]
+                else:
+                    content = str(content) if content else ""
+
+                if not isinstance(content, str):
+                    content = str(content) if content else ""
+                if not content or not content.strip():
+                    if msg.get("role") == "assistant":
+                        content = "[Previous analysis response — structured data]"
+                    else:
+                        content = "[Empty message]"
+
+                role = msg.get("role", "user")
+                if role not in ("user", "assistant", "system"):
+                    role = "user"
+
                 messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"],
+                    "role": role,
+                    "content": content,
                 })
 
         if data_str:

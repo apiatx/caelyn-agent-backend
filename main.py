@@ -670,7 +670,8 @@ async def query_agent(
                 try:
                     updated_messages = list(history)
                     updated_messages.append({"role": "user", "content": user_query})
-                    updated_messages.append({"role": "assistant", "content": _json.dumps(resp, default=str)})
+                    _asst_content = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
+                    updated_messages.append({"role": "assistant", "content": _asst_content})
                     _save_msgs(conv_id, updated_messages)
                 except Exception:
                     pass
@@ -689,7 +690,8 @@ async def query_agent(
                 try:
                     updated_messages = list(history)
                     updated_messages.append({"role": "user", "content": user_query})
-                    updated_messages.append({"role": "assistant", "content": _json.dumps(resp, default=str)})
+                    _asst_content2 = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
+                    updated_messages.append({"role": "assistant", "content": _asst_content2})
                     _save_msgs(conv_id, updated_messages)
                 except Exception:
                     pass
@@ -699,7 +701,10 @@ async def query_agent(
             try:
                 updated_messages = list(history)
                 updated_messages.append({"role": "user", "content": user_query})
-                updated_messages.append({"role": "assistant", "content": _json.dumps(result, default=str)})
+                _asst_content3 = result.get("analysis", "") if isinstance(result, dict) else ""
+                if not _asst_content3:
+                    _asst_content3 = _json.dumps(result, default=str)[:8000]
+                updated_messages.append({"role": "assistant", "content": _asst_content3})
                 _save_msgs(conv_id, updated_messages)
             except Exception as e:
                 print(f"[API] Failed to save conversation: {e}")
@@ -776,7 +781,7 @@ async def review_watchlist(
                 from data.chat_history import save_messages as _save2
                 _save2(body.conversation_id, [
                     {"role": "user", "content": f"Review my watchlist: {', '.join(tickers)}"},
-                    {"role": "assistant", "content": _json.dumps(result, default=str)},
+                    {"role": "assistant", "content": result.get("analysis", "") if isinstance(result, dict) else _json.dumps(result, default=str)[:8000]},
                 ])
             except Exception as e:
                 print(f"[API] Failed to save watchlist conversation: {e}")
