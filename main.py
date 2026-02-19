@@ -1652,22 +1652,22 @@ async def get_portfolio_events(api_key: str = Header(None, alias="X-API-Key")):
 @app.post("/api/portfolio/review")
 @limiter.limit("5/minute")
 async def review_portfolio(request: Request, api_key: str = Header(None, alias="X-API-Key")):
-    """AI Portfolio Review — takes holdings with cost basis, returns Buy/Hold/Sell for each."""
+    """AI Portfolio Review — comprehensive analysis with Buy/Hold/Sell verdicts."""
     import asyncio
-    import httpx
+    import time as _time
 
     if not api_key or api_key != AGENT_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
 
     await _wait_for_init()
     body = await request.json()
+    start = _time.time()
+
     print(f"[PORTFOLIO_REVIEW] === ENDPOINT HIT ===")
-    print(f"[PORTFOLIO_REVIEW] Request keys: {list(body.keys())}")
     holdings = body.get("holdings", [])
-    print(f"[PORTFOLIO_REVIEW] Holdings count: {len(holdings)}")
+    print(f"[PORTFOLIO_REVIEW] Holdings: {[h.get('ticker') for h in holdings]}")
 
     if not holdings:
-        print("[PORTFOLIO_REVIEW] No holdings found in request!")
         return {
             "type": "chat",
             "analysis": "",
@@ -1677,87 +1677,252 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             },
         }
 
-    print(f"[PORTFOLIO_REVIEW] Reviewing {len(holdings)} holdings: {[h.get('ticker') for h in holdings]}")
+    tickers = [h.get("ticker", "").upper().strip() for h in holdings if h.get("ticker")]
 
-    holdings_text = ""
+    holdings_context = []
     for h in holdings:
-        ticker = h.get("ticker", "")
-        shares = h.get("shares", 0)
-        avg_cost = h.get("avg_cost", 0) or h.get("avgCost", 0)
-        holdings_text += f"- {ticker}: {shares} shares @ ${avg_cost} avg cost\n"
+        ticker = h.get("ticker", "").upper().strip()
+        shares = float(h.get("shares", 0) or 0)
+        avg_cost = float(h.get("avg_cost", 0) or h.get("avgCost", 0) or 0)
+        asset_type = h.get("type", h.get("asset_type", "stock")).lower()
+        holdings_context.append({
+            "ticker": ticker,
+            "shares": shares,
+            "avg_cost": avg_cost,
+            "cost_basis": round(shares * avg_cost, 2),
+            "asset_type": asset_type,
+        })
 
-    tickers = [h.get("ticker", "").upper() for h in holdings if h.get("ticker")]
+    async def fetch_ticker_data(ticker, asset_type="stock"):
+        result = {"ticker": ticker, "asset_type": asset_type}
 
-    ticker_data = {}
-    for ticker in tickers[:25]:
-        data_item = {"ticker": ticker}
+        tasks = {}
 
-        try:
-            overview = await asyncio.wait_for(
-                agent.data.stockanalysis.get_overview(ticker),
-                timeout=6.0,
-            )
-            if overview:
-                data_item.update(overview)
-        except Exception as e:
-            print(f"[PORTFOLIO_REVIEW] {ticker} overview failed: {e}")
+        tasks["overview"] = asyncio.wait_for(
+            agent.data.stockanalysis.get_overview(ticker),
+            timeout=6.0,
+        )
 
-        try:
-            sentiment = await asyncio.wait_for(
-                agent.data.stocktwits.get_sentiment(ticker),
+        tasks["quote"] = asyncio.wait_for(
+            asyncio.to_thread(agent.data.finnhub.get_quote, ticker),
+            timeout=5.0,
+        )
+
+        tasks["sentiment"] = asyncio.wait_for(
+            agent.data.stocktwits.get_sentiment(ticker),
+            timeout=5.0,
+        )
+
+        tasks["candles"] = asyncio.wait_for(
+            agent.data.get_candles(ticker, days=120),
+            timeout=8.0,
+        )
+
+        tasks["analyst"] = asyncio.wait_for(
+            agent.data.stockanalysis.get_analyst_ratings(ticker),
+            timeout=5.0,
+        )
+
+        if agent.data.fmp:
+            tasks["news"] = asyncio.wait_for(
+                agent.data.fmp.get_stock_news(ticker, limit=3),
                 timeout=5.0,
             )
-            if sentiment:
-                data_item["social_sentiment"] = sentiment
-        except Exception:
-            pass
 
+        task_keys = list(tasks.keys())
+        task_coros = list(tasks.values())
+        results = await asyncio.gather(*task_coros, return_exceptions=True)
+
+        for key, res in zip(task_keys, results):
+            if isinstance(res, Exception):
+                print(f"[PORTFOLIO_REVIEW] {ticker}/{key} failed: {res}")
+                continue
+            if res:
+                if key == "overview":
+                    result["overview"] = res
+                elif key == "quote":
+                    if isinstance(res, dict) and res.get("price"):
+                        result["current_price"] = res["price"]
+                        result["change_pct"] = res.get("change_pct")
+                elif key == "sentiment":
+                    result["social_sentiment"] = res
+                elif key == "candles":
+                    if isinstance(res, list) and len(res) >= 20:
+                        from data.ta_utils import compute_technicals_from_bars
+                        result["technicals"] = compute_technicals_from_bars(res)
+                        result["current_price"] = result.get("current_price") or res[-1].get("c")
+                elif key == "analyst":
+                    result["analyst_ratings"] = res
+                elif key == "news":
+                    result["recent_news"] = res[:3] if isinstance(res, list) else res
+
+        return result
+
+    ticker_tasks = [fetch_ticker_data(t) for t in tickers[:15]]
+    ticker_results = await asyncio.gather(*ticker_tasks, return_exceptions=True)
+
+    ticker_data = {}
+    for res in ticker_results:
+        if isinstance(res, Exception):
+            print(f"[PORTFOLIO_REVIEW] Ticker fetch exception: {res}")
+            continue
+        if isinstance(res, dict) and res.get("ticker"):
+            ticker_data[res["ticker"]] = res
+
+    print(f"[PORTFOLIO_REVIEW] Data gathered for {len(ticker_data)}/{len(tickers)} tickers ({_time.time()-start:.1f}s)")
+
+    grok_sentiment = {}
+    if agent.data.xai and tickers:
         try:
-            if agent.data.fmp:
-                news = await asyncio.wait_for(
-                    agent.data.fmp.get_stock_news(ticker, limit=3),
-                    timeout=5.0,
-                )
-                if news:
-                    data_item["recent_news"] = news
-        except Exception:
-            pass
+            grok_sentiment = await asyncio.wait_for(
+                agent.data.xai.get_batch_sentiment(tickers[:5]),
+                timeout=20.0,
+            )
+            print(f"[PORTFOLIO_REVIEW] Grok sentiment: {len(grok_sentiment)} tickers")
+        except Exception as e:
+            print(f"[PORTFOLIO_REVIEW] Grok sentiment failed: {e}")
 
-        ticker_data[ticker] = data_item
-        await asyncio.sleep(0.3)
+    for ticker, grok_data in grok_sentiment.items():
+        if ticker in ticker_data and "error" not in grok_data:
+            ticker_data[ticker]["x_sentiment"] = grok_data
 
-    print(f"[PORTFOLIO_REVIEW] Data gathered for {len(ticker_data)} tickers")
+    macro_snapshot = {}
+    try:
+        macro_snapshot = await asyncio.wait_for(
+            agent.data._build_macro_snapshot(),
+            timeout=8.0,
+        )
+    except Exception as e:
+        print(f"[PORTFOLIO_REVIEW] Macro snapshot failed: {e}")
+
+    total_cost_basis = sum(h["cost_basis"] for h in holdings_context)
+
+    portfolio_summary = {
+        "total_holdings": len(holdings_context),
+        "total_cost_basis": total_cost_basis,
+        "holdings": [],
+    }
+
+    for h in holdings_context:
+        ticker = h["ticker"]
+        td = ticker_data.get(ticker, {})
+        current_price = td.get("current_price")
+
+        position = {
+            "ticker": ticker,
+            "shares": h["shares"],
+            "avg_cost": h["avg_cost"],
+            "cost_basis": h["cost_basis"],
+            "weight_pct": round(h["cost_basis"] / total_cost_basis * 100, 1) if total_cost_basis else 0,
+        }
+
+        if current_price:
+            position["current_price"] = current_price
+            position["market_value"] = round(h["shares"] * current_price, 2)
+            position["unrealized_pnl"] = round((current_price - h["avg_cost"]) * h["shares"], 2)
+            position["unrealized_pnl_pct"] = round((current_price - h["avg_cost"]) / h["avg_cost"] * 100, 1) if h["avg_cost"] else 0
+            position["change_today_pct"] = td.get("change_pct")
+
+        overview = td.get("overview", {})
+        if isinstance(overview, dict):
+            for key in ["pe_ratio", "ps_ratio", "market_cap", "revenue_growth", "eps_growth",
+                        "profit_margin", "sector", "industry", "beta", "52_week_high", "52_week_low",
+                        "dividend_yield", "analyst_rating", "price_target"]:
+                val = overview.get(key)
+                if val is not None:
+                    position[key] = val
+
+        technicals = td.get("technicals", {})
+        if technicals:
+            position["ta"] = {
+                "rsi": technicals.get("rsi") or technicals.get("rsi_14"),
+                "sma_20": technicals.get("sma_20"),
+                "sma_50": technicals.get("sma_50"),
+                "sma_200": technicals.get("sma_200"),
+                "macd_signal": technicals.get("macd_signal"),
+            }
+
+        social = td.get("social_sentiment", {})
+        if social and isinstance(social, dict):
+            position["sentiment"] = social.get("sentiment", "unknown")
+            position["sentiment_score"] = social.get("bullish_pct")
+
+        x_sent = td.get("x_sentiment", {})
+        if x_sent and isinstance(x_sent, dict):
+            position["x_sentiment"] = x_sent.get("overall_sentiment")
+            position["x_summary"] = x_sent.get("summary")
+
+        analyst = td.get("analyst_ratings", {})
+        if analyst and isinstance(analyst, dict):
+            position["analyst_consensus"] = analyst.get("consensus") or analyst.get("rating")
+            position["analyst_target"] = analyst.get("price_target") or analyst.get("target_price")
+
+        news = td.get("recent_news", [])
+        if news and isinstance(news, list):
+            position["news_headlines"] = [
+                n.get("title", n.get("headline", "")) for n in news[:3] if isinstance(n, dict)
+            ]
+
+        portfolio_summary["holdings"].append(position)
+
+    total_market_value = sum(
+        p.get("market_value", p.get("cost_basis", 0))
+        for p in portfolio_summary["holdings"]
+    )
+    portfolio_summary["total_market_value"] = total_market_value
+    portfolio_summary["total_unrealized_pnl"] = round(total_market_value - total_cost_basis, 2)
+    portfolio_summary["total_return_pct"] = round(
+        (total_market_value - total_cost_basis) / total_cost_basis * 100, 1
+    ) if total_cost_basis else 0
+
+    weights = [p.get("weight_pct", 0) for p in portfolio_summary["holdings"]]
+    portfolio_summary["max_weight"] = max(weights) if weights else 0
+    portfolio_summary["hhi"] = round(sum(w**2 for w in weights), 1)
+
+    if macro_snapshot:
+        portfolio_summary["macro_context"] = {
+            "fear_greed": macro_snapshot.get("fear_greed"),
+            "vix": macro_snapshot.get("vix"),
+            "treasury_10y": macro_snapshot.get("treasury_rates", {}).get("10y"),
+            "regime": macro_snapshot.get("regime"),
+        }
+
+    print(f"[PORTFOLIO_REVIEW] Portfolio context built ({_time.time()-start:.1f}s)")
 
     from agent.data_compressor import compress_data
-    compressed = compress_data({"portfolio_data": ticker_data})
+    compressed = compress_data(portfolio_summary)
     data_str = _json.dumps(compressed, default=str)
+
+    print(f"[PORTFOLIO_REVIEW] Sending {len(data_str):,} chars to Claude")
 
     from agent.prompts import SYSTEM_PROMPT
     messages = [{
         "role": "user",
-        "content": f"""[PORTFOLIO HOLDINGS]
-{holdings_text}
+        "content": f"""[PORTFOLIO REVIEW REQUEST]
 
-[MARKET DATA FOR HOLDINGS]
 {data_str}
 
-[REQUEST]
-Review my portfolio and give me a clear VERDICT for each position. For EACH holding provide:
+You are reviewing my personal investment portfolio. This is my real money. Be direct and honest.
 
-1. **VERDICT**: BUY MORE / HOLD / TRIM / SELL — be decisive, pick one
-2. **REASONING** (2-3 sentences max): Why this verdict? Reference specific data — recent news, sentiment shift, fundamental trend, technical setup, or valuation concern
+For EACH position, provide:
+
+1. **VERDICT**: BUY MORE / HOLD / TRIM / SELL — pick one, be decisive
+2. **THESIS** (2-3 sentences): Why this verdict? Reference the specific data — current price vs avg cost, P&L, fundamentals (revenue growth, margins, PE), technical setup (RSI, SMA position, MACD), social sentiment, and recent news.
 3. **KEY RISK**: The single biggest risk to this position right now
-4. **CATALYST**: The next potential catalyst (earnings date, product launch, sector trend, macro event)
+4. **CATALYST**: Next potential catalyst that could move the price (earnings, product launch, macro event, sector rotation)
+5. **TIMEFRAME**: How long to hold before re-evaluating (days, weeks, months, quarters)
+6. **POSITION SIZE**: Is my current allocation appropriate? Should I increase/decrease weight?
 
-Then provide an OVERALL PORTFOLIO ASSESSMENT:
-- Portfolio grade (A through F)
-- Biggest strength
-- Biggest weakness
-- Concentration risk (are positions too correlated?)
-- Top 1-2 action items I should take this week
-- If you had to add ONE new position to improve this portfolio, what would it be and why?
+Then provide OVERALL PORTFOLIO ASSESSMENT:
+- Portfolio grade (A through F) with justification
+- Sector/theme exposure — am I too concentrated or well-diversified?
+- Correlation risk — if one position drops, what happens to others?
+- Macro alignment — does my portfolio fit the current regime (Fear & Greed, rates, VIX)?
+- REBALANCING RECOMMENDATION: Specific percentage allocations I should target
+- TOP ACTION ITEMS: The 1-3 most important things I should do this week
+- If you had to add ONE new position to improve this portfolio, what would it be and why? Give a specific ticker with thesis.
 
-Be direct. Be opinionated. No hedge-everything disclaimers in the body — just one disclaimer at the very bottom.
+Be my portfolio advisor. No generic disclaimers in the body. One brief disclaimer at the very bottom.
 
 IMPORTANT: Respond with display_type "chat" and put your full analysis in the "message" field as formatted text.""",
     }]
@@ -1775,7 +1940,7 @@ IMPORTANT: Respond with display_type "chat" and put your full analysis in the "m
         )
 
         response_text = response.content[0].text.strip()
-        print(f"[PORTFOLIO_REVIEW] Claude responded: {len(response_text)} chars")
+        print(f"[PORTFOLIO_REVIEW] Claude responded: {len(response_text)} chars ({_time.time()-start:.1f}s total)")
 
         try:
             if response_text.startswith("```"):
@@ -1799,12 +1964,13 @@ IMPORTANT: Respond with display_type "chat" and put your full analysis in the "m
             }
 
     except asyncio.TimeoutError:
+        print(f"[PORTFOLIO_REVIEW] Claude timed out after 60s")
         return {
             "type": "chat",
             "analysis": "",
             "structured": {
                 "display_type": "chat",
-                "message": "Portfolio review timed out. Try with fewer holdings.",
+                "message": "Portfolio review timed out. Please try again.",
             },
         }
     except Exception as e:
