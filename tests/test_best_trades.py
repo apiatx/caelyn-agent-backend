@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from data.market_data_service import MarketDataService
 from data.cache import cache
 import data.market_data_service as mds
+from core.ta_signal_engine import analyze_bars, _detect_signals, _compute_ta_score, compute_atr
 
 
 def _make_bars(n=60, base_price=50.0):
@@ -236,3 +237,75 @@ async def test_best_trades_budget_limits_polygon_calls(mock_service):
 
     assert call_count["n"] <= 5
     assert result["display_type"] == "trades"
+
+
+@pytest.mark.asyncio
+async def test_best_trades_no_social_only_narrative(mock_service):
+    result = await mock_service.get_best_trades_scan()
+    for trade in result["top_trades"]:
+        assert "signals_stacking" in trade
+        assert len(trade["signals_stacking"]) >= 1
+        assert trade["pattern"] != ""
+
+
+def test_ta_engine_returns_signals_on_uptrend():
+    bars = _make_bars(60, base_price=50.0)
+    result = analyze_bars(bars, ticker="TEST")
+    assert result is not None
+    assert result["ticker"] == "TEST"
+    assert result["direction"] in ("long", "short")
+    assert result["entry"].startswith("$")
+    assert result["stop"].startswith("$")
+    assert len(result["targets"]) == 2
+    assert ":" in result["risk_reward"]
+    assert result["technical_score"] > 0
+    assert len(result["signals_stacking"]) >= 1
+    assert len(result["ta_signals"]) >= 1
+    for sig in result["ta_signals"]:
+        assert "name" in sig
+        assert "direction" in sig
+        assert "strength" in sig
+        assert "evidence" in sig
+        assert sig["direction"] in ("bullish", "bearish")
+        assert 0 <= sig["strength"] <= 100
+
+
+def test_ta_engine_too_few_bars_returns_none():
+    bars = _make_bars(10, base_price=50.0)
+    result = analyze_bars(bars, ticker="SHORT")
+    assert result is None
+
+
+def test_ta_engine_atr_computation():
+    bars = _make_bars(30, base_price=100.0)
+    highs = [b["h"] for b in bars]
+    lows = [b["l"] for b in bars]
+    closes = [b["c"] for b in bars]
+    atr = compute_atr(highs, lows, closes, period=14)
+    assert atr is not None
+    assert atr > 0
+
+
+def test_ta_score_increases_with_bullish_signals():
+    signals_few = [
+        {"name": "price_above_sma50", "direction": "bullish", "strength": 50, "evidence": "test"},
+    ]
+    signals_many = [
+        {"name": "price_above_sma50", "direction": "bullish", "strength": 50, "evidence": "test"},
+        {"name": "macd_bull_cross", "direction": "bullish", "strength": 60, "evidence": "test"},
+        {"name": "rsi_bull_zone", "direction": "bullish", "strength": 55, "evidence": "test"},
+        {"name": "volume_spike_2x", "direction": "bullish", "strength": 70, "evidence": "test"},
+    ]
+    score_few = _compute_ta_score(signals_few)
+    score_many = _compute_ta_score(signals_many)
+    assert score_many > score_few
+
+
+def test_ta_engine_volume_spike_detected():
+    bars = _make_bars(60, base_price=50.0)
+    avg_vol = sum(b["v"] for b in bars[-30:]) / 30
+    bars[-1]["v"] = int(avg_vol * 3)
+    result = analyze_bars(bars, ticker="VOLTEST")
+    if result:
+        signal_names = [s["name"] for s in result["ta_signals"]]
+        assert "volume_spike_2x" in signal_names or "volume_expansion" in signal_names

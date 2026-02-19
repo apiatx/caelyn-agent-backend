@@ -21,7 +21,7 @@ The platform is built on FastAPI, offering a robust and scalable backend.
 - **Microcap Guardrails**: Implements position sizing caps by tier and requires 2-of-3 confirmation for buying (TA, catalyst, liquidity) to avoid "Speculative/Watch" labels.
 - **Creative Discovery Exception**: Allows overrides for specific high-conviction setups with strong sentiment, volume expansion, real catalysts, and adequate liquidity, with capped sizing.
 - **Data Pipeline**: Employs a "wide funnel" approach, screening numerous candidates, mathematically ranking them, and sending the top for deep AI analysis.
-- **Best Trades Scanner**: A three-phase pipeline for identifying "best trades" based on Finviz screens, pre-ranking, technical signal stacking (e.g., stage2, breakout, EMA cross), and deterministic trade plan generation.
+- **Best Trades Scanner**: A three-phase TA-first pipeline: (1) Finviz discovery screens, (2) OHLCV fetch via candle provider chain, (3) core/ta_signal_engine.py computes structured TA signals (name/direction/strength/evidence), ATR-based trade plans (entry/stop/targets/R:R), and ta_score ranking. Social is disabled by default; Claude polishes TA output but cannot alter trade plan numbers.
 - **Scan Types**: Supports over 14 diverse scan types including best trades, social momentum, sector rotation, squeeze plays, thematic investing, commodities, and crypto scanning.
 - **Hybrid Trending Architecture**: Combines Grok (xAI) and Claude for trending/social momentum analysis, utilizing two-tier conviction scoring, prioritizing small/micro-caps.
 - **Cross-Market Scan**: Triggers parallel data pulling across all asset classes and uses a quantitative pre-ranker.

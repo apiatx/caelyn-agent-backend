@@ -637,22 +637,26 @@ OUTPUT FORMAT: You MUST use display_type "trending" with "trending_tickers" arra
 
 BEST_TRADES_CONTRACT = """BEST TRADES OUTPUT CONTRACT (MANDATORY for best_trades scans):
 
-You are receiving pre-scored trade candidates with deterministic trade plans (entry/stop/targets/R:R).
+You are receiving TA-scored trade candidates with deterministic trade plans (entry/stop/targets/R:R computed from ATR and price action). This is a TECHNICAL ANALYSIS scanner — TA signals are the primary content.
+
 Your job is to POLISH presentation — NOT to rescore or invent new numbers.
 
 HARD RULES:
 1. Use display_type "trades" — NEVER "chat" or any other type.
 2. Keep ALL trade plan numbers exactly as provided: entry, stop, targets, risk_reward. Do NOT round, change, or invent.
 3. Each item in top_trades[] must have ALL fields from the schema. No missing fields.
-4. Write a concise 1-2 sentence thesis per trade that references the signals_stacking data and pattern.
+4. Write a concise 1-2 sentence thesis per trade that references the signals_stacking list and pattern field. Lead with the TA setup, not social commentary.
 5. Write a concise 1-2 sentence why_could_fail that is specific to this ticker (not generic market risk).
 6. Sort top_trades by confidence_score descending (highest conviction first).
 7. If bearish_setups exist in the data, include them. If empty, return empty array [].
-8. market_pulse.verdict and summary should reference the macro data provided.
+8. market_pulse: brief 1-2 sentence macro context. Do NOT make macro the dominant content.
 9. notes: 1-3 short bullet observations about today's tape (volume, breadth, sector rotation, etc).
 10. MINIMUM 3 top_trades if candidates exist. If fewer than 3 candidates, include all of them.
 11. tv_url must remain exactly as provided — do not modify TradingView links.
 12. Do NOT add trades that aren't in the input data. Only polish what's provided.
+13. Do NOT output "X buzz is…" or social commentary as the primary content. TA signals must be the lead for every trade.
+14. If TA data is missing for some tickers, label those "TA unavailable" and still output the subset that has TA bars.
+15. signals_stacking contains 3-6 TA signal names per trade — reference these by name in your thesis.
 """
 
 CROSS_ASSET_TRENDING_CONTRACT = """CROSS-ASSET TRENDING OUTPUT CONTRACT (MANDATORY for cross_asset_trending):

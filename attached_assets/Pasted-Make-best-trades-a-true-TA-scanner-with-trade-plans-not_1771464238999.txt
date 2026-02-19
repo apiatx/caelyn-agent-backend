@@ -1,0 +1,174 @@
+Make best_trades a true TA scanner with trade plans, not a social commentary.
+
+Hard requirements:
+
+Do NOT change response schemas, display_type, or frontend contracts.
+
+Do NOT degrade daily_briefing or trending_now behavior.
+
+Best_trades must prioritize TA signals from candles. Social context is optional and must never replace TA output.
+
+1) Add a TA signal engine (new file)
+
+Create core/ta_signal_engine.py (or data/ta_signal_engine.py) that takes OHLCV bars and returns:
+
+indicators: RSI, MACD, SMA20/50/200, EMA20/50 (reuse existing ta_utils)
+
+signals: a list of discrete detected signals with:
+
+name (e.g., "macd_bull_cross", "sma50_above_sma200", "breakout_pivot", "volume_spike_2x")
+
+direction ("bullish"|"bearish")
+
+strength (0-100)
+
+evidence (short explanation with the actual numbers, like RSI=62 rising, MACD cross date)
+
+ta_score (0-100) computed from signal stack
+
+setup_type (e.g., "breakout", "trend_continuation", "mean_reversion", "breakdown_short")
+
+2) Define the Best Trades signal stack and scoring
+
+In the TA engine implement these detections (minimum set):
+
+Bullish:
+
+price_above_sma50 (strength based on distance and slope)
+
+sma50_above_sma200 (golden cross)
+
+macd_bull_cross (recent cross + histogram improving)
+
+rsi_bull_zone (50-70 and rising)
+
+breakout_pivot (close > highest high of last 20 trading days)
+
+volume_spike_2x (today vol >= 2x 20d avg)
+
+Bearish (include only if very high confidence):
+
+price_below_sma50
+
+sma50_below_sma200
+
+macd_bear_cross
+
+breakdown_support (close < lowest low of last 20 days)
+
+volume_spike_2x
+
+Scoring rule (simple and robust):
+
+Start 50
+
+Add sum of bullish strengths * weights
+
+Subtract bearish strengths * weights
+
+Add bonus for 3+ bullish signals stacking
+
+Apply penalty if volume data missing or last bar stale
+
+3) Refactor get_best_trades_scan to use TA engine and rank properly
+
+In market_data_service.py (best_trades path):
+
+Keep your existing discovery and shortlist.
+
+For each ticker that has candles, compute TA signals using ta_signal_engine.
+
+Rank candidates by:
+
+ta_score (primary)
+
+volume_spike presence (secondary)
+
+catalyst score (tertiary, optional)
+
+Ensure you always return at least the top 5 TA-qualified tickers if possible.
+
+4) Generate actionable trade plans from TA (deterministic, not Claude guesses)
+
+For each top candidate, compute:
+
+entry: either
+
+breakout: entry = pivot + small buffer (0.1% or 0.25 ATR)
+
+trend: entry = near SMA20/EMA20 pullback zone
+
+stop: entry - 1.5 ATR (longs), or entry + 1.5 ATR (shorts)
+
+targets: 1R and 2R targets (entry + (entry-stop)*1 and *2)
+
+timeframe: "1-3 days" for momentum, "2-6 weeks" for trend continuation
+
+tradingview_url: use existing chart link format you use in trending_now/daily_briefing. If exchange unknown, default to symbol only.
+
+Put these into the existing trades structured output fields so the UI renders like other panels.
+
+5) Fix the Claude contract for best_trades (force TA output)
+
+Update the best_trades Claude prompt / response_style:
+Claude MUST:
+
+Output a ranked list of trades with:
+
+Ticker
+
+Rating: Strong Buy / Buy / Hold / Sell (shorts: Sell/Short)
+
+Confidence 0-100
+
+Signal stack: list 3-6 strongest TA signals (by name)
+
+Entry, stop, targets, R/R
+
+1-2 bullet risks
+
+Claude may add a brief “market context” paragraph, but must not lead with it.
+
+Claude must NOT output “X buzz is…” as the main content for best_trades.
+
+If TA data missing for most tickers, Claude must still output the subset that has TA bars and explicitly label others “TA unavailable”.
+
+6) Make social optional, not dominant
+
+In orchestration for best_trades:
+
+Disable x_social_scan by default.
+
+Only enable x_social_scan if the user prompt contains explicit social keywords (buzz, X, twitter, stocktwits, trending).
+
+Even when enabled, social can only be used as a tie-breaker or as “why now”, not as the primary reason.
+
+7) Add one debug line for best_trades
+
+Log:
+
+number of candidates discovered
+
+number with candles
+
+number TA-qualified
+
+top 5 tickers with ta_score and top signals
+
+8) Tests
+
+Add or update unit tests:
+
+TA engine returns expected signals on a known synthetic series
+
+best_trades returns non-empty trades list when candles are available
+
+best_trades does not produce social-only narrative
+
+Done criteria:
+
+Best Trades returns a list of trade setups with signals + entry/stop/targets.
+
+No more “X buzz centers…” as the output format.
+
+No schema or frontend contract changes.
