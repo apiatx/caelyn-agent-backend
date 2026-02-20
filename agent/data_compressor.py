@@ -132,6 +132,7 @@ PROTECTED_KEYS = {
     "completeness_penalty", "position_size_guidance", "liquidity_tier",
     "catalyst_present_components", "market_cap_category",
     "recommendation_tier", "scoring_summary",
+    "x_sentiment", "hl_additional_coins",
 }
 
 

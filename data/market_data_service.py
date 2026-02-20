@@ -3703,7 +3703,7 @@ class MarketDataService:
 
         if self.xai:
             tasks["x_twitter_crypto"] = asyncio.wait_for(
-                self.xai.get_trending_tickers("crypto"), timeout=15.0
+                self.xai.get_trending_tickers("crypto"), timeout=20.0
             )
 
         task_names = list(tasks.keys())
@@ -3807,6 +3807,18 @@ class MarketDataService:
 
             "x_twitter_crypto": data.get("x_twitter_crypto", {}),
         }
+
+        x_data = data.get("x_twitter_crypto", {})
+        if isinstance(x_data, dict):
+            if x_data.get("error"):
+                print(f"[CRYPTO_SCANNER] X sentiment ERROR: {x_data.get('error')}")
+            elif x_data.get("trending_tickers") or x_data.get("btc_sentiment"):
+                print(f"[CRYPTO_SCANNER] X sentiment: {len(x_data.get('trending_tickers', []))} trending tickers, mood={x_data.get('market_mood')}")
+            else:
+                print(f"[CRYPTO_SCANNER] X sentiment: empty/no tickers (keys: {list(x_data.keys())[:5]})")
+        else:
+            print(f"[CRYPTO_SCANNER] X sentiment: not a dict, type={type(x_data).__name__}")
+
         import json as _json
         total_size = len(_json.dumps(result, default=str))
         print(f"[CRYPTO_SCANNER] Total raw data size: {total_size:,} chars", flush=True)
