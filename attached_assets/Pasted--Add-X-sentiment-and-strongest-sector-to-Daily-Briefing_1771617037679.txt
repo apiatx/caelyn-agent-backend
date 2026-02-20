@@ -1,0 +1,143 @@
+## Add X sentiment and strongest sector to Daily Briefing — SAFE approach
+
+### Context
+The Daily Briefing's "Hottest Social" card shows N/A and "Strongest Sector" is blank. Two missing data sources need to be added. 
+
+CRITICAL RULE: Do NOT modify the existing `briefing_tasks` list or the tuple unpacking in `get_morning_briefing()`. Those are fragile positional assignments. Any change to the task count will break the entire briefing.
+
+### Change 1: Add X/Grok sentiment as a BACKGROUND task
+
+In `market_data_service.py`, find `get_morning_briefing()` (around line 2472). Add X sentiment as a separate background task that runs in parallel with the existing pipeline but is completely independent of it.
+
+At the TOP of the function, right after the imports and before `macro_snapshot`:
+```python
+    async def get_morning_briefing(self) -> dict:
+        import asyncio
+        from data.scoring_engine import score_for_trades, score_for_investments, score_for_squeeze
+
+        # X sentiment runs as independent background task — does NOT touch briefing_tasks
+        x_trending = {}
+        async def _fetch_x_sentiment():
+            nonlocal x_trending
+            if self.xai:
+                try:
+                    result = await asyncio.wait_for(
+                        self.xai.get_trending_tickers("stock"),
+                        timeout=15.0
+                    )
+                    if isinstance(result, dict) and not result.get("error"):
+                        x_trending = result
+                        print(f"[Briefing] X sentiment: {len(result.get('trending_tickers', []))} tickers")
+                    else:
+                        print(f"[Briefing] X sentiment: empty or error")
+                except asyncio.TimeoutError:
+                    print(f"[Briefing] X sentiment: timed out (15s)")
+                except Exception as e:
+                    print(f"[Briefing] X sentiment failed: {e}")
+
+        x_task = asyncio.create_task(_fetch_x_sentiment())
+
+        # === EXISTING CODE BELOW — DO NOT MODIFY ANYTHING FROM HERE... ===
+        macro_snapshot = await self._build_macro_snapshot()
+        # ... all existing briefing_tasks, gather, unpacking stays exactly as-is ...
+```
+
+Then at the END of the function, right BEFORE the `return {` statement, add:
+```python
+        # Await X sentiment background task (should already be done)
+        try:
+            await asyncio.wait_for(x_task, timeout=2.0)
+        except:
+            pass
+
+        # Extract strongest sector from FMP sector performance
+        strongest_sector = None
+        sector_perf_data = fmp_data.get("sector_performance", [])
+        if isinstance(sector_perf_data, list) and sector_perf_data:
+            try:
+                valid_sectors = [
+                    s for s in sector_perf_data
+                    if isinstance(s, dict) and s.get("changesPercentage") is not None
+                ]
+                sorted_sectors = sorted(
+                    valid_sectors,
+                    key=lambda x: float(str(x.get("changesPercentage", "0")).replace("%", "")),
+                    reverse=True
+                )
+                if sorted_sectors:
+                    top = sorted_sectors[0]
+                    strongest_sector = {
+                        "sector": top.get("sector", ""),
+                        "change": top.get("changesPercentage", ""),
+                    }
+                    print(f"[Briefing] Strongest sector: {strongest_sector['sector']} ({strongest_sector['change']})")
+            except Exception as e:
+                print(f"[Briefing] Sector extraction failed: {e}")
+
+        # Extract hottest social ticker from X data
+        hottest_social = None
+        x_tickers = x_trending.get("trending_tickers", [])
+        if x_tickers and isinstance(x_tickers, list):
+            top_x = x_tickers[0]
+            if isinstance(top_x, dict):
+                hottest_social = {
+                    "ticker": top_x.get("ticker", ""),
+                    "sentiment": top_x.get("sentiment", ""),
+                    "why": top_x.get("why_trending", ""),
+                    "intensity": top_x.get("mention_intensity", ""),
+                }
+
+        return {
+            # === ALL EXISTING RETURN FIELDS — copy them exactly, do not remove any ===
+            "pre_computed_highlights": pre_computed_highlights,
+            "macro_snapshot": macro_snapshot,
+            "news_context": {"market_news": market_news},
+            "total_tickers_detected": len(all_tickers),
+            "multi_signal_tickers": {t: sources for t, sources in list(multi_signal.items())[:10]},
+            "ranked_candidates": [
+                {
+                    "ticker": t,
+                    "trade_score": d.get("trade_score", 0),
+                    "invest_score": d.get("invest_score", 0),
+                    "signal_count": d.get("signal_count", 0),
+                    "signal_sources": d.get("signal_sources", []),
+                }
+                for t, d in ranked[:15]
+            ],
+            "enriched_data": {t: d for t, d in ranked[:10]},
+            "fear_greed": fear_greed,
+            "fred_macro": fred_macro,
+            "fmp_market_data": fmp_data,
+            "highlights": {
+                "stage2_breakouts": stage2_breakouts[:3] if isinstance(stage2_breakouts, list) else [],
+                "volume_breakouts": volume_breakouts[:3] if isinstance(volume_breakouts, list) else [],
+                "macd_crossovers": macd_crossovers[:3] if isinstance(macd_crossovers, list) else [],
+                "high_short_float": high_short[:3] if isinstance(high_short, list) else [],
+                "insider_buying": insider_buying[:3] if isinstance(insider_buying, list) else [],
+                "revenue_growth": revenue_leaders[:3] if isinstance(revenue_leaders, list) else [],
+                "rsi_recovery": rsi_recovery[:3] if isinstance(rsi_recovery, list) else [],
+                "social_trending": [t.get("ticker") for t in trending[:5]] if isinstance(trending, list) else [],
+            },
+            "upcoming_earnings": upcoming_earnings[:5] if isinstance(upcoming_earnings, list) else [],
+            # === NEW FIELDS — append only, do not modify above ===
+            "x_sentiment": x_trending,
+            "strongest_sector": strongest_sector,
+            "hottest_social": hottest_social,
+        }
+```
+
+### WHAT NOT TO DO
+- Do NOT add tasks to the `briefing_tasks` list
+- Do NOT modify the tuple unpacking `(fear_greed, fred_macro, stage2_breakouts, ...)` 
+- Do NOT modify any existing return fields
+- Do NOT remove any existing code
+
+### Testing
+1. Click "Daily Briefing" → should return full briefing with all existing sections working
+2. Check logs for `[Briefing] X sentiment: X tickers` — confirms Grok returned data
+3. Check logs for `[Briefing] Strongest sector: Technology (+X.X%)`
+4. "Hottest Social" card should show a ticker from X
+5. "Strongest Sector" card should show sector name and change %
+6. If Grok fails or times out, briefing still works perfectly — all existing cards populate
+7. All other presets (Trending, Crypto, Best Trades) still work
+8. `python -m pytest` passes
