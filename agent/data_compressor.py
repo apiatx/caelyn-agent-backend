@@ -525,16 +525,17 @@ def _compress_crypto(data: dict) -> dict:
     else:
         compressed["cmc_global"] = cmc_g
 
-    btc_dom = mcap_pct.get("btc") or cmc_gd.get("btc_dominance") or 0
-    eth_dom = mcap_pct.get("eth") or cmc_gd.get("eth_dominance") or 0
-    usdt_dom = mcap_pct.get("usdt") or cmc_gd.get("usdt_market_cap_dominance") or 0
-    others_dom = round(100 - btc_dom - eth_dom - usdt_dom, 2) if btc_dom and eth_dom else None
+    btc_dom = cmc_gd.get("btc_dominance") or mcap_pct.get("btc")
+    eth_dom = cmc_gd.get("eth_dominance") or mcap_pct.get("eth")
     compressed["dominance"] = {
-        "btc": round(btc_dom, 2) if btc_dom else None,
-        "eth": round(eth_dom, 2) if eth_dom else None,
-        "usdt": round(usdt_dom, 2) if usdt_dom else None,
-        "others": others_dom,
+        "btc_dominance": round(btc_dom, 2) if btc_dom else None,
+        "eth_dominance": round(eth_dom, 2) if eth_dom else None,
     }
+
+    if top_coins and len(top_coins) > 0:
+        sample = top_coins[0]
+        print(f"[CRYPTO_COMPRESS] Sample coin keys: {list(sample.keys())}")
+        print(f"[CRYPTO_COMPRESS] 7d field check: 7d_in_currency={sample.get('price_change_percentage_7d_in_currency')}, 7d={sample.get('price_change_percentage_7d')}")
 
     top_coins = data.get("cg_top_coins", [])
     compressed["top_coins"] = [
@@ -543,14 +544,16 @@ def _compress_crypto(data: dict) -> dict:
             "name": c.get("name"),
             "price": c.get("current_price"),
             "change_24h": c.get("price_change_percentage_24h"),
-            "change_7d": c.get("price_change_percentage_7d_in_currency") or c.get("price_change_percentage_7d"),
-            "change_30d": c.get("price_change_percentage_30d_in_currency") or c.get("price_change_percentage_30d"),
+            "change_7d": c.get("price_change_percentage_7d_in_currency") or c.get("price_change_percentage_7d") or c.get("price_change_7d"),
+            "change_30d": c.get("price_change_percentage_30d_in_currency") or c.get("price_change_percentage_30d") or c.get("price_change_30d"),
             "market_cap": c.get("market_cap"),
             "volume_24h": c.get("total_volume"),
             "mcap_rank": c.get("market_cap_rank"),
         }
         for c in (top_coins or [])[:15]
     ]
+    if compressed["top_coins"]:
+        print(f"[CRYPTO_COMPRESS] Compressed sample: {compressed['top_coins'][0]}")
 
     cmc_listings = data.get("cmc_listings", [])
     compressed["cmc_top"] = [

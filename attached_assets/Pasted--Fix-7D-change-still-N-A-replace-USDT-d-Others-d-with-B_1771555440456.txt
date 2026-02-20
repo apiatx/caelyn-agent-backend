@@ -1,0 +1,110 @@
+## Fix: 7D change still N/A + replace USDT.d/Others.d with BTC.d and ETH.d from CMC
+
+### Problem 1: 7D change still showing N/A
+The 7D change data exists in CoinGecko top_coins and CMC listings but isn't reaching Claude's response. 
+
+### Diagnosis step
+Add temporary logging to see what fields the raw data actually has. In the crypto compressor function, right before compressing top_coins, add:
+```python
+    if top_coins and len(top_coins) > 0:
+        sample = top_coins[0]
+        print(f"[CRYPTO_COMPRESS] Sample coin keys: {list(sample.keys())}")
+        print(f"[CRYPTO_COMPRESS] 7d field check: 7d_in_currency={sample.get('price_change_percentage_7d_in_currency')}, 7d={sample.get('price_change_percentage_7d')}, atl_change={sample.get('atl_change_percentage')}")
+```
+
+This will tell us the exact field name CoinGecko uses for 7d change.
+
+Then check the compressed output — add logging after compression:
+```python
+    if compressed.get("top_coins"):
+        print(f"[CRYPTO_COMPRESS] Compressed sample: {compressed['top_coins'][0]}")
+```
+
+### Fix 1: Map the correct 7d field name
+
+CoinGecko's `/coins/markets` endpoint returns 7d change as `price_change_percentage_7d_in_currency`. But sometimes the CoinGecko dashboard endpoint returns it differently. Check the logs from above, then make sure the compression maps it correctly:
+```python
+    "change_7d": c.get("price_change_percentage_7d_in_currency") 
+                 or c.get("price_change_percentage_7d") 
+                 or c.get("price_change_7d")
+                 or c.get("7d"),
+```
+
+Also for CMC listings:
+```python
+    "change_7d": c.get("quote", {}).get("USD", {}).get("percent_change_7d"),
+```
+
+### Problem 2: Replace USDT.d/Others.d with BTC.d and ETH.d
+
+Remove the USDT dominance and Others dominance fields. Instead, use BTC dominance and ETH dominance directly from CMC's global metrics endpoint (which you're already calling — `/v1/global-metrics/quotes/latest` returns `btc_dominance` and `eth_dominance` directly).
+
+### Fix 2: Update compression to extract CMC dominance
+
+In the crypto compressor, replace the dominance section:
+```python
+    # Market dominance from CMC global metrics (direct values, no calculation needed)
+    cmc_global = data.get("cmc_global", {})
+    cg_global = data.get("cg_global", {})
+    
+    # CMC gives btc_dominance and eth_dominance directly
+    btc_dom = cmc_global.get("btc_dominance") or cmc_global.get("btc_dominance_24h_percentage_change")
+    eth_dom = cmc_global.get("eth_dominance") or cmc_global.get("eth_dominance_24h_percentage_change")
+    
+    # Fallback to CoinGecko market_cap_percentage
+    if not btc_dom:
+        cg_mcp = cg_global.get("market_cap_percentage", {})
+        btc_dom = cg_mcp.get("btc")
+    if not eth_dom:
+        cg_mcp = cg_global.get("market_cap_percentage", {})
+        eth_dom = cg_mcp.get("eth")
+    
+    compressed["dominance"] = {
+        "btc_dominance": round(btc_dom, 2) if btc_dom else None,
+        "eth_dominance": round(eth_dom, 2) if eth_dom else None,
+    }
+    
+    # Also add to market_summary for context
+    compressed["market_summary"] = {
+        "total_market_cap": cmc_global.get("quote", {}).get("USD", {}).get("total_market_cap") if isinstance(cmc_global.get("quote"), dict) else cg_global.get("total_market_cap", {}).get("usd") if isinstance(cg_global.get("total_market_cap"), dict) else None,
+        "total_volume_24h": cmc_global.get("quote", {}).get("USD", {}).get("total_volume_24h") if isinstance(cmc_global.get("quote"), dict) else None,
+        "btc_dominance": round(btc_dom, 2) if btc_dom else None,
+        "eth_dominance": round(eth_dom, 2) if eth_dom else None,
+        "active_cryptocurrencies": cmc_global.get("active_cryptocurrencies"),
+    }
+```
+
+Remove any `usdt_dominance` and `others_dominance` fields from the compression.
+
+### Fix 3: Update Claude's crypto prompt
+
+In the crypto-specific prompt instructions (where you tell Claude what to include in btc_eth_summary), update:
+
+Remove references to USDT.d and Others.d. Replace with:
+Include dominance data in your response:
+
+BTC.d (BTC dominance %): from the dominance.btc_dominance field. Rising BTC.d = capital rotating into BTC (flight to quality). Falling BTC.d = alt season approaching.
+ETH.d (ETH dominance %): from the dominance.eth_dominance field. Rising ETH.d = DeFi/L2 ecosystem strength. Falling ETH.d = ETH losing ground.
+
+Put these in the btc_eth_summary section alongside BTC and ETH price data.
+
+### Fix 4: Update the response schema in prompts.py
+
+In the crypto display_type schema, update the btc_eth_summary to include dominance:
+```json
+"btc_eth_summary": {
+    "btc": {"price": "", "change_24h": "", "dominance": "", "funding_rate": "", "signal": ""},
+    "eth": {"price": "", "change_24h": "", "dominance": "", "funding_rate": "", "signal": ""}
+}
+```
+
+Remove any `"dominance": {"usdt": "", "others": ""}` section if it was added.
+
+### Testing
+1. Click "Crypto" → check server logs for `[CRYPTO_COMPRESS] Sample coin keys` to see 7d field name
+2. Top momentum picks should show 7d change values (not N/A)
+3. BTC card should show BTC.d (dominance %)
+4. ETH card should show ETH.d (dominance %)
+5. No USDT.d or Others.d in the response
+6. All prices are real values from the data
+7. `python -m pytest` passes
