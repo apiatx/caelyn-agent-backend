@@ -132,7 +132,11 @@ PROTECTED_KEYS = {
     "completeness_penalty", "position_size_guidance", "liquidity_tier",
     "catalyst_present_components", "market_cap_category",
     "recommendation_tier", "scoring_summary",
-    "x_sentiment", "hl_additional_coins",
+    "x_twitter_crypto", "x_sentiment", "hl_additional_coins",
+    "perps_overview", "perps_squeezes", "perps_crowded_longs",
+    "perps_divergences", "perps_top_volume", "perps_top_oi",
+    "perps_gainers", "perps_losers", "funding_lookup",
+    "top_coins", "dominance", "derivatives",
 }
 
 

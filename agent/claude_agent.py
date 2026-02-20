@@ -1768,9 +1768,10 @@ class TradingAgent:
 
     DEEP_ANALYSIS_CATEGORIES = {
         "ticker_analysis", "investments", "portfolio_review", "followup",
+        "crypto",
     }
 
-    MEDIUM_DATA_CAP_CATEGORIES = {"crypto", "cross_market"}
+    MEDIUM_DATA_CAP_CATEGORIES = {"cross_market"}
 
     CRYPTO_PHRASE_SIGNALS = [
         "crypto market", "crypto scan", "funding rate", "altcoin", "altcoins", "defi",
@@ -3040,6 +3041,37 @@ Be direct and opinionated. Tell me what you actually think."""
                 compressed = market_data
             else:
                 compressed = compress_data(market_data)
+
+            if category == "crypto":
+                existing_x = compressed.get("x_sentiment", {})
+                has_valid_x = isinstance(existing_x, dict) and existing_x.get("top_social_movers")
+                if not has_valid_x:
+                    raw_x = market_data.get("x_twitter_crypto", {})
+                    if isinstance(raw_x, dict) and (raw_x.get("trending_tickers") or raw_x.get("btc_sentiment")):
+                        raw_tickers = (raw_x.get("trending_tickers") or [])[:10]
+                        compressed["x_sentiment"] = {
+                            "btc_sentiment": raw_x.get("btc_sentiment", {}),
+                            "market_mood": raw_x.get("market_mood"),
+                            "top_social_movers": [
+                                {
+                                    "symbol": t.get("ticker", t.get("symbol", "")),
+                                    "social_velocity": t.get("social_velocity", t.get("mention_intensity", "")),
+                                    "sentiment": t.get("sentiment", ""),
+                                    "why_trending": t.get("why_trending", ""),
+                                    "catalyst": t.get("catalyst", ""),
+                                }
+                                for t in raw_tickers
+                            ],
+                            "narrative_heat": (raw_x.get("narrative_heat") or raw_x.get("sector_heat") or [])[:5],
+                            "contrarian_signals": (raw_x.get("contrarian_signals") or [])[:3],
+                            "summary": raw_x.get("summary"),
+                        }
+                        print(f"[Agent] Crypto X sentiment re-inserted from raw: {len(compressed['x_sentiment'].get('top_social_movers', []))} social movers")
+                    else:
+                        print(f"[Agent] Crypto X sentiment: no raw data available (raw_x keys: {list(raw_x.keys()) if isinstance(raw_x, dict) else 'not dict'})")
+                else:
+                    print(f"[Agent] Crypto X sentiment: already present from compressor ({len(existing_x.get('top_social_movers', []))} social movers)")
+
             data_str = json.dumps(compressed, default=str)
             raw_size = len(json.dumps(market_data, default=str))
             print(f"[Agent] Data compression: {raw_size:,} → {len(data_str):,} chars ({100 - len(data_str)*100//max(raw_size,1)}% reduction)")
@@ -3340,6 +3372,15 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         if not response.content or not response.content[0].text.strip():
             print(f"[Agent] WARNING: Claude returned empty content (stop_reason={response.stop_reason})")
             return json.dumps({"display_type": "chat", "message": "The AI returned an empty response. Please try again."})
+
+        if category == "crypto" and 'data_str' in dir() and data_str:
+            try:
+                has_x = '"x_sentiment"' in data_str
+                x_size = len(json.dumps(compressed.get("x_sentiment", {}), default=str)) if compressed else 0
+                print(f"[Agent] Crypto data sent to Claude: total={len(data_str):,} chars, has_x_sentiment={has_x}, x_size={x_size}")
+            except Exception:
+                pass
+
         return response.content[0].text
 
     def _slim_cross_market_data(self, data: dict) -> dict:

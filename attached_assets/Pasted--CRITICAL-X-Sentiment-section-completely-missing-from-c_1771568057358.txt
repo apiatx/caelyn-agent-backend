@@ -1,0 +1,165 @@
+## CRITICAL: X Sentiment section completely missing from crypto response — THREE root causes found
+
+### Root Cause 1: Aggressive truncation destroys X sentiment data
+
+In `claude_agent.py`, line 2744: crypto is NOT in `DEEP_ANALYSIS_CATEGORIES`, so `is_fast_scan = True` and `data_cap = 25000` (25KB). The compressed crypto data is ~56KB. When `_aggressive_truncate` runs (line 2753), it halves every key NOT in `PROTECTED_KEYS`. `x_twitter_crypto` is NOT protected, so it gets gutted to nothing.
+
+**Fix A: Add crypto to DEEP_ANALYSIS_CATEGORIES**
+
+In `claude_agent.py`, find `DEEP_ANALYSIS_CATEGORIES` (line 1590):
+```python
+    DEEP_ANALYSIS_CATEGORIES = {
+        "ticker_analysis", "investments", "portfolio_review", "followup",
+        "crypto",  # ADD THIS — crypto has many data sources that need space
+    }
+```
+
+This gives crypto an 80KB data cap instead of 25KB, which is plenty for all sections including X sentiment.
+
+**Fix B: Add x_twitter_crypto and x_sentiment to PROTECTED_KEYS**
+
+In `data_compressor.py`, find `PROTECTED_KEYS` (line 120) and add:
+```python
+PROTECTED_KEYS = {
+    "two_tier_analysis", "grok_x_analysis", "scan_type",
+    "source_summary", "x_market_mood", "total_unique_tickers",
+    "ranked_tickers", "orchestration_metadata",
+    "ranked_candidates", "ranking_debug",
+    "institutional_scoring", "prior_score",
+    "data_completeness", "budget_exhausted_at", "social_discipline_flag",
+    "regime_context", "position_sizing", "catalyst_components",
+    "adjusted_final_score", "regime", "asset_multiplier",
+    "creative_discovery_override", "weight_matrix",
+    "data_flags", "conviction_validation", "scoring_debug",
+    "labels", "conviction_label", "failed_inputs",
+    "completeness_penalty", "position_size_guidance", "liquidity_tier",
+    "catalyst_present_components", "market_cap_category",
+    "recommendation_tier", "scoring_summary",
+    # Crypto-specific protected keys
+    "x_twitter_crypto", "x_sentiment", "hl_additional_coins",
+    "perps_overview", "perps_squeezes", "perps_crowded_longs",
+    "perps_divergences", "perps_top_volume", "perps_top_oi",
+    "perps_gainers", "perps_losers", "funding_lookup",
+    "top_coins", "dominance", "derivatives",
+}
+```
+
+### Root Cause 2: Grok crypto prompt was never updated
+
+In `xai_sentiment_provider.py`, the `get_trending_tickers()` method uses the SAME generic prompt for both stocks and crypto (lines 114-162). The crypto-specific prompt with `btc_sentiment`, `social_velocity`, and `narrative_heat` fields was never applied.
+
+**Fix: Replace the crypto branch with the dedicated prompt**
+
+In `get_trending_tickers()`, replace lines 114-162. The `if asset_type == "crypto":` block should use a completely separate prompt and return early:
+```python
+        if asset_type == "crypto":
+            prompt = """Search X for the most actively discussed cryptocurrencies and tokens right now (last 12-24 hours).
+
+PRIORITY SIGNALS:
+1. SOCIAL VELOCITY: Which crypto tokens have seen the SHARPEST INCREASE in X mentions in the last 24 hours? A coin going from 100 mentions to 1000 mentions is more interesting than one with steady 5000 mentions.
+2. SENTIMENT MOMENTUM: Which tokens are flipping from negative/neutral to POSITIVE sentiment?
+3. BTC SENTIMENT: What is the overall X sentiment on BTC right now? Is crypto twitter bullish, bearish, or indifferent?
+4. ALTCOIN HYPE: Which specific altcoins are getting disproportionate attention? Include ALL cap sizes — micro-caps with sudden buzz are HIGHER signal than established large caps with normal attention.
+5. NARRATIVE PLAYS: What crypto narratives are heating up? (AI tokens, gaming, RWA, meme coins, L2s, DePIN, etc.)
+
+DO NOT limit to large caps. A $50M token with exploding social interest is MORE valuable signal than ETH getting normal discussion.
+
+Return ONLY a JSON object (no markdown, no backticks):
+{
+    "scan_type": "x_crypto_sentiment",
+    "timestamp": "now",
+    "btc_sentiment": {
+        "overall": "bullish" | "bearish" | "neutral" | "mixed",
+        "score": -1.0 to 1.0,
+        "key_narrative": "What crypto twitter is saying about BTC right now",
+        "notable_calls": ["Any notable trader/influencer BTC calls"]
+    },
+    "market_mood": "risk-on" | "risk-off" | "mixed" | "euphoric" | "fearful",
+    "trending_tickers": [
+        {
+            "ticker": "SYMBOL",
+            "mention_intensity": "extreme" | "high" | "medium",
+            "social_velocity": "exploding" | "surging" | "rising" | "steady",
+            "sentiment": "bullish" | "bearish" | "mixed",
+            "sentiment_score": -1.0 to 1.0,
+            "why_trending": "2-3 sentence explanation of what sparked the social buzz",
+            "key_narratives": ["narrative1", "narrative2"],
+            "catalyst": "Specific event driving discussion",
+            "risk_flag": "Pump signals, bot activity, etc. or null",
+            "estimated_market_cap_tier": "large" | "mid" | "small" | "micro" | "unknown",
+            "trade_sentiment": "strong_buy" | "buy" | "hold" | "sell" | "speculative"
+        }
+    ],
+    "narrative_heat": [
+        {"narrative": "name", "buzz_level": "hot" | "warm" | "cold", "direction": "bullish" | "bearish", "top_tokens": ["SYM1", "SYM2"]}
+    ],
+    "contrarian_signals": ["Cases where X sentiment diverges from price action"],
+    "summary": "3-4 sentence overview of crypto X sentiment right now"
+}
+
+Return 10-15 tickers sorted by social velocity (fastest-growing mentions first).
+Flag coordinated pump signals. Include genuine micro-cap momentum if the catalyst is real.
+Always include BTC in trending_tickers even if its velocity is lower."""
+
+            return await self._call_grok_with_x_search(prompt)
+```
+
+This goes BEFORE the generic prompt construction. The `return` ensures it exits early for crypto.
+
+### Root Cause 3: No dedicated crypto compressor preserving X data
+
+The generic `compress_data()` runs `_compress_value()` on every key, which truncates lists to half their length and dicts to half their keys. This mangles the structured X sentiment data.
+
+**Fix: Add explicit X sentiment handling to the compression flow**
+
+After the generic `compress_data()` call in `_ask_claude()` (line 2738), add a crypto-specific post-processing step that re-inserts the X data from the raw market_data if it was destroyed:
+```python
+            compressed = compress_data(market_data)
+            
+            # For crypto: ensure X sentiment survives compression
+            if category == "crypto":
+                raw_x = market_data.get("x_twitter_crypto", {})
+                if isinstance(raw_x, dict) and raw_x.get("trending_tickers"):
+                    # Re-insert properly structured X data
+                    compressed["x_sentiment"] = {
+                        "btc_sentiment": raw_x.get("btc_sentiment", {}),
+                        "market_mood": raw_x.get("market_mood"),
+                        "trending_tickers": (raw_x.get("trending_tickers") or [])[:10],
+                        "narrative_heat": (raw_x.get("narrative_heat") or raw_x.get("sector_heat") or [])[:5],
+                        "contrarian_signals": (raw_x.get("contrarian_signals") or [])[:3],
+                        "summary": raw_x.get("summary"),
+                    }
+                    print(f"[Agent] Crypto X sentiment preserved: {len(compressed['x_sentiment'].get('trending_tickers', []))} tickers")
+                else:
+                    print(f"[Agent] Crypto X sentiment: no data available (raw_x keys: {list(raw_x.keys()) if isinstance(raw_x, dict) else 'not dict'})")
+```
+
+### Also fix: Remove "Funding" from momentum picks display
+
+In Claude's crypto preamble, add:
+For top_momentum picks: Do NOT include a separate "funding_rate" field. The funding data is already displayed in the "Funding Divergences" and "Squeeze Candidates" sections above. Including it again in momentum picks is redundant. Instead, reference the funding situation in the thesis text if relevant.
+
+### Add diagnostic logging
+
+Add this at the END of `_ask_claude()`, right before the return (after line 2886):
+```python
+        # Log what Claude received for crypto debugging
+        if category == "crypto" and data_str:
+            has_x = '"x_sentiment"' in data_str or '"x_twitter_crypto"' in data_str
+            x_size = len(json.dumps(compressed.get("x_sentiment", compressed.get("x_twitter_crypto", {})), default=str))
+            print(f"[Agent] Crypto data sent to Claude: total={len(data_str):,} chars, has_x_sentiment={has_x}, x_size={x_size}")
+```
+
+### Testing
+1. Click "Crypto" → check logs for:
+   - `[Agent] Crypto X sentiment preserved: 10+ tickers` — confirms X data survived
+   - `[Agent] Crypto data sent to Claude: total=XXX chars, has_x_sentiment=True` — confirms Claude received it
+   - `[CRYPTO_SCANNER] X sentiment: 10+ trending tickers` — confirms Grok returned data
+2. Response MUST include X Sentiment section with BTC sentiment, trending tokens, narrative heat
+3. If X Sentiment section still doesn't appear, check if Grok returned an error in logs
+4. Momentum picks should NOT have a separate Funding field
+5. All other sections still render correctly
+6. `python -m pytest` passes
+
+### If X sentiment STILL doesn't appear after these fixes:
+The final possibility is that the FRONTEND doesn't have a renderer. Check the frontend code for where crypto sections are rendered and confirm there's an `x_sentiment` rendering block. If not, the frontend agent needs to add one.

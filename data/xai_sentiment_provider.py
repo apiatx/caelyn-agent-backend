@@ -115,51 +115,52 @@ Flag any sarcasm you detect."""
             asset_context = "cryptocurrencies, tokens, and DeFi projects"
             examples = "$BTC, $ETH, $SOL, altcoins, meme coins"
 
-            crypto_prompt = f"""Search X for the most actively discussed cryptocurrencies and tokens right now (last 12-24 hours).
+            crypto_prompt = """Search X for the most actively discussed cryptocurrencies and tokens right now (last 12-24 hours).
 
 PRIORITY SIGNALS:
-1. SOCIAL VELOCITY: Which crypto tokens have the SHARPEST INCREASE in X mentions? Acceleration matters more than absolute volume.
-2. SENTIMENT MOMENTUM: Which tokens are flipping from negative/neutral to POSITIVE? This shift matters more than absolute sentiment.
-3. BTC SENTIMENT: What is CT (crypto twitter) saying about BTC? Bullish, bearish, or indifferent? Notable narratives?
-4. ALTCOIN HYPE: Which specific altcoins are getting disproportionate attention? Include ALL cap sizes — micro-caps with sudden buzz are HIGHER signal.
+1. SOCIAL VELOCITY: Which crypto tokens have seen the SHARPEST INCREASE in X mentions in the last 24 hours? A coin going from 100 mentions to 1000 mentions is more interesting than one with steady 5000 mentions.
+2. SENTIMENT MOMENTUM: Which tokens are flipping from negative/neutral to POSITIVE sentiment?
+3. BTC SENTIMENT: What is the overall X sentiment on BTC right now? Is crypto twitter bullish, bearish, or indifferent?
+4. ALTCOIN HYPE: Which specific altcoins are getting disproportionate attention? Include ALL cap sizes — micro-caps with sudden buzz are HIGHER signal than established large caps with normal attention.
 5. NARRATIVE PLAYS: What crypto narratives are heating up? (AI tokens, gaming, RWA, meme coins, L2s, DePIN, etc.)
 
-DO NOT limit to large caps. A $50M token with exploding social interest is MORE valuable than ETH getting normal discussion.
+DO NOT limit to large caps. A $50M token with exploding social interest is MORE valuable signal than ETH getting normal discussion.
 
 Return ONLY a JSON object (no markdown, no backticks):
-{{
+{
     "scan_type": "x_crypto_sentiment",
     "timestamp": "now",
-    "btc_sentiment": {{
-        "overall": "bullish/bearish/neutral/mixed",
-        "score": -1.0,
-        "key_narrative": "What CT is saying about BTC right now",
-        "notable_calls": ["Notable trader/influencer BTC calls"]
-    }},
-    "market_mood": "risk-on/risk-off/mixed/euphoric/fearful",
+    "btc_sentiment": {
+        "overall": "bullish" | "bearish" | "neutral" | "mixed",
+        "score": -1.0 to 1.0,
+        "key_narrative": "What crypto twitter is saying about BTC right now",
+        "notable_calls": ["Any notable trader/influencer BTC calls"]
+    },
+    "market_mood": "risk-on" | "risk-off" | "mixed" | "euphoric" | "fearful",
     "trending_tickers": [
-        {{
+        {
             "ticker": "SYMBOL",
-            "mention_intensity": "extreme/high/medium",
-            "social_velocity": "exploding/surging/rising/steady",
-            "sentiment": "bullish/bearish/mixed",
-            "sentiment_score": -1.0,
-            "why_trending": "2-3 sentence explanation",
-            "key_narratives": ["narrative1"],
+            "mention_intensity": "extreme" | "high" | "medium",
+            "social_velocity": "exploding" | "surging" | "rising" | "steady",
+            "sentiment": "bullish" | "bearish" | "mixed",
+            "sentiment_score": -1.0 to 1.0,
+            "why_trending": "2-3 sentence explanation of what sparked the social buzz",
+            "key_narratives": ["narrative1", "narrative2"],
             "catalyst": "Specific event driving discussion",
             "risk_flag": "Pump signals, bot activity, etc. or null",
-            "estimated_market_cap_tier": "large/mid/small/micro/unknown",
-            "trade_sentiment": "strong_buy/buy/hold/sell/speculative"
-        }}
+            "estimated_market_cap_tier": "large" | "mid" | "small" | "micro" | "unknown",
+            "trade_sentiment": "strong_buy" | "buy" | "hold" | "sell" | "speculative"
+        }
     ],
     "narrative_heat": [
-        {{"narrative": "name", "buzz_level": "hot/warm/cold", "direction": "bullish/bearish", "top_tokens": ["SYM1", "SYM2"]}}
+        {"narrative": "name", "buzz_level": "hot" | "warm" | "cold", "direction": "bullish" | "bearish", "top_tokens": ["SYM1", "SYM2"]}
     ],
     "contrarian_signals": ["Cases where X sentiment diverges from price action"],
     "summary": "3-4 sentence overview of crypto X sentiment right now"
-}}
+}
 
-Return 10-15 tickers sorted by social velocity. Flag coordinated pump signals.
+Return 10-15 tickers sorted by social velocity (fastest-growing mentions first).
+Flag coordinated pump signals. Include genuine micro-cap momentum if the catalyst is real.
 Always include BTC in trending_tickers even if its velocity is lower."""
 
             return await self._call_grok_with_x_search(crypto_prompt)
