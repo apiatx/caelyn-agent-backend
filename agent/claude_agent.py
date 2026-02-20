@@ -862,6 +862,9 @@ class TradingAgent:
         return {"category": "market_scan"}
 
     def _detect_cross_market(self, q: str) -> dict | None:
+        if self._is_crypto_query(q):
+            return None
+
         trending_intent = ["trending", "what's hot", "what's trending", "buzzing",
                            "what's buzzing", "what's moving", "movers", "momentum",
                            "social momentum", "top picks", "best trades", "best setups",
@@ -1770,13 +1773,17 @@ class TradingAgent:
     MEDIUM_DATA_CAP_CATEGORIES = {"crypto", "cross_market"}
 
     CRYPTO_PHRASE_SIGNALS = [
-        "crypto market", "crypto scan", "funding rate", "altcoin", "defi",
+        "crypto market", "crypto scan", "funding rate", "altcoin", "altcoins", "defi",
         "top momentum coins", "hot categories", "crypto sentiment",
-        "crypto fear", "crypto greed", "bitcoin dominance",
-        "crypto scanner", "full crypto",
+        "crypto fear", "crypto greed", "bitcoin dominance", "btc dominance",
+        "crypto scanner", "full crypto", "crypto overview", "crypto analysis",
+        "crypto momentum", "crypto hype", "crypto squeeze", "short squeeze crypto",
+        "funding divergence", "hyperliquid", "what's happening in crypto",
+        "meme coins", "meme coin", "shitcoins", "perps", "perpetual",
+        "btc.d", "eth.d",
     ]
-    CRYPTO_WORD_SIGNALS = ["crypto", "bitcoin", "btc", "eth", "solana"]
-    CRYPTO_EXCLUDE_STOCK = ["stock", "equit", "spy", "nasdaq"]
+    CRYPTO_WORD_SIGNALS = ["crypto", "bitcoin", "btc", "eth", "ethereum", "solana"]
+    CRYPTO_EXCLUDE_STOCK = ["stock", "equit", "spy", "nasdaq", "s&p"]
     CRYPTO_EXCLUDE_COMMODITY = ["gold", "oil", "silver", "commodit"]
 
     @classmethod
@@ -3144,9 +3151,15 @@ Be direct and opinionated. Tell me what you actually think."""
                 "- top_coins[].change_30d → each momentum pick for context.\n"
                 "- top_coins[].funding_rate → each momentum pick's funding_rate. This is HyperLiquid real-time data.\n"
                 "- top_coins[].open_interest_usd → each momentum pick's open_interest.\n"
-                "- derivatives.market_bias → funding_rate_analysis.market_bias.\n"
-                "- squeeze_candidates[] → HyperLiquid-confirmed squeeze setups. Feature prominently in funding_rate_analysis.\n"
-                "- funding_divergences[] → price vs funding divergences. Highest-signal trades.\n\n"
+                "- derivatives.market_bias → funding_rate_analysis.market_bias.\n\n"
+                "FUTURES/PERPS ANALYSIS (HyperLiquid — user's primary trading venue):\n"
+                "You MUST include a 'perps_overview' section using HyperLiquid data:\n"
+                "- perps_overview: market summary (total OI, volume, avg funding, market bias), BTC/ETH funding trends\n"
+                "- perps_top_volume: most active futures contracts by volume\n"
+                "- perps_squeezes: coins with extreme negative funding while price rising — HIGHEST SIGNAL trades\n"
+                "- perps_crowded_longs: coins where longs are overextended (liquidation risk)\n"
+                "- perps_divergences: price moving opposite to funding direction — strong reversal signals\n"
+                "For each squeeze/divergence, include the specific funding rate and what it means for trade direction.\n\n"
                 "CRITICAL: For EVERY momentum pick, you MUST include change_7d and funding_rate from the data. Do NOT output 'N/A' if the data exists in top_coins — look it up by symbol.\n\n"
                 "You MUST respond with ONLY a valid JSON object matching the 'crypto' display_type schema. No markdown wrapping, no explanations outside the JSON.\n"
                 "CRITICAL: Every price and percentage must come from the actual data below. Do NOT fabricate numbers. Use 'N/A' if data is missing.\n\n"

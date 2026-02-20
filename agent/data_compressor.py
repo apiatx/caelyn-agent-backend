@@ -665,41 +665,78 @@ def _compress_crypto(data: dict) -> dict:
         "total_volume_24h": hl_market.get("total_volume"),
     }
 
-    if isinstance(hl_data, dict) and not hl_data.get("error"):
-        hl_compressed = {}
-        for k in ("top_funding", "open_interest_leaders", "volume_leaders"):
-            v = hl_data.get(k)
-            if isinstance(v, list):
-                hl_compressed[k] = v[:8]
-        for k in ("market_summary", "funding_analysis", "btc_funding_trend", "eth_funding_trend"):
-            if k in hl_data:
-                hl_compressed[k] = hl_data[k]
-        compressed["hyperliquid"] = hl_compressed
+    hl_fa = hl_data.get("funding_analysis", {}) if isinstance(hl_data, dict) else {}
+    if not isinstance(hl_fa, dict):
+        hl_fa = {}
 
-    hl_fa = hl_data.get("funding_analysis", hl_data) if isinstance(hl_data, dict) else {}
-    hl_squeezes = hl_fa.get("squeeze_candidates", []) if isinstance(hl_fa, dict) else []
-    compressed["squeeze_candidates"] = [
+    compressed["perps_overview"] = {
+        "source": "Hyperliquid",
+        "market_summary": hl_fa.get("market_summary", {}),
+        "btc_funding_trend": hl_data.get("btc_funding_trend", {}) if isinstance(hl_data, dict) else {},
+        "eth_funding_trend": hl_data.get("eth_funding_trend", {}) if isinstance(hl_data, dict) else {},
+    }
+
+    compressed["perps_top_oi"] = [
+        {
+            "coin": o.get("coin"),
+            "open_interest_usd": o.get("open_interest_usd"),
+            "funding_rate": o.get("funding_rate"),
+            "price_change_24h": o.get("price_change_24h"),
+            "volume_24h_usd": o.get("volume_24h_usd"),
+        }
+        for o in (hl_fa.get("top_by_open_interest") or [])[:10]
+    ]
+
+    compressed["perps_top_volume"] = [
+        {
+            "coin": g.get("coin"),
+            "price_change_24h": g.get("price_change_24h"),
+            "funding_rate": g.get("funding_rate"),
+            "volume_24h_usd": g.get("volume_24h_usd"),
+        }
+        for g in sorted(
+            hl_fa.get("top_by_open_interest", []),
+            key=lambda x: x.get("volume_24h_usd") or 0, reverse=True
+        )[:10]
+    ]
+
+    compressed["perps_squeezes"] = [
         {
             "coin": s.get("coin"),
             "funding_rate": s.get("funding_rate"),
             "funding_annualized": s.get("funding_annualized") or s.get("funding_rate_annualized"),
             "open_interest_usd": s.get("open_interest_usd"),
+            "price_change_24h": s.get("price_change_24h"),
             "signal": s.get("signal"),
         }
-        for s in (hl_squeezes or [])[:8]
+        for s in (hl_fa.get("squeeze_candidates") or [])[:8]
     ]
 
-    hl_divergences = hl_fa.get("funding_divergences", []) if isinstance(hl_fa, dict) else []
-    compressed["funding_divergences"] = [
+    compressed["perps_crowded_longs"] = [
+        {
+            "coin": l.get("coin"),
+            "funding_rate": l.get("funding_rate"),
+            "funding_annualized": l.get("funding_annualized") or l.get("funding_rate_annualized"),
+            "open_interest_usd": l.get("open_interest_usd"),
+            "price_change_24h": l.get("price_change_24h"),
+            "signal": l.get("signal"),
+        }
+        for l in (hl_fa.get("crowded_longs") or [])[:8]
+    ]
+
+    compressed["perps_divergences"] = [
         {
             "coin": d.get("coin"),
+            "type": d.get("type"),
             "funding_rate": d.get("funding_rate"),
             "price_change_24h": d.get("price_change_24h"),
-            "type": d.get("type"),
             "signal": d.get("signal"),
         }
-        for d in (hl_divergences or [])[:5]
+        for d in (hl_fa.get("funding_divergences") or [])[:5]
     ]
+
+    compressed["perps_gainers"] = (hl_fa.get("top_gainers") or [])[:5]
+    compressed["perps_losers"] = (hl_fa.get("top_losers") or [])[:5]
 
     compressed["volume_acceleration"] = dict(list(data.get("volume_acceleration", {}).items())[:10])
 
