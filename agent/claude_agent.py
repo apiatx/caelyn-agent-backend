@@ -35,8 +35,20 @@ class TradingAgent:
         "economy": "macro_outlook",
         "earnings": "earnings_catalyst",
         "crypto": "crypto_scanner",
+        "crypto_focus": "crypto_scanner",
+        "crypto_scan": "crypto_scanner",
         "commodities": "commodity_scan",
         "commodity": "commodity_scan",
+        "commodity_focus": "commodity_scan",
+        "energy_focus": "thematic_scan",
+        "ai_compute": "thematic_scan",
+        "quantum_focus": "thematic_scan",
+        "materials_focus": "thematic_scan",
+        "aerospace_focus": "thematic_scan",
+        "tech_focus": "thematic_scan",
+        "finance_focus": "thematic_scan",
+        "healthcare_focus": "thematic_scan",
+        "real_estate_focus": "thematic_scan",
         "social": "social_momentum",
         "wsb": "social_momentum",
         "reddit": "social_momentum",
@@ -84,6 +96,7 @@ class TradingAgent:
         if resolved:
             print(f"[ROUTING] Resolved normalized preset '{normalized}' → '{resolved}'")
             return resolved
+        print(f"[ROUTING] Unknown preset_intent: '{preset_intent}' (normalized: '{normalized}') — no alias or profile found")
         return None
 
     def _build_plan_from_preset(self, preset_intent: str) -> dict:
