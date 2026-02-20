@@ -532,26 +532,61 @@ def _compress_crypto(data: dict) -> dict:
         "eth_dominance": round(eth_dom, 2) if eth_dom else None,
     }
 
-    if top_coins and len(top_coins) > 0:
-        sample = top_coins[0]
-        print(f"[CRYPTO_COMPRESS] Sample coin keys: {list(sample.keys())}")
-        print(f"[CRYPTO_COMPRESS] 7d field check: 7d_in_currency={sample.get('price_change_percentage_7d_in_currency')}, 7d={sample.get('price_change_percentage_7d')}")
+    hl_data = data.get("hyperliquid", {})
+    funding_lookup = {}
+    if isinstance(hl_data, dict) and not hl_data.get("error"):
+        funding_analysis = hl_data.get("funding_analysis", hl_data)
+        for source_key in ("top_funding", "open_interest_leaders", "volume_leaders",
+                           "top_by_open_interest", "crowded_longs", "squeeze_candidates",
+                           "funding_divergences", "top_gainers", "top_losers"):
+            items = funding_analysis.get(source_key, hl_data.get(source_key, []))
+            if isinstance(items, list):
+                for item in items:
+                    coin = (item.get("coin") or item.get("symbol") or "").upper()
+                    if coin and coin not in funding_lookup:
+                        funding_lookup[coin] = {
+                            "funding_rate": item.get("funding_rate"),
+                            "funding_annualized": item.get("funding_rate_annualized") or item.get("funding_annualized"),
+                            "open_interest_usd": item.get("open_interest_usd"),
+                        }
+        market_summary = hl_data.get("market_summary", funding_analysis.get("market_summary", {})) if isinstance(funding_analysis, dict) else {}
+        if isinstance(market_summary, dict):
+            funding_lookup["_market"] = {
+                "avg_funding_rate": market_summary.get("avg_funding_rate"),
+                "avg_funding_annualized": market_summary.get("avg_funding_annualized"),
+                "market_bias": market_summary.get("market_bias"),
+                "total_oi": market_summary.get("total_open_interest_usd"),
+                "total_volume": market_summary.get("total_volume_24h_usd"),
+            }
+    print(f"[CRYPTO_COMPRESS] Built funding lookup for {len(funding_lookup)} coins: {list(funding_lookup.keys())[:10]}")
 
-    top_coins = data.get("cg_top_coins", [])
-    compressed["top_coins"] = [
-        {
-            "symbol": c.get("symbol", "").upper(),
+    top_coins_raw = data.get("cg_top_coins", [])
+    if top_coins_raw:
+        sample = top_coins_raw[0]
+        print(f"[CRYPTO_COMPRESS] CoinGecko sample: {sample.get('symbol')}, keys: {sorted(sample.keys())}")
+        for k, v in sample.items():
+            if "7d" in k.lower() or "7" in str(k).lower():
+                print(f"[CRYPTO_COMPRESS]   {k} = {v}")
+
+    compressed["top_coins"] = []
+    for c in (top_coins_raw or [])[:15]:
+        symbol = (c.get("symbol") or "").upper()
+        hl_funding = funding_lookup.get(symbol, {})
+        compressed["top_coins"].append({
+            "symbol": symbol,
             "name": c.get("name"),
             "price": c.get("current_price"),
+            "change_1h": c.get("price_change_percentage_1h_in_currency"),
             "change_24h": c.get("price_change_percentage_24h"),
             "change_7d": c.get("price_change_percentage_7d_in_currency") or c.get("price_change_percentage_7d") or c.get("price_change_7d"),
             "change_30d": c.get("price_change_percentage_30d_in_currency") or c.get("price_change_percentage_30d") or c.get("price_change_30d"),
             "market_cap": c.get("market_cap"),
             "volume_24h": c.get("total_volume"),
             "mcap_rank": c.get("market_cap_rank"),
-        }
-        for c in (top_coins or [])[:15]
-    ]
+            "funding_rate": hl_funding.get("funding_rate"),
+            "funding_annualized": hl_funding.get("funding_annualized"),
+            "open_interest_usd": hl_funding.get("open_interest_usd"),
+        })
     if compressed["top_coins"]:
         print(f"[CRYPTO_COMPRESS] Compressed sample: {compressed['top_coins'][0]}")
 
@@ -621,17 +656,50 @@ def _compress_crypto(data: dict) -> dict:
 
     compressed["funding_analysis"] = data.get("funding_analysis", {})
 
-    hl = data.get("hyperliquid", {})
-    if isinstance(hl, dict) and not hl.get("error"):
+    hl_market = funding_lookup.get("_market", {})
+    compressed["derivatives"] = {
+        "avg_funding_rate": hl_market.get("avg_funding_rate"),
+        "avg_funding_annualized": hl_market.get("avg_funding_annualized"),
+        "market_bias": hl_market.get("market_bias"),
+        "total_open_interest": hl_market.get("total_oi"),
+        "total_volume_24h": hl_market.get("total_volume"),
+    }
+
+    if isinstance(hl_data, dict) and not hl_data.get("error"):
         hl_compressed = {}
         for k in ("top_funding", "open_interest_leaders", "volume_leaders"):
-            v = hl.get(k)
+            v = hl_data.get(k)
             if isinstance(v, list):
                 hl_compressed[k] = v[:8]
         for k in ("market_summary", "funding_analysis", "btc_funding_trend", "eth_funding_trend"):
-            if k in hl:
-                hl_compressed[k] = hl[k]
+            if k in hl_data:
+                hl_compressed[k] = hl_data[k]
         compressed["hyperliquid"] = hl_compressed
+
+    hl_fa = hl_data.get("funding_analysis", hl_data) if isinstance(hl_data, dict) else {}
+    hl_squeezes = hl_fa.get("squeeze_candidates", []) if isinstance(hl_fa, dict) else []
+    compressed["squeeze_candidates"] = [
+        {
+            "coin": s.get("coin"),
+            "funding_rate": s.get("funding_rate"),
+            "funding_annualized": s.get("funding_annualized") or s.get("funding_rate_annualized"),
+            "open_interest_usd": s.get("open_interest_usd"),
+            "signal": s.get("signal"),
+        }
+        for s in (hl_squeezes or [])[:8]
+    ]
+
+    hl_divergences = hl_fa.get("funding_divergences", []) if isinstance(hl_fa, dict) else []
+    compressed["funding_divergences"] = [
+        {
+            "coin": d.get("coin"),
+            "funding_rate": d.get("funding_rate"),
+            "price_change_24h": d.get("price_change_24h"),
+            "type": d.get("type"),
+            "signal": d.get("signal"),
+        }
+        for d in (hl_divergences or [])[:5]
+    ]
 
     compressed["volume_acceleration"] = dict(list(data.get("volume_acceleration", {}).items())[:10])
 
