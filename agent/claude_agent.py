@@ -3204,10 +3204,43 @@ Be direct and opinionated. Tell me what you actually think."""
             }
         ]
         if is_followup:
+            original_category = None
+            for msg in reversed(messages):
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    try:
+                        parsed = json.loads(content) if isinstance(content, str) else content
+                        if isinstance(parsed, dict):
+                            original_category = parsed.get("display_type") or parsed.get("structured", {}).get("display_type")
+                            break
+                    except:
+                        pass
+
+            category_context = ""
+            if original_category == "crypto":
+                category_context = (
+                    "\nIMPORTANT: This conversation started with a CRYPTO scan. The user is asking follow-up questions about CRYPTOCURRENCY.\n"
+                    "Do NOT reference stocks (NVDA, AMD, AVGO, etc.) unless the user explicitly asks about stocks.\n"
+                    "Stay in crypto context — reference the crypto data from your previous response (BTC, ETH, altcoins, funding rates, squeeze candidates, etc.).\n"
+                    "If the user asks about a specific crypto category (like gaming tokens), use crypto gaming tokens (AXS, GALA, SAND, IMX, etc.), NOT stock tickers."
+                )
+            elif original_category == "cross_market":
+                category_context = "\nThis conversation started with a cross-market scan covering stocks, crypto, and commodities."
+            elif original_category in ("trending", "best_trades", "trades"):
+                category_context = "\nThis conversation started with a stock/equity focused scan."
+            elif original_category == "screener":
+                category_context = "\nThis conversation started with a stock screener scan."
+            elif original_category == "sector_rotation":
+                category_context = "\nThis conversation started with a sector rotation scan."
+
+            if original_category:
+                print(f"[AGENT] Follow-up detected, original category: {original_category}")
+
             system_blocks.append({
                 "type": "text",
-                "text": """
+                "text": f"""
 FOLLOW-UP MODE: The user is continuing a conversation. You have the full conversation history above.
+{category_context}
 - If the user asks about a specific ticker or pick from your previous response, go deeper on that specific item.
 - If the user asks a general question, answer it using your trading expertise and any data from the conversation.
 - You can respond conversationally — you don't need to use a structured JSON display_type for follow-ups.
