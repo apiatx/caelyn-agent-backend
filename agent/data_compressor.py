@@ -495,13 +495,15 @@ def _compress_crypto(data: dict) -> dict:
     compressed = {}
 
     cg_global = data.get("cg_global", {})
+    mcap_pct = {}
     if isinstance(cg_global, dict) and "data" in cg_global:
         gd = cg_global["data"]
+        mcap_pct = gd.get("market_cap_percentage", {})
         compressed["cg_global"] = {
             "total_market_cap_usd": gd.get("total_market_cap", {}).get("usd"),
             "total_volume_usd": gd.get("total_volume", {}).get("usd"),
-            "btc_dominance": gd.get("market_cap_percentage", {}).get("btc"),
-            "eth_dominance": gd.get("market_cap_percentage", {}).get("eth"),
+            "btc_dominance": mcap_pct.get("btc"),
+            "eth_dominance": mcap_pct.get("eth"),
             "market_cap_change_24h": gd.get("market_cap_change_percentage_24h_usd"),
             "active_cryptos": gd.get("active_cryptocurrencies"),
         }
@@ -509,18 +511,30 @@ def _compress_crypto(data: dict) -> dict:
         compressed["cg_global"] = cg_global
 
     cmc_g = data.get("cmc_global", {})
+    cmc_gd = {}
     if isinstance(cmc_g, dict) and "data" in cmc_g:
-        gd = cmc_g["data"]
-        q = gd.get("quote", {}).get("USD", {})
+        cmc_gd = cmc_g["data"]
+        q = cmc_gd.get("quote", {}).get("USD", {})
         compressed["cmc_global"] = {
-            "btc_dominance": gd.get("btc_dominance"),
-            "eth_dominance": gd.get("eth_dominance"),
+            "btc_dominance": cmc_gd.get("btc_dominance"),
+            "eth_dominance": cmc_gd.get("eth_dominance"),
             "total_market_cap": q.get("total_market_cap"),
             "total_volume_24h": q.get("total_volume_24h"),
             "total_volume_change_24h": q.get("total_volume_24h_yesterday_percentage_change"),
         }
     else:
         compressed["cmc_global"] = cmc_g
+
+    btc_dom = mcap_pct.get("btc") or cmc_gd.get("btc_dominance") or 0
+    eth_dom = mcap_pct.get("eth") or cmc_gd.get("eth_dominance") or 0
+    usdt_dom = mcap_pct.get("usdt") or cmc_gd.get("usdt_market_cap_dominance") or 0
+    others_dom = round(100 - btc_dom - eth_dom - usdt_dom, 2) if btc_dom and eth_dom else None
+    compressed["dominance"] = {
+        "btc": round(btc_dom, 2) if btc_dom else None,
+        "eth": round(eth_dom, 2) if eth_dom else None,
+        "usdt": round(usdt_dom, 2) if usdt_dom else None,
+        "others": others_dom,
+    }
 
     top_coins = data.get("cg_top_coins", [])
     compressed["top_coins"] = [
@@ -529,7 +543,8 @@ def _compress_crypto(data: dict) -> dict:
             "name": c.get("name"),
             "price": c.get("current_price"),
             "change_24h": c.get("price_change_percentage_24h"),
-            "change_7d": c.get("price_change_percentage_7d_in_currency"),
+            "change_7d": c.get("price_change_percentage_7d_in_currency") or c.get("price_change_percentage_7d"),
+            "change_30d": c.get("price_change_percentage_30d_in_currency") or c.get("price_change_percentage_30d"),
             "market_cap": c.get("market_cap"),
             "volume_24h": c.get("total_volume"),
             "mcap_rank": c.get("market_cap_rank"),
@@ -545,7 +560,9 @@ def _compress_crypto(data: dict) -> dict:
             "price": c.get("quote", {}).get("USD", {}).get("price"),
             "change_24h": c.get("quote", {}).get("USD", {}).get("percent_change_24h"),
             "change_7d": c.get("quote", {}).get("USD", {}).get("percent_change_7d"),
+            "change_30d": c.get("quote", {}).get("USD", {}).get("percent_change_30d"),
             "volume_24h": c.get("quote", {}).get("USD", {}).get("volume_24h"),
+            "volume_change_24h": c.get("quote", {}).get("USD", {}).get("volume_change_24h"),
             "market_cap": c.get("quote", {}).get("USD", {}).get("market_cap"),
         }
         for c in (cmc_listings or [])[:12]

@@ -1,0 +1,124 @@
+## Fix: Crypto scan missing 7D price change + add USDT.d and Others.d dominance data
+
+### Problem 1: 7D price change shows "N/A" for all momentum picks
+The `top_momentum` coins in the crypto response show `change_7d: "N/A"`. The data exists in CoinGecko's top_coins (`price_change_percentage_7d_in_currency`) but it's either not being passed through the compression, or Claude isn't including it in the response.
+
+### Fix 1: Ensure 7d change survives compression
+
+In `data_compressor.py`, find the `_compress_crypto_scanner` function (or `_compress_crypto`). Check the `top_coins` compression — make sure `change_7d` is included:
+
+The CoinGecko top_coins field name is `price_change_percentage_7d_in_currency`. Make sure it's mapped:
+```python
+    compressed["top_coins"] = [
+        {
+            "symbol": c.get("symbol", "").upper(),
+            "name": c.get("name"),
+            "price": c.get("current_price"),
+            "change_24h": c.get("price_change_percentage_24h"),
+            "change_7d": c.get("price_change_percentage_7d_in_currency") or c.get("price_change_percentage_7d"),
+            "change_30d": c.get("price_change_percentage_30d_in_currency") or c.get("price_change_percentage_30d"),
+            "market_cap": c.get("market_cap"),
+            "volume_24h": c.get("total_volume"),
+            "mcap_rank": c.get("market_cap_rank"),
+        }
+        for c in (top_coins or [])[:15]
+    ]
+```
+
+Also check the CMC listings compression — CMC provides `percent_change_7d`:
+```python
+    compressed["cmc_top"] = [
+        {
+            "symbol": c.get("symbol"),
+            "name": c.get("name"),
+            "price": c.get("quote", {}).get("USD", {}).get("price"),
+            "change_24h": c.get("quote", {}).get("USD", {}).get("percent_change_24h"),
+            "change_7d": c.get("quote", {}).get("USD", {}).get("percent_change_7d"),
+            "change_30d": c.get("quote", {}).get("USD", {}).get("percent_change_30d"),
+            "volume_24h": c.get("quote", {}).get("USD", {}).get("volume_24h"),
+            "volume_change_24h": c.get("quote", {}).get("USD", {}).get("volume_change_24h"),
+            "market_cap": c.get("quote", {}).get("USD", {}).get("market_cap"),
+        }
+        for c in (cmc_listings or [])[:12]
+    ]
+```
+
+### Problem 2: Add USDT.d and Others.d (dominance data)
+
+USDT dominance and "Others" dominance are critical crypto sentiment indicators:
+- Rising USDT.d = risk-off, money flowing to stables (bearish for alts)
+- Falling USDT.d = risk-on, money flowing into crypto (bullish for alts)
+- Rising Others.d = alt season signal
+- Falling Others.d = BTC season / flight to quality
+
+This data is available from CoinGecko's global market data (`global_market` / `cg_global`).
+
+### Fix 2: Extract dominance data in compression
+
+In the `_compress_crypto_scanner` function, extract dominance data from the CoinGecko global market data:
+```python
+    # Global market + dominance data
+    cg_global = data.get("cg_global", {})
+    cmc_global = data.get("cmc_global", {})
+    
+    # Extract dominance percentages
+    market_cap_percentage = cg_global.get("market_cap_percentage", {})
+    
+    compressed["market_summary"] = {
+        "total_market_cap": cg_global.get("total_market_cap", {}).get("usd") if isinstance(cg_global.get("total_market_cap"), dict) else cg_global.get("total_market_cap"),
+        "total_volume_24h": cg_global.get("total_volume", {}).get("usd") if isinstance(cg_global.get("total_volume"), dict) else cg_global.get("total_volume"),
+        "market_cap_change_24h": cg_global.get("market_cap_change_percentage_24h_usd"),
+        "btc_dominance": market_cap_percentage.get("btc") or cg_global.get("btc_dominance") or cmc_global.get("btc_dominance"),
+        "eth_dominance": market_cap_percentage.get("eth") or cg_global.get("eth_dominance") or cmc_global.get("eth_dominance"),
+        "usdt_dominance": market_cap_percentage.get("usdt"),
+        "others_dominance": None,  # Calculated below
+    }
+    
+    # Calculate Others dominance = 100% - BTC - ETH - USDT - other top coins
+    btc_dom = compressed["market_summary"].get("btc_dominance") or 0
+    eth_dom = compressed["market_summary"].get("eth_dominance") or 0
+    usdt_dom = compressed["market_summary"].get("usdt_dominance") or 0
+    
+    # Others.d = everything except BTC, ETH, USDT (rough proxy for altcoin activity)
+    if btc_dom and eth_dom:
+        compressed["market_summary"]["others_dominance"] = round(100 - btc_dom - eth_dom - usdt_dom, 2)
+```
+
+If CoinGecko doesn't include USDT in `market_cap_percentage`, check CMC global data:
+```python
+    # Fallback: try CMC for USDT dominance
+    if not compressed["market_summary"]["usdt_dominance"] and isinstance(cmc_global, dict):
+        # CMC might have stablecoin_volume_24h or similar
+        usdt_dom_cmc = cmc_global.get("usdt_market_cap_dominance") or cmc_global.get("stablecoin_dominance")
+        if usdt_dom_cmc:
+            compressed["market_summary"]["usdt_dominance"] = usdt_dom_cmc
+```
+
+### Fix 3: Tell Claude to include dominance in the response
+
+In the crypto-specific Claude prompt (the preamble added when category is "crypto"), add:
+Include in your btc_eth_summary:
+
+BTC dominance % and what it signals
+USDT dominance % and whether it's rising (risk-off) or falling (risk-on)
+Others dominance % (altcoin share) and whether alt season is approaching
+
+The market_summary in the data contains: btc_dominance, eth_dominance, usdt_dominance, others_dominance. Use these numbers.
+
+Also update the crypto response schema. In `prompts.py`, find the crypto display_type schema (around line 397-398) and add `usdt_dominance` and `others_dominance` fields to the `btc_eth_summary`:
+```json
+"dominance": {
+    "btc": "",
+    "eth": "", 
+    "usdt": "",
+    "others": "",
+    "signal": ""
+}
+```
+
+### Testing
+1. Click "Crypto" → top momentum picks should show 7d change (not N/A)
+2. BTC/ETH summary cards should show dominance data
+3. USDT.d and Others.d should appear in the response
+4. All other presets still work
+5. `python -m pytest` passes
