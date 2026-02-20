@@ -1,0 +1,173 @@
+## CRITICAL Fix: "Crypto" sidebar button routes to wrong pipeline — shows stock data instead of crypto
+
+### Root Cause
+When the user clicks "Crypto" in the Sectors sidebar, the frontend sends a canned query like "Full crypto market scan. Global market state, funding rates, hot categories, top momentum coins with social buzz." as the `query` field — but it may NOT send `preset_intent: "crypto"`. Without the preset_intent, the query goes through the OpenAI classifier which routes it to `trending` or `cross_market` instead of the dedicated `crypto_scanner` pipeline. That's why the response shows KNRX and KLAR (stocks from Finviz) instead of crypto data.
+
+### Step 1: Verify the routing
+
+Add a log line at the very top of `handle_query()` in `claude_agent.py` (right after line 306):
+```python
+    print(f"[AGENT] === NEW REQUEST === (followup={is_followup}, history_turns={len(history)}, preset={preset_intent or 'none'})")
+    print(f"[AGENT] Query: {user_prompt[:100]}")
+    print(f"[AGENT] preset_intent raw value: '{preset_intent}' (type={type(preset_intent).__name__})")
+```
+
+Then click "Crypto" in the sidebar and check the logs. You should see either:
+- `preset_intent raw value: 'crypto'` → routing should work, problem is elsewhere
+- `preset_intent raw value: 'None'` or `preset_intent raw value: ''` → **frontend is not sending preset_intent**, this is the bug
+
+### Step 2: Add crypto keyword detection as a routing fallback
+
+In the heuristic classifier `_classify_simple()` (around line 698), make sure crypto keywords ALWAYS route to the crypto category, even without preset_intent:
+
+Find the crypto detection block:
+```python
+if any(w in q for w in ["crypto", "bitcoin", "btc", "eth", "solana", "altcoin", "defi", "funding rate"]):
+    return {"category": "crypto"}
+```
+
+Make sure this check happens BEFORE any cross_market detection. Also add more keywords:
+```python
+    # Crypto-specific queries ALWAYS go to crypto scanner
+    crypto_only_signals = ["crypto market", "crypto scan", "funding rate", "altcoin", "defi",
+                           "top momentum coins", "hot categories", "crypto sentiment", 
+                           "crypto fear", "crypto greed", "bitcoin dominance"]
+    if any(s in q for s in crypto_only_signals):
+        return {"category": "crypto"}
+    
+    if any(w in q for w in ["crypto", "bitcoin", "btc", "eth", "solana"]):
+        # Only route to crypto if no stock/commodity signals present
+        has_stock = any(s in q for s in ["stock", "equit", "spy", "nasdaq"])
+        has_commodity = any(s in q for s in ["gold", "oil", "silver", "commodit"])
+        if not has_stock and not has_commodity:
+            return {"category": "crypto"}
+```
+
+### Step 3: Protect crypto routing from cross_market override
+
+In `handle_query()`, around line 334, the cross_market override can hijack the crypto category:
+```python
+cross_market_override = self._detect_cross_market(user_prompt.lower().strip())
+if cross_market_override and category != "cross_market":
+```
+
+Add a guard to prevent overriding crypto:
+```python
+if cross_market_override and category not in ("cross_market", "crypto"):
+    print(f"[AGENT] Cross-market override: {category} → cross_market")
+    category = "cross_market"
+```
+
+### Step 4: Optimize the crypto scanner for speed
+
+The current crypto scanner takes 47 seconds for data + 47 seconds for Claude = 94 seconds total. This likely exceeds deployment timeouts. Target: under 35 seconds total.
+
+**A. Speed up data gathering in `get_crypto_scanner()` (market_data_service.py):**
+
+Add individual timeouts to each task and remove the slow/low-value calls:
+```python
+    async def get_crypto_scanner(self) -> dict:
+        import asyncio
+
+        tasks = {}
+
+        if self.coingecko:
+            tasks["cg_dashboard"] = asyncio.wait_for(
+                self.coingecko.get_crypto_dashboard(), timeout=10.0
+            )
+
+        if self.cmc:
+            tasks["cmc_dashboard"] = asyncio.wait_for(
+                self.cmc.get_full_dashboard(), timeout=10.0
+            )
+
+        tasks["hyperliquid"] = asyncio.wait_for(
+            self.hyperliquid.get_crypto_dashboard(), timeout=8.0
+        )
+
+        tasks["fear_greed"] = asyncio.wait_for(
+            self.fear_greed.get_fear_greed_index(), timeout=5.0
+        )
+
+        # Skip AlphaVantage news — slow, low value for crypto
+        # tasks["crypto_news"] = ...
+
+        if self.altfins:
+            tasks["altfins"] = asyncio.wait_for(
+                self.altfins.get_crypto_scanner_data(), timeout=10.0
+            )
+
+        if self.xai:
+            tasks["x_twitter_crypto"] = asyncio.wait_for(
+                self.xai.get_trending_tickers("crypto"), timeout=15.0
+            )
+```
+
+And after the gather, **skip the deep_dive and coin_metadata lookups** — they add 5-15 seconds each for marginal value:
+```python
+        # SKIP deep_dive — data already in top_coins, saves 5-10 seconds
+        deep_dive = {}
+        
+        # SKIP coin_metadata — saves 3-5 seconds  
+        coin_metadata = {}
+```
+
+**B. Speed up Claude response:**
+
+For crypto category, use Haiku for speed. In the model selection logic in `_ask_claude()`:
+```python
+if category == "crypto":
+    model = "claude-haiku-4-5-20241022"
+    max_tokens = 4000
+```
+
+**C. Add crypto-specific instructions to the Claude prompt:**
+
+When category is "crypto", prepend this to the user message in `_ask_claude()`:
+```python
+if category == "crypto":
+    crypto_preamble = """
+CRYPTO MARKET INTELLIGENCE — You are analyzing crypto data for a trader whose philosophy is:
+- BTC is the only true INVESTMENT. All other crypto is TRADED based on hype cycles + technical momentum + catalysts.
+- Focus on: Fear & Greed sentiment, BTC dominance, funding rates (squeeze setups), and altcoins with ACCELERATING relative strength or social hype.
+- Use altFINS data for technical analysis, CoinGecko/CMC for fundamentals and metrics, Grok/X for social sentiment velocity.
+- Be decisive. Give specific coins with specific theses and trade plans.
+
+You MUST respond with ONLY a valid JSON object matching the "crypto" display_type schema. No markdown wrapping, no explanations outside the JSON.
+
+CRITICAL: Every price and percentage must come from the actual data below. Do NOT fabricate numbers. Use "N/A" if data is missing.
+"""
+    # Prepend to the user message content
+```
+
+### Step 5: Ensure the Grok/X scan specifically targets crypto social sentiment
+
+In `xai_sentiment_provider.py`, find `get_trending_tickers()` and check what happens when called with `"crypto"`:
+```bash
+grep -n "def get_trending_tickers" xai_sentiment_provider.py
+```
+
+The Grok prompt for crypto should specifically ask for:
+- Which crypto tokens have the highest INCREASE in social mentions in the last 24 hours
+- Which ones have sentiment shifting from negative to positive (momentum flip)
+- Which ones are getting NEW attention (not perennially discussed like BTC/ETH)
+
+If the Grok crypto prompt is generic, update it to be specific about social velocity and sentiment momentum.
+
+### Testing
+
+1. Click "Crypto" in sidebar → check server logs for `[ROUTING] category=crypto` (NOT trending or cross_market)
+2. Response should show BTC/ETH with actual prices, funding rates, squeeze candidates
+3. Response should include top momentum altcoins from CoinGecko/CMC trending
+4. Response should include altFINS technical signals if available
+5. Response should include Grok social sentiment for top coins
+6. Total response time < 35 seconds
+7. All other presets (Daily Briefing, Trending Now, Best Trades) still work correctly
+8. `python -m pytest` passes
+
+### Success Criteria
+- BTC and ETH show real prices (not N/A)
+- At least 3-5 altcoins with momentum theses
+- Fear & Greed index displayed
+- Funding rate analysis with squeeze candidates
+- No stock tickers (KNRX, KLAR, etc.) in the crypto response

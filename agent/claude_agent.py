@@ -306,6 +306,7 @@ class TradingAgent:
 
         print(f"[AGENT] === NEW REQUEST === (followup={is_followup}, history_turns={len(history)}, preset={preset_intent or 'none'})")
         print(f"[AGENT] Query: {user_prompt[:100]}")
+        print(f"[AGENT] preset_intent raw value: '{preset_intent}' (type={type(preset_intent).__name__})")
 
         reasoning_brief = None
 
@@ -396,7 +397,7 @@ class TradingAgent:
             orch_plan = query_info.get("orchestration_plan")
             if orch_plan:
                 cross_market_override = self._detect_cross_market(user_prompt.lower().strip())
-                if cross_market_override and category != "cross_market":
+                if cross_market_override and category not in ("cross_market", "crypto"):
                     print(f"[AGENT] Cross-market override: {category} → cross_market")
                     category = "cross_market"
                     query_info["category"] = "cross_market"
@@ -438,7 +439,7 @@ class TradingAgent:
             plan = query_info.get("orchestration_plan")
             if not plan:
                 cross_market_override = self._detect_cross_market(user_prompt.lower().strip())
-                if cross_market_override and category != "cross_market":
+                if cross_market_override and category not in ("cross_market", "crypto"):
                     print(f"[AGENT] Cross-market override: {category} → cross_market")
                     category = "cross_market"
                     query_info["category"] = "cross_market"
@@ -726,6 +727,9 @@ class TradingAgent:
 
     def _keyword_classify(self, query: str) -> dict:
         q = query.lower().strip()
+
+        if self._is_crypto_query(q):
+            return {"category": "crypto"}
 
         cross_market = self._detect_cross_market(q)
         if cross_market:
@@ -1489,6 +1493,13 @@ class TradingAgent:
                 timeout=10.0,
             )
             from_heuristic = plan.pop("_from_heuristic", False)
+
+            q_lower = prompt.lower()
+            if self._is_crypto_query(q_lower):
+                plan["intent"] = "single_asset_scan"
+                plan["asset_classes"] = ["crypto"]
+                print(f"[ORCHESTRATOR] Crypto override: forcing single_asset_scan(crypto) for query")
+
             query_info = self._plan_to_query_info(plan)
             q_lower = prompt.lower()
             social_triggers = ["trending", "hype", "sentiment", "most talked about",
@@ -1744,6 +1755,27 @@ class TradingAgent:
     }
 
     MEDIUM_DATA_CAP_CATEGORIES = {"crypto", "cross_market"}
+
+    CRYPTO_PHRASE_SIGNALS = [
+        "crypto market", "crypto scan", "funding rate", "altcoin", "defi",
+        "top momentum coins", "hot categories", "crypto sentiment",
+        "crypto fear", "crypto greed", "bitcoin dominance",
+        "crypto scanner", "full crypto",
+    ]
+    CRYPTO_WORD_SIGNALS = ["crypto", "bitcoin", "btc", "eth", "solana"]
+    CRYPTO_EXCLUDE_STOCK = ["stock", "equit", "spy", "nasdaq"]
+    CRYPTO_EXCLUDE_COMMODITY = ["gold", "oil", "silver", "commodit"]
+
+    @classmethod
+    def _is_crypto_query(cls, q_lower: str) -> bool:
+        if any(s in q_lower for s in cls.CRYPTO_PHRASE_SIGNALS):
+            return True
+        if any(w in q_lower for w in cls.CRYPTO_WORD_SIGNALS):
+            has_stock = any(s in q_lower for s in cls.CRYPTO_EXCLUDE_STOCK)
+            has_commodity = any(s in q_lower for s in cls.CRYPTO_EXCLUDE_COMMODITY)
+            if not has_stock and not has_commodity:
+                return True
+        return False
 
     async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "") -> str:
         data_size = len(json.dumps(market_data, default=str)) if market_data else 0
@@ -3084,8 +3116,21 @@ Be direct and opinionated. Tell me what you actually think."""
                     "content": content,
                 })
 
+        crypto_preamble = ""
+        if category == "crypto":
+            crypto_preamble = (
+                "CRYPTO MARKET INTELLIGENCE — You are analyzing crypto data for a trader whose philosophy is:\n"
+                "- BTC is the only true INVESTMENT. All other crypto is TRADED based on hype cycles + technical momentum + catalysts.\n"
+                "- Focus on: Fear & Greed sentiment, BTC dominance, funding rates (squeeze setups), and altcoins with ACCELERATING relative strength or social hype.\n"
+                "- Use altFINS data for technical analysis, CoinGecko/CMC for fundamentals and metrics, Hyperliquid for funding rates.\n"
+                "- Be decisive. Give specific coins with specific theses and trade plans.\n\n"
+                "You MUST respond with ONLY a valid JSON object matching the 'crypto' display_type schema. No markdown wrapping, no explanations outside the JSON.\n"
+                "CRITICAL: Every price and percentage must come from the actual data below. Do NOT fabricate numbers. Use 'N/A' if data is missing.\n\n"
+            )
+
         if data_str:
             user_content = (
+                f"{crypto_preamble}"
                 f"[MARKET DATA — use this to inform your analysis]\n"
                 f"{data_str}\n\n"
                 f"{filter_instructions}\n\n"
@@ -3093,7 +3138,7 @@ Be direct and opinionated. Tell me what you actually think."""
                 f"{user_prompt}"
             )
         else:
-            user_content = user_prompt
+            user_content = f"{crypto_preamble}{user_prompt}" if crypto_preamble else user_prompt
 
         messages.append({"role": "user", "content": user_content})
 
@@ -3161,11 +3206,14 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             })
 
         use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES
-        if use_fast_model:
+        if category == "crypto":
+            model = "claude-sonnet-4-20250514"
+            token_limit = 4096
+        elif use_fast_model:
             model = "claude-sonnet-4-20250514"
             if category == "best_trades":
                 token_limit = 8192
-            elif category in ("crypto", "cross_market"):
+            elif category == "cross_market":
                 token_limit = 8192
             else:
                 token_limit = 4096

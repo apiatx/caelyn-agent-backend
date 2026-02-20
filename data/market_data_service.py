@@ -3680,20 +3680,31 @@ class MarketDataService:
         tasks = {}
 
         if self.coingecko:
-            tasks["cg_dashboard"] = self.coingecko.get_crypto_dashboard()
+            tasks["cg_dashboard"] = asyncio.wait_for(
+                self.coingecko.get_crypto_dashboard(), timeout=12.0
+            )
 
         if self.cmc:
-            tasks["cmc_dashboard"] = self.cmc.get_full_dashboard()
+            tasks["cmc_dashboard"] = asyncio.wait_for(
+                self.cmc.get_full_dashboard(), timeout=12.0
+            )
 
-        tasks["hyperliquid"] = self.hyperliquid.get_crypto_dashboard()
-        tasks["fear_greed"] = self.fear_greed.get_fear_greed_index()
-        tasks["crypto_news"] = self.alphavantage.get_news_sentiment("CRYPTO:BTC")
+        tasks["hyperliquid"] = asyncio.wait_for(
+            self.hyperliquid.get_crypto_dashboard(), timeout=8.0
+        )
+        tasks["fear_greed"] = asyncio.wait_for(
+            self.fear_greed.get_fear_greed_index(), timeout=5.0
+        )
 
         if self.altfins:
-            tasks["altfins"] = self.altfins.get_crypto_scanner_data()
+            tasks["altfins"] = asyncio.wait_for(
+                self.altfins.get_crypto_scanner_data(), timeout=10.0
+            )
 
         if self.xai:
-            tasks["x_twitter_crypto"] = self.xai.get_trending_tickers("crypto")
+            tasks["x_twitter_crypto"] = asyncio.wait_for(
+                self.xai.get_trending_tickers("crypto"), timeout=15.0
+            )
 
         task_names = list(tasks.keys())
         results = await asyncio.gather(
@@ -3743,23 +3754,7 @@ class MarketDataService:
                     "market_cap_dominance": quote.get("market_cap_dominance"),
                 }
 
-        deep_dive_ids = []
-        if isinstance(cg_trending_data, dict):
-            for coin in cg_trending_data.get("coins", [])[:4]:
-                cid = coin.get("item", {}).get("id")
-                if cid:
-                    deep_dive_ids.append(cid)
-
-        cg_gl = cg.get("gainers_losers", {})
-        if isinstance(cg_gl, dict):
-            for g in (cg_gl.get("gainers") or [])[:1]:
-                cid = g.get("id")
-                if cid and cid not in deep_dive_ids:
-                    deep_dive_ids.append(cid)
-
         deep_dive = {}
-        if deep_dive_ids and self.coingecko:
-            deep_dive = await self.coingecko.get_coin_deep_dive(deep_dive_ids[:5])
 
         derivatives = cg.get("derivatives", [])
         funding_analysis = self._analyze_funding_rates(derivatives) if derivatives else {}
@@ -3771,13 +3766,7 @@ class MarketDataService:
 
         cmc_gainers_losers = cmc.get("gainers_losers", {})
 
-        trending_symbols = list(dual_trending | high_attention)[:10]
         coin_metadata = {}
-        if trending_symbols and self.cmc:
-            try:
-                coin_metadata = await self.cmc.get_coin_info(trending_symbols)
-            except:
-                pass
 
         result = {
             "cg_global": cg.get("global_market", {}),
