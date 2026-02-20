@@ -2682,10 +2682,6 @@ class MarketDataService:
         else:
             briefing_tasks.append(asyncio.sleep(0))
 
-        briefing_tasks.append(
-            asyncio.wait_for(self.xai.get_trending_tickers("stock"), timeout=15.0) if self.xai else asyncio.sleep(0)
-        )
-
         (
             fear_greed,
             fred_macro,
@@ -2702,7 +2698,6 @@ class MarketDataService:
             trending,
             upcoming_earnings,
             market_news_raw,
-            x_trending_raw,
         ) = await asyncio.gather(*briefing_tasks, return_exceptions=True)
 
         def safe(val, default=None):
@@ -2711,16 +2706,6 @@ class MarketDataService:
             return val if not isinstance(val, Exception) else default
 
         market_news = safe(market_news_raw)
-        x_trending = safe(x_trending_raw, {})
-        if isinstance(x_trending, dict) and not x_trending.get("error"):
-            x_ticker_count = len(x_trending.get("trending_tickers", []))
-            if x_ticker_count:
-                print(f"[Briefing] X sentiment: {x_ticker_count} trending tickers, mood={x_trending.get('market_mood')}")
-            else:
-                print(f"[Briefing] X sentiment: empty/no tickers")
-        else:
-            print(f"[Briefing] X sentiment: error or unavailable")
-            x_trending = {}
         fear_greed = safe(fear_greed, {})
         fred_macro = safe(fred_macro, {})
         stage2_breakouts = safe(stage2_breakouts)
@@ -2854,24 +2839,6 @@ class MarketDataService:
             stage2_breakouts, macd_crossovers, new_highs, volume_breakouts, unusual_volume,
         )
 
-        strongest_sector = None
-        sector_perf_data = fmp_data.get("sector_performance", [])
-        if isinstance(sector_perf_data, list) and sector_perf_data:
-            def _parse_sector_pct(s):
-                try:
-                    return float(str(s.get("changesPercentage", "0")).replace("%", ""))
-                except (ValueError, TypeError):
-                    return -999.0
-            parseable = [s for s in sector_perf_data if isinstance(s, dict) and s.get("changesPercentage") is not None]
-            sorted_sectors = sorted(parseable, key=_parse_sector_pct, reverse=True)
-            if sorted_sectors:
-                top = sorted_sectors[0]
-                strongest_sector = {
-                    "sector": top.get("sector", ""),
-                    "change": top.get("changesPercentage", ""),
-                }
-                print(f"[Briefing] Strongest sector: {strongest_sector['sector']} ({strongest_sector['change']})")
-
         return {
             "pre_computed_highlights": pre_computed_highlights,
             "macro_snapshot": macro_snapshot,
@@ -2892,8 +2859,6 @@ class MarketDataService:
             "fear_greed": fear_greed,
             "fred_macro": fred_macro,
             "fmp_market_data": fmp_data,
-            "strongest_sector": strongest_sector,
-            "x_sentiment": x_trending if isinstance(x_trending, dict) else {},
             "highlights": {
                 "stage2_breakouts": stage2_breakouts[:3] if isinstance(stage2_breakouts, list) else [],
                 "volume_breakouts": volume_breakouts[:3] if isinstance(volume_breakouts, list) else [],
@@ -2903,7 +2868,6 @@ class MarketDataService:
                 "revenue_growth": revenue_leaders[:3] if isinstance(revenue_leaders, list) else [],
                 "rsi_recovery": rsi_recovery[:3] if isinstance(rsi_recovery, list) else [],
                 "social_trending": [t.get("ticker") for t in trending[:5]] if isinstance(trending, list) else [],
-                "x_trending": (x_trending.get("trending_tickers") or [])[:8] if isinstance(x_trending, dict) else [],
             },
             "upcoming_earnings": upcoming_earnings[:5] if isinstance(upcoming_earnings, list) else [],
         }
