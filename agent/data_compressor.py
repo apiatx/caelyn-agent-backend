@@ -590,6 +590,30 @@ def _compress_crypto(data: dict) -> dict:
     if compressed["top_coins"]:
         print(f"[CRYPTO_COMPRESS] Compressed sample: {compressed['top_coins'][0]}")
 
+    cg_symbols = {(c.get("symbol") or "").upper() for c in compressed["top_coins"]}
+    hl_all_coins = {}
+    if isinstance(hl_data, dict) and not hl_data.get("error"):
+        hl_fa_coins = hl_data.get("funding_analysis", {})
+        if isinstance(hl_fa_coins, dict):
+            for source_key in ("top_by_open_interest", "top_gainers", "squeeze_candidates", "crowded_longs", "funding_divergences", "top_losers"):
+                for item in (hl_fa_coins.get(source_key) or []):
+                    coin = (item.get("coin") or "").upper()
+                    if coin and coin not in hl_all_coins:
+                        hl_all_coins[coin] = item
+    compressed["hl_additional_coins"] = sorted([
+        {
+            "symbol": coin,
+            "source": "hyperliquid",
+            "price_change_24h": item.get("price_change_24h"),
+            "funding_rate": item.get("funding_rate"),
+            "funding_annualized": item.get("funding_annualized") or item.get("funding_rate_annualized"),
+            "open_interest_usd": item.get("open_interest_usd"),
+            "volume_24h_usd": item.get("volume_24h_usd"),
+        }
+        for coin, item in hl_all_coins.items() if coin not in cg_symbols
+    ], key=lambda x: x.get("volume_24h_usd") or 0, reverse=True)[:20]
+    print(f"[CRYPTO_COMPRESS] CoinGecko coins: {len(compressed['top_coins'])}, HL-only coins: {len(compressed['hl_additional_coins'])}")
+
     cmc_listings = data.get("cmc_listings", [])
     compressed["cmc_top"] = [
         {
@@ -684,7 +708,7 @@ def _compress_crypto(data: dict) -> dict:
             "price_change_24h": o.get("price_change_24h"),
             "volume_24h_usd": o.get("volume_24h_usd"),
         }
-        for o in (hl_fa.get("top_by_open_interest") or [])[:10]
+        for o in (hl_fa.get("top_by_open_interest") or [])[:5]
     ]
 
     compressed["perps_top_volume"] = [
@@ -693,11 +717,12 @@ def _compress_crypto(data: dict) -> dict:
             "price_change_24h": g.get("price_change_24h"),
             "funding_rate": g.get("funding_rate"),
             "volume_24h_usd": g.get("volume_24h_usd"),
+            "open_interest_usd": g.get("open_interest_usd"),
         }
         for g in sorted(
             hl_fa.get("top_by_open_interest", []),
             key=lambda x: x.get("volume_24h_usd") or 0, reverse=True
-        )[:10]
+        )[:5]
     ]
 
     compressed["perps_squeezes"] = [
@@ -810,7 +835,30 @@ def _compress_crypto(data: dict) -> dict:
                     "tickers": tickers,
                 })
 
-    compressed["x_sentiment"] = data.get("x_twitter_crypto", {})
+    x_data = data.get("x_twitter_crypto", {})
+    if isinstance(x_data, dict) and not x_data.get("error") and (x_data.get("trending_tickers") or x_data.get("btc_sentiment")):
+        raw_tickers = (x_data.get("trending_tickers") or [])[:10]
+        compressed["x_sentiment"] = {
+            "btc_sentiment": x_data.get("btc_sentiment", {}),
+            "market_mood": x_data.get("market_mood"),
+            "top_social_movers": [
+                {
+                    "symbol": t.get("ticker", t.get("symbol", "")),
+                    "social_velocity": t.get("social_velocity", t.get("mention_intensity", "")),
+                    "sentiment": t.get("sentiment", ""),
+                    "why_trending": t.get("why_trending", ""),
+                    "catalyst": t.get("catalyst", ""),
+                }
+                for t in raw_tickers
+            ],
+            "narrative_heat": (x_data.get("narrative_heat") or x_data.get("sector_heat") or [])[:5],
+            "contrarian_signals": (x_data.get("contrarian_signals") or [])[:3],
+            "summary": x_data.get("summary"),
+        }
+        print(f"[CRYPTO_COMPRESS] X sentiment: {len(compressed['x_sentiment'].get('top_social_movers', []))} social movers")
+    else:
+        compressed["x_sentiment"] = {}
+        print(f"[CRYPTO_COMPRESS] X sentiment: unavailable or error")
 
     coin_metadata = data.get("coin_metadata", {})
     if isinstance(coin_metadata, dict):
