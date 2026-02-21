@@ -1,7 +1,4 @@
-elapsed = round(_t.time() - start_time, 1)
-print(f"[SCREENER] Phase C: {len(final_rows)} qualified from {len(enriched_rows)} enriched in {elapsed}s")
-
-return {import asyncio
+import asyncio
 import time as _time
 
 from data.polygon_provider import PolygonProvider

@@ -915,7 +915,7 @@ class TradingAgent:
     def _classify_query(self, prompt: str) -> dict:
         if self.openai_client:
             return self._classify_query_openai(prompt)
-        return self._keyword_classify(prompt)
+        return self._classify_query_claude(prompt)
 
     def _classify_query_openai(self, prompt: str) -> dict:
         try:
