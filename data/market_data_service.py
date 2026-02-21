@@ -4104,19 +4104,23 @@ class MarketDataService:
                 print(f"[SCREENER] StockAnalysis enrich error {ticker}: {e}")
 
             if not row["price"]:
-                try:
-                    price_str = item.get("price", "")
+                for price_key in ("price", "Price", "last", "close"):
+                    price_str = item.get(price_key, "")
                     if price_str:
-                        row["price"] = float(str(price_str).replace(",", ""))
-                except (ValueError, TypeError):
-                    pass
+                        try:
+                            row["price"] = float(str(price_str).replace(",", "").replace("$", "").strip())
+                            break
+                        except (ValueError, TypeError):
+                            continue
             if not row["chg_pct"]:
-                try:
-                    chg_str = item.get("change", "")
+                for chg_key in ("change", "Change", "perf_w", "change_pct"):
+                    chg_str = item.get(chg_key, "")
                     if chg_str:
-                        row["chg_pct"] = float(str(chg_str).replace("%", "").replace("+", ""))
-                except (ValueError, TypeError):
-                    pass
+                        try:
+                            row["chg_pct"] = float(str(chg_str).replace("%", "").replace("+", "").replace(",", "").strip())
+                            break
+                        except (ValueError, TypeError):
+                            continue
 
             ta_data = {}
             if _t.time() - enrichment_start < ENRICHMENT_TIMEOUT:
@@ -4373,6 +4377,47 @@ class MarketDataService:
         elapsed = round(_t.time() - start_time, 1)
         print(f"[SCREENER] Phase C: {len(final_rows)} qualified from {len(enriched_rows)} enriched in {elapsed}s")
 
+        # --- Add frontend-compatible field aliases ---
+        for row in final_rows:
+            # Frontend reads 'change' but backend computes 'chg_pct'
+            if row.get("chg_pct") is not None and "change" not in row:
+                val = row["chg_pct"]
+                try:
+                    row["change"] = f"{float(val):+.2f}%"
+                except (ValueError, TypeError):
+                    row["change"] = str(val)
+
+            # Frontend reads 'market_cap' but backend has 'mkt_cap'
+            if row.get("mkt_cap") and "market_cap" not in row:
+                row["market_cap"] = row["mkt_cap"]
+
+            # Frontend reads 'rev_growth' but backend has 'rev_growth_yoy'
+            if row.get("rev_growth_yoy") is not None and "rev_growth" not in row:
+                try:
+                    row["rev_growth"] = f"{float(row['rev_growth_yoy']):+.1f}%"
+                except (ValueError, TypeError):
+                    row["rev_growth"] = str(row["rev_growth_yoy"])
+
+            # Frontend reads 'rsi' — extract from signals list
+            if "rsi" not in row and row.get("signals"):
+                for sig in row["signals"]:
+                    if isinstance(sig, str) and sig.startswith("RSI "):
+                        try:
+                            row["rsi"] = sig.split("RSI ")[1].split()[0]
+                        except (IndexError, ValueError):
+                            pass
+                        break
+
+            # Format price as string with $ if numeric
+            if row.get("price") is not None:
+                try:
+                    p = float(row["price"])
+                    row["price"] = f"${p:,.2f}" if p >= 1 else f"${p:.4f}"
+                except (ValueError, TypeError):
+                    pass
+
+        # Also provide as 'results' for frontend compatibility
+        
         return {
             "display_type": "screener",
             "screen_name": definition["screen_label"],
@@ -4380,6 +4425,7 @@ class MarketDataService:
             "explain": definition["explain_template"],
             "top_picks": top_picks,
             "rows": final_rows,
+            "results": final_rows,  # <-- ADD THIS LINE
             "scan_stats": {
                 "candidates_total": candidates_total,
                 "enriched": len(enriched_rows),
