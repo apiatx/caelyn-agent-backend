@@ -2659,27 +2659,6 @@ class MarketDataService:
         import asyncio
         from data.scoring_engine import score_for_trades, score_for_investments, score_for_squeeze
 
-        x_trending = {}
-        async def _fetch_x_sentiment():
-            nonlocal x_trending
-            if self.xai:
-                try:
-                    result = await asyncio.wait_for(
-                        self.xai.get_trending_tickers("stock"),
-                        timeout=15.0
-                    )
-                    if isinstance(result, dict) and not result.get("error"):
-                        x_trending = result
-                        print(f"[Briefing] X sentiment: {len(result.get('trending_tickers', []))} tickers")
-                    else:
-                        print(f"[Briefing] X sentiment: empty or error")
-                except asyncio.TimeoutError:
-                    print(f"[Briefing] X sentiment: timed out (15s)")
-                except Exception as e:
-                    print(f"[Briefing] X sentiment failed: {e}")
-
-        x_task = asyncio.create_task(_fetch_x_sentiment())
-
         macro_snapshot = await self._build_macro_snapshot()
 
         briefing_tasks = [
@@ -2860,46 +2839,6 @@ class MarketDataService:
             stage2_breakouts, macd_crossovers, new_highs, volume_breakouts, unusual_volume,
         )
 
-        try:
-            await asyncio.wait_for(x_task, timeout=2.0)
-        except Exception:
-            pass
-
-        strongest_sector = None
-        sector_perf_data = fmp_data.get("sector_performance", [])
-        if isinstance(sector_perf_data, list) and sector_perf_data:
-            try:
-                valid_sectors = [
-                    s for s in sector_perf_data
-                    if isinstance(s, dict) and s.get("changesPercentage") is not None
-                ]
-                sorted_sectors = sorted(
-                    valid_sectors,
-                    key=lambda x: float(str(x.get("changesPercentage", "0")).replace("%", "")),
-                    reverse=True
-                )
-                if sorted_sectors:
-                    top = sorted_sectors[0]
-                    strongest_sector = {
-                        "sector": top.get("sector", ""),
-                        "change": top.get("changesPercentage", ""),
-                    }
-                    print(f"[Briefing] Strongest sector: {strongest_sector['sector']} ({strongest_sector['change']})")
-            except Exception as e:
-                print(f"[Briefing] Sector extraction failed: {e}")
-
-        hottest_social = None
-        x_tickers = x_trending.get("trending_tickers", [])
-        if x_tickers and isinstance(x_tickers, list):
-            top_x = x_tickers[0]
-            if isinstance(top_x, dict):
-                hottest_social = {
-                    "ticker": top_x.get("ticker", ""),
-                    "sentiment": top_x.get("sentiment", ""),
-                    "why": top_x.get("why_trending", ""),
-                    "intensity": top_x.get("mention_intensity", ""),
-                }
-
         return {
             "pre_computed_highlights": pre_computed_highlights,
             "macro_snapshot": macro_snapshot,
@@ -2931,9 +2870,6 @@ class MarketDataService:
                 "social_trending": [t.get("ticker") for t in trending[:5]] if isinstance(trending, list) else [],
             },
             "upcoming_earnings": upcoming_earnings[:5] if isinstance(upcoming_earnings, list) else [],
-            "x_sentiment": x_trending,
-            "strongest_sector": strongest_sector,
-            "hottest_social": hottest_social,
         }
 
     async def analyze_portfolio(self, tickers: list) -> dict:
