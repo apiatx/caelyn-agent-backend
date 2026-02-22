@@ -555,6 +555,23 @@ class TradingAgent:
                         t["why_could_fail"] = "Reversal above resistance would invalidate short thesis"
                     if not t.get("risk"):
                         t["risk"] = t.get("why_could_fail", "")
+                # Build empty-state context if no trades found
+                empty_context = ""
+                if not top_trades and not bearish_setups:
+                    dh = market_data.get("data_health", {})
+                    reasons = []
+                    if dh.get("budget_exhausted"):
+                        reasons.append("Candle API budget was exhausted")
+                    if dh.get("empty_reason"):
+                        reasons.append(dh["empty_reason"])
+                    ss = scan_stats
+                    if isinstance(ss, dict):
+                        if ss.get("candles_blocked", 0) > ss.get("candles_ok", 0):
+                            reasons.append(f"Rate-limited: only {ss.get('candles_ok', 0)}/{ss.get('candle_targets', 0)} candles fetched")
+                        if ss.get("ta_qualified", 0) == 0 and ss.get("candles_ok", 0) > 0:
+                            reasons.append("No tickers had 2+ confirming bullish signals")
+                    empty_context = " | ".join(reasons) if reasons else "No qualifying setups in current market conditions"
+
                 structured = {
                     "display_type": "trades",
                     "market_pulse": {
@@ -567,15 +584,68 @@ class TradingAgent:
                     "scan_stats": scan_stats,
                     "notes": ["TA-first scan with deterministic trade plans", "Trade plan numbers are pre-computed from OHLCV data"],
                 }
-                result = {
-                    "type": "trades",
-                    "analysis": claude_text,
-                    "structured": structured,
-                }
+                if empty_context:
+                    structured["empty_reason"] = empty_context
 
         if category == "best_trades" and market_data and isinstance(market_data, dict):
             structured = result.get("structured")
             if isinstance(structured, dict):
+                # --- Backfill: if Claude returned "trades" but has empty/weak trade list ---
+                claude_trades = structured.get("top_trades", [])
+                backend_trades = market_data.get("top_trades", [])
+
+                # If Claude has fewer trades than backend, backfill from backend
+                if len(claude_trades) < len(backend_trades):
+                    claude_tickers = {t.get("ticker") for t in claude_trades if isinstance(t, dict)}
+                    for bt in backend_trades:
+                        if isinstance(bt, dict) and bt.get("ticker") not in claude_tickers:
+                            # Ensure required fields exist
+                            if not bt.get("thesis"):
+                                sigs = bt.get("indicator_signals", bt.get("signals_stacking", []))
+                                bt["thesis"] = bt.get("pattern", "Technical setup") + " — " + ", ".join(sigs[:3])
+                            if not bt.get("risk"):
+                                bt["risk"] = bt.get("why_could_fail", "Breakdown below stop level would invalidate setup")
+                            claude_trades.append(bt)
+                    structured["top_trades"] = claude_trades
+                    print(f"[BEST_TRADES] Backfilled: Claude had {len(claude_tickers)} trades, backend had {len(backend_trades)}, merged to {len(claude_trades)}")
+
+                # If Claude still has 0 trades, force backend trades in
+                if not structured.get("top_trades") and backend_trades:
+                    for bt in backend_trades:
+                        if isinstance(bt, dict):
+                            if not bt.get("thesis"):
+                                sigs = bt.get("indicator_signals", bt.get("signals_stacking", []))
+                                bt["thesis"] = bt.get("pattern", "Technical setup") + " — " + ", ".join(sigs[:3])
+                            if not bt.get("risk"):
+                                bt["risk"] = bt.get("why_could_fail", "Breakdown below stop level would invalidate setup")
+                    structured["top_trades"] = backend_trades
+                    print(f"[BEST_TRADES] Forced {len(backend_trades)} backend trades (Claude returned 0)")
+
+                # Same for bearish
+                if not structured.get("bearish_setups") and market_data.get("bearish_setups"):
+                    backend_bearish = market_data["bearish_setups"]
+                    for bt in backend_bearish:
+                        if isinstance(bt, dict):
+                            if not bt.get("thesis"):
+                                bt["thesis"] = "Bearish breakdown with multiple confirming signals"
+                            if not bt.get("risk"):
+                                bt["risk"] = bt.get("why_could_fail", "Reversal above resistance would invalidate short thesis")
+                    structured["bearish_setups"] = backend_bearish
+
+                # Backfill market_pulse if Claude dropped it
+                if not structured.get("market_pulse") and market_data.get("market_pulse"):
+                    macro = market_data["market_pulse"]
+                    structured["market_pulse"] = {
+                        "verdict": macro.get("regime", "Neutral") if isinstance(macro, dict) else "Neutral",
+                        "regime": macro.get("regime", "") if isinstance(macro, dict) else "",
+                        "summary": macro.get("summary", "Market scan complete") if isinstance(macro, dict) else "Market scan complete",
+                    }
+
+                # Backfill scan_stats if missing
+                if not structured.get("scan_stats") and market_data.get("scan_stats"):
+                    structured["scan_stats"] = market_data["scan_stats"]
+
+                # --- Existing field fixes (keep these) ---
                 for t in structured.get("top_trades", []):
                     if isinstance(t, dict):
                         if not t.get("risk"):
@@ -585,6 +655,8 @@ class TradingAgent:
                 for t in structured.get("bearish_setups", []):
                     if isinstance(t, dict) and not t.get("risk"):
                         t["risk"] = t.get("why_could_fail", "Reversal above resistance would invalidate short thesis")
+
+            # --- data_health injection (keep existing) ---
             data_health = market_data.get("data_health")
             if data_health:
                 structured = result.get("structured")
@@ -915,7 +987,7 @@ class TradingAgent:
     def _classify_query(self, prompt: str) -> dict:
         if self.openai_client:
             return self._classify_query_openai(prompt)
-        return self._classify_query_claude(prompt)
+        return self._keyword_classify(prompt)
 
     def _classify_query_openai(self, prompt: str) -> dict:
         try:
