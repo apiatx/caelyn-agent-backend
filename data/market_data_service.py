@@ -2351,29 +2351,29 @@ class MarketDataService:
                     print(f"[SECTOR] get_sector_rotation FMP snapshot failed: {e}")
                     fmp_sectors = {}
 
-        macro = self.fred.get_quick_macro()
-        fear_greed = await self.fear_greed.get_fear_greed_index()
+            macro = self.fred.get_quick_macro()
+            fear_greed = await self.fear_greed.get_fear_greed_index()
 
-        dxy = {}
-        commodities = {}
-        if self.fmp:
-            dxy_result, comm_result = await asyncio.gather(
-                self.fmp.get_dxy(),
-                self.fmp.get_key_commodities(),
-                return_exceptions=True,
-            )
-            dxy = dxy_result if not isinstance(dxy_result, Exception) else {}
-            commodities = comm_result if not isinstance(
-                comm_result, Exception) else {}
+            dxy = {}
+            commodities = {}
+            if self.fmp:
+                dxy_result, comm_result = await asyncio.gather(
+                    self.fmp.get_dxy(),
+                    self.fmp.get_key_commodities(),
+                    return_exceptions=True,
+                )
+                dxy = dxy_result if not isinstance(dxy_result, Exception) else {}
+                commodities = comm_result if not isinstance(
+                    comm_result, Exception) else {}
 
-        return {
-            "fmp_sector_data": fmp_sectors,
-            "macro_data": macro,
-            "fear_greed":
-            fear_greed if not isinstance(fear_greed, Exception) else {},
-            "dxy": dxy,
-            "commodities": commodities,
-        }
+            return {
+                "fmp_sector_data": fmp_sectors,
+                "macro_data": macro,
+                "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+                "dxy": dxy,
+                "commodities": commodities,
+            }
+
 
     def _is_weekend(self) -> bool:
         import datetime
