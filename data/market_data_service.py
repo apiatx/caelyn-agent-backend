@@ -22,12 +22,23 @@ from data.xai_sentiment_provider import XAISentimentProvider
 from data.cache import cache, MACRO_TTL, SECTOR_ETF_TTL, CANDLE_TTL, REGIME_CANDLE_TTL
 from api_budget import daily_budget
 
-
 DATA_SOURCES = {
-    "equity_price": {"primary": "finnhub", "secondary": "fmp"},
-    "fundamentals": {"primary": "fmp", "secondary": "finnhub"},
-    "crypto": {"primary": "coingecko", "secondary": "cmc"},
-    "macro": {"primary": "fred", "secondary": None},
+    "equity_price": {
+        "primary": "finnhub",
+        "secondary": "fmp"
+    },
+    "fundamentals": {
+        "primary": "fmp",
+        "secondary": "finnhub"
+    },
+    "crypto": {
+        "primary": "coingecko",
+        "secondary": "cmc"
+    },
+    "macro": {
+        "primary": "fred",
+        "secondary": None
+    },
 }
 
 MAX_TICKERS_DEEP_DIVE = 10
@@ -47,16 +58,56 @@ CALL_WEIGHTS = {
 }
 
 PRESET_BUDGETS = {
-    "macro_outlook": {"max_points": 25, "max_seconds": 8, "allow_deep_dive": False},
-    "morning_briefing": {"max_points": 30, "max_seconds": 8, "allow_deep_dive": False},
-    "social_momentum": {"max_points": 45, "max_seconds": 10, "allow_deep_dive": True},
-    "microcap_asymmetry": {"max_points": 60, "max_seconds": 12, "allow_deep_dive": True},
-    "asymmetric": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
-    "investments": {"max_points": 90, "max_seconds": 20, "allow_deep_dive": True},
-    "fundamentals_scan": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
-    "small_cap_spec": {"max_points": 55, "max_seconds": 12, "allow_deep_dive": True},
-    "squeeze": {"max_points": 50, "max_seconds": 10, "allow_deep_dive": True},
-    "custom_screen": {"max_points": 70, "max_seconds": 16, "allow_deep_dive": True},
+    "macro_outlook": {
+        "max_points": 25,
+        "max_seconds": 8,
+        "allow_deep_dive": False
+    },
+    "morning_briefing": {
+        "max_points": 30,
+        "max_seconds": 8,
+        "allow_deep_dive": False
+    },
+    "social_momentum": {
+        "max_points": 45,
+        "max_seconds": 10,
+        "allow_deep_dive": True
+    },
+    "microcap_asymmetry": {
+        "max_points": 60,
+        "max_seconds": 12,
+        "allow_deep_dive": True
+    },
+    "asymmetric": {
+        "max_points": 55,
+        "max_seconds": 12,
+        "allow_deep_dive": True
+    },
+    "investments": {
+        "max_points": 90,
+        "max_seconds": 20,
+        "allow_deep_dive": True
+    },
+    "fundamentals_scan": {
+        "max_points": 55,
+        "max_seconds": 12,
+        "allow_deep_dive": True
+    },
+    "small_cap_spec": {
+        "max_points": 55,
+        "max_seconds": 12,
+        "allow_deep_dive": True
+    },
+    "squeeze": {
+        "max_points": 50,
+        "max_seconds": 10,
+        "allow_deep_dive": True
+    },
+    "custom_screen": {
+        "max_points": 70,
+        "max_seconds": 16,
+        "allow_deep_dive": True
+    },
 }
 
 
@@ -65,7 +116,10 @@ class BudgetTracker:
     Uses cost weights per call type instead of flat counting.
     Tracks elapsed time and whether budget was exhausted for graceful degradation."""
 
-    def __init__(self, max_points: int = MAX_BUDGET_POINTS, max_seconds: float = MAX_DATA_GATHER_SECONDS, allow_deep_dive: bool = True):
+    def __init__(self,
+                 max_points: int = MAX_BUDGET_POINTS,
+                 max_seconds: float = MAX_DATA_GATHER_SECONDS,
+                 allow_deep_dive: bool = True):
         self._start = _time.time()
         self._points = 0
         self._max_points = max_points
@@ -120,6 +174,7 @@ class BudgetTracker:
 
 
 class CandleBudget:
+
     def __init__(self, max_calls: int = 5):
         self._max = max_calls
         self._used = 0
@@ -199,7 +254,10 @@ def get_last_candle_stats() -> dict:
     return {}
 
 
-async def fetch_with_fallback(category: str, fetch_primary, fetch_secondary=None, timeout: float = 3.0):
+async def fetch_with_fallback(category: str,
+                              fetch_primary,
+                              fetch_secondary=None,
+                              timeout: float = 3.0):
     """
     Tiered data source fetcher. Tries primary with timeout, falls back to secondary.
     Returns result dict or empty dict on total failure.
@@ -231,6 +289,7 @@ def _parse_num(val):
     except (ValueError, TypeError):
         return None
 
+
 def _parse_pct(val):
     if val is None:
         return None
@@ -239,6 +298,7 @@ def _parse_pct(val):
         return float(s)
     except (ValueError, TypeError):
         return None
+
 
 def _parse_vol(val):
     if val is None:
@@ -259,7 +319,9 @@ def _parse_vol(val):
 def _log_provider_stats(phase: str, stats: dict):
     for provider, s in stats.items():
         if s["attempted"] > 0:
-            print(f"[BEST_TRADES] [{phase}] {provider}: {s['attempted']} attempted, {s['success']} ok, {s['auth_fail']} auth_fail, {s['rate_limit']} rate_limit, {s['timeout']} timeout, {s['error']} error")
+            print(
+                f"[BEST_TRADES] [{phase}] {provider}: {s['attempted']} attempted, {s['success']} ok, {s['auth_fail']} auth_fail, {s['rate_limit']} rate_limit, {s['timeout']} timeout, {s['error']} error"
+            )
 
 
 class MarketDataService:
@@ -268,7 +330,14 @@ class MarketDataService:
     Your agent talks to THIS — never directly to Polygon or scrapers.
     """
 
-    def __init__(self, polygon_key: str, fmp_key: str = None, coingecko_key: str = None, cmc_key: str = None, altfins_key: str = None, xai_key: str = None, twelvedata_key: str = None):
+    def __init__(self,
+                 polygon_key: str,
+                 fmp_key: str = None,
+                 coingecko_key: str = None,
+                 cmc_key: str = None,
+                 altfins_key: str = None,
+                 xai_key: str = None,
+                 twelvedata_key: str = None):
         self.polygon = PolygonProvider(polygon_key)
         td_key = twelvedata_key or TWELVEDATA_API_KEY
         self.twelvedata = TwelveDataProvider(td_key) if td_key else None
@@ -288,7 +357,8 @@ class MarketDataService:
         print("[INIT] SEC EDGAR provider initialized (rate-limited, cached)")
         self.fear_greed = FearGreedProvider()
         self.fmp = FMPProvider(fmp_key) if fmp_key else None
-        self.coingecko = CoinGeckoProvider(coingecko_key) if coingecko_key else None
+        self.coingecko = CoinGeckoProvider(
+            coingecko_key) if coingecko_key else None
         from data.cmc_provider import CMCProvider
         self.cmc = CMCProvider(cmc_key) if cmc_key else None
         self.reddit = RedditSentimentProvider()
@@ -299,9 +369,15 @@ class MarketDataService:
         if self.xai:
             print("[INIT] xAI Grok X sentiment provider initialized")
         else:
-            print("[INIT] xAI Grok X sentiment provider SKIPPED (no XAI_API_KEY)")
+            print(
+                "[INIT] xAI Grok X sentiment provider SKIPPED (no XAI_API_KEY)"
+            )
 
-    async def get_candles(self, symbol: str, days: int = 120, budget: CandleBudget = None, ttl: int = None) -> list:
+    async def get_candles(self,
+                          symbol: str,
+                          days: int = 120,
+                          budget: CandleBudget = None,
+                          ttl: int = None) -> list:
         global _last_candle_budget
         symbol = symbol.upper()
         cache_key = f"candles:{symbol}:1d:{days}"
@@ -319,10 +395,12 @@ class MarketDataService:
             budget.record_blocked()
             return []
 
-        if self.twelvedata and not _is_twelvedata_disabled() and daily_budget.can_spend("twelvedata"):
+        if self.twelvedata and not _is_twelvedata_disabled(
+        ) and daily_budget.can_spend("twelvedata"):
             try:
                 td_bars = await asyncio.wait_for(
-                    asyncio.to_thread(self.twelvedata.get_daily_bars, symbol, days),
+                    asyncio.to_thread(self.twelvedata.get_daily_bars, symbol,
+                                      days),
                     timeout=12.0,
                 )
                 if isinstance(td_bars, dict) and td_bars.get("error"):
@@ -331,23 +409,29 @@ class MarketDataService:
                     elif td_bars["error"] == "rate_limited":
                         if budget:
                             budget.record_twelvedata_rate_limited()
-                        print(f"[CANDLES] TwelveData {symbol} rate limited, falling through to Finnhub/Polygon")
+                        print(
+                            f"[CANDLES] TwelveData {symbol} rate limited, falling through to Finnhub/Polygon"
+                        )
                 elif td_bars and len(td_bars) >= 20:
                     daily_budget.spend("twelvedata")
                     if budget:
                         budget.spend("twelvedata")
                     cache.set(cache_key, td_bars, use_ttl)
-                    print(f"[CANDLES] TwelveData {symbol} OK ({len(td_bars)} bars)")
+                    print(
+                        f"[CANDLES] TwelveData {symbol} OK ({len(td_bars)} bars)"
+                    )
                     return td_bars
             except asyncio.TimeoutError:
                 print(f"[CANDLES] TwelveData {symbol} timeout")
             except Exception as e:
                 print(f"[CANDLES] TwelveData {symbol} error: {e}")
 
-        if not _is_finnhub_candles_disabled() and daily_budget.can_spend("finnhub"):
+        if not _is_finnhub_candles_disabled() and daily_budget.can_spend(
+                "finnhub"):
             try:
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(self.finnhub.get_stock_candles, symbol, days),
+                    asyncio.to_thread(self.finnhub.get_stock_candles, symbol,
+                                      days),
                     timeout=10.0,
                 )
                 if result and len(result) >= 20:
@@ -374,9 +458,14 @@ class MarketDataService:
                 timeout=10.0,
             )
             if poly_bars and len(poly_bars) >= 20:
-                bars = [{"o": b.get("o"), "h": b.get("h"), "l": b.get("l"),
-                         "c": b.get("c"), "v": b.get("v", 0), "t": b.get("t")}
-                        for b in poly_bars]
+                bars = [{
+                    "o": b.get("o"),
+                    "h": b.get("h"),
+                    "l": b.get("l"),
+                    "c": b.get("c"),
+                    "v": b.get("v", 0),
+                    "t": b.get("t")
+                } for b in poly_bars]
                 cache.set(cache_key, bars, use_ttl)
                 return bars
         except asyncio.TimeoutError:
@@ -387,16 +476,40 @@ class MarketDataService:
         return []
 
     NEGATIVE_NEWS_KEYWORDS = [
-        "fraud", "lawsuit", "sued", "investigation", "sec probe",
-        "recall", "scandal", "exposed", "fake", "misleading",
-        "class action", "downgrade", "bankruptcy", "default",
-        "fda reject", "failed trial", "data breach", "ceo resign",
-        "accounting", "restatement", "delisted", "indictment",
-        "ponzi", "embezzlement", "whistleblower", "sec charges",
-        "criminal", "subpoena", "material weakness",
+        "fraud",
+        "lawsuit",
+        "sued",
+        "investigation",
+        "sec probe",
+        "recall",
+        "scandal",
+        "exposed",
+        "fake",
+        "misleading",
+        "class action",
+        "downgrade",
+        "bankruptcy",
+        "default",
+        "fda reject",
+        "failed trial",
+        "data breach",
+        "ceo resign",
+        "accounting",
+        "restatement",
+        "delisted",
+        "indictment",
+        "ponzi",
+        "embezzlement",
+        "whistleblower",
+        "sec charges",
+        "criminal",
+        "subpoena",
+        "material weakness",
     ]
 
-    async def get_market_news_context(self, tickers: list = None, modules: dict = None) -> dict:
+    async def get_market_news_context(self,
+                                      tickers: list = None,
+                                      modules: dict = None) -> dict:
         """
         Pull recent news, sentiment, Reddit, and economic calendar data
         BEFORE individual ticker analysis.
@@ -404,35 +517,46 @@ class MarketDataService:
         """
         news_data = {}
         modules = modules or {}
-        want_social = modules.get("social_sentiment", True)   # default True = safe for presets
-        want_macro  = modules.get("macro_context", True)
+        want_social = modules.get("social_sentiment",
+                                  True)  # default True = safe for presets
+        want_macro = modules.get("macro_context", True)
 
         tasks = []
         task_keys = []
 
-        tasks.append(asyncio.wait_for(
-            self.alphavantage.get_news_sentiment(topics="financial_markets"),
-            timeout=8.0
-        ))
+        tasks.append(
+            asyncio.wait_for(self.alphavantage.get_news_sentiment(
+                topics="financial_markets"),
+                             timeout=8.0))
         task_keys.append("market_news")
 
         if self.fmp:
-            tasks.append(asyncio.wait_for(self.fmp.get_market_news(limit=10), timeout=8.0))
+            tasks.append(
+                asyncio.wait_for(self.fmp.get_market_news(limit=10),
+                                 timeout=8.0))
             task_keys.append("fmp_news")
             if want_macro:
-                tasks.append(asyncio.wait_for(self.fmp.get_economic_calendar(days_ahead=3), timeout=6.0))
+                tasks.append(
+                    asyncio.wait_for(
+                        self.fmp.get_economic_calendar(days_ahead=3),
+                        timeout=6.0))
                 task_keys.append("economic_calendar")
 
         if want_social:
-            tasks.append(asyncio.wait_for(self.stocktwits.get_trending(), timeout=6.0))
+            tasks.append(
+                asyncio.wait_for(self.stocktwits.get_trending(), timeout=6.0))
             task_keys.append("stocktwits_trending")
 
         if want_macro:
-            tasks.append(asyncio.wait_for(self.fear_greed.get_fear_greed_index(), timeout=5.0))
+            tasks.append(
+                asyncio.wait_for(self.fear_greed.get_fear_greed_index(),
+                                 timeout=5.0))
             task_keys.append("fear_greed")
 
         if want_social:
-            tasks.append(asyncio.wait_for(self.reddit.get_full_reddit_dashboard(), timeout=8.0))
+            tasks.append(
+                asyncio.wait_for(self.reddit.get_full_reddit_dashboard(),
+                                 timeout=8.0))
             task_keys.append("reddit")
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -447,34 +571,40 @@ class MarketDataService:
             news_data["market_news"] = av_news["articles"]
         elif not isinstance(av_news, list):
             fmp_news = news_data.pop("fmp_news", [])
-            news_data["market_news"] = fmp_news if isinstance(fmp_news, list) else []
+            news_data["market_news"] = fmp_news if isinstance(fmp_news,
+                                                              list) else []
 
         reddit_data = news_data.get("reddit", {})
         if isinstance(reddit_data, dict):
             wsb = reddit_data.get("wsb_trending", [])
             all_reddit = reddit_data.get("all_stocks_trending", [])
             news_data["reddit_wsb_trending"] = wsb[:15] if wsb else []
-            news_data["reddit_all_trending"] = all_reddit[:15] if all_reddit else []
+            news_data[
+                "reddit_all_trending"] = all_reddit[:15] if all_reddit else []
 
         return news_data
 
-    async def enrich_with_sentiment_filter(self, ticker_list: list, screener_results: list = None) -> list:
+    async def enrich_with_sentiment_filter(self,
+                                           ticker_list: list,
+                                           screener_results: list = None
+                                           ) -> list:
         """
         Enrich tickers with sentiment data and FLAG/WARN on negative catalysts.
         Uses StockTwits sentiment in PARALLEL for speed.
         Returns list of dicts with sentiment_flag and warning fields.
         """
+
         async def check_one(ticker):
             ticker_data = {"ticker": ticker}
             if screener_results:
                 for item in screener_results:
-                    if isinstance(item, dict) and item.get("ticker", "").upper() == ticker.upper():
+                    if isinstance(item, dict) and item.get(
+                            "ticker", "").upper() == ticker.upper():
                         ticker_data.update(item)
                         break
             try:
                 sentiment = await asyncio.wait_for(
-                    self.stocktwits.get_sentiment(ticker), timeout=5.0
-                )
+                    self.stocktwits.get_sentiment(ticker), timeout=5.0)
                 if isinstance(sentiment, Exception):
                     sentiment = {}
             except Exception:
@@ -485,10 +615,12 @@ class MarketDataService:
                 bearish_pct = sentiment.get("bearish_pct", 0) or 0
                 if bearish_pct > 70:
                     ticker_data["sentiment_flag"] = "EXTREME_BEARISH"
-                    ticker_data["sentiment_warning"] = f"{bearish_pct}% bearish on StockTwits"
+                    ticker_data[
+                        "sentiment_warning"] = f"{bearish_pct}% bearish on StockTwits"
                 elif bearish_pct > 50:
                     ticker_data["sentiment_flag"] = "BEARISH"
-                    ticker_data["sentiment_warning"] = f"{bearish_pct}% bearish — sentiment headwind"
+                    ticker_data[
+                        "sentiment_warning"] = f"{bearish_pct}% bearish — sentiment headwind"
                 else:
                     ticker_data["sentiment_flag"] = "OK"
             else:
@@ -505,7 +637,11 @@ class MarketDataService:
         enriched = []
         for r in results:
             if isinstance(r, Exception):
-                enriched.append({"ticker": "?", "sentiment_flag": "NO_DATA", "news_flag": "NO_DATA"})
+                enriched.append({
+                    "ticker": "?",
+                    "sentiment_flag": "NO_DATA",
+                    "news_flag": "NO_DATA"
+                })
             else:
                 enriched.append(r)
 
@@ -528,7 +664,8 @@ class MarketDataService:
             )
             finnhub_profile = await fetch_with_fallback(
                 "company_profile",
-                lambda: asyncio.to_thread(self.finnhub.get_company_profile, ticker),
+                lambda: asyncio.to_thread(self.finnhub.get_company_profile,
+                                          ticker),
                 timeout=3.0,
             )
             daily_budget.spend("finnhub", 2)
@@ -564,10 +701,12 @@ class MarketDataService:
             "technicals": technicals,
             "news": self.polygon.get_news(ticker, limit=10),
             "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
-            "insider_transactions": self.finnhub.get_insider_transactions(ticker),
+            "insider_transactions":
+            self.finnhub.get_insider_transactions(ticker),
             "earnings_history": self.finnhub.get_earnings_surprises(ticker),
             "earnings_upcoming": self.finnhub.get_earnings_calendar(ticker),
-            "recommendation_trends": self.finnhub.get_recommendation_trends(ticker),
+            "recommendation_trends":
+            self.finnhub.get_recommendation_trends(ticker),
             "social_sentiment": self.finnhub.get_social_sentiment(ticker),
             "peer_companies": self.finnhub.get_company_peers(ticker),
         }
@@ -582,11 +721,17 @@ class MarketDataService:
             self.edgar.get_company_summary(ticker),
         ]
         async_keys = [
-            "sentiment", "fundamentals", "financials", "analyst_ratings",
-            "options_put_call", "news_sentiment_ai", "sec_filings",
+            "sentiment",
+            "fundamentals",
+            "financials",
+            "analyst_ratings",
+            "options_put_call",
+            "news_sentiment_ai",
+            "sec_filings",
         ]
 
-        async_results = await asyncio.gather(*async_tasks, return_exceptions=True)
+        async_results = await asyncio.gather(*async_tasks,
+                                             return_exceptions=True)
 
         for key, result in zip(async_keys, async_results):
             if isinstance(result, Exception):
@@ -603,13 +748,15 @@ class MarketDataService:
 
         if news_articles:
             news_text = " ".join(
-                (n.get("title", "") + " " + n.get("summary", "") + " " + n.get("text", "")).lower()
-                for n in news_articles
-            )
-            found_negatives = [kw for kw in self.NEGATIVE_NEWS_KEYWORDS if kw in news_text]
+                (n.get("title", "") + " " + n.get("summary", "") + " " +
+                 n.get("text", "")).lower() for n in news_articles)
+            found_negatives = [
+                kw for kw in self.NEGATIVE_NEWS_KEYWORDS if kw in news_text
+            ]
             if found_negatives:
                 sync_data["news_flag"] = "NEGATIVE_CATALYST"
-                sync_data["news_warning"] = f"Negative news detected: {', '.join(found_negatives)}"
+                sync_data[
+                    "news_warning"] = f"Negative news detected: {', '.join(found_negatives)}"
             else:
                 sync_data["news_flag"] = "OK"
 
@@ -618,7 +765,8 @@ class MarketDataService:
             bearish_pct = sentiment.get("bearish_pct", 0) or 0
             if bearish_pct > 70:
                 sync_data["sentiment_flag"] = "EXTREME_BEARISH"
-                sync_data["sentiment_warning"] = f"{bearish_pct}% bearish on StockTwits"
+                sync_data[
+                    "sentiment_warning"] = f"{bearish_pct}% bearish on StockTwits"
             elif bearish_pct > 50:
                 sync_data["sentiment_flag"] = "BEARISH"
             else:
@@ -654,19 +802,21 @@ class MarketDataService:
                 asyncio.to_thread(self.finnhub.get_upcoming_earnings),
                 self.fear_greed.get_fear_greed_index(),
                 return_exceptions=True,
-            )
-        )
+            ))
 
         if isinstance(trending, Exception): trending = []
         if isinstance(unusual_options, Exception): unusual_options = []
-        if isinstance(options_volume_leaders, Exception): options_volume_leaders = []
+        if isinstance(options_volume_leaders, Exception):
+            options_volume_leaders = []
         if isinstance(upcoming_earnings, Exception): upcoming_earnings = []
         if isinstance(fear_greed, Exception): fear_greed = {}
 
-        options_signals = self.options.interpret_flow(unusual_options) if unusual_options else {}
+        options_signals = self.options.interpret_flow(
+            unusual_options) if unusual_options else {}
         macro = self.fred.get_quick_macro()
 
-        screener_gainers = await self.finviz.get_screener_results("ta_topgainers")
+        screener_gainers = await self.finviz.get_screener_results(
+            "ta_topgainers")
 
         return {
             "movers": movers,
@@ -729,11 +879,14 @@ class MarketDataService:
                 self.fear_greed.get_fear_greed_index(),
                 return_exceptions=True,
             )
-            fmp_data = fmp_result if not isinstance(fmp_result, Exception) else {}
-            fear_greed = fg_result if not isinstance(fg_result, Exception) else {}
+            fmp_data = fmp_result if not isinstance(fmp_result,
+                                                    Exception) else {}
+            fear_greed = fg_result if not isinstance(fg_result,
+                                                     Exception) else {}
         else:
             fear_greed_result = await self.fear_greed.get_fear_greed_index()
-            fear_greed = fear_greed_result if not isinstance(fear_greed_result, Exception) else {}
+            fear_greed = fear_greed_result if not isinstance(
+                fear_greed_result, Exception) else {}
 
         macro_snapshot = await self._build_macro_snapshot()
 
@@ -764,10 +917,14 @@ class MarketDataService:
                 self.fmp.get_treasury_rates(),
                 return_exceptions=True,
             )
-            fmp_commodities = comm_result if not isinstance(comm_result, Exception) else {}
-            fmp_dxy = dxy_result if not isinstance(dxy_result, Exception) else {}
-            fmp_econ = econ_result if not isinstance(econ_result, Exception) else {}
-            fmp_treasuries = treasury_result if not isinstance(treasury_result, Exception) else {}
+            fmp_commodities = comm_result if not isinstance(
+                comm_result, Exception) else {}
+            fmp_dxy = dxy_result if not isinstance(dxy_result,
+                                                   Exception) else {}
+            fmp_econ = econ_result if not isinstance(econ_result,
+                                                     Exception) else {}
+            fmp_treasuries = treasury_result if not isinstance(
+                treasury_result, Exception) else {}
 
         fred_macro = self.fred.get_quick_macro()
 
@@ -776,7 +933,10 @@ class MarketDataService:
         commodity_sentiment = {}
         commodity_tickers_social = ["USO", "GLD", "URA", "XLE"]
         social_results = await asyncio.gather(
-            *[self.stocktwits.get_sentiment(t) for t in commodity_tickers_social],
+            *[
+                self.stocktwits.get_sentiment(t)
+                for t in commodity_tickers_social
+            ],
             return_exceptions=True,
         )
         for ticker, result in zip(commodity_tickers_social, social_results):
@@ -789,7 +949,8 @@ class MarketDataService:
             "economic_calendar": fmp_econ,
             "treasury_yields": fmp_treasuries,
             "fred_macro": fred_macro,
-            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+            "fear_greed":
+            fear_greed if not isinstance(fear_greed, Exception) else {},
             "commodity_news": [],
             "etf_technicals": {},
             "commodity_sentiment": commodity_sentiment,
@@ -807,16 +968,20 @@ class MarketDataService:
             "enrich_top": 12,
         },
         "investments": {
-            "filters": "sh_avgvol_o300,fa_salesqoq_o10,ta_sma50_pa,sh_price_o5",
-            "limit": 50,
-            "enrich_top": 15,
+            "filters":
+            "sh_avgvol_o300,fa_salesqoq_o10,ta_sma50_pa,sh_price_o5",
+            "limit":
+            50,
+            "enrich_top":
+            15,
             "fallback_filters": [
                 "sh_avgvol_o200,fa_salesqoq_o5,ta_sma200_pa,sh_price_o5",
                 "sh_avgvol_o200,fa_epsqoq_o10,ta_sma50_pa,sh_price_o3",
             ],
         },
         "fundamentals_scan": {
-            "filters": "sh_avgvol_o300,fa_salesqoq_o20,fa_opermargin_pos,sh_price_o5",
+            "filters":
+            "sh_avgvol_o300,fa_salesqoq_o20,fa_opermargin_pos,sh_price_o5",
             "limit": 40,
             "enrich_top": 12,
         },
@@ -846,13 +1011,16 @@ class MarketDataService:
             "enrich_top": 10,
         },
         "small_cap_spec": {
-            "filters": "sh_avgvol_o200,cap_microover,cap_smallunder,ta_sma50_pa,sh_price_o1",
+            "filters":
+            "sh_avgvol_o200,cap_microover,cap_smallunder,ta_sma50_pa,sh_price_o1",
             "limit": 40,
             "enrich_top": 10,
         },
     }
 
-    async def wide_scan_and_rank(self, category: str, filters: dict = None) -> dict:
+    async def wide_scan_and_rank(self,
+                                 category: str,
+                                 filters: dict = None) -> dict:
         """
         News-first scan pipeline:
         1. Finviz screen + market news context IN PARALLEL
@@ -866,17 +1034,20 @@ class MarketDataService:
         budget = BudgetTracker.for_preset(category)
         from data.scoring_engine import rank_candidates
 
-        cat_config = self.CATEGORY_FILTERS.get(category, self.CATEGORY_FILTERS["market_scan"])
+        cat_config = self.CATEGORY_FILTERS.get(
+            category, self.CATEGORY_FILTERS["market_scan"])
         finviz_filters = cat_config["filters"]
         limit = cat_config["limit"]
         enrich_top = cat_config["enrich_top"]
 
-        print(f"[Wide Scan] {category}: filters={finviz_filters}, limit={limit}, enrich_top={enrich_top}")
+        print(
+            f"[Wide Scan] {category}: filters={finviz_filters}, limit={limit}, enrich_top={enrich_top}"
+        )
 
         screener_task = self.finviz._custom_screen(
-            f"v=111&f={finviz_filters}&ft=4&o=-change"
-        )
-        news_task = self.get_market_news_context(modules=filters.get("_modules") if filters else None)
+            f"v=111&f={finviz_filters}&ft=4&o=-change")
+        news_task = self.get_market_news_context(
+            modules=filters.get("_modules") if filters else None)
 
         macro_task = None
         if category in ("investments", "fundamentals_scan"):
@@ -884,15 +1055,13 @@ class MarketDataService:
 
         if macro_task:
             screener_results, news_context, macro_snapshot = await asyncio.gather(
-                screener_task, news_task, macro_task, return_exceptions=True
-            )
+                screener_task, news_task, macro_task, return_exceptions=True)
             if isinstance(macro_snapshot, Exception):
                 print(f"[Wide Scan] Macro snapshot failed: {macro_snapshot}")
                 macro_snapshot = {}
         else:
             screener_results, news_context = await asyncio.gather(
-                screener_task, news_task, return_exceptions=True
-            )
+                screener_task, news_task, return_exceptions=True)
             macro_snapshot = {}
 
         if isinstance(screener_results, Exception):
@@ -901,18 +1070,28 @@ class MarketDataService:
 
         if len(screener_results) < 5 and cat_config.get("fallback_filters"):
             for fallback_filter in cat_config["fallback_filters"]:
-                print(f"[Wide Scan] Primary returned only {len(screener_results)} results, trying fallback: {fallback_filter}")
+                print(
+                    f"[Wide Scan] Primary returned only {len(screener_results)} results, trying fallback: {fallback_filter}"
+                )
                 try:
                     fallback_results = await self.finviz._custom_screen(
-                        f"v=111&f={fallback_filter}&ft=4&o=-change"
-                    )
+                        f"v=111&f={fallback_filter}&ft=4&o=-change")
                     if isinstance(fallback_results, list) and fallback_results:
-                        existing_tickers = {item.get("ticker", "").upper() for item in screener_results if isinstance(item, dict)}
+                        existing_tickers = {
+                            item.get("ticker", "").upper()
+                            for item in screener_results
+                            if isinstance(item, dict)
+                        }
                         for item in fallback_results:
-                            if isinstance(item, dict) and item.get("ticker", "").upper() not in existing_tickers:
+                            if isinstance(item, dict) and item.get(
+                                    "ticker",
+                                    "").upper() not in existing_tickers:
                                 screener_results.append(item)
-                                existing_tickers.add(item.get("ticker", "").upper())
-                        print(f"[Wide Scan] Fallback added results, total now {len(screener_results)}")
+                                existing_tickers.add(
+                                    item.get("ticker", "").upper())
+                        print(
+                            f"[Wide Scan] Fallback added results, total now {len(screener_results)}"
+                        )
                         if len(screener_results) >= 15:
                             break
                 except Exception as e:
@@ -921,7 +1100,9 @@ class MarketDataService:
         if isinstance(news_context, Exception):
             news_context = {}
 
-        print(f"[Wide Scan] News context: {len(news_context.get('market_news', []))} headlines, trending: {len(news_context.get('stocktwits_trending', []))} ({time.time()-scan_start:.1f}s)")
+        print(
+            f"[Wide Scan] News context: {len(news_context.get('market_news', []))} headlines, trending: {len(news_context.get('stocktwits_trending', []))} ({time.time()-scan_start:.1f}s)"
+        )
 
         all_tickers = set()
 
@@ -929,7 +1110,8 @@ class MarketDataService:
             for item in screener_results:
                 if isinstance(item, dict) and item.get("ticker"):
                     ticker = item["ticker"].upper().strip()
-                    if ".X" not in ticker and ".U" not in ticker and len(ticker) <= 5 and ticker.isalpha():
+                    if ".X" not in ticker and ".U" not in ticker and len(
+                            ticker) <= 5 and ticker.isalpha():
                         all_tickers.add(ticker)
 
         trending = news_context.get("stocktwits_trending", [])
@@ -937,17 +1119,24 @@ class MarketDataService:
             if isinstance(t, dict) and t.get("ticker"):
                 all_tickers.add(t["ticker"].upper().strip())
 
-        print(f"[Wide Scan] {category}: {len(all_tickers)} unique candidates found ({time.time()-scan_start:.1f}s)")
+        print(
+            f"[Wide Scan] {category}: {len(all_tickers)} unique candidates found ({time.time()-scan_start:.1f}s)"
+        )
 
         needs_fundamentals = category in [
-            "investments", "fundamentals_scan", "asymmetric", "squeeze",
+            "investments",
+            "fundamentals_scan",
+            "asymmetric",
+            "squeeze",
         ]
 
         async def light_enrich(ticker):
             try:
                 finviz_data = {}
-                for item in (screener_results if isinstance(screener_results, list) else []):
-                    if isinstance(item, dict) and item.get("ticker", "").upper() == ticker.upper():
+                for item in (screener_results if isinstance(
+                        screener_results, list) else []):
+                    if isinstance(item, dict) and item.get(
+                            "ticker", "").upper() == ticker.upper():
                         finviz_data = item
                         break
 
@@ -969,7 +1158,8 @@ class MarketDataService:
                 }
                 async_tasks = []
                 if needs_fundamentals:
-                    async_tasks.append(("overview", self.stockanalysis.get_overview(ticker)))
+                    async_tasks.append(
+                        ("overview", self.stockanalysis.get_overview(ticker)))
 
                 if async_tasks:
                     async_results = await asyncio.gather(
@@ -977,7 +1167,8 @@ class MarketDataService:
                         return_exceptions=True,
                     )
                     for (key, _), res in zip(async_tasks, async_results):
-                        result[key] = res if not isinstance(res, Exception) else {}
+                        result[key] = res if not isinstance(res,
+                                                            Exception) else {}
 
                 return result
             except Exception as e:
@@ -988,54 +1179,80 @@ class MarketDataService:
         enrichment_results = []
         for i, ticker in enumerate(ticker_list):
             if not budget.can_continue():
-                print(f"[Wide Scan] Budget exhausted during light enrichment at ticker {i}/{len(ticker_list)} ({budget.status()})")
+                print(
+                    f"[Wide Scan] Budget exhausted during light enrichment at ticker {i}/{len(ticker_list)} ({budget.status()})"
+                )
                 budget.mark_exhausted("light_enrichment")
                 break
             try:
-                result = await asyncio.wait_for(light_enrich(ticker), timeout=6.0)
+                result = await asyncio.wait_for(light_enrich(ticker),
+                                                timeout=6.0)
                 budget.tick("light_enrich")
             except asyncio.TimeoutError:
                 print(f"[Wide Scan] {ticker} light enrich timed out, skipping")
                 result = {"error": "timeout"}
             enrichment_results.append(result)
             if (i + 1) % 10 == 0 or i == len(ticker_list) - 1:
-                print(f"[Wide Scan] Light enriched {i + 1}/{len(ticker_list)} tickers ({time.time()-scan_start:.1f}s)")
+                print(
+                    f"[Wide Scan] Light enriched {i + 1}/{len(ticker_list)} tickers ({time.time()-scan_start:.1f}s)"
+                )
 
         candidates = {}
         for ticker, result in zip(ticker_list, enrichment_results):
             if isinstance(result, dict) and "error" not in result:
                 candidates[ticker] = result
 
-        print(f"[Wide Scan] {len(candidates)} candidates enriched successfully ({time.time()-scan_start:.1f}s)")
-
-        top_ranked = rank_candidates(candidates, category, top_n=enrich_top + 3)
-
-        print(f"[Wide Scan] Top scores: {[(t, s) for t, s, _ in top_ranked[:enrich_top]]}")
-
-        top_ticker_names = [ticker for ticker, score, _ in top_ranked[:min(enrich_top, 10)]]
-        top_scores = {ticker: score for ticker, score, _ in top_ranked[:min(enrich_top, 10)]}
-
-        print(f"[Wide Scan] Running sentiment + news filter on {len(top_ticker_names)} candidates ({time.time()-scan_start:.1f}s)")
-        sentiment_filtered = await self.enrich_with_sentiment_filter(
-            top_ticker_names, screener_results
+        print(
+            f"[Wide Scan] {len(candidates)} candidates enriched successfully ({time.time()-scan_start:.1f}s)"
         )
-        print(f"[Wide Scan] Sentiment filter complete ({time.time()-scan_start:.1f}s)")
+
+        top_ranked = rank_candidates(candidates,
+                                     category,
+                                     top_n=enrich_top + 3)
+
+        print(
+            f"[Wide Scan] Top scores: {[(t, s) for t, s, _ in top_ranked[:enrich_top]]}"
+        )
+
+        top_ticker_names = [
+            ticker for ticker, score, _ in top_ranked[:min(enrich_top, 10)]
+        ]
+        top_scores = {
+            ticker: score
+            for ticker, score, _ in top_ranked[:min(enrich_top, 10)]
+        }
+
+        print(
+            f"[Wide Scan] Running sentiment + news filter on {len(top_ticker_names)} candidates ({time.time()-scan_start:.1f}s)"
+        )
+        sentiment_filtered = await self.enrich_with_sentiment_filter(
+            top_ticker_names, screener_results)
+        print(
+            f"[Wide Scan] Sentiment filter complete ({time.time()-scan_start:.1f}s)"
+        )
 
         flagged = []
         clean = []
         for td in sentiment_filtered:
             t = td.get("ticker", "")
-            if td.get("sentiment_flag") == "EXTREME_BEARISH" or td.get("news_flag") == "NEGATIVE_CATALYST":
+            if td.get("sentiment_flag") == "EXTREME_BEARISH" or td.get(
+                    "news_flag") == "NEGATIVE_CATALYST":
                 flagged.append(td)
-                print(f"[Wide Scan] FLAGGED {t}: sentiment={td.get('sentiment_flag')} news={td.get('news_flag')} warn={td.get('sentiment_warning', td.get('news_warning', ''))}")
+                print(
+                    f"[Wide Scan] FLAGGED {t}: sentiment={td.get('sentiment_flag')} news={td.get('news_flag')} warn={td.get('sentiment_warning', td.get('news_warning', ''))}"
+                )
             else:
                 clean.append(td)
 
         if budget.allow_deep_dive:
-            deep_tickers = [td["ticker"] for td in clean[:min(8, MAX_TICKERS_DEEP_DIVE)]]
+            deep_tickers = [
+                td["ticker"] for td in clean[:min(8, MAX_TICKERS_DEEP_DIVE)]
+            ]
         else:
             deep_tickers = []
-            print(f"[Wide Scan] Deep dive skipped — budget preset disables deep enrichment for {category}")
+            print(
+                f"[Wide Scan] Deep dive skipped — budget preset disables deep enrichment for {category}"
+            )
 
         async def deep_enrich(ticker):
             try:
@@ -1043,18 +1260,26 @@ class MarketDataService:
                     await asyncio.gather(
                         self.stockanalysis.get_overview(ticker),
                         self.stockanalysis.get_analyst_ratings(ticker),
-                        asyncio.to_thread(lambda: self.finnhub.get_insider_sentiment(ticker)),
-                        asyncio.to_thread(lambda: self.finnhub.get_earnings_surprises(ticker)),
-                        asyncio.to_thread(lambda: self.finnhub.get_recommendation_trends(ticker)),
+                        asyncio.to_thread(lambda: self.finnhub.
+                                          get_insider_sentiment(ticker)),
+                        asyncio.to_thread(lambda: self.finnhub.
+                                          get_earnings_surprises(ticker)),
+                        asyncio.to_thread(lambda: self.finnhub.
+                                          get_recommendation_trends(ticker)),
                         return_exceptions=True,
-                    )
-                )
+                    ))
                 return {
-                    "overview": overview if not isinstance(overview, Exception) else {},
-                    "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
-                    "insider_sentiment": insider if not isinstance(insider, Exception) else {},
-                    "earnings_history": earnings if not isinstance(earnings, Exception) else [],
-                    "recommendations": recommendations if not isinstance(recommendations, Exception) else [],
+                    "overview":
+                    overview if not isinstance(overview, Exception) else {},
+                    "analyst_ratings":
+                    analyst if not isinstance(analyst, Exception) else {},
+                    "insider_sentiment":
+                    insider if not isinstance(insider, Exception) else {},
+                    "earnings_history":
+                    earnings if not isinstance(earnings, Exception) else [],
+                    "recommendations":
+                    recommendations
+                    if not isinstance(recommendations, Exception) else [],
                 }
             except Exception as e:
                 return {"error": str(e)}
@@ -1062,11 +1287,14 @@ class MarketDataService:
         deep_results = []
         for i, ticker in enumerate(deep_tickers):
             if not budget.can_continue():
-                print(f"[Wide Scan] Budget exhausted during deep enrichment at ticker {i}/{len(deep_tickers)} ({budget.status()})")
+                print(
+                    f"[Wide Scan] Budget exhausted during deep enrichment at ticker {i}/{len(deep_tickers)} ({budget.status()})"
+                )
                 budget.mark_exhausted("deep_enrichment")
                 break
             try:
-                result = await asyncio.wait_for(deep_enrich(ticker), timeout=8.0)
+                result = await asyncio.wait_for(deep_enrich(ticker),
+                                                timeout=8.0)
                 budget.tick("deep_enrich")
             except Exception as e:
                 result = {"error": str(e)}
@@ -1080,7 +1308,9 @@ class MarketDataService:
                     self.xai.get_batch_sentiment(deep_tickers[:10]),
                     timeout=30.0,
                 )
-                print(f"[SCAN] xAI enriched {len(x_batch)} tickers with X sentiment")
+                print(
+                    f"[SCAN] xAI enriched {len(x_batch)} tickers with X sentiment"
+                )
             except Exception as e:
                 print(f"[SCAN] xAI batch sentiment failed: {e}")
                 x_batch = {}
@@ -1097,13 +1327,15 @@ class MarketDataService:
                 base_data["sentiment"] = sent_data["social_sentiment"]
             if sent_data.get("recent_news"):
                 base_data["recent_news"] = sent_data["recent_news"]
-            base_data["sentiment_flag"] = sent_data.get("sentiment_flag", "NO_DATA")
+            base_data["sentiment_flag"] = sent_data.get(
+                "sentiment_flag", "NO_DATA")
             base_data["news_flag"] = sent_data.get("news_flag", "NO_DATA")
             if sent_data.get("sentiment_warning"):
                 base_data["sentiment_warning"] = sent_data["sentiment_warning"]
             if sent_data.get("news_warning"):
                 base_data["news_warning"] = sent_data["news_warning"]
-            if not isinstance(deep_data, Exception) and isinstance(deep_data, dict) and "error" not in deep_data:
+            if not isinstance(deep_data, Exception) and isinstance(
+                    deep_data, dict) and "error" not in deep_data:
                 base_data.update(deep_data)
 
                 overview = deep_data.get("overview", {})
@@ -1140,14 +1372,20 @@ class MarketDataService:
                         "targetPrice": "analyst_target",
                     }
                     for source_key, target_key in field_mapping.items():
-                        if source_key in overview and overview[source_key] is not None:
-                            if target_key not in base_data or base_data[target_key] is None:
+                        if source_key in overview and overview[
+                                source_key] is not None:
+                            if target_key not in base_data or base_data[
+                                    target_key] is None:
                                 base_data[target_key] = overview[source_key]
 
-                    for key in ["market_cap", "sector", "industry", "pe_ratio", "ps_ratio",
-                                "revenue_growth", "eps_growth", "profit_margin", "beta",
-                                "52_week_high", "52_week_low", "avg_volume", "shares_outstanding",
-                                "dividend_yield", "analyst_rating", "price_target", "analyst_count"]:
+                    for key in [
+                            "market_cap", "sector", "industry", "pe_ratio",
+                            "ps_ratio", "revenue_growth", "eps_growth",
+                            "profit_margin", "beta", "52_week_high",
+                            "52_week_low", "avg_volume", "shares_outstanding",
+                            "dividend_yield", "analyst_rating", "price_target",
+                            "analyst_count"
+                    ]:
                         if key in overview and overview[key] is not None:
                             if key not in base_data or base_data[key] is None:
                                 base_data[key] = overview[key]
@@ -1173,13 +1411,20 @@ class MarketDataService:
             base_data["quant_score"] = top_scores.get(ticker, 0)
             enriched_candidates[f"FLAGGED_{ticker}"] = base_data
 
-        print(f"[Wide Scan] Complete: {len(enriched_candidates)} candidates ({len(flagged)} flagged) ({time.time()-scan_start:.1f}s) Budget: {budget.status()}")
+        print(
+            f"[Wide Scan] Complete: {len(enriched_candidates)} candidates ({len(flagged)} flagged) ({time.time()-scan_start:.1f}s) Budget: {budget.status()}"
+        )
 
-        if category in ("investments", "fundamentals_scan", "asymmetric", "custom_screen"):
-            print(f"[Wide Scan] Starting quote+TA phase for {category} (main budget: {budget.status()})")
+        if category in ("investments", "fundamentals_scan", "asymmetric",
+                        "custom_screen"):
+            print(
+                f"[Wide Scan] Starting quote+TA phase for {category} (main budget: {budget.status()})"
+            )
 
             quote_tickers = list(enriched_candidates.keys())[:12]
-            quote_tickers_clean = [t.replace("FLAGGED_", "") for t in quote_tickers]
+            quote_tickers_clean = [
+                t.replace("FLAGGED_", "") for t in quote_tickers
+            ]
 
             if quote_tickers_clean:
                 try:
@@ -1193,18 +1438,27 @@ class MarketDataService:
                         if clean_ticker in batch_quotes and ticker in enriched_candidates:
                             q = batch_quotes[clean_ticker]
                             if isinstance(q, dict) and "error" not in q:
-                                if not enriched_candidates[ticker].get("snapshot"):
-                                    enriched_candidates[ticker]["snapshot"] = {}
+                                if not enriched_candidates[ticker].get(
+                                        "snapshot"):
+                                    enriched_candidates[ticker][
+                                        "snapshot"] = {}
                                 if q.get("price"):
-                                    enriched_candidates[ticker]["snapshot"]["price"] = q["price"]
-                                    enriched_candidates[ticker]["snapshot"]["change_pct"] = q.get("change_pct")
+                                    enriched_candidates[ticker]["snapshot"][
+                                        "price"] = q["price"]
+                                    enriched_candidates[ticker]["snapshot"][
+                                        "change_pct"] = q.get("change_pct")
                                     filled += 1
-                    print(f"[Wide Scan] Quote backfill: {filled}/{len(quote_tickers_clean)} prices filled")
+                    print(
+                        f"[Wide Scan] Quote backfill: {filled}/{len(quote_tickers_clean)} prices filled"
+                    )
                 except Exception as e:
                     print(f"[Wide Scan] Quote backfill failed: {e}")
 
             candle_budget_inv = CandleBudget(max_calls=8)
-            candle_tickers = [t for t in list(enriched_candidates.keys())[:8] if not t.startswith("FLAGGED_")]
+            candle_tickers = [
+                t for t in list(enriched_candidates.keys())[:8]
+                if not t.startswith("FLAGGED_")
+            ]
 
             if candle_tickers:
                 from data.ta_utils import compute_technicals_from_bars
@@ -1212,7 +1466,9 @@ class MarketDataService:
 
                 async def _fetch_inv_candle(t):
                     async with candle_semaphore:
-                        bars = await self.get_candles(t, days=120, budget=candle_budget_inv)
+                        bars = await self.get_candles(t,
+                                                      days=120,
+                                                      budget=candle_budget_inv)
                         return t, bars
 
                 candle_results = await asyncio.gather(
@@ -1225,37 +1481,51 @@ class MarketDataService:
                     if isinstance(result, Exception):
                         continue
                     ticker, bars = result
-                    if bars and len(bars) >= 20 and ticker in enriched_candidates:
+                    if bars and len(
+                            bars) >= 20 and ticker in enriched_candidates:
                         ta_data = compute_technicals_from_bars(bars)
                         if ta_data and isinstance(ta_data, dict):
-                            if not enriched_candidates[ticker].get("technicals"):
+                            if not enriched_candidates[ticker].get(
+                                    "technicals"):
                                 enriched_candidates[ticker]["technicals"] = {}
-                            enriched_candidates[ticker]["technicals"].update(ta_data)
+                            enriched_candidates[ticker]["technicals"].update(
+                                ta_data)
                             last_close = bars[-1].get("c")
-                            if last_close and not enriched_candidates[ticker].get("snapshot", {}).get("price"):
-                                enriched_candidates[ticker].setdefault("snapshot", {})["price"] = last_close
+                            if last_close and not enriched_candidates[
+                                    ticker].get("snapshot", {}).get("price"):
+                                enriched_candidates[ticker].setdefault(
+                                    "snapshot", {})["price"] = last_close
                             ta_filled += 1
 
-                print(f"[Wide Scan] TA enrichment: {ta_filled}/{len(candle_tickers)} candles OK ({candle_budget_inv.summary()})")
+                print(
+                    f"[Wide Scan] TA enrichment: {ta_filled}/{len(candle_tickers)} candles OK ({candle_budget_inv.summary()})"
+                )
 
         scan_result = {
-            "news_context": news_context,
-            "total_candidates_scanned": len(all_tickers),
-            "candidates_scored": len(candidates),
-            "flagged_tickers": [
-                {
-                    "ticker": td["ticker"],
-                    "sentiment_flag": td.get("sentiment_flag"),
-                    "news_flag": td.get("news_flag"),
-                    "warning": td.get("sentiment_warning", td.get("news_warning", "")),
-                }
-                for td in flagged
-            ],
-            "top_ranked": [
-                {"ticker": t, "score": s} for t, s, _ in top_ranked[:enrich_top]
-            ],
-            "enriched_data": enriched_candidates,
-            "trending": trending[:10] if trending else [],
+            "news_context":
+            news_context,
+            "total_candidates_scanned":
+            len(all_tickers),
+            "candidates_scored":
+            len(candidates),
+            "flagged_tickers": [{
+                "ticker":
+                td["ticker"],
+                "sentiment_flag":
+                td.get("sentiment_flag"),
+                "news_flag":
+                td.get("news_flag"),
+                "warning":
+                td.get("sentiment_warning", td.get("news_warning", "")),
+            } for td in flagged],
+            "top_ranked": [{
+                "ticker": t,
+                "score": s
+            } for t, s, _ in top_ranked[:enrich_top]],
+            "enriched_data":
+            enriched_candidates,
+            "trending":
+            trending[:10] if trending else [],
         }
         if macro_snapshot:
             scan_result["macro_snapshot"] = macro_snapshot
@@ -1309,7 +1579,8 @@ class MarketDataService:
         if isinstance(new_highs, Exception): new_highs = []
 
         unusual_options = await self.options.get_unusual_options_activity()
-        options_signals = self.options.interpret_flow(unusual_options) if unusual_options else {}
+        options_signals = self.options.interpret_flow(
+            unusual_options) if unusual_options else {}
 
         trending = await self.stocktwits.get_trending()
 
@@ -1327,7 +1598,8 @@ class MarketDataService:
         Scan for the best technical analysis setups across stocks.
         Looks for Stage 2 breakouts, volume surges, and momentum.
         """
-        screener_gainers = await self.finviz.get_screener_results("ta_topgainers")
+        screener_gainers = await self.finviz.get_screener_results(
+            "ta_topgainers")
 
         unusual_options, options_volume_leaders = await asyncio.gather(
             self.options.get_unusual_options_activity(),
@@ -1335,9 +1607,11 @@ class MarketDataService:
             return_exceptions=True,
         )
         if isinstance(unusual_options, Exception): unusual_options = []
-        if isinstance(options_volume_leaders, Exception): options_volume_leaders = []
+        if isinstance(options_volume_leaders, Exception):
+            options_volume_leaders = []
 
-        options_signals = self.options.interpret_flow(unusual_options) if unusual_options else {}
+        options_signals = self.options.interpret_flow(
+            unusual_options) if unusual_options else {}
 
         unusual_vol, new_highs, most_active = await asyncio.gather(
             self.finviz.get_unusual_volume(),
@@ -1392,46 +1666,63 @@ class MarketDataService:
                 timeout=10.0,
             )
 
-        all_tasks = [new_highs_task, unusual_vol_task, gainers_task, breakout_task, volume_task,
-                     most_active_task, oversold_task, volatile_task]
+        all_tasks = [
+            new_highs_task, unusual_vol_task, gainers_task, breakout_task,
+            volume_task, most_active_task, oversold_task, volatile_task
+        ]
         if mood_task:
             all_tasks.append(mood_task)
 
         results = await asyncio.gather(*all_tasks, return_exceptions=True)
 
         new_highs = results[0] if not isinstance(results[0], Exception) else []
-        unusual_vol = results[1] if not isinstance(results[1], Exception) else []
+        unusual_vol = results[1] if not isinstance(results[1],
+                                                   Exception) else []
         gainers = results[2] if not isinstance(results[2], Exception) else []
         breakout = results[3] if not isinstance(results[3], Exception) else []
-        vol_screen = results[4] if not isinstance(results[4], Exception) else []
-        most_active = results[5] if not isinstance(results[5], Exception) else []
+        vol_screen = results[4] if not isinstance(results[4],
+                                                  Exception) else []
+        most_active = results[5] if not isinstance(results[5],
+                                                   Exception) else []
         oversold = results[6] if not isinstance(results[6], Exception) else []
         volatile = results[7] if not isinstance(results[7], Exception) else []
 
         market_mood = None
         if mood_task and len(results) > 8:
             mood_result = results[8]
-            if not isinstance(mood_result, Exception) and isinstance(mood_result, dict):
+            if not isinstance(mood_result, Exception) and isinstance(
+                    mood_result, dict):
                 market_mood = mood_result
-                print(f"[BEST_TRADES] Grok market mood: {mood_result.get('mood', '?')} (score={mood_result.get('mood_score', '?')})")
+                print(
+                    f"[BEST_TRADES] Grok market mood: {mood_result.get('mood', '?')} (score={mood_result.get('mood_score', '?')})"
+                )
             else:
-                print(f"[BEST_TRADES] Grok mood unavailable: {mood_result if isinstance(mood_result, Exception) else 'empty'}")
+                print(
+                    f"[BEST_TRADES] Grok mood unavailable: {mood_result if isinstance(mood_result, Exception) else 'empty'}"
+                )
 
         ticker_sources = {}
-        for src_name, src_list in [("new_high", new_highs), ("unusual_vol", unusual_vol),
-                                     ("gainer", gainers), ("breakout", breakout), ("vol_screen", vol_screen),
-                                     ("most_active", most_active), ("oversold", oversold), ("volatile", volatile)]:
+        for src_name, src_list in [("new_high", new_highs),
+                                   ("unusual_vol", unusual_vol),
+                                   ("gainer", gainers), ("breakout", breakout),
+                                   ("vol_screen", vol_screen),
+                                   ("most_active", most_active),
+                                   ("oversold", oversold),
+                                   ("volatile", volatile)]:
             if not isinstance(src_list, list):
                 continue
             for item in src_list:
                 if isinstance(item, dict) and item.get("ticker"):
                     t = item["ticker"].upper().strip()
-                    if ".X" not in t and ".U" not in t and len(t) <= 5 and t.isalpha():
+                    if ".X" not in t and ".U" not in t and len(
+                            t) <= 5 and t.isalpha():
                         if t not in ticker_sources:
                             ticker_sources[t] = {"sources": [], "finviz": item}
                         ticker_sources[t]["sources"].append(src_name)
 
-        print(f"[BEST_TRADES] Phase 1: {len(ticker_sources)} unique candidates from {len(new_highs)} highs, {len(unusual_vol)} vol, {len(gainers)} gainers, {len(breakout)} breakout, {len(vol_screen)} vol_screen, {len(most_active)} active, {len(oversold)} oversold, {len(volatile)} volatile")
+        print(
+            f"[BEST_TRADES] Phase 1: {len(ticker_sources)} unique candidates from {len(new_highs)} highs, {len(unusual_vol)} vol, {len(gainers)} gainers, {len(breakout)} breakout, {len(vol_screen)} vol_screen, {len(most_active)} active, {len(oversold)} oversold, {len(volatile)} volatile"
+        )
 
         def _pre_rank_score(ticker: str) -> float:
             info = ticker_sources.get(ticker, {})
@@ -1453,7 +1744,9 @@ class MarketDataService:
             if "oversold" in src:
                 score += 8
             try:
-                chg = float(str(finviz.get("change", "0")).replace("%", "").replace("+", ""))
+                chg = float(
+                    str(finviz.get("change",
+                                   "0")).replace("%", "").replace("+", ""))
                 if chg > 5:
                     score += 8
                 elif chg > 2:
@@ -1472,15 +1765,28 @@ class MarketDataService:
             return score
 
         SHORTLIST_SIZE = 40
-        all_ranked = sorted(ticker_sources.keys(), key=_pre_rank_score, reverse=True)
+        all_ranked = sorted(ticker_sources.keys(),
+                            key=_pre_rank_score,
+                            reverse=True)
 
-        bucket_volume = [t for t in all_ranked if "unusual_vol" in ticker_sources[t]["sources"] or "vol_screen" in ticker_sources[t]["sources"]][:10]
-        bucket_breakout = [t for t in all_ranked if "breakout" in ticker_sources[t]["sources"] or "new_high" in ticker_sources[t]["sources"]][:10]
-        bucket_gainer = [t for t in all_ranked if "gainer" in ticker_sources[t]["sources"]][:10]
+        bucket_volume = [
+            t for t in all_ranked
+            if "unusual_vol" in ticker_sources[t]["sources"]
+            or "vol_screen" in ticker_sources[t]["sources"]
+        ][:10]
+        bucket_breakout = [
+            t for t in all_ranked if "breakout" in ticker_sources[t]["sources"]
+            or "new_high" in ticker_sources[t]["sources"]
+        ][:10]
+        bucket_gainer = [
+            t for t in all_ranked if "gainer" in ticker_sources[t]["sources"]
+        ][:10]
         bucket_score = all_ranked[:10]
 
         shortlist_set = set()
-        for bucket in [bucket_volume, bucket_breakout, bucket_gainer, bucket_score]:
+        for bucket in [
+                bucket_volume, bucket_breakout, bucket_gainer, bucket_score
+        ]:
             shortlist_set.update(bucket)
 
         if len(shortlist_set) < SHORTLIST_SIZE:
@@ -1492,7 +1798,9 @@ class MarketDataService:
 
         shortlist = sorted(shortlist_set, key=_pre_rank_score, reverse=True)
         candle_targets = shortlist[:20]
-        print(f"[BEST_TRADES] Phase 1: Shortlisted {len(shortlist)} (buckets: vol={len(bucket_volume)} brk={len(bucket_breakout)} gain={len(bucket_gainer)} score={len(bucket_score)}), fetching candles for top {len(candle_targets)}")
+        print(
+            f"[BEST_TRADES] Phase 1: Shortlisted {len(shortlist)} (buckets: vol={len(bucket_volume)} brk={len(bucket_breakout)} gain={len(bucket_gainer)} score={len(bucket_score)}), fetching candles for top {len(candle_targets)}"
+        )
 
         import random as _random
         ohlc_results = {}
@@ -1506,7 +1814,9 @@ class MarketDataService:
                 if _td_fetch_count >= 6 and not _is_twelvedata_disabled():
                     await asyncio.sleep(_random.uniform(0.15, 0.25))
                 _td_fetch_count += 1
-                bars = await self.get_candles(ticker, days=120, budget=candle_budget)
+                bars = await self.get_candles(ticker,
+                                              days=120,
+                                              budget=candle_budget)
                 if bars and len(bars) >= 20:
                     ohlc_results[ticker] = bars
                 else:
@@ -1515,16 +1825,25 @@ class MarketDataService:
         fetch_tasks = [_fetch_ohlc_for_ticker(t) for t in candle_targets]
         await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
-        print(f"[BEST_TRADES] Phase 2: OHLCV {len(ohlc_results)}/{len(candle_targets)} fetched, {len(no_ta_tickers)} missing | {candle_budget.summary()}")
+        print(
+            f"[BEST_TRADES] Phase 2: OHLCV {len(ohlc_results)}/{len(candle_targets)} fetched, {len(no_ta_tickers)} missing | {candle_budget.summary()}"
+        )
 
         if len(ohlc_results) < 8 and candle_budget.can_spend():
             already_fetched = set(ohlc_results.keys()) | set(no_ta_tickers)
-            retry_targets = [t for t in shortlist if t not in already_fetched][:10]
+            retry_targets = [t for t in shortlist
+                             if t not in already_fetched][:10]
             if retry_targets:
-                print(f"[BEST_TRADES] Phase 2b: Broadening — fetching {len(retry_targets)} additional candles")
-                retry_tasks = [_fetch_ohlc_for_ticker(t) for t in retry_targets]
+                print(
+                    f"[BEST_TRADES] Phase 2b: Broadening — fetching {len(retry_targets)} additional candles"
+                )
+                retry_tasks = [
+                    _fetch_ohlc_for_ticker(t) for t in retry_targets
+                ]
                 await asyncio.gather(*retry_tasks, return_exceptions=True)
-                print(f"[BEST_TRADES] Phase 2b: After retry OHLCV {len(ohlc_results)} total | {candle_budget.summary()}")
+                print(
+                    f"[BEST_TRADES] Phase 2b: After retry OHLCV {len(ohlc_results)} total | {candle_budget.summary()}"
+                )
 
         all_candidates = []
         for ticker, bars in ohlc_results.items():
@@ -1537,24 +1856,38 @@ class MarketDataService:
                     source_list=source_info.get("sources", []),
                 )
                 if candidate:
-                    bull_signals = [s for s in candidate.get("ta_signals", []) if s["direction"] == "bullish"]
+                    bull_signals = [
+                        s for s in candidate.get("ta_signals", [])
+                        if s["direction"] == "bullish"
+                    ]
                     if len(bull_signals) >= 2 or candidate.get("is_bearish"):
                         all_candidates.append(candidate)
                     else:
-                        print(f"[BEST_TRADES] {ticker}: filtered (only {len(bull_signals)} bullish signals)")
+                        print(
+                            f"[BEST_TRADES] {ticker}: filtered (only {len(bull_signals)} bullish signals)"
+                        )
             except Exception as e:
                 print(f"[BEST_TRADES] Analysis error for {ticker}: {e}")
 
-        bullish = sorted([c for c in all_candidates if not c.get("is_bearish")],
-                         key=lambda x: (x["technical_score"], x["confidence_score"]), reverse=True)
-        bearish_list = sorted([c for c in all_candidates if c.get("is_bearish") and c["technical_score"] >= 70],
-                              key=lambda x: x["confidence_score"], reverse=True)[:2]
+        bullish = sorted(
+            [c for c in all_candidates if not c.get("is_bearish")],
+            key=lambda x: (x["technical_score"], x["confidence_score"]),
+            reverse=True)
+        bearish_list = sorted([
+            c for c in all_candidates
+            if c.get("is_bearish") and c["technical_score"] >= 70
+        ],
+                              key=lambda x: x["confidence_score"],
+                              reverse=True)[:2]
 
         top_trades = bullish[:10]
 
         if top_trades:
-            enrich_tasks = [self._enrich_trade_candidate(c) for c in top_trades]
-            enriched = await asyncio.gather(*enrich_tasks, return_exceptions=True)
+            enrich_tasks = [
+                self._enrich_trade_candidate(c) for c in top_trades
+            ]
+            enriched = await asyncio.gather(*enrich_tasks,
+                                            return_exceptions=True)
             for i, result in enumerate(enriched):
                 if isinstance(result, dict):
                     top_trades[i] = result
@@ -1579,10 +1912,14 @@ class MarketDataService:
         ta_qualified = len(all_candidates)
         top5_debug = []
         for c in (top_trades + bearish_list)[:5]:
-            top5_debug.append(f"{c['ticker']}(ta={c['technical_score']},sigs={','.join(c['signals_stacking'][:3])})")
+            top5_debug.append(
+                f"{c['ticker']}(ta={c['technical_score']},sigs={','.join(c['signals_stacking'][:3])})"
+            )
 
         top_tickers = [c["ticker"] for c in (top_trades + bearish_list)[:10]]
-        print(f"[BEST_TRADES] candidates={len(ticker_sources)} shortlist={len(shortlist)} candles_ok={len(ohlc_results)} blocked={candle_budget._blocked} cache_hits={candle_budget._cache_hits} top={top_tickers}")
+        print(
+            f"[BEST_TRADES] candidates={len(ticker_sources)} shortlist={len(shortlist)} candles_ok={len(ohlc_results)} blocked={candle_budget._blocked} cache_hits={candle_budget._cache_hits} top={top_tickers}"
+        )
 
         for c in top_trades + bearish_list:
             c.pop("is_bearish", None)
@@ -1595,12 +1932,20 @@ class MarketDataService:
         budget_exhausted = not candle_budget.can_spend()
 
         data_health = {
-            "candles_source": "twelvedata" if candle_budget._twelvedata_used > 0 else ("polygon" if candle_budget._polygon_used > 0 else ("cache" if candle_budget._cache_hits > 0 else "none")),
-            "finnhub_circuit_breaker": finnhub_disabled,
-            "twelvedata_circuit_breaker": _is_twelvedata_disabled(),
-            "budget_exhausted": budget_exhausted,
-            "candle_stats": candle_budget.summary(),
-            "api_usage": candle_budget.stats_dict(),
+            "candles_source":
+            "twelvedata" if candle_budget._twelvedata_used > 0 else
+            ("polygon" if candle_budget._polygon_used > 0 else
+             ("cache" if candle_budget._cache_hits > 0 else "none")),
+            "finnhub_circuit_breaker":
+            finnhub_disabled,
+            "twelvedata_circuit_breaker":
+            _is_twelvedata_disabled(),
+            "budget_exhausted":
+            budget_exhausted,
+            "candle_stats":
+            candle_budget.summary(),
+            "api_usage":
+            candle_budget.stats_dict(),
         }
 
         if len(top_trades) == 0 and len(bearish_list) == 0:
@@ -1608,10 +1953,14 @@ class MarketDataService:
             if budget_exhausted:
                 reasons.append("Candle budget exhausted")
             if len(no_ta_tickers) > 0:
-                reasons.append(f"OHLCV unavailable for {len(no_ta_tickers)} tickers")
-            data_health["empty_reason"] = "; ".join(reasons) if reasons else "No qualifying setups found"
+                reasons.append(
+                    f"OHLCV unavailable for {len(no_ta_tickers)} tickers")
+            data_health["empty_reason"] = "; ".join(
+                reasons) if reasons else "No qualifying setups found"
 
-        print(f"[BEST_TRADES] Done: candidates={len(all_candidates)} selected={len(top_trades)} bearish={len(bearish_list)} no_ta={len(no_ta_tickers)} ({elapsed:.1f}s)")
+        print(
+            f"[BEST_TRADES] Done: candidates={len(all_candidates)} selected={len(top_trades)} bearish={len(bearish_list)} no_ta={len(no_ta_tickers)} ({elapsed:.1f}s)"
+        )
 
         return {
             "scan_type": "best_trades",
@@ -1638,8 +1987,7 @@ class MarketDataService:
         ticker = candidate.get("ticker", "")
         try:
             overview = await asyncio.wait_for(
-                self.stockanalysis.get_overview(ticker), timeout=5.0
-            )
+                self.stockanalysis.get_overview(ticker), timeout=5.0)
         except Exception:
             overview = None
 
@@ -1650,10 +1998,12 @@ class MarketDataService:
             exchange = overview.get("exchange", "")
             if exchange:
                 candidate["exchange"] = exchange
-                candidate["tv_url"] = f"https://www.tradingview.com/chart/?symbol={exchange}:{ticker}"
+                candidate[
+                    "tv_url"] = f"https://www.tradingview.com/chart/?symbol={exchange}:{ticker}"
             if not candidate.get("name"):
                 candidate["name"] = overview.get("name", "")
-            if not candidate.get("market_cap") or candidate["market_cap"] == "":
+            if not candidate.get(
+                    "market_cap") or candidate["market_cap"] == "":
                 candidate["market_cap"] = overview.get("market_cap", "")
         else:
             candidate["data_gaps"].append("fundamentals")
@@ -1679,12 +2029,21 @@ class MarketDataService:
                 return_exceptions=True,
             )
             return {
-                "overview": async_results[0] if not isinstance(async_results[0], Exception) else {},
-                "analyst_ratings": async_results[1] if not isinstance(async_results[1], Exception) else {},
-                "sec_filings": async_results[2] if not isinstance(async_results[2], Exception) else [],
-                "earnings_history": self.finnhub.get_earnings_surprises(ticker),
-                "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
-                "recommendations": self.finnhub.get_recommendation_trends(ticker),
+                "overview":
+                async_results[0]
+                if not isinstance(async_results[0], Exception) else {},
+                "analyst_ratings":
+                async_results[1]
+                if not isinstance(async_results[1], Exception) else {},
+                "sec_filings":
+                async_results[2]
+                if not isinstance(async_results[2], Exception) else [],
+                "earnings_history":
+                self.finnhub.get_earnings_surprises(ticker),
+                "insider_sentiment":
+                self.finnhub.get_insider_sentiment(ticker),
+                "recommendations":
+                self.finnhub.get_recommendation_trends(ticker),
             }
 
         fund_results = await asyncio.gather(
@@ -1719,9 +2078,11 @@ class MarketDataService:
                 return_exceptions=True,
             )
             return {
-                "stocktwits": async_results[0] if not isinstance(async_results[0], Exception) else {},
+                "stocktwits": async_results[0]
+                if not isinstance(async_results[0], Exception) else {},
                 "social_sentiment": self.finnhub.get_social_sentiment(ticker),
-                "news_sentiment": async_results[1] if not isinstance(async_results[1], Exception) else {},
+                "news_sentiment": async_results[1]
+                if not isinstance(async_results[1], Exception) else {},
             }
 
         buzz_results = await asyncio.gather(
@@ -1782,7 +2143,9 @@ class MarketDataService:
         and positive sentiment in the last 24-48 hours.
         """
         trending = await self.stocktwits.get_trending()
-        trending_tickers = [t["ticker"] for t in trending[:12] if t.get("ticker")]
+        trending_tickers = [
+            t["ticker"] for t in trending[:12] if t.get("ticker")
+        ]
 
         async def get_social_detail(ticker):
             st_result, finn_result, av_result = await asyncio.gather(
@@ -1792,9 +2155,12 @@ class MarketDataService:
                 return_exceptions=True,
             )
             return {
-                "stocktwits": st_result if not isinstance(st_result, Exception) else {},
-                "reddit_twitter": finn_result if not isinstance(finn_result, Exception) else {},
-                "news_sentiment": av_result if not isinstance(av_result, Exception) else {},
+                "stocktwits":
+                st_result if not isinstance(st_result, Exception) else {},
+                "reddit_twitter":
+                finn_result if not isinstance(finn_result, Exception) else {},
+                "news_sentiment":
+                av_result if not isinstance(av_result, Exception) else {},
             }
 
         results = await asyncio.gather(
@@ -1843,7 +2209,8 @@ class MarketDataService:
         async def light_enrich_earnings(ticker):
             try:
                 earnings_hist = self.finnhub.get_earnings_surprises(ticker)
-                recommendations = self.finnhub.get_recommendation_trends(ticker)
+                recommendations = self.finnhub.get_recommendation_trends(
+                    ticker)
                 return {
                     "snapshot": {},
                     "technicals": {},
@@ -1855,20 +2222,25 @@ class MarketDataService:
                 return {"error": str(e)}
 
         results = await asyncio.gather(
-            *[asyncio.to_thread(lambda t=t: light_enrich_earnings(t)) for t in earnings_tickers],
+            *[
+                asyncio.to_thread(lambda t=t: light_enrich_earnings(t))
+                for t in earnings_tickers
+            ],
             return_exceptions=True,
         )
 
         scored = []
         for ticker, result in zip(earnings_tickers, results):
-            if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
+            if isinstance(result, Exception) or not isinstance(
+                    result, dict) or "error" in result:
                 continue
             score = 0.0
 
             snapshot = result.get("snapshot", {})
             details = result.get("details", {})
             volume = snapshot.get("volume")
-            avg_vol = details.get("avg_volume") if isinstance(details, dict) else None
+            avg_vol = details.get("avg_volume") if isinstance(details,
+                                                              dict) else None
             if volume and avg_vol:
                 try:
                     ratio = float(volume) / float(avg_vol)
@@ -1880,10 +2252,13 @@ class MarketDataService:
 
             earnings_hist = result.get("earnings_history", [])
             if isinstance(earnings_hist, list):
-                beats = sum(1 for e in earnings_hist[:4] if isinstance(e, dict) and e.get("surprise_pct") and e["surprise_pct"] > 0)
+                beats = sum(1 for e in earnings_hist[:4]
+                            if isinstance(e, dict) and e.get("surprise_pct")
+                            and e["surprise_pct"] > 0)
                 score += beats * 10
 
-            mc = details.get("market_cap") if isinstance(details, dict) else None
+            mc = details.get("market_cap") if isinstance(details,
+                                                         dict) else None
             if mc:
                 try:
                     mc = float(mc)
@@ -1917,9 +2292,12 @@ class MarketDataService:
                     return_exceptions=True,
                 )
                 return {
-                    "sentiment": st if not isinstance(st, Exception) else {},
-                    "overview": overview if not isinstance(overview, Exception) else {},
-                    "recent_8k_filings": filings if not isinstance(filings, Exception) else [],
+                    "sentiment":
+                    st if not isinstance(st, Exception) else {},
+                    "overview":
+                    overview if not isinstance(overview, Exception) else {},
+                    "recent_8k_filings":
+                    filings if not isinstance(filings, Exception) else [],
                 }
             except:
                 return {}
@@ -1930,7 +2308,9 @@ class MarketDataService:
         )
 
         enriched = {}
-        for (ticker, quant_score), deep, (_, _, base) in zip(top_tickers, deep_results, scored[:12]):
+        for (ticker,
+             quant_score), deep, (_, _, base) in zip(top_tickers, deep_results,
+                                                     scored[:12]):
             if not isinstance(deep, Exception) and isinstance(deep, dict):
                 base.update(deep)
             base["quant_score"] = quant_score
@@ -1943,10 +2323,16 @@ class MarketDataService:
                 earnings_dates[t] = e
 
         return {
-            "total_earnings_scanned": len(earnings_tickers),
-            "ranked_by_volatility": [{"ticker": t, "score": s} for t, s, _ in scored[:15]],
-            "enriched_data": enriched,
-            "earnings_dates": earnings_dates,
+            "total_earnings_scanned":
+            len(earnings_tickers),
+            "ranked_by_volatility": [{
+                "ticker": t,
+                "score": s
+            } for t, s, _ in scored[:15]],
+            "enriched_data":
+            enriched,
+            "earnings_dates":
+            earnings_dates,
             "market_news": [],
         }
 
@@ -1970,15 +2356,22 @@ class MarketDataService:
                 return_exceptions=True,
             )
             dxy = dxy_result if not isinstance(dxy_result, Exception) else {}
-            commodities = comm_result if not isinstance(comm_result, Exception) else {}
+            commodities = comm_result if not isinstance(
+                comm_result, Exception) else {}
 
         return {
             "fmp_sector_data": fmp_sectors,
             "macro_data": macro,
-            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+            "fear_greed":
+            fear_greed if not isinstance(fear_greed, Exception) else {},
             "dxy": dxy,
             "commodities": commodities,
         }
+
+    def _is_weekend(self) -> bool:
+        import datetime
+        day = datetime.datetime.utcnow().weekday()
+        return day >= 5  # 5 = Saturday, 6 = Sunday
 
     async def get_sector_rotation_with_stages(self) -> dict:
         """
@@ -1990,6 +2383,59 @@ class MarketDataService:
         start = time.time()
         print("[SECTOR] Starting sector rotation scan...")
 
+        # Skip Finviz on weekends — it blocks weekend requests
+        if self._is_weekend():
+            print(
+                "[SECTOR] Weekend detected — skipping Finviz, using FMP ETF data only"
+            )
+            fmp_sectors = {}
+            try:
+                fmp_sectors = await asyncio.wait_for(
+                    self.fmp.get_sector_etf_snapshot(),
+                    timeout=10.0,
+                )
+            except Exception as e:
+                print(f"[SECTOR] FMP fallback failed: {e}")
+                try:
+                    perf = await asyncio.wait_for(
+                        self.fmp.get_sector_performance(),
+                        timeout=8.0,
+                    )
+                    fmp_sectors = {
+                        "sector_performance": perf,
+                        "etf_quotes": {}
+                    }
+                except Exception as e2:
+                    print(f"[SECTOR] FMP sector performance also failed: {e2}")
+                    fmp_sectors = {}
+
+            fear_greed = await self.fear_greed.get_fear_greed_index()
+            macro = self.fred.get_quick_macro()
+
+            return {
+                "sector_stages": [],
+                "breakout_candidates": [],
+                "top_sectors": [],
+                "fear_greed":
+                fear_greed if not isinstance(fear_greed, Exception) else {},
+                "fmp_sector_data": fmp_sectors,
+                "macro_data": macro,
+                "weekend_mode": True,
+                "scan_summary": {
+                    "total_stocks_scanned":
+                    0,
+                    "stage2_total":
+                    0,
+                    "stage4_total":
+                    0,
+                    "sectors_analyzed":
+                    0,
+                    "note":
+                    "Weekend mode — Finviz unavailable. Using FMP sector ETF momentum data instead."
+                }
+            }
+
+        # Weekday — proceed with normal Finviz scan below
         sector_etfs = {
             "Technology": "XLK",
             "Healthcare": "XLV",
@@ -2006,17 +2452,16 @@ class MarketDataService:
 
         try:
             stage2_task = self.finviz._custom_screen(
-                "v=111&f=ta_sma200_pa,ta_sma50_pa,sh_avgvol_o300&ft=4"
-            )
+                "v=111&f=ta_sma200_pa,ta_sma50_pa,sh_avgvol_o300&ft=4")
             stage4_task = self.finviz._custom_screen(
-                "v=111&f=ta_sma200_pb,ta_sma50_pb,sh_avgvol_o300&ft=4"
-            )
+                "v=111&f=ta_sma200_pb,ta_sma50_pb,sh_avgvol_o300&ft=4")
             total_task = self.finviz._custom_screen(
-                "v=111&f=sh_avgvol_o300&ft=4"
-            )
+                "v=111&f=sh_avgvol_o300&ft=4")
 
             stage2_stocks, stage4_stocks, total_stocks = await asyncio.gather(
-                stage2_task, stage4_task, total_task,
+                stage2_task,
+                stage4_task,
+                total_task,
                 return_exceptions=True,
             )
 
@@ -2030,12 +2475,17 @@ class MarketDataService:
                 print(f"[SECTOR] Total screen failed: {total_stocks}")
                 total_stocks = []
 
-            print(f"[SECTOR] Raw counts: Stage2={len(stage2_stocks)}, Stage4={len(stage4_stocks)}, Total={len(total_stocks)} ({time.time()-start:.1f}s)")
+            print(
+                f"[SECTOR] Raw counts: Stage2={len(stage2_stocks)}, Stage4={len(stage4_stocks)}, Total={len(total_stocks)} ({time.time()-start:.1f}s)"
+            )
 
             if not stage2_stocks and not stage4_stocks and not total_stocks:
-                print("[SECTOR] WARNING: All Finviz screens returned empty. Finviz may be blocking requests.")
+                print(
+                    "[SECTOR] WARNING: All Finviz screens returned empty. Finviz may be blocking requests."
+                )
                 return {
-                    "error": "Finviz screener returned no data. The service may be temporarily unavailable.",
+                    "error":
+                    "Finviz screener returned no data. The service may be temporarily unavailable.",
                     "sectors": [],
                     "breakout_candidates": [],
                 }
@@ -2043,20 +2493,27 @@ class MarketDataService:
             sectors_map = {}
 
             for stock in total_stocks:
-                sector = stock.get("sector") or stock.get("Sector") or "Unknown"
+                sector = stock.get("sector") or stock.get(
+                    "Sector") or "Unknown"
                 if sector in ("Unknown", ""):
                     continue
                 if sector not in sectors_map:
-                    sectors_map[sector] = {"total": 0, "stage2": 0, "stage4": 0}
+                    sectors_map[sector] = {
+                        "total": 0,
+                        "stage2": 0,
+                        "stage4": 0
+                    }
                 sectors_map[sector]["total"] += 1
 
             for stock in stage2_stocks:
-                sector = stock.get("sector") or stock.get("Sector") or "Unknown"
+                sector = stock.get("sector") or stock.get(
+                    "Sector") or "Unknown"
                 if sector in sectors_map:
                     sectors_map[sector]["stage2"] += 1
 
             for stock in stage4_stocks:
-                sector = stock.get("sector") or stock.get("Sector") or "Unknown"
+                sector = stock.get("sector") or stock.get(
+                    "Sector") or "Unknown"
                 if sector in sectors_map:
                     sectors_map[sector]["stage4"] += 1
 
@@ -2099,11 +2556,17 @@ class MarketDataService:
 
             sectors.sort(key=lambda x: x["stage2_pct"], reverse=True)
 
-            print(f"[SECTOR] Processed {len(sectors)} sectors ({time.time()-start:.1f}s)")
+            print(
+                f"[SECTOR] Processed {len(sectors)} sectors ({time.time()-start:.1f}s)"
+            )
             for s in sectors:
-                print(f"[SECTOR]   {s['sector']}: {s['stage2_pct']}% Stage 2, {s['stage4_pct']}% Stage 4 — {s['sector_stage']}")
+                print(
+                    f"[SECTOR]   {s['sector']}: {s['stage2_pct']}% Stage 2, {s['stage4_pct']}% Stage 4 — {s['sector_stage']}"
+                )
 
-            top_sectors = [s["sector"] for s in sectors[:3] if s["stage2_pct"] >= 40]
+            top_sectors = [
+                s["sector"] for s in sectors[:3] if s["stage2_pct"] >= 40
+            ]
             breakout_candidates = []
 
             if top_sectors:
@@ -2113,16 +2576,25 @@ class MarketDataService:
                         ticker = stock.get("ticker") or stock.get("Ticker")
                         if ticker:
                             breakout_candidates.append({
-                                "ticker": ticker,
-                                "company": stock.get("company") or stock.get("Company", ""),
-                                "sector": sector,
-                                "price": stock.get("price") or stock.get("Price"),
-                                "change": stock.get("change") or stock.get("Change"),
-                                "volume": stock.get("volume") or stock.get("Volume"),
+                                "ticker":
+                                ticker,
+                                "company":
+                                stock.get("company")
+                                or stock.get("Company", ""),
+                                "sector":
+                                sector,
+                                "price":
+                                stock.get("price") or stock.get("Price"),
+                                "change":
+                                stock.get("change") or stock.get("Change"),
+                                "volume":
+                                stock.get("volume") or stock.get("Volume"),
                             })
 
                 breakout_candidates = breakout_candidates[:15]
-                print(f"[SECTOR] Found {len(breakout_candidates)} breakout candidates from top sectors: {top_sectors} ({time.time()-start:.1f}s)")
+                print(
+                    f"[SECTOR] Found {len(breakout_candidates)} breakout candidates from top sectors: {top_sectors} ({time.time()-start:.1f}s)"
+                )
 
                 enriched = []
                 for candidate in breakout_candidates[:8]:
@@ -2138,7 +2610,9 @@ class MarketDataService:
                     enriched.append(candidate)
 
                 breakout_candidates = enriched
-                print(f"[SECTOR] Enriched {len(breakout_candidates)} candidates ({time.time()-start:.1f}s)")
+                print(
+                    f"[SECTOR] Enriched {len(breakout_candidates)} candidates ({time.time()-start:.1f}s)"
+                )
 
             fear_greed = {}
             try:
@@ -2163,8 +2637,10 @@ class MarketDataService:
                 "sector_stages": sectors,
                 "breakout_candidates": breakout_candidates,
                 "top_sectors": top_sectors,
-                "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
-                "fmp_sector_performance": fmp_sectors if not isinstance(fmp_sectors, Exception) else {},
+                "fear_greed":
+                fear_greed if not isinstance(fear_greed, Exception) else {},
+                "fmp_sector_performance":
+                fmp_sectors if not isinstance(fmp_sectors, Exception) else {},
                 "scan_summary": {
                     "total_stocks_scanned": len(total_stocks),
                     "stage2_total": len(stage2_stocks),
@@ -2173,7 +2649,9 @@ class MarketDataService:
                 },
             }
 
-            print(f"[SECTOR] Final result: {len(str(result)):,} chars ({time.time()-start:.1f}s)")
+            print(
+                f"[SECTOR] Final result: {len(str(result)):,} chars ({time.time()-start:.1f}s)"
+            )
             return result
 
         except Exception as e:
@@ -2203,12 +2681,12 @@ class MarketDataService:
         if isinstance(new_highs, Exception): new_highs = []
         if isinstance(insider_buys, Exception): insider_buys = []
 
-        all_tickers = list(dict.fromkeys(
-            [s["ticker"] for s in (gainers or [])[:5]] +
-            [s["ticker"] for s in (unusual_vol or [])[:5]] +
-            [s["ticker"] for s in (new_highs or [])[:5]] +
-            [s["ticker"] for s in (insider_buys or [])[:5]]
-        ))[:12]
+        all_tickers = list(
+            dict.fromkeys([s["ticker"] for s in (gainers or [])[:5]] +
+                          [s["ticker"] for s in (unusual_vol or [])[:5]] +
+                          [s["ticker"] for s in (new_highs or [])[:5]] +
+                          [s["ticker"]
+                           for s in (insider_buys or [])[:5]]))[:12]
 
         async def get_asymmetric_detail(ticker):
             overview, analyst = await asyncio.gather(
@@ -2217,10 +2695,14 @@ class MarketDataService:
                 return_exceptions=True,
             )
             return {
-                "overview": overview if not isinstance(overview, Exception) else {},
-                "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
-                "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
-                "earnings_history": self.finnhub.get_earnings_surprises(ticker),
+                "overview":
+                overview if not isinstance(overview, Exception) else {},
+                "analyst_ratings":
+                analyst if not isinstance(analyst, Exception) else {},
+                "insider_sentiment":
+                self.finnhub.get_insider_sentiment(ticker),
+                "earnings_history":
+                self.finnhub.get_earnings_surprises(ticker),
             }
 
         detail_results = await asyncio.gather(
@@ -2265,24 +2747,45 @@ class MarketDataService:
 
         THEMES = {
             "ai_compute": {
-                "name": "AI & Compute Infrastructure",
-                "tickers": ["NVDA", "AMD", "AVGO", "MRVL", "CRDO", "SMCI", "VRT", "ANET", "DELL", "ORCL", "MSFT", "GOOGL", "AMZN", "META", "TSM"],
+                "name":
+                "AI & Compute Infrastructure",
+                "tickers": [
+                    "NVDA", "AMD", "AVGO", "MRVL", "CRDO", "SMCI", "VRT",
+                    "ANET", "DELL", "ORCL", "MSFT", "GOOGL", "AMZN", "META",
+                    "TSM"
+                ],
             },
             "energy": {
-                "name": "Energy & Oil/Gas",
-                "tickers": ["XOM", "CVX", "COP", "EOG", "DVN", "FANG", "OXY", "SLB", "HAL", "AR", "EQT", "RRC"],
+                "name":
+                "Energy & Oil/Gas",
+                "tickers": [
+                    "XOM", "CVX", "COP", "EOG", "DVN", "FANG", "OXY", "SLB",
+                    "HAL", "AR", "EQT", "RRC"
+                ],
             },
             "uranium": {
-                "name": "Uranium & Nuclear",
-                "tickers": ["CCJ", "UEC", "UUUU", "DNN", "NXE", "LEU", "SMR", "OKLO", "VST", "CEG", "TLN"],
+                "name":
+                "Uranium & Nuclear",
+                "tickers": [
+                    "CCJ", "UEC", "UUUU", "DNN", "NXE", "LEU", "SMR", "OKLO",
+                    "VST", "CEG", "TLN"
+                ],
             },
             "metals": {
-                "name": "Metals & Mining",
-                "tickers": ["FCX", "NEM", "GOLD", "AEM", "WPM", "RGLD", "SCCO", "VALE", "RIO", "BHP", "TECK", "MP"],
+                "name":
+                "Metals & Mining",
+                "tickers": [
+                    "FCX", "NEM", "GOLD", "AEM", "WPM", "RGLD", "SCCO", "VALE",
+                    "RIO", "BHP", "TECK", "MP"
+                ],
             },
             "defense": {
-                "name": "Defense & Aerospace",
-                "tickers": ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "LDOS", "KTOS", "PLTR", "RKLB"],
+                "name":
+                "Defense & Aerospace",
+                "tickers": [
+                    "LMT", "RTX", "NOC", "GD", "BA", "LHX", "LDOS", "KTOS",
+                    "PLTR", "RKLB"
+                ],
             },
         }
 
@@ -2298,8 +2801,10 @@ class MarketDataService:
                 )
 
                 return {
-                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
-                    "overview": overview if not isinstance(overview, Exception) else {},
+                    "sentiment":
+                    st_result if not isinstance(st_result, Exception) else {},
+                    "overview":
+                    overview if not isinstance(overview, Exception) else {},
                 }
             except Exception as e:
                 return {"error": str(e)}
@@ -2312,7 +2817,8 @@ class MarketDataService:
         from data.scoring_engine import score_for_trades
         theme_results = []
         for ticker, result in zip(tickers, results):
-            if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
+            if isinstance(result, Exception) or not isinstance(
+                    result, dict) or "error" in result:
                 continue
             quant_score = score_for_trades(result)
             result["quant_score"] = quant_score
@@ -2325,11 +2831,14 @@ class MarketDataService:
             enriched[ticker] = data
 
         return {
-            "theme_name": theme_data["name"],
-            "ranked_tickers": [
-                {"ticker": t, "score": s} for t, s, _ in theme_results
-            ],
-            "enriched_data": enriched,
+            "theme_name":
+            theme_data["name"],
+            "ranked_tickers": [{
+                "ticker": t,
+                "score": s
+            } for t, s, _ in theme_results],
+            "enriched_data":
+            enriched,
             "market_news": [],
         }
 
@@ -2363,10 +2872,14 @@ class MarketDataService:
                     else:
                         trend = "→"
                     return (symbol, {
-                        "price": round(q["price"], 2),
-                        "change": f"{chg:+.2f}" if chg is not None else "N/A",
-                        "change_pct": f"{chg_pct:+.2f}%" if chg_pct is not None else "",
-                        "trend": trend,
+                        "price":
+                        round(q["price"], 2),
+                        "change":
+                        f"{chg:+.2f}" if chg is not None else "N/A",
+                        "change_pct":
+                        f"{chg_pct:+.2f}%" if chg_pct is not None else "",
+                        "trend":
+                        trend,
                     })
             except Exception as e:
                 print(f"[MACRO_SNAPSHOT] Finnhub {symbol} error: {e}")
@@ -2380,7 +2893,9 @@ class MarketDataService:
                     trend_data = vix.get("trend", [])
                     delta = None
                     if len(trend_data) >= 2:
-                        delta = round(trend_data[-1].get("vix", 0) - trend_data[-2].get("vix", 0), 2)
+                        delta = round(
+                            trend_data[-1].get("vix", 0) -
+                            trend_data[-2].get("vix", 0), 2)
                     if delta is not None and delta > 0:
                         trend = "↑"
                     elif delta is not None and delta < 0:
@@ -2389,7 +2904,8 @@ class MarketDataService:
                         trend = "→"
                     return {
                         "price": level,
-                        "change": f"{delta:+.2f}" if delta is not None else "N/A",
+                        "change":
+                        f"{delta:+.2f}" if delta is not None else "N/A",
                         "trend": trend,
                         "signal": vix.get("signal", ""),
                     }
@@ -2405,7 +2921,9 @@ class MarketDataService:
                     trend_data = y10.get("trend", [])
                     delta = None
                     if len(trend_data) >= 2:
-                        delta = round(trend_data[-1].get("yield", 0) - trend_data[-2].get("yield", 0), 2)
+                        delta = round(
+                            trend_data[-1].get("yield", 0) -
+                            trend_data[-2].get("yield", 0), 2)
                     if delta is not None and delta > 0:
                         trend = "↑"
                     elif delta is not None and delta < 0:
@@ -2414,7 +2932,8 @@ class MarketDataService:
                         trend = "→"
                     return {
                         "yield": f"{level:.2f}%",
-                        "change": f"{delta:+.2f}" if delta is not None else "N/A",
+                        "change":
+                        f"{delta:+.2f}" if delta is not None else "N/A",
                         "trend": trend,
                     }
             except Exception as e:
@@ -2424,7 +2943,8 @@ class MarketDataService:
         async def _fmp_dxy() -> dict:
             try:
                 if self.fmp:
-                    dxy = await asyncio.wait_for(self.fmp.get_dxy(), timeout=8.0)
+                    dxy = await asyncio.wait_for(self.fmp.get_dxy(),
+                                                 timeout=8.0)
                     if isinstance(dxy, dict) and dxy.get("price"):
                         chg = dxy.get("change")
                         if chg is not None and chg > 0:
@@ -2435,7 +2955,8 @@ class MarketDataService:
                             trend = "→"
                         return {
                             "price": round(dxy["price"], 2),
-                            "change": f"{chg:+.2f}" if chg is not None else "N/A",
+                            "change":
+                            f"{chg:+.2f}" if chg is not None else "N/A",
                             "trend": trend,
                         }
             except Exception as e:
@@ -2452,7 +2973,10 @@ class MarketDataService:
         quote_symbols = ["SPY", "QQQ", "IWM", "GLD", "USO"]
         quote_tasks = [_finnhub_quote(s) for s in quote_symbols]
         all_results = await asyncio.gather(
-            *quote_tasks, _fred_vix(), _fred_10y(), _fmp_dxy(),
+            *quote_tasks,
+            _fred_vix(),
+            _fred_10y(),
+            _fmp_dxy(),
             return_exceptions=True,
         )
 
@@ -2480,22 +3004,42 @@ class MarketDataService:
             "iwm": quotes.get("IWM") or _na(),
             "vix": vix_result or _na(),
             "dxy": dxy_result or _na(),
-            "ten_year": ten_y_result or {"yield": "N/A", "change": "N/A", "trend": "→"},
+            "ten_year": ten_y_result or {
+                "yield": "N/A",
+                "change": "N/A",
+                "trend": "→"
+            },
             "oil": quotes.get("USO") or _na(),
             "gold": quotes.get("GLD") or _na(),
         }
 
-        filled = [k for k, v in snapshot.items() if v.get("price", v.get("yield", "N/A")) != "N/A"]
-        missing = [k for k, v in snapshot.items() if v.get("price", v.get("yield", "N/A")) == "N/A"]
-        print(f"[MACRO_SNAPSHOT] filled={','.join(filled)} missing={','.join(missing) if missing else 'none'}")
+        filled = [
+            k for k, v in snapshot.items()
+            if v.get("price", v.get("yield", "N/A")) != "N/A"
+        ]
+        missing = [
+            k for k, v in snapshot.items()
+            if v.get("price", v.get("yield", "N/A")) == "N/A"
+        ]
+        print(
+            f"[MACRO_SNAPSHOT] filled={','.join(filled)} missing={','.join(missing) if missing else 'none'}"
+        )
 
         cache.set("macro_snapshot_v1", snapshot, 90)
         return snapshot
 
     def _compute_signal_highlights(
-        self, screener_sources, raw_screener_data, enriched,
-        stage2_breakouts, macd_crossovers, new_highs, volume_breakouts, unusual_volume,
+        self,
+        screener_sources,
+        raw_screener_data,
+        enriched,
+        stage2_breakouts,
+        macd_crossovers,
+        new_highs,
+        volume_breakouts,
+        unusual_volume,
     ) -> dict:
+
         def _parse_float(val):
             if val is None:
                 return None
@@ -2505,7 +3049,10 @@ class MarketDataService:
             except (ValueError, TypeError):
                 return None
 
-        ta_sources = {"stage2_breakout", "macd_crossover", "new_high", "accumulation", "rsi_recovery"}
+        ta_sources = {
+            "stage2_breakout", "macd_crossover", "new_high", "accumulation",
+            "rsi_recovery"
+        }
 
         candidates_ta = []
         for ticker, sources in screener_sources.items():
@@ -2585,7 +3132,8 @@ class MarketDataService:
             rvol = _parse_float(raw.get("rel_volume"))
             raw_vol_str = raw.get("volume")
             raw_vol = _parse_float(raw_vol_str)
-            avg_vol = _parse_float(overview.get("avg_volume")) if overview else None
+            avg_vol = _parse_float(
+                overview.get("avg_volume")) if overview else None
             if avg_vol is None:
                 avg_vol = _parse_float(raw.get("avg_volume"))
 
@@ -2623,7 +3171,10 @@ class MarketDataService:
         biggest_vol = {"ticker": "N/A", "signal": "N/A"}
         biggest_vol_pct = "NA"
         if candidates_vol:
-            real_vol = [c for c in candidates_vol if c["source"] != "raw_only" and c["vol_pct"] > 0]
+            real_vol = [
+                c for c in candidates_vol
+                if c["source"] != "raw_only" and c["vol_pct"] > 0
+            ]
             if real_vol:
                 winner = max(real_vol, key=lambda c: c["vol_pct"])
             else:
@@ -2648,7 +3199,9 @@ class MarketDataService:
 
             biggest_vol = {"ticker": winner["ticker"], "signal": sig}
 
-        print(f"[HIGHLIGHTS] best_ta={best_ta['ticker']} biggest_vol={biggest_vol['ticker']} vol_pct={biggest_vol_pct} ta_score={best_ta_score}")
+        print(
+            f"[HIGHLIGHTS] best_ta={best_ta['ticker']} biggest_vol={biggest_vol['ticker']} vol_pct={biggest_vol_pct} ta_score={best_ta_score}"
+        )
 
         return {
             "best_ta_setup": best_ta,
@@ -2740,11 +3293,19 @@ class MarketDataService:
                     return_exceptions=True,
                 )
                 fmp_data = {
-                    "dxy": dxy if not isinstance(dxy, Exception) else {},
-                    "commodities": commodities if not isinstance(commodities, Exception) else {},
-                    "treasury_yields": treasuries if not isinstance(treasuries, Exception) else {},
-                    "sector_performance": sector_perf if not isinstance(sector_perf, Exception) else [],
-                    "indices": indices if not isinstance(indices, Exception) else {},
+                    "dxy":
+                    dxy if not isinstance(dxy, Exception) else {},
+                    "commodities":
+                    commodities
+                    if not isinstance(commodities, Exception) else {},
+                    "treasury_yields":
+                    treasuries
+                    if not isinstance(treasuries, Exception) else {},
+                    "sector_performance":
+                    sector_perf
+                    if not isinstance(sector_perf, Exception) else [],
+                    "indices":
+                    indices if not isinstance(indices, Exception) else {},
                 }
             except:
                 pass
@@ -2780,7 +3341,8 @@ class MarketDataService:
                                 raw_screener_data[t] = item
                             else:
                                 for k, v in item.items():
-                                    if k != "ticker" and v and not raw_screener_data[t].get(k):
+                                    if k != "ticker" and v and not raw_screener_data[
+                                            t].get(k):
                                         raw_screener_data[t][k] = v
 
         for t in (trending or []):
@@ -2791,17 +3353,28 @@ class MarketDataService:
                     screener_sources[ticker] = []
                 screener_sources[ticker].append("social_trending")
 
-        print(f"[Briefing] {len(all_tickers)} unique tickers across all sources")
+        print(
+            f"[Briefing] {len(all_tickers)} unique tickers across all sources")
 
-        multi_signal = {t: sources for t, sources in screener_sources.items() if len(sources) >= 2}
-        single_signal = {t: sources for t, sources in screener_sources.items() if len(sources) == 1}
+        multi_signal = {
+            t: sources
+            for t, sources in screener_sources.items() if len(sources) >= 2
+        }
+        single_signal = {
+            t: sources
+            for t, sources in screener_sources.items() if len(sources) == 1
+        }
 
-        print(f"[Briefing] {len(multi_signal)} multi-signal tickers: {list(multi_signal.keys())[:10]}")
+        print(
+            f"[Briefing] {len(multi_signal)} multi-signal tickers: {list(multi_signal.keys())[:10]}"
+        )
 
         priority_tickers = list(multi_signal.keys())[:15]
         remaining_slots = 20 - len(priority_tickers)
         if remaining_slots > 0:
-            filler = [t for t in single_signal.keys() if t not in priority_tickers][:remaining_slots]
+            filler = [
+                t for t in single_signal.keys() if t not in priority_tickers
+            ][:remaining_slots]
             priority_tickers.extend(filler)
 
         async def enrich_briefing(ticker):
@@ -2813,8 +3386,10 @@ class MarketDataService:
                 )
 
                 return {
-                    "sentiment": st_result if not isinstance(st_result, Exception) else {},
-                    "overview": overview if not isinstance(overview, Exception) else {},
+                    "sentiment":
+                    st_result if not isinstance(st_result, Exception) else {},
+                    "overview":
+                    overview if not isinstance(overview, Exception) else {},
                 }
             except Exception as e:
                 return {"error": str(e)}
@@ -2826,7 +3401,8 @@ class MarketDataService:
 
         enriched = {}
         for ticker, result in zip(priority_tickers, enrichment_results):
-            if not isinstance(result, Exception) and isinstance(result, dict) and "error" not in result:
+            if not isinstance(result, Exception) and isinstance(
+                    result, dict) and "error" not in result:
                 trade_score = score_for_trades(result)
                 invest_score = score_for_investments(result)
                 result["trade_score"] = trade_score
@@ -2837,46 +3413,84 @@ class MarketDataService:
 
         ranked = sorted(
             enriched.items(),
-            key=lambda x: (x[1].get("signal_count", 0), x[1].get("trade_score", 0)),
+            key=lambda x:
+            (x[1].get("signal_count", 0), x[1].get("trade_score", 0)),
             reverse=True,
         )
 
         pre_computed_highlights = self._compute_signal_highlights(
-            screener_sources, raw_screener_data, enriched,
-            stage2_breakouts, macd_crossovers, new_highs, volume_breakouts, unusual_volume,
+            screener_sources,
+            raw_screener_data,
+            enriched,
+            stage2_breakouts,
+            macd_crossovers,
+            new_highs,
+            volume_breakouts,
+            unusual_volume,
         )
 
         return {
-            "pre_computed_highlights": pre_computed_highlights,
-            "macro_snapshot": macro_snapshot,
-            "news_context": {"market_news": market_news},
-            "total_tickers_detected": len(all_tickers),
-            "multi_signal_tickers": {t: sources for t, sources in list(multi_signal.items())[:10]},
-            "ranked_candidates": [
-                {
-                    "ticker": t,
-                    "trade_score": d.get("trade_score", 0),
-                    "invest_score": d.get("invest_score", 0),
-                    "signal_count": d.get("signal_count", 0),
-                    "signal_sources": d.get("signal_sources", []),
-                }
-                for t, d in ranked[:15]
-            ],
-            "enriched_data": {t: d for t, d in ranked[:10]},
-            "fear_greed": fear_greed,
-            "fred_macro": fred_macro,
-            "fmp_market_data": fmp_data,
-            "highlights": {
-                "stage2_breakouts": stage2_breakouts[:3] if isinstance(stage2_breakouts, list) else [],
-                "volume_breakouts": volume_breakouts[:3] if isinstance(volume_breakouts, list) else [],
-                "macd_crossovers": macd_crossovers[:3] if isinstance(macd_crossovers, list) else [],
-                "high_short_float": high_short[:3] if isinstance(high_short, list) else [],
-                "insider_buying": insider_buying[:3] if isinstance(insider_buying, list) else [],
-                "revenue_growth": revenue_leaders[:3] if isinstance(revenue_leaders, list) else [],
-                "rsi_recovery": rsi_recovery[:3] if isinstance(rsi_recovery, list) else [],
-                "social_trending": [t.get("ticker") for t in trending[:5]] if isinstance(trending, list) else [],
+            "pre_computed_highlights":
+            pre_computed_highlights,
+            "macro_snapshot":
+            macro_snapshot,
+            "news_context": {
+                "market_news": market_news
             },
-            "upcoming_earnings": upcoming_earnings[:5] if isinstance(upcoming_earnings, list) else [],
+            "total_tickers_detected":
+            len(all_tickers),
+            "multi_signal_tickers": {
+                t: sources
+                for t, sources in list(multi_signal.items())[:10]
+            },
+            "ranked_candidates": [{
+                "ticker":
+                t,
+                "trade_score":
+                d.get("trade_score", 0),
+                "invest_score":
+                d.get("invest_score", 0),
+                "signal_count":
+                d.get("signal_count", 0),
+                "signal_sources":
+                d.get("signal_sources", []),
+            } for t, d in ranked[:15]],
+            "enriched_data": {
+                t: d
+                for t, d in ranked[:10]
+            },
+            "fear_greed":
+            fear_greed,
+            "fred_macro":
+            fred_macro,
+            "fmp_market_data":
+            fmp_data,
+            "highlights": {
+                "stage2_breakouts":
+                stage2_breakouts[:3]
+                if isinstance(stage2_breakouts, list) else [],
+                "volume_breakouts":
+                volume_breakouts[:3]
+                if isinstance(volume_breakouts, list) else [],
+                "macd_crossovers":
+                macd_crossovers[:3]
+                if isinstance(macd_crossovers, list) else [],
+                "high_short_float":
+                high_short[:3] if isinstance(high_short, list) else [],
+                "insider_buying":
+                insider_buying[:3] if isinstance(insider_buying, list) else [],
+                "revenue_growth":
+                revenue_leaders[:3]
+                if isinstance(revenue_leaders, list) else [],
+                "rsi_recovery":
+                rsi_recovery[:3] if isinstance(rsi_recovery, list) else [],
+                "social_trending":
+                [t.get("ticker")
+                 for t in trending[:5]] if isinstance(trending, list) else [],
+            },
+            "upcoming_earnings":
+            upcoming_earnings[:5]
+            if isinstance(upcoming_earnings, list) else [],
         }
 
     async def analyze_portfolio(self, tickers: list) -> dict:
@@ -2897,7 +3511,8 @@ class MarketDataService:
 
             try:
                 overview = await asyncio.wait_for(
-                    self.stockanalysis.get_overview(ticker), timeout=8.0,
+                    self.stockanalysis.get_overview(ticker),
+                    timeout=8.0,
                 )
                 if overview:
                     data["overview"] = overview
@@ -2906,7 +3521,8 @@ class MarketDataService:
 
             try:
                 analyst = await asyncio.wait_for(
-                    self.stockanalysis.get_analyst_ratings(ticker), timeout=8.0,
+                    self.stockanalysis.get_analyst_ratings(ticker),
+                    timeout=8.0,
                 )
                 if analyst:
                     data["analyst_ratings"] = analyst
@@ -2915,7 +3531,8 @@ class MarketDataService:
 
             try:
                 sentiment = await asyncio.wait_for(
-                    self.stocktwits.get_sentiment(ticker), timeout=6.0,
+                    self.stocktwits.get_sentiment(ticker),
+                    timeout=6.0,
                 )
                 if sentiment:
                     data["sentiment"] = sentiment
@@ -2924,8 +3541,7 @@ class MarketDataService:
 
             try:
                 insider = await asyncio.to_thread(
-                    lambda: self.finnhub.get_insider_sentiment(ticker)
-                )
+                    lambda: self.finnhub.get_insider_sentiment(ticker))
                 if insider:
                     data["insider_sentiment"] = insider
             except Exception as e:
@@ -2933,8 +3549,7 @@ class MarketDataService:
 
             try:
                 earnings = await asyncio.to_thread(
-                    lambda: self.finnhub.get_earnings_surprises(ticker)
-                )
+                    lambda: self.finnhub.get_earnings_surprises(ticker))
                 if earnings:
                     data["earnings_history"] = earnings
             except Exception as e:
@@ -2942,8 +3557,7 @@ class MarketDataService:
 
             try:
                 recs = await asyncio.to_thread(
-                    lambda: self.finnhub.get_recommendation_trends(ticker)
-                )
+                    lambda: self.finnhub.get_recommendation_trends(ticker))
                 if recs:
                     data["recommendations"] = recs
             except Exception as e:
@@ -2953,22 +3567,30 @@ class MarketDataService:
 
         all_data = []
         for i in range(0, len(tickers), 5):
-            batch = tickers[i:i+5]
+            batch = tickers[i:i + 5]
             batch_results = await asyncio.gather(
-                *[asyncio.wait_for(full_enrich(t), timeout=15.0) for t in batch],
+                *[
+                    asyncio.wait_for(full_enrich(t), timeout=15.0)
+                    for t in batch
+                ],
                 return_exceptions=True,
             )
             for ticker, result in zip(batch, batch_results):
                 if isinstance(result, Exception):
                     print(f"[PORTFOLIO] {ticker} fully failed: {result}")
-                    all_data.append({"ticker": ticker, "error": "Failed to fetch data"})
+                    all_data.append({
+                        "ticker": ticker,
+                        "error": "Failed to fetch data"
+                    })
                 else:
                     all_data.append(result)
 
             if i + 5 < len(tickers):
                 await asyncio.sleep(0.3)
 
-            print(f"[PORTFOLIO] Enriched {min(i+5, len(tickers))}/{len(tickers)} tickers ({time.time()-start:.1f}s)")
+            print(
+                f"[PORTFOLIO] Enriched {min(i+5, len(tickers))}/{len(tickers)} tickers ({time.time()-start:.1f}s)"
+            )
 
         enriched = {}
         for data in all_data:
@@ -2978,7 +3600,8 @@ class MarketDataService:
                 continue
             trade_score = score_for_trades(data)
             invest_score = score_for_investments(data)
-            combined = round((invest_score * 0.4) + (trade_score * 0.4) + ((invest_score + trade_score) / 2 * 0.2), 1)
+            combined = round((invest_score * 0.4) + (trade_score * 0.4) +
+                             ((invest_score + trade_score) / 2 * 0.2), 1)
             data["trade_score"] = trade_score
             data["invest_score"] = invest_score
             data["combined_score"] = combined
@@ -2993,24 +3616,31 @@ class MarketDataService:
         fear_greed = {}
         try:
             fear_greed = await asyncio.wait_for(
-                self.fear_greed.get_fear_greed_index(), timeout=8.0,
+                self.fear_greed.get_fear_greed_index(),
+                timeout=8.0,
             )
         except:
             pass
 
-        print(f"[PORTFOLIO] Complete: {len(enriched)} tickers enriched ({time.time()-start:.1f}s)")
+        print(
+            f"[PORTFOLIO] Complete: {len(enriched)} tickers enriched ({time.time()-start:.1f}s)"
+        )
 
         return {
-            "tickers_analyzed": len(tickers),
-            "ranked_tickers": [
-                {"ticker": t, "combined_score": d.get("combined_score", 0),
-                 "trade_score": d.get("trade_score", 0),
-                 "invest_score": d.get("invest_score", 0)}
-                for t, d in ranked
-            ],
-            "enriched_data": enriched,
-            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
-            "macro": self.fred.get_quick_macro(),
+            "tickers_analyzed":
+            len(tickers),
+            "ranked_tickers": [{
+                "ticker": t,
+                "combined_score": d.get("combined_score", 0),
+                "trade_score": d.get("trade_score", 0),
+                "invest_score": d.get("invest_score", 0)
+            } for t, d in ranked],
+            "enriched_data":
+            enriched,
+            "fear_greed":
+            fear_greed if not isinstance(fear_greed, Exception) else {},
+            "macro":
+            self.fred.get_quick_macro(),
         }
 
     async def get_small_cap_spec(self) -> dict:
@@ -3030,10 +3660,9 @@ class MarketDataService:
 
         trending = await self.stocktwits.get_trending()
 
-        all_tickers = list(dict.fromkeys(
-            [s["ticker"] for s in (small_gainers or [])[:6]] +
-            [s["ticker"] for s in (high_short or [])[:4]]
-        ))[:10]
+        all_tickers = list(
+            dict.fromkeys([s["ticker"] for s in (small_gainers or [])[:6]] +
+                          [s["ticker"] for s in (high_short or [])[:4]]))[:10]
 
         async def enrich_small(ticker):
             st, overview = await asyncio.gather(
@@ -3043,7 +3672,8 @@ class MarketDataService:
             )
             return {
                 "sentiment": st if not isinstance(st, Exception) else {},
-                "overview": overview if not isinstance(overview, Exception) else {},
+                "overview":
+                overview if not isinstance(overview, Exception) else {},
             }
 
         enriched = await asyncio.gather(
@@ -3076,8 +3706,8 @@ class MarketDataService:
         xai_task = None
         if self.xai:
             xai_task = asyncio.create_task(
-                asyncio.wait_for(self.xai.get_trending_tickers("stock"), timeout=35.0)
-            )
+                asyncio.wait_for(self.xai.get_trending_tickers("stock"),
+                                 timeout=35.0))
 
         (
             stocktwits_trending,
@@ -3100,9 +3730,11 @@ class MarketDataService:
 
         if isinstance(stocktwits_trending, Exception): stocktwits_trending = []
         if isinstance(yahoo_trending, Exception): yahoo_trending = []
-        if isinstance(stockanalysis_trending, Exception): stockanalysis_trending = []
+        if isinstance(stockanalysis_trending, Exception):
+            stockanalysis_trending = []
         if isinstance(finviz_most_active, Exception): finviz_most_active = []
-        if isinstance(finviz_unusual_volume, Exception): finviz_unusual_volume = []
+        if isinstance(finviz_unusual_volume, Exception):
+            finviz_unusual_volume = []
         if isinstance(finviz_top_gainers, Exception): finviz_top_gainers = []
         if isinstance(reddit_trending, Exception): reddit_trending = []
 
@@ -3113,21 +3745,32 @@ class MarketDataService:
             try:
                 xai_trending = await xai_task
                 xai_tickers_raw = xai_trending.get("trending_tickers", [])
-                print(f"[TRENDING] xAI Grok returned {len(xai_tickers_raw)} trending tickers from X")
+                print(
+                    f"[TRENDING] xAI Grok returned {len(xai_tickers_raw)} trending tickers from X"
+                )
                 xai_market_mood = xai_trending.get("market_mood", "unknown")
                 for item in xai_tickers_raw:
                     t = item.get("ticker", "").upper().strip()
                     if t and len(t) <= 6:
                         xai_top_picks.append({
-                            "ticker": t,
-                            "x_sentiment": item.get("sentiment", "unknown"),
-                            "x_sentiment_score": item.get("sentiment_score", 0),
-                            "x_why_trending": item.get("why_trending", ""),
-                            "x_catalyst": item.get("catalyst", ""),
-                            "x_mention_intensity": item.get("mention_intensity", "medium"),
-                            "x_trade_sentiment": item.get("trade_sentiment", "hold"),
-                            "x_risk_flag": item.get("risk_flag"),
-                            "x_narratives": item.get("key_narratives", []),
+                            "ticker":
+                            t,
+                            "x_sentiment":
+                            item.get("sentiment", "unknown"),
+                            "x_sentiment_score":
+                            item.get("sentiment_score", 0),
+                            "x_why_trending":
+                            item.get("why_trending", ""),
+                            "x_catalyst":
+                            item.get("catalyst", ""),
+                            "x_mention_intensity":
+                            item.get("mention_intensity", "medium"),
+                            "x_trade_sentiment":
+                            item.get("trade_sentiment", "hold"),
+                            "x_risk_flag":
+                            item.get("risk_flag"),
+                            "x_narratives":
+                            item.get("key_narratives", []),
                         })
             except Exception as e:
                 print(f"[TRENDING] xAI Grok trending failed: {e}")
@@ -3168,9 +3811,12 @@ class MarketDataService:
         ranked = sorted(ticker_sources.items(), key=sort_key, reverse=True)
         top_tickers = [t for t, _ in ranked[:12]]
 
-        print(f"[Trending] {len(ticker_sources)} unique tickers across all platforms")
+        print(
+            f"[Trending] {len(ticker_sources)} unique tickers across all platforms"
+        )
         xai_in_top = len([t for t in top_tickers if t in xai_ticker_set])
-        print(f"[Trending] Top 12 selected ({xai_in_top} from X): {top_tickers}")
+        print(
+            f"[Trending] Top 12 selected ({xai_in_top} from X): {top_tickers}")
 
         async def full_enrich(ticker):
             try:
@@ -3178,20 +3824,27 @@ class MarketDataService:
                     self.stocktwits.get_sentiment(ticker),
                     self.stockanalysis.get_overview(ticker),
                     self.stockanalysis.get_analyst_ratings(ticker),
-                    asyncio.to_thread(lambda t=ticker: self.finnhub.get_company_profile(t)),
+                    asyncio.to_thread(
+                        lambda t=ticker: self.finnhub.get_company_profile(t)),
                     return_exceptions=True,
                 )
-                ov = overview if not isinstance(overview, Exception) and isinstance(overview, dict) else {}
-                prof = profile if not isinstance(profile, Exception) and isinstance(profile, dict) else {}
+                ov = overview if not isinstance(overview,
+                                                Exception) and isinstance(
+                                                    overview, dict) else {}
+                prof = profile if not isinstance(
+                    profile, Exception) and isinstance(profile, dict) else {}
                 if prof and not ov.get("sector"):
-                    ov["sector"] = prof.get("finnhubIndustry") or prof.get("sector") or ""
+                    ov["sector"] = prof.get("finnhubIndustry") or prof.get(
+                        "sector") or ""
                     ov["industry"] = prof.get("finnhubIndustry") or ""
                     if not ov.get("company_name"):
                         ov["company_name"] = prof.get("name") or ""
                 return {
-                    "stocktwits_sentiment": st_result if not isinstance(st_result, Exception) else {},
+                    "stocktwits_sentiment":
+                    st_result if not isinstance(st_result, Exception) else {},
                     "overview": ov,
-                    "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
+                    "analyst_ratings":
+                    analyst if not isinstance(analyst, Exception) else {},
                 }
             except Exception as e:
                 return {"error": str(e)}
@@ -3203,24 +3856,33 @@ class MarketDataService:
 
         enriched = {}
         for ticker, result in zip(top_tickers, enrichment_results):
-            if isinstance(result, Exception) or not isinstance(result, dict) or "error" in result:
-                enriched[ticker] = {"overview": {}, "stocktwits_sentiment": {}, "analyst_ratings": {}}
+            if isinstance(result, Exception) or not isinstance(
+                    result, dict) or "error" in result:
+                enriched[ticker] = {
+                    "overview": {},
+                    "stocktwits_sentiment": {},
+                    "analyst_ratings": {}
+                }
                 continue
 
             quant_score = score_for_trades(result)
             result["quant_score"] = quant_score
             result["trending_sources"] = list(ticker_sources.get(ticker, []))
             result["source_count"] = len(ticker_sources.get(ticker, []))
-            xai_pick = next((p for p in xai_top_picks if p["ticker"] == ticker), None)
+            xai_pick = next(
+                (p for p in xai_top_picks if p["ticker"] == ticker), None)
             if xai_pick:
                 result["x_analysis"] = xai_pick
             enriched[ticker] = result
 
         from data.microcap_scorer import score_trending_tickers
-        microcap_results = score_trending_tickers(enriched, xai_top_picks, ticker_sources)
+        microcap_results = score_trending_tickers(enriched, xai_top_picks,
+                                                  ticker_sources)
 
         microcap_scores = {}
-        for bucket in ["asymmetric_opportunities", "institutional_plays", "rejected"]:
+        for bucket in [
+                "asymmetric_opportunities", "institutional_plays", "rejected"
+        ]:
             for r in microcap_results[bucket]:
                 microcap_scores[r["ticker"]] = r
 
@@ -3231,15 +3893,20 @@ class MarketDataService:
         asymmetric_count = len(microcap_results["asymmetric_opportunities"])
         institutional_count = len(microcap_results["institutional_plays"])
         rejected_count = len(microcap_results["rejected"])
-        power_law_tickers = [r["ticker"] for r in microcap_results["power_law_candidates"]]
-        print(f"[Trending] Two-tier scoring: {asymmetric_count} asymmetric, {institutional_count} institutional, {rejected_count} rejected, power_law={power_law_tickers}")
+        power_law_tickers = [
+            r["ticker"] for r in microcap_results["power_law_candidates"]
+        ]
+        print(
+            f"[Trending] Two-tier scoring: {asymmetric_count} asymmetric, {institutional_count} institutional, {rejected_count} rejected, power_law={power_law_tickers}"
+        )
 
         sorted_tickers = sorted(
             enriched.items(),
             key=lambda x: (
                 1 if x[0] in xai_ticker_set else 0,
                 x[1].get("source_count", 0),
-                x[1].get("microcap_analysis", {}).get("microcap_score") or x[1].get("quant_score", 0),
+                x[1].get("microcap_analysis", {}).get("microcap_score") or x[1]
+                .get("quant_score", 0),
             ),
             reverse=True,
         )
@@ -3296,38 +3963,58 @@ class MarketDataService:
         for r in microcap_results["asymmetric_opportunities"]:
             b = r.get("breakdown", {})
             compact = {
-                "ticker": r["ticker"],
-                "tier": r["tier"],
-                "mcap": r.get("mcap_formatted", "?"),
-                "score": r["microcap_score"],
-                "power_law": r.get("power_law_flag", False),
-                "catalyst": b.get("catalyst", {}).get("score", 0),
-                "catalyst_signals": " | ".join(b.get("catalyst", {}).get("details", {}).get("signals", [])[:3]),
-                "sector": b.get("sector_alignment", {}).get("score", 0),
-                "sector_detail": b.get("sector_alignment", {}).get("details", {}).get("alignment", ""),
-                "technical": b.get("early_technical", {}).get("score", 0),
-                "social": b.get("social_momentum", {}).get("score", 0),
-                "liquidity": b.get("liquidity", {}).get("score", 0),
+                "ticker":
+                r["ticker"],
+                "tier":
+                r["tier"],
+                "mcap":
+                r.get("mcap_formatted", "?"),
+                "score":
+                r["microcap_score"],
+                "power_law":
+                r.get("power_law_flag", False),
+                "catalyst":
+                b.get("catalyst", {}).get("score", 0),
+                "catalyst_signals":
+                " | ".join(
+                    b.get("catalyst", {}).get("details",
+                                              {}).get("signals", [])[:3]),
+                "sector":
+                b.get("sector_alignment", {}).get("score", 0),
+                "sector_detail":
+                b.get("sector_alignment", {}).get("details",
+                                                  {}).get("alignment", ""),
+                "technical":
+                b.get("early_technical", {}).get("score", 0),
+                "social":
+                b.get("social_momentum", {}).get("score", 0),
+                "liquidity":
+                b.get("liquidity", {}).get("score", 0),
             }
             scoring_summary.append(compact)
 
         return {
-            "scan_type": "hybrid_trending",
+            "scan_type":
+            "hybrid_trending",
             "two_tier_analysis": {
-                "INSTRUCTION": "PRIORITIZE asymmetric small-caps below. Power-law candidates deserve HIGHEST conviction.",
+                "INSTRUCTION":
+                "PRIORITIZE asymmetric small-caps below. Power-law candidates deserve HIGHEST conviction.",
                 "asymmetric_opportunities": asymmetric_count,
                 "power_law_candidates": power_law_tickers,
                 "scoring_summary": scoring_summary,
                 "institutional_plays_count": institutional_count,
                 "rejected_count": rejected_count,
             },
-            "total_unique_tickers": len(ticker_sources),
-            "x_market_mood": xai_market_mood,
+            "total_unique_tickers":
+            len(ticker_sources),
+            "x_market_mood":
+            xai_market_mood,
             "grok_x_analysis": {
                 "summary": xai_trending.get("summary", ""),
                 "sector_heat": xai_trending.get("sector_heat", []),
                 "notable_themes": xai_trending.get("notable_themes", []),
-                "contrarian_signals": xai_trending.get("contrarian_signals", []),
+                "contrarian_signals": xai_trending.get("contrarian_signals",
+                                                       []),
                 "top_picks": xai_top_picks,
             },
             "source_summary": {
@@ -3340,19 +4027,24 @@ class MarketDataService:
                 "Finviz Volume": len(finviz_unusual_volume),
                 "Finviz Gainers": len(finviz_top_gainers),
             },
-            "ranked_tickers": [
-                {
-                    "ticker": t,
-                    "source_count": d.get("source_count", 0),
-                    "sources": d.get("trending_sources", []),
-                    "quant_score": d.get("quant_score", 0),
-                    "on_x": t in xai_ticker_set,
-                    "microcap_score": d.get("microcap_analysis", {}).get("microcap_score"),
-                    "tier": d.get("microcap_analysis", {}).get("tier", "unknown"),
-                }
-                for t, d in sorted_tickers[:15]
-            ],
-            "enriched_data": sorted_enriched,
+            "ranked_tickers": [{
+                "ticker":
+                t,
+                "source_count":
+                d.get("source_count", 0),
+                "sources":
+                d.get("trending_sources", []),
+                "quant_score":
+                d.get("quant_score", 0),
+                "on_x":
+                t in xai_ticker_set,
+                "microcap_score":
+                d.get("microcap_analysis", {}).get("microcap_score"),
+                "tier":
+                d.get("microcap_analysis", {}).get("tier", "unknown"),
+            } for t, d in sorted_tickers[:15]],
+            "enriched_data":
+            sorted_enriched,
         }
 
     async def get_cross_market_scan(self) -> dict:
@@ -3362,6 +4054,7 @@ class MarketDataService:
         Returns a unified dataset so Claude can rank across asset classes fairly.
         Each sub-scan has its own timeout to prevent one slow source from blocking everything.
         """
+
         async def _timed(coro, label, timeout=25.0):
             try:
                 result = await asyncio.wait_for(coro, timeout=timeout)
@@ -3376,43 +4069,68 @@ class MarketDataService:
 
         stock_task = _timed(self._get_stock_trending_light(), "stocks", 25.0)
         crypto_task = _timed(self._get_crypto_light(), "crypto", 25.0)
-        commodity_task = _timed(self._get_commodities_light(), "commodities", 15.0)
+        commodity_task = _timed(self._get_commodities_light(), "commodities",
+                                15.0)
         macro_task = _timed(self.get_macro_overview(), "macro", 15.0)
 
         stock_data, crypto_data, commodity_data, macro_data = await asyncio.gather(
-            stock_task, crypto_task, commodity_task, macro_task,
+            stock_task,
+            crypto_task,
+            commodity_task,
+            macro_task,
         )
 
-        stock_data = stock_data if stock_data else {"error": "Stock data unavailable"}
-        crypto_data = crypto_data if crypto_data else {"error": "Crypto data unavailable"}
-        commodity_data = commodity_data if commodity_data else {"error": "Commodity data unavailable"}
-        macro_data = macro_data if macro_data else {"error": "Macro data unavailable"}
+        stock_data = stock_data if stock_data else {
+            "error": "Stock data unavailable"
+        }
+        crypto_data = crypto_data if crypto_data else {
+            "error": "Crypto data unavailable"
+        }
+        commodity_data = commodity_data if commodity_data else {
+            "error": "Commodity data unavailable"
+        }
+        macro_data = macro_data if macro_data else {
+            "error": "Macro data unavailable"
+        }
 
         from data.cross_asset_ranker import rank_cross_market
         try:
-            ranking_result = rank_cross_market(stock_data, crypto_data, commodity_data, macro_data)
+            ranking_result = rank_cross_market(stock_data, crypto_data,
+                                               commodity_data, macro_data)
         except Exception as e:
             print(f"[CROSS-MARKET] Ranker failed: {e}")
-            ranking_result = {"ranked_candidates": [], "ranking_debug": {"error": str(e)}}
+            ranking_result = {
+                "ranked_candidates": [],
+                "ranking_debug": {
+                    "error": str(e)
+                }
+            }
 
         result = {
-            "scan_type": "cross_market",
-            "instructions": (
-                "CROSS-MARKET SCAN — PRE-RANKED DATA. Candidates have been quantitatively scored, "
-                "normalized across asset classes, and filtered. The ranking_debug shows WHY each was selected. "
-                "Your job: (1) Use the pre-ranked list as your starting point — do NOT re-rank from scratch. "
-                "(2) Add qualitative analysis the math can't capture (narrative, timing, regime context). "
-                "(3) You may promote or demote candidates by 1-2 positions based on qualitative factors, but "
-                "explain why. (4) MUST include at least one stock and one commodity if they appear in ranked list. "
-                "(5) If macro regime is risk_off, do NOT recommend speculative small-cap crypto. "
-                "(6) Present your final 3-5 picks with conviction level and specific entry thesis."
-            ),
-            "ranked_candidates": ranking_result.get("ranked_candidates", []),
-            "ranking_debug": ranking_result.get("ranking_debug", {}),
-            "stock_trending": stock_data,
-            "crypto_scanner": crypto_data,
-            "commodities": commodity_data,
-            "macro_context": macro_data,
+            "scan_type":
+            "cross_market",
+            "instructions":
+            ("CROSS-MARKET SCAN — PRE-RANKED DATA. Candidates have been quantitatively scored, "
+             "normalized across asset classes, and filtered. The ranking_debug shows WHY each was selected. "
+             "Your job: (1) Use the pre-ranked list as your starting point — do NOT re-rank from scratch. "
+             "(2) Add qualitative analysis the math can't capture (narrative, timing, regime context). "
+             "(3) You may promote or demote candidates by 1-2 positions based on qualitative factors, but "
+             "explain why. (4) MUST include at least one stock and one commodity if they appear in ranked list. "
+             "(5) If macro regime is risk_off, do NOT recommend speculative small-cap crypto. "
+             "(6) Present your final 3-5 picks with conviction level and specific entry thesis."
+             ),
+            "ranked_candidates":
+            ranking_result.get("ranked_candidates", []),
+            "ranking_debug":
+            ranking_result.get("ranking_debug", {}),
+            "stock_trending":
+            stock_data,
+            "crypto_scanner":
+            crypto_data,
+            "commodities":
+            commodity_data,
+            "macro_context":
+            macro_data,
         }
 
         return result
@@ -3450,7 +4168,9 @@ class MarketDataService:
         add_tickers(finviz_most_active, "Finviz Active")
         add_tickers(reddit_trending, "Reddit")
 
-        ranked = sorted(ticker_sources.items(), key=lambda x: len(x[1]), reverse=True)
+        ranked = sorted(ticker_sources.items(),
+                        key=lambda x: len(x[1]),
+                        reverse=True)
         multi_source = [(t, srcs) for t, srcs in ranked if len(srcs) >= 2]
         top_tickers = [t for t, _ in multi_source[:10]]
 
@@ -3468,13 +4188,17 @@ class MarketDataService:
             enriched[ticker] = result
 
         return {
-            "total_unique_tickers": len(ticker_sources),
-            "multi_platform_count": len(multi_source),
-            "top_trending": [
-                {"ticker": t, "source_count": len(s), "sources": list(s)}
-                for t, s in multi_source[:15]
-            ],
-            "enriched_data": enriched,
+            "total_unique_tickers":
+            len(ticker_sources),
+            "multi_platform_count":
+            len(multi_source),
+            "top_trending": [{
+                "ticker": t,
+                "source_count": len(s),
+                "sources": list(s)
+            } for t, s in multi_source[:15]],
+            "enriched_data":
+            enriched,
         }
 
     async def _get_crypto_light(self) -> dict:
@@ -3504,29 +4228,124 @@ class MarketDataService:
         return output
 
     COMMODITY_UNIVERSE = {
-        "oil":          {"proxy": "USO",  "name": "Crude Oil",        "type": "energy"},
-        "nat_gas":      {"proxy": "UNG",  "name": "Natural Gas",      "type": "energy"},
-        "gold":         {"proxy": "GLD",  "name": "Gold",             "type": "precious_metals"},
-        "silver":       {"proxy": "SLV",  "name": "Silver",           "type": "precious_metals"},
-        "platinum":     {"proxy": "PPLT", "name": "Platinum",         "type": "precious_metals"},
-        "copper":       {"proxy": "CPER", "name": "Copper",           "type": "base_metals"},
-        "base_metals":  {"proxy": "DBB",  "name": "Base Metals",      "type": "base_metals"},
-        "steel":        {"proxy": "SLX",  "name": "Steel",            "type": "base_metals",   "equity_proxy": "CLF"},
-        "aluminum":     {"proxy": "AA",   "name": "Aluminum (Alcoa)", "type": "base_metals"},
-        "uranium":      {"proxy": "URA",  "name": "Uranium",          "type": "energy"},
-        "uranium_alt":  {"proxy": "URNM", "name": "Uranium Miners",   "type": "energy"},
-        "lithium":      {"proxy": "LIT",  "name": "Lithium",          "type": "battery_metals", "equity_proxy": "ALB"},
-        "rare_earth":   {"proxy": "REMX", "name": "Rare Earth",       "type": "battery_metals", "equity_proxy": "MP"},
-        "wheat":        {"proxy": "WEAT", "name": "Wheat",            "type": "agriculture"},
-        "corn":         {"proxy": "CORN", "name": "Corn",             "type": "agriculture"},
-        "soybeans":     {"proxy": "SOYB", "name": "Soybeans",         "type": "agriculture"},
-        "agriculture":  {"proxy": "DBA",  "name": "Agriculture Basket","type": "agriculture"},
-        "carbon":       {"proxy": "KRBN", "name": "Carbon Credits",   "type": "carbon"},
-        "energy_eq":    {"proxy": "XLE",  "name": "Energy Sector",    "type": "energy"},
-        "gold_miners":  {"proxy": "GDX",  "name": "Gold Miners",      "type": "precious_metals"},
-        "jr_gold":      {"proxy": "GDXJ", "name": "Jr Gold Miners",   "type": "precious_metals"},
-        "clean_energy": {"proxy": "ICLN", "name": "Clean Energy",     "type": "energy"},
-        "timber":       {"proxy": "WOOD", "name": "Timber",            "type": "agriculture"},
+        "oil": {
+            "proxy": "USO",
+            "name": "Crude Oil",
+            "type": "energy"
+        },
+        "nat_gas": {
+            "proxy": "UNG",
+            "name": "Natural Gas",
+            "type": "energy"
+        },
+        "gold": {
+            "proxy": "GLD",
+            "name": "Gold",
+            "type": "precious_metals"
+        },
+        "silver": {
+            "proxy": "SLV",
+            "name": "Silver",
+            "type": "precious_metals"
+        },
+        "platinum": {
+            "proxy": "PPLT",
+            "name": "Platinum",
+            "type": "precious_metals"
+        },
+        "copper": {
+            "proxy": "CPER",
+            "name": "Copper",
+            "type": "base_metals"
+        },
+        "base_metals": {
+            "proxy": "DBB",
+            "name": "Base Metals",
+            "type": "base_metals"
+        },
+        "steel": {
+            "proxy": "SLX",
+            "name": "Steel",
+            "type": "base_metals",
+            "equity_proxy": "CLF"
+        },
+        "aluminum": {
+            "proxy": "AA",
+            "name": "Aluminum (Alcoa)",
+            "type": "base_metals"
+        },
+        "uranium": {
+            "proxy": "URA",
+            "name": "Uranium",
+            "type": "energy"
+        },
+        "uranium_alt": {
+            "proxy": "URNM",
+            "name": "Uranium Miners",
+            "type": "energy"
+        },
+        "lithium": {
+            "proxy": "LIT",
+            "name": "Lithium",
+            "type": "battery_metals",
+            "equity_proxy": "ALB"
+        },
+        "rare_earth": {
+            "proxy": "REMX",
+            "name": "Rare Earth",
+            "type": "battery_metals",
+            "equity_proxy": "MP"
+        },
+        "wheat": {
+            "proxy": "WEAT",
+            "name": "Wheat",
+            "type": "agriculture"
+        },
+        "corn": {
+            "proxy": "CORN",
+            "name": "Corn",
+            "type": "agriculture"
+        },
+        "soybeans": {
+            "proxy": "SOYB",
+            "name": "Soybeans",
+            "type": "agriculture"
+        },
+        "agriculture": {
+            "proxy": "DBA",
+            "name": "Agriculture Basket",
+            "type": "agriculture"
+        },
+        "carbon": {
+            "proxy": "KRBN",
+            "name": "Carbon Credits",
+            "type": "carbon"
+        },
+        "energy_eq": {
+            "proxy": "XLE",
+            "name": "Energy Sector",
+            "type": "energy"
+        },
+        "gold_miners": {
+            "proxy": "GDX",
+            "name": "Gold Miners",
+            "type": "precious_metals"
+        },
+        "jr_gold": {
+            "proxy": "GDXJ",
+            "name": "Jr Gold Miners",
+            "type": "precious_metals"
+        },
+        "clean_energy": {
+            "proxy": "ICLN",
+            "name": "Clean Energy",
+            "type": "energy"
+        },
+        "timber": {
+            "proxy": "WOOD",
+            "name": "Timber",
+            "type": "agriculture"
+        },
     }
 
     COMMODITY_THEME_KEYWORDS = {
@@ -3552,7 +4371,9 @@ class MarketDataService:
 
     MAX_COMMODITY_QUOTES = 20
 
-    async def _get_commodities_light(self, grok_themes: list[str] | None = None) -> dict:
+    async def _get_commodities_light(self,
+                                     grok_themes: list[str] | None = None
+                                     ) -> dict:
         """
         Commodity universe quote sampling for cross-market trending.
         Fetches quotes for up to MAX_COMMODITY_QUOTES liquid proxies,
@@ -3567,7 +4388,9 @@ class MarketDataService:
 
         cached = cache.get(CACHE_KEY)
         if cached is not None:
-            print(f"[COMMODITIES] Using cached universe quotes ({len(cached.get('commodity_proxies', []))} items) key={theme_suffix}")
+            print(
+                f"[COMMODITIES] Using cached universe quotes ({len(cached.get('commodity_proxies', []))} items) key={theme_suffix}"
+            )
             return cached
 
         grok_themes = grok_themes or []
@@ -3586,11 +4409,19 @@ class MarketDataService:
                 all_proxies.append({"symbol": sym, "theme": theme_key, **info})
                 seen_symbols.add(sym)
             eq = info.get("equity_proxy")
-            if eq and eq not in seen_symbols and len(all_proxies) < self.MAX_COMMODITY_QUOTES + 3:
-                all_proxies.append({"symbol": eq, "theme": theme_key, "name": f"{info['name']} (equity)", "type": info["type"]})
+            if eq and eq not in seen_symbols and len(
+                    all_proxies) < self.MAX_COMMODITY_QUOTES + 3:
+                all_proxies.append({
+                    "symbol": eq,
+                    "theme": theme_key,
+                    "name": f"{info['name']} (equity)",
+                    "type": info["type"]
+                })
                 seen_symbols.add(eq)
 
-        quote_symbols = [p["symbol"] for p in all_proxies[:self.MAX_COMMODITY_QUOTES]]
+        quote_symbols = [
+            p["symbol"] for p in all_proxies[:self.MAX_COMMODITY_QUOTES]
+        ]
 
         fmp_quotes = {}
         fmp_treasuries = {}
@@ -3598,15 +4429,18 @@ class MarketDataService:
             batch_size = 20
             quote_tasks = []
             for i in range(0, len(quote_symbols), batch_size):
-                batch = quote_symbols[i:i+batch_size]
+                batch = quote_symbols[i:i + batch_size]
                 quote_tasks.append(self.fmp.get_etf_quotes(batch))
             treasury_task = self.fmp.get_treasury_rates()
 
-            results = await asyncio.gather(*quote_tasks, treasury_task, return_exceptions=True)
+            results = await asyncio.gather(*quote_tasks,
+                                           treasury_task,
+                                           return_exceptions=True)
             for r in results[:-1]:
                 if isinstance(r, dict):
                     fmp_quotes.update(r)
-            fmp_treasuries = results[-1] if not isinstance(results[-1], Exception) else {}
+            fmp_treasuries = results[-1] if not isinstance(
+                results[-1], Exception) else {}
 
         fred_macro = self.fred.get_quick_macro()
 
@@ -3619,22 +4453,37 @@ class MarketDataService:
                 missing.append(sym)
                 continue
             commodity_proxies.append({
-                "symbol": sym,
-                "name": p.get("name", sym),
-                "theme": p.get("theme", ""),
-                "type": p.get("type", ""),
-                "price": quote.get("price"),
-                "change": quote.get("change"),
-                "change_pct": quote.get("change_pct"),
-                "volume": quote.get("volume"),
-                "avg_volume": quote.get("avg_volume"),
-                "year_high": quote.get("year_high"),
-                "year_low": quote.get("year_low"),
-                "abs_change_pct": abs(quote.get("change_pct") or 0),
-                "grok_theme_match": p.get("theme", "") in force_include_themes,
+                "symbol":
+                sym,
+                "name":
+                p.get("name", sym),
+                "theme":
+                p.get("theme", ""),
+                "type":
+                p.get("type", ""),
+                "price":
+                quote.get("price"),
+                "change":
+                quote.get("change"),
+                "change_pct":
+                quote.get("change_pct"),
+                "volume":
+                quote.get("volume"),
+                "avg_volume":
+                quote.get("avg_volume"),
+                "year_high":
+                quote.get("year_high"),
+                "year_low":
+                quote.get("year_low"),
+                "abs_change_pct":
+                abs(quote.get("change_pct") or 0),
+                "grok_theme_match":
+                p.get("theme", "") in force_include_themes,
             })
 
-        commodity_proxies.sort(key=lambda x: (x["grok_theme_match"], x["abs_change_pct"]), reverse=True)
+        commodity_proxies.sort(key=lambda x:
+                               (x["grok_theme_match"], x["abs_change_pct"]),
+                               reverse=True)
 
         selected = []
         selected_themes = set()
@@ -3650,8 +4499,11 @@ class MarketDataService:
                 if len(selected) >= 4:
                     break
 
-        grok_theme_names = list(force_include_themes) if force_include_themes else []
-        print(f"[COMMODITIES] universe={len(all_proxies)} fetched={len(commodity_proxies)} selected={len(selected)} grok_themes={grok_theme_names} missing={missing[:5]}")
+        grok_theme_names = list(
+            force_include_themes) if force_include_themes else []
+        print(
+            f"[COMMODITIES] universe={len(all_proxies)} fetched={len(commodity_proxies)} selected={len(selected)} grok_themes={grok_theme_names} missing={missing[:5]}"
+        )
 
         result = {
             "commodity_proxies": selected,
@@ -3688,30 +4540,24 @@ class MarketDataService:
 
         if self.coingecko:
             tasks["cg_dashboard"] = asyncio.wait_for(
-                self.coingecko.get_crypto_dashboard(), timeout=12.0
-            )
+                self.coingecko.get_crypto_dashboard(), timeout=12.0)
 
         if self.cmc:
             tasks["cmc_dashboard"] = asyncio.wait_for(
-                self.cmc.get_full_dashboard(), timeout=12.0
-            )
+                self.cmc.get_full_dashboard(), timeout=12.0)
 
         tasks["hyperliquid"] = asyncio.wait_for(
-            self.hyperliquid.get_crypto_dashboard(), timeout=8.0
-        )
+            self.hyperliquid.get_crypto_dashboard(), timeout=8.0)
         tasks["fear_greed"] = asyncio.wait_for(
-            self.fear_greed.get_fear_greed_index(), timeout=5.0
-        )
+            self.fear_greed.get_fear_greed_index(), timeout=5.0)
 
         if self.altfins:
             tasks["altfins"] = asyncio.wait_for(
-                self.altfins.get_crypto_scanner_data(), timeout=10.0
-            )
+                self.altfins.get_crypto_scanner_data(), timeout=10.0)
 
         if self.xai:
             tasks["x_twitter_crypto"] = asyncio.wait_for(
-                self.xai.get_trending_tickers("crypto"), timeout=20.0
-            )
+                self.xai.get_trending_tickers("crypto"), timeout=20.0)
 
         task_names = list(tasks.keys())
         results = await asyncio.gather(
@@ -3747,7 +4593,8 @@ class MarketDataService:
                 cmc_most_visited_symbols.add(sym)
 
         dual_trending = cg_trending_symbols & cmc_trending_symbols
-        high_attention = (cg_trending_symbols | cmc_trending_symbols) & cmc_most_visited_symbols
+        high_attention = (cg_trending_symbols
+                          | cmc_trending_symbols) & cmc_most_visited_symbols
 
         volume_acceleration = {}
         for coin in (cmc.get("listings") or []):
@@ -3764,7 +4611,8 @@ class MarketDataService:
         deep_dive = {}
 
         derivatives = cg.get("derivatives", [])
-        funding_analysis = self._analyze_funding_rates(derivatives) if derivatives else {}
+        funding_analysis = self._analyze_funding_rates(
+            derivatives) if derivatives else {}
 
         cg_categories = (cg.get("categories") or [])[:10]
         cmc_categories = (cmc.get("categories") or [])[:10]
@@ -3776,59 +4624,78 @@ class MarketDataService:
         coin_metadata = {}
 
         result = {
-            "cg_global": cg.get("global_market", {}),
-            "cmc_global": cmc.get("global_metrics", {}),
-
+            "cg_global":
+            cg.get("global_market", {}),
+            "cmc_global":
+            cmc.get("global_metrics", {}),
             "cg_top_coins": (cg.get("top_coins") or [])[:20],
             "cmc_listings": (cmc.get("listings") or [])[:15],
-
-            "cg_trending": cg_trending_data,
-            "cmc_trending": cmc.get("trending", []),
+            "cg_trending":
+            cg_trending_data,
+            "cmc_trending":
+            cmc.get("trending", []),
             "cmc_most_visited": (cmc.get("most_visited") or [])[:10],
-            "dual_trending": list(dual_trending),
-            "high_attention": list(high_attention),
-
-            "cg_gainers_losers": cg.get("gainers_losers", {}),
-            "cmc_gainers_losers": cmc_gainers_losers,
-
+            "dual_trending":
+            list(dual_trending),
+            "high_attention":
+            list(high_attention),
+            "cg_gainers_losers":
+            cg.get("gainers_losers", {}),
+            "cmc_gainers_losers":
+            cmc_gainers_losers,
             "derivatives_tickers": (derivatives or [])[:15],
-            "funding_analysis": funding_analysis,
-
-            "hyperliquid": data.get("hyperliquid", {}),
-
-            "cg_categories": cg_categories[:5],
-            "cmc_categories": cmc_categories[:5],
-
-            "volume_acceleration": dict(sorted(volume_acceleration.items(), key=lambda x: abs(x[1].get("volume_change_24h", 0)), reverse=True)[:15]),
-
-            "new_listings": new_listings,
-
-            "deep_dive": deep_dive,
-
-            "coin_metadata": coin_metadata if not isinstance(coin_metadata, Exception) else {},
-
-            "fear_greed": data.get("fear_greed", {}),
-            "crypto_news": data.get("crypto_news", {}),
-
-            "altfins": data.get("altfins", {}),
-
-            "x_twitter_crypto": data.get("x_twitter_crypto", {}),
+            "funding_analysis":
+            funding_analysis,
+            "hyperliquid":
+            data.get("hyperliquid", {}),
+            "cg_categories":
+            cg_categories[:5],
+            "cmc_categories":
+            cmc_categories[:5],
+            "volume_acceleration":
+            dict(
+                sorted(volume_acceleration.items(),
+                       key=lambda x: abs(x[1].get("volume_change_24h", 0)),
+                       reverse=True)[:15]),
+            "new_listings":
+            new_listings,
+            "deep_dive":
+            deep_dive,
+            "coin_metadata":
+            coin_metadata if not isinstance(coin_metadata, Exception) else {},
+            "fear_greed":
+            data.get("fear_greed", {}),
+            "crypto_news":
+            data.get("crypto_news", {}),
+            "altfins":
+            data.get("altfins", {}),
+            "x_twitter_crypto":
+            data.get("x_twitter_crypto", {}),
         }
 
         x_data = data.get("x_twitter_crypto", {})
         if isinstance(x_data, dict):
             if x_data.get("error"):
-                print(f"[CRYPTO_SCANNER] X sentiment ERROR: {x_data.get('error')}")
+                print(
+                    f"[CRYPTO_SCANNER] X sentiment ERROR: {x_data.get('error')}"
+                )
             elif x_data.get("trending_tickers") or x_data.get("btc_sentiment"):
-                print(f"[CRYPTO_SCANNER] X sentiment: {len(x_data.get('trending_tickers', []))} trending tickers, mood={x_data.get('market_mood')}")
+                print(
+                    f"[CRYPTO_SCANNER] X sentiment: {len(x_data.get('trending_tickers', []))} trending tickers, mood={x_data.get('market_mood')}"
+                )
             else:
-                print(f"[CRYPTO_SCANNER] X sentiment: empty/no tickers (keys: {list(x_data.keys())[:5]})")
+                print(
+                    f"[CRYPTO_SCANNER] X sentiment: empty/no tickers (keys: {list(x_data.keys())[:5]})"
+                )
         else:
-            print(f"[CRYPTO_SCANNER] X sentiment: not a dict, type={type(x_data).__name__}")
+            print(
+                f"[CRYPTO_SCANNER] X sentiment: not a dict, type={type(x_data).__name__}"
+            )
 
         import json as _json
         total_size = len(_json.dumps(result, default=str))
-        print(f"[CRYPTO_SCANNER] Total raw data size: {total_size:,} chars", flush=True)
+        print(f"[CRYPTO_SCANNER] Total raw data size: {total_size:,} chars",
+              flush=True)
         for k, v in result.items():
             ks = len(_json.dumps(v, default=str))
             if ks > 2000:
@@ -3843,7 +4710,8 @@ class MarketDataService:
             async with quote_semaphore:
                 if daily_budget.can_spend("finnhub"):
                     try:
-                        quote = await asyncio.to_thread(self.finnhub.get_quote, ticker)
+                        quote = await asyncio.to_thread(
+                            self.finnhub.get_quote, ticker)
                         daily_budget.spend("finnhub")
                         if quote and quote.get("price"):
                             results[ticker] = {
@@ -3854,14 +4722,17 @@ class MarketDataService:
                             return
                     except Exception:
                         pass
-                if hasattr(self, 'fmp') and self.fmp and daily_budget.can_spend("fmp"):
+                if hasattr(
+                        self,
+                        'fmp') and self.fmp and daily_budget.can_spend("fmp"):
                     try:
                         fmp_quote = await self.fmp.get_quote(ticker)
                         daily_budget.spend("fmp")
                         if fmp_quote and fmp_quote.get("price"):
                             results[ticker] = {
                                 "price": fmp_quote["price"],
-                                "change_pct": fmp_quote.get("changesPercentage"),
+                                "change_pct":
+                                fmp_quote.get("changesPercentage"),
                                 "prev_close": fmp_quote.get("previousClose"),
                             }
                     except Exception:
@@ -3871,7 +4742,9 @@ class MarketDataService:
         await asyncio.gather(*tasks, return_exceptions=True)
         return results
 
-    async def enrich_with_edgar(self, tickers: list[str], mode: str = "light") -> dict:
+    async def enrich_with_edgar(self,
+                                tickers: list[str],
+                                mode: str = "light") -> dict:
         """
         Enrich tickers with SEC EDGAR data.
         Modes:
@@ -3897,41 +4770,60 @@ class MarketDataService:
             if not cik:
                 continue
 
-            entry = {"cik": cik, "filings_recent": [], "catalysts": [], "insider": None}
+            entry = {
+                "cik": cik,
+                "filings_recent": [],
+                "catalysts": [],
+                "insider": None
+            }
 
             try:
-                entry["filings_recent"] = await self.sec_edgar.get_recent_filings(
-                    cik, lookback_days=14, limit=5, budget=budget,
-                )
+                entry[
+                    "filings_recent"] = await self.sec_edgar.get_recent_filings(
+                        cik,
+                        lookback_days=14,
+                        limit=5,
+                        budget=budget,
+                    )
             except Exception as e:
                 print(f"[EDGAR] Filings error for {ticker}: {e}")
 
             if mode in ("standard", "insider_focus"):
                 try:
-                    entry["catalysts"] = await self.sec_edgar.get_8k_s1_catalysts(
-                        cik, lookback_days=14, limit=5, budget=budget,
-                    )
+                    entry[
+                        "catalysts"] = await self.sec_edgar.get_8k_s1_catalysts(
+                            cik,
+                            lookback_days=14,
+                            limit=5,
+                            budget=budget,
+                        )
                 except Exception as e:
                     print(f"[EDGAR] Catalysts error for {ticker}: {e}")
 
             if mode == "insider_focus":
                 try:
-                    entry["insider"] = await self.sec_edgar.get_form4_insider_summary(
-                        cik, lookback_days=30, limit=10, budget=budget,
-                    )
+                    entry[
+                        "insider"] = await self.sec_edgar.get_form4_insider_summary(
+                            cik,
+                            lookback_days=30,
+                            limit=10,
+                            budget=budget,
+                        )
                 except Exception as e:
                     print(f"[EDGAR] Insider error for {ticker}: {e}")
 
-            if entry["filings_recent"] or entry["catalysts"] or entry.get("insider"):
+            if entry["filings_recent"] or entry["catalysts"] or entry.get(
+                    "insider"):
                 result[ticker] = entry
                 processed += 1
 
             if not budget.can_spend() and not any(
-                cache.get(f"edgar:filings:{cik}:all:14") for _ in [1]
-            ):
+                    cache.get(f"edgar:filings:{cik}:all:14") for _ in [1]):
                 break
 
-        print(f"[EDGAR] tickers={len(to_process)} mode={mode} enriched={processed} {budget.summary()}")
+        print(
+            f"[EDGAR] tickers={len(to_process)} mode={mode} enriched={processed} {budget.summary()}"
+        )
         return result
 
     async def run_deterministic_screener(self, preset_name: str) -> dict:
@@ -3959,7 +4851,9 @@ class MarketDataService:
         ENRICHMENT_LIMIT = 30
         ENRICHMENT_TIMEOUT = 12.0
 
-        print(f"[SCREENER] Starting preset={preset_name} label={definition['screen_label']}")
+        print(
+            f"[SCREENER] Starting preset={preset_name} label={definition['screen_label']}"
+        )
 
         # --- Phase A: Finviz discovery ---
         finviz_filter_str = definition["finviz_filters"]
@@ -3983,10 +4877,13 @@ class MarketDataService:
                 )
                 if isinstance(candidates, Exception):
                     candidates = []
-                if isinstance(market_mood, Exception) or not isinstance(market_mood, dict):
+                if isinstance(market_mood,
+                              Exception) or not isinstance(market_mood, dict):
                     market_mood = None
                 else:
-                    print(f"[SCREENER] Grok mood: {market_mood.get('mood', '?')}")
+                    print(
+                        f"[SCREENER] Grok mood: {market_mood.get('mood', '?')}"
+                    )
             else:
                 candidates = await self.finviz._custom_screen(screen_url)
                 market_mood = None
@@ -3996,7 +4893,8 @@ class MarketDataService:
             market_mood = None
 
         if not candidates:
-            fallback_filter = finviz_filter_str.split(",")[0] if "," in finviz_filter_str else finviz_filter_str
+            fallback_filter = finviz_filter_str.split(
+                ",")[0] if "," in finviz_filter_str else finviz_filter_str
             fallback_url = f"v=111&f={fallback_filter},sh_avgvol_o200&ft=4&o={finviz_sort}"
             print(f"[SCREENER] Phase A fallback: {fallback_url}")
             try:
@@ -4015,8 +4913,15 @@ class MarketDataService:
                 "explain": definition["explain_template"],
                 "top_picks": [],
                 "rows": [],
-                "scan_stats": {"candidates_total": 0, "enriched": 0, "qualified": 0},
-                "meta": {"empty_reason": "No candidates matched Finviz screen criteria"},
+                "scan_stats": {
+                    "candidates_total": 0,
+                    "enriched": 0,
+                    "qualified": 0
+                },
+                "meta": {
+                    "empty_reason":
+                    "No candidates matched Finviz screen criteria"
+                },
             }
 
         to_enrich = candidates[:ENRICHMENT_LIMIT]
@@ -4043,7 +4948,11 @@ class MarketDataService:
                 if val is None:
                     return None
                 try:
-                    return float(str(val).replace("%", "").replace("+", "").replace(",", "").strip())
+                    return float(
+                        str(val).replace("%",
+                                         "").replace("+",
+                                                     "").replace(",",
+                                                                 "").strip())
                 except (ValueError, TypeError):
                     return None
 
@@ -4069,10 +4978,13 @@ class MarketDataService:
             if finviz_price and finviz_price > 0:
                 row["price"] = finviz_price
                 row["chg_pct"] = finviz_chg
-                print(f"[SCREENER] using Finviz price for {ticker}: ${finviz_price}")
+                print(
+                    f"[SCREENER] using Finviz price for {ticker}: ${finviz_price}"
+                )
             elif daily_budget.can_spend("finnhub"):
                 try:
-                    quote = await asyncio.to_thread(self.finnhub.get_quote, ticker)
+                    quote = await asyncio.to_thread(self.finnhub.get_quote,
+                                                    ticker)
                     daily_budget.spend("finnhub")
                     if quote and quote.get("price"):
                         row["price"] = quote["price"]
@@ -4087,22 +4999,27 @@ class MarketDataService:
                         sa_name = overview.get("ticker", "")
                         if overview.get("market_cap"):
                             row["company"] = f"{ticker} Corp"
-                    pe_raw = overview.get("pe_ratio") or overview.get("forward_pe")
+                    pe_raw = overview.get("pe_ratio") or overview.get(
+                        "forward_pe")
                     if pe_raw:
                         try:
-                            row["pe"] = float(str(pe_raw).replace(",", "").replace("x", ""))
+                            row["pe"] = float(
+                                str(pe_raw).replace(",", "").replace("x", ""))
                         except (ValueError, TypeError):
                             pass
                     div_raw = overview.get("dividend_yield")
                     if div_raw and div_raw not in ("N/A", "-", "n/a"):
                         try:
-                            row["div_yield"] = float(str(div_raw).replace("%", "").replace(",", ""))
+                            row["div_yield"] = float(
+                                str(div_raw).replace("%", "").replace(",", ""))
                         except (ValueError, TypeError):
                             pass
                     rg_raw = overview.get("revenue_growth")
                     if rg_raw:
                         try:
-                            row["rev_growth_yoy"] = float(str(rg_raw).replace("%", "").replace("+", "").replace(",", ""))
+                            row["rev_growth_yoy"] = float(
+                                str(rg_raw).replace("%", "").replace(
+                                    "+", "").replace(",", ""))
                         except (ValueError, TypeError):
                             pass
                     if not row["mkt_cap"] and overview.get("market_cap"):
@@ -4115,7 +5032,10 @@ class MarketDataService:
                     price_str = item.get(price_key, "")
                     if price_str:
                         try:
-                            row["price"] = float(str(price_str).replace(",", "").replace("$", "").strip())
+                            row["price"] = float(
+                                str(price_str).replace(",",
+                                                       "").replace("$",
+                                                                   "").strip())
                             break
                         except (ValueError, TypeError):
                             continue
@@ -4124,7 +5044,9 @@ class MarketDataService:
                     chg_str = item.get(chg_key, "")
                     if chg_str:
                         try:
-                            row["chg_pct"] = float(str(chg_str).replace("%", "").replace("+", "").replace(",", "").strip())
+                            row["chg_pct"] = float(
+                                str(chg_str).replace("%", "").replace(
+                                    "+", "").replace(",", "").strip())
                             break
                         except (ValueError, TypeError):
                             continue
@@ -4132,10 +5054,14 @@ class MarketDataService:
             ta_data = {}
             if _t.time() - enrichment_start < ENRICHMENT_TIMEOUT:
                 try:
-                    bars = await self.get_candles(ticker, days=120, budget=candle_budget)
+                    bars = await self.get_candles(ticker,
+                                                  days=120,
+                                                  budget=candle_budget)
                     if bars and len(bars) >= 20:
                         ta_data = compute_technicals_from_bars(bars)
-                        closes = [b["c"] for b in bars if b.get("c") is not None]
+                        closes = [
+                            b["c"] for b in bars if b.get("c") is not None
+                        ]
                         volumes = [b.get("v", 0) for b in bars]
 
                         if ta_data.get("rsi") is not None:
@@ -4155,7 +5081,8 @@ class MarketDataService:
                                 row["signals"].append("MACD positive")
                             else:
                                 row["signals"].append("MACD negative")
-                        if ta_data.get("macd") is not None and ta_data.get("macd_signal") is not None:
+                        if ta_data.get("macd") is not None and ta_data.get(
+                                "macd_signal") is not None:
                             if ta_data["macd"] > ta_data["macd_signal"]:
                                 row["signals"].append("MACD bull cross")
                         avg_vol = ta_data.get("avg_volume") or 0
@@ -4202,7 +5129,9 @@ class MarketDataService:
             if isinstance(r, dict) and r.get("ticker"):
                 enriched_rows.append(r)
 
-        missing_price_tickers = [r["ticker"] for r in enriched_rows if not r.get("price")]
+        missing_price_tickers = [
+            r["ticker"] for r in enriched_rows if not r.get("price")
+        ]
         if missing_price_tickers:
             try:
                 batch_quotes = await asyncio.wait_for(
@@ -4213,20 +5142,29 @@ class MarketDataService:
                     t = r["ticker"]
                     if not r.get("price") and t in batch_quotes:
                         r["price"] = batch_quotes[t]["price"]
-                        if not r.get("chg_pct") and batch_quotes[t].get("change_pct") is not None:
+                        if not r.get("chg_pct") and batch_quotes[t].get(
+                                "change_pct") is not None:
                             r["chg_pct"] = batch_quotes[t]["change_pct"]
-                print(f"[SCREENER] Quote backfill: {len(batch_quotes)}/{len(missing_price_tickers)} filled")
+                print(
+                    f"[SCREENER] Quote backfill: {len(batch_quotes)}/{len(missing_price_tickers)} filled"
+                )
             except asyncio.TimeoutError:
                 print("[SCREENER] Quote backfill timed out")
             except Exception as e:
                 print(f"[SCREENER] Quote backfill error: {e}")
 
-        print(f"[SCREENER] Phase B: {len(enriched_rows)} enriched (budget: {candle_budget.summary()})")
+        print(
+            f"[SCREENER] Phase B: {len(enriched_rows)} enriched (budget: {candle_budget.summary()})"
+        )
 
         # --- Phase C: Filter + Rank ---
         ta_rules = definition.get("ta_rules", {})
         fund_rules = definition.get("fundamental_rules", {})
-        weights = definition.get("ranking_weights", {"technical": 0.4, "fundamental": 0.4, "liquidity": 0.2})
+        weights = definition.get("ranking_weights", {
+            "technical": 0.4,
+            "fundamental": 0.4,
+            "liquidity": 0.2
+        })
 
         scored_rows = []
         for row in enriched_rows:
@@ -4235,10 +5173,13 @@ class MarketDataService:
 
             # Penalize tickers where candle fetch was blocked or returned nothing
             ta_missing = not ta or not any([
-                ta.get("rsi"), ta.get("sma_20"), ta.get("sma_50"),
-                ta.get("macd"), ta.get("macd_histogram")
+                ta.get("rsi"),
+                ta.get("sma_20"),
+                ta.get("sma_50"),
+                ta.get("macd"),
+                ta.get("macd_histogram")
             ])
-            tech_score = 20 if ta_missing else 50   # start 30pts lower if no TA at all
+            tech_score = 20 if ta_missing else 50  # start 30pts lower if no TA at all
             fund_score = 50
             liq_score = 50
             if ta_missing:
@@ -4252,20 +5193,24 @@ class MarketDataService:
                 else:
                     tech_score -= 10
 
-            if ta_rules.get("above_sma50") and ta.get("sma_50") and row.get("price"):
+            if ta_rules.get("above_sma50") and ta.get("sma_50") and row.get(
+                    "price"):
                 if row["price"] > ta["sma_50"]:
                     tech_score += 15
                 else:
                     tech_score -= 15
 
-            if ta_rules.get("above_sma20") and ta.get("sma_20") and row.get("price"):
+            if ta_rules.get("above_sma20") and ta.get("sma_20") and row.get(
+                    "price"):
                 if row["price"] > ta["sma_20"]:
                     tech_score += 10
 
-            if ta_rules.get("sma50_trending_up") and row.get("_sma50_trending_up"):
+            if ta_rules.get("sma50_trending_up") and row.get(
+                    "_sma50_trending_up"):
                 tech_score += 10
 
-            if ta_rules.get("sma20_above_sma50") and ta.get("sma_20") and ta.get("sma_50"):
+            if ta_rules.get("sma20_above_sma50") and ta.get(
+                    "sma_20") and ta.get("sma_50"):
                 if ta["sma_20"] > ta["sma_50"]:
                     tech_score += 10
 
@@ -4278,19 +5223,22 @@ class MarketDataService:
                 if macd_val is not None and macd_sig is not None and macd_val > macd_sig:
                     tech_score += 5
 
-            if ta_rules.get("breakout_20d_high") or ta_rules.get("breakout_or_gap_up"):
+            if ta_rules.get("breakout_20d_high") or ta_rules.get(
+                    "breakout_or_gap_up"):
                 if row.get("_breakout_20d"):
                     tech_score += 15
                 elif ta_rules.get("breakout_20d_high"):
                     tech_score -= 10
 
-            rel_vol_min = ta_rules.get("rel_vol_min") or ta_rules.get("prefer_rel_vol")
+            rel_vol_min = ta_rules.get("rel_vol_min") or ta_rules.get(
+                "prefer_rel_vol")
             if rel_vol_min and row.get("rel_vol"):
                 if row["rel_vol"] >= rel_vol_min:
                     tech_score += 10
                     liq_score += 10
 
-            if ta_rules.get("above_sma200_or_reclaiming") and ta.get("sma_200") and row.get("price"):
+            if ta_rules.get("above_sma200_or_reclaiming") and ta.get(
+                    "sma_200") and row.get("price"):
                 if row["price"] > ta["sma_200"]:
                     tech_score += 15
                 elif ta.get("rsi") and ta["rsi"] > 40:
@@ -4298,7 +5246,8 @@ class MarketDataService:
                 else:
                     tech_score -= 10
 
-            if ta_rules.get("not_severe_downtrend") and ta.get("sma_200") and row.get("price"):
+            if ta_rules.get("not_severe_downtrend") and ta.get(
+                    "sma_200") and row.get("price"):
                 if row["price"] < ta["sma_200"] * 0.95:
                     if row.get("_sma50_trending_up") is not True:
                         passes = False
@@ -4344,11 +5293,9 @@ class MarketDataService:
             fund_score = max(0, min(100, fund_score))
             liq_score = max(0, min(100, liq_score))
 
-            composite = (
-                tech_score * weights["technical"]
-                + fund_score * weights["fundamental"]
-                + liq_score * weights["liquidity"]
-            )
+            composite = (tech_score * weights["technical"] +
+                         fund_score * weights["fundamental"] +
+                         liq_score * weights["liquidity"])
 
             if not passes:
                 composite = 0
@@ -4361,19 +5308,23 @@ class MarketDataService:
             scored_rows.append(clean_row)
 
         # Sort: tickers with real TA always rank above data-dark tickers at same score
-        scored_rows.sort(key=lambda r: (
-            0 if r.get("_ta_unavailable") else 1,
-            r["composite_score"]
-        ), reverse=True)
+        scored_rows.sort(
+            key=lambda r:
+            (0 if r.get("_ta_unavailable") else 1, r["composite_score"]),
+            reverse=True)
         qualified = [r for r in scored_rows if r["composite_score"] > 20]
         final_rows = qualified[:25]
 
         top_picks = []
         for r in final_rows[:5]:
             top_picks.append({
-                "ticker": r["ticker"],
-                "confidence": r["composite_score"],
-                "reason": ", ".join(r.get("signals", [])[:3]) or "Qualified on screen criteria",
+                "ticker":
+                r["ticker"],
+                "confidence":
+                r["composite_score"],
+                "reason":
+                ", ".join(r.get("signals", [])[:3])
+                or "Qualified on screen criteria",
             })
 
         edgar_mode = "insider_focus" if preset_name == "insider_breakout" else "light"
@@ -4394,7 +5345,9 @@ class MarketDataService:
             print(f"[SCREENER] EDGAR enrichment error for {preset_name}: {e}")
 
         elapsed = round(_t.time() - start_time, 1)
-        print(f"[SCREENER] Phase C: {len(final_rows)} qualified from {len(enriched_rows)} enriched in {elapsed}s")
+        print(
+            f"[SCREENER] Phase C: {len(final_rows)} qualified from {len(enriched_rows)} enriched in {elapsed}s"
+        )
 
         # --- Add frontend-compatible field aliases ---
         for row in final_rows:
@@ -4411,7 +5364,8 @@ class MarketDataService:
                 row["market_cap"] = row["mkt_cap"]
 
             # Frontend reads 'rev_growth' but backend has 'rev_growth_yoy'
-            if row.get("rev_growth_yoy") is not None and "rev_growth" not in row:
+            if row.get(
+                    "rev_growth_yoy") is not None and "rev_growth" not in row:
                 try:
                     row["rev_growth"] = f"{float(row['rev_growth_yoy']):+.1f}%"
                 except (ValueError, TypeError):
@@ -4436,7 +5390,7 @@ class MarketDataService:
                     pass
 
         # Also provide as 'results' for frontend compatibility
-        
+
         return {
             "display_type": "screener",
             "screen_name": definition["screen_label"],
@@ -4636,8 +5590,10 @@ class MarketDataService:
             if perf_month_down >= 20: f_parts.append("ta_perf_4w20u")
             elif perf_month_down >= 10: f_parts.append("ta_perf_4w10u")
 
-        if filters.get("earnings_this_week"): f_parts.append("earningsdate_thisweek")
-        if filters.get("earnings_next_week"): f_parts.append("earningsdate_nextweek")
+        if filters.get("earnings_this_week"):
+            f_parts.append("earningsdate_thisweek")
+        if filters.get("earnings_next_week"):
+            f_parts.append("earningsdate_nextweek")
         if filters.get("earnings_today"): f_parts.append("earningsdate_today")
 
         upside = filters.get("analyst_upside_min")
@@ -4665,27 +5621,40 @@ class MarketDataService:
         filter_str = ",".join(f_parts) if f_parts else "sh_avgvol_o200"
 
         is_ta_focused = any(k in filters for k in [
-            "rsi_max", "rsi_min", "above_sma200", "above_sma50",
-            "below_sma200", "below_sma50", "unusual_volume",
-            "relative_volume_min", "gap_up", "gap_down",
+            "rsi_max",
+            "rsi_min",
+            "above_sma200",
+            "above_sma50",
+            "below_sma200",
+            "below_sma50",
+            "unusual_volume",
+            "relative_volume_min",
+            "gap_up",
+            "gap_down",
         ])
         view = "171" if is_ta_focused else "111"
 
         sort_order = filters.get("sort", "-sh_relvol")
         screen_url = f"v={view}&f={filter_str}&ft=4&o={sort_order}"
 
-        print(f"[AI Screener] Final Finviz URL: v={view}&f={filter_str}&ft=4&o={sort_order}")
+        print(
+            f"[AI Screener] Final Finviz URL: v={view}&f={filter_str}&ft=4&o={sort_order}"
+        )
         print(f"[AI Screener] Parsed filters: {filters}")
         print(f"[AI Screener] Filter parts: {f_parts}")
 
         screener_results = await self.finviz._custom_screen(screen_url)
         if isinstance(screener_results, Exception) or not screener_results:
             return {
-                "filters_applied": filters,
-                "finviz_url": screen_url,
-                "total_results": 0,
+                "filters_applied":
+                filters,
+                "finviz_url":
+                screen_url,
+                "total_results":
+                0,
                 "results": [],
-                "error": "No stocks matched your criteria. Try loosening some filters.",
+                "error":
+                "No stocks matched your criteria. Try loosening some filters.",
             }
 
         print(f"[AI Screener] Found {len(screener_results)} matches")
@@ -4706,9 +5675,12 @@ class MarketDataService:
 
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                item["sa_overview"] = results[0] if not isinstance(results[0], Exception) else {}
-                item["sa_analyst"] = results[1] if not isinstance(results[1], Exception) else {}
-                if len(results) > 2 and not isinstance(results[2], Exception) and results[2]:
+                item["sa_overview"] = results[0] if not isinstance(
+                    results[0], Exception) else {}
+                item["sa_analyst"] = results[1] if not isinstance(
+                    results[1], Exception) else {}
+                if len(results) > 2 and not isinstance(
+                        results[2], Exception) and results[2]:
                     item["sentiment"] = results[2]
             except:
                 item["sa_overview"] = {}
@@ -4739,36 +5711,60 @@ class MarketDataService:
         if not derivatives or not isinstance(derivatives, list):
             return {}
 
-        perps = [d for d in derivatives if d.get("contract_type") == "perpetual" and d.get("funding_rate") is not None]
+        perps = [
+            d for d in derivatives if d.get("contract_type") == "perpetual"
+            and d.get("funding_rate") is not None
+        ]
 
         if not perps:
             return {}
 
-        sorted_by_funding = sorted(perps, key=lambda x: x.get("funding_rate", 0), reverse=True)
+        sorted_by_funding = sorted(perps,
+                                   key=lambda x: x.get("funding_rate", 0),
+                                   reverse=True)
 
         highest_funding = [{
-            "symbol": p.get("symbol", ""),
-            "funding_rate": p.get("funding_rate"),
-            "open_interest": p.get("open_interest"),
-            "volume_24h": p.get("h24_volume"),
-            "price": p.get("last"),
-            "change_24h": p.get("h24_percentage_change"),
-            "signal": "Crowded longs — correction risk" if p.get("funding_rate", 0) > 0.03 else "Elevated long bias",
+            "symbol":
+            p.get("symbol", ""),
+            "funding_rate":
+            p.get("funding_rate"),
+            "open_interest":
+            p.get("open_interest"),
+            "volume_24h":
+            p.get("h24_volume"),
+            "price":
+            p.get("last"),
+            "change_24h":
+            p.get("h24_percentage_change"),
+            "signal":
+            "Crowded longs — correction risk"
+            if p.get("funding_rate", 0) > 0.03 else "Elevated long bias",
         } for p in sorted_by_funding[:10]]
 
         lowest_funding = [{
-            "symbol": p.get("symbol", ""),
-            "funding_rate": p.get("funding_rate"),
-            "open_interest": p.get("open_interest"),
-            "volume_24h": p.get("h24_volume"),
-            "price": p.get("last"),
-            "change_24h": p.get("h24_percentage_change"),
-            "signal": "Crowded shorts — squeeze potential" if p.get("funding_rate", 0) < -0.01 else "Short bias",
+            "symbol":
+            p.get("symbol", ""),
+            "funding_rate":
+            p.get("funding_rate"),
+            "open_interest":
+            p.get("open_interest"),
+            "volume_24h":
+            p.get("h24_volume"),
+            "price":
+            p.get("last"),
+            "change_24h":
+            p.get("h24_percentage_change"),
+            "signal":
+            "Crowded shorts — squeeze potential"
+            if p.get("funding_rate", 0) < -0.01 else "Short bias",
         } for p in sorted_by_funding[-10:]]
 
-        avg_funding = sum(p.get("funding_rate", 0) for p in perps) / len(perps) if perps else 0
+        avg_funding = sum(p.get("funding_rate", 0)
+                          for p in perps) / len(perps) if perps else 0
 
-        sorted_by_oi = sorted(perps, key=lambda x: x.get("open_interest", 0) or 0, reverse=True)
+        sorted_by_oi = sorted(perps,
+                              key=lambda x: x.get("open_interest", 0) or 0,
+                              reverse=True)
         highest_oi = [{
             "symbol": p.get("symbol", ""),
             "open_interest": p.get("open_interest"),
@@ -4777,10 +5773,17 @@ class MarketDataService:
         } for p in sorted_by_oi[:10]]
 
         return {
-            "total_perps_tracked": len(perps),
-            "avg_funding_rate": round(avg_funding, 6),
-            "market_bias": "Bullish (longs paying)" if avg_funding > 0.005 else "Bearish (shorts paying)" if avg_funding < -0.005 else "Neutral",
-            "highest_funding": highest_funding,
-            "most_negative_funding": lowest_funding,
-            "highest_open_interest": highest_oi,
+            "total_perps_tracked":
+            len(perps),
+            "avg_funding_rate":
+            round(avg_funding, 6),
+            "market_bias":
+            "Bullish (longs paying)" if avg_funding > 0.005 else
+            "Bearish (shorts paying)" if avg_funding < -0.005 else "Neutral",
+            "highest_funding":
+            highest_funding,
+            "most_negative_funding":
+            lowest_funding,
+            "highest_open_interest":
+            highest_oi,
         }

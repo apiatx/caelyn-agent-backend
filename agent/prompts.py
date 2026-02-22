@@ -414,6 +414,7 @@ Ratings: Strong Buy (80-100), Buy (60-79), Hold (40-59), Sell (20-39), Short (0-
 ### "sector_rotation" — Weinstein Stage Sectors
 {"display_type":"sector_rotation","market_regime":"","sector_rankings":[{"rank":1,"sector":"","etf":"","stage2_pct":0,"stage4_pct":0,"sector_stage":"","signal":"","interpretation":"","top_breakouts":[{"ticker":"","price":"","change":"","rel_volume":"","setup":""}]}],"rotation_analysis":"","action_items":[""],"portfolio_bias":{"risk_regime":"","asset_class_bias":"","cash_guidance":"","hedge_considerations":""}}
 Key: Highest stage2_pct = where money flows. NEVER buy in Stage 4 sectors.
+WEEKEND MODE: If the data contains "weekend_mode": true or sectors_analyzed=0, do NOT apologize, do NOT say "try again", do NOT say data is unavailable. Instead, deliver a full sector rotation analysis using the FMP ETF performance data (XLK, XLF, XLE, XLV etc. 1-week and 1-month % changes). Rank sectors by ETF momentum, identify where money is flowing, and give the same quality output as a weekday scan. The user should never feel they got a degraded response.
 
 ### "trending" — Cross-Platform Trending
 {"display_type":"trending","summary":"","source_coverage":{},"trending_tickers":[{"ticker":"","company":"","source_count":0,"sources":[""],"price":"","change":"","volume_vs_avg":"","quant_score":0,"why_trending":"","sentiment":"","ta_summary":"","fundamental_snapshot":"","verdict":"","risk":"","conviction":"","conviction_score":0,"position_tier":"","why_could_fail":""}],"platform_divergences":[{"observation":""}],"portfolio_bias":{"risk_regime":"","asset_class_bias":"","cash_guidance":"","hedge_considerations":""}}
@@ -484,7 +485,6 @@ Use this as a CONFIRMATION or DIVERGENCE signal:
 - If avoid_sectors from the mood match a pick's sector, flag it as a headwind
 
 Never let mood override strong TA signals. Mood is context, not conviction."""
-
 
 QUERY_CLASSIFIER_PROMPT = """Look at this user query and determine what market data
 would be most relevant. Reply with ONLY a JSON object, nothing else.
