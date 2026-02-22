@@ -1857,10 +1857,10 @@ class TradingAgent:
 
         return context
 
-        DEEP_ANALYSIS_CATEGORIES = {
-            "ticker_analysis", "investments", "portfolio_review", "followup",
-            "crypto", "best_trades", "cross_market",
-        }
+    DEEP_ANALYSIS_CATEGORIES = {
+        "ticker_analysis", "investments", "portfolio_review", "followup",
+        "crypto", "best_trades", "cross_market",
+    }
 
     MEDIUM_DATA_CAP_CATEGORIES = {"cross_market"}
 
