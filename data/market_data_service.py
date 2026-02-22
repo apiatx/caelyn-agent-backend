@@ -2336,13 +2336,20 @@ class MarketDataService:
             "market_news": [],
         }
 
-    async def get_sector_rotation(self) -> dict:
-        """
-        Enhanced sector rotation using FMP sector ETF data + FRED macro.
-        """
-        fmp_sectors = {}
-        if self.fmp:
-            fmp_sectors = await self.fmp.get_sector_etf_snapshot()
+        async def get_sector_rotation(self) -> dict:
+            """
+            Enhanced sector rotation using FMP sector ETF data + FRED macro.
+            """
+            fmp_sectors = {}
+            if self.fmp:
+                try:
+                    fmp_sectors = await asyncio.wait_for(
+                        self.fmp.get_sector_etf_snapshot(),
+                        timeout=10.0,
+                    )
+                except Exception as e:
+                    print(f"[SECTOR] get_sector_rotation FMP snapshot failed: {e}")
+                    fmp_sectors = {}
 
         macro = self.fred.get_quick_macro()
         fear_greed = await self.fear_greed.get_fear_greed_index()
