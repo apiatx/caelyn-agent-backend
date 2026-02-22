@@ -248,6 +248,19 @@ def score_for_trades(ticker_data: dict) -> float:
         except (TypeError, ValueError):
             pass
 
+    ta_indicators_available = sum([
+        1 if (price and sma_20) else 0,
+        1 if (price and sma_50) else 0,
+        1 if (macd is not None and macd_signal is not None) else 0,
+        1 if macd_hist is not None else 0,
+        1 if rsi is not None else 0,
+    ])
+    if ta_indicators_available == 0:
+        score -= 20
+        ticker_data["_ta_unavailable"] = True
+    elif ta_indicators_available < 2:
+        score -= 8
+        ticker_data["_ta_partial"] = True
     score += min(ta_points, 30)
 
     # ── Momentum Quality (20 pts) ──

@@ -396,13 +396,16 @@ class MarketDataService:
         "criminal", "subpoena", "material weakness",
     ]
 
-    async def get_market_news_context(self, tickers: list = None) -> dict:
+    async def get_market_news_context(self, tickers: list = None, modules: dict = None) -> dict:
         """
         Pull recent news, sentiment, Reddit, and economic calendar data
         BEFORE individual ticker analysis.
         Called at the start of every scan pipeline.
         """
         news_data = {}
+        modules = modules or {}
+        want_social = modules.get("social_sentiment", True)   # default True = safe for presets
+        want_macro  = modules.get("macro_context", True)
 
         tasks = []
         task_keys = []
@@ -416,17 +419,21 @@ class MarketDataService:
         if self.fmp:
             tasks.append(asyncio.wait_for(self.fmp.get_market_news(limit=10), timeout=8.0))
             task_keys.append("fmp_news")
-            tasks.append(asyncio.wait_for(self.fmp.get_economic_calendar(days_ahead=3), timeout=6.0))
-            task_keys.append("economic_calendar")
+            if want_macro:
+                tasks.append(asyncio.wait_for(self.fmp.get_economic_calendar(days_ahead=3), timeout=6.0))
+                task_keys.append("economic_calendar")
 
-        tasks.append(asyncio.wait_for(self.stocktwits.get_trending(), timeout=6.0))
-        task_keys.append("stocktwits_trending")
+        if want_social:
+            tasks.append(asyncio.wait_for(self.stocktwits.get_trending(), timeout=6.0))
+            task_keys.append("stocktwits_trending")
 
-        tasks.append(asyncio.wait_for(self.fear_greed.get_fear_greed_index(), timeout=5.0))
-        task_keys.append("fear_greed")
+        if want_macro:
+            tasks.append(asyncio.wait_for(self.fear_greed.get_fear_greed_index(), timeout=5.0))
+            task_keys.append("fear_greed")
 
-        tasks.append(asyncio.wait_for(self.reddit.get_full_reddit_dashboard(), timeout=8.0))
-        task_keys.append("reddit")
+        if want_social:
+            tasks.append(asyncio.wait_for(self.reddit.get_full_reddit_dashboard(), timeout=8.0))
+            task_keys.append("reddit")
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for key, result in zip(task_keys, results):
@@ -869,7 +876,7 @@ class MarketDataService:
         screener_task = self.finviz._custom_screen(
             f"v=111&f={finviz_filters}&ft=4&o=-change"
         )
-        news_task = self.get_market_news_context()
+        news_task = self.get_market_news_context(modules=filters.get("_modules") if filters else None)
 
         macro_task = None
         if category in ("investments", "fundamentals_scan"):
@@ -4223,11 +4230,19 @@ class MarketDataService:
 
         scored_rows = []
         for row in enriched_rows:
-            tech_score = 50
-            fund_score = 50
-            liq_score = 50
             ta = row.get("_ta", {})
             passes = True
+
+            # Penalize tickers where candle fetch was blocked or returned nothing
+            ta_missing = not ta or not any([
+                ta.get("rsi"), ta.get("sma_20"), ta.get("sma_50"),
+                ta.get("macd"), ta.get("macd_histogram")
+            ])
+            tech_score = 20 if ta_missing else 50   # start 30pts lower if no TA at all
+            fund_score = 50
+            liq_score = 50
+            if ta_missing:
+                row["_ta_unavailable"] = True
 
             rsi_val = row.get("_rsi_value") or (ta.get("rsi") if ta else None)
             rsi_max = ta_rules.get("rsi_max")
@@ -4345,7 +4360,11 @@ class MarketDataService:
             clean_row["liq_score"] = liq_score
             scored_rows.append(clean_row)
 
-        scored_rows.sort(key=lambda r: r["composite_score"], reverse=True)
+        # Sort: tickers with real TA always rank above data-dark tickers at same score
+        scored_rows.sort(key=lambda r: (
+            0 if r.get("_ta_unavailable") else 1,
+            r["composite_score"]
+        ), reverse=True)
         qualified = [r for r in scored_rows if r["composite_score"] > 20]
         final_rows = qualified[:25]
 

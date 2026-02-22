@@ -13,10 +13,10 @@ import json
 from typing import Optional
 
 
-STOCK_MCAP_FLOOR = 500_000_000
-CRYPTO_MCAP_FLOOR = 100_000_000
-STOCK_VOLUME_FLOOR = 1_000_000
-CRYPTO_VOLUME_FLOOR = 50_000_000
+STOCK_MCAP_FLOOR = 100_000_000
+CRYPTO_MCAP_FLOOR = 50_000_000
+STOCK_VOLUME_FLOOR = 800_000
+CRYPTO_VOLUME_FLOOR = 10_000_000
 
 STOCK_LARGE_CAP = 10_000_000_000
 STOCK_MID_CAP = 2_000_000_000
@@ -37,9 +37,9 @@ MAJOR_COMMODITIES = {
 }
 
 COVERAGE_QUOTAS = {
-    "equities_large": 0,
+    "equities_large": 2,
     "equities_mid": 3,
-    "equities_small": 2,
+    "equities_small": 3,
     "crypto": 2,
     "commodities": 2,
 }
@@ -696,6 +696,7 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
     q_crypto = COVERAGE_QUOTAS["crypto"]
     q_commodity = COVERAGE_QUOTAS["commodities"]
 
+    # Step 1: Guarantee minimum quota floors
     for c in large[:q_large]:
         _add(c)
     for c in mid[:q_mid]:
@@ -713,6 +714,7 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
     actual_crypto = sum(1 for c in final if c["asset_class"] == "crypto")
     actual_commodity = sum(1 for c in final if c["asset_class"] == "commodity")
 
+    # Step 2: Backfill any quotas that came up short
     if actual_large < q_large:
         for c in mid[q_mid:] + small[q_small:]:
             if actual_large >= q_large:
@@ -755,18 +757,17 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
                 actual_commodity += 1
                 debug["quota_adjustments"].append(f"Backfill commodity with {c['symbol']}")
 
+    # Step 3: Fill remaining slots by pure score — large-caps now compete freely
     remaining_slots = MAX_FINAL_PICKS - len(final)
     if remaining_slots > 0:
-        all_remaining = []
+        all_unlocked = []
         for pool in [large, mid, small, crypto_sorted, commodity_sorted]:
             for c in pool:
                 if c["symbol"] not in used_symbols:
-                    all_remaining.append(c)
-        all_remaining.sort(key=lambda x: x.get("normalized_score", 0), reverse=True)
-        for c in all_remaining[:remaining_slots]:
+                    all_unlocked.append(c)
+        all_unlocked.sort(key=lambda x: x.get("normalized_score", 0), reverse=True)
+        for c in all_unlocked[:remaining_slots]:
             _add(c)
-
-    final.sort(key=lambda x: x.get("normalized_score", 0), reverse=True)
 
     eq_count = sum(1 for c in final if c["asset_class"] == "stock")
     cr_count = sum(1 for c in final if c["asset_class"] == "crypto")

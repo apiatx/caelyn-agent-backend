@@ -1423,7 +1423,7 @@ class TradingAgent:
                     },
                     {
                         "role": "user",
-                        "content": f"{ORCHESTRATION_PROMPT}\n\nUser query: {prompt}",
+                        "content": f"{ORCHESTRATION_PROMPT}\n\nAPI BUDGET STATUS:\n{self._get_api_budget_hint()}\n\nUser query: {prompt}",
                     },
                 ],
             )
@@ -1435,7 +1435,26 @@ class TradingAgent:
             plan = self._heuristic_fallback_plan(prompt)
             plan["_from_heuristic"] = True
             return plan
-
+    def _get_api_budget_hint(self) -> str:
+        """Returns a plain-text budget hint for the orchestration prompt."""
+        try:
+            from data.api_budget import DailyBudgetTracker
+            tracker = DailyBudgetTracker()
+            budget = tracker.status()
+            lines = []
+            for provider, status in budget.items():
+                if not isinstance(status, dict):
+                    continue
+                used = status.get("used", 0)
+                limit = status.get("limit", 999)
+                pct = int(used / limit * 100) if limit else 0
+                if pct >= 80:
+                    lines.append(f"- {provider}: {pct}% used — AVOID unless essential")
+                elif pct >= 50:
+                    lines.append(f"- {provider}: {pct}% used — use sparingly")
+            return "\n".join(lines) if lines else "- All providers: healthy"
+        except Exception:
+            return "- Budget status unavailable"
     def _validate_plan(self, plan: dict, prompt: str) -> dict:
         if not isinstance(plan, dict):
             print(f"[ORCHESTRATOR] Invalid plan type: {type(plan)}, using default")
@@ -1838,10 +1857,10 @@ class TradingAgent:
 
         return context
 
-    DEEP_ANALYSIS_CATEGORIES = {
-        "ticker_analysis", "investments", "portfolio_review", "followup",
-        "crypto",
-    }
+        DEEP_ANALYSIS_CATEGORIES = {
+            "ticker_analysis", "investments", "portfolio_review", "followup",
+            "crypto", "best_trades", "cross_market",
+        }
 
     MEDIUM_DATA_CAP_CATEGORIES = {"cross_market"}
 
@@ -1889,6 +1908,11 @@ class TradingAgent:
         """Fetch the appropriate data based on query classification."""
         category = query_info.get("category", "general")
         filters = query_info.get("filters", {})
+        # Inject modules into filters so get_market_news_context can gate expensive calls
+        plan = query_info.get("orchestration_plan", {})
+        if plan.get("modules"):
+            filters = dict(filters)
+            filters["_modules"] = plan["modules"]
 
         if category == "ticker_analysis":
             tickers = query_info.get("tickers", [])
@@ -3418,19 +3442,23 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
 
         use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES
         if category == "crypto":
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 6000
+        elif category in ("best_trades", "cross_market"):
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 10000
+        elif category in ("ticker_analysis", "investments", "portfolio_review"):
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 10000
+        elif category == "followup":
             model = "claude-sonnet-4-20250514"
             token_limit = 4096
         elif use_fast_model:
             model = "claude-sonnet-4-20250514"
-            if category == "best_trades":
-                token_limit = 8192
-            elif category == "cross_market":
-                token_limit = 8192
-            else:
-                token_limit = 4096
+            token_limit = 4096
         else:
             model = "claude-sonnet-4-5-20250929"
-            token_limit = 16384
+            token_limit = 10000
         print(f"[Agent] Sending {len(messages)} messages to Claude (model={model}, category={category}, followup={is_followup}, max_tokens={token_limit})")
 
         response = self.client.messages.create(

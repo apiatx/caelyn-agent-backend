@@ -629,6 +629,7 @@ RULES:
 6. Chat/opinion questions — set intent to chat, minimal modules (all false or near-false).
 7. Never set ALL modules to true unless the user explicitly asks for "everything" or "full dashboard".
 8. Be precise — don't activate modules that aren't relevant to the user's actual question.
+9. If the API BUDGET STATUS above shows a provider at AVOID level, set that module to false unless the query absolutely cannot be answered without it. social_sentiment maps to StockTwits/Reddit. macro_context maps to Fear & Greed and economic calendar.
 """
 
 REASONING_BRIEF_PROMPT = """You are generating a REASONING BRIEF for a trading analyst AI. This brief will guide what the analyst focuses on when reviewing market data.
