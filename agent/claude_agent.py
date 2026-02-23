@@ -950,6 +950,9 @@ class TradingAgent:
             return {"category": "earnings"}
         if any(w in q for w in ["portfolio", "watchlist", "review my"]):
             return {"category": "portfolio_review"}
+        # Detect TradingView export format (NYSE:TICKER, NASDAQ:TICKER, etc.)
+        if re.search(r"(NYSE|NASDAQ|AMEX|ASX|CRYPTO|MEXC|BINANCE):[A-Z]", q.upper()):
+            return {"category": "portfolio_review"}
         if any(w in q for w in ["screen", "screener", "filter", "scan for"]):
             return {"category": "ai_screener"}
         if any(w in q for w in ["bearish", "short", "puts", "downside"]):
@@ -1001,6 +1004,10 @@ class TradingAgent:
 
     def _extract_tickers(self, query: str) -> list:
         ticker_pattern = re.findall(r'\$?([A-Z]{2,5})\b', query)
+        # Handle TradingView export format: NYSE:LAC, NASDAQ:ASTI, CRYPTO:HYPEHUSD
+        tv_pattern = re.findall(r'(?:NYSE|NASDAQ|AMEX|ASX|CRYPTO|MEXC|BINANCE|COINBASE|OTC|ARCA|BATS):([A-Z0-9]{2,10})', query.upper())
+        if tv_pattern:
+            return tv_pattern
         common = {
             "THE", "AND", "FOR", "ARE", "BUT", "NOT", "YOU", "ALL", "CAN",
             "WAS", "ONE", "OUR", "OUT", "HAS", "HOW", "ITS", "MAY", "NEW",
@@ -2339,21 +2346,10 @@ class TradingAgent:
         elif category == "portfolio_review":
             tickers = query_info.get("tickers", [])
             if not tickers:
-                import re
-                ticker_pattern = re.findall(r'\b([A-Z]{1,5})\b', query_info.get("original_prompt", ""))
-                common_words = {"I", "A", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
-                               "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON", "OR",
-                               "SO", "TO", "UP", "US", "WE", "THE", "AND", "FOR", "ARE",
-                               "BUT", "NOT", "YOU", "ALL", "CAN", "HAD", "HER", "WAS",
-                               "ONE", "OUR", "OUT", "HAS", "HIS", "HOW", "ITS", "MAY",
-                               "NEW", "NOW", "OLD", "SEE", "WAY", "WHO", "DID", "GET",
-                               "HIM", "LET", "SAY", "SHE", "TOO", "USE", "BUY", "SELL",
-                               "HOLD", "LONG", "SHORT", "PUT", "CALL", "ETF", "IPO",
-                               "CEO", "CFO", "COO", "EPS", "GDP", "CPI", "FED", "SEC",
-                               "FDA", "RSI", "SMA", "ATH", "ATL", "YOY", "QOQ", "EBITDA",
-                               "NYSE", "SHOW", "GIVE", "BEST", "WHAT", "WHICH", "RATE",
-                               "FULL", "HIGH", "LOW", "TOP"}
-                tickers = [t for t in ticker_pattern if t not in common_words][:25]
+                tickers = self._extract_tickers(query_info.get("original_prompt", ""))
+            tickers = tickers[:25]
+            if hasattr(self, 'review_watchlist') and len(tickers) >= 3:
+                return await self.review_watchlist(tickers)
             return await self.data.analyze_portfolio(tickers)
 
         elif category == "chat":
