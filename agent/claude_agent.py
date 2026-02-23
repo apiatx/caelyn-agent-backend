@@ -957,6 +957,10 @@ class TradingAgent:
         comma_tickers = [t.strip() for t in q.upper().split(",") if t.strip()]
         if len(comma_tickers) >= 3 and all(re.match(r'^[A-Z]{1,5}$', t) for t in comma_tickers):
             return {"category": "portfolio_review"}
+        # Detect space-separated ticker lists (e.g. LAC ASTI ATOM OSS)
+        space_tokens = q.upper().split()
+        if len(space_tokens) >= 3 and all(re.match(r'^[A-Z]{2,5}$', t) for t in space_tokens):
+            return {"category": "portfolio_review"}
         if any(w in q for w in ["screen", "screener", "filter", "scan for"]):
             return {"category": "ai_screener"}
         if any(w in q for w in ["bearish", "short", "puts", "downside"]):
