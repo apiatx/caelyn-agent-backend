@@ -2794,6 +2794,55 @@ class MarketDataService:
                     "PLTR", "RKLB"
                 ],
             },
+            "quantum": {
+                "name":
+                "Quantum Computing",
+                "tickers": [
+                    "IONQ", "RGTI", "QBTS", "QUBT", "ARQQ", "IBM", "GOOGL",
+                    "HON", "MSFT"
+                ],
+            },
+            "tech": {
+                "name":
+                "Technology & Software",
+                "tickers": [
+                    "AAPL", "MSFT", "GOOGL", "META", "AMZN", "CRM", "NOW",
+                    "ADBE", "INTU", "PANW", "CRWD", "SNOW", "NET", "DDOG",
+                    "ZS"
+                ],
+            },
+            "financials": {
+                "name":
+                "Financials & Banking",
+                "tickers": [
+                    "JPM", "BAC", "GS", "MS", "WFC", "C", "SCHW", "BLK",
+                    "AXP", "V", "MA", "COF"
+                ],
+            },
+            "healthcare": {
+                "name":
+                "Healthcare & Biotech",
+                "tickers": [
+                    "UNH", "JNJ", "LLY", "ABBV", "PFE", "MRK", "TMO",
+                    "ABT", "AMGN", "GILD", "ISRG", "VRTX"
+                ],
+            },
+            "real_estate": {
+                "name":
+                "Real Estate & REITs",
+                "tickers": [
+                    "AMT", "PLD", "EQIX", "SPG", "O", "DLR", "WELL", "AVB",
+                    "PSA", "VICI", "ARE", "EXR"
+                ],
+            },
+            "materials": {
+                "name":
+                "Materials & Mining",
+                "tickers": [
+                    "FCX", "NEM", "GOLD", "AEM", "WPM", "RGLD", "SCCO",
+                    "VALE", "RIO", "BHP", "TECK", "MP", "ALB", "LIN", "APD"
+                ],
+            },
         }
 
         theme_data = THEMES.get(theme, THEMES["ai_compute"])
