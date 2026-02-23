@@ -478,10 +478,53 @@ def _render_trades_analysis(s: dict) -> str:
     return "\n".join(parts).strip()
 
 
-_NARRATIVE_KEYS = ("summary", "narrative", "analysis", "report", "text", "message")
+_NARRATIVE_KEYS = ("summary", "narrative", "analysis", "report", "text", "message", "observations")
+def _render_screener_analysis(s: dict) -> str:
+    parts = []
+    screen_name = s.get("screen_name", "Screener")
+    parts.append(f"**{screen_name}**")
+    explain = s.get("explain", [])
+    if explain:
+        parts.append("**Screen Criteria:**")
+        for e in explain:
+            parts.append(f"- {e}")
+        parts.append("")
+    top_picks = s.get("top_picks", [])
+    if top_picks:
+        parts.append("**Top Picks:**")
+        for p in top_picks:
+            ticker = p.get("ticker", "?")
+            conf = p.get("confidence", 0)
+            reason = p.get("reason", "")
+            parts.append(f"- **{ticker}** (score: {conf}) -- {reason}")
+        parts.append("")
+    rows = s.get("rows", [])
+    if rows:
+        parts.append(f"**{len(rows)} stocks qualified** from screening pipeline.")
+        for r in rows[:10]:
+            ticker = r.get("ticker", "?")
+            price = r.get("price", "N/A")
+            change = r.get("change", r.get("chg_pct", ""))
+            score = r.get("composite_score", "")
+            signals = ", ".join(r.get("signals", [])[:3]) if r.get("signals") else ""
+            line = f"- **{ticker}** {price}"
+            if change:
+                line += f" ({change})"
+            if score:
+                line += f" | Score: {score}"
+            if signals:
+                line += f" | {signals}"
+            parts.append(line)
+    scan_stats = s.get("scan_stats", {})
+    if scan_stats:
+        parts.append(f"Scanned {scan_stats.get(chr(39)+'candidates_total'+chr(39), chr(39)+'?'+chr(39))} candidates")
+    return chr(10).join(parts).strip()
+
+
 _RENDERERS = {
     "cross_market": _render_cross_market_analysis,
     "trades": _render_trades_analysis,
+    "screener": _render_screener_analysis,
 }
 
 
@@ -648,6 +691,7 @@ async def query_agent(
                                "analysis_text", "briefing", "holdings", "top_picks",
                                "opportunities", "ranked_candidates", "watchlist",
                                "equities", "crypto", "commodities", "social_trading_signal",
+                               "rows", "screen_name",
                                "top_trades", "bearish_setups"}
             has_content = any(structured.get(k) for k in meaningful_keys)
             if has_content:

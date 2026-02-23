@@ -5374,13 +5374,17 @@ class MarketDataService:
         top_picks = []
         for r in final_rows[:5]:
             top_picks.append({
-                "ticker":
-                r["ticker"],
-                "confidence":
-                r["composite_score"],
-                "reason":
-                ", ".join(r.get("signals", [])[:3])
-                or "Qualified on screen criteria",
+                "ticker": r["ticker"],
+                "company": r.get("company"),
+                "price": r.get("price"),
+                "change": r.get("change"),
+                "confidence": r["composite_score"],
+                "conviction": "High" if r["composite_score"] >= 70 else ("Medium" if r["composite_score"] >= 50 else "Low"),
+                "analysis": ", ".join(r.get("signals", [])[:4]) or "Qualified on screen criteria",
+                "reason": ", ".join(r.get("signals", [])[:3]) or "Qualified on screen criteria",
+                "composite_score": r["composite_score"],
+                "tech_score": r.get("tech_score"),
+                "fund_score": r.get("fund_score"),
             })
 
         edgar_mode = "insider_focus" if preset_name == "insider_breakout" else "light"

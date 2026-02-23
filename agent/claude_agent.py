@@ -721,6 +721,8 @@ class TradingAgent:
                     structured["display_type"] = "screener"
                 if not structured.get("rows") and market_data.get("rows"):
                     structured["rows"] = market_data["rows"]
+                if not structured.get("results") and (market_data.get("results") or market_data.get("rows")):
+                    structured["results"] = market_data.get("results") or market_data.get("rows")
                 if not structured.get("top_picks") and market_data.get("top_picks"):
                     structured["top_picks"] = market_data["top_picks"]
                 if not structured.get("screen_name") and market_data.get("screen_name"):
