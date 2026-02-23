@@ -953,6 +953,10 @@ class TradingAgent:
         # Detect TradingView export format (NYSE:TICKER, NASDAQ:TICKER, etc.)
         if re.search(r"(NYSE|NASDAQ|AMEX|ASX|CRYPTO|MEXC|BINANCE):[A-Z]", q.upper()):
             return {"category": "portfolio_review"}
+        # Detect plain comma-separated ticker lists (e.g. LAC,ASTI,ATOM or LAC, ASTI, ATOM)
+        comma_tickers = [t.strip() for t in q.upper().split(",") if t.strip()]
+        if len(comma_tickers) >= 3 and all(re.match(r'^[A-Z]{1,5}$', t) for t in comma_tickers):
+            return {"category": "portfolio_review"}
         if any(w in q for w in ["screen", "screener", "filter", "scan for"]):
             return {"category": "ai_screener"}
         if any(w in q for w in ["bearish", "short", "puts", "downside"]):
@@ -2344,10 +2348,54 @@ class TradingAgent:
             return await self.data.get_morning_briefing()
 
         elif category == "portfolio_review":
+            original = query_info.get("original_prompt", "")
             tickers = query_info.get("tickers", [])
             if not tickers:
-                tickers = self._extract_tickers(query_info.get("original_prompt", ""))
-            tickers = tickers[:25]
+                tickers = self._extract_tickers(original)
+            # Parse TradingView category headers for context
+            tv_categories = {}
+            if "###" in original:
+                import re as _re
+                sections = _re.split(r'###\s*', original)
+                for section in sections:
+                    if not section.strip():
+                        continue
+                    parts = section.split(",", 1)
+                    cat_name = parts[0].strip()
+                    if len(parts) > 1:
+                        sec_tickers = _re.findall(r'(?:NYSE|NASDAQ|AMEX|ASX|OTC|CRYPTO|MEXC|BINANCE|COINBASE|ARCA|BATS|TSX|TSXV|CSE|EURONEXT|GETTEX|TSE):([A-Z0-9]{2,10})', parts[1].upper())
+                        if sec_tickers:
+                            tv_categories[cat_name] = sec_tickers
+            # Smart prioritization: holdings first, then high conviction, then watchlist
+            if tv_categories:
+                priority_order = []
+                for key in tv_categories:
+                    kl = key.lower()
+                    if any(w in kl for w in ["holding", "individual", "active", "position"]):
+                        priority_order = tv_categories[key] + priority_order
+                    elif any(w in kl for w in ["1 highest", "highest conviction", "conviction"]):
+                        priority_order.extend(tv_categories[key])
+                    elif "sold" not in kl:
+                        priority_order.extend(tv_categories[key])
+                # Deduplicate while preserving order
+                seen = set()
+                unique = []
+                for t in priority_order:
+                    if t not in seen:
+                        seen.add(t)
+                        unique.append(t)
+                tickers = unique[:20]
+                # Build context string for Claude
+                cat_summary = []
+                for cat, cat_tickers in tv_categories.items():
+                    if "sold" in cat.lower():
+                        cat_summary.append(f"SOLD/EXITED: {', '.join(cat_tickers[:5])}...")
+                    else:
+                        scanned = [t for t in cat_tickers if t in tickers]
+                        cat_summary.append(f"{cat}: {', '.join(cat_tickers[:8])}{'...' if len(cat_tickers) > 8 else ''} ({len(scanned)} scanning)")
+                query_info["tv_context"] = "User pasted TradingView watchlist with categories:\n" + "\n".join(cat_summary) + f"\nAnalyzing top {len(tickers)} priority tickers (holdings and highest conviction first). Total unique tickers in export: {len(unique) + len(seen)}."
+            else:
+                tickers = tickers[:20]
             if hasattr(self, 'review_watchlist') and len(tickers) >= 3:
                 return await self.review_watchlist(tickers)
             return await self.data.analyze_portfolio(tickers)
