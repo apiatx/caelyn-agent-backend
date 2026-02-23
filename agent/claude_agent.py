@@ -2401,8 +2401,15 @@ class TradingAgent:
             else:
                 tickers = tickers[:20]
             if hasattr(self, 'review_watchlist') and len(tickers) >= 3:
-                return await self.review_watchlist(tickers)
-            return await self.data.analyze_portfolio(tickers)
+                try:
+                    return await self.review_watchlist(tickers)
+                except Exception as e:
+                    print(f"[WATCHLIST] review_watchlist failed: {e}, falling back to analyze_portfolio")
+            try:
+                return await self.data.analyze_portfolio(tickers)
+            except Exception as e:
+                print(f"[WATCHLIST] analyze_portfolio failed: {e}")
+                return {"error": f"Portfolio analysis failed: {str(e)}", "tickers": tickers}
 
         elif category == "chat":
             return await self._gather_chat_context(
