@@ -344,7 +344,7 @@ class TradingAgent:
             "tickers": [],
         }
 
-    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "") -> dict:
+    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None) -> dict:
         start_time = time.time()
         if history is None:
             history = []
@@ -355,6 +355,40 @@ class TradingAgent:
         print(f"[AGENT] preset_intent raw value: '{preset_intent}' (type={type(preset_intent).__name__})")
 
         reasoning_brief = None
+
+        # --- CSV Upload Handling ---
+        csv_parsed = None
+        if csv_data:
+            import csv as _csv
+            import io as _io
+            try:
+                reader = _csv.DictReader(_io.StringIO(csv_data))
+                rows = []
+                ticker_col = None
+                for row in reader:
+                    if not ticker_col:
+                        for key in row.keys():
+                            kl = key.lower().strip()
+                            if kl in ('ticker', 'symbol', 'stock', 'name', 'company'):
+                                ticker_col = key
+                                break
+                        if not ticker_col:
+                            ticker_col = list(row.keys())[0]
+                    rows.append(row)
+                csv_tickers = []
+                for row in rows:
+                    raw = (row.get(ticker_col, '') or '').strip().upper()
+                    if ':' in raw:
+                        raw = raw.split(':')[-1]
+                    if raw and len(raw) >= 1 and len(raw) <= 10:
+                        csv_tickers.append(raw)
+                csv_parsed = {"tickers": csv_tickers[:20], "rows": rows[:20], "all_tickers": csv_tickers, "total_count": len(csv_tickers), "columns": list(rows[0].keys()) if rows else [], "ticker_col": ticker_col}
+                print(f"[CSV] Parsed {len(csv_tickers)} tickers from CSV ({len(rows)} rows, cols: {csv_parsed['columns'][:8]})")
+                if not user_prompt.strip():
+                    user_prompt = f"Analyze these {len(csv_tickers)} tickers from my uploaded watchlist. Focus on the top {min(20, len(csv_tickers))} by priority."
+                preset_intent = None
+            except Exception as e:
+                print(f"[CSV] Parse error: {e}")
 
         if is_followup and not self._needs_fresh_data(user_prompt):
             category = "followup"
@@ -438,7 +472,15 @@ class TradingAgent:
                 routing_confidence = "high"
 
             query_info["original_prompt"] = user_prompt
-            category = query_info.get("category", "general")
+            # CSV upload override — force portfolio_review with spreadsheet data
+            if csv_parsed:
+                category = "portfolio_review"
+                query_info["category"] = "portfolio_review"
+                query_info["csv_parsed"] = csv_parsed
+                query_info["tickers"] = csv_parsed["tickers"]
+                print(f"[CSV] Overriding category to portfolio_review with {len(csv_parsed['tickers'])} tickers")
+            else:
+                category = query_info.get("category", "general")
 
             orch_plan = query_info.get("orchestration_plan")
             if orch_plan:
@@ -2402,7 +2444,7 @@ class TradingAgent:
                 tickers = tickers[:20]
             if hasattr(self, 'review_watchlist') and len(tickers) >= 3:
                 try:
-                    return await self.review_watchlist(tickers)
+                    return await self.review_watchlist(tickers, csv_parsed=query_info.get("csv_parsed"))
                 except Exception as e:
                     print(f"[WATCHLIST] review_watchlist failed: {e}, falling back to analyze_portfolio")
             try:
@@ -3056,7 +3098,7 @@ class TradingAgent:
 
         return broadened
 
-    async def review_watchlist(self, tickers: list) -> dict:
+    async def review_watchlist(self, tickers: list, csv_parsed: dict = None) -> dict:
         """Dedicated watchlist review — bypasses the classifier entirely."""
         import time
         start = time.time()
@@ -3144,6 +3186,8 @@ class TradingAgent:
             "role": "user",
             "content": f"""[WATCHLIST DATA]
 {data_str}
+
+{f"[UPLOADED SPREADSHEET DATA - THIS IS HIGH-QUALITY USER-PROVIDED DATA, WEIGHT IT EQUALLY WITH API DATA]{chr(10)}{chr(10)}Columns: {', '.join(csv_parsed['columns'])}{chr(10)}Tickers analyzed: {', '.join(csv_parsed['tickers'])}{chr(10)}{chr(10)}" + chr(10).join([str(row) for row in csv_parsed['rows'][:20]]) + f"{chr(10)}Total tickers in spreadsheet: {csv_parsed['total_count']}{chr(10)}" if csv_parsed else ""}
 
 [USER REQUEST]
 Review my watchlist: {', '.join(tickers)}
