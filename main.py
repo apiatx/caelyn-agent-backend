@@ -609,7 +609,7 @@ async def query_agent(
     t0 = _time.time()
     req_id = str(_uuid.uuid4())
     user_query = body.query or body.prompt or ""
-    print(f"[REQ] id={req_id} query_len={len(user_query)} preset={body.preset_intent} conversation_id={body.conversation_id}")
+    print(f"[REQ] id={req_id} query_len={len(user_query)} preset={body.preset_intent} conversation_id={body.conversation_id} csv_data={'YES (' + str(len(body.csv_data)) + ' chars)' if body.csv_data else 'NO'}")
 
     meta = _build_meta(req_id, preset_intent=body.preset_intent, conv_id=body.conversation_id)
 
@@ -625,10 +625,14 @@ async def query_agent(
         _resp_log(req_id, 503, "error", resp)
         return JSONResponse(status_code=503, content=resp)
 
-    if not user_query.strip() and not body.preset_intent:
+    if not user_query.strip() and not body.preset_intent and not body.csv_data:
         resp = _error_envelope("NO_QUERY", "No query provided. Send query or use preset_intent.", meta)
         _resp_log(req_id, 400, "error", resp)
         return JSONResponse(status_code=400, content=resp)
+
+    # If CSV data present but no query, provide a default analysis prompt
+    if body.csv_data and not user_query.strip():
+        user_query = "Analyze every ticker in this uploaded CSV. Give a BUY, HOLD, or SELL rating for each, plus identify the top 2-3 best investments."
 
     from data.chat_history import create_conversation, get_conversation, save_messages as _save_msgs
 
