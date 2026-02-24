@@ -363,7 +363,9 @@ class TradingAgent:
             import io as _io
             print(f"[CSV] Received csv_data: {len(csv_data)} chars, first 200: {csv_data[:200]}")
             try:
-                reader = _csv.DictReader(_io.StringIO(csv_data))
+                # Strip BOM and normalize line endings
+                clean_csv = csv_data.replace(chr(65279), "").replace("\r\n", "\n").replace("\r", "\n")
+                reader = _csv.DictReader(_io.StringIO(clean_csv))
                 rows = []
                 ticker_col = None
                 for row in reader:
@@ -384,6 +386,7 @@ class TradingAgent:
                     if raw and len(raw) >= 1 and len(raw) <= 10:
                         csv_tickers.append(raw)
                 csv_parsed = {"tickers": csv_tickers[:20], "rows": rows[:20], "all_tickers": csv_tickers, "total_count": len(csv_tickers), "columns": list(rows[0].keys()) if rows else [], "ticker_col": ticker_col}
+                print(f"[CSV] ticker_col={ticker_col}, first 5 tickers={csv_tickers[:5]}, total rows={len(rows)}, columns={list(rows[0].keys())[:6] if rows else []}")
                 print(f"[CSV] Parsed {len(csv_tickers)} tickers from CSV ({len(rows)} rows, cols: {csv_parsed['columns'][:8]})")
                 if not user_prompt.strip():
                     user_prompt = f"Analyze these {len(csv_tickers)} tickers from my uploaded watchlist. Focus on the top {min(20, len(csv_tickers))} by priority."
