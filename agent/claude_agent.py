@@ -385,11 +385,11 @@ class TradingAgent:
                         raw = raw.split(':')[-1]
                     if raw and len(raw) >= 1 and len(raw) <= 10:
                         csv_tickers.append(raw)
-                csv_parsed = {"tickers": csv_tickers[:20], "rows": rows[:20], "all_tickers": csv_tickers, "total_count": len(csv_tickers), "columns": list(rows[0].keys()) if rows else [], "ticker_col": ticker_col}
+                csv_parsed = {"tickers": csv_tickers, "rows": rows, "all_tickers": csv_tickers, "total_count": len(csv_tickers), "columns": list(rows[0].keys()) if rows else [], "ticker_col": ticker_col}
                 print(f"[CSV] ticker_col={ticker_col}, first 5 tickers={csv_tickers[:5]}, total rows={len(rows)}, columns={list(rows[0].keys())[:6] if rows else []}")
                 print(f"[CSV] Parsed {len(csv_tickers)} tickers from CSV ({len(rows)} rows, cols: {csv_parsed['columns'][:8]})")
                 if not user_prompt.strip():
-                    user_prompt = f"Analyze these {len(csv_tickers)} tickers from my uploaded watchlist. Focus on the top {min(20, len(csv_tickers))} by priority."
+                    user_prompt = f"Analyze every one of these {len(csv_tickers)} tickers from my uploaded watchlist. Give a BUY, HOLD, or SELL rating for each ticker, then identify the top 2-3 best investments."
                 preset_intent = None
             except Exception as e:
                 print(f"[CSV] Parse error: {e}")
@@ -607,8 +607,18 @@ class TradingAgent:
         if isinstance(claude_data, dict) and claude_data.get("csv_direct"):
             csv_rows = claude_data.get("rows", [])
             csv_cols = claude_data.get("columns", [])
-            csv_table = "\n".join([", ".join(f"{k}: {v}" for k, v in row.items()) for row in csv_rows[:20]])
-            csv_context = f"[USER UPLOADED SPREADSHEET - {len(csv_rows)} stocks]\nColumns: {', '.join(csv_cols)}\n\n{csv_table}\n\nAnalyze ONLY this data. Do NOT make up numbers. Every data point must come from the spreadsheet above."
+            csv_table = "\n".join([", ".join(f"{k}: {v}" for k, v in row.items()) for row in csv_rows])
+            csv_context = (
+                f"[USER UPLOADED SPREADSHEET - {len(csv_rows)} stocks]\n"
+                f"Columns: {', '.join(csv_cols)}\n\n"
+                f"{csv_table}\n\n"
+                f"INSTRUCTIONS:\n"
+                f"1. Analyze EVERY ticker in this spreadsheet — do not skip any.\n"
+                f"2. For EACH ticker, provide a clear BUY, HOLD, or SELL rating with a brief justification based on the data provided.\n"
+                f"3. After rating all tickers, identify the TOP 2-3 BEST INVESTMENTS from this list and explain why they stand out.\n"
+                f"4. Do NOT make up numbers. Every data point must come from the spreadsheet above.\n"
+                f"5. Use the data columns provided (e.g. price, volume, performance, sector) to support your ratings."
+            )
             user_prompt = csv_context + "\n\n[USER REQUEST]\n" + user_prompt
             claude_data = {}
             print(f"[CSV] Injected {len(csv_rows)} rows directly into Claude prompt ({len(csv_context)} chars)")
@@ -2443,7 +2453,7 @@ class TradingAgent:
                     if t not in seen:
                         seen.add(t)
                         unique.append(t)
-                tickers = unique[:20]
+                tickers = unique
                 # Build context string for Claude
                 cat_summary = []
                 for cat, cat_tickers in tv_categories.items():
@@ -2454,7 +2464,7 @@ class TradingAgent:
                         cat_summary.append(f"{cat}: {', '.join(cat_tickers[:8])}{'...' if len(cat_tickers) > 8 else ''} ({len(scanned)} scanning)")
                 query_info["tv_context"] = "User pasted TradingView watchlist with categories:\n" + "\n".join(cat_summary) + f"\nAnalyzing top {len(tickers)} priority tickers (holdings and highest conviction first). Total unique tickers in export: {len(unique) + len(seen)}."
             else:
-                tickers = tickers[:20]
+                pass  # Use all tickers from CSV — no artificial limit
             # If CSV data present, skip API calls — send spreadsheet directly to Claude
             csv_p = query_info.get("csv_parsed")
             if csv_p and csv_p.get("rows"):
