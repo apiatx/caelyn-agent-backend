@@ -361,6 +361,7 @@ class TradingAgent:
         if csv_data:
             import csv as _csv
             import io as _io
+            print(f"[CSV] Received csv_data: {len(csv_data)} chars, first 200: {csv_data[:200]}")
             try:
                 reader = _csv.DictReader(_io.StringIO(csv_data))
                 rows = []
