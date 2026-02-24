@@ -394,6 +394,43 @@ class TradingAgent:
             except Exception as e:
                 print(f"[CSV] Parse error: {e}")
 
+        # --- CSV FAST PATH: skip ALL API calls, send spreadsheet directly to Claude ---
+        if csv_parsed:
+            category = "portfolio_review"
+            routing_source = "csv_upload"
+            routing_confidence = "high"
+            market_data = None
+            print(f"[CSV] Fast-path: skipping all API calls, sending {csv_parsed['total_count']} rows directly to Claude")
+
+            csv_rows = csv_parsed["rows"]
+            csv_cols = csv_parsed["columns"]
+            csv_table = "\n".join([", ".join(f"{k}: {v}" for k, v in row.items()) for row in csv_rows])
+            csv_context = (
+                f"[USER UPLOADED SPREADSHEET - {len(csv_rows)} stocks]\n"
+                f"Columns: {', '.join(csv_cols)}\n\n"
+                f"{csv_table}\n\n"
+                f"INSTRUCTIONS:\n"
+                f"1. Analyze EVERY ticker in this spreadsheet — do not skip any.\n"
+                f"2. For EACH ticker, provide a clear BUY, HOLD, or SELL rating with a brief justification based on the data provided.\n"
+                f"3. After rating all tickers, identify the TOP 2-3 BEST INVESTMENTS from this list and explain why they stand out.\n"
+                f"4. Do NOT make up numbers. Every data point must come from the spreadsheet above.\n"
+                f"5. Use the data columns provided (e.g. Market Cap, Volume, Revenue Growth, EPS Growth, RSI, Forward PE) to support your ratings."
+            )
+            user_prompt = csv_context + "\n\n[USER REQUEST]\n" + user_prompt
+            print(f"[CSV] Injected {len(csv_rows)} rows into prompt ({len(csv_context)} chars)")
+
+            data_done_time = time.time()
+            data_ms = int((data_done_time - start_time) * 1000)
+
+            raw_response = await self._ask_claude_with_timeout(user_prompt, {}, history, is_followup=False, category=category)
+            claude_ms = int((time.time() - data_done_time) * 1000)
+            print(f"[AGENT] Claude responded (CSV path): {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
+
+            result = self._parse_response(raw_response, request_id=request_id)
+            result["_timing"] = {"data": data_ms, "claude": claude_ms, "grok": 0}
+            result["_routing"] = {"source": routing_source, "confidence": routing_confidence, "category": category}
+            return result
+
         if is_followup and not self._needs_fresh_data(user_prompt):
             category = "followup"
             market_data = None

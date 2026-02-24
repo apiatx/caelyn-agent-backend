@@ -789,6 +789,64 @@ async def query_agent(
         return JSONResponse(content=resp)
 
 
+class TestCsvRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    csv_data: Optional[str] = None
+
+
+@app.post("/api/test-csv")
+@limiter.limit("10/minute")
+async def test_csv(request: Request, body: TestCsvRequest):
+    """Debug endpoint: accepts csv_data, parses it, returns tickers + first 3 rows."""
+    import csv as _csv
+    import io as _io
+
+    if not body.csv_data:
+        return JSONResponse(status_code=400, content={"error": "No csv_data provided"})
+
+    raw = body.csv_data
+    print(f"[TEST-CSV] Received {len(raw)} chars, first 200: {raw[:200]}")
+
+    try:
+        clean = raw.replace(chr(65279), "").replace("\r\n", "\n").replace("\r", "\n")
+        reader = _csv.DictReader(_io.StringIO(clean))
+        rows = []
+        ticker_col = None
+        for row in reader:
+            if not ticker_col:
+                for key in row.keys():
+                    kl = key.lower().strip()
+                    if kl in ("ticker", "symbol", "stock", "name", "company"):
+                        ticker_col = key
+                        break
+                if not ticker_col:
+                    ticker_col = list(row.keys())[0]
+            rows.append(row)
+
+        tickers = []
+        for row in rows:
+            val = (row.get(ticker_col, "") or "").strip().upper()
+            if ":" in val:
+                val = val.split(":")[-1]
+            if val and 1 <= len(val) <= 10:
+                tickers.append(val)
+
+        print(f"[TEST-CSV] Parsed {len(tickers)} tickers from col '{ticker_col}', columns={list(rows[0].keys()) if rows else []}")
+
+        return {
+            "status": "ok",
+            "chars_received": len(raw),
+            "ticker_column": ticker_col,
+            "columns": list(rows[0].keys()) if rows else [],
+            "total_rows": len(rows),
+            "tickers": tickers,
+            "first_3_rows": rows[:3],
+        }
+    except Exception as e:
+        print(f"[TEST-CSV] Parse error: {e}")
+        return JSONResponse(status_code=400, content={"error": f"CSV parse failed: {str(e)}"})
+
+
 @app.post("/api/cache/clear")
 @limiter.limit("5/minute")
 async def clear_cache(request: Request, api_key: str = Header(None, alias="X-API-Key")):
