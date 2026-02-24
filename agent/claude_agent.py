@@ -603,6 +603,15 @@ class TradingAgent:
             claude_data["_reasoning_brief"] = reasoning_brief
             print(f"[AGENT] Reasoning brief injected into Claude context")
 
+        # If CSV direct data, inject spreadsheet context into the prompt
+        if isinstance(claude_data, dict) and claude_data.get("csv_direct"):
+            csv_rows = claude_data.get("rows", [])
+            csv_cols = claude_data.get("columns", [])
+            csv_table = "\n".join([", ".join(f"{k}: {v}" for k, v in row.items()) for row in csv_rows[:20]])
+            csv_context = f"[USER UPLOADED SPREADSHEET - {len(csv_rows)} stocks]\nColumns: {', '.join(csv_cols)}\n\n{csv_table}\n\nAnalyze ONLY this data. Do NOT make up numbers. Every data point must come from the spreadsheet above."
+            user_prompt = csv_context + "\n\n[USER REQUEST]\n" + user_prompt
+            claude_data = {}
+            print(f"[CSV] Injected {len(csv_rows)} rows directly into Claude prompt ({len(csv_context)} chars)")
         raw_response = await self._ask_claude_with_timeout(user_prompt, claude_data, history, is_followup=is_followup, category=category)
         claude_ms = int((time.time() - data_done_time) * 1000)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
@@ -2446,6 +2455,13 @@ class TradingAgent:
                 query_info["tv_context"] = "User pasted TradingView watchlist with categories:\n" + "\n".join(cat_summary) + f"\nAnalyzing top {len(tickers)} priority tickers (holdings and highest conviction first). Total unique tickers in export: {len(unique) + len(seen)}."
             else:
                 tickers = tickers[:20]
+            # If CSV data present, skip API calls — send spreadsheet directly to Claude
+            csv_p = query_info.get("csv_parsed")
+            if csv_p and csv_p.get("rows"):
+                import json as _json
+                csv_str = _json.dumps(csv_p["rows"], default=str)
+                print(f"[CSV] Skipping API calls — sending {len(csv_p['rows'])} rows directly to Claude ({len(csv_str)} chars)")
+                return {"csv_direct": True, "csv_parsed": csv_p, "tickers": csv_p["tickers"], "rows": csv_p["rows"], "columns": csv_p["columns"]}
             if hasattr(self, 'review_watchlist') and len(tickers) >= 3:
                 try:
                     return await self.review_watchlist(tickers, csv_parsed=query_info.get("csv_parsed"))
