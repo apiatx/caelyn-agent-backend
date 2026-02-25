@@ -421,6 +421,7 @@ class TradingAgent:
             print(f"[CSV] Injected {len(csv_rows)} rows into prompt ({len(csv_context)} chars)")
 
             data_done_time = time.time()
+            data_ms = int((data_done_time - start_time) * 1000)
             try:
                 import anthropic as _anth
                 _client = _anth.Anthropic(api_key=self.api_key)
