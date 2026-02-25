@@ -396,7 +396,7 @@ class TradingAgent:
 
         # --- CSV FAST PATH: skip ALL API calls, send spreadsheet directly to Claude ---
         if csv_parsed:
-            category = "portfolio_review"
+            category = "csv_analysis"
             routing_source = "csv_upload"
             routing_confidence = "high"
             market_data = None
@@ -3896,6 +3896,9 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         elif category in ("best_trades", "cross_market"):
             model = "claude-sonnet-4-5-20250929"
             token_limit = 10000
+        elif category == "csv_analysis":
+            model = "claude-sonnet-4-20250514"
+            token_limit = 8000
         elif category in ("ticker_analysis", "investments", "portfolio_review"):
             model = "claude-sonnet-4-5-20250929"
             token_limit = 10000
