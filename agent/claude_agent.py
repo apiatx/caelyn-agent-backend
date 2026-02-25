@@ -421,20 +421,28 @@ class TradingAgent:
             print(f"[CSV] Injected {len(csv_rows)} rows into prompt ({len(csv_context)} chars)")
 
             data_done_time = time.time()
-            data_ms = int((data_done_time - start_time) * 1000)
-
             try:
-                raw_response = await asyncio.wait_for(
-                    asyncio.to_thread(self._ask_claude, user_prompt, {}, history, False, category),
-                    timeout=120.0,
+                import anthropic as _anth
+                _client = _anth.Anthropic(api_key=self.api_key)
+                resp = _client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=6000,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    system="You are a professional quant analyst. Analyze the uploaded spreadsheet data. Be concise but thorough. For each ticker give a 1-2 sentence verdict with BUY/HOLD/SELL rating. Then identify top 2-3 best investments.",
                 )
-            except asyncio.TimeoutError:
-                print(f"[CSV] Claude timed out on CSV analysis")
-                raw_response = json.dumps({"display_type": "chat", "message": "CSV analysis timed out. Try uploading fewer tickers (under 30) or ask me to focus on a specific sector."})
+                raw_response = resp.content[0].text
+                print(f"[CSV] Direct API call done: {len(raw_response)} chars ({time.time() - data_done_time:.1f}s)")
+            except Exception as e:
+                print(f"[CSV] API error: {e}")
+                raw_response = f"CSV analysis error: {str(e)}"
             claude_ms = int((time.time() - data_done_time) * 1000)
-            print(f"[AGENT] Claude responded (CSV path): {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
-
-            result = self._parse_response(raw_response, request_id=request_id)
+            return {
+                "type": "chat",
+                "structured": {"display_type": "chat", "message": raw_response},
+                "analysis": raw_response,
+                "_timing": {"data": data_ms, "claude": claude_ms, "grok": 0},
+                "_routing": {"source": routing_source, "confidence": routing_confidence, "category": "csv_analysis"},
+            }
             result["_timing"] = {"data": data_ms, "claude": claude_ms, "grok": 0}
             result["_routing"] = {"source": routing_source, "confidence": routing_confidence, "category": category}
             return result
