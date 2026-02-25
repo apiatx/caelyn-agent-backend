@@ -404,7 +404,8 @@ class TradingAgent:
 
             csv_rows = csv_parsed["rows"]
             csv_cols = csv_parsed["columns"]
-            csv_table = "\n".join([", ".join(f"{k}: {v}" for k, v in row.items()) for row in csv_rows])
+            csv_rows = csv_rows[:30]
+            csv_table = "\n".join([", ".join(f"{k}: {v}" for k, v in row.items() if v) for row in csv_rows])
             csv_context = (
                 f"[USER UPLOADED SPREADSHEET - {len(csv_rows)} stocks]\n"
                 f"Columns: {', '.join(csv_cols)}\n\n"
@@ -422,7 +423,14 @@ class TradingAgent:
             data_done_time = time.time()
             data_ms = int((data_done_time - start_time) * 1000)
 
-            raw_response = await self._ask_claude_with_timeout(user_prompt, {}, history, is_followup=False, category=category)
+            try:
+                raw_response = await asyncio.wait_for(
+                    asyncio.to_thread(self._ask_claude, user_prompt, {}, history, False, category),
+                    timeout=120.0,
+                )
+            except asyncio.TimeoutError:
+                print(f"[CSV] Claude timed out on CSV analysis")
+                raw_response = json.dumps({"display_type": "chat", "message": "CSV analysis timed out. Try uploading fewer tickers (under 30) or ask me to focus on a specific sector."})
             claude_ms = int((time.time() - data_done_time) * 1000)
             print(f"[AGENT] Claude responded (CSV path): {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
 
