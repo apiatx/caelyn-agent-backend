@@ -522,6 +522,7 @@ class TradingAgent:
                     "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "NZD",
                     "OK", "YES", "HEY", "WOW", "ANY", "MAY", "CAN", "LET",
                     "SAY", "GET", "USE", "SET", "RUN", "TRY", "ADD",
+                    "STRONG", "PICKS", "TOTAL",
                 }
                 for msg in history:
                     c = str(msg.get("content", ""))
@@ -533,19 +534,39 @@ class TradingAgent:
                     if t not in seen:
                         seen.add(t)
                         unique_tickers.append(t)
-                prior_tickers = unique_tickers[:10]
+
+                if csv_followup:
+                    # For CSV follow-ups, use ALL extracted tickers (up to 50)
+                    prior_tickers = unique_tickers[:50]
+                    print(f"[FOLLOWUP] CSV watchlist tickers extracted: {len(prior_tickers)} → {prior_tickers[:10]}...")
+                else:
+                    prior_tickers = unique_tickers[:10]
 
                 if prior_tickers:
                     market_data = {}
                     if needs_social and self.data.xai:
                         try:
-                            social = await asyncio.wait_for(
-                                self.data.xai.get_batch_sentiment(prior_tickers[:5]),
-                                timeout=20.0,
-                            )
-                            if social:
-                                market_data["social_sentiment_comparison"] = social
-                                print(f"[FOLLOWUP] Social comparison: {list(social.keys())}")
+                            if csv_followup:
+                                # Use watchlist-specific social scan for CSV follow-ups
+                                # Single Grok call that checks sentiment for ONLY these tickers
+                                social = await asyncio.wait_for(
+                                    self.data.xai.get_watchlist_social_momentum(prior_tickers),
+                                    timeout=45.0,
+                                )
+                                if social and "error" not in social:
+                                    market_data["watchlist_social_momentum"] = social
+                                    ranked = social.get("ranked_by_momentum", [])
+                                    print(f"[FOLLOWUP] CSV watchlist social scan: {len(ranked)} tickers with buzz, {len(social.get('no_buzz_tickers', []))} with no buzz")
+                                else:
+                                    print(f"[FOLLOWUP] CSV watchlist social scan returned error: {social.get('error', 'unknown')}")
+                            else:
+                                social = await asyncio.wait_for(
+                                    self.data.xai.get_batch_sentiment(prior_tickers[:5]),
+                                    timeout=20.0,
+                                )
+                                if social:
+                                    market_data["social_sentiment_comparison"] = social
+                                    print(f"[FOLLOWUP] Social comparison: {list(social.keys())}")
                         except Exception as e:
                             print(f"[FOLLOWUP] Social fetch failed: {e}")
                     if needs_price:
@@ -3894,11 +3915,16 @@ Be direct and opinionated. Tell me what you actually think."""
                 category_context = (
                     "\nIMPORTANT: This conversation started with a CSV WATCHLIST ANALYSIS. The user uploaded a spreadsheet of stocks "
                     "and you rated each one as Strong Buy, Buy, Hold, or Sell.\n"
-                    "The user is now asking follow-up questions about those stocks. Use your previous ratings and the conversation "
-                    "history as context. You can elaborate on individual picks, reconsider ratings based on new factors the user "
-                    "mentions (like social momentum, insider buying, technical setups, etc.), compare stocks, or provide deeper analysis.\n"
+                    "The user is now asking follow-up questions about THOSE SPECIFIC STOCKS from their watchlist.\n"
+                    "CRITICAL RULE: ONLY discuss tickers that were in the original CSV watchlist. Do NOT bring in outside tickers "
+                    "(like NVDA, TSLA, AAPL, AMZN, etc.) unless they were explicitly part of the uploaded CSV. The user wants analysis "
+                    "of THEIR watchlist, not general market commentary.\n"
+                    "If social sentiment data is provided below (watchlist_social_momentum), use it to rank and discuss which of the "
+                    "user's OWN watchlist stocks have the strongest social buzz on X/Twitter. Reference specific sentiment scores, "
+                    "catalysts, and bullish/bearish highlights from the data.\n"
                     "Be conversational and intelligent — the user wants to discuss their watchlist with you as a knowledgeable trading analyst.\n"
-                    "If social sentiment data is provided below, incorporate it into your analysis of the relevant tickers."
+                    "You can elaborate on individual picks, reconsider ratings based on new factors, compare stocks within the watchlist, "
+                    "or provide deeper analysis on specific names."
                 )
             elif original_category == "crypto":
                 category_context = (

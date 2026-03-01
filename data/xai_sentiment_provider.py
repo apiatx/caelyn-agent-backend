@@ -240,6 +240,54 @@ Be direct. Which of these does X like best right now and why?"""
 
         return await self._call_grok_with_x_search(prompt)
 
+    async def get_watchlist_social_momentum(self, tickers: list) -> dict:
+        """
+        Check social momentum on X for a specific watchlist of tickers.
+        Single Grok call — asks which of THESE specific tickers are buzzing.
+        Designed for CSV follow-ups where user wants social sentiment on their own watchlist.
+        """
+        tickers_str = ", ".join([f"${t}" for t in tickers[:50]])
+
+        prompt = f"""Search X for recent posts (last 24 hours) about ONLY these specific tickers: {tickers_str}
+
+IMPORTANT: ONLY analyze the tickers listed above. Do NOT add other tickers. Do NOT mention stocks not in this list.
+
+For each ticker that has meaningful X/Twitter discussion, report:
+- How much buzz it has (mention volume)
+- Whether sentiment is bullish, bearish, or mixed
+- What's driving the discussion (catalyst, news, chart pattern, etc.)
+- Any notable bullish or bearish posts/themes
+
+Return ONLY a JSON object (no markdown, no backticks):
+{{
+    "watchlist_social_scan": true,
+    "tickers_checked": {len(tickers)},
+    "ranked_by_momentum": [
+        {{
+            "ticker": "SYMBOL",
+            "social_momentum": "extreme" | "high" | "medium" | "low" | "minimal",
+            "sentiment": "bullish" | "bearish" | "mixed" | "neutral",
+            "sentiment_score": -1.0 to 1.0,
+            "buzz_volume": "high" | "medium" | "low" | "negligible",
+            "why_buzzing": "1-2 sentence explanation of what X is saying about this ticker",
+            "bullish_highlight": "Most notable bullish post/theme, or null",
+            "bearish_highlight": "Most notable bearish post/theme, or null",
+            "catalyst": "Specific catalyst driving discussion, or null"
+        }}
+    ],
+    "no_buzz_tickers": ["tickers with negligible or no X discussion"],
+    "overall_watchlist_sentiment": "Brief 2-3 sentence summary of social sentiment across this specific watchlist",
+    "strongest_social_play": "Which ticker from this watchlist has the most compelling social momentum and why"
+}}
+
+Sort ranked_by_momentum by social momentum (strongest first).
+Only include tickers that have at least SOME meaningful discussion in ranked_by_momentum.
+Put tickers with negligible/zero discussion in no_buzz_tickers.
+Be direct — if most of these are small/mid caps with minimal X presence, say so.
+CRITICAL: Only analyze tickers from the list above. Do not add NVDA, TSLA, AAPL or any other ticker not in the list."""
+
+        return await self._call_grok_with_x_search(prompt)
+
     async def run_x_social_scan(self, mode: str, query: str = "", constraints: dict = None) -> dict:
         """
         Unified entry point for x_social_scan module.
