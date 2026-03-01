@@ -54,8 +54,17 @@ function FollowUpInput({ panelId, onSubmit, C, font, sansFont, suggestions }: { 
   const [stage, setStage] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [showSuggestions, setShowSuggestions] = useState(true);
+  const prevSuggestionsRef = useRef<string[] | undefined>(undefined);
   const stageRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Reset showSuggestions when new suggestions arrive
+  useEffect(() => {
+    if (suggestions && suggestions.length > 0 && suggestions !== prevSuggestionsRef.current) {
+      setShowSuggestions(true);
+    }
+    prevSuggestionsRef.current = suggestions;
+  }, [suggestions]);
 
   useEffect(() => {
     if (sending) {
@@ -461,6 +470,7 @@ export default function TradingAgent() {
       }
 
       console.log('[RECV]', res.status, data);
+      console.log('[SUGGESTIONS]', data.suggested_followups || 'none');
       if (data.conversation_id) setConversationId(data.conversation_id);
 
       if (data.type === 'error' || data.error) {
