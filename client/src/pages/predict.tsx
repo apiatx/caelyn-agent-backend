@@ -795,6 +795,41 @@ function PredictionAgent() {
   );
 }
 
+// ─── Lazy Iframe ──────────────────────────────────────────────────
+
+function LazyIframe({ src, title, sandbox, referrerPolicy, scrolling }: {
+  src: string;
+  title: string;
+  sandbox?: string;
+  referrerPolicy?: string;
+  scrolling?: string;
+}) {
+  const [loaded, setLoaded] = useState(false);
+  if (!loaded) {
+    return (
+      <div
+        className="w-full h-[600px] rounded-lg border border-white/10 flex flex-col items-center justify-center gap-3 bg-white/[0.02] cursor-pointer hover:bg-white/[0.04] transition-colors"
+        onClick={() => setLoaded(true)}
+      >
+        <ExternalLink className="w-6 h-6 text-white/20" />
+        <p className="text-xs text-white/30">Click to load {title}</p>
+        <p className="text-[10px] text-white/15">Loads on demand to avoid auto-popups</p>
+      </div>
+    );
+  }
+  return (
+    <iframe
+      src={src}
+      className="w-full h-[600px] rounded-lg border border-crypto-silver/20"
+      title={title}
+      frameBorder="0"
+      sandbox={sandbox}
+      referrerPolicy={referrerPolicy as React.IframeHTMLAttributes<HTMLIFrameElement>["referrerPolicy"]}
+      scrolling={scrolling}
+    />
+  );
+}
+
 // ─── Existing Components ──────────────────────────────────────────
 
 const SmallLink = ({ href, label }: { href: string; label: string }) => (
@@ -850,11 +885,9 @@ export default function PredictPage() {
           <div className="flex justify-end mb-1 mt-0">
             <SmallLink href="https://predictbase.app/" label="Open PredictBase" />
           </div>
-          <iframe
+          <LazyIframe
             src="https://predictbase.app/"
-            className="w-full h-[600px] rounded-lg border border-crypto-silver/20"
             title="PredictBase"
-            frameBorder="0"
             sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-popups-to-escape-sandbox allow-storage-access-by-user-activation"
             referrerPolicy="no-referrer-when-downgrade"
           />
@@ -862,11 +895,9 @@ export default function PredictPage() {
           <div className="flex justify-end mb-1 mt-6">
             <SmallLink href="https://betbase.xyz/" label="Open BetBase" />
           </div>
-          <iframe
+          <LazyIframe
             src="https://betbase.xyz/"
-            className="w-full h-[600px] rounded-lg border border-crypto-silver/20"
             title="BetBase"
-            frameBorder="0"
             sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-popups-to-escape-sandbox allow-storage-access-by-user-activation"
             referrerPolicy="no-referrer-when-downgrade"
           />
@@ -874,11 +905,9 @@ export default function PredictPage() {
           <div className="flex justify-end mb-1 mt-6">
             <SmallLink href="https://pmx.trade/markets" label="Open PMX Trading" />
           </div>
-          <iframe
+          <LazyIframe
             src="https://pmx.trade/markets"
-            className="w-full h-[600px] rounded-lg border border-crypto-silver/20"
             title="PMX Trading"
-            frameBorder="0"
             scrolling="yes"
           />
 
