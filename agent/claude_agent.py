@@ -9,7 +9,7 @@ import openai
 
 from agent.data_compressor import compress_data
 from agent.institutional_scorer import apply_institutional_scoring
-from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, REASONING_BRIEF_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT, SMART_ORCHESTRATOR_PROMPT
+from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, REASONING_BRIEF_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT, SMART_ORCHESTRATOR_PROMPT, PREDICTION_MARKETS_CONTRACT
 from data.market_data_service import MarketDataService
 
 
@@ -113,6 +113,12 @@ class TradingAgent:
         "catalyst_scan": "catalyst_scan",
         # --- Other ---
         "microcap_spec": "microcap_spec",
+        # --- Prediction Markets ---
+        "prediction_markets": "prediction_markets",
+        "polymarket": "prediction_markets",
+        "prediction": "prediction_markets",
+        "odds": "prediction_markets",
+        "probabilities": "prediction_markets",
     }
 
     def _resolve_preset(self, preset_intent: str) -> str:
@@ -1152,6 +1158,16 @@ class TradingAgent:
             "review my", "portfolio review", "dashboard",
         ]
 
+        # Prediction markets detection
+        prediction_keywords = [
+            "polymarket", "prediction market", "prediction markets",
+            "odds of", "probability of", "chances of", "betting odds",
+            "if this event", "if this plays out", "what are the odds",
+            "kalshi", "event contract", "prediction data",
+        ]
+        if any(kw in q for kw in prediction_keywords):
+            return {"category": "prediction_markets"}
+
         conversational_signals = [
             "what do you think", "your opinion", "how would you",
             "why is", "why are", "what's the difference", "should i",
@@ -2060,6 +2076,24 @@ class TradingAgent:
             "response_style": "deep_thesis",
             "priority_depth": "deep",
         },
+        # ---- Prediction Markets ----
+        "prediction_markets": {
+            "intent": "prediction_markets",
+            "asset_classes": ["equities", "crypto", "commodities", "macro"],
+            "modules": {
+                "x_sentiment": False,
+                "social_sentiment": False,
+                "technical_scan": False,
+                "fundamental_validation": False,
+                "macro_context": True,
+                "liquidity_filter": False,
+                "earnings_data": False,
+                "ticker_research": False,
+            },
+            "risk_framework": "neutral",
+            "response_style": "full_thesis",
+            "priority_depth": "deep",
+        },
     }
 
     INTENT_TO_CATEGORY = {
@@ -2079,6 +2113,7 @@ class TradingAgent:
         "best_trades": "best_trades",
         "deterministic_screener": "deterministic_screener",
         "chat": "chat",
+        "prediction_markets": "prediction_markets",
     }
 
     ASSET_CLASS_CATEGORY_MAP = {
@@ -2603,7 +2638,7 @@ class TradingAgent:
 
     DEEP_ANALYSIS_CATEGORIES = {
         "ticker_analysis", "investments", "portfolio_review", "followup",
-        "crypto", "best_trades", "cross_market",
+        "crypto", "best_trades", "cross_market", "prediction_markets",
     }
 
     MEDIUM_DATA_CAP_CATEGORIES = {"cross_market"}
@@ -2647,6 +2682,89 @@ class TradingAgent:
         except Exception as e:
             print(f"[AGENT] Claude API error: {e}")
             return json.dumps({"display_type": "chat", "message": f"Error reaching AI: {str(e)}"})
+
+    async def _gather_polymarket_context(self, query_info: dict) -> dict:
+        """Fetch Polymarket prediction markets data + macro context."""
+        import httpx
+        context = {}
+
+        # 1. Fetch Polymarket events
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                resp = await client.get(
+                    "https://gamma-api.polymarket.com/events",
+                    params={"limit": "50", "active": "true", "closed": "false",
+                            "order": "volume24hr", "ascending": "false"},
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; TradingAgent/1.0)",
+                             "Accept": "application/json"},
+                )
+                resp.raise_for_status()
+                events = resp.json()
+                if isinstance(events, list):
+                    # Slim down to essential fields for token efficiency
+                    slim_events = []
+                    for ev in events[:40]:
+                        slim_ev = {
+                            "title": ev.get("title", ""),
+                            "description": (ev.get("description") or "")[:200],
+                            "volume24hr": ev.get("volume24hr", 0),
+                            "volume": ev.get("volume", 0),
+                            "liquidity": ev.get("liquidity", 0),
+                            "tags": [t.get("label", "") for t in (ev.get("tags") or [])],
+                        }
+                        markets = []
+                        for m in (ev.get("markets") or []):
+                            if not m.get("active") or m.get("closed"):
+                                continue
+                            try:
+                                prices = json.loads(m.get("outcomePrices", "[]"))
+                            except Exception:
+                                prices = []
+                            markets.append({
+                                "question": m.get("question", ev.get("title", "")),
+                                "yes_price": round(float(prices[0]), 3) if prices else 0,
+                                "no_price": round(float(prices[1]), 3) if len(prices) > 1 else 0,
+                                "volume24hr": m.get("volume24hr", 0),
+                            })
+                        if markets:
+                            slim_ev["markets"] = markets
+                            slim_events.append(slim_ev)
+                    context["polymarket_events"] = slim_events
+                    print(f"[POLYMARKET_GATHER] Fetched {len(slim_events)} active events with markets")
+        except Exception as e:
+            print(f"[POLYMARKET_GATHER] Failed to fetch Polymarket data: {e}")
+            context["polymarket_events"] = []
+            context["polymarket_error"] = str(e)
+
+        # 2. Fetch macro context (fear/greed + FRED)
+        try:
+            fg = await asyncio.wait_for(
+                self.data.fear_greed.get_fear_greed_index(),
+                timeout=5.0,
+            )
+            if fg:
+                context["fear_greed"] = fg
+        except Exception:
+            pass
+
+        try:
+            macro = await asyncio.wait_for(
+                self.data.get_macro_overview(),
+                timeout=10.0,
+            )
+            if macro:
+                # Slim macro data to essentials
+                slim_macro = {}
+                for key in ("fed_funds_rate", "cpi", "unemployment", "gdp",
+                            "treasury_10y", "treasury_2y", "vix", "dxy",
+                            "economic_calendar", "summary"):
+                    if key in macro:
+                        slim_macro[key] = macro[key]
+                context["macro_context"] = slim_macro
+        except Exception as e:
+            print(f"[POLYMARKET_GATHER] Macro fetch failed: {e}")
+
+        return context
 
     async def _gather_data(self, query_info: dict) -> dict:
         """Fetch the appropriate data based on query classification."""
@@ -2707,6 +2825,9 @@ class TradingAgent:
 
         elif category == "macro":
             return await self.data.get_macro_overview()
+
+        elif category == "prediction_markets":
+            return await self._gather_polymarket_context(query_info)
 
         elif category == "sec_filings":
             tickers = query_info.get("tickers", [])
@@ -4276,6 +4397,12 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
                 "text": DETERMINISTIC_SCREENER_CONTRACT,
             })
 
+        if category == "prediction_markets":
+            system_blocks.append({
+                "type": "text",
+                "text": PREDICTION_MARKETS_CONTRACT,
+            })
+
         use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES
         if category == "crypto":
             model = "claude-sonnet-4-5-20250929"
@@ -4286,7 +4413,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         elif category == "csv_analysis":
             model = "claude-sonnet-4-20250514"
             token_limit = 8000
-        elif category in ("ticker_analysis", "investments", "portfolio_review"):
+        elif category in ("ticker_analysis", "investments", "portfolio_review", "prediction_markets"):
             model = "claude-sonnet-4-5-20250929"
             token_limit = 10000
         elif category == "followup":
