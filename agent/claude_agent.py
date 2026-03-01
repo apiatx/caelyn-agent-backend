@@ -453,15 +453,31 @@ class TradingAgent:
             try:
                 parsed = json.loads(raw_text)
             except json.JSONDecodeError:
-                # Try to extract JSON from the response
-                brace_start = raw_text.find("{")
-                if brace_start != -1:
-                    try:
-                        parsed = json.loads(raw_text[brace_start:])
-                    except json.JSONDecodeError:
+                # Strip markdown code fences if Claude wrapped the JSON
+                cleaned = re.sub(r"```json\s*", "", raw_text)
+                cleaned = re.sub(r"```\s*", "", cleaned).strip()
+                try:
+                    parsed = json.loads(cleaned)
+                except json.JSONDecodeError:
+                    # Try to extract JSON object by finding matched braces
+                    brace_start = cleaned.find("{")
+                    if brace_start != -1:
+                        depth = 0
+                        for i in range(brace_start, len(cleaned)):
+                            if cleaned[i] == "{":
+                                depth += 1
+                            elif cleaned[i] == "}":
+                                depth -= 1
+                                if depth == 0:
+                                    try:
+                                        parsed = json.loads(cleaned[brace_start:i + 1])
+                                    except json.JSONDecodeError:
+                                        parsed = {"display_type": "chat", "message": raw_text}
+                                    break
+                        else:
+                            parsed = {"display_type": "chat", "message": raw_text}
+                    else:
                         parsed = {"display_type": "chat", "message": raw_text}
-                else:
-                    parsed = {"display_type": "chat", "message": raw_text}
 
             # Build a rich text summary for conversation history / follow-ups
             summary = parsed.get("summary", "")
