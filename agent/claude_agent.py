@@ -547,16 +547,33 @@ class TradingAgent:
                     if needs_social and self.data.xai:
                         try:
                             if csv_followup:
-                                # Use watchlist-specific social scan for CSV follow-ups
-                                # Single Grok call that checks sentiment for ONLY these tickers
+                                # Extract the CSV analysis from history to give Grok context
+                                # (market caps, growth rates, ratings, sectors)
+                                watchlist_context = ""
+                                for msg in reversed(history):
+                                    if msg.get("role") == "assistant":
+                                        asst_text = str(msg.get("content", ""))
+                                        if any(m in asst_text for m in ["STRONG BUY", "BUY(", "HOLD(", "SELL("]):
+                                            watchlist_context = asst_text
+                                            print(f"[FOLLOWUP] Extracted CSV analysis context: {len(watchlist_context)} chars")
+                                            break
+
+                                # Deep watchlist social scan — single Grok call with full context
                                 social = await asyncio.wait_for(
-                                    self.data.xai.get_watchlist_social_momentum(prior_tickers),
-                                    timeout=45.0,
+                                    self.data.xai.get_watchlist_social_momentum(
+                                        prior_tickers,
+                                        watchlist_context=watchlist_context,
+                                    ),
+                                    timeout=120.0,
                                 )
                                 if social and "error" not in social:
                                     market_data["watchlist_social_momentum"] = social
-                                    ranked = social.get("ranked_by_momentum", [])
-                                    print(f"[FOLLOWUP] CSV watchlist social scan: {len(ranked)} tickers with buzz, {len(social.get('no_buzz_tickers', []))} with no buzz")
+                                    ranked = social.get("highest_relative_momentum", [])
+                                    top_plays = social.get("top_social_plays", [])
+                                    clusters = social.get("notable_narrative_clusters", [])
+                                    print(f"[FOLLOWUP] CSV watchlist deep scan: {len(ranked)} tickers with buzz, "
+                                          f"{len(top_plays)} top plays, {len(clusters)} narrative clusters, "
+                                          f"{len(social.get('low_or_no_buzz_tickers', []))} quiet")
                                 else:
                                     print(f"[FOLLOWUP] CSV watchlist social scan returned error: {social.get('error', 'unknown')}")
                             else:
@@ -3919,11 +3936,17 @@ Be direct and opinionated. Tell me what you actually think."""
                     "CRITICAL RULE: ONLY discuss tickers that were in the original CSV watchlist. Do NOT bring in outside tickers "
                     "(like NVDA, TSLA, AAPL, AMZN, etc.) unless they were explicitly part of the uploaded CSV. The user wants analysis "
                     "of THEIR watchlist, not general market commentary.\n"
-                    "If social sentiment data is provided below (watchlist_social_momentum), use it to rank and discuss which of the "
-                    "user's OWN watchlist stocks have the strongest social buzz on X/Twitter. Reference specific sentiment scores, "
-                    "catalysts, and bullish/bearish highlights from the data.\n"
-                    "Be conversational and intelligent — the user wants to discuss their watchlist with you as a knowledgeable trading analyst.\n"
-                    "You can elaborate on individual picks, reconsider ratings based on new factors, compare stocks within the watchlist, "
+                    "If social sentiment data is provided below (watchlist_social_momentum), this contains a DEEP social scan from Grok/X "
+                    "of the user's SPECIFIC watchlist tickers. Use this data thoroughly:\n"
+                    "- Reference the 'highest_relative_momentum' rankings to identify which watchlist stocks have disproportionate social buzz relative to their market cap\n"
+                    "- Discuss 'notable_narrative_clusters' — which groups of watchlist stocks are riding the same sector narrative (AI power, photonics, mining cycles, etc.)\n"
+                    "- Highlight the 'top_social_plays' and explain WHY each has compelling social momentum\n"
+                    "- Distinguish between high-signal posts (DD threads, thesis posts, institutional analysis) vs low-signal noise (spam, pump posts)\n"
+                    "- Reference specific catalysts, engagement patterns, and sentiment quality from the data\n"
+                    "- Note which tickers are in 'low_or_no_buzz_tickers' and what that means (under the radar = opportunity or lack of interest?)\n"
+                    "- Cross-reference social momentum with your earlier fundamental ratings — does social buzz confirm or contradict the fundamentals?\n"
+                    "Be conversational, analytical, and opinionated — the user wants deep insight, not a generic summary.\n"
+                    "You can elaborate on individual picks, reconsider ratings based on social factors, identify sector clusters, "
                     "or provide deeper analysis on specific names."
                 )
             elif original_category == "crypto":

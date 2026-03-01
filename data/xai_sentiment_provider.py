@@ -240,53 +240,96 @@ Be direct. Which of these does X like best right now and why?"""
 
         return await self._call_grok_with_x_search(prompt)
 
-    async def get_watchlist_social_momentum(self, tickers: list) -> dict:
+    async def get_watchlist_social_momentum(self, tickers: list, watchlist_context: str = "") -> dict:
         """
-        Check social momentum on X for a specific watchlist of tickers.
-        Single Grok call — asks which of THESE specific tickers are buzzing.
+        Deep social momentum scan on X for a specific watchlist of tickers.
+        Single Grok call — provides watchlist context (market caps, growth rates, ratings)
+        so Grok can assess relative social momentum vs. size.
         Designed for CSV follow-ups where user wants social sentiment on their own watchlist.
         """
         tickers_str = ", ".join([f"${t}" for t in tickers[:50]])
 
-        prompt = f"""Search X for recent posts (last 24 hours) about ONLY these specific tickers: {tickers_str}
+        context_block = ""
+        if watchlist_context:
+            # Truncate to avoid exceeding token limits but keep as much as possible
+            ctx = watchlist_context[:4000]
+            context_block = f"""
+WATCHLIST CONTEXT (from user's CSV analysis — use this to understand market caps, growth rates, and sectors):
+{ctx}
+"""
 
-IMPORTANT: ONLY analyze the tickers listed above. Do NOT add other tickers. Do NOT mention stocks not in this list.
+        prompt = f"""Search X thoroughly for recent posts (last 7 days, emphasis on last 48 hours) about ONLY these specific tickers from a user's watchlist: {tickers_str}
+{context_block}
+IMPORTANT: ONLY analyze tickers from this watchlist. Do NOT add tickers not in this list (no NVDA, TSLA, AAPL, AMZN, etc. unless they appear in the list above).
 
-For each ticker that has meaningful X/Twitter discussion, report:
-- How much buzz it has (mention volume)
-- Whether sentiment is bullish, bearish, or mixed
-- What's driving the discussion (catalyst, news, chart pattern, etc.)
-- Any notable bullish or bearish posts/themes
+You are scanning social momentum for a SPECIFIC portfolio watchlist. Many of these are small-to-mid cap names that won't have mega-cap-level mention volume. That's expected — adjust your analysis accordingly:
+
+ANALYSIS FRAMEWORK:
+1. RELATIVE SOCIAL MOMENTUM (vs market cap): A $1B stock with 50 recent engaged posts is MORE socially active than a $100B stock with 200 posts. Normalize for size. Small caps need far less absolute mentions to count as "high momentum."
+
+2. POST QUALITY — distinguish between:
+   - HIGH SIGNAL: Educational threads with engagement (likes/retweets), detailed DD/thesis posts, conviction posts from accounts with real followers, earnings analysis, sector thesis posts that name specific tickers
+   - MEDIUM SIGNAL: Watchlist inclusions, price target discussions, chart/TA posts, options flow mentions
+   - LOW SIGNAL/NOISE: Spam, pump-and-dump style "to the moon" posts with Discord links, bot activity, zero-engagement posts
+
+3. CATALYST NARRATIVES: What specific catalysts are being discussed? Earnings dates, sector tailwinds (AI power demand, photonics, mining cycles, etc.), regulatory events, partnerships, technical breakouts. Be specific.
+
+4. SENTIMENT DEPTH: Don't just say "bullish" — describe the TYPE of bullishness:
+   - Is it retail hype/FOMO or informed institutional thesis-building?
+   - Are people building long-term positions or trading momentum?
+   - Is there pushback/debate or is it one-directional?
+
+5. SECTOR CLUSTERING: If multiple watchlist tickers benefit from the same narrative (e.g., photonics/AI optics cluster, bitcoin miners, energy infrastructure), identify those clusters and assess the narrative strength.
 
 Return ONLY a JSON object (no markdown, no backticks):
 {{
     "watchlist_social_scan": true,
-    "tickers_checked": {len(tickers)},
-    "ranked_by_momentum": [
+    "tickers_scanned": {len(tickers)},
+    "scan_depth": "deep",
+    "highest_relative_momentum": [
         {{
             "ticker": "SYMBOL",
-            "social_momentum": "extreme" | "high" | "medium" | "low" | "minimal",
+            "social_momentum_vs_cap": "extreme" | "high" | "medium" | "low",
             "sentiment": "bullish" | "bearish" | "mixed" | "neutral",
             "sentiment_score": -1.0 to 1.0,
-            "buzz_volume": "high" | "medium" | "low" | "negligible",
-            "why_buzzing": "1-2 sentence explanation of what X is saying about this ticker",
-            "bullish_highlight": "Most notable bullish post/theme, or null",
-            "bearish_highlight": "Most notable bearish post/theme, or null",
-            "catalyst": "Specific catalyst driving discussion, or null"
+            "sentiment_quality": "informed_bullish" | "retail_hype" | "thesis_building" | "momentum_trading" | "mixed_debate" | "spam_driven" | "neutral",
+            "buzz_volume_absolute": "high" | "medium" | "low" | "minimal",
+            "buzz_volume_relative_to_cap": "high" | "medium" | "low",
+            "post_quality": "high_signal" | "medium_signal" | "low_signal_noise",
+            "why_buzzing": "2-4 sentence detailed explanation of what X is saying, referencing specific post themes, engagement patterns, and types of accounts discussing it",
+            "bullish_highlights": ["Most notable bullish theme/post 1", "Theme 2"],
+            "bearish_highlights": ["Most notable bearish concern, or null"],
+            "catalysts_discussed": ["Specific catalyst 1", "Catalyst 2"],
+            "narrative_cluster": "Name of broader narrative this belongs to (e.g., 'AI power infrastructure', 'photonics/optics boom', 'gold miners cycle'), or null if standalone"
         }}
     ],
-    "no_buzz_tickers": ["tickers with negligible or no X discussion"],
-    "overall_watchlist_sentiment": "Brief 2-3 sentence summary of social sentiment across this specific watchlist",
-    "strongest_social_play": "Which ticker from this watchlist has the most compelling social momentum and why"
+    "notable_narrative_clusters": [
+        {{
+            "narrative": "Name of the narrative (e.g., 'AI data center power demand')",
+            "watchlist_tickers_in_cluster": ["TICKER1", "TICKER2"],
+            "cluster_momentum": "hot" | "warm" | "cold",
+            "cluster_sentiment": "bullish" | "bearish" | "mixed",
+            "why_hot": "1-2 sentence explanation of why this narrative is driving social interest"
+        }}
+    ],
+    "low_or_no_buzz_tickers": ["tickers with negligible or no meaningful X discussion"],
+    "overall_watchlist_social_summary": "3-5 sentence analytical summary: Is this watchlist socially hot? Which segments have momentum? Is the buzz retail-driven or informed? What narratives are dominating? How does social sentiment align with or diverge from fundamentals?",
+    "top_social_plays": [
+        {{
+            "ticker": "SYMBOL",
+            "why": "2-3 sentence case for why this is the strongest social momentum play from this watchlist, combining relative buzz, sentiment quality, and catalyst strength"
+        }}
+    ]
 }}
 
-Sort ranked_by_momentum by social momentum (strongest first).
-Only include tickers that have at least SOME meaningful discussion in ranked_by_momentum.
-Put tickers with negligible/zero discussion in no_buzz_tickers.
-Be direct — if most of these are small/mid caps with minimal X presence, say so.
-CRITICAL: Only analyze tickers from the list above. Do not add NVDA, TSLA, AAPL or any other ticker not in the list."""
+KEY INSTRUCTIONS:
+- Include ALL tickers that have ANY meaningful discussion (even "low" momentum) in highest_relative_momentum. Only put truly zero-discussion tickers in low_or_no_buzz_tickers.
+- For top_social_plays, pick the 3-5 BEST from the watchlist. These should combine strong relative momentum, positive sentiment quality (not just spam), and real catalysts.
+- Be opinionated and direct. If a ticker has strong social momentum, say so clearly. If buzz is mostly spam/pumps, flag it.
+- Sort highest_relative_momentum by social_momentum_vs_cap (strongest first).
+- CRITICAL: Only analyze tickers from the watchlist above. Do not bring in outside tickers."""
 
-        return await self._call_grok_with_x_search(prompt)
+        return await self._call_grok_with_x_search(prompt, timeout=90.0)
 
     async def run_x_social_scan(self, mode: str, query: str = "", constraints: dict = None) -> dict:
         """
@@ -515,7 +558,7 @@ Keep it tight. This is a mood check, not a full scan."""
 
         return result
 
-    async def _call_grok_with_x_search(self, prompt: str) -> dict:
+    async def _call_grok_with_x_search(self, prompt: str, timeout: float = 45.0) -> dict:
         """Call the xAI Responses API with x_search enabled."""
         payload = {
             "model": self.model,
@@ -531,7 +574,7 @@ Keep it tight. This is a mood check, not a full scan."""
         }
 
         try:
-            async with httpx.AsyncClient(timeout=45.0) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     f"{self.BASE_URL}/responses",
                     headers=self.headers,
