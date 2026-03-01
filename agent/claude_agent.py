@@ -484,15 +484,17 @@ class TradingAgent:
             }
 
         # Detect if this is a follow-up to a CSV analysis
+        # Check ALL assistant messages in history (not just the last one)
+        # because subsequent follow-ups won't have CSV markers in the latest response
         csv_followup = False
         if is_followup and history:
-            for msg in reversed(history):
+            for msg in history:
                 if msg.get("role") == "assistant":
-                    last_asst = str(msg.get("content", ""))
-                    if any(marker in last_asst for marker in ["STRONG BUY:", "BUY:", "HOLD:", "SELL:", "TOP PICKS:"]):
+                    asst_text = str(msg.get("content", ""))
+                    if any(marker in asst_text for marker in ["STRONG BUY:", "BUY:", "HOLD:", "SELL:", "TOP PICKS:", "STRONG BUY(", "BUY(", "HOLD(", "SELL("]):
                         csv_followup = True
-                        print(f"[AGENT] CSV follow-up detected — forcing conversational follow-up path")
-                    break
+                        print(f"[AGENT] CSV follow-up detected — found CSV markers in conversation history")
+                        break
 
         if is_followup and (csv_followup or not self._needs_fresh_data(user_prompt)):
             category = "followup"
@@ -3917,20 +3919,27 @@ Be direct and opinionated. Tell me what you actually think."""
         ]
         if is_followup:
             original_category = None
-            for msg in reversed(messages):
+            # Check ALL assistant messages (not just last) to find the original scan type
+            # On 2nd/3rd follow-ups, the CSV markers are in an earlier message
+            for msg in messages:
                 if msg.get("role") == "assistant":
                     content = msg.get("content", "")
                     # Check for CSV analysis markers in plain text history
-                    if isinstance(content, str) and any(m in content for m in ["STRONG BUY:", "BUY:", "HOLD:", "SELL:", "TOP PICKS:"]):
+                    if isinstance(content, str) and any(m in content for m in ["STRONG BUY:", "BUY:", "HOLD:", "SELL:", "TOP PICKS:", "STRONG BUY(", "BUY(", "HOLD(", "SELL("]):
                         original_category = "csv_watchlist"
                         break
-                    try:
-                        parsed = json.loads(content) if isinstance(content, str) else content
-                        if isinstance(parsed, dict):
-                            original_category = parsed.get("display_type") or parsed.get("structured", {}).get("display_type")
-                            break
-                    except:
-                        pass
+            # If no CSV found, check the last assistant message for other categories
+            if not original_category:
+                for msg in reversed(messages):
+                    if msg.get("role") == "assistant":
+                        content = msg.get("content", "")
+                        try:
+                            parsed = json.loads(content) if isinstance(content, str) else content
+                            if isinstance(parsed, dict):
+                                original_category = parsed.get("display_type") or parsed.get("structured", {}).get("display_type")
+                                break
+                        except:
+                            pass
 
             category_context = ""
             if original_category == "csv_watchlist":
