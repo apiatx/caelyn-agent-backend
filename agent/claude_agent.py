@@ -9,7 +9,7 @@ import openai
 
 from agent.data_compressor import compress_data
 from agent.institutional_scorer import apply_institutional_scoring
-from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, REASONING_BRIEF_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT
+from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, REASONING_BRIEF_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT, SMART_ORCHESTRATOR_PROMPT
 from data.market_data_service import MarketDataService
 
 
@@ -503,105 +503,106 @@ class TradingAgent:
             routing_confidence = "high"
             print(f"[AGENT] Follow-up detected (csv_followup={csv_followup}), using conversational path ({time.time() - start_time:.1f}s)")
 
+            # Use Smart Orchestrator to understand the follow-up intent and extract tickers
+            followup_csv_context = None
+            if csv_followup and history:
+                for msg in reversed(history):
+                    if msg.get("role") == "assistant":
+                        asst_text = str(msg.get("content", ""))
+                        if any(m in asst_text for m in ["STRONG BUY", "BUY(", "HOLD(", "SELL("]):
+                            followup_csv_context = asst_text
+                            print(f"[FOLLOWUP] Extracted CSV analysis context for smart orchestrator: {len(followup_csv_context)} chars")
+                            break
+
+            smart_result = None
+            if self.openai_client:
+                try:
+                    smart_result = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self._smart_orchestrate, user_prompt, history, followup_csv_context
+                        ),
+                        timeout=5.0,
+                    )
+                    if "enhanced_prompt" in smart_result:
+                        smart_tickers = smart_result.get("tickers", [])
+                        smart_apis = smart_result.get("api_calls", {})
+                        print(f"[FOLLOWUP_SMART] Tickers: {smart_tickers[:10]} | APIs: {[k for k, v in smart_apis.items() if v]}")
+                    else:
+                        smart_result = None
+                except Exception as e:
+                    print(f"[FOLLOWUP_SMART] Smart orchestrator failed: {e}")
+                    smart_result = None
+
+            # Determine what data to fetch based on smart orchestrator or keyword fallback
             q_lower = user_prompt.lower()
-            needs_social = any(w in q_lower for w in ["social", "momentum", "sentiment", "buzz", "hype", "x say", "twitter", "reddit"])
-            needs_price = any(w in q_lower for w in ["price", "entry", "stop", "target", "chart", "technical"])
+            if smart_result:
+                smart_apis = smart_result.get("api_calls", {})
+                needs_social = bool(smart_apis.get("grok_social"))
+                needs_price = bool(smart_apis.get("technical_data"))
+                prior_tickers = smart_result.get("tickers", [])
+                # If smart orchestrator extracted no tickers, fall back to regex extraction
+                if not prior_tickers:
+                    prior_tickers = self._extract_followup_tickers(history, csv_followup)
+            else:
+                needs_social = any(w in q_lower for w in ["social", "momentum", "sentiment", "buzz", "hype", "x say", "twitter", "reddit"])
+                needs_price = any(w in q_lower for w in ["price", "entry", "stop", "target", "chart", "technical"])
+                prior_tickers = self._extract_followup_tickers(history, csv_followup) if (needs_social or needs_price) else []
 
-            if needs_social or needs_price:
-                import re as _re
-                prior_tickers = []
-                _common = {
-                    "I", "A", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
-                    "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON", "OR",
-                    "SO", "TO", "UP", "US", "WE", "THE", "AND", "FOR", "ARE",
-                    "BUT", "NOT", "YOU", "ALL", "BUY", "SELL", "HOLD", "LONG",
-                    "SHORT", "PUT", "CALL", "ETF", "IPO", "NOW", "OUT", "TOP",
-                    "NEW", "HAS", "MOST", "BEST", "HIGH", "LOW", "RISK", "STOP",
-                    "ENTRY", "WHICH", "THESE", "THOSE", "WHAT", "THAT", "FEAR",
-                    "CEO", "CFO", "EPS", "GDP", "CPI", "FED", "SEC", "RSI", "SMA",
-                    "AI", "FOMC", "NAV", "DCF", "ATH", "ATL", "YOY", "QOQ",
-                    "MACD", "TA", "FA", "PE", "PB", "ROE", "ROI", "YTD",
-                    "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "NZD",
-                    "OK", "YES", "HEY", "WOW", "ANY", "MAY", "CAN", "LET",
-                    "SAY", "GET", "USE", "SET", "RUN", "TRY", "ADD",
-                    "STRONG", "PICKS", "TOTAL",
-                }
-                for msg in history:
-                    c = str(msg.get("content", ""))
-                    found = _re.findall(r'\b([A-Z]{1,5})\b', c)
-                    prior_tickers.extend([t for t in found if t not in _common])
-                seen = set()
-                unique_tickers = []
-                for t in prior_tickers:
-                    if t not in seen:
-                        seen.add(t)
-                        unique_tickers.append(t)
+            if prior_tickers and (needs_social or needs_price):
+                market_data = {}
+                if needs_social and self.data.xai:
+                    try:
+                        if csv_followup:
+                            watchlist_context = followup_csv_context or ""
 
-                if csv_followup:
-                    # For CSV follow-ups, use ALL extracted tickers (up to 50)
-                    prior_tickers = unique_tickers[:50]
-                    print(f"[FOLLOWUP] CSV watchlist tickers extracted: {len(prior_tickers)} → {prior_tickers[:10]}...")
-                else:
-                    prior_tickers = unique_tickers[:10]
-
-                if prior_tickers:
-                    market_data = {}
-                    if needs_social and self.data.xai:
-                        try:
-                            if csv_followup:
-                                # Extract the CSV analysis from history to give Grok context
-                                watchlist_context = ""
-                                for msg in reversed(history):
-                                    if msg.get("role") == "assistant":
-                                        asst_text = str(msg.get("content", ""))
-                                        if any(m in asst_text for m in ["STRONG BUY", "BUY(", "HOLD(", "SELL("]):
-                                            watchlist_context = asst_text
-                                            print(f"[FOLLOWUP] Extracted CSV analysis context: {len(watchlist_context)} chars")
-                                            break
-
-                                # Deep watchlist social scan — batched Grok calls with context
-                                social = await asyncio.wait_for(
-                                    self.data.xai.get_watchlist_social_momentum(
-                                        prior_tickers,
-                                        watchlist_context=watchlist_context,
-                                    ),
-                                    timeout=300.0,
-                                )
-                                if social and "error" not in social:
-                                    market_data["watchlist_social_momentum"] = social
-                                    # Mark top-level as pre-compressed so data_compressor
-                                    # doesn't truncate Grok's rich analysis text
-                                    market_data["_compression"] = {"category": "followup_social", "skip": True}
-                                    grok_text = social.get("grok_analysis", "")
-                                    print(f"[FOLLOWUP] CSV watchlist deep scan: {len(grok_text)} chars of Grok analysis, "
-                                          f"{social.get('batches_completed', 0)} batches completed, "
-                                          f"{social.get('batches_failed', 0)} failed")
-                                else:
-                                    err = social.get('error', 'unknown') if social else 'null response'
-                                    print(f"[FOLLOWUP] CSV watchlist social scan returned error: {err}")
-                            else:
-                                social = await asyncio.wait_for(
-                                    self.data.xai.get_batch_sentiment(prior_tickers[:5]),
-                                    timeout=20.0,
-                                )
-                                if social:
-                                    market_data["social_sentiment_comparison"] = social
-                                    print(f"[FOLLOWUP] Social comparison: {list(social.keys())}")
-                        except Exception as e:
-                            print(f"[FOLLOWUP] Social fetch failed: {e}")
-                    if needs_price:
-                        try:
-                            quotes = await asyncio.wait_for(
-                                self.data.get_quotes_batch(prior_tickers[:10]),
-                                timeout=8.0,
+                            # Deep watchlist social scan — batched Grok calls with context
+                            social = await asyncio.wait_for(
+                                self.data.xai.get_watchlist_social_momentum(
+                                    prior_tickers,
+                                    watchlist_context=watchlist_context,
+                                ),
+                                timeout=300.0,
                             )
-                            if quotes:
-                                market_data["price_quotes"] = quotes
-                                print(f"[FOLLOWUP] Price quotes: {list(quotes.keys())}")
-                        except Exception as e:
-                            print(f"[FOLLOWUP] Price fetch failed: {e}")
-                    if not market_data:
-                        market_data = None
+                            if social and "error" not in social:
+                                market_data["watchlist_social_momentum"] = social
+                                # Mark top-level as pre-compressed so data_compressor
+                                # doesn't truncate Grok's rich analysis text
+                                market_data["_compression"] = {"category": "followup_social", "skip": True}
+                                grok_text = social.get("grok_analysis", "")
+                                print(f"[FOLLOWUP] CSV watchlist deep scan: {len(grok_text)} chars of Grok analysis, "
+                                      f"{social.get('batches_completed', 0)} batches completed, "
+                                      f"{social.get('batches_failed', 0)} failed")
+                            else:
+                                err = social.get('error', 'unknown') if social else 'null response'
+                                print(f"[FOLLOWUP] CSV watchlist social scan returned error: {err}")
+                        else:
+                            social = await asyncio.wait_for(
+                                self.data.xai.get_batch_sentiment(prior_tickers[:5]),
+                                timeout=20.0,
+                            )
+                            if social:
+                                market_data["social_sentiment_comparison"] = social
+                                print(f"[FOLLOWUP] Social comparison: {list(social.keys())}")
+                    except Exception as e:
+                        print(f"[FOLLOWUP] Social fetch failed: {e}")
+                if needs_price:
+                    try:
+                        quotes = await asyncio.wait_for(
+                            self.data.get_quotes_batch(prior_tickers[:10]),
+                            timeout=8.0,
+                        )
+                        if quotes:
+                            market_data["price_quotes"] = quotes
+                            print(f"[FOLLOWUP] Price quotes: {list(quotes.keys())}")
+                    except Exception as e:
+                        print(f"[FOLLOWUP] Price fetch failed: {e}")
+                if not market_data:
+                    market_data = None
+
+            # Use enhanced prompt from smart orchestrator if available
+            if smart_result and smart_result.get("enhanced_prompt"):
+                user_prompt = smart_result["enhanced_prompt"]
+                print(f"[FOLLOWUP] Using enhanced prompt from smart orchestrator ({len(user_prompt)} chars)")
         elif preset_intent:
             plan = self._build_plan_from_preset(preset_intent)
             if plan is None:
@@ -663,7 +664,7 @@ class TradingAgent:
                     market_data = {"error": str(market_data)}
                 print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
         else:
-            query_info = await self._orchestrate_with_timeout(user_prompt)
+            query_info = await self._orchestrate_with_timeout(user_prompt, history=history)
             routing_source = query_info.pop("_routing_source", "heuristic")
             routing_confidence = query_info.pop("_routing_confidence", "low")
             query_info["original_prompt"] = user_prompt
@@ -763,6 +764,20 @@ class TradingAgent:
             user_prompt = csv_context + "\n\n[USER REQUEST]\n" + user_prompt
             claude_data = {}
             print(f"[CSV] Injected {len(csv_rows)} rows directly into Claude prompt ({len(csv_context)} chars)")
+
+        # Apply enhanced prompt from Smart Orchestrator (for non-CSV, non-followup freeform queries)
+        if category != "followup" and not csv_parsed:
+            try:
+                enhanced = query_info.get("_enhanced_prompt")
+                response_inst = query_info.get("_response_instruction", "")
+                if enhanced and enhanced != user_prompt:
+                    user_prompt = enhanced
+                    if response_inst:
+                        user_prompt += f"\n\n[RESPONSE GUIDANCE]\n{response_inst}"
+                    print(f"[SMART_ORCH] Using enhanced prompt for Claude ({len(user_prompt)} chars)")
+            except NameError:
+                pass
+
         raw_response = await self._ask_claude_with_timeout(user_prompt, claude_data, history, is_followup=is_followup, category=category)
         claude_ms = int((time.time() - data_done_time) * 1000)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
@@ -1240,6 +1255,42 @@ class TradingAgent:
         }
         return [t for t in ticker_pattern if t not in common]
 
+    def _extract_followup_tickers(self, history: list, csv_followup: bool = False) -> list:
+        """Extract tickers from conversation history for follow-up queries.
+        For CSV follow-ups, extracts up to 50 tickers. Otherwise up to 10."""
+        import re as _re
+        prior_tickers = []
+        _common = {
+            "I", "A", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
+            "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON", "OR",
+            "SO", "TO", "UP", "US", "WE", "THE", "AND", "FOR", "ARE",
+            "BUT", "NOT", "YOU", "ALL", "BUY", "SELL", "HOLD", "LONG",
+            "SHORT", "PUT", "CALL", "ETF", "IPO", "NOW", "OUT", "TOP",
+            "NEW", "HAS", "MOST", "BEST", "HIGH", "LOW", "RISK", "STOP",
+            "ENTRY", "WHICH", "THESE", "THOSE", "WHAT", "THAT", "FEAR",
+            "CEO", "CFO", "EPS", "GDP", "CPI", "FED", "SEC", "RSI", "SMA",
+            "AI", "FOMC", "NAV", "DCF", "ATH", "ATL", "YOY", "QOQ",
+            "MACD", "TA", "FA", "PE", "PB", "ROE", "ROI", "YTD",
+            "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "NZD",
+            "OK", "YES", "HEY", "WOW", "ANY", "MAY", "CAN", "LET",
+            "SAY", "GET", "USE", "SET", "RUN", "TRY", "ADD",
+            "STRONG", "PICKS", "TOTAL",
+        }
+        for msg in history:
+            c = str(msg.get("content", ""))
+            found = _re.findall(r'\b([A-Z]{1,5})\b', c)
+            prior_tickers.extend([t for t in found if t not in _common])
+        seen = set()
+        unique_tickers = []
+        for t in prior_tickers:
+            if t not in seen:
+                seen.add(t)
+                unique_tickers.append(t)
+        limit = 50 if csv_followup else 10
+        result = unique_tickers[:limit]
+        print(f"[FOLLOWUP_TICKERS] Extracted {len(result)} tickers (csv={csv_followup}): {result[:10]}...")
+        return result
+
     def _classify_query(self, prompt: str) -> dict:
         if self.openai_client:
             return self._classify_query_openai(prompt)
@@ -1295,6 +1346,102 @@ class TradingAgent:
         except Exception as e:
             print(f"[AGENT] Classification API error: {e}")
             return self._keyword_classify(prompt)
+
+    def _smart_orchestrate(self, user_prompt: str, history: list = None, csv_context: str = None) -> dict:
+        """
+        Use GPT-4o-mini as a Smart Orchestrator + Prompt Engineer.
+        Understands full context (prompt + history + CSV), extracts tickers from
+        prior analysis, decides which APIs to call, and enhances the prompt.
+
+        Returns dict with: enhanced_prompt, tickers, api_calls, response_instruction,
+        intent, asset_classes, risk_framework, response_style, priority_depth, filters.
+        Falls back to keyword classifier on failure.
+        """
+        if not self.openai_client:
+            print("[SMART_ORCH] No OpenAI client, falling back to keyword classifier")
+            return self._keyword_classify(user_prompt)
+
+        # Build context messages for GPT
+        messages = [
+            {
+                "role": "system",
+                "content": SMART_ORCHESTRATOR_PROMPT,
+            },
+        ]
+
+        # Inject conversation history (last 6 messages max, trimmed)
+        if history:
+            for msg in history[-6:]:
+                role = msg.get("role", "user")
+                content = str(msg.get("content", ""))[:2000]
+                if role in ("user", "assistant"):
+                    messages.append({"role": role, "content": content})
+
+        # Build the user message with all context
+        user_parts = []
+        if csv_context:
+            user_parts.append(f"[CSV ANALYSIS CONTEXT]\n{csv_context[:3000]}")
+        user_parts.append(f"[USER QUERY]\n{user_prompt}")
+        user_parts.append(f"\n[API BUDGET]\n{self._get_api_budget_hint()}")
+
+        messages.append({"role": "user", "content": "\n\n".join(user_parts)})
+
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                max_tokens=500,
+                temperature=0.1,
+                response_format={"type": "json_object"},
+                messages=messages,
+            )
+            text = response.choices[0].message.content.strip()
+            result = json.loads(text)
+
+            # Validate required fields
+            if "enhanced_prompt" not in result:
+                result["enhanced_prompt"] = user_prompt
+            if "tickers" not in result or not isinstance(result.get("tickers"), list):
+                result["tickers"] = []
+            if "api_calls" not in result or not isinstance(result.get("api_calls"), dict):
+                result["api_calls"] = {}
+            if "response_instruction" not in result:
+                result["response_instruction"] = ""
+            if "intent" not in result or result["intent"] not in self.VALID_INTENTS:
+                result["intent"] = "cross_asset_trending"
+            if "asset_classes" not in result or not isinstance(result.get("asset_classes"), list):
+                result["asset_classes"] = ["equities"]
+            if "filters" not in result:
+                result["filters"] = {}
+
+            # Map api_calls to modules for backward compatibility with orchestration plan
+            api = result["api_calls"]
+            result["modules"] = {
+                "x_sentiment": bool(api.get("grok_social")),
+                "social_sentiment": bool(api.get("grok_social")),
+                "technical_scan": bool(api.get("technical_data")),
+                "fundamental_validation": bool(api.get("fundamental_data")),
+                "macro_context": False,
+                "liquidity_filter": False,
+                "earnings_data": False,
+                "ticker_research": bool(result["tickers"]) and result["intent"] == "deep_dive",
+            }
+            # Enable news via macro_context (news is fetched there)
+            if api.get("news_search"):
+                result["modules"]["macro_context"] = True
+
+            result["risk_framework"] = result.get("risk_framework", "neutral")
+            result["response_style"] = result.get("response_style", "institutional_brief")
+            result["priority_depth"] = result.get("priority_depth", "medium")
+
+            tickers_str = ", ".join(result["tickers"][:5]) if result["tickers"] else "none"
+            active_apis = [k for k, v in api.items() if v]
+            print(f"[SMART_ORCH] Intent: {result['intent']} | Tickers: {tickers_str} | "
+                  f"APIs: {active_apis} | Enhanced prompt: {result['enhanced_prompt'][:80]}...")
+            return result
+
+        except Exception as e:
+            print(f"[SMART_ORCH] GPT call failed: {e}, falling back to keyword classifier")
+            return self._keyword_classify(user_prompt)
 
     INTENT_PROFILES = {
         "daily_briefing": {
@@ -1902,35 +2049,27 @@ class TradingAgent:
         "tickers": [],
     }
 
-    def _orchestrate_query_openai(self, prompt: str) -> dict:
-        if not self.openai_client:
-            print(f"[ORCHESTRATOR] No OpenAI client, using default plan")
-            return dict(self.DEFAULT_PLAN)
-        try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o",
-                max_tokens=500,
-                temperature=0.1,
-                response_format={"type": "json_object"},
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a trading system orchestrator. Reply with ONLY a valid JSON object matching the schema described. No narrative text.",
-                    },
-                    {
-                        "role": "user",
-                        "content": f"{ORCHESTRATION_PROMPT}\n\nAPI BUDGET STATUS:\n{self._get_api_budget_hint()}\n\nUser query: {prompt}",
-                    },
-                ],
-            )
-            text = response.choices[0].message.content.strip()
-            plan = json.loads(text)
-            return self._validate_plan(plan, prompt)
-        except Exception as e:
-            print(f"[ORCHESTRATOR] OpenAI orchestration error: {e}, using heuristic fallback")
+    def _orchestrate_query_openai(self, prompt: str, history: list = None, csv_context: str = None) -> dict:
+        """Orchestrate query using Smart Orchestrator (GPT-4o-mini).
+        Delegates to _smart_orchestrate for context-aware routing + prompt enhancement.
+        Falls back to heuristic plan on failure."""
+        result = self._smart_orchestrate(prompt, history=history, csv_context=csv_context)
+
+        # If _smart_orchestrate fell back to keyword classifier, convert to plan format
+        if "enhanced_prompt" not in result:
+            # This is a keyword classifier result, convert to plan
             plan = self._heuristic_fallback_plan(prompt)
             plan["_from_heuristic"] = True
             return plan
+
+        # _smart_orchestrate already returns a full plan with modules, intent, etc.
+        plan = self._validate_plan(result, prompt)
+        # Preserve smart orchestrator fields through the pipeline
+        plan["_enhanced_prompt"] = result.get("enhanced_prompt", prompt)
+        plan["_response_instruction"] = result.get("response_instruction", "")
+        plan["_api_calls"] = result.get("api_calls", {})
+        return plan
+
     def _get_api_budget_hint(self) -> str:
         """Returns a plain-text budget hint for the orchestration prompt."""
         try:
@@ -2089,10 +2228,10 @@ class TradingAgent:
             print(f"[REASONING_BRIEF] Generation failed (non-fatal): {e}")
             return None
 
-    async def _orchestrate_with_timeout(self, prompt: str) -> dict:
+    async def _orchestrate_with_timeout(self, prompt: str, history: list = None, csv_context: str = None) -> dict:
         try:
             plan = await asyncio.wait_for(
-                asyncio.to_thread(self._orchestrate_query_openai, prompt),
+                asyncio.to_thread(self._orchestrate_query_openai, prompt, history, csv_context),
                 timeout=10.0,
             )
             from_heuristic = plan.pop("_from_heuristic", False)
@@ -2123,8 +2262,17 @@ class TradingAgent:
                 is_chat = plan.get("intent") == "chat"
                 query_info["_routing_confidence"] = "low" if is_chat else "medium"
             else:
-                query_info["_routing_source"] = "classifier"
+                query_info["_routing_source"] = "smart_orchestrator"
                 query_info["_routing_confidence"] = "high"
+
+            # Preserve enhanced prompt and response instruction from smart orchestrator
+            if plan.get("_enhanced_prompt"):
+                query_info["_enhanced_prompt"] = plan["_enhanced_prompt"]
+            if plan.get("_response_instruction"):
+                query_info["_response_instruction"] = plan["_response_instruction"]
+            if plan.get("_api_calls"):
+                query_info["_api_calls"] = plan["_api_calls"]
+
             print(f"[ORCHESTRATOR] Intent: {plan.get('intent')} → Category: {query_info['category']} | "
                   f"Assets: {plan.get('asset_classes')} | "
                   f"Modules: {[k for k, v in plan.get('modules', {}).items() if v]} | "

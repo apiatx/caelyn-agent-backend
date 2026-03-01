@@ -26,6 +26,7 @@ class XAISentimentProvider:
         self.headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
+            "User-Agent": "CaelynAgent/1.0",
         }
 
     async def get_ticker_sentiment(self, ticker: str, asset_type: str = "stock") -> dict:
