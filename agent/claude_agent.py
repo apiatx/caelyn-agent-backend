@@ -402,13 +402,27 @@ class TradingAgent:
             csv_cols = csv_parsed["columns"]
             csv_table = "\n".join([", ".join(f"{k}: {v}" for k, v in row.items() if v) for row in csv_rows[:200]])
             csv_prompt = (
-                f"You are a concise stock analyst. Analyze this spreadsheet and respond in plain text (NOT JSON).\n\n"
+                f"Analyze this spreadsheet. Respond with ONLY a valid JSON object, no markdown, no explanation outside the JSON.\n\n"
                 f"SPREADSHEET ({len(csv_rows)} stocks):\n"
                 f"Columns: {', '.join(csv_cols)}\n\n"
                 f"{csv_table}\n\n"
-                f"For EACH ticker give: TICKER — BUY/HOLD/SELL — one-line reason using the data above.\n"
-                f"Then list your TOP 2-3 BEST picks with a short paragraph each.\n"
-                f"Be concise. Use only data from the spreadsheet. Do not make up numbers.\n\n"
+                f"Return this exact JSON structure:\n"
+                f'{{"display_type":"csv_watchlist","summary":"1-2 sentence overview of the watchlist",'
+                f'"strong_buy":[{{"ticker":"SYM","reason":"one-line reason from data"}}],'
+                f'"buy":[{{"ticker":"SYM","reason":"one-line reason from data"}}],'
+                f'"hold":[{{"ticker":"SYM","reason":"one-line reason from data"}}],'
+                f'"sell":[{{"ticker":"SYM","reason":"one-line reason from data"}}],'
+                f'"top_picks":[{{"ticker":"SYM","thesis":"2-3 sentence thesis using data from spreadsheet"}}]'
+                f'}}\n\n'
+                f"Rules:\n"
+                f"- Classify EVERY ticker into exactly one of: strong_buy, buy, hold, sell\n"
+                f"- strong_buy = great growth + reasonable valuation + positive FCF\n"
+                f"- buy = solid fundamentals, decent valuation\n"
+                f"- hold = mixed signals or fair value\n"
+                f"- sell = overvalued, negative FCF, or deteriorating fundamentals\n"
+                f"- top_picks = your TOP 2-3 best investments with a detailed thesis\n"
+                f"- Use ONLY data from the spreadsheet. Do NOT make up numbers.\n"
+                f"- Be concise. One-line reasons only (except top_picks thesis).\n\n"
                 f"User request: {user_prompt}"
             )
             print(f"[CSV] Prompt size: {len(csv_prompt)} chars")
@@ -426,17 +440,32 @@ class TradingAgent:
                 )
                 raw_text = response.content[0].text if response.content else ""
             except asyncio.TimeoutError:
-                raw_text = "CSV analysis timed out after 60s. Try uploading a smaller file."
+                raw_text = '{"display_type":"chat","message":"CSV analysis timed out after 60s. Try a smaller file."}'
             except Exception as e:
-                raw_text = f"CSV analysis error: {str(e)}"
+                raw_text = f'{{"display_type":"chat","message":"CSV analysis error: {str(e)}"}}'
 
             claude_ms = int((time.time() - data_done_time) * 1000)
             data_ms = int((data_done_time - start_time) * 1000)
             print(f"[CSV] Claude responded in {claude_ms}ms ({len(raw_text)} chars)")
 
+            # Parse the JSON response
+            try:
+                parsed = json.loads(raw_text)
+            except json.JSONDecodeError:
+                # Try to extract JSON from the response
+                brace_start = raw_text.find("{")
+                if brace_start != -1:
+                    try:
+                        parsed = json.loads(raw_text[brace_start:])
+                    except json.JSONDecodeError:
+                        parsed = {"display_type": "chat", "message": raw_text}
+                else:
+                    parsed = {"display_type": "chat", "message": raw_text}
+
+            summary = parsed.get("summary", "")
             return {
-                "analysis": raw_text,
-                "structured": {"display_type": "chat", "message": raw_text},
+                "analysis": summary,
+                "structured": parsed,
                 "_timing": {"data": data_ms, "claude": claude_ms, "grok": 0},
                 "_routing": {"source": "csv_upload", "confidence": "high", "category": "csv_analysis"},
             }
