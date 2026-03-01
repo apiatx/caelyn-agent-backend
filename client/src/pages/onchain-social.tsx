@@ -378,24 +378,16 @@ export default function OnchainSocialPage() {
         }} />
 
         {/* HERO */}
-        <div style={{ padding: '4rem 3rem 2rem', maxWidth: 900, margin: '0 auto', textAlign: 'center', position: 'relative', zIndex: 1 }}>
-          <div style={{
-            display: 'inline-block', fontFamily: "'JetBrains Mono', monospace", fontSize: '0.72rem', fontWeight: 500,
-            letterSpacing: '0.12em', textTransform: 'uppercase', color: '#38bdf8',
-            border: '1px solid rgba(56,189,248,0.25)', borderRadius: 100, padding: '0.4rem 1.2rem',
-            marginBottom: '2.5rem', background: 'rgba(56,189,248,0.05)'
-          }}>
-            Social Intelligence
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
-            <img src={socialImage} alt="Caelyn.ai" style={{ width: 320, height: 'auto', objectFit: 'contain' }} />
-            <h1 style={{ fontSize: 'clamp(2rem, 4vw, 3rem)', fontWeight: 700, lineHeight: 1.15, letterSpacing: '-0.03em' }}>
+        <div style={{ padding: '1.5rem 3rem 1rem', maxWidth: 900, margin: '0 auto', textAlign: 'center', position: 'relative', zIndex: 1 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem', marginBottom: '0.5rem' }}>
+            <img src={socialImage} alt="Caelyn.ai" style={{ width: 180, height: 'auto', objectFit: 'contain' }} />
+            <h1 style={{ fontSize: 'clamp(1.4rem, 3vw, 2rem)', fontWeight: 700, lineHeight: 1.15, letterSpacing: '-0.03em', margin: 0 }}>
               <span className="gradient-text">Social</span>
             </h1>
+            <p style={{ fontSize: '0.9rem', color: '#64748b', margin: 0, lineHeight: 1.5 }}>
+              Social intelligence and community analytics
+            </p>
           </div>
-          <p style={{ fontSize: '1.05rem', color: '#64748b', maxWidth: 680, margin: '0 auto', lineHeight: 1.7 }}>
-            Social intelligence and community analytics
-          </p>
         </div>
 
         {/* DIVIDER */}
