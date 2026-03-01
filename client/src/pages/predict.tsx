@@ -46,16 +46,15 @@ const MACRO_EXCLUDE = [
   "paralympics",
 ];
 
-type CategoryTab = "all" | "crypto" | "fed" | "elections" | "economy" | "geopolitics" | "finance" | "tech" | "earnings";
+type CategoryTab = "all" | "crypto" | "fed" | "elections" | "economy" | "geopolitics" | "finance" | "tech";
 
 // Categories that use Polymarket tag_slug API for direct fetching
 const TAG_SLUG_CATEGORIES: Partial<Record<CategoryTab, string>> = {
   finance: "finance",
   tech: "tech",
-  earnings: "earnings",
 };
 
-const CATEGORY_KEYWORDS: Record<Exclude<CategoryTab, "all" | "finance" | "tech" | "earnings">, string[]> = {
+const CATEGORY_KEYWORDS: Record<Exclude<CategoryTab, "all" | "finance" | "tech">, string[]> = {
   crypto: ["bitcoin", "btc", "ethereum", "eth", "crypto", "solana", "xrp", "dogecoin", "defi", "nft", "blockchain"],
   fed: ["fed", "rate", "rates", "interest", "monetary", "central bank", "fomc", "powell", "inflation", "cpi", "ppi", "yield", "bond"],
   elections: ["election", "president", "congress", "senate", "house", "vote", "governor", "democrat", "republican", "trump", "biden"],
@@ -753,9 +752,11 @@ async function fetchPolymarketByTag(tagSlug: string): Promise<PolyEvent[] | null
 
 function PolymarketDashboard() {
   const [markets, setMarkets] = useState<ParsedMarket[]>([]);
-  const [tagMarkets, setTagMarkets] = useState<ParsedMarket[]>([]);
+  const [tagCache, setTagCache] = useState<Record<string, ParsedMarket[]>>({});
+  const [earningsMarkets, setEarningsMarkets] = useState<ParsedMarket[]>([]);
   const [loading, setLoading] = useState(true);
   const [tagLoading, setTagLoading] = useState(false);
+  const [earningsLoading, setEarningsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<CategoryTab>("all");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -801,37 +802,49 @@ function PolymarketDashboard() {
     }
   }, []);
 
-  // Fetch tag-specific markets when a tag-slug tab is active
+  // Fetch tag-specific markets — caches results so switching tabs is instant
   const fetchTagData = useCallback(async (tab: CategoryTab) => {
     const tagSlug = TAG_SLUG_CATEGORIES[tab];
     if (!tagSlug) return;
-    setTagLoading(true);
-    setTagMarkets([]);
+    // If already cached, don't show loading
+    if (!tagCache[tagSlug]) setTagLoading(true);
     try {
       const data = await fetchPolymarketByTag(tagSlug);
       if (data && data.length > 0) {
         const parsed = parseTagEvents(data);
-        setTagMarkets(parsed);
-        setError(null);
-      } else {
-        setTagMarkets([]);
+        setTagCache((prev) => ({ ...prev, [tagSlug]: parsed }));
       }
-    } catch {
-      setTagMarkets([]);
-    } finally {
+    } catch { /* keep cached data */ }
+    finally {
       setTagLoading(false);
+    }
+  }, [tagCache]);
+
+  // Fetch earnings data on mount (pre-loaded, always visible)
+  const fetchEarnings = useCallback(async () => {
+    setEarningsLoading(true);
+    try {
+      const data = await fetchPolymarketByTag("earnings");
+      if (data && data.length > 0) {
+        setEarningsMarkets(parseTagEvents(data));
+      }
+    } catch { /* silent */ }
+    finally {
+      setEarningsLoading(false);
     }
   }, []);
 
   useEffect(() => {
     fetchData();
-    const iv = setInterval(fetchData, REFRESH_INTERVAL);
+    fetchEarnings();
+    const iv = setInterval(() => { fetchData(); fetchEarnings(); }, REFRESH_INTERVAL);
     return () => clearInterval(iv);
-  }, [fetchData]);
+  }, [fetchData, fetchEarnings]);
 
-  // When switching to a tag-slug category, fetch its data
+  // When switching to a tag-slug category, fetch if not cached
   useEffect(() => {
-    if (activeTab in TAG_SLUG_CATEGORIES) {
+    const tagSlug = TAG_SLUG_CATEGORIES[activeTab];
+    if (tagSlug) {
       fetchTagData(activeTab);
     }
   }, [activeTab, fetchTagData]);
@@ -839,15 +852,20 @@ function PolymarketDashboard() {
   const handleRefresh = () => {
     setLoading(true);
     fetchData();
-    if (activeTab in TAG_SLUG_CATEGORIES) {
+    fetchEarnings();
+    const tagSlug = TAG_SLUG_CATEGORIES[activeTab];
+    if (tagSlug) {
+      // Clear cache for active tag to force reload
+      setTagCache((prev) => { const n = { ...prev }; delete n[tagSlug]; return n; });
       fetchTagData(activeTab);
     }
   };
 
-  // For tag-slug categories, use tagMarkets; for others, filter the main markets
+  // For tag-slug categories, use cached tag data; for others, filter the main markets
   const isTagCategory = activeTab in TAG_SLUG_CATEGORIES;
+  const tagSlug = TAG_SLUG_CATEGORIES[activeTab];
   const filtered = isTagCategory
-    ? tagMarkets
+    ? (tagSlug ? tagCache[tagSlug] || [] : [])
     : markets.filter((m) => matchesCategory(m, activeTab));
 
   const tabs: { key: CategoryTab; label: string }[] = [
@@ -859,10 +877,10 @@ function PolymarketDashboard() {
     { key: "geopolitics", label: "Geopolitics" },
     { key: "finance", label: "Finance" },
     { key: "tech", label: "Tech" },
-    { key: "earnings", label: "Earnings" },
   ];
 
   return (
+    <>
     <GlassCard className="p-5 mb-8">
       {/* Header */}
       <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
@@ -925,11 +943,11 @@ function PolymarketDashboard() {
         </div>
       ) : (
         <>
-          {/* Market Pulse Ticker Tape */}
-          <MarketPulseBar markets={filtered} />
+          {/* Market Pulse Ticker Tape — always uses main markets */}
+          <MarketPulseBar markets={markets} />
 
-          {/* Movers & Shakers */}
-          <MoversSection markets={filtered} />
+          {/* Movers & Shakers — always uses main markets */}
+          <MoversSection markets={markets} />
 
           {/* Category Tabs */}
           <div className="flex items-center gap-1.5 mb-4 overflow-x-auto pb-1 scrollbar-hide">
@@ -944,7 +962,7 @@ function PolymarketDashboard() {
                 }`}
               >
                 {tab.label}
-                {activeTab === tab.key && (
+                {activeTab === tab.key && filtered.length > 0 && (
                   <span className="ml-1.5 text-[9px] text-blue-400/60">
                     {filtered.length}
                   </span>
@@ -953,24 +971,14 @@ function PolymarketDashboard() {
             ))}
           </div>
 
-          {/* Tag category loading state */}
-          {isTagCategory && tagLoading ? (
+          {/* Tag category: show skeleton only on first load (no cache yet) */}
+          {isTagCategory && tagLoading && filtered.length === 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-2">
               {Array.from({ length: 6 }).map((_, i) => (
                 <CardSkeleton key={i} />
               ))}
             </div>
-          ) : activeTab === "earnings" ? (
-            /* ═══ Earnings calendar view ═══ */
-            filtered.length === 0 ? (
-              <div className="text-center py-8 text-sm text-white/30">
-                No earnings markets found. Check back closer to earnings season.
-              </div>
-            ) : (
-              <EarningsCalendar markets={filtered} />
-            )
           ) : (
-            /* ═══ Standard markets grid (all, crypto, fed, elections, economy, geopolitics, finance, tech) ═══ */
             <>
               <div className="flex items-center gap-2 mb-3">
                 <TrendingUp className="w-4 h-4 text-blue-400" />
@@ -1002,6 +1010,35 @@ function PolymarketDashboard() {
         </>
       )}
     </GlassCard>
+
+    {/* ═══ Earnings Calendar — always visible, pre-loaded ═══ */}
+    <GlassCard className="p-5 mb-8">
+      {earningsLoading && earningsMarkets.length === 0 ? (
+        <div>
+          <div className="flex items-center gap-3 mb-4">
+            <CalendarDays className="w-5 h-5 text-yellow-400" />
+            <h3 className="text-sm font-bold text-white/90">
+              Earnings Calendar
+              <span className="text-white/30 font-normal ml-2">/ Loading...</span>
+            </h3>
+          </div>
+          <div className="grid grid-cols-5 gap-2">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} className="h-[200px] rounded-xl" />
+            ))}
+          </div>
+        </div>
+      ) : earningsMarkets.length === 0 ? (
+        <div className="flex items-center gap-3">
+          <CalendarDays className="w-5 h-5 text-yellow-400" />
+          <h3 className="text-sm font-bold text-white/90">Earnings Calendar</h3>
+          <span className="text-[10px] text-white/30 ml-2">No earnings markets found. Check back closer to earnings season.</span>
+        </div>
+      ) : (
+        <EarningsCalendar markets={earningsMarkets} />
+      )}
+    </GlassCard>
+    </>
   );
 }
 
