@@ -137,6 +137,7 @@ PROTECTED_KEYS = {
     "perps_divergences", "perps_top_volume", "perps_top_oi",
     "perps_gainers", "perps_losers", "funding_lookup",
     "top_coins", "dominance", "derivatives",
+    "watchlist_social_momentum", "grok_analysis",
 }
 
 

@@ -548,7 +548,6 @@ class TradingAgent:
                         try:
                             if csv_followup:
                                 # Extract the CSV analysis from history to give Grok context
-                                # (market caps, growth rates, ratings, sectors)
                                 watchlist_context = ""
                                 for msg in reversed(history):
                                     if msg.get("role") == "assistant":
@@ -558,24 +557,26 @@ class TradingAgent:
                                             print(f"[FOLLOWUP] Extracted CSV analysis context: {len(watchlist_context)} chars")
                                             break
 
-                                # Deep watchlist social scan — single Grok call with full context
+                                # Deep watchlist social scan — batched Grok calls with context
                                 social = await asyncio.wait_for(
                                     self.data.xai.get_watchlist_social_momentum(
                                         prior_tickers,
                                         watchlist_context=watchlist_context,
                                     ),
-                                    timeout=120.0,
+                                    timeout=300.0,
                                 )
                                 if social and "error" not in social:
                                     market_data["watchlist_social_momentum"] = social
-                                    ranked = social.get("highest_relative_momentum", [])
-                                    top_plays = social.get("top_social_plays", [])
-                                    clusters = social.get("notable_narrative_clusters", [])
-                                    print(f"[FOLLOWUP] CSV watchlist deep scan: {len(ranked)} tickers with buzz, "
-                                          f"{len(top_plays)} top plays, {len(clusters)} narrative clusters, "
-                                          f"{len(social.get('low_or_no_buzz_tickers', []))} quiet")
+                                    # Mark top-level as pre-compressed so data_compressor
+                                    # doesn't truncate Grok's rich analysis text
+                                    market_data["_compression"] = {"category": "followup_social", "skip": True}
+                                    grok_text = social.get("grok_analysis", "")
+                                    print(f"[FOLLOWUP] CSV watchlist deep scan: {len(grok_text)} chars of Grok analysis, "
+                                          f"{social.get('batches_completed', 0)} batches completed, "
+                                          f"{social.get('batches_failed', 0)} failed")
                                 else:
-                                    print(f"[FOLLOWUP] CSV watchlist social scan returned error: {social.get('error', 'unknown')}")
+                                    err = social.get('error', 'unknown') if social else 'null response'
+                                    print(f"[FOLLOWUP] CSV watchlist social scan returned error: {err}")
                             else:
                                 social = await asyncio.wait_for(
                                     self.data.xai.get_batch_sentiment(prior_tickers[:5]),
@@ -3715,11 +3716,15 @@ Be direct and opinionated. Tell me what you actually think."""
             print(f"[Agent] Data compression: {raw_size:,} → {len(data_str):,} chars ({100 - len(data_str)*100//max(raw_size,1)}% reduction)")
 
             is_best_trades = category == "best_trades"
+            has_social_followup = "watchlist_social_momentum" in (market_data or {})
             is_fast_scan = category not in self.DEEP_ANALYSIS_CATEGORIES
             if is_best_trades:
                 data_cap = 50000
             elif category in self.MEDIUM_DATA_CAP_CATEGORIES:
                 data_cap = 50000
+            elif has_social_followup:
+                # Social follow-ups contain rich Grok analysis text — give it room
+                data_cap = 60000
             elif is_cross_market_data or is_fast_scan:
                 data_cap = 25000
             else:
@@ -3935,19 +3940,26 @@ Be direct and opinionated. Tell me what you actually think."""
                     "The user is now asking follow-up questions about THOSE SPECIFIC STOCKS from their watchlist.\n"
                     "CRITICAL RULE: ONLY discuss tickers that were in the original CSV watchlist. Do NOT bring in outside tickers "
                     "(like NVDA, TSLA, AAPL, AMZN, etc.) unless they were explicitly part of the uploaded CSV. The user wants analysis "
-                    "of THEIR watchlist, not general market commentary.\n"
-                    "If social sentiment data is provided below (watchlist_social_momentum), this contains a DEEP social scan from Grok/X "
-                    "of the user's SPECIFIC watchlist tickers. Use this data thoroughly:\n"
-                    "- Reference the 'highest_relative_momentum' rankings to identify which watchlist stocks have disproportionate social buzz relative to their market cap\n"
-                    "- Discuss 'notable_narrative_clusters' — which groups of watchlist stocks are riding the same sector narrative (AI power, photonics, mining cycles, etc.)\n"
-                    "- Highlight the 'top_social_plays' and explain WHY each has compelling social momentum\n"
-                    "- Distinguish between high-signal posts (DD threads, thesis posts, institutional analysis) vs low-signal noise (spam, pump posts)\n"
-                    "- Reference specific catalysts, engagement patterns, and sentiment quality from the data\n"
-                    "- Note which tickers are in 'low_or_no_buzz_tickers' and what that means (under the radar = opportunity or lack of interest?)\n"
-                    "- Cross-reference social momentum with your earlier fundamental ratings — does social buzz confirm or contradict the fundamentals?\n"
-                    "Be conversational, analytical, and opinionated — the user wants deep insight, not a generic summary.\n"
-                    "You can elaborate on individual picks, reconsider ratings based on social factors, identify sector clusters, "
-                    "or provide deeper analysis on specific names."
+                    "of THEIR watchlist, not general market commentary.\n\n"
+                    "SOCIAL SENTIMENT DATA FROM GROK:\n"
+                    "If the market data below contains 'watchlist_social_momentum' with a 'grok_analysis' field, this is a REAL-TIME "
+                    "deep scan from Grok searching X/Twitter for the user's specific watchlist tickers. Grok searched each ticker's "
+                    "cashtag on X and found actual posts, engagement data, catalysts being discussed, and sentiment patterns.\n\n"
+                    "YOU MUST USE THIS DATA AS YOUR PRIMARY SOURCE. Do NOT dismiss it as 'no buzz' or 'radio silence' — Grok did "
+                    "the actual X searching. Present what Grok found:\n"
+                    "- Which watchlist tickers have the strongest social momentum relative to their market cap\n"
+                    "- What specific catalysts are being discussed on X (earnings, AI power demand, photonics, mining cycles, etc.)\n"
+                    "- Whether the buzz is high-quality (DD threads, thesis posts) or low-quality (spam, pump posts)\n"
+                    "- Sector/narrative clusters — which groups of watchlist stocks ride the same X narrative\n"
+                    "- Specific bullish and bearish themes Grok found in real posts\n"
+                    "- How social momentum confirms or contradicts your earlier fundamental ratings\n\n"
+                    "PRESENTATION STYLE:\n"
+                    "- Lead with the TOP 3-5 highest social momentum tickers from the watchlist, with specific detail on what X is saying\n"
+                    "- Group tickers by narrative cluster where applicable (e.g., 'Photonics/AI optics cluster: AAOI, AXTI, LITE')\n"
+                    "- Reference specific post themes and catalysts from the Grok data — do not be vague\n"
+                    "- Cross-reference: 'IREN was rated HOLD on fundamentals, but X is extremely bullish on AI power demand — worth upgrading?'\n"
+                    "- End with your revised top picks considering both fundamentals AND social momentum\n"
+                    "- NEVER say 'no buzz detected' if Grok provided analysis data. The data IS the evidence.\n"
                 )
             elif original_category == "crypto":
                 category_context = (

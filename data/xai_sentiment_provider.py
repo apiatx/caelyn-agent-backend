@@ -243,93 +243,94 @@ Be direct. Which of these does X like best right now and why?"""
     async def get_watchlist_social_momentum(self, tickers: list, watchlist_context: str = "") -> dict:
         """
         Deep social momentum scan on X for a specific watchlist of tickers.
-        Single Grok call — provides watchlist context (market caps, growth rates, ratings)
-        so Grok can assess relative social momentum vs. size.
-        Designed for CSV follow-ups where user wants social sentiment on their own watchlist.
+        Batches tickers into groups of ~17 for parallel Grok calls, then aggregates.
+        Uses natural language prompt (not heavy JSON schema) to let Grok search deeply.
         """
-        tickers_str = ", ".join([f"${t}" for t in tickers[:50]])
+        # Split into batches of ~17 for deeper per-batch scanning
+        batch_size = 17
+        batches = [tickers[i:i + batch_size] for i in range(0, len(tickers), batch_size)]
+        print(f"[XAI_WATCHLIST] Scanning {len(tickers)} tickers in {len(batches)} batches of ~{batch_size}")
 
         context_block = ""
         if watchlist_context:
-            # Truncate to avoid exceeding token limits but keep as much as possible
-            ctx = watchlist_context[:4000]
-            context_block = f"""
-WATCHLIST CONTEXT (from user's CSV analysis — use this to understand market caps, growth rates, and sectors):
-{ctx}
-"""
+            ctx = watchlist_context[:3000]
+            context_block = f"\nCONTEXT from user's CSV (market caps, growth, sectors):\n{ctx}\n"
 
-        prompt = f"""Search X thoroughly for recent posts (last 7 days, emphasis on last 48 hours) about ONLY these specific tickers from a user's watchlist: {tickers_str}
+        # Run all batches concurrently
+        tasks = [
+            self._scan_watchlist_batch(batch, batch_idx + 1, len(batches), context_block)
+            for batch_idx, batch in enumerate(batches)
+        ]
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Aggregate results
+        all_analysis = []
+        errors = []
+        for i, result in enumerate(batch_results):
+            if isinstance(result, Exception):
+                errors.append(f"Batch {i+1} failed: {result}")
+                print(f"[XAI_WATCHLIST] Batch {i+1} exception: {result}")
+            elif isinstance(result, dict) and "error" in result:
+                errors.append(f"Batch {i+1}: {result['error']}")
+                print(f"[XAI_WATCHLIST] Batch {i+1} error: {result['error']}")
+            elif isinstance(result, dict):
+                # Extract the analysis text — Grok returns natural language
+                raw_text = result.get("_raw_analysis", "")
+                if raw_text:
+                    all_analysis.append(raw_text)
+                    print(f"[XAI_WATCHLIST] Batch {i+1}: {len(raw_text)} chars of analysis")
+                else:
+                    all_analysis.append(json.dumps(result, default=str))
+                    print(f"[XAI_WATCHLIST] Batch {i+1}: got JSON result, {len(json.dumps(result))} chars")
+
+        if not all_analysis:
+            return {"error": "All watchlist social scan batches failed", "details": errors}
+
+        # Combine all batch analyses into one comprehensive result
+        combined = "\n\n---\n\n".join(all_analysis)
+        print(f"[XAI_WATCHLIST] Combined analysis: {len(combined)} chars from {len(all_analysis)} batches")
+
+        return {
+            "watchlist_social_scan": True,
+            "tickers_scanned": len(tickers),
+            "batches_completed": len(all_analysis),
+            "batches_failed": len(errors),
+            "grok_analysis": combined,
+            "errors": errors if errors else None,
+        }
+
+    async def _scan_watchlist_batch(self, tickers: list, batch_num: int, total_batches: int, context_block: str) -> dict:
+        """
+        Scan a single batch of tickers on X. Uses a natural, less constrained prompt
+        so Grok can search deeply and provide rich analysis rather than shallow JSON.
+        """
+        tickers_str = ", ".join([f"${t}" for t in tickers])
+
+        prompt = f"""Search X/Twitter thoroughly for recent posts (last 7 days, emphasis on last 48 hours) about these specific stocks from a user's watchlist (batch {batch_num}/{total_batches}):
+
+{tickers_str}
 {context_block}
-IMPORTANT: ONLY analyze tickers from this watchlist. Do NOT add tickers not in this list (no NVDA, TSLA, AAPL, AMZN, etc. unless they appear in the list above).
+CRITICAL RULES:
+- ONLY report on the tickers listed above. Do NOT add outside tickers.
+- Search for each ticker individually using cashtags (e.g. $IREN, $ONDS, $AAOI).
+- For EACH ticker that has ANY meaningful X discussion, provide a detailed report.
+- Even small-cap stocks with just a few quality posts matter — a $1B stock with 20 engaged posts has MORE relative momentum than a $100B stock with 200 posts.
 
-You are scanning social momentum for a SPECIFIC portfolio watchlist. Many of these are small-to-mid cap names that won't have mega-cap-level mention volume. That's expected — adjust your analysis accordingly:
+For each ticker with social activity, report:
+1. BUZZ LEVEL: How many recent posts? How much engagement (likes, retweets, replies)? Is discussion increasing, steady, or declining?
+2. SENTIMENT: Is it overwhelmingly bullish, bearish, mixed, or neutral? Is this retail hype or informed thesis-building?
+3. WHAT X IS SAYING: Quote or paraphrase the most notable bullish and bearish posts. Reference specific themes (e.g., "multiple threads on AI data center power demand for $IREN", "conviction posts on photonics boom naming $AAOI and $AXTI").
+4. CATALYSTS BEING DISCUSSED: What specific catalysts are people talking about? Earnings dates, sector tailwinds, partnerships, technical breakouts, regulatory events.
+5. POST QUALITY: Is the buzz from accounts with real followers doing DD/analysis? Or is it spam, pump posts with Discord links, and bots?
+6. SECTOR NARRATIVE: If this ticker is part of a broader narrative being discussed on X (AI power infrastructure, photonics/optics, mining cycle, etc.), name that narrative.
 
-ANALYSIS FRAMEWORK:
-1. RELATIVE SOCIAL MOMENTUM (vs market cap): A $1B stock with 50 recent engaged posts is MORE socially active than a $100B stock with 200 posts. Normalize for size. Small caps need far less absolute mentions to count as "high momentum."
+For tickers with ZERO or truly negligible X presence, simply list them at the end.
 
-2. POST QUALITY — distinguish between:
-   - HIGH SIGNAL: Educational threads with engagement (likes/retweets), detailed DD/thesis posts, conviction posts from accounts with real followers, earnings analysis, sector thesis posts that name specific tickers
-   - MEDIUM SIGNAL: Watchlist inclusions, price target discussions, chart/TA posts, options flow mentions
-   - LOW SIGNAL/NOISE: Spam, pump-and-dump style "to the moon" posts with Discord links, bot activity, zero-engagement posts
+Be thorough, direct, and opinionated. Provide specific evidence from what you find on X. Do not be generic — reference actual post themes, engagement levels, and catalysts.
 
-3. CATALYST NARRATIVES: What specific catalysts are being discussed? Earnings dates, sector tailwinds (AI power demand, photonics, mining cycles, etc.), regulatory events, partnerships, technical breakouts. Be specific.
+Return your analysis as a clear report. Start with the highest social momentum tickers first, then work down to lower momentum, then list zero-buzz tickers at the end."""
 
-4. SENTIMENT DEPTH: Don't just say "bullish" — describe the TYPE of bullishness:
-   - Is it retail hype/FOMO or informed institutional thesis-building?
-   - Are people building long-term positions or trading momentum?
-   - Is there pushback/debate or is it one-directional?
-
-5. SECTOR CLUSTERING: If multiple watchlist tickers benefit from the same narrative (e.g., photonics/AI optics cluster, bitcoin miners, energy infrastructure), identify those clusters and assess the narrative strength.
-
-Return ONLY a JSON object (no markdown, no backticks):
-{{
-    "watchlist_social_scan": true,
-    "tickers_scanned": {len(tickers)},
-    "scan_depth": "deep",
-    "highest_relative_momentum": [
-        {{
-            "ticker": "SYMBOL",
-            "social_momentum_vs_cap": "extreme" | "high" | "medium" | "low",
-            "sentiment": "bullish" | "bearish" | "mixed" | "neutral",
-            "sentiment_score": -1.0 to 1.0,
-            "sentiment_quality": "informed_bullish" | "retail_hype" | "thesis_building" | "momentum_trading" | "mixed_debate" | "spam_driven" | "neutral",
-            "buzz_volume_absolute": "high" | "medium" | "low" | "minimal",
-            "buzz_volume_relative_to_cap": "high" | "medium" | "low",
-            "post_quality": "high_signal" | "medium_signal" | "low_signal_noise",
-            "why_buzzing": "2-4 sentence detailed explanation of what X is saying, referencing specific post themes, engagement patterns, and types of accounts discussing it",
-            "bullish_highlights": ["Most notable bullish theme/post 1", "Theme 2"],
-            "bearish_highlights": ["Most notable bearish concern, or null"],
-            "catalysts_discussed": ["Specific catalyst 1", "Catalyst 2"],
-            "narrative_cluster": "Name of broader narrative this belongs to (e.g., 'AI power infrastructure', 'photonics/optics boom', 'gold miners cycle'), or null if standalone"
-        }}
-    ],
-    "notable_narrative_clusters": [
-        {{
-            "narrative": "Name of the narrative (e.g., 'AI data center power demand')",
-            "watchlist_tickers_in_cluster": ["TICKER1", "TICKER2"],
-            "cluster_momentum": "hot" | "warm" | "cold",
-            "cluster_sentiment": "bullish" | "bearish" | "mixed",
-            "why_hot": "1-2 sentence explanation of why this narrative is driving social interest"
-        }}
-    ],
-    "low_or_no_buzz_tickers": ["tickers with negligible or no meaningful X discussion"],
-    "overall_watchlist_social_summary": "3-5 sentence analytical summary: Is this watchlist socially hot? Which segments have momentum? Is the buzz retail-driven or informed? What narratives are dominating? How does social sentiment align with or diverge from fundamentals?",
-    "top_social_plays": [
-        {{
-            "ticker": "SYMBOL",
-            "why": "2-3 sentence case for why this is the strongest social momentum play from this watchlist, combining relative buzz, sentiment quality, and catalyst strength"
-        }}
-    ]
-}}
-
-KEY INSTRUCTIONS:
-- Include ALL tickers that have ANY meaningful discussion (even "low" momentum) in highest_relative_momentum. Only put truly zero-discussion tickers in low_or_no_buzz_tickers.
-- For top_social_plays, pick the 3-5 BEST from the watchlist. These should combine strong relative momentum, positive sentiment quality (not just spam), and real catalysts.
-- Be opinionated and direct. If a ticker has strong social momentum, say so clearly. If buzz is mostly spam/pumps, flag it.
-- Sort highest_relative_momentum by social_momentum_vs_cap (strongest first).
-- CRITICAL: Only analyze tickers from the watchlist above. Do not bring in outside tickers."""
-
-        return await self._call_grok_with_x_search(prompt, timeout=90.0)
+        return await self._call_grok_with_x_search(prompt, timeout=90.0, raw_mode=True)
 
     async def run_x_social_scan(self, mode: str, query: str = "", constraints: dict = None) -> dict:
         """
@@ -558,8 +559,11 @@ Keep it tight. This is a mood check, not a full scan."""
 
         return result
 
-    async def _call_grok_with_x_search(self, prompt: str, timeout: float = 45.0) -> dict:
-        """Call the xAI Responses API with x_search enabled."""
+    async def _call_grok_with_x_search(self, prompt: str, timeout: float = 45.0, raw_mode: bool = False) -> dict:
+        """
+        Call the xAI Responses API with x_search enabled.
+        If raw_mode=True, returns the raw text analysis instead of trying to parse JSON.
+        """
         payload = {
             "model": self.model,
             "tools": [
@@ -594,11 +598,16 @@ Keep it tight. This is a mood check, not a full scan."""
                 print(f"[XAI] No text in response. Keys: {list(data.keys())}")
                 return {"error": "No text in Grok response", "raw": str(data)[:500]}
 
+            if raw_mode:
+                # Return raw text analysis — don't try to parse as JSON
+                print(f"[XAI] Raw mode: returning {len(text)} chars of analysis")
+                return {"_raw_analysis": text, "success": True}
+
             return self._parse_json_response(text)
 
         except httpx.TimeoutException:
-            print("[XAI] Request timed out after 45s")
-            return {"error": "xAI request timed out"}
+            print(f"[XAI] Request timed out after {timeout}s")
+            return {"error": f"xAI request timed out after {timeout}s"}
         except Exception as e:
             print(f"[XAI] Error: {e}")
             return {"error": str(e)}
