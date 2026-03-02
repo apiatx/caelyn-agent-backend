@@ -576,10 +576,64 @@ function buildEntry(m: ParsedMarket): EarningsEntry {
 
 // ─── Earnings Detail Modal ────────────────────────────────────────
 
+interface EarningsDetailData {
+  ticker: string;
+  company_name?: string;
+  sector?: string;
+  industry?: string;
+  market_cap?: number;
+  current_price?: number;
+  price_change_pct?: number;
+  logo?: string;
+  beat_rate?: string;
+  beat_pct?: number;
+  avg_surprise_pct?: number;
+  earnings_history?: { period: string; actual_eps: number | null; estimate_eps: number | null; surprise_percent: number | null; beat: boolean | null }[];
+  analyst_consensus?: { buy: number; hold: number; sell: number; total: number; rating: string };
+  news_articles?: { title: string; source: string; content: string; url: string }[];
+  news_summary?: string;
+  news_sentiment?: string;
+}
+
+function formatMktCap(v: number | undefined): string {
+  if (!v) return "N/A";
+  if (v >= 1e12) return `$${(v / 1e12).toFixed(2)}T`;
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(0)}M`;
+  return `$${v.toLocaleString()}`;
+}
+
 function EarningsModal({ entry, onClose }: { entry: EarningsEntry; onClose: () => void }) {
   const bullets = buildBullets(entry);
   const beatPct = entry.beatPct;
   const missPct = 100 - beatPct;
+  const [detail, setDetail] = useState<EarningsDetailData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch enriched data from backend
+  useEffect(() => {
+    if (!entry.ticker || entry.ticker === "???") {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `${AGENT_BACKEND_URL}/api/earnings/detail?ticker=${encodeURIComponent(entry.ticker)}`
+        );
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          setDetail(data);
+        }
+      } catch (e) {
+        console.warn("[EarningsModal] detail fetch failed:", e);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [entry.ticker]);
 
   // Close on Escape
   useEffect(() => {
@@ -588,6 +642,11 @@ function EarningsModal({ entry, onClose }: { entry: EarningsEntry; onClose: () =
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
+  const companyName = detail?.company_name || entry.company;
+  const history = detail?.earnings_history || [];
+  const consensus = detail?.analyst_consensus;
+  const articles = detail?.news_articles || [];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       {/* Backdrop */}
@@ -595,18 +654,22 @@ function EarningsModal({ entry, onClose }: { entry: EarningsEntry; onClose: () =
 
       {/* Modal */}
       <div
-        className="relative w-full max-w-lg bg-[#0c0c0f] border border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+        className="relative w-full max-w-2xl max-h-[90vh] bg-[#0c0c0f] border border-white/10 rounded-2xl shadow-2xl overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="px-6 pt-5 pb-4 border-b border-white/[0.06]">
+        <div className="px-6 pt-5 pb-4 border-b border-white/[0.06] sticky top-0 bg-[#0c0c0f] z-10">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${tickerColor(entry.ticker)} flex items-center justify-center`}>
-                <span className="text-sm font-bold text-white">{entry.ticker.slice(0, 2)}</span>
-              </div>
+              {detail?.logo ? (
+                <img src={detail.logo} alt={entry.ticker} className="w-10 h-10 rounded-xl object-contain bg-white/5 p-1" />
+              ) : (
+                <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${tickerColor(entry.ticker)} flex items-center justify-center`}>
+                  <span className="text-sm font-bold text-white">{entry.ticker.slice(0, 2)}</span>
+                </div>
+              )}
               <div>
-                <h3 className="text-base font-bold text-white">{entry.company}</h3>
+                <h3 className="text-base font-bold text-white">{companyName}</h3>
                 <div className="flex items-center gap-2 mt-0.5">
                   <span className="text-xs font-mono text-white/50">{entry.ticker}</span>
                   {entry.exchange && (
@@ -615,19 +678,34 @@ function EarningsModal({ entry, onClose }: { entry: EarningsEntry; onClose: () =
                   {entry.quarter && (
                     <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400/70">{entry.quarter}</span>
                   )}
+                  {detail?.sector && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/[0.04] text-white/25">{detail.sector}</span>
+                  )}
                 </div>
               </div>
             </div>
-            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors">
-              <X className="w-4 h-4 text-white/40" />
-            </button>
+            <div className="flex items-center gap-3">
+              {detail?.current_price && (
+                <div className="text-right">
+                  <p className="text-sm font-bold text-white">${detail.current_price.toFixed(2)}</p>
+                  {detail.price_change_pct != null && (
+                    <p className={`text-[10px] font-semibold ${detail.price_change_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      {detail.price_change_pct >= 0 ? "+" : ""}{detail.price_change_pct.toFixed(2)}%
+                    </p>
+                  )}
+                </div>
+              )}
+              <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors">
+                <X className="w-4 h-4 text-white/40" />
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Beat / Miss probability */}
+        {/* Polymarket Beat / Miss probability */}
         <div className="px-6 py-4 border-b border-white/[0.06]">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-semibold text-white/50 uppercase tracking-wider">Chance of Beat</span>
+            <span className="text-[11px] font-semibold text-white/50 uppercase tracking-wider">Polymarket: Chance of Beat</span>
             <span className={`text-lg font-bold ${beatPct >= 50 ? "text-emerald-400" : "text-red-400"}`}>
               {beatPct}%
             </span>
@@ -648,52 +726,188 @@ function EarningsModal({ entry, onClose }: { entry: EarningsEntry; onClose: () =
           </div>
         </div>
 
-        {/* Stats grid */}
+        {/* Stats grid — key metrics */}
         <div className="px-6 py-4 border-b border-white/[0.06]">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-2.5">
             {entry.eps && (
-              <div className="bg-white/[0.03] rounded-lg p-3 text-center">
+              <div className="bg-white/[0.03] rounded-lg p-2.5 text-center">
                 <p className="text-[9px] text-white/30 uppercase tracking-wider mb-1">EPS Est.</p>
                 <p className="text-sm font-bold text-white">{entry.eps}</p>
               </div>
             )}
-            <div className="bg-white/[0.03] rounded-lg p-3 text-center">
-              <p className="text-[9px] text-white/30 uppercase tracking-wider mb-1">24h Volume</p>
-              <p className="text-sm font-bold text-white">{formatVolume(entry.market.volume24hr)}</p>
-            </div>
-            <div className="bg-white/[0.03] rounded-lg p-3 text-center">
-              <p className="text-[9px] text-white/30 uppercase tracking-wider mb-1">Total Volume</p>
-              <p className="text-sm font-bold text-white">{formatVolume(entry.market.totalVolume)}</p>
-            </div>
             {entry.time && (
-              <div className="bg-white/[0.03] rounded-lg p-3 text-center">
+              <div className="bg-white/[0.03] rounded-lg p-2.5 text-center">
                 <p className="text-[9px] text-white/30 uppercase tracking-wider mb-1">Report Time</p>
                 <p className="text-sm font-bold text-white">{entry.time}</p>
               </div>
             )}
-            <div className="bg-white/[0.03] rounded-lg p-3 text-center">
-              <p className="text-[9px] text-white/30 uppercase tracking-wider mb-1">Liquidity</p>
-              <p className="text-sm font-bold text-white">{formatVolume(entry.market.liquidity)}</p>
-            </div>
+            {detail?.beat_rate && (
+              <div className="bg-white/[0.03] rounded-lg p-2.5 text-center">
+                <p className="text-[9px] text-white/30 uppercase tracking-wider mb-1">Beat Record</p>
+                <p className="text-sm font-bold text-emerald-400">{detail.beat_rate}</p>
+              </div>
+            )}
+            {detail?.avg_surprise_pct != null && (
+              <div className="bg-white/[0.03] rounded-lg p-2.5 text-center">
+                <p className="text-[9px] text-white/30 uppercase tracking-wider mb-1">Avg Surprise</p>
+                <p className={`text-sm font-bold ${detail.avg_surprise_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                  {detail.avg_surprise_pct >= 0 ? "+" : ""}{detail.avg_surprise_pct}%
+                </p>
+              </div>
+            )}
+            {detail?.market_cap && (
+              <div className="bg-white/[0.03] rounded-lg p-2.5 text-center">
+                <p className="text-[9px] text-white/30 uppercase tracking-wider mb-1">Mkt Cap</p>
+                <p className="text-sm font-bold text-white">{formatMktCap(detail.market_cap)}</p>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Analysis bullets */}
-        <div className="px-6 py-4 border-b border-white/[0.06]">
-          <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-wider mb-3">Key Details</h4>
-          <ul className="space-y-2">
-            {bullets.map((b, i) => (
-              <li key={i} className="flex items-start gap-2">
-                <span className="w-1 h-1 rounded-full bg-blue-400 mt-1.5 flex-shrink-0" />
-                <span className="text-xs text-white/70 leading-relaxed">{b}</span>
-              </li>
-            ))}
-          </ul>
+        {/* Earnings History — past quarters */}
+        {history.length > 0 && (
+          <div className="px-6 py-4 border-b border-white/[0.06]">
+            <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-wider mb-3">Earnings History</h4>
+            <div className="grid grid-cols-4 gap-2">
+              {history.slice(0, 4).map((h, i) => (
+                <div key={i} className={`rounded-lg p-2.5 text-center border ${
+                  h.beat === true ? "bg-emerald-500/5 border-emerald-500/15" :
+                  h.beat === false ? "bg-red-500/5 border-red-500/15" :
+                  "bg-white/[0.02] border-white/[0.06]"
+                }`}>
+                  <p className="text-[9px] text-white/40 mb-1">{h.period || `Q${4 - i}`}</p>
+                  <p className={`text-xs font-bold ${h.beat === true ? "text-emerald-400" : h.beat === false ? "text-red-400" : "text-white/50"}`}>
+                    {h.beat === true ? "BEAT" : h.beat === false ? "MISS" : "N/A"}
+                  </p>
+                  {h.actual_eps != null && h.estimate_eps != null && (
+                    <p className="text-[9px] text-white/30 mt-0.5">
+                      ${h.actual_eps.toFixed(2)} vs ${h.estimate_eps.toFixed(2)}
+                    </p>
+                  )}
+                  {h.surprise_percent != null && (
+                    <p className={`text-[9px] font-semibold mt-0.5 ${(h.surprise_percent || 0) >= 0 ? "text-emerald-400/60" : "text-red-400/60"}`}>
+                      {h.surprise_percent >= 0 ? "+" : ""}{h.surprise_percent.toFixed(1)}%
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Analyst Consensus */}
+        {consensus && consensus.total > 0 && (
+          <div className="px-6 py-4 border-b border-white/[0.06]">
+            <div className="flex items-center justify-between mb-2.5">
+              <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-wider">Analyst Consensus</h4>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded ${
+                consensus.rating === "Buy" ? "bg-emerald-500/10 text-emerald-400" :
+                consensus.rating === "Sell" ? "bg-red-500/10 text-red-400" :
+                "bg-yellow-500/10 text-yellow-400"
+              }`}>
+                {consensus.rating}
+              </span>
+            </div>
+            <div className="h-2.5 rounded-full bg-white/5 overflow-hidden flex">
+              <div className="h-full bg-emerald-500/70" style={{ width: `${(consensus.buy / consensus.total) * 100}%` }} />
+              <div className="h-full bg-yellow-500/50" style={{ width: `${(consensus.hold / consensus.total) * 100}%` }} />
+              <div className="h-full bg-red-500/70" style={{ width: `${(consensus.sell / consensus.total) * 100}%` }} />
+            </div>
+            <div className="flex justify-between mt-1.5 text-[9px]">
+              <span className="text-emerald-400/70">Buy {consensus.buy}</span>
+              <span className="text-yellow-400/70">Hold {consensus.hold}</span>
+              <span className="text-red-400/70">Sell {consensus.sell}</span>
+            </div>
+          </div>
+        )}
+
+        {/* AI News Summary + Sentiment */}
+        {detail?.news_summary && (
+          <div className="px-6 py-4 border-b border-white/[0.06]">
+            <div className="flex items-center justify-between mb-2.5">
+              <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-wider flex items-center gap-1.5">
+                <Sparkles className="w-3 h-3 text-blue-400" /> Earnings Context
+              </h4>
+              {detail.news_sentiment && (
+                <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
+                  detail.news_sentiment === "Bullish" ? "bg-emerald-500/10 text-emerald-400" :
+                  detail.news_sentiment === "Bearish" ? "bg-red-500/10 text-red-400" :
+                  "bg-white/[0.06] text-white/40"
+                }`}>
+                  {detail.news_sentiment}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-white/60 leading-relaxed">{detail.news_summary}</p>
+          </div>
+        )}
+
+        {/* Recent News Articles */}
+        {articles.length > 0 && (
+          <div className="px-6 py-4 border-b border-white/[0.06]">
+            <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-wider mb-3">Recent News</h4>
+            <div className="space-y-2.5">
+              {articles.slice(0, 4).map((a, i) => (
+                <a
+                  key={i}
+                  href={a.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block rounded-lg p-3 bg-white/[0.02] border border-white/[0.04] hover:bg-white/[0.04] hover:border-white/[0.08] transition-all group"
+                >
+                  <p className="text-xs font-semibold text-white/80 group-hover:text-blue-400 transition-colors leading-snug">
+                    {a.title}
+                  </p>
+                  {a.content && (
+                    <p className="text-[10px] text-white/40 mt-1 leading-relaxed line-clamp-2">
+                      {a.content.slice(0, 180)}
+                    </p>
+                  )}
+                  {a.source && (
+                    <p className="text-[9px] text-white/20 mt-1">{a.source}</p>
+                  )}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Polymarket key details (fallback bullets) */}
+        {(!detail || loading) && (
+          <div className="px-6 py-4 border-b border-white/[0.06]">
+            {loading ? (
+              <div className="flex items-center justify-center py-4 gap-2">
+                <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+                <span className="text-xs text-white/40">Loading earnings data...</span>
+              </div>
+            ) : (
+              <>
+                <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-wider mb-3">Key Details</h4>
+                <ul className="space-y-2">
+                  {bullets.map((b, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="w-1 h-1 rounded-full bg-blue-400 mt-1.5 flex-shrink-0" />
+                      <span className="text-xs text-white/70 leading-relaxed">{b}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Polymarket volume stats */}
+        <div className="px-6 py-3 border-b border-white/[0.06]">
+          <div className="flex items-center gap-4 text-[10px] text-white/30">
+            <span><span className="text-white/50 font-semibold">24h Vol:</span> {formatVolume(entry.market.volume24hr)}</span>
+            <span><span className="text-white/50 font-semibold">Total Vol:</span> {formatVolume(entry.market.totalVolume)}</span>
+            <span><span className="text-white/50 font-semibold">Liquidity:</span> {formatVolume(entry.market.liquidity)}</span>
+          </div>
         </div>
 
         {/* Footer */}
         <div className="px-6 py-4 flex items-center justify-between">
-          <span className="text-[9px] text-white/20">Data from Polymarket prediction markets</span>
+          <span className="text-[9px] text-white/20">Polymarket + Finnhub + Tavily</span>
           <a
             href={`https://polymarket.com/event/${entry.market.eventSlug}`}
             target="_blank"
