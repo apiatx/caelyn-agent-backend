@@ -382,7 +382,7 @@ async def earnings_detail(request: Request, ticker: str = ""):
     await _wait_for_init()
 
     from data.cache import cache
-    cache_key = f"earnings_detail:{ticker}"
+    cache_key = f"earnings_detail_v2:{ticker}"
     cached = cache.get(cache_key)
     if cached is not None:
         return JSONResponse(content=cached)
@@ -516,11 +516,47 @@ async def earnings_detail(request: Request, ticker: str = ""):
                 "rating": "Buy" if buy > hold + sell else "Hold" if hold >= sell else "Sell",
             }
 
-    # Web search articles for news section
+    # Web search articles for news section — with strict relevance filter
     search_data = result.get("tavily_earnings", {})
     if isinstance(search_data, dict):
-        result["news_articles"] = search_data.get("articles", [])[:6]
-        result["news_summary"] = search_data.get("summary", "")
+        raw_articles = search_data.get("articles", [])[:10]
+
+        # Final safety-net filter: ONLY keep articles about THIS company
+        # Extract short company name for matching (e.g. "MongoDB" from "MongoDB, Inc.")
+        _cn = company_name or ticker
+        _short = _cn.split(",")[0].split(" Inc")[0].split(" Corp")[0].split(" Ltd")[0].split(" Group")[0].strip()
+        _short_lower = _short.lower() if _short else ""
+        _ticker_lower = ticker.lower()
+
+        filtered_articles = []
+        for art in raw_articles:
+            t_lower = (art.get("title") or "").lower()
+            c_lower = (art.get("content") or "").lower()
+
+            # Must appear in title OR have 2+ mentions in body
+            in_title = (
+                _ticker_lower in t_lower
+                or (_short_lower and _short_lower in t_lower)
+            )
+            body_count = c_lower.count(_ticker_lower) + (
+                c_lower.count(_short_lower) if _short_lower else 0
+            )
+            if in_title or body_count >= 2:
+                filtered_articles.append(art)
+
+        result["news_articles"] = filtered_articles[:6]
+
+        # Only use the AI summary if it actually mentions our company
+        raw_summary = search_data.get("summary", "")
+        if raw_summary:
+            summary_lower = raw_summary.lower()
+            if _ticker_lower in summary_lower or (_short_lower and _short_lower in summary_lower):
+                result["news_summary"] = raw_summary
+            else:
+                result["news_summary"] = ""
+        else:
+            result["news_summary"] = ""
+
         result["news_sentiment"] = search_data.get("sentiment_label", "Neutral")
 
     # Cache for 10 minutes

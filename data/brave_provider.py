@@ -269,7 +269,7 @@ class BraveProvider:
     async def get_ticker_news_sentiment(self, ticker: str, company_name: str = "") -> dict:
         """Get news + sentiment for a single ticker."""
         ticker = ticker.upper()
-        cache_key = f"brave:ticker_news:{ticker}"
+        cache_key = f"brave:ticker_news_v2:{ticker}"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached

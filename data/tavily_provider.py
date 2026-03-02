@@ -207,7 +207,7 @@ class TavilyProvider:
         Replaces AlphaVantage get_news_sentiment(ticker).
         """
         ticker = ticker.upper()
-        cache_key = f"tavily:ticker_news:{ticker}"
+        cache_key = f"tavily:ticker_news_v2:{ticker}"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
