@@ -255,6 +255,8 @@ export default function TradingAgent() {
   const [leftRailOpen, setLeftRailOpen] = useState(false);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [signalPopup, setSignalPopup] = useState<{ ticker: string; signal: string; scannerName: string; color: string; icon: string } | null>(null);
+  const [signalChartInterval, setSignalChartInterval] = useState('D');
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
   const commandInputRef = useRef<HTMLInputElement>(null);
   const loadingRef = useRef(false);
@@ -329,7 +331,7 @@ export default function TradingAgent() {
     if (typeof panel.data?.content === 'string' && panel.data.content.trim()) {
       assistantContent = panel.data.content;
     }
-    if (parsed && (!assistantContent || assistantContent === 'Response received. See panel data for details.')) {
+    if (parsed && !assistantContent) {
       const fallback = parsed.analysis || parsed.structured?.message || parsed.message;
       if (typeof fallback === 'string' && fallback.trim()) {
         assistantContent = fallback;
@@ -492,7 +494,7 @@ export default function TradingAgent() {
       } else if (data.message && data.message.trim()) {
         responseText = data.message;
       } else {
-        responseText = 'Response received. See panel data for details.';
+        responseText = '';
       }
 
       const newPanel: Panel = {
@@ -581,6 +583,7 @@ export default function TradingAgent() {
   function formatAnalysis(text: string) {
     if (!text) return '';
     return text
+      .replace(/```[\w]*\n?/g, '')
       .replace(/^---+$/gm, '')
       .replace(/^# (.*?)$/gm, `<div style="color:${C.bright};font-weight:800;font-size:18px;margin:20px 0 10px;font-family:${sansFont}">$1</div>`)
       .replace(/^## (.*?)$/gm, `<div style="color:${C.bright};font-weight:700;font-size:16px;margin:16px 0 8px;font-family:${sansFont}">$1</div>`)
@@ -1449,20 +1452,20 @@ export default function TradingAgent() {
     };
 
     return <div>
-      <div style={{ padding:'20px 24px', background:`linear-gradient(135deg, ${C.card} 0%, ${C.bg} 100%)`, border:`1px solid ${C.border}`, borderRadius:12, marginBottom:10 }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+      <div style={{ padding:'22px 26px', background:`linear-gradient(135deg, ${C.card} 0%, ${C.bg} 100%)`, border:`1px solid ${C.border}`, borderRadius:12, marginBottom:12, boxShadow:'0 2px 8px rgba(0,0,0,0.15)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
           <div style={{ display:'flex', alignItems:'center', gap:12 }}>
             <span style={{ fontSize:22 }}>⚡</span>
             <span style={{ color:verdictColor(pulse.verdict), fontSize:20, fontWeight:800, fontFamily:sansFont }}>{pulse.verdict || 'Loading...'}</span>
           </div>
           {pulse.regime && <Badge color={regimeColor(pulse.regime)}>{pulse.regime}</Badge>}
         </div>
-        {pulse.summary && <div style={{ color:C.text, fontSize:13, lineHeight:1.7, fontFamily:sansFont }}>{pulse.summary}</div>}
+        {pulse.summary && <div style={{ color:C.text, fontSize:13, lineHeight:1.8, fontFamily:sansFont }}>{pulse.summary}</div>}
       </div>
 
-      {Object.keys(numbers).length > 0 && <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(140px, 1fr))', gap:8, marginBottom:10 }}>
+      {Object.keys(numbers).length > 0 && <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(140px, 1fr))', gap:10, marginBottom:12 }}>
         {Object.entries(numbers).map(([key, val]: [string, any]) => (
-          <div key={key} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:'10px 12px' }}>
+          <div key={key} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:'12px 14px' }}>
             <div style={{ color:C.dim, fontSize:9, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:4 }}>{key.replace(/_/g, ' ')}</div>
             <div style={{ display:'flex', alignItems:'baseline', gap:6 }}>
               <span style={{ color:C.bright, fontSize:15, fontWeight:700, fontFamily:font }}>{val?.price || val?.value || '—'}</span>
@@ -1499,12 +1502,15 @@ export default function TradingAgent() {
               'strongest_sector': {icon: '🔄', color: '#06b6d4'},
             };
             const cfg = labelMap[key] || {icon: '•', color: C.dim};
-            return <div key={key} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:14 }}>
+            return <div key={key} onClick={() => { if (val?.ticker) { setSignalPopup({ ticker: val.ticker, signal: val.signal || '', scannerName: key.replace(/_/g, ' '), color: cfg.color, icon: cfg.icon }); setSignalChartInterval('D'); } }} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:14, cursor: val?.ticker ? 'pointer' : 'default', transition:'all 0.2s', position:'relative', overflow:'hidden' }} onMouseEnter={e => { if (val?.ticker) { (e.currentTarget as HTMLElement).style.borderColor = cfg.color + '60'; (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)'; (e.currentTarget as HTMLElement).style.boxShadow = `0 4px 12px ${cfg.color}15`; } }} onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = C.border; (e.currentTarget as HTMLElement).style.transform = 'translateY(0)'; (e.currentTarget as HTMLElement).style.boxShadow = 'none'; }}>
               <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
                 <span style={{ fontSize:14 }}>{cfg.icon}</span>
                 <span style={{ color:cfg.color, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.04em' }}>{key.replace(/_/g, ' ')}</span>
               </div>
-              <div style={{ color:C.bright, fontSize:14, fontWeight:700, fontFamily:font, marginBottom:4 }}>{val?.ticker || '—'}</div>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                <div style={{ color:C.bright, fontSize:14, fontWeight:700, fontFamily:font, marginBottom:4 }}>{val?.ticker || '—'}</div>
+                {val?.ticker && <span style={{ color:cfg.color, fontSize:9, fontWeight:600, fontFamily:font, opacity:0.7 }}>VIEW</span>}
+              </div>
               <div style={{ color:C.text, fontSize:11, lineHeight:1.5, fontFamily:sansFont }}>{val?.signal || ''}</div>
             </div>;
           })}
@@ -2131,8 +2137,8 @@ export default function TradingAgent() {
       {displayType === 'sector_rotation' && renderSectorRotation(s)}
       {displayType === 'earnings_catalyst' && renderEarningsCatalyst(s)}
       {displayType === 'csv_watchlist' && renderCsvWatchlist(s)}
-      {(displayType === 'chat' || !knownTypes.includes(displayType)) && <div style={{ padding:22, background:C.card, border:`1px solid ${C.border}`, borderRadius:10, color:C.text, lineHeight:1.75, fontSize:13, fontFamily:sansFont }} dangerouslySetInnerHTML={{ __html: formatAnalysis(analysisText) }} />}
-      {displayType && displayType !== 'chat' && displayType !== 'cross_market' && displayType !== 'cross_asset_trending' && displayType !== 'trades' && knownTypes.includes(displayType) && analysisText && <div style={{ marginTop:16, padding:22, background:C.card, border:`1px solid ${C.border}`, borderRadius:10, color:C.text, lineHeight:1.75, fontSize:13, fontFamily:sansFont }} dangerouslySetInnerHTML={{ __html: formatAnalysis(analysisText) }} />}
+      {(displayType === 'chat' || !knownTypes.includes(displayType)) && analysisText && analysisText.trim() && <div style={{ padding:22, background:C.card, border:`1px solid ${C.border}`, borderRadius:10, color:C.text, lineHeight:1.75, fontSize:13, fontFamily:sansFont }} dangerouslySetInnerHTML={{ __html: formatAnalysis(analysisText) }} />}
+      {displayType && displayType !== 'chat' && displayType !== 'cross_market' && displayType !== 'cross_asset_trending' && displayType !== 'trades' && knownTypes.includes(displayType) && analysisText && analysisText.trim() && <div style={{ marginTop:16, padding:22, background:C.card, border:`1px solid ${C.border}`, borderRadius:10, color:C.text, lineHeight:1.75, fontSize:13, fontFamily:sansFont }} dangerouslySetInnerHTML={{ __html: formatAnalysis(analysisText) }} />}
     </div>;
   }
 
@@ -2309,10 +2315,64 @@ export default function TradingAgent() {
         @media (min-width: 1024px) {
           .mobile-toggle { display: none !important; }
         }
+        @keyframes signal-modal-in {
+          from { opacity: 0; transform: scale(0.95) translateY(10px); }
+          to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes signal-overlay-in {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        .signal-modal-overlay {
+          animation: signal-overlay-in 0.2s ease-out;
+        }
+        .signal-modal-content {
+          animation: signal-modal-in 0.25s ease-out;
+        }
+        .signal-interval-btn:hover {
+          background: ${C.blue}25 !important;
+          color: ${C.blue} !important;
+        }
       `}</style>
 
+      {/* Signal Popup Modal */}
+      {signalPopup && (
+        <div className="signal-modal-overlay" onClick={() => setSignalPopup(null)} style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.7)', backdropFilter:'blur(8px)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
+          <div className="signal-modal-content" onClick={e => e.stopPropagation()} style={{ background:C.bg, border:`1px solid ${signalPopup.color}30`, borderRadius:14, width:'100%', maxWidth:620, maxHeight:'90vh', overflow:'auto', boxShadow:`0 24px 48px rgba(0,0,0,0.5), 0 0 0 1px ${signalPopup.color}10` }}>
+            <div style={{ padding:'18px 22px', borderBottom:`1px solid ${C.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                <span style={{ fontSize:18 }}>{signalPopup.icon}</span>
+                <div>
+                  <div style={{ color:C.bright, fontSize:18, fontWeight:800, fontFamily:font }}>{signalPopup.ticker}</div>
+                  <div style={{ color:signalPopup.color, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.04em', marginTop:2 }}>{signalPopup.scannerName}</div>
+                </div>
+              </div>
+              <button onClick={() => setSignalPopup(null)} style={{ width:32, height:32, display:'flex', alignItems:'center', justifyContent:'center', background:C.card, border:`1px solid ${C.border}`, borderRadius:8, color:C.dim, fontSize:16, cursor:'pointer', fontFamily:font, transition:'all 0.15s' }} onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = C.bright; (e.currentTarget as HTMLElement).style.color = C.bright; }} onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = C.border; (e.currentTarget as HTMLElement).style.color = C.dim; }}>x</button>
+            </div>
+            {signalPopup.signal && (
+              <div style={{ padding:'14px 22px', borderBottom:`1px solid ${C.border}`, background:`${signalPopup.color}06` }}>
+                <div style={{ color:C.text, fontSize:12, lineHeight:1.7, fontFamily:sansFont }}>{signalPopup.signal}</div>
+              </div>
+            )}
+            <div style={{ padding:'16px 22px' }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+                <span style={{ color:C.dim, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.06em' }}>Chart</span>
+                <div style={{ display:'flex', gap:4 }}>
+                  {[{l:'1H',v:'60'},{l:'4H',v:'240'},{l:'1D',v:'D'},{l:'1W',v:'W'},{l:'1M',v:'M'}].map(iv => (
+                    <button key={iv.v} className="signal-interval-btn" onClick={() => setSignalChartInterval(iv.v)} style={{ padding:'3px 10px', fontSize:10, fontWeight:600, fontFamily:font, background: signalChartInterval === iv.v ? `${C.blue}20` : 'transparent', color: signalChartInterval === iv.v ? C.blue : C.dim, border:`1px solid ${signalChartInterval === iv.v ? C.blue+'40' : C.border}`, borderRadius:4, cursor:'pointer', transition:'all 0.15s' }}>{iv.l}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ borderRadius:10, overflow:'hidden', border:`1px solid ${C.border}` }}>
+                <iframe src={`https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(signalPopup.ticker)}&interval=${signalChartInterval}&theme=dark&style=1&locale=en&hide_top_toolbar=1&hide_side_toolbar=1&allow_symbol_change=0&save_image=0&width=100%25&height=320`} style={{ width:'100%', height:320, border:'none', display:'block' }} title={`${signalPopup.ticker} chart`} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* TOP COMMAND BAR */}
-      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 10px', background:'rgba(15,15,30,0.6)', borderBottom:'1px solid rgba(255,255,255,0.06)', flexShrink:0, position:'sticky', top:0, zIndex:50, backdropFilter:'blur(12px)' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 12px', background:'rgba(11,12,16,0.85)', borderBottom:'1px solid rgba(255,255,255,0.06)', flexShrink:0, position:'sticky', top:0, zIndex:50, backdropFilter:'blur(16px)' }}>
         <button className="mobile-toggle" onClick={() => setLeftRailOpen(!leftRailOpen)} style={{ display:'none', alignItems:'center', justifyContent:'center', width:28, height:28, background:'transparent', border:`1px solid ${C.border}`, borderRadius:3, color:C.dim, cursor:'pointer', fontSize:14, fontFamily:font }}>☰</button>
 
         <input type="file" ref={csvInputRef} accept=".csv,.tsv,.txt" style={{ display:'none' }} onChange={(e) => {
@@ -2337,14 +2397,14 @@ export default function TradingAgent() {
             }}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCommandSubmit(); } if (e.key === 'Escape') setCommandPaletteOpen(false); }}
             placeholder="Ask anything or type / for commands..."
-            style={{ width:'100%', padding:'7px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:3, color:C.bright, fontSize:13, fontFamily:font, boxSizing:'border-box' }}
+            style={{ width:'100%', padding:'8px 14px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:6, color:C.bright, fontSize:13, fontFamily:font, boxSizing:'border-box' }}
           />
           {commandPaletteOpen && (
-            <div style={{ position:'absolute', top:'100%', left:0, right:0, background:C.card, border:`1px solid ${C.border}`, borderRadius:3, marginTop:2, zIndex:60, maxHeight:240, overflowY:'auto' }}>
+            <div style={{ position:'absolute', top:'100%', left:0, right:0, background:C.card, border:`1px solid ${C.border}`, borderRadius:8, marginTop:4, zIndex:60, maxHeight:240, overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
               {Object.entries(slashCommands).map(([cmd, intent]) => (
-                <div key={cmd} className="rail-item" onClick={() => { askAgent('', true, intent); setPrompt(''); setCommandPaletteOpen(false); }} style={{ padding:'8px 14px', cursor:'pointer', display:'flex', justifyContent:'space-between', borderBottom:`1px solid ${C.border}` }}>
+                <div key={cmd} className="rail-item" onClick={() => { askAgent('', true, intent); setPrompt(''); setCommandPaletteOpen(false); }} style={{ padding:'10px 16px', cursor:'pointer', display:'flex', justifyContent:'space-between', borderBottom:`1px solid ${C.border}` }}>
                   <span style={{ color:C.blue, fontSize:12, fontWeight:700, fontFamily:font }}>{cmd}</span>
-                  <span style={{ color:C.dim, fontSize:11, fontFamily:font }}>{intent.replace(/_/g, ' ')}</span>
+                  <span style={{ color:C.dim, fontSize:11, fontFamily:sansFont }}>{intent.replace(/_/g, ' ')}</span>
                 </div>
               ))}
             </div>
@@ -2356,8 +2416,7 @@ export default function TradingAgent() {
             <div style={{ width:10, height:10, border:`2px solid ${C.blue}`, borderTop:'2px solid transparent', borderRadius:'50%', animation:'agent-spin 0.8s linear infinite' }} />
             <span style={{ color:C.dim, fontSize:9, fontFamily:font, maxWidth:120, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{loadingStage}</span>
           </div>}
-          {conversationId && <span style={{ color:C.dim, fontSize:8, fontFamily:font, padding:'2px 6px', background:`${C.dim}10`, borderRadius:2, border:`1px solid ${C.border}` }}>ID:{conversationId.slice(0,6)}</span>}
-          <button onClick={newChat} className="panel-btn" style={{ padding:'5px 10px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:3, color:C.dim, fontSize:10, fontWeight:700, fontFamily:font, cursor:'pointer', textTransform:'uppercase', letterSpacing:'0.04em' }}>New</button>
+          <button onClick={newChat} className="panel-btn" style={{ padding:'6px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:6, color:C.dim, fontSize:10, fontWeight:700, fontFamily:font, cursor:'pointer', textTransform:'uppercase', letterSpacing:'0.04em' }}>New</button>
           <button className="mobile-toggle" onClick={() => setRightSidebarOpen(!rightSidebarOpen)} style={{ display:'none', alignItems:'center', justifyContent:'center', width:28, height:28, background:'transparent', border:`1px solid ${C.border}`, borderRadius:3, color:C.dim, cursor:'pointer', fontSize:12, fontFamily:font }}>⚙</button>
         </div>
       </div>
@@ -2398,8 +2457,8 @@ export default function TradingAgent() {
 
         {/* MAIN WORKSPACE */}
         <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-          <div style={{ flex:1, overflowY:'auto', padding:12 }}>
-            {error && <div style={{ padding:'10px 14px', background:`${C.red}10`, border:`1px solid ${C.red}30`, borderRadius:4, marginBottom:10, color:C.red, fontSize:12, fontFamily:font }}>{error}</div>}
+          <div style={{ flex:1, overflowY:'auto', padding:16 }}>
+            {error && <div style={{ padding:'12px 16px', background:`${C.red}10`, border:`1px solid ${C.red}30`, borderRadius:8, marginBottom:14, color:C.red, fontSize:12, fontFamily:font }}>{error}</div>}
 
             {loading && (
               <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'60px 20px', marginBottom:10 }}>
@@ -2422,7 +2481,6 @@ export default function TradingAgent() {
                 </div>
               </div>
             )}
-            ```
 
             {panels.length === 0 && !loading && (
               <div style={{ display:'flex', flexDirection:'column', alignItems:'center', flex:1, color:C.dim, overflow:'hidden' }}>
@@ -2438,7 +2496,7 @@ export default function TradingAgent() {
                     { l: '/crypto', intent: 'crypto_focus' },
                     { l: '/scan', intent: 'cross_asset_trending' },
                   ].map(cmd => (
-                    <button key={cmd.l} className="panel-btn" onClick={() => askAgent('', true, cmd.intent)} style={{ padding:'6px 14px', background:C.card, border:`1px solid ${C.border}`, borderRadius:3, color:C.blue, fontSize:11, fontWeight:600, fontFamily:font, cursor:'pointer' }}>{cmd.l}</button>
+                    <button key={cmd.l} className="panel-btn" onClick={() => askAgent('', true, cmd.intent)} style={{ padding:'8px 18px', background:C.card, border:`1px solid ${C.border}`, borderRadius:8, color:C.blue, fontSize:11, fontWeight:600, fontFamily:font, cursor:'pointer', transition:'all 0.15s' }}>{cmd.l}</button>
                   ))}
                 </div>
                 <div style={{ flex:1 }} />
@@ -2448,27 +2506,27 @@ export default function TradingAgent() {
             {panels.map(panel => {
               const isSaved = savedChats.some(c => c.id === panel.id);
               return (
-              <div key={panel.id} style={{ marginBottom:10, border:`1px solid ${panel.pinned ? C.blue+'40' : C.border}`, borderRadius:4, background:C.card, overflow:'hidden' }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 12px', background:C.bg, borderBottom:`1px solid ${C.border}` }}>
+              <div key={panel.id} style={{ marginBottom:14, border:`1px solid ${panel.pinned ? C.blue+'40' : C.border}`, borderRadius:10, background:C.card, overflow:'hidden', boxShadow:'0 2px 8px rgba(0,0,0,0.2)' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 14px', background:`${C.bg}cc`, borderBottom:`1px solid ${C.border}` }}>
                   <div style={{ display:'flex', alignItems:'center', gap:8, flex:1, minWidth:0 }}>
                     <span style={{ color:C.bright, fontSize:12, fontWeight:700, fontFamily:font, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{panel.title || 'Analysis'}</span>
                     <span style={{ color:C.dim, fontSize:9, fontFamily:font, flexShrink:0 }}>{new Date(panel.timestamp).toLocaleTimeString()}</span>
                   </div>
                   <div style={{ display:'flex', gap:4, flexShrink:0 }}>
-                    <button className="panel-btn" onClick={(e) => { e.stopPropagation(); saveToHistory(panel.id); }} style={{ width:24, height:24, display:'flex', alignItems:'center', justifyContent:'center', background:'transparent', border:`1px solid ${isSaved ? C.gold : C.border}`, borderRadius:2, color:isSaved ? C.gold : C.dim, fontSize:10, cursor:'pointer', fontFamily:font }} title={isSaved ? 'Saved' : 'Save to History'}>{isSaved ? '★' : '☆'}</button>
-                    <button className="panel-btn" onClick={(e) => { e.stopPropagation(); togglePinPanel(panel.id); }} style={{ width:24, height:24, display:'flex', alignItems:'center', justifyContent:'center', background:'transparent', border:`1px solid ${panel.pinned ? C.blue : C.border}`, borderRadius:2, color:panel.pinned ? C.blue : C.dim, fontSize:10, cursor:'pointer', fontFamily:font }} title="Pin">📌</button>
-                    <button className="panel-btn" onClick={(e) => { e.stopPropagation(); closePanel(panel.id); }} style={{ width:24, height:24, display:'flex', alignItems:'center', justifyContent:'center', background:'transparent', border:`1px solid ${C.border}`, borderRadius:2, color:C.dim, fontSize:12, cursor:'pointer', fontFamily:font }} title="Close">×</button>
+                    <button className="panel-btn" onClick={(e) => { e.stopPropagation(); saveToHistory(panel.id); }} style={{ width:26, height:26, display:'flex', alignItems:'center', justifyContent:'center', background:'transparent', border:`1px solid ${isSaved ? C.gold : C.border}`, borderRadius:6, color:isSaved ? C.gold : C.dim, fontSize:10, cursor:'pointer', fontFamily:font }} title={isSaved ? 'Saved' : 'Save to History'}>{isSaved ? '★' : '☆'}</button>
+                    <button className="panel-btn" onClick={(e) => { e.stopPropagation(); togglePinPanel(panel.id); }} style={{ width:26, height:26, display:'flex', alignItems:'center', justifyContent:'center', background:'transparent', border:`1px solid ${panel.pinned ? C.blue : C.border}`, borderRadius:6, color:panel.pinned ? C.blue : C.dim, fontSize:10, cursor:'pointer', fontFamily:font }} title="Pin">📌</button>
+                    <button className="panel-btn" onClick={(e) => { e.stopPropagation(); closePanel(panel.id); }} style={{ width:26, height:26, display:'flex', alignItems:'center', justifyContent:'center', background:'transparent', border:`1px solid ${C.border}`, borderRadius:6, color:C.dim, fontSize:12, cursor:'pointer', fontFamily:font }} title="Close">x</button>
                   </div>
                 </div>
                 {(panel.data?.parsed?.user_query || panel.userQuery) && (
-                  <div style={{ padding:'10px 14px', background:`${C.blue}06`, borderBottom:`1px solid ${C.border}` }}>
-                    <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
-                      <span style={{ color:C.blue, fontSize:9, fontWeight:700, fontFamily:font, marginTop:2, flexShrink:0 }}>YOU</span>
-                      <span style={{ color:C.bright, fontSize:12, fontFamily:sansFont, lineHeight:1.5 }}>{panel.data?.parsed?.user_query || panel.userQuery}</span>
+                  <div style={{ padding:'12px 16px', background:`${C.blue}06`, borderBottom:`1px solid ${C.border}` }}>
+                    <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
+                      <span style={{ color:C.blue, fontSize:9, fontWeight:700, fontFamily:font, marginTop:2, flexShrink:0, padding:'2px 6px', background:`${C.blue}12`, borderRadius:4 }}>YOU</span>
+                      <span style={{ color:C.bright, fontSize:12, fontFamily:sansFont, lineHeight:1.6 }}>{panel.data?.parsed?.user_query || panel.userQuery}</span>
                     </div>
                   </div>
                 )}
-                <div style={{ padding:14 }}>
+                <div style={{ padding:16 }}>
                   {renderAssistantMessage(panel.data)}
                 </div>
                 {panel.thread && panel.thread.length > 0 && (
