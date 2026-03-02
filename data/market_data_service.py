@@ -8,9 +8,10 @@ from data.stocktwits_provider import StockTwitsProvider
 from data.stockanalysis_scraper import StockAnalysisScraper
 from data.options_scraper import OptionsScraper
 from data.finnhub_provider import FinnhubProvider
-from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY, FMP_API_KEY, TWELVEDATA_API_KEY, TAVILY_API_KEY
+from config import FINNHUB_API_KEY, ALPHA_VANTAGE_API_KEY, FRED_API_KEY, FMP_API_KEY, TWELVEDATA_API_KEY, TAVILY_API_KEY, BRAVE_API_KEY
 from data.alphavantage_provider import AlphaVantageProvider
 from data.tavily_provider import TavilyProvider
+from data.web_search_provider import WebSearchProvider
 from data.fred_provider import FredProvider
 from data.edgar_provider import EdgarProvider
 from data.sec_edgar_provider import SecEdgarProvider, EdgarBudget
@@ -373,12 +374,11 @@ class MarketDataService:
             print(
                 "[INIT] xAI Grok X sentiment provider SKIPPED (no XAI_API_KEY)"
             )
-        self.tavily = TavilyProvider(TAVILY_API_KEY) if TAVILY_API_KEY else None
-        if self.tavily:
-            print("[INIT] Tavily search provider initialized (1000/month free)")
-        else:
-            print("[INIT] Tavily provider SKIPPED (no TAVILY_API_KEY)"
-            )
+        self.web_search = WebSearchProvider(BRAVE_API_KEY, TAVILY_API_KEY) if (BRAVE_API_KEY or TAVILY_API_KEY) else None
+        if not self.web_search:
+            print("[INIT] Web search provider SKIPPED (no BRAVE_API_KEY or TAVILY_API_KEY)")
+        # Keep self.tavily as alias for backward compat in callers
+        self.tavily = self.web_search
 
     async def get_candles(self,
                           symbol: str,
@@ -531,16 +531,16 @@ class MarketDataService:
         tasks = []
         task_keys = []
 
-        # Tavily replaces AlphaVantage for market news (better quality, no 25/day limit)
-        if self.tavily:
+        # Web search (Brave/Tavily) replaces AlphaVantage for market news
+        if self.web_search:
             from api_budget import daily_budget
-            if daily_budget.can_spend("tavily", 1):
+            if daily_budget.can_spend("web_search", 1):
                 tasks.append(
-                    asyncio.wait_for(self.tavily.get_market_news(
+                    asyncio.wait_for(self.web_search.get_market_news(
                         topic="stock market today"),
                                      timeout=10.0))
                 task_keys.append("tavily_news")
-                daily_budget.spend("tavily", 1)
+                daily_budget.spend("web_search", 1)
             else:
                 tasks.append(
                     asyncio.wait_for(self.alphavantage.get_news_sentiment(
@@ -742,7 +742,7 @@ class MarketDataService:
             "peer_companies": self.finnhub.get_company_peers(ticker),
         }
 
-        # Tavily replaces StockTwits + StockAnalysis + AlphaVantage in single call
+        # Web search replaces StockTwits + StockAnalysis + AlphaVantage in single call
         async_tasks = [
             self.options.get_put_call_ratio(ticker),
             self.edgar.get_company_summary(ticker),
@@ -752,9 +752,9 @@ class MarketDataService:
             "sec_filings",
         ]
 
-        # Add Tavily for news + sentiment + analyst data (1 call replaces 4)
-        if self.tavily:
-            async_tasks.append(self.tavily.get_ticker_news_sentiment(ticker))
+        # Add web search for news + sentiment + analyst data (1 call replaces 4)
+        if self.web_search:
+            async_tasks.append(self.web_search.get_ticker_news_sentiment(ticker))
             async_keys.append("tavily_enrichment")
         else:
             # Fallback to legacy providers
@@ -3313,7 +3313,7 @@ class MarketDataService:
         Designed to give a full market snapshot + top actionable moves in one call.
 
         Uses precomputed background cache when available (Phase 1 from free APIs),
-        then does lightweight Tavily enrichment on-demand (Phase 2).
+        then does lightweight Web search enrichment on-demand (Phase 2).
         Falls back to full scan if cache is stale.
         """
         import asyncio
@@ -3326,17 +3326,17 @@ class MarketDataService:
             priority_tickers = precomputed.get("priority_tickers", [])
             screener_sources = precomputed.get("screener_sources", {})
 
-            # Phase 2: Lightweight on-demand enrichment via Tavily
+            # Phase 2: Lightweight on-demand enrichment via web search
             enriched = {}
-            if self.tavily and priority_tickers:
+            if self.web_search and priority_tickers:
                 from api_budget import daily_budget
-                if daily_budget.can_spend("tavily", 3):
+                if daily_budget.can_spend("web_search", 3):
                     try:
                         tavily_data = await asyncio.wait_for(
-                            self.tavily.enrich_tickers_batched(priority_tickers[:12]),
+                            self.web_search.enrich_tickers_batched(priority_tickers[:12]),
                             timeout=15.0,
                         )
-                        daily_budget.spend("tavily", min(3, (len(priority_tickers[:12]) + 5) // 6))
+                        daily_budget.spend("web_search", min(3, (len(priority_tickers[:12]) + 5) // 6))
                         for ticker in priority_tickers:
                             t_data = tavily_data.get(ticker.upper(), {})
                             if t_data:
@@ -3349,7 +3349,7 @@ class MarketDataService:
                                 result["signal_sources"] = screener_sources.get(ticker, [])
                                 enriched[ticker] = result
                     except Exception as e:
-                        print(f"[Briefing] Tavily enrichment on precomputed failed: {e}")
+                        print(f"[Briefing] Web search enrichment on precomputed failed: {e}")
 
             ranked = sorted(
                 enriched.items(),
@@ -3534,17 +3534,17 @@ class MarketDataService:
             ][:remaining_slots]
             priority_tickers.extend(filler)
 
-        # --- Tavily batched enrichment (2-3 API calls instead of 40) ---
+        # --- Web search batched enrichment (2-3 API calls instead of 40) ---
         enriched = {}
-        if self.tavily:
+        if self.web_search:
             from api_budget import daily_budget
-            if daily_budget.can_spend("tavily", 3):
+            if daily_budget.can_spend("web_search", 3):
                 try:
                     tavily_data = await asyncio.wait_for(
-                        self.tavily.enrich_tickers_batched(priority_tickers[:12]),
+                        self.web_search.enrich_tickers_batched(priority_tickers[:12]),
                         timeout=15.0,
                     )
-                    daily_budget.spend("tavily", min(3, (len(priority_tickers[:12]) + 5) // 6))
+                    daily_budget.spend("web_search", min(3, (len(priority_tickers[:12]) + 5) // 6))
                     for ticker in priority_tickers:
                         t_data = tavily_data.get(ticker.upper(), {})
                         if t_data and not t_data.get("error"):
@@ -3560,11 +3560,11 @@ class MarketDataService:
                             result["signal_sources"] = screener_sources.get(ticker, [])
                             enriched[ticker] = result
                 except asyncio.TimeoutError:
-                    print("[Briefing] Tavily enrichment timed out")
+                    print("[Briefing] Web search enrichment timed out")
                 except Exception as e:
-                    print(f"[Briefing] Tavily enrichment error: {e}")
+                    print(f"[Briefing] Web search enrichment error: {e}")
 
-        # Fallback: use StockTwits for any tickers Tavily missed
+        # Fallback: use StockTwits for any tickers web search missed
         missing_tickers = [t for t in priority_tickers if t not in enriched]
         if missing_tickers:
             async def enrich_briefing_fallback(ticker):

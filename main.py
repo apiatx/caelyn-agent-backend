@@ -97,7 +97,7 @@ def _do_init():
 async def _briefing_precompute_loop():
     """
     Background precomputation for Daily Briefing.
-    Runs every 30 minutes using ONLY free/unlimited APIs (no Tavily).
+    Runs every 30 minutes using ONLY free/unlimited APIs (no web search).
     Caches Phase 1 data (screeners, macro, trending) so briefing requests
     are near-instant — only lightweight on-demand enrichment needed.
     """
@@ -364,7 +364,7 @@ async def polymarket_events_proxy(request: Request):
 
 
 # ============================================================
-# Earnings Detail Endpoint — Tavily + Finnhub enrichment
+# Earnings Detail Endpoint — Web Search + Finnhub enrichment
 # ============================================================
 
 @app.get("/api/earnings/detail")
@@ -372,7 +372,7 @@ async def polymarket_events_proxy(request: Request):
 async def earnings_detail(request: Request, ticker: str = ""):
     """
     Enriched earnings detail for a single ticker.
-    Combines: Finnhub earnings history/calendar + Tavily news/analyst context.
+    Combines: Finnhub earnings history/calendar + web search news/analyst context.
     Called when user clicks an earnings entry in the calendar popup.
     """
     ticker = ticker.upper().strip()
@@ -436,16 +436,16 @@ async def earnings_detail(request: Request, ticker: str = ""):
     except Exception:
         pass
 
-    # Tavily: earnings-specific news + analyst context (1 API call)
-    if agent.data.tavily:
+    # Web search: earnings-specific news + analyst context (1 API call)
+    if agent.data.web_search:
         from api_budget import daily_budget
-        if daily_budget.can_spend("tavily", 1):
+        if daily_budget.can_spend("web_search", 1):
             try:
                 tasks["tavily_earnings"] = asyncio.wait_for(
-                    agent.data.tavily.get_ticker_news_sentiment(ticker),
+                    agent.data.web_search.get_ticker_news_sentiment(ticker),
                     timeout=10.0,
                 )
-                daily_budget.spend("tavily", 1)
+                daily_budget.spend("web_search", 1)
             except Exception:
                 pass
 
@@ -508,12 +508,12 @@ async def earnings_detail(request: Request, ticker: str = ""):
                 "rating": "Buy" if buy > hold + sell else "Hold" if hold >= sell else "Sell",
             }
 
-    # Tavily articles for news section
-    tavily = result.get("tavily_earnings", {})
-    if isinstance(tavily, dict):
-        result["news_articles"] = tavily.get("articles", [])[:6]
-        result["news_summary"] = tavily.get("summary", "")
-        result["news_sentiment"] = tavily.get("sentiment_label", "Neutral")
+    # Web search articles for news section
+    search_data = result.get("tavily_earnings", {})
+    if isinstance(search_data, dict):
+        result["news_articles"] = search_data.get("articles", [])[:6]
+        result["news_summary"] = search_data.get("summary", "")
+        result["news_sentiment"] = search_data.get("sentiment_label", "Neutral")
 
     # Cache for 10 minutes
     cache.set(cache_key, result, 600)
@@ -2399,7 +2399,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
                 elif key == "news":
                     result["recent_news"] = res[:3] if isinstance(res, list) else res
 
-            # Inject Tavily enrichment (pre-fetched in batch)
+            # Inject web search enrichment (pre-fetched in batch)
             if _tavily_prefetch_data and ticker.upper() in _tavily_prefetch_data:
                 t_data = _tavily_prefetch_data[ticker.upper()]
                 result["tavily_enrichment"] = t_data
@@ -2408,22 +2408,22 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
 
             return result
 
-        # Tavily batch pre-fetch: 1-2 calls replaces 45 StockAnalysis+StockTwits calls
+        # Web search batch pre-fetch: 1-2 calls replaces 45 StockAnalysis+StockTwits calls
         _tavily_prefetch_data = {}
         stock_tickers = [h["ticker"] for h in holdings_context
                          if h.get("asset_type", "stock") == "stock" and not _is_known_index(h["ticker"])]
-        if agent.data.tavily and stock_tickers:
+        if agent.data.web_search and stock_tickers:
             from api_budget import daily_budget
-            if daily_budget.can_spend("tavily", 2):
+            if daily_budget.can_spend("web_search", 2):
                 try:
                     _tavily_prefetch_data = await asyncio.wait_for(
-                        agent.data.tavily.enrich_tickers_batched(stock_tickers[:12]),
+                        agent.data.web_search.enrich_tickers_batched(stock_tickers[:12]),
                         timeout=12.0,
                     )
-                    daily_budget.spend("tavily", min(2, (len(stock_tickers[:12]) + 5) // 6))
-                    _log(f"[PORTFOLIO_REVIEW] Tavily pre-fetched {len([k for k in _tavily_prefetch_data if not k.startswith('_')])} tickers")
+                    daily_budget.spend("web_search", min(2, (len(stock_tickers[:12]) + 5) // 6))
+                    _log(f"[PORTFOLIO_REVIEW] Web search pre-fetched {len([k for k in _tavily_prefetch_data if not k.startswith('_')])} tickers")
                 except Exception as e:
-                    _log(f"[PORTFOLIO_REVIEW] Tavily pre-fetch failed: {e}")
+                    _log(f"[PORTFOLIO_REVIEW] Web search pre-fetch failed: {e}")
 
         _log(f"[PORTFOLIO_REVIEW] Starting parallel fetch for {len(tickers)} tickers + macro...")
 

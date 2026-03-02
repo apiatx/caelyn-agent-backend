@@ -2573,18 +2573,18 @@ class TradingAgent:
         if tickers:
             print(f"[Chat] Fetching quick data for mentioned tickers: {tickers[:3]}")
 
-            # Tavily batched enrichment: 1 call instead of 9 (3 tickers × 3 calls each)
-            if self.data.tavily:
+            # Web search batched enrichment: 1 call instead of 9 (3 tickers × 3 calls each)
+            if self.data.web_search:
                 from api_budget import daily_budget
-                if daily_budget.can_spend("tavily", 1):
+                if daily_budget.can_spend("web_search", 1):
                     try:
-                        tavily_data = await asyncio.wait_for(
-                            self.data.tavily.enrich_tickers_batched(tickers[:3]),
+                        search_data = await asyncio.wait_for(
+                            self.data.web_search.enrich_tickers_batched(tickers[:3]),
                             timeout=10.0,
                         )
-                        daily_budget.spend("tavily", 1)
+                        daily_budget.spend("web_search", 1)
                         for ticker in tickers[:3]:
-                            t_data = tavily_data.get(ticker.upper(), {})
+                            t_data = search_data.get(ticker.upper(), {})
                             if t_data:
                                 context[f"ticker_{ticker}"] = {
                                     "ticker": ticker,
@@ -2592,12 +2592,12 @@ class TradingAgent:
                                     "headlines": t_data.get("headlines", []),
                                     "snippets": t_data.get("snippets", []),
                                 }
-                        if tavily_data.get("_summary"):
-                            context["tavily_summary"] = tavily_data["_summary"]
+                        if search_data.get("_summary"):
+                            context["tavily_summary"] = search_data["_summary"]
                     except Exception as e:
-                        print(f"[Chat] Tavily enrichment failed: {e}")
+                        print(f"[Chat] Web search enrichment failed: {e}")
 
-            # Fallback for tickers not enriched by Tavily
+            # Fallback for tickers not enriched by web search
             for ticker in tickers[:3]:
                 if f"ticker_{ticker}" in context:
                     continue
@@ -2613,7 +2613,7 @@ class TradingAgent:
                     pass
                 context[f"ticker_{ticker}"] = ticker_data
 
-            # xAI Grok sentiment (kept — independent from Tavily)
+            # xAI Grok sentiment (kept — independent from web search)
             CRYPTO_SYMBOLS = {
                 "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "DOT",
                 "MATIC", "LINK", "UNI", "AAVE", "ATOM", "NEAR", "ARB",
@@ -3357,24 +3357,24 @@ class TradingAgent:
                 if sym:
                     crypto_symbols.append(sym)
 
-        # Tavily batched enrichment: 1-2 calls instead of 10 individual scrapes
-        if equity_tickers and self.data.tavily:
+        # Web search batched enrichment: 1-2 calls instead of 10 individual scrapes
+        if equity_tickers and self.data.web_search:
             from api_budget import daily_budget
-            if daily_budget.can_spend("tavily", 2):
+            if daily_budget.can_spend("web_search", 2):
                 try:
-                    tavily_data = await asyncio.wait_for(
-                        self.data.tavily.enrich_tickers_batched(equity_tickers[:10]),
+                    search_data = await asyncio.wait_for(
+                        self.data.web_search.enrich_tickers_batched(equity_tickers[:10]),
                         timeout=12.0,
                     )
-                    daily_budget.spend("tavily", min(2, (len(equity_tickers[:10]) + 5) // 6))
+                    daily_budget.spend("web_search", min(2, (len(equity_tickers[:10]) + 5) // 6))
                     for ticker in equity_tickers[:10]:
-                        t_data = tavily_data.get(ticker.upper())
+                        t_data = search_data.get(ticker.upper())
                         if t_data and not t_data.get("error"):
                             enriched[ticker] = t_data
                 except Exception as e:
-                    print(f"[LIGHT_ENRICH] Tavily failed, falling back: {e}")
+                    print(f"[LIGHT_ENRICH] Web search failed, falling back: {e}")
 
-        # Fallback: StockAnalysis scraping for any tickers Tavily missed
+        # Fallback: StockAnalysis scraping for any tickers web search missed
         missing = [t for t in equity_tickers[:10] if t not in enriched]
         if missing:
             async def _quick_equity_quote(ticker):

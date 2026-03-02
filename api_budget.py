@@ -14,7 +14,7 @@ class DailyBudgetTracker:
         "coingecko": 333,
         "cmc": 333,
         "finnhub": 3600,
-        "tavily": 33,  # 1000/month ÷ 30 days — conservative daily cap
+        "web_search": 33,  # Combined Brave+Tavily daily cap (monthly cap in WebSearchProvider)
     }
 
     WARN_PCT = 0.70
