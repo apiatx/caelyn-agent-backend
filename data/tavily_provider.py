@@ -201,7 +201,7 @@ class TavilyProvider:
         cache.set(cache_key, result, TAVILY_NEWS_TTL)
         return result
 
-    async def get_ticker_news_sentiment(self, ticker: str) -> dict:
+    async def get_ticker_news_sentiment(self, ticker: str, company_name: str = "") -> dict:
         """
         Get news + sentiment for a single ticker.
         Replaces AlphaVantage get_news_sentiment(ticker).
@@ -212,18 +212,38 @@ class TavilyProvider:
         if cached is not None:
             return cached
 
+        # Build a targeted query using company name for disambiguation
+        name_part = f'"{company_name}" ' if company_name else ""
         data = await self._search(
-            query=f"{ticker} stock latest news analyst ratings price target sentiment today",
-            max_results=8,
+            query=f"{name_part}{ticker} stock earnings news analyst outlook",
+            max_results=10,
             topic="news",
         )
 
+        # Filter: only keep articles that mention the ticker or company name
+        ticker_lower = ticker.lower()
+        name_lower = company_name.lower() if company_name else ""
+        name_words = [w.lower().strip(",.") for w in (company_name or "").split()
+                      if len(w) > 2 and w.lower() not in ("inc", "inc.", "corp", "corp.", "ltd", "ltd.", "co", "co.", "the", "group", "plc")]
+
         articles = []
         for item in data.get("results", []):
+            title = item.get("title", "")
+            content = item.get("content", "")
+            text = (title + " " + content).lower()
+
+            is_relevant = (
+                ticker_lower in text
+                or (name_lower and name_lower in text)
+                or any(w in text for w in name_words if len(w) >= 4)
+            )
+            if not is_relevant:
+                continue
+
             articles.append({
-                "title": item.get("title", ""),
+                "title": title,
                 "source": item.get("url", "").split("/")[2] if item.get("url") else "",
-                "content": item.get("content", "")[:400],
+                "content": content[:400],
                 "url": item.get("url", ""),
             })
 

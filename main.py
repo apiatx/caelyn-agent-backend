@@ -389,6 +389,21 @@ async def earnings_detail(request: Request, ticker: str = ""):
 
     result = {"ticker": ticker}
 
+    # Phase 1: Get company profile first (usually cached, fast)
+    # We need the company name to make news searches relevant
+    company_name = ""
+    try:
+        profile = await asyncio.wait_for(
+            asyncio.to_thread(agent.data.finnhub.get_company_profile, ticker),
+            timeout=4.0,
+        )
+        if isinstance(profile, dict):
+            result["company_profile"] = profile
+            company_name = profile.get("name", "")
+    except Exception as e:
+        print(f"[EARNINGS_DETAIL] {ticker}/company_profile failed: {e}")
+
+    # Phase 2: Fetch remaining data in parallel (including news with company name)
     tasks = {}
 
     # Finnhub: earnings surprises (past 4 quarters)
@@ -418,15 +433,6 @@ async def earnings_detail(request: Request, ticker: str = ""):
     except Exception:
         pass
 
-    # Finnhub: company profile
-    try:
-        tasks["company_profile"] = asyncio.wait_for(
-            asyncio.to_thread(agent.data.finnhub.get_company_profile, ticker),
-            timeout=4.0,
-        )
-    except Exception:
-        pass
-
     # Finnhub: quote for current price
     try:
         tasks["quote"] = asyncio.wait_for(
@@ -436,13 +442,15 @@ async def earnings_detail(request: Request, ticker: str = ""):
     except Exception:
         pass
 
-    # Web search: earnings-specific news + analyst context (1 API call)
+    # Web search: earnings-specific news with company name for relevance
     if agent.data.web_search:
         from api_budget import daily_budget
         if daily_budget.can_spend("web_search", 1):
             try:
                 tasks["tavily_earnings"] = asyncio.wait_for(
-                    agent.data.web_search.get_ticker_news_sentiment(ticker),
+                    agent.data.web_search.get_ticker_news_sentiment(
+                        ticker, company_name=company_name
+                    ),
                     timeout=10.0,
                 )
                 daily_budget.spend("web_search", 1)

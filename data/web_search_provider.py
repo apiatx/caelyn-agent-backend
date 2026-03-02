@@ -124,12 +124,12 @@ class WebSearchProvider:
             self._record(label, 1)
         return result
 
-    async def get_ticker_news_sentiment(self, ticker: str) -> dict:
+    async def get_ticker_news_sentiment(self, ticker: str, company_name: str = "") -> dict:
         provider, label = self._pick(1)
         if not provider:
             return {"ticker": ticker, "article_count": 0, "summary": "",
                     "sentiment_label": "Neutral", "articles": []}
-        result = await provider.get_ticker_news_sentiment(ticker)
+        result = await provider.get_ticker_news_sentiment(ticker, company_name=company_name)
         if not result.get("error"):
             self._record(label, 1)
         return result
