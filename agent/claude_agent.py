@@ -9,7 +9,7 @@ import openai
 
 from agent.data_compressor import compress_data
 from agent.institutional_scorer import apply_institutional_scoring
-from agent.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, REASONING_BRIEF_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT, SMART_ORCHESTRATOR_PROMPT, PREDICTION_MARKETS_CONTRACT
+from agent.prompts import SYSTEM_PROMPT, USER_INVESTMENT_PROFILE, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, REASONING_BRIEF_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT, SMART_ORCHESTRATOR_PROMPT, PREDICTION_MARKETS_CONTRACT
 from data.market_data_service import MarketDataService
 
 
@@ -3761,7 +3761,12 @@ Be direct and opinionated. Tell me what you actually think."""
                             "type": "text",
                             "text": SYSTEM_PROMPT,
                             "cache_control": {"type": "ephemeral"},
-                        }
+                        },
+                        {
+                            "type": "text",
+                            "text": USER_INVESTMENT_PROFILE,
+                            "cache_control": {"type": "ephemeral"},
+                        },
                     ],
                     messages=messages,
                 ),
@@ -4286,7 +4291,12 @@ Be direct and opinionated. Tell me what you actually think."""
                 "type": "text",
                 "text": SYSTEM_PROMPT,
                 "cache_control": {"type": "ephemeral"},
-            }
+            },
+            {
+                "type": "text",
+                "text": USER_INVESTMENT_PROFILE,
+                "cache_control": {"type": "ephemeral"},
+            },
         ]
         if is_followup:
             original_category = None
