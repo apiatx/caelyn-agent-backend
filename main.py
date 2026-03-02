@@ -363,6 +363,163 @@ async def polymarket_events_proxy(request: Request):
         return JSONResponse(status_code=502, content={"error": f"Polymarket API unavailable: {type(e).__name__}: {str(e)[:200]}"})
 
 
+# ============================================================
+# Earnings Detail Endpoint — Tavily + Finnhub enrichment
+# ============================================================
+
+@app.get("/api/earnings/detail")
+@limiter.limit("30/minute")
+async def earnings_detail(request: Request, ticker: str = ""):
+    """
+    Enriched earnings detail for a single ticker.
+    Combines: Finnhub earnings history/calendar + Tavily news/analyst context.
+    Called when user clicks an earnings entry in the calendar popup.
+    """
+    ticker = ticker.upper().strip()
+    if not ticker or len(ticker) > 6:
+        return JSONResponse(status_code=400, content={"error": "Invalid ticker"})
+
+    await _wait_for_init()
+
+    from data.cache import cache
+    cache_key = f"earnings_detail:{ticker}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return JSONResponse(content=cached)
+
+    result = {"ticker": ticker}
+
+    tasks = {}
+
+    # Finnhub: earnings surprises (past 4 quarters)
+    try:
+        tasks["earnings_history"] = asyncio.wait_for(
+            asyncio.to_thread(agent.data.finnhub.get_earnings_surprises, ticker),
+            timeout=6.0,
+        )
+    except Exception:
+        pass
+
+    # Finnhub: upcoming earnings for this ticker
+    try:
+        tasks["earnings_upcoming"] = asyncio.wait_for(
+            asyncio.to_thread(agent.data.finnhub.get_earnings_calendar, ticker),
+            timeout=6.0,
+        )
+    except Exception:
+        pass
+
+    # Finnhub: analyst recommendations
+    try:
+        tasks["analyst_recommendations"] = asyncio.wait_for(
+            asyncio.to_thread(agent.data.finnhub.get_recommendation_trends, ticker),
+            timeout=5.0,
+        )
+    except Exception:
+        pass
+
+    # Finnhub: company profile
+    try:
+        tasks["company_profile"] = asyncio.wait_for(
+            asyncio.to_thread(agent.data.finnhub.get_company_profile, ticker),
+            timeout=4.0,
+        )
+    except Exception:
+        pass
+
+    # Finnhub: quote for current price
+    try:
+        tasks["quote"] = asyncio.wait_for(
+            asyncio.to_thread(agent.data.finnhub.get_quote, ticker),
+            timeout=4.0,
+        )
+    except Exception:
+        pass
+
+    # Tavily: earnings-specific news + analyst context (1 API call)
+    if agent.data.tavily:
+        from api_budget import daily_budget
+        if daily_budget.can_spend("tavily", 1):
+            try:
+                tasks["tavily_earnings"] = asyncio.wait_for(
+                    agent.data.tavily.get_ticker_news_sentiment(ticker),
+                    timeout=10.0,
+                )
+                daily_budget.spend("tavily", 1)
+            except Exception:
+                pass
+
+    if tasks:
+        task_keys = list(tasks.keys())
+        task_coros = list(tasks.values())
+        results = await asyncio.gather(*task_coros, return_exceptions=True)
+
+        for key, res in zip(task_keys, results):
+            if isinstance(res, Exception):
+                print(f"[EARNINGS_DETAIL] {ticker}/{key} failed: {type(res).__name__}: {res}")
+                continue
+            if not res:
+                continue
+            result[key] = res
+
+    # Compute earnings track record from history
+    history = result.get("earnings_history", [])
+    if isinstance(history, list) and history:
+        beats = sum(1 for h in history if isinstance(h, dict) and h.get("beat") is True)
+        total = sum(1 for h in history if isinstance(h, dict) and h.get("beat") is not None)
+        if total > 0:
+            result["beat_rate"] = f"{beats}/{total}"
+            result["beat_pct"] = round((beats / total) * 100)
+            avg_surprise = sum(
+                h.get("surprise_percent", 0) or 0
+                for h in history if isinstance(h, dict)
+            ) / len(history)
+            result["avg_surprise_pct"] = round(avg_surprise, 2)
+
+    # Extract key fields from profile
+    profile = result.get("company_profile", {})
+    if isinstance(profile, dict):
+        result["company_name"] = profile.get("name", ticker)
+        result["sector"] = profile.get("sector", "")
+        result["industry"] = profile.get("industry", "")
+        result["market_cap"] = profile.get("market_cap")
+        result["logo"] = profile.get("logo", "")
+
+    # Current price from quote
+    quote = result.get("quote", {})
+    if isinstance(quote, dict) and quote.get("price"):
+        result["current_price"] = quote["price"]
+        result["price_change_pct"] = quote.get("change_pct")
+
+    # Extract analyst consensus from recommendations
+    recs = result.get("analyst_recommendations", [])
+    if isinstance(recs, list) and recs:
+        latest = recs[0] if isinstance(recs[0], dict) else {}
+        buy = (latest.get("buy", 0) or 0) + (latest.get("strongBuy", 0) or 0)
+        sell = (latest.get("sell", 0) or 0) + (latest.get("strongSell", 0) or 0)
+        hold = latest.get("hold", 0) or 0
+        total_analysts = buy + sell + hold
+        if total_analysts > 0:
+            result["analyst_consensus"] = {
+                "buy": buy,
+                "hold": hold,
+                "sell": sell,
+                "total": total_analysts,
+                "rating": "Buy" if buy > hold + sell else "Hold" if hold >= sell else "Sell",
+            }
+
+    # Tavily articles for news section
+    tavily = result.get("tavily_earnings", {})
+    if isinstance(tavily, dict):
+        result["news_articles"] = tavily.get("articles", [])[:6]
+        result["news_summary"] = tavily.get("summary", "")
+        result["news_sentiment"] = tavily.get("sentiment_label", "Neutral")
+
+    # Cache for 10 minutes
+    cache.set(cache_key, result, 600)
+    return JSONResponse(content=result)
+
+
 async def verify_api_key(x_api_key: Optional[str] = Header(None)):
     """Verify the API key sent in the X-API-Key header."""
     if not x_api_key:
