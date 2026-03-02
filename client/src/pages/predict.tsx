@@ -603,15 +603,17 @@ function formatMktCap(v: number | undefined): string {
   return `$${v.toLocaleString()}`;
 }
 
-function EarningsModal({ entry, onClose }: { entry: EarningsEntry; onClose: () => void }) {
+function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEntry; onClose: () => void; prefetchedDetail?: EarningsDetailData | null }) {
   const bullets = buildBullets(entry);
   const beatPct = entry.beatPct;
   const missPct = 100 - beatPct;
-  const [detail, setDetail] = useState<EarningsDetailData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState<EarningsDetailData | null>(prefetchedDetail || null);
+  const [loading, setLoading] = useState(!prefetchedDetail);
+  const [fetchError, setFetchError] = useState(false);
 
-  // Fetch enriched data from backend
+  // Fetch enriched data from backend (skip if pre-fetched)
   useEffect(() => {
+    if (prefetchedDetail) { setDetail(prefetchedDetail); setLoading(false); return; }
     if (!entry.ticker || entry.ticker === "???") {
       setLoading(false);
       return;
@@ -622,18 +624,23 @@ function EarningsModal({ entry, onClose }: { entry: EarningsEntry; onClose: () =
         const res = await fetch(
           `${AGENT_BACKEND_URL}/api/earnings/detail?ticker=${encodeURIComponent(entry.ticker)}`
         );
-        if (res.ok && !cancelled) {
-          const data = await res.json();
-          setDetail(data);
+        if (!cancelled) {
+          if (res.ok) {
+            const data = await res.json();
+            setDetail(data);
+          } else {
+            setFetchError(true);
+          }
         }
       } catch (e) {
         console.warn("[EarningsModal] detail fetch failed:", e);
+        if (!cancelled) setFetchError(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [entry.ticker]);
+  }, [entry.ticker, prefetchedDetail]);
 
   // Close on Escape
   useEffect(() => {
@@ -872,27 +879,43 @@ function EarningsModal({ entry, onClose }: { entry: EarningsEntry; onClose: () =
           </div>
         )}
 
-        {/* Polymarket key details (fallback bullets) */}
-        {(!detail || loading) && (
+        {/* Loading / Error / Polymarket fallback bullets */}
+        {loading && (
           <div className="px-6 py-4 border-b border-white/[0.06]">
-            {loading ? (
-              <div className="flex items-center justify-center py-4 gap-2">
-                <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
-                <span className="text-xs text-white/40">Loading earnings data...</span>
-              </div>
-            ) : (
-              <>
-                <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-wider mb-3">Key Details</h4>
-                <ul className="space-y-2">
-                  {bullets.map((b, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <span className="w-1 h-1 rounded-full bg-blue-400 mt-1.5 flex-shrink-0" />
-                      <span className="text-xs text-white/70 leading-relaxed">{b}</span>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
+            <div className="flex items-center justify-center py-4 gap-2">
+              <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+              <span className="text-xs text-white/40">Loading earnings data from Finnhub + Tavily...</span>
+            </div>
+          </div>
+        )}
+        {!loading && fetchError && (
+          <div className="px-6 py-4 border-b border-white/[0.06]">
+            <div className="rounded-lg p-3 bg-red-500/5 border border-red-500/15">
+              <p className="text-[11px] text-red-400/80 font-semibold">Unable to load enriched data</p>
+              <p className="text-[10px] text-white/30 mt-1">Make sure the backend is running with the latest code. The /api/earnings/detail endpoint is required.</p>
+            </div>
+            <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-wider mb-3 mt-3">Polymarket Data</h4>
+            <ul className="space-y-2">
+              {bullets.map((b, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <span className="w-1 h-1 rounded-full bg-blue-400 mt-1.5 flex-shrink-0" />
+                  <span className="text-xs text-white/70 leading-relaxed">{b}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {!loading && !fetchError && !detail && (
+          <div className="px-6 py-4 border-b border-white/[0.06]">
+            <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-wider mb-3">Key Details</h4>
+            <ul className="space-y-2">
+              {bullets.map((b, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <span className="w-1 h-1 rounded-full bg-blue-400 mt-1.5 flex-shrink-0" />
+                  <span className="text-xs text-white/70 leading-relaxed">{b}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
@@ -928,6 +951,8 @@ function EarningsCalendar({ markets }: { markets: ParsedMarket[] }) {
   const [weekStart, setWeekStart] = useState<Date>(() => getSunday(new Date()));
   const [selectedDayKey, setSelectedDayKey] = useState<string>(dateKey(new Date()));
   const [modalEntry, setModalEntry] = useState<EarningsEntry | null>(null);
+  const [enrichments, setEnrichments] = useState<Record<string, EarningsDetailData>>({});
+  const [enrichLoading, setEnrichLoading] = useState<Set<string>>(new Set());
 
   // Build date → entries map
   const dateMap = new Map<string, EarningsEntry[]>();
@@ -948,6 +973,31 @@ function EarningsCalendar({ markets }: { markets: ParsedMarket[] }) {
   for (const entries of dateMap.values()) {
     entries.sort((a, b) => b.beatPct - a.beatPct);
   }
+
+  // Batch-fetch enrichment for all visible tickers when selected day changes
+  const fetchedDaysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (fetchedDaysRef.current.has(selectedDayKey)) return;
+    const dateEntries = selectedDayKey === "undated" ? undated : (dateMap.get(selectedDayKey) || []);
+    const tickers = dateEntries.map(e => e.ticker).filter(t => t && t !== "???");
+    if (tickers.length === 0) return;
+    fetchedDaysRef.current.add(selectedDayKey);
+    setEnrichLoading(prev => new Set([...prev, ...tickers]));
+    tickers.slice(0, 10).forEach(async (ticker) => {
+      try {
+        const res = await fetch(
+          `${AGENT_BACKEND_URL}/api/earnings/detail?ticker=${encodeURIComponent(ticker)}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setEnrichments(prev => ({ ...prev, [ticker]: data }));
+        }
+      } catch { /* silent */ }
+      finally {
+        setEnrichLoading(prev => { const n = new Set(prev); n.delete(ticker); return n; });
+      }
+    });
+  }, [selectedDayKey]);
 
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const weekMonth = MONTH_NAMES[weekStart.getMonth()];
@@ -1092,87 +1142,150 @@ function EarningsCalendar({ markets }: { markets: ParsedMarket[] }) {
           {displayEntries.map((e) => {
             const isHigh = e.beatPct >= 60;
             const isLow = e.beatPct <= 40;
-            const bullets = buildBullets(e);
+            const enrich = enrichments[e.ticker];
+            const isEnrichLoading = enrichLoading.has(e.ticker);
+            const consensus = enrich?.analyst_consensus;
+            const articles = enrich?.news_articles || [];
+            const topArticle = articles[0];
             return (
               <div
                 key={e.market.marketId}
-                className="flex items-start gap-4 p-4 rounded-xl border border-white/[0.06] bg-white/[0.015] hover:bg-white/[0.03] hover:border-white/[0.1] transition-all group"
+                className="rounded-xl border border-white/[0.06] bg-white/[0.015] hover:bg-white/[0.03] hover:border-white/[0.1] transition-all group cursor-pointer"
+                onClick={() => setModalEntry(e)}
               >
-                {/* Avatar */}
-                <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${tickerColor(e.ticker)} flex items-center justify-center flex-shrink-0 mt-0.5`}>
-                  <span className="text-xs font-bold text-white">{e.ticker.slice(0, 2)}</span>
-                </div>
+                <div className="flex items-start gap-4 p-4">
+                  {/* Avatar or logo */}
+                  {enrich?.logo ? (
+                    <img src={enrich.logo} alt={e.ticker} className="w-10 h-10 rounded-xl object-contain bg-white/5 p-1 flex-shrink-0 mt-0.5" />
+                  ) : (
+                    <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${tickerColor(e.ticker)} flex items-center justify-center flex-shrink-0 mt-0.5`}>
+                      <span className="text-xs font-bold text-white">{e.ticker.slice(0, 2)}</span>
+                    </div>
+                  )}
 
-                {/* Main content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      {/* Company name — clickable for modal */}
-                      <button
-                        onClick={() => setModalEntry(e)}
-                        className="text-sm font-bold text-white hover:text-blue-400 transition-colors text-left"
-                      >
-                        {e.company}
-                      </button>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[11px] font-mono text-white/40">{e.ticker}</span>
-                        {e.quarter && (
-                          <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-white/[0.04] text-white/30">{e.quarter}</span>
+                  {/* Main content */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-white group-hover:text-blue-400 transition-colors">
+                          {enrich?.company_name || e.company}
+                        </p>
+                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                          <span className="text-[11px] font-mono text-white/40">{e.ticker}</span>
+                          {e.quarter && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-400/70">{e.quarter}</span>
+                          )}
+                          {e.time && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-white/[0.04] text-white/30 flex items-center gap-0.5">
+                              <Clock className="w-2.5 h-2.5" /> {e.time}
+                            </span>
+                          )}
+                          {enrich?.sector && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-purple-500/10 text-purple-400/60">{enrich.sector}</span>
+                          )}
+                          {enrich?.current_price && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-white/[0.04] text-white/40 font-semibold">
+                              ${enrich.current_price.toFixed(2)}
+                              {enrich.price_change_pct != null && (
+                                <span className={enrich.price_change_pct >= 0 ? "text-emerald-400 ml-1" : "text-red-400 ml-1"}>
+                                  {enrich.price_change_pct >= 0 ? "+" : ""}{enrich.price_change_pct.toFixed(1)}%
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Beat % badge */}
+                      <div className="flex-shrink-0 text-right">
+                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${
+                          isHigh ? "bg-emerald-500/10 border border-emerald-500/20" : isLow ? "bg-red-500/10 border border-red-500/20" : "bg-yellow-500/10 border border-yellow-500/20"
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${
+                            isHigh ? "bg-emerald-400" : isLow ? "bg-red-400" : "bg-yellow-400"
+                          }`} />
+                          <span className={`text-xs font-bold ${
+                            isHigh ? "text-emerald-400" : isLow ? "text-red-400" : "text-yellow-400"
+                          }`}>
+                            {e.beatPct}%
+                          </span>
+                          <span className={`text-[9px] ${
+                            isHigh ? "text-emerald-400/60" : isLow ? "text-red-400/60" : "text-yellow-400/60"
+                          }`}>beat</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Enriched stats row — beat record, analyst consensus, market cap */}
+                    {enrich && (
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        {enrich.beat_rate && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/8 border border-emerald-500/15 text-emerald-400/80 font-semibold">
+                            Beat Record: {enrich.beat_rate}
+                          </span>
                         )}
-                        {e.time && (
-                          <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-white/[0.04] text-white/30 flex items-center gap-0.5">
-                            <Clock className="w-2.5 h-2.5" /> {e.time}
+                        {consensus && consensus.total > 0 && (
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${
+                            consensus.rating === "Buy" ? "bg-emerald-500/8 border border-emerald-500/15 text-emerald-400/80" :
+                            consensus.rating === "Sell" ? "bg-red-500/8 border border-red-500/15 text-red-400/80" :
+                            "bg-yellow-500/8 border border-yellow-500/15 text-yellow-400/80"
+                          }`}>
+                            Analysts: {consensus.rating} ({consensus.buy}B/{consensus.hold}H/{consensus.sell}S)
+                          </span>
+                        )}
+                        {enrich.market_cap && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/[0.04] border border-white/[0.06] text-white/40 font-semibold">
+                            {formatMktCap(enrich.market_cap)}
+                          </span>
+                        )}
+                        {enrich.news_sentiment && enrich.news_sentiment !== "Neutral" && (
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${
+                            enrich.news_sentiment === "Bullish" ? "bg-emerald-500/8 border border-emerald-500/15 text-emerald-400/80" :
+                            "bg-red-500/8 border border-red-500/15 text-red-400/80"
+                          }`}>
+                            {enrich.news_sentiment}
                           </span>
                         )}
                       </div>
-                    </div>
-
-                    {/* Beat % badge */}
-                    <div className="flex-shrink-0 text-right">
-                      <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${
-                        isHigh ? "bg-emerald-500/10 border border-emerald-500/20" : isLow ? "bg-red-500/10 border border-red-500/20" : "bg-yellow-500/10 border border-yellow-500/20"
-                      }`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${
-                          isHigh ? "bg-emerald-400" : isLow ? "bg-red-400" : "bg-yellow-400"
-                        }`} />
-                        <span className={`text-xs font-bold ${
-                          isHigh ? "text-emerald-400" : isLow ? "text-red-400" : "text-yellow-400"
-                        }`}>
-                          {e.beatPct}%
-                        </span>
-                        <span className={`text-[9px] ${
-                          isHigh ? "text-emerald-400/60" : isLow ? "text-red-400/60" : "text-yellow-400/60"
-                        }`}>chance of beat</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Bullet points */}
-                  <ul className="mt-2.5 space-y-1">
-                    {bullets.map((b, i) => (
-                      <li key={i} className="flex items-start gap-1.5">
-                        <span className="w-1 h-1 rounded-full bg-white/20 mt-1.5 flex-shrink-0" />
-                        <span className="text-[11px] text-white/50 leading-relaxed">{b}</span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  {/* Quick stats row */}
-                  <div className="flex items-center gap-4 mt-2.5">
-                    {e.eps && (
-                      <span className="text-[10px] text-white/30">
-                        <span className="text-white/50 font-semibold">EPS Est:</span> {e.eps}
-                      </span>
                     )}
-                    <span className="text-[10px] text-white/30">
-                      <span className="text-white/50 font-semibold">Vol:</span> {formatVolume(e.market.totalVolume)}
-                    </span>
-                    <button
-                      onClick={() => setModalEntry(e)}
-                      className="text-[10px] text-blue-400/60 hover:text-blue-400 transition-colors ml-auto"
-                    >
-                      More details
-                    </button>
+                    {isEnrichLoading && (
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <Loader2 className="w-3 h-3 text-blue-400/50 animate-spin" />
+                        <span className="text-[9px] text-white/25">Loading context...</span>
+                      </div>
+                    )}
+
+                    {/* AI news summary from Tavily */}
+                    {enrich?.news_summary && (
+                      <p className="text-[10px] text-white/45 leading-relaxed mt-2 line-clamp-2">
+                        <Sparkles className="w-3 h-3 text-blue-400/50 inline mr-1 -mt-0.5" />
+                        {enrich.news_summary}
+                      </p>
+                    )}
+
+                    {/* Top news headline from Tavily */}
+                    {topArticle && (
+                      <div className="mt-2 flex items-start gap-1.5">
+                        <ExternalLink className="w-3 h-3 text-blue-400/40 flex-shrink-0 mt-0.5" />
+                        <span className="text-[10px] text-blue-400/60 leading-snug line-clamp-1">{topArticle.title}</span>
+                        {topArticle.source && <span className="text-[8px] text-white/20 flex-shrink-0 mt-0.5">{topArticle.source}</span>}
+                      </div>
+                    )}
+
+                    {/* Quick stats row */}
+                    <div className="flex items-center gap-4 mt-2.5">
+                      {e.eps && (
+                        <span className="text-[10px] text-white/30">
+                          <span className="text-white/50 font-semibold">EPS Est:</span> {e.eps}
+                        </span>
+                      )}
+                      <span className="text-[10px] text-white/30">
+                        <span className="text-white/50 font-semibold">Vol:</span> {formatVolume(e.market.totalVolume)}
+                      </span>
+                      <span className="text-[10px] text-blue-400/60 group-hover:text-blue-400 transition-colors ml-auto">
+                        View full details
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1184,7 +1297,7 @@ function EarningsCalendar({ markets }: { markets: ParsedMarket[] }) {
       {/* Footer */}
       <div className="mt-4 flex items-center justify-between">
         <span className="text-[10px] text-white/20">
-          Odds powered by Polymarket prediction markets
+          Polymarket odds &middot; Finnhub fundamentals &middot; Tavily AI news
         </span>
         <a
           href="https://polymarket.com/earnings"
@@ -1197,7 +1310,7 @@ function EarningsCalendar({ markets }: { markets: ParsedMarket[] }) {
       </div>
 
       {/* Modal */}
-      {modalEntry && <EarningsModal entry={modalEntry} onClose={() => setModalEntry(null)} />}
+      {modalEntry && <EarningsModal entry={modalEntry} onClose={() => setModalEntry(null)} prefetchedDetail={enrichments[modalEntry.ticker] || null} />}
     </div>
   );
 }

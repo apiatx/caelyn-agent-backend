@@ -168,6 +168,7 @@ export default function StocksPortfolioPage() {
   const [sortKey, setSortKey] = useState<SortKey>('weight');
   const [sortAsc, setSortAsc] = useState(false);
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
+  const [portfolioChartInterval, setPortfolioChartInterval] = useState('D');
   const [aiReview, setAiReview] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiStage, setAiStage] = useState('');
@@ -820,9 +821,17 @@ export default function StocksPortfolioPage() {
                             <tr style={{ borderBottom: '1px solid #1a1c3a' }}>
                               <td colSpan={9} className="p-0">
                                 <div style={{ background: '#0f1129', borderTop: '1px solid #1e2148', padding: '12px' }}>
+                                  <div className="flex gap-1 mb-1.5">
+                                    {[{l:'1H',v:'60'},{l:'4H',v:'240'},{l:'1D',v:'D'},{l:'1W',v:'W'},{l:'1M',v:'M'}].map(iv => (
+                                      <button key={iv.v} onClick={(e) => { e.stopPropagation(); setPortfolioChartInterval(iv.v); }}
+                                        className="text-[9px] font-semibold px-2 py-0.5 rounded cursor-pointer transition-colors"
+                                        style={{ background: portfolioChartInterval === iv.v ? 'rgba(56, 189, 248, 0.12)' : 'transparent', color: portfolioChartInterval === iv.v ? '#38bdf8' : '#64748b', border: `1px solid ${portfolioChartInterval === iv.v ? 'rgba(56, 189, 248, 0.25)' : '#1e2148'}` }}
+                                      >{iv.l}</button>
+                                    ))}
+                                  </div>
                                   <div className="rounded-lg overflow-hidden my-2" style={{ border: '1px solid rgba(56, 78, 119, 0.2)' }}>
                                     <iframe
-                                      src={`https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(getTradingViewSymbol(h.ticker, h.assetType, h.quote?.tradingview_symbol))}&interval=D&theme=dark&style=1&locale=en&hide_top_toolbar=1&hide_side_toolbar=1&allow_symbol_change=0&save_image=0&width=100%25&height=220`}
+                                      src={`https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(getTradingViewSymbol(h.ticker, h.assetType, h.quote?.tradingview_symbol))}&interval=${portfolioChartInterval}&theme=dark&style=1&locale=en&hide_top_toolbar=1&hide_side_toolbar=1&allow_symbol_change=0&save_image=0&width=100%25&height=220`}
                                       style={{ width: '100%', height: 220, border: 'none', display: 'block' }}
                                       title={`${h.ticker} chart`}
                                     />

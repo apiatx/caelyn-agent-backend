@@ -566,8 +566,15 @@ export default function TradingAgent() {
 
   function TradingViewMini({ ticker, pick }: { ticker: string; pick?: any }) {
     const sym = getTVSymbol(ticker, pick);
-    return <div style={{ borderRadius:8, overflow:'hidden', border:`1px solid ${C.border}`, margin:'12px 0' }}>
-      <iframe src={`https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(sym)}&interval=D&theme=dark&style=1&locale=en&hide_top_toolbar=1&hide_side_toolbar=1&allow_symbol_change=0&save_image=0&width=100%25&height=200`} style={{ width:'100%', height:200, border:'none', display:'block' }} title={`${sym} chart`} />
+    const [ivl, setIvl] = useState('D');
+    const intervals = [{l:'1H',v:'60'},{l:'4H',v:'240'},{l:'1D',v:'D'},{l:'1W',v:'W'},{l:'1M',v:'M'}];
+    return <div style={{ margin:'12px 0' }}>
+      <div style={{ display:'flex', gap:4, marginBottom:6 }}>
+        {intervals.map(iv => <button key={iv.v} onClick={(e) => { e.stopPropagation(); setIvl(iv.v); }} style={{ padding:'2px 8px', fontSize:9, fontWeight:600, fontFamily:font, background: ivl === iv.v ? C.blue+'20' : 'transparent', color: ivl === iv.v ? C.blue : C.dim, border:`1px solid ${ivl === iv.v ? C.blue+'40' : C.border}`, borderRadius:3, cursor:'pointer' }}>{iv.l}</button>)}
+      </div>
+      <div style={{ borderRadius:8, overflow:'hidden', border:`1px solid ${C.border}` }}>
+        <iframe src={`https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(sym)}&interval=${ivl}&theme=dark&style=1&locale=en&hide_top_toolbar=1&hide_side_toolbar=1&allow_symbol_change=0&save_image=0&width=100%25&height=200`} style={{ width:'100%', height:200, border:'none', display:'block' }} title={`${sym} chart`} />
+      </div>
     </div>;
   }
 
