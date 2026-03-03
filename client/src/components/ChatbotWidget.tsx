@@ -420,7 +420,7 @@ export default function ChatbotWidget() {
 
       <div style={{ flexShrink: 0, borderTop: `1px solid ${C.border}`, padding: 10, background: C.card }}>
         {showChips && (
-          <div style={{ display: 'flex', gap: 4, marginBottom: 8, overflowX: 'auto', paddingBottom: 4, WebkitOverflowScrolling: 'touch' }}>
+          <div className="chatbot-chips-bar" style={{ display: 'flex', gap: 4, marginBottom: 8, overflowX: 'auto', paddingBottom: 0, WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}>
             {QUICK_PROMPTS.map(qp => (
               <button key={qp.l} onClick={() => { sendMessage(qp.p); }} disabled={isLoading} style={{
                 padding: isMobile ? '6px 12px' : '4px 10px', background: `${C.purple}08`, border: `1px solid ${C.purple}18`,

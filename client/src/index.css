@@ -179,3 +179,7 @@ iframe {
     min-width: 44px;
   }
 }
+
+.chatbot-chips-bar::-webkit-scrollbar {
+  display: none;
+}
