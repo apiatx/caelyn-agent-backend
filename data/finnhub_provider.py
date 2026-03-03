@@ -387,6 +387,40 @@ class FinnhubProvider:
             return {}
         return compute_technicals_from_bars(bars)
 
+    def get_company_news(self, ticker: str, days: int = 7) -> list:
+        """
+        Get news articles specifically about this company from Finnhub.
+        Returns articles tagged to this ticker — guaranteed relevant.
+        Free tier: included in base API.
+        """
+        ticker = ticker.upper()
+        cache_key = f"finnhub:company_news:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            today = datetime.now()
+            from_date = (today - timedelta(days=days)).strftime("%Y-%m-%d")
+            to_date = today.strftime("%Y-%m-%d")
+            data = self.client.company_news(ticker, _from=from_date, to=to_date)
+            if not isinstance(data, list):
+                return []
+            articles = []
+            for item in data[:10]:
+                articles.append({
+                    "title": item.get("headline", ""),
+                    "source": item.get("source", ""),
+                    "content": (item.get("summary", "") or "")[:400],
+                    "url": item.get("url", ""),
+                    "datetime": item.get("datetime"),
+                    "category": item.get("category", ""),
+                })
+            cache.set(cache_key, articles, FINNHUB_TTL)
+            return articles
+        except Exception as e:
+            print(f"Finnhub company_news error for {ticker}: {e}")
+            return []
+
     def _interpret_mspr(self, mspr) -> str:
         """Interpret the insider sentiment MSPR score."""
         if mspr is None:

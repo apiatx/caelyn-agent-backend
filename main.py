@@ -382,7 +382,7 @@ async def earnings_detail(request: Request, ticker: str = ""):
     await _wait_for_init()
 
     from data.cache import cache
-    cache_key = f"earnings_detail_v2:{ticker}"
+    cache_key = f"earnings_detail_v3:{ticker}"
     cached = cache.get(cache_key)
     if cached is not None:
         return JSONResponse(content=cached)
@@ -442,20 +442,14 @@ async def earnings_detail(request: Request, ticker: str = ""):
     except Exception:
         pass
 
-    # Web search: earnings-specific news with company name for relevance
-    if agent.data.web_search:
-        from api_budget import daily_budget
-        if daily_budget.can_spend("web_search", 1):
-            try:
-                tasks["tavily_earnings"] = asyncio.wait_for(
-                    agent.data.web_search.get_ticker_news_sentiment(
-                        ticker, company_name=company_name
-                    ),
-                    timeout=10.0,
-                )
-                daily_budget.spend("web_search", 1)
-            except Exception:
-                pass
+    # Finnhub: company-specific news (guaranteed relevant to this ticker)
+    try:
+        tasks["company_news"] = asyncio.wait_for(
+            asyncio.to_thread(agent.data.finnhub.get_company_news, ticker),
+            timeout=8.0,
+        )
+    except Exception:
+        pass
 
     if tasks:
         task_keys = list(tasks.keys())
@@ -516,48 +510,23 @@ async def earnings_detail(request: Request, ticker: str = ""):
                 "rating": "Buy" if buy > hold + sell else "Hold" if hold >= sell else "Sell",
             }
 
-    # Web search articles for news section — with strict relevance filter
-    search_data = result.get("tavily_earnings", {})
-    if isinstance(search_data, dict):
-        raw_articles = search_data.get("articles", [])[:10]
+    # Company news from Finnhub (guaranteed relevant — tagged to this ticker)
+    company_articles = result.get("company_news", [])
+    if isinstance(company_articles, list) and company_articles:
+        result["news_articles"] = company_articles[:6]
 
-        # Final safety-net filter: ONLY keep articles about THIS company
-        # Extract short company name for matching (e.g. "MongoDB" from "MongoDB, Inc.")
-        _cn = company_name or ticker
-        _short = _cn.split(",")[0].split(" Inc")[0].split(" Corp")[0].split(" Ltd")[0].split(" Group")[0].strip()
-        _short_lower = _short.lower() if _short else ""
-        _ticker_lower = ticker.lower()
-
-        filtered_articles = []
-        for art in raw_articles:
-            t_lower = (art.get("title") or "").lower()
-            c_lower = (art.get("content") or "").lower()
-
-            # Must appear in title OR have 2+ mentions in body
-            in_title = (
-                _ticker_lower in t_lower
-                or (_short_lower and _short_lower in t_lower)
-            )
-            body_count = c_lower.count(_ticker_lower) + (
-                c_lower.count(_short_lower) if _short_lower else 0
-            )
-            if in_title or body_count >= 2:
-                filtered_articles.append(art)
-
-        result["news_articles"] = filtered_articles[:6]
-
-        # Only use the AI summary if it actually mentions our company
-        raw_summary = search_data.get("summary", "")
-        if raw_summary:
-            summary_lower = raw_summary.lower()
-            if _ticker_lower in summary_lower or (_short_lower and _short_lower in summary_lower):
-                result["news_summary"] = raw_summary
-            else:
-                result["news_summary"] = ""
-        else:
-            result["news_summary"] = ""
-
-        result["news_sentiment"] = search_data.get("sentiment_label", "Neutral")
+        # Simple sentiment heuristic from article titles
+        all_titles = " ".join(a.get("title", "") for a in company_articles).lower()
+        bullish_words = ["beat", "surge", "rally", "upgrade", "outperform", "strong", "record", "growth"]
+        bearish_words = ["miss", "decline", "downgrade", "underperform", "cut", "warning", "loss", "weak"]
+        bull = sum(1 for w in bullish_words if w in all_titles)
+        bear = sum(1 for w in bearish_words if w in all_titles)
+        result["news_sentiment"] = "Bullish" if bull > bear else "Bearish" if bear > bull else "Neutral"
+        result["news_summary"] = ""
+    else:
+        result["news_articles"] = []
+        result["news_sentiment"] = "Neutral"
+        result["news_summary"] = ""
 
     # Cache for 10 minutes
     cache.set(cache_key, result, 600)
