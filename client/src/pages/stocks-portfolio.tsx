@@ -736,7 +736,7 @@ export default function StocksPortfolioPage() {
                 <option value="commodity" style={{ background: '#0f1129' }}>Commodity</option>
               </select>
               <input type="number" placeholder={SHARES_LABEL[selectedAssetType] || 'Shares'} value={newShares} onChange={e => setNewShares(e.target.value)} onKeyDown={e => e.key === 'Enter' && addHolding()} className="rounded-lg px-3 py-2 text-sm text-white placeholder-crypto-silver/50 focus:outline-none focus:border-cyan-500/50 w-full sm:w-28" style={{ background: '#0f1129', border: '1px solid #1e2148' }} />
-              <input type="number" placeholder="Avg Cost ($)" value={newAvgCost} onChange={e => setNewAvgCost(e.target.value)} onKeyDown={e => e.key === 'Enter' && addHolding()} className="rounded-lg px-3 py-2 text-sm text-white placeholder-crypto-silver/50 focus:outline-none focus:border-cyan-500/50 w-full sm:w-32" style={{ background: '#0f1129', border: '1px solid #1e2148' }} />
+              <input type="number" placeholder="Avg Price ($)" value={newAvgCost} onChange={e => setNewAvgCost(e.target.value)} onKeyDown={e => e.key === 'Enter' && addHolding()} className="rounded-lg px-3 py-2 text-sm text-white placeholder-crypto-silver/50 focus:outline-none focus:border-cyan-500/50 w-full sm:w-32" style={{ background: '#0f1129', border: '1px solid #1e2148' }} />
               <button onClick={addHolding} disabled={addingHolding || !newTicker.trim() || !newShares || !newAvgCost} className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium text-white transition-all disabled:opacity-40" style={{ background: 'linear-gradient(135deg, #6366f1, #3b82f6)', boxShadow: '0 0 12px rgba(99, 102, 241, 0.3)' }}>
                 <Plus className="w-4 h-4" />
                 Add
@@ -770,7 +770,7 @@ export default function StocksPortfolioPage() {
                       <th className="pb-2 pr-1 w-6"></th>
                       <th className="text-left pb-2 pr-3"><SortHeader label="Ticker" keyName="ticker" /></th>
                       <th className="text-right pb-2 px-3"><SortHeader label="Shares" keyName="shares" /></th>
-                      <th className="text-right pb-2 px-3"><SortHeader label="Avg Cost" keyName="avgCost" /></th>
+                      <th className="text-right pb-2 px-3"><SortHeader label="Avg Price" keyName="avgCost" /></th>
                       <th className="text-right pb-2 px-3"><SortHeader label="Price" keyName="currentPrice" /></th>
                       <th className="text-right pb-2 px-3" style={{color:'#94a3b8',fontSize:11}}>Invested</th>
                       <th className="text-right pb-2 px-3"><SortHeader label="Daily P&L" keyName="dailyPL" /></th>
@@ -908,21 +908,38 @@ export default function StocksPortfolioPage() {
                       );
                     })}
                   </tbody>
-                  {totalPortfolioValue > 0 && (
-                    <tfoot>
-                      <tr style={{ borderTop: '2px solid #1e2148', background: '#0f1129' }}>
-                        <td></td>
-                        <td colSpan={3} className="py-3 text-right text-xs text-crypto-silver font-medium">TOTAL</td>
-                        <td className="text-right py-3 px-3 font-bold" style={{ color: '#38bdf8', textShadow: '0 0 8px rgba(56, 189, 248, 0.2)' }}>{fmt(totalPortfolioValue)}</td>
-                        <td className="text-right py-3 px-3 font-bold" style={{ color: '#a78bfa' }}>{fmt(totalCostBasis)}</td>
-                        <td className={`text-right py-3 px-3 font-bold ${totalDailyPL >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtPL(totalDailyPL)}</td>
-                        <td className={`text-right py-3 px-3 font-bold ${totalOverallPL >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtPL(totalOverallPL)}</td>
-                        <td></td>
-                        <td></td>
-                      </tr>
-                    </tfoot>
-                  )}
                 </table>
+              </div>
+            </GlassCard>
+          )}
+
+          {/* Portfolio Totals */}
+          {holdings.length > 0 && totalPortfolioValue > 0 && (
+            <GlassCard className="p-3 sm:p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Briefcase className="w-4 h-4 text-cyan-400" />
+                <h3 className="text-sm font-semibold text-white">Portfolio Totals</h3>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="rounded-lg px-3 py-2.5" style={{ background: '#0f1129', border: '1px solid #1e2148' }}>
+                  <div className="text-[10px] text-crypto-silver uppercase tracking-wider mb-1">Total Balance</div>
+                  <div className="text-base font-bold" style={{ color: '#38bdf8', textShadow: '0 0 8px rgba(56, 189, 248, 0.2)' }}>{fmt(totalPortfolioValue)}</div>
+                </div>
+                <div className="rounded-lg px-3 py-2.5" style={{ background: '#0f1129', border: '1px solid #1e2148' }}>
+                  <div className="text-[10px] text-crypto-silver uppercase tracking-wider mb-1">Total Invested</div>
+                  <div className="text-base font-bold" style={{ color: '#a78bfa' }}>{fmt(totalCostBasis)}</div>
+                </div>
+                <div className="rounded-lg px-3 py-2.5" style={{ background: '#0f1129', border: '1px solid #1e2148' }}>
+                  <div className="text-[10px] text-crypto-silver uppercase tracking-wider mb-1">Daily P&L</div>
+                  <div className={`text-base font-bold ${totalDailyPL >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtPL(totalDailyPL)}</div>
+                </div>
+                <div className="rounded-lg px-3 py-2.5" style={{ background: '#0f1129', border: '1px solid #1e2148' }}>
+                  <div className="text-[10px] text-crypto-silver uppercase tracking-wider mb-1">Total P&L</div>
+                  <div className={`text-base font-bold ${totalOverallPL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    <span>{fmtPL(totalOverallPL)}</span>
+                    <span className="text-[10px] ml-1 opacity-70">{totalCostBasis > 0 ? `(${totalOverallPL >= 0 ? '+' : ''}${((totalOverallPL / totalCostBasis) * 100).toFixed(1)}%)` : ''}</span>
+                  </div>
+                </div>
               </div>
             </GlassCard>
           )}
