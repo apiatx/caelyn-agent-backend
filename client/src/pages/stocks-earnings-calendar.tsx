@@ -582,7 +582,7 @@ function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEn
           <div className="px-6 py-4 border-b border-white/[0.06]">
             <div className="flex items-center justify-center py-4 gap-2">
               <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
-              <span className="text-xs text-white/40">Loading earnings data from Finnhub + Tavily...</span>
+              <span className="text-xs text-white/40">Loading earnings data from Finnhub...</span>
             </div>
           </div>
         )}
@@ -628,7 +628,7 @@ function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEn
 
         {/* Footer */}
         <div className="px-6 py-4 flex items-center justify-between">
-          <span className="text-[9px] text-white/20">Polymarket + Finnhub + Tavily</span>
+          <span className="text-[9px] text-white/20">Polymarket + Finnhub</span>
           <a
             href={`https://polymarket.com/event/${entry.market.eventSlug}`}
             target="_blank"
@@ -984,7 +984,7 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
       {/* Footer */}
       <div className="mt-4 flex items-center justify-between">
         <span className="text-[10px] text-white/20">
-          Polymarket odds &middot; Finnhub fundamentals &middot; Tavily AI news
+          Polymarket odds &middot; Finnhub fundamentals &amp; news
         </span>
         <a
           href="https://polymarket.com/earnings"
@@ -1037,7 +1037,7 @@ export default function StocksEarningsCalendarPage() {
             </div>
             <h2 className="text-2xl lg:text-3xl font-bold bg-gradient-to-r from-white via-yellow-200 to-orange-200 bg-clip-text text-transparent">Earnings Calendar</h2>
           </div>
-          <p className="text-sm text-white/50">Polymarket-powered earnings predictions with Finnhub fundamentals &amp; AI news context</p>
+          <p className="text-sm text-white/50">Polymarket-powered earnings predictions with Finnhub fundamentals &amp; company news</p>
           <div className="w-32 h-1 bg-gradient-to-r from-yellow-500 to-orange-500 mx-auto mt-4 rounded-full"></div>
         </div>
       </div>
