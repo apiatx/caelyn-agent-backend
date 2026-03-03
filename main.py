@@ -573,6 +573,7 @@ class QueryRequest(BaseModel):
     conversation_id: Optional[str] = None
     preset_intent: Optional[str] = None
     csv_data: Optional[str] = None
+    chatbox_mode: Optional[bool] = False
 
 def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, timing_ms=None):
     return {
@@ -1132,6 +1133,7 @@ async def query_agent(
                 preset_intent=body.preset_intent,
                 request_id=req_id,
                 csv_data=body.csv_data,
+                chatbox_mode=body.chatbox_mode or False,
             ),
             timeout=150.0,
         )

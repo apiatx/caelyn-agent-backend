@@ -350,7 +350,7 @@ class TradingAgent:
             "tickers": [],
         }
 
-    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None) -> dict:
+    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False) -> dict:
         start_time = time.time()
         if history is None:
             history = []
@@ -828,15 +828,18 @@ class TradingAgent:
             except NameError:
                 pass
 
-        raw_response = await self._ask_claude_with_timeout(user_prompt, claude_data, history, is_followup=is_followup, category=category)
+        raw_response = await self._ask_claude_with_timeout(user_prompt, claude_data, history, is_followup=is_followup, category=category, chatbox_mode=chatbox_mode)
         claude_ms = int((time.time() - data_done_time) * 1000)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
 
-        result = self._parse_response(raw_response, request_id=request_id)
+        if chatbox_mode:
+            result = self._parse_chatbox_response(raw_response, request_id=request_id)
+        else:
+            result = self._parse_response(raw_response, request_id=request_id)
         parsed_display = result.get("structured", {}).get("display_type", result.get("type", "unknown"))
         print(f"[AGENT] Response parsed, display_type: {parsed_display} ({time.time() - start_time:.1f}s)")
 
-        if category == "best_trades" and market_data and isinstance(market_data, dict):
+        if category == "best_trades" and market_data and isinstance(market_data, dict) and not chatbox_mode:
             if parsed_display != "trades":
                 print(f"[BEST_TRADES] Claude returned display_type={parsed_display}, enforcing structured trades output")
                 claude_text = result.get("analysis", "") or result.get("structured", {}).get("message", "") or ""
@@ -891,7 +894,7 @@ class TradingAgent:
                 if empty_context:
                     structured["empty_reason"] = empty_context
 
-        if category == "best_trades" and market_data and isinstance(market_data, dict):
+        if category == "best_trades" and market_data and isinstance(market_data, dict) and not chatbox_mode:
             structured = result.get("structured")
             if isinstance(structured, dict):
                 # --- Backfill: if Claude returned "trades" but has empty/weak trade list ---
@@ -2704,12 +2707,12 @@ class TradingAgent:
                 return True
         return False
 
-    async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "") -> str:
+    async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False) -> str:
         data_size = len(json.dumps(market_data, default=str)) if market_data else 0
-        print(f"[AGENT] Sending to Claude: {data_size:,} chars of market data (category={category})")
+        print(f"[AGENT] Sending to Claude: {data_size:,} chars of market data (category={category}, chatbox_mode={chatbox_mode})")
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(self._ask_claude, user_prompt, market_data, history, is_followup, category),
+                asyncio.to_thread(self._ask_claude, user_prompt, market_data, history, is_followup, category, chatbox_mode),
                 timeout=90.0,
             )
         except asyncio.TimeoutError:
@@ -4135,7 +4138,7 @@ Be direct and opinionated. Tell me what you actually think."""
                 print(f"[Agent] Removed oldest message ({content_len:,} chars) to fit context window")
         return messages
 
-    def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "") -> str:
+    def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False) -> str:
         """Send the user's question + market data to Claude with conversation history."""
 
         data_str = None
@@ -4379,18 +4382,33 @@ Be direct and opinionated. Tell me what you actually think."""
             )
             print(f"[Agent] WARNING: Total prompt was {total_prompt_len:,} chars, re-truncated data to {len(data_str):,}")
 
-        system_blocks = [
-            {
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            },
-            {
-                "type": "text",
-                "text": USER_INVESTMENT_PROFILE,
-                "cache_control": {"type": "ephemeral"},
-            },
-        ]
+        if chatbox_mode:
+            from agent.prompts import CHATBOX_SYSTEM_PROMPT
+            system_blocks = [
+                {
+                    "type": "text",
+                    "text": CHATBOX_SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "type": "text",
+                    "text": USER_INVESTMENT_PROFILE,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ]
+        else:
+            system_blocks = [
+                {
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "type": "text",
+                    "text": USER_INVESTMENT_PROFILE,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ]
         if is_followup:
             original_category = None
             # Check ALL assistant messages (not just last) to find the original scan type
@@ -4679,6 +4697,32 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         except Exception as e:
             print(f"[Agent] _slim_cross_market_data error: {e}, passing raw data")
             return data
+
+    def _parse_chatbox_response(self, raw_response: str, request_id: str = "") -> dict:
+        """Parse chatbox mode response — conversational text with optional ticker extraction."""
+        response_text = raw_response.strip()
+        print(f"[ChatboxParser] Response length: {len(response_text)}")
+
+        # Extract tickers from the [TICKERS: ...] line if present
+        tickers = []
+        clean_text = response_text
+        ticker_match = re.search(r'\[TICKERS?:\s*([^\]]+)\]', response_text)
+        if ticker_match:
+            tickers_str = ticker_match.group(1)
+            tickers = [t.strip().upper() for t in tickers_str.split(',') if t.strip()]
+            # Remove the ticker line from the display text
+            clean_text = response_text[:ticker_match.start()].rstrip()
+            print(f"[ChatboxParser] Extracted tickers: {tickers}")
+
+        return {
+            "type": "chatbox",
+            "analysis": clean_text,
+            "structured": {
+                "display_type": "chatbox",
+                "message": clean_text,
+                "tickers": tickers,
+            },
+        }
 
     def _parse_response(self, raw_response: str, request_id: str = "") -> dict:
         """
