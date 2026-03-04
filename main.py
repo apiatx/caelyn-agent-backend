@@ -438,32 +438,78 @@ async def _fetch_brave_news(query: str, api_key: str) -> list:
 
 
 async def _fetch_perplexity_news(query: str, api_key: str) -> list:
-    """Direct Perplexity Search API — no abstraction layers."""
-    import httpx
+    """Perplexity Sonar API — chat/completions with web search grounding."""
+    import httpx, json
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                "https://api.perplexity.ai/search",
+                "https://api.perplexity.ai/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"query": f"{query} latest breaking news", "max_results": 10,
-                      "search_recency_filter": "day"},
-                timeout=12.0,
+                json={
+                    "model": "sonar",
+                    "messages": [
+                        {"role": "system", "content": "You are a news aggregator. Return ONLY a JSON array of news articles. Each article must have: title, description (2-3 sentences), source (domain name), url. No markdown, no explanation, just the JSON array."},
+                        {"role": "user", "content": f"Find the 10 most important {query} from today. Return as a JSON array."}
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 2000,
+                    "return_citations": True,
+                    "search_recency_filter": "day",
+                },
+                timeout=15.0,
             )
         if resp.status_code != 200:
-            print(f"[NEWS_FEED][Perplexity] HTTP {resp.status_code}: {resp.text[:200]}")
+            print(f"[NEWS_FEED][Perplexity] HTTP {resp.status_code}: {resp.text[:300]}")
             return []
         raw = resp.json()
+
+        # Extract articles from citations (structured source data)
         articles = []
-        for item in raw.get("results", []):
-            articles.append({
-                "title": item.get("title", ""),
-                "description": (item.get("content", "") or "")[:300],
-                "source": (item.get("url", "").split("/")[2] if item.get("url") else ""),
-                "url": item.get("url", ""),
-                "published": "",
-                "image": "",
-                "symbol": "",
-            })
+        citations = raw.get("citations", [])
+        content = raw.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+        # Try parsing the content as JSON array of articles
+        try:
+            # Strip markdown code fences if present
+            clean = content.strip()
+            if clean.startswith("```"):
+                clean = clean.split("\n", 1)[1] if "\n" in clean else clean[3:]
+                if clean.endswith("```"):
+                    clean = clean[:-3]
+                clean = clean.strip()
+                if clean.startswith("json"):
+                    clean = clean[4:].strip()
+            parsed = json.loads(clean)
+            if isinstance(parsed, list):
+                for item in parsed[:15]:
+                    if isinstance(item, dict) and item.get("title"):
+                        articles.append({
+                            "title": item.get("title", ""),
+                            "description": (item.get("description", "") or item.get("summary", "") or "")[:300],
+                            "source": item.get("source", ""),
+                            "url": item.get("url", ""),
+                            "published": item.get("published", item.get("date", "")),
+                            "image": "",
+                            "symbol": "",
+                        })
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # If JSON parsing failed, build articles from citations
+        if not articles and citations:
+            for url in citations[:15]:
+                if isinstance(url, str) and url.startswith("http"):
+                    domain = url.split("/")[2].replace("www.", "") if "/" in url else ""
+                    articles.append({
+                        "title": domain,
+                        "description": "",
+                        "source": domain,
+                        "url": url,
+                        "published": "",
+                        "image": "",
+                        "symbol": "",
+                    })
+
         print(f"[NEWS_FEED][Perplexity] {len(articles)} articles for '{query[:40]}'")
         return articles
     except Exception as e:
@@ -553,7 +599,7 @@ async def news_feed(request: Request, category: str = "finance"):
     from data.cache import cache
     from config import BRAVE_API_KEY, PERPLEXITY_API_KEY, TAVILY_API_KEY, FMP_API_KEY
 
-    await _wait_for_init()
+    # No _wait_for_init() needed — this endpoint uses direct API calls, not agent
 
     cache_key = f"news_feed:{category}"
     cached = cache.get(cache_key)

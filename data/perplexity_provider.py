@@ -1,21 +1,22 @@
 """
-Perplexity Search API provider for market intelligence.
-Drop-in replacement for BraveProvider/TavilyProvider — same 4-method interface.
+Perplexity Sonar API provider for market intelligence.
+Drop-in replacement for BraveProvider/TavilyProvider -- same 4-method interface.
 
-Endpoint: POST https://api.perplexity.ai/search
-Pricing:  $5 per 1,000 requests (flat, no token cost).
+Endpoint: POST https://api.perplexity.ai/chat/completions
+Model: sonar (web-search grounded)
+Pricing: $5 per 1,000 requests (flat, no token cost).
 
-Features over Brave/Tavily:
-  - Domain allowlists/denylists (up to 20 domains)
-  - Multi-query (up to 5 queries per request)
+Features:
+  - Web search grounded responses with citations
+  - Domain allowlists (search_domain_filter)
   - Recency filters (day, week, month, year)
-  - Controllable content extraction (256–2048 tokens per page)
+  - Returns citations as URLs
 """
 import asyncio
 import httpx
 from data.cache import cache
 
-PERPLEXITY_TTL = 300       # 5 minutes — matches Brave/Tavily TTL
+PERPLEXITY_TTL = 300       # 5 minutes
 PERPLEXITY_NEWS_TTL = 600  # 10 minutes for broad market news
 
 # Trusted financial news domains for allowlist mode
@@ -38,9 +39,9 @@ FINANCIAL_DOMAIN_ALLOWLIST = [
 
 
 class PerplexityProvider:
-    """Web search via Perplexity Search API — same interface as BraveProvider/TavilyProvider."""
+    """Web search via Perplexity Sonar API -- same interface as BraveProvider/TavilyProvider."""
 
-    SEARCH_URL = "https://api.perplexity.ai/search"
+    SONAR_URL = "https://api.perplexity.ai/chat/completions"
 
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -54,22 +55,21 @@ class PerplexityProvider:
                       domain_filter: list = None,
                       recency: str = None) -> dict:
         """
-        Execute a Perplexity Search API call.
+        Execute a Perplexity Sonar chat/completions call with web search grounding.
         Returns a Brave/Tavily-compatible response format:
-          {"answer": "", "results": [{"title", "content", "url", "age"}]}
-
-        Args:
-            query: Search string or list of up to 5 strings (multi-query).
-            max_results: 1-20 results per query.
-            domain_filter: List of domains to restrict results to.
-            recency: One of "day", "week", "month", "year".
+          {"answer": "...", "results": [{"title", "content", "url", "age"}]}
         """
         body = {
-            "query": query,
-            "max_results": min(max_results, 20),
+            "model": "sonar",
+            "messages": [
+                {"role": "system", "content": "You are a financial research assistant. Provide detailed, sourced answers about markets, stocks, and economic news."},
+                {"role": "user", "content": str(query) if isinstance(query, str) else " | ".join(query)},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 1500,
+            "return_citations": True,
         }
 
-        # Use recency filter for news-type queries
         if recency:
             body["search_recency_filter"] = recency
         elif topic == "news":
@@ -81,19 +81,19 @@ class PerplexityProvider:
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
-                    self.SEARCH_URL,
+                    self.SONAR_URL,
                     headers=self._headers,
                     json=body,
-                    timeout=12.0,
+                    timeout=15.0,
                 )
             if resp.status_code == 429:
                 print(f"[Perplexity] Rate limited for query: {str(query)[:60]}")
                 return {"error": "rate_limited", "results": []}
             if resp.status_code == 451:
-                print(f"[Perplexity] HTTP 451 — API key may need regeneration")
+                print(f"[Perplexity] HTTP 451 -- API key may need regeneration")
                 return {"error": "invalid_key", "results": []}
             if resp.status_code != 200:
-                print(f"[Perplexity] HTTP {resp.status_code} for query: {str(query)[:60]}")
+                print(f"[Perplexity] HTTP {resp.status_code} for query: {str(query)[:60]}: {resp.text[:200]}")
                 return {"error": f"HTTP {resp.status_code}", "results": []}
 
             raw = resp.json()
@@ -105,31 +105,34 @@ class PerplexityProvider:
 
     def _normalize_response(self, raw: dict) -> dict:
         """
-        Convert Perplexity Search API response to the same format
-        that BraveProvider/TavilyProvider return, so the rest of
-        the codebase doesn't need to change.
+        Convert Perplexity Sonar response to the Brave/Tavily-compatible format.
 
-        Perplexity format:
-          {"results": [{"title", "url", "snippet", "date", "last_updated"}]}
+        Sonar format:
+          {"choices": [{"message": {"content": "..."}}], "citations": ["url1", ...]}
 
-        Normalized format (Brave/Tavily compatible):
-          {"answer": "", "results": [{"title", "content", "url", "age"}]}
+        Normalized format:
+          {"answer": "...", "results": [{"title", "content", "url", "age"}]}
         """
+        content = raw.get("choices", [{}])[0].get("message", {}).get("content", "")
+        citations = raw.get("citations", [])
+
         results = []
-        for item in raw.get("results", []):
-            results.append({
-                "title": item.get("title", ""),
-                "content": item.get("snippet", ""),
-                "url": item.get("url", ""),
-                "age": item.get("date", item.get("last_updated", "")),
-            })
+        for url in citations:
+            if isinstance(url, str) and url.startswith("http"):
+                domain = url.split("/")[2].replace("www.", "") if len(url.split("/")) > 2 else ""
+                results.append({
+                    "title": domain,
+                    "content": "",
+                    "url": url,
+                    "age": "",
+                })
 
         return {
-            "answer": "",  # Search API returns raw results, not AI summaries
+            "answer": content,
             "results": results,
         }
 
-    # ── Public methods matching BraveProvider/TavilyProvider interface ──
+    # -- Public methods matching BraveProvider/TavilyProvider interface --
 
     async def search_ticker_batch(self, tickers: list,
                                   focus: str = "analyst_ratings_news") -> dict:
@@ -244,7 +247,7 @@ class PerplexityProvider:
         return combined
 
     async def get_market_news(self, topic: str = "stock market today") -> dict:
-        """Get broad market news — same interface as BraveProvider/TavilyProvider."""
+        """Get broad market news -- same interface as BraveProvider/TavilyProvider."""
         cache_key = f"pplx:market_news:{topic.replace(' ', '_')[:30]}"
         cached = cache.get(cache_key)
         if cached is not None:
