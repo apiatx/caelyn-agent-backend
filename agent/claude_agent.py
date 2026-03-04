@@ -9,7 +9,7 @@ import openai
 
 from agent.data_compressor import compress_data
 from agent.institutional_scorer import apply_institutional_scoring
-from agent.prompts import SYSTEM_PROMPT, USER_INVESTMENT_PROFILE, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, REASONING_BRIEF_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT, SMART_ORCHESTRATOR_PROMPT, PREDICTION_MARKETS_CONTRACT, SECTOR_ROTATION_CONTRACT
+from agent.prompts import SYSTEM_PROMPT, USER_INVESTMENT_PROFILE, CORE_QUANT_DNA, DEFAULT_PERSONAL_PROFILE, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, REASONING_BRIEF_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT, SMART_ORCHESTRATOR_PROMPT, PREDICTION_MARKETS_CONTRACT, SECTOR_ROTATION_CONTRACT
 from data.market_data_service import MarketDataService
 
 
@@ -4382,6 +4382,18 @@ Be direct and opinionated. Tell me what you actually think."""
             )
             print(f"[Agent] WARNING: Total prompt was {total_prompt_len:,} chars, re-truncated data to {len(data_str):,}")
 
+        # Load dynamic user settings
+        from data.user_settings import get_settings as _get_user_settings
+        _user_settings = _get_user_settings()
+        _active_profile = _user_settings.get("personal_profile", "").strip()
+        _standing_instr = _user_settings.get("standing_instructions", "").strip()
+
+        # Build profile block: Core Quant DNA always present + personal profile if set
+        _profile_text = CORE_QUANT_DNA
+        if _active_profile:
+            _profile_text += "\n\n" + _active_profile
+        # If no personal profile active, just use core DNA (default Caelyn)
+
         if chatbox_mode:
             from agent.prompts import CHATBOX_SYSTEM_PROMPT
             system_blocks = [
@@ -4392,7 +4404,7 @@ Be direct and opinionated. Tell me what you actually think."""
                 },
                 {
                     "type": "text",
-                    "text": USER_INVESTMENT_PROFILE,
+                    "text": _profile_text,
                     "cache_control": {"type": "ephemeral"},
                 },
             ]
@@ -4405,10 +4417,17 @@ Be direct and opinionated. Tell me what you actually think."""
                 },
                 {
                     "type": "text",
-                    "text": USER_INVESTMENT_PROFILE,
+                    "text": _profile_text,
                     "cache_control": {"type": "ephemeral"},
                 },
             ]
+
+        # Inject standing instructions if set
+        if _standing_instr:
+            system_blocks.append({
+                "type": "text",
+                "text": f"STANDING INSTRUCTIONS (always apply to every query):\n{_standing_instr}",
+            })
         if is_followup:
             original_category = None
             # Check ALL assistant messages (not just last) to find the original scan type

@@ -452,6 +452,79 @@ async def earnings_calendar(request: Request, from_date: str = "", to_date: str 
 
 
 # ============================================================
+# User Settings Endpoints — Standing Instructions + Profile
+# ============================================================
+
+@app.get("/api/settings")
+@limiter.limit("20/minute")
+async def get_settings_endpoint(request: Request):
+    from data.user_settings import get_settings
+    from agent.prompts import DEFAULT_PERSONAL_PROFILE, CORE_QUANT_DNA
+    settings = get_settings()
+    settings["default_personal_profile"] = DEFAULT_PERSONAL_PROFILE
+    settings["core_quant_dna"] = CORE_QUANT_DNA
+    return JSONResponse(content=settings)
+
+
+@app.put("/api/settings")
+@limiter.limit("20/minute")
+async def update_settings_endpoint(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    if not api_key or api_key != AGENT_API_KEY:
+        return JSONResponse(status_code=403, content={"error": "Invalid API key"})
+    body = await request.json()
+    from data.user_settings import save_settings
+    settings = save_settings(
+        standing_instructions=body.get("standing_instructions"),
+        personal_profile=body.get("personal_profile"),
+        active_instruction_template=body.get("active_instruction_template"),
+        active_profile_template=body.get("active_profile_template"),
+    )
+    return JSONResponse(content=settings)
+
+
+@app.post("/api/settings/templates")
+@limiter.limit("20/minute")
+async def save_template_endpoint(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    if not api_key or api_key != AGENT_API_KEY:
+        return JSONResponse(status_code=403, content={"error": "Invalid API key"})
+    body = await request.json()
+    template_type = body.get("type")  # "instruction" or "profile"
+    name = body.get("name", "")
+    content = body.get("content", "")
+    if template_type not in ("instruction", "profile"):
+        return JSONResponse(status_code=400, content={"error": "type must be 'instruction' or 'profile'"})
+    try:
+        from data.user_settings import save_template
+        settings = save_template(template_type, name, content)
+        return JSONResponse(content=settings)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.delete("/api/settings/templates")
+@limiter.limit("20/minute")
+async def delete_template_endpoint(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+    template_type: str = "",
+    name: str = "",
+):
+    if not api_key or api_key != AGENT_API_KEY:
+        return JSONResponse(status_code=403, content={"error": "Invalid API key"})
+    if template_type not in ("instruction", "profile"):
+        return JSONResponse(status_code=400, content={"error": "type must be 'instruction' or 'profile'"})
+    from data.user_settings import delete_template
+    settings = delete_template(template_type, name)
+    return JSONResponse(content=settings)
+
+
+# ============================================================
 # Earnings Detail Endpoint — Web Search + Finnhub enrichment
 # ============================================================
 
