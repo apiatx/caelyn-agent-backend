@@ -382,6 +382,76 @@ async def polymarket_events_proxy(request: Request):
 
 
 # ============================================================
+# Earnings Calendar Endpoint — Full Finnhub calendar by date range
+# ============================================================
+
+@app.get("/api/earnings/calendar")
+@limiter.limit("10/minute")
+async def earnings_calendar(request: Request, from_date: str = "", to_date: str = ""):
+    """
+    Returns all earnings for a date range from Finnhub.
+    Defaults to current week (Mon-Fri) if no dates provided.
+    """
+    from datetime import datetime, timedelta
+
+    await _wait_for_init()
+
+    # Default to current week
+    today = datetime.now()
+    if not from_date:
+        # Go to Monday of current week
+        monday = today - timedelta(days=today.weekday())
+        from_date = monday.strftime("%Y-%m-%d")
+    if not to_date:
+        monday = today - timedelta(days=today.weekday())
+        friday = monday + timedelta(days=4)
+        to_date = friday.strftime("%Y-%m-%d")
+
+    from data.cache import cache
+    cache_key = f"earnings_calendar:{from_date}:{to_date}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return JSONResponse(content=cached)
+
+    try:
+        data = await asyncio.wait_for(
+            asyncio.to_thread(
+                agent.data.finnhub.client.earnings_calendar,
+                _from=from_date,
+                to=to_date,
+                symbol=None,
+            ),
+            timeout=10.0,
+        )
+        earnings = data.get("earningsCalendar", [])
+
+        results = []
+        for e in earnings:
+            symbol = e.get("symbol")
+            if not symbol:
+                continue
+            results.append({
+                "ticker": symbol,
+                "date": e.get("date"),
+                "eps_estimate": e.get("epsEstimate"),
+                "eps_actual": e.get("epsActual"),
+                "revenue_estimate": e.get("revenueEstimate"),
+                "revenue_actual": e.get("revenueActual"),
+                "hour": e.get("hour", ""),  # "bmo", "amc", or ""
+                "quarter": e.get("quarter"),
+                "year": e.get("year"),
+            })
+
+        response = {"earnings": results, "from": from_date, "to": to_date, "count": len(results)}
+        cache.set(cache_key, response, 300)  # Cache 5 minutes
+        return JSONResponse(content=response)
+
+    except Exception as e:
+        print(f"[EARNINGS_CALENDAR] Error: {e}")
+        return JSONResponse(status_code=502, content={"error": f"Finnhub calendar unavailable: {str(e)[:200]}"})
+
+
+# ============================================================
 # Earnings Detail Endpoint — Web Search + Finnhub enrichment
 # ============================================================
 
