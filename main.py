@@ -397,7 +397,6 @@ async def polymarket_events_proxy(request: Request):
 # News Feed Endpoint — Categorized news for NotifAI page
 # ============================================================
 
-# Topic search queries per category for web_search provider
 _NEWS_TOPICS = {
     "finance": "stock market financial news today breaking earnings economy",
     "crypto": "cryptocurrency bitcoin ethereum crypto market news today",
@@ -405,16 +404,154 @@ _NEWS_TOPICS = {
     "world": "world news global markets geopolitical economy international today",
 }
 
+async def _fetch_brave_news(query: str, api_key: str) -> list:
+    """Direct Brave News Search — no abstraction layers."""
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://api.search.brave.com/res/v1/news/search",
+                headers={"Accept": "application/json", "X-Subscription-Token": api_key},
+                params={"q": query, "count": 20, "freshness": "pd"},
+                timeout=10.0,
+            )
+        if resp.status_code != 200:
+            print(f"[NEWS_FEED][Brave] HTTP {resp.status_code}: {resp.text[:200]}")
+            return []
+        raw = resp.json()
+        articles = []
+        for item in raw.get("results", []):
+            articles.append({
+                "title": item.get("title", ""),
+                "description": (item.get("description", "") or "")[:300],
+                "source": (item.get("url", "").split("/")[2] if item.get("url") else ""),
+                "url": item.get("url", ""),
+                "published": item.get("age", ""),
+                "image": (item.get("thumbnail", {}) or {}).get("src", ""),
+                "symbol": "",
+            })
+        print(f"[NEWS_FEED][Brave] {len(articles)} articles for '{query[:40]}'")
+        return articles
+    except Exception as e:
+        print(f"[NEWS_FEED][Brave] Error: {type(e).__name__}: {e}")
+        return []
+
+
+async def _fetch_perplexity_news(query: str, api_key: str) -> list:
+    """Direct Perplexity Search API — no abstraction layers."""
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.perplexity.ai/search",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"query": f"{query} latest breaking news", "max_results": 10,
+                      "search_recency_filter": "day"},
+                timeout=12.0,
+            )
+        if resp.status_code != 200:
+            print(f"[NEWS_FEED][Perplexity] HTTP {resp.status_code}: {resp.text[:200]}")
+            return []
+        raw = resp.json()
+        articles = []
+        for item in raw.get("results", []):
+            articles.append({
+                "title": item.get("title", ""),
+                "description": (item.get("content", "") or "")[:300],
+                "source": (item.get("url", "").split("/")[2] if item.get("url") else ""),
+                "url": item.get("url", ""),
+                "published": "",
+                "image": "",
+                "symbol": "",
+            })
+        print(f"[NEWS_FEED][Perplexity] {len(articles)} articles for '{query[:40]}'")
+        return articles
+    except Exception as e:
+        print(f"[NEWS_FEED][Perplexity] Error: {type(e).__name__}: {e}")
+        return []
+
+
+async def _fetch_fmp_news(category: str, api_key: str) -> list:
+    """Direct FMP stock_news — no abstraction layers."""
+    import httpx
+    try:
+        params = {"apikey": api_key, "limit": 25}
+        if category == "crypto":
+            params["tickers"] = "BTCUSD,ETHUSD,SOLUSD,COIN,MSTR"
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://financialmodelingprep.com/api/v3/stock_news",
+                params=params,
+                timeout=8.0,
+            )
+        if resp.status_code != 200:
+            print(f"[NEWS_FEED][FMP] HTTP {resp.status_code}")
+            return []
+        raw = resp.json()
+        if not isinstance(raw, list):
+            return []
+        articles = []
+        for item in raw[:25]:
+            if isinstance(item, dict):
+                articles.append({
+                    "title": item.get("title", ""),
+                    "description": (item.get("text", "") or "")[:300],
+                    "source": item.get("site", ""),
+                    "url": item.get("url", ""),
+                    "published": item.get("publishedDate", ""),
+                    "image": item.get("image", ""),
+                    "symbol": item.get("symbol", ""),
+                })
+        print(f"[NEWS_FEED][FMP] {len(articles)} articles for '{category}'")
+        return articles
+    except Exception as e:
+        print(f"[NEWS_FEED][FMP] Error: {type(e).__name__}: {e}")
+        return []
+
+
+async def _fetch_tavily_news(query: str, api_key: str) -> list:
+    """Direct Tavily Search — no abstraction layers."""
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.tavily.com/search",
+                json={"api_key": api_key, "query": f"{query} latest news",
+                      "search_depth": "basic", "max_results": 10, "topic": "news"},
+                timeout=10.0,
+            )
+        if resp.status_code != 200:
+            print(f"[NEWS_FEED][Tavily] HTTP {resp.status_code}: {resp.text[:200]}")
+            return []
+        raw = resp.json()
+        articles = []
+        for item in raw.get("results", []):
+            articles.append({
+                "title": item.get("title", ""),
+                "description": (item.get("content", "") or "")[:300],
+                "source": (item.get("url", "").split("/")[2] if item.get("url") else ""),
+                "url": item.get("url", ""),
+                "published": item.get("published_date", ""),
+                "image": "",
+                "symbol": "",
+            })
+        print(f"[NEWS_FEED][Tavily] {len(articles)} articles for '{query[:40]}'")
+        return articles
+    except Exception as e:
+        print(f"[NEWS_FEED][Tavily] Error: {type(e).__name__}: {e}")
+        return []
+
+
 @app.get("/api/news/feed")
 @limiter.limit("15/minute")
 async def news_feed(request: Request, category: str = "finance"):
     """
     Returns categorized news articles for the NotifAI page.
-    Categories: finance, crypto, politics, world
-    Primary: web_search (Perplexity → Brave → Tavily) — fast, cached, reliable.
-    Fallback: FMP stock_news.
+    Uses direct API calls to Brave → Perplexity → Tavily → FMP (all in parallel).
+    Takes the first provider that returns results.
     """
     from data.cache import cache
+    from config import BRAVE_API_KEY, PERPLEXITY_API_KEY, TAVILY_API_KEY, FMP_API_KEY
 
     await _wait_for_init()
 
@@ -426,61 +563,44 @@ async def news_feed(request: Request, category: str = "finance"):
     if category not in _NEWS_TOPICS:
         return JSONResponse(content={"articles": [], "error": "Unknown category"})
 
+    topic = _NEWS_TOPICS[category]
     articles = []
 
-    # ── Primary: web_search provider (Perplexity → Brave → Tavily) ──
-    if agent.data.web_search:
-        try:
-            topic = _NEWS_TOPICS[category]
-            news_data = await asyncio.wait_for(
-                agent.data.web_search.get_market_news(topic=topic),
-                timeout=15.0
-            )
-            if news_data and not news_data.get("error"):
-                for item in (news_data.get("articles") or []):
-                    articles.append({
-                        "title": item.get("title", ""),
-                        "description": (item.get("content", "") or "")[:250],
-                        "source": item.get("source", ""),
-                        "url": item.get("url", ""),
-                        "published": "",
-                        "image": "",
-                        "symbol": "",
-                    })
-                print(f"[NEWS_FEED] web_search returned {len(articles)} articles for '{category}'")
-        except Exception as e:
-            print(f"[NEWS_FEED] web_search failed for '{category}': {type(e).__name__}: {e}")
+    # Fire ALL available providers in parallel — use first one that returns results
+    tasks = {}
+    if BRAVE_API_KEY:
+        tasks["brave"] = _fetch_brave_news(topic, BRAVE_API_KEY)
+    if PERPLEXITY_API_KEY:
+        tasks["perplexity"] = _fetch_perplexity_news(topic, PERPLEXITY_API_KEY)
+    if TAVILY_API_KEY:
+        tasks["tavily"] = _fetch_tavily_news(topic, TAVILY_API_KEY)
+    if FMP_API_KEY:
+        tasks["fmp"] = _fetch_fmp_news(category, FMP_API_KEY)
 
-    # ── Fallback / supplement: FMP stock_news ──
-    if len(articles) < 8:
-        try:
-            if category == "crypto":
-                fmp_raw = await asyncio.wait_for(
-                    agent.data.fmp._get("stock_news", {"tickers": "BTCUSD,ETHUSD,SOLUSD,COIN,MSTR", "limit": 20}),
-                    timeout=8.0
-                )
-            else:
-                fmp_raw = await asyncio.wait_for(
-                    agent.data.fmp._get("stock_news", {"limit": 30}),
-                    timeout=8.0
-                )
-            if isinstance(fmp_raw, list):
-                for item in fmp_raw[:30]:
-                    if isinstance(item, dict):
-                        articles.append({
-                            "title": item.get("title", ""),
-                            "description": (item.get("text", "") or "")[:250],
-                            "source": item.get("site", ""),
-                            "url": item.get("url", ""),
-                            "published": item.get("publishedDate", ""),
-                            "image": item.get("image", ""),
-                            "symbol": item.get("symbol", ""),
-                        })
-                print(f"[NEWS_FEED] FMP supplement added {len(fmp_raw)} articles for '{category}'")
-        except Exception as e:
-            print(f"[NEWS_FEED] FMP fallback failed for '{category}': {type(e).__name__}: {e}")
+    if not tasks:
+        print("[NEWS_FEED] WARNING: No API keys configured for any news provider!")
+        return JSONResponse(content={"articles": [], "error": "No news providers configured"})
 
-    # ── Deduplicate by title ──
+    print(f"[NEWS_FEED] Firing {len(tasks)} providers in parallel: {list(tasks.keys())}")
+
+    task_keys = list(tasks.keys())
+    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+    # Prefer providers in order: Brave → Perplexity → Tavily → FMP
+    provider_priority = ["brave", "perplexity", "tavily", "fmp"]
+    best_articles = []
+    for provider in provider_priority:
+        if provider in task_keys:
+            idx = task_keys.index(provider)
+            result = results[idx]
+            if isinstance(result, list) and len(result) > len(best_articles):
+                best_articles = result
+                if len(best_articles) >= 5:
+                    break  # Good enough, stop looking
+
+    articles = best_articles
+
+    # Deduplicate by title
     seen = set()
     unique = []
     for a in articles:
@@ -492,7 +612,8 @@ async def news_feed(request: Request, category: str = "finance"):
 
     result = {"articles": articles, "category": category, "count": len(articles)}
     if articles:
-        cache.set(cache_key, result, ttl=300)  # Cache 5 min only if we got results
+        cache.set(cache_key, result, ttl=300)
+    print(f"[NEWS_FEED] Returning {len(articles)} articles for '{category}'")
     return JSONResponse(content=result)
 
 
