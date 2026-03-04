@@ -634,7 +634,7 @@ async def news_feed(request: Request, category: str = "finance"):
 
     result = {"articles": articles, "category": category, "count": len(articles)}
     if articles:
-        cache.set(cache_key, result, ttl=300)
+        cache.set(cache_key, result, ttl_seconds=300)
     print(f"[NEWS_FEED] Returning {len(articles)} articles for '{category}'")
     return JSONResponse(content=result)
 
