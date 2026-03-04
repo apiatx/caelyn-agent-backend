@@ -912,69 +912,112 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // === News Feed Proxy (category-specific RSS feeds) ===
+  // === News Feed Proxy (FastAPI primary → RSS fallback, with 5-min cache) ===
+  const NEWS_CACHE = new Map<string, { articles: any[]; ts: number }>();
+  const NEWS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  const FASTAPI_BASE = 'https://fast-api-server-trading-agent-aidanpilon.replit.app';
+
+  const RSS_FEEDS: Record<string, string[]> = {
+    finance: [
+      'https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,^DJI,^IXIC&region=US&lang=en-US',
+      'https://www.marketwatch.com/rss/topstories',
+      'https://feeds.bloomberg.com/markets/news.rss',
+    ],
+    crypto: [
+      'https://cointelegraph.com/rss',
+      'https://www.coindesk.com/arc/outboundfeeds/rss/',
+      'https://decrypt.co/feed',
+    ],
+    politics: [
+      'https://rss.politico.com/politics-news.xml',
+      'https://feeds.reuters.com/Reuters/PoliticsNews',
+      'https://thehill.com/feed/',
+    ],
+    world: [
+      'https://feeds.bbci.co.uk/news/world/rss.xml',
+      'https://rss.nytimes.com/services/xml/rss/nyt/World.xml',
+      'https://feeds.reuters.com/Reuters/worldNews',
+    ],
+  };
+
+  async function fetchRssFallback(category: string): Promise<any[]> {
+    const Parser = (await import('rss-parser')).default;
+    const parser = new Parser({
+      timeout: 15000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NewsAggregator/1.0)' },
+    });
+    const feeds = RSS_FEEDS[category] || RSS_FEEDS['finance'];
+    const results = await Promise.allSettled(
+      feeds.map(async (feedUrl) => {
+        try {
+          const feed = await parser.parseURL(feedUrl);
+          return (feed.items || []).map((item: any) => ({
+            title: item.title || '',
+            description: (item.contentSnippet || item.content || item.summary || '').slice(0, 300),
+            source: feed.title || new URL(feedUrl).hostname,
+            url: item.link || '',
+            published: item.isoDate || item.pubDate || '',
+            image: item.enclosure?.url || item['media:content']?.$.url || '',
+          }));
+        } catch {
+          return [];
+        }
+      })
+    );
+    const all: any[] = [];
+    for (const r of results) if (r.status === 'fulfilled') all.push(...r.value);
+    return all;
+  }
+
   app.get('/api/proxy/news/feed', async (req, res) => {
     try {
-      const Parser = (await import('rss-parser')).default;
-      const parser = new Parser({
-        timeout: 15000,
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NewsAggregator/1.0)' },
-      });
-
       const category = (req.query.category as string || 'finance').toLowerCase();
 
-      const RSS_FEEDS: Record<string, string[]> = {
-        finance: [
-          'https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,^DJI,^IXIC&region=US&lang=en-US',
-          'https://www.marketwatch.com/rss/topstories',
-          'https://feeds.bloomberg.com/markets/news.rss',
-        ],
-        crypto: [
-          'https://cointelegraph.com/rss',
-          'https://www.coindesk.com/arc/outboundfeeds/rss/',
-          'https://decrypt.co/feed',
-        ],
-        politics: [
-          'https://rss.politico.com/politics-news.xml',
-          'https://feeds.reuters.com/Reuters/PoliticsNews',
-          'https://thehill.com/feed/',
-        ],
-        world: [
-          'https://feeds.bbci.co.uk/news/world/rss.xml',
-          'https://rss.nytimes.com/services/xml/rss/nyt/World.xml',
-          'https://feeds.reuters.com/Reuters/worldNews',
-        ],
-      };
+      // Serve from cache if fresh
+      const cached = NEWS_CACHE.get(category);
+      if (cached && Date.now() - cached.ts < NEWS_CACHE_TTL) {
+        return res.json({ articles: cached.articles, category, source: 'cache', count: cached.articles.length });
+      }
 
-      const feeds = RSS_FEEDS[category] || RSS_FEEDS['finance'];
-      const allArticles: any[] = [];
+      let articles: any[] = [];
+      let usedSource = 'rss';
 
-      const results = await Promise.allSettled(
-        feeds.map(async (feedUrl) => {
-          try {
-            const feed = await parser.parseURL(feedUrl);
-            return (feed.items || []).map((item) => ({
-              title: item.title || '',
-              description: (item.contentSnippet || item.content || item.summary || '').slice(0, 300),
-              source: feed.title || '',
-              url: item.link || '',
-              published: item.isoDate || item.pubDate || '',
-              image: item.enclosure?.url || (item as any)['media:content']?.$.url || '',
+      // 1. Try FastAPI backend (Perplexity + Tavily)
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 12000);
+        const fapiRes = await fetch(`${FASTAPI_BASE}/api/news/feed?category=${category}`, {
+          signal: ctrl.signal,
+          headers: { 'User-Agent': 'CaelynProxy/1.0' },
+        });
+        clearTimeout(tid);
+        if (fapiRes.ok) {
+          const data = await fapiRes.json();
+          const raw: any[] = Array.isArray(data?.articles) ? data.articles : [];
+          if (raw.length > 0) {
+            articles = raw.map((a: any) => ({
+              title: a.title || '',
+              description: (a.description || a.summary || a.content || '').slice(0, 300),
+              source: a.source || a.publisher || '',
+              url: a.url || a.link || '',
+              published: a.published_date || a.published || a.date || '',
+              image: a.image || a.thumbnail || a.image_url || '',
             }));
-          } catch {
-            return [];
+            usedSource = 'fastapi';
           }
-        })
-      );
-
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          allArticles.push(...result.value);
         }
+      } catch {
+        // FastAPI unavailable — fall through to RSS
+      }
+
+      // 2. RSS fallback if FastAPI returned nothing
+      if (articles.length === 0) {
+        articles = await fetchRssFallback(category);
+        usedSource = 'rss';
       }
 
       // Sort by date descending
-      allArticles.sort((a, b) => {
+      articles.sort((a, b) => {
         const da = new Date(a.published).getTime() || 0;
         const db = new Date(b.published).getTime() || 0;
         return db - da;
@@ -982,14 +1025,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Deduplicate by title
       const seen = new Set<string>();
-      const unique = allArticles.filter((a) => {
+      const unique = articles.filter((a) => {
         const key = a.title.toLowerCase().trim();
         if (seen.has(key) || !key) return false;
         seen.add(key);
         return true;
       });
 
-      res.json({ articles: unique.slice(0, 40), category, count: unique.length });
+      const final = unique.slice(0, 40);
+
+      // Store in cache
+      NEWS_CACHE.set(category, { articles: final, ts: Date.now() });
+
+      console.log(`[News] ${category}: ${final.length} articles via ${usedSource}`);
+      res.json({ articles: final, category, source: usedSource, count: final.length });
     } catch (error) {
       console.error('News feed proxy error:', error);
       res.status(500).json({ error: 'Failed to fetch news', articles: [] });
