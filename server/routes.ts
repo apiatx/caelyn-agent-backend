@@ -912,65 +912,105 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // === News Feed Proxy (category-specific RSS feeds) ===
+  // === News Feed Proxy (RSS with media images + og:image fallback + 5-min cache) ===
+  const NEWS_CACHE = new Map<string, { articles: any[]; ts: number }>();
+  const NEWS_CACHE_TTL = 5 * 60 * 1000;
+
+  const RSS_FEEDS: Record<string, string[]> = {
+    finance: [
+      'https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,^DJI,^IXIC&region=US&lang=en-US',
+      'https://www.marketwatch.com/rss/topstories',
+      'https://feeds.bloomberg.com/markets/news.rss',
+    ],
+    crypto: [
+      'https://cointelegraph.com/rss',
+      'https://www.coindesk.com/arc/outboundfeeds/rss/',
+      'https://decrypt.co/feed',
+    ],
+    politics: [
+      'https://rss.politico.com/politics-news.xml',
+      'https://feeds.reuters.com/Reuters/PoliticsNews',
+      'https://thehill.com/feed/',
+    ],
+    world: [
+      'https://feeds.bbci.co.uk/news/world/rss.xml',
+      'https://rss.nytimes.com/services/xml/rss/nyt/World.xml',
+      'https://feeds.reuters.com/Reuters/worldNews',
+    ],
+  };
+
+  async function fetchOgImage(url: string): Promise<string> {
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 4000);
+      const r = await fetch(url, {
+        signal: ctrl.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NewsBot/1.0)', 'Range': 'bytes=0-30000' },
+      });
+      clearTimeout(tid);
+      const html = await r.text();
+      const m =
+        html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) ||
+        html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i) ||
+        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i);
+      return m?.[1] || '';
+    } catch {
+      return '';
+    }
+  }
+
   app.get('/api/proxy/news/feed', async (req, res) => {
     try {
+      const category = (req.query.category as string || 'finance').toLowerCase();
+
+      const cached = NEWS_CACHE.get(category);
+      if (cached && Date.now() - cached.ts < NEWS_CACHE_TTL) {
+        return res.json({ articles: cached.articles, category, count: cached.articles.length });
+      }
+
       const Parser = (await import('rss-parser')).default;
       const parser = new Parser({
         timeout: 15000,
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NewsAggregator/1.0)' },
+        customFields: {
+          item: [
+            ['media:content', 'mediaContent'],
+            ['media:thumbnail', 'mediaThumbnail'],
+          ],
+        },
       });
-
-      const category = (req.query.category as string || 'finance').toLowerCase();
-
-      const RSS_FEEDS: Record<string, string[]> = {
-        finance: [
-          'https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,^DJI,^IXIC&region=US&lang=en-US',
-          'https://www.marketwatch.com/rss/topstories',
-          'https://feeds.bloomberg.com/markets/news.rss',
-        ],
-        crypto: [
-          'https://cointelegraph.com/rss',
-          'https://www.coindesk.com/arc/outboundfeeds/rss/',
-          'https://decrypt.co/feed',
-        ],
-        politics: [
-          'https://rss.politico.com/politics-news.xml',
-          'https://feeds.reuters.com/Reuters/PoliticsNews',
-          'https://thehill.com/feed/',
-        ],
-        world: [
-          'https://feeds.bbci.co.uk/news/world/rss.xml',
-          'https://rss.nytimes.com/services/xml/rss/nyt/World.xml',
-          'https://feeds.reuters.com/Reuters/worldNews',
-        ],
-      };
 
       const feeds = RSS_FEEDS[category] || RSS_FEEDS['finance'];
       const allArticles: any[] = [];
 
-      const results = await Promise.allSettled(
+      const feedResults = await Promise.allSettled(
         feeds.map(async (feedUrl) => {
           try {
             const feed = await parser.parseURL(feedUrl);
-            return (feed.items || []).map((item) => ({
-              title: item.title || '',
-              description: (item.contentSnippet || item.content || item.summary || '').slice(0, 300),
-              source: feed.title || '',
-              url: item.link || '',
-              published: item.isoDate || item.pubDate || '',
-              image: item.enclosure?.url || (item as any)['media:content']?.$.url || '',
-            }));
+            return (feed.items || []).map((item: any) => {
+              const image =
+                item.mediaContent?.$.url ||
+                item.mediaThumbnail?.$.url ||
+                item.enclosure?.url ||
+                '';
+              return {
+                title: item.title || '',
+                description: (item.contentSnippet || item.content || item.summary || '').slice(0, 300),
+                source: feed.title || '',
+                url: item.link || '',
+                published: item.isoDate || item.pubDate || '',
+                image,
+              };
+            });
           } catch {
             return [];
           }
         })
       );
 
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          allArticles.push(...result.value);
-        }
+      for (const r of feedResults) {
+        if (r.status === 'fulfilled') allArticles.push(...r.value);
       }
 
       // Sort by date descending
@@ -989,7 +1029,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return true;
       });
 
-      res.json({ articles: unique.slice(0, 40), category, count: unique.length });
+      const top40 = unique.slice(0, 40);
+
+      // Fetch og:image in parallel for articles that have no image from RSS
+      const noImgIndices = top40.reduce<number[]>((acc, a, i) => {
+        if (!a.image && a.url) acc.push(i);
+        return acc;
+      }, []);
+
+      if (noImgIndices.length > 0) {
+        const ogResults = await Promise.allSettled(
+          noImgIndices.map((i) => fetchOgImage(top40[i].url))
+        );
+        ogResults.forEach((r, j) => {
+          if (r.status === 'fulfilled' && r.value) {
+            top40[noImgIndices[j]].image = r.value;
+          }
+        });
+      }
+
+      NEWS_CACHE.set(category, { articles: top40, ts: Date.now() });
+      console.log(`[News] ${category}: ${top40.length} articles, ${top40.filter(a => a.image).length} with images`);
+      res.json({ articles: top40, category, count: top40.length });
     } catch (error) {
       console.error('News feed proxy error:', error);
       res.status(500).json({ error: 'Failed to fetch news', articles: [] });
