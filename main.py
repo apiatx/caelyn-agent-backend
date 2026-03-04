@@ -385,13 +385,22 @@ async def polymarket_events_proxy(request: Request):
 # News Feed Endpoint — Categorized news for NotifAI page
 # ============================================================
 
+# Topic search queries per category for web_search provider
+_NEWS_TOPICS = {
+    "finance": "stock market financial news today breaking earnings economy",
+    "crypto": "cryptocurrency bitcoin ethereum crypto market news today",
+    "politics": "political news policy tariffs regulation government economy today",
+    "world": "world news global markets geopolitical economy international today",
+}
+
 @app.get("/api/news/feed")
 @limiter.limit("15/minute")
 async def news_feed(request: Request, category: str = "finance"):
     """
     Returns categorized news articles for the NotifAI page.
     Categories: finance, crypto, politics, world
-    Uses FMP stock_news (raw API) which returns images, and Finnhub company_news for supplemental data.
+    Primary: web_search (Perplexity → Brave → Tavily) — fast, cached, reliable.
+    Fallback: FMP stock_news.
     """
     from data.cache import cache
 
@@ -402,176 +411,77 @@ async def news_feed(request: Request, category: str = "finance"):
     if cached is not None:
         return JSONResponse(content=cached)
 
+    if category not in _NEWS_TOPICS:
+        return JSONResponse(content={"articles": [], "error": "Unknown category"})
+
     articles = []
 
-    def _map_fmp_raw(item: dict) -> dict:
-        """Map raw FMP stock_news API response to our article format."""
-        return {
-            "title": item.get("title", ""),
-            "description": (item.get("text", "") or "")[:250],
-            "source": item.get("site", ""),
-            "url": item.get("url", ""),
-            "published": item.get("publishedDate", ""),
-            "image": item.get("image", ""),
-            "symbol": item.get("symbol", ""),
-        }
-
-    def _map_finnhub_news(item: dict) -> dict:
-        """Map Finnhub get_company_news() pre-mapped response to our article format."""
-        return {
-            "title": item.get("title", item.get("headline", "")),
-            "description": (item.get("content", "") or item.get("summary", "") or "")[:250],
-            "source": item.get("source", ""),
-            "url": item.get("url", ""),
-            "published": item.get("datetime", ""),
-            "image": item.get("image", ""),
-            "symbol": "",
-        }
-
-    try:
-        if category == "finance":
-            # FMP raw stock_news — returns images, broad financial coverage
-            raw = await asyncio.wait_for(
-                agent.data.fmp._get("stock_news", {"limit": 40}),
-                timeout=10.0
+    # ── Primary: web_search provider (Perplexity → Brave → Tavily) ──
+    if agent.data.web_search:
+        try:
+            topic = _NEWS_TOPICS[category]
+            news_data = await asyncio.wait_for(
+                agent.data.web_search.get_market_news(topic=topic),
+                timeout=15.0
             )
-            if isinstance(raw, list):
-                articles = [_map_fmp_raw(item) for item in raw[:40] if isinstance(item, dict)]
+            if news_data and not news_data.get("error"):
+                for item in (news_data.get("articles") or []):
+                    articles.append({
+                        "title": item.get("title", ""),
+                        "description": (item.get("content", "") or "")[:250],
+                        "source": item.get("source", ""),
+                        "url": item.get("url", ""),
+                        "published": "",
+                        "image": "",
+                        "symbol": "",
+                    })
+                print(f"[NEWS_FEED] web_search returned {len(articles)} articles for '{category}'")
+        except Exception as e:
+            print(f"[NEWS_FEED] web_search failed for '{category}': {type(e).__name__}: {e}")
 
-        elif category == "crypto":
-            # FMP crypto-related tickers
-            crypto_tickers = "BTCUSD,ETHUSD,SOLUSD,DOGEUSD,XRPUSD,ADAUSD,AVAXUSD,LINKUSD,DOTUSD,TAOUSD"
-            raw = await asyncio.wait_for(
-                agent.data.fmp._get("stock_news", {"tickers": crypto_tickers, "limit": 30}),
-                timeout=10.0
-            )
-            if isinstance(raw, list):
-                articles = [_map_fmp_raw(item) for item in raw[:30] if isinstance(item, dict)]
-
-            # Supplement: Finnhub company_news for top crypto tickers (BTC proxy stocks)
-            if len(articles) < 10:
-                for ticker in ["COIN", "MSTR", "MARA"]:
-                    try:
-                        finnhub_raw = await asyncio.wait_for(
-                            asyncio.to_thread(agent.data.finnhub.get_company_news, ticker, 3),
-                            timeout=5.0
-                        )
-                        for item in (finnhub_raw or [])[:5]:
-                            if isinstance(item, dict):
-                                mapped = _map_finnhub_news(item)
-                                mapped["symbol"] = ticker
-                                articles.append(mapped)
-                    except Exception:
-                        pass
-
-            # Also search FMP general news for crypto keywords
-            if len(articles) < 15:
-                try:
-                    general = await asyncio.wait_for(
-                        agent.data.fmp._get("stock_news", {"limit": 60}),
-                        timeout=8.0
-                    )
-                    if isinstance(general, list):
-                        crypto_kw = ["bitcoin", "crypto", "ethereum", "blockchain", "defi",
-                                     "altcoin", "stablecoin", "nft", "web3", "solana",
-                                     "binance", "coinbase", "token", "mining", "btc", "eth"]
-                        for item in general:
-                            if isinstance(item, dict):
-                                text = ((item.get("title", "") or "") + " " + (item.get("text", "") or "")).lower()
-                                if any(kw in text for kw in crypto_kw):
-                                    articles.append(_map_fmp_raw(item))
-                except Exception:
-                    pass
-
-        elif category == "politics":
-            # FMP general news filtered for political content
-            raw = await asyncio.wait_for(
-                agent.data.fmp._get("stock_news", {"limit": 80}),
-                timeout=10.0
-            )
-            pol_keywords = [
-                "trump", "biden", "harris", "congress", "senate", "election",
-                "policy", "tariff", "regulation", "geopolitical", "sanction",
-                "government", "white house", "political", "democrat", "republican",
-                "legislation", "executive order", "federal reserve", "treasury",
-                "trade war", "diplomat", "nato", "china trade", "import duty",
-                "stimulus", "debt ceiling", "shutdown", "impeach", "supreme court",
-                "capitol", "pentagon", "state department", "eu regulation",
-            ]
-            if isinstance(raw, list):
-                for item in raw:
+    # ── Fallback / supplement: FMP stock_news ──
+    if len(articles) < 8:
+        try:
+            if category == "crypto":
+                fmp_raw = await asyncio.wait_for(
+                    agent.data.fmp._get("stock_news", {"tickers": "BTCUSD,ETHUSD,SOLUSD,COIN,MSTR", "limit": 20}),
+                    timeout=8.0
+                )
+            else:
+                fmp_raw = await asyncio.wait_for(
+                    agent.data.fmp._get("stock_news", {"limit": 30}),
+                    timeout=8.0
+                )
+            if isinstance(fmp_raw, list):
+                for item in fmp_raw[:30]:
                     if isinstance(item, dict):
-                        text = ((item.get("title", "") or "") + " " + (item.get("text", "") or "")).lower()
-                        if any(kw in text for kw in pol_keywords):
-                            articles.append(_map_fmp_raw(item))
+                        articles.append({
+                            "title": item.get("title", ""),
+                            "description": (item.get("text", "") or "")[:250],
+                            "source": item.get("site", ""),
+                            "url": item.get("url", ""),
+                            "published": item.get("publishedDate", ""),
+                            "image": item.get("image", ""),
+                            "symbol": item.get("symbol", ""),
+                        })
+                print(f"[NEWS_FEED] FMP supplement added {len(fmp_raw)} articles for '{category}'")
+        except Exception as e:
+            print(f"[NEWS_FEED] FMP fallback failed for '{category}': {type(e).__name__}: {e}")
 
-            # Supplement with Finnhub news from politically-sensitive tickers
-            if len(articles) < 10:
-                for ticker in ["SPY", "TLT", "GLD", "DXY"]:
-                    try:
-                        finnhub_raw = await asyncio.wait_for(
-                            asyncio.to_thread(agent.data.finnhub.get_company_news, ticker, 3),
-                            timeout=5.0
-                        )
-                        for item in (finnhub_raw or [])[:5]:
-                            if isinstance(item, dict):
-                                headline = (item.get("headline", "") or "").lower()
-                                summary = (item.get("summary", "") or "").lower()
-                                combined = headline + " " + summary
-                                if any(kw in combined for kw in pol_keywords):
-                                    mapped = _map_finnhub_news(item)
-                                    mapped["symbol"] = ticker
-                                    articles.append(mapped)
-                    except Exception:
-                        pass
+    # ── Deduplicate by title ──
+    seen = set()
+    unique = []
+    for a in articles:
+        key = (a.get("title", "") or "").strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(a)
+    articles = unique[:30]
 
-        elif category == "world":
-            # FMP general news — broadest coverage
-            raw = await asyncio.wait_for(
-                agent.data.fmp._get("stock_news", {"limit": 50}),
-                timeout=10.0
-            )
-            if isinstance(raw, list):
-                articles = [_map_fmp_raw(item) for item in raw[:50] if isinstance(item, dict)]
-
-            # Supplement with Finnhub for global macro tickers
-            for ticker in ["SPY", "EEM", "FXI", "EWJ", "EWG"]:
-                try:
-                    finnhub_raw = await asyncio.wait_for(
-                        asyncio.to_thread(agent.data.finnhub.get_company_news, ticker, 3),
-                        timeout=5.0
-                    )
-                    for item in (finnhub_raw or [])[:4]:
-                        if isinstance(item, dict):
-                            articles.append(_map_finnhub_news(item))
-                except Exception:
-                    pass
-
-        else:
-            return JSONResponse(content={"articles": [], "error": "Unknown category"})
-
-        # Deduplicate by title
-        seen = set()
-        unique = []
-        for a in articles:
-            key = (a.get("title", "") or "").strip().lower()
-            if key and key not in seen:
-                seen.add(key)
-                unique.append(a)
-        articles = unique[:30]
-
-        result = {"articles": articles, "category": category, "count": len(articles)}
-        cache.set(cache_key, result, ttl=300)  # Cache for 5 minutes
-        return JSONResponse(content=result)
-
-    except Exception as e:
-        print(f"[NEWS_FEED] Error for category '{category}': {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(
-            status_code=500,
-            content={"articles": [], "error": str(e)[:200]}
-        )
+    result = {"articles": articles, "category": category, "count": len(articles)}
+    if articles:
+        cache.set(cache_key, result, ttl=300)  # Cache 5 min only if we got results
+    return JSONResponse(content=result)
 
 
 # ============================================================
