@@ -912,6 +912,90 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // === News Feed Proxy (category-specific RSS feeds) ===
+  app.get('/api/proxy/news/feed', async (req, res) => {
+    try {
+      const Parser = (await import('rss-parser')).default;
+      const parser = new Parser({
+        timeout: 15000,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NewsAggregator/1.0)' },
+      });
+
+      const category = (req.query.category as string || 'finance').toLowerCase();
+
+      const RSS_FEEDS: Record<string, string[]> = {
+        finance: [
+          'https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,^DJI,^IXIC&region=US&lang=en-US',
+          'https://www.marketwatch.com/rss/topstories',
+          'https://feeds.bloomberg.com/markets/news.rss',
+        ],
+        crypto: [
+          'https://cointelegraph.com/rss',
+          'https://www.coindesk.com/arc/outboundfeeds/rss/',
+          'https://decrypt.co/feed',
+        ],
+        politics: [
+          'https://rss.politico.com/politics-news.xml',
+          'https://feeds.reuters.com/Reuters/PoliticsNews',
+          'https://thehill.com/feed/',
+        ],
+        world: [
+          'https://feeds.bbci.co.uk/news/world/rss.xml',
+          'https://rss.nytimes.com/services/xml/rss/nyt/World.xml',
+          'https://feeds.reuters.com/Reuters/worldNews',
+        ],
+      };
+
+      const feeds = RSS_FEEDS[category] || RSS_FEEDS['finance'];
+      const allArticles: any[] = [];
+
+      const results = await Promise.allSettled(
+        feeds.map(async (feedUrl) => {
+          try {
+            const feed = await parser.parseURL(feedUrl);
+            return (feed.items || []).map((item) => ({
+              title: item.title || '',
+              description: (item.contentSnippet || item.content || item.summary || '').slice(0, 300),
+              source: feed.title || '',
+              url: item.link || '',
+              published: item.isoDate || item.pubDate || '',
+              image: item.enclosure?.url || (item as any)['media:content']?.$.url || '',
+            }));
+          } catch {
+            return [];
+          }
+        })
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          allArticles.push(...result.value);
+        }
+      }
+
+      // Sort by date descending
+      allArticles.sort((a, b) => {
+        const da = new Date(a.published).getTime() || 0;
+        const db = new Date(b.published).getTime() || 0;
+        return db - da;
+      });
+
+      // Deduplicate by title
+      const seen = new Set<string>();
+      const unique = allArticles.filter((a) => {
+        const key = a.title.toLowerCase().trim();
+        if (seen.has(key) || !key) return false;
+        seen.add(key);
+        return true;
+      });
+
+      res.json({ articles: unique.slice(0, 40), category, count: unique.length });
+    } catch (error) {
+      console.error('News feed proxy error:', error);
+      res.status(500).json({ error: 'Failed to fetch news', articles: [] });
+    }
+  });
+
   // === Stock Portfolio Holdings (JSON file storage) ===
   app.get('/api/stock-holdings', (req, res) => {
     try {

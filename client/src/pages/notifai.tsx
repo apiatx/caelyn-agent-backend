@@ -88,12 +88,15 @@ function NewsFeed() {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 20000);
-      const res = await fetch(`${AGENT_BACKEND_URL}/api/news/feed?category=${cat}`, {
-        headers: { 'X-API-Key': AGENT_API_KEY },
-        signal: controller.signal,
-      });
+      const url = `/api/proxy/news/feed?category=${cat}`;
+      console.log('[NOTIFAI] Fetching:', url);
+      const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timeout);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      console.log('[NOTIFAI] Response status:', res.status);
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
+      }
       const data = await res.json();
       const arts = data.articles || [];
       setArticles(arts);
