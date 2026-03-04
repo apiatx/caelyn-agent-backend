@@ -479,6 +479,8 @@ async def update_settings_endpoint(
     settings = save_settings(
         standing_instructions=body.get("standing_instructions"),
         personal_profile=body.get("personal_profile"),
+        instruction_presets=body.get("instruction_presets"),
+        profile_presets=body.get("profile_presets"),
         active_instruction_template=body.get("active_instruction_template"),
         active_profile_template=body.get("active_profile_template"),
     )

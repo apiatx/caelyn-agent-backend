@@ -9,6 +9,24 @@ MAX_PERSONAL_PROFILE = 10000
 MAX_TEMPLATE_NAME = 60
 MAX_TEMPLATES_PER_TYPE = 20
 
+DEFAULT_INSTRUCTION_PRESETS = {
+    "focus_sectors": [],
+    "market_cap": "",
+    "risk_stance": "",
+    "conviction_minimum": "",
+    "analysis_depth": "",
+}
+
+DEFAULT_PROFILE_PRESETS = {
+    "capital_range": "",
+    "risk_tolerance": "",
+    "max_positions": "",
+    "position_sizing": "",
+    "holding_period": "",
+    "strategy_types": [],
+    "preferred_sectors": [],
+}
+
 
 def _ensure_file():
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -16,6 +34,8 @@ def _ensure_file():
         default = {
             "standing_instructions": "",
             "personal_profile": "",
+            "instruction_presets": DEFAULT_INSTRUCTION_PRESETS.copy(),
+            "profile_presets": DEFAULT_PROFILE_PRESETS.copy(),
             "instruction_templates": [],
             "profile_templates": [],
             "active_instruction_template": None,
@@ -33,6 +53,8 @@ def get_settings() -> dict:
     return {
         "standing_instructions": data.get("standing_instructions", ""),
         "personal_profile": data.get("personal_profile", ""),
+        "instruction_presets": {**DEFAULT_INSTRUCTION_PRESETS, **data.get("instruction_presets", {})},
+        "profile_presets": {**DEFAULT_PROFILE_PRESETS, **data.get("profile_presets", {})},
         "instruction_templates": data.get("instruction_templates", []),
         "profile_templates": data.get("profile_templates", []),
         "active_instruction_template": data.get("active_instruction_template"),
@@ -43,6 +65,8 @@ def get_settings() -> dict:
 def save_settings(
     standing_instructions: str = None,
     personal_profile: str = None,
+    instruction_presets: dict = None,
+    profile_presets: dict = None,
     active_instruction_template: str = None,
     active_profile_template: str = None,
 ) -> dict:
@@ -51,12 +75,52 @@ def save_settings(
         settings["standing_instructions"] = standing_instructions[:MAX_STANDING_INSTRUCTIONS]
     if personal_profile is not None:
         settings["personal_profile"] = personal_profile[:MAX_PERSONAL_PROFILE]
+    if instruction_presets is not None:
+        settings["instruction_presets"] = {**DEFAULT_INSTRUCTION_PRESETS, **instruction_presets}
+    if profile_presets is not None:
+        settings["profile_presets"] = {**DEFAULT_PROFILE_PRESETS, **profile_presets}
     if active_instruction_template is not None:
         settings["active_instruction_template"] = active_instruction_template or None
     if active_profile_template is not None:
         settings["active_profile_template"] = active_profile_template or None
     _write(settings)
     return settings
+
+
+def format_instruction_presets(presets: dict) -> str:
+    """Format instruction presets into natural language for the system prompt."""
+    parts = []
+    if presets.get("focus_sectors"):
+        parts.append(f"Focus sectors: {', '.join(presets['focus_sectors'])}")
+    if presets.get("market_cap"):
+        parts.append(f"Market cap preference: {presets['market_cap']}")
+    if presets.get("risk_stance"):
+        parts.append(f"Risk stance: {presets['risk_stance']}")
+    if presets.get("conviction_minimum"):
+        parts.append(f"Conviction minimum: {presets['conviction_minimum']}")
+    if presets.get("analysis_depth"):
+        parts.append(f"Analysis depth: {presets['analysis_depth']}")
+    return "\n".join(parts)
+
+
+def format_profile_presets(presets: dict) -> str:
+    """Format profile presets into natural language for the system prompt."""
+    parts = []
+    if presets.get("capital_range"):
+        parts.append(f"Portfolio capital: {presets['capital_range']}")
+    if presets.get("risk_tolerance"):
+        parts.append(f"Risk tolerance: {presets['risk_tolerance']}")
+    if presets.get("max_positions"):
+        parts.append(f"Max concurrent positions: {presets['max_positions']}")
+    if presets.get("position_sizing"):
+        parts.append(f"Default position sizing: {presets['position_sizing']}")
+    if presets.get("holding_period"):
+        parts.append(f"Preferred holding period: {presets['holding_period']}")
+    if presets.get("strategy_types"):
+        parts.append(f"Strategy types: {', '.join(presets['strategy_types'])}")
+    if presets.get("preferred_sectors"):
+        parts.append(f"Preferred sectors: {', '.join(presets['preferred_sectors'])}")
+    return "\n".join(parts)
 
 
 def save_template(template_type: str, name: str, content: str) -> dict:

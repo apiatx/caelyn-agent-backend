@@ -4383,10 +4383,22 @@ Be direct and opinionated. Tell me what you actually think."""
             print(f"[Agent] WARNING: Total prompt was {total_prompt_len:,} chars, re-truncated data to {len(data_str):,}")
 
         # Load dynamic user settings
-        from data.user_settings import get_settings as _get_user_settings
+        from data.user_settings import get_settings as _get_user_settings, format_instruction_presets, format_profile_presets
         _user_settings = _get_user_settings()
         _active_profile = _user_settings.get("personal_profile", "").strip()
         _standing_instr = _user_settings.get("standing_instructions", "").strip()
+
+        # Merge preset selections into standing instructions and profile
+        instruction_preset_text = format_instruction_presets(_user_settings.get("instruction_presets", {}))
+        profile_preset_text = format_profile_presets(_user_settings.get("profile_presets", {}))
+
+        # Build standing instructions: presets + free-form
+        standing_parts = [p for p in [instruction_preset_text, _standing_instr] if p]
+        _standing_instr = "\n\n".join(standing_parts) if standing_parts else ""
+
+        # Build profile: presets + free-form
+        profile_parts = [p for p in [profile_preset_text, _active_profile] if p]
+        _active_profile = "\n\n".join(profile_parts) if profile_parts else ""
 
         # Build profile block: Core Quant DNA always present + personal profile if set
         _profile_text = CORE_QUANT_DNA
