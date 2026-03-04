@@ -56,8 +56,20 @@ interface ParsedMarket {
   endDate?: string;
 }
 
+interface FinnhubEarning {
+  ticker: string;
+  date: string;
+  eps_estimate: number | null;
+  eps_actual: number | null;
+  revenue_estimate: number | null;
+  revenue_actual: number | null;
+  hour: string;  // "bmo", "amc", or ""
+  quarter: number | null;
+  year: number | null;
+}
+
 interface EarningsEntry {
-  market: ParsedMarket;
+  market: ParsedMarket | null;
   ticker: string;
   company: string;
   eps: string | null;
@@ -65,6 +77,9 @@ interface EarningsEntry {
   time: string | null;
   exchange: string | null;
   beatPct: number;
+  revenueEstimate: string | null;
+  source: "polymarket" | "finnhub" | "both";
+  earningsDate: string | null;
 }
 
 interface EarningsDetailData {
@@ -189,6 +204,7 @@ function extractExchange(description: string): string | null {
 
 function buildEntry(m: ParsedMarket): EarningsEntry {
   const combined = `${m.question} ${m.description}`;
+  const revMatch = m.description.match(/revenue\s+(?:estimate|forecast|consensus)?\s*(?:of\s+)?\$?([\d.]+\s*(?:B|M|billion|million))/i);
   return {
     market: m,
     ticker: extractTicker(m.question) || "???",
@@ -198,20 +214,59 @@ function buildEntry(m: ParsedMarket): EarningsEntry {
     time: extractTime(m.description),
     exchange: extractExchange(m.description),
     beatPct: Math.round(m.yesPrice * 100),
+    revenueEstimate: revMatch ? `$${revMatch[1]}` : null,
+    source: "polymarket",
+    earningsDate: m.endDate || null,
   };
+}
+
+function buildFinnhubEntry(e: FinnhubEarning): EarningsEntry {
+  const hour = e.hour === "bmo" ? "Pre-Market" : e.hour === "amc" ? "After Hours" : null;
+  const qtr = e.quarter && e.year ? `Q${e.quarter} ${e.year}` : e.quarter ? `Q${e.quarter}` : null;
+  const epsStr = e.eps_estimate != null ? `$${e.eps_estimate.toFixed(2)}` : null;
+  const revStr = e.revenue_estimate != null
+    ? (e.revenue_estimate >= 1e9 ? `$${(e.revenue_estimate / 1e9).toFixed(1)}B` : e.revenue_estimate >= 1e6 ? `$${(e.revenue_estimate / 1e6).toFixed(0)}M` : `$${e.revenue_estimate.toLocaleString()}`)
+    : null;
+  return {
+    market: null,
+    ticker: e.ticker,
+    company: e.ticker,  // Will be enriched later
+    eps: epsStr,
+    quarter: qtr,
+    time: hour,
+    exchange: null,
+    beatPct: -1,  // -1 = no Polymarket data
+    revenueEstimate: revStr,
+    source: "finnhub",
+    earningsDate: e.date,
+  };
+}
+
+function formatRevenue(v: number | null | undefined): string {
+  if (!v) return "N/A";
+  if (v >= 1e12) return `$${(v / 1e12).toFixed(1)}T`;
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(0)}M`;
+  return `$${v.toLocaleString()}`;
 }
 
 function buildBullets(entry: EarningsEntry): string[] {
   const bullets: string[] = [];
-  const desc = entry.market.description || "";
+  const desc = entry.market?.description || "";
 
   if (entry.eps) {
     const q = entry.quarter || "quarterly";
     bullets.push(`Wall Street consensus EPS estimate of ${entry.eps} for ${q} earnings`);
   }
 
-  const beatLabel = entry.beatPct >= 70 ? "strongly favored to beat" : entry.beatPct >= 55 ? "favored to beat" : entry.beatPct <= 30 ? "expected to miss" : entry.beatPct <= 45 ? "at risk of missing" : "near a coin flip on beating";
-  bullets.push(`Polymarket crowd: ${beatLabel} estimates (${entry.beatPct}% chance of beat)`);
+  if (entry.revenueEstimate) {
+    bullets.push(`Revenue estimate: ${entry.revenueEstimate}`);
+  }
+
+  if (entry.beatPct >= 0) {
+    const beatLabel = entry.beatPct >= 70 ? "strongly favored to beat" : entry.beatPct >= 55 ? "favored to beat" : entry.beatPct <= 30 ? "expected to miss" : entry.beatPct <= 45 ? "at risk of missing" : "near a coin flip on beating";
+    bullets.push(`Polymarket crowd: ${beatLabel} estimates (${entry.beatPct}% chance of beat)`);
+  }
 
   const revMatch = desc.match(/revenue\s+(?:estimate|forecast|consensus)?\s*(?:of\s+)?\$?([\d.]+\s*(?:B|M|billion|million))/i);
   if (revMatch) {
@@ -231,7 +286,7 @@ function buildBullets(entry: EarningsEntry): string[] {
     }
   }
 
-  if (bullets.length < 2) {
+  if (bullets.length < 2 && entry.market) {
     bullets.push(`Trading volume: ${formatVolume(entry.market.totalVolume)} total on Polymarket`);
   }
 
@@ -304,6 +359,21 @@ async function fetchPolymarketByTag(tagSlug: string): Promise<PolyEvent[] | null
   } catch { /* fall through */ }
 
   return null;
+}
+
+async function fetchFinnhubCalendar(fromDate: string, toDate: string): Promise<FinnhubEarning[]> {
+  try {
+    const res = await fetch(
+      `${AGENT_BACKEND_URL}/api/earnings/calendar?from_date=${encodeURIComponent(fromDate)}&to_date=${encodeURIComponent(toDate)}`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      return data.earnings || [];
+    }
+  } catch (e) {
+    console.warn("[FINNHUB_CALENDAR] fetch failed:", e);
+  }
+  return [];
 }
 
 // ─── Earnings Detail Modal ────────────────────────────────────────
@@ -410,6 +480,7 @@ function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEn
         </div>
 
         {/* Polymarket Beat / Miss probability */}
+        {beatPct >= 0 && (
         <div className="px-6 py-4 border-b border-white/[0.06]">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[11px] font-semibold text-white/50 uppercase tracking-wider">Polymarket: Chance of Beat</span>
@@ -432,6 +503,7 @@ function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEn
             <span className="text-red-400/70">Miss {missPct}%</span>
           </div>
         </div>
+        )}
 
         {/* Stats grid */}
         <div className="px-6 py-4 border-b border-white/[0.06]">
@@ -620,6 +692,7 @@ function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEn
         )}
 
         {/* Polymarket volume stats */}
+        {entry.market && (
         <div className="px-6 py-3 border-b border-white/[0.06]">
           <div className="flex items-center gap-4 text-[10px] text-white/30">
             <span><span className="text-white/50 font-semibold">24h Vol:</span> {formatVolume(entry.market.volume24hr)}</span>
@@ -627,10 +700,12 @@ function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEn
             <span><span className="text-white/50 font-semibold">Liquidity:</span> {formatVolume(entry.market.liquidity)}</span>
           </div>
         </div>
+        )}
 
         {/* Footer */}
         <div className="px-6 py-4 flex items-center justify-between">
-          <span className="text-[9px] text-white/20">Polymarket + Finnhub</span>
+          <span className="text-[9px] text-white/20">{entry.source === "polymarket" || entry.source === "both" ? "Polymarket + Finnhub" : "Finnhub"}</span>
+          {entry.market && (
           <a
             href={`https://polymarket.com/event/${entry.market.eventSlug}`}
             target="_blank"
@@ -639,6 +714,7 @@ function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEn
           >
             Trade on Polymarket <ExternalLink className="w-3 h-3" />
           </a>
+          )}
         </div>
       </div>
     </div>
@@ -653,8 +729,12 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
   const [modalEntry, setModalEntry] = useState<EarningsEntry | null>(null);
   const [enrichments, setEnrichments] = useState<Record<string, EarningsDetailData>>({});
   const [enrichLoading, setEnrichLoading] = useState<Set<string>>(new Set());
+  const [finnhubEntries, setFinnhubEntries] = useState<Map<string, EarningsEntry[]>>(new Map());
+  const [finnhubLoading, setFinnhubLoading] = useState(false);
+  const finnhubFetchedWeeks = useRef<Set<string>>(new Set());
 
-  const dateMap = new Map<string, EarningsEntry[]>();
+  // Build Polymarket date map
+  const polyDateMap = new Map<string, EarningsEntry[]>();
   const undated: EarningsEntry[] = [];
   for (const m of markets) {
     const entry = buildEntry(m);
@@ -662,15 +742,80 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
       const d = new Date(m.endDate);
       if (!isNaN(d.getTime())) {
         const key = dateKey(d);
-        if (!dateMap.has(key)) dateMap.set(key, []);
-        dateMap.get(key)!.push(entry);
+        if (!polyDateMap.has(key)) polyDateMap.set(key, []);
+        polyDateMap.get(key)!.push(entry);
         continue;
       }
     }
     undated.push(entry);
   }
+
+  // Fetch Finnhub calendar for current week
+  useEffect(() => {
+    const weekKey = dateKey(weekStart);
+    if (finnhubFetchedWeeks.current.has(weekKey)) return;
+    finnhubFetchedWeeks.current.add(weekKey);
+    setFinnhubLoading(true);
+
+    const sunday = weekStart;
+    const saturday = addDays(sunday, 6);
+    const fromStr = dateKey(sunday);
+    const toStr = dateKey(saturday);
+
+    fetchFinnhubCalendar(fromStr, toStr).then((earnings) => {
+      const map = new Map<string, EarningsEntry[]>();
+      for (const e of earnings) {
+        if (!e.date || !e.ticker) continue;
+        const key = e.date;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push(buildFinnhubEntry(e));
+      }
+      setFinnhubEntries(prev => {
+        const merged = new Map(prev);
+        for (const [k, v] of map) {
+          merged.set(k, v);
+        }
+        return merged;
+      });
+    }).catch(() => {}).finally(() => setFinnhubLoading(false));
+  }, [weekStart]);
+
+  // Merge: Polymarket entries take priority, Finnhub fills in the rest
+  const dateMap = new Map<string, EarningsEntry[]>();
+  // First, add all Polymarket entries
+  for (const [key, entries] of polyDateMap) {
+    dateMap.set(key, [...entries]);
+  }
+  // Then merge Finnhub entries (skip if ticker already present from Polymarket)
+  for (const [key, fhEntries] of finnhubEntries) {
+    const existing = dateMap.get(key) || [];
+    const existingTickers = new Set(existing.map(e => e.ticker.toUpperCase()));
+    for (const fhEntry of fhEntries) {
+      if (existingTickers.has(fhEntry.ticker.toUpperCase())) {
+        // Enrich existing Polymarket entry with Finnhub data
+        const polyEntry = existing.find(e => e.ticker.toUpperCase() === fhEntry.ticker.toUpperCase());
+        if (polyEntry) {
+          if (!polyEntry.eps && fhEntry.eps) polyEntry.eps = fhEntry.eps;
+          if (!polyEntry.quarter && fhEntry.quarter) polyEntry.quarter = fhEntry.quarter;
+          if (!polyEntry.time && fhEntry.time) polyEntry.time = fhEntry.time;
+          if (!polyEntry.revenueEstimate && fhEntry.revenueEstimate) polyEntry.revenueEstimate = fhEntry.revenueEstimate;
+          polyEntry.source = "both";
+        }
+      } else {
+        existing.push(fhEntry);
+        existingTickers.add(fhEntry.ticker.toUpperCase());
+      }
+    }
+    dateMap.set(key, existing);
+  }
+  // Sort: Polymarket entries first (by beatPct desc), then Finnhub entries alphabetically
   for (const entries of dateMap.values()) {
-    entries.sort((a, b) => b.beatPct - a.beatPct);
+    entries.sort((a, b) => {
+      if (a.beatPct >= 0 && b.beatPct < 0) return -1;
+      if (a.beatPct < 0 && b.beatPct >= 0) return 1;
+      if (a.beatPct >= 0 && b.beatPct >= 0) return b.beatPct - a.beatPct;
+      return a.ticker.localeCompare(b.ticker);
+    });
   }
 
   const fetchedDaysRef = useRef<Set<string>>(new Set());
@@ -681,7 +826,7 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
     if (tickers.length === 0) return;
     fetchedDaysRef.current.add(selectedDayKey);
     setEnrichLoading(prev => new Set([...prev, ...tickers]));
-    tickers.slice(0, 10).forEach(async (ticker) => {
+    tickers.slice(0, 15).forEach(async (ticker) => {
       try {
         const res = await fetch(
           `${AGENT_BACKEND_URL}/api/earnings/detail?ticker=${encodeURIComponent(ticker)}`
@@ -736,10 +881,11 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
               Earnings Calendar
             </h3>
             <p className="text-[10px] text-white/30 mt-0.5 leading-tight">
-              Polymarket-powered earnings predictions with Finnhub fundamentals &amp; news context
+              Complete earnings calendar with Polymarket predictions &amp; Finnhub fundamentals
             </p>
             <p className="text-[10px] text-white/20 mt-0.5">
               {weekMonth} {weekYear} &middot; {totalThisWeek} earnings call{totalThisWeek !== 1 ? "s" : ""} this week
+              {finnhubLoading && <span className="ml-1.5 text-blue-400/50"><Loader2 className="w-2.5 h-2.5 animate-spin inline" /></span>}
             </p>
           </div>
         </div>
@@ -791,7 +937,7 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
               {callCount > 0 && (
                 <div className="flex justify-center gap-0.5 mt-1.5">
                   {entries.slice(0, 4).map((e) => (
-                    <div key={e.market.marketId} className={`w-4 h-4 rounded-sm bg-gradient-to-br ${tickerColor(e.ticker)} flex items-center justify-center`}>
+                    <div key={e.market?.marketId || `fh-${e.ticker}`} className={`w-4 h-4 rounded-sm bg-gradient-to-br ${tickerColor(e.ticker)} flex items-center justify-center`}>
                       <span className="text-[6px] font-bold text-white">{e.ticker.slice(0, 1)}</span>
                     </div>
                   ))}
@@ -850,7 +996,7 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
             const topArticle = articles[0];
             return (
               <div
-                key={e.market.marketId}
+                key={e.market?.marketId || `fh-${e.ticker}`}
                 className="rounded-xl border border-white/[0.06] bg-white/[0.015] hover:bg-white/[0.03] hover:border-white/[0.1] transition-all group cursor-pointer"
                 onClick={() => setModalEntry(e)}
               >
@@ -896,6 +1042,7 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
                       </div>
 
                       <div className="flex-shrink-0 text-right">
+                        {e.beatPct >= 0 ? (
                         <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${
                           isHigh ? "bg-emerald-500/10 border border-emerald-500/20" : isLow ? "bg-red-500/10 border border-red-500/20" : "bg-yellow-500/10 border border-yellow-500/20"
                         }`}>
@@ -911,6 +1058,11 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
                             isHigh ? "text-emerald-400/60" : isLow ? "text-red-400/60" : "text-yellow-400/60"
                           }`}>beat</span>
                         </div>
+                        ) : (
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.04] border border-white/[0.08]">
+                          <span className="text-[9px] text-white/30 font-semibold">Finnhub</span>
+                        </div>
+                        )}
                       </div>
                     </div>
 
@@ -973,9 +1125,16 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
                           <span className="text-white/50 font-semibold">EPS Est:</span> {e.eps}
                         </span>
                       )}
+                      {e.revenueEstimate && (
+                        <span className="text-[10px] text-white/30">
+                          <span className="text-white/50 font-semibold">Rev Est:</span> {e.revenueEstimate}
+                        </span>
+                      )}
+                      {e.market && (
                       <span className="text-[10px] text-white/30">
                         <span className="text-white/50 font-semibold">Vol:</span> {formatVolume(e.market.totalVolume)}
                       </span>
+                      )}
                       <span className="text-[10px] text-blue-400/60 group-hover:text-blue-400 transition-colors ml-auto">
                         View full details
                       </span>
@@ -991,16 +1150,8 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
       {/* Footer */}
       <div className="mt-4 flex items-center justify-between">
         <span className="text-[10px] text-white/20">
-          Polymarket odds &middot; Finnhub fundamentals &amp; news
+          Finnhub earnings calendar &middot; Polymarket predictions
         </span>
-        <a
-          href="https://polymarket.com/earnings"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-[10px] text-blue-400/60 hover:text-blue-400 transition-colors"
-        >
-          View on Polymarket <ExternalLink className="w-2.5 h-2.5" />
-        </a>
       </div>
 
       {modalEntry && <EarningsModal entry={modalEntry} onClose={() => setModalEntry(null)} prefetchedDetail={enrichments[modalEntry.ticker] || null} />}
@@ -1122,7 +1273,7 @@ function EarningsAgent() {
         </div>
         <div>
           <h2 className="text-base font-bold text-white flex items-center gap-2">
-            Caelyn Earnings
+            Ask Caelyn
           </h2>
           <p className="text-[10px] text-white/30">
             Ask about upcoming earnings, beat odds, sentiment, and trading setups
@@ -1242,21 +1393,7 @@ export default function StocksEarningsCalendarPage() {
 
   return (
     <div className="min-h-screen text-white" style={{background: 'linear-gradient(135deg, hsl(0, 0%, 0%) 0%, hsl(0, 0%, 10%) 50%, hsl(0, 0%, 0%) 100%)'}}>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="text-center relative mb-8">
-          <div className="absolute inset-0 bg-gradient-to-r from-yellow-500/20 via-orange-500/20 to-red-500/20 blur-3xl -z-10"></div>
-          <div className="flex justify-center items-center gap-4 mb-4">
-            <div className="w-12 h-12 bg-gradient-to-br from-yellow-500 to-orange-500 rounded-xl flex items-center justify-center">
-              <CalendarDays className="w-6 h-6 text-white" />
-            </div>
-            <h2 className="text-2xl lg:text-3xl font-bold bg-gradient-to-r from-white via-yellow-200 to-orange-200 bg-clip-text text-transparent">Earnings Calendar</h2>
-          </div>
-          <p className="text-sm text-white/50">Polymarket-powered earnings predictions with Finnhub fundamentals &amp; company news</p>
-          <div className="w-32 h-1 bg-gradient-to-r from-yellow-500 to-orange-500 mx-auto mt-4 rounded-full"></div>
-        </div>
-      </div>
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <EarningsAgent />
         <GlassCard className="p-5">
           {earningsLoading && earningsMarkets.length === 0 ? (
@@ -1270,7 +1407,7 @@ export default function StocksEarningsCalendarPage() {
                     Earnings Calendar
                     <span className="text-white/30 font-normal text-xs ml-2">/ Loading...</span>
                   </h3>
-                  <p className="text-[10px] text-white/30 leading-tight">Polymarket-powered earnings predictions with Finnhub fundamentals &amp; news context</p>
+                  <p className="text-[10px] text-white/30 leading-tight">Complete earnings calendar with Polymarket predictions &amp; Finnhub fundamentals</p>
                 </div>
               </div>
               <div className="grid grid-cols-5 gap-2">
@@ -1278,19 +1415,6 @@ export default function StocksEarningsCalendarPage() {
                   <Skeleton key={i} className="h-[200px] rounded-xl" />
                 ))}
               </div>
-            </div>
-          ) : earningsMarkets.length === 0 ? (
-            <div>
-              <div className="flex items-center gap-3 mb-1">
-                <div className="w-9 h-9 bg-gradient-to-br from-yellow-500 to-orange-500 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <CalendarDays className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">Earnings Calendar</h3>
-                  <p className="text-[10px] text-white/30 leading-tight">Polymarket-powered earnings predictions with Finnhub fundamentals &amp; news context</p>
-                </div>
-              </div>
-              <p className="text-xs text-white/30 mt-3">No earnings markets found. Check back closer to earnings season.</p>
             </div>
           ) : (
             <EarningsCalendarWidget markets={earningsMarkets} />

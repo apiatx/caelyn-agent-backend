@@ -80,7 +80,7 @@ export function SidebarNavigation({ className = "", isCollapsed, isMobile = fals
         },
         {
           id: 'stocks-earnings-calendar',
-          label: 'Earnings Calendar',
+          label: 'Earnings',
           icon: <CalendarDays className="w-4 h-4" />,
           path: '/app/stocks/earnings-calendar'
         },
