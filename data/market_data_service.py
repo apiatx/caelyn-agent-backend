@@ -1052,15 +1052,25 @@ class MarketDataService:
             "enrich_top": 12,
         },
         "investments": {
+            # Primary: profitable growers above SMA50, revenue >20% QoQ, positive operating margin
+            # This requires BOTH revenue growth AND profitability — eliminates NUTX-style unsustainable growers
             "filters":
-            "sh_avgvol_o300,fa_salesqoq_o10,ta_sma50_pa,sh_price_o5",
+            "sh_avgvol_o300,fa_salesqoq_o20,fa_opermargin_pos,ta_sma50_pa,sh_price_o5",
             "limit":
             50,
             "enrich_top":
             15,
+            "market_cap_floor": 300e6,  # $300M floor — no nano/microcap turnarounds in investments scan
+            "market_cap_ceiling": 70e9,  # $70B ceiling — focus on compounders not mega caps
+            "extra_screens": [
+                # Screen 2: Revenue acceleration leaders above SMA200 (quality trend confirmation)
+                "sh_avgvol_o300,fa_salesqoq_o25,ta_sma200_pa,sh_price_o5",
+                # Screen 3: Profitable + growing + undervalued (P/S <10, not overpriced hype)
+                "sh_avgvol_o300,fa_salesqoq_o15,fa_opermargin_pos,fa_ps_u10,sh_price_o5",
+            ],
             "fallback_filters": [
-                "sh_avgvol_o200,fa_salesqoq_o5,ta_sma200_pa,sh_price_o5",
-                "sh_avgvol_o200,fa_epsqoq_o10,ta_sma50_pa,sh_price_o3",
+                "sh_avgvol_o200,fa_salesqoq_o15,fa_opermargin_pos,sh_price_o5",
+                "sh_avgvol_o200,fa_epsqoq_o15,ta_sma50_pa,sh_price_o5",
             ],
         },
         "fundamentals_scan": {
@@ -1133,6 +1143,13 @@ class MarketDataService:
         news_task = self.get_market_news_context(
             modules=filters.get("_modules") if filters else None)
 
+        # Multi-screen for investments: run extra screens in parallel and merge
+        extra_screens = cat_config.get("extra_screens", [])
+        extra_tasks = [
+            self.finviz._custom_screen(f"v=111&f={f}&ft=4&o=-change")
+            for f in extra_screens
+        ]
+
         macro_task = None
         if category in ("investments", "fundamentals_scan"):
             macro_task = self._build_macro_snapshot()
@@ -1151,6 +1168,22 @@ class MarketDataService:
         if isinstance(screener_results, Exception):
             print(f"[Wide Scan] Screener failed: {screener_results}")
             screener_results = []
+
+        # Merge extra screens (investments multi-screen)
+        if extra_tasks:
+            extra_results = await asyncio.gather(*extra_tasks, return_exceptions=True)
+            existing_tickers = {
+                item.get("ticker", "").upper()
+                for item in (screener_results or [])
+                if isinstance(item, dict)
+            }
+            for extra_list in extra_results:
+                if isinstance(extra_list, list):
+                    for item in extra_list:
+                        if isinstance(item, dict) and item.get("ticker", "").upper() not in existing_tickers:
+                            screener_results.append(item)
+                            existing_tickers.add(item.get("ticker", "").upper())
+            print(f"[Wide Scan] After multi-screen merge: {len(screener_results)} candidates")
 
         if len(screener_results) < 5 and cat_config.get("fallback_filters"):
             for fallback_filter in cat_config["fallback_filters"]:

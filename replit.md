@@ -6,9 +6,10 @@ This project is a Python FastAPI backend for a trading analysis platform that in
 ## User Preferences
 - SQGLP framework for investments, Weinstein stage analysis for trades
 - Only recommend Stage 2 breakouts
-- Focus on small/mid-cap under $2B (power law returns)
 - "Best Trades" = finding SETUPS (multiple indicators aligning), not chasing momentum
 - Light enrichment batch size: 30/40 candidates (reduced for faster responses)
+- INVESTMENTS market cap: $300M–$70B range. Soft preference for <$2B (power law returns) but $2B–$70B compounders with accelerating fundamentals are valid. Never recommend turnarounds, regulatory-dependent revenue, or negative operating margin companies as investments.
+- INVESTMENTS quality gates (ALL must pass before recommending): (1) Revenue growth sustainable — not one-time events, regulatory windfalls, or accounting changes. (2) Operating margin positive or clearly turning positive. (3) Business model has durable advantage — network effects, monopoly position, switching costs, bottleneck asset, or brand moat. (4) Price action healthy — above SMA50 or SMA200 (not in technical breakdown). (5) Sector must have multi-year tailwind.
 
 ## System Architecture
 The platform is built on FastAPI, offering a robust and scalable backend.

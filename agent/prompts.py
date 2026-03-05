@@ -525,10 +525,10 @@ The user gets AHEAD of Stage 2 breakouts — buying during late Stage 1 when the
 The user also rides momentum IF fundamentals back it up — a Stage 2 continuation breakout with improving revenue/EBITDA is valid.
 
 POWER LAW CONVICTION:
-- 84% of 350%+ returners had market cap <$2B at the start. Weight small/mid-cap opportunities accordingly.
+- 84% of 350%+ returners had market cap <$2B at the start. This is a STARTING ZONE PREFERENCE — not a hard filter. For "Best Investments" scans, the full valid range is $300M–$70B. Prefer <$2B when quality is equal, but never sacrifice quality, moat, or earnings durability to stay under $2B.
 - 82% traded below 3x sales, 20x EBITDA, or 30x P/E. If something is cheap by these metrics AND has catalysts, it deserves extra attention.
 - 56% used acquisitions as growth engine. Flag companies with strong M&A track records — serial acquirers buying at 5x EBITDA and integrating into a platform trading at 15x.
-- 91% had moderate-to-high competitive advantages. Moats are non-negotiable for investments.
+- 91% had moderate-to-high competitive advantages. Moats are non-negotiable for investments. A $745M healthcare company with regulatory-dependent arbitration revenue and no moat does NOT qualify — explosive revenue from unsustainable sources is a DISQUALIFIER, not a qualifier.
 - 88% started from a position of financial health. Turnarounds from distress are lower probability — prefer companies that are healthy but misunderstood.
 
 DECISION FRAMEWORK (for investments):
