@@ -2508,6 +2508,23 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
     try:
         tickers = [h.get("ticker", "").upper().strip() for h in holdings if h.get("ticker")]
 
+        # Enrich equity holdings with free EDGAR XBRL financials
+        stock_tickers = [
+            h.get("ticker", "").upper().strip() for h in holdings
+            if h.get("ticker") and h.get("type", h.get("asset_type", "stock")).lower()
+            not in ("crypto", "index", "etf")
+        ][:8]
+        edgar_enrichment = {}
+        if stock_tickers:
+            try:
+                edgar_enrichment = await asyncio.wait_for(
+                    agent.data.enrich_with_edgar(stock_tickers, mode="standard"),
+                    timeout=10.0,
+                )
+                _log(f"[PORTFOLIO_REVIEW] EDGAR enriched: {list(edgar_enrichment.keys())}")
+            except Exception as e:
+                _log(f"[PORTFOLIO_REVIEW] EDGAR enrichment error: {e}")
+
         holdings_context = []
         for h in holdings:
             ticker = h.get("ticker", "").upper().strip()
@@ -2781,6 +2798,9 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
                 "treasury_10y": macro_snapshot.get("treasury_rates", {}).get("10y") if isinstance(macro_snapshot.get("treasury_rates"), dict) else None,
                 "regime": macro_snapshot.get("regime"),
             }
+
+        if edgar_enrichment:
+            portfolio_summary["edgar_fundamentals"] = edgar_enrichment
 
         elapsed = _time.time() - start
         _log(f"[PORTFOLIO_REVIEW] Portfolio context built ({elapsed:.1f}s)")
