@@ -1126,6 +1126,9 @@ class TradingAgent:
 
         new_scan_triggers = [
             "scan", "screen", "what's trending", "best trades", "macro overview",
+            "insider", "filings", "8-k", "10-k", "10-q", "s-1", "earnings beat",
+            "revenue growth", "fundamentals", "balance sheet", "debt", "cash flow",
+            "institutional", "13f", "who owns", "catalyst",
             "crypto scan", "sector rotation", "daily briefing", "earnings watch",
             "commodities", "volume spikes", "short squeeze", "show me",
             "run a", "pull up", "find me", "search for", "morning briefing",
