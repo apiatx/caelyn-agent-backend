@@ -2983,7 +2983,7 @@ class TradingAgent:
             original = query_info.get("original_prompt", "").lower()
             edgar_keywords = ["catalyst", "why now", "insider", "filings", "s-1", "8-k",
                               "offering", "dilution", "secondary", "lockup", "guidance", "sec"]
-            if any(kw in original for kw in edgar_keywords) and tickers:
+            if tickers:  # Always run EDGAR for any ticker analysis
                 try:
                     edgar_data = await asyncio.wait_for(
                         self.data.enrich_with_edgar(tickers[:5], mode="insider_focus"),
@@ -3002,7 +3002,24 @@ class TradingAgent:
             return await self.data.get_dashboard()
 
         elif category == "investments":
-            return await self.data.wide_scan_and_rank("investments", filters)
+            invest_data = await self.data.wide_scan_and_rank("investments", filters)
+            if isinstance(invest_data, dict):
+                top_tickers = [
+                    c.get("ticker") for c in invest_data.get("candidates", invest_data.get("picks", []))[:8]
+                    if c.get("ticker")
+                ]
+                if top_tickers:
+                    try:
+                        edgar_data = await asyncio.wait_for(
+                            self.data.enrich_with_edgar(top_tickers, mode="standard"),
+                            timeout=10.0,
+                        )
+                        if edgar_data:
+                            invest_data["edgar"] = edgar_data
+                            print(f"[EDGAR] Investments enriched: {list(edgar_data.keys())}")
+                    except Exception as e:
+                        print(f"[EDGAR] Investments enrichment error: {e}")
+            return invest_data
 
         elif category == "fundamentals_scan":
             return await self.data.wide_scan_and_rank("fundamentals_scan", filters)
@@ -3139,7 +3156,26 @@ class TradingAgent:
                 return {"error": str(e), "filters_applied": {}, "total_results": 0, "results": []}
 
         elif category == "briefing":
-            return await self.data.get_morning_briefing()
+            briefing_data = await self.data.get_morning_briefing()
+            if isinstance(briefing_data, dict):
+                briefing_tickers = []
+                for scan_key in ["stage2_breakouts", "volume_breakouts", "revenue_leaders"]:
+                    for item in (briefing_data.get(scan_key) or [])[:3]:
+                        t = item.get("ticker") if isinstance(item, dict) else None
+                        if t and t not in briefing_tickers:
+                            briefing_tickers.append(t)
+                if briefing_tickers[:5]:
+                    try:
+                        edgar_briefing = await asyncio.wait_for(
+                            self.data.enrich_with_edgar(briefing_tickers[:5], mode="standard"),
+                            timeout=8.0,
+                        )
+                        if edgar_briefing:
+                            briefing_data["edgar"] = edgar_briefing
+                            print(f"[EDGAR] Briefing enriched: {list(edgar_briefing.keys())}")
+                    except Exception as e:
+                        print(f"[EDGAR] Briefing enrichment error: {e}")
+            return briefing_data
 
         elif category == "portfolio_review":
             original = query_info.get("original_prompt", "")
