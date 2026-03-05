@@ -44,6 +44,7 @@ class PerplexityProvider:
     """Web search via Perplexity Search API -- same interface as BraveProvider/TavilyProvider."""
 
     SEARCH_URL = "https://api.perplexity.ai/search"
+    CHAT_URL = "https://api.perplexity.ai/chat/completions"
 
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -88,9 +89,18 @@ class PerplexityProvider:
             if resp.status_code == 429:
                 print(f"[Perplexity] Rate limited for query: {str(query)[:60]}")
                 return {"error": "rate_limited", "results": []}
-            if resp.status_code == 451:
-                print(f"[Perplexity] HTTP 451 -- API key may need regeneration")
+            if resp.status_code in (401, 403, 451):
+                print(f"[Perplexity] HTTP {resp.status_code} -- API key may be invalid")
                 return {"error": "invalid_key", "results": []}
+            if resp.status_code in (400, 404, 405, 410):
+                print(f"[Perplexity] Search endpoint unavailable (HTTP {resp.status_code}), falling back to chat endpoint")
+                return await self._search_via_chat(
+                    query=query,
+                    max_results=max_results,
+                    topic=topic,
+                    domain_filter=domain_filter,
+                    recency=recency,
+                )
             if resp.status_code != 200:
                 print(f"[Perplexity] HTTP {resp.status_code} for query: {str(query)[:60]}: {resp.text[:200]}")
                 return {"error": f"HTTP {resp.status_code}", "results": []}
@@ -100,6 +110,50 @@ class PerplexityProvider:
 
         except Exception as e:
             print(f"[Perplexity] Error: {e}")
+            return {"error": str(e), "results": []}
+
+    async def _search_via_chat(self, query, max_results: int = 10,
+                               topic: str = "news", domain_filter: list = None,
+                               recency: str = None) -> dict:
+        """Fallback for accounts/models that no longer support /search endpoint."""
+        recency_hint = recency or ("day" if topic == "news" else "week")
+        domains = ", ".join((domain_filter or [])[:20])
+        domain_instruction = f"Prefer sources from: {domains}." if domains else ""
+
+        prompt = (
+            "Search the web and return up to "
+            f"{min(max_results, 20)} relevant results for this request: {query}. "
+            "For each result include title, url, and a short snippet. "
+            f"Prioritize recency: {recency_hint}. {domain_instruction}"
+        )
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    self.CHAT_URL,
+                    headers=self._headers,
+                    json={
+                        "model": "sonar",
+                        "messages": [
+                            {"role": "system", "content": "You are a web search assistant. Use web results and provide concise factual output."},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": 0.1,
+                        "max_tokens": 800,
+                    },
+                    timeout=15.0,
+                )
+
+            if resp.status_code in (401, 403, 451):
+                return {"error": "invalid_key", "results": []}
+            if resp.status_code == 429:
+                return {"error": "rate_limited", "results": []}
+            if resp.status_code != 200:
+                return {"error": f"HTTP {resp.status_code}", "results": []}
+
+            raw = resp.json()
+            return self._normalize_chat_response(raw, max_results=max_results)
+        except Exception as e:
             return {"error": str(e), "results": []}
 
     def _normalize_response(self, raw: dict) -> dict:
@@ -123,6 +177,28 @@ class PerplexityProvider:
 
         return {
             "answer": "",
+            "results": results,
+        }
+
+    def _normalize_chat_response(self, raw: dict, max_results: int = 10) -> dict:
+        """Normalize chat-completions response to the same shape as _normalize_response."""
+        answer = ""
+        choices = raw.get("choices", [])
+        if choices:
+            answer = choices[0].get("message", {}).get("content", "") or ""
+
+        citations = raw.get("citations", []) or []
+        results = []
+        for url in citations[:min(max_results, 20)]:
+            results.append({
+                "title": url,
+                "content": answer[:500],
+                "url": url,
+                "age": "",
+            })
+
+        return {
+            "answer": answer,
             "results": results,
         }
 

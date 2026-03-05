@@ -177,18 +177,26 @@ class WebSearchProvider:
     async def get_market_news(self, topic: str = "stock market today") -> dict:
         provider, label = self._pick(1)
         if not provider:
-            return {"topic": topic, "article_count": 0, "summary": "", "articles": []}
+            return {"topic": topic, "article_count": 0, "summary": "", "articles": [], "provider_used": "none"}
         result = await provider.get_market_news(topic)
         if result.get("error"):
+            err = str(result.get("error", ""))
+            status = "unknown"
+            if "HTTP" in err:
+                status = err.replace("HTTP", "").strip()
             fb_provider, fb_label = self._fallback(label, 1)
             if fb_provider:
-                print(f"[WebSearch] {label} failed, falling back to {fb_label}")
+                print(f"[WebNews] {label} failed status={status} -> fallback={fb_label}")
                 result = await fb_provider.get_market_news(topic)
                 if not result.get("error"):
                     self._record(fb_label, 1)
+                    if isinstance(result, dict):
+                        result["provider_used"] = fb_label
                 return result
         else:
             self._record(label, 1)
+            if isinstance(result, dict):
+                result["provider_used"] = label
         return result
 
     async def get_ticker_news_sentiment(self, ticker: str, company_name: str = "") -> dict:

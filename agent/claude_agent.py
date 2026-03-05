@@ -767,6 +767,29 @@ class TradingAgent:
                 regime_data = {"regime": "neutral", "confidence": 0}
             market_data = apply_institutional_scoring(market_data, regime_data=regime_data)
 
+        plan = query_info.get("orchestration_plan", {}) if 'query_info' in locals() and isinstance(query_info, dict) else {}
+        if isinstance(market_data, dict) and plan.get("web_news"):
+            news_context = await self._fetch_web_news_context(plan, user_prompt)
+            market_data["news_context"] = news_context
+            if plan.get("needs_citations"):
+                min_citations = max(1, int(plan.get("min_citations", 3) or 3))
+                distinct_urls = self._distinct_article_urls(news_context.get("articles", []))
+                if len(distinct_urls) < min_citations:
+                    return {
+                        "type": "error",
+                        "analysis": "Unable to fetch sufficient cited sources right now.",
+                        "structured": {
+                            "display_type": "error",
+                            "code": "NEWS_SOURCES_UNAVAILABLE",
+                            "message": "Unable to fetch sufficient cited sources right now.",
+                        },
+                    }
+                user_prompt = (
+                    user_prompt
+                    + "\n\n[CITATION REQUIREMENT]\n"
+                    + f"Use ONLY URLs from news_context. Include at least {min_citations} distinct URLs in your answer."
+                )
+
         data_done_time = time.time()
         data_ms = int((data_done_time - start_time) * 1000)
 
@@ -1511,6 +1534,14 @@ class TradingAgent:
                 result["asset_classes"] = ["equities"]
             if "filters" not in result:
                 result["filters"] = {}
+            if "web_news" not in result:
+                result["web_news"] = bool(result.get("api_calls", {}).get("news_search"))
+            if "needs_citations" not in result:
+                result["needs_citations"] = False
+            if "news_query" not in result:
+                result["news_query"] = None
+            if "min_citations" not in result:
+                result["min_citations"] = 3
 
             # Map api_calls to modules for backward compatibility with orchestration plan
             api = result["api_calls"]
@@ -2252,6 +2283,18 @@ class TradingAgent:
             plan["response_style"] = "institutional_brief"
         if "priority_depth" not in plan:
             plan["priority_depth"] = "medium"
+        if "web_news" not in plan:
+            plan["web_news"] = bool(plan.get("_api_calls", {}).get("news_search"))
+        if "needs_citations" not in plan:
+            plan["needs_citations"] = False
+        if "news_query" not in plan:
+            plan["news_query"] = None
+        min_citations = plan.get("min_citations", 3)
+        try:
+            min_citations = int(min_citations)
+        except Exception:
+            min_citations = 3
+        plan["min_citations"] = max(1, min_citations)
 
         plan = self._apply_priority_overrides(plan, prompt)
         return plan
@@ -2278,7 +2321,34 @@ class TradingAgent:
             plan["modules"]["fundamental_validation"] = True
             plan["modules"]["macro_context"] = True
 
+        time_sensitive_news_signals = [
+            "today", "latest", "last 24", "breaking", "headline", "what happened", "why did", "market-moving",
+            "news", "sources", "citations", "url",
+        ]
+        wants_citations_signals = ["source", "sources", "citation", "citations", "url", "urls", "link", "links"]
+        if any(s in q for s in time_sensitive_news_signals):
+            plan["web_news"] = True
+            plan.setdefault("_api_calls", {})["news_search"] = True
+            if isinstance(plan.get("modules"), dict):
+                plan["modules"]["macro_context"] = True
+        if any(s in q for s in wants_citations_signals):
+            plan["needs_citations"] = True
+            plan["min_citations"] = max(3, int(plan.get("min_citations", 3) or 3))
+            plan["web_news"] = True
+
+        if plan.get("web_news") and not plan.get("news_query"):
+            plan["news_query"] = self._derive_news_query(prompt)
+
         return plan
+
+    def _derive_news_query(self, prompt: str) -> str:
+        import re
+        q = (prompt or "").strip()
+        q = re.sub(r"\s+", " ", q)
+        q = re.sub(r"(?i)\b(provide|with|include)\s+(sources?|citations?|urls?)\b", "", q)
+        q = re.sub(r"(?i)\b(last\s+24\s+hours?|today|latest|breaking)\b", "", q)
+        q = re.sub(r"\s+", " ", q).strip(" ?")
+        return q or "stock market financial news today"
 
     def _plan_to_query_info(self, plan: dict) -> dict:
         intent = plan.get("intent", "cross_asset_trending")
@@ -2682,6 +2752,60 @@ class TradingAgent:
             return None
 
         return context
+
+    @staticmethod
+    def _distinct_article_urls(articles: list) -> list:
+        urls = []
+        seen = set()
+        for a in articles or []:
+            if not isinstance(a, dict):
+                continue
+            u = (a.get("url") or "").strip()
+            if not u or u in seen:
+                continue
+            seen.add(u)
+            urls.append(u)
+        return urls
+
+    async def _fetch_web_news_context(self, plan: dict, user_prompt: str) -> dict:
+        if not self.data.web_search:
+            return {"query": plan.get("news_query") or self._derive_news_query(user_prompt), "provider_used": "none", "articles": []}
+
+        query = plan.get("news_query") or self._derive_news_query(user_prompt)
+        min_citations = max(1, int(plan.get("min_citations", 3) or 3))
+        providers_tried = []
+
+        candidate_queries = [query]
+        if "market" not in query.lower():
+            candidate_queries.append(f"{query} market news")
+        candidate_queries.append("stock market breaking news today")
+
+        best = {"query": query, "provider_used": "none", "articles": []}
+        for q in candidate_queries[:3]:
+            res = await self.data.web_search.get_market_news(topic=q)
+            provider = res.get("provider_used", "unknown") if isinstance(res, dict) else "unknown"
+            articles = res.get("articles", []) if isinstance(res, dict) else []
+            providers_tried.append(provider)
+            normalized = []
+            for a in articles:
+                if not isinstance(a, dict):
+                    continue
+                normalized.append({
+                    "title": a.get("title", ""),
+                    "url": a.get("url", ""),
+                    "source": a.get("source", ""),
+                    "published": a.get("published", a.get("age", "")),
+                    "description": a.get("content", a.get("description", "")),
+                })
+            distinct = self._distinct_article_urls(normalized)
+            print(f"[WebNews] enabled query=\"{q}\" provider={provider} articles={len(distinct)}")
+            if len(distinct) > len(self._distinct_article_urls(best.get("articles", []))):
+                best = {"query": q, "provider_used": provider, "articles": normalized}
+            if len(distinct) >= min_citations:
+                break
+
+        best["providers_tried"] = providers_tried
+        return best
 
     DEEP_ANALYSIS_CATEGORIES = {
         "ticker_analysis", "investments", "portfolio_review", "followup",

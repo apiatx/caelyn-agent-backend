@@ -2290,11 +2290,10 @@ class MarketDataService:
             if e.get("ticker") and len(e["ticker"]) <= 5
         ]
 
-        async def light_enrich_earnings(ticker):
+        def light_enrich_earnings(ticker):
             try:
                 earnings_hist = self.finnhub.get_earnings_surprises(ticker)
-                recommendations = self.finnhub.get_recommendation_trends(
-                    ticker)
+                recommendations = self.finnhub.get_recommendation_trends(ticker)
                 return {
                     "snapshot": {},
                     "technicals": {},
@@ -2306,10 +2305,7 @@ class MarketDataService:
                 return {"error": str(e)}
 
         results = await asyncio.gather(
-            *[
-                asyncio.to_thread(lambda t=t: light_enrich_earnings(t))
-                for t in earnings_tickers
-            ],
+            *[asyncio.to_thread(light_enrich_earnings, t) for t in earnings_tickers],
             return_exceptions=True,
         )
 
