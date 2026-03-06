@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, Header, HTTPException, Body
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -1319,8 +1319,16 @@ async def query_agent(
 
     print(f"[API] request_id={req_id} query={user_query[:100]}, history_turns={len(history)}, conv_id={conv_id}")
 
-    try:
-        result = await asyncio.wait_for(
+    async def _stream_query():
+        """
+        Runs the query and streams keepalive spaces every 8s.
+        Prevents Replit proxy from killing connections on slow queries (Grok, investments).
+        Frontend strips leading whitespace before JSON.parse() — no frontend logic change needed.
+        Final payload is always a single valid JSON object.
+        """
+        import json as _j
+
+        task = asyncio.create_task(
             agent.handle_query(
                 user_query,
                 history=history,
@@ -1328,126 +1336,146 @@ async def query_agent(
                 request_id=req_id,
                 csv_data=body.csv_data,
                 chatbox_mode=body.chatbox_mode or False,
-            ),
-            timeout=150.0,
+            )
         )
 
-        timing_meta = None
-        if isinstance(result, dict) and result.get("_timing"):
-            timing_meta = result.pop("_timing")
-        if isinstance(result, dict) and result.get("_routing"):
-            meta["routing"] = result.pop("_routing")
-        if isinstance(result, dict) and result.get("_cross_asset_debug"):
-            meta["cross_asset_debug"] = result.pop("_cross_asset_debug")
-        if timing_meta:
-            meta["timing_ms"] = timing_meta
+        result = None
+        timed_out = False
 
-        def _is_truly_empty(r):
-            if not r:
-                return True
-            if not isinstance(r, dict):
-                return True
-            if r.get("type") == "error":
-                return False
-            structured = r.get("structured", {})
-            if not isinstance(structured, dict) or not structured:
-                analysis = r.get("analysis", "")
-                return not analysis or len(str(analysis).strip()) == 0
-            meaningful_keys = {"message", "summary", "picks", "conviction_picks",
-                               "recommendations", "tickers", "sectors", "results",
-                               "analysis_text", "briefing", "holdings", "top_picks",
-                               "opportunities", "ranked_candidates", "watchlist",
-                               "equities", "crypto", "commodities", "social_trading_signal",
-                               "rows", "screen_name",
-                               "top_trades", "bearish_setups"}
-            has_content = any(structured.get(k) for k in meaningful_keys)
-            if has_content:
-                return False
-            non_meta = {k: v for k, v in structured.items()
-                        if k not in {"display_type", "type", "scan_type"} and v}
-            return len(non_meta) == 0
-
-        if isinstance(result, dict) and result.get("_parse_error"):
-            parse_err = result.pop("_parse_error")
-            meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
-            resp = _error_envelope(
-                "CLAUDE_JSON_PARSE_FAIL",
-                "Claude returned a response that could not be parsed as structured JSON.",
-                meta,
-                details={"preview": parse_err.get("preview", "")[:800]},
-            )
-            _resp_log(req_id, 200, "error", resp)
-            if conv_id:
-                try:
-                    updated_messages = list(history)
-                    updated_messages.append({"role": "user", "content": user_query})
-                    _asst_content = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
-                    updated_messages.append({"role": "assistant", "content": _asst_content})
-                    _save_msgs(conv_id, updated_messages)
-                except Exception:
-                    pass
-            return JSONResponse(content=resp)
-
-        if _is_truly_empty(result):
-            print(f"[API] WARNING: Empty/blank result returned for query: {user_query[:80]}")
-            meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
-            resp = _error_envelope(
-                "EMPTY_RESPONSE",
-                "The analysis returned empty. This usually means data sources were rate-limited. Please wait a minute and try again.",
-                meta,
-            )
-            _resp_log(req_id, 200, "error", resp)
-            if conv_id:
-                try:
-                    updated_messages = list(history)
-                    updated_messages.append({"role": "user", "content": user_query})
-                    _asst_content2 = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
-                    updated_messages.append({"role": "assistant", "content": _asst_content2})
-                    _save_msgs(conv_id, updated_messages)
-                except Exception:
-                    pass
-            return JSONResponse(content=resp)
-
-        if conv_id:
+        for _ in range(15):  # max 15 * 8s = 120s
             try:
-                updated_messages = list(history)
-                updated_messages.append({"role": "user", "content": user_query})
-                _asst_content3 = result.get("analysis", "") if isinstance(result, dict) else ""
-                if not _asst_content3:
-                    _asst_content3 = _json.dumps(result, default=str)[:8000]
-                updated_messages.append({"role": "assistant", "content": _asst_content3})
-                _save_msgs(conv_id, updated_messages)
-            except Exception as e:
-                print(f"[API] Failed to save conversation: {e}")
+                result = await asyncio.wait_for(asyncio.shield(task), timeout=8.0)
+                break
+            except asyncio.TimeoutError:
+                yield b" "  # keepalive — proxy sees bytes, stays alive
+        else:
+            task.cancel()
+            timed_out = True
 
         meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
-        resp = _ok_envelope(result, meta)
-        _resp_log(req_id, 200, "ok", resp)
-        return JSONResponse(content=resp)
 
-    except asyncio.TimeoutError:
-        print(f"[API] request_id={req_id} status=timeout after 150s")
-        meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
-        resp = _error_envelope(
-            "REQUEST_TIMEOUT",
-            "Request timed out. The data sources may be slow or rate-limited — please wait a minute and try again.",
-            meta,
-        )
-        _resp_log(req_id, 200, "error", resp)
-        return JSONResponse(content=resp)
+        if timed_out:
+            resp = _error_envelope("REQUEST_TIMEOUT", "Request timed out after 120s — please try again.", meta)
+            _resp_log(req_id, 200, "timeout", resp)
+            yield _j.dumps(resp).encode()
+            return
 
-    except Exception as e:
-        import traceback
-        print(f"[API] request_id={req_id} status=error error={e}")
-        traceback.print_exc()
-        meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
-        resp = _error_envelope(
-            "UNHANDLED_EXCEPTION",
-            f"Something went wrong: {str(e)}",
-            meta,
-        )
-        _resp_log(req_id, 500, "error", resp)
-        return JSONResponse(content=resp)
+        try:
+            timing_meta = None
+            if isinstance(result, dict) and result.get("_timing"):
+                timing_meta = result.pop("_timing")
+            if isinstance(result, dict) and result.get("_routing"):
+                meta["routing"] = result.pop("_routing")
+            if isinstance(result, dict) and result.get("_cross_asset_debug"):
+                meta["cross_asset_debug"] = result.pop("_cross_asset_debug")
+            if timing_meta:
+                meta["timing_ms"] = timing_meta
+
+            def _is_truly_empty(r):
+                if not r:
+                    return True
+                if not isinstance(r, dict):
+                    return True
+                if r.get("type") == "error":
+                    return False
+                structured = r.get("structured", {})
+                if not isinstance(structured, dict) or not structured:
+                    analysis = r.get("analysis", "")
+                    return not analysis or len(str(analysis).strip()) == 0
+                meaningful_keys = {"message", "summary", "picks", "conviction_picks",
+                                   "recommendations", "tickers", "sectors", "results",
+                                   "analysis_text", "briefing", "holdings", "top_picks",
+                                   "opportunities", "ranked_candidates", "watchlist",
+                                   "equities", "crypto", "commodities", "social_trading_signal",
+                                   "rows", "screen_name",
+                                   "top_trades", "bearish_setups"}
+                has_content = any(structured.get(k) for k in meaningful_keys)
+                if has_content:
+                    return False
+                non_meta = {k: v for k, v in structured.items()
+                            if k not in {"display_type", "type", "scan_type"} and v}
+                return len(non_meta) == 0
+
+            if isinstance(result, dict) and result.get("_parse_error"):
+                parse_err = result.pop("_parse_error")
+                meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
+                resp = _error_envelope(
+                    "CLAUDE_JSON_PARSE_FAIL",
+                    "Claude returned a response that could not be parsed as structured JSON.",
+                    meta,
+                    details={"preview": parse_err.get("preview", "")[:800]},
+                )
+                _resp_log(req_id, 200, "error", resp)
+                if conv_id:
+                    try:
+                        updated_messages = list(history)
+                        updated_messages.append({"role": "user", "content": user_query})
+                        _asst_content = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
+                        updated_messages.append({"role": "assistant", "content": _asst_content})
+                        _save_msgs(conv_id, updated_messages)
+                    except Exception:
+                        pass
+                yield _j.dumps(resp).encode()
+                return
+
+            if _is_truly_empty(result):
+                print(f"[API] WARNING: Empty/blank result returned for query: {user_query[:80]}")
+                meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
+                resp = _error_envelope(
+                    "EMPTY_RESPONSE",
+                    "The analysis returned empty. This usually means data sources were rate-limited. Please wait a minute and try again.",
+                    meta,
+                )
+                _resp_log(req_id, 200, "error", resp)
+                if conv_id:
+                    try:
+                        updated_messages = list(history)
+                        updated_messages.append({"role": "user", "content": user_query})
+                        _asst_content2 = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
+                        updated_messages.append({"role": "assistant", "content": _asst_content2})
+                        _save_msgs(conv_id, updated_messages)
+                    except Exception:
+                        pass
+                yield _j.dumps(resp).encode()
+                return
+
+            if conv_id:
+                try:
+                    updated_messages = list(history)
+                    updated_messages.append({"role": "user", "content": user_query})
+                    _asst_content3 = result.get("analysis", "") if isinstance(result, dict) else ""
+                    if not _asst_content3:
+                        _asst_content3 = _json.dumps(result, default=str)[:8000]
+                    updated_messages.append({"role": "assistant", "content": _asst_content3})
+                    _save_msgs(conv_id, updated_messages)
+                except Exception as e:
+                    print(f"[API] Failed to save conversation: {e}")
+
+            meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
+            resp = _ok_envelope(result, meta)
+            _resp_log(req_id, 200, "ok", resp)
+            yield _j.dumps(resp).encode()
+
+        except asyncio.TimeoutError:
+            meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
+            resp = _error_envelope("REQUEST_TIMEOUT", "Request timed out — please try again.", meta)
+            _resp_log(req_id, 200, "timeout", resp)
+            yield _j.dumps(resp).encode()
+
+        except Exception as e:
+            import traceback
+            print(f"[API] request_id={req_id} status=error error={e}")
+            traceback.print_exc()
+            meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
+            resp = _error_envelope("UNHANDLED_EXCEPTION", f"Something went wrong: {str(e)}", meta)
+            _resp_log(req_id, 500, "error", resp)
+            yield _j.dumps(resp).encode()
+
+    return StreamingResponse(
+        _stream_query(),
+        media_type="application/json",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 class TestCsvRequest(BaseModel):
