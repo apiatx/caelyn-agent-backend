@@ -441,7 +441,7 @@ export default function TradingAgent() {
         headers: { 'Content-Type': 'application/json', 'X-API-Key': AGENT_API_KEY },
         body: JSON.stringify(payload),
       });
-      const raw = await res.text();
+      const raw = (await res.text()).trim();
       console.log('[RECV_RAW]', res.status, raw.slice(0, 800));
 
       if (!res.ok) {
