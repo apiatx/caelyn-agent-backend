@@ -614,6 +614,11 @@ Keep it tight. This is a mood check, not a full scan."""
         Returns structured list of tickers with thesis and sector context.
         This is the DISCOVERY layer for Best Investments — thematic first, not Finviz first.
         """
+        from data.cache import cache, XAI_THEMATIC_TTL
+        cached = cache.get("xai_thematic_investments")
+        if cached:
+            return cached
+
         prompt = """Search X/Twitter right now for what serious long-term investors, fund managers, 
 and well-followed analysts are discussing as their highest conviction multi-year holdings.
 
@@ -658,8 +663,9 @@ Return ONLY a JSON object (no markdown, no backticks):
 Return 8-12 tickers. Prioritize Tier 1 conviction. Include at least one from each major sector if genuine conviction exists.
 Be specific and opinionated — generic blue chips like AAPL or MSFT only if there is a specific fresh thesis."""
 
-        result = await self._call_grok_with_x_search(prompt, raw_mode=False, timeout=12.0)
+        result = await self._call_grok_with_x_search(prompt, raw_mode=False, timeout=22.0)
         if isinstance(result, dict) and "thematic_leaders" in result:
+            cache.set("xai_thematic_investments", result, XAI_THEMATIC_TTL)
             return result
         # If Grok returned raw text, try to extract JSON
         if isinstance(result, dict) and "raw" in result:
@@ -669,7 +675,9 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
             if match:
                 import json as _json
                 try:
-                    return _json.loads(match.group())
+                    parsed = _json.loads(match.group())
+                    cache.set("xai_thematic_investments", parsed, XAI_THEMATIC_TTL)
+                    return parsed
                 except Exception:
                     pass
         return {"thematic_leaders": [], "summary": "Grok thematic scan unavailable", "error": True}

@@ -3005,15 +3005,21 @@ class TradingAgent:
             return await self.data.get_dashboard()
 
         elif category == "investments":
+            # Check cache for grok thematic data before firing network call
+            from data.cache import cache, XAI_THEMATIC_TTL
+            _cached_thematic = cache.get("xai_thematic_investments")
+
             # Run Grok thematic discovery + Finviz scan truly in parallel
-            # Hard 12s cap on Grok — if it misses, Finviz results still flow through
+            # Hard 22s cap on Grok — if it misses, Finviz results still flow through
             async def _safe_grok_thematic():
+                if _cached_thematic:
+                    return _cached_thematic
                 if not self.data.xai:
                     return {}
                 try:
                     return await asyncio.wait_for(
                         self.data.xai.get_thematic_conviction_ideas(),
-                        timeout=12.0,
+                        timeout=22.0,
                     )
                 except Exception as e:
                     print(f"[INVESTMENTS] Grok thematic failed/timed out: {e}")
