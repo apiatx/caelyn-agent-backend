@@ -567,8 +567,15 @@ async def delete_template_endpoint(
 async def earnings_detail(request: Request, ticker: str = ""):
     """
     Enriched earnings detail for a single ticker.
-    Combines: Finnhub earnings history/calendar + web search news/analyst context.
-    Called when user clicks an earnings entry in the calendar popup.
+    Called on-demand when user clicks an earnings entry (NOT on page load).
+
+    Data sources (all free tier / included in API key):
+      - Finnhub: company profile, earnings history, analyst trends, quote, news
+      - SEC EDGAR XBRL: revenue, financials (free, no key needed)
+
+    IMPORTANT: No Perplexity, no LLM, no web_search calls here.
+    News sentiment is a simple keyword heuristic (see lines below).
+    news_summary field is always empty string — no AI summarization.
     """
     ticker = ticker.upper().strip()
     if not ticker or len(ticker) > 6:
