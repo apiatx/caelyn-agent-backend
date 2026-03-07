@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Activity, BarChart3, TrendingUp, ChartLine, Brain, Zap, DollarSign, Building2, Layers, Coins, ChevronRight, ChevronDown, ChevronLeft, Wallet, Users, MessageSquare, Rocket, Globe, ArrowLeftRight, Search, Menu, X, Gamepad2, Gem, CalendarDays, Settings, Info, Newspaper } from "lucide-react";
+import { Activity, BarChart3, TrendingUp, ChartLine, Brain, Zap, DollarSign, Building2, Layers, Coins, ChevronRight, ChevronDown, ChevronLeft, Wallet, Users, MessageSquare, Rocket, Globe, ArrowLeftRight, Search, Menu, X, Gamepad2, Gem, CalendarDays, Settings, Info, Newspaper, ScrollText } from "lucide-react";
 import { useLocation } from "wouter";
 import caelynLogo from "@assets/ChatGPT_Image_Feb_20,_2026,_01_10_21_AM_1771571543846.png";
 import { SettingsModal } from "@/pages/settings";
+import { HistoryPanel } from "@/components/HistoryPanel";
 
 interface SidebarNavigationProps {
   className?: string;
@@ -25,6 +26,7 @@ export function SidebarNavigation({ className = "", isCollapsed, isMobile = fals
   const [location, setLocation] = useLocation();
   const [expandedItems, setExpandedItems] = useState<string[]>(['crypto-stocks']);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const navigateTo = (url: string) => {
     setLocation(url);
@@ -496,6 +498,15 @@ export function SidebarNavigation({ className = "", isCollapsed, isMobile = fals
           {!isCollapsed && <span>Settings</span>}
         </button>
         <button
+          onClick={() => setHistoryOpen(true)}
+          title={isCollapsed ? "History" : undefined}
+          className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-2'} px-2 ${isMobile ? 'py-3' : 'py-1.5'} text-left text-xs font-medium transition-all duration-200 rounded-lg text-white/45 hover:bg-white/[0.04] hover:text-white/80`}
+          data-testid="nav-history"
+        >
+          <ScrollText className="w-4 h-4" />
+          {!isCollapsed && <span>History</span>}
+        </button>
+        <button
           onClick={() => navigateTo('/app/about')}
           title={isCollapsed ? "About" : undefined}
           className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-2'} px-2 ${isMobile ? 'py-3' : 'py-1.5'} text-left text-xs font-medium transition-all duration-200 rounded-lg ${
@@ -522,6 +533,8 @@ export function SidebarNavigation({ className = "", isCollapsed, isMobile = fals
 
     {/* Settings Modal */}
     <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    {/* History Panel */}
+    <HistoryPanel isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
     </>
   );
 }
