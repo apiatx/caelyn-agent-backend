@@ -9,7 +9,7 @@ import openai
 
 from agent.data_compressor import compress_data
 from agent.institutional_scorer import apply_institutional_scoring
-from agent.prompts import SYSTEM_PROMPT, USER_INVESTMENT_PROFILE, CORE_QUANT_DNA, DEFAULT_PERSONAL_PROFILE, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, REASONING_BRIEF_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT, SMART_ORCHESTRATOR_PROMPT, PREDICTION_MARKETS_CONTRACT, SECTOR_ROTATION_CONTRACT
+from agent.prompts import SYSTEM_PROMPT, USER_INVESTMENT_PROFILE, CORE_QUANT_DNA, DEFAULT_PERSONAL_PROFILE, QUERY_CLASSIFIER_PROMPT, ORCHESTRATION_PROMPT, REASONING_BRIEF_PROMPT, TRENDING_VALIDATION_PROMPT, CROSS_ASSET_TRENDING_CONTRACT, BEST_TRADES_CONTRACT, DETERMINISTIC_SCREENER_CONTRACT, SMART_ORCHESTRATOR_PROMPT, PREDICTION_MARKETS_CONTRACT, SECTOR_ROTATION_CONTRACT, EARNINGS_CATALYST_CONTRACT
 from data.market_data_service import MarketDataService
 
 
@@ -686,6 +686,14 @@ class TradingAgent:
                     category = "prediction_markets"
                     query_info["category"] = "prediction_markets"
 
+            # Force category override for earnings_catalyst preset —
+            # prevents classifier from reclassifying to investments/general
+            if preset_intent and self._resolve_preset(preset_intent) == "earnings_catalyst":
+                if category != "earnings_catalyst":
+                    print(f"[ROUTING] Forcing category override: {category} → earnings_catalyst (preset_intent={preset_intent})")
+                    category = "earnings_catalyst"
+                    query_info["category"] = "earnings_catalyst"
+
             orch_plan = query_info.get("orchestration_plan")
             if orch_plan:
                 cross_market_override = self._detect_cross_market(user_prompt.lower().strip())
@@ -876,7 +884,7 @@ class TradingAgent:
         claude_ms = int((time.time() - data_done_time) * 1000)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
 
-        if chatbox_mode or category == "prediction_markets":
+        if chatbox_mode or category == "prediction_markets" or category == "earnings_catalyst":
             result = self._parse_chatbox_response(raw_response, request_id=request_id)
         else:
             result = self._parse_response(raw_response, request_id=request_id)
@@ -2882,7 +2890,7 @@ class TradingAgent:
     DEEP_ANALYSIS_CATEGORIES = {
         "ticker_analysis", "investments", "portfolio_review", "followup",
         "crypto", "best_trades", "cross_market", "prediction_markets",
-        "chat", "sector_rotation",
+        "chat", "sector_rotation", "earnings_catalyst",
     }
 
     # Extended thinking budgets (tokens) for Sonnet 4.5 categories.
@@ -2895,6 +2903,7 @@ class TradingAgent:
         "crypto": 5000,
         "portfolio_review": 5000,
         "prediction_markets": 0,
+        "earnings_catalyst": 0,
         "chat": 4000,
         "sector_rotation": 4000,
     }
@@ -4740,7 +4749,7 @@ Be direct and opinionated. Tell me what you actually think."""
             _profile_text += "\n\n" + _active_profile
         # If no personal profile active, just use core DNA (default Caelyn)
 
-        if chatbox_mode or category == "prediction_markets":
+        if chatbox_mode or category == "prediction_markets" or category == "earnings_catalyst":
             from agent.prompts import CHATBOX_SYSTEM_PROMPT
             system_blocks = [
                 {
@@ -4891,6 +4900,12 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
                 "text": PREDICTION_MARKETS_CONTRACT,
             })
 
+        if category == "earnings_catalyst":
+            system_blocks.append({
+                "type": "text",
+                "text": EARNINGS_CATALYST_CONTRACT,
+            })
+
         if category == "sector_rotation":
             system_blocks.append({
                 "type": "text",
@@ -4910,7 +4925,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         elif category == "investments":
             model = "claude-sonnet-4-5-20250929"
             token_limit = 8000
-        elif category in ("ticker_analysis", "portfolio_review", "prediction_markets"):
+        elif category in ("ticker_analysis", "portfolio_review", "prediction_markets", "earnings_catalyst"):
             model = "claude-sonnet-4-5-20250929"
             token_limit = 10000
         elif category == "chat":
