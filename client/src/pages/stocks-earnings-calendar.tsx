@@ -141,6 +141,31 @@ interface EarningsDetailData {
   news_sentiment?: string;
 }
 
+interface SmartTicker {
+  ticker: string;
+  date: string;
+  eps_estimate: number | null;
+  revenue_estimate: number | null;
+  hour: string;
+  quarter: number | null;
+  year: number | null;
+  buzz_level: number;
+  sentiment: string;
+  news_signal: string;
+  analyst_focus: boolean;
+  one_line: string;
+  score: number;
+}
+
+interface SmartDayData {
+  tickers: SmartTicker[];
+  count: number;
+  cached_at: number;
+  fallback?: boolean;
+  scanning?: boolean;
+  cache_status?: { status: string; last_updated: string | null; age_hours?: number };
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────
 function parsePriceArray(raw: string): number[] {
   try {
@@ -414,6 +439,20 @@ async function fetchFinnhubCalendar(fromDate: string, toDate: string): Promise<F
     console.warn("[FINNHUB_CALENDAR] fetch failed:", e);
   }
   return [];
+}
+
+async function fetchSmartEarnings(date: string): Promise<SmartDayData | null> {
+  try {
+    const res = await fetch(
+      `${AGENT_BACKEND_URL}/api/earnings/smart/${encodeURIComponent(date)}`
+    );
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (e) {
+    console.warn("[SMART_EARNINGS] fetch failed:", e);
+  }
+  return null;
 }
 
 // ─── Earnings Detail Modal ────────────────────────────────────────
@@ -773,6 +812,11 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
   const [finnhubLoading, setFinnhubLoading] = useState(false);
   const finnhubFetchedWeeks = useRef<Set<string>>(new Set());
 
+  // Smart View state
+  const [viewMode, setViewMode] = useState<"smart" | "all">("smart");
+  const [smartData, setSmartData] = useState<Record<string, SmartDayData>>({});
+  const [smartLoading, setSmartLoading] = useState(false);
+
   // Build Polymarket date map
   const polyDateMap = new Map<string, EarningsEntry[]>();
   const undated: EarningsEntry[] = [];
@@ -819,6 +863,21 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
       });
     }).catch(() => {}).finally(() => setFinnhubLoading(false));
   }, [weekStart]);
+
+  // Fetch smart earnings data for the selected day
+  const smartFetchedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (viewMode !== "smart") return;
+    if (selectedDayKey === "undated") return;
+    if (smartFetchedRef.current.has(selectedDayKey)) return;
+    smartFetchedRef.current.add(selectedDayKey);
+    setSmartLoading(true);
+    fetchSmartEarnings(selectedDayKey).then((data) => {
+      if (data) {
+        setSmartData(prev => ({ ...prev, [selectedDayKey]: data }));
+      }
+    }).finally(() => setSmartLoading(false));
+  }, [selectedDayKey, viewMode]);
 
   // Merge: Polymarket entries take priority, Finnhub fills in the rest
   const dateMap = new Map<string, EarningsEntry[]>();
@@ -981,6 +1040,58 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
         </div>
       </div>
 
+      {/* Smart/All toggle + cache status */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-lg border border-white/[0.08] overflow-hidden">
+            <button
+              onClick={() => setViewMode("smart")}
+              className={`px-3 py-1 text-[10px] font-bold transition-all ${
+                viewMode === "smart"
+                  ? "bg-purple-500/20 text-purple-400 border-r border-white/[0.08]"
+                  : "bg-transparent text-white/35 border-r border-white/[0.08] hover:text-white/50"
+              }`}
+            >
+              <Sparkles className="w-3 h-3 inline mr-1 -mt-0.5" />Smart
+            </button>
+            <button
+              onClick={() => setViewMode("all")}
+              className={`px-3 py-1 text-[10px] font-bold transition-all ${
+                viewMode === "all"
+                  ? "bg-blue-500/20 text-blue-400"
+                  : "bg-transparent text-white/35 hover:text-white/50"
+              }`}
+            >
+              All
+            </button>
+          </div>
+          {viewMode === "smart" && (() => {
+            const sd = smartData[selectedDayKey];
+            const cs = sd?.cache_status;
+            if (smartLoading || sd?.scanning) {
+              return (
+                <span className="text-[9px] text-purple-400/60 flex items-center gap-1">
+                  <Loader2 className="w-2.5 h-2.5 animate-spin" /> Scanning...
+                </span>
+              );
+            }
+            if (cs?.last_updated) {
+              return (
+                <span className="text-[9px] text-white/20">
+                  Updated: {new Date(cs.last_updated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              );
+            }
+            return null;
+          })()}
+        </div>
+        {viewMode === "smart" && (
+          <span className="text-[9px] text-white/15">
+            AI-curated via Grok + Perplexity
+          </span>
+        )}
+      </div>
+
       {/* Week day selector row */}
       <div className="grid grid-cols-7 gap-1.5 mb-5">
         {weekDays.map((day, i) => {
@@ -1053,14 +1164,180 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
         )}
       </div>
 
-      {/* Company list for selected day */}
-      {displayEntries.length === 0 ? (
+      {/* Smart View */}
+      {viewMode === "smart" && (() => {
+        const sd = smartData[selectedDayKey];
+        const smartTickers = sd?.tickers || [];
+        if (smartLoading && !sd) {
+          return (
+            <div className="text-center py-10 border border-white/[0.04] rounded-xl bg-white/[0.01]">
+              <Loader2 className="w-6 h-6 text-purple-400/40 mx-auto mb-2 animate-spin" />
+              <p className="text-sm text-white/25">Scanning earnings with AI...</p>
+              <p className="text-[10px] text-white/15 mt-1">Analyzing social buzz and news signals</p>
+            </div>
+          );
+        }
+        if (smartTickers.length === 0) {
+          return (
+            <div className="text-center py-10 border border-white/[0.04] rounded-xl bg-white/[0.01]">
+              <Calendar className="w-6 h-6 text-white/10 mx-auto mb-2" />
+              <p className="text-sm text-white/25">No high-signal earnings for this day</p>
+              <p className="text-[10px] text-white/15 mt-1">Switch to "All" view to see every ticker</p>
+            </div>
+          );
+        }
+        return (
+          <div className="space-y-2">
+            {smartTickers.map((st) => {
+              const enrich = enrichments[st.ticker];
+              const isEnrichLoading = enrichLoading.has(st.ticker);
+              const epsStr = st.eps_estimate != null ? `$${st.eps_estimate.toFixed(2)}` : null;
+              const revStr = st.revenue_estimate != null
+                ? (st.revenue_estimate >= 1e9 ? `$${(st.revenue_estimate / 1e9).toFixed(1)}B` : st.revenue_estimate >= 1e6 ? `$${(st.revenue_estimate / 1e6).toFixed(0)}M` : `$${st.revenue_estimate.toLocaleString()}`)
+                : null;
+              const qtr = st.quarter && st.year ? `Q${st.quarter} ${st.year}` : st.quarter ? `Q${st.quarter}` : null;
+              const timeStr = st.hour === "bmo" ? "Pre-Market" : st.hour === "amc" ? "After Hours" : null;
+              const sentimentEmoji = st.sentiment === "bullish" ? "\uD83D\uDFE2" : st.sentiment === "bearish" ? "\uD83D\uDD34" : "\uD83D\uDFE1";
+              const buzzIcon = st.buzz_level >= 7 ? "\uD83D\uDD25" : st.buzz_level >= 4 ? "\u3030\uFE0F" : "";
+
+              return (
+                <div
+                  key={`smart-${st.ticker}`}
+                  className="rounded-xl border border-white/[0.06] bg-white/[0.015] hover:bg-white/[0.03] hover:border-white/[0.1] transition-all group cursor-pointer"
+                  onClick={() => {
+                    // Build a minimal EarningsEntry for the modal
+                    const entry: EarningsEntry = {
+                      market: null,
+                      ticker: st.ticker,
+                      company: enrich?.company_name || st.ticker,
+                      eps: epsStr,
+                      quarter: qtr,
+                      time: timeStr,
+                      exchange: null,
+                      beatPct: -1,
+                      revenueEstimate: revStr,
+                      source: "finnhub",
+                      earningsDate: st.date,
+                    };
+                    setModalEntry(entry);
+                    fetchTickerDetail(st.ticker);
+                  }}
+                >
+                  <div className="flex items-start gap-4 p-4">
+                    {enrich?.logo ? (
+                      <img src={enrich.logo} alt={st.ticker} className="w-10 h-10 rounded-xl object-contain bg-white/5 p-1 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${tickerColor(st.ticker)} flex items-center justify-center flex-shrink-0 mt-0.5`}>
+                        <span className="text-xs font-bold text-white">{st.ticker.slice(0, 2)}</span>
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-white group-hover:text-blue-400 transition-colors">
+                            {enrich?.company_name || st.ticker}
+                          </p>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            <span className="text-[11px] font-mono text-white/40">{st.ticker}</span>
+                            {qtr && <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-400/70">{qtr}</span>}
+                            {timeStr && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-white/[0.04] text-white/30 flex items-center gap-0.5">
+                                <Clock className="w-2.5 h-2.5" /> {timeStr}
+                              </span>
+                            )}
+                            {enrich?.sector && <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-purple-500/10 text-purple-400/60">{enrich.sector}</span>}
+                          </div>
+                          {/* AI one-line thesis */}
+                          {st.one_line && (
+                            <p className="text-[10px] text-white/40 leading-relaxed mt-1.5 line-clamp-2">
+                              <Sparkles className="w-3 h-3 text-purple-400/50 inline mr-1 -mt-0.5" />
+                              {st.one_line}
+                            </p>
+                          )}
+                        </div>
+                        {/* Right side: Market Cap + Sentiment + Buzz */}
+                        <div className="flex-shrink-0 flex items-center gap-2">
+                          <span className="text-[10px] font-semibold text-white/35 font-mono min-w-[48px] text-right">
+                            {enrich?.market_cap ? formatMktCap(enrich.market_cap) : ""}
+                          </span>
+                          {/* Sentiment badge */}
+                          <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold ${
+                            st.sentiment === "bullish" ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400" :
+                            st.sentiment === "bearish" ? "bg-red-500/10 border border-red-500/20 text-red-400" :
+                            "bg-yellow-500/10 border border-yellow-500/20 text-yellow-400"
+                          }`}>
+                            <span>{sentimentEmoji}</span>
+                            <span className="capitalize">{st.sentiment}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Signal indicators row */}
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        {/* Buzz level */}
+                        {st.buzz_level > 0 && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-orange-500/8 border border-orange-500/15 text-orange-400/80 font-semibold flex items-center gap-1">
+                            {buzzIcon} Buzz: {st.buzz_level}/10
+                          </span>
+                        )}
+                        {/* News signal */}
+                        {st.news_signal === "high" && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/8 border border-purple-500/15 text-purple-400/80 font-semibold">
+                            High News Signal
+                          </span>
+                        )}
+                        {/* Analyst focus */}
+                        {st.analyst_focus && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/8 border border-blue-500/15 text-blue-400/80 font-semibold">
+                            Analyst Focus
+                          </span>
+                        )}
+                        {enrich?.beat_rate && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/8 border border-emerald-500/15 text-emerald-400/80 font-semibold">
+                            Beat Record: {enrich.beat_rate}
+                          </span>
+                        )}
+                      </div>
+                      {isEnrichLoading && (
+                        <div className="flex items-center gap-1.5 mt-2">
+                          <Loader2 className="w-3 h-3 text-blue-400/50 animate-spin" />
+                          <span className="text-[9px] text-white/25">Loading context...</span>
+                        </div>
+                      )}
+
+                      {/* Bottom row: EPS, Rev, Score */}
+                      <div className="flex items-center gap-4 mt-2.5">
+                        {epsStr && (
+                          <span className="text-[10px] text-white/30">
+                            <span className="text-white/50 font-semibold">EPS Est:</span> {epsStr}
+                          </span>
+                        )}
+                        {revStr && (
+                          <span className="text-[10px] text-white/30">
+                            <span className="text-white/50 font-semibold">Rev Est:</span> {revStr}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-blue-400/60 group-hover:text-blue-400 transition-colors ml-auto">
+                          View full details
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      {/* All View — Company list for selected day (existing logic, unchanged) */}
+      {viewMode === "all" && displayEntries.length === 0 ? (
         <div className="text-center py-10 border border-white/[0.04] rounded-xl bg-white/[0.01]">
           <Calendar className="w-6 h-6 text-white/10 mx-auto mb-2" />
           <p className="text-sm text-white/25">No earnings calls scheduled</p>
           <p className="text-[10px] text-white/15 mt-1">Try another day or navigate to a different week</p>
         </div>
-      ) : (
+      ) : viewMode === "all" && (
         <div className="space-y-2">
           {visibleEntries.map((e) => {
             const isHigh = e.beatPct >= 60;
