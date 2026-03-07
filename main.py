@@ -569,13 +569,14 @@ async def earnings_calendar(request: Request, from_date: str = "", to_date: str 
 @limiter.limit("20/minute")
 async def smart_earnings_for_date(request: Request, date: str):
     """
-    Return AI-curated earnings tickers for a specific date.
+    Return Tier 2 (social + news ranked) earnings tickers for a specific date.
     Reads from file-backed cache (populated by background scheduler).
-    Falls back to top tickers by revenue estimate if cache is empty.
+    If cache miss, returns empty tier2 list and triggers a background scan
+    for that week.
     """
     await _wait_for_init()
 
-    from data.smart_earnings_scanner import get_cached_smart_day, get_cache_status, get_fallback_top_tickers
+    from data.smart_earnings_scanner import get_cached_smart_day, get_cache_status
 
     cached = get_cached_smart_day(date)
     if cached:
@@ -583,55 +584,16 @@ async def smart_earnings_for_date(request: Request, date: str):
         cached["scanning"] = _smart_scan_running
         return JSONResponse(content=cached)
 
-    # Cache miss — build fallback from calendar data
-    from data.cache import cache
-    cal_key = f"earnings_calendar_all_week"
-    cal_cached = cache.get(cal_key)
+    # Cache miss — return empty tier2, trigger background scan for this week
+    result = {
+        "tickers": [],
+        "count": 0,
+        "cached_at": 0,
+        "cache_status": get_cache_status(),
+        "scanning": True,  # we're about to start one
+    }
 
-    if not cal_cached:
-        # Fetch fresh calendar
-        try:
-            from datetime import datetime as dt2, timedelta as td2
-            d = dt2.strptime(date, "%Y-%m-%d")
-            monday = d - td2(days=d.weekday())
-            friday = monday + td2(days=4)
-            data = await asyncio.wait_for(
-                asyncio.to_thread(
-                    agent.data.finnhub.client.earnings_calendar,
-                    _from=monday.strftime("%Y-%m-%d"),
-                    to=friday.strftime("%Y-%m-%d"),
-                    symbol=None,
-                ),
-                timeout=10.0,
-            )
-            cal_cached = data.get("earningsCalendar", [])
-            cache.set(cal_key, cal_cached, 300)
-        except Exception as e:
-            print(f"[SMART_EARNINGS] Fallback calendar fetch failed: {e}")
-            cal_cached = []
-
-    # Build fallback with raw ticker data
-    fallback_entries = []
-    for e in (cal_cached or []):
-        sym = e.get("symbol")
-        edate = e.get("date")
-        if not sym or not edate:
-            continue
-        fallback_entries.append({
-            "ticker": sym,
-            "date": edate,
-            "eps_estimate": e.get("epsEstimate"),
-            "revenue_estimate": e.get("revenueEstimate"),
-            "hour": e.get("hour", ""),
-            "quarter": e.get("quarter"),
-            "year": e.get("year"),
-        })
-
-    result = get_fallback_top_tickers(fallback_entries, date, limit=30)
-    result["cache_status"] = get_cache_status()
-    result["scanning"] = _smart_scan_running
-
-    # Trigger background refresh if not already running
+    # Trigger background scan for the requested week if not already running
     if not _smart_scan_running:
         from config import XAI_API_KEY, PERPLEXITY_API_KEY
         from data.smart_earnings_scanner import run_smart_scan
@@ -639,7 +601,7 @@ async def smart_earnings_for_date(request: Request, date: str):
             global _smart_scan_running
             _smart_scan_running = True
             try:
-                await run_smart_scan(data_service.finnhub.client, XAI_API_KEY, PERPLEXITY_API_KEY)
+                await run_smart_scan(data_service.finnhub.client, XAI_API_KEY, PERPLEXITY_API_KEY, reference_date=date)
             except Exception as ex:
                 print(f"[SMART_EARNINGS] Background refresh failed: {ex}")
             finally:
@@ -661,8 +623,9 @@ async def smart_earnings_status(request: Request):
 
 @app.post("/api/earnings/refresh-smart-cache")
 @limiter.limit("2/minute")
-async def refresh_smart_cache(request: Request, x_api_key: str = Header(None)):
-    """Manual trigger for smart earnings scan. Runs in background."""
+async def refresh_smart_cache(request: Request, x_api_key: str = Header(None), date: str = None):
+    """Manual trigger for smart earnings scan. Runs in background.
+    Optional 'date' query param to scan a specific week."""
     if x_api_key != AGENT_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API key")
 
@@ -678,7 +641,7 @@ async def refresh_smart_cache(request: Request, x_api_key: str = Header(None)):
         global _smart_scan_running
         _smart_scan_running = True
         try:
-            await run_smart_scan(data_service.finnhub.client, XAI_API_KEY, PERPLEXITY_API_KEY)
+            await run_smart_scan(data_service.finnhub.client, XAI_API_KEY, PERPLEXITY_API_KEY, reference_date=date)
         except Exception as e:
             print(f"[SMART_EARNINGS] Manual refresh failed: {e}")
         finally:
