@@ -527,11 +527,40 @@ function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEn
     setThesisLoading(true);
     try {
       const companyName = detail?.company_name || entry.company || entry.ticker;
+
+      // Build a fully-grounded context string from data we already have,
+      // so Claude never has to guess whether earnings exist or when they are.
+      const parts: string[] = [
+        `${companyName} (${entry.ticker}) is reporting earnings${entry.quarter ? ` for ${entry.quarter}` : ""}${entry.earningsDate ? ` on ${entry.earningsDate}` : ""}.`,
+      ];
+      if (entry.time === "bmo") parts.push("Reports before market open.");
+      else if (entry.time === "amc") parts.push("Reports after market close.");
+      if (detail?.sector) parts.push(`Sector: ${detail.sector}.`);
+      if (detail?.industry) parts.push(`Industry: ${detail.industry}.`);
+      if (entry.eps) parts.push(`EPS estimate: ${entry.eps}.`);
+      if (entry.revenueEstimate) parts.push(`Revenue estimate: ${entry.revenueEstimate}.`);
+      if (entry.beatPct >= 0) parts.push(`Polymarket beat probability: ${entry.beatPct}%.`);
+      if (detail?.beat_rate) parts.push(`Historical beat rate: ${detail.beat_rate}.`);
+      if (detail?.avg_surprise_pct != null) parts.push(`Average EPS surprise: ${detail.avg_surprise_pct >= 0 ? "+" : ""}${detail.avg_surprise_pct}%.`);
+      if (detail?.market_cap) parts.push(`Market cap: ${formatMktCap(detail.market_cap)}.`);
+      if (detail?.current_price) parts.push(`Current price: $${detail.current_price.toFixed(2)}${detail.price_change_pct != null ? ` (${detail.price_change_pct >= 0 ? "+" : ""}${detail.price_change_pct.toFixed(2)}% today)` : ""}.`);
+      if (detail?.analyst_consensus && detail.analyst_consensus.total > 0) {
+        const c = detail.analyst_consensus;
+        parts.push(`Analyst consensus: ${c.rating} (${c.buy} buy / ${c.hold} hold / ${c.sell} sell).`);
+      }
+      if (detail?.earnings_history && detail.earnings_history.length > 0) {
+        const recent = detail.earnings_history.slice(0, 3).map(h =>
+          `${h.period}: ${h.beat === true ? "BEAT" : h.beat === false ? "MISS" : "N/A"}${h.surprise_percent != null ? ` (${h.surprise_percent >= 0 ? "+" : ""}${h.surprise_percent.toFixed(1)}%)` : ""}`
+        ).join(", ");
+        parts.push(`Recent earnings history: ${recent}.`);
+      }
+      parts.push("Based only on the data above, give a direct 3-4 sentence actionable earnings thesis: is this worth playing, how, and should I position before or after the print?");
+
       const res = await fetch(`${AGENT_BACKEND_URL}/api/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": AGENT_API_KEY },
         body: JSON.stringify({
-          query: `${entry.ticker} earnings thesis: Is this an earnings to watch? How should I play it? Give a direct, actionable 3-4 sentence take covering: key catalyst, risk/reward, and suggested positioning (before or after earnings).`,
+          query: parts.join(" "),
           preset_intent: "earnings_catalyst",
         }),
       });
