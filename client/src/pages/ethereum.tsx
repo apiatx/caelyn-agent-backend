@@ -1,59 +1,12 @@
 import { Suspense } from "react";
 import { EthereumSection } from "@/components/ethereum-section";
 import ethereumLogo from "@assets/image_1771292182048.png";
-import newHeaderBackground from "@assets/photo-1504333638930-c8787321eee0_1757208194192.avif";
-import criptomonedas from "@assets/Criptomonedas-r3pu02e09qriw0f9pyqx2rtyhwsri4es6sdgff2ebk_1757225856373.png";
 import { SectionLoadingState } from "@/components/loading-screen";
-import { useScrollFade } from "@/hooks/useScrollFade";
 
 export default function EthereumPage() {
-  const headerOpacity = useScrollFade(30, 120);
 
   return (
     <div className="min-h-screen text-white" style={{ background: '#050608' }}>
-      {/* Header */}
-      <header
-        className="glass-card-dark border-b border-white/[0.06] sticky top-0 z-50 transition-opacity duration-300 relative overflow-hidden" 
-        style={{ opacity: headerOpacity, pointerEvents: headerOpacity < 0.1 ? 'none' : 'auto' }}
-      >
-        {/* Background Image */}
-        <div 
-          className="absolute inset-0 opacity-75"
-          style={{
-            backgroundImage: `url(${newHeaderBackground})`,
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-            backgroundRepeat: 'no-repeat'
-          }}
-        />
-        {/* Content Layer */}
-        <div className="relative z-10 max-w-[95vw] mx-auto px-2 sm:px-3">
-          <div className="flex justify-between items-center py-3 lg:py-4">
-            <div className="flex items-center space-x-3 sm:space-x-4">
-              <div className="w-16 h-16 sm:w-20 sm:h-20 lg:w-24 lg:h-24 rounded-full overflow-hidden border-2 border-blue-400 shadow-lg bg-black/50 flex items-center justify-center">
-                <img 
-                  src={ethereumLogo}
-                  alt="Ethereum"
-                  className="w-10 h-10 sm:w-14 sm:h-14 lg:w-16 lg:h-16 object-contain"
-                />
-              </div>
-              <div>
-                <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white drop-shadow-lg">Ethereum Network</h1>
-                <p className="text-sm sm:text-base text-white/70 font-medium mt-1">Live Ethereum charts and trending tokens analysis</p>
-              </div>
-            </div>
-            {/* Top-right crypto image */}
-            <div className="hidden sm:flex items-center">
-              <img 
-                src={criptomonedas}
-                alt="Crypto Coins"
-                className="w-16 h-16 sm:w-20 sm:h-20 lg:w-24 lg:h-24 object-contain drop-shadow-lg"
-              />
-            </div>
-          </div>
-        </div>
-      </header>
-
       {/* Main Content */}
       <main className="max-w-[95vw] mx-auto px-2 sm:px-3 py-4">
         <div className="space-y-8">
