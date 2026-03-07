@@ -2885,7 +2885,7 @@ class TradingAgent:
         "cross_market": 6000,
         "crypto": 5000,
         "portfolio_review": 5000,
-        "prediction_markets": 4000,
+        "prediction_markets": 0,
         "chat": 4000,
         "sector_rotation": 4000,
     }
