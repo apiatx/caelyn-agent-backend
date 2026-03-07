@@ -4,6 +4,41 @@ import caelynLogo from "@assets/image_1771528728963.png";
 const AGENT_BACKEND_URL = 'https://fast-api-server-trading-agent-aidanpilon.replit.app';
 const AGENT_API_KEY = 'hippo_ak_7f3x9k2m4p8q1w5t';
 
+// Map preset_intent → history category for automatic saving
+const INTENT_TO_HISTORY_CATEGORY: Record<string, string> = {
+  daily_briefing: 'overview', macro_outlook: 'overview', news_leaders: 'overview',
+  catalyst_scan: 'overview', cross_asset_trending: 'overview', social_momentum_scan: 'overview',
+  sector_rotation: 'overview',
+  best_trades: 'trades', long_term_conviction: 'trades', microcap_asymmetry: 'trades',
+  microcap_spec: 'trades', short_squeeze_scan: 'trades',
+  fundamental_leaders: 'fundamental', fundamental_acceleration: 'fundamental',
+  earnings_watch: 'fundamental', insider_buying: 'fundamental',
+  revenue_reaccelerating: 'fundamental', margin_expansion: 'fundamental',
+  undervalued_growth: 'fundamental', institutional_accumulation: 'fundamental',
+  free_cash_flow_leaders: 'fundamental',
+  crypto_focus: 'sectors', commodities_focus: 'sectors', sector_energy: 'sectors',
+  sector_materials: 'sectors', sector_defense: 'sectors', sector_tech: 'sectors',
+  sector_ai: 'sectors', sector_quantum: 'sectors', sector_financials: 'sectors',
+  sector_healthcare: 'sectors', sector_real_estate: 'sectors',
+  oversold_growing: 'ta_screener', value_momentum: 'ta_screener',
+  insider_breakout: 'ta_screener', high_growth_sc: 'ta_screener',
+  dividend_value: 'ta_screener', technical_stage2: 'ta_screener',
+  technical_bullish_breakouts: 'ta_screener', technical_breakdowns: 'ta_screener',
+  technical_bearish_setups: 'ta_screener', technical_oversold: 'ta_screener',
+  technical_overbought: 'ta_screener', technical_crossovers: 'ta_screener',
+  momentum_shift_scan: 'ta_screener', volume_movers_scan: 'ta_screener',
+};
+
+function saveToPromptHistory(intent: string, rawResponse: string, displayType?: string) {
+  const category = INTENT_TO_HISTORY_CATEGORY[intent];
+  if (!category) return;
+  fetch(`${AGENT_BACKEND_URL}/api/history`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': AGENT_API_KEY },
+    body: JSON.stringify({ category, intent, content: rawResponse, display_type: displayType }),
+  }).catch(e => console.error('[HISTORY_SAVE]', e));
+}
+
 interface AgentResult {
   type: string;
   analysis: string;
@@ -508,6 +543,10 @@ export default function TradingAgent() {
         thread: [],
       };
       setPanels(prev => [...prev, newPanel]);
+      // Auto-save to prompt history for preset intents
+      if (presetIntent && !data.error) {
+        saveToPromptHistory(presetIntent, raw, data.display_type || data.type);
+      }
     } catch (err: any) {
       console.log('[FETCH_FAIL]', err, err?.message);
       const errMsg = err.message?.includes('429') ? 'Rate limit reached. Wait a moment.'
