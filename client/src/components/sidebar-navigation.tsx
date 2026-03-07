@@ -55,7 +55,7 @@ export function SidebarNavigation({ className = "", isCollapsed, isMobile = fals
   const navItems: NavItem[] = [
     {
       id: 'caelyn-ai',
-      label: 'CaelynAI',
+      label: 'Terminal',
       icon: <Brain className="w-4 h-4" />,
       path: '/app/caelyn-ai'
     },

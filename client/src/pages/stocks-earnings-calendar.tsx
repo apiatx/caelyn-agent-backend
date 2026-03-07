@@ -1793,25 +1793,30 @@ function EarningsAgent() {
   };
 
   return (
-    <GlassCard className="p-5 mb-6">
+    <div className="w-full lg:w-[380px] xl:w-[420px] flex-shrink-0">
+      <div className="rounded-xl p-5 sticky top-4" style={{
+        background: 'rgba(255,255,255,0.02)',
+        border: '1px solid rgba(255,255,255,0.06)',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03), 0 2px 16px rgba(0,0,0,0.3)',
+      }}>
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
         <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #f97316 50%, #ef4444 100%)' }}>
           <Sparkles className="w-4 h-4 text-white" />
         </div>
         <div>
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
+          <h2 className="text-sm font-bold text-white flex items-center gap-2">
             Ask Caelyn
           </h2>
-          <p className="text-[10px] text-white/30">
-            Ask about upcoming earnings, beat odds, sentiment, and trading setups
+          <p className="text-[10px] text-white/25">
+            Earnings intel, beat odds &amp; trading setups
           </p>
         </div>
       </div>
 
       {/* Suggested prompts (only show when no messages) */}
       {messages.length === 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+        <div className="flex flex-col gap-2 mb-4">
           {EARNINGS_SUGGESTED_PROMPTS.map((prompt) => (
             <button
               key={prompt}
@@ -1890,7 +1895,8 @@ function EarningsAgent() {
           Clear conversation
         </button>
       )}
-    </GlassCard>
+      </div>
+    </div>
   );
 }
 
@@ -1921,33 +1927,40 @@ export default function StocksEarningsCalendarPage() {
 
   return (
     <div className="min-h-screen text-white" style={{ background: '#050608' }}>
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <EarningsAgent />
-        <GlassCard className="p-5">
-          {earningsLoading && earningsMarkets.length === 0 ? (
-            <div>
-              <div className="flex items-center gap-3 mb-1">
-                <div className="w-9 h-9 bg-gradient-to-br from-yellow-500 to-orange-500 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <CalendarDays className="w-5 h-5 text-white" />
-                </div>
+      <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex flex-col lg:flex-row gap-6">
+          {/* Left: content */}
+          <div className="flex-1 min-w-0">
+            <GlassCard className="p-5">
+              {earningsLoading && earningsMarkets.length === 0 ? (
                 <div>
-                  <h3 className="text-base font-bold text-white">
-                    Earnings Calendar
-                    <span className="text-white/30 font-normal text-xs ml-2">/ Loading...</span>
-                  </h3>
-                  <p className="text-[10px] text-white/30 leading-tight">Complete earnings calendar with Polymarket predictions &amp; Finnhub fundamentals</p>
+                  <div className="flex items-center gap-3 mb-1">
+                    <div className="w-9 h-9 bg-gradient-to-br from-yellow-500 to-orange-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <CalendarDays className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-white">
+                        Earnings Calendar
+                        <span className="text-white/30 font-normal text-xs ml-2">/ Loading...</span>
+                      </h3>
+                      <p className="text-[10px] text-white/30 leading-tight">Complete earnings calendar with Polymarket predictions &amp; Finnhub fundamentals</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-5 gap-2">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <Skeleton key={i} className="h-[200px] rounded-xl" />
+                    ))}
+                  </div>
                 </div>
-              </div>
-              <div className="grid grid-cols-5 gap-2">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Skeleton key={i} className="h-[200px] rounded-xl" />
-                ))}
-              </div>
-            </div>
-          ) : (
-            <EarningsCalendarWidget markets={earningsMarkets} />
-          )}
-        </GlassCard>
+              ) : (
+                <EarningsCalendarWidget markets={earningsMarkets} />
+              )}
+            </GlassCard>
+          </div>
+
+          {/* Right: Agent sidebar */}
+          <EarningsAgent />
+        </div>
       </main>
     </div>
   );
