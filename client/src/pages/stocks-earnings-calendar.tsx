@@ -127,6 +127,7 @@ interface EarningsDetailData {
   company_name?: string;
   sector?: string;
   industry?: string;
+  description?: string;
   market_cap?: number;
   current_price?: number;
   price_change_pct?: number;
@@ -455,6 +456,60 @@ async function fetchSmartEarnings(date: string): Promise<SmartDayData | null> {
   return null;
 }
 
+// ─── TradingView Chart ────────────────────────────────────────────
+
+function TradingViewChart({ ticker }: { ticker: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    container.innerHTML = "";
+
+    const innerDiv = document.createElement("div");
+    innerDiv.className = "tradingview-widget-container__widget";
+    innerDiv.style.height = "100%";
+    innerDiv.style.width = "100%";
+    container.appendChild(innerDiv);
+
+    const script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+    script.async = true;
+    script.innerHTML = JSON.stringify({
+      autosize: true,
+      symbol: ticker,
+      interval: "D",
+      timezone: "Etc/UTC",
+      theme: "dark",
+      style: "1",
+      locale: "en",
+      backgroundColor: "rgba(12,12,15,0)",
+      gridColor: "rgba(255,255,255,0.04)",
+      enable_publishing: false,
+      allow_symbol_change: false,
+      hide_top_toolbar: false,
+      hide_legend: false,
+      save_image: false,
+      hide_volume: false,
+      support_host: "https://www.tradingview.com",
+    });
+    container.appendChild(script);
+
+    return () => {
+      if (container) container.innerHTML = "";
+    };
+  }, [ticker]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="tradingview-widget-container"
+      style={{ height: 380, width: "100%" }}
+    />
+  );
+}
+
 // ─── Earnings Detail Modal ────────────────────────────────────────
 
 function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEntry; onClose: () => void; prefetchedDetail?: EarningsDetailData | null }) {
@@ -464,6 +519,35 @@ function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEn
   const [detail, setDetail] = useState<EarningsDetailData | null>(prefetchedDetail || null);
   const [loading, setLoading] = useState(!prefetchedDetail);
   const [fetchError, setFetchError] = useState(false);
+  const [thesis, setThesis] = useState<string | null>(null);
+  const [thesisLoading, setThesisLoading] = useState(false);
+
+  const fetchThesis = async () => {
+    if (thesisLoading || thesis) return;
+    setThesisLoading(true);
+    try {
+      const companyName = detail?.company_name || entry.company || entry.ticker;
+      const res = await fetch(`${AGENT_BACKEND_URL}/api/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": AGENT_API_KEY },
+        body: JSON.stringify({
+          query: `${entry.ticker} earnings thesis: Is this an earnings to watch? How should I play it? Give a direct, actionable 3-4 sentence take covering: key catalyst, risk/reward, and suggested positioning (before or after earnings).`,
+          preset_intent: "earnings_catalyst",
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.analysis || data.structured?.message || data.structured?.analysis || data.message || "";
+        setThesis(text.trim() || "No thesis available for this ticker.");
+      } else {
+        setThesis("Unable to generate thesis. Please try again.");
+      }
+    } catch {
+      setThesis("Unable to reach agent. Please try again.");
+    } finally {
+      setThesisLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (prefetchedDetail) { setDetail(prefetchedDetail); setLoading(false); return; }
@@ -510,7 +594,7 @@ function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEn
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
       <div
-        className="relative w-full max-w-2xl max-h-[90vh] bg-[#0c0c0f] border border-white/10 rounded-2xl shadow-2xl overflow-y-auto"
+        className="relative w-full max-w-4xl max-h-[90vh] bg-[#0c0c0f] border border-white/10 rounded-2xl shadow-2xl overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -556,6 +640,68 @@ function EarningsModal({ entry, onClose, prefetchedDetail }: { entry: EarningsEn
               </button>
             </div>
           </div>
+        </div>
+
+        {/* ─── TradingView Chart ─── */}
+        <div className="px-6 pt-4 pb-3 border-b border-white/[0.06]">
+          <div className="flex items-center gap-1.5 mb-2">
+            <span className="text-[11px] font-semibold text-white/40 uppercase tracking-wider">Chart</span>
+            <span className="text-[9px] text-white/20 font-mono">{entry.ticker}</span>
+          </div>
+          <TradingViewChart ticker={entry.ticker} />
+        </div>
+
+        {/* ─── Company Description ─── */}
+        {(detail?.description || detail?.industry || detail?.sector) && (
+          <div className="px-6 py-3 border-b border-white/[0.06]">
+            <h4 className="text-[11px] font-semibold text-white/40 uppercase tracking-wider mb-1.5">About</h4>
+            {detail.description ? (
+              <p className="text-xs text-white/65 leading-relaxed">{detail.description}</p>
+            ) : (
+              <p className="text-xs text-white/65 leading-relaxed">
+                {detail.company_name || entry.company} is a
+                {detail.sector ? ` ${detail.sector}` : ""} company
+                {detail.industry ? ` in the ${detail.industry} industry` : ""}.
+              </p>
+            )}
+          </div>
+        )}
+        {loading && !detail && (
+          <div className="px-6 py-3 border-b border-white/[0.06]">
+            <div className="h-3 w-3/4 rounded bg-white/5 animate-pulse mb-1.5" />
+            <div className="h-3 w-1/2 rounded bg-white/5 animate-pulse" />
+          </div>
+        )}
+
+        {/* ─── Claude Thesis (on-demand) ─── */}
+        <div className="px-6 py-4 border-b border-white/[0.06]">
+          <div className="flex items-center justify-between mb-2.5">
+            <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-wider flex items-center gap-1.5">
+              <Sparkles className="w-3 h-3 text-blue-400" /> Claude Thesis
+            </h4>
+            {!thesis && !thesisLoading && (
+              <button
+                onClick={fetchThesis}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                style={{ background: 'linear-gradient(135deg, #2090d0, #3b82f6)', color: 'white' }}
+              >
+                <Sparkles className="w-3 h-3" />
+                Get Thesis
+              </button>
+            )}
+          </div>
+          {thesisLoading && (
+            <div className="flex items-center gap-2 text-xs text-white/40 py-1">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
+              Analyzing {entry.ticker} earnings setup...
+            </div>
+          )}
+          {thesis && (
+            <p className="text-xs text-white/75 leading-relaxed whitespace-pre-wrap">{thesis}</p>
+          )}
+          {!thesis && !thesisLoading && (
+            <p className="text-[11px] text-white/25">Click "Get Thesis" for a Claude take on whether to watch this earnings and how to play it.</p>
+          )}
         </div>
 
         {/* Polymarket Beat / Miss probability */}
