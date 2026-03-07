@@ -1870,10 +1870,10 @@ interface EarningsAgentMessage {
 }
 
 const EARNINGS_SUGGESTED_PROMPTS = [
-  "Which upcoming earnings have the highest beat probability?",
-  "What are the best earnings plays this week based on sentiment and technicals?",
-  "Which earnings could cause the biggest surprise moves?",
-  "Analyze the highest-volume earnings bets on Polymarket right now",
+  "What earnings have the most social buzz and X momentum right now?",
+  "Give me the best overall setup — beat history, sentiment, and technicals combined",
+  "Which Polymarket earnings bets have the highest conviction odds and volume?",
+  "What stocks could surprise big up or down — biggest potential movers?",
 ];
 
 function EarningsAgent() {
@@ -1897,8 +1897,20 @@ function EarningsAgent() {
 
     try {
       const history = messages.map((m) => ({ role: m.role, content: m.content }));
+
+      // Build week context so the backend contract can give date-aware answers.
+      const today = new Date();
+      const todayStr = today.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+      const dayOfWeek = today.getDay(); // 0=Sun, 6=Sat
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const currentWeekSunday = getSunday(today);
+      const focusWeek = isWeekend ? addDays(currentWeekSunday, 7) : currentWeekSunday;
+      const focusWeekSunday = focusWeek.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+      const focusWeekSaturday = addDays(focusWeek, 6).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+      const weekContext = `[Date context: Today is ${todayStr}. ${isWeekend ? "It is the weekend — focus on NEXT week's earnings" : "Focus on this week's earnings"}. Earnings week in view: ${focusWeekSunday} – ${focusWeekSaturday}.]`;
+
       const payload: Record<string, unknown> = {
-        query: text.trim(),
+        query: `${weekContext} ${text.trim()}`,
         preset_intent: "earnings_catalyst",
         history: history.length > 0 ? history : undefined,
         conversation_id: conversationId,
