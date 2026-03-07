@@ -183,22 +183,21 @@ export default function TradePerpsPage() {
                 </Button>
               </div>
 
-              {/* SuperP - Iframe */}
-              <div className="mb-6 mt-6">
-                <div className="bg-black/40 backdrop-blur-lg border border-white/[0.06] rounded-xl overflow-hidden">
-                  <iframe
-                    src="https://noliquidation.superp.xyz/en"
-                    className="w-full h-[500px] sm:h-[600px] lg:h-[800px] rounded-lg border border-white/[0.06]"
-                    title="SuperP"
-                    frameBorder="0"
-                    scrolling="yes"
-                  />
-                </div>
-                <div className="mt-4 text-center">
-                  <p className="text-xs text-white/35">
-                    No liquidation perpetual futures • SuperP trading platform
-                  </p>
-                </div>
+              {/* SuperP - Button Link */}
+              <div className="w-full mt-6">
+                <Button
+                  variant="outline"
+                  onClick={() => openInNewTab('https://noliquidation.superp.xyz/en')}
+                  className="group w-full bg-gradient-to-br from-green-600/40 via-emerald-500/30 to-green-500/40 border border-green-400/50 hover:from-green-500/50 hover:via-emerald-400/40 hover:to-green-400/50 hover:border-green-300/70 text-white justify-center p-8 h-auto rounded-lg transition-all duration-500 flex items-center shadow-2xl hover:shadow-green-500/40 transform hover:scale-[1.02] backdrop-blur-sm"
+                >
+                  <div className="text-center">
+                    <div className="font-bold text-2xl flex items-center justify-center gap-3 mb-2">
+                      <TrendingUp className="w-7 h-7 group-hover:rotate-12 group-hover:scale-110 transition-transform duration-500" />
+                      SuperP
+                    </div>
+                    <div className="text-base text-green-100/90 font-medium">No liquidation perpetual futures</div>
+                  </div>
+                </Button>
               </div>
 
             </div>
@@ -218,32 +217,21 @@ export default function TradePerpsPage() {
                 <p className="text-crypto-silver">Meme token trading and perpetual futures</p>
               </div>
 
-              {/* Uranus */}
-              <div className="mb-6">
-                <div className="flex justify-end mb-3">
-                  <a
-                    href="https://uranus.ag/trade/?token=BFgdzMkTPdKKJeTipv2njtDEwhKxkgFueJQfJGt1jups"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-1"
-                  >
-                    Open Full View <ExternalLink className="w-3 h-3" />
-                  </a>
-                </div>
-                
-                <div className="bg-black/20 border border-white/[0.06] rounded-lg overflow-hidden">
-                  <SafeIframe
-                    src="https://uranus.ag/trade/?token=BFgdzMkTPdKKJeTipv2njtDEwhKxkgFueJQfJGt1jups"
-                    title="Uranus DEX"
-                    className="w-full h-[600px] border-0"
-                  />
-                </div>
-                
-                <div className="mt-4 text-center">
-                  <p className="text-xs text-white/35">
-                    Uranus DEX trading platform • Decentralized exchange for meme tokens
-                  </p>
-                </div>
+              {/* Uranus.ag - Button Link */}
+              <div className="w-full mb-6">
+                <Button
+                  variant="outline"
+                  onClick={() => openInNewTab('https://uranus.ag/trade/?token=BFgdzMkTPdKKJeTipv2njtDEwhKxkgFueJQfJGt1jups')}
+                  className="group w-full bg-gradient-to-br from-purple-600/40 via-violet-500/30 to-purple-500/40 border border-purple-400/50 hover:from-purple-500/50 hover:via-violet-400/40 hover:to-purple-400/50 hover:border-purple-300/70 text-white justify-center p-8 h-auto rounded-lg transition-all duration-500 flex items-center shadow-2xl hover:shadow-purple-500/40 transform hover:scale-[1.02] backdrop-blur-sm"
+                >
+                  <div className="text-center">
+                    <div className="font-bold text-2xl flex items-center justify-center gap-3 mb-2">
+                      <TrendingUp className="w-7 h-7 group-hover:rotate-12 group-hover:scale-110 transition-transform duration-500" />
+                      Uranus.ag
+                    </div>
+                    <div className="text-base text-purple-100/90 font-medium">Decentralized exchange for meme tokens</div>
+                  </div>
+                </Button>
               </div>
 
               {/* Quanto - Full Width Enhanced Colored Button */}
@@ -368,14 +356,22 @@ export default function TradePerpsPage() {
                 </h3>
                 
                 <div className="bg-black/20 border border-white/[0.06] rounded-lg p-6">
-                  {/* Hyperbot Network Iframe - Moved to Copy Trade Section */}
-                  <div className="mb-6 w-full bg-black/20 border border-white/[0.06] rounded-lg p-4 shadow-lg">
-                    <SafeIframe
-                      src="https://hyperbot.network/discover"
-                      title="Hyperbot Network Discover"
-                      className="w-full h-[800px] rounded-lg"
-                    />
-                  </div>
+                  {/* Hyperbot Network - Button Link */}
+                  <button
+                    onClick={() => window.open('https://hyperbot.network/discover', '_blank', 'noopener,noreferrer')}
+                    className="flex items-center justify-between p-4 bg-black/20 border border-white/[0.06] rounded-lg hover:bg-black/30 hover:border-blue-500/30 transition-all duration-200 group mb-6 w-full"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full flex items-center justify-center">
+                        <span className="text-white font-bold text-sm">HB</span>
+                      </div>
+                      <div className="text-left">
+                        <h4 className="text-white font-medium text-sm">Hyperbot Network</h4>
+                        <p className="text-white/35 text-xs">Discover top traders and copy trade on Hyperliquid</p>
+                      </div>
+                    </div>
+                    <div className="w-4 h-4 text-white/35 group-hover:text-blue-400 transition-colors">→</div>
+                  </button>
                   
                   <div className="grid grid-cols-1 gap-4">
                     <button

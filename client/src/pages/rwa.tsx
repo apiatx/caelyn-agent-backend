@@ -439,6 +439,30 @@ export default function RWAPage() {
               </div>
             </div>
           </GlassCard>
+
+          {/* Plume Network RWA Platform */}
+          <GlassCard className="p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-6 h-6 bg-purple-500 rounded-full flex items-center justify-center">
+                <ExternalLink className="w-4 h-4 text-white" />
+              </div>
+              <h4 className="text-xl font-semibold text-white">Plume Network</h4>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30 font-medium">RWA PLATFORM</span>
+              <button
+                onClick={() => openInNewTab('https://portal.plume.org/')}
+                className="text-purple-400 hover:text-purple-300 text-sm ml-auto"
+              >
+                Open Full View →
+              </button>
+            </div>
+            <div className="bg-black/20 border border-white/[0.06] rounded-lg overflow-hidden">
+              <SafeIframe
+                src="https://portal.plume.org/"
+                title="Plume Network Portal"
+                className="w-full h-[600px] border-0"
+              />
+            </div>
+          </GlassCard>
         </div>
       </main>
     </div>

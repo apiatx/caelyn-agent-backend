@@ -59,16 +59,6 @@ export default function DeFiSection() {
     <div className="space-y-8">
       {/* Analytics Glass Card */}
       <GlassCard className="p-6">
-        <div className="flex flex-col items-center text-center gap-3 mb-6">
-          <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center">
-            <BarChart3 className="text-white text-xl" />
-          </div>
-          <div>
-            <h3 className="text-2xl font-bold text-white">Analytics</h3>
-            <p className="text-crypto-silver">DeFi TVL rankings and protocol analytics</p>
-          </div>
-        </div>
-        
         <div className="flex justify-end mb-3">
           <SafeLink
             href="https://defillama.com/"
@@ -99,81 +89,8 @@ export default function DeFiSection() {
           </div>
         </div>
 
-        {/* Reservoir Iframe */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
-              <DollarSign className="w-4 h-4 text-white" />
-            </div>
-            <h4 className="text-xl font-semibold text-white">Reservoir</h4>
-            <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">
-              STABLECOIN YIELD
-            </Badge>
-            <button
-              onClick={() => openInNewTab('https://app.reservoir.xyz/')}
-              className="text-blue-400 hover:text-blue-300 text-sm ml-auto"
-            >
-              Open Full View →
-            </button>
-          </div>
-          <SafeIframe
-            src="https://app.reservoir.xyz/"
-            title="Reservoir NFT Protocol"
-            className="w-full h-[600px] border-0"
-          />
-        </div>
 
-        {/* Yield.fi Iframe */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-6 h-6 bg-yellow-500 rounded-full flex items-center justify-center">
-              <DollarSign className="w-4 h-4 text-white" />
-            </div>
-            <h4 className="text-xl font-semibold text-white">Yield.fi</h4>
-            <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
-              VYUSD YIELD
-            </Badge>
-            <button
-              onClick={() => openInNewTab('https://www.yield.fi/vyusd')}
-              className="text-yellow-400 hover:text-yellow-300 text-sm ml-auto"
-            >
-              Open Full View →
-            </button>
-          </div>
-          <div className="bg-black/20 border border-white/[0.06] rounded-lg overflow-hidden">
-            <SafeIframe
-              src="https://www.yield.fi/vyusd"
-              title="Yield.fi vyUSD Yield Protocol"
-              className="w-full h-[600px] border-0"
-            />
-          </div>
-        </div>
 
-        {/* Aarna AI Engine Iframe */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-6 h-6 bg-indigo-500 rounded-full flex items-center justify-center">
-              <Brain className="w-4 h-4 text-white" />
-            </div>
-            <h4 className="text-xl font-semibold text-white">Aarna AI Engine</h4>
-            <Badge className="bg-indigo-500/20 text-indigo-400 border-indigo-500/30">
-              AI PLATFORM
-            </Badge>
-            <button
-              onClick={() => openInNewTab('https://engine.aarna.ai/?_branch_match_id=1349040087720564161&_branch_referrer=H4sIAAAAAAAAA8soKSkottLXTywo0EtMLMpL1EvM1HfLN7Lw98oxzAxPsq8rSk1LLSrKzEuPTyrKLy9OLbJ1zijKz00FAD%2FYufM6AAAA')}
-              className="text-indigo-400 hover:text-indigo-300 text-sm ml-auto"
-            >
-              Open Full View →
-            </button>
-          </div>
-          <div className="bg-black/20 border border-white/[0.06] rounded-lg overflow-hidden">
-            <SafeIframe
-              src="https://engine.aarna.ai/?_branch_match_id=1349040087720564161&_branch_referrer=H4sIAAAAAAAAA8soKSkottLXTywo0EtMLMpL1EvM1HfLN7Lw98oxzAxPsq8rSk1LLSrKzEuPTyrKLy9OLbJ1zijKz00FAD%2FYufM6AAAA"
-              title="Aarna AI Engine Platform"
-              className="w-full h-[600px] border-0"
-            />
-          </div>
-        </div>
 
         {/* Spark Fi Iframe */}
         <div className="mb-8">
@@ -306,57 +223,7 @@ export default function DeFiSection() {
           </div>
         </div>
 
-        {/* Venus Protocol Iframe */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-6 h-6 bg-yellow-500 rounded-full flex items-center justify-center">
-              <DollarSign className="w-4 h-4 text-white" />
-            </div>
-            <h4 className="text-xl font-semibold text-white">Venus Protocol</h4>
-            <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
-              BSC LENDING
-            </Badge>
-            <button
-              onClick={() => openInNewTab('https://app.venus.io/#/pool/0xfD36E2c2a6789Db23113685031d7F16329158384?chainId=56&tab=assets')}
-              className="text-yellow-400 hover:text-yellow-300 text-sm ml-auto"
-            >
-              Open Full View →
-            </button>
-          </div>
-          <div className="bg-black/20 border border-white/[0.06] rounded-lg overflow-hidden">
-            <SafeIframe
-              src="https://app.venus.io/#/pool/0xfD36E2c2a6789Db23113685031d7F16329158384?chainId=56&tab=assets"
-              title="Venus Protocol"
-              className="w-full h-[600px] border-0"
-            />
-          </div>
-        </div>
 
-        {/* Convex Finance Iframe */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-6 h-6 bg-red-500 rounded-full flex items-center justify-center">
-              <DollarSign className="w-4 h-4 text-white" />
-            </div>
-            <h4 className="text-xl font-semibold text-white">Convex Finance</h4>
-            <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
-              CURVE BOOSTER
-            </Badge>
-            <button
-              onClick={() => openInNewTab('https://www.convexfinance.com/')}
-              className="text-red-400 hover:text-red-300 text-sm ml-auto"
-            >
-              Open Full View →
-            </button>
-          </div>
-          <div className="bg-black/20 border border-white/[0.06] rounded-lg overflow-hidden">
-            <SafeIframe
-              src="https://www.convexfinance.com/"
-              title="Convex Finance"
-              className="w-full h-[600px] border-0"
-            />
-          </div>
-        </div>
 
         {/* Solstice Finance Iframe */}
         <div className="mb-8">
@@ -384,31 +251,6 @@ export default function DeFiSection() {
           </div>
         </div>
 
-        {/* Plume Network Iframe */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-6 h-6 bg-purple-500 rounded-full flex items-center justify-center">
-              <Layers className="w-4 h-4 text-white" />
-            </div>
-            <h4 className="text-xl font-semibold text-white">Plume Network</h4>
-            <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30">
-              RWA PLATFORM
-            </Badge>
-            <button
-              onClick={() => openInNewTab('https://portal.plume.org/')}
-              className="text-purple-400 hover:text-purple-300 text-sm ml-auto"
-            >
-              Open Full View →
-            </button>
-          </div>
-          <div className="bg-black/20 border border-white/[0.06] rounded-lg overflow-hidden">
-            <SafeIframe
-              src="https://portal.plume.org/"
-              title="Plume Network Portal"
-              className="w-full h-[600px] border-0"
-            />
-          </div>
-        </div>
 
 {/* Peapods Finance Iframe */}
         <div className="mb-8">
@@ -873,6 +715,76 @@ export default function DeFiSection() {
             <div className="text-center">
               <div className="font-semibold text-lg">Gearbox</div>
               <div className="text-sm text-crypto-silver">Leverage protocol</div>
+            </div>
+          </Button>
+
+          <Button
+            variant="outline"
+            onClick={() => openInNewTab('https://www.convexfinance.com/')}
+            className="bg-black/20 border-white/[0.06] hover:bg-red-500/20 hover:border-red-500/30 text-white justify-start p-6 h-auto flex-col space-y-2"
+          >
+            <div className="p-3 rounded-lg bg-gradient-to-r from-red-500/20 to-orange-500/20">
+              <DollarSign className="h-6 w-6 text-red-400" />
+            </div>
+            <div className="text-center">
+              <div className="font-semibold text-lg">Convex Finance</div>
+              <div className="text-sm text-crypto-silver">Curve booster</div>
+            </div>
+          </Button>
+
+          <Button
+            variant="outline"
+            onClick={() => openInNewTab('https://app.venus.io/#/pool/0xfD36E2c2a6789Db23113685031d7F16329158384?chainId=56&tab=assets')}
+            className="bg-black/20 border-white/[0.06] hover:bg-yellow-500/20 hover:border-yellow-500/30 text-white justify-start p-6 h-auto flex-col space-y-2"
+          >
+            <div className="p-3 rounded-lg bg-gradient-to-r from-yellow-500/20 to-amber-500/20">
+              <DollarSign className="h-6 w-6 text-yellow-400" />
+            </div>
+            <div className="text-center">
+              <div className="font-semibold text-lg">Venus Protocol</div>
+              <div className="text-sm text-crypto-silver">BSC lending</div>
+            </div>
+          </Button>
+
+          <Button
+            variant="outline"
+            onClick={() => openInNewTab('https://engine.aarna.ai/?_branch_match_id=1349040087720564161&_branch_referrer=H4sIAAAAAAAAA8soKSkottLXTywo0EtMLMpL1EvM1HfLN7Lw98oxzAxPsq8rSk1LLSrKzEuPTyrKLy9OLbJ1zijKz00FAD%2FYufM6AAAA')}
+            className="bg-black/20 border-white/[0.06] hover:bg-indigo-500/20 hover:border-indigo-500/30 text-white justify-start p-6 h-auto flex-col space-y-2"
+          >
+            <div className="p-3 rounded-lg bg-gradient-to-r from-indigo-500/20 to-violet-500/20">
+              <Brain className="h-6 w-6 text-indigo-400" />
+            </div>
+            <div className="text-center">
+              <div className="font-semibold text-lg">Aarna AI Engine</div>
+              <div className="text-sm text-crypto-silver">AI DeFi platform</div>
+            </div>
+          </Button>
+
+          <Button
+            variant="outline"
+            onClick={() => openInNewTab('https://www.yield.fi/vyusd')}
+            className="bg-black/20 border-white/[0.06] hover:bg-amber-500/20 hover:border-amber-500/30 text-white justify-start p-6 h-auto flex-col space-y-2"
+          >
+            <div className="p-3 rounded-lg bg-gradient-to-r from-amber-500/20 to-yellow-500/20">
+              <DollarSign className="h-6 w-6 text-amber-400" />
+            </div>
+            <div className="text-center">
+              <div className="font-semibold text-lg">Yield.fi</div>
+              <div className="text-sm text-crypto-silver">vyUSD yield protocol</div>
+            </div>
+          </Button>
+
+          <Button
+            variant="outline"
+            onClick={() => openInNewTab('https://app.reservoir.xyz/')}
+            className="bg-black/20 border-white/[0.06] hover:bg-blue-500/20 hover:border-blue-500/30 text-white justify-start p-6 h-auto flex-col space-y-2"
+          >
+            <div className="p-3 rounded-lg bg-gradient-to-r from-blue-500/20 to-cyan-500/20">
+              <DollarSign className="h-6 w-6 text-blue-400" />
+            </div>
+            <div className="text-center">
+              <div className="font-semibold text-lg">Reservoir</div>
+              <div className="text-sm text-crypto-silver">NFT liquidity protocol</div>
             </div>
           </Button>
         </div>
