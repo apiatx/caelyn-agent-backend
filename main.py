@@ -1652,6 +1652,54 @@ async def delete_conv(request: Request, conv_id: str):
     success = delete_conversation(conv_id)
     return {"success": success}
 
+# ── Prompt History ──────────────────────────────────────────────
+
+@app.get("/api/history")
+@limiter.limit("30/minute")
+async def get_history(request: Request):
+    from data.prompt_history import get_all
+    return get_all()
+
+@app.get("/api/history/{category}/{intent}")
+@limiter.limit("30/minute")
+async def get_history_by_intent(request: Request, category: str, intent: str):
+    from data.prompt_history import get_by_intent
+    return {"entries": get_by_intent(category, intent)}
+
+@app.post("/api/history")
+@limiter.limit("30/minute")
+async def save_history(request: Request, x_api_key: str = Header(None)):
+    if x_api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    body = await request.json()
+    category = body.get("category", "")
+    intent = body.get("intent", "")
+    content = body.get("content", "")
+    display_type = body.get("display_type")
+    if not category or not intent or not content:
+        raise HTTPException(status_code=400, detail="category, intent, and content are required")
+    from data.prompt_history import save_response
+    entry = save_response(category, intent, content, display_type)
+    return {"success": True, "entry": entry}
+
+@app.delete("/api/history/{category}/{intent}/{entry_id}")
+@limiter.limit("30/minute")
+async def delete_history_entry(request: Request, category: str, intent: str, entry_id: str, x_api_key: str = Header(None)):
+    if x_api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    from data.prompt_history import delete_entry
+    success = delete_entry(category, intent, entry_id)
+    return {"success": success}
+
+@app.delete("/api/history/{category}/{intent}")
+@limiter.limit("30/minute")
+async def clear_history_intent(request: Request, category: str, intent: str, x_api_key: str = Header(None)):
+    if x_api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    from data.prompt_history import clear_intent
+    success = clear_intent(category, intent)
+    return {"success": success}
+
 @app.get("/api/health")
 @limiter.limit("30/minute")
 async def health_check(request: Request):
