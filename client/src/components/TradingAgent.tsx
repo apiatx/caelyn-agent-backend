@@ -2199,52 +2199,45 @@ export default function TradingAgent() {
   }
 
   const promptGroups: { id: string; title: string; buttons: { l: string; intent: string }[] }[] = [
-    { id: 'g1', title: 'All-Encompassing', buttons: [
-      {l:'Trending Now', intent:'cross_asset_trending'},
+    { id: 'g1', title: 'Overview', buttons: [
       {l:'Daily Briefing', intent:'daily_briefing'},
+      {l:'Macro Overview', intent:'macro_outlook'},
+      {l:'Headlines', intent:'news_leaders'},
+      {l:'Upcoming Catalysts', intent:'catalyst_scan'},
+      {l:'Trending Now', intent:'cross_asset_trending'},
+      {l:'Social Momentum', intent:'social_momentum_scan'},
+      {l:'Sector Rotation', intent:'sector_rotation'},
+    ]},
+    { id: 'g2', title: 'Trades & Ideas', buttons: [
       {l:'Best Trades', intent:'best_trades'},
       {l:'Best Investments', intent:'long_term_conviction'},
-      {l:'Macro Overview', intent:'macro_outlook'},
-    ]},
-    { id: 'g2', title: 'Sectors', buttons: [
-      {l:'Sector Rotation', intent:'sector_rotation'},
-      {l:'Crypto', intent:'crypto_focus'},
-      {l:'Energy', intent:'sector_energy'},
-      {l:'AI/Compute', intent:'sector_ai'},
-      {l:'Materials', intent:'sector_materials'},
-      {l:'Quantum', intent:'sector_quantum'},
-      {l:'Aerospace/Defense', intent:'sector_defense'},
-      {l:'Tech', intent:'sector_tech'},
-      {l:'Finance', intent:'sector_financials'},
-      {l:'Commodities', intent:'commodities_focus'},
-      {l:'Healthcare', intent:'sector_healthcare'},
-      {l:'Real Estate', intent:'sector_real_estate'},
-      {l:'Uranium/Nuclear', intent:'sector_uranium'},
-    ]},
-    { id: 'g3', title: 'Technical Analysis', buttons: [
-      {l:'Stage 2 Breakouts', intent:'technical_stage2'},
-      {l:'Bearish Setups', intent:'technical_bearish_setups'},
-      {l:'Asymmetric Only', intent:'microcap_asymmetry'},
+      {l:'Asymmetric R:R', intent:'microcap_asymmetry'},
       {l:'Small Cap Spec', intent:'microcap_spec'},
       {l:'Short Squeeze', intent:'short_squeeze_scan'},
-      {l:'Bullish Breakouts', intent:'technical_bullish_breakouts'},
-      {l:'Bearish Breakdowns', intent:'technical_breakdowns'},
-      {l:'Oversold Bounces', intent:'technical_oversold'},
-      {l:'Overbought Warnings', intent:'technical_overbought'},
-      {l:'Crossover Signals', intent:'technical_crossovers'},
-      {l:'Momentum Shifts', intent:'momentum_shift_scan'},
-      {l:'Trend Status', intent:'trend_status_scan'},
-      {l:'Volume & Movers', intent:'volume_movers_scan'},
     ]},
-    { id: 'g4', title: 'Fundamental Analysis', buttons: [
+    { id: 'g3', title: 'Fundamental', buttons: [
       {l:'Fundamental Leaders', intent:'fundamental_leaders'},
       {l:'Rapidly Improving', intent:'fundamental_acceleration'},
       {l:'Earnings Watch', intent:'earnings_watch'},
+      {l:'Insider Buying', intent:'insider_buying'},
+      {l:'Revenue Reaccelerating', intent:'revenue_reaccelerating'},
+      {l:'Margin Expansion', intent:'margin_expansion'},
+      {l:'Undervalued Growth', intent:'undervalued_growth'},
+      {l:'Institutional Accumulation', intent:'institutional_accumulation'},
+      {l:'Free Cash Flow Leaders', intent:'free_cash_flow_leaders'},
     ]},
-    { id: 'g5', title: 'Buzz', buttons: [
-      {l:'Social Momentum', intent:'social_momentum_scan'},
-      {l:'News Leaders', intent:'news_leaders'},
-      {l:'Upcoming Catalysts', intent:'catalyst_scan'},
+    { id: 'g4', title: 'Sectors', buttons: [
+      {l:'Crypto', intent:'crypto_focus'},
+      {l:'Commodities', intent:'commodities_focus'},
+      {l:'Energy', intent:'sector_energy'},
+      {l:'Materials', intent:'sector_materials'},
+      {l:'Aerospace/Defense', intent:'sector_defense'},
+      {l:'Tech', intent:'sector_tech'},
+      {l:'AI/Compute', intent:'sector_ai'},
+      {l:'Quantum', intent:'sector_quantum'},
+      {l:'Fintech', intent:'sector_financials'},
+      {l:'Biotech', intent:'sector_healthcare'},
+      {l:'Real Estate', intent:'sector_real_estate'},
     ]},
   ];
 
@@ -2622,7 +2615,7 @@ export default function TradingAgent() {
           <div style={{ flex:1, overflowY:'auto', padding:8 }}>
             {/* Screener */}
             <div style={{ marginBottom:12 }}>
-              <div style={{ color:C.bright, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.04em', marginBottom:6, padding:'0 4px' }}>AI Screener</div>
+              <div style={{ color:C.bright, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.04em', marginBottom:6, padding:'0 4px' }}>TA Screener</div>
               <textarea
                 value={screenerInput}
                 onChange={e => setScreenerInput(e.target.value)}
@@ -2643,10 +2636,31 @@ export default function TradingAgent() {
                 {[
                   {l:'Oversold+Growing', intent:'oversold_growing'},
                   {l:'Value+Momentum', intent:'value_momentum'},
-                  {l:'Insider+Breakout', v:'Insider buying last 30 days, above SMA50 and SMA200, unusual volume, market cap under $10B'},
-                  {l:'High Growth SC', v:'Market cap under $2B, revenue growth >30%, EPS growth >25%, positive margins'},
-                  {l:'Dividend Value', v:'Dividend yield >3%, P/E under 20, debt to equity under 0.5, market cap over $2B'},
-                  {l:'Short Squeeze', v:'Short float >15%, RSI under 40, above SMA50, unusual volume, market cap under $5B'},
+                  {l:'Insider+Breakout', intent:'insider_breakout'},
+                  {l:'High Growth Small Cap', intent:'high_growth_sc'},
+                  {l:'Dividend Value', intent:'dividend_value'},
+                ].map(chip => (
+                  <button key={chip.l} className="sidebar-chip" onClick={() => { if (!loading) { newChat(); askAgent('', true, chip.intent); setRightSidebarOpen(false); } }} disabled={loading} style={{ padding:'3px 7px', background:`${C.purple}08`, border:`1px solid ${C.purple}18`, borderRadius:3, color:C.dim, fontSize:8, fontWeight:600, fontFamily:font, cursor:loading ? 'not-allowed' : 'pointer', transition:'all 0.15s', opacity:loading ? 0.5 : 1 }}>{chip.l}</button>
+                ))}
+              </div>
+              {/* Technical Analysis — buttons moved from sidebar, same preset_intents */}
+              {/* Mapping: Stage 2 Breakouts→technical_stage2, Bullish Breakouts→technical_bullish_breakouts,
+                  Bearish Breakdowns→technical_breakdowns, Bearish Setups→technical_bearish_setups,
+                  Oversold Bounces→technical_oversold, Overbought Warnings→technical_overbought,
+                  Crossover Signals→technical_crossovers, Momentum Shifts→momentum_shift_scan,
+                  Volume & Movers→volume_movers_scan */}
+              <div style={{ color:C.bright, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.04em', marginTop:12, marginBottom:4, padding:'0 4px', borderTop:`1px solid ${C.border}`, paddingTop:8 }}>Technical Analysis</div>
+              <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+                {[
+                  {l:'Stage 2 Breakouts', intent:'technical_stage2'},
+                  {l:'Bullish Breakouts', intent:'technical_bullish_breakouts'},
+                  {l:'Bearish Breakdowns', intent:'technical_breakdowns'},
+                  {l:'Bearish Setups', intent:'technical_bearish_setups'},
+                  {l:'Oversold Bounces', intent:'technical_oversold'},
+                  {l:'Overbought Warnings', intent:'technical_overbought'},
+                  {l:'Crossover Signals', intent:'technical_crossovers'},
+                  {l:'Momentum Shifts', intent:'momentum_shift_scan'},
+                  {l:'Volume & Movers', intent:'volume_movers_scan'},
                 ].map(chip => (
                   <button key={chip.l} className="sidebar-chip" onClick={() => { if (!loading) { newChat(); askAgent('', true, chip.intent); setRightSidebarOpen(false); } }} disabled={loading} style={{ padding:'3px 7px', background:`${C.purple}08`, border:`1px solid ${C.purple}18`, borderRadius:3, color:C.dim, fontSize:8, fontWeight:600, fontFamily:font, cursor:loading ? 'not-allowed' : 'pointer', transition:'all 0.15s', opacity:loading ? 0.5 : 1 }}>{chip.l}</button>
                 ))}
