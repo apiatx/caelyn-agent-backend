@@ -1204,7 +1204,10 @@ function EarningsCalendarWidget({ markets }: { markets: ParsedMarket[] }) {
               const buzzIcon = st.buzz_level >= 7 ? "\uD83D\uDD25" : st.buzz_level >= 4 ? "\u3030\uFE0F" : "";
               // Look up Polymarket beat probability from the already-fetched full day list
               const polyEntry = displayEntries.find(e => e.ticker.toUpperCase() === st.ticker.toUpperCase());
-              const polyBeatPct = polyEntry && polyEntry.beatPct >= 0 ? polyEntry.beatPct : null;
+              const polyBeatPct = polyEntry && polyEntry.beatPct > 0 ? polyEntry.beatPct : null;
+              if (polyEntry) {
+                console.log(`[SMART_PM] ${st.ticker}: found in displayEntries, beatPct=${polyEntry.beatPct}, source=${polyEntry.source}, showing badge=${polyBeatPct != null}`);
+              }
 
               return (
                 <div
