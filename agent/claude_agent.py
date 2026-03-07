@@ -2821,7 +2821,6 @@ class TradingAgent:
     # Categories not listed here (or using Sonnet 4) get no thinking.
     THINKING_BUDGETS = {
         "ticker_analysis": 5000,
-        "investments": 3000,
         "best_trades": 5000,
         "cross_market": 6000,
         "crypto": 5000,
@@ -4839,7 +4838,10 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         elif category == "csv_analysis":
             model = "claude-sonnet-4-20250514"
             token_limit = 8000
-        elif category in ("ticker_analysis", "investments", "portfolio_review", "prediction_markets"):
+        elif category == "investments":
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 8000
+        elif category in ("ticker_analysis", "portfolio_review", "prediction_markets"):
             model = "claude-sonnet-4-5-20250929"
             token_limit = 10000
         elif category == "chat":
