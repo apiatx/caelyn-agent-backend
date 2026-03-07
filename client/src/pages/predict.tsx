@@ -749,13 +749,14 @@ function PredictionAgent() {
         throw new Error(`Backend returned ${res.status}: ${errText.slice(0, 200)}`);
       }
 
-      const data = await res.json();
+      const raw = await res.text();
+      const data = JSON.parse(raw.trim());
       const convId = data.conversation_id || conversationId;
       if (convId) setConversationId(convId);
 
       // Extract the analysis text from the response
       let analysisText = "";
-      if (data.analysis) {
+      if (data.analysis && data.analysis.trim().length > 10) {
         analysisText = data.analysis;
       } else if (data.structured?.message) {
         analysisText = data.structured.message;
