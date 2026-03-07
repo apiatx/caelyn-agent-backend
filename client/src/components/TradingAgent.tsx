@@ -2639,19 +2639,6 @@ export default function TradingAgent() {
                   {l:'Insider+Breakout', intent:'insider_breakout'},
                   {l:'High Growth Small Cap', intent:'high_growth_sc'},
                   {l:'Dividend Value', intent:'dividend_value'},
-                ].map(chip => (
-                  <button key={chip.l} className="sidebar-chip" onClick={() => { if (!loading) { newChat(); askAgent('', true, chip.intent); setRightSidebarOpen(false); } }} disabled={loading} style={{ padding:'3px 7px', background:`${C.purple}08`, border:`1px solid ${C.purple}18`, borderRadius:3, color:C.dim, fontSize:8, fontWeight:600, fontFamily:font, cursor:loading ? 'not-allowed' : 'pointer', transition:'all 0.15s', opacity:loading ? 0.5 : 1 }}>{chip.l}</button>
-                ))}
-              </div>
-              {/* Technical Analysis — buttons moved from sidebar, same preset_intents */}
-              {/* Mapping: Stage 2 Breakouts→technical_stage2, Bullish Breakouts→technical_bullish_breakouts,
-                  Bearish Breakdowns→technical_breakdowns, Bearish Setups→technical_bearish_setups,
-                  Oversold Bounces→technical_oversold, Overbought Warnings→technical_overbought,
-                  Crossover Signals→technical_crossovers, Momentum Shifts→momentum_shift_scan,
-                  Volume & Movers→volume_movers_scan */}
-              <div style={{ color:C.bright, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.04em', marginTop:12, marginBottom:4, padding:'0 4px', borderTop:`1px solid ${C.border}`, paddingTop:8 }}>Technical Analysis</div>
-              <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
-                {[
                   {l:'Stage 2 Breakouts', intent:'technical_stage2'},
                   {l:'Bullish Breakouts', intent:'technical_bullish_breakouts'},
                   {l:'Bearish Breakdowns', intent:'technical_breakdowns'},
