@@ -677,6 +677,15 @@ class TradingAgent:
             else:
                 category = query_info.get("category", "general")
 
+            # Force category override for prediction_markets preset —
+            # prevents _refine_plan_with_query or _plan_to_query_info from
+            # reclassifying to a different category (e.g. "investments")
+            if preset_intent and self._resolve_preset(preset_intent) == "prediction_markets":
+                if category != "prediction_markets":
+                    print(f"[ROUTING] Forcing category override: {category} → prediction_markets (preset_intent={preset_intent})")
+                    category = "prediction_markets"
+                    query_info["category"] = "prediction_markets"
+
             orch_plan = query_info.get("orchestration_plan")
             if orch_plan:
                 cross_market_override = self._detect_cross_market(user_prompt.lower().strip())
@@ -867,7 +876,7 @@ class TradingAgent:
         claude_ms = int((time.time() - data_done_time) * 1000)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
 
-        if chatbox_mode:
+        if chatbox_mode or category == "prediction_markets":
             result = self._parse_chatbox_response(raw_response, request_id=request_id)
         else:
             result = self._parse_response(raw_response, request_id=request_id)
@@ -4731,7 +4740,7 @@ Be direct and opinionated. Tell me what you actually think."""
             _profile_text += "\n\n" + _active_profile
         # If no personal profile active, just use core DNA (default Caelyn)
 
-        if chatbox_mode:
+        if chatbox_mode or category == "prediction_markets":
             from agent.prompts import CHATBOX_SYSTEM_PROMPT
             system_blocks = [
                 {
