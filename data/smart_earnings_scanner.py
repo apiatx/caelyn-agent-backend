@@ -270,12 +270,17 @@ def _score_and_rank(
     grok_results: list[dict],
     pplx_results: list[dict],
 ) -> dict:
-    """Merge Grok + Perplexity results, score, rank, return top per day."""
+    """Merge Grok + Perplexity results, score, rank, return 10-20 per day.
+
+    GUARANTEE: if a day has >= 10 raw tickers, we always return 10-20.
+    If a day has < 10, we return all of them.
+    """
     # Index by ticker
     grok_map = {r.get("ticker", "").upper(): r for r in grok_results if isinstance(r, dict)}
     pplx_map = {r.get("ticker", "").upper(): r for r in pplx_results if isinstance(r, dict)}
 
     all_signal_tickers = set(grok_map.keys()) | set(pplx_map.keys())
+    print(f"[SMART_EARNINGS] _score_and_rank: grok_map={len(grok_map)} tickers, pplx_map={len(pplx_map)} tickers, union={len(all_signal_tickers)}")
 
     result = {}
     now = time.time()
@@ -284,8 +289,10 @@ def _score_and_rank(
     MAX_PER_DAY = 20
 
     for date_str, tickers in by_date.items():
-        scored = []
-        remaining = []  # tickers that didn't pass the signal threshold
+        total_raw = len(tickers)
+
+        # Build enriched entries for ALL tickers on this day
+        all_entries = []
         for t in tickers:
             sym = t["ticker"].upper()
             grok = grok_map.get(sym, {})
@@ -300,38 +307,49 @@ def _score_and_rank(
             news_signal = pplx.get("news_signal", "low")
             analyst_focus = pplx.get("analyst_focus", False)
             sentiment = grok.get("sentiment", "mixed")
-
-            # Merge one-liners (prefer Grok for social, Perplexity for news)
             one_line = grok.get("one_line") or pplx.get("one_line") or ""
 
-            entry = {
+            has_signal = sym in all_signal_tickers or buzz >= 6 or news_signal == "high"
+            score = buzz * 2 + (5 if news_signal == "high" else 2 if news_signal == "medium" else 0) + (3 if analyst_focus else 0)
+            # Give a small boost to tickers with higher revenue estimates so
+            # backfill tickers sort by market importance when scores are tied at 0
+            rev = t.get("revenue_estimate") or 0
+            rev_boost = min(rev / 1e10, 1.0) if rev > 0 else 0  # 0-1 range, won't override real scores
+
+            all_entries.append({
                 **t,
                 "buzz_level": buzz,
                 "sentiment": sentiment,
                 "news_signal": news_signal,
                 "analyst_focus": analyst_focus,
                 "one_line": one_line,
-                "score": buzz * 2 + (5 if news_signal == "high" else 2 if news_signal == "medium" else 0) + (3 if analyst_focus else 0),
-            }
+                "score": score + rev_boost if not has_signal else score,
+                "_has_signal": has_signal,
+            })
 
-            # Include if: buzz >= 6 OR news_signal == "high" OR in either result set
-            if sym in all_signal_tickers or buzz >= 6 or news_signal == "high":
-                scored.append(entry)
-            else:
-                remaining.append(entry)
+        # Separate signal-passing tickers from the rest
+        scored = [e for e in all_entries if e["_has_signal"]]
+        remaining = [e for e in all_entries if not e["_has_signal"]]
 
-        # Sort by score desc
+        # Sort scored by score desc
         scored.sort(key=lambda x: x["score"], reverse=True)
 
-        # If fewer than MIN_PER_DAY passed the threshold, backfill from remaining
+        # Backfill: if fewer than MIN_PER_DAY passed the threshold,
+        # fill from remaining sorted by revenue estimate desc
         if len(scored) < MIN_PER_DAY:
-            # Sort remaining by revenue estimate desc as proxy for importance
             remaining.sort(key=lambda x: x.get("revenue_estimate") or 0, reverse=True)
             need = MIN_PER_DAY - len(scored)
             scored.extend(remaining[:need])
 
         # Cap at MAX_PER_DAY
+        signal_count = len(scored)  # count before backfill cap is already applied, but after extend
         scored = scored[:MAX_PER_DAY]
+
+        print(f"[SMART_EARNINGS]   {date_str}: {total_raw} raw, {len([e for e in all_entries if e.get('_has_signal')])} signal, backfilled to {signal_count}, capped to {len(scored)} final")
+
+        # Clean internal flag before caching
+        for e in scored:
+            e.pop("_has_signal", None)
 
         result[date_str] = {
             "tickers": scored,
@@ -386,17 +404,23 @@ async def run_smart_scan(finnhub_client, xai_key: str, perplexity_key: str) -> d
 
     elapsed = time.time() - start
     total_curated = sum(d["count"] for d in scored.values())
-    print(f"[SMART_EARNINGS] Scan complete: {total_curated} curated tickers in {elapsed:.1f}s")
+    days_cached = list(scored.keys())
+    print(f"[SMART_EARNINGS] Scan complete: {total_curated} curated tickers across {len(days_cached)} days in {elapsed:.1f}s")
+    print(f"[SMART_EARNINGS] Cache written to {CACHE_FILE} — days: {days_cached}")
+    for d, v in scored.items():
+        print(f"[SMART_EARNINGS]   {d}: {v['count']} tickers cached")
 
     return scored
 
 
-def get_fallback_top_tickers(by_date_from_calendar: list[dict], date_str: str, limit: int = 30) -> dict:
-    """Fallback: return top tickers by revenue estimate (proxy for market cap) if cache is empty."""
+def get_fallback_top_tickers(by_date_from_calendar: list[dict], date_str: str, limit: int = 20) -> dict:
+    """Fallback: return top tickers by revenue estimate (proxy for market cap) if cache is empty.
+    Always returns 10-20 tickers (or all if fewer than 10 exist)."""
     day_tickers = [e for e in by_date_from_calendar if e.get("date") == date_str]
     # Sort by revenue_estimate desc as proxy for market cap
     day_tickers.sort(key=lambda x: x.get("revenue_estimate") or 0, reverse=True)
     day_tickers = day_tickers[:limit]
+    print(f"[SMART_EARNINGS] Fallback for {date_str}: {len(day_tickers)} tickers (from {len([e for e in by_date_from_calendar if e.get('date') == date_str])} total)")
 
     return {
         "tickers": [
