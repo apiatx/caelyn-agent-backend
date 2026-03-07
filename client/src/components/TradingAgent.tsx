@@ -295,6 +295,7 @@ export default function TradingAgent() {
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
   const commandInputRef = useRef<HTMLInputElement>(null);
   const loadingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -316,14 +317,23 @@ export default function TradingAgent() {
   }, [savedChats]);
 
   function newChat() {
+    // Abort any in-flight request immediately
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    // Reset loading state so the terminal returns to idle
+    loadingRef.current = false;
+    setLoading(false);
+    setLoadingStage('');
+    setPrompt('');
+    setError(null);
+    setExpandedTicker(null);
+    // Save current panels to history (do NOT clear them — panels stay on screen)
     if (panels.length > 0) {
       const title = panels[0]?.title || 'Chat';
       setSavedChats(prev => [{id: Date.now(), title, panels: [...panels], conversationId}, ...prev].slice(0, 20));
     }
     setPanels([]);
     setConversationId(null);
-    setError(null);
-    setExpandedTicker(null);
   }
 
   function loadChat(chat: typeof savedChats[0]) {
@@ -471,10 +481,13 @@ export default function TradingAgent() {
       }
 
       console.log('[CSV_PAYLOAD]', JSON.stringify(payload).substring(0, 500));
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-API-Key': AGENT_API_KEY },
         body: JSON.stringify(payload),
+        signal: controller.signal,
       });
       const raw = (await res.text()).trim();
       console.log('[RECV_RAW]', res.status, raw.slice(0, 800));
@@ -548,6 +561,11 @@ export default function TradingAgent() {
         saveToPromptHistory(presetIntent, raw, data.display_type || data.type);
       }
     } catch (err: any) {
+      // User-initiated abort (New button) — exit silently, no error panel
+      if (err?.name === 'AbortError') {
+        console.log('[ABORT] Request cancelled by user');
+        return;
+      }
       console.log('[FETCH_FAIL]', err, err?.message);
       const errMsg = err.message?.includes('429') ? 'Rate limit reached. Wait a moment.'
         : err.message?.includes('403') ? 'Auth failed.'
@@ -560,7 +578,7 @@ export default function TradingAgent() {
       };
       setPanels(prev => [...prev, failPanel]);
       setError(errMsg);
-    } finally { clearInterval(iv); setLoadingStage(''); setLoading(false); loadingRef.current = false; }
+    } finally { clearInterval(iv); setLoadingStage(''); setLoading(false); loadingRef.current = false; abortControllerRef.current = null; }
   }
 
 
