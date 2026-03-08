@@ -19,6 +19,13 @@ from pathlib import Path
 
 AGENT_API_KEY = os.getenv("AGENT_API_KEY")
 
+
+def _jwt_or_key(request: Request, api_key) -> bool:
+    """Return True if the request is authenticated via JWT middleware OR a valid API key."""
+    if getattr(request.state, "user_id", None):
+        return True
+    return bool(api_key and api_key == AGENT_API_KEY)
+
 # ── Auth middleware ──────────────────────────────────────────────
 # Public paths that do NOT require a valid JWT token
 _AUTH_PUBLIC_PATHS = {
@@ -151,10 +158,18 @@ async def auth_login(body: LoginRequest):
 
 @app.get("/api/auth/verify")
 async def auth_verify(request: Request):
-    """Verify the current JWT token and return user info."""
-    user_id = getattr(request.state, "user_id", None)
-    if not user_id:
+    """Verify the current JWT token and return user info.
+    This endpoint is public so we must extract the token manually."""
+    from auth import verify_token
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated.")
+    token = auth_header[7:]
+    try:
+        payload = verify_token(token)
+        user_id = payload.get("sub", "default")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Token expired or invalid.")
     return {"valid": True, "user_id": user_id}
 
 
@@ -715,7 +730,7 @@ async def smart_earnings_status(request: Request):
 async def refresh_smart_cache(request: Request, x_api_key: str = Header(None), date: str = None):
     """Manual trigger for smart earnings scan. Runs in background.
     Optional 'date' query param to scan a specific week."""
-    if x_api_key != AGENT_API_KEY:
+    if not _jwt_or_key(request, x_api_key):
         raise HTTPException(status_code=403, detail="Invalid API key")
 
     global _smart_scan_running
@@ -761,7 +776,7 @@ async def update_settings_endpoint(
     request: Request,
     api_key: str = Header(None, alias="X-API-Key"),
 ):
-    if not api_key or api_key != AGENT_API_KEY:
+    if not _jwt_or_key(request, api_key):
         return JSONResponse(status_code=403, content={"error": "Invalid API key"})
     body = await request.json()
     from data.user_settings import save_settings
@@ -782,7 +797,7 @@ async def save_template_endpoint(
     request: Request,
     api_key: str = Header(None, alias="X-API-Key"),
 ):
-    if not api_key or api_key != AGENT_API_KEY:
+    if not _jwt_or_key(request, api_key):
         return JSONResponse(status_code=403, content={"error": "Invalid API key"})
     body = await request.json()
     template_type = body.get("type")  # "instruction" or "profile"
@@ -806,7 +821,7 @@ async def delete_template_endpoint(
     template_type: str = "",
     name: str = "",
 ):
-    if not api_key or api_key != AGENT_API_KEY:
+    if not _jwt_or_key(request, api_key):
         return JSONResponse(status_code=403, content={"error": "Invalid API key"})
     if template_type not in ("instruction", "profile"):
         return JSONResponse(status_code=400, content={"error": "type must be 'instruction' or 'profile'"})
@@ -1009,17 +1024,12 @@ async def earnings_detail(request: Request, ticker: str = ""):
     return JSONResponse(content=result)
 
 
-async def verify_api_key(x_api_key: Optional[str] = Header(None)):
-    """Verify the API key sent in the X-API-Key header."""
-    if not x_api_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing API key. Include X-API-Key header.",
-        )
-    if x_api_key != AGENT_API_KEY:
+async def verify_api_key(request: Request, x_api_key: Optional[str] = Header(None)):
+    """Verify the API key sent in the X-API-Key header, or pass if JWT-authenticated."""
+    if not _jwt_or_key(request, x_api_key):
         raise HTTPException(
             status_code=403,
-            detail="Invalid API key.",
+            detail="Invalid or missing API key.",
         )
     return x_api_key
 
@@ -1537,7 +1547,7 @@ async def query_agent(
 
     meta = _build_meta(req_id, preset_intent=body.preset_intent, conv_id=body.conversation_id)
 
-    if not api_key or api_key != AGENT_API_KEY:
+    if not _jwt_or_key(request, api_key):
         resp = _error_envelope("AUTH_FAILED", "Invalid or missing API key.", meta)
         _resp_log(req_id, 403, "error", resp)
         return JSONResponse(status_code=403, content=resp)
@@ -1803,7 +1813,7 @@ async def test_csv(request: Request, body: TestCsvRequest):
 @app.post("/api/cache/clear")
 @limiter.limit("5/minute")
 async def clear_cache(request: Request, api_key: str = Header(None, alias="X-API-Key")):
-    if not api_key or api_key != AGENT_API_KEY:
+    if not _jwt_or_key(request, api_key):
         raise HTTPException(status_code=403, detail="Invalid API key")
     from data.cache import cache
     cache.clear()
@@ -1822,7 +1832,7 @@ async def review_watchlist(
     api_key: str = Header(None, alias="X-API-Key"),
 ):
     import asyncio
-    if not api_key or api_key != AGENT_API_KEY:
+    if not _jwt_or_key(request, api_key):
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
     if not body.tickers:
         raise HTTPException(status_code=400, detail="No tickers provided.")
@@ -2177,7 +2187,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
     import httpx
     import asyncio
 
-    if not api_key or api_key != AGENT_API_KEY:
+    if not _jwt_or_key(request, api_key):
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
 
     from data.cache import cache as _cache
