@@ -935,8 +935,16 @@ If social_signal.social_spike_primary exists in the data, populate the social_tr
 
 If no social_signal data: set social_trading_signal.symbol to "" and leave other fields at defaults.
 
+SENTIMENT POLARITY FILTER (CRITICAL — apply BEFORE classification):
+Social buzz volume ≠ bullish signal. You MUST check the POLARITY of the buzz:
+- If Grok data shows sentiment="bearish" or sentiment_score < -0.2 for a ticker, it means people are TRASHING it on X, not recommending it.
+- NEVER classify a bearish-sentiment ticker as "TRADE IDEA" with "Buy" rating. If the buzz is negative (people mocking it, calling it a bad investment, sharing loss porn), classify it as "WATCHLIST" with "Hold" or "Sell" rating.
+- A ticker with 10,000 posts saying it's terrible is NOT a buy — it's a warning signal.
+- Only classify as "TRADE IDEA" + "Buy" when social sentiment is GENUINELY BULLISH (people sharing real catalysts, accumulating, posting bullish theses).
+- If Grok flags trade_sentiment as "sell" or "hold", respect that — do not override with a "Buy" rating.
+
 CLASSIFICATION RULES (signal > hype):
-- "TRADE IDEA": social velocity is high/extreme AND at least one confirmation (TA, volume, or catalyst) is true
+- "TRADE IDEA": social velocity is high/extreme AND sentiment is bullish/mixed-bullish AND at least one confirmation (TA, volume, or catalyst) is true
 - "WATCHLIST": everything else — still list it but label clearly as watchlist with lower confidence
 - If NO items qualify as TRADE IDEA, explicitly state in thesis_bullets: "No confirmed trade ideas; all items are watchlist due to missing confirmations."
 
@@ -992,6 +1000,31 @@ RULES:
 - If social_scan_unavailable is true in the data, include a note: "X social scan was unavailable for this request" and rate using available market data only.
 - If edgar data is present for equity tickers, use it to ground "why now" and flag dilution/offerings/insider activity in thesis_bullets. Reference specific filing types (8-K, S-1, Form 4) and dates.
 - FALLING KNIFE RULE: Any ticker flagged with _falling_knife or _suspected_falling_knife in the data MUST be labeled "AVOID" or "WARNING" — never "Strong Buy" or "Buy". If the data shows _reversal_confirmed, you may label it as a "REVERSAL PLAY" with appropriate risk warnings.
+
+MARKET DRIVERS SUMMARY (MANDATORY — add as market_drivers in JSON output):
+At the end of your response, you MUST include a "market_drivers" object that synthesizes what's ACTUALLY moving markets right now.
+This section answers: "What are the 3-5 biggest stories driving asset prices today?"
+
+Structure:
+"market_drivers": {
+    "summary": "2-3 sentence macro overview of what's dominating markets right now",
+    "drivers": [
+        {
+            "theme": "Short label (e.g., 'Iran-Israel Conflict', 'Fed Rate Decision', 'AI Capex Cycle')",
+            "impact": "1-2 sentences on HOW this is affecting specific assets (oil up, defense stocks up, risk-off in crypto, etc.)",
+            "affected_assets": ["OIL", "GOLD", "defense stocks", etc.]
+        }
+    ]
+}
+
+Rules for market_drivers:
+- Pull from perplexity_news articles AND Grok social scan context. Cross-reference what news is saying with what X is discussing.
+- ALWAYS include geopolitical events if they exist in the news (wars, sanctions, trade disputes, elections). These move commodities and risk sentiment.
+- ALWAYS include macro events (Fed, CPI, jobs, rate decisions) if present.
+- Include sector-specific catalysts (earnings season, regulatory changes, tech launches).
+- This section should explain WHY trending assets are trending — connect the dots between news events and price action.
+- If oil is up 3%, SAY WHY (Iran tensions, OPEC cuts, inventory draw, etc.). If gold is surging, SAY WHY (war risk, rate cut expectations, central bank buying).
+- Minimum 2 drivers, maximum 5.
 """
 
 PREDICTION_MARKETS_CONTRACT = """You are Caelyn, an AI trading assistant specializing in prediction markets and probability analysis.

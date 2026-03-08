@@ -172,6 +172,20 @@ Return 10-15 tickers sorted by social velocity (fastest-growing mentions first).
 Flag coordinated pump signals. Include genuine micro-cap momentum if the catalyst is real.
 Always include BTC in trending_tickers even if its velocity is lower.
 
+CRITICAL — SENTIMENT POLARITY FILTER:
+A token being TALKED ABOUT is NOT the same as being BULLISH. You MUST distinguish:
+- POSITIVE BUZZ: People are excited, accumulating, sharing bullish theses, discussing real catalysts
+- NEGATIVE BUZZ: People are mocking it, calling it a bad investment, celebrating its decline, warning others to avoid it, sharing loss porn
+- CONTROVERSIAL BUZZ: Genuine debate with both sides making substantive arguments
+
+If a token is trending primarily because people are CRITICIZING it, MOCKING holders, or discussing how BAD it is:
+- Set sentiment to "bearish" (NOT "bullish" or "mixed")
+- Set trade_sentiment to "sell" or "hold" (NOT "buy")
+- In why_trending, clearly state "Trending due to negative sentiment — X users are criticizing/mocking this asset"
+- Do NOT recommend buying something just because lots of people are talking about it negatively
+
+The VOLUME of discussion does NOT equal BULLISH sentiment. 10,000 posts saying "$SOL is dead" is BEARISH, not bullish.
+
 ALPHA SIGNAL PRIORITIES (weight these higher when found):
 - FUNDING RATE DIVERGENCES: Discussion about tokens with price rising but funding negative (shorts getting squeezed — more upside likely) or price falling but funding positive (longs getting liquidated — more downside). These are the highest-conviction derivatives signals.
 - INFRASTRUCTURE BOTTLENECK TOKENS: Tokens tied to critical crypto infrastructure (L1 scaling, cross-chain bridges, oracle networks, decentralized compute) where the token IS the tollbooth for a larger ecosystem. Same logic as equity bottleneck plays.
@@ -222,6 +236,20 @@ Return ONLY a JSON object (no markdown, no backticks):
 Return the top 10-15 most actively discussed tickers, sorted by mention intensity.
 Be ruthless about quality — skip bot-driven noise and focus on real human discussion.
 If you see signs of coordinated pumping, FLAG IT.
+
+CRITICAL — SENTIMENT POLARITY FILTER:
+A stock being TALKED ABOUT is NOT the same as being BULLISH. You MUST distinguish:
+- POSITIVE BUZZ: People are excited, sharing bullish theses, discussing catalysts, accumulating
+- NEGATIVE BUZZ: People are mocking holders, calling it overvalued, celebrating its decline, warning others
+- CONTROVERSIAL: Genuine bull/bear debate with substantive arguments on both sides
+
+If a ticker is trending primarily because people are CRITICIZING it or discussing how BAD it is:
+- Set sentiment to "bearish" (NOT "bullish" or "mixed")
+- Set trade_sentiment to "sell" or "hold" (NOT "buy")
+- In why_trending, clearly state the negative nature of the buzz
+- Do NOT recommend buying something just because lots of people are talking about it negatively
+
+High mention volume + negative sentiment = BEARISH signal, not bullish.
 Don't be risk-averse about small caps — if they're hot and the thesis is real, include them.
 If a low-cap stock has genuine momentum and a real catalyst, say so directly.
 Also flag any tickers seeing surging mainstream retail interest beyond just financial social media — Google search trends, mainstream news coverage, TikTok/YouTube buzz. If a ticker is crossing over from financial Twitter into mainstream public awareness, that's a significant signal worth highlighting. Also note any references to Substack newsletters, research reports, or long-form analysis being widely shared on X — these often contain deeper thesis work that precedes major moves.

@@ -3600,7 +3600,7 @@ class TradingAgent:
                     module_status["news_context"] = "unavailable"
                     return
                 raw = await asyncio.wait_for(
-                    pplx.get_market_news("trending stocks crypto commodities market movers today"),
+                    pplx.get_market_news("trending stocks crypto commodities market movers geopolitical events war sanctions oil gold today"),
                     timeout=10.0,
                 )
                 if raw and raw.get("article_count", 0) > 0:
