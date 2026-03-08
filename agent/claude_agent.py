@@ -119,6 +119,8 @@ class TradingAgent:
         "catalyst_scan": "catalyst_scan",
         # --- Other ---
         "microcap_spec": "microcap_spec",
+        # --- Earnings Agent (frontend earnings page) ---
+        "earnings_agent": "earnings_catalyst",
         # --- Prediction Markets ---
         "prediction_markets": "prediction_markets",
         "polymarket": "prediction_markets",
@@ -672,8 +674,12 @@ class TradingAgent:
         elif preset_intent:
             plan = self._build_plan_from_preset(preset_intent)
             if plan is None:
-                print(f"[ROUTING] Unknown preset_intent '{preset_intent}', falling back to classifier")
-                query_info = await self._orchestrate_with_timeout(user_prompt)
+                # When preset can't resolve and query is empty (button click),
+                # synthesize a meaningful query from the preset name so the
+                # classifier has something to work with instead of an empty string.
+                fallback_query = user_prompt if user_prompt.strip() else preset_intent.replace("_", " ")
+                print(f"[ROUTING] Unknown preset_intent '{preset_intent}', falling back to classifier with query='{fallback_query[:80]}'")
+                query_info = await self._orchestrate_with_timeout(fallback_query)
                 routing_source = query_info.pop("_routing_source", "heuristic")
                 routing_confidence = query_info.pop("_routing_confidence", "low")
             else:
