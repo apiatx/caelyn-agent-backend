@@ -3,6 +3,7 @@ import time
 import httpx
 from datetime import datetime, timedelta
 from data.cache import cache
+from data import edgar_cache
 
 EDGAR_CIK_TTL = 604800
 EDGAR_FILINGS_TTL = 900
@@ -191,6 +192,19 @@ class SecEdgarProvider:
         limit: int = 10,
         budget: EdgarBudget | None = None,
     ) -> list[dict]:
+        # Check disk cache (populated by background job)
+        disk = edgar_cache.get_filings(cik)
+        if disk is not None:
+            # Apply form_type and lookback filters to cached data
+            if form_types:
+                disk = [f for f in disk if any(f.get("form", "").startswith(ft) for ft in form_types)]
+            cutoff = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+            disk = [f for f in disk if f.get("filed_at", "") >= cutoff]
+            if disk:
+                if budget:
+                    budget.record_cache_hit()
+                return disk[:limit]
+
         cache_key = f"edgar:filings:{cik}:{','.join(form_types or ['all'])}:{lookback_days}"
         cached = cache.get(cache_key)
         if cached is not None:
@@ -247,6 +261,13 @@ class SecEdgarProvider:
         limit: int = 10,
         budget: EdgarBudget | None = None,
     ) -> dict:
+        # Insider data has short TTL (5 min) — check disk cache but stay fresh
+        disk = edgar_cache.get_insider(cik)
+        if disk is not None:
+            if budget:
+                budget.record_cache_hit()
+            return disk
+
         cache_key = f"edgar:insider:{cik}:{lookback_days}"
         cached = cache.get(cache_key)
         if cached is not None:
@@ -311,6 +332,15 @@ class SecEdgarProvider:
         limit: int = 10,
         budget: EdgarBudget | None = None,
     ) -> list[dict]:
+        # Check disk cache
+        disk = edgar_cache.get_catalysts(cik)
+        if disk is not None:
+            cutoff = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+            disk = [c for c in disk if c.get("filed_at", "") >= cutoff]
+            if budget:
+                budget.record_cache_hit()
+            return disk[:limit]
+
         cache_key = f"edgar:catalysts:{cik}:{lookback_days}"
         cached = cache.get(cache_key)
         if cached is not None:
@@ -344,8 +374,16 @@ class SecEdgarProvider:
         """
         Fetch key financials from XBRL companyfacts API.
         Returns revenue, net income, EPS, assets, and debt — free, no key needed.
-        Cached 6 hours (financials don't change intraday).
+        Checks disk cache first (background job), then in-memory, then live API.
         """
+        # Check disk cache first (populated by nightly background job)
+        # Resolve CIK back to ticker for disk cache lookup
+        disk = edgar_cache.get_financials(cik)
+        if disk:
+            if budget:
+                budget.record_cache_hit()
+            return disk
+
         cache_key = f"edgar:financials:{cik}"
         cached = cache.get(cache_key)
         if cached is not None:

@@ -62,6 +62,7 @@ async def lifespan(app):
     threading.Thread(target=_do_init, daemon=True).start()
     asyncio.create_task(_briefing_precompute_loop())
     asyncio.create_task(_smart_earnings_loop())
+    asyncio.create_task(_edgar_cache_loop())
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)
@@ -503,6 +504,65 @@ async def _smart_earnings_loop():
             _smart_scan_running = False
             await asyncio.sleep(3600)  # Retry in 1 hour on error
 
+
+
+# ============================================================
+# EDGAR Background Cache Loop
+# ============================================================
+
+async def _edgar_cache_loop():
+    """
+    Background EDGAR data caching with two schedules:
+      - Full refresh: nightly at midnight CST (financials + filings + catalysts + insider)
+      - Filings refresh: every 2 hours during market hours (filings + catalysts only)
+
+    Insider data (Form 4) and earnings-day tickers stay live with short TTL (5 min)
+    for real-time trade signals.
+    """
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _init_event.wait, 120)
+
+    if data_service is None:
+        print("[EDGAR_CACHE] data_service not available, aborting background loop")
+        return
+
+    from data.edgar_cache import refresh_universe, is_midnight_cst, is_market_hours
+
+    # Initial full refresh on startup (populate cache if empty)
+    await asyncio.sleep(30)  # Let other init tasks finish first
+    try:
+        print("[EDGAR_CACHE] Running initial full refresh on startup...")
+        await refresh_universe(data_service.sec_edgar, mode="full")
+    except Exception as e:
+        print(f"[EDGAR_CACHE] Initial refresh error: {e}")
+
+    last_full_refresh = time.time()
+    last_filings_refresh = time.time()
+
+    while True:
+        try:
+            now = time.time()
+
+            # Nightly full refresh at midnight CST
+            if is_midnight_cst() and (now - last_full_refresh > 3600):
+                print("[EDGAR_CACHE] Midnight CST — running full refresh")
+                await refresh_universe(data_service.sec_edgar, mode="full")
+                last_full_refresh = now
+
+            # Intraday filings refresh every 2 hours during market hours
+            elif is_market_hours() and (now - last_filings_refresh > 7200):
+                print("[EDGAR_CACHE] Market hours — refreshing filings + catalysts")
+                await refresh_universe(data_service.sec_edgar, mode="filings")
+                last_filings_refresh = now
+
+            # Check every 5 minutes
+            await asyncio.sleep(300)
+
+        except Exception as e:
+            print(f"[EDGAR_CACHE] Loop error: {e}")
+            import traceback
+            traceback.print_exc()
+            await asyncio.sleep(600)
 
 
 # ============================================================

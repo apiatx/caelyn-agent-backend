@@ -12,3 +12,6 @@ wheels/
 
 # Chat history storage
 data/chat_history_store/
+
+# EDGAR background cache (disk-persisted, regenerated nightly)
+data/edgar_disk_cache/
