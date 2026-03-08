@@ -2,7 +2,6 @@ from fastapi import FastAPI, Request, Header, HTTPException, Body
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -26,7 +25,12 @@ def _jwt_or_key(request: Request, api_key) -> bool:
         return True
     return bool(api_key and api_key == AGENT_API_KEY)
 
-# ── Auth middleware ──────────────────────────────────────────────
+# ── Auth middleware (pure ASGI — no BaseHTTPMiddleware) ──────────
+# BaseHTTPMiddleware is known to break StreamingResponse by buffering the
+# body through an internal pipe. This pure ASGI implementation passes the
+# response through without touching it, which is critical for the keepalive
+# streaming used by /api/query.
+#
 # Public paths that do NOT require a valid JWT token
 _AUTH_PUBLIC_PATHS = {
     "/api/auth/login",
@@ -40,29 +44,71 @@ _AUTH_PUBLIC_PATHS = {
     "/redoc",
 }
 
-class JWTAuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        # Pass CORS preflight requests through so CORSMiddleware can handle them
-        if request.method == "OPTIONS":
-            return await call_next(request)
+
+class JWTAuthMiddleware:
+    """Pure ASGI middleware for JWT authentication.
+
+    Unlike BaseHTTPMiddleware, this does NOT wrap or buffer the response body.
+    StreamingResponse bytes flow directly from the endpoint to the client,
+    which is critical for keepalive streaming in /api/query.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope["path"]
+        method = scope.get("method", "GET")
+
+        # Pass CORS preflight requests through untouched
+        if method == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+
         # Allow public paths without auth
         if path in _AUTH_PUBLIC_PATHS or not path.startswith("/api/"):
-            return await call_next(request)
-        # Extract Bearer token
-        auth_header = request.headers.get("Authorization", "")
+            await self.app(scope, receive, send)
+            return
+
+        # Extract Bearer token from headers
+        headers = dict(
+            (k.decode("latin-1"), v.decode("latin-1"))
+            for k, v in scope.get("headers", [])
+        )
+        auth_header = headers.get("authorization", "")
         token = None
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
+
         if not token:
-            return JSONResponse(status_code=401, content={"error": "Unauthorized", "detail": "Missing or invalid Authorization header."})
+            response = JSONResponse(
+                status_code=401,
+                content={"error": "Unauthorized", "detail": "Missing or invalid Authorization header."},
+            )
+            await response(scope, receive, send)
+            return
+
         try:
             from auth import verify_token
             payload = verify_token(token)
-            request.state.user_id = payload.get("sub", "default")
+            # Set user_id in scope state so request.state.user_id works downstream
+            if "state" not in scope:
+                scope["state"] = {}
+            scope["state"]["user_id"] = payload.get("sub", "default")
         except Exception:
-            return JSONResponse(status_code=401, content={"error": "Unauthorized", "detail": "Token expired or invalid."})
-        return await call_next(request)
+            response = JSONResponse(
+                status_code=401,
+                content={"error": "Unauthorized", "detail": "Token expired or invalid."},
+            )
+            await response(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
+
 
 app = FastAPI(title="Trading Agent API")
 
@@ -112,9 +158,9 @@ async def json_decode_exception_handler(request: Request, exc: _json.JSONDecodeE
         },
     )
 
-# CORSMiddleware must be added LAST so it is outermost — it handles OPTIONS
-# preflights before JWTAuthMiddleware can block them, and adds CORS headers
-# to ALL responses (including 401s from JWT middleware).
+# CORSMiddleware must be outermost — handles OPTIONS preflights and adds
+# CORS headers to ALL responses (including 401s from JWT middleware).
+# JWTAuthMiddleware is pure ASGI now, so add_middleware ordering works correctly.
 app.add_middleware(JWTAuthMiddleware)
 
 app.add_middleware(
