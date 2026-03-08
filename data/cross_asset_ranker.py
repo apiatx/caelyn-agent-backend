@@ -48,7 +48,7 @@ MAX_CRYPTO = 3          # Hard ceiling — never exceed 3 crypto in final output
 MIN_EQUITIES = 5        # Hard floor — always at least 5 equities
 MIN_COMMODITIES = 2     # Hard floor — always at least 2 commodities
 
-MAX_FINAL_PICKS = 18
+MAX_FINAL_PICKS = 15
 
 
 def rank_cross_market(stock_data: dict, crypto_data: dict,

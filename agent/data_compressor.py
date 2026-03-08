@@ -354,6 +354,11 @@ def _compress_cross_asset_trending(data: dict) -> dict:
         "analyst_rating", "price_target", "upside_downside", "sector",
         "avg_volume", "beta", "price", "change", "ticker",
         "dividend_yield", "forward_pe", "week_52_high", "week_52_low",
+        "thesis", "catalyst", "catalyst_hint", "receipts", "confirmations",
+        "ta_summary", "normalized_score", "social_signal_rank",
+        "mention_velocity_score", "mention_velocity_label",
+        "classification", "factors_met", "factor_detail",
+        "confirmation_status", "source_count", "trending_sources",
     }
 
     for key, value in data.items():
@@ -380,7 +385,7 @@ def _compress_cross_asset_trending(data: dict) -> dict:
                         trimmed_grok[gk] = gv
                 compressed[key] = trimmed_grok
             elif key == "ranked_candidates" and isinstance(value, list):
-                compressed[key] = value[:18]
+                compressed[key] = value[:15]
             elif key == "ranking_debug" and isinstance(value, dict):
                 slim_debug = {}
                 for dk, dv in value.items():
@@ -396,7 +401,7 @@ def _compress_cross_asset_trending(data: dict) -> dict:
             enriched = value.get("enriched_data", {})
             compact_enriched = {}
             if isinstance(enriched, dict):
-                for ticker, info in list(enriched.items())[:12]:
+                for ticker, info in list(enriched.items())[:15]:
                     if isinstance(info, dict):
                         compact_enriched[ticker] = {k: v for k, v in info.items() if k in _ENRICHED_KEEP}
             top_trending = value.get("top_trending", [])
