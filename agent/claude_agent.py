@@ -3508,8 +3508,8 @@ class TradingAgent:
         from data.cache import cache, XAI_CROSS_ASSET_TTL
         import time as _t
 
-        WALL_CLOCK_LIMIT = 45.0
-        GROK_TIMEOUT = 25.0
+        WALL_CLOCK_LIMIT = 60.0
+        GROK_TIMEOUT = 40.0
         MARKET_SCAN_TIMEOUT = 25.0
         LIGHT_ENRICHMENT_TIMEOUT = 12.0
 
@@ -3600,8 +3600,8 @@ class TradingAgent:
                     module_status["news_context"] = "unavailable"
                     return
                 raw = await asyncio.wait_for(
-                    pplx.get_market_news("trending stocks crypto commodities market movers geopolitical events war sanctions oil gold today"),
-                    timeout=10.0,
+                    pplx.get_market_news("trending stocks crypto commodities market movers today"),
+                    timeout=20.0,
                 )
                 if raw and raw.get("article_count", 0) > 0:
                     news_context = raw

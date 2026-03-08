@@ -130,13 +130,13 @@ class PerplexityProvider:
 
         try:
             body = {
-                "model": "sonar-pro",
+                "model": "sonar-reasoning-pro",
                 "messages": [
                     {"role": "system", "content": "You are a web search assistant. Use web results and provide concise factual output."},
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.1,
-                "max_tokens": 800,
+                "max_tokens": 1200,
             }
             if domain_filter:
                 body["search_domain_filter"] = domain_filter[:20]
@@ -187,10 +187,13 @@ class PerplexityProvider:
 
     def _normalize_chat_response(self, raw: dict, max_results: int = 10) -> dict:
         """Normalize chat-completions response to the same shape as _normalize_response."""
+        import re as _re
         answer = ""
         choices = raw.get("choices", [])
         if choices:
             answer = choices[0].get("message", {}).get("content", "") or ""
+        # Strip <think>...</think> reasoning tokens from reasoning models
+        answer = _re.sub(r"<think>[\s\S]*?</think>", "", answer).strip()
 
         citations = raw.get("citations", []) or []
         results = []
@@ -470,7 +473,9 @@ class PerplexityProvider:
         prompt = (
             "List the top 5 most trending/moving commodities and futures right now. "
             "For each one, provide: name, current price, daily % change, and a brief "
-            "1-sentence reason why it's moving. Focus on: crude oil, gold, silver, "
+            "1-sentence reason why it's moving — connect the move to the underlying "
+            "driver (geopolitical events, supply disruptions, macro data, weather, etc.). "
+            "Focus on: crude oil, gold, silver, "
             "natural gas, copper, uranium, platinum, palladium, lithium, wheat, corn. "
             "Format each as: NAME | PRICE | CHANGE% | REASON"
         )
@@ -481,13 +486,13 @@ class PerplexityProvider:
                     self.SONAR_URL,
                     headers=self._headers,
                     json={
-                        "model": "sonar-pro",
+                        "model": "sonar-reasoning-pro",
                         "messages": [
-                            {"role": "system", "content": "You are a commodities market analyst. Provide current, accurate market data. Always include the daily percentage change with a + or - sign."},
+                            {"role": "system", "content": "You are a commodities market analyst. Provide current, accurate market data. Always include the daily percentage change with a + or - sign. Connect price moves to their underlying drivers (geopolitical events, supply disruptions, macro data, weather)."},
                             {"role": "user", "content": prompt},
                         ],
                         "temperature": 0.1,
-                        "max_tokens": 800,
+                        "max_tokens": 1200,
                         "search_domain_filter": [
                             "reuters.com",
                             "bloomberg.com",
@@ -496,7 +501,7 @@ class PerplexityProvider:
                             "cnbc.com",
                         ],
                     },
-                    timeout=15.0,
+                    timeout=25.0,
                 )
 
             if resp.status_code != 200:
@@ -509,6 +514,10 @@ class PerplexityProvider:
             if choices:
                 content = choices[0].get("message", {}).get("content", "")
             citations = raw.get("citations", [])
+
+            # Strip <think>...</think> reasoning tokens from reasoning models
+            import re as _re
+            content = _re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
 
             if not content:
                 print("[Perplexity] Sonar commodities: empty response")

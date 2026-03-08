@@ -193,7 +193,7 @@ ALPHA SIGNAL PRIORITIES (weight these higher when found):
 - SMART MONEY ON-CHAIN: Any discussion of whale wallets accumulating, VC unlocks, or protocol treasury movements. On-chain evidence > social hype.
 - OI + VOLUME ACCELERATION: Tokens where X discusses surging open interest alongside rising price — this is new money entering, not just spot buying."""
 
-            return await self._call_grok_with_x_search(crypto_prompt)
+            return await self._call_grok_with_x_search(crypto_prompt, use_deep_model=True)
 
         else:
             asset_context = "stocks and ETFs"
@@ -261,7 +261,7 @@ ALPHA SIGNAL PRIORITIES (weight these higher when found):
 - ASYMMETRIC SETUPS: Tickers where X discusses the "three-legged stool" — undervalued (low P/S vs peers) + rapid revenue ramp + hot sector. All three present = maximum signal.
 - SERIAL ACQUIRERS: Companies buying assets at 5x EBITDA and revalued by market at 15x — the M&A arbitrage play. If X is discussing an active acquisition strategy, flag it."""
 
-        return await self._call_grok_with_x_search(prompt)
+        return await self._call_grok_with_x_search(prompt, use_deep_model=True)
 
     async def compare_sentiment(self, tickers: list) -> dict:
         """Compare X sentiment head-to-head across multiple tickers."""
@@ -552,7 +552,7 @@ Return ONLY a JSON object matching this exact schema:
   "commodities": [{"commodity":"...","related_equity":"...","reason":"...","social_velocity":"...","mention_velocity_score":0,"mention_velocity_label":"...","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[...]}]
 }"""
 
-            result = await self._call_grok_with_x_search(prompt)
+            result = await self._call_grok_with_x_search(prompt, use_deep_model=True)
 
             if "error" not in result:
                 is_valid, errors = self._validate_cross_asset_schema(result)
@@ -716,7 +716,7 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
     async def _call_grok_with_x_search(
         self,
         prompt: str,
-        timeout: float = 45.0,
+        timeout: float = 60.0,
         raw_mode: bool = False,
         use_deep_model: bool = False,
         x_search_config: dict = None,
