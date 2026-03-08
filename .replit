@@ -49,7 +49,7 @@ externalPort = 8081
 [deployment]
 deploymentTarget = "autoscale"
 run = ["bash", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-5000}"]
-build = ["bash", "-c", "python -c 'import anthropic, openai, httpx, fastapi, slowapi, pydantic'"]
+build = ["bash", "-c", "pip install -q -r <(python -c \"import tomllib; f=open('pyproject.toml','rb'); print('\\n'.join(tomllib.load(f)['project']['dependencies']))\") && python -c 'import anthropic, openai, httpx, fastapi, slowapi, pydantic, jose, bcrypt'"]
 
 [userenv]
 
