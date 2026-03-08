@@ -1135,6 +1135,10 @@ class TradingAgent:
         if market_data and isinstance(market_data, dict) and market_data.get("cross_asset_debug"):
             result["_cross_asset_debug"] = market_data["cross_asset_debug"]
 
+        # Post-process: fix crypto tradingview_symbols and validate names
+        if category == "cross_asset_trending":
+            self._fix_trending_output(result, market_data)
+
         _locals = locals()
         result["_routing"] = {
             "source": _locals.get("routing_source", "unknown"),
@@ -3857,6 +3861,32 @@ class TradingAgent:
             primary_data = {"scan_type": "cross_asset_trending_social_first"}
 
         if grok_shortlist:
+            # Sanitize: move any ETFs from equities to etfs section
+            from data.cross_asset_ranker import KNOWN_ETFS
+            eq_gs = grok_shortlist.get("equities")
+            if isinstance(eq_gs, dict):
+                etf_section = grok_shortlist.get("etfs") or []
+                if not isinstance(etf_section, list):
+                    etf_section = []
+                for bucket_key in ["large_caps", "mid_caps", "small_micro_caps"]:
+                    bucket = eq_gs.get(bucket_key)
+                    if not isinstance(bucket, list):
+                        continue
+                    clean = []
+                    for item in bucket:
+                        if isinstance(item, dict):
+                            sym = (item.get("symbol") or item.get("ticker") or "").upper()
+                            if sym in KNOWN_ETFS:
+                                item["asset_class"] = "etf"
+                                etf_section.append(item)
+                                print(f"[GROK_SANITIZE] Moved ETF {sym} from equities.{bucket_key} to etfs")
+                            else:
+                                clean.append(item)
+                        else:
+                            clean.append(item)
+                    eq_gs[bucket_key] = clean
+                if etf_section:
+                    grok_shortlist["etfs"] = etf_section
             primary_data["grok_shortlist"] = grok_shortlist
             primary_data["grok_available"] = True
         else:
@@ -4337,6 +4367,92 @@ class TradingAgent:
             grok_comm = data.get("grok_shortlist", {}).get("commodities", [])
             count += len(grok_comm)
         return count
+
+    def _fix_trending_output(self, result: dict, market_data: dict):
+        """Post-process trending output to fix crypto tradingview_symbols, ETF classification, and name accuracy."""
+        structured = result.get("structured")
+        if not isinstance(structured, dict):
+            return
+
+        from data.coingecko_provider import get_crypto_tv_symbol
+        from data.cross_asset_ranker import KNOWN_ETFS
+
+        # Build name lookup from enriched data and ranked candidates
+        name_lookup = {}
+        if isinstance(market_data, dict):
+            stock_data = market_data.get("stock_trending") or {}
+            if isinstance(stock_data, dict):
+                enriched = stock_data.get("enriched_data") or {}
+                for ticker, info in enriched.items():
+                    if isinstance(info, dict):
+                        name = info.get("companyName") or info.get("name") or info.get("shortName")
+                        if name:
+                            name_lookup[ticker.upper()] = name
+            ranked = market_data.get("ranked_candidates") or []
+            for c in ranked:
+                if isinstance(c, dict) and c.get("name"):
+                    sym = (c.get("symbol") or "").upper()
+                    if sym and sym not in name_lookup:
+                        name_lookup[sym] = c["name"]
+
+        # Fix crypto items — ensure tradingview_symbol is correct
+        crypto_items = structured.get("crypto") or []
+        if isinstance(crypto_items, list):
+            for item in crypto_items:
+                if not isinstance(item, dict):
+                    continue
+                sym = (item.get("symbol") or "").upper()
+                if sym:
+                    # Always set/override tradingview_symbol for crypto
+                    item["tradingview_symbol"] = get_crypto_tv_symbol(sym)
+                    # Fix chart link if it uses plain ticker
+                    tv_sym = item["tradingview_symbol"]
+                    item["chart"] = f"https://www.tradingview.com/chart/?symbol={tv_sym}"
+
+        # Fix ETFs that leaked into equities sections
+        equities = structured.get("equities")
+        if isinstance(equities, dict):
+            etf_section = structured.get("etfs") or []
+            if not isinstance(etf_section, list):
+                etf_section = []
+            moved_etfs = False
+            for bucket_key in ["large_caps", "mid_caps", "small_micro_caps"]:
+                bucket = equities.get(bucket_key)
+                if not isinstance(bucket, list):
+                    continue
+                clean = []
+                for item in bucket:
+                    if isinstance(item, dict):
+                        sym = (item.get("symbol") or "").upper()
+                        if sym in KNOWN_ETFS:
+                            item["asset_class"] = "etf"
+                            etf_section.append(item)
+                            moved_etfs = True
+                            print(f"[POST_PROCESS] Moved ETF {sym} from equities.{bucket_key} to etfs section")
+                        else:
+                            clean.append(item)
+                    else:
+                        clean.append(item)
+                equities[bucket_key] = clean
+            if moved_etfs or etf_section:
+                structured["etfs"] = etf_section
+
+        # Fix ticker names using enriched data
+        all_sections = []
+        if isinstance(equities, dict):
+            for bucket_key in ["large_caps", "mid_caps", "small_micro_caps"]:
+                all_sections.extend(equities.get(bucket_key) or [])
+        for section_key in ["etfs", "crypto", "commodities"]:
+            section = structured.get(section_key) or []
+            if isinstance(section, list):
+                all_sections.extend(section)
+
+        for item in all_sections:
+            if not isinstance(item, dict):
+                continue
+            sym = (item.get("symbol") or "").upper()
+            if sym and sym in name_lookup:
+                item["name"] = name_lookup[sym]
 
     async def _broaden_candidates(self, data: dict, needs: list) -> dict:
         broadened = {}
