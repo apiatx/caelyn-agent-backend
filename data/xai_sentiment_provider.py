@@ -516,6 +516,7 @@ Commodities:
 
 For EACH item you MUST include:
 - symbol/commodity, category, reason
+- thesis: 1-2 sentence explanation of WHY this ticker is trending right now. Must include: the specific catalyst driving buzz, social velocity context (how fast mentions are accelerating), and sentiment quality (credible accounts vs noise). Example: "3x normal mention velocity driven by H200 order speculation ahead of Jensen keynote tomorrow, overwhelmingly bullish from credible accounts" or "Copper futures at 52-week high on China stimulus data, mining X accounts flagging supply deficit thesis with 2x usual engagement"
 - social_velocity: "low"|"medium"|"high"|"extreme"
 - mention_velocity_score: 0-100 (how fast mentions are accelerating vs prior hours; 0=no change, 100=explosive spike)
 - mention_velocity_label: "low"|"medium"|"high"|"extreme"
@@ -544,12 +545,12 @@ Return ONLY a JSON object matching this exact schema:
   "your_opinion": "...",
   "data_quality_flag": "high|medium|low",
   "equities": {
-    "large_caps": [{"symbol":"...","asset_class":"equities","category":"large_cap","reason":"...","social_velocity":"low|medium|high|extreme","mention_velocity_score":0,"mention_velocity_label":"low|medium|high|extreme","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[{"source":"x","stance":"bullish|bearish","text":"<=20 words"}]}],
+    "large_caps": [{"symbol":"...","asset_class":"equities","category":"large_cap","reason":"...","thesis":"1-2 sentence WHY trending + catalyst + velocity context","social_velocity":"low|medium|high|extreme","mention_velocity_score":0,"mention_velocity_label":"low|medium|high|extreme","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[{"source":"x","stance":"bullish|bearish","text":"<=20 words"}]}],
     "mid_caps": [<same item format with category="mid_cap">],
     "small_micro_caps": [<same item format with category="small_micro_cap">]
   },
-  "crypto": [{"symbol":"...","asset_class":"crypto","category":"major|alt","reason":"...","social_velocity":"...","mention_velocity_score":0,"mention_velocity_label":"...","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[...]}],
-  "commodities": [{"commodity":"...","related_equity":"...","reason":"...","social_velocity":"...","mention_velocity_score":0,"mention_velocity_label":"...","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[...]}]
+  "crypto": [{"symbol":"...","asset_class":"crypto","category":"major|alt","reason":"...","thesis":"...","social_velocity":"...","mention_velocity_score":0,"mention_velocity_label":"...","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[...]}],
+  "commodities": [{"commodity":"...","related_equity":"...","reason":"...","thesis":"...","social_velocity":"...","mention_velocity_score":0,"mention_velocity_label":"...","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[...]}]
 }"""
 
             result = await self._call_grok_with_x_search(prompt, use_deep_model=True)

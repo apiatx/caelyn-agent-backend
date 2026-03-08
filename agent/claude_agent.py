@@ -3973,6 +3973,7 @@ class TradingAgent:
                 "social_signal_rank": round(social_signal_rank, 1),
                 "mention_velocity_score": vel_score,
                 "mention_velocity_label": vel_label_raw,
+                "thesis": item.get("thesis", ""),
                 "catalyst_hint": catalyst_hint,
                 "receipts": receipts[:2] if receipts else [],
                 "classification": classification,
