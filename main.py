@@ -1148,7 +1148,7 @@ class QueryRequest(BaseModel):
     preset_intent: Optional[str] = None
     csv_data: Optional[str] = None
     chatbox_mode: Optional[bool] = False
-    reasoning_model: Optional[str] = "claude"
+    reasoning_model: Optional[str] = "agent_collab"
 
 def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, timing_ms=None):
     return {
@@ -1726,7 +1726,7 @@ async def query_agent(
                 request_id=req_id,
                 csv_data=body.csv_data,
                 chatbox_mode=body.chatbox_mode or False,
-                reasoning_model=body.reasoning_model or "claude",
+                reasoning_model=body.reasoning_model or "agent_collab",
             )
         )
 
@@ -1979,7 +1979,7 @@ async def clear_cache(request: Request, api_key: str = Header(None, alias="X-API
 class WatchlistRequest(BaseModel):
     tickers: List[str]
     conversation_id: Optional[str] = None
-    reasoning_model: Optional[str] = "claude"
+    reasoning_model: Optional[str] = "agent_collab"
 
 @app.post("/api/watchlist")
 @limiter.limit("10/minute")
@@ -2000,7 +2000,7 @@ async def review_watchlist(
 
     try:
         result = await asyncio.wait_for(
-            agent.review_watchlist(tickers, reasoning_model=body.reasoning_model or "claude"),
+            agent.review_watchlist(tickers, reasoning_model=body.reasoning_model or "agent_collab"),
             timeout=90.0,
         )
 

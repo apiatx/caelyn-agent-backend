@@ -363,7 +363,7 @@ class TradingAgent:
             "tickers": [],
         }
 
-    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "claude") -> dict:
+    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab") -> dict:
         try:
             return await self._handle_query_inner(user_prompt, history=history, preset_intent=preset_intent, request_id=request_id, csv_data=csv_data, chatbox_mode=chatbox_mode, reasoning_model=reasoning_model)
         except Exception as e:
@@ -380,7 +380,7 @@ class TradingAgent:
                 },
             }
 
-    async def _handle_query_inner(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "claude") -> dict:
+    async def _handle_query_inner(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab") -> dict:
         start_time = time.time()
         if history is None:
             history = []
@@ -618,7 +618,7 @@ class TradingAgent:
 
             if prior_tickers and (needs_social or needs_price):
                 market_data = {}
-                if needs_social and self.data.xai:
+                if needs_social and self.data.xai and reasoning_model == "agent_collab":
                     try:
                         if csv_followup:
                             watchlist_context = followup_csv_context or ""
@@ -821,7 +821,8 @@ class TradingAgent:
                 traceback.print_exc()
 
         plan = query_info.get("orchestration_plan", {}) if 'query_info' in locals() and isinstance(query_info, dict) else {}
-        if isinstance(market_data, dict) and plan.get("web_news"):
+        _news_model = reasoning_model if 'reasoning_model' in locals() else "agent_collab"
+        if isinstance(market_data, dict) and plan.get("web_news") and _news_model == "agent_collab":
             try:
                 news_context = await self._fetch_web_news_context(plan, user_prompt)
                 market_data["news_context"] = news_context
@@ -2295,7 +2296,7 @@ class TradingAgent:
     def _call_simple_model(self, reasoning_model: str, prompt: str, max_tokens: int = 4096) -> str:
         """Call the selected model with a simple user prompt (no system blocks). Sync."""
         messages = [{"role": "user", "content": prompt}]
-        if reasoning_model == "claude" or reasoning_model not in self.VALID_REASONING_MODELS:
+        if reasoning_model in ("claude", "agent_collab") or reasoning_model not in self.VALID_REASONING_MODELS:
             response = self.client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=max_tokens,
@@ -2363,7 +2364,7 @@ class TradingAgent:
     def _call_orchestrator_model(self, reasoning_model: str, system_prompt: str, messages: list) -> str:
         """Call the selected model for orchestration (lightweight JSON routing).
         Returns the raw text response. Uses sync calls since orchestration runs in a thread."""
-        if reasoning_model == "claude" or reasoning_model not in self.VALID_REASONING_MODELS:
+        if reasoning_model in ("claude", "agent_collab") or reasoning_model not in self.VALID_REASONING_MODELS:
             response = self.client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=500,
@@ -2447,7 +2448,7 @@ class TradingAgent:
     def _call_watchlist_model(self, reasoning_model: str, system_text: str, messages: list, max_tokens: int = 16384) -> str:
         """Call the selected model for watchlist review (long-form analysis).
         Similar to _call_orchestrator_model but with higher token limits and longer timeouts."""
-        if reasoning_model == "claude" or reasoning_model not in self.VALID_REASONING_MODELS:
+        if reasoning_model in ("claude", "agent_collab") or reasoning_model not in self.VALID_REASONING_MODELS:
             response = self.client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=max_tokens,
@@ -2874,7 +2875,9 @@ class TradingAgent:
                     return None
             overlay_tasks.append(("macro_context", fetch_macro()))
 
-        if modules.get("x_sentiment") and category not in ("trending", "social_momentum", "cross_market"):
+        _orch_model = query_info.get("reasoning_model", "agent_collab")
+
+        if modules.get("x_sentiment") and category not in ("trending", "social_momentum", "cross_market") and _orch_model == "agent_collab":
             tickers = plan.get("tickers", [])
             if tickers and self.data.xai:
                 async def fetch_x_sentiment():
@@ -2892,8 +2895,7 @@ class TradingAgent:
                         print(f"[ORCHESTRATOR] X sentiment overlay failed: {e}")
                         return None
                 overlay_tasks.append(("x_sentiment_overlay", fetch_x_sentiment()))
-
-        if modules.get("x_social_scan") and self.data.xai:
+        if modules.get("x_social_scan") and self.data.xai and _orch_model == "agent_collab":
             scan_mode = plan.get("x_social_scan_mode", "trending")
             scan_query = plan.get("x_social_scan_query", "")
             scan_constraints = {
@@ -2912,6 +2914,8 @@ class TradingAgent:
                     print(f"[ORCHESTRATOR] x_social_scan failed: {e}")
                     return None
             overlay_tasks.append(("x_social_scan", fetch_x_social_scan()))
+        elif modules.get("x_social_scan") and _orch_model != "agent_collab":
+            print(f"[ORCHESTRATOR] Skipping x_social_scan — single model mode ({_orch_model})")
 
         if overlay_tasks:
             overlay_results = await asyncio.gather(
@@ -3039,7 +3043,8 @@ class TradingAgent:
                 "SHIB", "LTC", "BCH", "FIL", "ICP", "STX", "MKR",
                 "RUNE", "PENDLE", "ENA", "W", "STRK", "ZRO", "PYTH",
             }
-            if self.data.xai:
+            _chat_model = query_info.get("reasoning_model", "agent_collab")
+            if self.data.xai and _chat_model == "agent_collab":
                 for ticker in tickers[:3]:
                     try:
                         x_sent = await asyncio.wait_for(
@@ -3162,20 +3167,22 @@ class TradingAgent:
                 return True
         return False
 
-    VALID_REASONING_MODELS = {"claude", "gpt-4o", "grok", "gemini", "perplexity"}
+    VALID_REASONING_MODELS = {"claude", "gpt-4o", "grok", "gemini", "perplexity", "agent_collab"}
 
     WEB_SEARCH_CATEGORIES = {"cross_asset_trending", "daily_briefing", "best_trades"}
 
     async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude") -> str:
         data_size = len(json.dumps(market_data, default=str)) if market_data else 0
         reasoning_model = reasoning_model if reasoning_model in self.VALID_REASONING_MODELS else "claude"
-        print(f"[AGENT] Sending to {reasoning_model}: {data_size:,} chars of market data (category={category}, chatbox_mode={chatbox_mode})")
+        # agent_collab uses Claude as the reasoning engine (with richer data from Grok/Perplexity data sources)
+        effective_model = "claude" if reasoning_model == "agent_collab" else reasoning_model
+        print(f"[AGENT] Sending to {effective_model} (selected={reasoning_model}): {data_size:,} chars of market data (category={category}, chatbox_mode={chatbox_mode})")
 
         # Non-Claude models: try the selected model, fallback to Claude on failure
-        if reasoning_model != "claude":
+        if effective_model != "claude":
             try:
                 result = await asyncio.wait_for(
-                    self._call_alt_model(reasoning_model, user_prompt, market_data, history, is_followup, category, chatbox_mode),
+                    self._call_alt_model(effective_model, user_prompt, market_data, history, is_followup, category, chatbox_mode),
                     timeout=90.0,
                 )
                 if result:
@@ -3184,8 +3191,11 @@ class TradingAgent:
             except Exception as e:
                 print(f"[AGENT] {reasoning_model} failed ({e}), falling back to Claude")
 
-        # Claude path: use async client + web search for eligible categories
-        if category in self.WEB_SEARCH_CATEGORIES:
+        # Claude path: use async client + web search
+        # In standalone claude mode, always use web search for real-time data
+        # In agent_collab mode, only use web search for specific categories (Grok/Perplexity handle the rest)
+        claude_needs_web_search = (reasoning_model == "claude") or (category in self.WEB_SEARCH_CATEGORIES)
+        if claude_needs_web_search:
             try:
                 return await asyncio.wait_for(
                     self._ask_claude_async_web_search(user_prompt, market_data, history, is_followup, category, chatbox_mode),
@@ -3221,12 +3231,14 @@ class TradingAgent:
         return oai_msgs
 
     async def _call_alt_model(self, reasoning_model: str, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False) -> str:
-        """Call a non-Claude model with web search for eligible categories. Returns response text or empty string on failure."""
+        """Call a non-Claude model with web search. When running as the sole model,
+        web search is ALWAYS enabled so the model can access real-time data."""
         system_blocks, messages, _, token_limit, _, _ = self._build_prompt(
             user_prompt, market_data, history, is_followup, category, chatbox_mode
         )
         oai_messages = self._prompt_to_openai_messages(system_blocks, messages)
-        use_web_search = category in self.WEB_SEARCH_CATEGORIES
+        # Individual models always get web search — they're the only LLM and need live data
+        use_web_search = True
 
         if reasoning_model == "gpt-4o":
             api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -3523,7 +3535,7 @@ class TradingAgent:
                     title = event.get("title", event.get("question", ""))
                     if title:
                         event_titles.append(title[:80])
-                if event_titles:
+                if event_titles and _orch_model == "agent_collab":
                     search_query = " OR ".join(event_titles)
                     try:
                         news_ctx = await asyncio.wait_for(
@@ -3593,7 +3605,10 @@ class TradingAgent:
 
             # Run Grok thematic discovery + Finviz scan truly in parallel
             # Hard 22s cap on Grok — if it misses, Finviz results still flow through
+            _invest_model = query_info.get("reasoning_model", "agent_collab")
             async def _safe_grok_thematic():
+                if _invest_model != "agent_collab":
+                    return {}
                 if _cached_thematic:
                     return _cached_thematic
                 if not self.data.xai:
@@ -3694,22 +3709,26 @@ class TradingAgent:
             return await self.data.get_earnings_catalyst_watch()
 
         elif category == "sector_rotation":
-            rotation_data, news_ctx = await asyncio.gather(
-                self.data.get_sector_rotation_with_stages(),
-                self.data.get_market_news_context(
-                    modules={"social_sentiment": False, "macro_context": True}
-                ),
-            )
-            # Slim the news context — headlines + economic calendar only
-            slim_news: dict = {}
-            if news_ctx.get("market_news"):
-                slim_news["market_news"] = news_ctx["market_news"][:8]
-            if news_ctx.get("market_news_summary"):
-                slim_news["market_news_summary"] = news_ctx["market_news_summary"]
-            if news_ctx.get("economic_calendar"):
-                slim_news["economic_calendar"] = news_ctx["economic_calendar"]
-            if slim_news:
-                rotation_data["market_news_context"] = slim_news
+            _rot_model = query_info.get("reasoning_model", "agent_collab")
+            if _rot_model == "agent_collab":
+                rotation_data, news_ctx = await asyncio.gather(
+                    self.data.get_sector_rotation_with_stages(),
+                    self.data.get_market_news_context(
+                        modules={"social_sentiment": False, "macro_context": True}
+                    ),
+                )
+                # Slim the news context — headlines + economic calendar only
+                slim_news: dict = {}
+                if news_ctx.get("market_news"):
+                    slim_news["market_news"] = news_ctx["market_news"][:8]
+                if news_ctx.get("market_news_summary"):
+                    slim_news["market_news_summary"] = news_ctx["market_news_summary"]
+                if news_ctx.get("economic_calendar"):
+                    slim_news["economic_calendar"] = news_ctx["economic_calendar"]
+                if slim_news:
+                    rotation_data["market_news_context"] = slim_news
+            else:
+                rotation_data = await self.data.get_sector_rotation_with_stages()
             return rotation_data
 
         elif category == "asymmetric":
@@ -4022,20 +4041,29 @@ class TradingAgent:
             "broadening": "skipped",
         }
 
-        print(f"[SOCIAL_REQUIRED] preset=cross_asset_trending enabled=True")
+        # Only use Grok/Perplexity data sources in agent_collab mode
+        _reasoning_model = query_info.get("reasoning_model", "agent_collab")
+        use_multi_model_data = (_reasoning_model == "agent_collab")
+        print(f"[SOCIAL_REQUIRED] preset=cross_asset_trending reasoning_model={_reasoning_model} multi_model_data={use_multi_model_data}")
 
         grok_shortlist = None
         grok_available = False
 
-        cached = cache.get("xai_cross_asset")
-        if cached:
-            grok_shortlist = cached
-            grok_available = True
-            module_status["x_social_scan"] = "ok_cached"
-            print("[CROSS_ASSET_TRENDING] Using cached Grok shortlist")
+        if use_multi_model_data:
+            cached = cache.get("xai_cross_asset")
+            if cached:
+                grok_shortlist = cached
+                grok_available = True
+                module_status["x_social_scan"] = "ok_cached"
+                print("[CROSS_ASSET_TRENDING] Using cached Grok shortlist")
+        else:
+            module_status["x_social_scan"] = "skipped_single_model"
+            print(f"[CROSS_ASSET_TRENDING] Skipping Grok X scan — single model mode ({_reasoning_model})")
 
         async def _fetch_grok():
             nonlocal grok_shortlist, grok_available
+            if not use_multi_model_data:
+                return
             if grok_shortlist:
                 return
             if not self.data.xai:
@@ -4085,11 +4113,14 @@ class TradingAgent:
                 module_status["market_scan"] = "error"
                 print(f"[CROSS_ASSET_TRENDING] Market scan failed: {e}")
 
-        # Perplexity news context — always-on for richer Claude synthesis
+        # Perplexity news context — only in agent_collab mode
         news_context = None
 
         async def _fetch_news_context():
             nonlocal news_context
+            if not use_multi_model_data:
+                module_status["news_context"] = "skipped_single_model"
+                return
             if not self.data.web_search or not getattr(self.data.web_search, 'perplexity', None):
                 module_status["news_context"] = "unavailable"
                 return
