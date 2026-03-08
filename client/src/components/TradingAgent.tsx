@@ -278,7 +278,7 @@ export default function TradingAgent() {
   const [prompt, setPrompt] = useState('');
   const [csvData, setCsvData] = useState<string | null>(null);
   const [csvFileName, setCsvFileName] = useState<string | null>(null);
-  const [reasoningModel, setReasoningModel] = useState<string>('claude');
+  const [reasoningModel, setReasoningModel] = useState<string>('agent_collab');
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(() => {
     try { return sessionStorage.getItem('caelyn_loading') === 'true'; } catch { return false; }
@@ -2538,6 +2538,7 @@ export default function TradingAgent() {
         <button onClick={() => csvInputRef.current?.click()} title="Upload CSV watchlist" style={{ width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center', background: csvData ? 'rgba(32,144,208,0.2)' : 'transparent', border: csvData ? '1px solid rgba(32,144,208,0.4)' : '1px solid rgba(255,255,255,0.08)', borderRadius:3, color: csvData ? '#a78bfa' : '#666', cursor:'pointer', fontSize:14, flexShrink:0 }}>+</button>
         {csvFileName && <div style={{ display:'flex', alignItems:'center', gap:4, padding:'2px 8px', background:'rgba(32,144,208,0.15)', border:'1px solid rgba(32,144,208,0.3)', borderRadius:3, fontSize:10, color:'#a78bfa', fontFamily:'monospace', flexShrink:0, maxWidth:160, overflow:'hidden' }}><span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{csvFileName}</span><span onClick={() => { setCsvData(null); setCsvFileName(null); }} style={{ cursor:'pointer', color:'#ef4444', fontWeight:700, flexShrink:0 }}>x</span></div>}
         <div style={{ display:'flex', gap:3, alignItems:'center', flexShrink:0 }}>
+          <button key="agent_collab" onClick={() => setReasoningModel('agent_collab')} style={{ padding:'3px 8px', borderRadius:10, fontSize:9, fontWeight:700, fontFamily:"'JetBrains Mono', monospace", background: reasoningModel === 'agent_collab' ? 'linear-gradient(135deg, #8b5cf6, #3b82f6, #06b6d4)' : 'rgba(139,92,246,0.08)', color: reasoningModel === 'agent_collab' ? '#ffffff' : '#a78bfa', border: reasoningModel === 'agent_collab' ? 'none' : '1px solid rgba(139,92,246,0.25)', cursor:'pointer', transition:'all 0.15s', textShadow: reasoningModel === 'agent_collab' ? '0 1px 2px rgba(0,0,0,0.3)' : 'none', boxShadow: reasoningModel === 'agent_collab' ? '0 0 8px rgba(139,92,246,0.4)' : 'none' }}>Agent Collab</button>
           {(['claude', 'gpt-4o', 'grok', 'gemini', 'perplexity'] as const).map(m => (
             <button key={m} onClick={() => setReasoningModel(m)} style={{ padding:'3px 8px', borderRadius:10, fontSize:9, fontWeight:600, fontFamily:"'JetBrains Mono', monospace", background: reasoningModel === m ? '#3b82f6' : 'rgba(255,255,255,0.04)', color: reasoningModel === m ? '#ffffff' : '#6b7280', border:'none', cursor:'pointer', transition:'all 0.15s' }}>{m}</button>
           ))}
@@ -2665,7 +2666,7 @@ export default function TradingAgent() {
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 14px', background:`${C.bg}cc`, borderBottom:`1px solid ${C.border}` }}>
                   <div style={{ display:'flex', alignItems:'center', gap:8, flex:1, minWidth:0 }}>
                     <span style={{ color:C.bright, fontSize:12, fontWeight:700, fontFamily:font, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{panel.title || 'Analysis'}</span>
-                    {panel.reasoningModel && panel.reasoningModel !== 'claude' && <span style={{ fontSize:8, fontWeight:600, fontFamily:font, textTransform:'uppercase', color:'#3b82f6', background:'#3b82f620', border:'1px solid #3b82f640', borderRadius:8, padding:'1px 6px', flexShrink:0 }}>{panel.reasoningModel}</span>}
+                    {panel.reasoningModel && panel.reasoningModel !== 'agent_collab' && <span style={{ fontSize:8, fontWeight:600, fontFamily:font, textTransform:'uppercase', color:'#3b82f6', background:'#3b82f620', border:'1px solid #3b82f640', borderRadius:8, padding:'1px 6px', flexShrink:0 }}>{panel.reasoningModel}</span>}
                     <span style={{ color:C.dim, fontSize:9, fontFamily:font, flexShrink:0 }}>{new Date(panel.timestamp).toLocaleTimeString()}</span>
                   </div>
                   <div style={{ display:'flex', gap:4, flexShrink:0 }}>
