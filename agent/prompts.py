@@ -907,7 +907,7 @@ CROSS_ASSET_TRENDING_CONTRACT = """CROSS-ASSET TRENDING OUTPUT CONTRACT (MANDATO
 
 HARD RULES (violations = broken contract):
 1. You MUST output ALL groups: Equities (Large/Mid/Small), Crypto, Commodities. NEVER skip a group.
-2. You MUST output AT LEAST: 5 equities total (across L/M/S), 2 crypto, 2 commodities. These are MINIMUMS.
+2. You MUST output AT LEAST: 3 equities total (across L/M/S), 2 commodities. These are HARD MINIMUMS. You MUST output AT MOST 3 crypto. This is a HARD MAXIMUM — never exceed 3 crypto picks regardless of signal strength. Prioritize equities and commodities over crypto overflow.
 3. NEVER answer with a single-pick-only response. Always provide cross-asset context + full shortlist.
 4. If a bucket has fewer items than minimum, still list what you have AND add watchlist items: "Only N met confirmation; others are watchlist due to [reason]."
 5. Items marked is_backfill=true or confirmation_status="unconfirmed" should be labeled as "Watchlist" with lower confidence.

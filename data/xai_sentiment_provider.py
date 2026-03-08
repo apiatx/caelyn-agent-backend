@@ -502,7 +502,7 @@ Equities buckets and counts:
 - small_micro_caps: 3-6 tickers with market cap $50M-$15B — High-conviction small caps with real catalysts, not pump-and-dump noise. Flag any that look like coordinated pumps.
 
 Crypto:
-- 2-4 tickers — find what is ACTUALLY performing or breaking out in the last 7-30 days
+- 2-3 tickers MAX — find what is ACTUALLY performing or breaking out in the last 7-30 days. NEVER return more than 3 crypto.
 - DO NOT default to ETH or SOL just because they are popular. If ETH is flat or down, do NOT include it.
 - Include BTC only if meaningfully relevant (breakout/breakdown/major catalyst/dominant velocity)
 - Focus on ACTUAL MOVERS: tokens with 20%+ moves in 7d, new ATHs, protocol upgrades going live, major exchange listings, or unusual volume spikes
