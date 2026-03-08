@@ -21,6 +21,31 @@ CRYPTO_VOLUME_FLOOR = 10_000_000
 STOCK_LARGE_CAP = 10_000_000_000
 STOCK_MID_CAP = 2_000_000_000
 
+# ETFs/ETNs that should NEVER be classified as equities — they are funds, not stocks
+KNOWN_ETFS = {
+    # Broad market
+    "SPY", "QQQ", "IWM", "DIA", "VOO", "VTI", "VT", "VXUS", "RSP",
+    "ARKK", "ARKW", "ARKB", "ARKF", "ARKG", "ARKQ",
+    # Sector
+    "XLF", "XLK", "XLE", "XLV", "XLI", "XLY", "XLP", "XLB", "XLU", "XLRE", "XLC",
+    # Real estate / bonds
+    "VNQ", "TLT", "HYG", "LQD", "BND", "AGG", "TIP", "SHY", "IEF",
+    # Commodities / metals
+    "GLD", "SLV", "GDX", "GDXJ", "COPX", "PPLT",
+    "USO", "UNG", "URA", "DBA", "CORN", "WEAT", "SOYB", "MOO", "COW",
+    "XOP", "OIH",
+    # Leveraged / inverse
+    "SOXL", "SOXS", "TQQQ", "SQQQ", "UVXY", "VXX", "SPXL", "SPXS",
+    "LABU", "LABD", "JNUG", "JDST", "NUGT", "DUST",
+    # Crypto ETFs
+    "BITO", "GBTC", "ETHE", "IBIT", "FBTC",
+    # International
+    "EEM", "EFA", "FXI", "INDA", "EWZ", "EWJ",
+    # Thematic
+    "BOTZ", "ROBO", "HACK", "SOXX", "SMH", "IGV", "WCLD", "CLOU",
+    "TAN", "ICLN", "LIT", "REMX", "KWEB",
+}
+
 COMMODITY_PROXY_ETFS = {
     "gold": "GLD", "silver": "SLV", "oil": "USO", "natural gas": "UNG",
     "uranium": "URA", "copper": "COPX", "agriculture": "DBA",
@@ -42,9 +67,11 @@ COVERAGE_QUOTAS = {
     "equities_small": 2,
     "crypto": 2,
     "commodities": 3,
+    "etfs": 2,
 }
 
 MAX_CRYPTO = 3          # Hard ceiling — never exceed 3 crypto in final output
+MAX_ETFS = 3            # Hard ceiling — never exceed 3 ETFs in final output
 MIN_EQUITIES = 5        # Hard floor — always at least 5 equities
 MIN_COMMODITIES = 2     # Hard floor — always at least 2 commodities
 
@@ -70,16 +97,23 @@ def rank_cross_market(stock_data: dict, crypto_data: dict,
     macro_regime = _detect_macro_regime(macro_data)
     debug["macro_regime"] = macro_regime
 
-    stocks = _extract_stock_candidates(stock_data, debug)
+    all_stock_candidates = _extract_stock_candidates(stock_data, debug)
+    # Separate ETFs from real equities — ETFs are not stocks
+    stocks = [s for s in all_stock_candidates if s["symbol"].upper() not in KNOWN_ETFS]
+    etfs = [s for s in all_stock_candidates if s["symbol"].upper() in KNOWN_ETFS]
+    for e in etfs:
+        e["asset_class"] = "etf"
     cryptos = _extract_crypto_candidates(crypto_data, debug)
     commodities = _extract_commodity_candidates(commodity_data, debug)
 
     if stocks: debug["asset_classes_pulled"].append("stocks")
+    if etfs: debug["asset_classes_pulled"].append("etfs")
     if cryptos: debug["asset_classes_pulled"].append("crypto")
     if commodities: debug["asset_classes_pulled"].append("commodities")
 
     debug["candidates_per_class"] = {
         "stocks_raw": len(stocks),
+        "etfs_raw": len(etfs),
         "crypto_raw": len(cryptos),
         "commodities_raw": len(commodities),
     }
@@ -95,16 +129,19 @@ def rank_cross_market(stock_data: dict, crypto_data: dict,
         "equities_large": len(large),
         "equities_mid": len(mid),
         "equities_small": len(small),
+        "etfs": len(etfs),
         "crypto": len(cryptos),
         "commodities": len(commodities),
     }
-    print(f"[CANDIDATES] pre_score equities=L{len(large)}/M{len(mid)}/S{len(small)}, crypto={len(cryptos)}, commodities={len(commodities)}")
+    print(f"[CANDIDATES] pre_score equities=L{len(large)}/M{len(mid)}/S{len(small)}, etfs={len(etfs)}, crypto={len(cryptos)}, commodities={len(commodities)}")
 
     _score_candidates(stocks, "stock")
+    _score_candidates(etfs, "etf")
     _score_candidates(cryptos, "crypto")
     _score_candidates(commodities, "commodity")
 
     _normalize_within_class(stocks)
+    _normalize_within_class(etfs)
     _normalize_within_class(cryptos)
     _normalize_within_class(commodities)
 
@@ -113,6 +150,7 @@ def rank_cross_market(stock_data: dict, crypto_data: dict,
         _apply_regime_penalty(stocks, cryptos, commodities, macro_regime)
 
     debug["candidates_per_class"]["stocks_after_score"] = len(stocks)
+    debug["candidates_per_class"]["etfs_after_score"] = len(etfs)
     debug["candidates_per_class"]["crypto_after_score"] = len(cryptos)
     debug["candidates_per_class"]["commodities_after_score"] = len(commodities)
 
@@ -124,11 +162,12 @@ def rank_cross_market(stock_data: dict, crypto_data: dict,
         "equities_large": len(large),
         "equities_mid": len(mid),
         "equities_small": len(small),
+        "etfs": len(etfs),
         "crypto": len(cryptos),
         "commodities": len(commodities),
     }
 
-    final = _assemble_with_quotas(stocks, cryptos, commodities, debug)
+    final = _assemble_with_quotas(stocks, cryptos, commodities, debug, etfs=etfs)
 
     for c in final:
         debug["selection_reasons"][c["symbol"]] = {
@@ -142,11 +181,13 @@ def rank_cross_market(stock_data: dict, crypto_data: dict,
         }
 
     eq_final = [c for c in final if c["asset_class"] == "stock"]
+    etf_final = [c for c in final if c["asset_class"] == "etf"]
     cr_final = [c for c in final if c["asset_class"] == "crypto"]
     co_final = [c for c in final if c["asset_class"] == "commodity"]
 
     print(f"[CROSS-RANKER] Regime: {macro_regime} | "
           f"Stocks: {debug['candidates_per_class'].get('stocks_raw', 0)}→{len(eq_final)} | "
+          f"ETFs: {debug['candidates_per_class'].get('etfs_raw', 0)}→{len(etf_final)} | "
           f"Crypto: {debug['candidates_per_class'].get('crypto_raw', 0)}→{len(cr_final)} | "
           f"Commodities: {debug['candidates_per_class'].get('commodities_raw', 0)}→{len(co_final)} | "
           f"Final picks: {len(final)} (backfilled={len(debug['coverage_backfills'])})")
@@ -507,14 +548,14 @@ def _score_candidates(candidates: list, asset_type: str):
         data_gaps = []
 
         sc = c.get("source_count") or 0
-        if asset_type in ("stock", "crypto"):
+        if asset_type in ("stock", "crypto", "etf"):
             factors["social_momentum"] = min(sc / 3.0, 1.0) if sc else 0
         else:
             factors["social_momentum"] = 0.3
 
         pct = c.get("price_change_pct")
         if pct is not None:
-            if asset_type == "stock":
+            if asset_type in ("stock", "etf"):
                 if 2 <= pct <= 25:
                     factors["technical"] = min(pct / 10.0, 1.0)
                 elif 0 < pct < 2:
@@ -542,6 +583,9 @@ def _score_candidates(candidates: list, asset_type: str):
             factors["catalyst"] = 0.8 if has_catalyst else 0.2
             if not has_catalyst:
                 data_gaps.append("catalyst")
+        elif asset_type == "etf":
+            # ETFs are driven by flows and sector momentum, not individual catalysts
+            factors["catalyst"] = 0.6 if (sc or 0) >= 1 else 0.3
         elif asset_type == "crypto":
             has_catalyst = (sc or 0) >= 2
             factors["catalyst"] = 0.7 if has_catalyst else 0.2
@@ -557,7 +601,7 @@ def _score_candidates(candidates: list, asset_type: str):
 
         vol = c.get("volume")
         mcap = c.get("market_cap")
-        if asset_type == "stock":
+        if asset_type in ("stock", "etf"):
             if vol and vol > 5_000_000:
                 factors["liquidity"] = 1.0
             elif vol and vol > STOCK_VOLUME_FLOOR:
@@ -679,12 +723,13 @@ def _apply_regime_penalty(stocks: list, cryptos: list, commodities: list, regime
 
 
 def _assemble_with_quotas(stocks: list, cryptos: list,
-                          commodities: list, debug: dict) -> list:
+                          commodities: list, debug: dict, etfs: list = None) -> list:
     large = sorted([s for s in stocks if _cap_tier(s) == "large"], key=lambda x: x.get("normalized_score", 0), reverse=True)
     mid = sorted([s for s in stocks if _cap_tier(s) == "mid"], key=lambda x: x.get("normalized_score", 0), reverse=True)
     small = sorted([s for s in stocks if _cap_tier(s) == "small"], key=lambda x: x.get("normalized_score", 0), reverse=True)
     crypto_sorted = sorted(cryptos, key=lambda x: x.get("normalized_score", 0), reverse=True)
     commodity_sorted = sorted(commodities, key=lambda x: x.get("normalized_score", 0), reverse=True)
+    etf_sorted = sorted(etfs or [], key=lambda x: x.get("normalized_score", 0), reverse=True)
 
     final = []
     used_symbols = set()
@@ -704,8 +749,11 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
     q_small = COVERAGE_QUOTAS["equities_small"]
     q_crypto = min(COVERAGE_QUOTAS["crypto"], MAX_CRYPTO)
     q_commodity = COVERAGE_QUOTAS["commodities"]
+    q_etf = min(COVERAGE_QUOTAS.get("etfs", 2), MAX_ETFS)
 
-    # Step 1: Guarantee minimum quota floors
+    # Step 1: Guarantee minimum quota floors — ETFs first (above equities)
+    for c in etf_sorted[:q_etf]:
+        _add(c)
     for c in large[:q_large]:
         _add(c)
     for c in mid[:q_mid]:
@@ -766,12 +814,13 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
                 actual_commodity += 1
                 debug["quota_adjustments"].append(f"Backfill commodity with {c['symbol']}")
 
-    # Step 3: Fill remaining slots by pure score — enforce crypto ceiling
+    # Step 3: Fill remaining slots by pure score — enforce crypto + ETF ceilings
     remaining_slots = MAX_FINAL_PICKS - len(final)
     crypto_in_final = sum(1 for c in final if c["asset_class"] == "crypto")
+    etf_in_final = sum(1 for c in final if c["asset_class"] == "etf")
     if remaining_slots > 0:
         all_unlocked = []
-        for pool in [large, mid, small, crypto_sorted, commodity_sorted]:
+        for pool in [large, mid, small, crypto_sorted, commodity_sorted, etf_sorted]:
             for c in pool:
                 if c["symbol"] not in used_symbols:
                     all_unlocked.append(c)
@@ -780,9 +829,14 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
             # Enforce hard crypto ceiling
             if c["asset_class"] == "crypto" and crypto_in_final >= MAX_CRYPTO:
                 continue
+            # Enforce hard ETF ceiling
+            if c["asset_class"] == "etf" and etf_in_final >= MAX_ETFS:
+                continue
             if _add(c):
                 if c["asset_class"] == "crypto":
                     crypto_in_final += 1
+                elif c["asset_class"] == "etf":
+                    etf_in_final += 1
 
     # Step 4: Enforce hard minimums — equities >= MIN_EQUITIES, commodities >= MIN_COMMODITIES
     eq_count = sum(1 for c in final if c["asset_class"] == "stock")
@@ -806,10 +860,11 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
                 debug["quota_adjustments"].append(f"Min-commodity backfill: {c['symbol']}")
 
     eq_count = sum(1 for c in final if c["asset_class"] == "stock")
+    etf_count = sum(1 for c in final if c["asset_class"] == "etf")
     cr_count = sum(1 for c in final if c["asset_class"] == "crypto")
     co_count = sum(1 for c in final if c["asset_class"] == "commodity")
     bf_count = len(debug["coverage_backfills"])
-    print(f"[SHORTLIST] post_score equities=L{actual_large}/M{actual_mid}/S{actual_small}, crypto={cr_count}, commodities={co_count}, backfilled={bf_count}")
+    print(f"[SHORTLIST] post_score equities=L{actual_large}/M{actual_mid}/S{actual_small}, etfs={etf_count}, crypto={cr_count}, commodities={co_count}, backfilled={bf_count}")
 
     for c in final:
         clean_keys = {"symbol", "asset_class", "name", "market_cap", "volume",

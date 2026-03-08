@@ -496,10 +496,16 @@ Rules:
 
 Scan X in real time for what is trending across markets and return a structured cross-asset shortlist.
 
-Equities buckets and counts:
+CRITICAL — ETFs vs EQUITIES: ETFs (SPY, QQQ, IWM, XLE, USO, GLD, ARKK, SMH, SOXX, TAN, etc.) are NOT equities. NEVER put an ETF in the equities section. ETFs are funds that track indices, sectors, or commodities — they do not have market caps in the same way stocks do. If an ETF is trending, put it in the separate "etfs" section, NOT in large_caps/mid_caps/small_micro_caps.
+
+Equities buckets and counts (REAL STOCKS ONLY — no ETFs, no index funds):
 - large_caps: 0-2 tickers with market cap >= $100B — ONLY include a large cap if it has a SPECIFIC catalyst driving unusual social activity RIGHT NOW (earnings surprise, major news, regulatory event, technical breakout to new highs). Do NOT include a large cap just because it gets mentioned a lot — AAPL, MSFT, NVDA are always discussed. Include them ONLY if something NEW and material is happening today.
 - mid_caps: 3-6 tickers with market cap $15B-$100B — This is your sweet spot. Mid-caps with momentum and catalysts are where the best trending signals live.
 - small_micro_caps: 3-6 tickers with market cap $50M-$15B — High-conviction small caps with real catalysts, not pump-and-dump noise. Flag any that look like coordinated pumps.
+
+ETFs (separate section):
+- 0-3 ETFs that are showing unusual volume, flows, or momentum. Sector ETFs (XLE, XLK, SMH), thematic ETFs (ARKK, TAN, URA), or commodity ETFs (GLD, USO, UNG) — whatever is actually moving.
+- Only include ETFs with a clear reason (sector rotation, unusual flows, breakout/breakdown).
 
 Crypto:
 - 2-3 tickers MAX — find what is ACTUALLY performing or breaking out in the last 7-30 days. NEVER return more than 3 crypto.
@@ -549,6 +555,7 @@ Return ONLY a JSON object matching this exact schema:
     "mid_caps": [<same item format with category="mid_cap">],
     "small_micro_caps": [<same item format with category="small_micro_cap">]
   },
+  "etfs": [{"symbol":"...","asset_class":"etf","category":"sector|thematic|commodity|broad_market","name":"Full ETF name","reason":"...","thesis":"...","social_velocity":"...","mention_velocity_score":0,"mention_velocity_label":"...","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[...]}],
   "crypto": [{"symbol":"...","asset_class":"crypto","category":"major|alt","reason":"...","thesis":"...","social_velocity":"...","mention_velocity_score":0,"mention_velocity_label":"...","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[...]}],
   "commodities": [{"commodity":"...","related_equity":"...","reason":"...","thesis":"...","social_velocity":"...","mention_velocity_score":0,"mention_velocity_label":"...","source_mix":{"x":100,"stocktwits":null,"reddit":null},"catalyst_hint":null,"receipts":[...]}]
 }"""
@@ -572,7 +579,8 @@ Return ONLY a JSON object matching this exact schema:
                 eq_count = len(eq.get("large_caps", [])) + len(eq.get("mid_caps", [])) + len(eq.get("small_micro_caps", []))
                 crypto = result.get("crypto", [])
                 commodities = result.get("commodities", [])
-                print(f"[X_CROSS_ASSET] Grok returned: equities={eq_count} crypto={len(crypto)} commodities={len(commodities)}")
+                etfs = result.get("etfs", [])
+                print(f"[X_CROSS_ASSET] Grok returned: equities={eq_count} etfs={len(etfs)} crypto={len(crypto)} commodities={len(commodities)}")
 
             result["_scan_mode"] = "cross_asset"
             return result
@@ -602,6 +610,9 @@ Return ONLY a JSON object matching this exact schema:
 
         if "commodities" in data and not isinstance(data.get("commodities"), list):
             errors.append("commodities must be a list")
+
+        if "etfs" in data and not isinstance(data.get("etfs"), list):
+            errors.append("etfs must be a list")
 
         dqf = data.get("data_quality_flag")
         if dqf is not None and dqf not in ("high", "medium", "low"):

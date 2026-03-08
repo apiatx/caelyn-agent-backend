@@ -906,19 +906,26 @@ HARD RULES:
 CROSS_ASSET_TRENDING_CONTRACT = """CROSS-ASSET TRENDING OUTPUT CONTRACT (MANDATORY for cross_asset_trending):
 
 HARD RULES (violations = broken contract):
-1. You MUST output ALL groups: Equities (Large/Mid/Small), Crypto, Commodities. NEVER skip a group.
+1. You MUST output ALL groups: ETFs, Equities (Large/Mid/Small), Crypto, Commodities. NEVER skip a group.
 2. ASSET CLASS DISTRIBUTION LIMITS — THIS IS THE MOST IMPORTANT RULE:
-   - EQUITIES: MINIMUM 5 total (across Large/Mid/Small combined). If fewer than 5 confirmed, backfill with watchlist items to reach 5. NEVER output fewer than 5 equities.
+   - ETFS: 0-3 ETFs. If ETFs appear in the data (asset_class="etf" in ranked_candidates, or in grok_shortlist.etfs), include them in the "etfs" array. ETFs are NEVER equities — SPY, QQQ, IWM, XLE, USO, GLD, ARKK, SMH, etc. are all ETFs/funds, NOT stocks. They do not have market caps like stocks and must NEVER appear in equities sections.
+   - EQUITIES: MINIMUM 5 total (across Large/Mid/Small combined). Only REAL STOCKS (individual companies) go here — never ETFs. If fewer than 5 confirmed, backfill with watchlist items to reach 5. NEVER output fewer than 5 equities.
    - CRYPTO: MAXIMUM 3 total. NEVER output more than 3 crypto picks. If you have 4+ crypto candidates, pick the best 2-3 and DROP the rest. Crypto must NEVER dominate the output.
-   - COMMODITIES: MINIMUM 2 total. ALWAYS include at least 2 commodities. Use commodity ETF proxies (GLD, USO, UNG, COPX, etc.) or futures if direct commodity data is available. If commodity data is sparse, still include the top 2 movers as watchlist items.
+   - COMMODITIES: MINIMUM 2 total. ALWAYS include at least 2 commodities. Use futures symbols for charts, NOT ETF proxies. If commodity data is sparse, still include the top 2 movers as watchlist items.
    - COUNT CHECK: Before finalizing output, COUNT your items. If equities < 5, add more. If crypto > 3, remove extras. If commodities < 2, add more. This is NON-NEGOTIABLE.
 3. NEVER answer with a single-pick-only response. Always provide cross-asset context + full shortlist.
 4. If a bucket has fewer items than minimum, still list what you have AND add watchlist items: "Only N met confirmation; others are watchlist due to [reason]."
 5. Items marked is_backfill=true or confirmation_status="unconfirmed" should be labeled as "Watchlist" with lower confidence.
 6. Do NOT include an EXCLUDED section. Do not list excluded/filtered-out tickers.
 7. Each item MUST be classified as either "TRADE IDEA" or "WATCHLIST" based on confirmation data.
-8. PRIORITY ORDER: Equities first (fill to 5+), then Commodities (fill to 2+), then Crypto (cap at 3). This reflects the asset class priority for a diversified trading desk.
+8. PRIORITY ORDER: ETFs first (if trending), then Equities (fill to 5+), then Commodities (fill to 2+), then Crypto (cap at 3).
 9. NEVER invent placeholder tickers like "WATCHLIST_PLACEHOLDER_1" or "MID_CAP_BACKFILL". Only output REAL ticker symbols that exist in the input data. If a bucket is empty, use real tickers from other buckets or from ranked_candidates/enriched_data/grok_shortlist — there are always real stocks available in the data.
+
+TICKER NAME ACCURACY (CRITICAL):
+- For every ticker, you MUST use the REAL company/fund name from the enriched data or ranked_candidates. If the data provides a "name" field, USE IT EXACTLY.
+- NEVER guess or hallucinate company names. If you don't know the exact company name for a ticker, look at the data fields: enriched_data[TICKER].companyName, enriched_data[TICKER].name, ranked_candidates[].name, grok_shortlist items.
+- If no name is available in the data, use ONLY the ticker symbol without a made-up name. "TPET" is better than "TPET - Wrong Company Name".
+- Common errors to avoid: Do not confuse ticker symbols with similarly-named companies. TPET = Trio Petroleum Corp, not anything else. Always verify against the data.
 
 SOCIAL TRADING SIGNAL (MANDATORY — populate social_trading_signal object):
 If social_signal.social_spike_primary exists in the data, populate the social_trading_signal JSON object:
@@ -963,10 +970,10 @@ CLASSIFICATION RULES (signal > hype):
 - If NO items qualify as TRADE IDEA, explicitly state in thesis_bullets: "No confirmed trade ideas; all items are watchlist due to missing confirmations."
 
 OUTPUT STRUCTURE (grouped lists — NOT flat top_picks):
-Populate equities.large_caps[], equities.mid_caps[], equities.small_micro_caps[], crypto[], commodities[] arrays.
+Populate etfs[], equities.large_caps[], equities.mid_caps[], equities.small_micro_caps[], crypto[], commodities[] arrays.
 Each item in these arrays MUST include:
 - symbol: ticker or commodity name (use "symbol" NOT "ticker")
-- tradingview_symbol: Pass through from data if present — this is the exchange-prefixed symbol for TradingView charts (e.g., BINANCE:TRXUSDT for crypto). Do NOT modify this field. If not present in the data, omit it.
+- tradingview_symbol: MANDATORY for crypto. Pass through from data if present — this is the exchange-prefixed symbol for TradingView charts (e.g., BINANCE:BTCUSDT, BINANCE:HYPEUSDT for crypto). Do NOT modify this field. For crypto items, if tradingview_symbol is not in the data, construct it as "BINANCE:{symbol}USDT" (e.g., HYPE → "BINANCE:HYPEUSDT", TAO → "BINANCE:TAOUSDT"). This prevents the frontend from showing the wrong stock chart (e.g., TAG Oil for TAO, or iShares bond fund for HYPE).
 - classification: "TRADE IDEA" or "WATCHLIST"
 - rating: "Strong Buy" / "Buy" / "Hold" / "Sell"
 - confidence: 0-100 integer
@@ -976,7 +983,7 @@ Each item in these arrays MUST include:
 - position_size: sizing guidance string
 - why_could_fail: 1-2 sentence risk
 - catalyst: catalyst description or "unconfirmed"
-- chart: TradingView link (for crypto, use the tradingview_symbol if available to build the correct link)
+- chart: TradingView link. For crypto, you MUST use the tradingview_symbol to build the link: "https://www.tradingview.com/chart/?symbol=BINANCE:HYPEUSDT" (NOT just "HYPE" which would show a stock). For equities, use the plain ticker.
 - score, social_velocity_label, mention_velocity_score: optional — include when social data is present
 
 CONFIDENCE ADJUSTMENTS:
