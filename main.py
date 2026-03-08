@@ -112,6 +112,11 @@ async def json_decode_exception_handler(request: Request, exc: _json.JSONDecodeE
         },
     )
 
+# CORSMiddleware must be added LAST so it is outermost — it handles OPTIONS
+# preflights before JWTAuthMiddleware can block them, and adds CORS headers
+# to ALL responses (including 401s from JWT middleware).
+app.add_middleware(JWTAuthMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -119,8 +124,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.add_middleware(JWTAuthMiddleware)
 
 # ── Auth Endpoints ───────────────────────────────────────────────
 
