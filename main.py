@@ -84,6 +84,15 @@ class JWTAuthMiddleware:
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
 
+        # Accept X-API-Key as alternative to Bearer token
+        api_key_header = headers.get("x-api-key", "")
+        if api_key_header and api_key_header == AGENT_API_KEY:
+            if "state" not in scope:
+                scope["state"] = {}
+            scope["state"]["user_id"] = "api_key_user"
+            await self.app(scope, receive, send)
+            return
+
         if not token:
             response = JSONResponse(
                 status_code=401,
@@ -248,7 +257,9 @@ def _do_init():
         print(f"[INIT] ERROR during initialization: {e}")
         import traceback
         traceback.print_exc()
-        _init_done = True
+        # Do NOT set _init_done = True here — agent is None and all
+        # endpoints would crash with 'NoneType' has no attribute errors.
+        # Instead, _wait_for_init() will return 503 after its timeout.
 
 async def _briefing_precompute_loop():
     """
@@ -1670,7 +1681,11 @@ async def query_agent(
         Final payload is always a single valid JSON object.
         """
         import json as _j
+        import traceback as _tb
 
+        print(f"[STREAM] Starting _stream_query for req_id={req_id}")
+        if agent is None:
+            raise RuntimeError("Agent not initialized — server startup may have failed. Check [INIT] logs.")
         task = asyncio.create_task(
             agent.handle_query(
                 user_query,
@@ -1833,8 +1848,28 @@ async def query_agent(
             _resp_log(req_id, 500, "error", resp)
             yield _j.dumps(resp).encode()
 
+    async def _safe_stream_query():
+        """Wraps _stream_query to catch any crash and always yield JSON."""
+        import json as _sj
+        import traceback as _stb
+        try:
+            async for chunk in _stream_query():
+                yield chunk
+        except Exception as exc:
+            print(f"[STREAM] FATAL CRASH in _stream_query: {exc}")
+            _stb.print_exc()
+            try:
+                err_resp = _error_envelope(
+                    "STREAM_CRASH",
+                    f"Internal streaming error: {str(exc)}",
+                    meta,
+                )
+                yield _sj.dumps(err_resp).encode()
+            except Exception:
+                yield _sj.dumps({"type": "error", "code": "STREAM_CRASH", "analysis": str(exc)}).encode()
+
     return StreamingResponse(
-        _stream_query(),
+        _safe_stream_query(),
         media_type="application/json",
         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
     )
