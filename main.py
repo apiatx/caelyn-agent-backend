@@ -194,11 +194,11 @@ _init_event = _threading.Event()
 def _do_init():
     global data_service, agent, _init_done, _init_error
     try:
-        from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY, XAI_API_KEY, OPENAI_API_KEY, TWELVEDATA_API_KEY
+        from config import ANTHROPIC_API_KEY, POLYGON_API_KEY, FMP_API_KEY, COINGECKO_API_KEY, CMC_API_KEY, ALTFINS_API_KEY, XAI_API_KEY, TWELVEDATA_API_KEY
         from data.market_data_service import MarketDataService
         from agent.claude_agent import TradingAgent
         data_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY, coingecko_key=COINGECKO_API_KEY, cmc_key=CMC_API_KEY, altfins_key=ALTFINS_API_KEY, xai_key=XAI_API_KEY, twelvedata_key=TWELVEDATA_API_KEY)
-        agent = TradingAgent(api_key=ANTHROPIC_API_KEY, data_service=data_service, openai_api_key=OPENAI_API_KEY)
+        agent = TradingAgent(api_key=ANTHROPIC_API_KEY, data_service=data_service)
         _init_done = True
         _init_event.set()
         print("[INIT] All services initialized successfully")
@@ -2075,24 +2075,6 @@ async def health_check(request: Request):
     await _wait_for_init()
     errors = []
 
-    openai_ok = False
-    if agent.openai_client:
-        try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    agent.openai_client.chat.completions.create,
-                    model="gpt-4o",
-                    max_tokens=20,
-                    messages=[{"role": "user", "content": "Say ok"}],
-                ),
-                timeout=15.0,
-            )
-            openai_ok = True
-        except Exception as e:
-            errors.append(f"OpenAI Orchestrator: {str(e)}")
-    else:
-        errors.append("OpenAI Orchestrator: No API key configured")
-
     claude_ok = False
     try:
         response = await asyncio.wait_for(
@@ -2139,13 +2121,12 @@ async def health_check(request: Request):
         edgar_health = {"enabled": True, "last_error": str(e), "circuit": "unknown"}
 
     return {
-        "openai_orchestrator": openai_ok,
         "claude_reasoning": claude_ok,
         "finviz": finviz_ok,
         "stockanalysis": sa_ok,
         "edgar": edgar_health,
         "errors": errors,
-        "status": "ok" if (openai_ok and claude_ok and finviz_ok and sa_ok) else "degraded",
+        "status": "ok" if (claude_ok and finviz_ok and sa_ok) else "degraded",
     }
 
 
