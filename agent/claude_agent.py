@@ -423,6 +423,12 @@ class TradingAgent:
                 csv_parsed = {"tickers": csv_tickers, "rows": rows, "all_tickers": csv_tickers, "total_count": len(csv_tickers), "columns": list(rows[0].keys()) if rows else [], "ticker_col": ticker_col}
                 print(f"[CSV] ticker_col={ticker_col}, first 5 tickers={csv_tickers[:5]}, total rows={len(rows)}, columns={list(rows[0].keys())[:6] if rows else []}")
                 print(f"[CSV] Parsed {len(csv_tickers)} tickers from CSV ({len(rows)} rows, cols: {csv_parsed['columns'][:8]})")
+                # Track CSV tickers for EDGAR background cache
+                try:
+                    from data.edgar_cache import add_to_universe
+                    add_to_universe(csv_tickers)
+                except Exception:
+                    pass
                 if not user_prompt.strip():
                     user_prompt = f"Analyze every one of these {len(csv_tickers)} tickers from my uploaded watchlist. Give a BUY, HOLD, or SELL rating for each ticker, then identify the top 2-3 best investments."
                 preset_intent = None
@@ -2456,6 +2462,14 @@ class TradingAgent:
 
         filters = plan.get("filters", {})
         tickers = plan.get("tickers", [])
+
+        # Track queried tickers for EDGAR background cache universe
+        if tickers:
+            try:
+                from data.edgar_cache import add_to_universe
+                add_to_universe(tickers)
+            except Exception:
+                pass
 
         query_info = {
             "category": category,
