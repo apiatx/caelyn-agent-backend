@@ -2033,6 +2033,7 @@ export default function TradingAgent() {
     const rawSignal = s.social_trading_signal || null;
     const signal = rawSignal && rawSignal.symbol ? rawSignal : null;
     const equities = s.equities || {};
+    const etfItems = s.etfs || [];
     const cryptoItems = s.crypto || [];
     const commodityItems = s.commodities || [];
 
@@ -2052,7 +2053,8 @@ export default function TradingAgent() {
       {['ta','volume','catalyst','fa'].map(k => { const { ic, cl } = confirmIcon(conf?.[k]); return <span key={k} style={{ padding:'1px 6px', borderRadius:3, fontSize:8, fontWeight:700, fontFamily:font, color:cl, background:`${cl}10`, border:`1px solid ${cl}20` }}>{k.toUpperCase()} {ic}</span>; })}
     </div>;
 
-    const sections: { key: string; label: string; icon: string; items: any[] }[] = [
+    const sections: { key: string; label: string; icon: string; items: any[]; accent?: string }[] = [
+      { key: 'etfs', label: 'Trending ETFs', icon: '📈', items: etfItems, accent: '#8b5cf6' },
       { key: 'large_caps', label: 'Equities: Large Caps', icon: '🏛️', items: equities.large_caps || [] },
       { key: 'mid_caps', label: 'Equities: Mid Caps', icon: '📊', items: equities.mid_caps || [] },
       { key: 'small_micro', label: 'Equities: Small + Micro', icon: '🔬', items: equities.small_micro_caps || [] },
@@ -2186,12 +2188,12 @@ export default function TradingAgent() {
         </div>
       </div>}
 
-      {sections.map(({ key, label, icon, items }) => {
+      {sections.map(({ key, label, icon, items, accent }) => {
         if (!items.length) return null;
         return <div key={key} style={{ marginBottom:14 }}>
           <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
             <span style={{ fontSize:14 }}>{icon}</span>
-            <span style={{ color:C.bright, fontSize:13, fontWeight:700, fontFamily:sansFont }}>{label}</span>
+            <span style={{ color: accent || C.bright, fontSize:13, fontWeight:700, fontFamily:sansFont }}>{label}</span>
             <span style={{ color:C.dim, fontSize:10, fontFamily:font }}>({items.length})</span>
           </div>
           <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
