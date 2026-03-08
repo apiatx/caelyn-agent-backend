@@ -1621,6 +1621,7 @@ async def query_agent(
 
         result = None
         timed_out = False
+        _task_error = None
 
         for _ in range(22):  # max 22 * 8s = 176s
             try:
@@ -1628,6 +1629,11 @@ async def query_agent(
                 break
             except asyncio.TimeoutError:
                 yield b" "  # keepalive — proxy sees bytes, stays alive
+            except Exception as _exc:
+                # handle_query raised a non-timeout exception — capture it
+                # so we can return a proper JSON error instead of an empty body
+                _task_error = _exc
+                break
         else:
             task.cancel()
             timed_out = True
@@ -1637,6 +1643,19 @@ async def query_agent(
         if timed_out:
             resp = _error_envelope("REQUEST_TIMEOUT", "Request timed out after 176s — please try again.", meta)
             _resp_log(req_id, 200, "timeout", resp)
+            yield _j.dumps(resp).encode()
+            return
+
+        if _task_error:
+            import traceback
+            print(f"[API] request_id={req_id} status=agent_error error={_task_error}")
+            traceback.print_exc()
+            resp = _error_envelope(
+                "AGENT_ERROR",
+                f"Something went wrong during analysis: {str(_task_error)}",
+                meta,
+            )
+            _resp_log(req_id, 500, "error", resp)
             yield _j.dumps(resp).encode()
             return
 

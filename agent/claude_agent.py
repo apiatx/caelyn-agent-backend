@@ -788,12 +788,21 @@ class TradingAgent:
             except Exception as e:
                 print(f"[REGIME] Detection failed, defaulting to neutral: {e}")
                 regime_data = {"regime": "neutral", "confidence": 0}
-            market_data = apply_institutional_scoring(market_data, regime_data=regime_data)
+            try:
+                market_data = apply_institutional_scoring(market_data, regime_data=regime_data)
+            except Exception as e:
+                print(f"[SCORING] Institutional scoring failed, using raw data: {e}")
+                import traceback
+                traceback.print_exc()
 
         plan = query_info.get("orchestration_plan", {}) if 'query_info' in locals() and isinstance(query_info, dict) else {}
         if isinstance(market_data, dict) and plan.get("web_news"):
-            news_context = await self._fetch_web_news_context(plan, user_prompt)
-            market_data["news_context"] = news_context
+            try:
+                news_context = await self._fetch_web_news_context(plan, user_prompt)
+                market_data["news_context"] = news_context
+            except Exception as e:
+                print(f"[NEWS] Web news context fetch failed: {e}")
+                news_context = {"articles": []}
             if plan.get("needs_citations"):
                 min_citations = max(1, int(plan.get("min_citations", 3) or 3))
                 distinct_urls = self._distinct_article_urls(news_context.get("articles", []))
