@@ -4794,6 +4794,21 @@ class MarketDataService:
 
     MAX_COMMODITY_QUOTES = 20
 
+    # TradingView futures symbols for real commodity charts (not ETF proxies)
+    COMMODITY_FUTURES_SYMBOLS = {
+        "oil": "TVC:USOIL", "nat_gas": "TVC:NATGAS",
+        "gold": "TVC:GOLD", "silver": "TVC:SILVER",
+        "platinum": "TVC:PLATINUM", "copper": "TVC:COPPER",
+        "wheat": "TVC:WHEAT", "corn": "TVC:CORN",
+        "soybeans": "CBOT:ZS1!", "uranium": "AMEX:URA",
+        "lithium": "AMEX:LIT", "rare_earth": "AMEX:REMX",
+        "steel": "AMEX:SLX", "aluminum": "NYSE:AA",
+        "base_metals": "AMEX:DBB", "agriculture": "AMEX:DBA",
+        "carbon": "AMEX:KRBN", "energy_eq": "AMEX:XLE",
+        "gold_miners": "AMEX:GDX", "jr_gold": "AMEX:GDXJ",
+        "clean_energy": "AMEX:ICLN", "timber": "AMEX:WOOD",
+    }
+
     async def _get_commodities_light(self,
                                      grok_themes: list[str] | None = None
                                      ) -> dict:
@@ -4875,13 +4890,14 @@ class MarketDataService:
             if not quote or not quote.get("price"):
                 missing.append(sym)
                 continue
+            theme_key = p.get("theme", "")
             commodity_proxies.append({
                 "symbol":
                 sym,
                 "name":
                 p.get("name", sym),
                 "theme":
-                p.get("theme", ""),
+                theme_key,
                 "type":
                 p.get("type", ""),
                 "price":
@@ -4901,7 +4917,9 @@ class MarketDataService:
                 "abs_change_pct":
                 abs(quote.get("change_pct") or 0),
                 "grok_theme_match":
-                p.get("theme", "") in force_include_themes,
+                theme_key in force_include_themes,
+                "tradingview_symbol":
+                self.COMMODITY_FUTURES_SYMBOLS.get(theme_key, ""),
             })
 
         # Perplexity Sonar fallback: if FMP returned no commodity data, use Sonar

@@ -3518,6 +3518,7 @@ class TradingAgent:
         module_status = {
             "x_social_scan": "pending",
             "market_scan": "pending",
+            "news_context": "skipped",
             "light_enrichment": "skipped",
             "broadening": "skipped",
         }
@@ -3585,13 +3586,44 @@ class TradingAgent:
                 module_status["market_scan"] = "error"
                 print(f"[CROSS_ASSET_TRENDING] Market scan failed: {e}")
 
+        # Perplexity news context — always-on for richer Claude synthesis
+        news_context = None
+
+        async def _fetch_news_context():
+            nonlocal news_context
+            if not self.data.web_search or not getattr(self.data.web_search, 'perplexity', None):
+                module_status["news_context"] = "unavailable"
+                return
+            try:
+                pplx = self.data.web_search.perplexity
+                if not pplx:
+                    module_status["news_context"] = "unavailable"
+                    return
+                raw = await asyncio.wait_for(
+                    pplx.get_market_news("trending stocks crypto commodities market movers today"),
+                    timeout=10.0,
+                )
+                if raw and raw.get("article_count", 0) > 0:
+                    news_context = raw
+                    module_status["news_context"] = "ok"
+                    print(f"[CROSS_ASSET_TRENDING] Perplexity news context: {raw.get('article_count', 0)} articles")
+                else:
+                    module_status["news_context"] = "empty"
+            except asyncio.TimeoutError:
+                module_status["news_context"] = "timeout"
+                print("[CROSS_ASSET_TRENDING] Perplexity news context timed out")
+            except Exception as e:
+                module_status["news_context"] = "error"
+                print(f"[CROSS_ASSET_TRENDING] Perplexity news context error: {e}")
+
         market_task = _fetch_market_data()
+        news_task = _fetch_news_context()
 
         if grok_shortlist:
-            await market_task
+            await asyncio.gather(market_task, news_task, return_exceptions=True)
         else:
             grok_task = _fetch_grok()
-            await asyncio.gather(grok_task, market_task, return_exceptions=True)
+            await asyncio.gather(grok_task, market_task, news_task, return_exceptions=True)
 
         market_scan_ok = module_status["market_scan"] == "ok"
 
@@ -3607,6 +3639,14 @@ class TradingAgent:
             primary_data["grok_available"] = True
         else:
             primary_data["grok_available"] = False
+
+        # Inject Perplexity news context (always-on — gives Claude real news to ground thesis)
+        if news_context:
+            primary_data["perplexity_news"] = {
+                "summary": news_context.get("summary", ""),
+                "articles": news_context.get("articles", [])[:8],
+                "article_count": news_context.get("article_count", 0),
+            }
 
         if not market_scan_ok and grok_shortlist:
             remaining = deadline - _t.time()

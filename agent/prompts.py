@@ -967,7 +967,8 @@ CONFIDENCE ADJUSTMENTS:
 - classification="WATCHLIST": cap confidence at 60 max
 
 COMMODITY RULES:
-- For each commodity, include equity proxy ETF where possible (e.g., Gold → GLD, Oil → USO)
+- For each commodity, use the FUTURES chart symbol from tradingview_symbol if provided in the data (e.g., TVC:GOLD, NYMEX:CL1!, COMEX:GC1!) — NOT ETF proxies like GLD/USO. Traders want to see the actual commodity futures chart.
+- Also mention the equity proxy ETF as secondary context (e.g., "Futures: TVC:GOLD | ETF proxy: GLD")
 - Commodities always have a rating even if TA/FA are sparse — use price action + macro alignment
 - If commodities bucket is empty: write "Commodities: No high-signal trends detected in current scan" and move on (1 line)
 
@@ -979,8 +980,11 @@ DATA COVERAGE (end section):
 RULES:
 - Every item MUST have: symbol, classification, rating, numeric confidence, thesis_bullets, why_could_fail, position_size, confirmations
 - thesis_bullets MUST reference at least 1 Grok receipt (verbatim excerpt from X) if grok_shortlist data is present
+- thesis_bullets MUST explain the STRUCTURAL "why" — not just "momentum is strong" but WHY the setup exists (e.g., "Supply deficit after China export ban → only 3 non-Chinese refiners globally → pricing power inflection"). Reference specific catalysts, earnings data, macro drivers, or supply/demand dynamics.
+- If perplexity_news data is present, you MUST incorporate at least 2-3 news headlines/context into your thesis bullets across the response. Ground your analysis in real breaking news, not generic narrative.
 - No vague narrative-only answers. If symbols exist in inputs, you MUST list them with ratings
 - Do NOT use the same generic thesis for multiple items
+- BANNED PHRASES in thesis_bullets: "momentum is building", "gaining traction", "showing strength", "buzzing on X", "trending higher". Instead use SPECIFIC data: price levels, % moves, volume multiples, filing dates, earnings numbers, supply/demand metrics.
 - Tone: professional, natural, direct. Minimal buzzwords. Do not repeat "regime/catalyst/buzzing" excessively.
 - For each bucket (equities.large_caps/mid_caps/small_micro_caps, crypto, commodities), list only shortlist items. No extra commentary dump.
 - If grok_shortlist shows data_quality_flag="low", mention this in thesis_bullets or as a risk

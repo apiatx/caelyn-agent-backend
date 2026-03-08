@@ -438,21 +438,21 @@ class PerplexityProvider:
 
     SONAR_URL = "https://api.perplexity.ai/chat/completions"
 
-    # TradingView-compatible symbols for commodity ETF proxies
+    # TradingView-compatible symbols — futures (primary) + ETF proxies (secondary)
     COMMODITY_TV_MAP = {
-        "gold": {"proxy": "GLD", "tv_symbol": "AMEX:GLD", "type": "metals"},
-        "silver": {"proxy": "SLV", "tv_symbol": "AMEX:SLV", "type": "metals"},
-        "oil": {"proxy": "USO", "tv_symbol": "AMEX:USO", "type": "energy"},
-        "crude oil": {"proxy": "USO", "tv_symbol": "AMEX:USO", "type": "energy"},
-        "natural gas": {"proxy": "UNG", "tv_symbol": "AMEX:UNG", "type": "energy"},
-        "copper": {"proxy": "COPX", "tv_symbol": "AMEX:COPX", "type": "metals"},
-        "uranium": {"proxy": "URA", "tv_symbol": "AMEX:URA", "type": "energy"},
-        "platinum": {"proxy": "PPLT", "tv_symbol": "AMEX:PPLT", "type": "metals"},
-        "palladium": {"proxy": "PALL", "tv_symbol": "AMEX:PALL", "type": "metals"},
-        "lithium": {"proxy": "LIT", "tv_symbol": "AMEX:LIT", "type": "metals"},
-        "wheat": {"proxy": "WEAT", "tv_symbol": "AMEX:WEAT", "type": "agriculture"},
-        "corn": {"proxy": "CORN", "tv_symbol": "AMEX:CORN", "type": "agriculture"},
-        "agriculture": {"proxy": "DBA", "tv_symbol": "AMEX:DBA", "type": "agriculture"},
+        "gold": {"proxy": "GLD", "tv_symbol": "TVC:GOLD", "tv_futures": "COMEX:GC1!", "tv_etf": "AMEX:GLD", "type": "metals"},
+        "silver": {"proxy": "SLV", "tv_symbol": "TVC:SILVER", "tv_futures": "COMEX:SI1!", "tv_etf": "AMEX:SLV", "type": "metals"},
+        "oil": {"proxy": "USO", "tv_symbol": "TVC:USOIL", "tv_futures": "NYMEX:CL1!", "tv_etf": "AMEX:USO", "type": "energy"},
+        "crude oil": {"proxy": "USO", "tv_symbol": "TVC:USOIL", "tv_futures": "NYMEX:CL1!", "tv_etf": "AMEX:USO", "type": "energy"},
+        "natural gas": {"proxy": "UNG", "tv_symbol": "TVC:NATGAS", "tv_futures": "NYMEX:NG1!", "tv_etf": "AMEX:UNG", "type": "energy"},
+        "copper": {"proxy": "COPX", "tv_symbol": "TVC:COPPER", "tv_futures": "COMEX:HG1!", "tv_etf": "AMEX:COPX", "type": "metals"},
+        "uranium": {"proxy": "URA", "tv_symbol": "AMEX:URA", "tv_futures": "", "tv_etf": "AMEX:URA", "type": "energy"},
+        "platinum": {"proxy": "PPLT", "tv_symbol": "TVC:PLATINUM", "tv_futures": "NYMEX:PL1!", "tv_etf": "AMEX:PPLT", "type": "metals"},
+        "palladium": {"proxy": "PALL", "tv_symbol": "TVC:PALLADIUM", "tv_futures": "NYMEX:PA1!", "tv_etf": "AMEX:PALL", "type": "metals"},
+        "lithium": {"proxy": "LIT", "tv_symbol": "AMEX:LIT", "tv_futures": "", "tv_etf": "AMEX:LIT", "type": "metals"},
+        "wheat": {"proxy": "WEAT", "tv_symbol": "TVC:WHEAT", "tv_futures": "CBOT:ZW1!", "tv_etf": "AMEX:WEAT", "type": "agriculture"},
+        "corn": {"proxy": "CORN", "tv_symbol": "TVC:CORN", "tv_futures": "CBOT:ZC1!", "tv_etf": "AMEX:CORN", "type": "agriculture"},
+        "agriculture": {"proxy": "DBA", "tv_symbol": "AMEX:DBA", "tv_futures": "", "tv_etf": "AMEX:DBA", "type": "agriculture"},
     }
 
     async def get_trending_commodities(self) -> list:
@@ -577,7 +577,7 @@ class PerplexityProvider:
 
             if not tv_info:
                 # Default fallback
-                tv_info = {"proxy": name[:4].upper(), "tv_symbol": "", "type": "commodity"}
+                tv_info = {"proxy": name[:4].upper(), "tv_symbol": "", "tv_futures": "", "tv_etf": "", "type": "commodity"}
 
             results.append({
                 "symbol": tv_info["proxy"],
@@ -594,6 +594,8 @@ class PerplexityProvider:
                 "year_low": None,
                 "grok_theme_match": False,
                 "tradingview_symbol": tv_info["tv_symbol"],
+                "tradingview_futures": tv_info.get("tv_futures", ""),
+                "tradingview_etf": tv_info.get("tv_etf", ""),
                 "source": "perplexity_sonar",
                 "reason": reason[:200] if reason else "",
                 "citations": citations[:3] if citations else [],

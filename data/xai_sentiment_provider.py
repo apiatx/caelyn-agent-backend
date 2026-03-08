@@ -474,9 +474,12 @@ Equities buckets and counts:
 - small_micro_caps: 3-6 tickers with market cap $50M-$15B — High-conviction small caps with real catalysts, not pump-and-dump noise. Flag any that look like coordinated pumps.
 
 Crypto:
-- 2-4 tickers
+- 2-4 tickers — find what is ACTUALLY performing or breaking out in the last 7-30 days
+- DO NOT default to ETH or SOL just because they are popular. If ETH is flat or down, do NOT include it.
 - Include BTC only if meaningfully relevant (breakout/breakdown/major catalyst/dominant velocity)
-- If BTC sideways and alts have accelerating velocity, focus on alts
+- Focus on ACTUAL MOVERS: tokens with 20%+ moves in 7d, new ATHs, protocol upgrades going live, major exchange listings, or unusual volume spikes
+- Look for: L2 tokens gaining TVL, DeFi tokens with fee revenue inflections, memecoins with viral catalysts, tokens with upcoming unlocks/burns
+- If you cannot find genuinely trending crypto with real catalysts, return fewer items rather than padding with ETH/SOL defaults
 - Emphasize velocity/acceleration, not raw mention count
 
 Commodities:
