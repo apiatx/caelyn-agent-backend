@@ -363,6 +363,23 @@ class TradingAgent:
         }
 
     async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False) -> dict:
+        try:
+            return await self._handle_query_inner(user_prompt, history=history, preset_intent=preset_intent, request_id=request_id, csv_data=csv_data, chatbox_mode=chatbox_mode)
+        except Exception as e:
+            import traceback
+            print(f"[AGENT] FATAL: handle_query crashed with unhandled exception: {e}")
+            traceback.print_exc()
+            return {
+                "type": "error",
+                "analysis": f"Internal error: {str(e)}",
+                "structured": {
+                    "display_type": "error",
+                    "code": "AGENT_CRASH",
+                    "message": f"Something went wrong during analysis: {str(e)}",
+                },
+            }
+
+    async def _handle_query_inner(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False) -> dict:
         start_time = time.time()
         if history is None:
             history = []
