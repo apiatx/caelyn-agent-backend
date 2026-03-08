@@ -257,7 +257,9 @@ def _do_init():
         print(f"[INIT] ERROR during initialization: {e}")
         import traceback
         traceback.print_exc()
-        _init_done = True
+        # Do NOT set _init_done = True here — agent is None and all
+        # endpoints would crash with 'NoneType' has no attribute errors.
+        # Instead, _wait_for_init() will return 503 after its timeout.
 
 async def _briefing_precompute_loop():
     """
@@ -1682,6 +1684,8 @@ async def query_agent(
         import traceback as _tb
 
         print(f"[STREAM] Starting _stream_query for req_id={req_id}")
+        if agent is None:
+            raise RuntimeError("Agent not initialized — server startup may have failed. Check [INIT] logs.")
         task = asyncio.create_task(
             agent.handle_query(
                 user_query,
