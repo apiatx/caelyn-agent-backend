@@ -44,6 +44,10 @@ COVERAGE_QUOTAS = {
     "commodities": 2,
 }
 
+MAX_CRYPTO = 3          # Hard ceiling — never exceed 3 crypto in final output
+MIN_EQUITIES = 3        # Hard floor — always at least 3 equities
+MIN_COMMODITIES = 2     # Hard floor — always at least 2 commodities
+
 MAX_FINAL_PICKS = 18
 
 
@@ -693,7 +697,7 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
     q_large = COVERAGE_QUOTAS["equities_large"]
     q_mid = COVERAGE_QUOTAS["equities_mid"]
     q_small = COVERAGE_QUOTAS["equities_small"]
-    q_crypto = COVERAGE_QUOTAS["crypto"]
+    q_crypto = min(COVERAGE_QUOTAS["crypto"], MAX_CRYPTO)
     q_commodity = COVERAGE_QUOTAS["commodities"]
 
     # Step 1: Guarantee minimum quota floors
@@ -757,8 +761,9 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
                 actual_commodity += 1
                 debug["quota_adjustments"].append(f"Backfill commodity with {c['symbol']}")
 
-    # Step 3: Fill remaining slots by pure score — large-caps now compete freely
+    # Step 3: Fill remaining slots by pure score — enforce crypto ceiling
     remaining_slots = MAX_FINAL_PICKS - len(final)
+    crypto_in_final = sum(1 for c in final if c["asset_class"] == "crypto")
     if remaining_slots > 0:
         all_unlocked = []
         for pool in [large, mid, small, crypto_sorted, commodity_sorted]:
@@ -767,7 +772,12 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
                     all_unlocked.append(c)
         all_unlocked.sort(key=lambda x: x.get("normalized_score", 0), reverse=True)
         for c in all_unlocked[:remaining_slots]:
-            _add(c)
+            # Enforce hard crypto ceiling
+            if c["asset_class"] == "crypto" and crypto_in_final >= MAX_CRYPTO:
+                continue
+            if _add(c):
+                if c["asset_class"] == "crypto":
+                    crypto_in_final += 1
 
     eq_count = sum(1 for c in final if c["asset_class"] == "stock")
     cr_count = sum(1 for c in final if c["asset_class"] == "crypto")
