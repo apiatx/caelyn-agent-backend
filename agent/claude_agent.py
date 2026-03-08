@@ -3444,6 +3444,12 @@ class TradingAgent:
                 thinking_used = sum(len(b.thinking) for b in response.content if b.type == "thinking")
                 print(f"[Agent] Extended thinking used ~{thinking_used} chars before responding")
 
+            # Strip <cite> tags from web search responses (keep inner text)
+            if "<cite" in response_text:
+                import re as _re
+                response_text = _re.sub(r'<cite[^>]*>', '', response_text)
+                response_text = response_text.replace('</cite>', '')
+
             print(f"[Agent] Async+web_search response: {len(response_text):,} chars")
             return response_text
         finally:
@@ -4606,17 +4612,19 @@ class TradingAgent:
         return found
 
     def _count_candidates(self, data: dict, asset_class: str) -> int:
+        """Count candidates the RANKER can actually see (not Grok shortlist which is passed separately to Claude).
+        Only counts stock_trending.enriched_data for equities, since that's what rank_cross_market receives."""
         count = 0
         if asset_class == "equities":
             stock = data.get("stock_trending") or {}
             if isinstance(stock, dict):
-                count += len(stock.get("top_trending", []))
                 enriched = stock.get("enriched_data")
                 if isinstance(enriched, dict):
-                    count = max(count, len(enriched))
-            grok = data.get("grok_shortlist", {}).get("equities", {})
-            if isinstance(grok, dict):
-                count += len(grok.get("large_caps", [])) + len(grok.get("mid_caps", [])) + len(grok.get("small_micro_caps", []))
+                    count = len(enriched)
+                else:
+                    count = len(stock.get("top_trending", []))
+            # Do NOT add grok_shortlist equities here — the ranker doesn't see them,
+            # so counting them prevents broadening from triggering when it should
         elif asset_class == "crypto":
             crypto = data.get("crypto_scanner") or {}
             if isinstance(crypto, dict):
@@ -4662,6 +4670,25 @@ class TradingAgent:
                     if sym and sym not in name_lookup:
                         name_lookup[sym] = c["name"]
 
+        # Build commodity tradingview_symbol lookup from ranked candidates
+        commodity_tv_lookup = {}
+        if isinstance(market_data, dict):
+            for c in (market_data.get("ranked_candidates") or []):
+                if isinstance(c, dict) and c.get("asset_class") == "commodity":
+                    sym = (c.get("symbol") or "").upper()
+                    tv = c.get("tradingview_symbol", "")
+                    if sym and tv:
+                        commodity_tv_lookup[sym] = tv
+            # Also check commodity_proxies / all_commodity_quotes
+            comm = market_data.get("commodities") or {}
+            if isinstance(comm, dict):
+                for item in (comm.get("commodity_proxies") or comm.get("all_commodity_quotes") or []):
+                    if isinstance(item, dict):
+                        sym = (item.get("symbol") or "").upper()
+                        tv = item.get("tradingview_symbol", "")
+                        if sym and tv and sym not in commodity_tv_lookup:
+                            commodity_tv_lookup[sym] = tv
+
         # Fix crypto items — ensure tradingview_symbol is correct
         crypto_items = structured.get("crypto") or []
         if isinstance(crypto_items, list):
@@ -4674,6 +4701,33 @@ class TradingAgent:
                     item["tradingview_symbol"] = get_crypto_tv_symbol(sym)
                     # Fix chart link if it uses plain ticker
                     tv_sym = item["tradingview_symbol"]
+                    item["chart"] = f"https://www.tradingview.com/chart/?symbol={tv_sym}"
+
+        # Fix commodity items — ensure tradingview_symbol uses futures chart, not ETF proxy
+        commodity_items = structured.get("commodities") or []
+        if isinstance(commodity_items, list):
+            for item in commodity_items:
+                if not isinstance(item, dict):
+                    continue
+                sym = (item.get("symbol") or "").upper()
+                # Try to match by symbol or by name keywords
+                tv_sym = commodity_tv_lookup.get(sym, "")
+                if not tv_sym:
+                    # Try matching by name/symbol keywords to COMMODITY_FUTURES_SYMBOLS
+                    name_lower = (item.get("name") or item.get("symbol") or "").lower()
+                    COMMODITY_NAME_TO_TV = {
+                        "oil": "TVC:USOIL", "crude": "TVC:USOIL", "wti": "TVC:USOIL", "brent": "TVC:USOIL",
+                        "gold": "TVC:GOLD", "silver": "TVC:SILVER", "platinum": "TVC:PLATINUM",
+                        "copper": "TVC:COPPER", "nat_gas": "TVC:NATGAS", "natural gas": "TVC:NATGAS",
+                        "wheat": "TVC:WHEAT", "corn": "TVC:CORN", "soybeans": "CBOT:ZS1!",
+                        "uranium": "AMEX:URA", "lithium": "AMEX:LIT",
+                    }
+                    for keyword, tv in COMMODITY_NAME_TO_TV.items():
+                        if keyword in name_lower or keyword in sym.lower():
+                            tv_sym = tv
+                            break
+                if tv_sym:
+                    item["tradingview_symbol"] = tv_sym
                     item["chart"] = f"https://www.tradingview.com/chart/?symbol={tv_sym}"
 
         # Fix ETFs that leaked into equities sections

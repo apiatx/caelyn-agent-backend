@@ -909,16 +909,16 @@ HARD RULES (violations = broken contract):
 1. You MUST output ALL groups: ETFs, Equities (Large/Mid/Small), Crypto, Commodities. NEVER skip a group.
 2. ASSET CLASS DISTRIBUTION LIMITS — THIS IS THE MOST IMPORTANT RULE:
    - ETFS: 0-3 ETFs. If ETFs appear in the data (asset_class="etf" in ranked_candidates, or in grok_shortlist.etfs), include them in the "etfs" array. ETFs are NEVER equities — SPY, QQQ, IWM, XLE, USO, GLD, ARKK, SMH, etc. are all ETFs/funds, NOT stocks. They do not have market caps like stocks and must NEVER appear in equities sections.
-   - EQUITIES: MINIMUM 5 total (across Large/Mid/Small combined). Only REAL STOCKS (individual companies) go here — never ETFs. If fewer than 5 confirmed, backfill with watchlist items to reach 5. NEVER output fewer than 5 equities.
+   - EQUITIES: MINIMUM 8 total (at least 2 large caps, at least 3 mid caps, at least 3 small/micro caps). Only REAL STOCKS (individual companies) go here — never ETFs. There is ALWAYS something trending in every market cap tier — the user is a trader whose #1 goal is finding hot setups regardless of market sentiment. If fewer than minimum in any tier, backfill with watchlist items from grok_shortlist or ranked_candidates to reach the minimum. NEVER output fewer than 8 equities total. NEVER leave mid_caps or small_micro_caps empty.
    - CRYPTO: MAXIMUM 3 total. NEVER output more than 3 crypto picks. If you have 4+ crypto candidates, pick the best 2-3 and DROP the rest. Crypto must NEVER dominate the output.
    - COMMODITIES: MINIMUM 2 total. ALWAYS include at least 2 commodities. Use futures symbols for charts, NOT ETF proxies. If commodity data is sparse, still include the top 2 movers as watchlist items.
-   - COUNT CHECK: Before finalizing output, COUNT your items. If equities < 5, add more. If crypto > 3, remove extras. If commodities < 2, add more. This is NON-NEGOTIABLE.
+   - COUNT CHECK: Before finalizing output, COUNT your items per tier. If large_caps < 2, add more. If mid_caps < 3, add more. If small_micro_caps < 3, add more. If crypto > 3, remove extras. If commodities < 2, add more. This is NON-NEGOTIABLE.
 3. NEVER answer with a single-pick-only response. Always provide cross-asset context + full shortlist.
 4. If a bucket has fewer items than minimum, still list what you have AND add watchlist items: "Only N met confirmation; others are watchlist due to [reason]."
 5. Items marked is_backfill=true or confirmation_status="unconfirmed" should be labeled as "Watchlist" with lower confidence.
 6. Do NOT include an EXCLUDED section. Do not list excluded/filtered-out tickers.
 7. Each item MUST be classified as either "TRADE IDEA" or "WATCHLIST" based on confirmation data.
-8. PRIORITY ORDER: ETFs first (if trending), then Equities (fill to 5+), then Commodities (fill to 2+), then Crypto (cap at 3).
+8. PRIORITY ORDER: ETFs first (if trending), then Equities (fill to 2+ large, 3+ mid, 3+ small), then Commodities (fill to 2+), then Crypto (cap at 3).
 9. NEVER invent placeholder tickers like "WATCHLIST_PLACEHOLDER_1" or "MID_CAP_BACKFILL". Only output REAL ticker symbols that exist in the input data. If a bucket is empty, use real tickers from other buckets or from ranked_candidates/enriched_data/grok_shortlist — there are always real stocks available in the data.
 
 TICKER NAME ACCURACY (CRITICAL):

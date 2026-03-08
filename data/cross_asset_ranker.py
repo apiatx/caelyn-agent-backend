@@ -62,9 +62,9 @@ MAJOR_COMMODITIES = {
 }
 
 COVERAGE_QUOTAS = {
-    "equities_large": 3,
-    "equities_mid": 3,
-    "equities_small": 2,
+    "equities_large": 4,
+    "equities_mid": 4,
+    "equities_small": 3,
     "crypto": 2,
     "commodities": 3,
     "etfs": 2,
@@ -72,7 +72,7 @@ COVERAGE_QUOTAS = {
 
 MAX_CRYPTO = 3          # Hard ceiling — never exceed 3 crypto in final output
 MAX_ETFS = 3            # Hard ceiling — never exceed 3 ETFs in final output
-MIN_EQUITIES = 5        # Hard floor — always at least 5 equities
+MIN_EQUITIES = 8        # Hard floor — always at least 8 equities (2 large + 3 mid + 3 small)
 MIN_COMMODITIES = 2     # Hard floor — always at least 2 commodities
 
 MAX_FINAL_PICKS = 15
@@ -456,6 +456,7 @@ def _extract_commodity_candidates(commodity_data: dict, debug: dict) -> list:
                 "volume": None,
                 "market_cap": None,
                 "is_major": symbol.upper() in MAJOR_COMMODITIES or any(m.lower() in name.lower() for m in ["gold", "silver", "oil", "crude", "gas", "copper", "wheat", "corn"]),
+                "tradingview_symbol": item.get("tradingview_symbol", ""),
                 "raw_data": item,
             })
 
@@ -474,6 +475,7 @@ def _extract_commodity_candidates(commodity_data: dict, debug: dict) -> list:
                         "volume": _parse_num(data.get("volume")),
                         "market_cap": _parse_num(data.get("marketCap")),
                         "is_major": symbol.upper() in MAJOR_COMMODITIES,
+                        "tradingview_symbol": data.get("tradingview_symbol", ""),
                         "raw_data": data,
                     })
 
@@ -494,6 +496,7 @@ def _extract_commodity_candidates(commodity_data: dict, debug: dict) -> list:
                     "volume": _parse_num(data.get("volume")),
                     "market_cap": None,
                     "is_major": symbol.upper() in MAJOR_COMMODITIES or True,
+                    "tradingview_symbol": data.get("tradingview_symbol", ""),
                     "raw_data": data,
                 })
 
