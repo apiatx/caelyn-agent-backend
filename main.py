@@ -84,6 +84,15 @@ class JWTAuthMiddleware:
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
 
+        # Accept X-API-Key as alternative to Bearer token
+        api_key_header = headers.get("x-api-key", "")
+        if api_key_header and api_key_header == AGENT_API_KEY:
+            if "state" not in scope:
+                scope["state"] = {}
+            scope["state"]["user_id"] = "api_key_user"
+            await self.app(scope, receive, send)
+            return
+
         if not token:
             response = JSONResponse(
                 status_code=401,
