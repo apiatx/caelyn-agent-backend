@@ -577,17 +577,34 @@ async def root():
 
 @app.get("/ping")
 async def ping():
-    return {"status": "ok"}
+    return {"status": "ok", "code_version": "2026-03-08-v3-pure-asgi"}
 
 
 @app.get("/health")
 async def health():
     return {
         "status": "ok",
+        "code_version": "2026-03-08-v3-pure-asgi",
         "init_complete": _init_done,
         "agent_loaded": agent is not None,
         "data_service_loaded": data_service is not None,
     }
+
+
+@app.post("/api/debug/echo")
+async def debug_echo(request: Request):
+    """Debug endpoint: echoes the request body back to verify the full pipeline works."""
+    try:
+        body = await request.body()
+        body_str = body.decode("utf-8", errors="replace")[:500]
+        return JSONResponse(content={
+            "echo": body_str,
+            "code_version": "2026-03-08-v3-pure-asgi",
+            "has_user_id": bool(getattr(request.state, "user_id", None)),
+            "user_id": getattr(request.state, "user_id", None),
+        })
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # ============================================================
