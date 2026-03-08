@@ -5,7 +5,6 @@ import time
 import asyncio
 
 import anthropic
-import openai
 
 from agent.data_compressor import compress_data
 from agent.institutional_scorer import apply_institutional_scoring
@@ -16,7 +15,6 @@ from data.market_data_service import MarketDataService
 class TradingAgent:
     def __init__(self, api_key: str, data_service: MarketDataService, openai_api_key: str = None):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=120.0)
-        self.openai_client = openai.OpenAI(api_key=openai_api_key) if openai_api_key else None
         self.data = data_service
 
     PRESET_ALIASES = {
@@ -583,23 +581,22 @@ class TradingAgent:
                             break
 
             smart_result = None
-            if self.openai_client:
-                try:
-                    smart_result = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            self._smart_orchestrate, user_prompt, history, followup_csv_context
-                        ),
-                        timeout=5.0,
-                    )
-                    if "enhanced_prompt" in smart_result:
-                        smart_tickers = smart_result.get("tickers", [])
-                        smart_apis = smart_result.get("api_calls", {})
-                        print(f"[FOLLOWUP_SMART] Tickers: {smart_tickers[:10]} | APIs: {[k for k, v in smart_apis.items() if v]}")
-                    else:
-                        smart_result = None
-                except Exception as e:
-                    print(f"[FOLLOWUP_SMART] Smart orchestrator failed: {e}")
+            try:
+                smart_result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._smart_orchestrate, user_prompt, history, followup_csv_context
+                    ),
+                    timeout=5.0,
+                )
+                if "enhanced_prompt" in smart_result:
+                    smart_tickers = smart_result.get("tickers", [])
+                    smart_apis = smart_result.get("api_calls", {})
+                    print(f"[FOLLOWUP_SMART] Tickers: {smart_tickers[:10]} | APIs: {[k for k, v in smart_apis.items() if v]}")
+                else:
                     smart_result = None
+            except Exception as e:
+                print(f"[FOLLOWUP_SMART] Smart orchestrator failed: {e}")
+                smart_result = None
 
             # Determine what data to fetch based on smart orchestrator or keyword fallback
             q_lower = user_prompt.lower()
@@ -1472,47 +1469,18 @@ class TradingAgent:
         return result
 
     def _classify_query(self, prompt: str) -> dict:
-        if self.openai_client:
-            return self._classify_query_openai(prompt)
-        return self._keyword_classify(prompt)
-
-    def _classify_query_openai(self, prompt: str) -> dict:
-        try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o",
-                max_tokens=200,
-                temperature=0.1,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a query classifier. Reply with ONLY a valid JSON object, nothing else.",
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"{QUERY_CLASSIFIER_PROMPT}\n\n"
-                            f"User query: {prompt}"
-                        ),
-                    },
-                ],
-            )
-            text = response.choices[0].message.content.strip()
-            text = re.sub(r"```json\s*", "", text)
-            text = re.sub(r"```\s*", "", text)
-            return json.loads(text)
-        except Exception as e:
-            print(f"[AGENT] OpenAI classification error: {e}, falling back to keyword classifier")
-            return self._keyword_classify(prompt)
+        return self._classify_query_claude(prompt)
 
     def _classify_query_claude(self, prompt: str) -> dict:
         try:
             response = self.client.messages.create(
-                model="claude-sonnet-4-5-20250929",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=200,
                 messages=[
                     {
                         "role": "user",
                         "content": (
+                            "You are a query classifier. Reply with ONLY a valid JSON object, nothing else.\n\n"
                             f"{QUERY_CLASSIFIER_PROMPT}\n\n"
                             f"User query: {prompt}"
                         ),
@@ -1524,12 +1492,12 @@ class TradingAgent:
             text = re.sub(r"```\s*", "", text)
             return json.loads(text)
         except Exception as e:
-            print(f"[AGENT] Classification API error: {e}")
+            print(f"[AGENT] Claude Haiku classification error: {e}, falling back to keyword classifier")
             return self._keyword_classify(prompt)
 
     def _smart_orchestrate(self, user_prompt: str, history: list = None, csv_context: str = None) -> dict:
         """
-        Use GPT-4o-mini as a Smart Orchestrator + Prompt Engineer.
+        Use Claude Sonnet as a Smart Orchestrator + Prompt Engineer.
         Understands full context (prompt + history + CSV), extracts tickers from
         prior analysis, decides which APIs to call, and enhances the prompt.
 
@@ -1537,17 +1505,10 @@ class TradingAgent:
         intent, asset_classes, risk_framework, response_style, priority_depth, filters.
         Falls back to keyword classifier on failure.
         """
-        if not self.openai_client:
-            print("[SMART_ORCH] No OpenAI client, falling back to keyword classifier")
-            return self._keyword_classify(user_prompt)
+        # Build context parts for Claude (system prompt + conversation history + user query)
+        system_prompt = SMART_ORCHESTRATOR_PROMPT + "\n\nReply with ONLY valid JSON. No other text."
 
-        # Build context messages for GPT
-        messages = [
-            {
-                "role": "system",
-                "content": SMART_ORCHESTRATOR_PROMPT,
-            },
-        ]
+        messages = []
 
         # Inject conversation history (last 6 messages max, trimmed)
         if history:
@@ -1567,14 +1528,15 @@ class TradingAgent:
         messages.append({"role": "user", "content": "\n\n".join(user_parts)})
 
         try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+            response = self.client.messages.create(
+                model="claude-sonnet-4-20250514",
                 max_tokens=500,
-                temperature=0.1,
-                response_format={"type": "json_object"},
+                system=system_prompt,
                 messages=messages,
             )
-            text = response.choices[0].message.content.strip()
+            text = response.content[0].text.strip()
+            text = re.sub(r"```json\s*", "", text)
+            text = re.sub(r"```\s*", "", text)
             result = json.loads(text)
 
             # Validate required fields
@@ -1628,7 +1590,7 @@ class TradingAgent:
             return result
 
         except Exception as e:
-            print(f"[SMART_ORCH] GPT call failed: {e}, falling back to keyword classifier")
+            print(f"[SMART_ORCH] Claude Sonnet call failed: {e}, falling back to keyword classifier")
             return self._keyword_classify(user_prompt)
 
     INTENT_PROFILES = {
@@ -2328,8 +2290,8 @@ class TradingAgent:
         "tickers": [],
     }
 
-    def _orchestrate_query_openai(self, prompt: str, history: list = None, csv_context: str = None) -> dict:
-        """Orchestrate query using Smart Orchestrator (GPT-4o-mini).
+    def _orchestrate_query(self, prompt: str, history: list = None, csv_context: str = None) -> dict:
+        """Orchestrate query using Smart Orchestrator (Claude Haiku).
         Delegates to _smart_orchestrate for context-aware routing + prompt enhancement.
         Falls back to heuristic plan on failure."""
         result = self._smart_orchestrate(prompt, history=history, csv_context=csv_context)
@@ -2508,8 +2470,6 @@ class TradingAgent:
         return query_info
 
     async def _generate_reasoning_brief(self, user_prompt: str, plan: dict) -> dict | None:
-        if not self.openai_client:
-            return None
         try:
             plan_summary = json.dumps({
                 "intent": plan.get("intent"),
@@ -2522,14 +2482,12 @@ class TradingAgent:
 
             response = await asyncio.wait_for(
                 asyncio.to_thread(
-                    self.openai_client.chat.completions.create,
-                    model="gpt-4o-mini",
+                    self.client.messages.create,
+                    model="claude-haiku-4-5-20251001",
                     max_tokens=300,
-                    temperature=0.2,
-                    response_format={"type": "json_object"},
                     messages=[
-                        {"role": "system", "content": "Reply with ONLY valid JSON. No other text."},
                         {"role": "user", "content": (
+                            "Reply with ONLY valid JSON. No other text.\n\n"
                             f"{REASONING_BRIEF_PROMPT}\n\n"
                             f"User query: {user_prompt}\n"
                             f"Orchestration plan: {plan_summary}"
@@ -2538,7 +2496,9 @@ class TradingAgent:
                 ),
                 timeout=5.0,
             )
-            text = response.choices[0].message.content.strip()
+            text = response.content[0].text.strip()
+            text = re.sub(r"```json\s*", "", text)
+            text = re.sub(r"```\s*", "", text)
             brief = json.loads(text)
             print(f"[REASONING_BRIEF] Generated: focus={brief.get('analysis_focus', [])[:3]} lens={brief.get('lens', '?')}")
             return brief
@@ -2588,7 +2548,7 @@ class TradingAgent:
     async def _orchestrate_with_timeout(self, prompt: str, history: list = None, csv_context: str = None) -> dict:
         try:
             plan = await asyncio.wait_for(
-                asyncio.to_thread(self._orchestrate_query_openai, prompt, history, csv_context),
+                asyncio.to_thread(self._orchestrate_query, prompt, history, csv_context),
                 timeout=10.0,
             )
             from_heuristic = plan.pop("_from_heuristic", False)
