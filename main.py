@@ -1979,6 +1979,7 @@ async def clear_cache(request: Request, api_key: str = Header(None, alias="X-API
 class WatchlistRequest(BaseModel):
     tickers: List[str]
     conversation_id: Optional[str] = None
+    reasoning_model: Optional[str] = "claude"
 
 @app.post("/api/watchlist")
 @limiter.limit("10/minute")
@@ -1999,7 +2000,7 @@ async def review_watchlist(
 
     try:
         result = await asyncio.wait_for(
-            agent.review_watchlist(tickers),
+            agent.review_watchlist(tickers, reasoning_model=body.reasoning_model or "claude"),
             timeout=90.0,
         )
 

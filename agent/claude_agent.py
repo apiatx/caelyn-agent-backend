@@ -472,24 +472,20 @@ class TradingAgent:
 
             data_done_time = time.time()
             try:
-                response = await asyncio.wait_for(
+                raw_text = await asyncio.wait_for(
                     asyncio.to_thread(
-                        self.client.messages.create,
-                        model="claude-sonnet-4-20250514",
-                        max_tokens=4096,
-                        messages=[{"role": "user", "content": csv_prompt}],
+                        self._call_simple_model, reasoning_model, csv_prompt, 4096
                     ),
                     timeout=60.0,
                 )
-                raw_text = response.content[0].text if response.content else ""
             except asyncio.TimeoutError:
                 raw_text = '{"display_type":"chat","message":"CSV analysis timed out after 60s. Try a smaller file."}'
             except Exception as e:
                 raw_text = f'{{"display_type":"chat","message":"CSV analysis error: {str(e)}"}}'
 
-            claude_ms = int((time.time() - data_done_time) * 1000)
+            model_ms = int((time.time() - data_done_time) * 1000)
             data_ms = int((data_done_time - start_time) * 1000)
-            print(f"[CSV] Claude responded in {claude_ms}ms ({len(raw_text)} chars)")
+            print(f"[CSV] {reasoning_model} responded in {model_ms}ms ({len(raw_text)} chars)")
 
             # Parse the JSON response
             try:
@@ -537,7 +533,7 @@ class TradingAgent:
             csv_result = {
                 "analysis": analysis_text,
                 "structured": parsed,
-                "_timing": {"data": data_ms, "claude": claude_ms, "grok": 0},
+                "_timing": {"data": data_ms, "claude": model_ms, "grok": 0},
                 "_routing": {"source": "csv_upload", "confidence": "high", "category": "csv_analysis"},
             }
 
@@ -545,7 +541,7 @@ class TradingAgent:
             try:
                 if analysis_text and len(analysis_text) > 50:
                     suggestions = await asyncio.wait_for(
-                        asyncio.to_thread(self._generate_followup_suggestions, analysis_text),
+                        asyncio.to_thread(self._generate_followup_suggestions, analysis_text, reasoning_model),
                         timeout=5.0,
                     )
                     if suggestions:
@@ -736,6 +732,7 @@ class TradingAgent:
                   f"modules={[k for k, v in (orch_plan.get('modules', {}) if orch_plan else {}).items() if v]} | "
                   f"response_style={orch_plan.get('response_style') if orch_plan else '?'}")
 
+            query_info["reasoning_model"] = reasoning_model
             if category == "chat":
                 market_data = await self._gather_chat_context(user_prompt, query_info)
                 data_size = len(json.dumps(market_data, default=str)) if market_data else 0
@@ -744,7 +741,7 @@ class TradingAgent:
                 data_task = self._gather_data_safe(query_info)
                 if not is_followup:
                     plan = query_info.get("orchestration_plan", {})
-                    brief_task = self._generate_reasoning_brief(user_prompt, plan)
+                    brief_task = self._generate_reasoning_brief(user_prompt, plan, reasoning_model=reasoning_model)
                     market_data, reasoning_brief = await asyncio.gather(
                         data_task, brief_task, return_exceptions=True
                     )
@@ -778,6 +775,7 @@ class TradingAgent:
                   f"modules={[k for k, v in (plan.get('modules', {}) if plan else {}).items() if v]} | "
                   f"response_style={plan.get('response_style') if plan else '?'}")
 
+            query_info["reasoning_model"] = reasoning_model
             if category == "chat":
                 market_data = await self._gather_chat_context(user_prompt, query_info)
                 data_size = len(json.dumps(market_data, default=str)) if market_data else 0
@@ -786,7 +784,7 @@ class TradingAgent:
                 data_task = self._gather_data_safe(query_info)
                 if not is_followup:
                     orch_plan = query_info.get("orchestration_plan", {})
-                    brief_task = self._generate_reasoning_brief(user_prompt, orch_plan)
+                    brief_task = self._generate_reasoning_brief(user_prompt, orch_plan, reasoning_model=reasoning_model)
                     market_data, reasoning_brief = await asyncio.gather(
                         data_task, brief_task, return_exceptions=True
                     )
@@ -1171,7 +1169,7 @@ class TradingAgent:
                         pass
             if analysis_text and len(analysis_text) > 50:
                 suggestions = await asyncio.wait_for(
-                    asyncio.to_thread(self._generate_followup_suggestions, analysis_text),
+                    asyncio.to_thread(self._generate_followup_suggestions, analysis_text, reasoning_model),
                     timeout=5.0,
                 )
                 if suggestions:
@@ -2294,6 +2292,74 @@ class TradingAgent:
         "tickers": [],
     }
 
+    def _call_simple_model(self, reasoning_model: str, prompt: str, max_tokens: int = 4096) -> str:
+        """Call the selected model with a simple user prompt (no system blocks). Sync."""
+        messages = [{"role": "user", "content": prompt}]
+        if reasoning_model == "claude" or reasoning_model not in self.VALID_REASONING_MODELS:
+            response = self.client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=max_tokens,
+                messages=messages,
+            )
+            return response.content[0].text if response.content else ""
+
+        oai_msgs = [{"role": "user", "content": prompt}]
+
+        if reasoning_model == "gpt-4o":
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+            if not api_key:
+                raise ValueError("No OPENAI_API_KEY")
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            resp = client.chat.completions.create(model="gpt-4o", max_tokens=max_tokens, messages=oai_msgs)
+            return resp.choices[0].message.content or ""
+
+        import httpx as _httpx
+        if reasoning_model == "grok":
+            api_key = os.environ.get("XAI_API_KEY", "")
+            if not api_key:
+                raise ValueError("No XAI_API_KEY")
+            resp = _httpx.post(
+                "https://api.x.ai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": "grok-3-fast", "max_tokens": max_tokens, "messages": oai_msgs},
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"] or ""
+
+        if reasoning_model == "gemini":
+            api_key = os.environ.get("GEMINI_API_KEY", "")
+            if not api_key:
+                raise ValueError("No GEMINI_API_KEY")
+            resp = _httpx.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {"maxOutputTokens": max_tokens},
+                },
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+            parts = resp.json()["candidates"][0]["content"]["parts"]
+            return "".join(p.get("text", "") for p in parts if "text" in p) or ""
+
+        if reasoning_model == "perplexity":
+            api_key = os.environ.get("PERPLEXITY_API_KEY", "")
+            if not api_key:
+                raise ValueError("No PERPLEXITY_API_KEY")
+            resp = _httpx.post(
+                "https://api.perplexity.ai/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": "sonar-pro", "max_tokens": max_tokens, "messages": oai_msgs},
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"] or ""
+
+        raise ValueError(f"Unknown model: {reasoning_model}")
+
     def _call_orchestrator_model(self, reasoning_model: str, system_prompt: str, messages: list) -> str:
         """Call the selected model for orchestration (lightweight JSON routing).
         Returns the raw text response. Uses sync calls since orchestration runs in a thread."""
@@ -2375,6 +2441,92 @@ class TradingAgent:
             )
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"].strip()
+
+        raise ValueError(f"Unknown reasoning model: {reasoning_model}")
+
+    def _call_watchlist_model(self, reasoning_model: str, system_text: str, messages: list, max_tokens: int = 16384) -> str:
+        """Call the selected model for watchlist review (long-form analysis).
+        Similar to _call_orchestrator_model but with higher token limits and longer timeouts."""
+        if reasoning_model == "claude" or reasoning_model not in self.VALID_REASONING_MODELS:
+            response = self.client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=max_tokens,
+                system=[
+                    {"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}},
+                ],
+                messages=messages,
+            )
+            return response.content[0].text
+
+        # Build OpenAI-compatible messages
+        oai_msgs = [{"role": "system", "content": system_text}]
+        for m in messages:
+            oai_msgs.append({"role": m["role"], "content": m["content"]})
+
+        if reasoning_model == "gpt-4o":
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+            if not api_key:
+                raise ValueError("No OPENAI_API_KEY set")
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            resp = client.chat.completions.create(
+                model="gpt-4o",
+                max_tokens=max_tokens,
+                messages=oai_msgs,
+            )
+            return resp.choices[0].message.content
+
+        if reasoning_model == "grok":
+            api_key = os.environ.get("XAI_API_KEY", "")
+            if not api_key:
+                raise ValueError("No XAI_API_KEY set")
+            import httpx as _httpx
+            resp = _httpx.post(
+                "https://api.x.ai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": "grok-3-fast", "max_tokens": max_tokens, "messages": oai_msgs},
+                timeout=90.0,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+
+        if reasoning_model == "gemini":
+            api_key = os.environ.get("GEMINI_API_KEY", "")
+            if not api_key:
+                raise ValueError("No GEMINI_API_KEY set")
+            contents = []
+            for m in messages:
+                role = "user" if m["role"] == "user" else "model"
+                contents.append({"role": role, "parts": [{"text": m["content"]}]})
+            import httpx as _httpx
+            resp = _httpx.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "system_instruction": {"parts": [{"text": system_text}]},
+                    "contents": contents,
+                    "generationConfig": {"maxOutputTokens": max_tokens},
+                },
+                timeout=90.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            parts = data["candidates"][0]["content"]["parts"]
+            return "".join(p.get("text", "") for p in parts if "text" in p)
+
+        if reasoning_model == "perplexity":
+            api_key = os.environ.get("PERPLEXITY_API_KEY", "")
+            if not api_key:
+                raise ValueError("No PERPLEXITY_API_KEY set")
+            import httpx as _httpx
+            resp = _httpx.post(
+                "https://api.perplexity.ai/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": "sonar-pro", "max_tokens": max_tokens, "messages": oai_msgs},
+                timeout=90.0,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
 
         raise ValueError(f"Unknown reasoning model: {reasoning_model}")
 
@@ -2565,7 +2717,7 @@ class TradingAgent:
 
         return query_info
 
-    async def _generate_reasoning_brief(self, user_prompt: str, plan: dict) -> dict | None:
+    async def _generate_reasoning_brief(self, user_prompt: str, plan: dict, reasoning_model: str = "claude") -> dict | None:
         try:
             plan_summary = json.dumps({
                 "intent": plan.get("intent"),
@@ -2576,23 +2728,19 @@ class TradingAgent:
                 "filters": plan.get("filters", {}),
             }, default=str)
 
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self.client.messages.create,
-                    model="claude-haiku-4-5-20251001",
-                    max_tokens=300,
-                    messages=[
-                        {"role": "user", "content": (
-                            "Reply with ONLY valid JSON. No other text.\n\n"
-                            f"{REASONING_BRIEF_PROMPT}\n\n"
-                            f"User query: {user_prompt}\n"
-                            f"Orchestration plan: {plan_summary}"
-                        )},
-                    ],
-                ),
-                timeout=5.0,
+            brief_prompt = (
+                "Reply with ONLY valid JSON. No other text.\n\n"
+                f"{REASONING_BRIEF_PROMPT}\n\n"
+                f"User query: {user_prompt}\n"
+                f"Orchestration plan: {plan_summary}"
             )
-            text = response.content[0].text.strip()
+            text = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._call_simple_model, reasoning_model, brief_prompt, 300
+                ),
+                timeout=8.0,
+            )
+            text = text.strip()
             text = re.sub(r"```json\s*", "", text)
             text = re.sub(r"```\s*", "", text)
             brief = json.loads(text)
@@ -2602,32 +2750,23 @@ class TradingAgent:
             print(f"[REASONING_BRIEF] Generation failed (non-fatal): {e}")
             return None
 
-    def _generate_followup_suggestions(self, analysis_text: str) -> list:
-        """Generate 4 contextual follow-up prompt suggestions based on Claude's response.
-        Uses Claude Sonnet for speed and reliability. Returns list of 4 short suggestion strings."""
+    def _generate_followup_suggestions(self, analysis_text: str, reasoning_model: str = "claude") -> list:
+        """Generate 4 contextual follow-up prompt suggestions using the selected model.
+        Returns list of 4 short suggestion strings."""
         try:
-            response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=200,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": (
-                            "Based on the analysis below, suggest exactly 4 short follow-up questions "
-                            "the user would logically want to ask next. Return ONLY a JSON array of 4 strings. "
-                            "Each must be under 60 characters. Make them specific to the tickers, ratings, "
-                            "and data in the response — not generic. "
-                            "Examples of good follow-ups: "
-                            "'Check social sentiment on the SELL-rated ones', "
-                            "'What are earnings dates for your top picks?', "
-                            "'Run technical analysis on IONQ and CRDO', "
-                            "'Compare LPTH vs FORM on fundamentals'\n\n"
-                            f"ANALYSIS:\n{analysis_text[:2000]}"
-                        ),
-                    }
-                ],
+            prompt = (
+                "Based on the analysis below, suggest exactly 4 short follow-up questions "
+                "the user would logically want to ask next. Return ONLY a JSON array of 4 strings. "
+                "Each must be under 60 characters. Make them specific to the tickers, ratings, "
+                "and data in the response — not generic. "
+                "Examples of good follow-ups: "
+                "'Check social sentiment on the SELL-rated ones', "
+                "'What are earnings dates for your top picks?', "
+                "'Run technical analysis on IONQ and CRDO', "
+                "'Compare LPTH vs FORM on fundamentals'\n\n"
+                f"ANALYSIS:\n{analysis_text[:2000]}"
             )
-            text = response.content[0].text.strip()
+            text = self._call_simple_model(reasoning_model, prompt, 200).strip()
             # Strip markdown fences if present
             if text.startswith("```"):
                 text = re.sub(r"```json\s*", "", text)
@@ -3720,7 +3859,7 @@ class TradingAgent:
                 return {"csv_direct": True, "csv_parsed": csv_p, "tickers": csv_p["tickers"], "rows": csv_p["rows"], "columns": csv_p["columns"]}
             if hasattr(self, 'review_watchlist') and len(tickers) >= 3:
                 try:
-                    return await self.review_watchlist(tickers, csv_parsed=query_info.get("csv_parsed"))
+                    return await self.review_watchlist(tickers, csv_parsed=query_info.get("csv_parsed"), reasoning_model=query_info.get("reasoning_model", "claude"))
                 except Exception as e:
                     print(f"[WATCHLIST] review_watchlist failed: {e}, falling back to analyze_portfolio")
             try:
@@ -4634,7 +4773,7 @@ class TradingAgent:
 
         return broadened
 
-    async def review_watchlist(self, tickers: list, csv_parsed: dict = None) -> dict:
+    async def review_watchlist(self, tickers: list, csv_parsed: dict = None, reasoning_model: str = "claude") -> dict:
         """Dedicated watchlist review — bypasses the classifier entirely."""
         import time
         start = time.time()
@@ -4744,47 +4883,34 @@ After analyzing each ticker individually, give me an OVERALL PORTFOLIO ASSESSMEN
 Be direct and opinionated. Tell me what you actually think."""
         }]
 
+        system_text = f"{SYSTEM_PROMPT}\n\n{USER_INVESTMENT_PROFILE}"
+        model_label = reasoning_model or "claude"
+
         try:
-            response = await asyncio.wait_for(
+            response_text = await asyncio.wait_for(
                 asyncio.to_thread(
-                    self.client.messages.create,
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=16384,
-                    system=[
-                        {
-                            "type": "text",
-                            "text": SYSTEM_PROMPT,
-                            "cache_control": {"type": "ephemeral"},
-                        },
-                        {
-                            "type": "text",
-                            "text": USER_INVESTMENT_PROFILE,
-                            "cache_control": {"type": "ephemeral"},
-                        },
-                    ],
-                    messages=messages,
+                    self._call_watchlist_model, model_label, system_text, messages, 16384
                 ),
-                timeout=60.0,
+                timeout=90.0,
             )
 
-            response_text = response.content[0].text
-            print(f"[WATCHLIST] Claude responded: {len(response_text)} chars ({time.time()-start:.1f}s)")
+            print(f"[WATCHLIST] {model_label} responded: {len(response_text)} chars ({time.time()-start:.1f}s)")
 
             parsed = self._parse_response(response_text)
             return parsed
 
         except asyncio.TimeoutError:
-            print(f"[WATCHLIST] Claude timed out ({time.time()-start:.1f}s)")
+            print(f"[WATCHLIST] {model_label} timed out ({time.time()-start:.1f}s)")
             return {
                 "type": "chat",
                 "analysis": "",
                 "structured": {
                     "display_type": "chat",
-                    "message": "Claude timed out analyzing your watchlist. Try fewer tickers.",
+                    "message": f"{model_label} timed out analyzing your watchlist. Try fewer tickers.",
                 },
             }
         except Exception as e:
-            print(f"[WATCHLIST] Claude error: {e}")
+            print(f"[WATCHLIST] {model_label} error: {e}")
             return {
                 "type": "chat",
                 "analysis": "",
