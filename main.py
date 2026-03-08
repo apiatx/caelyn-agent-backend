@@ -21,10 +21,8 @@ AGENT_API_KEY = os.getenv("AGENT_API_KEY")
 
 
 def _jwt_or_key(request: Request, api_key) -> bool:
-    """Return True if the request is authenticated via JWT middleware OR a valid API key."""
-    if getattr(request.state, "user_id", None):
-        return True
-    return bool(api_key and api_key == AGENT_API_KEY)
+    """Auth disabled — always allow. Re-enable when login page is ready."""
+    return True
 
 # ── Auth middleware (pure ASGI — no BaseHTTPMiddleware) ──────────
 # BaseHTTPMiddleware is known to break StreamingResponse by buffering the
@@ -48,76 +46,13 @@ _AUTH_PUBLIC_PATHS = {
 
 
 class JWTAuthMiddleware:
-    """Pure ASGI middleware for JWT authentication.
-
-    Unlike BaseHTTPMiddleware, this does NOT wrap or buffer the response body.
-    StreamingResponse bytes flow directly from the endpoint to the client,
-    which is critical for keepalive streaming in /api/query.
-    """
+    """DISABLED — pass-through. Auth is handled by _jwt_or_key() in endpoints.
+    JWT login can be re-enabled later by restoring the middleware logic."""
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        path = scope["path"]
-        method = scope.get("method", "GET")
-
-        # Pass CORS preflight requests through untouched
-        if method == "OPTIONS":
-            await self.app(scope, receive, send)
-            return
-
-        # Allow public paths without auth
-        if path in _AUTH_PUBLIC_PATHS or not path.startswith("/api/"):
-            await self.app(scope, receive, send)
-            return
-
-        # Extract Bearer token from headers
-        headers = dict(
-            (k.decode("latin-1"), v.decode("latin-1"))
-            for k, v in scope.get("headers", [])
-        )
-        auth_header = headers.get("authorization", "")
-        token = None
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-
-        # Accept X-API-Key as alternative to Bearer token
-        api_key_header = headers.get("x-api-key", "")
-        if api_key_header and api_key_header == AGENT_API_KEY:
-            if "state" not in scope:
-                scope["state"] = {}
-            scope["state"]["user_id"] = "api_key_user"
-            await self.app(scope, receive, send)
-            return
-
-        if not token:
-            response = JSONResponse(
-                status_code=401,
-                content={"error": "Unauthorized", "detail": "Missing or invalid Authorization header."},
-            )
-            await response(scope, receive, send)
-            return
-
-        try:
-            from auth import verify_token
-            payload = verify_token(token)
-            # Set user_id in scope state so request.state.user_id works downstream
-            if "state" not in scope:
-                scope["state"] = {}
-            scope["state"]["user_id"] = payload.get("sub", "default")
-        except Exception:
-            response = JSONResponse(
-                status_code=401,
-                content={"error": "Unauthorized", "detail": "Token expired or invalid."},
-            )
-            await response(scope, receive, send)
-            return
-
         await self.app(scope, receive, send)
 
 
