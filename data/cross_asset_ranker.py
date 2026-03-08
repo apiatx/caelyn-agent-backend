@@ -37,15 +37,15 @@ MAJOR_COMMODITIES = {
 }
 
 COVERAGE_QUOTAS = {
-    "equities_large": 2,
+    "equities_large": 3,
     "equities_mid": 3,
-    "equities_small": 3,
+    "equities_small": 2,
     "crypto": 2,
-    "commodities": 2,
+    "commodities": 3,
 }
 
 MAX_CRYPTO = 3          # Hard ceiling — never exceed 3 crypto in final output
-MIN_EQUITIES = 3        # Hard floor — always at least 3 equities
+MIN_EQUITIES = 5        # Hard floor — always at least 5 equities
 MIN_COMMODITIES = 2     # Hard floor — always at least 2 commodities
 
 MAX_FINAL_PICKS = 18
@@ -778,6 +778,27 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
             if _add(c):
                 if c["asset_class"] == "crypto":
                     crypto_in_final += 1
+
+    # Step 4: Enforce hard minimums — equities >= MIN_EQUITIES, commodities >= MIN_COMMODITIES
+    eq_count = sum(1 for c in final if c["asset_class"] == "stock")
+    co_count = sum(1 for c in final if c["asset_class"] == "commodity")
+
+    if eq_count < MIN_EQUITIES:
+        for pool in [large, mid, small]:
+            for c in pool:
+                if eq_count >= MIN_EQUITIES:
+                    break
+                if _add(c, is_backfill=True):
+                    eq_count += 1
+                    debug["quota_adjustments"].append(f"Min-equity backfill: {c['symbol']}")
+
+    if co_count < MIN_COMMODITIES:
+        for c in commodity_sorted:
+            if co_count >= MIN_COMMODITIES:
+                break
+            if _add(c, is_backfill=True):
+                co_count += 1
+                debug["quota_adjustments"].append(f"Min-commodity backfill: {c['symbol']}")
 
     eq_count = sum(1 for c in final if c["asset_class"] == "stock")
     cr_count = sum(1 for c in final if c["asset_class"] == "crypto")

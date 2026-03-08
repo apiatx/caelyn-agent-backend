@@ -372,6 +372,8 @@ def _compress_cross_asset_trending(data: dict) -> dict:
                             else:
                                 trimmed_eq[bucket_name] = bucket_items
                         trimmed_grok[gk] = trimmed_eq
+                    elif gk == "crypto" and isinstance(gv, list):
+                        trimmed_grok[gk] = gv[:5]
                     elif isinstance(gv, list):
                         trimmed_grok[gk] = gv[:10]
                     else:
@@ -412,7 +414,7 @@ def _compress_cross_asset_trending(data: dict) -> dict:
                 for ck in ("coingecko_trending", "cmc_trending", "top_coins"):
                     items = value.get(ck, [])
                     if isinstance(items, list) and items:
-                        compact_crypto[ck] = items[:8]
+                        compact_crypto[ck] = items[:5]
                 compressed[key] = compact_crypto or {"summary": "no crypto data"}
             continue
 

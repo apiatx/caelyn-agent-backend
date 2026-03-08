@@ -3677,7 +3677,7 @@ class TradingAgent:
 
         remaining = deadline - _t.time()
         needs_broadening = []
-        if eq_count < 3:
+        if eq_count < 5:
             needs_broadening.append("equities")
         if crypto_count < 2:
             needs_broadening.append("crypto")

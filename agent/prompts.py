@@ -907,12 +907,17 @@ CROSS_ASSET_TRENDING_CONTRACT = """CROSS-ASSET TRENDING OUTPUT CONTRACT (MANDATO
 
 HARD RULES (violations = broken contract):
 1. You MUST output ALL groups: Equities (Large/Mid/Small), Crypto, Commodities. NEVER skip a group.
-2. You MUST output AT LEAST: 3 equities total (across L/M/S), 2 commodities. These are HARD MINIMUMS. You MUST output AT MOST 3 crypto. This is a HARD MAXIMUM — never exceed 3 crypto picks regardless of signal strength. Prioritize equities and commodities over crypto overflow.
+2. ASSET CLASS DISTRIBUTION LIMITS — THIS IS THE MOST IMPORTANT RULE:
+   - EQUITIES: MINIMUM 5 total (across Large/Mid/Small combined). If fewer than 5 confirmed, backfill with watchlist items to reach 5. NEVER output fewer than 5 equities.
+   - CRYPTO: MAXIMUM 3 total. NEVER output more than 3 crypto picks. If you have 4+ crypto candidates, pick the best 2-3 and DROP the rest. Crypto must NEVER dominate the output.
+   - COMMODITIES: MINIMUM 2 total. ALWAYS include at least 2 commodities. Use commodity ETF proxies (GLD, USO, UNG, COPX, etc.) or futures if direct commodity data is available. If commodity data is sparse, still include the top 2 movers as watchlist items.
+   - COUNT CHECK: Before finalizing output, COUNT your items. If equities < 5, add more. If crypto > 3, remove extras. If commodities < 2, add more. This is NON-NEGOTIABLE.
 3. NEVER answer with a single-pick-only response. Always provide cross-asset context + full shortlist.
 4. If a bucket has fewer items than minimum, still list what you have AND add watchlist items: "Only N met confirmation; others are watchlist due to [reason]."
 5. Items marked is_backfill=true or confirmation_status="unconfirmed" should be labeled as "Watchlist" with lower confidence.
 6. Do NOT include an EXCLUDED section. Do not list excluded/filtered-out tickers.
 7. Each item MUST be classified as either "TRADE IDEA" or "WATCHLIST" based on confirmation data.
+8. PRIORITY ORDER: Equities first (fill to 5+), then Commodities (fill to 2+), then Crypto (cap at 3). This reflects the asset class priority for a diversified trading desk.
 
 SOCIAL TRADING SIGNAL (MANDATORY — populate social_trading_signal object):
 If social_signal.social_spike_primary exists in the data, populate the social_trading_signal JSON object:
@@ -942,6 +947,14 @@ Social buzz volume ≠ bullish signal. You MUST check the POLARITY of the buzz:
 - A ticker with 10,000 posts saying it's terrible is NOT a buy — it's a warning signal.
 - Only classify as "TRADE IDEA" + "Buy" when social sentiment is GENUINELY BULLISH (people sharing real catalysts, accumulating, posting bullish theses).
 - If Grok flags trade_sentiment as "sell" or "hold", respect that — do not override with a "Buy" rating.
+
+CRYPTO SPAM FILTER (CRITICAL — apply BEFORE including ANY crypto):
+- X/Twitter is DOMINATED by crypto spam bots shilling shitcoins. Most crypto "buzz" on X is fake — bot networks, scam giveaways, coordinated pump groups, and paid promotions.
+- NEVER include a crypto token just because it has high mention volume on X. High mention count for crypto usually = spam, NOT genuine interest.
+- Only include crypto if it has REAL catalysts: protocol upgrades, major exchange listings, TVL growth, institutional adoption, or genuine price breakouts with volume.
+- If a crypto token's social activity looks like bot spam (generic bullish posts, giveaway promotions, Discord/Telegram links, "1000x" claims), EXCLUDE it entirely.
+- Prefer established tokens (BTC, ETH, SOL, etc.) with genuine catalysts over obscure altcoins with suspicious social activity.
+- Remember: you can NEVER have more than 3 crypto total. When in doubt, include FEWER crypto, not more. 2 crypto is ideal.
 
 CLASSIFICATION RULES (signal > hype):
 - "TRADE IDEA": social velocity is high/extreme AND sentiment is bullish/mixed-bullish AND at least one confirmation (TA, volume, or catalyst) is true
@@ -978,7 +991,9 @@ COMMODITY RULES:
 - For each commodity, use the FUTURES chart symbol from tradingview_symbol if provided in the data (e.g., TVC:GOLD, NYMEX:CL1!, COMEX:GC1!) — NOT ETF proxies like GLD/USO. Traders want to see the actual commodity futures chart.
 - Also mention the equity proxy ETF as secondary context (e.g., "Futures: TVC:GOLD | ETF proxy: GLD")
 - Commodities always have a rating even if TA/FA are sparse — use price action + macro alignment
-- If commodities bucket is empty: write "Commodities: No high-signal trends detected in current scan" and move on (1 line)
+- You MUST ALWAYS include at least 2 commodities. This is a HARD MINIMUM. If commodity data is sparse, use the top commodity ETF proxies from the data (GLD, USO, UNG, COPX, DBA, etc.) as watchlist items with appropriate caveats.
+- If absolutely no commodity data exists in any form, use macro context to identify the 2 most relevant commodities (e.g., gold during risk-off, oil during geopolitical tension) and list them as watchlist items with "limited data" noted.
+- NEVER output 0 commodities. The commodities section must always have at least 2 entries.
 
 DATA COVERAGE (end section):
 - If module_status shows all modules "ok": "Full coverage across social, technical, and fundamental data."
