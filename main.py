@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Header, HTTPException, Body
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -120,7 +121,15 @@ class JWTAuthMiddleware:
         await self.app(scope, receive, send)
 
 
-app = FastAPI(title="Trading Agent API")
+@asynccontextmanager
+async def lifespan(app):
+    import threading
+    threading.Thread(target=_do_init, daemon=True).start()
+    asyncio.create_task(_briefing_precompute_loop())
+    asyncio.create_task(_smart_earnings_loop())
+    yield
+
+app = FastAPI(title="Trading Agent API", lifespan=lifespan)
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
@@ -559,14 +568,6 @@ async def _smart_earnings_loop():
             await asyncio.sleep(3600)  # Retry in 1 hour on error
 
 
-@app.on_event("startup")
-async def startup_event():
-    import threading
-    threading.Thread(target=_do_init, daemon=True).start()
-    # Launch background briefing precomputation (free APIs only)
-    asyncio.create_task(_briefing_precompute_loop())
-    # Launch smart earnings scanner (runs at 8am + 12pm EST on weekdays)
-    asyncio.create_task(_smart_earnings_loop())
 
 # ============================================================
 # API Routes
