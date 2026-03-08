@@ -618,6 +618,26 @@ async def debug_echo(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.get("/api/presets")
+async def list_presets(request: Request):
+    """List all available preset_intent values the backend supports.
+
+    Useful for verifying frontend-backend sync. Returns the complete
+    list of PRESET_ALIASES and INTENT_PROFILES so the frontend can
+    check that every button's intent value resolves correctly.
+    """
+    if agent is None:
+        return JSONResponse(status_code=503, content={"error": "Agent not initialized"})
+    profiles = list(agent.INTENT_PROFILES.keys())
+    aliases = dict(agent.PRESET_ALIASES)
+    return {
+        "profiles": profiles,
+        "aliases": aliases,
+        "total_profiles": len(profiles),
+        "total_aliases": len(aliases),
+    }
+
+
 # ============================================================
 # Polymarket Gamma API Proxy
 # ============================================================
@@ -1534,6 +1554,11 @@ def _ok_envelope(result: dict, meta: dict) -> dict:
     result.setdefault("structured", {})
     result = _ensure_analysis(result, meta)
     result["type"] = "ok"
+    # Surface display_type at top level — frontend checks data.display_type
+    # for history categorization (e.g. saveToPromptHistory)
+    structured = result.get("structured", {})
+    if isinstance(structured, dict) and structured.get("display_type"):
+        result["display_type"] = structured["display_type"]
     result["meta"] = meta
     result["error"] = None
     result["conversation_id"] = meta.get("conversation_id")
