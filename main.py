@@ -1933,14 +1933,11 @@ async def query_agent(
                     _hist_category = "general"
                     _hist_intent = "query"
 
-                # Build content snippet for history entry
+                # Build content snippet for history entry — human-readable, not raw JSON
+                from data.history_renderer import render_structured_to_text
                 _hist_content = ""
                 if isinstance(result, dict):
-                    _hist_content = result.get("analysis", "")
-                    if not _hist_content and isinstance(result.get("structured"), dict):
-                        _hist_content = result["structured"].get("message", "") or result["structured"].get("summary", "")
-                    if not _hist_content:
-                        _hist_content = _json.dumps(result.get("structured", {}), default=str)[:4000]
+                    _hist_content = render_structured_to_text(result)
 
                 # Extract tickers + recommended prices from structured response
                 _hist_tickers = extract_tickers_from_structured(_structured_data) if _structured_data else None
@@ -2205,9 +2202,42 @@ async def delete_conv(request: Request, conv_id: str):
 @app.get("/api/history")
 @limiter.limit("30/minute")
 async def get_history(request: Request):
+    import asyncio as _aio
     from data.prompt_history import get_all
     user_id = getattr(request.state, "user_id", "default")
-    return get_all(user_id=user_id)
+    all_history = get_all(user_id=user_id)
+
+    # Enrich entries with current prices for tickers that have rec_price
+    ticker_set = set()
+    for key, bucket in all_history.items():
+        for entry in bucket.get("entries", []):
+            for t in entry.get("tickers", []):
+                if t.get("rec_price") and t.get("ticker"):
+                    ticker_set.add(t["ticker"])
+
+    current_prices = {}
+    if ticker_set and data_service:
+        async def _fetch(ticker):
+            try:
+                quote = await _aio.to_thread(data_service.finnhub.get_quote, ticker)
+                return ticker, quote.get("price")
+            except Exception:
+                return ticker, None
+        results = await _aio.gather(*[_fetch(t) for t in ticker_set])
+        current_prices = {t: p for t, p in results if p and p > 0}
+
+    # Inject current_price and pct_change into each ticker entry
+    if current_prices:
+        for key, bucket in all_history.items():
+            for entry in bucket.get("entries", []):
+                for t in entry.get("tickers", []):
+                    rec = t.get("rec_price")
+                    cur = current_prices.get(t.get("ticker"))
+                    if rec and cur:
+                        t["current_price"] = round(cur, 2)
+                        t["pct_change"] = round(((cur - rec) / rec) * 100, 2)
+
+    return all_history
 
 @app.get("/api/history/backtest-summary")
 @limiter.limit("10/minute")
