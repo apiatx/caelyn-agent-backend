@@ -2202,6 +2202,94 @@ async def clear_history_intent(request: Request, category: str, intent: str):
     success = clear_intent(category, intent, user_id=user_id)
     return {"success": success}
 
+# ── Backtest ──────────────────────────────────────────────────
+
+class BacktestItem(BaseModel):
+    ticker: str
+    recommended_price: float
+    recommended_date: str  # ISO date or human-readable
+
+class BacktestRequest(BaseModel):
+    items: List[BacktestItem]
+    model_used: Optional[str] = None  # which model made the recommendation
+
+@app.post("/api/backtest")
+@limiter.limit("20/minute")
+async def backtest_recommendations(request: Request, body: BacktestRequest):
+    """
+    Backtest historical recommendations: fetch current price via Finnhub,
+    calculate % gain/loss, and return a Haiku-generated summary row per ticker.
+    """
+    await _wait_for_init()
+    if not data_service:
+        raise HTTPException(status_code=503, detail="Service not ready")
+
+    from config import ANTHROPIC_API_KEY
+    import anthropic
+
+    results = []
+    for item in body.items:
+        ticker = item.ticker.upper()
+        quote = data_service.finnhub.get_quote(ticker)
+        current_price = quote.get("price")
+        if current_price and current_price > 0:
+            pct_change = round(((current_price - item.recommended_price) / item.recommended_price) * 100, 2)
+            results.append({
+                "ticker": ticker,
+                "recommended_price": item.recommended_price,
+                "recommended_date": item.recommended_date,
+                "current_price": current_price,
+                "pct_change": pct_change,
+                "direction": "gain" if pct_change >= 0 else "loss",
+            })
+        else:
+            results.append({
+                "ticker": ticker,
+                "recommended_price": item.recommended_price,
+                "recommended_date": item.recommended_date,
+                "current_price": None,
+                "pct_change": None,
+                "direction": "unknown",
+                "error": "Could not fetch current price",
+            })
+
+    # Build a quick Haiku summary
+    rows_text = "\n".join(
+        f"- {r['ticker']}: recommended ${r['recommended_price']:.2f} on {r['recommended_date']}, "
+        f"now ${r['current_price']:.2f}, {'+' if r['pct_change'] >= 0 else ''}{r['pct_change']}% {'gain' if r['pct_change'] >= 0 else 'loss'}"
+        if r["current_price"] else f"- {r['ticker']}: price unavailable"
+        for r in results
+    )
+
+    model_label = body.model_used or "the model"
+    haiku_prompt = (
+        f"You are a concise trading performance tracker. Given these backtest results from {model_label}, "
+        f"produce a brief, clean one-row-per-ticker summary table (use | separators) showing: "
+        f"Ticker | Rec Price | Current Price | % Change | Verdict. "
+        f"After the table, add ONE sentence overall verdict on how {model_label} performed.\n\n"
+        f"Results:\n{rows_text}"
+    )
+
+    summary = ""
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": haiku_prompt}],
+        )
+        summary = resp.content[0].text if resp.content else ""
+    except Exception as e:
+        print(f"[BACKTEST] Haiku summary error: {e}")
+        summary = rows_text  # fallback to raw data
+
+    return {
+        "results": results,
+        "summary": summary,
+        "model_used": body.model_used,
+        "as_of": _dt.now(_tz.utc).isoformat(),
+    }
+
 @app.get("/api/health")
 @limiter.limit("30/minute")
 async def health_check(request: Request):
