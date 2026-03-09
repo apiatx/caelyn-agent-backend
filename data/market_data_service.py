@@ -341,6 +341,8 @@ class MarketDataService:
                  altfins_key: str = None,
                  xai_key: str = None,
                  twelvedata_key: str = None):
+        # When True, skip LLM-backed web search (Perplexity/etc.) — standalone models use their own native search
+        self._skip_llm_web_search = False
         self.polygon = PolygonProvider(polygon_key)
         td_key = twelvedata_key or TWELVEDATA_API_KEY
         self.twelvedata = TwelveDataProvider(td_key) if td_key else None
@@ -382,6 +384,11 @@ class MarketDataService:
         self.tavily = self.web_search
         self.polymarket = PolymarketProvider()
         print("[INIT] Polymarket prediction markets provider initialized")
+
+    @property
+    def _web_search_allowed(self) -> bool:
+        """Return True if LLM-backed web search (Perplexity/Brave/Tavily) is allowed for this request."""
+        return self.web_search is not None and not self._skip_llm_web_search
 
     async def get_candles(self,
                           symbol: str,
@@ -534,8 +541,8 @@ class MarketDataService:
         tasks = []
         task_keys = []
 
-        # Web search (Brave/Tavily) replaces AlphaVantage for market news
-        if self.web_search:
+        # Web search (Perplexity-routed) replaces AlphaVantage for market news — only in agent_collab mode
+        if self._web_search_allowed:
             from api_budget import daily_budget
             if daily_budget.can_spend("web_search", 1):
                 tasks.append(
@@ -757,8 +764,8 @@ class MarketDataService:
             "finnhub_company_news",
         ]
 
-        # Web search for batch enrichment (background AI context, not user-facing)
-        if self.web_search:
+        # Web search for batch enrichment (Perplexity-routed) — only in agent_collab mode
+        if self._web_search_allowed:
             async_tasks.append(asyncio.wait_for(self.web_search.get_ticker_news_sentiment(ticker), timeout=10.0))
             async_keys.append("tavily_enrichment")
         else:
@@ -957,9 +964,9 @@ class MarketDataService:
 
         macro_snapshot = await self._build_macro_snapshot()
 
-        # Web search: macro narrative context (why markets are moving today)
+        # Web search: macro narrative context (Perplexity-routed) — only in agent_collab mode
         macro_news = {}
-        if self.web_search:
+        if self._web_search_allowed:
             if daily_budget.can_spend("web_search", 1):
                 try:
                     macro_news = await asyncio.wait_for(
@@ -2439,7 +2446,7 @@ class MarketDataService:
         # Web search enrichment: analyst previews and recent news for top earnings tickers
         earnings_news = []
         top_earnings_tickers = [t for t, _, _ in scored[:10]]
-        if self.web_search and top_earnings_tickers:
+        if self._web_search_allowed and top_earnings_tickers:
             if daily_budget.can_spend("web_search", 2):
                 try:
                     search_data = await asyncio.wait_for(
@@ -3561,7 +3568,7 @@ class MarketDataService:
 
             # Phase 2: Lightweight on-demand enrichment via web search
             enriched = {}
-            if self.web_search and priority_tickers:
+            if self._web_search_allowed and priority_tickers:
                 from api_budget import daily_budget
                 if daily_budget.can_spend("web_search", 3):
                     try:
@@ -3627,8 +3634,8 @@ class MarketDataService:
             self.stocktwits.get_trending(),
             asyncio.to_thread(self.finnhub.get_upcoming_earnings),
         ]
-        # News: prefer web_search (Perplexity→Brave→Tavily), FMP free tier is slow/unreliable
-        if self.web_search:
+        # News: prefer web_search (Perplexity-routed) in agent_collab, else FMP
+        if self._web_search_allowed:
             briefing_tasks.append(
                 asyncio.wait_for(
                     self.web_search.get_market_news(topic="stock market financial news today"),
@@ -3779,9 +3786,9 @@ class MarketDataService:
             ][:remaining_slots]
             priority_tickers.extend(filler)
 
-        # --- Web search batched enrichment (2-3 API calls instead of 40) ---
+        # --- Web search batched enrichment (Perplexity-routed) — only in agent_collab mode ---
         enriched = {}
-        if self.web_search:
+        if self._web_search_allowed:
             from api_budget import daily_budget
             if daily_budget.can_spend("web_search", 3):
                 try:
@@ -4922,9 +4929,9 @@ class MarketDataService:
                 self.COMMODITY_FUTURES_SYMBOLS.get(theme_key, ""),
             })
 
-        # Perplexity Sonar fallback: if FMP returned no commodity data, use Sonar
+        # Perplexity Sonar fallback: if FMP returned no commodity data, use Sonar — only in agent_collab mode
         sonar_used = False
-        if len(commodity_proxies) == 0 and self.web_search and hasattr(self.web_search, 'perplexity') and self.web_search.perplexity:
+        if len(commodity_proxies) == 0 and self._web_search_allowed and hasattr(self.web_search, 'perplexity') and self.web_search.perplexity:
             try:
                 sonar_commodities = await asyncio.wait_for(
                     self.web_search.perplexity.get_trending_commodities(),

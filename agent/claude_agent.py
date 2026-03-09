@@ -733,6 +733,8 @@ class TradingAgent:
                   f"response_style={orch_plan.get('response_style') if orch_plan else '?'}")
 
             query_info["reasoning_model"] = reasoning_model
+            # Gate LLM-backed web search (Perplexity) in data layer: only allowed in agent_collab mode
+            self.data._skip_llm_web_search = (reasoning_model != "agent_collab")
             if category == "chat":
                 market_data = await self._gather_chat_context(user_prompt, query_info)
                 data_size = len(json.dumps(market_data, default=str)) if market_data else 0
@@ -776,6 +778,8 @@ class TradingAgent:
                   f"response_style={plan.get('response_style') if plan else '?'}")
 
             query_info["reasoning_model"] = reasoning_model
+            # Gate LLM-backed web search (Perplexity) in data layer: only allowed in agent_collab mode
+            self.data._skip_llm_web_search = (reasoning_model != "agent_collab")
             if category == "chat":
                 market_data = await self._gather_chat_context(user_prompt, query_info)
                 data_size = len(json.dumps(market_data, default=str)) if market_data else 0
@@ -916,6 +920,8 @@ class TradingAgent:
                 pass
 
         raw_response = await self._ask_claude_with_timeout(user_prompt, claude_data, history, is_followup=is_followup, category=category, chatbox_mode=chatbox_mode, reasoning_model=reasoning_model)
+        # Reset web search gate after request completes
+        self.data._skip_llm_web_search = False
         claude_ms = int((time.time() - data_done_time) * 1000)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
 
@@ -2994,8 +3000,9 @@ class TradingAgent:
         if tickers:
             print(f"[Chat] Fetching quick data for mentioned tickers: {tickers[:3]}")
 
-            # Web search batched enrichment: 1 call instead of 9 (3 tickers × 3 calls each)
-            if self.data.web_search:
+            # Web search batched enrichment (Perplexity-routed): only in agent_collab mode
+            _chat_model = query_info.get("reasoning_model", "agent_collab")
+            if self.data.web_search and _chat_model == "agent_collab":
                 from api_budget import daily_budget
                 if daily_budget.can_spend("web_search", 1):
                     try:
@@ -3178,7 +3185,7 @@ class TradingAgent:
         effective_model = "claude" if reasoning_model == "agent_collab" else reasoning_model
         print(f"[AGENT] Sending to {effective_model} (selected={reasoning_model}): {data_size:,} chars of market data (category={category}, chatbox_mode={chatbox_mode})")
 
-        # Non-Claude models: try the selected model, fallback to Claude on failure
+        # Non-Claude models: use ONLY the selected model (no Claude fallback)
         if effective_model != "claude":
             try:
                 result = await asyncio.wait_for(
@@ -3187,9 +3194,11 @@ class TradingAgent:
                 )
                 if result:
                     return result
-                print(f"[AGENT] {reasoning_model} returned empty, falling back to Claude")
+                print(f"[AGENT] {reasoning_model} returned empty — NOT falling back to another model")
+                return json.dumps({"error": f"{reasoning_model} returned an empty response. Please try again.", "model_used": reasoning_model})
             except Exception as e:
-                print(f"[AGENT] {reasoning_model} failed ({e}), falling back to Claude")
+                print(f"[AGENT] {reasoning_model} failed ({e}) — NOT falling back to another model")
+                return json.dumps({"error": f"{reasoning_model} encountered an error: {str(e)}. Please try again.", "model_used": reasoning_model})
 
         # Claude path: use async client + web search
         # In standalone claude mode, always use web search for real-time data
@@ -3998,7 +4007,8 @@ class TradingAgent:
             # Web search enrichment: recent news for top screener results
             enriched_data = result.get("enriched_data", {})
             top_screen_tickers = list(enriched_data.keys())[:10]
-            if top_screen_tickers and self.data.web_search:
+            _screen_model = query_info.get("reasoning_model", "agent_collab")
+            if top_screen_tickers and self.data.web_search and _screen_model == "agent_collab":
                 from api_budget import daily_budget
                 if daily_budget.can_spend("web_search", 2):
                     try:
@@ -4416,8 +4426,8 @@ class TradingAgent:
                 if sym:
                     crypto_symbols.append(sym)
 
-        # Web search batched enrichment: 1-2 calls instead of 10 individual scrapes
-        if equity_tickers and self.data.web_search:
+        # Web search batched enrichment (Perplexity-routed): only in agent_collab mode
+        if equity_tickers and self.data.web_search and not self.data._skip_llm_web_search:
             from api_budget import daily_budget
             if daily_budget.can_spend("web_search", 2):
                 try:
