@@ -58,6 +58,18 @@ class JWTAuthMiddleware:
 
 @asynccontextmanager
 async def lifespan(app):
+    # Diagnostic: confirm storage backends
+    import os as _os
+    _db_url = _os.environ.get("REPLIT_DB_URL", "")
+    print(f"[STARTUP] REPLIT_DB_URL={'SET (' + _db_url[:40] + '...)' if _db_url else 'NOT SET — history will use ephemeral JSON files!'}")
+    try:
+        from data.prompt_history import _use_replit_db as _ph_db
+        from data.chat_history import _use_replit_db as _ch_db
+        print(f"[STARTUP] prompt_history backend: {'Replit DB' if _ph_db else 'JSON files (ephemeral!)'}")
+        print(f"[STARTUP] chat_history backend: {'Replit DB' if _ch_db else 'JSON files (ephemeral!)'}")
+    except Exception as _e:
+        print(f"[STARTUP] Storage diagnostic error: {_e}")
+
     import threading
     threading.Thread(target=_do_init, daemon=True).start()
     asyncio.create_task(_briefing_precompute_loop())
@@ -158,7 +170,13 @@ async def auth_login(body: LoginRequest):
         from data.prompt_history import migrate_legacy_history
         migrate_legacy_history(user_id)
     except Exception as e:
-        print(f"[AUTH] History migration error: {e}")
+        print(f"[AUTH] Prompt history migration error: {e}")
+
+    try:
+        from data.chat_history import migrate_file_history_to_db
+        migrate_file_history_to_db()
+    except Exception as e:
+        print(f"[AUTH] Chat history migration error: {e}")
 
     return {"token": token, "user_id": user_id}
 
