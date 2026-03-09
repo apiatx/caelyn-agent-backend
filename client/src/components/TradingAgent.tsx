@@ -2702,6 +2702,13 @@ export default function TradingAgent() {
                     ))}
                   </div>
                 )}
+                {panel.reasoningModel && (
+                  <div style={{ padding:'4px 16px 4px', textAlign:'right' }}>
+                    <span style={{ fontSize:8, color: panel.reasoningModel === 'agent_collab' ? '#a78bfa' : C.dim, fontFamily:font, fontWeight:500, opacity:0.6 }}>
+                      {panel.reasoningModel === 'agent_collab' ? 'Agent Collab' : panel.reasoningModel === 'gpt-4o' ? 'GPT-4o' : panel.reasoningModel.charAt(0).toUpperCase() + panel.reasoningModel.slice(1)}
+                    </span>
+                  </div>
+                )}
                 <FollowUpInput panelId={panel.id} onSubmit={sendFollowUp} C={C} font={font} sansFont={sansFont} suggestions={(() => {
                   const thread = panel.thread || [];
                   for (let i = thread.length - 1; i >= 0; i--) {
