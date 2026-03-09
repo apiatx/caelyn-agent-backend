@@ -3195,10 +3195,10 @@ class TradingAgent:
                 if result:
                     return result
                 print(f"[AGENT] {reasoning_model} returned empty — NOT falling back to another model")
-                return json.dumps({"error": f"{reasoning_model} returned an empty response. Please try again.", "model_used": reasoning_model})
+                return json.dumps({"display_type": "chat", "message": f"{reasoning_model} returned an empty response. Please try again."})
             except Exception as e:
                 print(f"[AGENT] {reasoning_model} failed ({e}) — NOT falling back to another model")
-                return json.dumps({"error": f"{reasoning_model} encountered an error: {str(e)}. Please try again.", "model_used": reasoning_model})
+                return json.dumps({"display_type": "chat", "message": f"{reasoning_model} encountered an error: {str(e)}. Please try again."})
 
         # Claude path: use async client + web search
         # In standalone claude mode, always use web search for real-time data
