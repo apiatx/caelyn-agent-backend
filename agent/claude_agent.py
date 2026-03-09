@@ -2340,7 +2340,7 @@ class TradingAgent:
             if not api_key:
                 raise ValueError("No GEMINI_API_KEY")
             resp = _httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}",
                 headers={"Content-Type": "application/json"},
                 json={
                     "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -2421,12 +2421,15 @@ class TradingAgent:
                 contents.append({"role": role, "parts": [{"text": m["content"]}]})
             import httpx as _httpx
             resp = _httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}",
                 headers={"Content-Type": "application/json"},
                 json={
                     "system_instruction": {"parts": [{"text": system_prompt}]},
                     "contents": contents,
-                    "generationConfig": {"maxOutputTokens": 500},
+                    "generationConfig": {
+                        "maxOutputTokens": 500,
+                        "thinkingConfig": {"thinkingLevel": "low"},
+                    },
                 },
                 timeout=15.0,
             )
@@ -2507,7 +2510,7 @@ class TradingAgent:
                 contents.append({"role": role, "parts": [{"text": m["content"]}]})
             import httpx as _httpx
             resp = _httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}",
                 headers={"Content-Type": "application/json"},
                 json={
                     "system_instruction": {"parts": [{"text": system_text}]},
@@ -3362,7 +3365,7 @@ class TradingAgent:
                     body["tools"] = [{"google_search": {}}]
                 async with httpx.AsyncClient(timeout=90.0) as client:
                     resp = await client.post(
-                        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+                        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}",
                         headers={"Content-Type": "application/json"},
                         json=body,
                     )
@@ -3375,8 +3378,8 @@ class TradingAgent:
                     grounding = data.get("candidates", [{}])[0].get("groundingMetadata")
                     if grounding:
                         queries = grounding.get("webSearchQueries", [])
-                        print(f"[ALT_MODEL] gemini-2.5-flash{search_tag} grounded with {len(queries)} searches")
-                    print(f"[ALT_MODEL] gemini-2.5-flash{search_tag} responded: {len(text):,} chars")
+                        print(f"[ALT_MODEL] gemini-3-flash-preview{search_tag} grounded with {len(queries)} searches")
+                    print(f"[ALT_MODEL] gemini-3-flash-preview{search_tag} responded: {len(text):,} chars")
                     return text
             except httpx.HTTPStatusError as e:
                 print(f"[ALT_MODEL] gemini HTTP error: {e.response.status_code} {e.response.text[:500]}")
