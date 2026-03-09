@@ -108,6 +108,82 @@ interface HistoryEntry {
   query?: string;
 }
 
+interface BacktestItem {
+  ticker: string;
+  recommended_price: number;
+  recommended_date: string;
+}
+
+interface BacktestResult {
+  ticker: string;
+  recommended_price: number;
+  recommended_date: string;
+  current_price: number;
+  pct_change: number;
+  direction: string;
+}
+
+interface BacktestResponse {
+  results: BacktestResult[];
+  summary: string;
+  model_used: string;
+  as_of: string;
+}
+
+function parsePrice(val: any): number | null {
+  if (val == null) return null;
+  const s = String(val).replace(/[$,]/g, '').trim();
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+function extractBacktestItems(entry: HistoryEntry): BacktestItem[] {
+  let parsed: any = null;
+  try { parsed = JSON.parse(entry.content); } catch { return []; }
+
+  const recDate = new Date(entry.timestamp * 1000).toISOString().split('T')[0];
+  const items: BacktestItem[] = [];
+  const structured = parsed?.structured;
+
+  // trades: structured.top_trades[].ticker + .entry
+  if (structured?.top_trades && Array.isArray(structured.top_trades)) {
+    for (const t of structured.top_trades) {
+      const price = parsePrice(t.entry || t.price || t.entry_price);
+      if (t.ticker && price) items.push({ ticker: t.ticker, recommended_price: price, recommended_date: recDate });
+    }
+  }
+
+  // investments: structured.picks[].ticker + .price
+  if (structured?.picks && Array.isArray(structured.picks)) {
+    for (const p of structured.picks) {
+      const price = parsePrice(p.price || p.entry || p.entry_price);
+      if (p.ticker && price) items.push({ ticker: p.ticker, recommended_price: price, recommended_date: recDate });
+    }
+  }
+
+  // analysis: structured.ticker + structured.price
+  if (structured?.ticker && !items.length) {
+    const price = parsePrice(structured.price || structured.entry || structured.current_price);
+    if (price) items.push({ ticker: structured.ticker, recommended_price: price, recommended_date: recDate });
+  }
+
+  // Also check top-level arrays (some responses nest differently)
+  if (!items.length && parsed?.top_trades && Array.isArray(parsed.top_trades)) {
+    for (const t of parsed.top_trades) {
+      const price = parsePrice(t.entry || t.price || t.entry_price);
+      if (t.ticker && price) items.push({ ticker: t.ticker, recommended_price: price, recommended_date: recDate });
+    }
+  }
+  if (!items.length && parsed?.picks && Array.isArray(parsed.picks)) {
+    for (const p of parsed.picks) {
+      const price = parsePrice(p.price || p.entry || p.entry_price);
+      if (p.ticker && price) items.push({ ticker: p.ticker, recommended_price: price, recommended_date: recDate });
+    }
+  }
+
+  return items;
+}
+
 interface HistoryData {
   [key: string]: {
     category: string;
@@ -216,6 +292,10 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
   const [history, setHistory] = useState<HistoryData>({});
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<View>({ level: 'categories' });
+  const [backtestLoading, setBacktestLoading] = useState(false);
+  const [backtestResult, setBacktestResult] = useState<BacktestResponse | null>(null);
+  const [backtestError, setBacktestError] = useState<string | null>(null);
+  const [backtestEntryId, setBacktestEntryId] = useState<string | null>(null);
 
   const fetchHistory = useCallback(async () => {
     setLoading(true);
@@ -436,6 +516,97 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
     return <div style={{ padding: '8px 0' }}>{entries.map(renderItem)}</div>;
   }
 
+  async function runBacktest(entry: HistoryEntry) {
+    const items = extractBacktestItems(entry);
+    if (items.length === 0) { setBacktestError('No tickers with prices found in this entry'); return; }
+    setBacktestLoading(true);
+    setBacktestError(null);
+    setBacktestResult(null);
+    setBacktestEntryId(entry.id);
+    try {
+      const modelLabel = entry.model_used ? modelDisplayName(entry.model_used) : 'unknown';
+      const res = await fetch(`${AGENT_BACKEND_URL}/api/backtest`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ items, model_used: modelLabel }),
+      });
+      if (!res.ok) throw new Error(`Backtest failed (${res.status})`);
+      const data: BacktestResponse = await res.json();
+      setBacktestResult(data);
+    } catch (e: any) {
+      setBacktestError(e.message || 'Backtest request failed');
+    } finally {
+      setBacktestLoading(false);
+    }
+  }
+
+  function renderBacktestResults() {
+    if (!backtestResult && !backtestLoading && !backtestError) return null;
+    const isCurrentEntry = view.level === 'detail' && backtestEntryId === view.entry.id;
+    if (!isCurrentEntry) return null;
+
+    if (backtestLoading) {
+      return (
+        <div style={{ padding: '12px 14px', background: `${C.bg}cc`, border: `1px solid ${C.border}`, borderRadius: 8, marginTop: 10 }}>
+          <span style={{ color: C.dim, fontSize: 10, fontFamily: font }}>Running backtest...</span>
+        </div>
+      );
+    }
+
+    if (backtestError) {
+      return (
+        <div style={{ padding: '10px 14px', background: `${C.red}08`, border: `1px solid ${C.red}30`, borderRadius: 8, marginTop: 10 }}>
+          <span style={{ color: C.red, fontSize: 10, fontFamily: font }}>{backtestError}</span>
+        </div>
+      );
+    }
+
+    if (!backtestResult) return null;
+    const { results, summary, as_of } = backtestResult;
+
+    return (
+      <div style={{ marginTop: 10, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden', background: C.card }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+          <span style={{ color: C.bright, fontSize: 10, fontWeight: 700, fontFamily: font, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Backtest Results</span>
+          <button onClick={() => { setBacktestResult(null); setBacktestEntryId(null); }} style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer', fontSize: 10, fontFamily: font, padding: '2px 4px' }}>dismiss</button>
+        </div>
+        {/* Table header */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', padding: '6px 12px', borderBottom: `1px solid ${C.border}`, background: `${C.bg}80` }}>
+          <span style={{ color: C.dim, fontSize: 8, fontWeight: 700, fontFamily: font, textTransform: 'uppercase' }}>Ticker</span>
+          <span style={{ color: C.dim, fontSize: 8, fontWeight: 700, fontFamily: font, textTransform: 'uppercase', textAlign: 'right' }}>Rec Price</span>
+          <span style={{ color: C.dim, fontSize: 8, fontWeight: 700, fontFamily: font, textTransform: 'uppercase', textAlign: 'right' }}>Now</span>
+          <span style={{ color: C.dim, fontSize: 8, fontWeight: 700, fontFamily: font, textTransform: 'uppercase', textAlign: 'right' }}>% Change</span>
+        </div>
+        {/* Table rows */}
+        {results.map((r, i) => {
+          const color = r.direction === 'gain' ? C.green : r.direction === 'loss' ? C.red : C.dim;
+          return (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', padding: '5px 12px', borderBottom: i < results.length - 1 ? `1px solid ${C.border}` : 'none' }}>
+              <span style={{ color: C.bright, fontSize: 10, fontWeight: 600, fontFamily: font }}>{r.ticker}</span>
+              <span style={{ color: C.dim, fontSize: 10, fontFamily: font, textAlign: 'right' }}>${r.recommended_price.toFixed(2)}</span>
+              <span style={{ color: C.text, fontSize: 10, fontFamily: font, textAlign: 'right' }}>${r.current_price.toFixed(2)}</span>
+              <span style={{ color, fontSize: 10, fontWeight: 700, fontFamily: font, textAlign: 'right' }}>
+                {r.pct_change >= 0 ? '+' : ''}{r.pct_change.toFixed(1)}%
+              </span>
+            </div>
+          );
+        })}
+        {/* Summary */}
+        {summary && (
+          <div style={{ padding: '8px 12px', borderTop: `1px solid ${C.border}`, background: `${C.bg}60` }}>
+            <span style={{ color: C.text, fontSize: 10, fontFamily: sansFont, lineHeight: 1.5 }}>{summary}</span>
+          </div>
+        )}
+        {/* As-of timestamp */}
+        {as_of && (
+          <div style={{ padding: '4px 12px 6px', textAlign: 'right' }}>
+            <span style={{ color: C.dim, fontSize: 8, fontFamily: font }}>Prices as of {new Date(as_of).toLocaleString()}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderDetail() {
     if (view.level !== 'detail') return null;
     const { entry } = view;
@@ -445,6 +616,8 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
     try { parsed = JSON.parse(entry.content); } catch { /* plain text */ }
 
     const displayContent = parsed?.analysis || parsed?.structured?.message || parsed?.message || entry.content;
+    const backtestItems = extractBacktestItems(entry);
+    const canBacktest = backtestItems.length > 0;
 
     return (
       <div style={{ padding: 16, flex: 1, overflowY: 'auto' }}>
@@ -463,6 +636,20 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
               {entry.model_used === 'agent_collab' ? 'Agent Collab' : entry.model_used}
             </span>
           )}
+          {canBacktest && (
+            <button
+              onClick={() => runBacktest(entry)}
+              disabled={backtestLoading && backtestEntryId === entry.id}
+              style={{
+                marginLeft: 'auto', padding: '3px 10px', borderRadius: 6, fontSize: 9, fontWeight: 700,
+                fontFamily: font, background: `${C.gold}15`, color: C.gold,
+                border: `1px solid ${C.gold}40`, cursor: backtestLoading ? 'wait' : 'pointer',
+                transition: 'all 0.15s', textTransform: 'uppercase', letterSpacing: '0.04em',
+              }}
+            >
+              {backtestLoading && backtestEntryId === entry.id ? 'Testing...' : 'Backtest'}
+            </button>
+          )}
         </div>
         {entry.query && (
           <div style={{
@@ -478,10 +665,11 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
           color: C.text, fontSize: 12, fontFamily: sansFont, lineHeight: 1.7,
           whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           padding: 14, background: C.card, border: `1px solid ${C.border}`,
-          borderRadius: 8, maxHeight: 'calc(100vh - 300px)', overflowY: 'auto',
+          borderRadius: 8, maxHeight: 'calc(100vh - 340px)', overflowY: 'auto',
         }}>
           {displayContent}
         </div>
+        {renderBacktestResults()}
       </div>
     );
   }
