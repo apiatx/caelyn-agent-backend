@@ -3130,6 +3130,7 @@ class TradingAgent:
         "ticker_analysis", "investments", "portfolio_review", "followup",
         "crypto", "best_trades", "cross_market", "prediction_markets",
         "chat", "sector_rotation", "earnings_catalyst", "cross_asset_trending",
+        "daily_briefing", "briefing", "social_momentum",
     }
 
     # Extended thinking budgets (tokens) for Sonnet 4.5 categories.
@@ -3176,7 +3177,7 @@ class TradingAgent:
 
     VALID_REASONING_MODELS = {"claude", "gpt-4o", "grok", "gemini", "perplexity", "agent_collab"}
 
-    WEB_SEARCH_CATEGORIES = {"cross_asset_trending", "daily_briefing", "best_trades"}
+    WEB_SEARCH_CATEGORIES = {"cross_asset_trending", "daily_briefing", "best_trades", "earnings_catalyst"}
 
     async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude") -> str:
         data_size = len(json.dumps(market_data, default=str)) if market_data else 0
@@ -3202,8 +3203,8 @@ class TradingAgent:
 
         # Claude path: use async client + web search
         # In standalone claude mode, always use web search for real-time data
-        # In agent_collab mode, only use web search for specific categories (Grok/Perplexity handle the rest)
-        claude_needs_web_search = (reasoning_model == "claude") or (category in self.WEB_SEARCH_CATEGORIES)
+        # In agent_collab mode, Grok+Perplexity already provide real-time context — skip web search to avoid timeout
+        claude_needs_web_search = (reasoning_model == "claude") or (reasoning_model == "agent_collab" and category in ("daily_briefing", "briefing", "best_trades"))
         if claude_needs_web_search:
             try:
                 return await asyncio.wait_for(
@@ -3246,6 +3247,8 @@ class TradingAgent:
             user_prompt, market_data, history, is_followup, category, chatbox_mode
         )
         oai_messages = self._prompt_to_openai_messages(system_blocks, messages)
+        context_size = sum(len(m.get("content", "")) for m in oai_messages)
+        print(f"[ALT_MODEL] Preparing {reasoning_model}: context_size={context_size:,} chars, token_limit={token_limit}, category={category}")
         # Individual models always get web search — they're the only LLM and need live data
         use_web_search = True
 
@@ -3261,7 +3264,7 @@ class TradingAgent:
                     # Responses API with web search tool
                     resp = await client.responses.create(
                         model="gpt-4o",
-                        tools=[{"type": "web_search_preview"}],
+                        tools=[{"type": "web_search"}],
                         input=oai_messages,
                         max_output_tokens=token_limit,
                     )
@@ -3278,7 +3281,9 @@ class TradingAgent:
                     print(f"[ALT_MODEL] gpt-4o responded: {len(text):,} chars")
                 return text
             except Exception as e:
+                import traceback
                 print(f"[ALT_MODEL] gpt-4o error: {e}")
+                traceback.print_exc()
                 return ""
 
         if reasoning_model == "grok":
@@ -3286,9 +3291,9 @@ class TradingAgent:
             if not api_key:
                 print("[ALT_MODEL] No XAI_API_KEY set")
                 return ""
+            # Try Responses API first (supports web_search + x_search tools)
             try:
                 from openai import AsyncOpenAI
-                # xAI Responses API (OpenAI-compatible) with reasoning + live search
                 client = AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
                 tools = []
                 if use_web_search:
@@ -3304,29 +3309,35 @@ class TradingAgent:
                 text = resp.output_text or ""
                 search_tag = "+web_search+x_search" if use_web_search else ""
                 print(f"[ALT_MODEL] grok-3-fast{search_tag} responded: {len(text):,} chars")
-                return text
+                if text:
+                    return text
+                print("[ALT_MODEL] grok Responses API returned empty, trying chat completions")
             except Exception as e:
-                print(f"[ALT_MODEL] grok error: {e}")
-                # Fallback to raw httpx chat completions if Responses API fails
-                try:
-                    async with httpx.AsyncClient(timeout=90.0) as hclient:
-                        resp = await hclient.post(
-                            "https://api.x.ai/v1/chat/completions",
-                            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                            json={
-                                "model": "grok-3-fast",
-                                "max_tokens": token_limit,
-                                "messages": oai_messages,
-                            },
-                        )
-                        resp.raise_for_status()
-                        data = resp.json()
-                        text = data["choices"][0]["message"]["content"] or ""
-                        print(f"[ALT_MODEL] grok-3-fast (chat fallback) responded: {len(text):,} chars")
-                        return text
-                except Exception as e2:
-                    print(f"[ALT_MODEL] grok chat fallback also failed: {e2}")
-                    return ""
+                import traceback
+                print(f"[ALT_MODEL] grok Responses API error: {e}")
+                traceback.print_exc()
+            # Fallback to chat completions (no search tools, but still gets response)
+            try:
+                async with httpx.AsyncClient(timeout=90.0) as hclient:
+                    resp = await hclient.post(
+                        "https://api.x.ai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        json={
+                            "model": "grok-3-fast",
+                            "max_tokens": token_limit,
+                            "messages": oai_messages,
+                        },
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    text = data["choices"][0]["message"]["content"] or ""
+                    print(f"[ALT_MODEL] grok-3-fast (chat fallback) responded: {len(text):,} chars")
+                    return text
+            except Exception as e2:
+                import traceback
+                print(f"[ALT_MODEL] grok chat fallback also failed: {e2}")
+                traceback.print_exc()
+                return ""
 
         if reasoning_model == "gemini":
             api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -3367,8 +3378,13 @@ class TradingAgent:
                         print(f"[ALT_MODEL] gemini-2.5-flash{search_tag} grounded with {len(queries)} searches")
                     print(f"[ALT_MODEL] gemini-2.5-flash{search_tag} responded: {len(text):,} chars")
                     return text
+            except httpx.HTTPStatusError as e:
+                print(f"[ALT_MODEL] gemini HTTP error: {e.response.status_code} {e.response.text[:500]}")
+                return ""
             except Exception as e:
+                import traceback
                 print(f"[ALT_MODEL] gemini error: {e}")
+                traceback.print_exc()
                 return ""
 
         if reasoning_model == "perplexity":
@@ -3715,7 +3731,55 @@ class TradingAgent:
             return await self.data.wide_scan_and_rank("volume_spikes", filters)
 
         elif category == "earnings_catalyst":
-            return await self.data.get_earnings_catalyst_watch()
+            _cat_model = query_info.get("reasoning_model", "agent_collab")
+            # Base earnings data (always runs — proprietary data APIs)
+            earnings_data = await self.data.get_earnings_catalyst_watch()
+            if not isinstance(earnings_data, dict):
+                earnings_data = {}
+            # In agent_collab mode, supplement with Perplexity news + Grok X scan for broader catalysts
+            if _cat_model == "agent_collab":
+                catalyst_tasks = []
+                # Perplexity: upcoming catalysts beyond just earnings
+                if self.data.web_search and getattr(self.data.web_search, 'perplexity', None):
+                    async def _fetch_catalyst_news():
+                        try:
+                            return await asyncio.wait_for(
+                                self.data.web_search.perplexity.get_market_news(
+                                    "upcoming stock market catalysts FDA approvals product launches conferences analyst days IPOs lockup expirations this week"
+                                ),
+                                timeout=15.0,
+                            )
+                        except Exception as e:
+                            print(f"[CATALYST] Perplexity catalyst news failed: {e}")
+                            return {}
+                    catalyst_tasks.append(("catalyst_news", _fetch_catalyst_news()))
+                # Grok: X sentiment on upcoming catalysts
+                if self.data.xai:
+                    async def _fetch_x_catalysts():
+                        try:
+                            return await asyncio.wait_for(
+                                self.data.xai.get_batch_sentiment(
+                                    list(earnings_data.get("enriched_data", {}).keys())[:5]
+                                ),
+                                timeout=15.0,
+                            )
+                        except Exception as e:
+                            print(f"[CATALYST] Grok X sentiment failed: {e}")
+                            return {}
+                    catalyst_tasks.append(("x_catalyst_sentiment", _fetch_x_catalysts()))
+                if catalyst_tasks:
+                    results = await asyncio.gather(
+                        *[t for _, t in catalyst_tasks],
+                        return_exceptions=True,
+                    )
+                    for (key, _), result in zip(catalyst_tasks, results):
+                        if not isinstance(result, Exception) and result:
+                            earnings_data[key] = result
+                            print(f"[CATALYST] Added {key}: {len(str(result)):,} chars")
+            # Note: for standalone models (claude, gpt-4o, etc.), their native web search
+            # in the reasoning step will handle finding broader catalysts beyond earnings.
+            # The system prompt instructs them to search for upcoming catalysts broadly.
+            return earnings_data
 
         elif category == "sector_rotation":
             _rot_model = query_info.get("reasoning_model", "agent_collab")
@@ -3813,7 +3877,7 @@ class TradingAgent:
                 traceback.print_exc()
                 return {"error": str(e), "filters_applied": {}, "total_results": 0, "results": []}
 
-        elif category == "briefing":
+        elif category in ("briefing", "daily_briefing"):
             briefing_data = await self.data.get_morning_briefing()
             if isinstance(briefing_data, dict):
                 briefing_tickers = []
@@ -5709,6 +5773,12 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             model = "claude-sonnet-4-5-20250929"
             token_limit = 6000
         elif category == "sector_rotation":
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 6000
+        elif category in ("daily_briefing", "briefing"):
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 8000
+        elif category == "social_momentum":
             model = "claude-sonnet-4-5-20250929"
             token_limit = 6000
         elif category == "followup":
