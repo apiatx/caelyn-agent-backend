@@ -493,8 +493,10 @@ export default function TradingAgent() {
       ...(csvData ? { csv_data: csvData } : {}),
     };
     if (collabConfig) {
-      payload.reasoning_model = collabConfig.preset;
-      if (collabConfig.preset === 'all_agents' && collabConfig.agents.length > 0) {
+      if (collabConfig.preset === 'default') {
+        payload.reasoning_model = 'agent_collab';
+      } else {
+        payload.reasoning_model = 'all_agents';
         payload.collab_agents = collabConfig.agents;
         payload.primary_model = collabConfig.primary;
       }
@@ -608,11 +610,11 @@ export default function TradingAgent() {
         timestamp: Date.now(),
         conversationId: data.conversation_id || conversationId,
         thread: [],
-        reasoningModel: data?.meta?.reasoning_model || (collabConfig ? collabConfig.preset : selectedModel),
+        reasoningModel: data?.meta?.reasoning_model || (collabConfig ? (collabConfig.preset === 'default' ? 'agent_collab' : 'all_agents') : selectedModel),
       };
       setPanels(prev => [...prev, newPanel]);
       // Auto-save ALL successful responses to history
-      const usedModel = data?.meta?.reasoning_model || (collabConfig ? collabConfig.preset : selectedModel);
+      const usedModel = data?.meta?.reasoning_model || (collabConfig ? (collabConfig.preset === 'default' ? 'agent_collab' : 'all_agents') : selectedModel);
       if (presetIntent) {
         saveToPromptHistory(presetIntent, raw, data.display_type || data.type, usedModel, queryText || presetIntent);
       } else if (queryText) {
@@ -2562,29 +2564,35 @@ export default function TradingAgent() {
         {csvFileName && <div style={{ display:'flex', alignItems:'center', gap:4, padding:'2px 8px', background:'rgba(32,144,208,0.15)', border:'1px solid rgba(32,144,208,0.3)', borderRadius:3, fontSize:10, color:'#a78bfa', fontFamily:'monospace', flexShrink:0, maxWidth:160, overflow:'hidden' }}><span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{csvFileName}</span><span onClick={() => { setCsvData(null); setCsvFileName(null); }} style={{ cursor:'pointer', color:'#ef4444', fontWeight:700, flexShrink:0 }}>x</span></div>}
         <div style={{ display:'flex', gap:3, alignItems:'center', flexShrink:0 }}>
           <div className="agent-collab-wrapper" style={{ position:'relative', display:'inline-block' }}>
-            <button key="custom_collab" onClick={() => { if (!collabConfig) setCollabConfig({ preset: 'agent_collab', agents: ['grok', 'perplexity'], primary: 'claude' }); }} style={{ padding:'3px 8px', borderRadius:10, fontSize:9, fontWeight:700, fontFamily:"'JetBrains Mono', monospace", background: collabConfig ? 'linear-gradient(135deg, #8b5cf6, #3b82f6, #06b6d4)' : 'rgba(139,92,246,0.08)', color: collabConfig ? '#ffffff' : '#a78bfa', border: collabConfig ? 'none' : '1px solid rgba(139,92,246,0.25)', cursor:'pointer', transition:'all 0.15s', textShadow: collabConfig ? '0 1px 2px rgba(0,0,0,0.3)' : 'none', boxShadow: collabConfig ? '0 0 8px rgba(139,92,246,0.4)' : 'none' }}>
+            <button key="custom_collab" onClick={() => { if (!collabConfig) setCollabConfig({ preset: 'default', agents: ['grok', 'perplexity'], primary: 'claude' }); }} style={{ padding:'3px 8px', borderRadius:10, fontSize:9, fontWeight:700, fontFamily:"'JetBrains Mono', monospace", background: collabConfig ? 'linear-gradient(135deg, #8b5cf6, #3b82f6, #06b6d4)' : 'rgba(139,92,246,0.08)', color: collabConfig ? '#ffffff' : '#a78bfa', border: collabConfig ? 'none' : '1px solid rgba(139,92,246,0.25)', cursor:'pointer', transition:'all 0.15s', textShadow: collabConfig ? '0 1px 2px rgba(0,0,0,0.3)' : 'none', boxShadow: collabConfig ? '0 0 8px rgba(139,92,246,0.4)' : 'none' }}>
               Caelyn
             </button>
             <div className="agent-collab-dropdown" style={{ position:'absolute', top:'100%', left:0, minWidth:280, background:'rgba(15,15,30,0.98)', border:'1px solid rgba(139,92,246,0.25)', borderRadius:12, boxShadow:'0 8px 32px rgba(0,0,0,0.5)', padding:'8px 0', zIndex:1000, paddingTop:12 }}>
               {/* PRESETS */}
+              {(() => {
+                const presetDefs = [
+                  { id: 'default', label: 'Default', primary: 'claude', agents: ['grok', 'perplexity'], lock_agents: true, lock_reasoning: true },
+                  { id: 'full_collab', label: 'Full Collaboration', primary: 'claude', agents: ['claude', 'grok', 'gpt-4o', 'gemini', 'perplexity'], lock_agents: true, lock_reasoning: false },
+                  { id: 'custom_collab', label: 'Custom Collaboration', primary: 'claude', agents: ['grok', 'perplexity'], lock_agents: false, lock_reasoning: false },
+                ];
+                const activePreset = presetDefs.find(p => p.id === collabConfig?.preset) || presetDefs[0];
+                const isReasoningLocked = activePreset.lock_reasoning;
+                const isAgentsLocked = activePreset.lock_agents;
+                return (<>
               <div style={{ padding:'6px 14px 8px', borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
                 <div style={{ fontSize:10, textTransform:'uppercase', letterSpacing:'0.5px', color:'#6b7280', marginBottom:6, fontFamily:"'JetBrains Mono', monospace", fontWeight:700 }}>Presets</div>
-                {[
-                  { id: 'agent_collab', label: 'Default', primary: 'claude', agents: ['grok', 'perplexity'] },
-                  { id: 'all_agents', label: 'All Agents', primary: 'claude', agents: ['claude', 'grok', 'gpt-4o', 'gemini', 'perplexity'] },
-                  ...(collabOptions?.presets?.filter((p: any) => !['agent_collab','all_agents'].includes(p.id)) || []),
-                ].map((preset: any) => (
+                {presetDefs.map((preset) => (
                   <div key={preset.id} onClick={() => { setCollabConfig({ preset: preset.id, agents: preset.agents, primary: preset.primary }); }} style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 8px', cursor:'pointer', borderRadius:6, background: collabConfig?.preset === preset.id ? 'rgba(139,92,246,0.15)' : 'transparent', transition:'background 0.1s' }}>
                     <div style={{ width:14, height:14, borderRadius:'50%', border: collabConfig?.preset === preset.id ? '2px solid #8b5cf6' : '2px solid #4b5563', display:'flex', alignItems:'center', justifyContent:'center' }}>
                       {collabConfig?.preset === preset.id && <div style={{ width:7, height:7, borderRadius:'50%', background:'#8b5cf6' }} />}
                     </div>
-                    <span style={{ fontSize:11, color: collabConfig?.preset === preset.id ? '#e0e0e0' : '#9ca3af', fontFamily:"'JetBrains Mono', monospace" }}>{preset.label}</span>
+                    <span style={{ fontSize:11, color: collabConfig?.preset === preset.id ? '#e0e0e0' : '#9ca3af', fontFamily:"'JetBrains Mono', monospace" }}>{preset.label || preset.name}</span>
                   </div>
                 ))}
               </div>
               {/* REASONING MODEL */}
-              <div style={{ padding:'6px 14px 8px', borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
-                <div style={{ fontSize:10, textTransform:'uppercase', letterSpacing:'0.5px', color:'#6b7280', marginBottom:6, fontFamily:"'JetBrains Mono', monospace", fontWeight:700 }}>Reasoning Model</div>
+              <div style={{ padding:'6px 14px 8px', borderBottom:'1px solid rgba(255,255,255,0.06)', opacity: isReasoningLocked ? 0.5 : 1, pointerEvents: isReasoningLocked ? 'none' : 'auto' }}>
+                <div style={{ fontSize:10, textTransform:'uppercase', letterSpacing:'0.5px', color:'#6b7280', marginBottom:6, fontFamily:"'JetBrains Mono', monospace", fontWeight:700, display:'flex', alignItems:'center', gap:4 }}>Reasoning Model{isReasoningLocked && <span title="Locked in this preset" style={{ fontSize:9, opacity:0.7 }}>🔒</span>}</div>
                 {(collabOptions?.reasoning_models || [
                   { id: 'claude', label: 'Claude', icon: '🟣' },
                   { id: 'gpt-4o', label: 'ChatGPT', icon: '🟢' },
@@ -2592,7 +2600,7 @@ export default function TradingAgent() {
                   { id: 'grok', label: 'Grok', icon: '⚡' },
                   { id: 'perplexity', label: 'Perplexity', icon: '🌐' },
                 ]).map((m: any) => (
-                  <div key={m.id} onClick={() => { setCollabConfig(prev => prev ? { ...prev, primary: m.id } : { preset: 'agent_collab', agents: ['grok', 'perplexity'], primary: m.id }); }} style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 8px', cursor:'pointer', borderRadius:6, background: collabConfig?.primary === m.id ? 'rgba(59,130,246,0.15)' : 'transparent', transition:'background 0.1s' }}>
+                  <div key={m.id} onClick={() => { if (!isReasoningLocked) setCollabConfig(prev => prev ? { ...prev, primary: m.id } : { preset: 'default', agents: ['grok', 'perplexity'], primary: m.id }); }} style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 8px', cursor:'pointer', borderRadius:6, background: collabConfig?.primary === m.id ? 'rgba(59,130,246,0.15)' : 'transparent', transition:'background 0.1s' }}>
                     <div style={{ width:14, height:14, borderRadius:'50%', border: collabConfig?.primary === m.id ? '2px solid #3b82f6' : '2px solid #4b5563', display:'flex', alignItems:'center', justifyContent:'center' }}>
                       {collabConfig?.primary === m.id && <div style={{ width:7, height:7, borderRadius:'50%', background:'#3b82f6' }} />}
                     </div>
@@ -2602,8 +2610,8 @@ export default function TradingAgent() {
                 ))}
               </div>
               {/* COLLABORATING AGENTS */}
-              <div style={{ padding:'6px 14px 8px' }}>
-                <div style={{ fontSize:10, textTransform:'uppercase', letterSpacing:'0.5px', color:'#6b7280', marginBottom:6, fontFamily:"'JetBrains Mono', monospace", fontWeight:700 }}>Collaborating Agents</div>
+              <div style={{ padding:'6px 14px 8px', opacity: isAgentsLocked ? 0.5 : 1, pointerEvents: isAgentsLocked ? 'none' : 'auto' }}>
+                <div style={{ fontSize:10, textTransform:'uppercase', letterSpacing:'0.5px', color:'#6b7280', marginBottom:6, fontFamily:"'JetBrains Mono', monospace", fontWeight:700, display:'flex', alignItems:'center', gap:4 }}>Collaborating Agents{isAgentsLocked && <span title="Locked in this preset" style={{ fontSize:9, opacity:0.7 }}>🔒</span>}</div>
                 {(collabOptions?.collab_agents || [
                   { id: 'claude', label: 'Claude (Anthropic)', icon: '🟣' },
                   { id: 'grok', label: 'Grok (X/Twitter)', icon: '⚡' },
@@ -2614,7 +2622,7 @@ export default function TradingAgent() {
                   const agents = collabConfig?.agents || [];
                   const isChecked = agents.includes(a.id);
                   return (
-                  <div key={a.id} onClick={() => { const next = isChecked ? agents.filter((x: string) => x !== a.id) : [...agents, a.id]; setCollabConfig({ preset: next.length > 0 ? 'all_agents' : 'agent_collab', agents: next, primary: collabConfig?.primary || 'claude' }); }} style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 8px', cursor:'pointer', borderRadius:6, background: isChecked ? 'rgba(16,185,129,0.1)' : 'transparent', transition:'background 0.1s' }}>
+                  <div key={a.id} onClick={() => { if (!isAgentsLocked) { const next = isChecked ? agents.filter((x: string) => x !== a.id) : [...agents, a.id]; setCollabConfig(prev => prev ? { ...prev, agents: next } : { preset: 'custom_collab', agents: next, primary: 'claude' }); } }} style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 8px', cursor:'pointer', borderRadius:6, background: isChecked ? 'rgba(16,185,129,0.1)' : 'transparent', transition:'background 0.1s' }}>
                     <div style={{ width:14, height:14, borderRadius:3, border: isChecked ? '2px solid #10b981' : '2px solid #4b5563', background: isChecked ? '#10b981' : 'transparent', display:'flex', alignItems:'center', justifyContent:'center' }}>
                       {isChecked && <span style={{ color:'#fff', fontSize:9, fontWeight:700 }}>✓</span>}
                     </div>
@@ -2624,6 +2632,8 @@ export default function TradingAgent() {
                   );
                 })}
               </div>
+                </>);
+              })()}
             </div>
           </div>
           {(['claude', 'gpt-4o', 'grok', 'gemini', 'perplexity'] as const).map(m => (
