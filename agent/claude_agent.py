@@ -3221,29 +3221,27 @@ class TradingAgent:
                 return json.dumps({"display_type": "chat", "message": f"{reasoning_model} encountered an error: {str(e)}. Please try again."})
 
         # Claude path: use async client + web search
-        # In standalone claude mode, always use web search for real-time data
-        # In agent_collab mode, Grok+Perplexity already provide real-time context — skip web search to avoid timeout
-        claude_needs_web_search = (reasoning_model == "claude") or (reasoning_model == "agent_collab" and category in ("daily_briefing", "briefing", "best_trades"))
-        if claude_needs_web_search:
-            try:
-                return await asyncio.wait_for(
-                    self._ask_claude_async_web_search(user_prompt, market_data, history, is_followup, category, chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent),
-                    timeout=90.0,
-                )
-            except asyncio.TimeoutError:
-                print(f"[AGENT] Claude async+web_search timed out after 90s (data was {data_size:,} chars)")
-                return json.dumps({"display_type": "chat", "message": "The AI took too long to respond. Please try again — sometimes the model is under heavy load."})
-            except Exception as e:
-                print(f"[AGENT] Claude async+web_search error: {e}, falling back to sync path")
+        # Both standalone claude and agent_collab always use the async web-search path —
+        # it handles large payloads better and gives Claude access to real-time data.
+        try:
+            return await asyncio.wait_for(
+                self._ask_claude_async_web_search(user_prompt, market_data, history, is_followup, category, chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent),
+                timeout=120.0,
+            )
+        except asyncio.TimeoutError:
+            print(f"[AGENT] Claude async+web_search timed out after 120s (data was {data_size:,} chars)")
+            return json.dumps({"display_type": "chat", "message": "The AI took too long to respond. Please try again — sometimes the model is under heavy load."})
+        except Exception as e:
+            print(f"[AGENT] Claude async+web_search error: {e}, falling back to sync path")
 
-        # Default sync Claude path
+        # Fallback sync Claude path (if async client fails for non-timeout reasons)
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(self._ask_claude, user_prompt, market_data, history, is_followup, category, chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent),
-                timeout=80.0,
+                timeout=100.0,
             )
         except asyncio.TimeoutError:
-            print(f"[AGENT] Claude API timed out after 80s (data was {data_size:,} chars)")
+            print(f"[AGENT] Claude sync API timed out after 100s (data was {data_size:,} chars)")
             return json.dumps({"display_type": "chat", "message": "The AI took too long to respond. Please try again — sometimes the model is under heavy load."})
         except Exception as e:
             print(f"[AGENT] Claude API error: {e}")
@@ -3577,7 +3575,7 @@ class TradingAgent:
 
         async_client = anthropic.AsyncAnthropic(
             api_key=self.client.api_key,
-            timeout=90.0,
+            timeout=120.0,
         )
 
         tools = [{"type": "web_search_20250305", "name": "web_search"}]
