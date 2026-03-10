@@ -3187,10 +3187,17 @@ class TradingAgent:
         data_size = len(json.dumps(market_data, default=str)) if market_data else 0
         reasoning_model = reasoning_model if reasoning_model in self.VALID_REASONING_MODELS else "claude"
 
-        # ── All-agents collaboration: call multiple LLMs simultaneously, then synthesise with Claude ──
-        if reasoning_model == "all_agents" or (collab_agents and len(collab_agents) > 1):
+        # ── Multi-agent collaboration: call selected LLMs simultaneously, then synthesise ──
+        # Triggers when: explicit "all_agents" mode OR any collab_agents are specified (even just 1)
+        if reasoning_model == "all_agents" or (collab_agents and len(collab_agents) >= 1):
             agents_to_call = [a for a in (collab_agents or ["grok", "gpt-4o", "gemini", "perplexity"]) if a in self.VALID_COLLAB_AGENTS]
-            synthesis_model = primary_model if primary_model in ("claude", "gpt-4o", "gemini") else "claude"
+            # Determine synthesis model: explicit primary_model > reasoning_model > default claude
+            if primary_model in ("claude", "gpt-4o", "gemini"):
+                synthesis_model = primary_model
+            elif reasoning_model in ("claude", "gpt-4o", "gemini"):
+                synthesis_model = reasoning_model
+            else:
+                synthesis_model = "claude"
             print(f"[ALL_AGENTS] Multi-agent collab: agents={agents_to_call}, synthesis={synthesis_model}, data={data_size:,} chars")
             return await self._multi_agent_collab(user_prompt, market_data, history, is_followup, category, chatbox_mode, preset_intent, agents_to_call, synthesis_model)
 
