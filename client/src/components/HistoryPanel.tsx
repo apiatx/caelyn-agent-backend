@@ -109,7 +109,7 @@ interface HistoryEntry {
   content: string;
   display_type: string | null;
   model_used?: string;
-  tickers?: { ticker: string; rec_price: number | null }[];
+  tickers?: { ticker: string; rec_price: number | null; current_price?: number | null; pct_change?: number | null }[];
   conversation?: { role: string; content: string }[];
 }
 interface HistoryData {
@@ -403,6 +403,18 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
       const bt = backtestMap[entry.id];
       let labelParts = `${dateStr} ${timeStr}`;
       if (model) labelParts += ` ${model}`;
+
+      // Compute avg % from inline tickers if backtest map doesn't have it
+      let pctBadge: number | null = null;
+      if (bt) {
+        pctBadge = bt.cumulative_pct;
+      } else {
+        const priced = entry.tickers?.filter(t => t.pct_change != null) || [];
+        if (priced.length > 0) {
+          pctBadge = priced.reduce((s, t) => s + t.pct_change!, 0) / priced.length;
+        }
+      }
+
       return (
         <button
           key={entry.id}
@@ -419,13 +431,13 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
           <span style={{ color: C.bright, fontSize: 11, fontFamily: sansFont, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {labelParts}
           </span>
-          {bt && (
+          {pctBadge != null && (
             <span style={{
-              color: bt.cumulative_pct >= 0 ? C.green : C.red,
+              color: pctBadge >= 0 ? C.green : C.red,
               fontSize: 11, fontWeight: 700, fontFamily: font,
               marginLeft: 8, flexShrink: 0,
             }}>
-              {bt.cumulative_pct >= 0 ? '+' : ''}{bt.cumulative_pct.toFixed(1)}%
+              {pctBadge >= 0 ? '+' : ''}{pctBadge.toFixed(1)}%
             </span>
           )}
         </button>
@@ -446,9 +458,16 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
     if (view.level !== 'detail') return null;
     const { entry } = view;
     const bt = backtestMap[entry.id];
-    let parsed: any = null;
-    try { parsed = JSON.parse(entry.content); } catch { /* plain text */ }
-    const displayContent = parsed?.analysis || parsed?.structured?.message || parsed?.message || entry.content;
+    // Backend now sends clean preformatted text for new entries.
+    // For old entries that are raw JSON, extract readable text.
+    let displayContent = entry.content;
+    try {
+      const parsed = JSON.parse(entry.content);
+      // Only use parsed fields if content was actually JSON
+      displayContent = parsed?.analysis || parsed?.structured?.message || parsed?.message || JSON.stringify(parsed, null, 2);
+    } catch {
+      // Not JSON — already clean text from the new renderer, use as-is
+    }
     const conversation = (entry as any).conversation as { role: string; content: string }[] | undefined;
     return (
       <div style={{ padding: 16, flex: 1, overflowY: 'auto' }}>
@@ -456,50 +475,75 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
           {new Date(entry.timestamp * 1000).toLocaleString()}
           {entry.model_used && <span style={{ marginLeft: 8, color: C.purple }}>{modelLabel(entry.model_used)}</span>}
         </div>
-        {bt && bt.details.length > 0 && (
-          <div style={{
-            marginBottom: 12, padding: 10, background: '#0d0f14',
-            border: `1px solid ${C.border}`, borderRadius: 6,
-          }}>
-            <div style={{ color: C.dim, fontSize: 9, fontFamily: font, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
-              Backtest Performance
-            </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, fontFamily: font }}>
-              <thead>
-                <tr style={{ color: C.dim }}>
-                  <td style={{ padding: '3px 6px' }}>Ticker</td>
-                  <td style={{ padding: '3px 6px', textAlign: 'right' }}>Rec</td>
-                  <td style={{ padding: '3px 6px', textAlign: 'right' }}>Now</td>
-                  <td style={{ padding: '3px 6px', textAlign: 'right' }}>%</td>
-                </tr>
-              </thead>
-              <tbody>
-                {bt.details.map((d) => (
-                  <tr key={d.ticker}>
-                    <td style={{ padding: '3px 6px', color: C.bright, fontWeight: 600 }}>{d.ticker}</td>
-                    <td style={{ padding: '3px 6px', textAlign: 'right', color: C.dim }}>${d.rec_price.toFixed(2)}</td>
-                    <td style={{ padding: '3px 6px', textAlign: 'right', color: C.text }}>${d.current_price.toFixed(2)}</td>
-                    <td style={{
-                      padding: '3px 6px', textAlign: 'right', fontWeight: 700,
-                      color: d.pct_change >= 0 ? C.green : C.red,
-                    }}>
-                      {d.pct_change >= 0 ? '+' : ''}{d.pct_change.toFixed(1)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {(() => {
+          // Use backtest map data if available, otherwise use inline ticker data from the API
+          const inlineTickers = entry.tickers?.filter(
+            (t) => t.rec_price != null && t.current_price != null && t.pct_change != null
+          ) || [];
+          const hasBt = bt && bt.details.length > 0;
+          const hasInline = inlineTickers.length > 0;
+          if (!hasBt && !hasInline) return null;
+
+          const rows = hasBt
+            ? bt.details
+            : inlineTickers.map((t) => ({
+                ticker: t.ticker,
+                rec_price: t.rec_price!,
+                current_price: t.current_price!,
+                pct_change: t.pct_change!,
+              }));
+
+          const avgPct = rows.length > 0
+            ? rows.reduce((sum, r) => sum + r.pct_change, 0) / rows.length
+            : 0;
+          const totalTickers = hasBt ? bt.ticker_count : rows.length;
+          const cumulativePct = hasBt ? bt.cumulative_pct : avgPct;
+
+          return (
             <div style={{
-              marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`,
-              display: 'flex', justifyContent: 'space-between', fontSize: 10, fontFamily: font,
+              marginBottom: 12, padding: 10, background: '#0d0f14',
+              border: `1px solid ${C.border}`, borderRadius: 6,
             }}>
-              <span style={{ color: C.dim }}>Avg ({bt.ticker_count} tickers)</span>
-              <span style={{ fontWeight: 700, color: bt.cumulative_pct >= 0 ? C.green : C.red }}>
-                {bt.cumulative_pct >= 0 ? '+' : ''}{bt.cumulative_pct.toFixed(1)}%
-              </span>
+              <div style={{ color: C.dim, fontSize: 9, fontFamily: font, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
+                Price Tracking
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, fontFamily: font }}>
+                <thead>
+                  <tr style={{ color: C.dim }}>
+                    <td style={{ padding: '3px 6px' }}>Ticker</td>
+                    <td style={{ padding: '3px 6px', textAlign: 'right' }}>Rec</td>
+                    <td style={{ padding: '3px 6px', textAlign: 'right' }}>Now</td>
+                    <td style={{ padding: '3px 6px', textAlign: 'right' }}>%</td>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((d) => (
+                    <tr key={d.ticker}>
+                      <td style={{ padding: '3px 6px', color: C.bright, fontWeight: 600 }}>{d.ticker}</td>
+                      <td style={{ padding: '3px 6px', textAlign: 'right', color: C.dim }}>${d.rec_price.toFixed(2)}</td>
+                      <td style={{ padding: '3px 6px', textAlign: 'right', color: C.text }}>${d.current_price.toFixed(2)}</td>
+                      <td style={{
+                        padding: '3px 6px', textAlign: 'right', fontWeight: 700,
+                        color: d.pct_change >= 0 ? C.green : C.red,
+                      }}>
+                        {d.pct_change >= 0 ? '+' : ''}{d.pct_change.toFixed(1)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{
+                marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`,
+                display: 'flex', justifyContent: 'space-between', fontSize: 10, fontFamily: font,
+              }}>
+                <span style={{ color: C.dim }}>Avg ({totalTickers} tickers)</span>
+                <span style={{ fontWeight: 700, color: cumulativePct >= 0 ? C.green : C.red }}>
+                  {cumulativePct >= 0 ? '+' : ''}{cumulativePct.toFixed(1)}%
+                </span>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
         {conversation && conversation.length > 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {conversation.map((msg, i) => {
@@ -507,8 +551,10 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
               if (msg.role === 'assistant') {
                 try {
                   const p = JSON.parse(msg.content);
-                  msgContent = p.analysis || p.structured?.message || p.structured?.summary || msg.content;
-                } catch { /* use raw */ }
+                  msgContent = p.analysis || p.structured?.message || p.structured?.summary || JSON.stringify(p, null, 2);
+                } catch {
+                  // Not JSON — already clean text, use as-is
+                }
               }
               return (
                 <div key={i} style={{
