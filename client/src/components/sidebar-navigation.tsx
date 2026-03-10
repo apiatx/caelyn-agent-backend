@@ -464,7 +464,7 @@ export function SidebarNavigation({ className = "", isCollapsed, isMobile = fals
             data-testid="logo-cryptohippo"
           />
         </div>
-        <div style={{ position: 'absolute', right: -12, bottom: isCollapsed ? '50%' : -12, transform: isCollapsed ? 'translateY(50%)' : 'none', zIndex: 50, transition: 'bottom 0.3s ease-in-out, transform 0.3s ease-in-out' }}>
+        <div style={{ position: 'absolute', right: -12, bottom: -12, zIndex: 50 }}>
           <button
             onClick={onToggle}
             className="border border-white/[0.08] rounded-full p-1.5 text-white/40 hover:text-white hover:border-white/15 transition-all duration-200 shadow-lg"
