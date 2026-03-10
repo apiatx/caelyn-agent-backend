@@ -3190,9 +3190,10 @@ class TradingAgent:
         # ── Multi-agent collaboration: call selected LLMs simultaneously, then synthesise ──
         # ONLY triggers for explicit "all_agents" mode.
         # "agent_collab" mode uses Grok/Perplexity as DATA SOURCES within the normal
-        # structured scan pipeline — it must NOT be hijacked into multi-agent synthesis,
-        # or preset buttons (best_trades, daily_briefing, etc.) lose their structured
-        # response formats (cards, charts, data points).
+        # structured scan pipeline — it must NOT be hijacked into multi-agent synthesis.
+        # When preset_intent is set, the synthesis step enforces the preset's structured
+        # JSON format so preset buttons always produce cards/charts/data points even
+        # when multiple agents collaborate.
         if reasoning_model == "all_agents" and collab_agents and len(collab_agents) >= 1:
             agents_to_call = [a for a in (collab_agents or ["grok", "gpt-4o", "gemini", "perplexity"]) if a in self.VALID_COLLAB_AGENTS]
             # Determine synthesis model: explicit primary_model > reasoning_model > default claude
@@ -3321,6 +3322,36 @@ class TradingAgent:
                 f"{thesis}\n"
             )
 
+        # ── Build format enforcement for preset buttons ──
+        # When a preset is active, the synthesis MUST produce the same structured
+        # JSON output as any other preset response (cards, ranked lists, tables, etc.).
+        # Free-form queries get the generic "same JSON format" instruction.
+        _format_block = ""
+        if preset_intent:
+            _resolved = self._resolve_preset(preset_intent)
+            if _resolved and _resolved in self.INTENT_PROFILES:
+                _profile = self.INTENT_PROFILES[_resolved]
+                _resp_style = _profile.get("response_style", "institutional_brief")
+                _intent = _profile.get("intent", "")
+                _cat = self.INTENT_TO_CATEGORY.get(_intent, category)
+                _format_block = (
+                    f"\n\n⚠️  STRUCTURED OUTPUT REQUIREMENT (PRESET: {_resolved}):\n"
+                    f"This request was triggered by a PRESET BUTTON. You MUST respond with the\n"
+                    f"exact structured JSON format for category='{_cat}', response_style='{_resp_style}'.\n"
+                    f"Your system prompt defines the JSON schema for this category — follow it EXACTLY.\n"
+                    f"Do NOT output free-form narrative. Do NOT deviate from the expected display_type.\n"
+                    f"The agent theses above are INPUT DATA for your reasoning — your OUTPUT must be\n"
+                    f"the same structured JSON you would produce for any '{_resolved}' preset request.\n"
+                )
+            else:
+                _format_block = (
+                    f"\nRespond in the same JSON format you normally use for this category of analysis.\n"
+                )
+        else:
+            _format_block = (
+                f"\nRespond in the same JSON format you normally use for this category of analysis.\n"
+            )
+
         synthesis_prompt = (
             f"{user_prompt}\n\n"
             f"══════════════════════════════════════════════════════════════\n"
@@ -3339,11 +3370,13 @@ class TradingAgent:
             f"5. Identify UNIQUE INSIGHTS — things only one agent caught that others missed.\n"
             f"6. Synthesize everything into YOUR final, authoritative analysis.\n"
             f"7. Your response MUST be your own original synthesis, NOT a summary of each agent.\n"
-            f"   Weave the insights together into a cohesive thesis.\n\n"
-            f"Respond in the same JSON format you normally use for this category of analysis.\n"
+            f"   Weave the insights together into a cohesive thesis.\n"
+            f"{_format_block}\n"
             f"Do NOT mention the individual agents by name in your response — present it as unified analysis.\n"
         )
 
+        if preset_intent:
+            print(f"[ALL_AGENTS] Preset '{preset_intent}' active — synthesis will enforce structured format (category={category})")
         print(f"[ALL_AGENTS] Sending synthesis prompt to {synthesis_model}: {len(synthesis_prompt):,} chars ({len(agent_theses)} theses)")
 
         # Use Claude for synthesis (default path)
