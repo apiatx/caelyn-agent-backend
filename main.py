@@ -667,10 +667,10 @@ async def list_presets(request: Request):
 
 @app.get("/api/collab-options")
 async def get_collab_options(request: Request):
-    """Return available primary models and collaborating agents for the
-    frontend hover-over dropdown menu on the Agent Collab button."""
+    """Return available reasoning models, collaborating agents, and presets
+    for the frontend hover-over dropdown menu on the Agent Collab button."""
     return {
-        "primary_models": [
+        "reasoning_models": [
             {"id": "claude", "name": "Claude", "description": "Anthropic Claude — deep reasoning & synthesis (default)", "default": True},
             {"id": "gpt-4o", "name": "ChatGPT", "description": "OpenAI GPT-4o — orchestration, web search, reasoning"},
             {"id": "gemini", "name": "Gemini", "description": "Google Gemini — Google Search grounding, reasoning"},
@@ -678,6 +678,7 @@ async def get_collab_options(request: Request):
             {"id": "perplexity", "name": "Perplexity", "description": "Perplexity Sonar — citation-heavy web research"},
         ],
         "collab_agents": [
+            {"id": "claude", "name": "Claude (Anthropic)", "description": "Deep reasoning, analysis & synthesis", "icon": "anthropic"},
             {"id": "grok", "name": "Grok (X/Twitter)", "description": "Real-time X social scanning & sentiment", "icon": "xai"},
             {"id": "gpt-4o", "name": "ChatGPT/OpenAI", "description": "Web search, orchestration & reasoning", "icon": "openai"},
             {"id": "gemini", "name": "Gemini", "description": "Google Search grounding & reasoning", "icon": "gemini"},
@@ -698,20 +699,6 @@ async def get_collab_options(request: Request):
                 "description": "GPT + Gemini + Perplexity + Grok all reason simultaneously → Claude synthesizes all theses",
                 "agents": ["grok", "gpt-4o", "gemini", "perplexity"],
                 "primary": "claude",
-            },
-            {
-                "id": "gpt-4o",
-                "name": "ChatGPT Solo",
-                "description": "ChatGPT orchestrates, searches the web, reasons & responds",
-                "agents": [],
-                "primary": "gpt-4o",
-            },
-            {
-                "id": "gemini",
-                "name": "Gemini Solo",
-                "description": "Gemini orchestrates, uses Google Search, reasons & responds",
-                "agents": [],
-                "primary": "gemini",
             },
         ],
     }
