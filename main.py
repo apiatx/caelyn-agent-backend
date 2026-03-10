@@ -703,21 +703,24 @@ async def get_collab_options(request: Request):
         # lock_agents: if true, the collaborator checkboxes are locked (user cannot change them)
         # lock_reasoning: if true, the reasoning model radio is locked (user cannot change it)
         #
-        # IMPORTANT — "Default" sends reasoning_model: "agent_collab" with NO collab_agents.
-        # The backend already uses Grok + Perplexity as data sources in the agent_collab pipeline.
+        # IMPORTANT — "Default" sends reasoning_model: "agent_collab" with optional primary_model.
+        # The backend uses Grok + Perplexity as DATA SOURCES (not reasoners) in the agent_collab pipeline.
+        # When primary_model is set (e.g. "gemini"), that model reasons over the collected data.
+        # When primary_model is "claude" or unset, Claude reasons (original behavior).
+        # The reasoner does NOT do its own web search — all live data comes through the pipeline.
         # Only "Full Collaboration" and "Custom Collab" should send collab_agents + reasoning_model: "all_agents".
         "presets": [
             {
                 "id": "default",
                 "name": "Default",
-                "description": "Grok X scan + Perplexity web search + proprietary data → Claude synthesis (locked)",
+                "description": "Data sources (Grok X scan + Perplexity web search + proprietary data) → chosen reasoning model synthesizes",
                 "agents": [],
                 "reasoning_model": "agent_collab",
                 "primary": "claude",
                 "mode": "collab",
                 "default": True,
                 "lock_agents": True,
-                "lock_reasoning": True,
+                "lock_reasoning": False,
             },
             {
                 "id": "full_collab",

@@ -3206,15 +3206,24 @@ class TradingAgent:
             print(f"[ALL_AGENTS] Multi-agent collab: agents={agents_to_call}, synthesis={synthesis_model}, data={data_size:,} chars")
             return await self._multi_agent_collab(user_prompt, market_data, history, is_followup, category, chatbox_mode, preset_intent, agents_to_call, synthesis_model)
 
-        # agent_collab uses Claude as the reasoning engine (with richer data from Grok/Perplexity data sources)
-        effective_model = "claude" if reasoning_model == "agent_collab" else reasoning_model
-        print(f"[AGENT] Sending to {effective_model} (selected={reasoning_model}): {data_size:,} chars of market data (category={category}, chatbox_mode={chatbox_mode})")
+        # agent_collab uses a single reasoning engine (Claude by default, or primary_model if set)
+        # with richer data from Grok/Perplexity data sources.
+        # When primary_model is set (e.g. "gemini", "gpt-4o"), that model becomes the sole
+        # reasoner — it does NOT do its own web search; all data comes through the pipeline
+        # (Grok X scan + Perplexity web search + proprietary data already collected above).
+        if reasoning_model == "agent_collab":
+            effective_model = primary_model if (primary_model and primary_model in self.VALID_COLLAB_AGENTS) else "claude"
+        else:
+            effective_model = reasoning_model
+        print(f"[AGENT] Sending to {effective_model} (selected={reasoning_model}, primary={primary_model}): {data_size:,} chars of market data (category={category}, chatbox_mode={chatbox_mode})")
 
         # Non-Claude models: use ONLY the selected model (no Claude fallback)
+        # In agent_collab mode, skip web search — data sources already provided live data.
+        _is_agent_collab_alt = (reasoning_model == "agent_collab" and effective_model != "claude")
         if effective_model != "claude":
             try:
                 result = await asyncio.wait_for(
-                    self._call_alt_model(effective_model, user_prompt, market_data, history, is_followup, category, chatbox_mode, preset_intent=preset_intent),
+                    self._call_alt_model(effective_model, user_prompt, market_data, history, is_followup, category, chatbox_mode, preset_intent=preset_intent, skip_web_search=_is_agent_collab_alt),
                     timeout=90.0,
                 )
                 if result:
@@ -3419,17 +3428,20 @@ class TradingAgent:
             oai_msgs.append({"role": m["role"], "content": m["content"]})
         return oai_msgs
 
-    async def _call_alt_model(self, reasoning_model: str, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, preset_intent: str = None) -> str:
-        """Call a non-Claude model with web search. When running as the sole model,
-        web search is ALWAYS enabled so the model can access real-time data."""
+    async def _call_alt_model(self, reasoning_model: str, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, preset_intent: str = None, skip_web_search: bool = False) -> str:
+        """Call a non-Claude model. When running solo, web search is enabled.
+        When running as the reasoner in agent_collab mode (skip_web_search=True),
+        web search is disabled because data sources already provided live data."""
         system_blocks, messages, _, token_limit, _, _ = self._build_prompt(
             user_prompt, market_data, history, is_followup, category, chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent
         )
         oai_messages = self._prompt_to_openai_messages(system_blocks, messages)
         context_size = sum(len(m.get("content", "")) for m in oai_messages)
-        print(f"[ALT_MODEL] Preparing {reasoning_model}: context_size={context_size:,} chars, token_limit={token_limit}, category={category}")
-        # Individual models always get web search — they're the only LLM and need live data
-        use_web_search = True
+        # In agent_collab mode the data pipeline (Grok X scan, Perplexity web search,
+        # proprietary data) already collected all live data — the reasoner should NOT
+        # duplicate searches.  Solo models always get web search.
+        use_web_search = not skip_web_search
+        print(f"[ALT_MODEL] Preparing {reasoning_model}: context_size={context_size:,} chars, token_limit={token_limit}, category={category}, web_search={use_web_search}")
 
         if reasoning_model == "gpt-4o":
             api_key = os.environ.get("OPENAI_API_KEY", "")
