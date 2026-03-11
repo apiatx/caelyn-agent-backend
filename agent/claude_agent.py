@@ -932,6 +932,34 @@ class TradingAgent:
         parsed_display = result.get("structured", {}).get("display_type", result.get("type", "unknown"))
         print(f"[AGENT] Response parsed, display_type: {parsed_display} ({time.time() - start_time:.1f}s)")
 
+        # ── Preset display_type enforcement ──
+        # When a preset button triggered this request, ensure the parsed result has
+        # the correct display_type.  If the model returned "chat" (plain text fallback)
+        # but a structured display_type was expected, override the display_type so the
+        # frontend renders the correct card layout.  This does NOT change the content —
+        # it just corrects the routing label when models ignore the JSON schema instruction.
+        if preset_intent and not chatbox_mode:
+            _resolved_p = self._resolve_preset(preset_intent)
+            if _resolved_p and _resolved_p in self.INTENT_PROFILES:
+                # Use the already-computed category (accounts for asset_class overrides)
+                _expected_display = self.CATEGORY_TO_DISPLAY_TYPE.get(category)
+                if not _expected_display:
+                    _profile_p = self.INTENT_PROFILES[_resolved_p]
+                    _intent_p = _profile_p.get("intent", "")
+                    _cat_p = self.INTENT_TO_CATEGORY.get(_intent_p, category)
+                    _expected_display = self.CATEGORY_TO_DISPLAY_TYPE.get(_cat_p, _cat_p)
+                structured = result.get("structured", {})
+                if isinstance(structured, dict):
+                    actual_display = structured.get("display_type", "unknown")
+                    if actual_display == "chat" and _expected_display != "chat":
+                        # Model returned plain text wrapped as chat — override display_type
+                        # so the frontend can still render the right layout.
+                        # Keep the message content as-is (better than nothing).
+                        structured["display_type"] = _expected_display
+                        result["type"] = _expected_display
+                        parsed_display = _expected_display
+                        print(f"[PRESET_ENFORCE] Overrode display_type: chat → {_expected_display} (preset={_resolved_p})")
+
         if category == "best_trades" and market_data and isinstance(market_data, dict) and not chatbox_mode:
             if parsed_display != "trades":
                 print(f"[BEST_TRADES] Claude returned display_type={parsed_display}, enforcing structured trades output")
@@ -2268,6 +2296,29 @@ class TradingAgent:
         "chat": "chat",
         "prediction_markets": "prediction_markets",
         "news_intelligence": "news_intelligence",
+    }
+
+    # Maps routing category → the display_type the frontend expects.
+    # Used by preset format enforcement to tell models exactly which JSON schema to produce.
+    CATEGORY_TO_DISPLAY_TYPE = {
+        "briefing": "briefing",
+        "cross_asset_trending": "trending",
+        "trending": "trending",
+        "best_trades": "trades",
+        "sector_rotation": "sector_rotation",
+        "macro": "macro",
+        "investments": "investments",
+        "bearish": "trades",
+        "social_momentum": "trending",
+        "deterministic_screener": "screener",
+        "crypto": "crypto",
+        "thematic": "trades",
+        "market_scan": "trades",
+        "cross_market": "cross_market",
+        "commodities": "commodities",
+        "ticker_analysis": "analysis",
+        "news_intelligence": "trending",
+        "chat": "chat",
     }
 
     ASSET_CLASS_CATEGORY_MAP = {
@@ -5781,6 +5832,34 @@ Be direct and opinionated. Tell me what you actually think."""
         _personality = get_personality_prefix(reasoning_model, preset_intent, chatbox_mode)
         if _personality:
             user_content = f"[PERSONALITY & TONE]\n{_personality}\n\n{user_content}"
+
+        # ── Preset format enforcement ──
+        # When a preset button is active, inject a strong format enforcement block
+        # so ALL models (solo grok/gpt-4o/gemini/perplexity, Claude, agent_collab)
+        # produce the correct structured JSON output with the expected display_type.
+        # Free-form user queries are NOT affected by this block.
+        if preset_intent and not chatbox_mode:
+            _resolved = self._resolve_preset(preset_intent)
+            if _resolved and _resolved in self.INTENT_PROFILES:
+                # Use the already-computed `category` (from handle_query) which accounts
+                # for asset_class overrides (e.g. crypto_scanner → "crypto").
+                # Fall back to deriving from intent profile if category is empty.
+                _display_type = self.CATEGORY_TO_DISPLAY_TYPE.get(category)
+                if not _display_type:
+                    _profile = self.INTENT_PROFILES[_resolved]
+                    _intent = _profile.get("intent", "")
+                    _cat = self.INTENT_TO_CATEGORY.get(_intent, category)
+                    _display_type = self.CATEGORY_TO_DISPLAY_TYPE.get(_cat, _cat)
+                _format_enforcement = (
+                    f"\n\n⚠️  STRUCTURED OUTPUT REQUIREMENT (PRESET: {_resolved}):\n"
+                    f"This request was triggered by a PRESET BUTTON, not a free-form user query.\n"
+                    f"You MUST respond with ONLY a valid JSON object using display_type=\"{_display_type}\".\n"
+                    f"Your system prompt above defines the exact JSON schema for \"{_display_type}\" — follow it EXACTLY.\n"
+                    f"Do NOT output free-form text, markdown, or narrative. Do NOT wrap in ```json blocks.\n"
+                    f"Do NOT deviate from the expected display_type. Do NOT use display_type=\"chat\".\n"
+                    f"The response MUST be a raw JSON object that starts with {{ and ends with }}.\n"
+                )
+                user_content += _format_enforcement
 
         messages.append({"role": "user", "content": user_content})
 
