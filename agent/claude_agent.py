@@ -935,9 +935,9 @@ class TradingAgent:
         # ── Preset display_type enforcement ──
         # When a preset button triggered this request, ensure the parsed result has
         # the correct display_type.  If the model returned "chat" (plain text fallback)
-        # but a structured display_type was expected, override the display_type so the
-        # frontend renders the correct card layout.  This does NOT change the content —
-        # it just corrects the routing label when models ignore the JSON schema instruction.
+        # but a structured display_type was expected, rebuild the structured response
+        # from market data so the frontend can render proper cards with clickable
+        # tickers, TradingView iframes, and popup details.
         if preset_intent and not chatbox_mode:
             _resolved_p = self._resolve_preset(preset_intent)
             if _resolved_p and _resolved_p in self.INTENT_PROFILES:
@@ -952,13 +952,23 @@ class TradingAgent:
                 if isinstance(structured, dict):
                     actual_display = structured.get("display_type", "unknown")
                     if actual_display == "chat" and _expected_display != "chat":
-                        # Model returned plain text wrapped as chat — override display_type
-                        # so the frontend can still render the right layout.
-                        # Keep the message content as-is (better than nothing).
-                        structured["display_type"] = _expected_display
-                        result["type"] = _expected_display
-                        parsed_display = _expected_display
-                        print(f"[PRESET_ENFORCE] Overrode display_type: chat → {_expected_display} (preset={_resolved_p})")
+                        # Model returned plain text wrapped as chat — try to build
+                        # a proper structured response from market data.
+                        plain_text = structured.get("message", "") or result.get("analysis", "")
+                        rebuilt = self._rebuild_structured_from_data(
+                            _expected_display, market_data, plain_text, category
+                        )
+                        if rebuilt:
+                            result["structured"] = rebuilt
+                            result["type"] = _expected_display
+                            parsed_display = _expected_display
+                            print(f"[PRESET_ENFORCE] Rebuilt structured response from market data: chat → {_expected_display} (preset={_resolved_p})")
+                        else:
+                            # Fallback: at least fix the display_type label
+                            structured["display_type"] = _expected_display
+                            result["type"] = _expected_display
+                            parsed_display = _expected_display
+                            print(f"[PRESET_ENFORCE] Overrode display_type (no data rebuild): chat → {_expected_display} (preset={_resolved_p})")
 
         if category == "best_trades" and market_data and isinstance(market_data, dict) and not chatbox_mode:
             if parsed_display != "trades":
@@ -2327,6 +2337,29 @@ class TradingAgent:
         "commodities": "commodities",
         "macro": "macro",
     }
+
+    # Compact JSON schema skeletons for each display_type.
+    # Included directly in the format enforcement block so models see the
+    # exact structure they must produce, without searching the system prompt.
+    DISPLAY_TYPE_SCHEMAS = {
+        "trades": '{"display_type":"trades","market_pulse":{"verdict":"","regime":"","summary":""},"top_trades":[{"ticker":"","name":"","exchange":"","direction":"long","action":"BUY","confidence_score":85,"technical_score":80,"pattern":"","signals_stacking":[""],"entry":"$XX.XX","stop":"$XX.XX","targets":["$XX.XX"],"risk_reward":"2:1","timeframe":"","thesis":"","why_could_fail":"","confirmations":{"ta":true,"volume":true,"catalyst":false,"fa":true},"tv_url":"https://www.tradingview.com/chart/?symbol=TICKER"}],"bearish_setups":[...],"notes":[""]}',
+        "trending": '{"display_type":"trending","summary":"","source_coverage":{},"trending_tickers":[{"ticker":"","company":"","source_count":3,"sources":[""],"price":"","change":"","volume_vs_avg":"","quant_score":0,"why_trending":"","sentiment":"","ta_summary":"","fundamental_snapshot":"","verdict":"","risk":"","conviction":"High","conviction_score":80,"position_tier":"Tier 1","why_could_fail":""}],"platform_divergences":[{"observation":""}],"portfolio_bias":{"risk_regime":"","asset_class_bias":"","cash_guidance":"","hedge_considerations":""}}',
+        "briefing": '{"display_type":"briefing","market_pulse":{"verdict":"","summary":"","regime":""},"key_numbers":{"spy":{"price":"","change":"","trend":""},"qqq":{},"iwm":{},"vix":{},"fear_greed":{"value":"","label":"","trend":""},"dxy":{},"ten_year":{},"oil":{},"gold":{}},"whats_moving":[{"headline":"","category":""}],"signal_highlights":{"best_ta_setup":{"ticker":"","signal":""},"best_fundamental":{"ticker":"","signal":""},"hottest_social":{"ticker":"","signal":""},"top_squeeze":{"ticker":"","signal":""},"biggest_volume":{"ticker":"","signal":""},"strongest_sector":{"sector":"","ticker":"","signal":""}},"top_moves":[{"rank":1,"ticker":"","action":"BUY","conviction":"High","conviction_score":85,"position_tier":"Tier 1","thesis":"","why_could_fail":"","signals_stacking":[""],"signal_count":3,"entry":"","stop":"","target":"","risk_reward":"","timeframe":""}],"upcoming_catalysts":[""],"portfolio_bias":""}',
+        "sector_rotation": '{"display_type":"sector_rotation","summary":"","sectors":[{"etf":"XLK","sector":"Technology","change_today":1.25,"conviction":"High","rsi":62,"trend":"","vs_spy":0.45,"signal":"","stage2_pct":65.3,"stage4_pct":8.2,"price":220.50,"year_high":235.00,"year_low":180.00,"analysis":""}],"rotation_signal":"","macro_context":{"fear_greed":"","vix":"","dxy":"","market_regime":""},"rotation_analysis":"","action_items":[""],"portfolio_bias":{"risk_regime":"","asset_class_bias":"","cash_guidance":"","hedge_considerations":""}}',
+        "macro": '{"display_type":"macro","market_regime":"","summary":"","key_indicators":{"fed_rate":"","cpi":"","core_pce":"","gdp":"","unemployment":"","yield_curve":"","vix":"","dxy":"","oil":"","gold":"","fear_greed":""},"implications":{"growth_stocks":"","value_stocks":"","commodities":"","bonds":"","crypto":""},"upcoming_events":[""],"positioning":"","portfolio_bias":{"risk_regime":"","asset_class_bias":"","cash_guidance":"","hedge_considerations":""}}',
+        "crypto": '{"display_type":"crypto","market_overview":"","btc_eth_summary":{"btc":{"price":"","change_24h":"","dominance":"","funding_rate":"","signal":""},"eth":{"price":"","change_24h":"","dominance":"","funding_rate":"","signal":""}},"perps_overview":{"total_open_interest":"","market_bias":""},"perps_squeezes":[{"coin":"","funding_rate":"","signal":""}],"hot_categories":[{"name":"","signal":""}],"top_momentum":[{"coin":"","symbol":"","price":"","change_24h":"","funding_rate":"","conviction":"","thesis":"","why_could_fail":"","trade_plan":{"entry":"","stop":"","target_1":"","risk_reward":""}}],"portfolio_bias":{"risk_regime":"","asset_class_bias":"","cash_guidance":"","hedge_considerations":""}}',
+        "commodities": '{"display_type":"commodities","summary":"","dxy_context":"","commodities":[{"name":"","symbol":"","price":"","change_today":"","trend_short":"","rsi":0,"key_levels":"","drivers":"","conviction":"","why_could_fail":""}],"top_conviction_plays":[{"asset":"","direction":"","thesis":"","conviction":""}],"portfolio_bias":{"risk_regime":"","asset_class_bias":"","cash_guidance":"","hedge_considerations":""}}',
+        "investments": '{"display_type":"investments","market_context":"","picks":[{"ticker":"","company":"","price":"","market_cap":"","conviction":"High","conviction_score":85,"position_tier":"Tier 1","investment_thesis":"","catalyst":"","why_could_fail":"","moat":"","chart":"https://www.tradingview.com/chart/?symbol=TICKER","fundamentals":{"revenue_growth_yoy":"","ebitda_margin":"","pe_ratio":""},"sqglp":{"size":"","quality":"","growth":"","longevity":"","price":""}}],"portfolio_bias":{"risk_regime":"","asset_class_bias":"","cash_guidance":"","hedge_considerations":""}}',
+        "analysis": '{"display_type":"analysis","ticker":"","company":"","price":"","change":"","market_cap":"","stage":"","verdict":"","conviction_score":80,"chart":"https://www.tradingview.com/chart/?symbol=TICKER","ta":{"rsi_14":0,"macd":"","sma_20":"","sma_50":"","sma_200":"","pattern":""},"fundamentals":{"revenue_yoy":"","pe_ratio":"","next_earnings":""},"sentiment":{"buzz_level":"","bull_pct":0},"why_could_fail":"","trade_plan":{"entry":"","stop":"","target_1":"","risk_reward":""}}',
+        "cross_market": '{"display_type":"cross_market","macro_regime":{"verdict":"","summary":""},"equities":{"large_caps":[{"symbol":"","company":"","classification":"TRADE IDEA","rating":"Buy","confidence":80,"thesis_bullets":[""],"confirmations":{"ta":true,"volume":true,"catalyst":false,"fa":true},"chart":"https://www.tradingview.com/chart/?symbol=TICKER"}],"mid_caps":[...],"small_micro_caps":[...]},"crypto":[...],"commodities":[...],"portfolio_bias":{"risk_regime":"","asset_class_bias":"","cash_guidance":"","hedge_considerations":""}}',
+        "screener": '{"display_type":"screener","query_interpretation":"","filters_applied":{},"total_matches":0,"results":[{"ticker":"","company":"","price":"","change_pct":"","market_cap":"","rsi":0,"highlight":false,"note":""}],"top_picks":[{"ticker":"","why":"","conviction_score":80}],"observations":""}',
+        "portfolio": '{"display_type":"portfolio","summary":"","positions":[{"ticker":"","company":"","price":"","change":"","rating":"Buy","combined_score":75,"thesis":"","ta_summary":"","key_risk":"","action":""}],"portfolio_insights":{"sector_concentration":"","risk_flags":[""],"suggested_actions":[""]}}',
+    }
+
+    @classmethod
+    def _get_display_type_schema(cls, display_type: str) -> str:
+        """Return a compact JSON schema skeleton for the given display_type."""
+        return cls.DISPLAY_TYPE_SCHEMAS.get(display_type, cls.DISPLAY_TYPE_SCHEMAS.get("trades", "{}"))
 
     VALID_INTENTS = set(INTENT_TO_CATEGORY.keys())
 
@@ -5838,6 +5871,7 @@ Be direct and opinionated. Tell me what you actually think."""
         # so ALL models (solo grok/gpt-4o/gemini/perplexity, Claude, agent_collab)
         # produce the correct structured JSON output with the expected display_type.
         # Free-form user queries are NOT affected by this block.
+        _format_enforcement = ""
         if preset_intent and not chatbox_mode:
             _resolved = self._resolve_preset(preset_intent)
             if _resolved and _resolved in self.INTENT_PROFILES:
@@ -5850,14 +5884,24 @@ Be direct and opinionated. Tell me what you actually think."""
                     _intent = _profile.get("intent", "")
                     _cat = self.INTENT_TO_CATEGORY.get(_intent, category)
                     _display_type = self.CATEGORY_TO_DISPLAY_TYPE.get(_cat, _cat)
+
+                # Include the ACTUAL JSON schema skeleton so models don't have to
+                # search through the massive system prompt to find the right format.
+                _schema_skeleton = self._get_display_type_schema(_display_type)
+
                 _format_enforcement = (
                     f"\n\n⚠️  STRUCTURED OUTPUT REQUIREMENT (PRESET: {_resolved}):\n"
                     f"This request was triggered by a PRESET BUTTON, not a free-form user query.\n"
                     f"You MUST respond with ONLY a valid JSON object using display_type=\"{_display_type}\".\n"
-                    f"Your system prompt above defines the exact JSON schema for \"{_display_type}\" — follow it EXACTLY.\n"
                     f"Do NOT output free-form text, markdown, or narrative. Do NOT wrap in ```json blocks.\n"
                     f"Do NOT deviate from the expected display_type. Do NOT use display_type=\"chat\".\n"
                     f"The response MUST be a raw JSON object that starts with {{ and ends with }}.\n"
+                    f"\n"
+                    f"REQUIRED JSON SCHEMA for display_type=\"{_display_type}\":\n"
+                    f"{_schema_skeleton}\n"
+                    f"\n"
+                    f"Fill ALL fields using the market data provided above. Use real numbers from the data.\n"
+                    f"Every ticker MUST have a chart URL: https://www.tradingview.com/chart/?symbol=TICKER\n"
                 )
                 user_content += _format_enforcement
 
@@ -5871,12 +5915,14 @@ Be direct and opinionated. Tell me what you actually think."""
             from agent.data_compressor import _aggressive_truncate
             compressed = _aggressive_truncate(compressed, allowed)
             data_str = json.dumps(compressed, default=str)
+            # Preserve format enforcement and personality when re-truncating
             messages[-1]["content"] = (
                 f"[MARKET DATA — use this to inform your analysis]\n"
                 f"{data_str}\n\n"
                 f"{filter_instructions}\n\n"
                 f"[USER QUERY]\n"
                 f"{user_prompt}"
+                f"{_format_enforcement}"
             )
             print(f"[Agent] WARNING: Total prompt was {total_prompt_len:,} chars, re-truncated data to {len(data_str):,}")
 
@@ -6240,6 +6286,218 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         except Exception as e:
             print(f"[Agent] _slim_cross_market_data error: {e}, passing raw data")
             return data
+
+    def _rebuild_structured_from_data(self, display_type: str, market_data, plain_text: str, category: str) -> dict | None:
+        """
+        When a model returns plain text (display_type=chat) for a preset button,
+        rebuild a proper structured JSON response from market data so the frontend
+        can render cards with clickable tickers, TradingView charts, and popups.
+        Returns None if market_data is insufficient.
+        """
+        if not market_data or not isinstance(market_data, dict):
+            return None
+
+        try:
+            summary = plain_text[:500] if plain_text else "Analysis complete"
+
+            if display_type == "trending":
+                # Build trending from ranked_candidates or similar data
+                ranked = market_data.get("ranked_candidates", [])
+                grok_shortlist = market_data.get("grok_shortlist", {})
+                enriched = market_data.get("enriched_data", {})
+
+                tickers = []
+                seen = set()
+                for item in ranked[:15]:
+                    sym = item.get("ticker", item.get("symbol", ""))
+                    if not sym or sym in seen:
+                        continue
+                    seen.add(sym)
+                    enr = enriched.get(sym, {}) if isinstance(enriched, dict) else {}
+                    sources = item.get("sources", [])
+                    tickers.append({
+                        "ticker": sym,
+                        "company": enr.get("companyName", enr.get("name", item.get("name", ""))),
+                        "source_count": len(sources) if sources else item.get("source_count", 1),
+                        "sources": sources or ["scan"],
+                        "price": str(enr.get("price", item.get("price", ""))),
+                        "change": str(enr.get("changesPercentage", item.get("change", ""))),
+                        "volume_vs_avg": str(item.get("volume_vs_avg", enr.get("relativeVolume", ""))),
+                        "why_trending": item.get("why_trending", item.get("thesis", item.get("catalyst", "Trending in scan"))),
+                        "sentiment": item.get("sentiment", ""),
+                        "conviction": item.get("conviction", "Medium"),
+                        "conviction_score": item.get("conviction_score", item.get("combined_score", 60)),
+                        "position_tier": item.get("position_tier", "Tier 2"),
+                        "why_could_fail": item.get("why_could_fail", item.get("risk", "Market conditions may change")),
+                        "chart": f"https://www.tradingview.com/chart/?symbol={sym}",
+                    })
+                if not tickers:
+                    return None
+
+                return {
+                    "display_type": "trending",
+                    "summary": summary,
+                    "source_coverage": {"scan": len(tickers)},
+                    "trending_tickers": tickers,
+                    "platform_divergences": [],
+                    "portfolio_bias": market_data.get("portfolio_bias", {"risk_regime": "", "asset_class_bias": "", "cash_guidance": "", "hedge_considerations": ""}),
+                }
+
+            if display_type == "briefing":
+                macro = market_data.get("market_pulse", market_data.get("macro_context", {}))
+                if not isinstance(macro, dict):
+                    macro = {}
+                ranked = market_data.get("ranked_candidates", [])
+                top_trades = market_data.get("top_trades", [])
+                # Build top_moves from best available data
+                top_moves = []
+                for i, item in enumerate((top_trades or ranked)[:5], 1):
+                    sym = item.get("ticker", item.get("symbol", ""))
+                    if not sym:
+                        continue
+                    top_moves.append({
+                        "rank": i,
+                        "ticker": sym,
+                        "action": item.get("action", "BUY" if item.get("direction", "long") == "long" else "SELL"),
+                        "conviction": item.get("conviction", "Medium"),
+                        "conviction_score": item.get("conviction_score", item.get("confidence_score", 60)),
+                        "position_tier": item.get("position_tier", "Tier 2"),
+                        "thesis": item.get("thesis", item.get("catalyst", "")),
+                        "why_could_fail": item.get("why_could_fail", item.get("risk", "")),
+                        "signals_stacking": item.get("signals_stacking", item.get("indicator_signals", [])),
+                        "signal_count": len(item.get("signals_stacking", item.get("indicator_signals", []))),
+                        "entry": item.get("entry", ""),
+                        "stop": item.get("stop", ""),
+                        "target": item.get("targets", [""])[0] if item.get("targets") else item.get("target_1", ""),
+                        "risk_reward": item.get("risk_reward", ""),
+                        "timeframe": item.get("timeframe", ""),
+                    })
+                return {
+                    "display_type": "briefing",
+                    "market_pulse": {
+                        "verdict": macro.get("regime", macro.get("verdict", "Neutral")),
+                        "summary": summary[:300],
+                        "regime": macro.get("regime", ""),
+                    },
+                    "key_numbers": macro.get("key_numbers", {}),
+                    "whats_moving": [],
+                    "signal_highlights": market_data.get("pre_computed_highlights", {
+                        "best_ta_setup": {"ticker": "", "signal": ""},
+                        "best_fundamental": {"ticker": "", "signal": ""},
+                        "hottest_social": {"ticker": "", "signal": ""},
+                        "top_squeeze": {"ticker": "", "signal": ""},
+                        "biggest_volume": {"ticker": "", "signal": ""},
+                        "strongest_sector": {"sector": "", "ticker": "", "signal": ""},
+                    }),
+                    "top_moves": top_moves,
+                    "upcoming_catalysts": [],
+                    "portfolio_bias": macro.get("portfolio_bias", ""),
+                }
+
+            if display_type == "sector_rotation":
+                sectors = market_data.get("sectors", market_data.get("sector_data", []))
+                if not isinstance(sectors, list) or not sectors:
+                    return None
+                sector_list = []
+                for s in sectors[:12]:
+                    if not isinstance(s, dict):
+                        continue
+                    sector_list.append({
+                        "etf": s.get("etf", s.get("symbol", "")),
+                        "sector": s.get("sector", s.get("name", "")),
+                        "change_today": s.get("change_today", s.get("changesPercentage", 0)),
+                        "conviction": s.get("conviction", "Medium"),
+                        "rsi": s.get("rsi", 50),
+                        "trend": s.get("trend", s.get("weinstein_stage", "")),
+                        "vs_spy": s.get("vs_spy", 0),
+                        "signal": s.get("signal", ""),
+                        "stage2_pct": s.get("stage2_pct", 0),
+                        "stage4_pct": s.get("stage4_pct", 0),
+                        "price": s.get("price", 0),
+                        "year_high": s.get("year_high", s.get("yearHigh", 0)),
+                        "year_low": s.get("year_low", s.get("yearLow", 0)),
+                        "analysis": s.get("analysis", ""),
+                    })
+                return {
+                    "display_type": "sector_rotation",
+                    "summary": summary[:200],
+                    "sectors": sector_list,
+                    "rotation_signal": market_data.get("rotation_signal", ""),
+                    "macro_context": market_data.get("macro_context", {}),
+                    "rotation_analysis": summary[:400],
+                    "action_items": [],
+                    "portfolio_bias": market_data.get("portfolio_bias", {"risk_regime": "", "asset_class_bias": "", "cash_guidance": "", "hedge_considerations": ""}),
+                }
+
+            if display_type == "cross_market":
+                # Cross-market has a complex structure; return None to let the
+                # display_type label override handle it (the full system prompt
+                # schema is already in the enforcement block).
+                ranked = market_data.get("ranked_candidates", [])
+                if not ranked:
+                    return None
+                # Build minimal cross_market from ranked data
+                equities_large = []
+                equities_mid = []
+                equities_small = []
+                crypto_picks = []
+                commodity_picks = []
+                enriched = market_data.get("enriched_data", {}) or {}
+                for item in ranked[:20]:
+                    sym = item.get("ticker", item.get("symbol", ""))
+                    if not sym:
+                        continue
+                    enr = enriched.get(sym, {}) if isinstance(enriched, dict) else {}
+                    ac = item.get("asset_class", "equities")
+                    pick = {
+                        "symbol": sym,
+                        "company": enr.get("companyName", enr.get("name", item.get("name", ""))),
+                        "price": str(enr.get("price", item.get("price", ""))),
+                        "change": str(enr.get("changesPercentage", item.get("change", ""))),
+                        "classification": "TRADE IDEA" if item.get("conviction", "Medium") == "High" else "WATCHLIST",
+                        "rating": "Buy" if item.get("conviction_score", 50) >= 60 else "Hold",
+                        "confidence": item.get("conviction_score", item.get("combined_score", 50)),
+                        "thesis_bullets": [item.get("thesis", item.get("catalyst", "Trending in scan"))],
+                        "confirmations": item.get("confirmations", {"ta": False, "volume": False, "catalyst": False, "fa": False}),
+                        "why_could_fail": item.get("why_could_fail", item.get("risk", "")),
+                        "chart": f"https://www.tradingview.com/chart/?symbol={sym}",
+                    }
+                    if ac == "crypto":
+                        crypto_picks.append(pick)
+                    elif ac == "commodities":
+                        commodity_picks.append(pick)
+                    else:
+                        mcap = enr.get("mktCap", enr.get("marketCap", 0))
+                        if isinstance(mcap, str):
+                            mcap = 0
+                        if mcap > 10_000_000_000:
+                            equities_large.append(pick)
+                        elif mcap > 2_000_000_000:
+                            equities_mid.append(pick)
+                        else:
+                            equities_small.append(pick)
+                return {
+                    "display_type": "cross_market",
+                    "macro_regime": market_data.get("macro_context", {"verdict": "", "summary": summary[:200]}),
+                    "equities": {
+                        "large_caps": equities_large[:5],
+                        "mid_caps": equities_mid[:5],
+                        "small_micro_caps": equities_small[:5],
+                    },
+                    "crypto": crypto_picks[:3],
+                    "commodities": commodity_picks[:3],
+                    "portfolio_bias": market_data.get("portfolio_bias", {"risk_regime": "", "asset_class_bias": "", "cash_guidance": "", "hedge_considerations": ""}),
+                }
+
+            # For display types we can't rebuild from data, return None
+            # (the label-only override will still apply)
+            return None
+
+        except Exception as e:
+            print(f"[PRESET_REBUILD] Failed to rebuild {display_type} from data: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def _parse_chatbox_response(self, raw_response: str, request_id: str = "") -> dict:
         """Parse chatbox mode response — conversational text with optional ticker extraction."""
