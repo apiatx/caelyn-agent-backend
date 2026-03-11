@@ -970,9 +970,9 @@ class TradingAgent:
                             parsed_display = _expected_display
                             print(f"[PRESET_ENFORCE] Overrode display_type (no data rebuild): chat → {_expected_display} (preset={_resolved_p})")
 
-        if category == "best_trades" and market_data and isinstance(market_data, dict) and not chatbox_mode:
+        if category in ("best_trades", "bearish", "thematic", "market_scan") and market_data and isinstance(market_data, dict) and not chatbox_mode:
             if parsed_display != "trades":
-                print(f"[BEST_TRADES] Claude returned display_type={parsed_display}, enforcing structured trades output")
+                print(f"[TRADES_ENFORCE] Claude returned display_type={parsed_display} for {category}, enforcing structured trades output")
                 claude_text = result.get("analysis", "") or result.get("structured", {}).get("message", "") or ""
                 top_trades = market_data.get("top_trades", [])
                 bearish_setups = market_data.get("bearish_setups", [])
@@ -1025,7 +1025,7 @@ class TradingAgent:
                 if empty_context:
                     structured["empty_reason"] = empty_context
 
-        if category == "best_trades" and market_data and isinstance(market_data, dict) and not chatbox_mode:
+        if category in ("best_trades", "bearish", "thematic", "market_scan") and market_data and isinstance(market_data, dict) and not chatbox_mode:
             structured = result.get("structured")
             if isinstance(structured, dict):
                 # --- Backfill: if Claude returned "trades" but has empty/weak trade list ---
@@ -1090,9 +1090,15 @@ class TradingAgent:
                             t["risk"] = t.get("why_could_fail", "Breakdown below stop level would invalidate setup")
                         if not t.get("indicator_signals") and t.get("signals_stacking"):
                             t["indicator_signals"] = [s.replace("_", " ").title() for s in t["signals_stacking"]]
+                        # Ensure TradingView URL exists
+                        if not t.get("tv_url") and t.get("ticker"):
+                            t["tv_url"] = f"https://www.tradingview.com/chart/?symbol={t['ticker']}"
                 for t in structured.get("bearish_setups", []):
-                    if isinstance(t, dict) and not t.get("risk"):
-                        t["risk"] = t.get("why_could_fail", "Reversal above resistance would invalidate short thesis")
+                    if isinstance(t, dict):
+                        if not t.get("risk"):
+                            t["risk"] = t.get("why_could_fail", "Reversal above resistance would invalidate short thesis")
+                        if not t.get("tv_url") and t.get("ticker"):
+                            t["tv_url"] = f"https://www.tradingview.com/chart/?symbol={t['ticker']}"
 
             # --- data_health injection (keep existing) ---
             data_health = market_data.get("data_health")
@@ -1143,6 +1149,9 @@ class TradingAgent:
                         for key, val in list(row.items()):
                             if val == "N/A" or val == "n/a":
                                 row[key] = None
+                        # Ensure TradingView URL exists
+                        if not row.get("tv_url") and row.get("ticker"):
+                            row["tv_url"] = f"https://www.tradingview.com/chart/?symbol={row['ticker']}"
             elif not isinstance(structured, dict):
                 result["structured"] = market_data
 
@@ -1181,6 +1190,19 @@ class TradingAgent:
         # Post-process: fix crypto tradingview_symbols and validate names
         if category == "cross_asset_trending":
             self._fix_trending_output(result, market_data)
+
+        # Post-process: ensure TradingView chart URLs on ALL tickers in structured output
+        _struct = result.get("structured")
+        if isinstance(_struct, dict):
+            for _ticker_list_key in ("trending_tickers", "top_trades", "bearish_setups", "rows", "picks", "top_momentum", "top_moves"):
+                for item in _struct.get(_ticker_list_key, []):
+                    if isinstance(item, dict):
+                        sym = item.get("ticker", item.get("symbol", item.get("coin", "")))
+                        if sym:
+                            if not item.get("tv_url") and not item.get("chart"):
+                                item["tv_url"] = f"https://www.tradingview.com/chart/?symbol={sym}"
+                            if not item.get("chart") and item.get("tv_url"):
+                                item["chart"] = item["tv_url"]
 
         _locals = locals()
         result["_routing"] = {
@@ -3218,6 +3240,8 @@ class TradingAgent:
         "crypto", "best_trades", "cross_market", "prediction_markets",
         "chat", "sector_rotation", "earnings_catalyst", "cross_asset_trending",
         "daily_briefing", "briefing", "social_momentum",
+        "deterministic_screener", "bearish", "thematic", "commodities",
+        "macro", "news_intelligence", "market_scan", "trending",
     }
 
     # Extended thinking budgets (tokens) for Sonnet 4.5 categories.
@@ -6077,13 +6101,13 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
                 "text": TRENDING_VALIDATION_PROMPT,
             })
 
-        if category == "cross_asset_trending":
+        if category in ("cross_asset_trending", "trending", "news_intelligence"):
             system_blocks.append({
                 "type": "text",
                 "text": CROSS_ASSET_TRENDING_CONTRACT,
             })
 
-        if category == "best_trades":
+        if category in ("best_trades", "bearish", "thematic", "market_scan"):
             system_blocks.append({
                 "type": "text",
                 "text": BEST_TRADES_CONTRACT,
@@ -6141,6 +6165,21 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         elif category == "social_momentum":
             model = "claude-sonnet-4-5-20250929"
             token_limit = 6000
+        elif category == "deterministic_screener":
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 6000
+        elif category in ("bearish", "thematic", "market_scan"):
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 8000
+        elif category == "commodities":
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 6000
+        elif category == "macro":
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 6000
+        elif category in ("trending", "news_intelligence"):
+            model = "claude-sonnet-4-5-20250929"
+            token_limit = 8000
         elif category == "followup":
             model = "claude-sonnet-4-20250514"
             token_limit = 4096
@@ -6488,6 +6527,214 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
                     "commodities": commodity_picks[:3],
                     "portfolio_bias": market_data.get("portfolio_bias", {"risk_regime": "", "asset_class_bias": "", "cash_guidance": "", "hedge_considerations": ""}),
                 }
+
+            if display_type == "trades":
+                # Rebuild trades structure from market data (bearish, thematic, market_scan)
+                top_trades = market_data.get("top_trades", market_data.get("ranked_candidates", []))
+                bearish_setups = market_data.get("bearish_setups", [])
+                macro = market_data.get("market_pulse", {})
+                if not isinstance(macro, dict):
+                    macro = {}
+                if not top_trades and not bearish_setups:
+                    return None
+                for t in top_trades:
+                    if isinstance(t, dict):
+                        if not t.get("thesis"):
+                            sigs = t.get("indicator_signals", t.get("signals_stacking", []))
+                            t["thesis"] = t.get("pattern", "Technical setup") + " — " + ", ".join(sigs[:3]) if sigs else t.get("pattern", "Technical setup")
+                        if not t.get("why_could_fail"):
+                            t["why_could_fail"] = "Breakdown below stop level would invalidate setup"
+                        if not t.get("risk"):
+                            t["risk"] = t.get("why_could_fail", "")
+                        if not t.get("tv_url"):
+                            sym = t.get("ticker", t.get("symbol", ""))
+                            if sym:
+                                t["tv_url"] = f"https://www.tradingview.com/chart/?symbol={sym}"
+                for t in bearish_setups:
+                    if isinstance(t, dict):
+                        if not t.get("thesis"):
+                            t["thesis"] = "Bearish breakdown with multiple confirming signals"
+                        if not t.get("why_could_fail"):
+                            t["why_could_fail"] = "Reversal above resistance would invalidate short thesis"
+                        if not t.get("risk"):
+                            t["risk"] = t.get("why_could_fail", "")
+                        if not t.get("tv_url"):
+                            sym = t.get("ticker", t.get("symbol", ""))
+                            if sym:
+                                t["tv_url"] = f"https://www.tradingview.com/chart/?symbol={sym}"
+                return {
+                    "display_type": "trades",
+                    "market_pulse": {
+                        "verdict": macro.get("regime", "Neutral"),
+                        "regime": macro.get("regime", ""),
+                        "summary": summary[:300] if summary else "Market scan complete",
+                    },
+                    "top_trades": top_trades[:10],
+                    "bearish_setups": bearish_setups[:5],
+                    "scan_stats": market_data.get("scan_stats", {}),
+                    "notes": ["Rebuilt from backend data — trade plan numbers are pre-computed from OHLCV data"],
+                }
+
+            if display_type == "screener":
+                # Rebuild screener from deterministic_screener data
+                rows = market_data.get("rows", market_data.get("ranked_candidates", []))
+                if not rows:
+                    return None
+                screener_rows = []
+                for r in rows[:20]:
+                    if not isinstance(r, dict):
+                        continue
+                    sym = r.get("ticker", r.get("symbol", ""))
+                    if not sym:
+                        continue
+                    screener_rows.append({
+                        "ticker": sym,
+                        "company": r.get("company", r.get("companyName", r.get("name", ""))),
+                        "price": r.get("price", ""),
+                        "change": r.get("change", r.get("changesPercentage", "")),
+                        "composite_score": r.get("composite_score", r.get("combined_score", 0)),
+                        "ta_score": r.get("ta_score", 0),
+                        "fa_score": r.get("fa_score", 0),
+                        "signals": r.get("signals", r.get("indicator_signals", [])),
+                        "pattern": r.get("pattern", ""),
+                        "tv_url": f"https://www.tradingview.com/chart/?symbol={sym}",
+                    })
+                top_picks = [r["ticker"] for r in screener_rows[:3] if r.get("ticker")]
+                return {
+                    "display_type": "screener",
+                    "rows": screener_rows,
+                    "top_picks": top_picks,
+                    "explain": [f"{t}: Top-ranked by composite score" for t in top_picks],
+                    "observations": summary[:300] if summary else "Screener scan complete",
+                    "scan_stats": market_data.get("scan_stats", {}),
+                }
+
+            if display_type == "commodities":
+                commodities = market_data.get("commodities", market_data.get("commodity_data", []))
+                if not isinstance(commodities, list) or not commodities:
+                    return None
+                comm_list = []
+                for c in commodities[:10]:
+                    if not isinstance(c, dict):
+                        continue
+                    comm_list.append({
+                        "name": c.get("name", c.get("commodity", "")),
+                        "symbol": c.get("symbol", c.get("ticker", "")),
+                        "price": str(c.get("price", "")),
+                        "change_today": str(c.get("change_today", c.get("changesPercentage", ""))),
+                        "trend_short": c.get("trend_short", c.get("trend", "")),
+                        "rsi": c.get("rsi", 50),
+                        "key_levels": c.get("key_levels", ""),
+                        "drivers": c.get("drivers", c.get("catalyst", "")),
+                        "conviction": c.get("conviction", "Medium"),
+                        "why_could_fail": c.get("why_could_fail", c.get("risk", "")),
+                    })
+                if not comm_list:
+                    return None
+                return {
+                    "display_type": "commodities",
+                    "summary": summary[:300],
+                    "dxy_context": market_data.get("dxy_context", ""),
+                    "commodities": comm_list,
+                    "top_conviction_plays": [],
+                    "portfolio_bias": market_data.get("portfolio_bias", {"risk_regime": "", "asset_class_bias": "", "cash_guidance": "", "hedge_considerations": ""}),
+                }
+
+            if display_type == "macro":
+                macro = market_data.get("macro_context", market_data.get("market_pulse", {}))
+                if not isinstance(macro, dict):
+                    macro = {}
+                return {
+                    "display_type": "macro",
+                    "market_regime": macro.get("regime", macro.get("market_regime", "")),
+                    "summary": summary[:400],
+                    "key_indicators": macro.get("key_indicators", macro.get("key_numbers", {})),
+                    "implications": macro.get("implications", {}),
+                    "upcoming_events": macro.get("upcoming_events", []),
+                    "positioning": macro.get("positioning", ""),
+                    "portfolio_bias": market_data.get("portfolio_bias", {"risk_regime": "", "asset_class_bias": "", "cash_guidance": "", "hedge_considerations": ""}),
+                }
+
+            if display_type == "crypto":
+                top_coins = market_data.get("top_coins", [])
+                if not top_coins:
+                    return None
+                momentum = []
+                for c in top_coins[:8]:
+                    if not isinstance(c, dict):
+                        continue
+                    sym = c.get("symbol", c.get("ticker", ""))
+                    momentum.append({
+                        "coin": c.get("name", sym),
+                        "symbol": sym,
+                        "price": str(c.get("price", "")),
+                        "change_24h": str(c.get("change_24h", c.get("change_percentage_24h", ""))),
+                        "funding_rate": str(c.get("funding_rate", "")),
+                        "conviction": c.get("conviction", "Medium"),
+                        "thesis": c.get("thesis", c.get("catalyst", "")),
+                        "why_could_fail": c.get("why_could_fail", c.get("risk", "")),
+                        "trade_plan": c.get("trade_plan", {"entry": "", "stop": "", "target_1": "", "risk_reward": ""}),
+                    })
+                btc = next((c for c in top_coins if c.get("symbol", "").upper() in ("BTC", "BTCUSDT")), {})
+                eth = next((c for c in top_coins if c.get("symbol", "").upper() in ("ETH", "ETHUSDT")), {})
+                return {
+                    "display_type": "crypto",
+                    "market_overview": summary[:300],
+                    "btc_eth_summary": {
+                        "btc": {"price": str(btc.get("price", "")), "change_24h": str(btc.get("change_24h", "")), "dominance": str(btc.get("dominance", "")), "funding_rate": str(btc.get("funding_rate", "")), "signal": btc.get("signal", "")},
+                        "eth": {"price": str(eth.get("price", "")), "change_24h": str(eth.get("change_24h", "")), "dominance": str(eth.get("dominance", "")), "funding_rate": str(eth.get("funding_rate", "")), "signal": eth.get("signal", "")},
+                    },
+                    "perps_overview": market_data.get("perps_overview", {"total_open_interest": "", "market_bias": ""}),
+                    "perps_squeezes": market_data.get("perps_squeezes", [])[:5],
+                    "hot_categories": market_data.get("hot_categories", [])[:5],
+                    "top_momentum": momentum,
+                    "portfolio_bias": market_data.get("portfolio_bias", {"risk_regime": "", "asset_class_bias": "", "cash_guidance": "", "hedge_considerations": ""}),
+                }
+
+            if display_type == "investments":
+                ranked = market_data.get("ranked_candidates", market_data.get("top_trades", []))
+                enriched = market_data.get("enriched_data", {}) or {}
+                if not ranked:
+                    return None
+                picks = []
+                for item in ranked[:8]:
+                    if not isinstance(item, dict):
+                        continue
+                    sym = item.get("ticker", item.get("symbol", ""))
+                    if not sym:
+                        continue
+                    enr = enriched.get(sym, {}) if isinstance(enriched, dict) else {}
+                    picks.append({
+                        "ticker": sym,
+                        "company": enr.get("companyName", enr.get("name", item.get("name", ""))),
+                        "price": str(enr.get("price", item.get("price", ""))),
+                        "market_cap": str(enr.get("mktCap", enr.get("marketCap", ""))),
+                        "conviction": item.get("conviction", "Medium"),
+                        "conviction_score": item.get("conviction_score", item.get("combined_score", 60)),
+                        "position_tier": item.get("position_tier", "Tier 2"),
+                        "investment_thesis": item.get("thesis", item.get("catalyst", "")),
+                        "catalyst": item.get("catalyst", ""),
+                        "why_could_fail": item.get("why_could_fail", item.get("risk", "")),
+                        "moat": item.get("moat", ""),
+                        "chart": f"https://www.tradingview.com/chart/?symbol={sym}",
+                        "fundamentals": {
+                            "revenue_growth_yoy": str(enr.get("revenueGrowth", "")),
+                            "ebitda_margin": str(enr.get("ebitdaMargin", "")),
+                            "pe_ratio": str(enr.get("pe", enr.get("peRatioTTM", ""))),
+                        },
+                    })
+                if not picks:
+                    return None
+                return {
+                    "display_type": "investments",
+                    "market_context": summary[:300],
+                    "picks": picks,
+                    "portfolio_bias": market_data.get("portfolio_bias", {"risk_regime": "", "asset_class_bias": "", "cash_guidance": "", "hedge_considerations": ""}),
+                }
+
+            if display_type == "analysis":
+                # Ticker analysis — minimal rebuild, keep Claude's text as the main content
+                return None
 
             # For display types we can't rebuild from data, return None
             # (the label-only override will still apply)
