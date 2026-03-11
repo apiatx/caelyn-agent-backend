@@ -123,9 +123,19 @@ def _render_briefing(s: dict) -> str:
 
 def _render_picks(s: dict) -> str:
     lines = []
-    ctx = s.get("market_context", "")
-    if ctx:
-        lines.append(ctx)
+
+    # market_pulse can be string or dict; market_context is an older alias
+    pulse = s.get("market_pulse", "") or s.get("market_context", "")
+    if pulse:
+        if isinstance(pulse, str):
+            lines.append(f"Market Pulse: {pulse}")
+        elif isinstance(pulse, dict):
+            verdict = pulse.get("verdict", "")
+            summary = pulse.get("summary", "")
+            if verdict:
+                lines.append(f"Market Pulse: {verdict}")
+            if summary:
+                lines.append(summary)
         lines.append("")
 
     picks = s.get("picks", [])
@@ -136,6 +146,20 @@ def _render_picks(s: dict) -> str:
         if isinstance(pick, dict):
             _render_pick_line(lines, pick, prefix=f"#{i}")
             lines.append("")
+
+    bearish = s.get("bearish_setups", [])
+    if bearish:
+        lines.append("Bearish Setups:")
+        for i, pick in enumerate(bearish[:5], 1):
+            if isinstance(pick, dict):
+                _render_pick_line(lines, pick, prefix=f"#{i}")
+                lines.append("")
+
+    notes = s.get("notes", [])
+    if notes:
+        lines.append("Notes:")
+        for n in notes:
+            lines.append(f"  • {n}")
 
     bias = s.get("portfolio_bias", "")
     if isinstance(bias, str) and bias:
@@ -148,12 +172,14 @@ def _render_picks(s: dict) -> str:
 
 def _render_pick_line(lines: list, pick: dict, prefix: str = ""):
     ticker = pick.get("ticker", pick.get("symbol", ""))
-    company = pick.get("company", "")
+    company = pick.get("company", "") or pick.get("name", "")
     price = pick.get("price", pick.get("entry", ""))
     action = pick.get("action", "")
     conviction = pick.get("conviction", "")
-    score = pick.get("conviction_score", "")
+    score = pick.get("conviction_score", "") or pick.get("confidence_score", "")
+    tech = pick.get("technical_score", "")
     tier = pick.get("position_tier", "")
+    pattern = pick.get("pattern", "")
 
     header_parts = []
     if prefix:
@@ -170,9 +196,18 @@ def _render_pick_line(lines: list, pick: dict, prefix: str = ""):
         header_parts.append(f"- {conviction}")
     if score:
         header_parts.append(f"({score}/100)")
+    if tech:
+        header_parts.append(f"TA:{tech}")
     if tier:
         header_parts.append(f"- {tier}")
+    if pattern:
+        header_parts.append(f"| {pattern}")
     lines.append(" ".join(header_parts))
+
+    # Indicator signals (human-readable)
+    ind_signals = pick.get("indicator_signals", [])
+    if ind_signals:
+        lines.append(f"  Indicators: {', '.join(str(x) for x in ind_signals)}")
 
     thesis = pick.get("thesis", pick.get("investment_thesis", ""))
     if thesis:
@@ -182,17 +217,33 @@ def _render_pick_line(lines: list, pick: dict, prefix: str = ""):
     if catalyst:
         lines.append(f"  Catalyst: {catalyst}")
 
-    risk = pick.get("why_could_fail", pick.get("risk", ""))
+    risk = pick.get("risk", "") or pick.get("why_could_fail", "")
     if risk:
         lines.append(f"  Risk: {risk}")
 
+    # Trade plan — can be nested under "trade_plan" or flat
     tp = pick.get("trade_plan", {})
-    if isinstance(tp, dict) and tp.get("entry"):
+    if isinstance(tp, dict) and tp:
         entry = tp.get("entry", "")
         stop = tp.get("stop", "")
+        targets = tp.get("targets", [])
         t1 = tp.get("target_1", tp.get("target", ""))
         rr = tp.get("risk_reward", "")
-        lines.append(f"  Trade: Entry {entry} | Stop {stop} | Target {t1} | R:R {rr}")
+        tf = tp.get("timeframe", "")
+        target_str = ", ".join(str(x) for x in targets) if targets else str(t1) if t1 else ""
+        plan_bits = []
+        if entry:
+            plan_bits.append(f"Entry {entry}")
+        if stop:
+            plan_bits.append(f"Stop {stop}")
+        if target_str:
+            plan_bits.append(f"Targets {target_str}")
+        if rr:
+            plan_bits.append(f"R:R {rr}")
+        if tf:
+            plan_bits.append(f"TF {tf}")
+        if plan_bits:
+            lines.append(f"  Trade: {' | '.join(plan_bits)}")
 
 
 # ── Analysis (single ticker) ────────────────────────────────

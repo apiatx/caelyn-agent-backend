@@ -1492,26 +1492,35 @@ def _render_cross_market_analysis(s: dict) -> str:
 
 def _render_trades_analysis(s: dict) -> str:
     parts = []
-    pulse = s.get("market_pulse", {})
+
+    # market_pulse can be a string OR a dict — handle both
+    pulse = s.get("market_pulse", "")
     if pulse:
-        verdict = pulse.get("verdict", "N/A")
-        summary = pulse.get("summary", "")
-        parts.append(f"MARKET PULSE: {verdict}")
-        if summary:
-            parts.append(summary)
+        if isinstance(pulse, str):
+            parts.append(f"MARKET PULSE: {pulse}")
+        elif isinstance(pulse, dict):
+            verdict = pulse.get("verdict", "N/A")
+            summary = pulse.get("summary", "")
+            parts.append(f"MARKET PULSE: {verdict}")
+            if summary:
+                parts.append(summary)
         parts.append("")
 
     def _render_trade(t):
         ticker = t.get("ticker", "?")
         name = t.get("name", "")
+        price = t.get("price", "")
         direction = t.get("direction", "long").upper()
         action = t.get("action", "")
         conf = t.get("confidence_score", "")
         tech = t.get("technical_score", "")
         pattern = t.get("pattern", "")
+        mcap = t.get("market_cap", "")
         header = f"{ticker}"
         if name:
             header += f" ({name})"
+        if price:
+            header += f" @ {price}"
         header += f" [{direction}]"
         if action:
             header += f" — {action}"
@@ -1522,30 +1531,42 @@ def _render_trades_analysis(s: dict) -> str:
             detail_parts.append(f"TA Score: {tech}")
         if pattern:
             detail_parts.append(f"Pattern: {pattern}")
+        if mcap:
+            detail_parts.append(f"MCap: {mcap}")
         if detail_parts:
             header += " | " + " | ".join(detail_parts)
         parts.append(header)
-        signals = t.get("signals_stacking", [])
-        if signals:
-            parts.append(f"  Signals: {', '.join(signals)}")
-        entry = t.get("entry", "")
-        stop = t.get("stop", "")
-        targets = t.get("targets", [])
-        rr = t.get("risk_reward", "")
-        tf = t.get("timeframe", "")
+
+        # indicator_signals (human-readable signal list)
+        ind_signals = t.get("indicator_signals", [])
+        if ind_signals:
+            parts.append(f"  Indicators: {', '.join(str(x) for x in ind_signals)}")
+        else:
+            signals = t.get("signals_stacking", [])
+            if signals:
+                parts.append(f"  Signals: {', '.join(str(x) for x in signals)}")
+
+        # Trade plan — can be nested under "trade_plan" or flat on the trade
+        plan = t.get("trade_plan", {}) if isinstance(t.get("trade_plan"), dict) else {}
+        entry = plan.get("entry", "") or t.get("entry", "")
+        stop = plan.get("stop", "") or t.get("stop", "")
+        targets = plan.get("targets", []) or t.get("targets", [])
+        rr = plan.get("risk_reward", "") or t.get("risk_reward", "")
+        tf = plan.get("timeframe", "") or t.get("timeframe", "")
         plan_parts = []
         if entry:
             plan_parts.append(f"Entry: {entry}")
         if stop:
             plan_parts.append(f"Stop: {stop}")
         if targets:
-            plan_parts.append(f"Targets: {', '.join(targets)}")
+            plan_parts.append(f"Targets: {', '.join(str(x) for x in targets)}")
         if rr:
             plan_parts.append(f"R:R {rr}")
         if tf:
             plan_parts.append(f"Timeframe: {tf}")
         if plan_parts:
             parts.append(f"  {' | '.join(plan_parts)}")
+
         confs = t.get("confirmations", {})
         if confs and isinstance(confs, dict):
             conf_strs = []
@@ -1559,16 +1580,17 @@ def _render_trades_analysis(s: dict) -> str:
                 parts.append(f"  Confirmations: {' | '.join(conf_strs)}")
         thesis = t.get("thesis", "")
         if thesis:
-            parts.append(f"  {thesis}")
-        fail = t.get("why_could_fail", "")
-        if fail:
-            parts.append(f"  Risk: {fail}")
-        tv = t.get("tv_url", "")
+            parts.append(f"  Thesis: {thesis}")
+        # "risk" field (detailed) takes priority, then "why_could_fail"
+        risk = t.get("risk", "") or t.get("why_could_fail", "")
+        if risk:
+            parts.append(f"  Risk: {risk}")
+        tv = t.get("tradingview_url", "") or t.get("tv_url", "")
         if tv:
             parts.append(f"  Chart: {tv}")
         gaps = t.get("data_gaps", [])
         if gaps:
-            parts.append(f"  Data gaps: {', '.join(gaps)}")
+            parts.append(f"  Data gaps: {', '.join(str(x) for x in gaps)}")
         parts.append("")
 
     top = s.get("top_trades", [])
@@ -1594,7 +1616,10 @@ def _render_trades_analysis(s: dict) -> str:
         parts.append("")
         parts.append(disclaimer)
 
-    return "\n".join(parts).strip()
+    rendered = "\n".join(parts).strip()
+    if not rendered:
+        return ""
+    return rendered
 
 
 _NARRATIVE_KEYS = ("summary", "narrative", "analysis", "report", "text", "message", "observations")
@@ -1666,7 +1691,11 @@ def _ensure_analysis(result: dict, meta: dict = None) -> dict:
                 break
 
     if not analysis and display_type in _RENDERERS:
-        analysis = _RENDERERS[display_type](structured)
+        try:
+            analysis = _RENDERERS[display_type](structured)
+        except Exception as render_err:
+            print(f"[RENDER] Renderer crashed for display_type={display_type}: {render_err}")
+            analysis = ""
 
     if analysis:
         result["analysis"] = analysis
@@ -1987,7 +2016,16 @@ async def query_agent(
                     updated_messages.append({"role": "user", "content": user_query})
                     _asst_content3 = result.get("analysis", "") if isinstance(result, dict) else ""
                     if not _asst_content3:
-                        _asst_content3 = _json.dumps(result, default=str)[:8000]
+                        # Try to render structured data instead of dumping raw JSON
+                        _s3 = result.get("structured", {}) if isinstance(result, dict) else {}
+                        _dt3 = _s3.get("display_type", "") if isinstance(_s3, dict) else ""
+                        if _dt3 in _RENDERERS:
+                            try:
+                                _asst_content3 = _RENDERERS[_dt3](_s3)
+                            except Exception:
+                                pass
+                        if not _asst_content3:
+                            _asst_content3 = _json.dumps(result, default=str)[:8000]
                     updated_messages.append({"role": "assistant", "content": _asst_content3})
                     _save_msgs(conv_id, updated_messages)
                 except Exception as e:
