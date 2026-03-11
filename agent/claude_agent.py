@@ -3217,9 +3217,18 @@ class TradingAgent:
             effective_model = reasoning_model
         print(f"[AGENT] Sending to {effective_model} (selected={reasoning_model}, primary={primary_model}): {data_size:,} chars of market data (category={category}, chatbox_mode={chatbox_mode})")
 
-        # Non-Claude models: use ONLY the selected model (no Claude fallback)
+        # Non-Claude models: try the selected model first.
         # In agent_collab mode, skip web search — data sources already provided live data.
+        # For preset/scan categories (data-heavy structured output), fall back to Claude
+        # if the alt model returns empty or errors — these must always produce results.
         _is_agent_collab_alt = (reasoning_model == "agent_collab" and effective_model != "claude")
+        _FALLBACK_CATEGORIES = {
+            "daily_briefing", "briefing", "best_trades", "cross_asset_trending",
+            "sector_rotation", "earnings_catalyst", "crypto", "investments",
+            "social_momentum", "ticker_analysis", "portfolio_review",
+            "cross_market", "prediction_markets",
+        }
+        _should_fallback = preset_intent or category in _FALLBACK_CATEGORIES
         if effective_model != "claude":
             try:
                 result = await asyncio.wait_for(
@@ -3228,11 +3237,20 @@ class TradingAgent:
                 )
                 if result:
                     return result
-                print(f"[AGENT] {reasoning_model} returned empty — NOT falling back to another model")
-                return json.dumps({"display_type": "chat", "message": f"{reasoning_model} returned an empty response. Please try again."})
+                if not _should_fallback:
+                    print(f"[AGENT] {reasoning_model} returned empty — NOT falling back to another model")
+                    return json.dumps({"display_type": "chat", "message": f"{reasoning_model} returned an empty response. Please try again."})
+                print(f"[AGENT] {reasoning_model} returned empty for {category} — falling back to Claude")
+            except asyncio.TimeoutError:
+                if not _should_fallback:
+                    print(f"[AGENT] {reasoning_model} timed out — NOT falling back to another model")
+                    return json.dumps({"display_type": "chat", "message": f"{reasoning_model} timed out. Please try again."})
+                print(f"[AGENT] {reasoning_model} timed out for {category} — falling back to Claude")
             except Exception as e:
-                print(f"[AGENT] {reasoning_model} failed ({e}) — NOT falling back to another model")
-                return json.dumps({"display_type": "chat", "message": f"{reasoning_model} encountered an error: {str(e)}. Please try again."})
+                if not _should_fallback:
+                    print(f"[AGENT] {reasoning_model} failed ({e}) — NOT falling back to another model")
+                    return json.dumps({"display_type": "chat", "message": f"{reasoning_model} encountered an error: {str(e)}. Please try again."})
+                print(f"[AGENT] {reasoning_model} failed ({e}) for {category} — falling back to Claude")
 
         # Claude path: use async client + web search
         # Both standalone claude and agent_collab always use the async web-search path —
