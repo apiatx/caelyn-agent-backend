@@ -3387,13 +3387,7 @@ class TradingAgent:
     VALID_REASONING_MODELS = {"claude", "gpt-4o", "grok", "gemini", "perplexity", "agent_collab", "all_agents"}
     VALID_COLLAB_AGENTS = {"grok", "gpt-4o", "gemini", "perplexity"}
 
-    # Categories where web_search tool is allowed for FREE-FORM (non-preset) queries.
-    # Preset buttons NEVER get web_search regardless of category.
-    WEB_SEARCH_CATEGORIES = {
-        "cross_asset_trending", "daily_briefing", "best_trades", "earnings_catalyst",
-        "ticker_analysis", "chat", "news_intelligence", "prediction_markets",
-        "portfolio_review", "investments", "social_momentum",
-    }
+    WEB_SEARCH_CATEGORIES = {"cross_asset_trending", "daily_briefing", "best_trades", "earnings_catalyst"}
 
     async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None, collab_agents: list = None, primary_model: str = None) -> str:
         data_size = len(json.dumps(market_data, default=str)) if market_data else 0
@@ -3665,10 +3659,8 @@ class TradingAgent:
         # In agent_collab mode the data pipeline (Grok X scan, Perplexity web search,
         # proprietary data) already collected all live data — the reasoner should NOT
         # duplicate searches.  Solo models always get web search.
-        # CRITICAL: Preset buttons NEVER get web search — it causes models to produce
-        # narrative prose instead of the structured JSON the frontend needs.
-        use_web_search = not skip_web_search and not preset_intent
-        print(f"[ALT_MODEL] Preparing {reasoning_model}: context_size={context_size:,} chars, token_limit={token_limit}, category={category}, web_search={use_web_search}, preset={preset_intent}")
+        use_web_search = not skip_web_search
+        print(f"[ALT_MODEL] Preparing {reasoning_model}: context_size={context_size:,} chars, token_limit={token_limit}, category={category}, web_search={use_web_search}")
 
         if reasoning_model == "gpt-4o":
             api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -3864,15 +3856,7 @@ class TradingAgent:
         return ""
 
     async def _ask_claude_async_web_search(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None) -> str:
-        """Async Claude call, optionally with web_search tool.
-
-        IMPORTANT: Preset buttons NEVER get web_search.  The data pipeline
-        already gathered all live market data (Grok X scan, Perplexity,
-        proprietary APIs).  Giving Claude web_search on preset requests
-        causes it to search the web and produce narrative prose instead of
-        the structured JSON the frontend needs for cards, TradingView
-        iframes, and interactive tickers.
-        """
+        """Async Claude call with web_search tool for eligible categories."""
         system_blocks, messages, model, token_limit, use_thinking, thinking_budget = self._build_prompt(
             user_prompt, market_data, history, is_followup, category, chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent
         )
@@ -3887,35 +3871,29 @@ class TradingAgent:
             timeout=120.0,
         )
 
-        # Gate web_search: preset buttons MUST NOT get it (produces prose
-        # instead of structured JSON).  Only allow for specific free-form
-        # categories where live web context genuinely improves the answer.
-        _allow_web_search = (
-            not preset_intent
-            and not chatbox_mode
-            and category in self.WEB_SEARCH_CATEGORIES
-        )
-        tools = [{"type": "web_search_20250305", "name": "web_search"}] if _allow_web_search else []
+        tools = [{"type": "web_search_20250305", "name": "web_search"}]
 
         try:
-            _mode_label = "ASYNC+web_search" if tools else "ASYNC (no tools — preset/structured)"
-            # Build common kwargs
-            _kwargs = {
-                "model": model,
-                "system": system_text,
-                "messages": messages,
-            }
-            if tools:
-                _kwargs["tools"] = tools
             if use_thinking:
                 effective_max_tokens = token_limit + thinking_budget
-                _kwargs["max_tokens"] = effective_max_tokens
-                _kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
-                print(f"[Agent] Sending {len(messages)} messages to Claude {_mode_label} (model={model}, category={category}, max_tokens={effective_max_tokens}, thinking={thinking_budget})")
+                print(f"[Agent] Sending {len(messages)} messages to Claude ASYNC+web_search (model={model}, category={category}, max_tokens={effective_max_tokens}, thinking={thinking_budget})")
+                response = await async_client.messages.create(
+                    model=model,
+                    max_tokens=effective_max_tokens,
+                    thinking={"type": "enabled", "budget_tokens": thinking_budget},
+                    system=system_text,
+                    messages=messages,
+                    tools=tools,
+                )
             else:
-                _kwargs["max_tokens"] = token_limit
-                print(f"[Agent] Sending {len(messages)} messages to Claude {_mode_label} (model={model}, category={category}, max_tokens={token_limit})")
-            response = await async_client.messages.create(**_kwargs)
+                print(f"[Agent] Sending {len(messages)} messages to Claude ASYNC+web_search (model={model}, category={category}, max_tokens={token_limit})")
+                response = await async_client.messages.create(
+                    model=model,
+                    max_tokens=token_limit,
+                    system=system_text,
+                    messages=messages,
+                    tools=tools,
+                )
 
             # Find the last text block (tool_use blocks may appear before it)
             response_text = ""
