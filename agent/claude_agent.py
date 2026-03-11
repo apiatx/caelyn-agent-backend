@@ -3237,20 +3237,13 @@ class TradingAgent:
                 )
                 if result:
                     return result
-                if not _should_fallback:
-                    print(f"[AGENT] {reasoning_model} returned empty — NOT falling back to another model")
-                    return json.dumps({"display_type": "chat", "message": f"{reasoning_model} returned an empty response. Please try again."})
-                print(f"[AGENT] {reasoning_model} returned empty for {category} — falling back to Claude")
+                # Always fall back to Claude when alt model returns empty —
+                # a Claude response is infinitely better than an error message.
+                print(f"[AGENT] {reasoning_model} returned empty for {category} (preset={preset_intent}) — falling back to Claude")
             except asyncio.TimeoutError:
-                if not _should_fallback:
-                    print(f"[AGENT] {reasoning_model} timed out — NOT falling back to another model")
-                    return json.dumps({"display_type": "chat", "message": f"{reasoning_model} timed out. Please try again."})
-                print(f"[AGENT] {reasoning_model} timed out for {category} — falling back to Claude")
+                print(f"[AGENT] {reasoning_model} timed out for {category} (preset={preset_intent}) — falling back to Claude")
             except Exception as e:
-                if not _should_fallback:
-                    print(f"[AGENT] {reasoning_model} failed ({e}) — NOT falling back to another model")
-                    return json.dumps({"display_type": "chat", "message": f"{reasoning_model} encountered an error: {str(e)}. Please try again."})
-                print(f"[AGENT] {reasoning_model} failed ({e}) for {category} — falling back to Claude")
+                print(f"[AGENT] {reasoning_model} failed ({e}) for {category} (preset={preset_intent}) — falling back to Claude")
 
         # Claude path: use async client + web search
         # Both standalone claude and agent_collab always use the async web-search path —
@@ -3503,25 +3496,48 @@ class TradingAgent:
             # Model selection: reasoning for solo/primary, non-reasoning for collaborator
             grok_model = "grok-4-1-fast-non-reasoning" if is_collab_agent else "grok-4-1-fast-reasoning"
             # Try Responses API first (supports web_search + x_search tools)
+            # Use httpx directly instead of OpenAI SDK — xAI's response format
+            # differs slightly and the SDK's output_text property can return empty.
             try:
-                from openai import AsyncOpenAI
-                client = AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
                 tools = []
                 if use_web_search:
                     tools = [{"type": "web_search"}, {"type": "x_search"}]
-                kwargs = {
+                payload = {
                     "model": grok_model,
                     "input": oai_messages,
                     "max_output_tokens": token_limit,
                 }
                 if tools:
-                    kwargs["tools"] = tools
-                resp = await client.responses.create(**kwargs)
-                text = resp.output_text or ""
-                search_tag = "+web_search+x_search" if use_web_search else ""
-                print(f"[ALT_MODEL] {grok_model}{search_tag} responded: {len(text):,} chars")
-                if text:
-                    return text
+                    payload["tools"] = tools
+                async with httpx.AsyncClient(timeout=90.0) as hclient:
+                    resp = await hclient.post(
+                        "https://api.x.ai/v1/responses",
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        json=payload,
+                    )
+                if resp.status_code != 200:
+                    print(f"[ALT_MODEL] {grok_model} Responses API HTTP {resp.status_code}: {resp.text[:500]}")
+                else:
+                    data = resp.json()
+                    # Extract text from xAI Responses API output — same logic as xai_sentiment_provider
+                    texts = []
+                    for item in data.get("output", []):
+                        if item.get("type") == "message":
+                            for cb in item.get("content", []):
+                                if cb.get("type") in ("output_text", "text"):
+                                    t = cb.get("text", "")
+                                    if t:
+                                        texts.append(t)
+                    text = "\n".join(texts).strip()
+                    search_tag = "+web_search+x_search" if use_web_search else ""
+                    output_types = [item.get("type") for item in data.get("output", [])]
+                    print(f"[ALT_MODEL] {grok_model}{search_tag} responded: {len(text):,} chars, output_types={output_types}")
+                    if text:
+                        return text
+                    # Log the raw response for debugging when text is empty
+                    print(f"[ALT_MODEL] {grok_model} Responses API returned empty text. Raw output keys: {list(data.keys())}, output items: {len(data.get('output', []))}")
+                    if data.get("output"):
+                        print(f"[ALT_MODEL] First output item: {str(data['output'][0])[:500]}")
                 print(f"[ALT_MODEL] {grok_model} Responses API returned empty, trying chat completions")
             except Exception as e:
                 import traceback
