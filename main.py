@@ -1271,6 +1271,7 @@ class QueryRequest(BaseModel):
     reasoning_model: Optional[str] = "agent_collab"
     collab_agents: Optional[List[str]] = None       # e.g. ["grok","gpt-4o","gemini","perplexity"]
     primary_model: Optional[str] = None              # final synthesis model (default: claude)
+    history: Optional[List[dict]] = None             # client-side conversation history (for model-switch continuity)
 
 def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, timing_ms=None):
     return {
@@ -1814,6 +1815,11 @@ async def query_agent(
         elif conv is None:
             print(f"[API] Conversation {conv_id} not found, creating new one")
             conv_id = None
+
+    # If client explicitly sent history, prefer it — handles model switches and message deletions
+    if body.history is not None and len(body.history) > 0:
+        print(f"[API] Using client-provided history ({len(body.history)} msgs) over DB history ({len(history)} msgs)")
+        history = body.history
 
     if not conv_id:
         try:
