@@ -966,15 +966,28 @@ class TradingAgent:
                             result.pop("_parse_error", None)
                             print(f"[PRESET_ENFORCE] Rebuilt structured response from market data: {actual_display} → {_expected_display} (preset={_resolved_p})")
                         else:
-                            # Fallback: at least fix the display_type label so
-                            # the frontend attempts the correct renderer
+                            # Fallback: try to migrate existing structured data
+                            # to the expected format (e.g. picks→top_trades for trades).
+                            # If the model returned a valid structure under the wrong
+                            # display_type label, we can often just relabel + migrate fields.
+                            _migrated = False
+                            if _expected_display == "trades" and structured.get("picks"):
+                                # Model used "Short-term Plays" schema (picks[]) instead
+                                # of "Best Trade Setups" schema (top_trades[]).
+                                # Migrate picks → top_trades.
+                                structured["top_trades"] = structured.pop("picks")
+                                if structured.get("market_context") and not structured.get("market_pulse"):
+                                    ctx = structured.pop("market_context")
+                                    structured["market_pulse"] = {"verdict": "", "regime": "", "summary": ctx if isinstance(ctx, str) else ""}
+                                _migrated = True
                             structured["display_type"] = _expected_display
                             result["type"] = _expected_display
                             parsed_display = _expected_display
                             # Clear _parse_error — display_type override is still
                             # better than returning an error envelope
                             result.pop("_parse_error", None)
-                            print(f"[PRESET_ENFORCE] Overrode display_type (no data rebuild): {actual_display} → {_expected_display} (preset={_resolved_p})")
+                            _label = "migrated fields" if _migrated else "label only"
+                            print(f"[PRESET_ENFORCE] Overrode display_type ({_label}): {actual_display} → {_expected_display} (preset={_resolved_p})")
 
         if category in ("best_trades", "bearish", "thematic", "market_scan") and market_data and isinstance(market_data, dict) and not chatbox_mode:
             if parsed_display != "trades":
@@ -1030,10 +1043,37 @@ class TradingAgent:
                 }
                 if empty_context:
                     structured["empty_reason"] = empty_context
+                # Save rebuilt structure back to result (was previously dead code)
+                result["structured"] = structured
+                result["type"] = "trades"
+                parsed_display = "trades"
+                result.pop("_parse_error", None)
+                print(f"[TRADES_ENFORCE] Rebuilt trades structure from market data ({len(top_trades)} trades, {len(bearish_setups)} bearish)")
 
         if category in ("best_trades", "bearish", "thematic", "market_scan") and market_data and isinstance(market_data, dict) and not chatbox_mode:
             structured = result.get("structured")
             if isinstance(structured, dict):
+                # --- Normalize: if model used "picks" schema variant, migrate to "top_trades" ---
+                if structured.get("picks") and not structured.get("top_trades"):
+                    structured["top_trades"] = structured.pop("picks")
+                    print(f"[TRADES_NORMALIZE] Migrated picks[] → top_trades[] ({len(structured['top_trades'])} items)")
+                # Normalize market_context → market_pulse
+                if structured.get("market_context") and not structured.get("market_pulse"):
+                    ctx = structured.pop("market_context")
+                    structured["market_pulse"] = {"verdict": "", "regime": "", "summary": ctx if isinstance(ctx, str) else ""}
+                    print(f"[TRADES_NORMALIZE] Migrated market_context → market_pulse")
+                # Normalize chart → tv_url on each trade
+                for _list_key in ("top_trades", "bearish_setups"):
+                    for t in structured.get(_list_key, []):
+                        if isinstance(t, dict):
+                            if t.get("chart") and not t.get("tv_url"):
+                                t["tv_url"] = t["chart"]
+                            # Normalize nested trade_plan to flat fields
+                            tp = t.get("trade_plan")
+                            if isinstance(tp, dict):
+                                for f in ("entry", "stop", "targets", "risk_reward", "timeframe"):
+                                    if tp.get(f) and not t.get(f):
+                                        t[f] = tp[f]
                 # --- Backfill: if Claude returned "trades" but has empty/weak trade list ---
                 claude_trades = structured.get("top_trades", [])
                 backend_trades = market_data.get("top_trades", [])
@@ -1292,15 +1332,23 @@ class TradingAgent:
         # Post-process: ensure TradingView chart URLs on ALL tickers in structured output
         _struct = result.get("structured")
         if isinstance(_struct, dict):
-            for _ticker_list_key in ("trending_tickers", "top_trades", "bearish_setups", "rows", "picks", "top_momentum", "top_moves"):
-                for item in _struct.get(_ticker_list_key, []):
-                    if isinstance(item, dict):
-                        sym = item.get("ticker", item.get("symbol", item.get("coin", "")))
-                        if sym:
-                            if not item.get("tv_url") and not item.get("chart"):
-                                item["tv_url"] = f"https://www.tradingview.com/chart/?symbol={sym}"
-                            if not item.get("chart") and item.get("tv_url"):
-                                item["chart"] = item["tv_url"]
+            _all_items = []
+            for _ticker_list_key in ("trending_tickers", "top_trades", "bearish_setups", "rows", "picks", "top_momentum", "top_moves", "positions", "commodities", "sectors"):
+                _all_items.extend(_struct.get(_ticker_list_key, []))
+            # Also handle nested cross_market structure
+            _eq = _struct.get("equities", {})
+            if isinstance(_eq, dict):
+                for _cap_key in ("large_caps", "mid_caps", "small_micro_caps"):
+                    _all_items.extend(_eq.get(_cap_key, []))
+            _all_items.extend(_struct.get("crypto", []) if isinstance(_struct.get("crypto"), list) else [])
+            for item in _all_items:
+                if isinstance(item, dict):
+                    sym = item.get("ticker", item.get("symbol", item.get("coin", "")))
+                    if sym:
+                        if not item.get("tv_url") and not item.get("chart"):
+                            item["tv_url"] = f"https://www.tradingview.com/chart/?symbol={sym}"
+                        if not item.get("chart") and item.get("tv_url"):
+                            item["chart"] = item["tv_url"]
 
         _locals = locals()
         result["_routing"] = {
@@ -6234,6 +6282,30 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
                 "type": "text",
                 "text": SECTOR_ROTATION_CONTRACT,
             })
+
+        # ── Preset: inject the target display_type schema into system blocks ──
+        # System-level enforcement is higher priority than user-message enforcement
+        # and ensures ALL models (Claude, GPT-4o, Grok, Gemini, Perplexity) see
+        # the required JSON structure prominently.
+        if preset_intent and not chatbox_mode:
+            _resolved_sys = self._resolve_preset(preset_intent)
+            if _resolved_sys and _resolved_sys in self.INTENT_PROFILES:
+                _display_type_sys = self.CATEGORY_TO_DISPLAY_TYPE.get(category)
+                if not _display_type_sys:
+                    _profile_sys = self.INTENT_PROFILES[_resolved_sys]
+                    _intent_sys = _profile_sys.get("intent", "")
+                    _cat_sys = self.INTENT_TO_CATEGORY.get(_intent_sys, category)
+                    _display_type_sys = self.CATEGORY_TO_DISPLAY_TYPE.get(_cat_sys, _cat_sys)
+                if _display_type_sys and _display_type_sys != "chat":
+                    _schema_sys = self._get_display_type_schema(_display_type_sys)
+                    system_blocks.append({
+                        "type": "text",
+                        "text": (
+                            f"PRESET RESPONSE FORMAT: This request is from preset button '{_resolved_sys}'. "
+                            f"Your response MUST be a raw JSON object with display_type=\"{_display_type_sys}\". "
+                            f"Schema: {_schema_sys}"
+                        ),
+                    })
 
         use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES
         if category == "crypto":
