@@ -934,10 +934,10 @@ class TradingAgent:
 
         # ── Preset display_type enforcement ──
         # When a preset button triggered this request, ensure the parsed result has
-        # the correct display_type.  If the model returned "chat" (plain text fallback)
-        # but a structured display_type was expected, rebuild the structured response
-        # from market data so the frontend can render proper cards with clickable
-        # tickers, TradingView iframes, and popup details.
+        # the correct display_type.  If the model returned the WRONG display_type
+        # (plain text "chat", or any mismatch like "analysis" instead of "crypto"),
+        # rebuild the structured response from market data so the frontend renders
+        # proper cards with clickable tickers, TradingView iframes, and popup details.
         if preset_intent and not chatbox_mode:
             _resolved_p = self._resolve_preset(preset_intent)
             if _resolved_p and _resolved_p in self.INTENT_PROFILES:
@@ -951,8 +951,8 @@ class TradingAgent:
                 structured = result.get("structured", {})
                 if isinstance(structured, dict):
                     actual_display = structured.get("display_type", "unknown")
-                    if actual_display == "chat" and _expected_display != "chat":
-                        # Model returned plain text wrapped as chat — try to build
+                    if actual_display != _expected_display and _expected_display != "chat":
+                        # Model returned wrong display_type — try to rebuild
                         # a proper structured response from market data.
                         plain_text = structured.get("message", "") or result.get("analysis", "")
                         rebuilt = self._rebuild_structured_from_data(
@@ -962,13 +962,19 @@ class TradingAgent:
                             result["structured"] = rebuilt
                             result["type"] = _expected_display
                             parsed_display = _expected_display
-                            print(f"[PRESET_ENFORCE] Rebuilt structured response from market data: chat → {_expected_display} (preset={_resolved_p})")
+                            # Clear _parse_error — we successfully rebuilt from data
+                            result.pop("_parse_error", None)
+                            print(f"[PRESET_ENFORCE] Rebuilt structured response from market data: {actual_display} → {_expected_display} (preset={_resolved_p})")
                         else:
-                            # Fallback: at least fix the display_type label
+                            # Fallback: at least fix the display_type label so
+                            # the frontend attempts the correct renderer
                             structured["display_type"] = _expected_display
                             result["type"] = _expected_display
                             parsed_display = _expected_display
-                            print(f"[PRESET_ENFORCE] Overrode display_type (no data rebuild): chat → {_expected_display} (preset={_resolved_p})")
+                            # Clear _parse_error — display_type override is still
+                            # better than returning an error envelope
+                            result.pop("_parse_error", None)
+                            print(f"[PRESET_ENFORCE] Overrode display_type (no data rebuild): {actual_display} → {_expected_display} (preset={_resolved_p})")
 
         if category in ("best_trades", "bearish", "thematic", "market_scan") and market_data and isinstance(market_data, dict) and not chatbox_mode:
             if parsed_display != "trades":
@@ -1154,6 +1160,98 @@ class TradingAgent:
                             row["tv_url"] = f"https://www.tradingview.com/chart/?symbol={row['ticker']}"
             elif not isinstance(structured, dict):
                 result["structured"] = market_data
+
+        # ── Category-specific enforcement for crypto ──
+        if category == "crypto" and market_data and isinstance(market_data, dict) and not chatbox_mode:
+            structured = result.get("structured", {})
+            if isinstance(structured, dict) and structured.get("display_type") != "crypto":
+                print(f"[CRYPTO_ENFORCE] Claude returned display_type={structured.get('display_type')} for crypto, rebuilding")
+                plain_text = result.get("analysis", "") or structured.get("message", "") or ""
+                rebuilt = self._rebuild_structured_from_data("crypto", market_data, plain_text, category)
+                if rebuilt:
+                    result["structured"] = rebuilt
+                    result["type"] = "crypto"
+                    parsed_display = "crypto"
+                    result.pop("_parse_error", None)
+                    print(f"[CRYPTO_ENFORCE] Rebuilt crypto structured response from market data")
+
+        # ── Category-specific enforcement for commodities ──
+        if category == "commodities" and market_data and isinstance(market_data, dict) and not chatbox_mode:
+            structured = result.get("structured", {})
+            if isinstance(structured, dict) and structured.get("display_type") != "commodities":
+                print(f"[COMMODITIES_ENFORCE] Claude returned display_type={structured.get('display_type')}, rebuilding")
+                plain_text = result.get("analysis", "") or structured.get("message", "") or ""
+                rebuilt = self._rebuild_structured_from_data("commodities", market_data, plain_text, category)
+                if rebuilt:
+                    result["structured"] = rebuilt
+                    result["type"] = "commodities"
+                    parsed_display = "commodities"
+                    result.pop("_parse_error", None)
+
+        # ── Category-specific enforcement for macro ──
+        if category == "macro" and market_data and isinstance(market_data, dict) and not chatbox_mode:
+            structured = result.get("structured", {})
+            if isinstance(structured, dict) and structured.get("display_type") != "macro":
+                print(f"[MACRO_ENFORCE] Claude returned display_type={structured.get('display_type')}, rebuilding")
+                plain_text = result.get("analysis", "") or structured.get("message", "") or ""
+                rebuilt = self._rebuild_structured_from_data("macro", market_data, plain_text, category)
+                if rebuilt:
+                    result["structured"] = rebuilt
+                    result["type"] = "macro"
+                    parsed_display = "macro"
+                    result.pop("_parse_error", None)
+
+        # ── Category-specific enforcement for briefing ──
+        if category in ("briefing", "daily_briefing") and market_data and isinstance(market_data, dict) and not chatbox_mode:
+            structured = result.get("structured", {})
+            if isinstance(structured, dict) and structured.get("display_type") != "briefing":
+                print(f"[BRIEFING_ENFORCE] Claude returned display_type={structured.get('display_type')}, rebuilding")
+                plain_text = result.get("analysis", "") or structured.get("message", "") or ""
+                rebuilt = self._rebuild_structured_from_data("briefing", market_data, plain_text, category)
+                if rebuilt:
+                    result["structured"] = rebuilt
+                    result["type"] = "briefing"
+                    parsed_display = "briefing"
+                    result.pop("_parse_error", None)
+
+        # ── Category-specific enforcement for investments ──
+        if category == "investments" and market_data and isinstance(market_data, dict) and not chatbox_mode:
+            structured = result.get("structured", {})
+            if isinstance(structured, dict) and structured.get("display_type") != "investments":
+                print(f"[INVESTMENTS_ENFORCE] Claude returned display_type={structured.get('display_type')}, rebuilding")
+                plain_text = result.get("analysis", "") or structured.get("message", "") or ""
+                rebuilt = self._rebuild_structured_from_data("investments", market_data, plain_text, category)
+                if rebuilt:
+                    result["structured"] = rebuilt
+                    result["type"] = "investments"
+                    parsed_display = "investments"
+                    result.pop("_parse_error", None)
+
+        # ── Category-specific enforcement for sector_rotation ──
+        if category == "sector_rotation" and market_data and isinstance(market_data, dict) and not chatbox_mode:
+            structured = result.get("structured", {})
+            if isinstance(structured, dict) and structured.get("display_type") != "sector_rotation":
+                print(f"[SECTOR_ENFORCE] Claude returned display_type={structured.get('display_type')}, rebuilding")
+                plain_text = result.get("analysis", "") or structured.get("message", "") or ""
+                rebuilt = self._rebuild_structured_from_data("sector_rotation", market_data, plain_text, category)
+                if rebuilt:
+                    result["structured"] = rebuilt
+                    result["type"] = "sector_rotation"
+                    parsed_display = "sector_rotation"
+                    result.pop("_parse_error", None)
+
+        # ── Category-specific enforcement for trending / cross_asset_trending / social_momentum ──
+        if category in ("trending", "cross_asset_trending", "social_momentum") and market_data and isinstance(market_data, dict) and not chatbox_mode:
+            structured = result.get("structured", {})
+            if isinstance(structured, dict) and structured.get("display_type") != "trending":
+                print(f"[TRENDING_ENFORCE] Claude returned display_type={structured.get('display_type')} for {category}, rebuilding")
+                plain_text = result.get("analysis", "") or structured.get("message", "") or ""
+                rebuilt = self._rebuild_structured_from_data("trending", market_data, plain_text, category)
+                if rebuilt:
+                    result["structured"] = rebuilt
+                    result["type"] = "trending"
+                    parsed_display = "trending"
+                    result.pop("_parse_error", None)
 
         if market_data and isinstance(market_data, dict) and market_data.get("pre_computed_highlights"):
             pch = market_data["pre_computed_highlights"]

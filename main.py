@@ -1622,6 +1622,192 @@ def _render_trades_analysis(s: dict) -> str:
     return rendered
 
 
+def _render_crypto_analysis(s: dict) -> str:
+    parts = []
+    overview = s.get("market_overview", "")
+    if overview:
+        parts.append(f"CRYPTO MARKET: {overview}")
+        parts.append("")
+    btc_eth = s.get("btc_eth_summary", {})
+    for key in ("btc", "eth"):
+        coin = btc_eth.get(key, {})
+        if isinstance(coin, dict) and coin.get("price"):
+            parts.append(f"{key.upper()}: {coin.get('price', '')} ({coin.get('change_24h', '')}) | Funding: {coin.get('funding_rate', '')} | Dom: {coin.get('dominance', '')}")
+    if btc_eth:
+        parts.append("")
+    momentum = s.get("top_momentum", [])
+    if momentum:
+        parts.append("--- TOP MOMENTUM PICKS ---")
+        for m in momentum:
+            sym = m.get("symbol", m.get("coin", "?"))
+            price = m.get("price", "")
+            change = m.get("change_24h", "")
+            funding = m.get("funding_rate", "")
+            conv = m.get("conviction", "")
+            line = f"{sym}"
+            if price:
+                line += f" {price}"
+            if change:
+                line += f" ({change})"
+            if funding:
+                line += f" | Funding: {funding}"
+            if conv:
+                line += f" | {conv}"
+            parts.append(line)
+            thesis = m.get("thesis", "")
+            if thesis:
+                parts.append(f"  {thesis}")
+            parts.append("")
+    return "\n".join(parts).strip()
+
+
+def _render_trending_analysis(s: dict) -> str:
+    parts = []
+    summary = s.get("summary", "")
+    if summary:
+        parts.append(summary)
+        parts.append("")
+    tickers = s.get("trending_tickers", [])
+    if tickers:
+        parts.append("--- TRENDING ---")
+        for t in tickers:
+            sym = t.get("ticker", "?")
+            company = t.get("company", "")
+            price = t.get("price", "")
+            change = t.get("change", "")
+            conv = t.get("conviction", "")
+            line = f"{sym}"
+            if company:
+                line += f" ({company})"
+            if price:
+                line += f" {price}"
+            if change:
+                line += f" ({change})"
+            if conv:
+                line += f" [{conv}]"
+            parts.append(line)
+            why = t.get("why_trending", "")
+            if why:
+                parts.append(f"  {why}")
+            parts.append("")
+    return "\n".join(parts).strip()
+
+
+def _render_briefing_analysis(s: dict) -> str:
+    parts = []
+    pulse = s.get("market_pulse", {})
+    if isinstance(pulse, dict):
+        parts.append(f"MARKET PULSE: {pulse.get('verdict', '')} — {pulse.get('summary', '')}")
+    elif isinstance(pulse, str):
+        parts.append(f"MARKET PULSE: {pulse}")
+    parts.append("")
+    numbers = s.get("key_numbers", {})
+    if isinstance(numbers, dict):
+        for key in ("spy", "qqq", "vix", "dxy", "gold", "oil"):
+            val = numbers.get(key, {})
+            if isinstance(val, dict) and val.get("price"):
+                parts.append(f"  {key.upper()}: {val.get('price', '')} ({val.get('change', '')})")
+        parts.append("")
+    moves = s.get("top_moves", [])
+    if moves:
+        parts.append("--- TOP MOVES ---")
+        for m in moves:
+            ticker = m.get("ticker", "?")
+            action = m.get("action", "")
+            conv = m.get("conviction", "")
+            thesis = m.get("thesis", "")
+            parts.append(f"{ticker} {action} [{conv}] — {thesis}")
+        parts.append("")
+    return "\n".join(parts).strip()
+
+
+def _render_commodities_analysis(s: dict) -> str:
+    parts = []
+    summary = s.get("summary", "")
+    if summary:
+        parts.append(summary)
+        parts.append("")
+    comms = s.get("commodities", [])
+    for c in comms:
+        name = c.get("name", c.get("symbol", "?"))
+        price = c.get("price", "")
+        change = c.get("change_today", "")
+        conv = c.get("conviction", "")
+        line = f"{name}: {price} ({change})"
+        if conv:
+            line += f" [{conv}]"
+        parts.append(line)
+        drivers = c.get("drivers", "")
+        if drivers:
+            parts.append(f"  {drivers}")
+    return "\n".join(parts).strip()
+
+
+def _render_macro_analysis(s: dict) -> str:
+    parts = []
+    regime = s.get("market_regime", "")
+    if regime:
+        parts.append(f"REGIME: {regime}")
+    summary = s.get("summary", "")
+    if summary:
+        parts.append(summary)
+    parts.append("")
+    indicators = s.get("key_indicators", {})
+    if isinstance(indicators, dict):
+        for k, v in indicators.items():
+            if v:
+                parts.append(f"  {k}: {v}")
+    return "\n".join(parts).strip()
+
+
+def _render_investments_analysis(s: dict) -> str:
+    parts = []
+    ctx = s.get("market_context", "")
+    if ctx:
+        parts.append(ctx)
+        parts.append("")
+    picks = s.get("picks", [])
+    if picks:
+        parts.append("--- INVESTMENT PICKS ---")
+        for p in picks:
+            ticker = p.get("ticker", "?")
+            company = p.get("company", "")
+            conv = p.get("conviction", "")
+            thesis = p.get("investment_thesis", "")
+            line = f"{ticker}"
+            if company:
+                line += f" ({company})"
+            if conv:
+                line += f" [{conv}]"
+            parts.append(line)
+            if thesis:
+                parts.append(f"  {thesis}")
+            parts.append("")
+    return "\n".join(parts).strip()
+
+
+def _render_sector_rotation_analysis(s: dict) -> str:
+    parts = []
+    summary = s.get("summary", "")
+    if summary:
+        parts.append(summary)
+        parts.append("")
+    sectors = s.get("sectors", [])
+    for sec in sectors:
+        etf = sec.get("etf", "")
+        name = sec.get("sector", "")
+        change = sec.get("change_today", "")
+        conv = sec.get("conviction", "")
+        stage2 = sec.get("stage2_pct", "")
+        line = f"{etf} ({name}): {change}%"
+        if conv:
+            line += f" [{conv}]"
+        if stage2:
+            line += f" | Stage2: {stage2}%"
+        parts.append(line)
+    return "\n".join(parts).strip()
+
+
 _NARRATIVE_KEYS = ("summary", "narrative", "analysis", "report", "text", "message", "observations")
 def _render_screener_analysis(s: dict) -> str:
     parts = []
@@ -1669,6 +1855,13 @@ _RENDERERS = {
     "cross_market": _render_cross_market_analysis,
     "trades": _render_trades_analysis,
     "screener": _render_screener_analysis,
+    "crypto": _render_crypto_analysis,
+    "trending": _render_trending_analysis,
+    "briefing": _render_briefing_analysis,
+    "commodities": _render_commodities_analysis,
+    "macro": _render_macro_analysis,
+    "investments": _render_investments_analysis,
+    "sector_rotation": _render_sector_rotation_analysis,
 }
 
 
@@ -1968,26 +2161,39 @@ async def query_agent(
                 return len(non_meta) == 0
 
             if isinstance(result, dict) and result.get("_parse_error"):
-                parse_err = result.pop("_parse_error")
-                meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
-                resp = _error_envelope(
-                    "CLAUDE_JSON_PARSE_FAIL",
-                    "Claude returned a response that could not be parsed as structured JSON.",
-                    meta,
-                    details={"preview": parse_err.get("preview", "")[:800]},
-                )
-                _resp_log(req_id, 200, "error", resp)
-                if conv_id:
-                    try:
-                        updated_messages = list(history)
-                        updated_messages.append({"role": "user", "content": user_query})
-                        _asst_content = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
-                        updated_messages.append({"role": "assistant", "content": _asst_content})
-                        _save_msgs(conv_id, updated_messages)
-                    except Exception:
-                        pass
-                yield _j.dumps(resp).encode()
-                return
+                # Check if the agent already rebuilt structured data despite
+                # the parse error (e.g. preset enforcement rebuilt from market
+                # data).  If meaningful structured content exists, treat it as
+                # a success — don't return an error envelope.
+                _s_check = result.get("structured", {})
+                _dt_check = _s_check.get("display_type", "chat") if isinstance(_s_check, dict) else "chat"
+                _has_content = _dt_check not in ("chat", "error", "unknown", "")
+                if _has_content:
+                    # Structured data was rebuilt — drop the parse error and
+                    # continue to the normal success path below.
+                    result.pop("_parse_error", None)
+                    print(f"[API] _parse_error present but structured data rebuilt (display_type={_dt_check}), continuing as success")
+                else:
+                    parse_err = result.pop("_parse_error")
+                    meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
+                    resp = _error_envelope(
+                        "CLAUDE_JSON_PARSE_FAIL",
+                        "Claude returned a response that could not be parsed as structured JSON.",
+                        meta,
+                        details={"preview": parse_err.get("preview", "")[:800]},
+                    )
+                    _resp_log(req_id, 200, "error", resp)
+                    if conv_id:
+                        try:
+                            updated_messages = list(history)
+                            updated_messages.append({"role": "user", "content": user_query})
+                            _asst_content = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
+                            updated_messages.append({"role": "assistant", "content": _asst_content})
+                            _save_msgs(conv_id, updated_messages)
+                        except Exception:
+                            pass
+                    yield _j.dumps(resp).encode()
+                    return
 
             if _is_truly_empty(result):
                 print(f"[API] WARNING: Empty/blank result returned for query: {user_query[:80]}")
