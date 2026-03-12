@@ -689,7 +689,7 @@ async def get_collab_options(request: Request):
         ],
         # Collab agents — full list available for multi-agent collaboration.
         # Frontend sends based on preset:
-        #   Default:            { reasoning_model: "agent_collab" }  (locked — no collab_agents needed, backend knows the combo)
+        #   Default:            { reasoning_model: "agent_collab", collab_agents: ["grok","perplexity"] }
         #   Full Collaboration: { reasoning_model: "all_agents", collab_agents: [all], primary_model: "<user-chosen>" }
         #   Custom Collab:      { reasoning_model: "agent_collab", collab_agents: [...user-picked], primary_model: "<user-chosen>" }
         #                       OR { reasoning_model: "all_agents", collab_agents: [...user-picked], primary_model: "<user-chosen>" }
@@ -707,7 +707,7 @@ async def get_collab_options(request: Request):
         #
         # THREE DISTINCT MODES (currently implemented):
         #
-        # 1. DEFAULT COLLAB — reasoning_model: "agent_collab", agents LOCKED (empty).
+        # 1. DEFAULT COLLAB — reasoning_model: "agent_collab", agents LOCKED (Grok + Perplexity).
         #    Backend pipeline: Grok X scan + Perplexity web search + proprietary data → single
         #    reasoning model synthesizes. User can change the reasoning model (primary_model)
         #    but cannot change which data sources run. The reasoner does NOT do its own web
@@ -730,7 +730,7 @@ async def get_collab_options(request: Request):
                 "id": "default",
                 "name": "Default",
                 "description": "Data sources (Grok X scan + Perplexity web search + proprietary data) → chosen reasoning model synthesizes",
-                "agents": [],
+                "agents": ["grok", "perplexity"],
                 "reasoning_model": "agent_collab",
                 "primary": "claude",
                 "mode": "collab",
@@ -2013,6 +2013,10 @@ async def query_agent(
                     if isinstance(_s, dict):
                         _structured_data = _s
                         _hist_display_type = _s.get("display_type", "")
+                        # Normalize legacy/new chatbox naming so frontend history
+                        # grouping stays consistent (free-form chat should be "chat").
+                        if _hist_display_type == "chatbox":
+                            _hist_display_type = "chat"
                         _hist_category = _s.get("scan_type", "") or _hist_display_type
 
                 # Map preset_intent to history category
@@ -2053,6 +2057,18 @@ async def query_agent(
                 if isinstance(result, dict):
                     _hist_content = render_structured_to_text(result)
 
+                # Do not skip history rows when renderer returns blank (this caused
+                # prompt/response pairs to silently disappear in History UI).
+                if not _hist_content:
+                    if isinstance(result, dict):
+                        _hist_content = (
+                            (result.get("analysis") or "").strip()
+                            or ((_structured_data.get("message") or "") if isinstance(_structured_data, dict) else "")
+                            or ((_structured_data.get("summary") or "") if isinstance(_structured_data, dict) else "")
+                        )
+                    if not _hist_content:
+                        _hist_content = (user_query or "").strip() or "(empty response)"
+
                 # Extract tickers + recommended prices from structured response
                 _hist_tickers = extract_tickers_from_structured(_structured_data) if _structured_data else None
 
@@ -2075,20 +2091,19 @@ async def query_agent(
                 except Exception:
                     pass
 
-                if _hist_content:
-                    _save_prompt_history(
-                        category=_hist_category,
-                        intent=_hist_intent,
-                        content=_hist_content[:8000],
-                        display_type=_hist_display_type or "chat",
-                        user_id=_hist_user_id,
-                        model_used=_hist_model,
-                        query=user_query,
-                        tickers=_hist_tickers,
-                        conversation=_hist_conversation,
-                    )
-                    _ticker_count = len(_hist_tickers) if _hist_tickers else 0
-                    print(f"[HISTORY] Saved to prompt_history: category={_hist_category}, intent={_hist_intent}, model={_hist_model}, tickers={_ticker_count}, len={len(_hist_content)}")
+                _save_prompt_history(
+                    category=_hist_category,
+                    intent=_hist_intent,
+                    content=_hist_content[:8000],
+                    display_type=_hist_display_type or "chat",
+                    user_id=_hist_user_id,
+                    model_used=_hist_model,
+                    query=user_query,
+                    tickers=_hist_tickers,
+                    conversation=_hist_conversation,
+                )
+                _ticker_count = len(_hist_tickers) if _hist_tickers else 0
+                print(f"[HISTORY] Saved to prompt_history: category={_hist_category}, intent={_hist_intent}, model={_hist_model}, tickers={_ticker_count}, len={len(_hist_content)}")
             except Exception as _hist_err:
                 print(f"[HISTORY] Failed to auto-save prompt history: {_hist_err}")
 

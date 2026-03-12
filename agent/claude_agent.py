@@ -919,20 +919,29 @@ class TradingAgent:
             except NameError:
                 pass
 
-        raw_response = await self._ask_claude_with_timeout(user_prompt, claude_data, history, is_followup=is_followup, category=category, chatbox_mode=chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent, collab_agents=collab_agents, primary_model=primary_model)
+        # Preserve legacy preset behavior: preset button requests must return the
+        # structured payload expected by frontend renderers, regardless of selected
+        # reasoning/model routing mode. Free-form chat keeps chatbox/plain-text mode.
+        is_preset_request = bool(preset_intent)
+        use_chatbox_mode = (
+            (chatbox_mode or category in ("prediction_markets", "earnings_catalyst"))
+            and not is_preset_request
+        )
+
+        raw_response = await self._ask_claude_with_timeout(user_prompt, claude_data, history, is_followup=is_followup, category=category, chatbox_mode=use_chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent, collab_agents=collab_agents, primary_model=primary_model)
         # Reset web search gate after request completes
         self.data._skip_llm_web_search = False
         claude_ms = int((time.time() - data_done_time) * 1000)
         print(f"[AGENT] Claude responded: {len(raw_response):,} chars ({time.time() - start_time:.1f}s)")
 
-        if chatbox_mode or category == "prediction_markets" or category == "earnings_catalyst":
+        if use_chatbox_mode:
             result = self._parse_chatbox_response(raw_response, request_id=request_id)
         else:
             result = self._parse_response(raw_response, request_id=request_id)
         parsed_display = result.get("structured", {}).get("display_type", result.get("type", "unknown"))
         print(f"[AGENT] Response parsed, display_type: {parsed_display} ({time.time() - start_time:.1f}s)")
 
-        if category == "best_trades" and market_data and isinstance(market_data, dict) and not chatbox_mode:
+        if category == "best_trades" and market_data and isinstance(market_data, dict) and not use_chatbox_mode:
             if parsed_display != "trades":
                 print(f"[BEST_TRADES] Claude returned display_type={parsed_display}, enforcing structured trades output")
                 claude_text = result.get("analysis", "") or result.get("structured", {}).get("message", "") or ""
@@ -987,7 +996,7 @@ class TradingAgent:
                 if empty_context:
                     structured["empty_reason"] = empty_context
 
-        if category == "best_trades" and market_data and isinstance(market_data, dict) and not chatbox_mode:
+        if category == "best_trades" and market_data and isinstance(market_data, dict) and not use_chatbox_mode:
             structured = result.get("structured")
             if isinstance(structured, dict):
                 # --- Backfill: if Claude returned "trades" but has empty/weak trade list ---
@@ -5825,7 +5834,7 @@ Be direct and opinionated. Tell me what you actually think."""
             _profile_text += "\n\n" + _active_profile
         # If no personal profile active, just use core DNA (default Caelyn)
 
-        if chatbox_mode or category == "prediction_markets" or category == "earnings_catalyst":
+        if chatbox_mode or ((category == "prediction_markets" or category == "earnings_catalyst") and not preset_intent):
             from agent.prompts import CHATBOX_SYSTEM_PROMPT
             system_blocks = [
                 {
