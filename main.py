@@ -2288,6 +2288,52 @@ class CreateConversationRequest(BaseModel):
 class UpdateConversationRequest(BaseModel):
     messages: List[dict] = []
 
+
+def _shape_prompt_history(all_history: dict, recent_limit: int = 10) -> dict:
+    """Return a frontend-friendly history payload while preserving bucket grouping."""
+    if not isinstance(all_history, dict):
+        all_history = {}
+
+    categories: dict = {}
+    items: list[dict] = []
+
+    for bucket_key, bucket in all_history.items():
+        if not isinstance(bucket, dict):
+            continue
+
+        category = bucket.get("category") or "general"
+        intent = bucket.get("intent") or "query"
+        entries = bucket.get("entries", [])
+        if not isinstance(entries, list):
+            entries = []
+
+        categories.setdefault(category, {})
+        categories[category][intent] = entries
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            items.append(
+                {
+                    "category": category,
+                    "intent": intent,
+                    "bucket_key": bucket_key,
+                    **entry,
+                }
+            )
+
+    items.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+    recent = items[: max(1, min(recent_limit, 100))]
+
+    return {
+        "buckets": all_history,
+        "categories": categories,
+        "items": items,
+        "recent": recent,
+        "recent_count": len(recent),
+        "total_count": len(items),
+    }
+
 @app.get("/api/conversations")
 @limiter.limit("30/minute")
 async def get_conversations(request: Request):
@@ -2366,7 +2412,31 @@ async def get_history(request: Request):
                         t["current_price"] = round(cur, 2)
                         t["pct_change"] = round(((cur - rec) / rec) * 100, 2)
 
-    return all_history
+    # Keep backward compatibility for older clients that expect raw {"category::intent": bucket}.
+    fmt = (request.query_params.get("format") or "").lower().strip()
+    if fmt in {"legacy", "raw"}:
+        return all_history
+
+    limit_param = request.query_params.get("recent_limit", "10")
+    try:
+        recent_limit = int(limit_param)
+    except Exception:
+        recent_limit = 10
+    return _shape_prompt_history(all_history, recent_limit=recent_limit)
+
+
+@app.get("/api/history/recent")
+@limiter.limit("30/minute")
+async def get_history_recent(request: Request, limit: int = 10):
+    from data.prompt_history import get_all
+    user_id = getattr(request.state, "user_id", "default")
+    all_history = get_all(user_id=user_id)
+    shaped = _shape_prompt_history(all_history, recent_limit=limit)
+    return {
+        "recent": shaped.get("recent", []),
+        "recent_count": shaped.get("recent_count", 0),
+        "total_count": shaped.get("total_count", 0),
+    }
 
 @app.get("/api/history/storage-info")
 @limiter.limit("10/minute")
