@@ -1803,7 +1803,7 @@ async def query_agent(
     if body.csv_data and not user_query.strip():
         user_query = "Analyze every ticker in this uploaded CSV. Give a BUY, HOLD, or SELL rating for each, plus identify the top 2-3 best investments."
 
-    from data.chat_history import create_conversation, get_conversation, save_messages as _save_msgs
+    from data.chat_history import create_conversation, get_conversation, append_message as _append_msg
 
     conv_id = body.conversation_id
     history = []
@@ -1834,6 +1834,21 @@ async def query_agent(
     meta["conversation_id"] = conv_id
 
     print(f"[API] request_id={req_id} query={user_query[:100]}, history_turns={len(history)}, conv_id={conv_id}")
+
+    if conv_id and user_query.strip():
+        try:
+            _append_msg(
+                conv_id,
+                "user",
+                user_query,
+                message_type="preset" if body.preset_intent else "chat",
+                preset_key=body.preset_intent,
+                model_used=body.reasoning_model or "agent_collab",
+            )
+            conv_now = get_conversation(conv_id)
+            history = conv_now.get("messages", []) if conv_now else history
+        except Exception as e:
+            print(f"[API] Failed to persist user message: {e}")
 
     async def _stream_query():
         """
@@ -1950,11 +1965,8 @@ async def query_agent(
                 _resp_log(req_id, 200, "error", resp)
                 if conv_id:
                     try:
-                        updated_messages = list(history)
-                        updated_messages.append({"role": "user", "content": user_query})
                         _asst_content = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
-                        updated_messages.append({"role": "assistant", "content": _asst_content})
-                        _save_msgs(conv_id, updated_messages)
+                        _append_msg(conv_id, "assistant", _asst_content, message_type="error", structured_payload=resp, preset_key=body.preset_intent, model_used=body.reasoning_model or "agent_collab")
                     except Exception:
                         pass
                 yield _j.dumps(resp).encode()
@@ -1971,11 +1983,8 @@ async def query_agent(
                 _resp_log(req_id, 200, "error", resp)
                 if conv_id:
                     try:
-                        updated_messages = list(history)
-                        updated_messages.append({"role": "user", "content": user_query})
                         _asst_content2 = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
-                        updated_messages.append({"role": "assistant", "content": _asst_content2})
-                        _save_msgs(conv_id, updated_messages)
+                        _append_msg(conv_id, "assistant", _asst_content2, message_type="error", structured_payload=resp, preset_key=body.preset_intent, model_used=body.reasoning_model or "agent_collab")
                     except Exception:
                         pass
                 yield _j.dumps(resp).encode()
@@ -1983,13 +1992,18 @@ async def query_agent(
 
             if conv_id:
                 try:
-                    updated_messages = list(history)
-                    updated_messages.append({"role": "user", "content": user_query})
                     _asst_content3 = result.get("analysis", "") if isinstance(result, dict) else ""
                     if not _asst_content3:
                         _asst_content3 = _json.dumps(result, default=str)[:8000]
-                    updated_messages.append({"role": "assistant", "content": _asst_content3})
-                    _save_msgs(conv_id, updated_messages)
+                    _append_msg(
+                        conv_id,
+                        "assistant",
+                        _asst_content3,
+                        message_type="preset" if body.preset_intent else "chat",
+                        structured_payload=result if isinstance(result, dict) else None,
+                        preset_key=body.preset_intent,
+                        model_used=body.reasoning_model or "agent_collab",
+                    )
                 except Exception as e:
                     print(f"[API] Failed to save conversation: {e}")
 
@@ -2249,11 +2263,9 @@ async def review_watchlist(
 
         if body.conversation_id:
             try:
-                from data.chat_history import save_messages as _save2
-                _save2(body.conversation_id, [
-                    {"role": "user", "content": f"Review my watchlist: {', '.join(tickers)}"},
-                    {"role": "assistant", "content": result.get("analysis", "") if isinstance(result, dict) else _json.dumps(result, default=str)[:8000]},
-                ])
+                from data.chat_history import append_message as _append2
+                _append2(body.conversation_id, "user", f"Review my watchlist: {', '.join(tickers)}", message_type="watchlist", model_used=body.reasoning_model or "agent_collab")
+                _append2(body.conversation_id, "assistant", result.get("analysis", "") if isinstance(result, dict) else _json.dumps(result, default=str)[:8000], message_type="watchlist", structured_payload=result if isinstance(result, dict) else None, model_used=body.reasoning_model or "agent_collab")
             except Exception as e:
                 print(f"[API] Failed to save watchlist conversation: {e}")
 
