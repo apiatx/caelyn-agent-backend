@@ -19,19 +19,22 @@ from pathlib import Path
 
 AGENT_API_KEY = os.getenv("AGENT_API_KEY")
 _pg_startup_checked = False
+_pg_startup_attempts = 0
 
 
-def _init_postgres_chat_storage_on_startup():
+def _init_postgres_chat_storage_on_startup(reason: str = "startup"):
     """Ensure PostgreSQL chat tables exist in the live runtime entrypoint."""
-    global _pg_startup_checked
-    if _pg_startup_checked:
-        return
+    global _pg_startup_checked, _pg_startup_attempts
+    _pg_startup_attempts += 1
 
     db_url = os.getenv("DATABASE_URL")
-    print(f"[STARTUP][PG] DATABASE_URL detected={'YES' if bool(db_url) else 'NO'}")
+    print(f"[STARTUP][PG] reason={reason} attempt={_pg_startup_attempts} DATABASE_URL detected={'YES' if bool(db_url) else 'NO'}")
     if not db_url:
         print("[STARTUP][PG] Skipping PostgreSQL init because DATABASE_URL is not set")
-        _pg_startup_checked = True
+        return
+
+    if _pg_startup_checked:
+        print("[STARTUP][PG] PostgreSQL init already completed in this process")
         return
 
     try:
@@ -45,7 +48,7 @@ def _init_postgres_chat_storage_on_startup():
 
         print("[STARTUP][PG] table initialization start (schema=public)")
         ok = _pg_init()
-        print(f"[STARTUP][PG] init_tables_ran={'YES' if ok else 'NO'}")
+        print(f"[STARTUP][PG] table initialization {'SUCCESS' if ok else 'FAIL'}")
         if not ok:
             return
 
@@ -59,6 +62,10 @@ def _init_postgres_chat_storage_on_startup():
     except Exception as e:
         print(f"[STARTUP][PG] FATAL PostgreSQL startup init error: {e}")
 
+
+
+# Eager bootstrap in the actual module entrypoint path (uvicorn imports main:app).
+_init_postgres_chat_storage_on_startup("module_import")
 
 def _jwt_or_key(request: Request, api_key) -> bool:
     """Auth disabled — always allow. Re-enable when login page is ready."""
@@ -98,7 +105,7 @@ class JWTAuthMiddleware:
 
 @asynccontextmanager
 async def lifespan(app):
-    _init_postgres_chat_storage_on_startup()
+    _init_postgres_chat_storage_on_startup("lifespan")
 
     # Diagnostic: confirm storage backends
     try:
@@ -631,7 +638,7 @@ async def _edgar_cache_loop():
 
 async def _wait_for_init():
     import asyncio
-    _init_postgres_chat_storage_on_startup()
+    _init_postgres_chat_storage_on_startup("wait_for_init")
     if _init_done:
         return
     if _init_error:

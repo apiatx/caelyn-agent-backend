@@ -168,38 +168,6 @@ def init_tables():
             CREATE INDEX IF NOT EXISTS idx_conversations_updated_at
             ON public.conversations (updated_at DESC)
         """)
-
-        # New normalized chat schema (source of truth going forward)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NULL,
-                title TEXT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id BIGSERIAL PRIMARY KEY,
-                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-                role TEXT NOT NULL,
-                message_type TEXT NOT NULL DEFAULT 'chat',
-                content TEXT NOT NULL DEFAULT '',
-                structured_payload JSONB NULL,
-                preset_key TEXT NULL,
-                model_used TEXT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
-            ON messages (conversation_id, created_at ASC, id ASC)
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_conversations_updated_at
-            ON conversations (updated_at DESC)
-        """)
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
