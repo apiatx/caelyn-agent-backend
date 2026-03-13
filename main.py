@@ -16,9 +16,63 @@ import uuid as _uuid
 from datetime import datetime as _dt, timezone as _tz
 
 from pathlib import Path
+from urllib.parse import urlparse, unquote
 
 AGENT_API_KEY = os.getenv("AGENT_API_KEY")
+_pg_startup_checked = False
+_pg_startup_attempts = 0
+_pg_last_init_error = None
 
+
+def _init_postgres_chat_storage_on_startup(reason: str = "startup"):
+    """Ensure PostgreSQL chat tables exist in the live runtime entrypoint."""
+    global _pg_startup_checked, _pg_startup_attempts, _pg_last_init_error
+    _pg_startup_attempts += 1
+
+    db_url = os.getenv("DATABASE_URL")
+    print(f"[STARTUP][PG] reason={reason} attempt={_pg_startup_attempts} DATABASE_URL detected={'YES' if bool(db_url) else 'NO'}")
+    if not db_url:
+        print("[STARTUP][PG] Skipping PostgreSQL init because DATABASE_URL is not set")
+        _pg_last_init_error = "DATABASE_URL not set"
+        return
+
+    if _pg_startup_checked:
+        _pg_last_init_error = None
+        print("[STARTUP][PG] PostgreSQL init already completed in this process")
+        return
+
+    try:
+        from data.pg_storage import startup_probe as _pg_probe, init_tables as _pg_init
+
+        before = _pg_probe()
+        print(
+            f"[STARTUP][PG] connection={'OK' if before.get('connected') else 'FAILED'} "
+            f"database={before.get('database')} schema={before.get('schema')} tables_before={before.get('tables', [])}"
+        )
+
+        print("[STARTUP][PG] table initialization start (schema=public)")
+        ok = _pg_init()
+        print(f"[STARTUP][PG] table initialization {'SUCCESS' if ok else 'FAIL'}")
+        if not ok:
+            _pg_last_init_error = "init_tables returned False"
+            return
+
+        after = _pg_probe()
+        print(
+            f"[STARTUP][PG] tables_after={after.get('tables', [])} "
+            f"has_conversations={'conversations' in after.get('tables', [])} "
+            f"has_messages={'messages' in after.get('tables', [])}"
+        )
+        _pg_startup_checked = True
+        _pg_last_init_error = None
+    except Exception as e:
+        _pg_last_init_error = str(e)
+        print(f"[STARTUP][PG] FATAL PostgreSQL startup init error: {e}")
+
+
+
+# Eager bootstrap in the actual module entrypoint path (uvicorn imports main:app).
+_init_postgres_chat_storage_on_startup("module_import")
 
 def _jwt_or_key(request: Request, api_key) -> bool:
     """Auth disabled — always allow. Re-enable when login page is ready."""
@@ -58,6 +112,8 @@ class JWTAuthMiddleware:
 
 @asynccontextmanager
 async def lifespan(app):
+    _init_postgres_chat_storage_on_startup("lifespan")
+
     # Diagnostic: confirm storage backends
     try:
         from data.prompt_history import _use_postgres as _ph_pg, _use_object_storage as _ph_obj, _use_replit_db as _ph_db
@@ -589,6 +645,7 @@ async def _edgar_cache_loop():
 
 async def _wait_for_init():
     import asyncio
+    _init_postgres_chat_storage_on_startup("wait_for_init")
     if _init_done:
         return
     if _init_error:
@@ -639,6 +696,65 @@ async def debug_echo(request: Request):
         })
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+def _safe_database_url_parts(db_url: str | None) -> tuple[str | None, str | None]:
+    if not db_url:
+        return None, None
+    try:
+        parsed = urlparse(db_url)
+        host = parsed.hostname
+        db_name = unquote((parsed.path or "").lstrip("/")) or None
+        return host, db_name
+    except Exception:
+        return None, None
+
+
+@app.get("/api/debug/db")
+async def debug_db(request: Request):
+    """Temporary debugging endpoint for PostgreSQL runtime state."""
+    _init_postgres_chat_storage_on_startup("debug_endpoint")
+    db_url = os.getenv("DATABASE_URL")
+    database_host, database_name = _safe_database_url_parts(db_url)
+
+    current_database = None
+    current_schema = None
+    public_tables = []
+    pg_probe_error = None
+    try:
+        from data.pg_storage import startup_probe as _pg_probe
+        probe = _pg_probe()
+        current_database = probe.get("database")
+        current_schema = probe.get("schema")
+        public_tables = probe.get("tables") or []
+        pg_probe_error = probe.get("error")
+    except Exception as e:
+        pg_probe_error = str(e)
+
+    pg_backend_active = False
+    try:
+        import data.chat_history as _chat_hist
+        _chat_hist._ensure_postgres_backend()
+        pg_backend_active = bool(getattr(_chat_hist, "_use_postgres", False))
+    except Exception:
+        pg_backend_active = False
+
+    dev_domain = os.getenv("REPLIT_DEV_DOMAIN")
+    suggested_debug_url = f"https://{dev_domain}/api/debug/db" if dev_domain else "/api/debug/db"
+
+    return {
+        "database_host": database_host,
+        "database_name": database_name,
+        "current_database": current_database,
+        "current_schema": current_schema,
+        "public_tables": public_tables,
+        "init_tables_executed_in_process": bool(_pg_startup_checked),
+        "postgres_backend_active_in_process": pg_backend_active,
+        "last_initialization_error": _pg_last_init_error,
+        "pg_probe_error": pg_probe_error,
+        "init_attempts": _pg_startup_attempts,
+        "suggested_debug_url": suggested_debug_url,
+    }
 
 
 @app.get("/api/presets")
@@ -1803,7 +1919,7 @@ async def query_agent(
     if body.csv_data and not user_query.strip():
         user_query = "Analyze every ticker in this uploaded CSV. Give a BUY, HOLD, or SELL rating for each, plus identify the top 2-3 best investments."
 
-    from data.chat_history import create_conversation, get_conversation, save_messages as _save_msgs
+    from data.chat_history import create_conversation, get_conversation, append_message as _append_msg
 
     conv_id = body.conversation_id
     history = []
@@ -1834,6 +1950,21 @@ async def query_agent(
     meta["conversation_id"] = conv_id
 
     print(f"[API] request_id={req_id} query={user_query[:100]}, history_turns={len(history)}, conv_id={conv_id}")
+
+    if conv_id and user_query.strip():
+        try:
+            _append_msg(
+                conv_id,
+                "user",
+                user_query,
+                message_type="preset" if body.preset_intent else "chat",
+                preset_key=body.preset_intent,
+                model_used=body.reasoning_model or "agent_collab",
+            )
+            conv_now = get_conversation(conv_id)
+            history = conv_now.get("messages", []) if conv_now else history
+        except Exception as e:
+            print(f"[API] Failed to persist user message: {e}")
 
     async def _stream_query():
         """
@@ -1950,11 +2081,8 @@ async def query_agent(
                 _resp_log(req_id, 200, "error", resp)
                 if conv_id:
                     try:
-                        updated_messages = list(history)
-                        updated_messages.append({"role": "user", "content": user_query})
                         _asst_content = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
-                        updated_messages.append({"role": "assistant", "content": _asst_content})
-                        _save_msgs(conv_id, updated_messages)
+                        _append_msg(conv_id, "assistant", _asst_content, message_type="error", structured_payload=resp, preset_key=body.preset_intent, model_used=body.reasoning_model or "agent_collab")
                     except Exception:
                         pass
                 yield _j.dumps(resp).encode()
@@ -1971,11 +2099,8 @@ async def query_agent(
                 _resp_log(req_id, 200, "error", resp)
                 if conv_id:
                     try:
-                        updated_messages = list(history)
-                        updated_messages.append({"role": "user", "content": user_query})
                         _asst_content2 = resp.get("analysis", "") or _json.dumps(resp, default=str)[:8000]
-                        updated_messages.append({"role": "assistant", "content": _asst_content2})
-                        _save_msgs(conv_id, updated_messages)
+                        _append_msg(conv_id, "assistant", _asst_content2, message_type="error", structured_payload=resp, preset_key=body.preset_intent, model_used=body.reasoning_model or "agent_collab")
                     except Exception:
                         pass
                 yield _j.dumps(resp).encode()
@@ -1983,13 +2108,18 @@ async def query_agent(
 
             if conv_id:
                 try:
-                    updated_messages = list(history)
-                    updated_messages.append({"role": "user", "content": user_query})
                     _asst_content3 = result.get("analysis", "") if isinstance(result, dict) else ""
                     if not _asst_content3:
                         _asst_content3 = _json.dumps(result, default=str)[:8000]
-                    updated_messages.append({"role": "assistant", "content": _asst_content3})
-                    _save_msgs(conv_id, updated_messages)
+                    _append_msg(
+                        conv_id,
+                        "assistant",
+                        _asst_content3,
+                        message_type="preset" if body.preset_intent else "chat",
+                        structured_payload=result if isinstance(result, dict) else None,
+                        preset_key=body.preset_intent,
+                        model_used=body.reasoning_model or "agent_collab",
+                    )
                 except Exception as e:
                     print(f"[API] Failed to save conversation: {e}")
 
@@ -2249,11 +2379,9 @@ async def review_watchlist(
 
         if body.conversation_id:
             try:
-                from data.chat_history import save_messages as _save2
-                _save2(body.conversation_id, [
-                    {"role": "user", "content": f"Review my watchlist: {', '.join(tickers)}"},
-                    {"role": "assistant", "content": result.get("analysis", "") if isinstance(result, dict) else _json.dumps(result, default=str)[:8000]},
-                ])
+                from data.chat_history import append_message as _append2
+                _append2(body.conversation_id, "user", f"Review my watchlist: {', '.join(tickers)}", message_type="watchlist", model_used=body.reasoning_model or "agent_collab")
+                _append2(body.conversation_id, "assistant", result.get("analysis", "") if isinstance(result, dict) else _json.dumps(result, default=str)[:8000], message_type="watchlist", structured_payload=result if isinstance(result, dict) else None, model_used=body.reasoning_model or "agent_collab")
             except Exception as e:
                 print(f"[API] Failed to save watchlist conversation: {e}")
 
