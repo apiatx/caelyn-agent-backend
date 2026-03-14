@@ -733,6 +733,16 @@ class TradingAgent:
                   f"response_style={orch_plan.get('response_style') if orch_plan else '?'}")
 
             query_info["reasoning_model"] = reasoning_model
+            # ── Caelyn auto-routing (agent_collab mode, no explicit user override) ──
+            # Fires BEFORE data gathering so collab intent is logged, but collaborator
+            # calls happen AFTER _gather_data_safe completes (in _ask_claude_with_timeout).
+            if reasoning_model == "agent_collab" and not collab_agents:
+                from agent.caelyn_routing import get_caelyn_route
+                _caelyn_route = get_caelyn_route(preset_intent, category)
+                collab_agents = _caelyn_route["collaborators"]
+                if not primary_model:
+                    primary_model = _caelyn_route["final"]
+                query_info["_caelyn_depth"] = _caelyn_route["mode"]
             # Gate LLM-backed web search (Perplexity) in data layer: only allowed in agent_collab mode
             self.data._skip_llm_web_search = (reasoning_model not in ("agent_collab", "all_agents"))
             if category == "chat":
@@ -778,6 +788,14 @@ class TradingAgent:
                   f"response_style={plan.get('response_style') if plan else '?'}")
 
             query_info["reasoning_model"] = reasoning_model
+            # ── Caelyn auto-routing (agent_collab mode, no explicit user override) ──
+            if reasoning_model == "agent_collab" and not collab_agents:
+                from agent.caelyn_routing import get_caelyn_route
+                _caelyn_route = get_caelyn_route(preset_intent, category)
+                collab_agents = _caelyn_route["collaborators"]
+                if not primary_model:
+                    primary_model = _caelyn_route["final"]
+                query_info["_caelyn_depth"] = _caelyn_route["mode"]
             # Gate LLM-backed web search (Perplexity) in data layer: only allowed in agent_collab mode
             self.data._skip_llm_web_search = (reasoning_model not in ("agent_collab", "all_agents"))
             if category == "chat":
@@ -3215,6 +3233,27 @@ class TradingAgent:
             print(f"[ALL_AGENTS] Multi-agent collab: agents={agents_to_call}, synthesis={synthesis_model}, data={data_size:,} chars")
             return await self._multi_agent_collab(user_prompt, market_data, history, is_followup, category, chatbox_mode, preset_intent, agents_to_call, synthesis_model)
 
+        # ── Caelyn collaborative synthesis ────────────────────────────────────
+        # When Caelyn auto-routing has assigned collaborators, run them in parallel
+        # AFTER the proprietary data pipeline has already completed (market_data is
+        # fully assembled at this point). Each collaborator gathers domain-specific
+        # information using its native search (Grok→X search, Perplexity→Sonar,
+        # Gemini→Google Search), then passes targeted findings to the final model.
+        # The final model synthesizes: proprietary data + collaborator findings + query.
+        # Guard: only fires when reasoning_model == "agent_collab" AND collab_agents
+        # is non-empty. Customize/manual mode (explicit user collab selection) is
+        # handled separately via the all_agents path above.
+        if reasoning_model == "agent_collab" and collab_agents and len(collab_agents) >= 1:
+            valid_collabs = [a for a in collab_agents if a in self.VALID_COLLAB_AGENTS]
+            final_model = primary_model if (primary_model and primary_model in self.VALID_COLLAB_AGENTS) else "claude"
+            if valid_collabs:
+                print(f"[CAELYN] Collab synthesis: collaborators={valid_collabs}, final={final_model}, data={data_size:,} chars")
+                return await self._caelyn_collab_synthesis(
+                    user_prompt, market_data, history, is_followup, category,
+                    chatbox_mode, preset_intent, valid_collabs, final_model
+                )
+            # No valid collaborators — fall through to single-model path below
+
         # agent_collab uses a single reasoning engine (Claude by default, or primary_model if set)
         # with richer data from Grok/Perplexity data sources.
         # When primary_model is set (e.g. "gemini", "gpt-4o"), that model becomes the sole
@@ -3439,6 +3478,202 @@ class TradingAgent:
             # Fallback
             longest = max(agent_theses.values(), key=len)
             return longest
+
+    # ── Caelyn Collaborative Synthesis ───────────────────────────────────────
+    # Distinct from _multi_agent_collab (all_agents mode).
+    #
+    # all_agents:  each agent does FULL INDEPENDENT analysis with full web search.
+    #              All agents are peers. Synthesis combines independent theses.
+    #
+    # _caelyn_collab_synthesis: collaborators do FOCUSED DOMAIN retrieval only
+    #   (short targeted findings in their specialty), then the designated final
+    #   reasoning model synthesizes EVERYTHING:
+    #     (1) full proprietary market_data from _gather_data_safe  [unchanged]
+    #     (2) collaborator domain findings                          [additive]
+    #     (3) user request
+    #   The final model is primary_model (the real reasoning engine).
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _caelyn_collab_synthesis(
+        self,
+        user_prompt: str,
+        market_data: dict,
+        history: list,
+        is_followup: bool,
+        category: str,
+        chatbox_mode: bool,
+        preset_intent: str | None,
+        collab_agents: list,
+        final_model: str,
+    ) -> str:
+        """
+        Caelyn collaborative synthesis pipeline:
+          1. Call each collaborator in parallel with a domain-focused prompt.
+             Each collaborator uses its native search (Grok→X search, Perplexity→Sonar,
+             Gemini→Google Search) AND receives the full proprietary market_data.
+          2. Collect their focused findings (short, domain-specific).
+          3. Inject findings into the context for the final reasoning model.
+          4. Call the final model with: user_prompt + proprietary data + collab findings.
+
+        _gather_data_safe output (market_data) is NEVER modified — findings are
+        injected as an additional key, not a replacement.
+        """
+        import time as _t
+        from agent.caelyn_routing import COLLAB_DOMAIN_PROMPTS
+
+        t0 = _t.time()
+
+        # ── Fan-out: call collaborators in parallel with focused domain prompts ──
+        async def _call_collab(agent_id: str) -> tuple[str, str, int]:
+            a0 = _t.time()
+            domain_prefix = COLLAB_DOMAIN_PROMPTS.get(agent_id, "")
+            focused_prompt = (
+                f"{domain_prefix}\n\n"
+                f"USER REQUEST CONTEXT:\n{user_prompt}"
+            ) if domain_prefix else user_prompt
+            try:
+                text = await asyncio.wait_for(
+                    self._call_alt_model(
+                        agent_id,
+                        focused_prompt,
+                        market_data,
+                        history,
+                        is_followup,
+                        category,
+                        chatbox_mode=False,
+                        preset_intent=preset_intent,
+                        skip_web_search=False,   # each collaborator uses its native search
+                        is_collab_agent=True,    # use faster non-reasoning model variant
+                    ),
+                    timeout=60.0,
+                )
+                ms = int((_t.time() - a0) * 1000)
+                print(f"[CAELYN] {agent_id} collab findings: {len(text or ''):,} chars in {ms}ms")
+                return (agent_id, text or "", ms)
+            except asyncio.TimeoutError:
+                ms = int((_t.time() - a0) * 1000)
+                print(f"[CAELYN] {agent_id} timed out after {ms}ms")
+                return (agent_id, "", ms)
+            except Exception as e:
+                ms = int((_t.time() - a0) * 1000)
+                print(f"[CAELYN] {agent_id} failed after {ms}ms: {e}")
+                return (agent_id, "", ms)
+
+        results = await asyncio.gather(*[_call_collab(a) for a in collab_agents])
+
+        # Collect non-empty findings
+        collab_findings: dict[str, str] = {}
+        for agent_id, text, _ in results:
+            if text and len(text.strip()) > 30:
+                collab_findings[agent_id] = text.strip()
+
+        fan_out_ms = int((_t.time() - t0) * 1000)
+        print(f"[CAELYN] Fan-out complete: {len(collab_findings)}/{len(collab_agents)} collaborators responded in {fan_out_ms}ms")
+
+        # ── Build synthesis context ──────────────────────────────────────────
+        # Inject collab findings into a copy of market_data so the final model
+        # sees both the full proprietary data AND the collaborator findings.
+        # The original market_data dict is not mutated.
+        _agent_labels = {
+            "grok":       "Grok (X/Twitter social & narrative)",
+            "perplexity": "Perplexity (news & catalysts)",
+            "gemini":     "Gemini (web research & context)",
+            "gpt-4o":     "ChatGPT/OpenAI (web research)",
+        }
+
+        synthesis_market_data = dict(market_data) if market_data else {}
+
+        if collab_findings:
+            finding_sections = []
+            for agent_id, finding in collab_findings.items():
+                label = _agent_labels.get(agent_id, agent_id)
+                finding_sections.append(
+                    f"── {label} ──\n{finding}"
+                )
+            synthesis_market_data["_caelyn_collab_findings"] = {
+                "note": (
+                    "The following are targeted domain findings from collaborating models. "
+                    "They supplement the proprietary structured data above. "
+                    "Cross-reference them with the quantitative data — where they converge, "
+                    "conviction is stronger. Where they diverge, flag the tension."
+                ),
+                "findings": collab_findings,
+                "formatted": "\n\n".join(finding_sections),
+            }
+
+        # ── Build synthesis prompt with format enforcement ────────────────────
+        if collab_findings:
+            collab_summary = "\n\n".join(
+                f"[{_agent_labels.get(a, a)}]\n{t}" for a, t in collab_findings.items()
+            )
+            synthesis_prompt = (
+                f"{user_prompt}\n\n"
+                f"══════════════════════════════════════════════════════════════\n"
+                f"CAELYN COLLABORATIVE CONTEXT — ADDITIONAL DOMAIN FINDINGS\n"
+                f"══════════════════════════════════════════════════════════════\n"
+                f"The following targeted findings have been gathered by specialist models\n"
+                f"to supplement the proprietary structured market data above.\n\n"
+                f"{collab_summary}\n\n"
+                f"══════════════════════════════════════════════════════════════\n"
+                f"YOUR TASK: Synthesize the proprietary data (structured market context)\n"
+                f"WITH the specialist findings above into your final authoritative analysis.\n"
+                f"- Proprietary data is authoritative for quantitative signals.\n"
+                f"- Specialist findings add social, news, and research context.\n"
+                f"- Where they agree, conviction is higher. Where they conflict, flag it.\n"
+                f"- Do NOT mention the individual models by name in your response.\n"
+                f"- Respond in your normal structured JSON format for this category.\n"
+            )
+        else:
+            # No collaborator findings came back — run as standard single-model
+            synthesis_prompt = user_prompt
+
+        # ── Call the final reasoning model ────────────────────────────────────
+        print(f"[CAELYN] Calling final model '{final_model}' with {len(synthesis_prompt):,} char prompt + "
+              f"{len(json.dumps(synthesis_market_data, default=str)):,} char context")
+
+        if final_model == "claude":
+            try:
+                return await asyncio.wait_for(
+                    self._ask_claude_async_web_search(
+                        synthesis_prompt, synthesis_market_data, history, is_followup,
+                        category, chatbox_mode, reasoning_model="agent_collab", preset_intent=preset_intent,
+                    ),
+                    timeout=120.0,
+                )
+            except asyncio.TimeoutError:
+                return json.dumps({"display_type": "chat", "message": "The AI took too long to respond. Please try again."})
+            except Exception as e:
+                print(f"[CAELYN] Claude synthesis error: {e}, falling back to sync")
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self._ask_claude, synthesis_prompt, synthesis_market_data,
+                            history, is_followup, category, chatbox_mode,
+                            reasoning_model="agent_collab", preset_intent=preset_intent,
+                        ),
+                        timeout=100.0,
+                    )
+                except Exception as e2:
+                    return json.dumps({"display_type": "chat", "message": f"Error reaching AI: {str(e2)}"})
+        else:
+            # Non-Claude final model (grok, perplexity, gemini, gpt-4o)
+            # skip_web_search=True because the collaborators already gathered live data
+            try:
+                result = await asyncio.wait_for(
+                    self._call_alt_model(
+                        final_model, synthesis_prompt, synthesis_market_data,
+                        history, is_followup, category, chatbox_mode,
+                        preset_intent=preset_intent, skip_web_search=True,
+                    ),
+                    timeout=90.0,
+                )
+                if result:
+                    total_ms = int((_t.time() - t0) * 1000)
+                    print(f"[CAELYN] {final_model} synthesis complete: {len(result):,} chars in {total_ms}ms total")
+                    return result
+            except Exception as e:
+                print(f"[CAELYN] {final_model} synthesis failed: {e}")
+            return json.dumps({"display_type": "chat", "message": f"{final_model} synthesis failed. Please try again."})
 
     def _prompt_to_openai_messages(self, system_blocks, messages) -> list:
         """Convert Anthropic system_blocks + messages into OpenAI-compatible message list."""
