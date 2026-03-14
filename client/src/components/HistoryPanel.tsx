@@ -208,6 +208,50 @@ function modelLabel(model?: string): string {
   if (m === 'agent_collab') return '';
   return model.charAt(0).toUpperCase() + model.slice(1);
 }
+// Extracts a readable summary from the raw backend JSON envelope.
+// Covers every display_type the backend uses — never falls back to raw JSON.
+function extractSummary(parsed: any): string {
+  if (!parsed || typeof parsed !== 'object') return '';
+  const s = parsed.structured || {};
+  // Priority 1: non-empty top-level analysis field
+  if (typeof parsed.analysis === 'string' && parsed.analysis.trim()) {
+    return parsed.analysis.trim().slice(0, 500);
+  }
+  // Priority 2: briefing display_type — market_pulse.summary + verdict prefix
+  if (s.market_pulse?.summary) {
+    const verdict = typeof s.market_pulse.verdict === 'string' ? `${s.market_pulse.verdict} — ` : '';
+    return `${verdict}${s.market_pulse.summary}`.slice(0, 500);
+  }
+  // Priority 3: common summary/context fields across most display_types
+  for (const key of ['summary', 'market_context', 'market_overview', 'description', 'message', 'overview']) {
+    const v = s[key];
+    if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 500);
+  }
+  // Priority 4: nested macro regime or source coverage descriptions
+  if (s.macro_regime?.summary) return String(s.macro_regime.summary).slice(0, 500);
+  if (s.market_regime?.summary) return String(s.market_regime.summary).slice(0, 500);
+  return '';
+}
+// Extracts top ticker symbols from any structured response shape.
+// Tries all known array fields — no client-side price math.
+function extractTickers(parsed: any): string[] {
+  if (!parsed || typeof parsed !== 'object') return [];
+  const s = parsed.structured || {};
+  const candidates = [
+    s.picks, s.top_trades, s.trending_tickers, s.stocks, s.opportunities,
+    s.top_conviction_plays, s.top_setups, s.recommendations,
+    s.equities?.large_caps, s.equities?.mid_caps, s.equities?.small_micro_caps,
+  ];
+  for (const src of candidates) {
+    if (Array.isArray(src) && src.length > 0) {
+      const tickers = src.slice(0, 6)
+        .map((p: any) => p.ticker || p.symbol || p.asset || '')
+        .filter(Boolean);
+      if (tickers.length > 0) return tickers;
+    }
+  }
+  return [];
+}
 export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [history, setHistory] = useState<HistoryData>({});
   const [loading, setLoading] = useState(false);
@@ -491,44 +535,55 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
         }
       }
 
+      // Compute a short preview text from the stored content without exposing raw JSON
+      let previewText = '';
+      try {
+        const p = JSON.parse(entry.content);
+        const s = extractSummary(p);
+        previewText = s.slice(0, 90) + (s.length > 90 ? '…' : '');
+      } catch { /* plain text */ }
+
       return (
         <div
           key={entry.id}
           onClick={() => setView({ level: 'detail', categoryId: view.categoryId, intent: view.intent, label: view.label, entry, entryLabel: labelParts })}
           style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: '8px 12px', margin: '0 12px 3px', background: C.card,
             border: `1px solid ${C.border}`, borderRadius: 6, cursor: 'pointer',
-            transition: 'all 0.15s', width: 'calc(100% - 24px)', textAlign: 'left',
+            transition: 'all 0.15s', width: 'calc(100% - 24px)',
             boxSizing: 'border-box',
           }}
           className="panel-btn"
           role="button"
         >
-          <span style={{ color: C.bright, fontSize: 11, fontFamily: sansFont, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {labelParts}
-          </span>
-          <div style={{ display:'flex', alignItems:'center', gap:8, marginLeft: 8, flexShrink:0 }}>
-            {pctBadge != null && (
-              <span style={{
-                color: pctBadge >= 0 ? C.green : C.red,
-                fontSize: 11, fontWeight: 700, fontFamily: font,
-              }}>
-                {pctBadge >= 0 ? '+' : ''}{pctBadge.toFixed(1)}%
-              </span>
-            )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                deleteHistoryEntry(view.categoryId, view.intent, entry.id);
-              }}
-              title="Delete entry"
-              style={{ background:'transparent', border:`1px solid ${C.border}`, borderRadius:4, color:C.dim, fontSize:9, padding:'2px 6px', cursor:'pointer' }}
-              className="panel-btn"
-            >
-              Del
-            </button>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ color: C.bright, fontSize: 11, fontFamily: sansFont, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+              {labelParts}
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 8, flexShrink: 0 }}>
+              {pctBadge != null && (
+                <span style={{ color: pctBadge >= 0 ? C.green : C.red, fontSize: 11, fontWeight: 700, fontFamily: font }}>
+                  {pctBadge >= 0 ? '+' : ''}{pctBadge.toFixed(1)}%
+                </span>
+              )}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteHistoryEntry(view.categoryId, view.intent, entry.id);
+                }}
+                title="Delete entry"
+                style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 4, color: C.dim, fontSize: 9, padding: '2px 6px', cursor: 'pointer' }}
+                className="panel-btn"
+              >
+                Del
+              </button>
+            </div>
           </div>
+          {previewText && (
+            <div style={{ color: C.dim, fontSize: 10, fontFamily: sansFont, marginTop: 3, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {previewText}
+            </div>
+          )}
         </div>
       );
     };
@@ -547,113 +602,152 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
     if (view.level !== 'detail') return null;
     const { entry } = view;
     const bt = backtestMap[entry.id];
-    // Backend now sends clean preformatted text for new entries.
-    // For old entries that are raw JSON, extract readable text.
-    let displayContent = entry.content;
-    try {
-      const parsed = JSON.parse(entry.content);
-      // Only use parsed fields if content was actually JSON
-      displayContent = parsed?.analysis || parsed?.structured?.message || parsed?.message || JSON.stringify(parsed, null, 2);
-    } catch {
-      // Not JSON — already clean text from the new renderer, use as-is
-    }
+
+    // Parse stored content — never expose raw JSON as the default display
+    let parsed: any = null;
+    try { parsed = JSON.parse(entry.content); } catch { /* plain text content */ }
+
+    const summary = parsed ? extractSummary(parsed) : entry.content;
+    const topTickers = parsed ? extractTickers(parsed) : [];
+    const intentLabel = view.label ||
+      CATEGORIES.flatMap(c => c.intents).find(i => i.intent === view.intent)?.label || view.intent;
+
+    // Performance — prefer backtest map, fall back to inline ticker data from API response
+    const inlineTickers = entry.tickers?.filter(
+      t => t.rec_price != null && t.current_price != null && t.pct_change != null
+    ) || [];
+    const hasBt = bt && bt.details.length > 0;
+    const hasInline = inlineTickers.length > 0;
+    const rows = hasBt
+      ? bt.details
+      : inlineTickers.map(t => ({
+          ticker: t.ticker, rec_price: t.rec_price!,
+          current_price: t.current_price!, pct_change: t.pct_change!,
+        }));
+    const totalTickers = hasBt ? bt.ticker_count : rows.length;
+    const cumulativePct = hasBt
+      ? bt.cumulative_pct
+      : rows.length > 0 ? rows.reduce((s, r) => s + r.pct_change, 0) / rows.length : null;
+
     const conversation = (entry as any).conversation as { role: string; content: string }[] | undefined;
+
     return (
       <div style={{ padding: 16, flex: 1, overflowY: 'auto' }}>
-        {entry.query && (
+
+        {/* ── Header card: title / timestamp / model / perf / tickers ── */}
+        <div style={{
+          marginBottom: 12, padding: 12, background: '#0d0f14',
+          border: `1px solid ${C.border}`, borderRadius: 8,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: C.bright, fontSize: 13, fontWeight: 700, fontFamily: sansFont, marginBottom: 3 }}>
+                {intentLabel}
+              </div>
+              <div style={{ color: C.dim, fontSize: 10, fontFamily: font }}>
+                {new Date(entry.timestamp * 1000).toLocaleString('en-US', {
+                  month: 'long', day: 'numeric', year: 'numeric',
+                  hour: 'numeric', minute: '2-digit',
+                })}
+                {entry.model_used && modelLabel(entry.model_used) && (
+                  <span style={{ marginLeft: 8, color: C.purple }}>{modelLabel(entry.model_used)}</span>
+                )}
+              </div>
+            </div>
+            {cumulativePct != null && (
+              <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 12 }}>
+                <div style={{ color: C.dim, fontSize: 9, fontFamily: font, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 2 }}>Since Issued</div>
+                <div style={{ color: cumulativePct >= 0 ? C.green : C.red, fontSize: 18, fontWeight: 800, fontFamily: font, lineHeight: 1 }}>
+                  {cumulativePct >= 0 ? '+' : ''}{cumulativePct.toFixed(1)}%
+                </div>
+                {totalTickers > 0 && (
+                  <div style={{ color: C.dim, fontSize: 9, fontFamily: font, marginTop: 2 }}>{totalTickers} tickers</div>
+                )}
+              </div>
+            )}
+          </div>
+          {entry.query && (
+            <div style={{ color: C.dim, fontSize: 10, fontFamily: sansFont, fontStyle: 'italic', marginBottom: topTickers.length > 0 ? 8 : 0 }}>
+              "{entry.query}"
+            </div>
+          )}
+          {topTickers.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {topTickers.map(t => (
+                <span key={t} style={{
+                  padding: '2px 7px', background: `${C.blue}15`,
+                  border: `1px solid ${C.blue}30`, borderRadius: 4,
+                  color: C.blue, fontSize: 10, fontWeight: 700, fontFamily: font,
+                }}>
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── Summary text — the main readable content ── */}
+        {summary && (
           <div style={{
-            marginBottom: 10, padding: '7px 10px', background: '#12141a',
-            border: `1px solid ${C.border}`, borderRadius: 6,
-            color: C.text, fontSize: 11, fontFamily: sansFont, lineHeight: 1.5,
+            marginBottom: 12, padding: '12px 14px', background: C.card,
+            border: `1px solid ${C.border}`, borderRadius: 8,
+            color: C.text, fontSize: 12, fontFamily: sansFont, lineHeight: 1.75,
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           }}>
-            <span style={{ color: C.dim, fontSize: 9, fontFamily: font, textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 3 }}>Query</span>
-            {entry.query}
+            {summary}
           </div>
         )}
-        <div style={{ color: C.dim, fontSize: 9, fontFamily: font, marginBottom: 8 }}>
-          {new Date(entry.timestamp * 1000).toLocaleString()}
-          {entry.model_used && <span style={{ marginLeft: 8, color: C.purple }}>{modelLabel(entry.model_used)}</span>}
-        </div>
-        {(() => {
-          // Use backtest map data if available, otherwise use inline ticker data from the API
-          const inlineTickers = entry.tickers?.filter(
-            (t) => t.rec_price != null && t.current_price != null && t.pct_change != null
-          ) || [];
-          const hasBt = bt && bt.details.length > 0;
-          const hasInline = inlineTickers.length > 0;
-          if (!hasBt && !hasInline) return null;
 
-          const rows = hasBt
-            ? bt.details
-            : inlineTickers.map((t) => ({
-                ticker: t.ticker,
-                rec_price: t.rec_price!,
-                current_price: t.current_price!,
-                pct_change: t.pct_change!,
-              }));
-
-          const avgPct = rows.length > 0
-            ? rows.reduce((sum, r) => sum + r.pct_change, 0) / rows.length
-            : 0;
-          const totalTickers = hasBt ? bt.ticker_count : rows.length;
-          const cumulativePct = hasBt ? bt.cumulative_pct : avgPct;
-
-          return (
-            <div style={{
-              marginBottom: 12, padding: 10, background: '#0d0f14',
-              border: `1px solid ${C.border}`, borderRadius: 6,
-            }}>
-              <div style={{ color: C.dim, fontSize: 9, fontFamily: font, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
-                Price Tracking
-              </div>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, fontFamily: font }}>
-                <thead>
-                  <tr style={{ color: C.dim }}>
-                    <td style={{ padding: '3px 6px' }}>Ticker</td>
-                    <td style={{ padding: '3px 6px', textAlign: 'right' }}>Rec</td>
-                    <td style={{ padding: '3px 6px', textAlign: 'right' }}>Now</td>
-                    <td style={{ padding: '3px 6px', textAlign: 'right' }}>%</td>
+        {/* ── Price tracking table ── */}
+        {rows.length > 0 && (
+          <div style={{ marginBottom: 12, padding: 10, background: '#0d0f14', border: `1px solid ${C.border}`, borderRadius: 6 }}>
+            <div style={{ color: C.dim, fontSize: 9, fontFamily: font, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
+              Price Tracking
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, fontFamily: font }}>
+              <thead>
+                <tr style={{ color: C.dim }}>
+                  <td style={{ padding: '3px 6px' }}>Ticker</td>
+                  <td style={{ padding: '3px 6px', textAlign: 'right' }}>Rec</td>
+                  <td style={{ padding: '3px 6px', textAlign: 'right' }}>Now</td>
+                  <td style={{ padding: '3px 6px', textAlign: 'right' }}>%</td>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(d => (
+                  <tr key={d.ticker}>
+                    <td style={{ padding: '3px 6px', color: C.bright, fontWeight: 600 }}>{d.ticker}</td>
+                    <td style={{ padding: '3px 6px', textAlign: 'right', color: C.dim }}>${d.rec_price.toFixed(2)}</td>
+                    <td style={{ padding: '3px 6px', textAlign: 'right', color: C.text }}>${d.current_price.toFixed(2)}</td>
+                    <td style={{ padding: '3px 6px', textAlign: 'right', fontWeight: 700, color: d.pct_change >= 0 ? C.green : C.red }}>
+                      {d.pct_change >= 0 ? '+' : ''}{d.pct_change.toFixed(1)}%
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {rows.map((d) => (
-                    <tr key={d.ticker}>
-                      <td style={{ padding: '3px 6px', color: C.bright, fontWeight: 600 }}>{d.ticker}</td>
-                      <td style={{ padding: '3px 6px', textAlign: 'right', color: C.dim }}>${d.rec_price.toFixed(2)}</td>
-                      <td style={{ padding: '3px 6px', textAlign: 'right', color: C.text }}>${d.current_price.toFixed(2)}</td>
-                      <td style={{
-                        padding: '3px 6px', textAlign: 'right', fontWeight: 700,
-                        color: d.pct_change >= 0 ? C.green : C.red,
-                      }}>
-                        {d.pct_change >= 0 ? '+' : ''}{d.pct_change.toFixed(1)}%
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div style={{
-                marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`,
-                display: 'flex', justifyContent: 'space-between', fontSize: 10, fontFamily: font,
-              }}>
+                ))}
+              </tbody>
+            </table>
+            {cumulativePct != null && (
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', fontSize: 10, fontFamily: font }}>
                 <span style={{ color: C.dim }}>Avg ({totalTickers} tickers)</span>
                 <span style={{ fontWeight: 700, color: cumulativePct >= 0 ? C.green : C.red }}>
                   {cumulativePct >= 0 ? '+' : ''}{cumulativePct.toFixed(1)}%
                 </span>
               </div>
-            </div>
-          );
-        })()}
-        {conversation && conversation.length > 0 ? (
+            )}
+          </div>
+        )}
+
+        {/* ── Conversation thread (Terminal Chat / freeform entries) ── */}
+        {conversation && conversation.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {conversation.map((msg, i) => {
               let msgContent = msg.content;
               if (msg.role === 'assistant') {
                 try {
                   const p = JSON.parse(msg.content);
-                  msgContent = p.analysis || p.structured?.message || p.structured?.summary || JSON.stringify(p, null, 2);
-                } catch {
-                  // Not JSON — already clean text, use as-is
-                }
+                  // Use extractSummary — never fall back to raw JSON
+                  msgContent = extractSummary(p) || p.analysis || msg.content;
+                } catch { /* already plain text */ }
               }
               return (
                 <div key={i} style={{
@@ -664,25 +758,37 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
                   <div style={{ color: msg.role === 'user' ? C.blue : C.purple, fontSize: 9, fontFamily: font, marginBottom: 4, textTransform: 'uppercase' }}>
                     {msg.role === 'user' ? 'You' : 'Agent'}
                   </div>
-                  <div style={{
-                    color: C.text, fontSize: 12, fontFamily: sansFont, lineHeight: 1.7,
-                    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                  }}>
+                  <div style={{ color: C.text, fontSize: 12, fontFamily: sansFont, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                     {msgContent}
                   </div>
                 </div>
               );
             })}
           </div>
-        ) : (
-          <div style={{
-            color: C.text, fontSize: 12, fontFamily: sansFont, lineHeight: 1.7,
-            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            padding: 14, background: C.card, border: `1px solid ${C.border}`,
-            borderRadius: 8, maxHeight: 'calc(100vh - 260px)', overflowY: 'auto',
-          }}>
-            {displayContent}
+        )}
+
+        {/* ── Fallback: show plain text content only if nothing else rendered ── */}
+        {!summary && rows.length === 0 && !conversation?.length && !parsed && (
+          <div style={{ color: C.text, fontSize: 12, fontFamily: sansFont, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word', padding: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+            {entry.content}
           </div>
+        )}
+
+        {/* ── Raw Data — hidden by default, expandable for debugging ── */}
+        {parsed && (
+          <details style={{ marginTop: 12 }}>
+            <summary style={{ color: C.dim, fontSize: 9, fontFamily: font, cursor: 'pointer', userSelect: 'none', textTransform: 'uppercase', letterSpacing: 1, padding: '4px 0' }}>
+              Raw Data
+            </summary>
+            <pre style={{
+              marginTop: 8, padding: 10, background: '#0d0f14',
+              border: `1px solid ${C.border}`, borderRadius: 6,
+              color: C.dim, fontSize: 9, fontFamily: font,
+              overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              {JSON.stringify(parsed, null, 2)}
+            </pre>
+          </details>
         )}
       </div>
     );

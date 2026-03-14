@@ -1,0 +1,98 @@
+Before coding, first inspect the current implementation and show me the minimum-change plan, including the exact files you expect to modify.
+
+We need a targeted frontend fix for the History page. Do NOT redesign the whole app. Keep the current layout/style language, but make it readable and useful.
+
+Current problem:
+History detail/preview is displaying the raw saved response JSON blob, which is ugly and not useful. It is also not showing the gain/loss % since the response was issued.
+
+We need History to render a clean backtesting-friendly preview using backend-provided summary/performance data.
+
+GOALS
+
+1. Make history entries readable
+Do NOT render the raw JSON envelope as the default history preview/detail.
+Instead render a clean history summary view using backend-provided normalized fields.
+
+Each history item should display something like:
+- title
+- timestamp
+- category breadcrumb or label
+- mode/model label
+- readable summary text
+- top tickers
+- basket performance % since issued
+- priced count if useful
+
+2. Display gain/loss % clearly
+Show the basket performance returned by backend:
+- on the section row if backend provides section aggregate
+- on each history item preview/detail
+Use:
+- green for positive
+- red for negative
+- muted fallback for unavailable
+
+3. Keep History page structure and styling
+The overall History layout is fine.
+Keep:
+- modal/page shell
+- section grouping
+- accordion behavior
+- dark styling
+Just fix:
+- readability
+- labels
+- ordering
+- performance display
+
+4. Category labels/order
+Use this exact order:
+1. Terminal Chat
+2. Overview
+3. Trades & Ideas
+4. Fundamental
+5. Sectors
+6. TA Screener
+7. Earnings
+8. Prediction Markets
+9. NotifAI
+
+Required label changes:
+- "Terminal" -> "Terminal Chat"
+- "Earnings Agent" -> "Earnings"
+
+5. Rendering rules
+If backend returns a normalized history summary model, use it directly.
+Do NOT pretty-print the raw JSON blob unless explicitly entering a raw/debug mode.
+If backend still provides raw payload for detail view, keep it hidden behind an optional expandable "Raw Data" section only.
+
+6. Readability expectations
+For a Daily Briefing history item, I want to see something like:
+- Daily Briefing
+- March 13, 2026 11:16 PM
+- Risk-Off — Markets sold off sharply... contrarian setups emerging.
+- Tickers: ORKA, VIST, MUR
+- Since issued: +X.XX%
+
+Not the entire raw structured response dumped into the screen.
+
+What I want before coding:
+1. Audit the current History fetch/render path
+2. Identify where the raw JSON dump is being rendered
+3. Show the minimum-change plan and exact files to modify
+4. Explain how section-level and item-level performance will be displayed if backend provides it
+
+What I want after coding:
+1. exact files changed
+2. exact reason raw JSON was surfacing in the UI
+3. confirmation that history now renders normalized summary fields
+4. confirmation that basket performance % is visible
+5. confirmation of final category labels/order
+6. precise description of the final rendered history item layout
+
+Important constraints:
+- no major redesign
+- no client-side ticker extraction
+- no client-side performance math
+- frontend should render backend-provided summary/performance data cleanly
+- raw JSON should be hidden by default, not used as the main display
