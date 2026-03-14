@@ -14,6 +14,7 @@ import json as _json
 import os
 import uuid as _uuid
 from datetime import datetime as _dt, timezone as _tz
+from agent.mode_normalizer import normalize_reasoning_model, mode_concept, mode_display_label
 
 from pathlib import Path
 from urllib.parse import urlparse, unquote
@@ -844,8 +845,11 @@ async def get_collab_options(request: Request):
         "presets": [
             {
                 "id": "default",
-                "name": "Default",
-                "description": "Data sources (Grok X scan + Perplexity web search + proprietary data) → chosen reasoning model synthesizes",
+                # ── Phase 0: ui_concept / ui_label tell the frontend which UX mode to show ──
+                "ui_concept": "caelyn",
+                "ui_label": "Caelyn",
+                "name": "Caelyn",
+                "description": "Automatic smart mode — Grok X scan + Perplexity web search + proprietary data → chosen reasoning model synthesizes",
                 "agents": ["grok", "perplexity"],
                 "reasoning_model": "agent_collab",
                 "primary": "claude",
@@ -856,6 +860,8 @@ async def get_collab_options(request: Request):
             },
             {
                 "id": "full_collab",
+                "ui_concept": "customize",
+                "ui_label": "Full Collaboration",
                 "name": "Full Collaboration",
                 "description": "All agents collaborate simultaneously — choose which model reasons",
                 "agents": ["claude", "grok", "gpt-4o", "gemini", "perplexity"],
@@ -867,7 +873,9 @@ async def get_collab_options(request: Request):
             },
             {
                 "id": "custom_collab",
-                "name": "Custom Collaboration",
+                "ui_concept": "customize",
+                "ui_label": "Customize",
+                "name": "Customize",
                 "description": "Pick your collaborating agent(s) and reasoning model — fully customizable",
                 "agents": [],
                 "reasoning_model": "agent_collab",
@@ -1389,13 +1397,16 @@ class QueryRequest(BaseModel):
     primary_model: Optional[str] = None              # final synthesis model (default: claude)
     history: Optional[List[dict]] = None             # client-side conversation history (for model-switch continuity)
 
-def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, timing_ms=None):
+def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, timing_ms=None, reasoning_model=None):
+    rm = normalize_reasoning_model(reasoning_model)
     return {
         "request_id": req_id,
         "preset_intent": preset_intent,
         "conversation_id": conv_id,
         "routing": routing or {"source": "unknown", "confidence": "low", "category": "unknown"},
         "timing_ms": timing_ms or {"total": 0, "grok": 0, "data": 0, "claude": 0},
+        "mode_concept": mode_concept(rm),
+        "mode_label": mode_display_label(rm),
     }
 
 
@@ -1896,7 +1907,7 @@ async def query_agent(
     user_query = body.query or body.prompt or ""
     print(f"[REQ] id={req_id} query_len={len(user_query)} preset={body.preset_intent} conversation_id={body.conversation_id} csv_data={'YES (' + str(len(body.csv_data)) + ' chars)' if body.csv_data else 'NO'}")
 
-    meta = _build_meta(req_id, preset_intent=body.preset_intent, conv_id=body.conversation_id)
+    meta = _build_meta(req_id, preset_intent=body.preset_intent, conv_id=body.conversation_id, reasoning_model=body.reasoning_model)
 
     if not _jwt_or_key(request, api_key):
         resp = _error_envelope("AUTH_FAILED", "Invalid or missing API key.", meta)
@@ -1918,6 +1929,11 @@ async def query_agent(
     # If CSV data present but no query, provide a default analysis prompt
     if body.csv_data and not user_query.strip():
         user_query = "Analyze every ticker in this uploaded CSV. Give a BUY, HOLD, or SELL rating for each, plus identify the top 2-3 best investments."
+
+    # ── Phase 0: normalize inbound mode/reasoning_model string ──────────────
+    # Accepts "caelyn", "customize", legacy aliases, and existing identifiers.
+    # All downstream code continues to use internal identifiers unchanged.
+    body.reasoning_model = normalize_reasoning_model(body.reasoning_model)
 
     from data.chat_history import create_conversation, get_conversation, append_message as _append_msg
 
@@ -2369,6 +2385,7 @@ async def review_watchlist(
     await _wait_for_init()
 
     tickers = [t.strip().upper() for t in body.tickers if t.strip()][:25]
+    body.reasoning_model = normalize_reasoning_model(body.reasoning_model)
     print(f"[API] Watchlist review request: {tickers}")
 
     try:

@@ -63,12 +63,12 @@ def get_personality_prefix(
     if no prefix should be added.
 
     Rules:
-      - Agent Collab mode → always gets the Caelyn prefix
+      - Agent Collab / Caelyn mode → always gets the Caelyn prefix
       - Free-form chat (no preset, chatbox_mode=True) → gets the model's prefix
       - Any other preset/agent mode → no prefix (empty string)
     """
-    # Agent Collab always gets Caelyn personality
-    if reasoning_model == "agent_collab":
+    # Agent Collab / "caelyn" alias → always gets Caelyn personality
+    if reasoning_model in ("agent_collab", "caelyn"):
         return PERSONALITY_PREFIXES["agent_collab"]
 
     # Free-form chat: user is typing in the chatbox without a preset button
