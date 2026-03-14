@@ -118,6 +118,9 @@ class TradingAgent:
         "catalyst_scan": "catalyst_scan",
         # --- Other ---
         "microcap_spec": "microcap_spec",
+        # --- Trending Now (frontend Trending button sends "trending_now") ---
+        "trending_now": "cross_asset_trending",
+        "trending_scan": "cross_asset_trending",
         # --- Earnings Agent (frontend earnings page) ---
         "earnings_agent": "earnings_catalyst",
         # --- Prediction Markets ---
