@@ -732,15 +732,24 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
         raw_mode: bool = False,
         use_deep_model: bool = False,
         x_search_config: dict = None,
+        system_text: str = None,
     ) -> dict:
         """
         Call the xAI Responses API with x_search enabled.
         If raw_mode=True, returns the raw text analysis instead of trying to parse JSON.
         If use_deep_model=True, uses the reasoning model for deeper X searching.
         x_search_config can include from_date, to_date, etc.
+        system_text, when provided, is prepended as a system message before the user prompt
+        so that full trading context (system prompt + market data) is preserved when Grok
+        acts as a final or solo reasoning model.
         """
         model = self.deep_model if use_deep_model else self.model
         x_search_opts = x_search_config or {}
+
+        input_messages = []
+        if system_text:
+            input_messages.append({"role": "system", "content": system_text})
+        input_messages.append({"role": "user", "content": prompt})
 
         payload = {
             "model": model,
@@ -750,12 +759,11 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
                     "x_search": x_search_opts,
                 }
             ],
-            "input": [
-                {"role": "user", "content": prompt}
-            ],
+            "input": input_messages,
         }
 
-        print(f"[XAI] Calling {model} (raw_mode={raw_mode}, x_search_config={x_search_opts})")
+        ctx_tag = f", system={len(system_text):,}chars" if system_text else ""
+        print(f"[XAI] Calling {model} (raw_mode={raw_mode}, x_search_config={x_search_opts}{ctx_tag})")
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:

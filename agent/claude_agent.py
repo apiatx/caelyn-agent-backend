@@ -3275,10 +3275,22 @@ class TradingAgent:
 
         if effective_model != "claude":
             try:
-                result = await asyncio.wait_for(
-                    self._call_alt_model(effective_model, user_prompt, market_data, history, is_followup, category, chatbox_mode, preset_intent=preset_intent, skip_web_search=_is_agent_collab_alt),
-                    timeout=90.0,
-                )
+                # Grok always routes through XaiSentimentProvider so that its model
+                # selection, auth headers, and x_search tool config are preserved.
+                # All other models continue to use _call_alt_model.
+                if effective_model == "grok":
+                    _coro = self._call_grok_via_provider(
+                        user_prompt, market_data, history, is_followup,
+                        category, chatbox_mode, preset_intent=preset_intent,
+                        is_collab_agent=False,
+                    )
+                else:
+                    _coro = self._call_alt_model(
+                        effective_model, user_prompt, market_data, history, is_followup,
+                        category, chatbox_mode, preset_intent=preset_intent,
+                        skip_web_search=_is_agent_collab_alt,
+                    )
+                result = await asyncio.wait_for(_coro, timeout=90.0)
                 if result:
                     return result
                 if _is_solo_mode:
@@ -3706,16 +3718,24 @@ class TradingAgent:
                     return json.dumps({"display_type": "chat", "message": f"Error reaching AI: {str(e2)}"})
         else:
             # Non-Claude final model (grok, perplexity, gemini, gpt-4o)
-            # skip_web_search=True because the collaborators already gathered live data
+            # Grok routes through XaiSentimentProvider (x_search preserved).
+            # All other non-Claude final models use _call_alt_model with
+            # skip_web_search=True — collaborators already gathered live data.
             try:
-                result = await asyncio.wait_for(
-                    self._call_alt_model(
+                if final_model == "grok":
+                    _final_coro = self._call_grok_via_provider(
+                        synthesis_prompt, synthesis_market_data,
+                        history, is_followup, category, chatbox_mode,
+                        preset_intent=preset_intent,
+                        is_collab_agent=False,
+                    )
+                else:
+                    _final_coro = self._call_alt_model(
                         final_model, synthesis_prompt, synthesis_market_data,
                         history, is_followup, category, chatbox_mode,
                         preset_intent=preset_intent, skip_web_search=True,
-                    ),
-                    timeout=90.0,
-                )
+                    )
+                result = await asyncio.wait_for(_final_coro, timeout=90.0)
                 if result:
                     total_ms = int((_t.time() - t0) * 1000)
                     print(f"[CAELYN] {final_model} synthesis complete: {len(result):,} chars in {total_ms}ms total")
@@ -3723,6 +3743,80 @@ class TradingAgent:
             except Exception as e:
                 print(f"[CAELYN] {final_model} synthesis failed: {e}")
             return json.dumps({"display_type": "chat", "message": f"{final_model} synthesis failed. Please try again."})
+
+    async def _call_grok_via_provider(
+        self,
+        user_prompt: str,
+        market_data: dict,
+        history: list,
+        is_followup: bool,
+        category: str,
+        chatbox_mode: bool,
+        preset_intent: str | None,
+        is_collab_agent: bool = False,
+    ) -> str:
+        """
+        Route any Grok call through XaiSentimentProvider._call_grok_with_x_search so that
+        the provider's model selection, auth headers, and x_search tool config are always
+        applied — whether Grok is acting as a collaborator, a Caelyn final model, or a
+        solo/direct user-selected model.
+
+        Builds the full system prompt + market data context via _build_prompt (identical
+        to what _call_alt_model would use), passes it as system_text to the provider so
+        Grok receives the complete institutional trading instructions alongside the user
+        request.
+
+        Falls back to _call_alt_model('grok') if:
+          - self.data.xai is None (provider not configured)
+          - _call_grok_with_x_search returns empty (API error, timeout, etc.)
+        """
+        if not self.data.xai:
+            print("[GROK_DISPATCH] XaiSentimentProvider unavailable — using _call_alt_model fallback")
+            return await self._call_alt_model(
+                "grok", user_prompt, market_data, history, is_followup,
+                category, chatbox_mode, preset_intent=preset_intent,
+                skip_web_search=False, is_collab_agent=is_collab_agent,
+            )
+
+        system_blocks, messages, _, _, _, _ = self._build_prompt(
+            user_prompt, market_data, history, is_followup, category, chatbox_mode,
+            reasoning_model="grok", preset_intent=preset_intent,
+        )
+        system_text = "\n\n".join(
+            b["text"] if isinstance(b, dict) else str(b) for b in (system_blocks or [])
+        )
+        latest_user = user_prompt
+        for m in reversed(messages or []):
+            if m.get("role") == "user":
+                latest_user = m.get("content", user_prompt)
+                break
+
+        use_deep = not is_collab_agent
+        print(
+            f"[GROK_DISPATCH] XaiSentimentProvider: model={'deep' if use_deep else 'fast'}, "
+            f"x_search=enabled, system={len(system_text):,} chars, category={category}"
+        )
+        try:
+            raw = await self.data.xai._call_grok_with_x_search(
+                latest_user,
+                raw_mode=True,
+                use_deep_model=use_deep,
+                system_text=system_text,
+                timeout=80.0,
+            )
+            text = raw.get("_raw_analysis", "") if isinstance(raw, dict) else str(raw or "")
+        except Exception as e:
+            print(f"[GROK_DISPATCH] XaiSentimentProvider error: {e} — using _call_alt_model fallback")
+            text = ""
+
+        if not text:
+            print("[GROK_DISPATCH] XaiSentimentProvider returned empty — using _call_alt_model fallback")
+            return await self._call_alt_model(
+                "grok", user_prompt, market_data, history, is_followup,
+                category, chatbox_mode, preset_intent=preset_intent,
+                skip_web_search=False, is_collab_agent=is_collab_agent,
+            )
+        return text
 
     def _prompt_to_openai_messages(self, system_blocks, messages) -> list:
         """Convert Anthropic system_blocks + messages into OpenAI-compatible message list."""
