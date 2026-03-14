@@ -515,7 +515,10 @@ export default function TradingAgent() {
       conversation_id: freshChat ? null : (typeof conversationId === 'string' ? conversationId : null),
       ...(csvData ? { csv_data: csvData } : {}),
     };
-    if (collabConfig) {
+    if (presetIntent) {
+      // Preset buttons always use agent_collab — backend routes via preset_intent
+      payload.reasoning_model = 'agent_collab';
+    } else if (collabConfig) {
       Object.assign(payload, buildCollabPayload(collabConfig, selectedModel));
     } else {
       payload.reasoning_model = selectedModel;
