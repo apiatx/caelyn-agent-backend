@@ -172,6 +172,29 @@ def init_tables():
             CREATE INDEX IF NOT EXISTS idx_conversations_updated_at
             ON public.conversations (updated_at DESC)
         """)
+
+        # Ticker mention snapshots — one row per ticker per assistant message
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.ticker_mentions (
+                id BIGSERIAL PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                message_id BIGINT NULL,
+                ticker TEXT NOT NULL,
+                mentioned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                mention_price NUMERIC(20, 6) NULL,
+                asset_type TEXT NULL,
+                source TEXT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ticker_mentions_conv
+            ON public.ticker_mentions (conversation_id, mentioned_at DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ticker_mentions_message
+            ON public.ticker_mentions (message_id)
+        """)
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
@@ -407,10 +430,11 @@ def chat_append_message(
     structured_payload: dict | None = None,
     preset_key: str | None = None,
     model_used: str | None = None,
-) -> bool:
+) -> int | None:
+    """Append a message and return its BIGINT message_id, or None on failure."""
     conn = _get_conn()
     if conn is None:
-        return False
+        return None
     try:
         cur = conn.cursor()
         cur.execute(
@@ -427,9 +451,12 @@ def chat_append_message(
                 conversation_id, role, message_type, content,
                 structured_payload, preset_key, model_used, created_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            RETURNING id
             """,
             (conv_id, role, message_type or "chat", content or "", _to_jsonb(structured_payload), preset_key, model_used),
         )
+        row = cur.fetchone()
+        message_id = row[0] if row else None
         if role == "user":
             trimmed = (content or "").strip()
             title = (trimmed[:60] + "...") if len(trimmed) > 60 else trimmed
@@ -441,11 +468,136 @@ def chat_append_message(
             cur.execute("UPDATE public.conversations SET updated_at = NOW() WHERE id = %s", (conv_id,))
         conn.commit()
         cur.close()
-        return True
+        return message_id
     except Exception as e:
         print(f"[PG_STORAGE] chat_append_message error for {conv_id}: {e}")
         conn.rollback()
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def add_ticker_mentions(
+    conversation_id: str,
+    message_id: int | None,
+    mentions: list[dict],
+) -> bool:
+    """
+    Persist ticker mention snapshots for a given assistant message.
+    Each mention dict: {ticker, mention_price, asset_type, source}
+    """
+    if not mentions:
+        return True
+    conn = _get_conn()
+    if conn is None:
         return False
+    try:
+        cur = conn.cursor()
+        for m in mentions:
+            ticker = (m.get("ticker") or "").upper().strip()
+            if not ticker:
+                continue
+            price = m.get("mention_price") or m.get("price")
+            asset_type = m.get("asset_type")
+            source = m.get("source")
+            cur.execute(
+                """
+                INSERT INTO public.ticker_mentions
+                    (conversation_id, message_id, ticker, mention_price, asset_type, source, mentioned_at, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+                """,
+                (conversation_id, message_id, ticker, price, asset_type, source),
+            )
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"[PG_STORAGE] add_ticker_mentions error: {e}")
+        conn.rollback()
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def get_ticker_mentions_by_conv(conversation_id: str) -> list[dict]:
+    """Return all ticker mention snapshots for a conversation, newest first."""
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, message_id, ticker, mentioned_at, mention_price, asset_type, source
+            FROM public.ticker_mentions
+            WHERE conversation_id = %s
+            ORDER BY mentioned_at DESC
+            """,
+            (conversation_id,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return [
+            {
+                "id": r[0],
+                "message_id": r[1],
+                "ticker": r[2],
+                "mentioned_at": r[3].isoformat() if r[3] else None,
+                "mention_price": float(r[4]) if r[4] is not None else None,
+                "asset_type": r[5],
+                "source": r[6],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[PG_STORAGE] get_ticker_mentions_by_conv error: {e}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def chat_list_recent(limit: int = 5) -> list:
+    """Return the N most recently updated conversations (lightweight, for sidebar)."""
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                c.id,
+                c.title,
+                c.created_at,
+                c.updated_at,
+                (
+                    SELECT m.model_used
+                    FROM public.messages m
+                    WHERE m.conversation_id = c.id
+                    ORDER BY m.created_at DESC
+                    LIMIT 1
+                ) AS last_model_used
+            FROM public.conversations c
+            ORDER BY c.updated_at DESC
+            LIMIT %s
+            """,
+            (max(1, min(limit, 50)),),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return [
+            {
+                "id": r[0],
+                "title": r[1] or "",
+                "created_at": r[2].isoformat() if r[2] else "",
+                "updated_at": r[3].isoformat() if r[3] else "",
+                "last_model_used": r[4],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[PG_STORAGE] chat_list_recent error: {e}")
+        return []
     finally:
         _put_conn(conn)
 
@@ -514,7 +666,9 @@ def chat_get_conversation(conv_id: str) -> dict | None:
             (conv_id,),
         )
         messages = []
+        msg_id_list = []
         for row in cur.fetchall():
+            msg_id_list.append(row[0])
             messages.append({
                 "id": row[0],
                 "role": row[1],
@@ -524,7 +678,33 @@ def chat_get_conversation(conv_id: str) -> dict | None:
                 "preset_key": row[5],
                 "model_used": row[6],
                 "created_at": row[7].isoformat() if row[7] else None,
+                "ticker_mentions": [],
             })
+
+        # Attach ticker mentions per message (single batch query)
+        if msg_id_list:
+            cur.execute(
+                """
+                SELECT message_id, ticker, mentioned_at, mention_price, asset_type, source
+                FROM public.ticker_mentions
+                WHERE message_id = ANY(%s)
+                ORDER BY mentioned_at ASC
+                """,
+                (msg_id_list,),
+            )
+            mentions_by_msg: dict[int, list] = {}
+            for mr in cur.fetchall():
+                mid = mr[0]
+                mentions_by_msg.setdefault(mid, []).append({
+                    "ticker": mr[1],
+                    "mentioned_at": mr[2].isoformat() if mr[2] else None,
+                    "mention_price": float(mr[3]) if mr[3] is not None else None,
+                    "asset_type": mr[4],
+                    "source": mr[5],
+                })
+            for msg in messages:
+                msg["ticker_mentions"] = mentions_by_msg.get(msg["id"], [])
+
         cur.close()
         return {
             "id": conv_row[0],

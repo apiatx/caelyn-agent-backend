@@ -1893,6 +1893,56 @@ async def social_grok_query(
         return JSONResponse(status_code=500, content={"error": str(e), "query": query})
 
 
+async def _capture_ticker_mentions(
+    conv_id: str,
+    message_id: int,
+    hist_tickers: list[dict],
+    svc,
+) -> None:
+    """
+    Background task: fetch live prices for extracted tickers at response time
+    and persist them to ticker_mentions. Runs after the response is yielded
+    so client latency is unaffected. Fails silently on any error.
+    """
+    import asyncio as _aio
+    try:
+        from data.pg_storage import add_ticker_mentions as _add_tm
+        mentions = []
+        crypto_syms = {"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "MATIC", "DOT", "LINK",
+                       "UNI", "ATOM", "LTC", "BCH", "NEAR", "FIL", "ARB", "OP", "INJ", "SUI",
+                       "WIF", "PEPE", "SHIB", "BONK", "APT", "SEI", "TIA", "JUP", "PYTH"}
+        for t in (hist_tickers or []):
+            sym = (t.get("ticker") or "").upper().strip()
+            if not sym:
+                continue
+            asset_type = "crypto" if sym in crypto_syms else "equity"
+            price = None
+            source = None
+            try:
+                if asset_type == "equity":
+                    q = await _aio.to_thread(svc.finnhub.get_quote, sym)
+                    price = q.get("price") if isinstance(q, dict) else None
+                    source = "finnhub"
+                else:
+                    # Use rec_price from structured response for crypto (live price not wired here)
+                    price = t.get("rec_price")
+                    source = "structured"
+            except Exception:
+                price = t.get("rec_price")
+                source = "structured_fallback"
+            mentions.append({
+                "ticker": sym,
+                "mention_price": price,
+                "asset_type": asset_type,
+                "source": source,
+            })
+        if mentions:
+            await _aio.to_thread(_add_tm, conv_id, message_id, mentions)
+            print(f"[TICKER_MENTIONS] Saved {len(mentions)} mentions for message_id={message_id} conv={conv_id}")
+    except Exception as _e:
+        print(f"[TICKER_MENTIONS] Capture error: {_e}")
+
+
 @app.post("/api/query")
 @limiter.limit("10/minute")
 async def query_agent(
@@ -1948,12 +1998,14 @@ async def query_agent(
             print(f"[API] Conversation {conv_id} not found, creating new one")
             conv_id = None
 
-    # If client explicitly sent history WITH messages, prefer it — handles model switches
-    # and message deletions.  An empty list means the client has no history loaded,
-    # so fall back to the DB history to preserve follow-up context.
-    if body.history is not None and len(body.history) > 0:
-        print(f"[API] Using client-provided history ({len(body.history)} msgs) over DB history ({len(history)} msgs)")
+    # When a valid conv_id has DB history, always trust the DB — it is the source of truth
+    # for conversation continuity across model switches.  Client-provided body.history is
+    # only used when there is no server-side thread (new conversation or no conv_id).
+    if body.history is not None and len(body.history) > 0 and not history:
+        print(f"[API] No DB history for conv_id={conv_id}; using client-provided history ({len(body.history)} msgs)")
         history = body.history
+    elif history:
+        print(f"[API] Using DB history for conv_id={conv_id} ({len(history)} msgs); ignoring client-provided history")
 
     if not conv_id:
         try:
@@ -2122,12 +2174,13 @@ async def query_agent(
                 yield _j.dumps(resp).encode()
                 return
 
+            _asst_msg_id: int | None = None
             if conv_id:
                 try:
                     _asst_content3 = result.get("analysis", "") if isinstance(result, dict) else ""
                     if not _asst_content3:
                         _asst_content3 = _json.dumps(result, default=str)[:8000]
-                    _append_msg(
+                    _asst_msg_id = _append_msg(
                         conv_id,
                         "assistant",
                         _asst_content3,
@@ -2320,6 +2373,13 @@ async def query_agent(
                 print(f"[HISTORY] Failed to auto-save prompt history: {_hist_err}")
 
             yield _j.dumps(resp).encode()
+
+            # ── Ticker mention snapshot capture (post-yield, non-blocking for client) ──
+            # Fetch live prices NOW (mention-time) and persist so backtesting is accurate.
+            if conv_id and _asst_msg_id and _hist_tickers and data_service:
+                asyncio.create_task(_capture_ticker_mentions(
+                    conv_id, _asst_msg_id, _hist_tickers, data_service,
+                ))
 
         except asyncio.TimeoutError:
             meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
@@ -2754,6 +2814,96 @@ async def get_history_recent(request: Request, limit: int = 10):
         "recent_count": shaped.get("recent_count", 0),
         "total_count": shaped.get("total_count", 0),
     }
+
+@app.get("/api/history/sidebar")
+@limiter.limit("60/minute")
+async def history_sidebar(request: Request):
+    """
+    Lightweight endpoint for the right-side recent history panel.
+    Returns the 5 most recently updated conversations — no backtesting data.
+    """
+    from data.chat_history import list_recent_conversations
+    limit = min(int(request.query_params.get("limit", "5")), 20)
+    convs = list_recent_conversations(limit=limit)
+    return {"conversations": convs, "count": len(convs)}
+
+
+@app.get("/api/history/page")
+@limiter.limit("20/minute")
+async def history_page(request: Request):
+    """
+    Full History page endpoint.
+    Returns all conversations with messages and per-message ticker mention snapshots.
+    Also collects all unique tickers so the frontend can fetch current prices separately
+    via /api/prices/batch.
+    """
+    from data.chat_history import list_conversations
+    from data.pg_storage import get_ticker_mentions_by_conv as _get_tm
+    import asyncio as _aio
+
+    all_convs = list_conversations()
+    limit = min(int(request.query_params.get("limit", "50")), 200)
+    all_convs = all_convs[:limit]
+
+    # Collect all unique tickers across all conversations for batch-price hint
+    all_tickers: set = set()
+    result_convs = []
+    for conv in all_convs:
+        conv_id = conv.get("id", "")
+        tm = []
+        if conv_id:
+            try:
+                tm = await _aio.to_thread(_get_tm, conv_id)
+            except Exception:
+                tm = []
+        for m in tm:
+            t = m.get("ticker", "")
+            if t:
+                all_tickers.add(t)
+        result_convs.append({**conv, "ticker_mentions": tm})
+
+    return {
+        "conversations": result_convs,
+        "conversation_count": len(result_convs),
+        "all_tickers": sorted(all_tickers),
+    }
+
+
+@app.post("/api/prices/batch")
+@limiter.limit("30/minute")
+async def prices_batch(request: Request):
+    """
+    Batch current-price lookup for History page performance comparison.
+    Body: {"tickers": ["NVDA", "AAPL", "BTC"]}
+    Returns: {"prices": {"NVDA": 950.0, "AAPL": 225.0}, "failed": ["BTC"]}
+    Deduplicates tickers, fails gracefully per symbol.
+    """
+    import asyncio as _aio
+    await _wait_for_init()
+    if not data_service:
+        raise HTTPException(status_code=503, detail="Service not ready")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    raw_tickers = body.get("tickers") or []
+    if not isinstance(raw_tickers, list):
+        raw_tickers = []
+    tickers = list({t.upper().strip() for t in raw_tickers if isinstance(t, str) and t.strip()})[:50]
+
+    async def _fetch_one(sym: str):
+        try:
+            q = await _aio.to_thread(data_service.finnhub.get_quote, sym)
+            p = q.get("price") if isinstance(q, dict) else None
+            return sym, p if (p and p > 0) else None
+        except Exception:
+            return sym, None
+
+    results = await _aio.gather(*[_fetch_one(t) for t in tickers])
+    prices = {sym: price for sym, price in results if price is not None}
+    failed = [sym for sym, price in results if price is None]
+    return {"prices": prices, "failed": failed, "requested": len(tickers)}
+
 
 @app.get("/api/history/storage-info")
 @limiter.limit("10/minute")

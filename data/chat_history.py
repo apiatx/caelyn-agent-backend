@@ -30,6 +30,7 @@ try:
         chat_replace_messages as _pg_chat_replace,
         chat_delete as _pg_chat_delete,
         chat_list as _pg_chat_list,
+        chat_list_recent as _pg_chat_list_recent,
     )
 
     if _pg_available():
@@ -110,11 +111,12 @@ def append_message(
     structured_payload: dict | None = None,
     preset_key: str | None = None,
     model_used: str | None = None,
-) -> bool:
+) -> int | None:
+    """Append a message and return its integer message_id, or None on failure."""
     if not _validate_id(conv_id):
-        return False
+        return None
     if not _ensure_postgres_backend():
-        return False
+        return None
     return _pg_chat_append(
         conv_id=conv_id,
         role=role,
@@ -160,6 +162,16 @@ def delete_conversation(conv_id: str) -> bool:
     if _ensure_postgres_backend():
         return _pg_chat_delete(conv_id)
     return False
+
+
+def list_recent_conversations(limit: int = 5) -> list:
+    """Return the N most recently updated conversations for sidebar quick reference."""
+    if _ensure_postgres_backend():
+        try:
+            return _pg_chat_list_recent(limit=limit)
+        except Exception as e:
+            print(f"[CHAT_HISTORY] list_recent_conversations error: {e}")
+    return []
 
 
 def migrate_file_history_to_db():
