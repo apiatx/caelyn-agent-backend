@@ -19,6 +19,9 @@ export interface NormalizedHistoryEntry extends HistoryEntry {
   key: string;
   category: string;
   intent: string;
+  // Populated from sidebar/conversation endpoints
+  conversation_id?: string;
+  title?: string;
 }
 
 export type HistoryApiResponse = Record<string, Partial<HistoryBucket> | null | undefined>;
@@ -106,7 +109,8 @@ export function normalizeNewHistoryApiResponse(apiData: unknown): Record<string,
       query: typeof item.query === 'string' ? item.query : undefined,
       model_used: typeof item.model_used === 'string' ? item.model_used : undefined,
       tickers: Array.isArray(item.tickers) ? item.tickers as any : undefined,
-    });
+      conversation_id: typeof item.conversation_id === 'string' ? item.conversation_id : undefined,
+    } as any);
   }
 
   for (const bucket of Object.values(out)) {
@@ -142,9 +146,47 @@ export function normalizeNewHistoryFlat(apiData: unknown): NormalizedHistoryEntr
       query: typeof item.query === 'string' ? item.query : undefined,
       model_used: typeof item.model_used === 'string' ? item.model_used : undefined,
       tickers: Array.isArray(item.tickers) ? item.tickers as any : undefined,
+      conversation_id: typeof item.conversation_id === 'string' ? item.conversation_id : undefined,
       key: `${category}::${intent}`,
       category,
       intent,
     };
   }).sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/**
+ * Normalizes the GET /api/history/sidebar response.
+ * Expected shape: { conversations: [...] } or [ ...conversations ] directly.
+ * Each conversation has: conversation_id, title, last_updated, last_model_used, preview, intent?, category?
+ */
+export function normalizeSidebarResponse(apiData: unknown): NormalizedHistoryEntry[] {
+  if (!apiData || typeof apiData !== 'object') return [];
+  const data = apiData as any;
+
+  const items: any[] = Array.isArray(data.conversations)
+    ? data.conversations
+    : Array.isArray(data.items)
+    ? data.items
+    : Array.isArray(data)
+    ? data
+    : [];
+
+  return items.slice(0, 5).map((item: any) => {
+    const ts = toSafeTimestamp(item.last_updated || item.updated_at || item.timestamp || item.created_at);
+    const category = String(item.category || 'terminal');
+    const intent = String(item.intent || 'freeform_query');
+    return {
+      id: String(item.conversation_id || item.id || `sidebar-${ts}`),
+      timestamp: ts,
+      content: typeof item.preview === 'string' ? item.preview : (typeof item.title === 'string' ? item.title : ''),
+      display_type: null,
+      query: typeof item.title === 'string' ? item.title : undefined,
+      model_used: typeof item.last_model_used === 'string' ? item.last_model_used : (typeof item.model_used === 'string' ? item.model_used : undefined),
+      conversation_id: typeof item.conversation_id === 'string' ? item.conversation_id : undefined,
+      title: typeof item.title === 'string' ? item.title : undefined,
+      key: `${category}::${intent}`,
+      category,
+      intent,
+    };
+  });
 }

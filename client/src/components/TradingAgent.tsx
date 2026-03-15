@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import caelynLogo from "@assets/image_1771528728963.png";
 import { useAuth } from '@/contexts/AuthContext';
-import { normalizeHistory, normalizeNewHistoryFlat, type NormalizedHistoryEntry } from '@/lib/history';
+import { normalizeHistory, normalizeNewHistoryFlat, normalizeSidebarResponse, type NormalizedHistoryEntry } from '@/lib/history';
 import {
   applyPresetState,
   buildCollabPayload,
@@ -363,18 +363,34 @@ export default function TradingAgent() {
   }, [collabConfig?.reasoningModelRequest]);
 
   function fetchRecentHistory() {
-    fetch(`${AGENT_BACKEND_URL}/api/history/recent?limit=10`, { headers: authHeaders() })
-      .then(r => r.ok ? r.json() : null)
+    // Use /api/history/sidebar for the right-side panel — returns 5 most recent conversations.
+    // Falls back to the legacy /api/history/recent endpoint if sidebar is unavailable.
+    fetch(`${AGENT_BACKEND_URL}/api/history/sidebar`, { headers: authHeaders() })
+      .then(r => {
+        if (!r.ok) throw new Error('sidebar unavailable');
+        return r.json();
+      })
       .then(data => {
         if (!data) return;
-        // Detect new format { items: [...] } vs old bucket format
-        if (data && typeof data === 'object' && (Array.isArray(data.items) || Array.isArray(data.recent))) {
-          setRecentHistory(normalizeNewHistoryFlat(data).slice(0, 10));
-        } else {
-          setRecentHistory(normalizeHistory(data).slice(0, 10));
-        }
+        const entries = normalizeSidebarResponse(data);
+        if (entries.length > 0) { setRecentHistory(entries); return; }
+        // Sidebar returned empty — fall back
+        throw new Error('sidebar empty');
       })
-      .catch(() => {});
+      .catch(() => {
+        // Fallback: use legacy recent endpoint
+        fetch(`${AGENT_BACKEND_URL}/api/history/recent?limit=5`, { headers: authHeaders() })
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (!data) return;
+            if (Array.isArray(data.items) || Array.isArray(data.recent)) {
+              setRecentHistory(normalizeNewHistoryFlat(data).slice(0, 5));
+            } else {
+              setRecentHistory(normalizeHistory(data).slice(0, 5));
+            }
+          })
+          .catch(() => {});
+      });
   }
 
   function humanReadableLabel(intent: string): string {
@@ -393,13 +409,60 @@ export default function TradingAgent() {
   }
 
   function loadRecentEntry(entry: typeof recentHistory[0]) {
+    // If the entry has a conversation_id, restore the full thread from the backend.
+    // This preserves cross-model continuity — the backend is source of truth.
+    if (entry.conversation_id) {
+      fetch(`${AGENT_BACKEND_URL}/api/conversations/${entry.conversation_id}`, { headers: authHeaders() })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (!data) return;
+          // Build thread from backend messages
+          const msgs: { role: string; content: string }[] = Array.isArray(data.messages) ? data.messages : [];
+          const thread: PanelMessage[] = msgs.map((m: any) => ({
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+            parsed: m.role === 'assistant' ? (() => { try { return JSON.parse(m.content); } catch { return null; } })() : null,
+            timestamp: m.timestamp ? m.timestamp * 1000 : Date.now(),
+          }));
+          // The last assistant message becomes the panel data
+          const lastAsst = [...msgs].reverse().find((m: any) => m.role === 'assistant');
+          let responseText = '';
+          if (lastAsst) {
+            try {
+              const p = JSON.parse(lastAsst.content);
+              responseText = p?.analysis || p?.structured?.message || p?.message || lastAsst.content;
+            } catch { responseText = lastAsst.content; }
+          }
+          const title = entry.title || entry.query || humanReadableLabel(entry.intent);
+          const newPanel: Panel = {
+            id: Date.now(), title,
+            userQuery: entry.query || '',
+            data: { role: 'assistant', content: responseText, parsed: lastAsst ? (() => { try { return JSON.parse(lastAsst.content); } catch { return null; } })() : null },
+            timestamp: entry.timestamp * 1000,
+            conversationId: entry.conversation_id,
+            thread,
+            reasoningModel: entry.model_used || 'agent_collab',
+          };
+          setPanels(prev => [...prev, newPanel]);
+          setConversationId(entry.conversation_id!);
+        })
+        .catch(() => {
+          // Network error — fall back to stored content
+          _loadEntryFromContent(entry);
+        });
+      return;
+    }
+    _loadEntryFromContent(entry);
+  }
+
+  function _loadEntryFromContent(entry: typeof recentHistory[0]) {
     let parsed: any = null;
     try { parsed = JSON.parse(entry.content); } catch { /* plain text */ }
     const responseText = parsed?.analysis || parsed?.structured?.message || parsed?.message || entry.content;
-    const title = parsed?._user_query ? (parsed._user_query as string).slice(0, 60) : humanReadableLabel(entry.intent);
+    const title = entry.title || (parsed?._user_query ? (parsed._user_query as string).slice(0, 60) : humanReadableLabel(entry.intent));
     const newPanel: Panel = {
       id: Date.now(), title,
-      userQuery: parsed?._user_query || '',
+      userQuery: parsed?._user_query || entry.query || '',
       data: { role: 'assistant', content: responseText, parsed },
       timestamp: entry.timestamp * 1000,
     };
@@ -2957,16 +3020,25 @@ export default function TradingAgent() {
                 <div style={{ color:C.dim, fontSize:10, fontFamily:font, padding:'8px 4px' }}>No history yet</div>
               ) : (
                 <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
-                  {recentHistory.map((entry, i) => {
-                    let displayLabel = humanReadableLabel(entry.intent);
-                    try { const p = JSON.parse(entry.content); if (p?._user_query) displayLabel = p._user_query; } catch {}
-                    const truncated = displayLabel.length > 60 ? displayLabel.slice(0, 57) + '...' : displayLabel;
-                    const timeStr = new Date(entry.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                  {recentHistory.slice(0, 5).map((entry, i) => {
+                    // Sidebar entries have a title field; fallback to intent label or parsed query
+                    let displayLabel = entry.title || entry.query || '';
+                    if (!displayLabel) {
+                      try { const p = JSON.parse(entry.content); if (p?._user_query) displayLabel = p._user_query; } catch {}
+                    }
+                    if (!displayLabel) displayLabel = humanReadableLabel(entry.intent);
+                    const truncated = displayLabel.length > 55 ? displayLabel.slice(0, 52) + '...' : displayLabel;
+                    const d = new Date(entry.timestamp * 1000);
+                    const isToday = d.toDateString() === new Date().toDateString();
+                    const timeStr = isToday
+                      ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                      : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                    const modelStr = entry.model_used === 'agent_collab' ? 'collab' : (entry.model_used || '');
                     return (
                       <div key={`${entry.key}-${i}`} className="rail-item" onClick={() => loadRecentEntry(entry)} style={{ cursor:'pointer', padding:'5px 6px', borderRadius:2, border:`1px solid ${C.border}`, background:C.bg }}>
                         <div style={{ display:'flex', alignItems:'center', gap:4 }}>
                           <div style={{ color:C.dim, fontSize:10, fontFamily:sansFont, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>{truncated}</div>
-                          {entry.model_used && <span style={{ fontSize:6, fontWeight:700, fontFamily:font, textTransform:'uppercase', color: entry.model_used === 'agent_collab' ? '#a78bfa' : C.blue, background: entry.model_used === 'agent_collab' ? 'rgba(139,92,246,0.12)' : `${C.blue}12`, borderRadius:4, padding:'1px 3px', flexShrink:0 }}>{entry.model_used === 'agent_collab' ? 'collab' : entry.model_used}</span>}
+                          {modelStr && <span style={{ fontSize:6, fontWeight:700, fontFamily:font, textTransform:'uppercase', color: entry.model_used === 'agent_collab' ? '#a78bfa' : C.blue, background: entry.model_used === 'agent_collab' ? 'rgba(139,92,246,0.12)' : `${C.blue}12`, borderRadius:4, padding:'1px 3px', flexShrink:0 }}>{modelStr}</span>}
                         </div>
                         <div style={{ color:C.dim, fontSize:8, fontFamily:font, marginTop:1 }}>{timeStr}</div>
                       </div>

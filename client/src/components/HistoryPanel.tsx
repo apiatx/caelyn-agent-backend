@@ -104,12 +104,19 @@ interface BacktestData {
   ticker_count: number;
   details: TickerBacktest[];
 }
+interface TickerMention {
+  ticker: string;
+  mention_price: number;
+  mention_time?: number;
+}
 interface HistoryEntry {
   id: string;
   timestamp: number;
   content: string;
   display_type: string | null;
   model_used?: string;
+  query?: string;
+  conversation_id?: string;
   tickers?: { ticker: string; rec_price: number | null; current_price?: number | null; pct_change?: number | null }[];
   conversation?: { role: string; content: string }[];
 }
@@ -258,6 +265,10 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
   const [view, setView] = useState<View>({ level: 'categories' });
   const [backtestMap, setBacktestMap] = useState<Record<string, BacktestData>>({});
   const [backtestLoading, setBacktestLoading] = useState(false);
+  // Ticker mention data for the currently open detail view
+  const [tickerMentions, setTickerMentions] = useState<TickerMention[]>([]);
+  const [currentPrices, setCurrentPrices] = useState<Record<string, number>>({});
+  const [mentionLoading, setMentionLoading] = useState(false);
   const fetchHistory = useCallback(async () => {
     setLoading(true);
     try {
@@ -323,6 +334,68 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
       fetchBacktest();
     }
   }, [isOpen, fetchHistory, fetchBacktest]);
+
+  // When entering a detail view, fetch ticker mentions via GET /api/conversations/{conv_id}
+  // then GET current prices via POST /api/prices/batch. Reset when leaving detail.
+  useEffect(() => {
+    if (view.level !== 'detail') {
+      setTickerMentions([]);
+      setCurrentPrices({});
+      setMentionLoading(false);
+      return;
+    }
+    const { entry } = view;
+    if (!entry.conversation_id) return;
+
+    setMentionLoading(true);
+    fetch(`${AGENT_BACKEND_URL}/api/conversations/${entry.conversation_id}`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) { setMentionLoading(false); return; }
+        // Collect all ticker_mentions across all messages
+        const msgs: any[] = Array.isArray(data.messages) ? data.messages : [];
+        const allMentions: TickerMention[] = [];
+        const seen = new Set<string>();
+        for (const msg of msgs) {
+          const mentions: any[] = Array.isArray(msg.ticker_mentions) ? msg.ticker_mentions : [];
+          for (const m of mentions) {
+            const ticker = String(m.ticker || '').toUpperCase();
+            const price = typeof m.mention_price === 'number' ? m.mention_price : null;
+            if (ticker && price != null && !seen.has(ticker)) {
+              seen.add(ticker);
+              allMentions.push({ ticker, mention_price: price, mention_time: m.mention_time });
+            }
+          }
+        }
+        setTickerMentions(allMentions);
+
+        if (allMentions.length === 0) { setMentionLoading(false); return; }
+
+        // Fetch current prices for all mentioned tickers via /api/prices/batch
+        const tickers = allMentions.map(m => m.ticker);
+        fetch(`${AGENT_BACKEND_URL}/api/prices/batch`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ tickers }),
+        })
+          .then(r => r.ok ? r.json() : null)
+          .then(priceData => {
+            if (!priceData) return;
+            // Response shape: { "AMSC": 15.23, ... } or { prices: { "AMSC": 15.23 } }
+            const priceMap = priceData.prices || priceData;
+            const out: Record<string, number> = {};
+            for (const [k, v] of Object.entries(priceMap)) {
+              const num = typeof v === 'number' ? v : typeof (v as any)?.price === 'number' ? (v as any).price : null;
+              if (num != null) out[k.toUpperCase()] = num;
+            }
+            setCurrentPrices(out);
+          })
+          .catch(() => {})
+          .finally(() => setMentionLoading(false));
+      })
+      .catch(() => setMentionLoading(false));
+  }, [view]);
+
   if (!isOpen) return null;
   function getEntriesForIntent(categoryId: string, intent: string): HistoryEntry[] {
     const key = `${categoryId}::${intent}`;
@@ -734,6 +807,46 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
                 </span>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ── Ticker Mentions — mention-time price from backend + current price + % gain/loss ── */}
+        {tickerMentions.length > 0 && (
+          <div style={{ marginBottom: 12, padding: 10, background: '#0d0f14', border: `1px solid ${C.border}`, borderRadius: 6 }}>
+            <div style={{ color: C.dim, fontSize: 9, fontFamily: font, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+              Ticker Mentions
+              {mentionLoading && <span style={{ color: C.blue, fontSize: 8 }}>loading prices…</span>}
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, fontFamily: font }}>
+              <thead>
+                <tr style={{ color: C.dim }}>
+                  <td style={{ padding: '3px 6px' }}>Ticker</td>
+                  <td style={{ padding: '3px 6px', textAlign: 'right' }}>At Mention</td>
+                  <td style={{ padding: '3px 6px', textAlign: 'right' }}>Current</td>
+                  <td style={{ padding: '3px 6px', textAlign: 'right' }}>Change</td>
+                </tr>
+              </thead>
+              <tbody>
+                {tickerMentions.map(m => {
+                  const curr = currentPrices[m.ticker];
+                  const pct = (curr != null && m.mention_price > 0)
+                    ? ((curr - m.mention_price) / m.mention_price) * 100
+                    : null;
+                  return (
+                    <tr key={m.ticker}>
+                      <td style={{ padding: '3px 6px', color: C.bright, fontWeight: 600 }}>{m.ticker}</td>
+                      <td style={{ padding: '3px 6px', textAlign: 'right', color: C.dim }}>${m.mention_price.toFixed(2)}</td>
+                      <td style={{ padding: '3px 6px', textAlign: 'right', color: C.text }}>
+                        {curr != null ? `$${curr.toFixed(2)}` : <span style={{ color: C.dim }}>—</span>}
+                      </td>
+                      <td style={{ padding: '3px 6px', textAlign: 'right', fontWeight: 700, color: pct == null ? C.dim : pct >= 0 ? C.green : C.red }}>
+                        {pct == null ? '—' : `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
 
