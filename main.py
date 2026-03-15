@@ -2130,7 +2130,7 @@ async def query_agent(
                                    "equities", "crypto", "commodities", "social_trading_signal",
                                    "rows", "screen_name",
                                    "top_trades", "bearish_setups",
-                                   "top_moves", "market_pulse", "watchlist_today",
+                                   "top_moves", "market_pulse", "top_stocks_to_watch",
                                    "sector_thesis", "benchmark", "whats_moving"}
                 has_content = any(structured.get(k) for k in meaningful_keys)
                 if has_content:

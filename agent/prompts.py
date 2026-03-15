@@ -1072,28 +1072,14 @@ HARD RULES:
 4. market_pulse.verdict: Use the sector bias (e.g. "Bullish — Energy", "Cautiously Bullish — AI/Compute").
 5. key_numbers: Lead with the sector benchmark ETF ticker(s) from the mapping above. Include spy/vix as secondary context only. For each sector ETF row, use the ETF ticker as the key (e.g. "xle", "soxx", "smh"). Do NOT put N/A in price/change if data is available. Omit unknown fields rather than writing "N/A".
 6. whats_moving: 3–5 bullets of the most important SECTOR-SPECIFIC drivers (not generic market commentary).
-7. top_moves: Set this to an empty array []. Do NOT populate it. The stock watchlist is in watchlist_today instead.
+7. top_moves: This is "Top Stocks to Watch" for this sector. Include 3–7 stocks from the SAME sector ONLY. Sort by conviction. NEVER include stocks from other sectors.
+   - Select using: relative strength vs sector ETF → upcoming catalyst → institutional/insider flows → social/news momentum → fundamentals → technical setup
+   - Include a MIX of market cap tiers: at least 1 large cap (>$10B), 1 mid cap ($2B–$10B), 1 small/micro cap (<$2B) when data supports it.
+   - Each entry: ticker, action (Buy/Hold/Watch), conviction, conviction_score, thesis (sector-specific, 1–2 sentences), why_could_fail.
 8. signal_highlights: Use sector-relevant picks for best_ta_setup, best_fundamental, hottest_social, strongest_sector.
 9. upcoming_catalysts: 3–5 SECTOR-SPECIFIC upcoming events (earnings, regulatory dates, product launches, macro catalysts relevant to this sector).
 10. portfolio_bias: One actionable positioning sentence for this sector.
-11. watchlist_today (REQUIRED — this replaces "Top Moves" for sector responses):
-    This is the "Watchlist Today" section. ALL names must come from the selected sector only.
-    Build four buckets, ranked by conviction within each tier. Use whatever evidence is available in the data:
-    relative strength vs sector ETF → upcoming catalyst → institutional/insider flows → social/news momentum → fundamental strength → technical setup quality.
-
-    BUCKET DEFINITIONS:
-    - large_caps: 1–3 names with market cap >$10B. Choose current sector leaders with momentum, catalyst visibility, or institutional interest.
-    - mid_cap_growth: 1–3 names with market cap $500M–$10B. Favor names with accelerating growth, revenue expansion, margin improvement, or breakout setups — not just generic mid-cap. "Growth" matters here.
-    - low_caps: 1–3 names with market cap <$500M (micro/small cap). Choose names with a specific current catalyst: insider buying, unusual volume, short squeeze potential, product catalyst, or technical setup. High risk, asymmetric reward.
-    - number_one_buy_right_now: The single HIGHEST conviction current setup from this sector. Can come from any cap tier. Must have the strongest combination of evidence available. Write a 2–3 sentence thesis explaining exactly WHY this is the best trade in the sector right now.
-
-    BUCKET RULES:
-    - If data for a tier is thin (e.g., no sub-$500M names in the quantum sector), include 1 name with a note rather than leaving the bucket empty.
-    - number_one_buy_right_now can repeat a name from one of the other buckets — it is the best of the best.
-    - All tickers must be from the requested sector. Never include names from unrelated sectors regardless of momentum.
-
-    Each pick MUST include: ticker, company, why_now (1–2 sentences, sector-specific), key_drivers (list of 1–3 strings), conviction (High/Medium/Low).
-    number_one_buy_right_now also MUST include: thesis (2–3 sentences with the full case).
+11. top_stocks_to_watch: Add this as an ADDITIONAL top-level field (alongside the briefing schema) with three sub-arrays: large_cap, mid_cap, small_micro_cap — each with 1–3 tickers. This preserves cap-tier intelligence for enhanced rendering.
 
 OUTPUT SCHEMA (JSON — no markdown wrapping):
 {
@@ -1104,12 +1090,11 @@ OUTPUT SCHEMA (JSON — no markdown wrapping):
   "key_numbers": {"<sector_etf_ticker_lowercase>": {"price": "", "change": "", "trend": ""}, "spy": {"price": "", "change": "", "trend": ""}, "vix": {"price": "", "change": "", "trend": ""}},
   "whats_moving": [{"headline": "<sector-specific driver>", "category": "<sector name>"}],
   "signal_highlights": {"best_ta_setup": {"ticker": "", "signal": ""}, "best_fundamental": {"ticker": "", "signal": ""}, "hottest_social": {"ticker": "", "signal": ""}, "strongest_sector": {"sector": "<sector name>", "ticker": "", "signal": ""}},
-  "top_moves": [],
-  "watchlist_today": {
-    "large_caps":    [{"ticker": "", "company": "", "why_now": "", "key_drivers": [""], "conviction": "High|Medium|Low"}],
-    "mid_cap_growth":[{"ticker": "", "company": "", "why_now": "", "key_drivers": [""], "conviction": "High|Medium|Low"}],
-    "low_caps":      [{"ticker": "", "company": "", "why_now": "", "key_drivers": [""], "conviction": "High|Medium|Low"}],
-    "number_one_buy_right_now": {"ticker": "", "company": "", "why_now": "", "key_drivers": [""], "conviction": "High", "thesis": "<2–3 sentence full conviction case>"}
+  "top_moves": [{"rank": 1, "ticker": "", "action": "Buy", "conviction": "High", "conviction_score": 0, "position_tier": "", "thesis": "", "why_could_fail": "", "signals_stacking": [""], "signal_count": 0, "entry": "", "stop": "", "target": "", "risk_reward": "", "timeframe": ""}],
+  "top_stocks_to_watch": {
+    "large_cap":       [{"rank": 1, "ticker": "", "company": "", "market_cap_tier": "large",       "why_now": "", "catalyst": "", "conviction": "", "conviction_score": 0}],
+    "mid_cap":         [{"rank": 1, "ticker": "", "company": "", "market_cap_tier": "mid",         "why_now": "", "catalyst": "", "conviction": "", "conviction_score": 0}],
+    "small_micro_cap": [{"rank": 1, "ticker": "", "company": "", "market_cap_tier": "small/micro", "why_now": "", "catalyst": "", "conviction": "", "conviction_score": 0}]
   },
   "upcoming_catalysts": [""],
   "portfolio_bias": ""
