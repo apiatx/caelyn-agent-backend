@@ -32,7 +32,8 @@ CAELYN_ROUTES: dict[str, dict] = {
     "upcoming_catalysts":   {"final": "claude",      "collaborators": ["perplexity"],                      "mode": "fast"},
     "trending_now":         {"final": "grok",        "collaborators": ["perplexity"],                      "mode": "fast"},
     "social_momentum":      {"final": "grok",        "collaborators": [],                                  "mode": "fast"},
-    "x_trader_consensus":   {"final": "grok",        "collaborators": [],                                  "mode": "fast"},
+    "x_trader_consensus":        {"final": "grok",   "collaborators": [],                                  "mode": "fast"},
+    "x_select_trader_consensus": {"final": "grok",   "collaborators": [],                                  "mode": "fast"},
     "sector_rotation":      {"final": "claude",      "collaborators": ["gemini", "perplexity"],            "mode": "deep"},
 
     # TRADES & IDEAS
@@ -135,12 +136,19 @@ _ALIAS_MAP: dict[str, str] = {
     "wsb": "social_momentum",
     "reddit": "social_momentum",
 
-    # X Trader Consensus
+    # X Trader Consensus (broader / top traders)
     "x_trader_consensus": "x_trader_consensus",
     "trader_consensus": "x_trader_consensus",
     "top_traders": "x_trader_consensus",
     "consensus_tickers": "x_trader_consensus",
     "x_consensus": "x_trader_consensus",
+
+    # X Select Trader Consensus (curated 18-account list)
+    "x_select_trader_consensus": "x_select_trader_consensus",
+    "select_traders": "x_select_trader_consensus",
+    "select_trader_consensus": "x_select_trader_consensus",
+    "curated_traders": "x_select_trader_consensus",
+    "x_select_consensus": "x_select_trader_consensus",
 
     # Sector Rotation
     "sector_rotation": "sector_rotation",

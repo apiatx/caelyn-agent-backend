@@ -1388,3 +1388,82 @@ RULES:
 7. final_opinion.reasoning must cite specific evidence from the trader posts — not generic market commentary.
 8. If a ticker is in momentum_leaders, it does NOT need to also be in early_vs_crowded (unless warranted).
 9. Return ONLY valid JSON. No preamble, no markdown, no explanation outside the JSON."""
+
+X_SELECT_TRADER_CONSENSUS_CONTRACT = """X SELECT TRADER CONSENSUS OUTPUT CONTRACT (MANDATORY for x_select_trader_consensus scans):
+
+TASK: Search X (Twitter) for posts from the EXACT list of accounts below, from the last 30 days only.
+Analyze their stock/asset mentions to identify consensus bullish ideas, thesis quality, and conviction level.
+
+ACCOUNTS TO ANALYZE (search only these 18 selected accounts — no others):
+@StockSavvyShay, @HyperTechInvest, @crux_capital_, @SJCapitalInvest, @BlackPantherCap,
+@Kaizen_Investor, @Venu_7_, @CKCapitalxx, @TheTape_TNM, @equitydd, @Speculator_io,
+@DrJebaim, @StonkValue, @stamatoudism, @yianisz, @sunxliao, @futurist_lens, @Thomas_james_1
+
+ANALYSIS WINDOW: Last 30 days only. Do not include posts older than 30 days.
+
+HOW TO SCORE CONSENSUS:
+- Frequency: how many times a ticker is mentioned across the 18 accounts
+- Conviction: strength of language (strong buy vs casual mention), position sizing hints, repeated emphasis
+- Recency: more recent posts weighted higher — posts in last 7 days score 2x vs posts 15–30 days ago
+- Cross-account agreement: a ticker mentioned bullishly by 9 out of 18 accounts beats one mentioned 10 times by 1 account
+- Thesis quality: does the bullish case have specifics (catalysts, earnings, technicals)? Generic hype scores lower.
+- Momentum: is the bullishness INCREASING week-over-week across these accounts?
+
+Do NOT just count raw mentions. Synthesize conviction + frequency + agreement + recency + thesis quality.
+
+RETURN ONLY valid JSON (no markdown, no backticks, no extra text) matching this EXACT schema:
+
+{
+  "display_type": "social",
+  "scan_type": "x_select_trader_consensus",
+  "title": "Consensus Tickers Among Select X Traders",
+  "analysis_window": "Last 30 days",
+  "accounts_analyzed": ["@StockSavvyShay","@HyperTechInvest","@crux_capital_","@SJCapitalInvest","@BlackPantherCap","@Kaizen_Investor","@Venu_7_","@CKCapitalxx","@TheTape_TNM","@equitydd","@Speculator_io","@DrJebaim","@StonkValue","@stamatoudism","@yianisz","@sunxliao","@futurist_lens","@Thomas_james_1"],
+  "consensus_summary": "2–3 sentence synthesis of what these selected traders collectively agree on most right now",
+  "consensus_tickers": [
+    {
+      "rank": 1,
+      "ticker": "TICKER",
+      "name": "Company Name",
+      "consensus_strength": "Very High | High | Moderate | Emerging",
+      "trader_count": 7,
+      "conviction": "High | Moderate | Low",
+      "signal_weight": 88,
+      "thesis": "Core bullish thesis in 1–2 sentences",
+      "why_bullish": "What specifically is making these traders bullish — catalyst, earnings, technical breakout, etc.",
+      "momentum": "Increasing | Stable | New Mention",
+      "risks": "Main risk or counterargument if visible in posts",
+      "representative_reasons": ["reason from trader 1", "reason from trader 2", "reason from trader 3"]
+    }
+  ],
+  "momentum_leaders": [
+    {
+      "ticker": "TICKER",
+      "note": "Why this name is gaining bullish mentions week-over-week among these selected traders"
+    }
+  ],
+  "early_vs_crowded": {
+    "early_stage": [
+      {"ticker": "TICKER", "note": "Why this looks early — fewer accounts, building thesis"}
+    ],
+    "crowded": [
+      {"ticker": "TICKER", "note": "Why this looks crowded — widely discussed, risk of peak consensus"}
+    ]
+  },
+  "final_opinion": {
+    "strongest_buys": ["TICKER1", "TICKER2"],
+    "watch_closely": ["TICKER3"],
+    "reasoning": "2–3 sentence synthesis: what looks strongest, what's early vs crowded, what the user should focus on based on the evidence from these selected traders specifically"
+  }
+}
+
+RULES:
+1. consensus_tickers MUST be sorted by rank (rank 1 = highest consensus).
+2. Include 3–7 tickers in consensus_tickers. Never fewer than 3 unless data is genuinely sparse.
+3. signal_weight is 0–100 composite (frequency + conviction + recency + cross-account + thesis quality).
+4. trader_count is the number of the 18 selected accounts that mentioned this ticker bullishly in the last 30 days.
+5. If fewer than 3 tickers have meaningful data, still return the best available and note sparse data in consensus_summary.
+6. Do NOT include tickers only mentioned bearishly or neutrally.
+7. final_opinion.reasoning must cite specific evidence from the trader posts — not generic market commentary.
+8. If a ticker is in momentum_leaders, it does NOT need to also be in early_vs_crowded (unless warranted).
+9. Return ONLY valid JSON. No preamble, no markdown, no explanation outside the JSON."""
