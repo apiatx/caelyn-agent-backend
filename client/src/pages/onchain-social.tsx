@@ -260,10 +260,14 @@ function GrokSocialAgent() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
   }, [messages]);
 
   const sendMessage = useCallback(async (text: string, presetIntent?: string) => {
@@ -479,7 +483,7 @@ function GrokSocialAgent() {
 
         {/* Messages / Response area */}
         {(messages.length > 0 || loading) && (
-          <div style={{
+          <div ref={messagesContainerRef} style={{
             maxHeight: 520,
             overflowY: 'auto',
             display: 'flex',
