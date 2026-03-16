@@ -1769,152 +1769,127 @@ export default function TradingAgent() {
         </div>
       </div>}
 
-      {/* ── Watchlist Today — supports new structured buckets and legacy flat top_moves ── */}
+      {/* ── Watchlist Today
+           SECTOR preset responses (identified by s.sector_key existing) use the new
+           nested shape: watchlist_today.{ large_cap[], mid_cap[], low_cap[], buy_right_now }
+           Non-sector briefings fall back to the legacy flat top_moves array.
+      ── */}
       {(() => {
+        const isSectorPreset = Boolean(s.sector_key);
         const watchlist = s.watchlist_today;
         const legacyMoves: any[] = topMoves;
-        const hasWatchlist = watchlist && typeof watchlist === 'object';
-        if (!hasWatchlist && legacyMoves.length === 0) return null;
+
+        // Sector preset path — use new nested fields (exact backend keys)
+        if (isSectorPreset && watchlist && typeof watchlist === 'object') {
+          const largeCap: any[]  = Array.isArray(watchlist.large_cap)  ? watchlist.large_cap.filter((e: any) => e.ticker)  : [];
+          const midCap: any[]    = Array.isArray(watchlist.mid_cap)    ? watchlist.mid_cap.filter((e: any) => e.ticker)    : [];
+          const lowCap: any[]    = Array.isArray(watchlist.low_cap)    ? watchlist.low_cap.filter((e: any) => e.ticker)    : [];
+          const buyNow: any      = (watchlist.buy_right_now && watchlist.buy_right_now.ticker) ? watchlist.buy_right_now : null;
+
+          // Helper: render a single watchlist entry card
+          const WatchCard = ({ m, keyPrefix, idx }: { m: any; keyPrefix: string; idx: number }) => {
+            const isExp = expandedTicker === `${keyPrefix}-${idx}`;
+            return <CardWrap key={idx} onClick={() => setExpandedTicker(isExp ? null : `${keyPrefix}-${idx}`)} expanded={isExp}>
+              <div style={{ padding:'12px 16px' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:4 }}>
+                  {m.rank != null && <span style={{ color:C.gold, fontWeight:800, fontSize:14, fontFamily:font }}>#{m.rank}</span>}
+                  <span style={{ color:C.blue, fontWeight:800, fontSize:15, fontFamily:font }}>{m.ticker}</span>
+                  {m.company && <span style={{ color:C.dim, fontSize:11, fontFamily:sansFont }}>{m.company}</span>}
+                  {m.conviction && <Badge color={convColor(m.conviction)}>{m.conviction}</Badge>}
+                  {m.conviction_score != null && <span style={{ color:C.dim, fontSize:10, fontFamily:font }}>{m.conviction_score}</span>}
+                </div>
+                {m.why_now && <div style={{ color:C.text, fontSize:12, lineHeight:1.6, fontFamily:sansFont, marginBottom:4 }}>{m.why_now}</div>}
+                {m.catalyst && <div style={{ color:C.dim, fontSize:11, fontFamily:font, lineHeight:1.5 }}>{m.catalyst}</div>}
+              </div>
+              {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:14 }}>
+                <TradingViewMini ticker={m.ticker} pick={m} />
+              </div>}
+            </CardWrap>;
+          };
+
+          return <div style={{ marginBottom:10 }}>
+            <div style={{ color:C.bright, fontSize:14, fontWeight:800, fontFamily:sansFont, marginBottom:10 }}>Watchlist Today</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+
+              {/* ── #1 Buy Right Now ── */}
+              <div style={{ padding:'14px 18px', background:`linear-gradient(135deg, ${C.gold}10 0%, ${C.bg} 100%)`, border:`1px solid ${C.gold}30`, borderRadius:10 }}>
+                <div style={{ color:C.gold, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:8 }}>#1 Buy Right Now</div>
+                {buyNow ? (
+                  <div>
+                    <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:6 }}>
+                      <span style={{ color:C.bright, fontSize:16, fontWeight:800, fontFamily:font }}>{buyNow.ticker}</span>
+                      {buyNow.company && <span style={{ color:C.dim, fontSize:12, fontFamily:sansFont }}>{buyNow.company}</span>}
+                      {buyNow.conviction && <Badge color={convColor(buyNow.conviction)}>{buyNow.conviction}</Badge>}
+                      {buyNow.conviction_score != null && <span style={{ color:C.dim, fontSize:10, fontFamily:font }}>score {buyNow.conviction_score}</span>}
+                    </div>
+                    {buyNow.why_now && <div style={{ color:C.text, fontSize:12, fontFamily:sansFont, lineHeight:1.6, marginBottom:4 }}>{buyNow.why_now}</div>}
+                    {buyNow.catalyst && <div style={{ color:C.dim, fontSize:11, fontFamily:font }}>{buyNow.catalyst}</div>}
+                  </div>
+                ) : <div style={{ color:C.dim, fontSize:12, fontFamily:sansFont }}>No top pick identified.</div>}
+              </div>
+
+              {/* ── Large Caps ── */}
+              <div>
+                <div style={{ color:C.dim, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>Large Caps</div>
+                {largeCap.length > 0
+                  ? <div style={{ display:'flex', flexDirection:'column', gap:6 }}>{largeCap.map((m, i) => <WatchCard key={i} m={m} keyPrefix="wl-lc" idx={i} />)}</div>
+                  : <div style={{ color:C.dim, fontSize:12, fontFamily:sansFont, padding:'8px 0' }}>No large-cap setups identified for this sector.</div>}
+              </div>
+
+              {/* ── Mid-Cap Growth ── */}
+              <div>
+                <div style={{ color:C.dim, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>Mid-Cap Growth</div>
+                {midCap.length > 0
+                  ? <div style={{ display:'flex', flexDirection:'column', gap:6 }}>{midCap.map((m, i) => <WatchCard key={i} m={m} keyPrefix="wl-mc" idx={i} />)}</div>
+                  : <div style={{ color:C.dim, fontSize:12, fontFamily:sansFont, padding:'8px 0' }}>No mid-cap setups identified.</div>}
+              </div>
+
+              {/* ── Low Caps ── */}
+              <div>
+                <div style={{ color:C.dim, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>Low Caps</div>
+                {lowCap.length > 0
+                  ? <div style={{ display:'flex', flexDirection:'column', gap:6 }}>{lowCap.map((m, i) => <WatchCard key={i} m={m} keyPrefix="wl-sc" idx={i} />)}</div>
+                  : <div style={{ color:C.dim, fontSize:12, fontFamily:sansFont, padding:'8px 0' }}>No small-cap setups identified.</div>}
+              </div>
+
+            </div>
+          </div>;
+        }
+
+        // Non-sector briefing fallback — legacy flat top_moves list
+        if (legacyMoves.length === 0) return null;
         return <div style={{ marginBottom:10 }}>
           <div style={{ color:C.bright, fontSize:14, fontWeight:800, fontFamily:sansFont, marginBottom:10 }}>Watchlist Today</div>
-          {hasWatchlist ? (
-            <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-              {/* #1 Buy Right Now */}
-              {watchlist.number_one_buy && (
-                <div style={{ padding:'14px 18px', background:`linear-gradient(135deg, ${C.gold}10 0%, ${C.bg} 100%)`, border:`1px solid ${C.gold}30`, borderRadius:10 }}>
-                  <div style={{ color:C.gold, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>#1 Buy Right Now</div>
-                  {(() => {
-                    const b = watchlist.number_one_buy;
-                    return <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                      <span style={{ color:C.bright, fontSize:16, fontWeight:800, fontFamily:font }}>{b.ticker || b}</span>
-                      {b.action && <Badge color={C.green}>{b.action}</Badge>}
-                      {b.conviction && <Badge color={convColor(b.conviction)}>{b.conviction}</Badge>}
-                      {b.thesis && <span style={{ color:C.text, fontSize:12, fontFamily:sansFont, flex:1 }}>{b.thesis}</span>}
-                    </div>;
-                  })()}
-                </div>
-              )}
-              {/* Large caps */}
-              {Array.isArray(watchlist.large_caps) && watchlist.large_caps.length > 0 && (
-                <div>
-                  <div style={{ color:C.dim, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>Large Caps</div>
-                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                    {watchlist.large_caps.map((move: any, i: number) => {
-                      const isExp = expandedTicker === `wl-lc-${i}`;
-                      return <CardWrap key={i} onClick={() => setExpandedTicker(isExp ? null : `wl-lc-${i}`)} expanded={isExp}>
-                        <div style={{ padding:'12px 16px' }}>
-                          <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                            {move.rank != null && <span style={{ color:C.gold, fontWeight:800, fontSize:15, fontFamily:font }}>#{move.rank}</span>}
-                            <span style={{ color:C.blue, fontWeight:800, fontSize:15, fontFamily:font }}>{move.ticker}</span>
-                            {move.action && <Badge color={move.action === 'BUY' ? C.green : move.action === 'SHORT' ? C.red : C.gold}>{move.action}</Badge>}
-                            {move.conviction && <Badge color={convColor(move.conviction)}>{move.conviction}</Badge>}
-                            {move.signal_count != null && <span style={{ color:C.gold, fontSize:11, fontWeight:700, fontFamily:font }}>{move.signal_count} signals</span>}
-                          </div>
-                          {move.thesis && <div style={{ color:C.text, fontSize:12, lineHeight:1.7, fontFamily:sansFont, marginTop:6 }}>{move.thesis}</div>}
-                        </div>
-                        {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:14 }}>
-                          <TradingViewMini ticker={move.ticker} pick={move} />
-                          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(120px, 1fr))', gap:8, marginTop:12 }}>
-                            {([['Entry', move.entry, C.bright], ['Stop Loss', move.stop, C.red], ['Target', move.target, C.green], ['R/R', move.risk_reward, C.gold], ['Timeframe', move.timeframe, C.dim]] as [string, any, string][]).map(([l, v, c]) => v ? <div key={l}><div style={{ color:C.dim, fontSize:9, fontFamily:font, textTransform:'uppercase' }}>{l}</div><div style={{ color:c, fontSize:14, fontWeight:700, fontFamily:font, marginTop:2 }}>{v}</div></div> : null)}
-                          </div>
-                        </div>}
-                      </CardWrap>;
-                    })}
-                  </div>
-                </div>
-              )}
-              {/* Mid-cap growth */}
-              {Array.isArray(watchlist.mid_cap_growth) && watchlist.mid_cap_growth.length > 0 && (
-                <div>
-                  <div style={{ color:C.dim, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>Mid-Cap Growth</div>
-                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                    {watchlist.mid_cap_growth.map((move: any, i: number) => {
-                      const isExp = expandedTicker === `wl-mc-${i}`;
-                      return <CardWrap key={i} onClick={() => setExpandedTicker(isExp ? null : `wl-mc-${i}`)} expanded={isExp}>
-                        <div style={{ padding:'12px 16px' }}>
-                          <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                            {move.rank != null && <span style={{ color:C.gold, fontWeight:800, fontSize:15, fontFamily:font }}>#{move.rank}</span>}
-                            <span style={{ color:C.blue, fontWeight:800, fontSize:15, fontFamily:font }}>{move.ticker}</span>
-                            {move.action && <Badge color={move.action === 'BUY' ? C.green : move.action === 'SHORT' ? C.red : C.gold}>{move.action}</Badge>}
-                            {move.conviction && <Badge color={convColor(move.conviction)}>{move.conviction}</Badge>}
-                            {move.signal_count != null && <span style={{ color:C.gold, fontSize:11, fontWeight:700, fontFamily:font }}>{move.signal_count} signals</span>}
-                          </div>
-                          {move.thesis && <div style={{ color:C.text, fontSize:12, lineHeight:1.7, fontFamily:sansFont, marginTop:6 }}>{move.thesis}</div>}
-                        </div>
-                        {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:14 }}>
-                          <TradingViewMini ticker={move.ticker} pick={move} />
-                          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(120px, 1fr))', gap:8, marginTop:12 }}>
-                            {([['Entry', move.entry, C.bright], ['Stop Loss', move.stop, C.red], ['Target', move.target, C.green], ['R/R', move.risk_reward, C.gold], ['Timeframe', move.timeframe, C.dim]] as [string, any, string][]).map(([l, v, c]) => v ? <div key={l}><div style={{ color:C.dim, fontSize:9, fontFamily:font, textTransform:'uppercase' }}>{l}</div><div style={{ color:c, fontSize:14, fontWeight:700, fontFamily:font, marginTop:2 }}>{v}</div></div> : null)}
-                          </div>
-                        </div>}
-                      </CardWrap>;
-                    })}
-                  </div>
-                </div>
-              )}
-              {/* Low caps */}
-              {Array.isArray(watchlist.low_caps) && watchlist.low_caps.length > 0 && (
-                <div>
-                  <div style={{ color:C.dim, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>Low Caps</div>
-                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                    {watchlist.low_caps.map((move: any, i: number) => {
-                      const isExp = expandedTicker === `wl-sc-${i}`;
-                      return <CardWrap key={i} onClick={() => setExpandedTicker(isExp ? null : `wl-sc-${i}`)} expanded={isExp}>
-                        <div style={{ padding:'12px 16px' }}>
-                          <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                            {move.rank != null && <span style={{ color:C.gold, fontWeight:800, fontSize:15, fontFamily:font }}>#{move.rank}</span>}
-                            <span style={{ color:C.blue, fontWeight:800, fontSize:15, fontFamily:font }}>{move.ticker}</span>
-                            {move.action && <Badge color={move.action === 'BUY' ? C.green : move.action === 'SHORT' ? C.red : C.gold}>{move.action}</Badge>}
-                            {move.conviction && <Badge color={convColor(move.conviction)}>{move.conviction}</Badge>}
-                            {move.signal_count != null && <span style={{ color:C.gold, fontSize:11, fontWeight:700, fontFamily:font }}>{move.signal_count} signals</span>}
-                          </div>
-                          {move.thesis && <div style={{ color:C.text, fontSize:12, lineHeight:1.7, fontFamily:sansFont, marginTop:6 }}>{move.thesis}</div>}
-                        </div>
-                        {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:14 }}>
-                          <TradingViewMini ticker={move.ticker} pick={move} />
-                          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(120px, 1fr))', gap:8, marginTop:12 }}>
-                            {([['Entry', move.entry, C.bright], ['Stop Loss', move.stop, C.red], ['Target', move.target, C.green], ['R/R', move.risk_reward, C.gold], ['Timeframe', move.timeframe, C.dim]] as [string, any, string][]).map(([l, v, c]) => v ? <div key={l}><div style={{ color:C.dim, fontSize:9, fontFamily:font, textTransform:'uppercase' }}>{l}</div><div style={{ color:c, fontSize:14, fontWeight:700, fontFamily:font, marginTop:2 }}>{v}</div></div> : null)}
-                          </div>
-                        </div>}
-                      </CardWrap>;
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            /* Legacy flat top_moves list — rendered under new "Watchlist Today" label */
-            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-              {legacyMoves.map((move: any, i: number) => {
-                const isExp = expandedTicker === `brief-${i}`;
-                return <CardWrap key={i} onClick={() => setExpandedTicker(isExp ? null : `brief-${i}`)} expanded={isExp}>
-                  <div style={{ padding:'16px 20px' }}>
-                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-                      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                        <span style={{ color:C.gold, fontWeight:800, fontSize:18, fontFamily:font }}>#{move.rank}</span>
-                        <span style={{ color:C.blue, fontWeight:800, fontSize:18, fontFamily:font }}>{move.ticker}</span>
-                        <Badge color={move.action === 'BUY' ? C.green : move.action === 'SHORT' ? C.red : C.gold}>{move.action}</Badge>
-                        <Badge color={convColor(move.conviction)}>{move.conviction}</Badge>
-                      </div>
-                      <span style={{ color:C.gold, fontSize:11, fontWeight:700, fontFamily:font }}>{move.signal_count} signals</span>
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {legacyMoves.map((move: any, i: number) => {
+              const isExp = expandedTicker === `brief-${i}`;
+              return <CardWrap key={i} onClick={() => setExpandedTicker(isExp ? null : `brief-${i}`)} expanded={isExp}>
+                <div style={{ padding:'16px 20px' }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                      <span style={{ color:C.gold, fontWeight:800, fontSize:18, fontFamily:font }}>#{move.rank}</span>
+                      <span style={{ color:C.blue, fontWeight:800, fontSize:18, fontFamily:font }}>{move.ticker}</span>
+                      <Badge color={move.action === 'BUY' ? C.green : move.action === 'SHORT' ? C.red : C.gold}>{move.action}</Badge>
+                      <Badge color={convColor(move.conviction)}>{move.conviction}</Badge>
                     </div>
-                    {move.signals_stacking && <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:8 }}>
-                      {move.signals_stacking.map((sig: string, j: number) => (
-                        <span key={j} style={{ padding:'2px 8px', borderRadius:4, fontSize:9, fontWeight:600, fontFamily:font, color:C.gold, background:`${C.gold}10`, border:`1px solid ${C.gold}20` }}>{sig.replace(/_/g, ' ')}</span>
-                      ))}
-                    </div>}
-                    <div style={{ color:C.text, fontSize:12, lineHeight:1.7, fontFamily:sansFont }}>{move.thesis}</div>
+                    <span style={{ color:C.gold, fontSize:11, fontWeight:700, fontFamily:font }}>{move.signal_count} signals</span>
                   </div>
-                  {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:14 }}>
-                    <TradingViewMini ticker={move.ticker} pick={move} />
-                    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(120px, 1fr))', gap:8, marginTop:12 }}>
-                      {([['Entry', move.entry, C.bright], ['Stop Loss', move.stop, C.red], ['Target', move.target, C.green], ['R/R', move.risk_reward, C.gold], ['Timeframe', move.timeframe, C.dim]] as [string, any, string][]).map(([l, v, c]) => v ? <div key={l as string}><div style={{ color:C.dim, fontSize:9, fontFamily:font, textTransform:'uppercase' }}>{l as string}</div><div style={{ color:c as string, fontSize:15, fontWeight:700, fontFamily:font, marginTop:2 }}>{v as string}</div></div> : null)}
-                    </div>
+                  {move.signals_stacking && <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:8 }}>
+                    {move.signals_stacking.map((sig: string, j: number) => (
+                      <span key={j} style={{ padding:'2px 8px', borderRadius:4, fontSize:9, fontWeight:600, fontFamily:font, color:C.gold, background:`${C.gold}10`, border:`1px solid ${C.gold}20` }}>{sig.replace(/_/g, ' ')}</span>
+                    ))}
                   </div>}
-                </CardWrap>;
-              })}
-            </div>
-          )}
+                  <div style={{ color:C.text, fontSize:12, lineHeight:1.7, fontFamily:sansFont }}>{move.thesis}</div>
+                </div>
+                {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:14 }}>
+                  <TradingViewMini ticker={move.ticker} pick={move} />
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(120px, 1fr))', gap:8, marginTop:12 }}>
+                    {([['Entry', move.entry, C.bright], ['Stop Loss', move.stop, C.red], ['Target', move.target, C.green], ['R/R', move.risk_reward, C.gold], ['Timeframe', move.timeframe, C.dim]] as [string, any, string][]).map(([l, v, c]) => v ? <div key={l as string}><div style={{ color:C.dim, fontSize:9, fontFamily:font, textTransform:'uppercase' }}>{l as string}</div><div style={{ color:c as string, fontSize:15, fontWeight:700, fontFamily:font, marginTop:2 }}>{v as string}</div></div> : null)}
+                  </div>
+                </div>}
+              </CardWrap>;
+            })}
+          </div>
         </div>;
       })()}
 
