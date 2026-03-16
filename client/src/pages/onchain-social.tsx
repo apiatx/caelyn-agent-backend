@@ -399,7 +399,7 @@ export default function OnchainSocialPage() {
               pointerEvents: 'none',
             }} />
             <img src={socialImage} alt="Caelyn.ai" style={{ width: 320, height: 'auto', objectFit: 'contain', position: 'relative', zIndex: 1 }} />
-            <h1 style={{ fontSize: 'clamp(1.4rem, 3vw, 2rem)', fontWeight: 700, lineHeight: 1.15, letterSpacing: '-0.03em', margin: 0, position: 'relative', zIndex: 1 }}>
+            <h1 style={{ fontSize: 'clamp(1.4rem, 3vw, 2rem)', fontWeight: 700, lineHeight: 1.15, letterSpacing: '-0.03em', margin: 0, marginTop: '-70px', position: 'relative', zIndex: 1 }}>
               <span className="gradient-text">Social</span>
             </h1>
             <p style={{ fontSize: '0.9rem', color: '#64748b', margin: 0, lineHeight: 1.5, position: 'relative', zIndex: 1 }}>
