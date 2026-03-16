@@ -55,8 +55,13 @@ CAELYN_ROUTES: dict[str, dict] = {
     "free_cash_flow_leaders":    {"final": "claude", "collaborators": ["gemini"],                          "mode": "standard"},
 
     # SECTORS
-    "crypto":               {"final": "claude",      "collaborators": ["grok", "perplexity"],              "mode": "standard"},
-    "commodities":          {"final": "claude",      "collaborators": ["perplexity", "gemini"],            "mode": "standard"},
+    # crypto: Grok X sentiment + CoinGecko + CMC + Hyperliquid + altFINS + DeFiLlama + Polymarket
+    # are ALL already gathered in parallel inside get_crypto_scanner() before Caelyn fires.
+    # Adding collaborators on top forces a second Grok call + Perplexity call that each take
+    # 12-90s, making total response time 150s+. Claude gets all the data it needs directly.
+    "crypto":               {"final": "claude",      "collaborators": [],                                  "mode": "fast"},
+    # commodities: commodity_scan pipeline already pulls ETF proxies + Grok themes + macro data.
+    "commodities":          {"final": "claude",      "collaborators": [],                                  "mode": "fast"},
     "energy":               {"final": "claude",      "collaborators": ["perplexity", "gemini"],            "mode": "standard"},
     "materials":            {"final": "claude",      "collaborators": ["gemini", "perplexity"],            "mode": "standard"},
     "aerospace_defense":    {"final": "claude",      "collaborators": ["perplexity", "gemini"],            "mode": "standard"},

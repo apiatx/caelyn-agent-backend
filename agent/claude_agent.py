@@ -3055,7 +3055,7 @@ class TradingAgent:
                 print(f"[AGENT] Cross-asset trending data gathering error: {e}")
                 return {"error": f"Data gathering failed: {str(e)}", "scan_type": "cross_asset_trending_error"}
 
-        gather_timeout = 40.0 if category == "cross_market" else 65.0 if category == "investments" else 55.0
+        gather_timeout = 40.0 if category == "cross_market" else 65.0 if category == "investments" else 30.0 if category == "crypto" else 55.0
         if has_plan and query_info.get("orchestration_plan", {}).get("modules", {}).get("macro_context"):
             gather_timeout = min(gather_timeout + 10.0, 65.0)
         try:
@@ -4151,10 +4151,14 @@ class TradingAgent:
             timeout=120.0,
         )
 
-        # Thematic (sector preset) calls skip web_search: the sector universe data is
-        # already pulled from StockAnalysis/Finviz/Grok. Adding web_search on top of
-        # the complex watchlist schema pushes AI/Compute responses over the 120s limit.
-        use_web_search = not skip_web_search and category != "thematic"
+        # Categories that skip web_search because their proprietary data pipeline
+        # already provides real-time live data from multiple sources:
+        # - thematic: StockAnalysis/Finviz/Grok sector universe already pulled
+        # - crypto: CoinGecko + CMC + Hyperliquid + altFINS + DeFiLlama + Polymarket + Grok X
+        # - commodities: commodity ETF proxies + Grok themes + macro snapshot already gathered
+        # Adding web_search on top of these categories adds 30-90s with zero marginal value.
+        _skip_web_for_cat = category in ("thematic", "crypto", "commodities")
+        use_web_search = not skip_web_search and not _skip_web_for_cat
         tools = [{"type": "web_search_20250305", "name": "web_search"}] if use_web_search else []
 
         try:
