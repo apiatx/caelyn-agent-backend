@@ -153,7 +153,7 @@ function GrokSocialAgent() {
               fontFamily: "'JetBrains Mono', monospace",
               fontSize: '0.82rem', fontWeight: 600, color: '#e2e8f0',
               letterSpacing: '-0.01em', margin: 0,
-            }}>Social Caelyn</h3>
+            }}>Ask Caelyn</h3>
             <p style={{
               fontFamily: "'JetBrains Mono', monospace",
               fontSize: '0.62rem', color: '#475569',
@@ -409,7 +409,9 @@ export default function OnchainSocialPage() {
         </div>
 
         {/* ═══ Grok Social Agent ═══ */}
-        <GrokSocialAgent />
+        <div style={{ marginTop: '2rem' }}>
+          <GrokSocialAgent />
+        </div>
 
         {/* StocksX + CryptoX Side by Side */}
         <section style={{ maxWidth: 1400, margin: '0 auto', padding: '2rem 3rem', position: 'relative', zIndex: 1 }}>
