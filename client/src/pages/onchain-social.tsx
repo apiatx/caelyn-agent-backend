@@ -387,23 +387,22 @@ export default function OnchainSocialPage() {
 
         {/* HERO */}
         <div style={{ padding: '1.5rem 3rem 1rem', maxWidth: 900, margin: '0 auto', textAlign: 'center', position: 'relative', zIndex: 1 }}>
-          {/* Solid white card — box-shadow spreads white outward so it fades into the dark bg */}
-          <div style={{
-            display: 'inline-flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '0.4rem',
-            paddingBottom: '1rem',
-            background: 'white',
-            borderRadius: 24,
-            boxShadow: '0 0 70px 55px white',
-            marginBottom: '1.5rem',
-          }}>
-            <img src={socialImage} alt="Caelyn.ai" style={{ width: 320, height: 'auto', objectFit: 'contain' }} />
-            <h1 style={{ fontSize: 'clamp(1.4rem, 3vw, 2rem)', fontWeight: 700, lineHeight: 1.15, letterSpacing: '-0.03em', margin: 0 }}>
+          <div style={{ position: 'relative', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem', paddingBottom: '1rem', marginBottom: '1.5rem' }}>
+            {/* Blurred white blob — no border-radius corners, no hard edges, pure seamless fade */}
+            <div style={{
+              position: 'absolute',
+              inset: -80,
+              background: 'white',
+              filter: 'blur(50px)',
+              borderRadius: '50%',
+              zIndex: 0,
+              pointerEvents: 'none',
+            }} />
+            <img src={socialImage} alt="Caelyn.ai" style={{ width: 320, height: 'auto', objectFit: 'contain', position: 'relative', zIndex: 1 }} />
+            <h1 style={{ fontSize: 'clamp(1.4rem, 3vw, 2rem)', fontWeight: 700, lineHeight: 1.15, letterSpacing: '-0.03em', margin: 0, position: 'relative', zIndex: 1 }}>
               <span className="gradient-text">Social</span>
             </h1>
-            <p style={{ fontSize: '0.9rem', color: '#64748b', margin: 0, lineHeight: 1.5 }}>
+            <p style={{ fontSize: '0.9rem', color: '#64748b', margin: 0, lineHeight: 1.5, position: 'relative', zIndex: 1 }}>
               Social intelligence and community analytics
             </p>
           </div>
