@@ -4037,8 +4037,8 @@ class TradingAgent:
 
         return ""
 
-    async def _ask_claude_async_web_search(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None) -> str:
-        """Async Claude call with web_search tool for eligible categories."""
+    async def _ask_claude_async_web_search(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None, skip_web_search: bool = False) -> str:
+        """Async Claude call with optional web_search tool. Web search is skipped for thematic/sector preset calls to avoid 120s timeouts."""
         system_blocks, messages, model, token_limit, use_thinking, thinking_budget = self._build_prompt(
             user_prompt, market_data, history, is_followup, category, chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent
         )
@@ -4053,29 +4053,28 @@ class TradingAgent:
             timeout=120.0,
         )
 
-        tools = [{"type": "web_search_20250305", "name": "web_search"}]
+        # Thematic (sector preset) calls skip web_search: the sector universe data is
+        # already pulled from StockAnalysis/Finviz/Grok. Adding web_search on top of
+        # the complex watchlist schema pushes AI/Compute responses over the 120s limit.
+        use_web_search = not skip_web_search and category != "thematic"
+        tools = [{"type": "web_search_20250305", "name": "web_search"}] if use_web_search else []
 
         try:
             if use_thinking:
                 effective_max_tokens = token_limit + thinking_budget
-                print(f"[Agent] Sending {len(messages)} messages to Claude ASYNC+web_search (model={model}, category={category}, max_tokens={effective_max_tokens}, thinking={thinking_budget})")
-                response = await async_client.messages.create(
-                    model=model,
-                    max_tokens=effective_max_tokens,
-                    thinking={"type": "enabled", "budget_tokens": thinking_budget},
-                    system=system_text,
-                    messages=messages,
-                    tools=tools,
-                )
+                search_tag = "+web_search" if use_web_search else ""
+                print(f"[Agent] Sending {len(messages)} messages to Claude ASYNC{search_tag} (model={model}, category={category}, max_tokens={effective_max_tokens}, thinking={thinking_budget})")
+                create_kwargs = dict(model=model, max_tokens=effective_max_tokens, thinking={"type": "enabled", "budget_tokens": thinking_budget}, system=system_text, messages=messages)
+                if tools:
+                    create_kwargs["tools"] = tools
+                response = await async_client.messages.create(**create_kwargs)
             else:
-                print(f"[Agent] Sending {len(messages)} messages to Claude ASYNC+web_search (model={model}, category={category}, max_tokens={token_limit})")
-                response = await async_client.messages.create(
-                    model=model,
-                    max_tokens=token_limit,
-                    system=system_text,
-                    messages=messages,
-                    tools=tools,
-                )
+                search_tag = "+web_search" if use_web_search else ""
+                print(f"[Agent] Sending {len(messages)} messages to Claude ASYNC{search_tag} (model={model}, category={category}, max_tokens={token_limit})")
+                create_kwargs = dict(model=model, max_tokens=token_limit, system=system_text, messages=messages)
+                if tools:
+                    create_kwargs["tools"] = tools
+                response = await async_client.messages.create(**create_kwargs)
 
             # Find the last text block (tool_use blocks may appear before it)
             response_text = ""
