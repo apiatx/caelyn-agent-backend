@@ -579,8 +579,11 @@ export default function TradingAgent() {
       ...(csvData ? { csv_data: csvData } : {}),
     };
     if (presetIntent) {
-      // Preset buttons always use agent_collab — backend routes via preset_intent
-      payload.reasoning_model = 'agent_collab';
+      // Per-preset model overrides — avoids unnecessary slow models for fast presets
+      const PRESET_MODEL_OVERRIDES: Record<string, string> = {
+        crypto: 'grok',
+      };
+      payload.reasoning_model = PRESET_MODEL_OVERRIDES[presetIntent] ?? 'agent_collab';
     } else if (collabConfig) {
       Object.assign(payload, buildCollabPayload(collabConfig, selectedModel));
     } else {
