@@ -3847,8 +3847,14 @@ class TradingAgent:
                     "the top consensus bullish tickers. Follow your JSON schema exactly."
                 ),
                 "x_select_trader_consensus": (
-                    "Search the last 30 days of posts from the 18 selected X accounts listed and identify "
-                    "the top consensus bullish tickers among those specific traders. Follow your JSON schema exactly."
+                    "Search X for stock/ticker posts from ONLY these exact accounts — no others: "
+                    "from:StockSavvyShay OR from:HyperTechInvest OR from:crux_capital_ OR from:SJCapitalInvest OR "
+                    "from:BlackPantherCap OR from:Kaizen_Investor OR from:Venu_7_ OR from:CKCapitalxx OR "
+                    "from:TheTape_TNM OR from:equitydd OR from:Speculator_io OR from:DrJebaim OR "
+                    "from:StonkValue OR from:stamatoudism OR from:yianisz OR from:sunxliao OR "
+                    "from:futurist_lens OR from:Thomas_james_1 "
+                    "— last 30 days only. Do NOT include posts from any accounts outside this list. "
+                    "Identify consensus bullish tickers across only these 18 selected traders and follow your JSON schema exactly."
                 ),
             }
             latest_user = _PRESET_TRIGGERS.get(
