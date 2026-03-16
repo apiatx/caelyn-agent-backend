@@ -1315,17 +1315,18 @@ X_TRADER_CONSENSUS_CONTRACT = """X TRADER CONSENSUS OUTPUT CONTRACT (MANDATORY f
 TASK: Search X (Twitter) for posts from the EXACT list of accounts below, from the last 30 days only.
 Analyze their stock/asset mentions to identify consensus bullish ideas, thesis quality, and conviction level.
 
-ACCOUNTS TO ANALYZE (search only these 11 accounts — no others):
+ACCOUNTS TO ANALYZE (search only these 18 accounts — no others):
 @StockSavvyShay, @HyperTechInvest, @crux_capital_, @SJCapitalInvest, @BlackPantherCap,
-@Kaizen_Investor, @Venu_7_, @CKCapitalxx, @TheTape_TNM, @equitydd, @Speculator_io
+@Kaizen_Investor, @Venu_7_, @CKCapitalxx, @TheTape_TNM, @equitydd, @Speculator_io,
+@DrJebaim, @StonkValue, @stamatoudism, @yianisz, @sunxliao, @futurist_lens, @Thomas_james_1
 
 ANALYSIS WINDOW: Last 30 days only. Do not include posts older than 30 days.
 
 HOW TO SCORE CONSENSUS:
-- Frequency: how many times a ticker is mentioned across the 11 accounts
+- Frequency: how many times a ticker is mentioned across the 18 accounts
 - Conviction: strength of language (strong buy vs casual mention), position sizing hints, repeated emphasis
 - Recency: more recent posts weighted higher — posts in last 7 days score 2x vs posts 15–30 days ago
-- Cross-account agreement: a ticker mentioned bullishly by 6 out of 11 accounts beats one mentioned 10 times by 1 account
+- Cross-account agreement: a ticker mentioned bullishly by 9 out of 18 accounts beats one mentioned 10 times by 1 account
 - Thesis quality: does the bullish case have specifics (catalysts, earnings, technicals)? Generic hype scores lower.
 - Momentum: is the bullishness INCREASING week-over-week across these accounts?
 
@@ -1338,7 +1339,7 @@ RETURN ONLY valid JSON (no markdown, no backticks, no extra text) matching this 
   "scan_type": "x_trader_consensus",
   "title": "Consensus Tickers Among Top X Traders",
   "analysis_window": "Last 30 days",
-  "accounts_analyzed": ["@StockSavvyShay","@HyperTechInvest","@crux_capital_","@SJCapitalInvest","@BlackPantherCap","@Kaizen_Investor","@Venu_7_","@CKCapitalxx","@TheTape_TNM","@equitydd","@Speculator_io"],
+  "accounts_analyzed": ["@StockSavvyShay","@HyperTechInvest","@crux_capital_","@SJCapitalInvest","@BlackPantherCap","@Kaizen_Investor","@Venu_7_","@CKCapitalxx","@TheTape_TNM","@equitydd","@Speculator_io","@DrJebaim","@StonkValue","@stamatoudism","@yianisz","@sunxliao","@futurist_lens","@Thomas_james_1"],
   "consensus_summary": "2–3 sentence synthesis of what these traders collectively agree on most right now",
   "consensus_tickers": [
     {
@@ -1381,7 +1382,7 @@ RULES:
 1. consensus_tickers MUST be sorted by rank (rank 1 = highest consensus).
 2. Include 3–7 tickers in consensus_tickers. Never fewer than 3 unless data is genuinely sparse.
 3. signal_weight is 0–100 composite (frequency + conviction + recency + cross-account + thesis quality).
-4. trader_count is the number of the 11 accounts that mentioned this ticker bullishly in the last 30 days.
+4. trader_count is the number of the 18 accounts that mentioned this ticker bullishly in the last 30 days.
 5. If fewer than 3 tickers have meaningful data, still return the best available and note sparse data in consensus_summary.
 6. Do NOT include tickers only mentioned bearishly or neutrally.
 7. final_opinion.reasoning must cite specific evidence from the trader posts — not generic market commentary.
