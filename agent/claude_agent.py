@@ -1153,6 +1153,9 @@ class TradingAgent:
             elif not isinstance(structured, dict):
                 result["structured"] = market_data
 
+        if category == "thematic" and market_data and isinstance(market_data, dict):
+            self._enforce_thematic_watchlist(result, market_data)
+
         if market_data and isinstance(market_data, dict) and market_data.get("pre_computed_highlights"):
             pch = market_data["pre_computed_highlights"]
             structured = result.get("structured") or result
@@ -6123,6 +6126,108 @@ Be direct and opinionated. Tell me what you actually think."""
               f"pool={len(candidates)}")
 
         return json.dumps(prerank, indent=2)
+
+    @staticmethod
+    def _enforce_thematic_watchlist(result: dict, market_data: dict) -> None:
+        """
+        Deterministic fallback for thematic/sector responses.
+
+        If Claude returns watchlist_today with empty or missing buckets, this
+        rebuilds them from the same pre-ranked data used in the prompt injection,
+        ensuring the frontend always receives fully-populated watchlist_today data.
+
+        Mutates result["structured"]["watchlist_today"] in-place.
+        """
+        structured = result.get("structured")
+        if not isinstance(structured, dict):
+            return
+
+        if not structured.get("sector_key"):
+            return
+
+        wt = structured.get("watchlist_today")
+        if not isinstance(wt, dict):
+            wt = {}
+            structured["watchlist_today"] = wt
+
+        def _ticker_missing(entries) -> bool:
+            if not entries:
+                return True
+            if isinstance(entries, list):
+                return not any(
+                    isinstance(e, dict) and e.get("ticker") and len(str(e.get("ticker", ""))) > 0
+                    for e in entries
+                )
+            return True
+
+        needs_large = _ticker_missing(wt.get("large_cap"))
+        needs_mid   = _ticker_missing(wt.get("mid_cap"))
+        needs_low   = _ticker_missing(wt.get("low_cap"))
+        buy_rn      = wt.get("buy_right_now", {})
+        needs_buy   = not (isinstance(buy_rn, dict) and buy_rn.get("ticker"))
+
+        if not any([needs_large, needs_mid, needs_low, needs_buy]):
+            return
+
+        try:
+            prerank_json = TradingAgent._build_thematic_watchlist_prerank(market_data)
+            if not prerank_json:
+                print("[SECTOR_ENFORCE] Pre-ranker returned empty — cannot populate watchlist_today")
+                return
+            prerank = json.loads(prerank_json)
+        except Exception as e:
+            print(f"[SECTOR_ENFORCE] Pre-ranker error: {e}")
+            return
+
+        def _make_entry(entry: dict, tier: str) -> dict:
+            score = entry.get("composite_score", 0)
+            conviction = "High" if score >= 50 else "Medium" if score >= 30 else "Watch"
+            return {
+                "rank":            entry.get("rank", 1),
+                "ticker":          entry.get("ticker", ""),
+                "company":         entry.get("company", ""),
+                "market_cap_tier": tier,
+                "why_now":         (
+                    f"Backend-ranked #{entry.get('rank',1)} by quant score, social sentiment, "
+                    f"and revenue growth (composite={score})"
+                ),
+                "catalyst":        entry.get("signals", "see data"),
+                "conviction":      conviction,
+                "conviction_score": int(score),
+            }
+
+        rebuilt = []
+        if needs_large and prerank.get("large_cap"):
+            wt["large_cap"] = [_make_entry(e, "large") for e in prerank["large_cap"]]
+            rebuilt.append(f"large_cap={[e['ticker'] for e in wt['large_cap']]}")
+
+        if needs_mid and prerank.get("mid_cap"):
+            wt["mid_cap"] = [_make_entry(e, "mid") for e in prerank["mid_cap"]]
+            rebuilt.append(f"mid_cap={[e['ticker'] for e in wt['mid_cap']]}")
+
+        if needs_low and prerank.get("low_cap"):
+            wt["low_cap"] = [_make_entry(e, "low") for e in prerank["low_cap"]]
+            rebuilt.append(f"low_cap={[e['ticker'] for e in wt['low_cap']]}")
+
+        if needs_buy and isinstance(prerank.get("buy_right_now"), dict):
+            brc = prerank["buy_right_now"]
+            score = brc.get("composite_score", 0)
+            wt["buy_right_now"] = {
+                "ticker":          brc.get("ticker", ""),
+                "company":         brc.get("company", ""),
+                "market_cap_tier": "",
+                "why_now":         (
+                    f"Highest composite score across all market cap tiers (score={score}) — "
+                    f"strongest overall setup in this sector right now"
+                ),
+                "catalyst":        brc.get("signals", "see data"),
+                "conviction":      "High",
+                "conviction_score": int(score),
+            }
+            rebuilt.append(f"buy_right_now={wt['buy_right_now']['ticker']}")
+
+        if rebuilt:
+            print(f"[SECTOR_ENFORCE] watchlist_today rebuilt: {', '.join(rebuilt)}")
 
     def _build_prompt(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None):
         """Build system_blocks, messages, model selection for a Claude call.
