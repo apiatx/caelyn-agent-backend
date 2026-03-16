@@ -1757,7 +1757,7 @@ class TradingAgent:
             "priority_depth": "medium",
         },
         "crypto_scanner": {
-            "intent": "single_asset_scan",
+            "intent": "crypto",
             "asset_classes": ["crypto"],
             "modules": {
                 "x_sentiment": True,
@@ -1774,7 +1774,7 @@ class TradingAgent:
             "priority_depth": "medium",
         },
         "commodity_scan": {
-            "intent": "single_asset_scan",
+            "intent": "commodities",
             "asset_classes": ["commodities"],
             "modules": {
                 "x_sentiment": False,
@@ -2334,6 +2334,8 @@ class TradingAgent:
         "chat": "chat",
         "prediction_markets": "prediction_markets",
         "news_intelligence": "news_intelligence",
+        "crypto": "crypto",
+        "commodities": "commodities",
     }
 
     ASSET_CLASS_CATEGORY_MAP = {
