@@ -1628,6 +1628,7 @@ export default function TradingAgent() {
               })()}
               <div style={{ padding:'0 18px 14px', color:C.text, fontSize:12, lineHeight:1.6, fontFamily:sansFont }}>{c.thesis}</div>
               {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:14 }}>
+                <TradingViewMini ticker={c.symbol || c.coin} pick={{ ...c, asset_class: 'crypto' }} />
                 {c.social && <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(130px, 1fr))', gap:8, marginBottom:10 }}>
                   {c.social.twitter_followers && <IndicatorPill label="Twitter" value={c.social.twitter_followers} />}
                   {c.social.reddit_subscribers && <IndicatorPill label="Reddit" value={c.social.reddit_subscribers} />}
