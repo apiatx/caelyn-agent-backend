@@ -407,7 +407,7 @@ function GrokSocialAgent() {
         {/* ── x_trader_consensus preset button ── */}
         <div style={{ marginBottom: '0.6rem' }}>
           <button
-            onClick={() => sendMessage('', 'x_trader_consensus')}
+            onClick={() => sendMessage('Consensus tickers among top X traders', 'x_trader_consensus')}
             disabled={loading}
             style={{
               fontFamily: font,
