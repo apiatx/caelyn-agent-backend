@@ -890,7 +890,7 @@ HARD RULES:
 2. Keep screen_name and preset exactly as provided.
 3. Keep rows in the order provided (pre-ranked by composite_score).
 4. Each row must have: ticker, company, price, chg_pct, mkt_cap, signals. Keep values exactly as provided.
-5. Optional fields (rev_growth_yoy, pe, div_yield) — keep if present, omit key if null.
+5. Optional fields (rev_growth_yoy, pe, div_yield, rating, upside, vol, margin, rsi) — keep if present, omit key if null.
 6. Do NOT put "N/A" strings in any field. If a value is null, omit the key entirely.
 7. company must be a real company name (2+ characters), never a single letter or abbreviation like "T" or "S".
 8. top_picks: 2-5 tickers with confidence and a 1-sentence reason referencing actual signals from the row.

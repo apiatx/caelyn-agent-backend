@@ -68,6 +68,10 @@ class StockAnalysisScraper:
                 "analysts": "analyst_rating",
                 "price target": "price_target",
                 "earnings date": "earnings_date",
+                "profit margin": "profit_margin",
+                "net margin": "profit_margin",
+                "operating margin": "operating_margin",
+                "gross margin": "gross_margin",
             }
 
             for table_rows in tables:
@@ -121,6 +125,29 @@ class StockAnalysisScraper:
                     stats["dividend_yield"] = match.group(1)
                 elif div.lower() == "n/a" or div == "-":
                     stats["dividend_yield"] = "N/A"
+
+            # Extract company name from page title or h1
+            try:
+                h1 = soup.find("h1")
+                if h1:
+                    raw_name = h1.get_text(strip=True)
+                    # Strip trailing " Stock" or "(TICKER)" suffixes that StockAnalysis adds
+                    raw_name = re.sub(r'\s*\(.*?\)\s*$', '', raw_name).strip()
+                    raw_name = re.sub(r'\s+Stock\s*$', '', raw_name, flags=re.IGNORECASE).strip()
+                    if raw_name and len(raw_name) > 1 and raw_name.upper() != ticker:
+                        stats["company_name"] = raw_name
+                if not stats.get("company_name"):
+                    title_tag = soup.find("title")
+                    if title_tag:
+                        title_text = title_tag.get_text(strip=True)
+                        # Format: "CompanyName (TICKER) Stock Analysis | Stock Analysis"
+                        m = re.match(r'^(.+?)\s*\(', title_text)
+                        if m:
+                            candidate = m.group(1).strip()
+                            if candidate and len(candidate) > 1 and candidate.upper() != ticker:
+                                stats["company_name"] = candidate
+            except Exception:
+                pass
 
             stats["ticker"] = ticker
             print(f"[StockAnalysis] overview {ticker}: parsed {len(stats)} fields: {list(stats.keys())}")

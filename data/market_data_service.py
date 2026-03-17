@@ -5510,10 +5510,13 @@ class MarketDataService:
             try:
                 overview = await self.stockanalysis.get_overview(ticker)
                 if overview and not overview.get("error"):
+                    # Company name: prefer Finviz (already in row), fall back to
+                    # StockAnalysis h1/title extraction, never use "{ticker} Corp"
                     if not row["company"] or len(row["company"] or "") <= 1:
-                        sa_name = overview.get("ticker", "")
-                        if overview.get("market_cap"):
-                            row["company"] = f"{ticker} Corp"
+                        sa_company = overview.get("company_name", "")
+                        if sa_company and len(sa_company) > 1:
+                            row["company"] = sa_company
+                        # If still missing, leave as None — Claude will handle it
                     pe_raw = overview.get("pe_ratio") or overview.get(
                         "forward_pe")
                     if pe_raw:
@@ -5539,6 +5542,24 @@ class MarketDataService:
                             pass
                     if not row["mkt_cap"] and overview.get("market_cap"):
                         row["mkt_cap"] = overview["market_cap"]
+                    # Analyst rating and upside — already in StockAnalysis overview
+                    analyst_rating = overview.get("analyst_rating")
+                    if analyst_rating and analyst_rating not in ("N/A", "-", "n/a"):
+                        row["rating"] = analyst_rating
+                    upside_raw = overview.get("upside_downside")
+                    if upside_raw and upside_raw not in ("N/A", "-", "n/a"):
+                        row["upside"] = upside_raw
+                    # Margin — captured from page if label_map matched it
+                    for margin_key in ("profit_margin", "operating_margin", "gross_margin"):
+                        margin_raw = overview.get(margin_key)
+                        if margin_raw and margin_raw not in ("N/A", "-", "n/a"):
+                            try:
+                                row["margin"] = float(
+                                    str(margin_raw).replace("%", "").replace("+", "").replace(",", ""))
+                                break
+                            except (ValueError, TypeError):
+                                row["margin"] = margin_raw
+                                break
             except Exception as e:
                 print(f"[SCREENER] StockAnalysis enrich error {ticker}: {e}")
 
@@ -5899,6 +5920,13 @@ class MarketDataService:
                         except (IndexError, ValueError):
                             pass
                         break
+
+            # Frontend reads 'vol' — use relative volume from TA
+            if row.get("rel_vol") is not None and "vol" not in row:
+                try:
+                    row["vol"] = round(float(row["rel_vol"]), 1)
+                except (ValueError, TypeError):
+                    row["vol"] = row["rel_vol"]
 
             # Format price as string with $ if numeric
             if row.get("price") is not None:

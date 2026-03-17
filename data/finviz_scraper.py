@@ -234,14 +234,18 @@ class FinvizScraper:
                     if not ticker or len(ticker) > 6:
                         continue
 
+                    _ci = {k: header_map.get(k, d) for k, d in [
+                        ("company", 2), ("sector", 3), ("industry", 4),
+                        ("market cap", 6), ("price", 8), ("change", 9),
+                    ]}
                     item = {
                         "ticker": ticker,
-                        "company": cells[header_map.get("company", 2)].get_text(strip=True) if "company" in header_map and len(cells) > header_map["company"] else "",
-                        "sector": cells[header_map.get("sector", 3)].get_text(strip=True) if "sector" in header_map and len(cells) > header_map["sector"] else "",
-                        "industry": cells[header_map.get("industry", 4)].get_text(strip=True) if "industry" in header_map and len(cells) > header_map["industry"] else "",
-                        "market_cap": cells[header_map.get("market cap", 6)].get_text(strip=True) if "market cap" in header_map and len(cells) > header_map["market cap"] else "",
-                        "price": cells[header_map.get("price", 8)].get_text(strip=True) if "price" in header_map and len(cells) > header_map["price"] else "",
-                        "change": cells[header_map.get("change", 9)].get_text(strip=True) if "change" in header_map and len(cells) > header_map["change"] else "",
+                        "company": cells[_ci["company"]].get_text(strip=True) if len(cells) > _ci["company"] else "",
+                        "sector": cells[_ci["sector"]].get_text(strip=True) if len(cells) > _ci["sector"] else "",
+                        "industry": cells[_ci["industry"]].get_text(strip=True) if len(cells) > _ci["industry"] else "",
+                        "market_cap": cells[_ci["market cap"]].get_text(strip=True) if len(cells) > _ci["market cap"] else "",
+                        "price": cells[_ci["price"]].get_text(strip=True) if len(cells) > _ci["price"] else "",
+                        "change": cells[_ci["change"]].get_text(strip=True) if len(cells) > _ci["change"] else "",
                         "volume": cells[header_map.get("volume", 10)].get_text(strip=True) if "volume" in header_map and len(cells) > header_map["volume"] else "",
                     }
 
