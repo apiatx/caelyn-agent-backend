@@ -29,6 +29,8 @@ except ImportError:
             return args[0]
         return _noop
 
+traceable = _ls_traceable
+
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
