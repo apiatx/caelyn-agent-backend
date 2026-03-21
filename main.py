@@ -1943,56 +1943,6 @@ async def social_grok_query(
         return JSONResponse(status_code=500, content={"error": str(e), "query": query})
 
 
-async def _capture_ticker_mentions(
-    conv_id: str,
-    message_id: int,
-    hist_tickers: list[dict],
-    svc,
-) -> None:
-    """
-    Background task: fetch live prices for extracted tickers at response time
-    and persist them to ticker_mentions. Runs after the response is yielded
-    so client latency is unaffected. Fails silently on any error.
-    """
-    import asyncio as _aio
-    try:
-        from data.pg_storage import add_ticker_mentions as _add_tm
-        mentions = []
-        crypto_syms = {"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "MATIC", "DOT", "LINK",
-                       "UNI", "ATOM", "LTC", "BCH", "NEAR", "FIL", "ARB", "OP", "INJ", "SUI",
-                       "WIF", "PEPE", "SHIB", "BONK", "APT", "SEI", "TIA", "JUP", "PYTH"}
-        for t in (hist_tickers or []):
-            sym = (t.get("ticker") or "").upper().strip()
-            if not sym:
-                continue
-            asset_type = "crypto" if sym in crypto_syms else "equity"
-            price = None
-            source = None
-            try:
-                if asset_type == "equity":
-                    q = await _aio.to_thread(svc.finnhub.get_quote, sym)
-                    price = q.get("price") if isinstance(q, dict) else None
-                    source = "finnhub"
-                else:
-                    # Use rec_price from structured response for crypto (live price not wired here)
-                    price = t.get("rec_price")
-                    source = "structured"
-            except Exception:
-                price = t.get("rec_price")
-                source = "structured_fallback"
-            mentions.append({
-                "ticker": sym,
-                "mention_price": price,
-                "asset_type": asset_type,
-                "source": source,
-            })
-        if mentions:
-            await _aio.to_thread(_add_tm, conv_id, message_id, mentions)
-            print(f"[TICKER_MENTIONS] Saved {len(mentions)} mentions for message_id={message_id} conv={conv_id}")
-    except Exception as _e:
-        print(f"[TICKER_MENTIONS] Capture error: {_e}")
-
-
 @app.post("/api/query")
 @limiter.limit("10/minute")
 @traceable(name="main.query_agent")
@@ -2049,14 +1999,12 @@ async def query_agent(
             print(f"[API] Conversation {conv_id} not found, creating new one")
             conv_id = None
 
-    # When a valid conv_id has DB history, always trust the DB — it is the source of truth
-    # for conversation continuity across model switches.  Client-provided body.history is
-    # only used when there is no server-side thread (new conversation or no conv_id).
-    if body.history is not None and len(body.history) > 0 and not history:
-        print(f"[API] No DB history for conv_id={conv_id}; using client-provided history ({len(body.history)} msgs)")
+    # If client explicitly sent history WITH messages, prefer it — handles model switches
+    # and message deletions.  An empty list means the client has no history loaded,
+    # so fall back to the DB history to preserve follow-up context.
+    if body.history is not None and len(body.history) > 0:
+        print(f"[API] Using client-provided history ({len(body.history)} msgs) over DB history ({len(history)} msgs)")
         history = body.history
-    elif history:
-        print(f"[API] Using DB history for conv_id={conv_id} ({len(history)} msgs); ignoring client-provided history")
 
     if not conv_id:
         try:
@@ -2180,12 +2128,7 @@ async def query_agent(
                                    "opportunities", "ranked_candidates", "watchlist",
                                    "equities", "crypto", "commodities", "social_trading_signal",
                                    "rows", "screen_name",
-                                   "top_trades", "bearish_setups",
-                                   "top_moves", "market_pulse", "top_stocks_to_watch",
-                                   "sector_thesis", "benchmark", "whats_moving",
-                                   "watchlist_today", "strongest_overall",
-                                   "consensus_tickers", "consensus_summary", "final_opinion",
-                                   "momentum_leaders", "accounts_analyzed", "early_vs_crowded"}
+                                   "top_trades", "bearish_setups"}
                 has_content = any(structured.get(k) for k in meaningful_keys)
                 if has_content:
                     return False
@@ -2230,13 +2173,12 @@ async def query_agent(
                 yield _j.dumps(resp).encode()
                 return
 
-            _asst_msg_id: int | None = None
             if conv_id:
                 try:
                     _asst_content3 = result.get("analysis", "") if isinstance(result, dict) else ""
                     if not _asst_content3:
                         _asst_content3 = _json.dumps(result, default=str)[:8000]
-                    _asst_msg_id = _append_msg(
+                    _append_msg(
                         conv_id,
                         "assistant",
                         _asst_content3,
@@ -2274,103 +2216,37 @@ async def query_agent(
                             _hist_display_type = "chat"
                         _hist_category = _s.get("scan_type", "") or _hist_display_type
 
-                # Map preset_intent to history category — deterministic, stable bucket_keys.
-                # Every preset must have an entry here so DB bucket_keys are consistent.
+                # Map preset_intent to history category
                 _PRESET_TO_HISTORY = {
-                    # Overview
-                    "daily_briefing": ("overview", "daily_briefing"),
-                    "morning_briefing": ("overview", "daily_briefing"),
-                    "briefing": ("overview", "daily_briefing"),
-                    "macro_outlook": ("overview", "macro_outlook"),
-                    "macro": ("overview", "macro_outlook"),
-                    "economy": ("overview", "macro_outlook"),
-                    "news_intelligence": ("overview", "news_intelligence"),
-                    "headlines": ("overview", "news_intelligence"),
-                    "news_analysis": ("overview", "news_intelligence"),
-                    "notifai": ("overview", "news_intelligence"),
-                    "news": ("overview", "news_intelligence"),
-                    "news_markets": ("overview", "news_intelligence"),
-                    # Trades & Ideas
-                    "best_trades": ("trades_ideas", "best_trades"),
-                    "trades": ("trades_ideas", "best_trades"),
-                    "setups": ("trades_ideas", "best_trades"),
-                    "trade_setups": ("trades_ideas", "best_trades"),
-                    "cross_asset_trending": ("trades_ideas", "trending_now"),
-                    "trending_now": ("trades_ideas", "trending_now"),
-                    "trending": ("trades_ideas", "trending_now"),
-                    "whats_hot": ("trades_ideas", "trending_now"),
-                    "cross_asset": ("trades_ideas", "trending_now"),
-                    "social_momentum": ("trades_ideas", "social_momentum"),
-                    "social_momentum_scan": ("trades_ideas", "social_momentum"),
-                    "social": ("trades_ideas", "social_momentum"),
-                    "wsb": ("trades_ideas", "social_momentum"),
-                    "investment_ideas": ("trades_ideas", "best_investments"),
-                    "investments": ("trades_ideas", "best_investments"),
-                    "long_term_conviction": ("trades_ideas", "best_investments"),
-                    "sqglp": ("trades_ideas", "best_investments"),
-                    "microcap_asymmetry": ("trades_ideas", "microcap"),
-                    "microcap": ("trades_ideas", "microcap"),
-                    "asymmetric": ("trades_ideas", "microcap"),
-                    "bearish_setups": ("trades_ideas", "bearish"),
-                    "bearish": ("trades_ideas", "bearish"),
-                    "shorts": ("trades_ideas", "bearish"),
-                    "short_squeeze": ("trades_ideas", "squeeze"),
-                    "squeeze": ("trades_ideas", "squeeze"),
-                    "x_social_scan": ("trades_ideas", "x_scan"),
-                    "x_scan": ("trades_ideas", "x_scan"),
-                    "twitter_scan": ("trades_ideas", "x_scan"),
-                    "grok_scan": ("trades_ideas", "x_scan"),
-                    # Fundamental
-                    "investment_analysis": ("fundamental", "analysis"),
-                    "ticker_analysis": ("fundamental", "analysis"),
-                    "thematic_scan": ("fundamental", "thematic"),
-                    "thematic": ("fundamental", "thematic"),
-                    "themes": ("fundamental", "thematic"),
-                    # Sectors
-                    "sector_rotation": ("sectors", "sector_rotation"),
-                    "sector": ("sectors", "sector_rotation"),
-                    "rotation": ("sectors", "sector_rotation"),
-                    "crypto_scanner": ("sectors", "crypto"),
-                    "crypto": ("sectors", "crypto"),
-                    "crypto_scan": ("sectors", "crypto"),
-                    "crypto_focus": ("sectors", "crypto"),
-                    "commodity_scan": ("sectors", "commodities"),
-                    "commodities": ("sectors", "commodities"),
-                    "commodity": ("sectors", "commodities"),
-                    # TA Screener
-                    "oversold_growing": ("ta_screener", "oversold_growing"),
-                    "value_momentum": ("ta_screener", "value_momentum"),
-                    "insider_breakout": ("ta_screener", "insider_breakout"),
-                    "high_growth_sc": ("ta_screener", "high_growth_sc"),
-                    "dividend_value": ("ta_screener", "dividend_value"),
-                    "short_squeeze_scan": ("ta_screener", "short_squeeze"),
-                    # Earnings
-                    "earnings_catalyst": ("earnings", "earnings_catalyst"),
-                    "earnings_agent": ("earnings", "earnings_catalyst"),
-                    "earnings": ("earnings", "earnings_catalyst"),
-                    "earnings_watch": ("earnings", "earnings_watch"),
-                    "upcoming_catalysts": ("earnings", "upcoming_catalysts"),
-                    # Prediction Markets
+                    "daily_briefing": ("daily_briefing", "briefing"),
+                    "morning_briefing": ("daily_briefing", "briefing"),
+                    "briefing": ("daily_briefing", "briefing"),
+                    "macro": ("macro", "overview"),
+                    "macro_outlook": ("macro", "overview"),
+                    "news_intelligence": ("headlines", "news"),
+                    "headlines": ("headlines", "news"),
+                    "earnings_catalyst": ("upcoming_catalysts", "catalysts"),
+                    "cross_asset_trending": ("trending_now", "trending"),
+                    "social_momentum": ("social_momentum", "social"),
+                    "social_momentum_scan": ("social_momentum", "social"),
+                    "sector_rotation": ("sector_rotation", "rotation"),
+                    "best_trades": ("best_trades", "trades"),
+                    "investments": ("investments", "ideas"),
                     "prediction_markets": ("prediction_markets", "predictions"),
-                    "polymarket": ("prediction_markets", "predictions"),
-                    "prediction": ("prediction_markets", "predictions"),
-                    "odds": ("prediction_markets", "predictions"),
-                    # Portfolio
-                    "portfolio_review": ("portfolio", "review"),
-                    "portfolio": ("portfolio", "review"),
-                    "holdings": ("portfolio", "review"),
+                    "ticker_analysis": ("ticker_analysis", "analysis"),
+                    "portfolio_review": ("portfolio_review", "review"),
+                    "crypto": ("crypto", "scan"),
                 }
                 _preset = body.preset_intent or ""
                 if _preset and _preset in _PRESET_TO_HISTORY:
                     _hist_category, _hist_intent = _PRESET_TO_HISTORY[_preset]
-                elif _hist_display_type and _hist_display_type not in ("chat", "chatbox", ""):
-                    # Preset button that maps to a known display_type but isn't in the map
+                elif _hist_display_type:
+                    # Fallback: use display_type as category for free-form queries
                     _hist_category = _hist_display_type
                     _hist_intent = "freeform"
                 else:
-                    # Free-form terminal chat (no preset, plain chat display_type)
-                    _hist_category = "terminal_chat"
-                    _hist_intent = "chat"
+                    _hist_category = "general"
+                    _hist_intent = "query"
 
                 # Build content snippet for history entry — human-readable, not raw JSON
                 from data.history_renderer import render_structured_to_text
@@ -2429,13 +2305,6 @@ async def query_agent(
                 print(f"[HISTORY] Failed to auto-save prompt history: {_hist_err}")
 
             yield _j.dumps(resp).encode()
-
-            # ── Ticker mention snapshot capture (post-yield, non-blocking for client) ──
-            # Fetch live prices NOW (mention-time) and persist so backtesting is accurate.
-            if conv_id and _asst_msg_id and _hist_tickers and data_service:
-                asyncio.create_task(_capture_ticker_mentions(
-                    conv_id, _asst_msg_id, _hist_tickers, data_service,
-                ))
 
         except asyncio.TimeoutError:
             meta["timing_ms"]["total"] = int((_time.time() - t0) * 1000)
@@ -2620,12 +2489,26 @@ class UpdateConversationRequest(BaseModel):
 
 
 @traceable(name="main.shape_prompt_history")
-def _shape_prompt_history(all_history: dict, recent_limit: int = 10) -> dict:
+def _shape_prompt_history(all_history: dict, recent_limit: int = 10, current_prices: dict | None = None) -> dict:
     """Return a frontend-friendly history payload while preserving bucket grouping."""
     if not isinstance(all_history, dict):
         all_history = {}
 
-    current_prices = current_prices or {}
+    # Enrich ticker entries with current prices if provided
+    if current_prices:
+        for _key, bucket in all_history.items():
+            if not isinstance(bucket, dict):
+                continue
+            for entry in bucket.get("entries", []):
+                if not isinstance(entry, dict):
+                    continue
+                for t in entry.get("tickers", []):
+                    rec = t.get("rec_price")
+                    cur = current_prices.get(t.get("ticker"))
+                    if rec and cur:
+                        t["current_price"] = round(cur, 2)
+                        t["pct_change"] = round(((cur - rec) / rec) * 100, 2)
+
     categories: dict = {}
     items: list[dict] = []
 
@@ -2639,86 +2522,27 @@ def _shape_prompt_history(all_history: dict, recent_limit: int = 10) -> dict:
         if not isinstance(entries, list):
             entries = []
 
-        display_label, display_order = _CAT_TO_DISPLAY.get(category, ("Terminal Chat", 1))
-
-        categories.setdefault(category, {
-            "display_label": display_label,
-            "display_order": display_order,
-        })
+        categories.setdefault(category, {})
         categories[category][intent] = entries
 
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
-
-            # Compute basket performance for this entry
-            tickers = entry.get("tickers") or []
-            basket_pct = None
-            priced_count = 0
-            total_count = len(tickers)
-            per_symbol = []
-            if tickers and current_prices:
-                returns = []
-                for t in tickers:
-                    sym = t.get("ticker", "")
-                    rec = t.get("rec_price")
-                    cur = current_prices.get(sym)
-                    if rec and cur and rec > 0:
-                        pct = round(((cur - rec) / rec) * 100, 2)
-                        returns.append(pct)
-                        priced_count += 1
-                        per_symbol.append({"ticker": sym, "entry_price": rec, "current_price": cur, "pct_change": pct})
-                if returns:
-                    basket_pct = round(sum(returns) / len(returns), 2)
-
-            perf_status = "unavailable"
-            if total_count == 0:
-                perf_status = "unavailable"
-            elif priced_count == 0:
-                perf_status = "unavailable"
-            elif priced_count < total_count:
-                perf_status = "partial"
-            else:
-                perf_status = "priced"
-
-            item = {
-                "category": category,
-                "intent": intent,
-                "bucket_key": bucket_key,
-                "display_label": display_label,
-                "display_order": display_order,
-                "basket_performance_pct": basket_pct,
-                "basket_performance_label": (
-                    f"{'+' if basket_pct >= 0 else ''}{basket_pct:.1f}%" if basket_pct is not None else None
-                ),
-                "priced_symbol_count": priced_count,
-                "total_symbol_count": total_count,
-                "performance_status": perf_status,
-                **entry,
-            }
-            if per_symbol:
-                item["per_symbol_performance"] = per_symbol
-            items.append(item)
+            items.append(
+                {
+                    "category": category,
+                    "intent": intent,
+                    "bucket_key": bucket_key,
+                    **entry,
+                }
+            )
 
     items.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
     recent = items[: max(1, min(recent_limit, 100))]
 
-    # Build grouped sections in display order
-    sections: list[dict] = []
-    seen_labels: dict[str, dict] = {}
-    for item in items:
-        lbl = item.get("display_label", "Terminal Chat")
-        order = item.get("display_order", 1)
-        if lbl not in seen_labels:
-            seen_labels[lbl] = {"display_label": lbl, "display_order": order, "entries": [], "entry_count": 0}
-        seen_labels[lbl]["entries"].append(item)
-        seen_labels[lbl]["entry_count"] += 1
-    sections = sorted(seen_labels.values(), key=lambda s: s["display_order"])
-
     return {
         "buckets": all_history,
         "categories": categories,
-        "sections": sections,
         "items": items,
         "recent": recent,
         "recent_count": len(recent),
@@ -2799,6 +2623,17 @@ async def get_history(request: Request):
         results = await _aio.gather(*[_fetch(t) for t in ticker_set])
         current_prices = {t: p for t, p in results if p and p > 0}
 
+    # Inject current_price and pct_change into each ticker entry
+    if current_prices:
+        for key, bucket in all_history.items():
+            for entry in bucket.get("entries", []):
+                for t in entry.get("tickers", []):
+                    rec = t.get("rec_price")
+                    cur = current_prices.get(t.get("ticker"))
+                    if rec and cur:
+                        t["current_price"] = round(cur, 2)
+                        t["pct_change"] = round(((cur - rec) / rec) * 100, 2)
+
     # Keep backward compatibility for older clients that expect raw {"category::intent": bucket}.
     fmt = (request.query_params.get("format") or "").lower().strip()
     if fmt in {"legacy", "raw"}:
@@ -2809,133 +2644,22 @@ async def get_history(request: Request):
         recent_limit = int(limit_param)
     except Exception:
         recent_limit = 10
-    return _shape_prompt_history(all_history, recent_limit=recent_limit, current_prices=current_prices)
+    return _shape_prompt_history(all_history, recent_limit=recent_limit)
 
 
 @app.get("/api/history/recent")
 @limiter.limit("30/minute")
 @traceable(name="main.get_history_recent")
 async def get_history_recent(request: Request, limit: int = 10):
-    import asyncio as _aio
     from data.prompt_history import get_all
     user_id = getattr(request.state, "user_id", "default")
     all_history = get_all(user_id=user_id)
-
-    # Collect tickers for price enrichment
-    ticker_set = set()
-    for key, bucket in all_history.items():
-        for entry in bucket.get("entries", []):
-            for t in entry.get("tickers", []):
-                if t.get("rec_price") and t.get("ticker"):
-                    ticker_set.add(t["ticker"])
-
-    current_prices = {}
-    if ticker_set and data_service:
-        async def _fetch_r(ticker):
-            try:
-                quote = await _aio.to_thread(data_service.finnhub.get_quote, ticker)
-                return ticker, quote.get("price")
-            except Exception:
-                return ticker, None
-        results = await _aio.gather(*[_fetch_r(t) for t in ticker_set])
-        current_prices = {t: p for t, p in results if p and p > 0}
-
-    shaped = _shape_prompt_history(all_history, recent_limit=limit, current_prices=current_prices)
+    shaped = _shape_prompt_history(all_history, recent_limit=limit)
     return {
         "recent": shaped.get("recent", []),
         "recent_count": shaped.get("recent_count", 0),
         "total_count": shaped.get("total_count", 0),
     }
-
-@app.get("/api/history/sidebar")
-@limiter.limit("60/minute")
-async def history_sidebar(request: Request):
-    """
-    Lightweight endpoint for the right-side recent history panel.
-    Returns the 5 most recently updated conversations — no backtesting data.
-    """
-    from data.chat_history import list_recent_conversations
-    limit = min(int(request.query_params.get("limit", "5")), 20)
-    convs = list_recent_conversations(limit=limit)
-    return {"conversations": convs, "count": len(convs)}
-
-
-@app.get("/api/history/page")
-@limiter.limit("20/minute")
-async def history_page(request: Request):
-    """
-    Full History page endpoint.
-    Returns all conversations with messages and per-message ticker mention snapshots.
-    Also collects all unique tickers so the frontend can fetch current prices separately
-    via /api/prices/batch.
-    """
-    from data.chat_history import list_conversations
-    from data.pg_storage import get_ticker_mentions_by_conv as _get_tm
-    import asyncio as _aio
-
-    all_convs = list_conversations()
-    limit = min(int(request.query_params.get("limit", "50")), 200)
-    all_convs = all_convs[:limit]
-
-    # Collect all unique tickers across all conversations for batch-price hint
-    all_tickers: set = set()
-    result_convs = []
-    for conv in all_convs:
-        conv_id = conv.get("id", "")
-        tm = []
-        if conv_id:
-            try:
-                tm = await _aio.to_thread(_get_tm, conv_id)
-            except Exception:
-                tm = []
-        for m in tm:
-            t = m.get("ticker", "")
-            if t:
-                all_tickers.add(t)
-        result_convs.append({**conv, "ticker_mentions": tm})
-
-    return {
-        "conversations": result_convs,
-        "conversation_count": len(result_convs),
-        "all_tickers": sorted(all_tickers),
-    }
-
-
-@app.post("/api/prices/batch")
-@limiter.limit("30/minute")
-async def prices_batch(request: Request):
-    """
-    Batch current-price lookup for History page performance comparison.
-    Body: {"tickers": ["NVDA", "AAPL", "BTC"]}
-    Returns: {"prices": {"NVDA": 950.0, "AAPL": 225.0}, "failed": ["BTC"]}
-    Deduplicates tickers, fails gracefully per symbol.
-    """
-    import asyncio as _aio
-    await _wait_for_init()
-    if not data_service:
-        raise HTTPException(status_code=503, detail="Service not ready")
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    raw_tickers = body.get("tickers") or []
-    if not isinstance(raw_tickers, list):
-        raw_tickers = []
-    tickers = list({t.upper().strip() for t in raw_tickers if isinstance(t, str) and t.strip()})[:50]
-
-    async def _fetch_one(sym: str):
-        try:
-            q = await _aio.to_thread(data_service.finnhub.get_quote, sym)
-            p = q.get("price") if isinstance(q, dict) else None
-            return sym, p if (p and p > 0) else None
-        except Exception:
-            return sym, None
-
-    results = await _aio.gather(*[_fetch_one(t) for t in tickers])
-    prices = {sym: price for sym, price in results if price is not None}
-    failed = [sym for sym, price in results if price is None]
-    return {"prices": prices, "failed": failed, "requested": len(tickers)}
-
 
 @app.get("/api/history/storage-info")
 @limiter.limit("10/minute")

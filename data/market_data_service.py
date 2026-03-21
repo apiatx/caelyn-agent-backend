@@ -886,8 +886,8 @@ class MarketDataService:
         if self.fmp:
             try:
                 movers = await self.fmp.get_gainers_losers()
-            except:
-                pass
+            except Exception as e:
+                print(f"[SCAN_MARKET] FMP get_gainers_losers failed: {type(e).__name__}: {e}")
 
         trending, unusual_options, options_volume_leaders, upcoming_earnings, fear_greed = (
             await asyncio.gather(
@@ -2408,8 +2408,8 @@ class MarketDataService:
                     if ratio >= 2.0: score += 20
                     elif ratio >= 1.5: score += 12
                     elif ratio >= 1.0: score += 5
-                except:
-                    pass
+                except Exception as e:
+                    print(f"[QUANT_SCORE] Volume ratio calc failed for ticker: {type(e).__name__}: {e}")
 
             earnings_hist = result.get("earnings_history", [])
             if isinstance(earnings_hist, list):
@@ -2426,16 +2426,16 @@ class MarketDataService:
                     if mc < 2e9: score += 20
                     elif mc < 10e9: score += 12
                     elif mc < 50e9: score += 5
-                except:
-                    pass
+                except Exception as e:
+                    print(f"[QUANT_SCORE] Market cap calc failed: {type(e).__name__}: {e}")
 
             technicals = result.get("technicals", {})
             rsi = technicals.get("rsi")
             if rsi:
                 try:
                     if 45 <= float(rsi) <= 65: score += 10
-                except:
-                    pass
+                except Exception as e:
+                    print(f"[QUANT_SCORE] RSI parse failed (rsi={rsi}): {type(e).__name__}: {e}")
 
             result["quant_score"] = round(score, 1)
             scored.append((ticker, score, result))
@@ -2460,7 +2460,8 @@ class MarketDataService:
                     "recent_8k_filings":
                     filings if not isinstance(filings, Exception) else [],
                 }
-            except:
+            except Exception as e:
+                print(f"[DEEP_ENRICH] deep_enrich_earnings({ticker}) failed: {type(e).__name__}: {e}")
                 return {}
 
         deep_results = await asyncio.gather(
@@ -3796,8 +3797,8 @@ class MarketDataService:
                     "indices":
                     indices if not isinstance(indices, Exception) else {},
                 }
-            except:
-                pass
+            except Exception as e:
+                print(f"[BEST_TRADES] Macro data gathering failed: {type(e).__name__}: {e}")
 
         all_tickers = set()
         screener_sources = {}
@@ -4130,8 +4131,8 @@ class MarketDataService:
                 self.fear_greed.get_fear_greed_index(),
                 timeout=8.0,
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"[PORTFOLIO] Fear & Greed index fetch failed: {type(e).__name__}: {e}")
 
         print(
             f"[PORTFOLIO] Complete: {len(enriched)} tickers enriched ({time.time()-start:.1f}s)"
@@ -6287,7 +6288,8 @@ class MarketDataService:
                 if len(results) > 2 and not isinstance(
                         results[2], Exception) and results[2]:
                     item["sentiment"] = results[2]
-            except:
+            except Exception as e:
+                print(f"[SA_ENRICH] enrich_ticker({item.get('ticker','?')}) failed: {type(e).__name__}: {e}")
                 item["sa_overview"] = {}
                 item["sa_analyst"] = {}
             return item

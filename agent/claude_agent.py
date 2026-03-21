@@ -6483,8 +6483,8 @@ Be direct and opinionated. Tell me what you actually think."""
                             if isinstance(parsed, dict):
                                 original_category = parsed.get("display_type") or parsed.get("structured", {}).get("display_type")
                                 break
-                        except:
-                            pass
+                        except Exception as e:
+                            print(f"[FOLLOWUP] JSON parse of assistant message failed: {type(e).__name__}: {e}")
 
             category_context = ""
             if original_category == "csv_watchlist":
