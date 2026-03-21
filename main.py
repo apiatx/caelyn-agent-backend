@@ -785,6 +785,38 @@ async def debug_db(request: Request):
     }
 
 
+@app.get("/api/debug/langsmith")
+async def debug_langsmith(
+    request: Request,
+    hours: int = 24,
+    limit: int = 20,
+    errors_only: bool = False,
+    run_id: Optional[str] = None,
+):
+    """Pull recent LangSmith traces, errors, and diagnostics.
+
+    Query params:
+      - hours: lookback window (default 24)
+      - limit: max runs to return (default 20)
+      - errors_only: only return error runs
+      - run_id: get full detail for a specific run
+    """
+    try:
+        from data.langsmith_diagnostics import diagnose, get_run_detail, get_recent_runs
+    except ImportError as e:
+        return JSONResponse(status_code=500, content={"error": f"Import failed: {e}"})
+
+    try:
+        if run_id:
+            return get_run_detail(run_id)
+        if errors_only:
+            runs = get_recent_runs(hours=hours, error_only=True, limit=limit)
+            return {"errors": runs}
+        return diagnose(hours=hours, limit=limit)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.get("/api/presets")
 @traceable(name="main.list_presets")
 async def list_presets(request: Request):
