@@ -44,40 +44,38 @@ def _post(path: str, body: dict, timeout: int = 30) -> dict:
         return json.loads(resp.read())
 
 
+def _get_session_id(project_name: str = DEFAULT_PROJECT) -> Optional[str]:
+    """Look up project/session ID by name."""
+    try:
+        sessions = _get("/sessions", {"name": project_name})
+        if isinstance(sessions, list) and sessions:
+            return sessions[0].get("id")
+    except Exception:
+        pass
+    return None
+
+
 def get_recent_runs(
     project_name: str = DEFAULT_PROJECT,
     hours: int = 24,
     error_only: bool = False,
     limit: int = 20,
-    filter_expr: Optional[str] = None,
 ) -> list:
-    """Fetch recent runs using session_name (no project ID lookup needed)."""
+    """Fetch recent runs."""
+    session_id = _get_session_id(project_name)
+    if not session_id:
+        return [{"_fetch_error": f"Project '{project_name}' not found"}]
+
     start_time = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
     body = {
-        "session_name": [project_name],
+        "session": [session_id],
         "is_root": True,
         "limit": limit,
-        "order": "desc",
-        "select": [
-            "id", "name", "run_type", "status", "error",
-            "start_time", "end_time", "latency",
-            "total_tokens", "prompt_tokens", "completion_tokens",
-            "feedback_stats", "tags",
-        ],
     }
-
-    # Build filter expression
-    filters = [f'gt(start_time, "{start_time}")']
     if error_only:
-        filters.append("neq(error, null)")
-    if filter_expr:
-        filters.append(filter_expr)
-
-    if len(filters) == 1:
-        body["filter"] = filters[0]
-    else:
-        body["filter"] = f"and({', '.join(filters)})"
+        body["error"] = True
+    body["start_time"] = start_time
 
     try:
         result = _post("/runs/query", body)
