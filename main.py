@@ -3324,6 +3324,8 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
             stocks_needing_sector = [t for t in stock_tickers if t in quotes and not quotes[t].get("sector")]
             if stocks_needing_sector:
                 print(f"[PORTFOLIO] Fetching sector via FMP /stable/profile for: {stocks_needing_sector}")
+                # Resolve cached sectors first
+                _uncached_sector_tickers = []
                 for ticker in stocks_needing_sector:
                     sector_cache_key = f"sector:{ticker}"
                     cached_sector = _cache.get(sector_cache_key)
@@ -3331,11 +3333,15 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                         quotes[ticker]["sector"] = cached_sector.get("sector", "Other")
                         quotes[ticker]["industry"] = cached_sector.get("industry", "")
                         quotes[ticker]["company_name"] = cached_sector.get("company_name", "")
-                        continue
+                    else:
+                        _uncached_sector_tickers.append(ticker)
+
+                # Fetch uncached sectors in parallel
+                async def _fetch_sector(t):
                     try:
                         profile_resp = await client.get(
                             "https://financialmodelingprep.com/stable/profile",
-                            params={"symbol": ticker, "apikey": FMP_API_KEY},
+                            params={"symbol": t, "apikey": FMP_API_KEY},
                         )
                         if profile_resp.status_code == 200:
                             profile_data = profile_resp.json()
@@ -3343,18 +3349,24 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                 sector = profile_data[0].get("sector", "")
                                 industry = profile_data[0].get("industry", "")
                                 company_name = profile_data[0].get("companyName", "")
-                                if sector:
-                                    quotes[ticker]["sector"] = sector
-                                    quotes[ticker]["industry"] = industry
-                                    quotes[ticker]["company_name"] = company_name
-                                    _cache.set(sector_cache_key, {"sector": sector, "industry": industry, "company_name": company_name}, 86400)
-                                else:
-                                    quotes[ticker]["sector"] = "Other"
-                            else:
-                                quotes[ticker]["sector"] = "Other"
+                                return t, sector, industry, company_name
+                        return t, "", "", ""
                     except Exception as e:
-                        print(f"[PORTFOLIO] FMP profile {ticker} error: {e}")
-                        quotes[ticker]["sector"] = "Other"
+                        print(f"[PORTFOLIO] FMP profile {t} error: {e}")
+                        return t, "", "", ""
+
+                if _uncached_sector_tickers:
+                    _sector_results = await asyncio.gather(
+                        *[_fetch_sector(t) for t in _uncached_sector_tickers]
+                    )
+                    for t, sector, industry, company_name in _sector_results:
+                        if sector:
+                            quotes[t]["sector"] = sector
+                            quotes[t]["industry"] = industry
+                            quotes[t]["company_name"] = company_name
+                            _cache.set(f"sector:{t}", {"sector": sector, "industry": industry, "company_name": company_name}, 86400)
+                        else:
+                            quotes[t]["sector"] = "Other"
 
         # ---- INDICES: VIX via FRED (actual value), others via Yahoo → unavailable with note ----
         if index_tickers:
@@ -3552,64 +3564,83 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
             elif crypto_still_missing and not CMC_API_KEY:
                 print(f"[PORTFOLIO] CMC_API_KEY not set, cannot fallback for: {crypto_still_missing}")
 
-        # ---- COMMODITIES: FMP commodity symbols ----
+        # ---- COMMODITIES: FMP commodity symbols (parallel) ----
         if commodity_tickers:
-            for ticker in commodity_tickers:
-                fmp_symbol = COMMODITY_SYMBOLS.get(ticker)
-                if fmp_symbol:
-                    try:
-                        resp = await client.get(
-                            "https://financialmodelingprep.com/stable/quote-short",
-                            params={"symbol": fmp_symbol, "apikey": FMP_API_KEY},
-                        )
-                        if resp.status_code == 200:
-                            items = resp.json()
-                            if items:
-                                item = items[0]
-                                quotes[ticker] = {
-                                    "price": item.get("price"),
-                                    "change": item.get("change"),
-                                    "change_pct": item.get("changesPercentage"),
-                                    "volume": item.get("volume"),
-                                    "source": "fmp_commodity",
-                                    "asset_type": "commodity",
-                                    "sector": "Commodities",
-                                }
-                                print(f"[PORTFOLIO] Commodity: {ticker} = ${item.get('price')}")
-                    except Exception as e:
-                        print(f"[PORTFOLIO] Commodity {ticker} error: {e}")
-                else:
-                    print(f"[PORTFOLIO] No commodity symbol mapping for: {ticker}")
+            _commodity_pairs = [(t, COMMODITY_SYMBOLS.get(t)) for t in commodity_tickers]
+            _valid_commodities = [(t, sym) for t, sym in _commodity_pairs if sym]
+            _invalid_commodities = [t for t, sym in _commodity_pairs if not sym]
+            for t in _invalid_commodities:
+                print(f"[PORTFOLIO] No commodity symbol mapping for: {t}")
+
+            async def _fetch_commodity(t, fmp_symbol):
+                try:
+                    resp = await client.get(
+                        "https://financialmodelingprep.com/stable/quote-short",
+                        params={"symbol": fmp_symbol, "apikey": FMP_API_KEY},
+                    )
+                    if resp.status_code == 200:
+                        items = resp.json()
+                        if items:
+                            item = items[0]
+                            print(f"[PORTFOLIO] Commodity: {t} = ${item.get('price')}")
+                            return t, {
+                                "price": item.get("price"),
+                                "change": item.get("change"),
+                                "change_pct": item.get("changesPercentage"),
+                                "volume": item.get("volume"),
+                                "source": "fmp_commodity",
+                                "asset_type": "commodity",
+                                "sector": "Commodities",
+                            }
+                except Exception as e:
+                    print(f"[PORTFOLIO] Commodity {t} error: {e}")
+                return t, None
+
+            if _valid_commodities:
+                _comm_results = await asyncio.gather(
+                    *[_fetch_commodity(t, sym) for t, sym in _valid_commodities]
+                )
+                for t, data in _comm_results:
+                    if data:
+                        quotes[t] = data
 
         missing_tickers = [t for t in tickers if t not in quotes]
         if missing_tickers:
             print(f"[PORTFOLIO] Fallback for unresolved tickers: {missing_tickers}")
 
-            for ticker in list(missing_tickers):
-                if ticker in quotes:
-                    continue
-                fmp_symbol = COMMODITY_SYMBOLS.get(ticker)
-                if fmp_symbol:
-                    try:
-                        resp = await client.get(
-                            "https://financialmodelingprep.com/stable/quote-short",
-                            params={"symbol": fmp_symbol, "apikey": FMP_API_KEY},
-                        )
-                        if resp.status_code == 200:
-                            items = resp.json()
-                            if items:
-                                item = items[0]
-                                quotes[ticker] = {
-                                    "price": item.get("price"),
-                                    "change": item.get("change"),
-                                    "change_pct": item.get("changesPercentage"),
-                                    "volume": item.get("volume"),
-                                    "source": "fmp_commodity",
-                                    "asset_type": "commodity",
-                                    "sector": "Commodities",
-                                }
-                    except Exception:
-                        pass
+            # Parallel commodity fallback for missing tickers
+            _missing_commodity = [(t, COMMODITY_SYMBOLS.get(t)) for t in missing_tickers if COMMODITY_SYMBOLS.get(t)]
+
+            async def _fallback_commodity(t, fmp_symbol):
+                try:
+                    resp = await client.get(
+                        "https://financialmodelingprep.com/stable/quote-short",
+                        params={"symbol": fmp_symbol, "apikey": FMP_API_KEY},
+                    )
+                    if resp.status_code == 200:
+                        items = resp.json()
+                        if items:
+                            item = items[0]
+                            return t, {
+                                "price": item.get("price"),
+                                "change": item.get("change"),
+                                "change_pct": item.get("changesPercentage"),
+                                "volume": item.get("volume"),
+                                "source": "fmp_commodity",
+                                "asset_type": "commodity",
+                                "sector": "Commodities",
+                            }
+                except Exception:
+                    pass
+                return t, None
+
+            if _missing_commodity:
+                _mc_results = await asyncio.gather(
+                    *[_fallback_commodity(t, sym) for t, sym in _missing_commodity]
+                )
+                for t, data in _mc_results:
+                    if data:
+                        quotes[t] = data
 
             still_missing = [t for t in tickers if t not in quotes]
             if still_missing:
