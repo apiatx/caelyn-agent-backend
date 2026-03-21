@@ -1324,24 +1324,33 @@ class MarketDataService:
         ticker_list = list(all_tickers)[:limit]
 
         enrichment_results = []
-        for i, ticker in enumerate(ticker_list):
+        # Parallel light enrichment in batches of 8 (budget-aware)
+        _le_batch_size = 8
+        for batch_start in range(0, len(ticker_list), _le_batch_size):
             if not budget.can_continue():
                 print(
-                    f"[Wide Scan] Budget exhausted during light enrichment at ticker {i}/{len(ticker_list)} ({budget.status()})"
+                    f"[Wide Scan] Budget exhausted during light enrichment at ticker {batch_start}/{len(ticker_list)} ({budget.status()})"
                 )
                 budget.mark_exhausted("light_enrichment")
                 break
-            try:
-                result = await asyncio.wait_for(light_enrich(ticker),
-                                                timeout=6.0)
-                budget.tick("light_enrich")
-            except asyncio.TimeoutError:
-                print(f"[Wide Scan] {ticker} light enrich timed out, skipping")
-                result = {"error": "timeout"}
-            enrichment_results.append(result)
-            if (i + 1) % 10 == 0 or i == len(ticker_list) - 1:
+            batch = ticker_list[batch_start:batch_start + _le_batch_size]
+            batch_results = await asyncio.gather(
+                *[asyncio.wait_for(light_enrich(t), timeout=6.0) for t in batch],
+                return_exceptions=True,
+            )
+            for j, result in enumerate(batch_results):
+                if isinstance(result, asyncio.TimeoutError):
+                    print(f"[Wide Scan] {batch[j]} light enrich timed out, skipping")
+                    enrichment_results.append({"error": "timeout"})
+                elif isinstance(result, Exception):
+                    enrichment_results.append({"error": str(result)})
+                else:
+                    enrichment_results.append(result)
+                    budget.tick("light_enrich")
+            done_count = batch_start + len(batch)
+            if done_count % 10 < _le_batch_size or done_count == len(ticker_list):
                 print(
-                    f"[Wide Scan] Light enriched {i + 1}/{len(ticker_list)} tickers ({time.time()-scan_start:.1f}s)"
+                    f"[Wide Scan] Light enriched {done_count}/{len(ticker_list)} tickers ({time.time()-scan_start:.1f}s)"
                 )
 
         candidates = {}
@@ -1432,20 +1441,18 @@ class MarketDataService:
                 return {"error": str(e)}
 
         deep_results = []
-        for i, ticker in enumerate(deep_tickers):
-            if not budget.can_continue():
-                print(
-                    f"[Wide Scan] Budget exhausted during deep enrichment at ticker {i}/{len(deep_tickers)} ({budget.status()})"
-                )
-                budget.mark_exhausted("deep_enrichment")
-                break
-            try:
-                result = await asyncio.wait_for(deep_enrich(ticker),
-                                                timeout=8.0)
-                budget.tick("deep_enrich")
-            except Exception as e:
-                result = {"error": str(e)}
-            deep_results.append(result)
+        # Parallel deep enrichment (small set, typically ≤8 tickers)
+        if deep_tickers and budget.can_continue():
+            _deep_raw = await asyncio.gather(
+                *[asyncio.wait_for(deep_enrich(t), timeout=8.0) for t in deep_tickers],
+                return_exceptions=True,
+            )
+            for i, result in enumerate(_deep_raw):
+                if isinstance(result, Exception):
+                    deep_results.append({"error": str(result)})
+                else:
+                    deep_results.append(result)
+                    budget.tick("deep_enrich")
 
         # Skip xAI batch sentiment for investments — the investments pipeline
         # already runs a separate Grok thematic call in parallel. Adding another
@@ -5282,72 +5289,71 @@ class MarketDataService:
         result = {}
         processed = 0
 
-        for ticker in to_process:
-            ticker = ticker.upper().strip()
-            if not ticker:
-                continue
+        # Parallel EDGAR enrichment with concurrency limit (SEC rate limit safe)
+        _edgar_sem = asyncio.Semaphore(3)
 
-            cik = await self.sec_edgar.resolve_cik(ticker)
-            if not cik:
-                continue
+        async def _enrich_one_edgar(ticker_raw):
+            ticker_clean = ticker_raw.upper().strip()
+            if not ticker_clean:
+                return None
 
-            entry = {
-                "cik": cik,
-                "filings_recent": [],
-                "catalysts": [],
-                "insider": None
-            }
+            async with _edgar_sem:
+                cik = await self.sec_edgar.resolve_cik(ticker_clean)
+                if not cik:
+                    return None
 
-            try:
-                entry[
-                    "filings_recent"] = await self.sec_edgar.get_recent_filings(
-                        cik,
-                        lookback_days=14,
-                        limit=5,
-                        budget=budget,
-                    )
-            except Exception as e:
-                print(f"[EDGAR] Filings error for {ticker}: {e}")
-
-            if mode in ("standard", "insider_focus"):
-                try:
-                    entry[
-                        "catalysts"] = await self.sec_edgar.get_8k_s1_catalysts(
-                            cik,
-                            lookback_days=14,
-                            limit=5,
-                            budget=budget,
-                        )
-                except Exception as e:
-                    print(f"[EDGAR] Catalysts error for {ticker}: {e}")
+                entry = {
+                    "cik": cik,
+                    "filings_recent": [],
+                    "catalysts": [],
+                    "insider": None
+                }
 
                 try:
-                    entry["financials"] = await self.sec_edgar.get_company_financials(
-                        cik, budget=budget
+                    entry["filings_recent"] = await self.sec_edgar.get_recent_filings(
+                        cik, lookback_days=14, limit=5, budget=budget,
                     )
                 except Exception as e:
-                    print(f"[EDGAR] Financials error for {ticker}: {e}")
+                    print(f"[EDGAR] Filings error for {ticker_clean}: {e}")
 
-            if mode == "insider_focus":
-                try:
-                    entry[
-                        "insider"] = await self.sec_edgar.get_form4_insider_summary(
-                            cik,
-                            lookback_days=30,
-                            limit=10,
-                            budget=budget,
+                if mode in ("standard", "insider_focus"):
+                    try:
+                        entry["catalysts"] = await self.sec_edgar.get_8k_s1_catalysts(
+                            cik, lookback_days=14, limit=5, budget=budget,
                         )
-                except Exception as e:
-                    print(f"[EDGAR] Insider error for {ticker}: {e}")
+                    except Exception as e:
+                        print(f"[EDGAR] Catalysts error for {ticker_clean}: {e}")
 
-            if entry["filings_recent"] or entry["catalysts"] or entry.get(
-                    "insider"):
-                result[ticker] = entry
+                    try:
+                        entry["financials"] = await self.sec_edgar.get_company_financials(
+                            cik, budget=budget
+                        )
+                    except Exception as e:
+                        print(f"[EDGAR] Financials error for {ticker_clean}: {e}")
+
+                if mode == "insider_focus":
+                    try:
+                        entry["insider"] = await self.sec_edgar.get_form4_insider_summary(
+                            cik, lookback_days=30, limit=10, budget=budget,
+                        )
+                    except Exception as e:
+                        print(f"[EDGAR] Insider error for {ticker_clean}: {e}")
+
+                if entry["filings_recent"] or entry["catalysts"] or entry.get("insider"):
+                    return (ticker_clean, entry)
+                return None
+
+        _edgar_results = await asyncio.gather(
+            *[_enrich_one_edgar(t) for t in to_process],
+            return_exceptions=True,
+        )
+        for res in _edgar_results:
+            if isinstance(res, Exception):
+                continue
+            if res is not None:
+                ticker_name, entry = res
+                result[ticker_name] = entry
                 processed += 1
-
-            if not budget.can_spend() and not any(
-                    cache.get(f"edgar:filings:{cik}:all:14") for _ in [1]):
-                break
 
         print(
             f"[EDGAR] tickers={len(to_process)} mode={mode} enriched={processed} {budget.summary()}"

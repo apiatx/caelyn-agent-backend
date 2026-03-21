@@ -2956,14 +2956,19 @@ class TradingAgent:
             if tickers and self.data.xai:
                 async def fetch_x_sentiment():
                     try:
-                        results = {}
-                        for ticker in tickers[:3]:
-                            sent = await asyncio.wait_for(
-                                self.data.xai.get_ticker_sentiment(ticker, "stock"),
-                                timeout=15.0,
-                            )
-                            if sent and "error" not in sent:
-                                results[ticker] = sent
+                        async def _fetch_one_x(t):
+                            try:
+                                sent = await asyncio.wait_for(
+                                    self.data.xai.get_ticker_sentiment(t, "stock"),
+                                    timeout=15.0,
+                                )
+                                return (t, sent) if sent and "error" not in sent else (t, None)
+                            except Exception:
+                                return (t, None)
+                        pairs = await asyncio.gather(
+                            *[_fetch_one_x(t) for t in tickers[:3]]
+                        )
+                        results = {t: s for t, s in pairs if s}
                         return results or None
                     except Exception as e:
                         print(f"[ORCHESTRATOR] X sentiment overlay failed: {e}")
@@ -3095,21 +3100,26 @@ class TradingAgent:
                     except Exception as e:
                         print(f"[Chat] Web search enrichment failed: {e}")
 
-            # Fallback for tickers not enriched by web search
-            for ticker in tickers[:3]:
-                if f"ticker_{ticker}" in context:
-                    continue
-                ticker_data = {"ticker": ticker}
-                try:
-                    sentiment = await asyncio.wait_for(
-                        self.data.stocktwits.get_sentiment(ticker),
-                        timeout=5.0,
-                    )
-                    if sentiment:
-                        ticker_data["social_sentiment"] = sentiment
-                except Exception:
-                    pass
-                context[f"ticker_{ticker}"] = ticker_data
+            # Fallback for tickers not enriched by web search (parallel)
+            _fallback_tickers = [t for t in tickers[:3] if f"ticker_{t}" not in context]
+            if _fallback_tickers:
+                async def _fetch_stocktwits(t):
+                    ticker_data = {"ticker": t}
+                    try:
+                        sentiment = await asyncio.wait_for(
+                            self.data.stocktwits.get_sentiment(t),
+                            timeout=5.0,
+                        )
+                        if sentiment:
+                            ticker_data["social_sentiment"] = sentiment
+                    except Exception:
+                        pass
+                    return t, ticker_data
+                _fb_results = await asyncio.gather(
+                    *[_fetch_stocktwits(t) for t in _fallback_tickers]
+                )
+                for t, td in _fb_results:
+                    context[f"ticker_{t}"] = td
 
             # xAI Grok sentiment (kept — independent from web search)
             CRYPTO_SYMBOLS = {
@@ -3122,20 +3132,26 @@ class TradingAgent:
             }
             _chat_model = query_info.get("reasoning_model", "agent_collab")
             if self.data.xai and _chat_model in ("agent_collab", "all_agents"):
-                for ticker in tickers[:3]:
+                async def _fetch_x_sent(t):
                     try:
                         x_sent = await asyncio.wait_for(
                             self.data.xai.get_ticker_sentiment(
-                                ticker,
-                                "crypto" if ticker.upper() in CRYPTO_SYMBOLS else "stock",
+                                t,
+                                "crypto" if t.upper() in CRYPTO_SYMBOLS else "stock",
                             ),
                             timeout=15.0,
                         )
                         if x_sent and "error" not in x_sent:
-                            if f"ticker_{ticker}" in context:
-                                context[f"ticker_{ticker}"]["x_sentiment"] = x_sent
+                            return t, x_sent
                     except Exception:
                         pass
+                    return t, None
+                _x_results = await asyncio.gather(
+                    *[_fetch_x_sent(t) for t in tickers[:3]]
+                )
+                for t, x_sent in _x_results:
+                    if x_sent and f"ticker_{t}" in context:
+                        context[f"ticker_{t}"]["x_sentiment"] = x_sent
 
         if not context:
             return None
@@ -4267,17 +4283,24 @@ class TradingAgent:
         if category == "ticker_analysis":
             tickers = query_info.get("tickers", [])
             results = {}
-            for ticker in tickers[:5]:
-                try:
-                    results[ticker] = await asyncio.wait_for(
-                        self.data.research_ticker(ticker), timeout=30.0
-                    )
-                except asyncio.TimeoutError:
-                    print(f"[TICKER_ANALYSIS] research_ticker({ticker}) timed out after 30s")
-                    results[ticker] = {"error": "timeout"}
-                except Exception as e:
-                    print(f"[TICKER_ANALYSIS] research_ticker({ticker}) failed: {e}")
-                    results[ticker] = {"error": str(e)}
+            _tickers_to_research = tickers[:5]
+            if _tickers_to_research:
+                async def _research_one(t):
+                    try:
+                        return t, await asyncio.wait_for(
+                            self.data.research_ticker(t), timeout=30.0
+                        )
+                    except asyncio.TimeoutError:
+                        print(f"[TICKER_ANALYSIS] research_ticker({t}) timed out after 30s")
+                        return t, {"error": "timeout"}
+                    except Exception as e:
+                        print(f"[TICKER_ANALYSIS] research_ticker({t}) failed: {e}")
+                        return t, {"error": str(e)}
+                _gather_results = await asyncio.gather(
+                    *[_research_one(t) for t in _tickers_to_research]
+                )
+                for t, data in _gather_results:
+                    results[t] = data
             original = query_info.get("original_prompt", "").lower()
             edgar_keywords = ["catalyst", "why now", "insider", "filings", "s-1", "8-k",
                               "offering", "dilution", "secondary", "lockup", "guidance", "sec"]
