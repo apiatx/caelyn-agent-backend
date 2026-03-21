@@ -168,6 +168,7 @@ class TradingAgent:
         "news_markets": "news_intelligence",
     }
 
+    @traceable(name="resolve_preset")
     def _resolve_preset(self, preset_intent: str) -> str:
         if preset_intent in self.INTENT_PROFILES:
             return preset_intent
@@ -185,6 +186,7 @@ class TradingAgent:
         print(f"[ROUTING] Unknown preset_intent: '{preset_intent}' (normalized: '{normalized}') — no alias or profile found")
         return None
 
+    @traceable(name="build_plan_from_preset")
     def _build_plan_from_preset(self, preset_intent: str) -> dict:
         resolved = self._resolve_preset(preset_intent)
         if not resolved:
@@ -207,6 +209,7 @@ class TradingAgent:
             plan["_screener_preset"] = profile["_screener_preset"]
         return plan
 
+    @traceable(name="refine_plan_with_query")
     def _refine_plan_with_query(self, base_plan: dict, query: str) -> dict:
         q = query.lower().strip()
         plan = {
@@ -280,6 +283,7 @@ class TradingAgent:
 
         return plan
 
+    @traceable(name="heuristic_fallback_plan")
     def _heuristic_fallback_plan(self, prompt: str) -> dict:
         q = prompt.lower().strip()
 
@@ -1261,6 +1265,7 @@ class TradingAgent:
 
         return result
 
+    @traceable(name="needs_fresh_data")
     def _needs_fresh_data(self, query: str) -> bool:
         q = query.lower().strip()
 
@@ -1311,6 +1316,7 @@ class TradingAgent:
 
         return False
 
+    @traceable(name="classify_with_timeout")
     async def _classify_with_timeout(self, prompt: str) -> dict:
         try:
             return await asyncio.wait_for(
@@ -1321,6 +1327,7 @@ class TradingAgent:
             print(f"[AGENT] Classification failed/timed out: {e}, using keyword fallback")
             return self._keyword_classify(prompt)
 
+    @traceable(name="keyword_classify")
     def _keyword_classify(self, query: str) -> dict:
         q = query.lower().strip()
 
@@ -1465,6 +1472,7 @@ class TradingAgent:
             return {"category": "market_scan"}
         return {"category": "market_scan"}
 
+    @traceable(name="detect_cross_market")
     def _detect_cross_market(self, q: str) -> dict | None:
         if self._is_crypto_query(q):
             return None
@@ -1496,6 +1504,7 @@ class TradingAgent:
             return {"category": "cross_market"}
         return None
 
+    @traceable(name="extract_tickers")
     def _extract_tickers(self, query: str) -> list:
         ticker_pattern = re.findall(r'\$?([A-Z]{2,5})\b', query)
         # Handle TradingView export format: NYSE:LAC, NASDAQ:ASTI, CRYPTO:HYPEHUSD
@@ -1520,6 +1529,7 @@ class TradingAgent:
         }
         return [t for t in ticker_pattern if t not in common]
 
+    @traceable(name="extract_followup_tickers")
     def _extract_followup_tickers(self, history: list, csv_followup: bool = False) -> list:
         """Extract tickers from conversation history for follow-up queries.
         For CSV follow-ups, extracts up to 50 tickers. Otherwise up to 10."""
@@ -1556,9 +1566,11 @@ class TradingAgent:
         print(f"[FOLLOWUP_TICKERS] Extracted {len(result)} tickers (csv={csv_followup}): {result[:10]}...")
         return result
 
+    @traceable(name="classify_query")
     def _classify_query(self, prompt: str) -> dict:
         return self._classify_query_claude(prompt)
 
+    @traceable(name="classify_query_claude")
     def _classify_query_claude(self, prompt: str) -> dict:
         try:
             response = self.client.messages.create(
@@ -1583,6 +1595,7 @@ class TradingAgent:
             print(f"[AGENT] Claude Haiku classification error: {e}, falling back to keyword classifier")
             return self._keyword_classify(prompt)
 
+    @traceable(name="smart_orchestrate")
     def _smart_orchestrate(self, user_prompt: str, history: list = None, csv_context: str = None, reasoning_model: str = "claude") -> dict:
         """
         Smart Orchestrator + Prompt Engineer — uses the selected reasoning model.
@@ -2409,6 +2422,7 @@ class TradingAgent:
         "tickers": [],
     }
 
+    @traceable(name="call_simple_model")
     def _call_simple_model(self, reasoning_model: str, prompt: str, max_tokens: int = 4096) -> str:
         """Call the selected model with a simple user prompt (no system blocks). Sync."""
         messages = [{"role": "user", "content": prompt}]
@@ -2477,6 +2491,7 @@ class TradingAgent:
 
         raise ValueError(f"Unknown model: {reasoning_model}")
 
+    @traceable(name="call_orchestrator_model")
     def _call_orchestrator_model(self, reasoning_model: str, system_prompt: str, messages: list) -> str:
         """Call the selected model for orchestration (lightweight JSON routing).
         Returns the raw text response. Uses sync calls since orchestration runs in a thread."""
@@ -2564,6 +2579,7 @@ class TradingAgent:
 
         raise ValueError(f"Unknown reasoning model: {reasoning_model}")
 
+    @traceable(name="call_watchlist_model")
     def _call_watchlist_model(self, reasoning_model: str, system_text: str, messages: list, max_tokens: int = 16384) -> str:
         """Call the selected model for watchlist review (long-form analysis).
         Similar to _call_orchestrator_model but with higher token limits and longer timeouts."""
@@ -2650,6 +2666,7 @@ class TradingAgent:
 
         raise ValueError(f"Unknown reasoning model: {reasoning_model}")
 
+    @traceable(name="orchestrate_query")
     def _orchestrate_query(self, prompt: str, history: list = None, csv_context: str = None, reasoning_model: str = "claude") -> dict:
         """Orchestrate query using the selected reasoning model.
         Delegates to _smart_orchestrate for context-aware routing + prompt enhancement.
@@ -2671,6 +2688,7 @@ class TradingAgent:
         plan["_api_calls"] = result.get("api_calls", {})
         return plan
 
+    @traceable(name="get_api_budget_hint")
     def _get_api_budget_hint(self) -> str:
         """Returns a plain-text budget hint for the orchestration prompt."""
         try:
@@ -2691,6 +2709,7 @@ class TradingAgent:
             return "\n".join(lines) if lines else "- All providers: healthy"
         except Exception:
             return "- Budget status unavailable"
+    @traceable(name="validate_plan")
     def _validate_plan(self, plan: dict, prompt: str) -> dict:
         if not isinstance(plan, dict):
             print(f"[ORCHESTRATOR] Invalid plan type: {type(plan)}, using default")
@@ -2733,6 +2752,7 @@ class TradingAgent:
         plan = self._apply_priority_overrides(plan, prompt)
         return plan
 
+    @traceable(name="apply_priority_overrides")
     def _apply_priority_overrides(self, plan: dict, prompt: str) -> dict:
         q = prompt.lower().strip()
 
@@ -2775,6 +2795,7 @@ class TradingAgent:
 
         return plan
 
+    @traceable(name="derive_news_query")
     def _derive_news_query(self, prompt: str) -> str:
         import re
         q = (prompt or "").strip()
@@ -2784,6 +2805,7 @@ class TradingAgent:
         q = re.sub(r"\s+", " ", q).strip(" ?")
         return q or "stock market financial news today"
 
+    @traceable(name="plan_to_query_info")
     def _plan_to_query_info(self, plan: dict) -> dict:
         intent = plan.get("intent", "cross_asset_trending")
         category = self.INTENT_TO_CATEGORY.get(intent, "market_scan")
@@ -2837,6 +2859,7 @@ class TradingAgent:
 
         return query_info
 
+    @traceable(name="generate_reasoning_brief")
     async def _generate_reasoning_brief(self, user_prompt: str, plan: dict, reasoning_model: str = "claude") -> dict | None:
         try:
             plan_summary = json.dumps({
@@ -2870,6 +2893,7 @@ class TradingAgent:
             print(f"[REASONING_BRIEF] Generation failed (non-fatal): {e}")
             return None
 
+    @traceable(name="generate_followup_suggestions")
     def _generate_followup_suggestions(self, analysis_text: str, reasoning_model: str = "claude") -> list:
         """Generate 4 contextual follow-up prompt suggestions using the selected model.
         Returns list of 4 short suggestion strings."""
@@ -2900,6 +2924,7 @@ class TradingAgent:
             print(f"[SUGGESTIONS] Claude call failed: {e}")
             return []
 
+    @traceable(name="orchestrate_with_timeout")
     async def _orchestrate_with_timeout(self, prompt: str, history: list = None, csv_context: str = None, reasoning_model: str = "claude") -> dict:
         try:
             plan = await asyncio.wait_for(
@@ -2957,6 +2982,7 @@ class TradingAgent:
             fallback["_routing_confidence"] = "medium"
             return fallback
 
+    @traceable(name="execute_orchestration_plan")
     async def _execute_orchestration_plan(self, query_info: dict) -> dict:
         plan = query_info.get("orchestration_plan")
         if not plan:
@@ -3094,6 +3120,7 @@ class TradingAgent:
             print(f"[AGENT] Data gathering error: {e}")
             return {"error": f"Data gathering failed: {str(e)}"}
 
+    @traceable(name="gather_chat_context")
     async def _gather_chat_context(self, query: str, query_info: dict) -> dict:
         context = {}
 
@@ -3187,6 +3214,7 @@ class TradingAgent:
         return context
 
     @staticmethod
+    @traceable(name="distinct_article_urls")
     def _distinct_article_urls(articles: list) -> list:
         urls = []
         seen = set()
@@ -3200,6 +3228,7 @@ class TradingAgent:
             urls.append(u)
         return urls
 
+    @traceable(name="fetch_web_news_context")
     async def _fetch_web_news_context(self, plan: dict, user_prompt: str) -> dict:
         if not self.data.web_search:
             return {"query": plan.get("news_query") or self._derive_news_query(user_prompt), "provider_used": "none", "articles": []}
@@ -3279,6 +3308,7 @@ class TradingAgent:
     CRYPTO_EXCLUDE_COMMODITY = ["gold", "oil", "silver", "commodit"]
 
     @classmethod
+    @traceable(name="is_crypto_query")
     def _is_crypto_query(cls, q_lower: str) -> bool:
         if any(s in q_lower for s in cls.CRYPTO_PHRASE_SIGNALS):
             return True
@@ -3294,6 +3324,7 @@ class TradingAgent:
 
     WEB_SEARCH_CATEGORIES = {"cross_asset_trending", "daily_briefing", "best_trades", "earnings_catalyst"}
 
+    @traceable(name="ask_claude_with_timeout")
     async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None, collab_agents: list = None, primary_model: str = None) -> str:
         data_size = len(json.dumps(market_data, default=str)) if market_data else 0
         reasoning_model = reasoning_model if reasoning_model in self.VALID_REASONING_MODELS else "claude"
@@ -3591,6 +3622,7 @@ class TradingAgent:
     #   The final model is primary_model (the real reasoning engine).
     # ─────────────────────────────────────────────────────────────────────────
 
+    @traceable(name="caelyn_collab_synthesis")
     async def _caelyn_collab_synthesis(
         self,
         user_prompt: str,
@@ -3956,6 +3988,7 @@ class TradingAgent:
             )
         return text
 
+    @traceable(name="prompt_to_openai_messages")
     def _prompt_to_openai_messages(self, system_blocks, messages) -> list:
         """Convert Anthropic system_blocks + messages into OpenAI-compatible message list."""
         system_text = "\n\n".join(
@@ -4251,6 +4284,7 @@ class TradingAgent:
         finally:
             await async_client.close()
 
+    @traceable(name="gather_polymarket_context")
     async def _gather_polymarket_context(self, query_info: dict) -> dict:
         """Fetch Polymarket prediction markets data + macro context via the dedicated provider."""
         context = {}
@@ -4337,6 +4371,7 @@ class TradingAgent:
 
         return context
 
+    @traceable(name="gather_data")
     async def _gather_data(self, query_info: dict) -> dict:
         """Fetch the appropriate data based on query classification."""
         category = query_info.get("category", "general")
@@ -4759,6 +4794,7 @@ class TradingAgent:
         else:
             return {}
 
+    @traceable(name="gather_custom_screen_data")
     async def _gather_custom_screen_data(self, query_info: dict) -> dict:
         plan = query_info.get("orchestration_plan", {})
         filters = plan.get("filters", {})
@@ -4855,6 +4891,7 @@ class TradingAgent:
             else:
                 self.data.CATEGORY_FILTERS.pop("custom_screen", None)
 
+    @traceable(name="gather_cross_asset_trending_data")
     async def _gather_cross_asset_trending_data(self, query_info: dict) -> dict:
         from data.cache import cache, XAI_CROSS_ASSET_TTL
         import time as _t
@@ -5230,6 +5267,7 @@ class TradingAgent:
 
         return primary_data
 
+    @traceable(name="light_enrich_grok_shortlist")
     async def _light_enrich_grok_shortlist(self, grok_shortlist: dict) -> dict:
         enriched = {}
         equity_tickers = []
@@ -5298,6 +5336,7 @@ class TradingAgent:
 
         return enriched
 
+    @traceable(name="compute_social_signal_rank")
     def _compute_social_signal_rank(self, grok_shortlist: dict, market_data_result: dict, primary_data: dict) -> dict:
         if not grok_shortlist:
             return {}
@@ -5445,6 +5484,7 @@ class TradingAgent:
 
         return result
 
+    @traceable(name="extract_grok_commodity_themes")
     def _extract_grok_commodity_themes(self, grok_shortlist: dict | None) -> list[str]:
         if not grok_shortlist or not isinstance(grok_shortlist, dict):
             return []
@@ -5475,6 +5515,7 @@ class TradingAgent:
                 found.append(theme)
         return found
 
+    @traceable(name="count_candidates")
     def _count_candidates(self, data: dict, asset_class: str) -> int:
         """Count candidates the RANKER can actually see (not Grok shortlist which is passed separately to Claude).
         Only counts stock_trending.enriched_data for equities, since that's what rank_cross_market receives."""
@@ -5507,6 +5548,7 @@ class TradingAgent:
             count += len(grok_comm)
         return count
 
+    @traceable(name="fix_trending_output")
     def _fix_trending_output(self, result: dict, market_data: dict):
         """Post-process trending output to fix crypto tradingview_symbols, ETF classification, and name accuracy."""
         structured = result.get("structured")
@@ -5639,6 +5681,7 @@ class TradingAgent:
             if sym and sym in name_lookup:
                 item["name"] = name_lookup[sym]
 
+    @traceable(name="broaden_candidates")
     async def _broaden_candidates(self, data: dict, needs: list) -> dict:
         broadened = {}
         tasks = []
@@ -5691,6 +5734,7 @@ class TradingAgent:
 
         return broadened
 
+    @traceable(name="review_watchlist")
     async def review_watchlist(self, tickers: list, csv_parsed: dict = None, reasoning_model: str = "claude") -> dict:
         """Dedicated watchlist review — bypasses the classifier entirely."""
         import time
@@ -5838,6 +5882,7 @@ Be direct and opinionated. Tell me what you actually think."""
                 },
             }
 
+    @traceable(name="extract_screener_filters")
     def _extract_screener_filters(self, prompt: str) -> dict:
         """
         Parse natural language screener request into structured filters.
@@ -6063,6 +6108,7 @@ Be direct and opinionated. Tell me what you actually think."""
         print(f"[AI Screener] Extracted filters from prompt: {filters}")
         return filters
 
+    @traceable(name="trim_history")
     def _trim_history(self, messages: list, max_chars: int = 100000) -> list:
         total = sum(len(m.get("content", "")) for m in messages)
         while total > max_chars and len(messages) > 2:
@@ -6080,271 +6126,7 @@ Be direct and opinionated. Tell me what you actually think."""
                 print(f"[Agent] Removed oldest message ({content_len:,} chars) to fit context window")
         return messages
 
-    @staticmethod
-    def _build_thematic_watchlist_prerank(market_data: dict) -> str:
-        """
-        Deterministically rank and bucket sector candidates into watchlist_today
-        using the structured data already gathered by get_thematic_scan().
-
-        Scoring weights (applied to normalised 0-100 values):
-          40%  quant_score         (from score_for_trades in market_data_service)
-          30%  social_bull_pct     (StockTwits bullish_percent)
-          20%  revenue_growth_pct  (StockAnalysis overview)
-          10%  analyst_boost       (+15 pts if "Buy" in analyst_rating)
-
-        Market-cap buckets:
-          large  > $10B
-          mid    $2B – $10B
-          low    < $2B  (falls back to the smallest-cap ticker when sector is thin)
-
-        Returns a compact JSON string to inject into the system prompt.
-        """
-        import re as _re
-
-        def _parse_mcap_billions(raw: str) -> float | None:
-            """Convert '$3.5T' / '$450B' / '$4.5B' / '$250M' → float billions."""
-            if not raw or not isinstance(raw, str):
-                return None
-            raw = raw.replace(",", "").strip()
-            m = _re.search(r'([\d.]+)\s*([TBMK])', raw, _re.IGNORECASE)
-            if not m:
-                return None
-            val, suffix = float(m.group(1)), m.group(2).upper()
-            multipliers = {"T": 1_000, "B": 1, "M": 0.001, "K": 0.000001}
-            return val * multipliers.get(suffix, 1)
-
-        def _parse_pct(raw) -> float:
-            """Parse '78%' / '-12.5%' / 78.0 → float, else 0."""
-            if raw is None:
-                return 0.0
-            if isinstance(raw, (int, float)):
-                return float(raw)
-            m = _re.search(r'([+-]?\d+\.?\d*)', str(raw))
-            return float(m.group(1)) if m else 0.0
-
-        ranked_tickers = market_data.get("ranked_tickers", [])
-        enriched_data  = market_data.get("enriched_data", {})
-
-        # Build quant_score lookup {ticker: score}
-        qs_map = {r["ticker"]: float(r.get("score", 0)) for r in ranked_tickers if isinstance(r, dict)}
-
-        # Score every enriched ticker
-        candidates = []
-        for ticker, tdata in enriched_data.items():
-            if not isinstance(tdata, dict):
-                continue
-            overview  = tdata.get("overview", {}) or {}
-            sentiment = tdata.get("sentiment", {}) or {}
-
-            quant     = qs_map.get(ticker, 0.0)
-            social    = float(sentiment.get("bullish_percent") or 0)
-            rev_g     = _parse_pct(overview.get("revenue_growth"))
-            rev_g     = max(min(rev_g, 200), -50)          # clamp wild outliers
-
-            analyst_raw = (overview.get("analyst_rating") or "").lower()
-            analyst_boost = 15.0 if "buy" in analyst_raw else 0.0
-
-            # Normalise each component to 0-100 before weighting
-            quant_n  = min(quant, 100)
-            social_n = min(social, 100)
-            rev_n    = min(max((rev_g + 50) / 2.5, 0), 100)   # -50→0, 0→20, 200→100
-
-            composite = (
-                0.40 * quant_n
-                + 0.30 * social_n
-                + 0.20 * rev_n
-                + 0.10 * analyst_boost
-            )
-
-            mcap_raw  = overview.get("market_cap", "")
-            mcap_b    = _parse_mcap_billions(mcap_raw)
-            company   = overview.get("company", ticker)
-            earnings  = overview.get("earnings_date", "")
-            rev_str   = overview.get("revenue_growth", "")
-            price_tgt = overview.get("price_target", "")
-            upside    = overview.get("upside_downside", "")
-
-            candidates.append({
-                "ticker":       ticker,
-                "company":      company,
-                "composite":    round(composite, 1),
-                "quant":        round(quant_n, 1),
-                "social":       round(social_n, 1),
-                "rev_growth":   rev_str,
-                "analyst":      overview.get("analyst_rating", ""),
-                "price_target": price_tgt,
-                "upside":       upside,
-                "earnings_date":earnings,
-                "mcap_b":       mcap_b,
-                "mcap_raw":     mcap_raw,
-            })
-
-        if not candidates:
-            return ""
-
-        candidates.sort(key=lambda c: c["composite"], reverse=True)
-
-        # Bucket by market cap
-        large, mid, low = [], [], []
-        for c in candidates:
-            mb = c["mcap_b"]
-            if mb is None:
-                mid.append(c)            # unknown → mid bucket
-            elif mb >= 10:
-                large.append(c)
-            elif mb >= 2:
-                mid.append(c)
-            else:
-                low.append(c)
-
-        # Fallback: if low_cap is empty, use the smallest-cap ticker from any bucket
-        if not low and candidates:
-            by_size = [c for c in candidates if c["mcap_b"] is not None]
-            if by_size:
-                by_size.sort(key=lambda c: c["mcap_b"])
-                low = [by_size[0]]      # smallest available; label noted in injected text
-
-        def _to_entry(c: dict, rank: int, tier_note: str = "") -> dict:
-            note_parts = []
-            if c.get("rev_growth"):
-                note_parts.append(f"rev_growth={c['rev_growth']}")
-            if c.get("analyst"):
-                note_parts.append(f"analyst={c['analyst']}")
-            if c.get("earnings_date"):
-                note_parts.append(f"earnings={c['earnings_date']}")
-            if c.get("upside"):
-                note_parts.append(f"upside={c['upside']}")
-            if tier_note:
-                note_parts.append(tier_note)
-            return {
-                "rank":            rank,
-                "ticker":          c["ticker"],
-                "company":         c["company"],
-                "market_cap":      c["mcap_raw"] or "unknown",
-                "composite_score": c["composite"],
-                "signals":         ", ".join(note_parts) if note_parts else "see data",
-            }
-
-        large_entries = [_to_entry(c, i+1) for i, c in enumerate(large[:3])]
-        mid_entries   = [_to_entry(c, i+1) for i, c in enumerate(mid[:3])]
-        low_entries   = [_to_entry(c, i+1, tier_note="smallest-cap in sector" if c not in [x for x in candidates if (x.get("mcap_b") or 999) < 2] else "") for i, c in enumerate(low[:3])]
-        buy_rn        = _to_entry(candidates[0], 1)   # highest composite overall
-
-        prerank = {
-            "large_cap":     large_entries,
-            "mid_cap":       mid_entries,
-            "low_cap":       low_entries,
-            "buy_right_now": buy_rn,
-        }
-
-        print(f"[SECTOR_PRERANK] large={len(large_entries)} mid={len(mid_entries)} low={len(low_entries)} "
-              f"buy_rn={buy_rn['ticker']}({buy_rn['composite_score']}) "
-              f"pool={len(candidates)}")
-
-        return json.dumps(prerank, indent=2)
-
-    @staticmethod
-    def _enforce_thematic_watchlist(result: dict, market_data: dict) -> None:
-        """
-        Deterministic fallback for thematic/sector responses.
-
-        If Claude returns watchlist_today with empty or missing buckets, this
-        rebuilds them from the same pre-ranked data used in the prompt injection,
-        ensuring the frontend always receives fully-populated watchlist_today data.
-
-        Mutates result["structured"]["watchlist_today"] in-place.
-        """
-        structured = result.get("structured")
-        if not isinstance(structured, dict):
-            return
-
-        if not structured.get("sector_key"):
-            return
-
-        wt = structured.get("watchlist_today")
-        if not isinstance(wt, dict):
-            wt = {}
-            structured["watchlist_today"] = wt
-
-        def _ticker_missing(entries) -> bool:
-            if not entries:
-                return True
-            if isinstance(entries, list):
-                return not any(
-                    isinstance(e, dict) and e.get("ticker") and len(str(e.get("ticker", ""))) > 0
-                    for e in entries
-                )
-            return True
-
-        needs_large = _ticker_missing(wt.get("large_cap"))
-        needs_mid   = _ticker_missing(wt.get("mid_cap"))
-        needs_low   = _ticker_missing(wt.get("low_cap"))
-        buy_rn      = wt.get("buy_right_now", {})
-        needs_buy   = not (isinstance(buy_rn, dict) and buy_rn.get("ticker"))
-
-        if not any([needs_large, needs_mid, needs_low, needs_buy]):
-            return
-
-        try:
-            prerank_json = TradingAgent._build_thematic_watchlist_prerank(market_data)
-            if not prerank_json:
-                print("[SECTOR_ENFORCE] Pre-ranker returned empty — cannot populate watchlist_today")
-                return
-            prerank = json.loads(prerank_json)
-        except Exception as e:
-            print(f"[SECTOR_ENFORCE] Pre-ranker error: {e}")
-            return
-
-        def _make_entry(entry: dict, tier: str) -> dict:
-            score = entry.get("composite_score", 0)
-            conviction = "High" if score >= 50 else "Medium" if score >= 30 else "Watch"
-            return {
-                "rank":            entry.get("rank", 1),
-                "ticker":          entry.get("ticker", ""),
-                "company":         entry.get("company", ""),
-                "market_cap_tier": tier,
-                "why_now":         (
-                    f"Backend-ranked #{entry.get('rank',1)} by quant score, social sentiment, "
-                    f"and revenue growth (composite={score})"
-                ),
-                "catalyst":        entry.get("signals", "see data"),
-                "conviction":      conviction,
-                "conviction_score": int(score),
-            }
-
-        rebuilt = []
-        if needs_large and prerank.get("large_cap"):
-            wt["large_cap"] = [_make_entry(e, "large") for e in prerank["large_cap"]]
-            rebuilt.append(f"large_cap={[e['ticker'] for e in wt['large_cap']]}")
-
-        if needs_mid and prerank.get("mid_cap"):
-            wt["mid_cap"] = [_make_entry(e, "mid") for e in prerank["mid_cap"]]
-            rebuilt.append(f"mid_cap={[e['ticker'] for e in wt['mid_cap']]}")
-
-        if needs_low and prerank.get("low_cap"):
-            wt["low_cap"] = [_make_entry(e, "low") for e in prerank["low_cap"]]
-            rebuilt.append(f"low_cap={[e['ticker'] for e in wt['low_cap']]}")
-
-        if needs_buy and isinstance(prerank.get("buy_right_now"), dict):
-            brc = prerank["buy_right_now"]
-            score = brc.get("composite_score", 0)
-            wt["buy_right_now"] = {
-                "ticker":          brc.get("ticker", ""),
-                "company":         brc.get("company", ""),
-                "market_cap_tier": "",
-                "why_now":         (
-                    f"Highest composite score across all market cap tiers (score={score}) — "
-                    f"strongest overall setup in this sector right now"
-                ),
-                "catalyst":        brc.get("signals", "see data"),
-                "conviction":      "High",
-                "conviction_score": int(score),
-            }
-            rebuilt.append(f"buy_right_now={wt['buy_right_now']['ticker']}")
-
-        if rebuilt:
-            print(f"[SECTOR_ENFORCE] watchlist_today rebuilt: {', '.join(rebuilt)}")
-
+    @traceable(name="build_prompt")
     def _build_prompt(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None):
         """Build system_blocks, messages, model selection for a Claude call.
         Returns (system_blocks, messages, model, token_limit, use_thinking, thinking_budget)."""
@@ -6938,6 +6720,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
 
         return system_blocks, messages, model, token_limit, use_thinking, thinking_budget
 
+    @traceable(name="ask_claude")
     def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None) -> str:
         """Send the user's question + market data to Claude with conversation history."""
         system_blocks, messages, model, token_limit, use_thinking, thinking_budget = self._build_prompt(
@@ -6982,6 +6765,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
 
         return response_text
 
+    @traceable(name="slim_cross_market_data")
     def _slim_cross_market_data(self, data: dict) -> dict:
         """Pre-compress cross-market data. Now prioritizes pre-ranked candidates over raw dumps."""
         try:
@@ -7070,6 +6854,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             print(f"[Agent] _slim_cross_market_data error: {e}, passing raw data")
             return data
 
+    @traceable(name="parse_chatbox_response")
     def _parse_chatbox_response(self, raw_response: str, request_id: str = "") -> dict:
         """Parse chatbox mode response — conversational text with optional ticker extraction."""
         response_text = raw_response.strip()
@@ -7096,81 +6881,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             },
         }
 
-    def _inject_crypto_chart_urls(self, structured: dict) -> dict:
-        """
-        Post-processor: ensure every coin entry in the crypto response has a valid
-        TradingView chart URL. Runs after parse_response regardless of which model
-        generated the response, so charts always appear in the frontend.
-
-        Format: https://www.tradingview.com/chart/?symbol=BINANCE:{SYMBOL}USDT
-        Special cases: USDT/USDC are stablecoins — skip chart generation for them.
-        BTC uses BTCUSDT, ETH uses ETHUSDT (standard Binance perpetual/spot pairs).
-        """
-        _STABLECOINS = {"USDT", "USDC", "BUSD", "TUSD", "DAI", "FRAX", "LUSD", "PYUSD"}
-
-        def _make_chart(symbol: str) -> str:
-            sym = (symbol or "").upper().strip()
-            if not sym or sym in _STABLECOINS:
-                return ""
-            # Strip common suffixes already present (USDT, USD, PERP)
-            for suffix in ("USDT", "USD", "PERP", "-PERP"):
-                if sym.endswith(suffix) and len(sym) > len(suffix):
-                    sym = sym[: -len(suffix)]
-                    break
-            return f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
-
-        def _inject_list(items: list, symbol_key: str = "symbol") -> list:
-            """Add chart field to every item in a list that has a symbol."""
-            if not isinstance(items, list):
-                return items
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("chart"):
-                    continue  # already present — respect model's choice
-                sym = item.get(symbol_key) or item.get("coin") or item.get("ticker") or ""
-                url = _make_chart(str(sym))
-                if url:
-                    item["chart"] = url
-            return items
-
-        added = 0
-        before = sum(
-            sum(1 for i in lst if isinstance(i, dict) and not i.get("chart"))
-            for key in ("top_momentum", "perps_squeezes", "perps_crowded_longs",
-                        "perps_divergences", "perps_top_volume")
-            for lst in [structured.get(key, [])]
-            if isinstance(lst, list)
-        )
-
-        # Top-level coin arrays
-        for key in ("top_momentum", "perps_squeezes", "perps_crowded_longs",
-                    "perps_divergences", "perps_top_volume"):
-            structured[key] = _inject_list(structured.get(key, []))
-
-        # Nested: x_sentiment.top_social_movers
-        x_sent = structured.get("x_sentiment", {})
-        if isinstance(x_sent, dict):
-            x_sent["top_social_movers"] = _inject_list(x_sent.get("top_social_movers", []))
-
-        # Nested: funding_rate_analysis.{squeeze_candidates, crowded_longs}
-        fra = structured.get("funding_rate_analysis", {})
-        if isinstance(fra, dict):
-            fra["squeeze_candidates"] = _inject_list(fra.get("squeeze_candidates", []))
-            fra["crowded_longs"] = _inject_list(fra.get("crowded_longs", []))
-
-        after = sum(
-            sum(1 for i in lst if isinstance(i, dict) and not i.get("chart"))
-            for key in ("top_momentum", "perps_squeezes", "perps_crowded_longs",
-                        "perps_divergences", "perps_top_volume")
-            for lst in [structured.get(key, [])]
-            if isinstance(lst, list)
-        )
-        added = before - after
-        if added > 0:
-            print(f"[CRYPTO_CHARTS] Injected {added} TradingView chart URLs into crypto response")
-        return structured
-
+    @traceable(name="parse_response")
     def _parse_response(self, raw_response: str, request_id: str = "") -> dict:
         """
         Parse Claude's response into structured JSON.

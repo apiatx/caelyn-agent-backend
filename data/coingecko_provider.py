@@ -1,6 +1,17 @@
 import httpx
 from data.cache import cache
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 CRYPTO_CACHE_TTL = 120
 
 CRYPTO_TV_SYMBOLS = {
@@ -84,6 +95,7 @@ CRYPTO_TV_SYMBOLS = {
 }
 
 
+@traceable(name="coingecko_provider.get_crypto_tv_symbol")
 def get_crypto_tv_symbol(ticker: str) -> str:
     ticker = ticker.upper().strip()
     if ticker in CRYPTO_TV_SYMBOLS:
@@ -97,6 +109,7 @@ class CoinGeckoProvider:
     def __init__(self, api_key: str):
         self.api_key = api_key
 
+    @traceable(name="get")
     async def _get(self, endpoint: str, params: dict = None) -> dict | list:
         if params is None:
             params = {}
@@ -127,6 +140,7 @@ class CoinGeckoProvider:
             print(f"CoinGecko request failed ({endpoint}): {e}")
             return []
 
+    @traceable(name="get_top_coins")
     async def get_top_coins(self, limit: int = 25) -> list:
         return await self._get("coins/markets", {
             "vs_currency": "usd",
@@ -137,9 +151,11 @@ class CoinGeckoProvider:
             "price_change_percentage": "1h,24h,7d,30d",
         })
 
+    @traceable(name="get_trending")
     async def get_trending(self) -> dict:
         return await self._get("search/trending")
 
+    @traceable(name="get_coin_detail")
     async def get_coin_detail(self, coin_id: str) -> dict:
         return await self._get(f"coins/{coin_id}", {
             "localization": "false",
@@ -149,27 +165,33 @@ class CoinGeckoProvider:
             "developer_data": "true",
         })
 
+    @traceable(name="get_global_market")
     async def get_global_market(self) -> dict:
         data = await self._get("global")
         return data.get("data", {}) if isinstance(data, dict) else {}
 
+    @traceable(name="get_global_defi")
     async def get_global_defi(self) -> dict:
         data = await self._get("global/decentralized_finance_defi")
         return data.get("data", {}) if isinstance(data, dict) else {}
 
+    @traceable(name="get_derivatives_tickers")
     async def get_derivatives_tickers(self) -> list:
         return await self._get("derivatives")
 
+    @traceable(name="get_derivatives_exchange")
     async def get_derivatives_exchange(self, exchange_id: str = "binance_futures") -> dict:
         return await self._get(f"derivatives/exchanges/{exchange_id}", {
             "include_tickers": "all",
         })
 
+    @traceable(name="get_categories")
     async def get_categories(self) -> list:
         return await self._get("coins/categories", {
             "order": "market_cap_change_24h_desc",
         })
 
+    @traceable(name="get_top_gainers_losers")
     async def get_top_gainers_losers(self) -> dict:
         coins = await self.get_top_coins(50)
         if not coins:
@@ -183,6 +205,7 @@ class CoinGeckoProvider:
 
         return {"gainers": gainers, "losers": losers}
 
+    @traceable(name="get_crypto_dashboard")
     async def get_crypto_dashboard(self) -> dict:
         import asyncio
 
@@ -207,6 +230,7 @@ class CoinGeckoProvider:
             "gainers_losers": gainers_losers if not isinstance(gainers_losers, Exception) else {},
         }
 
+    @traceable(name="get_coin_deep_dive")
     async def get_coin_deep_dive(self, coin_ids: list) -> dict:
         import asyncio
         results = await asyncio.gather(

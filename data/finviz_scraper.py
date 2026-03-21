@@ -3,6 +3,17 @@ import httpx
 from bs4 import BeautifulSoup
 from data.cache import cache, FINVIZ_TTL
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 
 class FinvizScraper:
     """Scrapes Finviz for screener data that Polygon doesn't provide."""
@@ -15,6 +26,7 @@ class FinvizScraper:
         )
     }
 
+    @traceable(name="get_screener_results")
     async def get_screener_results(
         self, filters: str = "ta_topgainers"
     ) -> list:
@@ -67,38 +79,47 @@ class FinvizScraper:
             print(f"Finviz scraper error: {e}")
             return []
 
+    @traceable(name="get_oversold_stocks")
     async def get_oversold_stocks(self) -> list:
         """Get stocks with RSI below 30 — oversold bounce candidates."""
         return await self.get_screener_results("ta_oversold")
 
+    @traceable(name="get_overbought_stocks")
     async def get_overbought_stocks(self) -> list:
         """Get stocks with RSI above 70 — potential short or exit candidates."""
         return await self.get_screener_results("ta_overbought")
 
+    @traceable(name="get_unusual_volume")
     async def get_unusual_volume(self) -> list:
         """Get stocks with unusual volume — more than 2x average."""
         return await self.get_screener_results("ta_unusualvolume")
 
+    @traceable(name="get_new_highs")
     async def get_new_highs(self) -> list:
         """Get stocks hitting new 52-week highs — momentum leaders."""
         return await self.get_screener_results("ta_newhigh")
 
+    @traceable(name="get_new_lows")
     async def get_new_lows(self) -> list:
         """Get stocks hitting new 52-week lows — potential turnaround candidates."""
         return await self.get_screener_results("ta_newlow")
 
+    @traceable(name="get_most_volatile")
     async def get_most_volatile(self) -> list:
         """Get the most volatile stocks today."""
         return await self.get_screener_results("ta_mostvolatile")
 
+    @traceable(name="get_most_active")
     async def get_most_active(self) -> list:
         """Get the most actively traded stocks today."""
         return await self.get_screener_results("ta_mostactive")
 
+    @traceable(name="get_top_losers")
     async def get_top_losers(self) -> list:
         """Get biggest losers today — potential bounce plays."""
         return await self.get_screener_results("ta_toplosers")
 
+    @traceable(name="get_small_cap_gainers")
     async def get_small_cap_gainers(self) -> list:
         """Get small cap stocks (under $2B) with biggest gains today."""
         return await self._custom_screen({
@@ -106,6 +127,7 @@ class FinvizScraper:
             "o": "-change",
         })
 
+    @traceable(name="get_penny_stock_gainers")
     async def get_penny_stock_gainers(self) -> list:
         """Get stocks under $5 with biggest gains today."""
         return await self._custom_screen({
@@ -113,6 +135,7 @@ class FinvizScraper:
             "o": "-change",
         })
 
+    @traceable(name="get_high_short_float")
     async def get_high_short_float(self) -> list:
         """Get stocks with high short interest — squeeze candidates."""
         return await self._custom_screen({
@@ -120,6 +143,7 @@ class FinvizScraper:
             "o": "-shortinterestshare",
         })
 
+    @traceable(name="get_earnings_this_week")
     async def get_earnings_this_week(self) -> list:
         """Get stocks with earnings this week."""
         return await self._custom_screen({
@@ -127,6 +151,7 @@ class FinvizScraper:
             "o": "-marketcap",
         })
 
+    @traceable(name="get_insider_buying")
     async def get_insider_buying(self) -> list:
         """Get stocks with recent insider buying."""
         return await self._custom_screen({
@@ -134,6 +159,7 @@ class FinvizScraper:
             "o": "-change",
         })
 
+    @traceable(name="get_analyst_upgrades")
     async def get_analyst_upgrades(self) -> list:
         """Get stocks with recent analyst upgrades."""
         return await self._custom_screen({
@@ -141,6 +167,7 @@ class FinvizScraper:
             "o": "-change",
         })
 
+    @traceable(name="custom_screen")
     async def _custom_screen(self, params) -> list:
         """Run a custom Finviz screener with arbitrary filter parameters.
         Accepts either a dict of params or a URL query string like 'v=111&f=...'
@@ -265,6 +292,7 @@ class FinvizScraper:
             traceback.print_exc()
             return []
 
+    @traceable(name="get_stage2_breakouts")
     async def get_stage2_breakouts(self) -> list:
         """
         Stocks breaking out above the 200-day SMA with volume surge.
@@ -275,6 +303,7 @@ class FinvizScraper:
             "v=111&f=sh_avgvol_o500,sh_relvol_o2,ta_highlow52w_nh,ta_sma200_pa&ft=4&o=-change"
         )
 
+    @traceable(name="get_macd_crossovers")
     async def get_macd_crossovers(self) -> list:
         """
         Stocks with recent bullish MACD crossover + positive momentum.
@@ -284,6 +313,7 @@ class FinvizScraper:
             "v=111&f=sh_avgvol_o300,ta_change_u,ta_signal_buy&ft=4&o=-change"
         )
 
+    @traceable(name="get_rsi_recovery")
     async def get_rsi_recovery(self) -> list:
         """
         Stocks recovering from oversold (RSI was <30, now moving up).
@@ -293,6 +323,7 @@ class FinvizScraper:
             "v=111&f=sh_avgvol_o300,ta_rsi_os40,ta_change_u&ft=4&o=-change"
         )
 
+    @traceable(name="get_volume_breakouts")
     async def get_volume_breakouts(self) -> list:
         """
         Stocks with massive volume surge (3x+) AND price increase.
@@ -302,6 +333,7 @@ class FinvizScraper:
             "v=111&f=sh_avgvol_o200,sh_relvol_o3,ta_change_u5&ft=4&o=-relvol"
         )
 
+    @traceable(name="get_sma_crossover_stocks")
     async def get_sma_crossover_stocks(self) -> list:
         """
         Stocks where price just crossed above the 50-day SMA.
@@ -311,6 +343,7 @@ class FinvizScraper:
             "v=111&f=sh_avgvol_o300,ta_sma50_pa,ta_change_u&ft=4&o=-change"
         )
 
+    @traceable(name="get_small_cap_momentum")
     async def get_small_cap_momentum(self) -> list:
         """
         Small caps (under $2B) with volume surge + price increase + above SMA 20.
@@ -320,6 +353,7 @@ class FinvizScraper:
             "v=111&f=cap_smallunder,sh_avgvol_o200,sh_relvol_o2,ta_sma20_pa,ta_change_u&ft=4&o=-change"
         )
 
+    @traceable(name="get_gap_up_volume")
     async def get_gap_up_volume(self) -> list:
         """
         Stocks gapping up today on high volume.
@@ -329,6 +363,7 @@ class FinvizScraper:
             "v=111&f=sh_avgvol_o500,sh_relvol_o2,ta_change_u3&ft=4&o=-change"
         )
 
+    @traceable(name="get_consolidation_breakouts")
     async def get_consolidation_breakouts(self) -> list:
         """
         Stocks breaking out of tight consolidation (low volatility -> expansion).
@@ -338,6 +373,7 @@ class FinvizScraper:
             "v=111&f=sh_avgvol_o300,ta_change_u3,ta_volatility_wo3&ft=4&o=-change"
         )
 
+    @traceable(name="get_accumulation_stocks")
     async def get_accumulation_stocks(self) -> list:
         """
         Stocks showing accumulation pattern: up on above-average volume over multiple days.
@@ -347,6 +383,7 @@ class FinvizScraper:
             "v=111&f=sh_avgvol_o500,sh_relvol_o1.5,ta_change_u,ta_sma20_pa,ta_sma50_pa&ft=4&o=-relvol"
         )
 
+    @traceable(name="get_small_cap_squeeze_setups")
     async def get_small_cap_squeeze_setups(self) -> list:
         """
         Small caps with high short interest + volume surge.
@@ -356,60 +393,70 @@ class FinvizScraper:
             "v=111&f=cap_smallunder,sh_avgvol_o200,sh_relvol_o2,sh_short_o15,ta_change_u&ft=4&o=-change"
         )
 
+    @traceable(name="get_revenue_growth_leaders")
     async def get_revenue_growth_leaders(self) -> list:
         """Stocks with high revenue growth (>25% YoY) and positive price action."""
         return await self._custom_screen(
             "v=111&f=fa_salesqoq_o25,sh_avgvol_o300,ta_change_u&ft=4&o=-fa_salesqoq"
         )
 
+    @traceable(name="get_earnings_growth_leaders")
     async def get_earnings_growth_leaders(self) -> list:
         """Stocks with strong EPS growth and positive momentum."""
         return await self._custom_screen(
             "v=111&f=fa_epsqoq_o25,sh_avgvol_o300,ta_change_u&ft=4&o=-fa_epsqoq"
         )
 
+    @traceable(name="get_profitable_growth")
     async def get_profitable_growth(self) -> list:
         """Growing stocks that are actually profitable (positive margins + growth)."""
         return await self._custom_screen(
             "v=111&f=fa_epsqoq_o15,fa_opermargin_pos,fa_salesqoq_o15,sh_avgvol_o300&ft=4&o=-fa_salesqoq"
         )
 
+    @traceable(name="get_low_ps_high_growth")
     async def get_low_ps_high_growth(self) -> list:
         """Undervalued on P/S but growing fast — asymmetric value + growth."""
         return await self._custom_screen(
             "v=111&f=fa_ps_u5,fa_salesqoq_o20,sh_avgvol_o200&ft=4&o=-fa_salesqoq"
         )
 
+    @traceable(name="get_ebitda_positive_turn")
     async def get_ebitda_positive_turn(self) -> list:
         """Stocks with positive operating margins that recently turned profitable."""
         return await self._custom_screen(
             "v=111&f=fa_opermargin_pos,fa_salesqoq_o10,sh_avgvol_o200,ta_change_u&ft=4&o=-fa_salesqoq"
         )
 
+    @traceable(name="get_low_debt_growth")
     async def get_low_debt_growth(self) -> list:
         """Growing companies with low debt — financially healthy growers."""
         return await self._custom_screen(
             "v=111&f=fa_debteq_u0.5,fa_salesqoq_o15,sh_avgvol_o200&ft=4&o=-fa_salesqoq"
         )
 
+    @traceable(name="get_institutional_accumulation")
     async def get_institutional_accumulation(self) -> list:
         """Stocks with increasing institutional ownership + positive momentum."""
         return await self._custom_screen(
             "v=111&f=sh_avgvol_o500,sh_instown_o60,ta_change_u,ta_sma50_pa&ft=4&o=-change"
         )
 
+    @traceable(name="get_breaking_below_200sma")
     async def get_breaking_below_200sma(self) -> list:
         """Stocks breaking below 200 SMA — Stage 3/4 breakdown candidates."""
         return await self._custom_screen(
             "v=111&f=sh_avgvol_o300,ta_sma200_pb,ta_change_d&ft=4&o=change"
         )
 
+    @traceable(name="get_declining_earnings")
     async def get_declining_earnings(self) -> list:
         """Stocks with declining EPS — fundamental deterioration."""
         return await self._custom_screen(
             "v=111&f=fa_epsqoq_d,sh_avgvol_o300&ft=4&o=fa_epsqoq"
         )
 
+    @traceable(name="get_high_short_declining")
     async def get_high_short_declining(self) -> list:
         """High short interest + price declining — shorts are winning."""
         return await self._custom_screen(
@@ -417,6 +464,7 @@ class FinvizScraper:
         )
 
 
+@traceable(name="finviz_scraper.scrape_yahoo_trending")
 async def scrape_yahoo_trending() -> list:
     """
     Scrape Yahoo Finance trending tickers page.
@@ -478,6 +526,7 @@ async def scrape_yahoo_trending() -> list:
         return []
 
 
+@traceable(name="finviz_scraper.scrape_stockanalysis_trending")
 async def scrape_stockanalysis_trending() -> list:
     """
     Get most active / trending stocks via FMP API (gainers + actives).

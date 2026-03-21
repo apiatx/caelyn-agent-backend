@@ -14,6 +14,17 @@ import asyncio
 import httpx
 from data.cache import cache
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 ALTFINS_CACHE_TTL = 600
 ALTFINS_SIGNALS_CACHE_TTL = 900
 
@@ -50,6 +61,7 @@ class AltFINSProvider:
     def __init__(self, api_key: str):
         self.api_key = api_key
 
+    @traceable(name="get")
     async def _get(self, endpoint: str, params: dict = None, cache_key: str = None, ttl: int = ALTFINS_CACHE_TTL) -> dict | list:
         if cache_key:
             cached = cache.get(cache_key)
@@ -88,6 +100,7 @@ class AltFINSProvider:
             print(f"[ALTFINS] Request failed ({endpoint}): {e}")
             return []
 
+    @traceable(name="get_coin_analytics")
     async def get_coin_analytics(self, symbol: str, interval: str = "DAILY") -> dict:
         """
         Get full screener data for a specific coin.
@@ -147,6 +160,7 @@ class AltFINSProvider:
 
         return result
 
+    @traceable(name="get_signals_feed")
     async def get_signals_feed(self, signal_key: str, trend: str = "BULLISH", limit: int = 15) -> list:
         """
         Get recent signals from the signals feed.
@@ -168,6 +182,7 @@ class AltFINSProvider:
             return data.get("content", [])
         return data if isinstance(data, list) else []
 
+    @traceable(name="get_crypto_scanner_data")
     async def get_crypto_scanner_data(self) -> dict:
         """
         Main method for the crypto scanner.
@@ -232,6 +247,7 @@ class AltFINSProvider:
             },
         }
 
+    @traceable(name="get_coin_deep_dive")
     async def get_coin_deep_dive(self, symbol: str) -> dict:
         """
         Full deep dive on a single coin — daily + 4h screener data + recent signals.

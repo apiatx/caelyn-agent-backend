@@ -15,6 +15,17 @@ import asyncio
 import httpx
 from data.cache import cache
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 POLYMARKET_TTL = 120          # 2 minutes — markets move fast
 POLYMARKET_TAG_TTL = 180      # 3 minutes for tag-specific queries
 GAMMA_BASE = "https://gamma-api.polymarket.com"
@@ -29,6 +40,7 @@ class PolymarketProvider:
 
     # ── public methods ──────────────────────────────────────────────
 
+    @traceable(name="get_top_events")
     async def get_top_events(self, limit: int = 50) -> list[dict]:
         """Return the top active events sorted by 24h volume."""
         cache_key = f"polymarket:top_events:{limit}"
@@ -53,6 +65,7 @@ class PolymarketProvider:
             print(f"[Polymarket] get_top_events error: {e}")
             return []
 
+    @traceable(name="get_events_by_tag")
     async def get_events_by_tag(self, tag_slug: str, limit: int = 50) -> list[dict]:
         """Return active events for a specific tag (e.g. 'earnings', 'crypto', 'finance')."""
         cache_key = f"polymarket:tag:{tag_slug}:{limit}"
@@ -78,6 +91,7 @@ class PolymarketProvider:
             print(f"[Polymarket] get_events_by_tag({tag_slug}) error: {e}")
             return []
 
+    @traceable(name="get_macro_prediction_context")
     async def get_macro_prediction_context(self) -> dict:
         """
         Build a rich context dict suitable for the agent's prediction_markets
@@ -123,6 +137,7 @@ class PolymarketProvider:
         cache.set(cache_key, context, POLYMARKET_TTL)
         return context
 
+    @traceable(name="search_events")
     async def search_events(self, query: str, limit: int = 20) -> list[dict]:
         """
         Search for events matching a free-text query.
@@ -143,6 +158,7 @@ class PolymarketProvider:
 
     # ── internal helpers ────────────────────────────────────────────
 
+    @traceable(name="fetch_events")
     async def _fetch_events(self, params: dict) -> list[dict]:
         """Raw HTTP call to Gamma API /events endpoint."""
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
@@ -155,6 +171,7 @@ class PolymarketProvider:
             data = resp.json()
             return data if isinstance(data, list) else []
 
+    @traceable(name="normalise_events")
     def _normalise_events(self, raw_events: list[dict]) -> list[dict]:
         """
         Slim events down to essential fields to keep context window usage low

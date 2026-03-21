@@ -1,5 +1,16 @@
 import httpx
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 
 class AlphaVantageProvider:
     """
@@ -15,6 +26,7 @@ class AlphaVantageProvider:
     def __init__(self, api_key: str):
         self.api_key = api_key
 
+    @traceable(name="get_news_sentiment")
     async def get_news_sentiment(self, ticker: str = None, topics: str = None) -> dict:
         """
         Get AI-powered news sentiment analysis.
@@ -112,6 +124,7 @@ class AlphaVantageProvider:
             print(f"Alpha Vantage news sentiment error: {e}")
             return {"ticker": ticker, "articles": [], "error": str(e)}
 
+    @traceable(name="get_market_news_sentiment")
     async def get_market_news_sentiment(self, topic: str = "financial_markets") -> dict:
         """
         Get broad market news sentiment for a topic.

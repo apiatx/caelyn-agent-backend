@@ -1,3 +1,14 @@
+
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
 """
 Quantitative scoring engine for ranking stock candidates.
 Runs BEFORE Claude — no AI calls, pure math.
@@ -82,6 +93,7 @@ CATEGORY_MARKET_CAP_FLOORS = {
 }
 
 
+@traceable(name="scoring_engine.get_market_cap")
 def get_market_cap(ticker_data: dict) -> float | None:
     """Extract market cap from any available data source."""
     for source_key in ["details", "overview", "snapshot"]:
@@ -95,6 +107,7 @@ def get_market_cap(ticker_data: dict) -> float | None:
     return None
 
 
+@traceable(name="scoring_engine.passes_market_cap_filter")
 def passes_market_cap_filter(ticker_data: dict, category: str) -> bool:
     """
     Check if a ticker passes the market cap filter for this category.
@@ -117,6 +130,7 @@ def passes_market_cap_filter(ticker_data: dict, category: str) -> bool:
     return True
 
 
+@traceable(name="scoring_engine.apply_market_cap_score_adjustment")
 def apply_market_cap_score_adjustment(base_score: float, ticker_data: dict, category: str) -> float:
     """
     Apply market cap-based score adjustments.
@@ -147,6 +161,7 @@ def apply_market_cap_score_adjustment(base_score: float, ticker_data: dict, cate
         return base_score * 0.70
 
 
+@traceable(name="scoring_engine.score_for_trades")
 def score_for_trades(ticker_data: dict) -> float:
     """
     Score a ticker for short-term trading setup quality.
@@ -395,6 +410,7 @@ def score_for_trades(ticker_data: dict) -> float:
     return round(min(max(score, 0), 100), 1)
 
 
+@traceable(name="scoring_engine.score_for_investments")
 def score_for_investments(ticker_data: dict) -> float:
     """
     Score a ticker for long-term investment potential.
@@ -560,6 +576,7 @@ def score_for_investments(ticker_data: dict) -> float:
     return round(min(score, 100), 1)
 
 
+@traceable(name="scoring_engine.score_for_squeeze")
 def score_for_squeeze(ticker_data: dict) -> float:
     """
     Score a ticker for short squeeze potential.
@@ -677,6 +694,7 @@ def score_for_squeeze(ticker_data: dict) -> float:
     return round(min(score, 100), 1)
 
 
+@traceable(name="scoring_engine.score_for_fundamentals")
 def score_for_fundamentals(ticker_data: dict) -> float:
     """
     Score a ticker for improving fundamentals.
@@ -765,6 +783,7 @@ def score_for_fundamentals(ticker_data: dict) -> float:
     return round(min(score, 100), 1)
 
 
+@traceable(name="scoring_engine.score_for_bearish")
 def score_for_bearish(ticker_data: dict) -> float:
     """
     Score a ticker for bearish/breakdown potential.
@@ -834,6 +853,7 @@ def score_for_bearish(ticker_data: dict) -> float:
     return round(min(score, 100), 1)
 
 
+@traceable(name="scoring_engine.score_for_small_cap")
 def score_for_small_cap(ticker_data: dict) -> float:
     """
     Score for speculative small cap plays.
@@ -884,6 +904,7 @@ SCORING_FUNCTIONS = {
 }
 
 
+@traceable(name="scoring_engine.rank_candidates")
 def rank_candidates(candidates: dict, category: str, top_n: int = 12) -> list:
     """
     Takes a dict of {ticker: raw_data}, filters by market cap,

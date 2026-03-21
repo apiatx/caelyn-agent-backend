@@ -18,7 +18,18 @@ from data.ta_utils import (
     compute_technicals_from_bars,
 )
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
 
+
+@traceable(name="ta_signal_engine.compute_atr")
 def compute_atr(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> float | None:
     if len(highs) < period + 1 or len(lows) < period + 1 or len(closes) < period + 1:
         return None
@@ -35,6 +46,7 @@ def compute_atr(highs: list[float], lows: list[float], closes: list[float], peri
     return sum(true_ranges[-period:]) / period
 
 
+@traceable(name="ta_signal_engine.detect_signals")
 def _detect_signals(
     closes: list[float],
     highs: list[float],
@@ -230,6 +242,7 @@ def _detect_signals(
     return signals
 
 
+@traceable(name="ta_signal_engine.compute_ta_score")
 def _compute_ta_score(signals: list[dict]) -> int:
     score = 50
     bullish_sum = sum(s["strength"] for s in signals if s["direction"] == "bullish")
@@ -252,6 +265,7 @@ def _compute_ta_score(signals: list[dict]) -> int:
     return max(0, min(100, score))
 
 
+@traceable(name="ta_signal_engine.classify_setup")
 def _classify_setup(signals: list[dict], price: float, indicators: dict) -> str:
     names = {s["name"] for s in signals if s["direction"] == "bullish"}
     bearish_names = {s["name"] for s in signals if s["direction"] == "bearish"}
@@ -269,6 +283,7 @@ def _classify_setup(signals: list[dict], price: float, indicators: dict) -> str:
     return "technical_setup"
 
 
+@traceable(name="ta_signal_engine.build_trade_plan")
 def _build_trade_plan(
     price: float,
     highs: list[float],
@@ -319,6 +334,7 @@ def _build_trade_plan(
     }
 
 
+@traceable(name="ta_signal_engine.analyze_bars")
 def analyze_bars(
     bars: list[dict],
     ticker: str = "",
@@ -449,6 +465,7 @@ def analyze_bars(
     }
 
 
+@traceable(name="ta_signal_engine.format_indicator_signals")
 def _format_indicator_signals(signals: list[dict], indicators: dict, vol_ratio: float) -> list[str]:
     formatted = []
     name_map = {
@@ -477,6 +494,7 @@ def _format_indicator_signals(signals: list[dict], indicators: dict, vol_ratio: 
     return formatted
 
 
+@traceable(name="ta_signal_engine.pick_pattern_label")
 def _pick_pattern_label(signals: list[dict], setup_type: str) -> str:
     names = {s["name"] for s in signals}
     if "stage2_uptrend" in names:

@@ -2,6 +2,17 @@ from fredapi import Fred
 from datetime import datetime, timedelta
 from data.cache import cache, FRED_TTL
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 
 class FredProvider:
     """
@@ -26,6 +37,7 @@ class FredProvider:
             return {"error": "FRED API key not configured"}
         return None
 
+    @traceable(name="get_fed_funds_rate")
     def get_fed_funds_rate(self) -> dict:
         """Get the effective federal funds rate (what the Fed sets)."""
         check = self._check_init()
@@ -52,6 +64,7 @@ class FredProvider:
             print(f"FRED fed funds rate error: {e}")
             return {"error": str(e)}
 
+    @traceable(name="get_inflation_cpi")
     def get_inflation_cpi(self) -> dict:
         """
         Get CPI (Consumer Price Index) and calculate YoY inflation rate.
@@ -97,6 +110,7 @@ class FredProvider:
             print(f"FRED CPI error: {e}")
             return {"error": str(e)}
 
+    @traceable(name="get_core_pce")
     def get_core_pce(self) -> dict:
         """
         Get Core PCE — the Fed's PREFERRED inflation measure.
@@ -138,6 +152,7 @@ class FredProvider:
             print(f"FRED Core PCE error: {e}")
             return {"error": str(e)}
 
+    @traceable(name="get_unemployment")
     def get_unemployment(self) -> dict:
         """Get the unemployment rate."""
         check = self._check_init()
@@ -164,6 +179,7 @@ class FredProvider:
             print(f"FRED unemployment error: {e}")
             return {"error": str(e)}
 
+    @traceable(name="get_gdp_growth")
     def get_gdp_growth(self) -> dict:
         """Get real GDP growth rate (quarterly, annualized)."""
         check = self._check_init()
@@ -193,6 +209,7 @@ class FredProvider:
             print(f"FRED GDP error: {e}")
             return {"error": str(e)}
 
+    @traceable(name="get_ten_year_yield")
     def get_ten_year_yield(self) -> dict:
         """Get 10-year Treasury yield — the benchmark for mortgages and valuations."""
         check = self._check_init()
@@ -221,6 +238,7 @@ class FredProvider:
             print(f"FRED 10Y yield error: {e}")
             return {"error": str(e)}
 
+    @traceable(name="get_two_year_yield")
     def get_two_year_yield(self) -> dict:
         """Get 2-year Treasury yield — key for yield curve analysis."""
         check = self._check_init()
@@ -249,6 +267,7 @@ class FredProvider:
             print(f"FRED 2Y yield error: {e}")
             return {"error": str(e)}
 
+    @traceable(name="get_yield_curve_spread")
     def get_yield_curve_spread(self) -> dict:
         """
         Get the 10Y-2Y yield spread (yield curve).
@@ -293,6 +312,7 @@ class FredProvider:
             print(f"FRED yield curve error: {e}")
             return {"error": str(e)}
 
+    @traceable(name="get_vix")
     def get_vix(self) -> dict:
         """Get the VIX (fear index) — measures market volatility expectations."""
         check = self._check_init()
@@ -334,6 +354,7 @@ class FredProvider:
             print(f"FRED VIX error: {e}")
             return {"error": str(e)}
 
+    @traceable(name="get_initial_jobless_claims")
     def get_initial_jobless_claims(self) -> dict:
         """
         Get weekly initial jobless claims.
@@ -380,6 +401,7 @@ class FredProvider:
             print(f"FRED jobless claims error: {e}")
             return {"error": str(e)}
 
+    @traceable(name="get_full_macro_dashboard")
     def get_full_macro_dashboard(self) -> dict:
         """
         Complete macroeconomic picture. This is the motherlode —
@@ -404,6 +426,7 @@ class FredProvider:
         cache.set(cache_key, result, FRED_TTL)
         return result
 
+    @traceable(name="get_quick_macro")
     def get_quick_macro(self) -> dict:
         """
         Lighter version — just the 4 most important indicators.

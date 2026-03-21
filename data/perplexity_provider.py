@@ -18,6 +18,17 @@ import asyncio
 import httpx
 from data.cache import cache
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 PERPLEXITY_TTL = 300       # 5 minutes
 PERPLEXITY_NEWS_TTL = 600  # 10 minutes for broad market news
 
@@ -54,6 +65,7 @@ class PerplexityProvider:
             "Content-Type": "application/json",
         }
 
+    @traceable(name="search")
     async def _search(self, query, max_results: int = 10,
                       search_depth: str = "basic", topic: str = "news",
                       domain_filter: list = None,
@@ -113,6 +125,7 @@ class PerplexityProvider:
             print(f"[Perplexity] Error: {e}")
             return {"error": str(e), "results": []}
 
+    @traceable(name="search_via_chat")
     async def _search_via_chat(self, query, max_results: int = 10,
                                topic: str = "news", domain_filter: list = None,
                                recency: str = None) -> dict:
@@ -161,6 +174,7 @@ class PerplexityProvider:
         except Exception as e:
             return {"error": str(e), "results": []}
 
+    @traceable(name="normalize_response")
     def _normalize_response(self, raw: dict) -> dict:
         """
         Convert Perplexity Search API response to Brave/Tavily-compatible format.
@@ -185,6 +199,7 @@ class PerplexityProvider:
             "results": results,
         }
 
+    @traceable(name="normalize_chat_response")
     def _normalize_chat_response(self, raw: dict, max_results: int = 10) -> dict:
         """Normalize chat-completions response to the same shape as _normalize_response."""
         import re as _re
@@ -212,6 +227,7 @@ class PerplexityProvider:
 
     # -- Public methods matching BraveProvider/TavilyProvider interface --
 
+    @traceable(name="search_ticker_batch")
     async def search_ticker_batch(self, tickers: list,
                                   focus: str = "analyst_ratings_news") -> dict:
         """
@@ -247,6 +263,7 @@ class PerplexityProvider:
         cache.set(cache_key, result, PERPLEXITY_TTL)
         return result
 
+    @traceable(name="parse_batch_results")
     def _parse_batch_results(self, tickers: list, raw: dict) -> dict:
         """Parse results and attribute them to tickers."""
         parsed = {t.upper(): {"ticker": t.upper(), "headlines": [], "snippets": []}
@@ -282,6 +299,7 @@ class PerplexityProvider:
 
         return parsed
 
+    @traceable(name="enrich_tickers_batched")
     async def enrich_tickers_batched(self, tickers: list) -> dict:
         """
         Full enrichment for up to 12 tickers.
@@ -324,6 +342,7 @@ class PerplexityProvider:
         cache.set(cache_key, combined, PERPLEXITY_TTL)
         return combined
 
+    @traceable(name="get_collab_findings")
     async def get_collab_findings(self, prompt: str) -> str:
         """
         Free-form analytical response using sonar-reasoning-pro with
@@ -372,6 +391,7 @@ class PerplexityProvider:
             print(f"[Perplexity][collab] get_collab_findings error: {e}")
             return ""
 
+    @traceable(name="get_market_news")
     async def get_market_news(self, topic: str = "stock market today") -> dict:
         """Get broad market news -- same interface as BraveProvider/TavilyProvider."""
         cache_key = f"pplx:market_news:{topic.replace(' ', '_')[:30]}"
@@ -406,6 +426,7 @@ class PerplexityProvider:
         cache.set(cache_key, result, PERPLEXITY_NEWS_TTL)
         return result
 
+    @traceable(name="get_ticker_news_sentiment")
     async def get_ticker_news_sentiment(self, ticker: str, company_name: str = "") -> dict:
         """Get news + sentiment for a single ticker."""
         ticker = ticker.upper()
@@ -506,6 +527,7 @@ class PerplexityProvider:
         "agriculture": {"proxy": "DBA", "tv_symbol": "AMEX:DBA", "tv_futures": "", "tv_etf": "AMEX:DBA", "type": "agriculture"},
     }
 
+    @traceable(name="get_trending_commodities")
     async def get_trending_commodities(self) -> list:
         """
         Use Perplexity Sonar to get current trending commodities with prices/moves,
@@ -581,6 +603,7 @@ class PerplexityProvider:
             print(f"[Perplexity] Sonar commodities error: {e}")
             return []
 
+    @traceable(name="parse_commodity_response")
     def _parse_commodity_response(self, content: str, citations: list = None) -> list:
         """Parse Sonar response into structured commodity data with TradingView symbols."""
         import re

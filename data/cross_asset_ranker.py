@@ -12,6 +12,17 @@ Philosophy: SCORING RANKS, NOT FILTERS.
 import json
 from typing import Optional
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 
 STOCK_MCAP_FLOOR = 100_000_000
 CRYPTO_MCAP_FLOOR = 50_000_000
@@ -78,6 +89,7 @@ MIN_COMMODITIES = 2     # Hard floor — always at least 2 commodities
 MAX_FINAL_PICKS = 15
 
 
+@traceable(name="cross_asset_ranker.rank_cross_market")
 def rank_cross_market(stock_data: dict, crypto_data: dict,
                       commodity_data: dict, macro_data: dict) -> dict:
     debug = {
@@ -204,6 +216,7 @@ def rank_cross_market(stock_data: dict, crypto_data: dict,
     }
 
 
+@traceable(name="cross_asset_ranker.cap_tier")
 def _cap_tier(candidate: dict) -> str:
     mcap = candidate.get("market_cap")
     if mcap is None:
@@ -220,6 +233,7 @@ def _cap_tier(candidate: dict) -> str:
     return "small"
 
 
+@traceable(name="cross_asset_ranker.detect_macro_regime")
 def _detect_macro_regime(macro_data: dict) -> str:
     if not isinstance(macro_data, dict) or "error" in macro_data:
         return "unknown"
@@ -257,6 +271,7 @@ def _detect_macro_regime(macro_data: dict) -> str:
     return "neutral"
 
 
+@traceable(name="cross_asset_ranker.extract_stock_candidates")
 def _extract_stock_candidates(stock_data: dict, debug: dict) -> list:
     if not isinstance(stock_data, dict) or "error" in stock_data:
         return []
@@ -317,6 +332,7 @@ def _extract_stock_candidates(stock_data: dict, debug: dict) -> list:
     return candidates
 
 
+@traceable(name="cross_asset_ranker.extract_crypto_candidates")
 def _extract_crypto_candidates(crypto_data: dict, debug: dict) -> list:
     if not isinstance(crypto_data, dict) or "error" in crypto_data:
         return []
@@ -431,6 +447,7 @@ def _extract_crypto_candidates(crypto_data: dict, debug: dict) -> list:
     return list(seen.values())
 
 
+@traceable(name="cross_asset_ranker.extract_commodity_candidates")
 def _extract_commodity_candidates(commodity_data: dict, debug: dict) -> list:
     if not isinstance(commodity_data, dict) or "error" in commodity_data:
         return []
@@ -503,6 +520,7 @@ def _extract_commodity_candidates(commodity_data: dict, debug: dict) -> list:
     return candidates
 
 
+@traceable(name="cross_asset_ranker.apply_soft_filters")
 def _apply_soft_filters(candidates: list, asset_type: str, debug: dict) -> list:
     kept = []
     rejection_key = "stocks" if asset_type == "stock" else "crypto"
@@ -544,6 +562,7 @@ def _apply_soft_filters(candidates: list, asset_type: str, debug: dict) -> list:
     return kept
 
 
+@traceable(name="cross_asset_ranker.score_candidates")
 def _score_candidates(candidates: list, asset_type: str):
     for c in candidates:
         factors = {}
@@ -681,6 +700,7 @@ def _score_candidates(candidates: list, asset_type: str):
             c["cap_tier"] = _cap_tier(c)
 
 
+@traceable(name="cross_asset_ranker.normalize_within_class")
 def _normalize_within_class(candidates: list):
     if not candidates:
         return
@@ -694,6 +714,7 @@ def _normalize_within_class(candidates: list):
         c["normalized_score"] = ((c["raw_score"] - min_s) / spread) * 100
 
 
+@traceable(name="cross_asset_ranker.apply_regime_penalty")
 def _apply_regime_penalty(stocks: list, cryptos: list, commodities: list, regime: str):
     if regime == "risk_off":
         for c in cryptos:
@@ -725,6 +746,7 @@ def _apply_regime_penalty(stocks: list, cryptos: list, commodities: list, regime
                 c["factor_detail"]["regime_penalty"] = -0.3
 
 
+@traceable(name="cross_asset_ranker.assemble_with_quotas")
 def _assemble_with_quotas(stocks: list, cryptos: list,
                           commodities: list, debug: dict, etfs: list = None) -> list:
     large = sorted([s for s in stocks if _cap_tier(s) == "large"], key=lambda x: x.get("normalized_score", 0), reverse=True)
@@ -737,6 +759,7 @@ def _assemble_with_quotas(stocks: list, cryptos: list,
     final = []
     used_symbols = set()
 
+    @traceable(name="cross_asset_ranker.add")
     def _add(candidate, is_backfill=False):
         if candidate["symbol"] in used_symbols:
             return False

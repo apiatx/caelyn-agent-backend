@@ -1,5 +1,16 @@
 import json
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 
 MAX_TOTAL_CHARS = 80000
 MAX_ARRAY_ITEMS = 15
@@ -38,6 +49,7 @@ MARKET_DATA_KEEP = {
 }
 
 
+@traceable(name="data_compressor.compress_data")
 def compress_data(data: dict, scan_type: str = "general") -> dict:
     if not isinstance(data, dict):
         return data
@@ -165,6 +177,7 @@ def _aggressive_truncate(data: dict, max_chars: int) -> dict:
     return result
 
 
+@traceable(name="data_compressor.compress_for_claude")
 def compress_for_claude(market_data: dict, category: str) -> dict:
     if not market_data or not isinstance(market_data, dict):
         return market_data
@@ -200,6 +213,7 @@ def compress_for_claude(market_data: dict, category: str) -> dict:
     return compressed
 
 
+@traceable(name="data_compressor.compress_best_trades")
 def _compress_best_trades(data: dict) -> dict:
     top_trades = data.get("top_trades", [])
     bearish = data.get("bearish_setups", [])
@@ -288,6 +302,7 @@ def _compress_best_trades(data: dict) -> dict:
     }
 
 
+@traceable(name="data_compressor.compress_briefing")
 def _compress_briefing(data: dict) -> dict:
     highlights = data.get("pre_computed_highlights", data.get("highlights", {}))
 
@@ -335,6 +350,7 @@ def _compress_briefing(data: dict) -> dict:
     }
 
 
+@traceable(name="data_compressor.compress_cross_asset_trending")
 def _compress_cross_asset_trending(data: dict) -> dict:
     compressed = {}
 
@@ -454,6 +470,7 @@ def _compress_cross_asset_trending(data: dict) -> dict:
     return compressed
 
 
+@traceable(name="data_compressor.compress_trending")
 def _compress_trending(data: dict) -> dict:
     if "picks" in data or "trending_tickers" in data:
         compressed = {k: v for k, v in data.items()
@@ -483,6 +500,7 @@ def _compress_trending(data: dict) -> dict:
     return _compress_generic(data)
 
 
+@traceable(name="data_compressor.compress_screener")
 def _compress_screener(data: dict) -> dict:
     rows = []
     for row in data.get("rows", []):
@@ -504,6 +522,7 @@ def _compress_screener(data: dict) -> dict:
     }
 
 
+@traceable(name="data_compressor.compress_crypto")
 def _compress_crypto(data: dict) -> dict:
     compressed = {}
 
@@ -954,6 +973,7 @@ def _compress_crypto(data: dict) -> dict:
     return compressed
 
 
+@traceable(name="data_compressor.compress_sector")
 def _compress_sector(data: dict) -> dict:
     """Preserve all critical sector rotation fields Claude needs for a complete response."""
     compressed = {}
@@ -1008,12 +1028,14 @@ def _compress_sector(data: dict) -> dict:
     return compressed
 
 
+@traceable(name="data_compressor.compress_macro")
 def _compress_macro(data: dict) -> dict:
     compressed = dict(data)
     compressed["news_context"] = _trim_news(data.get("news_context", {}))
     return compressed
 
 
+@traceable(name="data_compressor.compress_generic")
 def _compress_generic(data: dict) -> dict:
     def _clean(obj, depth=0):
         if depth > 5:
@@ -1029,6 +1051,7 @@ def _compress_generic(data: dict) -> dict:
     return _clean(data)
 
 
+@traceable(name="data_compressor.trim_news")
 def _trim_news(news_context: dict) -> dict:
     if not isinstance(news_context, dict):
         return news_context

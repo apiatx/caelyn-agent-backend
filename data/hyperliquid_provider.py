@@ -1,6 +1,17 @@
 import asyncio
 import time
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 import httpx
 
 from data.cache import cache
@@ -12,6 +23,7 @@ HL_FUNDING_HISTORY_CACHE_TTL = 300
 class HyperliquidProvider:
     BASE_URL = "https://api.hyperliquid.xyz/info"
 
+    @traceable(name="post")
     async def _post(self, payload: dict, cache_key: str = None, ttl: int = HL_CACHE_TTL):
         if cache_key:
             cached = cache.get(cache_key)
@@ -36,6 +48,7 @@ class HyperliquidProvider:
             print(f"[HYPERLIQUID] Request failed: {e}")
             return []
 
+    @traceable(name="get_all_perps")
     async def get_all_perps(self) -> dict:
         data = await self._post(
             {"type": "metaAndAssetCtxs"},
@@ -87,6 +100,7 @@ class HyperliquidProvider:
 
         return {"universe": universe, "assets": assets}
 
+    @traceable(name="get_funding_analysis")
     async def get_funding_analysis(self) -> dict:
         perp_data = await self.get_all_perps()
         assets = perp_data.get("assets", [])
@@ -208,6 +222,7 @@ class HyperliquidProvider:
             } for a in top_losers],
         }
 
+    @traceable(name="get_funding_history")
     async def get_funding_history(self, coin: str, hours_back: int = 72) -> dict:
         start_time = int((time.time() - (hours_back * 3600)) * 1000)
 
@@ -251,6 +266,7 @@ class HyperliquidProvider:
             "recent_rates": [round(r, 8) for r in rates[-12:]],
         }
 
+    @traceable(name="get_crypto_dashboard")
     async def get_crypto_dashboard(self) -> dict:
         funding_analysis = await self.get_funding_analysis()
 
@@ -285,6 +301,7 @@ class HyperliquidProvider:
         "SPACEX", "STRIPE", "OPENAI",
     }
 
+    @traceable(name="get_overnight_signal")
     async def get_overnight_signal(self) -> dict:
         """Compact risk-on/risk-off signal from equity, commodity, and BTC perps.
 
@@ -319,6 +336,7 @@ class HyperliquidProvider:
         if not equities and not commodities and not btc:
             return {}
 
+        @traceable(name="compact")
         def _compact(asset_list, top_n=10):
             """Return top movers by absolute price change, compact format."""
             sorted_list = sorted(asset_list, key=lambda x: abs(x["price_change_24h_pct"]), reverse=True)

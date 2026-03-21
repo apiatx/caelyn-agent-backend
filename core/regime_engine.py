@@ -19,11 +19,23 @@ defaulting to neutral 0.2 when candles are unavailable.
 import asyncio
 import time as _time
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 _regime_cache = {"result": None, "expires": 0}
 _last_known_regime = None
 REGIME_CACHE_TTL = 600
 
 
+@traceable(name="regime_engine.detect_market_regime")
 async def detect_market_regime(market_data_service) -> dict:
     global _last_known_regime
     now = _time.time()
@@ -61,6 +73,7 @@ async def detect_market_regime(market_data_service) -> dict:
     return result
 
 
+@traceable(name="regime_engine.gather_regime_signals")
 async def _gather_regime_signals(svc) -> dict:
     from data.market_data_service import CandleBudget, REGIME_CANDLE_TTL
 
@@ -130,6 +143,7 @@ async def _gather_regime_signals(svc) -> dict:
     return signals
 
 
+@traceable(name="regime_engine.classify_regime")
 def _classify_regime(signals: dict) -> dict:
     spy_up = signals.get("spy_above_200dma")
     vix = signals.get("vix_level")

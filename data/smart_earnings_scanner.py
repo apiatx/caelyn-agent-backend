@@ -27,6 +27,17 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 import httpx
 
 CACHE_FILE = Path("data/earnings_smart_cache.json")
@@ -35,6 +46,7 @@ CACHE_TTL = 6 * 3600  # 6 hours
 MAX_TIER2_PER_DAY = 15
 
 
+@traceable(name="smart_earnings_scanner.read_cache")
 def _read_cache() -> dict:
     """Read the file-backed smart earnings cache."""
     if CACHE_FILE.exists():
@@ -46,6 +58,7 @@ def _read_cache() -> dict:
     return {}
 
 
+@traceable(name="smart_earnings_scanner.write_cache")
 def _write_cache(data: dict):
     """Write to disk so cache survives restarts."""
     CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -53,6 +66,7 @@ def _write_cache(data: dict):
         json.dump(data, f, separators=(",", ":"))
 
 
+@traceable(name="smart_earnings_scanner.get_cached_smart_day")
 def get_cached_smart_day(date_str: str) -> dict | None:
     """Return cached smart data for a date, or None if stale/missing."""
     data = _read_cache()
@@ -65,6 +79,7 @@ def get_cached_smart_day(date_str: str) -> dict | None:
     return day
 
 
+@traceable(name="smart_earnings_scanner.get_cache_status")
 def get_cache_status() -> dict:
     """Return cache freshness info for UI display."""
     data = _read_cache()
@@ -81,6 +96,7 @@ def get_cache_status() -> dict:
     }
 
 
+@traceable(name="smart_earnings_scanner.fetch_week_tickers")
 async def _fetch_week_tickers(finnhub_client, reference_date: str | None = None) -> dict[str, list[dict]]:
     """Fetch earnings tickers for the week containing reference_date.
     If reference_date is None, uses today. Accepts any date string (YYYY-MM-DD).
@@ -132,6 +148,7 @@ async def _fetch_week_tickers(finnhub_client, reference_date: str | None = None)
 
 # ── GROK BATCH SCAN ─────────────────────────────────────────────
 
+@traceable(name="smart_earnings_scanner.grok_batch_scan")
 async def _grok_batch_scan(xai_key: str, tickers: list[str]) -> list[dict]:
     """Single Grok x_search call for social buzz on all earnings tickers."""
     if not xai_key or not tickers:
@@ -193,6 +210,7 @@ async def _grok_batch_scan(xai_key: str, tickers: list[str]) -> list[dict]:
 
 # ── PERPLEXITY BATCH SCAN ────────────────────────────────────────
 
+@traceable(name="smart_earnings_scanner.perplexity_batch_scan")
 async def _perplexity_batch_scan(pplx_key: str, tickers: list[str]) -> list[dict]:
     """Single Perplexity call for news signals on all earnings tickers."""
     if not pplx_key or not tickers:
@@ -247,6 +265,7 @@ async def _perplexity_batch_scan(pplx_key: str, tickers: list[str]) -> list[dict
         return []
 
 
+@traceable(name="smart_earnings_scanner.parse_json_array")
 def _parse_json_array(text: str) -> list[dict]:
     """Extract a JSON array from LLM output that may contain markdown fencing."""
     text = text.strip()
@@ -269,6 +288,7 @@ def _parse_json_array(text: str) -> list[dict]:
     return []
 
 
+@traceable(name="smart_earnings_scanner.build_tier2")
 def _build_tier2(
     by_date: dict[str, list[dict]],
     grok_results: list[dict],
@@ -340,6 +360,7 @@ def _build_tier2(
     return result
 
 
+@traceable(name="smart_earnings_scanner.run_smart_scan")
 async def run_smart_scan(
     finnhub_client,
     xai_key: str,

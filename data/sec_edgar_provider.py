@@ -5,6 +5,17 @@ from datetime import datetime, timedelta
 from data.cache import cache
 from data import edgar_cache
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 EDGAR_CIK_TTL = 604800
 EDGAR_FILINGS_TTL = 900
 EDGAR_INSIDER_TTL = 1800
@@ -30,6 +41,7 @@ _circuit_opened_at: float = 0.0
 CIRCUIT_BREAKER_COOLDOWN = 300
 
 
+@traceable(name="sec_edgar_provider.refill_tokens")
 def _refill_tokens():
     global _token_bucket_tokens, _token_bucket_last
     now = time.time()
@@ -44,6 +56,7 @@ def _refill_tokens():
     _token_bucket_last = now
 
 
+@traceable(name="sec_edgar_provider.acquire_token")
 async def _acquire_token():
     _refill_tokens()
     global _token_bucket_tokens
@@ -94,6 +107,7 @@ class SecEdgarProvider:
     def __init__(self):
         self._client: httpx.AsyncClient | None = None
 
+    @traceable(name="get_client")
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
@@ -103,6 +117,7 @@ class SecEdgarProvider:
             )
         return self._client
 
+    @traceable(name="fetch")
     async def _fetch(self, url: str, budget: EdgarBudget | None = None) -> dict | None:
         global _last_error, _circuit_open, _circuit_opened_at
 
@@ -146,6 +161,7 @@ class SecEdgarProvider:
             print(f"[EDGAR] Fetch error: {e}")
             return None
 
+    @traceable(name="load_cik_map")
     async def _load_cik_map(self) -> dict:
         global _cik_map, _cik_map_loaded_at
         if _cik_map and (time.time() - _cik_map_loaded_at < EDGAR_CIK_TTL):
@@ -171,6 +187,7 @@ class SecEdgarProvider:
 
         return _cik_map or {}
 
+    @traceable(name="resolve_cik")
     async def resolve_cik(self, symbol: str) -> str | None:
         symbol = symbol.upper().strip()
         cache_key = f"edgar:cik:{symbol}"
@@ -184,6 +201,7 @@ class SecEdgarProvider:
             cache.set(cache_key, cik, EDGAR_CIK_TTL)
         return cik
 
+    @traceable(name="get_recent_filings")
     async def get_recent_filings(
         self,
         cik: str,
@@ -254,6 +272,7 @@ class SecEdgarProvider:
         cache.set(cache_key, filings, EDGAR_FILINGS_TTL)
         return filings
 
+    @traceable(name="get_form4_insider_summary")
     async def get_form4_insider_summary(
         self,
         cik: str,
@@ -325,6 +344,7 @@ class SecEdgarProvider:
         cache.set(cache_key, result, EDGAR_INSIDER_TTL)
         return result
 
+    @traceable(name="get_8k_s1_catalysts")
     async def get_8k_s1_catalysts(
         self,
         cik: str,
@@ -366,6 +386,7 @@ class SecEdgarProvider:
         return catalysts
 
 
+    @traceable(name="get_company_financials")
     async def get_company_financials(
         self,
         cik: str,
@@ -398,6 +419,7 @@ class SecEdgarProvider:
 
         facts = data.get("facts", {}).get("us-gaap", {})
 
+        @traceable(name="latest_annual")
         def latest_annual(concept: str) -> float | None:
             """Get the most recent annual value for a concept."""
             entries = facts.get(concept, {}).get("units", {})
@@ -412,6 +434,7 @@ class SecEdgarProvider:
             annual.sort(key=lambda x: x.get("end", ""), reverse=True)
             return annual[0].get("val")
 
+        @traceable(name="latest_quarterly")
         def latest_quarterly(concept: str) -> float | None:
             """Get most recent quarterly value."""
             entries = facts.get(concept, {}).get("units", {})
@@ -463,6 +486,7 @@ class SecEdgarProvider:
         cache.set(cache_key, result, 21600)  # 6 hour cache
         return result
 
+    @traceable(name="get_health")
     def get_health(self) -> dict:
         return {
             "enabled": True,

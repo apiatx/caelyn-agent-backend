@@ -294,11 +294,13 @@ _ALIAS_MAP: dict[str, str] = {
 }
 
 
+@traceable(name="caelyn_routing.normalize")
 def _normalize(raw: str) -> str:
     """Lowercase, strip, collapse spaces/dashes/slashes to underscores."""
     return raw.lower().strip().replace("-", "_").replace(" ", "_").replace("/", "_")
 
 
+@traceable(name="caelyn_routing.normalize_route_key")
 def normalize_route_key(preset_intent: str | None, category: str | None) -> str | None:
     """
     Try to resolve a canonical route key from preset_intent first,

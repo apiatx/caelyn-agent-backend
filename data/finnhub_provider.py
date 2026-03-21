@@ -2,6 +2,17 @@ import finnhub
 from datetime import datetime, timedelta
 from data.cache import cache, FINNHUB_TTL, EARNINGS_TTL
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 
 class FinnhubProvider:
     """
@@ -13,6 +24,7 @@ class FinnhubProvider:
     def __init__(self, api_key: str):
         self.client = finnhub.Client(api_key=api_key)
 
+    @traceable(name="get_quote")
     def get_quote(self, ticker: str) -> dict:
         ticker = ticker.upper()
         cache_key = f"finnhub:quote:{ticker}"
@@ -37,6 +49,7 @@ class FinnhubProvider:
             print(f"Finnhub quote error for {ticker}: {e}")
         return {}
 
+    @traceable(name="get_company_profile")
     def get_company_profile(self, ticker: str) -> dict:
         ticker = ticker.upper()
         cache_key = f"finnhub:profile:{ticker}"
@@ -63,6 +76,7 @@ class FinnhubProvider:
             print(f"Finnhub profile error for {ticker}: {e}")
         return {}
 
+    @traceable(name="get_insider_sentiment")
     def get_insider_sentiment(self, ticker: str) -> dict:
         """
         Get insider sentiment (MSPR) for a ticker.
@@ -110,6 +124,7 @@ class FinnhubProvider:
             print(f"Finnhub insider sentiment error for {ticker}: {e}")
             return {"ticker": ticker, "insider_sentiment": None, "error": str(e)}
 
+    @traceable(name="get_insider_transactions")
     def get_insider_transactions(self, ticker: str) -> list:
         """Get recent insider buy/sell transactions (SEC Form 4 filings)."""
         ticker = ticker.upper()
@@ -131,6 +146,7 @@ class FinnhubProvider:
             print(f"Finnhub insider transactions error for {ticker}: {e}")
             return []
 
+    @traceable(name="get_earnings_calendar")
     def get_earnings_calendar(self, ticker: str = None) -> list:
         """
         Get upcoming earnings dates. If ticker is provided, get earnings
@@ -168,6 +184,7 @@ class FinnhubProvider:
             print(f"Finnhub earnings calendar error: {e}")
             return []
 
+    @traceable(name="get_earnings_surprises")
     def get_earnings_surprises(self, ticker: str) -> list:
         """Get past earnings results vs estimates (beat or miss)."""
         ticker = ticker.upper()
@@ -196,6 +213,7 @@ class FinnhubProvider:
             print(f"Finnhub earnings surprises error for {ticker}: {e}")
             return []
 
+    @traceable(name="get_recommendation_trends")
     def get_recommendation_trends(self, ticker: str) -> list:
         """Get analyst recommendation trends (buy/hold/sell counts over time)."""
         ticker = ticker.upper()
@@ -222,6 +240,7 @@ class FinnhubProvider:
             print(f"Finnhub recommendation trends error for {ticker}: {e}")
             return []
 
+    @traceable(name="get_social_sentiment")
     def get_social_sentiment(self, ticker: str) -> dict:
         """Get social media sentiment from Reddit and Twitter."""
         ticker = ticker.upper()
@@ -304,6 +323,7 @@ class FinnhubProvider:
             print(f"Finnhub social sentiment error for {ticker}: {e}")
             return {"ticker": ticker, "reddit": None, "twitter": None}
 
+    @traceable(name="get_company_peers")
     def get_company_peers(self, ticker: str) -> list:
         """Get list of peer/comparable companies."""
         ticker = ticker.upper()
@@ -313,6 +333,7 @@ class FinnhubProvider:
             print(f"Finnhub peers error for {ticker}: {e}")
             return []
 
+    @traceable(name="get_upcoming_earnings")
     def get_upcoming_earnings(self) -> list:
         """Get all earnings coming up in the next 7 days."""
         cache_key = "finnhub:upcoming_earnings"
@@ -344,6 +365,7 @@ class FinnhubProvider:
             print(f"Finnhub upcoming earnings error: {e}")
             return []
 
+    @traceable(name="get_stock_candles")
     def get_stock_candles(self, ticker: str, days: int = 120) -> list:
         """Fetch daily OHLCV candles from Finnhub. Returns list of bar dicts."""
         ticker = ticker.upper()
@@ -379,6 +401,7 @@ class FinnhubProvider:
             print(f"Finnhub candles error for {ticker}: {e}")
             return []
 
+    @traceable(name="get_technicals")
     def get_technicals(self, ticker: str) -> dict:
         """Compute technicals locally from Finnhub candle data."""
         from data.ta_utils import compute_technicals_from_bars
@@ -387,6 +410,7 @@ class FinnhubProvider:
             return {}
         return compute_technicals_from_bars(bars)
 
+    @traceable(name="get_company_news")
     def get_company_news(self, ticker: str, days: int = 7) -> list:
         """
         Get news articles specifically about this company from Finnhub.
@@ -421,6 +445,7 @@ class FinnhubProvider:
             print(f"Finnhub company_news error for {ticker}: {e}")
             return []
 
+    @traceable(name="interpret_mspr")
     def _interpret_mspr(self, mspr) -> str:
         """Interpret the insider sentiment MSPR score."""
         if mspr is None:

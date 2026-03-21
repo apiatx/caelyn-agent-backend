@@ -13,6 +13,17 @@ from data.perplexity_provider import PerplexityProvider
 from data.brave_provider import BraveProvider
 from data.tavily_provider import TavilyProvider
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 
 BRAVE_MONTHLY_LIMIT = 950  # Leave 50-request buffer under the 1,000 free cap
 
@@ -97,6 +108,7 @@ class WebSearchProvider:
         else:
             print(f"[WebSearch] WARNING: No search provider configured")
 
+    @traceable(name="pick")
     def _pick(self, cost: int = 1):
         """Return (provider, label) — Perplexity first, then Brave if budget allows, else Tavily."""
         if self.perplexity:
@@ -107,6 +119,7 @@ class WebSearchProvider:
             return self.tavily, "tavily"
         return None, None
 
+    @traceable(name="fallback")
     def _fallback(self, failed_label: str, cost: int = 1):
         """Return next provider after a failure, skipping the one that failed."""
         chain = []
@@ -126,6 +139,7 @@ class WebSearchProvider:
                 return provider, label
         return None, None
 
+    @traceable(name="record")
     def _record(self, label: str, cost: int = 1):
         """Record usage after a successful call."""
         if label == "perplexity":
@@ -138,6 +152,7 @@ class WebSearchProvider:
 
     # ── Public interface (mirrors TavilyProvider exactly) ─────────────
 
+    @traceable(name="search_ticker_batch")
     async def search_ticker_batch(self, tickers: list,
                                   focus: str = "analyst_ratings_news") -> dict:
         provider, label = self._pick(1)
@@ -156,6 +171,7 @@ class WebSearchProvider:
             self._record(label, 1)
         return result
 
+    @traceable(name="enrich_tickers_batched")
     async def enrich_tickers_batched(self, tickers: list) -> dict:
         batch_count = min(2, (len(tickers[:12]) + 5) // 6)
         provider, label = self._pick(batch_count)
@@ -174,6 +190,7 @@ class WebSearchProvider:
             self._record(label, batch_count)
         return result
 
+    @traceable(name="get_market_news")
     async def get_market_news(self, topic: str = "stock market today") -> dict:
         provider, label = self._pick(1)
         if not provider:
@@ -199,6 +216,7 @@ class WebSearchProvider:
                 result["provider_used"] = label
         return result
 
+    @traceable(name="get_ticker_news_sentiment")
     async def get_ticker_news_sentiment(self, ticker: str, company_name: str = "") -> dict:
         provider, label = self._pick(1)
         if not provider:
@@ -217,6 +235,7 @@ class WebSearchProvider:
             self._record(label, 1)
         return result
 
+    @traceable(name="search_budget_status")
     def search_budget_status(self) -> dict:
         """Return current budget status for diagnostics."""
         return {

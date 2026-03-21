@@ -8,6 +8,17 @@ Auto-creates tables on first use. Survives all deploys and autoscale events.
 import json
 import os
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 # NEON_DATABASE_URL is the externally-accessible cloud DB (works in both dev and
 # production deployments). DATABASE_URL points to Replit's internal Helium host
 # which is only reachable from the dev workspace, not from deployed containers.
@@ -16,6 +27,7 @@ _pool = None
 _available = False
 
 
+@traceable(name="pg_storage.to_jsonb")
 def _to_jsonb(value):
     if not isinstance(value, dict):
         return None
@@ -26,6 +38,7 @@ def _to_jsonb(value):
         return json.dumps(value, default=str)
 
 
+@traceable(name="pg_storage.get_conn")
 def _get_conn():
     """Get a connection from the pool (lazy-initialized)."""
     global _pool, _available
@@ -59,6 +72,7 @@ def _get_conn():
         return None
 
 
+@traceable(name="pg_storage.put_conn")
 def _put_conn(conn):
     """Return a connection to the pool."""
     if _pool and conn:
@@ -68,6 +82,7 @@ def _put_conn(conn):
             pass
 
 
+@traceable(name="pg_storage.is_available")
 def is_available() -> bool:
     """Check if PostgreSQL is available."""
     if not _DATABASE_URL:
@@ -81,6 +96,7 @@ def is_available() -> bool:
 
 
 
+@traceable(name="pg_storage.startup_probe")
 def startup_probe() -> dict:
     """Startup diagnostic for PostgreSQL connectivity/schema visibility."""
     info = {"database_url_detected": bool(_DATABASE_URL), "connected": False, "database": None, "schema": None, "tables": []}
@@ -111,6 +127,7 @@ def startup_probe() -> dict:
         _put_conn(conn)
     return info
 
+@traceable(name="pg_storage.init_tables")
 def init_tables():
     """Create tables if they don't exist. Safe to call multiple times."""
     print("[PG_STORAGE] init_tables starting (target schema=public)")
@@ -209,6 +226,7 @@ def init_tables():
 
 # ── Prompt History ───────────────────────────────────────────
 
+@traceable(name="pg_storage.ph_read")
 def ph_read(user_id: str) -> dict:
     """Read all prompt history for a user."""
     conn = _get_conn()
@@ -235,6 +253,7 @@ def ph_read(user_id: str) -> dict:
         _put_conn(conn)
 
 
+@traceable(name="pg_storage.ph_write")
 def ph_write(user_id: str, data: dict):
     """Write all prompt history for a user (full replace by bucket)."""
     conn = _get_conn()
@@ -270,32 +289,7 @@ def ph_write(user_id: str, data: dict):
         _put_conn(conn)
 
 
-def ph_read_bucket(user_id: str, bucket_key: str) -> dict | None:
-    """Read a single bucket row — much faster than reading all buckets."""
-    conn = _get_conn()
-    if conn is None:
-        return None
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT data FROM public.prompt_history WHERE user_id = %s AND bucket_key = %s",
-            (user_id, bucket_key),
-        )
-        row = cur.fetchone()
-        cur.close()
-        if row is None:
-            return None
-        data = row[0]
-        if isinstance(data, str):
-            data = json.loads(data)
-        return data
-    except Exception as e:
-        print(f"[PG_STORAGE] ph_read_bucket error for {user_id}/{bucket_key}: {e}")
-        return None
-    finally:
-        _put_conn(conn)
-
-
+@traceable(name="pg_storage.ph_write_bucket")
 def ph_write_bucket(user_id: str, bucket_key: str, bucket_data: dict):
     """Write a single bucket (more efficient for single-intent updates)."""
     conn = _get_conn()
@@ -321,11 +315,13 @@ def ph_write_bucket(user_id: str, bucket_key: str, bucket_data: dict):
 
 # ── Chat History ─────────────────────────────────────────────
 
+@traceable(name="pg_storage.chat_read")
 def chat_read(conv_id: str) -> dict | None:
     """Read a single conversation."""
     return chat_get_conversation(conv_id)
 
 
+@traceable(name="pg_storage.chat_write")
 def chat_write(conv_id: str, data: dict):
     """Write/update a conversation."""
     # Keep compatibility with existing callers while storing in normalized schema.
@@ -334,6 +330,7 @@ def chat_write(conv_id: str, data: dict):
     chat_replace_messages(conv_id, messages=messages, title=title)
 
 
+@traceable(name="pg_storage.chat_delete")
 def chat_delete(conv_id: str) -> bool:
     """Delete a conversation."""
     conn = _get_conn()
@@ -358,6 +355,7 @@ def chat_delete(conv_id: str) -> bool:
         _put_conn(conn)
 
 
+@traceable(name="pg_storage.chat_list")
 def chat_list() -> list:
     """List all conversations (summary only), sorted by updated_at desc."""
     conn = _get_conn()
@@ -396,6 +394,7 @@ def chat_list() -> list:
         _put_conn(conn)
 
 
+@traceable(name="pg_storage.chat_create_conversation")
 def chat_create_conversation(conv_id: str, title: str | None = None, session_id: str | None = None) -> bool:
     conn = _get_conn()
     if conn is None:
@@ -422,6 +421,7 @@ def chat_create_conversation(conv_id: str, title: str | None = None, session_id:
         _put_conn(conn)
 
 
+@traceable(name="pg_storage.chat_append_message")
 def chat_append_message(
     conv_id: str,
     role: str,
@@ -602,6 +602,7 @@ def chat_list_recent(limit: int = 5) -> list:
         _put_conn(conn)
 
 
+@traceable(name="pg_storage.chat_replace_messages")
 def chat_replace_messages(conv_id: str, messages: list, title: str | None = None) -> bool:
     conn = _get_conn()
     if conn is None:
@@ -645,6 +646,7 @@ def chat_replace_messages(conv_id: str, messages: list, title: str | None = None
         _put_conn(conn)
 
 
+@traceable(name="pg_storage.chat_get_conversation")
 def chat_get_conversation(conv_id: str) -> dict | None:
     conn = _get_conn()
     if conn is None:
@@ -720,6 +722,7 @@ def chat_get_conversation(conv_id: str) -> dict | None:
         _put_conn(conn)
 
 
+@traceable(name="pg_storage.storage_info")
 def storage_info() -> dict:
     """Return diagnostic info about PostgreSQL storage."""
     conn = _get_conn()

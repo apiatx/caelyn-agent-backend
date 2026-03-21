@@ -17,7 +17,19 @@ Components:
 
 from datetime import datetime
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
 
+
+
+@traceable(name="catalyst_engine.calculate_catalyst_score")
 def calculate_catalyst_score(data_bundle: dict) -> dict:
     components = {}
 
@@ -40,6 +52,7 @@ def calculate_catalyst_score(data_bundle: dict) -> dict:
     }
 
 
+@traceable(name="catalyst_engine.score_earnings_proximity")
 def _score_earnings_proximity(data: dict) -> dict:
     overview = data.get("overview", {})
     if not isinstance(overview, dict):
@@ -77,6 +90,7 @@ def _score_earnings_proximity(data: dict) -> dict:
     return {"score": score, "present": True}
 
 
+@traceable(name="catalyst_engine.score_fundamental_acceleration")
 def _score_fundamental_acceleration(data: dict) -> dict:
     overview = data.get("overview", {})
     if not isinstance(overview, dict):
@@ -116,6 +130,7 @@ def _score_fundamental_acceleration(data: dict) -> dict:
     return {"score": min(score, 20), "present": True}
 
 
+@traceable(name="catalyst_engine.score_volume_expansion")
 def _score_volume_expansion(data: dict) -> dict:
     snapshot = data.get("snapshot", {})
     details = data.get("details", {})
@@ -141,6 +156,7 @@ def _score_volume_expansion(data: dict) -> dict:
         return {"score": 0, "present": False}
 
 
+@traceable(name="catalyst_engine.score_social_acceleration")
 def _score_social_acceleration(data: dict) -> dict:
     has_data = False
     score = 0
@@ -186,6 +202,7 @@ def _score_social_acceleration(data: dict) -> dict:
     return {"score": min(score, 18), "present": True}
 
 
+@traceable(name="catalyst_engine.score_news_density")
 def _score_news_density(data: dict) -> dict:
     CATALYST_KEYWORDS = [
         "fda", "approval", "partnership", "contract", "acquisition", "merger",
@@ -217,6 +234,7 @@ def _score_news_density(data: dict) -> dict:
     return {"score": 0, "present": True}
 
 
+@traceable(name="catalyst_engine.score_insider_signal")
 def _score_insider_signal(data: dict) -> dict:
     insider = data.get("insider_sentiment", {})
     if not isinstance(insider, dict) or not insider:
@@ -238,6 +256,7 @@ def _score_insider_signal(data: dict) -> dict:
         return {"score": 0, "present": False}
 
 
+@traceable(name="catalyst_engine.score_regulatory_catalyst")
 def _score_regulatory_catalyst(data: dict) -> dict:
     news = data.get("recent_news", [])
     if not isinstance(news, list) or not news:

@@ -3,6 +3,17 @@ import httpx
 from bs4 import BeautifulSoup
 from data.cache import cache, STOCKANALYSIS_TTL
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 
 class StockAnalysisScraper:
 
@@ -14,6 +25,7 @@ class StockAnalysisScraper:
         )
     }
 
+    @traceable(name="parse_tables")
     def _parse_tables(self, soup: BeautifulSoup) -> list:
         results = []
         for table in soup.select("table"):
@@ -28,6 +40,7 @@ class StockAnalysisScraper:
                 results.append(rows)
         return results
 
+    @traceable(name="get_overview")
     async def get_overview(self, ticker: str) -> dict:
         ticker = ticker.upper()
         cache_key = f"stockanalysis:overview:{ticker}"
@@ -157,6 +170,7 @@ class StockAnalysisScraper:
             print(f"[StockAnalysis] overview error for {ticker}: {e}")
             return {"ticker": ticker, "error": str(e)}
 
+    @traceable(name="get_analyst_ratings")
     async def get_analyst_ratings(self, ticker: str) -> dict:
         ticker = ticker.upper()
         cache_key = f"stockanalysis:analyst:{ticker}"
@@ -244,6 +258,7 @@ class StockAnalysisScraper:
             print(f"[StockAnalysis] analyst error for {ticker}: {e}")
             return {"ticker": ticker, "error": str(e)}
 
+    @traceable(name="get_financials")
     async def get_financials(self, ticker: str) -> dict:
         ticker = ticker.upper()
         cache_key = f"stockanalysis:financials:{ticker}"

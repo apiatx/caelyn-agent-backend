@@ -18,6 +18,17 @@ Hard sanity filters:
 
 from data.scoring_engine import parse_pct, parse_market_cap_string, get_market_cap
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 
 MCAP_FLOOR = 50_000_000
 MCAP_MICRO_CEILING = 500_000_000
@@ -57,6 +68,7 @@ CATALYST_KEYWORDS = [
 ]
 
 
+@traceable(name="microcap_scorer.score_microcap")
 def score_microcap(ticker: str, enriched_data: dict, x_analysis: dict = None,
                    source_count: int = 0, sources: list = None) -> dict:
     if ticker in ETF_TICKERS:
@@ -146,6 +158,7 @@ def score_microcap(ticker: str, enriched_data: dict, x_analysis: dict = None,
     }
 
 
+@traceable(name="microcap_scorer.classify_tier")
 def _classify_tier(mcap: float = None) -> str:
     if mcap is None:
         return "micro_cap"
@@ -156,6 +169,7 @@ def _classify_tier(mcap: float = None) -> str:
     return "institutional"
 
 
+@traceable(name="microcap_scorer.format_mcap")
 def _format_mcap(mcap: float = None) -> str:
     if mcap is None:
         return "Unknown"
@@ -164,6 +178,7 @@ def _format_mcap(mcap: float = None) -> str:
     return f"${mcap/1e6:.0f}M"
 
 
+@traceable(name="microcap_scorer.score_catalyst")
 def _score_catalyst(ticker: str, overview: dict, analyst: dict,
                     x_analysis: dict = None, source_count: int = 0) -> tuple[float, dict]:
     score = 0
@@ -242,6 +257,7 @@ def _score_catalyst(ticker: str, overview: dict, analyst: dict,
     return min(score, 100), {"signals": signals, "raw_score": score}
 
 
+@traceable(name="microcap_scorer.score_sector_alignment")
 def _score_sector_alignment(overview: dict, x_analysis: dict = None) -> tuple[float, dict]:
     score = 0
     details = {}
@@ -283,6 +299,7 @@ def _score_sector_alignment(overview: dict, x_analysis: dict = None) -> tuple[fl
     return min(score, 100), details
 
 
+@traceable(name="microcap_scorer.score_early_technical")
 def _score_early_technical(overview: dict, enriched_data: dict) -> tuple[float, dict]:
     score = 0
     signals = []
@@ -378,6 +395,7 @@ def _score_early_technical(overview: dict, enriched_data: dict) -> tuple[float, 
     return min(score, 100), {"signals": signals, "raw_score": score}
 
 
+@traceable(name="microcap_scorer.score_social_momentum")
 def _score_social_momentum(st_sentiment: dict, source_count: int,
                            sources: list = None, x_analysis: dict = None) -> tuple[float, dict]:
     score = 0
@@ -439,6 +457,7 @@ def _score_social_momentum(st_sentiment: dict, source_count: int,
     return min(score, 100), {"signals": signals, "raw_score": score}
 
 
+@traceable(name="microcap_scorer.score_liquidity")
 def _score_liquidity(overview: dict) -> tuple[float, dict]:
     score = 0
     details = {}
@@ -471,6 +490,7 @@ def _score_liquidity(overview: dict) -> tuple[float, dict]:
     return min(score, 100), details
 
 
+@traceable(name="microcap_scorer.score_trending_tickers")
 def score_trending_tickers(enriched_data: dict, xai_top_picks: list,
                            ticker_sources: dict) -> dict:
     xai_lookup = {p["ticker"]: p for p in xai_top_picks}

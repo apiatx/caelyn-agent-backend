@@ -12,6 +12,17 @@ import asyncio
 import httpx
 from data.cache import cache
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def _noop(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _noop
+
+
 BRAVE_TTL = 300       # 5 minutes — matches Tavily TTL
 BRAVE_NEWS_TTL = 600  # 10 minutes for broad market news
 
@@ -30,6 +41,7 @@ class BraveProvider:
             "X-Subscription-Token": api_key,
         }
 
+    @traceable(name="search")
     async def _search(self, query: str, max_results: int = 8,
                       search_depth: str = "basic", topic: str = "news") -> dict:
         """
@@ -73,6 +85,7 @@ class BraveProvider:
             print(f"[Brave] Error: {e}")
             return {"error": str(e), "results": []}
 
+    @traceable(name="normalize_response")
     def _normalize_response(self, raw: dict, is_news: bool) -> dict:
         """
         Convert Brave response to Tavily-compatible format so the rest
@@ -126,6 +139,7 @@ class BraveProvider:
 
     # ── Public methods matching TavilyProvider interface ──────────────
 
+    @traceable(name="search_ticker_batch")
     async def search_ticker_batch(self, tickers: list,
                                   focus: str = "analyst_ratings_news") -> dict:
         """
@@ -157,6 +171,7 @@ class BraveProvider:
         cache.set(cache_key, result, BRAVE_TTL)
         return result
 
+    @traceable(name="parse_batch_results")
     def _parse_batch_results(self, tickers: list, raw: dict) -> dict:
         """Parse results and attribute them to tickers."""
         parsed = {t.upper(): {"ticker": t.upper(), "headlines": [], "snippets": []}
@@ -192,6 +207,7 @@ class BraveProvider:
 
         return parsed
 
+    @traceable(name="enrich_tickers_batched")
     async def enrich_tickers_batched(self, tickers: list) -> dict:
         """
         Full enrichment for up to 12 tickers.
@@ -234,6 +250,7 @@ class BraveProvider:
         cache.set(cache_key, combined, BRAVE_TTL)
         return combined
 
+    @traceable(name="get_market_news")
     async def get_market_news(self, topic: str = "stock market today") -> dict:
         """Get broad market news — same interface as TavilyProvider."""
         cache_key = f"brave:market_news:{topic.replace(' ', '_')[:30]}"
@@ -266,6 +283,7 @@ class BraveProvider:
         cache.set(cache_key, result, BRAVE_NEWS_TTL)
         return result
 
+    @traceable(name="get_ticker_news_sentiment")
     async def get_ticker_news_sentiment(self, ticker: str, company_name: str = "") -> dict:
         """Get news + sentiment for a single ticker."""
         ticker = ticker.upper()
