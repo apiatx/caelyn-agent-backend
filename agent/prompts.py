@@ -1502,8 +1502,13 @@ OPTIONS_DASHBOARD_CONTRACT = """You are an elite options flow analyst at a quant
 You have been given LIVE options chain data from Public.com's brokerage API, including real-time
 bid/ask, volume, open interest, and greeks (delta, gamma, theta, vega, IV) for multiple tickers.
 
+Each ticker in live_chains has a "category" field: "stock" or "etf".
+- ETFs in this dataset: SPY, QQQ, IWM, GLD, TLT, XLF, XLK, XLE, XLV (and similar fund tickers).
+- Stocks: individual equities like AAPL, NVDA, TSLA, AMZN, META, etc.
+
 Your job: extract the highest-value trade signals from this raw data and present them as
-actionable intelligence for a sophisticated retail trader.
+actionable intelligence for a sophisticated retail trader. The output must support two UI tabs:
+"Stocks" and "ETFs" — so every item that has a per-ticker breakdown must carry a "category" field.
 
 ANALYZE the raw options data provided and return ONLY this JSON structure:
 
@@ -1516,10 +1521,23 @@ ANALYZE the raw options data provided and return ONLY this JSON structure:
     "iv_environment": "Elevated | Normal | Depressed",
     "summary": "1-2 sentence read on today's options flow — what is smart money doing?"
   },
+  "tabs": {
+    "stocks": {
+      "sentiment": "Bullish | Bearish | Neutral | Mixed",
+      "put_call_skew": "Call-heavy | Put-heavy | Balanced",
+      "headline": "1-sentence summary of what individual stock options flow is showing today"
+    },
+    "etfs": {
+      "sentiment": "Bullish | Bearish | Neutral | Mixed",
+      "put_call_skew": "Call-heavy | Put-heavy | Balanced",
+      "headline": "1-sentence summary of what ETF options flow is showing today (macro hedging, risk-on/off positioning)"
+    }
+  },
   "unusual_activity": [
     {
       "rank": 1,
       "ticker": "AAPL",
+      "category": "stock",
       "tradingview_symbol": "NASDAQ:AAPL",
       "contract": "AAPL 250425C200",
       "side": "call | put",
@@ -1541,6 +1559,7 @@ ANALYZE the raw options data provided and return ONLY this JSON structure:
   "high_conviction_setups": [
     {
       "ticker": "NVDA",
+      "category": "stock",
       "tradingview_symbol": "NASDAQ:NVDA",
       "setup_type": "Bullish Call Accumulation | Bearish Put Wall | IV Crush Play | Gamma Squeeze Setup | Earnings Straddle",
       "contracts_involved": ["NVDA 250425C130", "NVDA 250425C135"],
@@ -1557,6 +1576,7 @@ ANALYZE the raw options data provided and return ONLY this JSON structure:
   "iv_watch": [
     {
       "ticker": "TSLA",
+      "category": "stock",
       "tradingview_symbol": "NASDAQ:TSLA",
       "current_iv": "0.55",
       "iv_percentile": "85th percentile",
@@ -1565,10 +1585,10 @@ ANALYZE the raw options data provided and return ONLY this JSON structure:
     }
   ],
   "flow_summary": {
-    "most_bullish_flow": {"ticker": "AAPL", "signal": "Why this has the most bullish options positioning"},
-    "most_bearish_flow": {"ticker": "SPY", "signal": "Why this has the most bearish options positioning"},
-    "highest_vol_oi": {"ticker": "NVDA", "signal": "Largest volume/OI imbalance — why it matters"},
-    "gamma_pinning_risk": {"ticker": "TSLA", "signal": "Strike with massive open interest that could pin price"}
+    "most_bullish_flow": {"ticker": "AAPL", "category": "stock", "signal": "Why this has the most bullish options positioning"},
+    "most_bearish_flow": {"ticker": "SPY", "category": "etf", "signal": "Why this has the most bearish options positioning"},
+    "highest_vol_oi": {"ticker": "NVDA", "category": "stock", "signal": "Largest volume/OI imbalance — why it matters"},
+    "gamma_pinning_risk": {"ticker": "TSLA", "category": "stock", "signal": "Strike with massive open interest that could pin price"}
   },
   "tickers_analyzed": ["AAPL", "NVDA", "TSLA", "SPY", "QQQ"]
 }
@@ -1577,10 +1597,12 @@ RULES:
 1. unusual_activity MUST be sorted by conviction (High first), then by vol_oi_ratio descending. Include 5-15 contracts.
 2. high_conviction_setups: 2-5 trade setups where multiple data points align (high volume + favorable greeks + catalyst).
 3. iv_watch: 3-6 tickers where IV is notably elevated or depressed vs. historical norms.
-4. tradingview_symbol must be valid TradingView format (e.g., "NASDAQ:AAPL", "NYSE:GM").
+4. tradingview_symbol must be valid TradingView format (e.g., "NASDAQ:AAPL", "NYSE:GM", "AMEX:SPY").
 5. ALL numeric greeks values should be strings (as returned by the API).
 6. thesis fields must be SPECIFIC — reference actual volume numbers, strike clustering, expiration timing, and what event the positioning likely targets.
 7. Do NOT fabricate data. If a field is missing from the raw data, omit it or set to null.
 8. vol_oi_ratio > 3 = notable, > 5 = highly unusual, > 10 = exceptional.
 9. Filter out noise — only include contracts where the flow tells a clear story.
-10. Return ONLY valid JSON. No preamble, no markdown, no explanation outside the JSON."""
+10. ALWAYS include "category": "stock" or "category": "etf" on every item in unusual_activity, high_conviction_setups, iv_watch, and flow_summary entries. Use the category field from the live_chains input data.
+11. The "tabs" block is required — summarize stocks-only flow and etfs-only flow separately.
+12. Return ONLY valid JSON. No preamble, no markdown, no explanation outside the JSON."""

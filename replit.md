@@ -1,7 +1,7 @@
 # Trading Analysis Platform - FastAPI Backend
 
 ## Overview
-This project is a Python FastAPI backend for a trading analysis platform that integrates real-time market data from over 15 sources with Claude AI to generate actionable trading insights. It functions as an institutional cross-asset portfolio strategist, focusing on capital allocation, asymmetric risk/reward, probability-weighted repricing, and ruthless filtering. The platform supports both long-term investment strategies and short-term trading, aiming to provide users with hedge-fund-style intelligence through market scanning, sentiment analysis, and AI-driven recommendations with quantitative conviction scoring.
+This project is a Python FastAPI backend for a trading analysis platform designed to integrate real-time market data from over 15 sources with Claude AI. Its primary purpose is to generate actionable trading insights, acting as an institutional cross-asset portfolio strategist. The platform focuses on capital allocation, asymmetric risk/reward, probability-weighted repricing, and ruthless filtering to support both long-term investment strategies and short-term trading. It aims to provide users with hedge-fund-style intelligence through market scanning, sentiment analysis, and AI-driven recommendations with quantitative conviction scoring, ultimately delivering alpha-generating opportunities.
 
 ## User Preferences
 - SQGLP framework for investments, Weinstein stage analysis for trades
@@ -16,48 +16,41 @@ This project is a Python FastAPI backend for a trading analysis platform that in
 - INVESTMENTS ideal candidates: AI infrastructure bottlenecks, defense/aerospace primes and disruptors, energy grid buildout, critical materials monopolies, cybersecurity platform leaders, late-stage biotech with breakthrough potential, quantum computing leaders, companies with visionary respected leadership building category-defining businesses.
 
 ## System Architecture
-The platform is built on FastAPI, offering a robust and scalable backend.
+The platform's backend is built on FastAPI, designed for robustness and scalability.
 - **Core Functionality**: Orchestrates market scanning, data enrichment, quantitative pre-scoring, and integrates Claude AI for analysis.
-- **Deterministic Scoring Pipeline**: Detects market regimes, computes structured catalyst scores, applies regime-aware cross-asset multipliers, and uses regime-specific weight matrices for scoring, passing structured scorecards to Claude for interpretation only.
-- **Position Sizing Guidance**: Provides regime-driven position sizing brackets (e.g., risk_on 5-8%, risk_off 2-3%) as metadata for Claude.
-- **Data Completeness Awareness**: Assigns neutral scores for missing data with deterministic penalties, transparently logging data gaps.
-- **Confidence-Blended Weights**: Blends regime weights with base weights based on confidence levels to prevent misclassification swings.
-- **Bounded Cross-Asset Multipliers**: Multipliers are clamped [0.75, 1.25] with liquidity-aware penalization for nano/micro caps.
-- **Microcap Guardrails**: Implements position sizing caps by tier and requires 2-of-3 confirmation for buying (TA, catalyst, liquidity) to avoid "Speculative/Watch" labels.
-- **Creative Discovery Exception**: Allows overrides for specific high-conviction setups with strong sentiment, volume expansion, real catalysts, and adequate liquidity, with capped sizing.
-- **Data Pipeline**: Employs a "wide funnel" approach, screening numerous candidates, mathematically ranking them, and sending the top for deep AI analysis.
-- **Best Trades Scanner**: A three-phase TA-first pipeline: (1) Wide Finviz discovery (8 screens: new_highs, unusual_vol, gainers, breakout, vol_screen, most_active, oversold, volatile; 60 rows/screen → 200+ candidates), (2) Bucket-based shortlist (top-10 per volume/breakout/gainer/score buckets → 40 de-duped), (3) OHLCV fetch for top 20 with CandleBudget(max_calls=15) + TwelveData jitter pacing + Phase 2b broadening when <8 candles, then core/ta_signal_engine.py computes structured TA signals, ATR-based trade plans. Social is disabled by default; Claude polishes TA output but cannot alter trade plan numbers. Deterministic fallback renderer ensures structured output even when Claude returns narrative.
-  - **Candle Budget**: CandleBudget(max_calls=15), shortlist=40 (bucket-based), candle_targets=20, with Phase 2b broadening retry when <8 candles have data. TwelveData jitter (150-250ms) when approaching rate limit.
-  - **Output Fields**: setup_type, indicator_signals (human-readable list), tradingview_url, action (Strong Buy/Buy/Hold/Sell), catalyst_check, risk, atr preserved. scan_stats includes candidates_total, candles_ok, candles_blocked, cache_hits. data_health includes api_usage stats.
-  - **Hard Enforcement**: Backend enforces display_type=trades, non-empty risk field, and indicator_signals even when Claude returns wrong format.
-- **Deterministic Screener Presets**: 6 preset screeners (oversold_growing, value_momentum, insider_breakout, high_growth_sc, dividend_value, short_squeeze) with 3-phase pipeline: Finviz discovery (60 rows/screen) → enrichment (Finnhub quotes, StockAnalysis fundamentals, TA from candles with CandleBudget=8, quote batcher backfill for missing prices) → deterministic filter/rank. Output: display_type="screener" with rows table (ticker, company, price, chg_pct, mkt_cap, signals, rev_growth_yoy, pe, div_yield). scan_stats includes api_usage. Definitions in screener_definitions.py. Backend enforces no N/A strings, company validation (no single chars), and fallback to raw data if Claude misbehaves.
-- **Quote Batcher**: get_quotes_batch(symbols) with Finnhub primary + FMP fallback for reliable price/chg population. Used by screener enrichment to backfill missing prices.
+- **Deterministic Scoring Pipeline**: Detects market regimes, computes structured catalyst scores, applies regime-aware cross-asset multipliers, and uses regime-specific weight matrices for scoring, passing structured scorecards to Claude for interpretation.
+- **Data Completeness & Confidence**: Assigns neutral scores for missing data with deterministic penalties and blends regime weights with base weights based on confidence levels.
+- **Microcap Guardrails**: Implements position sizing caps and requires multi-factor confirmation for buying to mitigate risks.
+- **Data Pipeline**: Employs a "wide funnel" approach for candidate screening, mathematical ranking, and deep AI analysis of top candidates.
+- **Best Trades Scanner**: A three-phase technical analysis-first pipeline for discovery, shortlisting, and detailed signal computation with ATR-based trade plans.
+- **Deterministic Screener Presets**: Provides 6 preset screeners with a three-phase pipeline including Finviz discovery, enrichment, and deterministic filtering/ranking.
 - **Scan Types**: Supports over 14 diverse scan types including best trades, social momentum, sector rotation, squeeze plays, thematic investing, commodities, and crypto scanning.
-- **Hybrid Trending Architecture**: Combines Grok (xAI) and Claude for trending/social momentum analysis, utilizing two-tier conviction scoring, prioritizing small/micro-caps.
-- **Cross-Market Scan**: Triggers parallel data pulling across all asset classes and uses a quantitative pre-ranker.
-- **Resilient Cross-Asset Trending Pipeline**: Parallel execution of Grok and market scan with module-level status tracking, social-first fallback, and minimum output guarantees across asset classes. Commodity coverage uses a 23-entry COMMODITY_UNIVERSE mapping (ETF/equity proxies across energy, metals, agriculture, battery metals, carbon) with bounded quote sampling (MAX_COMMODITY_QUOTES=20), Grok theme force-inclusion, and 3-minute caching keyed by theme suffix.
-- **Conversational AI**: Fully conversational with persistent, server-side stored conversation threads supporting multi-turn interactions and intelligent data gathering.
-- **Candle Provider Chain**: cache → TwelveData (8/min, 15min circuit breaker on auth) → Finnhub (60min circuit breaker on 403) → Polygon (budget-tracked). CandleBudget tracks per-provider usage (twelvedata_used, polygon_used). Debug endpoint: GET /api/candle_stats.
-- **Global Daily Budget**: DailyBudgetTracker in api_budget.py tracks per-provider daily API calls with configurable limits (FMP 250, AV 25, TD 800, CG 333, CMC 333, Finnhub 3600). Warns at 70%, hard-stops at 90%. Wired into get_candles, get_quotes_batch, screener enrichment, macro snapshot, and research_ticker. Debug endpoint: GET /api/health/budget.
-- **Finviz-First Price Extraction**: Screener _enrich_one uses Finviz price/change data directly instead of calling Finnhub for every candidate. Finnhub only called as fallback when Finviz data is missing (~2-5 calls per preset vs ~30 before).
-- **Crypto Scanner Routing**: Centralized `_is_crypto_query()` classifier ensures crypto queries always route to the dedicated crypto pipeline, overriding OpenAI classifier misrouting. Cross-market override guards prevent category hijacking. Crypto scanner uses per-source timeouts (5-15s), skips deep_dive/coin_metadata for speed (157K→29K compressed in 15s), and uses Sonnet 4 with crypto-specific trading preamble. Output: display_type="crypto" with market_overview, btc_eth_summary, funding_rate_analysis, hot_categories, top_momentum, attention_signals, volume_acceleration, x_sentiment.
-- **HL Additional Coins**: After compressing CoinGecko top 50, scans all HyperLiquid funding_analysis sources for coins not in CoinGecko coverage. Up to 20 additional coins with funding/OI/volume data. Claude uses these for squeeze/momentum analysis alongside CoinGecko coins.
-- **X/Twitter Crypto Sentiment**: Dedicated Grok prompt for crypto X scanning with social velocity, BTC sentiment, narrative heat, and contrarian signals. Compressed into x_sentiment section. Claude renders when data available, skips when unavailable.
-- **Data Compression Layer**: Pre-digests raw market data (50-150KB) into 5-15KB structured summaries before sending to Claude. Category-specific compressors for best_trades, briefing, trending, screener, crypto, sector, macro strip noise while preserving actionable signals. Cross-asset trending compressor aggressively strips raw stock_trending/crypto_scanner/commodities/macro_context blobs (can be 8MB+) down to compact summaries keeping only essential fields per ticker. Logs [COMPRESS] with size/ratio. Falls back to uncompressed data on error. Original market_data preserved for post-processing.
-- **Enhanced Model Autonomy**: Three-model collaboration pipeline. OpenAI (gpt-4o-mini) generates a reasoning brief that guides Claude's analysis focus (runs in parallel with data gathering, 5s timeout). Grok contributes a lightweight market mood snapshot (cached 3min) to Best Trades and Screeners for social context. Claude receives both as structured context (_reasoning_brief, market_mood_social) but retains full analytical autonomy. All three signals are advisory with silent fallbacks on failure.
-- **Caching**: An in-memory TTL caching system optimizes API calls across all data providers.
-- **Error Handling & Reliability**: Standardized JSON response envelope with error codes, never-empty guarantee, logging of raw Claude output and parse failures, and a wall-clock data-gathering deadline for cross-asset trending.
+- **Hybrid Trending Architecture**: Combines Grok (xAI) and Claude for trending/social momentum analysis with two-tier conviction scoring, prioritizing small/micro-caps.
+- **Cross-Market Scan**: Triggers parallel data pulling across all asset classes with quantitative pre-ranking.
+- **Resilient Cross-Asset Trending Pipeline**: Parallel execution with module-level status tracking, social-first fallback, and minimum output guarantees across asset classes, including commodity coverage via ETF/equity proxies.
+- **Conversational AI**: Fully conversational with persistent, server-side stored conversation threads supporting multi-turn interactions.
+- **Candle Provider Chain**: Utilizes a tiered fallback system for candle data (cache → TwelveData → Finnhub → Polygon) with budget tracking.
+- **Global Daily Budget**: Tracks per-provider daily API calls with configurable limits, warnings, and hard-stops.
+- **Finviz-First Price Extraction**: Prioritizes Finviz for price/change data in screener enrichment to reduce API calls.
+- **Crypto Scanner Routing**: Centralized classifier routes crypto queries to a dedicated pipeline with specific optimizations for speed and crypto-specific analysis.
+- **HL Additional Coins**: Scans HyperLiquid funding analysis for additional coins not covered by CoinGecko, integrating funding/OI/volume data for Claude's analysis.
+- **X/Twitter Crypto Sentiment**: Dedicated Grok prompt for crypto X scanning to provide social velocity, BTC sentiment, narrative heat, and contrarian signals.
+- **Data Compression Layer**: Pre-digests raw market data into structured, category-specific summaries (5-15KB) before sending to Claude, with aggressive compression for cross-asset trending.
+- **Enhanced Model Autonomy**: Three-model collaboration where OpenAI (gpt-4o-mini) provides a reasoning brief, Grok offers a market mood snapshot, and Claude retains analytical autonomy with these as advisory inputs.
+- **Caching**: An in-memory TTL caching system optimizes API calls.
+- **Error Handling & Reliability**: Standardized JSON response envelope, never-empty guarantee, and robust logging.
 - **UI/UX Considerations**: Delivers concise, dense trading terminal-style JSON output, including TradingView chart links.
-- **Portfolio Management**: Offers portfolio review for up to 25 tickers with dual scoring and endpoints for managing holdings and events.
-- **Portfolio Quotes**: Features asset-type-aware routing for efficient data retrieval from primary and fallback sources.
-- **Intent-Driven Orchestration**: Uses OpenAI for query classification and structured plan generation, with preset intent routing and heuristic fallbacks.
-- **Data Architecture & Performance**: Utilizes local TA computation, tiered data sources with fallbacks, and scan budgeting with `BudgetTracker` for efficient resource management and adaptive per-preset budgets. Enforces "Social→FA Discipline" to prevent hype-only recommendations.
+- **Portfolio Management**: Offers portfolio review with dual scoring and endpoints for managing holdings and events.
+- **Intent-Driven Orchestration**: Uses OpenAI for query classification and structured plan generation.
+- **Data Architecture & Performance**: Utilizes local TA computation, tiered data sources with fallbacks, and scan budgeting. Enforces "Social→FA Discipline."
+- **Options Flow Dashboard**: Background precompute loop for options data, serving cached results for fast frontend display and eliminating timeouts.
 
 ## External Dependencies
-- **AI**: OpenAI (GPT-4o for orchestration/classification), Anthropic (Claude Sonnet for reasoning/analysis).
-- **Market Data & Screening**: Finviz, TwelveData (primary candles, 8/min), Polygon.io (fallback candles, 4/min), Finnhub (circuit-broken), Financial Modeling Prep (FMP), Alpha Vantage, Nasdaq.
-- **Social Sentiment & Trending**: Reddit/ApeWisdom, StockTwits, Yahoo Finance, xAI Grok.
+- **AI**: OpenAI (GPT-4o for orchestration/classification), Anthropic (Claude Sonnet for reasoning/analysis), xAI Grok.
+- **Market Data & Screening**: Finviz, TwelveData, Polygon.io, Finnhub, Financial Modeling Prep (FMP), Alpha Vantage, Nasdaq.
+- **Social Sentiment & Trending**: Reddit/ApeWisdom, StockTwits, Yahoo Finance.
 - **Financial Analysis**: StockAnalysis.
-- **SEC Filings**: SEC EDGAR (data.sec.gov) — free, no API key. SecEdgarProvider in data/sec_edgar_provider.py with rate limiting (2 req/s, 5min circuit breaker on 429), per-request budgets (EdgarBudget, max 3 fetches), and multi-tier caching (CIK 7d, filings 15min, insider 30min, catalysts 15min). Enriches best_trades (standard mode, top 6), cross_asset_trending (standard, top 6 equities), screener presets (insider_focus for insider_breakout, light for others, top 8), and freeform queries with catalyst/insider keywords (insider_focus, top 5). Provides resolve_cik(), get_recent_filings(), get_form4_insider_summary(), get_8k_s1_catalysts(). Health at /api/health.edgar.
+- **SEC Filings**: SEC EDGAR (data.sec.gov).
 - **Economic Data**: FRED (Federal Reserve Economic Data), CNN (Fear & Greed Index).
-- **Cryptocurrency Data**: CoinGecko, CoinMarketCap, Hyperliquid, altFINS (crypto scanner only).
+- **Cryptocurrency Data**: CoinGecko, CoinMarketCap, Hyperliquid, altFINS.
+- **Options Data**: Public.com.
