@@ -347,6 +347,181 @@ class PublicComProvider:
             "puts": enriched_puts,
         }
 
+    # ETFs recognized for category tagging
+    _ETF_SET = {
+        "SPY", "QQQ", "IWM", "GLD", "TLT", "XLF", "XLK", "XLE", "XLV",
+        "HYG", "DIA", "EEM", "ARKK", "SMH", "SOXX", "VXX", "UVXY",
+    }
+
+    @traceable(name="public_com.scan_full_screener")
+    async def scan_full_screener(self, symbols: list) -> dict:
+        """
+        Comprehensive screener: fetch full option chains (nearest expiry) for all
+        symbols, compute per-ticker summary metrics and build a flat contracts list.
+        Concurrency=4 — safe within 10 req/sec limit (4 tickers × 3 sequential
+        calls each = 12 calls/~3 sec window, well under the rate cap).
+
+        Returns:
+          {
+            "tickers": [...],          # per-ticker summary rows (for screener table)
+            "all_contracts": [...],    # flat list of every active contract (for flow view)
+            "market_summary": {...},   # aggregated stats
+          }
+        """
+
+        async def _fetch_one(symbol: str) -> dict | None:
+            expirations = await self.get_option_expirations(symbol)
+            if not expirations:
+                return None
+            exp = expirations[0]
+            chain = await self.get_full_chain_with_greeks(symbol, exp)
+            calls = chain.get("calls", [])
+            puts  = chain.get("puts", [])
+            return {"symbol": symbol, "expiration": exp, "calls": calls, "puts": puts}
+
+        sem = asyncio.Semaphore(4)
+
+        async def _bounded(sym):
+            async with sem:
+                try:
+                    return await _fetch_one(sym)
+                except Exception as e:
+                    print(f"[PUBLIC.COM] Screener fetch error for {sym}: {e}")
+                    return None
+
+        raw_results = await asyncio.gather(*[_bounded(s) for s in symbols])
+
+        def _safe_int(v):
+            try:
+                return int(v or 0)
+            except Exception:
+                return 0
+
+        def _safe_float(v):
+            try:
+                return float(v)
+            except Exception:
+                return None
+
+        tickers = []
+        all_contracts = []
+
+        for res in raw_results:
+            if not res:
+                continue
+
+            symbol = res["symbol"]
+            exp    = res["expiration"]
+            calls  = res["calls"]
+            puts   = res["puts"]
+            category = "etf" if symbol.upper() in self._ETF_SET else "stock"
+
+            # Active contracts (volume > 0)
+            active_calls = [c for c in calls if _safe_int(c.get("volume")) > 0]
+            active_puts  = [p for p in puts  if _safe_int(p.get("volume")) > 0]
+
+            call_vol = sum(_safe_int(c.get("volume"))       for c in active_calls)
+            put_vol  = sum(_safe_int(p.get("volume"))       for p in active_puts)
+            call_oi  = sum(_safe_int(c.get("openInterest")) for c in calls)
+            put_oi   = sum(_safe_int(p.get("openInterest")) for p in puts)
+
+            # Volume-weighted average IV
+            def _vwiv(contracts):
+                total_vol = sum(_safe_int(c.get("volume")) for c in contracts)
+                if total_vol == 0:
+                    return None
+                wsum = sum(
+                    (_safe_float(c.get("iv")) or 0) * _safe_int(c.get("volume"))
+                    for c in contracts
+                )
+                v = wsum / total_vol
+                return round(v, 4) if v > 0 else None
+
+            avg_call_iv = _vwiv(active_calls)
+            avg_put_iv  = _vwiv(active_puts)
+            iv_skew = (
+                round(avg_put_iv - avg_call_iv, 4)
+                if avg_call_iv and avg_put_iv else None
+            )
+
+            # Max pain: strike with highest combined OI
+            oi_by_strike = {}
+            for c in calls + puts:
+                s = c.get("strike")
+                if s is not None:
+                    oi_by_strike[s] = oi_by_strike.get(s, 0) + _safe_int(c.get("openInterest"))
+            max_pain = max(oi_by_strike, key=oi_by_strike.get) if oi_by_strike else None
+
+            # Top contracts by volume
+            top_calls = sorted(active_calls, key=lambda x: _safe_int(x.get("volume")), reverse=True)[:10]
+            top_puts  = sorted(active_puts,  key=lambda x: _safe_int(x.get("volume")), reverse=True)[:10]
+
+            ticker_row = {
+                "ticker":        symbol,
+                "category":      category,
+                "expiration":    exp,
+                "call_volume":   call_vol,
+                "put_volume":    put_vol,
+                "total_volume":  call_vol + put_vol,
+                "pc_ratio":      round(put_vol / call_vol, 3) if call_vol > 0 else None,
+                "call_oi":       call_oi,
+                "put_oi":        put_oi,
+                "total_oi":      call_oi + put_oi,
+                "avg_call_iv":   avg_call_iv,
+                "avg_put_iv":    avg_put_iv,
+                "iv_skew":       iv_skew,
+                "max_pain":      max_pain,
+                "top_calls":     top_calls,
+                "top_puts":      top_puts,
+            }
+            tickers.append(ticker_row)
+
+            # Flatten contracts for the "flow" view
+            for c in active_calls:
+                vol  = _safe_int(c.get("volume"))
+                oi_v = _safe_int(c.get("openInterest"))
+                all_contracts.append({
+                    **c,
+                    "underlying": symbol,
+                    "category":   category,
+                    "expiration": exp,
+                    "side":       "call",
+                    "vol_oi_ratio": round(vol / oi_v, 2) if oi_v > 0 else None,
+                })
+            for p in active_puts:
+                vol  = _safe_int(p.get("volume"))
+                oi_v = _safe_int(p.get("openInterest"))
+                all_contracts.append({
+                    **p,
+                    "underlying": symbol,
+                    "category":   category,
+                    "expiration": exp,
+                    "side":       "put",
+                    "vol_oi_ratio": round(vol / oi_v, 2) if oi_v > 0 else None,
+                })
+
+        # Sort tickers by total volume descending (default)
+        tickers.sort(key=lambda x: x.get("total_volume", 0), reverse=True)
+        all_contracts.sort(key=lambda x: _safe_int(x.get("volume")), reverse=True)
+
+        # Aggregated market summary
+        total_call_vol = sum(t.get("call_volume", 0) for t in tickers)
+        total_put_vol  = sum(t.get("put_volume", 0)  for t in tickers)
+        market_summary = {
+            "tickers_scanned":   len(tickers),
+            "total_call_volume": total_call_vol,
+            "total_put_volume":  total_put_vol,
+            "market_pc_ratio":   round(total_put_vol / total_call_vol, 3) if total_call_vol > 0 else None,
+            "total_contracts":   len(all_contracts),
+            "most_active_ticker": tickers[0]["ticker"] if tickers else None,
+        }
+
+        return {
+            "tickers":        tickers,
+            "all_contracts":  all_contracts[:500],  # cap at 500 for payload size
+            "market_summary": market_summary,
+        }
+
     @traceable(name="public_com.scan_high_volume_options")
     async def scan_high_volume_options(self, symbols: list) -> tuple:
         """

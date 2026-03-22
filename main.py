@@ -4457,25 +4457,25 @@ async def test_altfins(symbol: str = "BTC", api_key: str = Header(None, alias="X
 # OPTIONS DASHBOARD — Live options flow + Claude signal extraction
 # ═══════════════════════════════════════════════════════════════════
 
-# Ticker universe split by category for Stocks / ETFs tabs
-_OPTIONS_ETF_SET = {"SPY", "QQQ", "IWM", "GLD", "TLT", "XLF", "XLK",
-                    "XLE", "XLV", "HYG", "DIA", "EEM", "ARKK", "SMH", "SOXX"}
-
-# Tickers to precompute: 3 ETFs + 5 Stocks = 8 total (fits rate limit)
-_OPTIONS_PRECOMPUTE_TICKERS = [
-    "SPY", "QQQ", "IWM",                          # ETFs
-    "AAPL", "NVDA", "TSLA", "AMZN", "META",       # Stocks
+# ── Options Screener: ticker universe ───────────────────────────────────────
+_OPTIONS_SCREENER_TICKERS = [
+    # ETFs — macro + sector flow
+    "SPY", "QQQ", "IWM", "GLD", "TLT", "XLF", "XLK",
+    # Stocks — highest-volume options universe
+    "AAPL", "NVDA", "TSLA", "AMZN", "META", "MSFT", "AMD", "GOOGL", "NFLX", "COIN",
 ]
-_OPTIONS_PRECOMPUTE_INTERVAL = 300   # 5 minutes
-_OPTIONS_CACHE_KEY = "options_precomputed_v1"
-_OPTIONS_CACHE_TTL = 360             # 6 minutes — slightly longer than scan interval
+
+_OPTIONS_PRECOMPUTE_INTERVAL = 90    # 90 seconds — fast since no Claude overhead
+_OPTIONS_CACHE_KEY = "options_screener_v2"
+_OPTIONS_CACHE_TTL = 120             # 2 minutes TTL
 
 
 async def _options_precompute_loop():
     """
-    Background precomputation for the Options Flow dashboard.
-    Runs every 5 minutes. Caches the full Claude-analyzed result so the
-    endpoint returns instantly from cache instead of waiting 40-50 seconds.
+    Background screener loop for the Options Flow dashboard.
+    Runs every 90 seconds. Fetches full chains + greeks for all tickers via
+    Public.com, computes per-ticker summary metrics, and caches pure data —
+    no Claude involved here. Claude is available via the chat bar instead.
     """
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _init_event.wait, 120)
@@ -4486,89 +4486,29 @@ async def _options_precompute_loop():
 
     import time as _time
     from data.cache import cache
-    from agent.prompts import OPTIONS_DASHBOARD_CONTRACT
-    from config import ANTHROPIC_API_KEY
-    import anthropic as _anthropic
 
     while True:
         try:
-            print("[OPTIONS_PRECOMPUTE] Starting options scan...")
+            print(f"[OPTIONS_PRECOMPUTE] Scanning {len(_OPTIONS_SCREENER_TICKERS)} tickers...")
             t0 = _time.time()
 
-            (
-                (barchart_unusual, barchart_volume),
-                (unusual_contracts, all_chains),
-            ) = await asyncio.gather(
-                asyncio.gather(
-                    data_service.options.get_unusual_options_activity(),
-                    data_service.options.get_options_volume_leaders(),
-                ),
-                data_service.public_com.scan_high_volume_options(_OPTIONS_PRECOMPUTE_TICKERS),
+            screener_data = await data_service.public_com.scan_full_screener(
+                _OPTIONS_SCREENER_TICKERS
             )
-            barchart_signals = data_service.options.interpret_flow(barchart_unusual)
-            gather_time = _time.time() - t0
 
-            # Tag each chain with its category (etf / stock)
-            def _category(ticker):
-                return "etf" if ticker.upper() in _OPTIONS_ETF_SET else "stock"
+            elapsed = _time.time() - t0
+            n_tickers = len(screener_data.get("tickers", []))
+            n_contracts = len(screener_data.get("all_contracts", []))
 
-            raw_data = {
-                "live_chains": {},
-                "unusual_contracts": unusual_contracts[:30],
-                "barchart_unusual_activity": barchart_unusual[:20],
-                "barchart_volume_leaders": barchart_volume[:15],
-                "barchart_flow_signals": barchart_signals,
-                "tickers_scanned": _OPTIONS_PRECOMPUTE_TICKERS,
+            result = {
+                "display_type": "options_screener",
+                "scan_type": "options_flow",
+                "cached_at": _time.time(),
+                "tickers_scanned": _OPTIONS_SCREENER_TICKERS,
+                **screener_data,
             }
-            for ticker, chain in all_chains.items():
-                compressed = {
-                    "expiration": chain.get("expiration"),
-                    "category": _category(ticker),
-                    "calls": [],
-                    "puts": [],
-                }
-                for side in ("calls", "puts"):
-                    contracts = chain.get(side, [])
-                    active = [c for c in contracts if c.get("volume") and int(c.get("volume", 0)) > 0]
-                    active.sort(key=lambda x: int(x.get("volume", 0)), reverse=True)
-                    compressed[side] = active[:15]
-                raw_data["live_chains"][ticker] = compressed
-
-            # Claude analysis
-            claude_client = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=90.0)
-            claude_resp = claude_client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=4096,
-                system=OPTIONS_DASHBOARD_CONTRACT,
-                messages=[{
-                    "role": "user",
-                    "content": f"Here is the live options data to analyze:\n\n{_json.dumps(raw_data, default=str)}"
-                }],
-            )
-            raw_text = claude_resp.content[0].text
-
-            try:
-                cleaned = raw_text.strip()
-                if cleaned.startswith("```"):
-                    cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
-                if cleaned.endswith("```"):
-                    cleaned = cleaned[:-3]
-                if cleaned.startswith("json"):
-                    cleaned = cleaned[4:]
-                result = _json.loads(cleaned.strip())
-            except Exception:
-                import re as _re
-                m = _re.search(r'\{[\s\S]*\}', raw_text)
-                result = _json.loads(m.group()) if m else {}
-
-            if result:
-                result["cached_at"] = _time.time()
-                result["tickers_scanned"] = _OPTIONS_PRECOMPUTE_TICKERS
-                cache.set(_OPTIONS_CACHE_KEY, result, _OPTIONS_CACHE_TTL)
-                elapsed = _time.time() - t0
-                print(f"[OPTIONS_PRECOMPUTE] Cached in {elapsed:.1f}s (gather={gather_time:.1f}s). Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s.")
-            else:
-                print("[OPTIONS_PRECOMPUTE] Claude returned empty result, not caching.")
+            cache.set(_OPTIONS_CACHE_KEY, result, _OPTIONS_CACHE_TTL)
+            print(f"[OPTIONS_PRECOMPUTE] Cached {n_tickers} tickers, {n_contracts} contracts in {elapsed:.1f}s. Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s.")
 
         except Exception as e:
             import traceback
@@ -4578,21 +4518,21 @@ async def _options_precompute_loop():
         await asyncio.sleep(_OPTIONS_PRECOMPUTE_INTERVAL)
 
 
-# Default tickers (used for on-demand requests with custom lists)
-_OPTIONS_DEFAULT_TICKERS = _OPTIONS_PRECOMPUTE_TICKERS
+_OPTIONS_DEFAULT_TICKERS = _OPTIONS_SCREENER_TICKERS
 
 
 @app.post("/api/options/dashboard")
-@limiter.limit("30/minute")
+@limiter.limit("60/minute")
 @traceable(name="main.options_dashboard")
 async def options_dashboard(
     request: Request,
     api_key: str = Header(None, alias="X-API-Key"),
 ):
     """
-    Options flow dashboard — serves from background-precomputed cache for instant response.
-    The precompute loop runs every 5 minutes and populates the cache with a full
-    Claude-analyzed scan. This endpoint returns in <1s from cache, never timing out.
+    Options flow screener — pure data endpoint, no Claude involved.
+    Returns cached screener data (tickers + contracts + market summary) pre-fetched
+    every 90 seconds by the background loop. Instant response from cache.
+    Claude remains available via the chat bar for narrative analysis.
     """
     await _wait_for_init()
 
@@ -4605,108 +4545,49 @@ async def options_dashboard(
     import time as _time
     from data.cache import cache
 
-    # ── Serve from cache (primary path — instant response) ──────────────────
+    # ── Primary path: serve from cache (instant) ────────────────────────────
     cached = cache.get(_OPTIONS_CACHE_KEY)
     if cached:
         age = int(_time.time() - cached.get("cached_at", _time.time()))
-        print(f"[OPTIONS_DASH] Serving from cache (age={age}s)")
+        print(f"[OPTIONS_DASH] Cache hit (age={age}s, {len(cached.get('tickers', []))} tickers, {len(cached.get('all_contracts', []))} contracts)")
         return {
             "response": cached,
             "structured": True,
-            "preset": "options_dashboard",
+            "preset": "options_screener",
             "from_cache": True,
             "cache_age_seconds": age,
         }
 
-    # ── Cold-start fallback: run a quick scan synchronously ──────────────────
-    # Only happens on the very first load before the background loop has run once.
-    print("[OPTIONS_DASH] Cache empty — running cold-start scan (first load)...")
+    # ── Cold-start fallback (first request before background loop completes) ─
+    print("[OPTIONS_DASH] Cache cold — running synchronous screener fetch...")
     t0 = _time.time()
-
     try:
-        (
-            (barchart_unusual, barchart_volume),
-            (unusual_contracts, all_chains),
-        ) = await asyncio.gather(
-            asyncio.gather(
-                data_service.options.get_unusual_options_activity(),
-                data_service.options.get_options_volume_leaders(),
-            ),
-            data_service.public_com.scan_high_volume_options(_OPTIONS_PRECOMPUTE_TICKERS),
-        )
-        barchart_signals = data_service.options.interpret_flow(barchart_unusual)
-        gather_time = _time.time() - t0
+        screener_data = await data_service.public_com.scan_full_screener(_OPTIONS_SCREENER_TICKERS)
+        elapsed = _time.time() - t0
 
-        def _category(ticker):
-            return "etf" if ticker.upper() in _OPTIONS_ETF_SET else "stock"
-
-        raw_data = {
-            "live_chains": {},
-            "unusual_contracts": unusual_contracts[:30],
-            "barchart_unusual_activity": barchart_unusual[:20],
-            "barchart_volume_leaders": barchart_volume[:15],
-            "barchart_flow_signals": barchart_signals,
-            "tickers_scanned": _OPTIONS_PRECOMPUTE_TICKERS,
+        result = {
+            "display_type": "options_screener",
+            "scan_type": "options_flow",
+            "cached_at": _time.time(),
+            "tickers_scanned": _OPTIONS_SCREENER_TICKERS,
+            **screener_data,
         }
-        for ticker, chain in all_chains.items():
-            compressed = {
-                "expiration": chain.get("expiration"),
-                "category": _category(ticker),
-                "calls": [],
-                "puts": [],
-            }
-            for side in ("calls", "puts"):
-                contracts = chain.get(side, [])
-                active = [c for c in contracts if c.get("volume") and int(c.get("volume", 0)) > 0]
-                active.sort(key=lambda x: int(x.get("volume", 0)), reverse=True)
-                compressed[side] = active[:15]
-            raw_data["live_chains"][ticker] = compressed
-
-        from agent.prompts import OPTIONS_DASHBOARD_CONTRACT
-        from config import ANTHROPIC_API_KEY
-        import anthropic
-        claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=90.0)
-        claude_response = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            system=OPTIONS_DASHBOARD_CONTRACT,
-            messages=[{"role": "user", "content": f"Here is the live options data to analyze:\n\n{_json.dumps(raw_data, default=str)}"}],
-        )
-        raw_text = claude_response.content[0].text
-
-        try:
-            cleaned = raw_text.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-            result = _json.loads(cleaned.strip())
-        except Exception:
-            import re
-            m = re.search(r'\{[\s\S]*\}', raw_text)
-            result = _json.loads(m.group()) if m else {"display_type": "options_dashboard", "error": "Parse failed"}
-
-        total_time = _time.time() - t0
-        result["cached_at"] = _time.time()
-        result["tickers_scanned"] = _OPTIONS_PRECOMPUTE_TICKERS
         cache.set(_OPTIONS_CACHE_KEY, result, _OPTIONS_CACHE_TTL)
-        print(f"[OPTIONS_DASH] Cold-start complete in {total_time:.1f}s (gather={gather_time:.1f}s)")
+        print(f"[OPTIONS_DASH] Cold-start in {elapsed:.1f}s — {len(screener_data.get('tickers', []))} tickers")
 
         return {
             "response": result,
             "structured": True,
-            "preset": "options_dashboard",
+            "preset": "options_screener",
             "from_cache": False,
-            "timing": {"gather_seconds": round(gather_time, 1), "total_seconds": round(total_time, 1)},
+            "timing": {"total_seconds": round(elapsed, 1)},
         }
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         print(f"[OPTIONS_DASH] Error: {e}")
-        return JSONResponse(status_code=500, content={"error": f"Options dashboard error: {str(e)[:300]}"})
+        return JSONResponse(status_code=500, content={"error": f"Options screener error: {str(e)[:300]}"})
 
 
 @app.get("/api/options/chain/{symbol}")

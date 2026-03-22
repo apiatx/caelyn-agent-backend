@@ -43,7 +43,7 @@ The platform's backend is built on FastAPI, designed for robustness and scalabil
 - **Portfolio Management**: Offers portfolio review with dual scoring and endpoints for managing holdings and events.
 - **Intent-Driven Orchestration**: Uses OpenAI for query classification and structured plan generation.
 - **Data Architecture & Performance**: Utilizes local TA computation, tiered data sources with fallbacks, and scan budgeting. Enforces "Social→FA Discipline."
-- **Options Flow Dashboard**: Background precompute loop for options data, serving cached results for fast frontend display and eliminating timeouts.
+- **Options Flow Screener**: Background precompute loop (`_options_precompute_loop`) fires every 90 seconds, scanning 17 tickers (7 ETFs: SPY/QQQ/IWM/GLD/TLT/XLF/XLK + 10 Stocks: AAPL/NVDA/TSLA/AMZN/META/MSFT/AMD/GOOGL/NFLX/COIN) via Public.com using `scan_full_screener()`. No Claude in the screener — pure data pipeline. Cache key `options_screener_v2` (TTL 120s). `POST /api/options/dashboard` returns in <100ms. Response: `{ tickers:[...], all_contracts:[...500], market_summary:{...} }`. Per-ticker: call_volume, put_volume, pc_ratio, call_oi, put_oi, avg_call_iv (volume-weighted), avg_put_iv, iv_skew, max_pain, top_calls[:10], top_puts[:10]. Flat all_contracts: every active contract with underlying, category (stock/etf), side (call/put), strike, bid/ask/last, volume, openInterest, vol_oi_ratio, delta, gamma, theta, vega, iv — frontend can sort by any field. Claude is only for the conversational chat bar below the screener. Cold-start fallback for first request before loop runs.
 
 ## External Dependencies
 - **AI**: OpenAI (GPT-4o for orchestration/classification), Anthropic (Claude Sonnet for reasoning/analysis), xAI Grok.
