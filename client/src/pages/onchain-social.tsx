@@ -392,7 +392,27 @@ function isConsensusBriefing(obj: any): boolean {
     (obj.market_pulse || obj.hype_radar || obj.consensus_picks || obj.fresh_trades);
 }
 
-function renderConsensusBriefing(data: any) {
+// ─── TradingView chart dropdown ───────────────────────────────────
+function TradingViewChart({ symbol }: { symbol: string }) {
+  const src = `https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=${encodeURIComponent(symbol)}&interval=D&hidesidetoolbar=0&symboledit=1&saveimage=0&toolbarbg=0b1217&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&showpopupbutton=0&width=100%25&height=100%25`;
+  return (
+    <div style={{ width: '100%', height: 400, marginTop: 8, borderRadius: 8, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.07)' }}>
+      <iframe
+        src={src}
+        width="100%"
+        height="100%"
+        frameBorder="0"
+        allowTransparency={true}
+        style={{ display: 'block' }}
+      />
+    </div>
+  );
+}
+
+function ConsensusBriefingCard({ data }: { data: any }) {
+  const [expandedPick, setExpandedPick] = useState<string | null>(null);
+  const [expandedHypeTicker, setExpandedHypeTicker] = useState<string | null>(null);
+
   const C = {
     blue: '#38bdf8', gold: '#f59e0b', green: '#22c55e', red: '#ef4444',
     purple: '#a78bfa', dim: '#475569', text: '#94a3b8', bright: '#e2e8f0',
@@ -406,6 +426,22 @@ function renderConsensusBriefing(data: any) {
   const bias = data.portfolio_bias || '';
 
   const verdictColor = /bull/i.test(mp.verdict || '') ? C.green : /bear/i.test(mp.verdict || '') ? C.red : C.gold;
+
+  const buzzColor = (level: string) => {
+    if (/extreme/i.test(level)) return C.red;
+    if (/high/i.test(level)) return C.gold;
+    if (/moderate/i.test(level)) return '#eab308';
+    return C.dim;
+  };
+
+  const handlePickClick = (ticker: string) => {
+    setExpandedPick(expandedPick === ticker ? null : ticker);
+  };
+
+  const handleHypeTickerClick = (theme: string, ticker: string) => {
+    const key = `${theme}-${ticker}`;
+    setExpandedHypeTicker(expandedHypeTicker === key ? null : key);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -437,24 +473,58 @@ function renderConsensusBriefing(data: any) {
             textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
             Hype Radar ({hypeRadar.length})
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-            {hypeRadar.map((h: any, i: number) => (
-              <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: '0.6rem 0.85rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <span style={{ color: C.blue, fontWeight: 800, fontSize: '0.82rem', fontFamily: font }}>{h.ticker || h.symbol}</span>
-                  {h.mentions != null && (
-                    <span style={{ color: C.dim, fontSize: '0.62rem', fontFamily: font }}>{h.mentions} mentions</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {hypeRadar.map((h: any, i: number) => {
+              const themeKey = h.theme || `hype-${i}`;
+              const bc = buzzColor(h.buzz_level || '');
+              return (
+                <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: '0.7rem 0.85rem' }}>
+                  {/* Theme title + buzz badge */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: 6 }}>
+                    <span style={{ color: C.bright, fontWeight: 700, fontSize: '0.78rem', fontFamily: font }}>{h.theme || 'Untitled Theme'}</span>
+                    {h.buzz_level && (
+                      <span style={{
+                        padding: '1px 7px', borderRadius: 100, fontSize: '0.58rem', fontWeight: 700,
+                        fontFamily: font, color: bc, border: `1px solid ${bc}40`,
+                        background: `${bc}12`, textTransform: 'uppercase', letterSpacing: '0.06em',
+                      }}>{h.buzz_level}</span>
+                    )}
+                  </div>
+
+                  {/* Why hot */}
+                  {h.why_hot && (
+                    <div style={{ color: C.text, fontSize: '0.7rem', fontFamily: sansFont, lineHeight: 1.6, marginBottom: 8 }}>{h.why_hot}</div>
                   )}
-                  {h.sentiment && (
-                    <span style={{ color: /bull/i.test(h.sentiment) ? C.green : /bear/i.test(h.sentiment) ? C.red : C.gold,
-                      fontSize: '0.62rem', fontWeight: 600, fontFamily: font, textTransform: 'uppercase' }}>{h.sentiment}</span>
+
+                  {/* Key tickers as clickable chips */}
+                  {Array.isArray(h.key_tickers) && h.key_tickers.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                      {h.key_tickers.map((ticker: string, j: number) => {
+                        const chipKey = `${themeKey}-${ticker}`;
+                        const isExpanded = expandedHypeTicker === chipKey;
+                        return (
+                          <div key={j} style={{ display: 'flex', flexDirection: 'column' }}>
+                            <button
+                              onClick={() => handleHypeTickerClick(themeKey, ticker)}
+                              style={{
+                                padding: '3px 10px', borderRadius: 6, fontSize: '0.7rem', fontWeight: 700,
+                                fontFamily: font, color: isExpanded ? '#fff' : C.blue,
+                                background: isExpanded ? `${C.blue}30` : `${C.blue}10`,
+                                border: `1px solid ${isExpanded ? C.blue : `${C.blue}30`}`,
+                                cursor: 'pointer', transition: 'all 0.15s',
+                              }}
+                              onMouseOver={e => { (e.currentTarget).style.background = `${C.blue}20`; }}
+                              onMouseOut={e => { (e.currentTarget).style.background = isExpanded ? `${C.blue}30` : `${C.blue}10`; }}
+                            >${ticker}</button>
+                            {isExpanded && <TradingViewChart symbol={`NASDAQ:${ticker}`} />}
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
-                  {h.conviction && <ConvictionBadge value={h.conviction} />}
                 </div>
-                {h.catalyst && <div style={{ color: C.text, fontSize: '0.68rem', fontFamily: sansFont, lineHeight: 1.5, marginTop: 4 }}>{h.catalyst}</div>}
-                {h.reason && <div style={{ color: C.text, fontSize: '0.68rem', fontFamily: sansFont, lineHeight: 1.5, marginTop: 4 }}>{h.reason}</div>}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -467,31 +537,52 @@ function renderConsensusBriefing(data: any) {
             Consensus Picks ({picks.length})
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {picks.map((p: any, i: number) => (
-              <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: '0.75rem 0.9rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: p.thesis || p.reason ? 6 : 0 }}>
-                  {p.rank != null && <span style={{ color: C.gold, fontWeight: 800, fontSize: '0.8rem', fontFamily: font }}>#{p.rank}</span>}
-                  <span style={{ color: C.blue, fontWeight: 800, fontSize: '0.88rem', fontFamily: font }}>{p.ticker || p.symbol}</span>
-                  {p.conviction && <ConvictionBadge value={p.conviction} />}
-                  {p.trader_count != null && (
-                    <span style={{ color: C.dim, fontSize: '0.62rem', fontFamily: font }}>{p.trader_count} traders</span>
-                  )}
-                  {p.direction && (
-                    <span style={{ color: /bull|long|buy/i.test(p.direction) ? C.green : /bear|short|sell/i.test(p.direction) ? C.red : C.gold,
-                      fontSize: '0.62rem', fontWeight: 700, fontFamily: font, textTransform: 'uppercase' }}>{p.direction}</span>
-                  )}
-                </div>
-                {p.thesis && <div style={{ color: C.text, fontSize: '0.72rem', fontFamily: sansFont, lineHeight: 1.6 }}>{p.thesis}</div>}
-                {p.reason && <div style={{ color: C.text, fontSize: '0.72rem', fontFamily: sansFont, lineHeight: 1.6 }}>{p.reason}</div>}
-                {p.why_bullish && <div style={{ color: C.green, fontSize: '0.68rem', fontFamily: sansFont, lineHeight: 1.5, marginTop: 4 }}>Bullish: {p.why_bullish}</div>}
-                {p.risks && <div style={{ color: C.red, fontSize: '0.68rem', fontFamily: sansFont, lineHeight: 1.5, marginTop: 4 }}>Risks: {p.risks}</div>}
-                {Array.isArray(p.traders) && p.traders.length > 0 && (
-                  <div style={{ color: C.dim, fontSize: '0.62rem', fontFamily: font, marginTop: 4 }}>
-                    Traders: {p.traders.join(', ')}
+            {picks.map((p: any, i: number) => {
+              const pickTicker = p.ticker || p.symbol || `pick-${i}`;
+              const isExpanded = expandedPick === pickTicker;
+              const tvSymbol = p.tradingview_symbol || `NASDAQ:${pickTicker}`;
+              return (
+                <div key={i}>
+                  <div
+                    onClick={() => handlePickClick(pickTicker)}
+                    style={{
+                      background: isExpanded ? `${C.card}` : C.card,
+                      border: `1px solid ${isExpanded ? C.blue + '40' : C.border}`,
+                      borderRadius: 8, padding: '0.75rem 0.9rem',
+                      cursor: 'pointer', transition: 'border-color 0.15s',
+                    }}
+                    onMouseOver={e => { (e.currentTarget).style.borderColor = `${C.blue}30`; }}
+                    onMouseOut={e => { (e.currentTarget).style.borderColor = isExpanded ? `${C.blue}40` : 'rgba(255,255,255,0.07)'; }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: p.thesis || p.reason ? 6 : 0 }}>
+                      {p.rank != null && <span style={{ color: C.gold, fontWeight: 800, fontSize: '0.8rem', fontFamily: font }}>#{p.rank}</span>}
+                      <span style={{ color: C.blue, fontWeight: 800, fontSize: '0.88rem', fontFamily: font }}>{pickTicker}</span>
+                      {p.conviction && <ConvictionBadge value={p.conviction} />}
+                      {p.trader_count != null && (
+                        <span style={{ color: C.dim, fontSize: '0.62rem', fontFamily: font }}>{p.trader_count} traders</span>
+                      )}
+                      {p.direction && (
+                        <span style={{ color: /bull|long|buy/i.test(p.direction) ? C.green : /bear|short|sell/i.test(p.direction) ? C.red : C.gold,
+                          fontSize: '0.62rem', fontWeight: 700, fontFamily: font, textTransform: 'uppercase' }}>{p.direction}</span>
+                      )}
+                      <span style={{ color: C.dim, fontSize: '0.58rem', fontFamily: font, marginLeft: 'auto' }}>
+                        {isExpanded ? '▼ chart' : '▶ chart'}
+                      </span>
+                    </div>
+                    {p.thesis && <div style={{ color: C.text, fontSize: '0.72rem', fontFamily: sansFont, lineHeight: 1.6 }}>{p.thesis}</div>}
+                    {p.reason && <div style={{ color: C.text, fontSize: '0.72rem', fontFamily: sansFont, lineHeight: 1.6 }}>{p.reason}</div>}
+                    {p.why_bullish && <div style={{ color: C.green, fontSize: '0.68rem', fontFamily: sansFont, lineHeight: 1.5, marginTop: 4 }}>Bullish: {p.why_bullish}</div>}
+                    {p.risks && <div style={{ color: C.red, fontSize: '0.68rem', fontFamily: sansFont, lineHeight: 1.5, marginTop: 4 }}>Risks: {p.risks}</div>}
+                    {Array.isArray(p.traders) && p.traders.length > 0 && (
+                      <div style={{ color: C.dim, fontSize: '0.62rem', fontFamily: font, marginTop: 4 }}>
+                        Traders: {p.traders.join(', ')}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            ))}
+                  {isExpanded && <TradingViewChart symbol={tvSymbol} />}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -829,7 +920,7 @@ function GrokSocialAgent() {
                 }}>
                   {msg.role === 'assistant'
                     ? isConsensusBriefing(msg.structured)
-                      ? renderConsensusBriefing(msg.structured)
+                      ? <ConsensusBriefingCard data={msg.structured} />
                       : (msg.structured?.scan_type === 'x_trader_consensus' || msg.structured?.display_type === 'social')
                         ? renderConsensusResponse(msg.structured, typeof msg.content === 'string' ? msg.content : undefined)
                         : isBriefingResponse(msg.content) || isBriefingResponse(msg.structured)
