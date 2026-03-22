@@ -1059,6 +1059,7 @@ export default function TradingAgent() {
               </div>
               {p.risk && <div style={{ padding:12, background:`${C.red}08`, border:`1px solid ${C.red}15`, borderRadius:8, color:C.text, fontSize:12, fontFamily:sansFont }}><span style={{ color:C.red, fontWeight:700 }}>Risk: </span>{p.risk}</div>}
               {p.stage && <div style={{ marginTop:10, color:C.dim, fontSize:11, fontFamily:font }}>Weinstein: {p.stage}</div>}
+              <TradingViewMini ticker={p.ticker} pick={p} />
             </div>}
           </CardWrap>;
         })}
