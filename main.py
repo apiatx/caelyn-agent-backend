@@ -2732,6 +2732,22 @@ async def get_history_recent(request: Request, limit: int = 10):
         "_meta": _history_storage_meta(),
     }
 
+@app.get("/api/history/sidebar")
+@limiter.limit("30/minute")
+@traceable(name="main.get_history_sidebar")
+async def get_history_sidebar(request: Request, limit: int = 10):
+    """Sidebar-friendly recent history — same shape as /api/history/recent."""
+    from data.prompt_history import get_all
+    user_id = getattr(request.state, "user_id", "default")
+    all_history = get_all(user_id=user_id)
+    shaped = _shape_prompt_history(all_history, recent_limit=limit)
+    return {
+        "recent": shaped.get("recent", []),
+        "recent_count": shaped.get("recent_count", 0),
+        "total_count": shaped.get("total_count", 0),
+        "_meta": _history_storage_meta(),
+    }
+
 @app.get("/api/history/storage-info")
 @limiter.limit("10/minute")
 @traceable(name="main.history_storage_info")
@@ -2849,7 +2865,18 @@ async def save_history(request: Request, x_api_key: str = Header(None)):
         raise HTTPException(status_code=400, detail="category, intent, and content are required")
     user_id = getattr(request.state, "user_id", "default")
     from data.prompt_history import save_response
-    entry = save_response(category, intent, content, display_type, user_id=user_id)
+    entry = save_response(
+        category,
+        intent,
+        content,
+        display_type,
+        user_id=user_id,
+        model_used=body.get("model_used"),
+        query=body.get("query"),
+        tickers=body.get("tickers"),
+        conversation=body.get("conversation"),
+        structured_response=body.get("structured_response"),
+    )
     return {"success": True, "entry": entry}
 
 @app.delete("/api/history/{category}/{intent}/{entry_id}")
