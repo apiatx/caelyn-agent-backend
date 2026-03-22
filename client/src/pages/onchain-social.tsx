@@ -30,6 +30,7 @@ const SUGGESTED_PROMPTS = [
 
 // ─── Sentiment color helper ───────────────────────────────────────
 function renderGrokResponse(text: string) {
+  if (typeof text !== 'string') text = JSON.stringify(text, null, 2);
   // Split into lines, apply color coding for sentiment words
   return text.split('\n').map((line, i) => {
     // Apply inline coloring for sentiment keywords
@@ -61,6 +62,127 @@ function renderGrokResponse(text: string) {
       <div key={i} dangerouslySetInnerHTML={{ __html: html || '&nbsp;' }} />
     );
   });
+}
+
+// ─── Structured briefing card renderer ────────────────────────────
+interface BriefingSection {
+  heading: string;
+  bullets: string[];
+}
+
+interface BriefingResponse {
+  display_type: 'briefing';
+  title: string;
+  summary: string;
+  sections: BriefingSection[];
+  sentiment_score?: number;
+  confidence?: number;
+  metadata?: { tokens_analyzed?: number; sources?: string[] };
+}
+
+function isBriefingResponse(obj: any): obj is BriefingResponse {
+  return obj && typeof obj === 'object' && obj.display_type === 'briefing';
+}
+
+function renderBriefingCard(data: BriefingResponse) {
+  const sentimentColor = (data.sentiment_score ?? 5) >= 7
+    ? '#22c55e'
+    : (data.sentiment_score ?? 5) >= 4
+      ? '#f59e0b'
+      : '#ef4444';
+  const confidenceColor = (data.confidence ?? 5) >= 7
+    ? '#22c55e'
+    : (data.confidence ?? 5) >= 4
+      ? '#f59e0b'
+      : '#64748b';
+
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(15,23,42,0.95), rgba(10,15,30,0.98))',
+      border: '1px solid rgba(92,200,240,0.15)',
+      borderRadius: 10,
+      padding: '1rem 1.2rem',
+      fontFamily: "'JetBrains Mono', monospace",
+    }}>
+      {/* Title */}
+      <div style={{
+        fontSize: '0.85rem',
+        fontWeight: 700,
+        color: '#e2e8f0',
+        marginBottom: '0.5rem',
+        borderBottom: '1px solid rgba(255,255,255,0.06)',
+        paddingBottom: '0.5rem',
+      }}>{data.title}</div>
+
+      {/* Summary */}
+      <div style={{
+        fontSize: '0.74rem',
+        color: '#94a3b8',
+        lineHeight: 1.7,
+        marginBottom: '0.75rem',
+      }}>{data.summary}</div>
+
+      {/* Sections */}
+      {data.sections?.map((section, si) => (
+        <div key={si} style={{ marginBottom: '0.6rem' }}>
+          <div style={{
+            fontSize: '0.76rem',
+            fontWeight: 700,
+            color: '#5cc8f0',
+            marginBottom: '0.3rem',
+          }}>{section.heading}</div>
+          <ul style={{
+            margin: 0,
+            paddingLeft: '1.2rem',
+            listStyleType: 'disc',
+          }}>
+            {section.bullets?.map((bullet, bi) => (
+              <li key={bi} style={{
+                fontSize: '0.72rem',
+                color: '#94a3b8',
+                lineHeight: 1.65,
+                marginBottom: '0.15rem',
+              }}>{bullet}</li>
+            ))}
+          </ul>
+        </div>
+      ))}
+
+      {/* Sentiment & Confidence */}
+      {(data.sentiment_score != null || data.confidence != null) && (
+        <div style={{
+          display: 'flex',
+          gap: '1rem',
+          marginTop: '0.6rem',
+          paddingTop: '0.5rem',
+          borderTop: '1px solid rgba(255,255,255,0.06)',
+          fontSize: '0.7rem',
+        }}>
+          {data.sentiment_score != null && (
+            <span style={{ color: sentimentColor, fontWeight: 600 }}>
+              Sentiment: {data.sentiment_score}/10
+            </span>
+          )}
+          {data.confidence != null && (
+            <span style={{ color: confidenceColor, fontWeight: 600 }}>
+              Confidence: {data.confidence}/10
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Metadata */}
+      {data.metadata?.sources && data.metadata.sources.length > 0 && (
+        <div style={{
+          marginTop: '0.4rem',
+          fontSize: '0.65rem',
+          color: '#475569',
+        }}>
+          Sources: {data.metadata.sources.join(', ')}
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface GrokMessage {
@@ -521,7 +643,9 @@ function GrokSocialAgent() {
                   {msg.role === 'assistant'
                     ? (msg.structured?.scan_type === 'x_trader_consensus' || msg.structured?.display_type === 'social')
                       ? renderConsensusResponse(msg.structured)
-                      : renderGrokResponse(msg.content)
+                      : isBriefingResponse(msg.content) || isBriefingResponse(msg.structured)
+                        ? renderBriefingCard((isBriefingResponse(msg.content) ? msg.content : msg.structured) as BriefingResponse)
+                        : renderGrokResponse(msg.content)
                     : msg.content}
                 </div>
               </div>
