@@ -92,20 +92,13 @@ export function SidebarNavigation({ className = "", isCollapsed, isMobile = fals
           id: 'stocks-earnings-calendar',
           label: 'Earnings',
           icon: <CalendarDays className="w-4 h-4" />,
-          children: [
-            {
-              id: 'stocks-earnings-main',
-              label: 'Calendar',
-              icon: <CalendarDays className="w-4 h-4" />,
-              path: '/app/stocks/earnings-calendar'
-            },
-            {
-              id: 'stocks-options',
-              label: 'Options',
-              icon: <BarChart3 className="w-4 h-4" />,
-              path: '/app/stocks/options'
-            }
-          ]
+          path: '/app/stocks/earnings-calendar'
+        },
+        {
+          id: 'stocks-options',
+          label: 'Options',
+          icon: <BarChart3 className="w-4 h-4" />,
+          path: '/app/stocks/options'
         },
         {
           id: 'stocks-sectors',
