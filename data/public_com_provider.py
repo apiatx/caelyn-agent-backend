@@ -32,9 +32,12 @@ class PublicComProvider:
         self.api_key = api_key          # This is the SECRET key
         self._account_id = None
         self._access_token = None       # Fetched via token exchange
+        self._token_lock = asyncio.Lock()
+        self._account_lock = asyncio.Lock()
 
     async def _get_access_token(self) -> str:
-        """Exchange the secret key for a time-limited access token."""
+        """Exchange the secret key for a time-limited access token.
+        Uses a lock to prevent concurrent token exchanges (race condition)."""
         if self._access_token:
             return self._access_token
 
@@ -44,28 +47,37 @@ class PublicComProvider:
             self._access_token = cached
             return cached
 
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    self.AUTH_URL,
-                    headers={"Content-Type": "application/json"},
-                    json={
-                        "secret": self.api_key,
-                        "validityInMinutes": _ACCESS_TOKEN_VALIDITY_MINUTES,
-                    },
-                )
-            if resp.status_code == 200:
-                token = resp.json().get("accessToken")
-                if token:
-                    self._access_token = token
-                    cache.set(cache_key, token, _ACCESS_TOKEN_CACHE_TTL)
-                    print("[PUBLIC.COM] Access token obtained successfully")
-                    return token
-            print(f"[PUBLIC.COM] Token exchange failed: {resp.status_code} {resp.text[:300]}")
-            return None
-        except Exception as e:
-            print(f"[PUBLIC.COM] Token exchange error: {e}")
-            return None
+        async with self._token_lock:
+            # Re-check after acquiring the lock (another coroutine may have set it)
+            if self._access_token:
+                return self._access_token
+            cached = cache.get(cache_key)
+            if cached:
+                self._access_token = cached
+                return cached
+
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.post(
+                        self.AUTH_URL,
+                        headers={"Content-Type": "application/json"},
+                        json={
+                            "secret": self.api_key,
+                            "validityInMinutes": _ACCESS_TOKEN_VALIDITY_MINUTES,
+                        },
+                    )
+                if resp.status_code == 200:
+                    token = resp.json().get("accessToken")
+                    if token:
+                        self._access_token = token
+                        cache.set(cache_key, token, _ACCESS_TOKEN_CACHE_TTL)
+                        print("[PUBLIC.COM] Access token obtained successfully")
+                        return token
+                print(f"[PUBLIC.COM] Token exchange failed: {resp.status_code} {resp.text[:300]}")
+                return None
+            except Exception as e:
+                print(f"[PUBLIC.COM] Token exchange error: {e}")
+                return None
 
     def _make_headers(self, access_token: str) -> dict:
         return {
@@ -77,34 +89,39 @@ class PublicComProvider:
         if self._account_id:
             return self._account_id
 
-        access_token = await self._get_access_token()
-        if not access_token:
-            return None
+        async with self._account_lock:
+            # Re-check after acquiring lock
+            if self._account_id:
+                return self._account_id
 
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(
-                    f"{self.BASE_URL}/trading/account",
-                    headers=self._make_headers(access_token),
-                )
-            if resp.status_code == 200:
-                data = resp.json()
-                accounts = data.get("accounts", [])
-                if accounts:
-                    self._account_id = accounts[0].get("accountId")
-                    print(f"[PUBLIC.COM] Account ID resolved: {self._account_id}")
-                    return self._account_id
-            elif resp.status_code == 401:
-                # Token expired mid-session — clear and retry once
-                print(f"[PUBLIC.COM] Access token expired, clearing cache for retry")
-                self._access_token = None
-                cache_key = "public_com:access_token"
-                cache.delete(cache_key) if hasattr(cache, 'delete') else None
-            print(f"[PUBLIC.COM] Failed to get account ID: {resp.status_code} {resp.text[:200]}")
-            return None
-        except Exception as e:
-            print(f"[PUBLIC.COM] Account ID error: {e}")
-            return None
+            access_token = await self._get_access_token()
+            if not access_token:
+                return None
+
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.get(
+                        f"{self.BASE_URL}/trading/account",
+                        headers=self._make_headers(access_token),
+                    )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    accounts = data.get("accounts", [])
+                    if accounts:
+                        self._account_id = accounts[0].get("accountId")
+                        print(f"[PUBLIC.COM] Account ID resolved: {self._account_id}")
+                        return self._account_id
+                elif resp.status_code == 401:
+                    # Token expired mid-session — clear and retry once
+                    print("[PUBLIC.COM] Access token expired, clearing for retry")
+                    self._access_token = None
+                    if hasattr(cache, 'delete'):
+                        cache.delete("public_com:access_token")
+                print(f"[PUBLIC.COM] Failed to get account ID: {resp.status_code} {resp.text[:200]}")
+                return None
+            except Exception as e:
+                print(f"[PUBLIC.COM] Account ID error: {e}")
+                return None
 
     @traceable(name="public_com.get_option_expirations")
     async def get_option_expirations(self, symbol: str) -> list:
@@ -331,51 +348,56 @@ class PublicComProvider:
         }
 
     @traceable(name="public_com.scan_high_volume_options")
-    async def scan_high_volume_options(self, symbols: list) -> list:
+    async def scan_high_volume_options(self, symbols: list) -> tuple:
         """
         For a list of tickers, get the nearest expiration chain and find
         contracts with high volume/OI ratios (unusual activity signal).
-        Returns a flat list of notable contracts across all symbols.
+        Returns (notable_contracts, all_chains_dict) so callers can reuse
+        the fetched chains without a second round of API calls.
+        Scans 8 tickers max, nearest expiry only — keeps total API calls ~24.
         """
         notable = []
+        all_chains = {}
 
         async def _scan_one(symbol: str):
             expirations = await self.get_option_expirations(symbol)
             if not expirations:
-                return []
+                return [], {}
 
-            # Get nearest 2 expirations for signal density
-            nearest = expirations[:2]
+            # Nearest expiry only — keeps calls to 3 per ticker (chain+greeks+quotes)
+            exp = expirations[0]
+            chain = await self.get_full_chain_with_greeks(symbol, exp)
             results = []
-            for exp in nearest:
-                chain = await self.get_full_chain_with_greeks(symbol, exp)
-                for side in ("calls", "puts"):
-                    for c in chain.get(side, []):
-                        vol = c.get("volume")
-                        oi = c.get("openInterest")
-                        if vol and oi and int(vol) > 0 and int(oi) > 0:
-                            ratio = int(vol) / int(oi)
-                            if ratio > 1.5 or int(vol) > 5000:
-                                results.append({
-                                    **c,
-                                    "underlying": symbol,
-                                    "expiration": exp,
-                                    "side": "call" if side == "calls" else "put",
-                                    "vol_oi_ratio": round(ratio, 2),
-                                })
-            return results
+            for side in ("calls", "puts"):
+                for c in chain.get(side, []):
+                    vol = c.get("volume")
+                    oi = c.get("openInterest")
+                    if vol and oi and int(vol) > 0 and int(oi) > 0:
+                        ratio = int(vol) / int(oi)
+                        if ratio > 1.5 or int(vol) > 5000:
+                            results.append({
+                                **c,
+                                "underlying": symbol,
+                                "expiration": exp,
+                                "side": "call" if side == "calls" else "put",
+                                "vol_oi_ratio": round(ratio, 2),
+                            })
+            return results, {symbol: {"expiration": exp, **chain}}
 
-        # Process up to 5 symbols concurrently to stay within rate limits
-        sem = asyncio.Semaphore(5)
+        # Process 3 symbols concurrently — Public.com allows 10 req/sec,
+        # each ticker makes 3-4 sequential calls, so 3 concurrent = ~9 req burst
+        # Cap at 8 tickers (was 15) — 8 × 3 calls = 24 total API calls
+        sem = asyncio.Semaphore(3)
 
         async def _bounded(sym):
             async with sem:
                 return await _scan_one(sym)
 
-        results = await asyncio.gather(*[_bounded(s) for s in symbols[:15]])
-        for r in results:
-            notable.extend(r)
+        results = await asyncio.gather(*[_bounded(s) for s in symbols[:8]])
+        for contracts, chain_map in results:
+            notable.extend(contracts)
+            all_chains.update(chain_map)
 
         # Sort by vol/OI ratio descending
         notable.sort(key=lambda x: x.get("vol_oi_ratio", 0), reverse=True)
-        return notable[:50]
+        return notable[:50], all_chains

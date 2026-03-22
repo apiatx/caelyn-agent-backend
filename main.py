@@ -4502,35 +4502,20 @@ async def options_dashboard(
     t0 = _time.time()
 
     try:
-        # Phase 1: Gather raw options data from Public.com
-        all_chains = {}
-        unusual_contracts = []
-
-        # Also gather Barchart scraper data for cross-referencing
-        barchart_unusual, barchart_volume = await asyncio.gather(
-            data_service.options.get_unusual_options_activity(),
-            data_service.options.get_options_volume_leaders(),
+        # Phase 1: Gather raw options data — run Barchart scrape + Public.com scan in parallel
+        # scan_high_volume_options now returns (notable_contracts, all_chains_dict) in one pass
+        # — no second chain-fetch needed, cutting API calls from 120+ down to ~24.
+        (
+            (barchart_unusual, barchart_volume),
+            (unusual_contracts, all_chains),
+        ) = await asyncio.gather(
+            asyncio.gather(
+                data_service.options.get_unusual_options_activity(),
+                data_service.options.get_options_volume_leaders(),
+            ),
+            data_service.public_com.scan_high_volume_options(tickers),
         )
         barchart_signals = data_service.options.interpret_flow(barchart_unusual)
-
-        # Fetch chains + high-vol scan from Public.com
-        scan_results = await data_service.public_com.scan_high_volume_options(tickers)
-        unusual_contracts = scan_results
-
-        # For each ticker, also grab nearest expiration chain for Claude context
-        async def _get_chain(ticker):
-            exps = await data_service.public_com.get_option_expirations(ticker)
-            if not exps:
-                return None
-            exp = requested_expiration if requested_expiration and requested_expiration in exps else exps[0]
-            chain = await data_service.public_com.get_full_chain_with_greeks(ticker, exp)
-            return chain
-
-        chain_tasks = [_get_chain(t) for t in tickers[:10]]
-        chain_results = await asyncio.gather(*chain_tasks, return_exceptions=True)
-        for i, result in enumerate(chain_results):
-            if result and not isinstance(result, Exception):
-                all_chains[tickers[i]] = result
 
         gather_time = _time.time() - t0
         print(f"[OPTIONS_DASH] Data gathered in {gather_time:.1f}s — {len(all_chains)} chains, {len(unusual_contracts)} unusual contracts")
