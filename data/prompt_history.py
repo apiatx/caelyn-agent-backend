@@ -47,7 +47,8 @@ try:
 except Exception as e:
     print(f"[HISTORY] PostgreSQL unavailable ({e}), trying Object Storage...")
 
-# 2. Try Object Storage
+# 2. Try Object Storage (also used as migration source when PostgreSQL is primary)
+_obj_client_for_migration = None
 if not _use_postgres:
     try:
         from replit.object_storage import Client as _ObjClient
@@ -63,6 +64,51 @@ if not _use_postgres:
                 print("[HISTORY] Using Replit DB for prompt history (dev only)")
         except Exception as e2:
             print(f"[HISTORY] Replit DB unavailable ({e2}), falling back to JSON files")
+else:
+    # PostgreSQL is primary — check if Object Storage has data to migrate
+    try:
+        from replit.object_storage import Client as _ObjClient
+        _obj_client_for_migration = _ObjClient()
+    except Exception:
+        _obj_client_for_migration = None
+
+# ── One-time migration: Object Storage / JSON → PostgreSQL ──
+if _use_postgres and _obj_client_for_migration is not None:
+    try:
+        # Check if PostgreSQL is empty for the default user
+        _existing = _pg_read("default")
+        if not _existing:
+            # Try migrating from Object Storage
+            try:
+                _obj_raw = _obj_client_for_migration.download_as_text("ph/default.json")
+                if _obj_raw:
+                    _obj_data = json.loads(_obj_raw)
+                    if isinstance(_obj_data, dict) and _obj_data:
+                        _pg_write("default", _obj_data)
+                        print(f"[HISTORY] Migrated {len(_obj_data)} buckets from Object Storage → PostgreSQL")
+                    else:
+                        print("[HISTORY] Object Storage has no prompt history to migrate")
+                else:
+                    print("[HISTORY] Object Storage has no prompt history to migrate")
+            except Exception as _mig_err:
+                print(f"[HISTORY] Object Storage migration skipped: {_mig_err}")
+
+            # Also try migrating from JSON files
+            if not _pg_read("default"):
+                _json_path = Path("data/prompt_history_default.json")
+                if _json_path.exists():
+                    try:
+                        with open(_json_path, "r") as _jf:
+                            _json_data = json.load(_jf)
+                        if isinstance(_json_data, dict) and _json_data:
+                            _pg_write("default", _json_data)
+                            print(f"[HISTORY] Migrated {len(_json_data)} buckets from JSON → PostgreSQL")
+                    except Exception as _jmig_err:
+                        print(f"[HISTORY] JSON migration skipped: {_jmig_err}")
+        else:
+            print(f"[HISTORY] PostgreSQL already has {len(_existing)} buckets, no migration needed")
+    except Exception as _mig_outer:
+        print(f"[HISTORY] Migration check failed: {_mig_outer}")
 
 
 def _get_lock(user_id: str) -> Lock:
