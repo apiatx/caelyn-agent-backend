@@ -13,34 +13,79 @@ except ImportError:
         return _noop
 
 OPTIONS_CACHE_TTL = 120  # 2 min — options data is time-sensitive
+_ACCESS_TOKEN_VALIDITY_MINUTES = 55  # request 55-min tokens, cache for 54 min
+_ACCESS_TOKEN_CACHE_TTL = 54 * 60   # 54 minutes in seconds
 
 
 class PublicComProvider:
     """
     Public.com brokerage API provider for live options data.
     Endpoints: option expirations, option chain, quotes (volume/OI), greeks.
-    Auth: Bearer token via PUBLIC_COM_API_KEY.
+    Auth: Two-step — exchange secret key for access token, then Bearer token.
     Rate limit: 10 req/sec globally.
     """
 
     BASE_URL = "https://api.public.com/userapigateway"
+    AUTH_URL = "https://api.public.com/userapiauthservice/personal/access-tokens"
 
     def __init__(self, api_key: str):
-        self.api_key = api_key
+        self.api_key = api_key          # This is the SECRET key
         self._account_id = None
-        self._headers = {
-            "Authorization": f"Bearer {api_key}",
+        self._access_token = None       # Fetched via token exchange
+
+    async def _get_access_token(self) -> str:
+        """Exchange the secret key for a time-limited access token."""
+        if self._access_token:
+            return self._access_token
+
+        cache_key = "public_com:access_token"
+        cached = cache.get(cache_key)
+        if cached:
+            self._access_token = cached
+            return cached
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    self.AUTH_URL,
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "secret": self.api_key,
+                        "validityInMinutes": _ACCESS_TOKEN_VALIDITY_MINUTES,
+                    },
+                )
+            if resp.status_code == 200:
+                token = resp.json().get("accessToken")
+                if token:
+                    self._access_token = token
+                    cache.set(cache_key, token, _ACCESS_TOKEN_CACHE_TTL)
+                    print("[PUBLIC.COM] Access token obtained successfully")
+                    return token
+            print(f"[PUBLIC.COM] Token exchange failed: {resp.status_code} {resp.text[:300]}")
+            return None
+        except Exception as e:
+            print(f"[PUBLIC.COM] Token exchange error: {e}")
+            return None
+
+    def _make_headers(self, access_token: str) -> dict:
+        return {
+            "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
 
     async def _get_account_id(self) -> str:
         if self._account_id:
             return self._account_id
+
+        access_token = await self._get_access_token()
+        if not access_token:
+            return None
+
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
                     f"{self.BASE_URL}/trading/account",
-                    headers=self._headers,
+                    headers=self._make_headers(access_token),
                 )
             if resp.status_code == 200:
                 data = resp.json()
@@ -49,6 +94,12 @@ class PublicComProvider:
                     self._account_id = accounts[0].get("accountId")
                     print(f"[PUBLIC.COM] Account ID resolved: {self._account_id}")
                     return self._account_id
+            elif resp.status_code == 401:
+                # Token expired mid-session — clear and retry once
+                print(f"[PUBLIC.COM] Access token expired, clearing cache for retry")
+                self._access_token = None
+                cache_key = "public_com:access_token"
+                cache.delete(cache_key) if hasattr(cache, 'delete') else None
             print(f"[PUBLIC.COM] Failed to get account ID: {resp.status_code} {resp.text[:200]}")
             return None
         except Exception as e:
@@ -72,7 +123,7 @@ class PublicComProvider:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
                     f"{self.BASE_URL}/marketdata/{account_id}/option-expirations",
-                    headers=self._headers,
+                    headers=self._make_headers(self._access_token),
                     json={"instrument": {"symbol": symbol, "type": "EQUITY"}},
                 )
             if resp.status_code == 200:
@@ -106,7 +157,7 @@ class PublicComProvider:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(
                     f"{self.BASE_URL}/marketdata/{account_id}/option-chain",
-                    headers=self._headers,
+                    headers=self._make_headers(self._access_token),
                     json={
                         "instrument": {"symbol": symbol, "type": "EQUITY"},
                         "expirationDate": expiration,
@@ -146,7 +197,7 @@ class PublicComProvider:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
                     f"{self.BASE_URL}/marketdata/{account_id}/quotes",
-                    headers=self._headers,
+                    headers=self._make_headers(self._access_token),
                     json={"instruments": instruments},
                 )
             if resp.status_code == 200:
@@ -188,7 +239,7 @@ class PublicComProvider:
                     params = "&".join([f"osiSymbols={s}" for s in batch])
                     resp = await client.get(
                         f"{self.BASE_URL}/option-details/{account_id}/greeks?{params}",
-                        headers=self._headers,
+                        headers=self._make_headers(self._access_token),
                     )
                     if resp.status_code == 200:
                         data = resp.json()
