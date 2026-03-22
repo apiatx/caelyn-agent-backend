@@ -363,7 +363,8 @@ def save_response(category: str, intent: str, content: str, display_type: str | 
         entry["tickers"] = tickers
     if conversation:
         entry["conversation"] = conversation
-<<<<<<< HEAD
+    if structured_response:
+        entry["structured_response"] = structured_response
 
     key = f"{category}::{intent}"
 
@@ -382,10 +383,6 @@ def save_response(category: str, intent: str, content: str, display_type: str | 
         return entry
 
     # Non-PostgreSQL path: full read/write (object storage / replit db / file)
-=======
-    if structured_response:
-        entry["structured_response"] = structured_response
->>>>>>> origin/claude/integrate-langchain-oqC18
     with _get_lock(user_id):
         data = _read(user_id)
         if key not in data:
