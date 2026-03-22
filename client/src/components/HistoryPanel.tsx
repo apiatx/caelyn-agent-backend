@@ -274,13 +274,25 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
     setLoading(true);
     try {
       const res = await fetch(`${AGENT_BACKEND_URL}/api/history`, { headers: authHeaders() });
+      console.log('[HISTORY] GET /api/history status:', res.status);
       if (res.ok) {
         const data = await res.json();
+        console.log('[HISTORY] raw response keys:', Object.keys(data || {}));
+        console.log('[HISTORY] items?', Array.isArray(data?.items), 'len:', data?.items?.length);
+        console.log('[HISTORY] recent?', Array.isArray(data?.recent), 'len:', data?.recent?.length);
+        console.log('[HISTORY] total_count:', data?.total_count);
+        if (data?.items?.length > 0) console.log('[HISTORY] first item keys:', Object.keys(data.items[0]));
         // Detect new format { items: [...], recent: [...], total_count: N }
         if (data && typeof data === 'object' && (Array.isArray(data.items) || Array.isArray(data.recent))) {
-          setHistory(normalizeNewHistoryApiResponse(data) as HistoryData);
+          const normalized = normalizeNewHistoryApiResponse(data) as HistoryData;
+          console.log('[HISTORY] normalized (new API) bucket keys:', Object.keys(normalized));
+          const totalEntries = Object.values(normalized).reduce((s, b: any) => s + (b?.entries?.length || 0), 0);
+          console.log('[HISTORY] total normalized entries:', totalEntries);
+          setHistory(normalized);
         } else {
-          setHistory(normalizeHistoryBuckets(data) as HistoryData);
+          const normalized = normalizeHistoryBuckets(data) as HistoryData;
+          console.log('[HISTORY] normalized (old API) bucket keys:', Object.keys(normalized));
+          setHistory(normalized);
         }
       }
     } catch (e) {

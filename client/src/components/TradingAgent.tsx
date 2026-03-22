@@ -51,10 +51,18 @@ const INTENT_TO_HISTORY_CATEGORY: Record<string, string> = {
 function saveToPromptHistory(intent: string, rawResponse: string, displayType?: string, modelUsed?: string, query?: string) {
   const category = INTENT_TO_HISTORY_CATEGORY[intent];
   if (!category) return;
+  // Parse raw response to extract structured_response for new history entries
+  let structured_response: any = undefined;
+  try {
+    const parsed = JSON.parse(rawResponse);
+    if (parsed && typeof parsed === 'object') {
+      structured_response = { analysis: parsed.analysis, structured: parsed.structured, type: parsed.type };
+    }
+  } catch { /* not JSON — leave undefined */ }
   fetch(`${AGENT_BACKEND_URL}/api/history`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ category, intent, content: rawResponse, display_type: displayType, model_used: modelUsed, query }),
+    body: JSON.stringify({ category, intent, content: rawResponse, display_type: displayType, model_used: modelUsed, query, structured_response }),
   }).catch(e => console.error('[HISTORY_SAVE]', e));
 }
 
@@ -367,26 +375,35 @@ export default function TradingAgent() {
     // Falls back to the legacy /api/history/recent endpoint if sidebar is unavailable.
     fetch(`${AGENT_BACKEND_URL}/api/history/sidebar`, { headers: authHeaders() })
       .then(r => {
+        console.log('[SIDEBAR] GET /api/history/sidebar status:', r.status);
         if (!r.ok) throw new Error('sidebar unavailable');
         return r.json();
       })
       .then(data => {
+        console.log('[SIDEBAR] raw response:', JSON.stringify(data).slice(0, 300));
         if (!data) return;
         const entries = normalizeSidebarResponse(data);
+        console.log('[SIDEBAR] normalized entries:', entries.length, entries.map(e => ({ id: e.id, query: e.query, ts: e.timestamp })));
         if (entries.length > 0) { setRecentHistory(entries); return; }
         // Sidebar returned empty — fall back
         throw new Error('sidebar empty');
       })
-      .catch(() => {
+      .catch((err) => {
+        console.log('[SIDEBAR] falling back to /api/history/recent, reason:', err?.message);
         // Fallback: use legacy recent endpoint
         fetch(`${AGENT_BACKEND_URL}/api/history/recent?limit=5`, { headers: authHeaders() })
-          .then(r => r.ok ? r.json() : null)
+          .then(r => { console.log('[RECENT] GET status:', r.status); return r.ok ? r.json() : null; })
           .then(data => {
             if (!data) return;
+            console.log('[RECENT] raw keys:', Object.keys(data), 'items?', Array.isArray(data.items), 'recent?', Array.isArray(data.recent));
             if (Array.isArray(data.items) || Array.isArray(data.recent)) {
-              setRecentHistory(normalizeNewHistoryFlat(data).slice(0, 5));
+              const entries = normalizeNewHistoryFlat(data).slice(0, 5);
+              console.log('[RECENT] normalized entries:', entries.length);
+              setRecentHistory(entries);
             } else {
-              setRecentHistory(normalizeHistory(data).slice(0, 5));
+              const entries = normalizeHistory(data).slice(0, 5);
+              console.log('[RECENT] normalized (old format) entries:', entries.length);
+              setRecentHistory(entries);
             }
           })
           .catch(() => {});
@@ -728,8 +745,9 @@ export default function TradingAgent() {
         saveToPromptHistory(presetIntent, raw, data.display_type || data.type, usedModel, queryText || presetIntent);
       } else if (queryText) {
         let contentToSave: string;
-        try { const p = JSON.parse(raw); contentToSave = JSON.stringify({ _user_query: queryText, ...p }); } catch { contentToSave = raw; }
-        fetch(`${AGENT_BACKEND_URL}/api/history`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ category: 'terminal', intent: 'freeform_query', content: contentToSave, model_used: usedModel, query: queryText }) }).catch(e => console.error('[HISTORY_SAVE]', e));
+        let sr: any = undefined;
+        try { const p = JSON.parse(raw); contentToSave = JSON.stringify({ _user_query: queryText, ...p }); sr = { analysis: p.analysis, structured: p.structured, type: p.type }; } catch { contentToSave = raw; }
+        fetch(`${AGENT_BACKEND_URL}/api/history`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ category: 'terminal', intent: 'freeform_query', content: contentToSave, model_used: usedModel, query: queryText, structured_response: sr }) }).catch(e => console.error('[HISTORY_SAVE]', e));
       }
       setTimeout(fetchRecentHistory, 1500);
     } catch (err: any) {
