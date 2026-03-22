@@ -9,7 +9,7 @@ function MarketSummaryWidget() {
     iframe.style.width = "100%";
     iframe.style.height = "100%";
     iframe.style.border = "none";
-    iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-popups");
+    iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation");
     containerRef.current.appendChild(iframe);
     const doc = iframe.contentDocument;
     if (doc) {
