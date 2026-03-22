@@ -141,7 +141,7 @@ class TradingAgent:
         "top_traders": "x_trader_consensus",
         "consensus_tickers": "x_trader_consensus",
         "x_consensus": "x_trader_consensus",
-        # --- X Select Trader Consensus (curated 18-account list) ---
+        # --- X Select Trader Consensus (curated 25-account list) ---
         "x_select_trader_consensus": "x_select_trader_consensus",
         "select_traders": "x_select_trader_consensus",
         "select_trader_consensus": "x_select_trader_consensus",
@@ -3916,14 +3916,18 @@ class TradingAgent:
                     "the top consensus bullish tickers. Follow your JSON schema exactly."
                 ),
                 "x_select_trader_consensus": (
-                    "Search X for stock/ticker posts from ONLY these exact accounts — no others: "
-                    "from:StockSavvyShay OR from:HyperTechInvest OR from:crux_capital_ OR from:SJCapitalInvest OR "
-                    "from:BlackPantherCap OR from:Kaizen_Investor OR from:Venu_7_ OR from:CKCapitalxx OR "
-                    "from:TheTape_TNM OR from:equitydd OR from:Speculator_io OR from:DrJebaim OR "
-                    "from:StonkValue OR from:stamatoudism OR from:yianisz OR from:sunxliao OR "
-                    "from:futurist_lens OR from:Thomas_james_1 "
-                    "— last 30 days only. Do NOT include posts from any accounts outside this list. "
-                    "Identify consensus bullish tickers across only these 18 selected traders and follow your JSON schema exactly."
+                    "Search the last 10 posts for EACH of these EXACT accounts — no others: "
+                    "from:aleabitoreddit OR from:KobeissiLetter OR from:HyperTechInvest OR from:crux_capital_ OR "
+                    "from:SJCapitalInvest OR from:BlackPantherCap OR from:Kaizen_Investor OR from:Venu_7_ OR "
+                    "from:DrJebaim OR from:CKCapitalxx OR from:TheTape_TNM OR from:equitydd OR "
+                    "from:Speculator_io OR from:StonkValue OR from:stamatoudism OR from:yianisz OR "
+                    "from:sunxliao OR from:futurist_lens OR from:Thomas_james_1 OR from:DeepValueBagger OR "
+                    "from:ConnorJBates_ OR from:BussinBiotech OR from:BambroughKevin OR from:AlexfromBabylon OR "
+                    "from:UncleAlpha007 "
+                    "— extract the highest signal. I want 5-10 tickers in the response and why. "
+                    "Give me the thesis of these X accounts on those tickers and tell me what's really worth watching. "
+                    "Flag any new ticker that has recently started being talked about as a potential new/fresh trade with a good entry. "
+                    "Follow your JSON schema exactly."
                 ),
                 "crypto": (
                     "Search X/crypto Twitter for the most actively discussed cryptocurrencies, DeFi protocols, "
@@ -3952,15 +3956,17 @@ class TradingAgent:
 
         use_deep = not is_collab_agent
 
-        # For x_select_trader_consensus, hard-lock x_search to the curated 18-account list
+        # For x_select_trader_consensus, hard-lock x_search to the curated 25-account list
         # using the native allowed_x_handles API parameter — handles without @ symbol.
         # This constrains the search at the API level, not just via prompt wording.
         _X_SELECT_HANDLES = [
-            "StockSavvyShay", "HyperTechInvest", "crux_capital_", "SJCapitalInvest",
-            "BlackPantherCap", "Kaizen_Investor", "Venu_7_", "CKCapitalxx",
-            "TheTape_TNM", "equitydd", "Speculator_io", "DrJebaim",
-            "StonkValue", "stamatoudism", "yianisz", "sunxliao",
-            "futurist_lens", "Thomas_james_1",
+            "aleabitoreddit", "KobeissiLetter", "HyperTechInvest", "crux_capital_",
+            "SJCapitalInvest", "BlackPantherCap", "Kaizen_Investor", "Venu_7_",
+            "DrJebaim", "CKCapitalxx", "TheTape_TNM", "equitydd",
+            "Speculator_io", "StonkValue", "stamatoudism", "yianisz",
+            "sunxliao", "futurist_lens", "Thomas_james_1", "DeepValueBagger",
+            "ConnorJBates_", "BussinBiotech", "BambroughKevin", "AlexfromBabylon",
+            "UncleAlpha007",
         ]
         x_search_config = (
             {"allowed_x_handles": _X_SELECT_HANDLES}

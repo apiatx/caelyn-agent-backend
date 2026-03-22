@@ -158,7 +158,7 @@ _ALIAS_MAP: dict[str, str] = {
     "consensus_tickers": "x_trader_consensus",
     "x_consensus": "x_trader_consensus",
 
-    # X Select Trader Consensus (curated 18-account list)
+    # X Select Trader Consensus (curated 25-account list)
     "x_select_trader_consensus": "x_select_trader_consensus",
     "select_traders": "x_select_trader_consensus",
     "select_trader_consensus": "x_select_trader_consensus",
