@@ -1133,7 +1133,7 @@ export default function TradingAgent() {
                 <Badge color={convColor(p.conviction)}>{p.conviction}</Badge>
               </div>
             </div>
-            <div style={{ padding:'0 18px 10px', color:C.text, fontSize:12, lineHeight:1.6, fontFamily:sansFont, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.investment_thesis}</div>
+            <div style={{ padding:'0 18px 10px', color:C.text, fontSize:12, lineHeight:1.6, fontFamily:sansFont, ...(isExp ? {} : { overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }) }}>{p.investment_thesis}</div>
             <div style={{ padding:'4px 14px', background:`${convColor(p.conviction)}08`, borderTop:`1px solid ${C.border}`, color:convColor(p.conviction), fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.04em' }}>{p.conviction} CONVICTION{p.why_conviction ? ' — ' + p.why_conviction : ''}</div>
             {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:14 }}>
               {p.moat && <div style={{ padding:12, background:`${C.purple}08`, border:`1px solid ${C.purple}15`, borderRadius:8, marginBottom:10, color:C.text, fontSize:12, fontFamily:sansFont }}><span style={{ color:C.purple, fontWeight:700 }}>Moat: </span>{p.moat}</div>}
