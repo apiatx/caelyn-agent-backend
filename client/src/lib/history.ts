@@ -7,6 +7,7 @@ export interface HistoryEntry {
   model_used?: string;
   tickers?: { ticker: string; rec_price: number | null; current_price?: number | null; pct_change?: number | null }[];
   conversation?: { role: string; content: string }[];
+  structured_response?: { analysis?: string; structured?: any; [key: string]: any } | null;
 }
 
 export interface HistoryBucket {
@@ -55,6 +56,7 @@ export function normalizeHistoryBuckets(apiData: unknown): Record<string, Histor
         model_used: typeof entry.model_used === 'string' ? entry.model_used : undefined,
         tickers: Array.isArray(entry.tickers) ? entry.tickers as any : undefined,
         conversation: Array.isArray(entry.conversation) ? entry.conversation as any : undefined,
+        structured_response: (entry.structured_response && typeof entry.structured_response === 'object') ? entry.structured_response as any : undefined,
       }))
       .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
@@ -110,6 +112,7 @@ export function normalizeNewHistoryApiResponse(apiData: unknown): Record<string,
       model_used: typeof item.model_used === 'string' ? item.model_used : undefined,
       tickers: Array.isArray(item.tickers) ? item.tickers as any : undefined,
       conversation_id: typeof item.conversation_id === 'string' ? item.conversation_id : undefined,
+      structured_response: (item.structured_response && typeof item.structured_response === 'object') ? item.structured_response as any : undefined,
     } as any);
   }
 
@@ -147,6 +150,7 @@ export function normalizeNewHistoryFlat(apiData: unknown): NormalizedHistoryEntr
       model_used: typeof item.model_used === 'string' ? item.model_used : undefined,
       tickers: Array.isArray(item.tickers) ? item.tickers as any : undefined,
       conversation_id: typeof item.conversation_id === 'string' ? item.conversation_id : undefined,
+      structured_response: (item.structured_response && typeof item.structured_response === 'object') ? item.structured_response as any : undefined,
       key: `${category}::${intent}`,
       category,
       intent,
@@ -183,6 +187,7 @@ export function normalizeSidebarResponse(apiData: unknown): NormalizedHistoryEnt
       query: typeof item.title === 'string' ? item.title : undefined,
       model_used: typeof item.last_model_used === 'string' ? item.last_model_used : (typeof item.model_used === 'string' ? item.model_used : undefined),
       conversation_id: typeof item.conversation_id === 'string' ? item.conversation_id : undefined,
+      structured_response: (item.structured_response && typeof item.structured_response === 'object') ? item.structured_response as any : undefined,
       title: typeof item.title === 'string' ? item.title : undefined,
       key: `${category}::${intent}`,
       category,

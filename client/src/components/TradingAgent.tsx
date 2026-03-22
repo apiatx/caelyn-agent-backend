@@ -408,6 +408,20 @@ export default function TradingAgent() {
     return known[intent] || intent.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
 
+  function relativeTime(ts: number): string {
+    const now = Date.now();
+    const diff = Math.max(0, Math.floor((now - ts * 1000) / 1000));
+    if (diff < 60) return 'just now';
+    const mins = Math.floor(diff / 60);
+    if (mins < 60) return `${mins} min ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    if (days === 1) return 'yesterday';
+    if (days < 7) return `${days}d ago`;
+    return new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
   function loadRecentEntry(entry: typeof recentHistory[0]) {
     // If the entry has a conversation_id, restore the full thread from the backend.
     // This preserves cross-model continuity — the backend is source of truth.
@@ -456,13 +470,21 @@ export default function TradingAgent() {
   }
 
   function _loadEntryFromContent(entry: typeof recentHistory[0]) {
+    // Use structured_response directly when available — feeds the full structured data
+    // into the Terminal's existing renderAssistantMessage pipeline
     let parsed: any = null;
-    try { parsed = JSON.parse(entry.content); } catch { /* plain text */ }
+    if (entry.structured_response && typeof entry.structured_response === 'object') {
+      parsed = entry.structured_response;
+    } else {
+      try { parsed = JSON.parse(entry.content); } catch { /* plain text */ }
+    }
     const responseText = parsed?.analysis || parsed?.structured?.message || parsed?.message || entry.content;
-    const title = entry.title || (parsed?._user_query ? (parsed._user_query as string).slice(0, 60) : humanReadableLabel(entry.intent));
+    const title = entry.query
+      ? entry.query.slice(0, 60)
+      : (entry.title || (parsed?._user_query ? (parsed._user_query as string).slice(0, 60) : humanReadableLabel(entry.intent)));
     const newPanel: Panel = {
       id: Date.now(), title,
-      userQuery: parsed?._user_query || entry.query || '',
+      userQuery: entry.query || parsed?._user_query || '',
       data: { role: 'assistant', content: responseText, parsed },
       timestamp: entry.timestamp * 1000,
     };
@@ -3118,19 +3140,15 @@ export default function TradingAgent() {
                 <div style={{ color:C.dim, fontSize:10, fontFamily:font, padding:'8px 4px' }}>No history yet</div>
               ) : (
                 <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
-                  {recentHistory.slice(0, 5).map((entry, i) => {
-                    // Sidebar entries have a title field; fallback to intent label or parsed query
-                    let displayLabel = entry.title || entry.query || '';
+                  {recentHistory.slice(0, 10).map((entry, i) => {
+                    // Use query text first, then title/intent as fallback label
+                    let displayLabel = entry.query || entry.title || '';
                     if (!displayLabel) {
                       try { const p = JSON.parse(entry.content); if (p?._user_query) displayLabel = p._user_query; } catch {}
                     }
                     if (!displayLabel) displayLabel = humanReadableLabel(entry.intent);
                     const truncated = displayLabel.length > 55 ? displayLabel.slice(0, 52) + '...' : displayLabel;
-                    const d = new Date(entry.timestamp * 1000);
-                    const isToday = d.toDateString() === new Date().toDateString();
-                    const timeStr = isToday
-                      ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                      : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                    const timeStr = relativeTime(entry.timestamp);
                     const modelStr = entry.model_used === 'agent_collab' ? 'collab' : (entry.model_used || '');
                     return (
                       <div key={`${entry.key}-${i}`} className="rail-item" onClick={() => loadRecentEntry(entry)} style={{ cursor:'pointer', padding:'5px 6px', borderRadius:2, border:`1px solid ${C.border}`, background:C.bg }}>

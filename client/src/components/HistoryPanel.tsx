@@ -119,6 +119,7 @@ interface HistoryEntry {
   conversation_id?: string;
   tickers?: { ticker: string; rec_price: number | null; current_price?: number | null; pct_change?: number | null }[];
   conversation?: { role: string; content: string }[];
+  structured_response?: { analysis?: string; structured?: any; [key: string]: any } | null;
 }
 interface HistoryData {
   [key: string]: {
@@ -680,7 +681,9 @@ export function HistoryPanel({ isOpen, onClose }: { isOpen: boolean; onClose: ()
     let parsed: any = null;
     try { parsed = JSON.parse(entry.content); } catch { /* plain text content */ }
 
-    const summary = parsed ? extractSummary(parsed) : entry.content;
+    // Prefer structured_response.analysis (new entries), fall back to extractSummary
+    const summary = entry.structured_response?.analysis
+      || (parsed ? extractSummary(parsed) : entry.content);
     const topTickers = parsed ? extractTickers(parsed) : [];
     const intentLabel = view.label ||
       CATEGORIES.flatMap(c => c.intents).find(i => i.intent === view.intent)?.label || view.intent;
