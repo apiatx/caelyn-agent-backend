@@ -7,6 +7,7 @@ Auto-creates tables on first use. Survives all deploys and autoscale events.
 
 import json
 import os
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 try:
     from langsmith import traceable
@@ -19,12 +20,32 @@ except ImportError:
         return _noop
 
 
+def _sanitize_database_url(url: str | None) -> str | None:
+    """Strip channel_binding from Neon pooler URLs — psycopg2-binary doesn't
+    always handle SCRAM channel binding correctly with connection poolers."""
+    if not url:
+        return url
+    try:
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        if "channel_binding" in qs:
+            del qs["channel_binding"]
+            new_query = urlencode(qs, doseq=True)
+            url = urlunparse(parsed._replace(query=new_query))
+    except Exception:
+        pass
+    return url
+
+
 # NEON_DATABASE_URL is the externally-accessible cloud DB (works in both dev and
 # production deployments). DATABASE_URL points to Replit's internal Helium host
 # which is only reachable from the dev workspace, not from deployed containers.
-_DATABASE_URL = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+_RAW_DATABASE_URL = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+_DATABASE_URL = _sanitize_database_url(_RAW_DATABASE_URL)
 _pool = None
 _available = False
+# Track last connection error for diagnostics
+_last_conn_error: str | None = None
 
 
 @traceable(name="pg_storage.to_jsonb")
@@ -38,38 +59,76 @@ def _to_jsonb(value):
         return json.dumps(value, default=str)
 
 
+def _destroy_pool():
+    """Tear down the connection pool so the next _get_conn() rebuilds it."""
+    global _pool, _available
+    if _pool is not None:
+        try:
+            _pool.closeall()
+        except Exception:
+            pass
+    _pool = None
+    _available = False
+
+
 @traceable(name="pg_storage.get_conn")
 def _get_conn():
-    """Get a connection from the pool (lazy-initialized)."""
-    global _pool, _available
-    if _pool is None:
-        if not _DATABASE_URL:
-            return None
+    """Get a healthy connection from the pool (lazy-initialized).
+
+    If a pooled connection is stale (Neon kills idle connections aggressively),
+    discard it, destroy the pool, and rebuild once.  This guarantees callers
+    always receive a usable connection or an explicit None.
+    """
+    global _pool, _available, _last_conn_error
+    if not _DATABASE_URL:
+        _last_conn_error = "No NEON_DATABASE_URL or DATABASE_URL set"
+        return None
+
+    for attempt in range(2):  # at most one retry after pool rebuild
+        if _pool is None:
+            try:
+                import psycopg2
+                from psycopg2 import pool as _pg_pool
+                _pool = _pg_pool.SimpleConnectionPool(1, 5, _DATABASE_URL)
+                _available = True
+                _last_conn_error = None
+            except Exception as e:
+                _last_conn_error = f"Pool creation failed: {e}"
+                print(f"[PG_STORAGE] {_last_conn_error}")
+                _available = False
+                return None
+
+        conn = None
         try:
-            import psycopg2
-            from psycopg2 import pool as _pg_pool
-            _pool = _pg_pool.SimpleConnectionPool(1, 5, _DATABASE_URL)
-            _available = True
+            conn = _pool.getconn()
         except Exception as e:
-            print(f"[PG_STORAGE] Failed to create connection pool: {e}")
-            _available = False
-            return None
-    try:
-        conn = _pool.getconn()
+            _last_conn_error = f"getconn failed: {e}"
+            print(f"[PG_STORAGE] {_last_conn_error}")
+            _destroy_pool()
+            continue
+
+        # Health check: verify the connection is alive
         try:
             cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
             cur.execute("SET search_path TO public")
             conn.commit()
             cur.close()
-        except Exception:
+            _last_conn_error = None
+            return conn
+        except Exception as e:
+            _last_conn_error = f"Health check failed (attempt {attempt+1}): {e}"
+            print(f"[PG_STORAGE] {_last_conn_error}")
+            # Connection is dead — drop it and rebuild pool
             try:
-                conn.rollback()
+                _pool.putconn(conn, close=True)
             except Exception:
                 pass
-        return conn
-    except Exception as e:
-        print(f"[PG_STORAGE] Failed to get connection: {e}")
-        return None
+            _destroy_pool()
+            continue
+
+    return None
 
 
 @traceable(name="pg_storage.put_conn")
@@ -92,6 +151,11 @@ def is_available() -> bool:
         return False
     _put_conn(conn)
     return True
+
+
+def get_last_conn_error() -> str | None:
+    """Return the last connection error message (for diagnostics)."""
+    return _last_conn_error
 
 
 

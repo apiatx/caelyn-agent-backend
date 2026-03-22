@@ -2586,7 +2586,7 @@ def _shape_prompt_history(all_history: dict, recent_limit: int = 10, current_pri
 @traceable(name="main.get_conversations")
 async def get_conversations(request: Request):
     from data.chat_history import list_conversations
-    return {"conversations": list_conversations()}
+    return {"conversations": list_conversations(), "_meta": _history_storage_meta()}
 
 @app.get("/api/conversations/{conv_id}")
 @limiter.limit("30/minute")
@@ -2625,6 +2625,21 @@ async def delete_conv(request: Request, conv_id: str):
     return {"success": success}
 
 # ── Prompt History ──────────────────────────────────────────────
+
+def _history_storage_meta() -> dict:
+    """Build a _meta block describing the active storage backend + any errors."""
+    try:
+        from data.prompt_history import _use_postgres as _ph_pg
+        from data.pg_storage import is_available as _pg_ok, get_last_conn_error as _pg_err
+        backend = "postgresql" if _ph_pg else "fallback"
+        return {
+            "storage_backend": backend,
+            "db_connected": _pg_ok() if _ph_pg else False,
+            "db_error": _pg_err() if _ph_pg else None,
+        }
+    except Exception as e:
+        return {"storage_backend": "unknown", "db_connected": False, "db_error": str(e)}
+
 
 @app.get("/api/history")
 @limiter.limit("30/minute")
@@ -2676,7 +2691,9 @@ async def get_history(request: Request):
         recent_limit = int(limit_param)
     except Exception:
         recent_limit = 10
-    return _shape_prompt_history(all_history, recent_limit=recent_limit)
+    result = _shape_prompt_history(all_history, recent_limit=recent_limit)
+    result["_meta"] = _history_storage_meta()
+    return result
 
 
 @app.get("/api/history/recent")
@@ -2691,6 +2708,7 @@ async def get_history_recent(request: Request, limit: int = 10):
         "recent": shaped.get("recent", []),
         "recent_count": shaped.get("recent_count", 0),
         "total_count": shaped.get("total_count", 0),
+        "_meta": _history_storage_meta(),
     }
 
 @app.get("/api/history/storage-info")
@@ -2707,8 +2725,9 @@ async def history_storage_info(request: Request):
         "chat_history_backend": ch_backend,
     }
     try:
-        from data.pg_storage import storage_info as _pg_info
+        from data.pg_storage import storage_info as _pg_info, get_last_conn_error as _pg_err
         info["postgresql"] = _pg_info()
+        info["last_connection_error"] = _pg_err()
     except Exception:
         info["postgresql"] = {"available": False}
     return info
