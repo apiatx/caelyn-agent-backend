@@ -1938,12 +1938,70 @@ async def social_grok_query(
 ):
     """Direct Grok/X query for the Social page — real-time X search via xAI."""
     query = body.get("query", "")
-    if not query.strip():
-        return JSONResponse(status_code=400, content={"error": "No query provided"})
+    preset_intent = body.get("preset_intent", "")
 
     await _wait_for_init()
     if not data_service or not data_service.xai:
         return JSONResponse(status_code=503, content={"error": "xAI sentiment provider not initialized"})
+
+    # ── Select Trader Consensus preset ──────────────────────────────────
+    # Detect by preset_intent OR by query text matching the button label.
+    _SELECT_TRIGGERS = {"x_select_trader_consensus", "select_traders",
+                        "select_trader_consensus", "curated_traders", "x_select_consensus"}
+    _SELECT_QUERY_HINTS = ["select x traders", "select traders", "concensus tickers among select",
+                           "consensus tickers among select"]
+    is_select_consensus = (
+        preset_intent in _SELECT_TRIGGERS
+        or any(hint in (query or "").lower() for hint in _SELECT_QUERY_HINTS)
+    )
+
+    if is_select_consensus:
+        from agent.prompts import X_SELECT_TRADER_CONSENSUS_CONTRACT
+        _X_SELECT_HANDLES = [
+            "aleabitoreddit", "KobeissiLetter", "HyperTechInvest", "crux_capital_",
+            "SJCapitalInvest", "BlackPantherCap", "Kaizen_Investor", "Venu_7_",
+            "DrJebaim", "CKCapitalxx", "TheTape_TNM", "equitydd",
+            "Speculator_io", "StonkValue", "stamatoudism", "yianisz",
+            "sunxliao", "futurist_lens", "Thomas_james_1", "DeepValueBagger",
+            "ConnorJBates_", "BussinBiotech", "BambroughKevin", "AlexfromBabylon",
+            "UncleAlpha007",
+        ]
+        user_prompt = (
+            "Search the last 10 posts for EACH of these EXACT accounts — no others: "
+            + " OR ".join(f"from:{h}" for h in _X_SELECT_HANDLES)
+            + " — extract the highest signal. I want 5-10 tickers in the response and why. "
+            "Give me the thesis of these X accounts on those tickers and tell me what's really worth watching. "
+            "Flag any new ticker that has recently started being talked about as a potential new/fresh trade with a good entry. "
+            "Follow your JSON schema exactly."
+        )
+        print(f"[SOCIAL_GROK] Select trader consensus — {len(_X_SELECT_HANDLES)} handles, x_search constrained")
+        try:
+            result = await data_service.xai._call_grok_with_x_search(
+                prompt=user_prompt,
+                raw_mode=False,
+                use_deep_model=True,
+                timeout=80.0,
+                system_text=X_SELECT_TRADER_CONSENSUS_CONTRACT,
+                x_search_config={"allowed_x_handles": _X_SELECT_HANDLES},
+            )
+            if isinstance(result, dict) and not result.get("error"):
+                return JSONResponse(content={
+                    "response": result,
+                    "query": query or "Consensus tickers among select X traders",
+                    "structured": True,
+                    "preset": "x_select_trader_consensus",
+                })
+            else:
+                err = result.get("error", "unknown") if isinstance(result, dict) else str(result)
+                print(f"[SOCIAL_GROK] Select consensus error: {err}")
+                return JSONResponse(status_code=502, content={"error": err, "query": query})
+        except Exception as e:
+            print(f"[SOCIAL_GROK] Select consensus exception: {e}")
+            return JSONResponse(status_code=500, content={"error": str(e), "query": query})
+
+    # ── Generic social query (free-form) ────────────────────────────────
+    if not query.strip():
+        return JSONResponse(status_code=400, content={"error": "No query provided"})
 
     system_prompt = (
         "You are a financial social media analyst with real-time access to X/Twitter. "
