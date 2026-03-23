@@ -4470,24 +4470,27 @@ _OPTIONS_SCREENER_TICKERS = [
 # Extended watchlist for Polygon historic data ingestion (runs at 5 calls/min)
 # Imported from the ingestion module — used by the background pipeline
 from data.options_ingestion import OPTIONS_WATCHLIST as _OPTIONS_FULL_WATCHLIST
+from data.options_flow_engine import OptionsFlowEngine
 
-_OPTIONS_PRECOMPUTE_INTERVAL = 90    # 90 seconds — fast since no Claude overhead
+_OPTIONS_PRECOMPUTE_INTERVAL = 1800  # 30 minutes — stock-side prefilter only
 _OPTIONS_CACHE_KEY = "options_screener_v2"
-_OPTIONS_CACHE_TTL = 120             # 2 minutes TTL
+_OPTIONS_CACHE_TTL = 45              # short-lived page response cache
+_OPTIONS_PREFILTER_CACHE_KEY = "options_screener_prefilter_v1"
+_OPTIONS_PREFILTER_CACHE_TTL = 3600  # 1 hour — proprietary stock-side data only
 
 
 async def _options_precompute_loop():
     """
     Background screener loop for the Options Flow dashboard.
-    Runs every 90 seconds. Fetches full chains + greeks for all tickers via
-    Public.com, computes per-ticker summary metrics, and caches pure data —
-    no Claude involved here. Claude is available via the chat bar instead.
+    Runs every 30 minutes. Precomputes ONLY stock-side/catalyst prefilter data
+    from the supporting proprietary/free sources so the page can stay responsive.
+    Public.com is intentionally reserved for the page request itself.
     """
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _init_event.wait, 120)
 
-    if data_service is None or not getattr(data_service, "public_com", None):
-        print("[OPTIONS_PRECOMPUTE] Public.com not available, skipping loop")
+    if data_service is None:
+        print("[OPTIONS_PRECOMPUTE] Data service not available, skipping loop")
         return
 
     import time as _time
@@ -4495,44 +4498,16 @@ async def _options_precompute_loop():
 
     while True:
         try:
-            print(f"[OPTIONS_PRECOMPUTE] Scanning {len(_OPTIONS_SCREENER_TICKERS)} tickers...")
+            print(f"[OPTIONS_PRECOMPUTE] Refreshing stock-side prefilter for {len(_OPTIONS_SCREENER_TICKERS)} seed tickers...")
             t0 = _time.time()
 
-            screener_data = await data_service.public_com.scan_full_screener(
+            prefilter_data = await OptionsFlowEngine(data_service).build_prefilter_snapshot(
                 _OPTIONS_SCREENER_TICKERS
             )
 
             elapsed = _time.time() - t0
-            n_tickers = len(screener_data.get("tickers", []))
-            n_contracts = len(screener_data.get("all_contracts", []))
-
-            # Enrich screener tickers with stored technicals + historic volume
-            try:
-                from data.options_history_store import get_latest_technicals, get_options_volume_summary
-                for ticker_row in screener_data.get("tickers", []):
-                    sym = ticker_row.get("ticker", "")
-                    if not sym:
-                        continue
-                    # Merge latest technical indicators from DB
-                    techs = get_latest_technicals(sym)
-                    if techs and len(techs) > 1:  # >1 means we have data beyond just 'ticker' key
-                        ticker_row["technicals"] = techs
-                    # Merge historic volume summary (30-day)
-                    vol_summary = get_options_volume_summary(sym, days=30)
-                    if vol_summary and vol_summary.get("call_total_volume"):
-                        ticker_row["historic_volume"] = vol_summary
-            except Exception as _enrich_err:
-                print(f"[OPTIONS_PRECOMPUTE] Enrichment warning (non-fatal): {_enrich_err}")
-
-            result = {
-                "display_type": "options_screener",
-                "scan_type": "options_flow",
-                "cached_at": _time.time(),
-                "tickers_scanned": _OPTIONS_SCREENER_TICKERS,
-                **screener_data,
-            }
-            cache.set(_OPTIONS_CACHE_KEY, result, _OPTIONS_CACHE_TTL)
-            print(f"[OPTIONS_PRECOMPUTE] Cached {n_tickers} tickers, {n_contracts} contracts in {elapsed:.1f}s. Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s.")
+            cache.set(_OPTIONS_PREFILTER_CACHE_KEY, prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
+            print(f"[OPTIONS_PRECOMPUTE] Cached {len(prefilter_data.get('candidates', []))} prefilter candidates in {elapsed:.1f}s. Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s.")
 
         except Exception as e:
             import traceback
@@ -4554,9 +4529,9 @@ async def options_dashboard(
 ):
     """
     Options flow screener — pure data endpoint, no Claude involved.
-    Returns cached screener data (tickers + contracts + market summary) pre-fetched
-    every 90 seconds by the background loop. Instant response from cache.
-    Claude remains available via the chat bar for narrative analysis.
+    Returns a live Public.com options scan over a stock-side shortlist that is
+    pre-fetched periodically in the background. Claude remains available via
+    the chat bar instead of being part of this route.
     """
     await _wait_for_init()
 
@@ -4569,7 +4544,7 @@ async def options_dashboard(
     import time as _time
     from data.cache import cache
 
-    # ── Primary path: serve from cache (instant) ────────────────────────────
+    # ── Primary path: serve short-lived live-response cache ─────────────────
     cached = cache.get(_OPTIONS_CACHE_KEY)
     if cached:
         age = int(_time.time() - cached.get("cached_at", _time.time()))
@@ -4582,12 +4557,41 @@ async def options_dashboard(
             "cache_age_seconds": age,
         }
 
-    # ── Cold-start fallback (first request before background loop completes) ─
-    print("[OPTIONS_DASH] Cache cold — running synchronous screener fetch...")
+    # ── Live page visit path: use cached prefilter, then call Public.com now ─
+    prefilter_snapshot = cache.get(_OPTIONS_PREFILTER_CACHE_KEY)
+    if prefilter_snapshot:
+        pre_age = int(_time.time() - _dt.fromisoformat(prefilter_snapshot.get("generated_at")).timestamp()) if prefilter_snapshot.get("generated_at") else None
+        print(f"[OPTIONS_DASH] Using prefilter cache (age={pre_age}s)")
+    else:
+        print("[OPTIONS_DASH] Prefilter cache cold — building stock-side shortlist now...")
     t0 = _time.time()
     try:
-        screener_data = await data_service.public_com.scan_full_screener(_OPTIONS_SCREENER_TICKERS)
+        engine = OptionsFlowEngine(data_service)
+        if not prefilter_snapshot:
+            prefilter_snapshot = await engine.build_prefilter_snapshot(_OPTIONS_SCREENER_TICKERS)
+            cache.set(_OPTIONS_PREFILTER_CACHE_KEY, prefilter_snapshot, _OPTIONS_PREFILTER_CACHE_TTL)
+
+        screener_data = await engine.run_live_scan(
+            _OPTIONS_SCREENER_TICKERS,
+            prefilter_snapshot=prefilter_snapshot,
+        )
         elapsed = _time.time() - t0
+
+        # Keep legacy enrichment fields the page may already rely on.
+        try:
+            from data.options_history_store import get_latest_technicals, get_options_volume_summary
+            for ticker_row in screener_data.get("tickers", []):
+                sym = ticker_row.get("ticker", "")
+                if not sym:
+                    continue
+                techs = get_latest_technicals(sym)
+                if techs and len(techs) > 1:
+                    ticker_row["technicals"] = techs
+                vol_summary = get_options_volume_summary(sym, days=30)
+                if vol_summary and vol_summary.get("call_total_volume"):
+                    ticker_row["historic_volume"] = vol_summary
+        except Exception as _enrich_err:
+            print(f"[OPTIONS_DASH] Enrichment warning (non-fatal): {_enrich_err}")
 
         result = {
             "display_type": "options_screener",
@@ -4597,7 +4601,7 @@ async def options_dashboard(
             **screener_data,
         }
         cache.set(_OPTIONS_CACHE_KEY, result, _OPTIONS_CACHE_TTL)
-        print(f"[OPTIONS_DASH] Cold-start in {elapsed:.1f}s — {len(screener_data.get('tickers', []))} tickers")
+        print(f"[OPTIONS_DASH] Live scan completed in {elapsed:.1f}s — {len(screener_data.get('tickers', []))} tickers")
 
         return {
             "response": result,
