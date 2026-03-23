@@ -504,7 +504,7 @@ class OptionsFlowEngine:
                 catalyst_context = "earnings scheduled"
 
         short_squeeze_context = "high short-float screen hit" if row.get("short_squeeze_flag") else None
-        liquidity_context = "strong stock liquidity" if liquidity_dollars >= self.defaults["min_stock_liquidity"] * 2 else "adequate stock liquidity"
+        liquidity_context = "strong stock liquidity" if (liquidity_dollars is not None and liquidity_dollars >= self.defaults["min_stock_liquidity"] * 2) else "adequate stock liquidity"
         breakout_context = "breakout / trend continuation" if breakout else ""
         reversal_context = "reversal / exhaustion watch" if reversal or exhaustion else ""
 
