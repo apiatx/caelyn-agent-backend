@@ -342,6 +342,126 @@ def get_latest_technicals(ticker: str) -> dict:
         _put_conn(conn)
 
 
+# ── Live Options Flow Snapshots ─────────────────────────────────────
+
+@traceable(name="options_store.store_flow_snapshots")
+def store_options_flow_snapshots(rows: list[dict]) -> int:
+    """Persist lightweight live options flow snapshots for future history-based scoring."""
+    if not rows:
+        return 0
+    conn = _get_conn()
+    if conn is None:
+        return 0
+    try:
+        cur = conn.cursor()
+        inserted = 0
+        for row in rows:
+            cur.execute("""
+                INSERT INTO public.options_flow_snapshots (
+                    underlying, contract_symbol, expiration, option_type, strike, underlying_price,
+                    bid, ask, last, midpoint, volume, open_interest, implied_volatility, delta, gamma,
+                    theta, vega, spread_pct, premium_traded_estimate, expected_move_pct
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s
+                )
+            """, (
+                row.get("underlying"),
+                row.get("contract_symbol"),
+                row.get("expiration"),
+                row.get("option_type"),
+                row.get("strike"),
+                row.get("underlying_price"),
+                row.get("bid"),
+                row.get("ask"),
+                row.get("last"),
+                row.get("midpoint"),
+                row.get("volume"),
+                row.get("open_interest"),
+                row.get("implied_volatility"),
+                row.get("delta"),
+                row.get("gamma"),
+                row.get("theta"),
+                row.get("vega"),
+                row.get("spread_pct"),
+                row.get("premium_traded_estimate"),
+                row.get("expected_move_pct"),
+            ))
+            inserted += 1
+        conn.commit()
+        cur.close()
+        return inserted
+    except Exception as e:
+        print(f"[OPTIONS_STORE] store_options_flow_snapshots error: {e}")
+        conn.rollback()
+        return 0
+    finally:
+        _put_conn(conn)
+
+
+@traceable(name="options_store.get_contract_flow_summary")
+def get_contract_flow_history_summary(contract_symbol: str, days: int = 30) -> dict:
+    """Return recent snapshot summary for a contract to support repeated flow and IV history."""
+    if not contract_symbol:
+        return {}
+    conn = _get_conn()
+    if conn is None:
+        return {}
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT volume, open_interest, implied_volatility, premium_traded_estimate, captured_at
+            FROM public.options_flow_snapshots
+            WHERE contract_symbol = %s
+              AND captured_at >= NOW() - (%s * INTERVAL '1 day')
+            ORDER BY captured_at DESC
+            LIMIT 60
+        """, (contract_symbol, days))
+        rows = cur.fetchall()
+        cur.close()
+        if len(rows) < 5:
+            return {}
+
+        volumes = [int(r[0]) for r in rows if r[0] is not None]
+        open_interests = [int(r[1]) for r in rows if r[1] is not None]
+        ivs = [float(r[2]) for r in rows if r[2] is not None]
+        premiums = [float(r[3]) for r in rows if r[3] is not None]
+
+        latest_volume = volumes[0] if volumes else None
+        avg_volume = (sum(volumes[1:]) / len(volumes[1:])) if len(volumes) > 1 else None
+        repeated_flow_score = None
+        if latest_volume is not None and avg_volume and avg_volume > 0:
+            repeated_flow_score = round(min((latest_volume / avg_volume) * 20.0, 100.0), 1)
+
+        iv_percentile = None
+        if len(ivs) >= 20:
+            latest_iv = ivs[0]
+            less_equal = sum(1 for iv in ivs if iv <= latest_iv)
+            iv_percentile = round((less_equal / len(ivs)) * 100.0, 1)
+
+        oi_change = None
+        if len(open_interests) >= 2 and open_interests[1] is not None:
+            oi_change = open_interests[0] - open_interests[1]
+
+        return {
+            "snapshot_count": len(rows),
+            "avg_volume": round(avg_volume, 1) if avg_volume is not None else None,
+            "latest_volume": latest_volume,
+            "avg_premium_traded_estimate": round(sum(premiums) / len(premiums), 2) if premiums else None,
+            "avg_iv": round(sum(ivs) / len(ivs), 4) if ivs else None,
+            "iv_percentile": iv_percentile,
+            "latest_open_interest": open_interests[0] if open_interests else None,
+            "oi_change": oi_change,
+            "repeated_flow_score": repeated_flow_score,
+        }
+    except Exception as e:
+        print(f"[OPTIONS_STORE] get_contract_flow_history_summary error: {e}")
+        return {}
+    finally:
+        _put_conn(conn)
+
+
 # ── Fetch Progress Tracking ──────────────────────────────────────────
 
 @traceable(name="options_store.get_fetch_progress")

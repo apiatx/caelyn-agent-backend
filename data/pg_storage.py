@@ -338,6 +338,42 @@ def init_tables():
             )
         """)
 
+        # ── Live options flow snapshots for intraday signal history ───────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.options_flow_snapshots (
+                id BIGSERIAL PRIMARY KEY,
+                underlying TEXT NOT NULL,
+                contract_symbol TEXT NOT NULL,
+                expiration DATE NULL,
+                option_type TEXT NULL,
+                strike NUMERIC(12, 4) NULL,
+                underlying_price NUMERIC(12, 4) NULL,
+                bid NUMERIC(12, 4) NULL,
+                ask NUMERIC(12, 4) NULL,
+                last NUMERIC(12, 4) NULL,
+                midpoint NUMERIC(12, 4) NULL,
+                volume BIGINT NULL,
+                open_interest BIGINT NULL,
+                implied_volatility NUMERIC(12, 6) NULL,
+                delta NUMERIC(12, 6) NULL,
+                gamma NUMERIC(12, 6) NULL,
+                theta NUMERIC(12, 6) NULL,
+                vega NUMERIC(12, 6) NULL,
+                spread_pct NUMERIC(12, 4) NULL,
+                premium_traded_estimate NUMERIC(16, 2) NULL,
+                expected_move_pct NUMERIC(12, 4) NULL,
+                captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_options_flow_snapshots_contract
+            ON public.options_flow_snapshots (contract_symbol, captured_at DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_options_flow_snapshots_underlying
+            ON public.options_flow_snapshots (underlying, captured_at DESC)
+        """)
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")

@@ -4470,9 +4470,10 @@ _OPTIONS_SCREENER_TICKERS = [
 # Extended watchlist for Polygon historic data ingestion (runs at 5 calls/min)
 # Imported from the ingestion module — used by the background pipeline
 from data.options_ingestion import OPTIONS_WATCHLIST as _OPTIONS_FULL_WATCHLIST
+from data.options_flow_engine import OptionsFlowEngine
 
 _OPTIONS_PRECOMPUTE_INTERVAL = 90    # 90 seconds — fast since no Claude overhead
-_OPTIONS_CACHE_KEY = "options_screener_v2"
+_OPTIONS_CACHE_KEY = "options_screener_v3"
 _OPTIONS_CACHE_TTL = 120             # 2 minutes TTL
 
 
@@ -4498,7 +4499,7 @@ async def _options_precompute_loop():
             print(f"[OPTIONS_PRECOMPUTE] Scanning {len(_OPTIONS_SCREENER_TICKERS)} tickers...")
             t0 = _time.time()
 
-            screener_data = await data_service.public_com.scan_full_screener(
+            screener_data = await OptionsFlowEngine(data_service).run_scan(
                 _OPTIONS_SCREENER_TICKERS
             )
 
@@ -4586,7 +4587,7 @@ async def options_dashboard(
     print("[OPTIONS_DASH] Cache cold — running synchronous screener fetch...")
     t0 = _time.time()
     try:
-        screener_data = await data_service.public_com.scan_full_screener(_OPTIONS_SCREENER_TICKERS)
+        screener_data = await OptionsFlowEngine(data_service).run_scan(_OPTIONS_SCREENER_TICKERS)
         elapsed = _time.time() - t0
 
         result = {
