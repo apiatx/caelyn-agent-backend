@@ -611,11 +611,15 @@ function FlowTab({ contracts }: { contracts: any[] }) {
 // ─── MAIN PAGE ───────────────────────────────────────────────────────────────────
 type MainTab = 'tickers' | 'flow';
 
+type ScanTab = 'megacap' | 'high_growth';
+const SCAN_TAB_LABELS: Record<ScanTab, string> = { megacap: 'Megacap', high_growth: 'High Growth' };
+
 export default function OptionsPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [loadStage, setLoadStage] = useState('Initializing live scan...');
   const [error, setError] = useState('');
+  const [scanTab, setScanTab] = useState<ScanTab>('megacap');
   const [tab, setTab] = useState<MainTab>('tickers');
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'ai'; text: string }>>([]);
@@ -623,7 +627,10 @@ export default function OptionsPage() {
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchDashboard = useCallback(async () => {
+  const scanTabRef = useRef<ScanTab>(scanTab);
+  scanTabRef.current = scanTab;
+
+  const fetchDashboard = useCallback(async (tabOverride?: ScanTab) => {
     setLoading(true);
     setError('');
     const stages = ['Running live scan...', 'Scanning options chains...', 'Aggregating volume & OI...', 'Computing greeks & IV...', 'Building market summary...', 'Finalizing...'];
@@ -631,7 +638,7 @@ export default function OptionsPage() {
     setLoadStage(stages[0]);
     const stageTimer = setInterval(() => { si = Math.min(si + 1, stages.length - 1); setLoadStage(stages[si]); }, 2500);
     try {
-      const res = await fetch('/api/options/dashboard', { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) });
+      const res = await fetch('/api/options/dashboard', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ tab: tabOverride ?? scanTabRef.current }) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
@@ -649,6 +656,13 @@ export default function OptionsPage() {
     intervalRef.current = setInterval(() => fetchDashboard(), 120_000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [fetchDashboard]);
+
+  const switchScanTab = (newTab: ScanTab) => {
+    if (newTab === scanTab || loading) return;
+    setScanTab(newTab);
+    setData(null);
+    fetchDashboard(newTab);
+  };
 
   useEffect(() => { chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
 
@@ -706,6 +720,16 @@ export default function OptionsPage() {
             <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
             {loading ? loadStage : 'Refresh'}
           </button>
+        </div>
+
+        {/* Scan tab switcher */}
+        <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+          {(['megacap', 'high_growth'] as ScanTab[]).map(t => (
+            <button key={t} onClick={() => switchScanTab(t)} disabled={loading}
+              style={{ padding: '5px 16px', fontSize: 11, fontWeight: 700, fontFamily: font, background: scanTab === t ? `${C.green}18` : 'transparent', color: scanTab === t ? C.green : C.dim, border: `1px solid ${scanTab === t ? C.green + '40' : C.border}`, borderRadius: 6, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading && scanTab !== t ? 0.5 : 1, transition: 'all 0.15s ease' }}>
+              {SCAN_TAB_LABELS[t]}
+            </button>
+          ))}
         </div>
 
         {/* Market summary banner */}
