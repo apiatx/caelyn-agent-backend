@@ -231,26 +231,32 @@ const trendSignal = (sma20?: number | null, sma50?: number | null): { label: str
   return sma20 > sma50 ? { label: "Bullish", color: C.green } : { label: "Bearish", color: C.red };
 };
 
-const fmtVol = (n: number | null | undefined) =>
-  n == null
-    ? "—"
-    : n >= 1_000_000
-      ? `${(n / 1_000_000).toFixed(1)}M`
-      : n >= 1_000
-        ? `${(n / 1_000).toFixed(0)}K`
-        : String(Math.round(n));
-const fmtNum = (n: number | null | undefined, d = 2) => (n == null || Number.isNaN(n) ? "—" : n.toFixed(d));
-const fmtMoney = (n: number | null | undefined, d = 2) => (n == null || Number.isNaN(n) ? "—" : `$${n.toFixed(d)}`);
-const fmtSmartPct = (n: number | null | undefined, d = 1) => {
-  if (n == null || Number.isNaN(n)) return "—";
-  const value = Math.abs(n) <= 1 ? n * 100 : n;
+const safeNum = (n: unknown): number | null => {
+  if (n == null) return null;
+  const v = typeof n === "string" ? parseFloat(n) : Number(n);
+  return Number.isFinite(v) ? v : null;
+};
+const fmtVol = (n: unknown) => {
+  const v = safeNum(n);
+  if (v == null) return "—";
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(0)}K`;
+  return String(Math.round(v));
+};
+const fmtNum = (n: unknown, d = 2) => { const v = safeNum(n); return v == null ? "—" : v.toFixed(d); };
+const fmtMoney = (n: unknown, d = 2) => { const v = safeNum(n); return v == null ? "—" : `$${v.toFixed(d)}`; };
+const fmtSmartPct = (n: unknown, d = 1) => {
+  const v = safeNum(n);
+  if (v == null) return "—";
+  const value = Math.abs(v) <= 1 ? v * 100 : v;
   return `${value >= 0 ? "+" : ""}${value.toFixed(d)}%`;
 };
-const fmtRatioPct = (n: number | null | undefined, d = 1) => {
-  if (n == null || Number.isNaN(n)) return "—";
-  return `${(n * 100).toFixed(d)}%`;
+const fmtRatioPct = (n: unknown, d = 1) => {
+  const v = safeNum(n);
+  if (v == null) return "—";
+  return `${(v * 100).toFixed(d)}%`;
 };
-const fmtPlainPct = (n: number | null | undefined, d = 1) => (n == null || Number.isNaN(n) ? "—" : `${n.toFixed(d)}%`);
+const fmtPlainPct = (n: unknown, d = 1) => { const v = safeNum(n); return v == null ? "—" : `${v.toFixed(d)}%`; };
 const fmtMaybeText = (value: unknown) => {
   if (value == null || value === "") return "—";
   if (Array.isArray(value)) return value.filter(Boolean).join(", ");
@@ -287,13 +293,13 @@ const toTitleCase = (value: string) => value.split(/[_\s-]+/).filter(Boolean).ma
 const compactDate = (value?: string | null) => value ? String(value).slice(5, 10) : "—";
 const normalizeContract = (contract: OptionContract) => {
   const side = (contract.type || contract.side || "").toLowerCase() || "call";
-  const openInterest = contract.open_interest ?? contract.openInterest ?? null;
-  const iv = contract.iv ?? contract.implied_volatility ?? null;
-  const delta = contract.greeks?.delta ?? contract.delta ?? null;
-  const gamma = contract.greeks?.gamma ?? contract.gamma ?? null;
-  const theta = contract.greeks?.theta ?? contract.theta ?? null;
-  const vega = contract.greeks?.vega ?? contract.vega ?? null;
-  const volumeToOi = contract.option_volume_to_oi_ratio ?? contract.vol_oi_ratio ?? null;
+  const openInterest = safeNum(contract.open_interest ?? contract.openInterest);
+  const iv = safeNum(contract.iv ?? contract.implied_volatility);
+  const delta = safeNum(contract.greeks?.delta ?? contract.delta);
+  const gamma = safeNum(contract.greeks?.gamma ?? contract.gamma);
+  const theta = safeNum(contract.greeks?.theta ?? contract.theta);
+  const vega = safeNum(contract.greeks?.vega ?? contract.vega);
+  const volumeToOi = safeNum(contract.option_volume_to_oi_ratio ?? contract.vol_oi_ratio);
   return { ...contract, side, openInterest, iv, delta, gamma, theta, vega, volumeToOi };
 };
 const signalTagsForTicker = (ticker: TickerResult) => {
