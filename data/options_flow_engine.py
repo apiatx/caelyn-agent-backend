@@ -238,7 +238,7 @@ class OptionsFlowEngine:
 
         inspectable = candidates[: self.defaults["options_inspection_limit"]]
         print(f"[OPTIONS_FLOW] [{tab}] Pipeline: {len(candidates)} prefilter → {len(inspectable)} inspectable")
-        results = await self._inspect_shortlist(inspectable, macro)
+        results = await self._inspect_shortlist(inspectable, macro, tab=tab)
         dropped_tickers = [inspectable[i].get("ticker") for i, r in enumerate(results) if r is None]
         results = [r for r in results if r]
         results.sort(key=lambda row: row.get("composite_score", 0), reverse=True)
@@ -624,20 +624,20 @@ class OptionsFlowEngine:
             score += 7
         return _clip(score)
 
-    async def _inspect_shortlist(self, candidates: list[dict], macro: dict) -> list[dict | None]:
+    async def _inspect_shortlist(self, candidates: list[dict], macro: dict, *, tab: str = "megacap") -> list[dict | None]:
         sem = asyncio.Semaphore(6)
 
         async def _bounded(candidate: dict):
             async with sem:
                 try:
-                    return await self._inspect_one_ticker(candidate, macro)
+                    return await self._inspect_one_ticker(candidate, macro, tab=tab)
                 except Exception as exc:
                     print(f"[OPTIONS_FLOW] ticker inspect failed for {candidate.get('ticker')}: {exc}")
                     return None
 
         return await asyncio.gather(*[_bounded(c) for c in candidates])
 
-    async def _inspect_one_ticker(self, candidate: dict, macro: dict) -> dict | None:
+    async def _inspect_one_ticker(self, candidate: dict, macro: dict, *, tab: str = "megacap") -> dict | None:
         symbol = candidate["ticker"]
         price = _safe_float(candidate.get("price"))
         if not price:
@@ -681,7 +681,7 @@ class OptionsFlowEngine:
                     contract = self._normalize_contract(symbol, side, exp, raw, price)
                     if contract:
                         total_normalized += 1
-                        if self._contract_filter(contract, candidate):
+                        if self._contract_filter(contract, candidate, tab=tab):
                             contracts.append(contract)
 
         if not contracts:
@@ -889,14 +889,29 @@ class OptionsFlowEngine:
             "liquidity_quality": round(self._score_contract_liquidity(volume, open_interest, spread_pct), 1),
         }
 
-    def _contract_filter(self, contract: dict, candidate: dict) -> bool:
-        if contract["volume"] < self.defaults["min_contract_volume"]:
+    def _contract_filter(self, contract: dict, candidate: dict, *, tab: str = "megacap") -> bool:
+        # High-growth stocks ($500M–$100B cap) have inherently lower options
+        # liquidity than mega-caps, so we relax contract-level thresholds.
+        if tab == "high_growth":
+            min_volume = max(self.defaults["min_contract_volume"] // 3, 3)
+            min_oi = max(self.defaults["min_open_interest"] // 5, 5)
+            min_premium = self.defaults["min_premium_traded_estimate"] * 0.2
+            max_spread = self.defaults["max_spread_pct"] * 1.67  # ~30%
+            min_liquidity_quality = 10
+        else:
+            min_volume = self.defaults["min_contract_volume"]
+            min_oi = self.defaults["min_open_interest"]
+            min_premium = self.defaults["min_premium_traded_estimate"]
+            max_spread = self.defaults["max_spread_pct"]
+            min_liquidity_quality = 20
+
+        if contract["volume"] < min_volume:
             return False
-        if contract["open_interest"] < self.defaults["min_open_interest"]:
+        if contract["open_interest"] < min_oi:
             return False
-        if contract["premium_traded_estimate"] < self.defaults["min_premium_traded_estimate"]:
+        if contract["premium_traded_estimate"] < min_premium:
             return False
-        if contract.get("spread_pct") is not None and contract["spread_pct"] > self.defaults["max_spread_pct"]:
+        if contract.get("spread_pct") is not None and contract["spread_pct"] > max_spread:
             return False
         if contract.get("moneyness_pct") is not None and contract["moneyness_pct"] > self.defaults["max_moneyness_pct"]:
             return False
@@ -906,7 +921,7 @@ class OptionsFlowEngine:
                 return False
             if abs_delta > 0.9:
                 return False
-        if candidate.get("category") != "etf" and contract["liquidity_quality"] < 20:
+        if candidate.get("category") != "etf" and contract["liquidity_quality"] < min_liquidity_quality:
             return False
         return True
 
