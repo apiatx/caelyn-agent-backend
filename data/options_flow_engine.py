@@ -685,23 +685,8 @@ class OptionsFlowEngine:
         breakout_context = "breakout / trend continuation" if breakout else ""
         reversal_context = "reversal / exhaustion watch" if reversal or exhaustion else ""
 
-        # Dynamic ETF detection: check profile signals beyond the hardcoded set
-        is_etf = symbol in ETF_SET
-        if not is_etf and isinstance(profile, dict):
-            # Finnhub returns empty industry + 0/null mcap for ETFs
-            industry = (profile.get("finnhubIndustry") or "").strip()
-            profile_mcap = profile.get("marketCapitalization")
-            profile_type = (profile.get("type") or "").strip().upper()
-            if profile_type in ("ETF", "ETP"):
-                is_etf = True
-            elif not industry and (profile_mcap is None or profile_mcap == 0):
-                # No industry + no mcap → almost certainly an ETF/ETP
-                is_etf = True
-        if is_etf:
-            ETF_SET.add(symbol)  # cache for future lookups in this process
-
         return {
-            "category": "etf" if is_etf else "stock",
+            "category": "etf" if symbol in ETF_SET else "stock",
             "price": round(price, 4) if price is not None else None,
             "change_pct": round(change_pct, 2) if change_pct is not None else None,
             "volume": int(volume) if volume else 0,
