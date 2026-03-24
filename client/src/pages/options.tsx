@@ -1391,6 +1391,7 @@ const SCAN_TAB_LABELS: Record<ScanTab, string> = { megacap: "Megacap", high_grow
 
 interface OptionsPageProps {
   apiBase?: string;
+  queryApiBase?: string;
   pageTitle?: string;
   queryPresetIntent?: string;
   enableContractDetail?: boolean;
@@ -1398,7 +1399,7 @@ interface OptionsPageProps {
   dataSourceLabel?: string | null;
 }
 
-export default function OptionsPage({ apiBase = "/api/options", pageTitle = "OPTIONS FLOW", queryPresetIntent = "options_flow", enableContractDetail = false, enableTimeSales = false, dataSourceLabel = null }: OptionsPageProps = {}) {
+export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pageTitle = "OPTIONS FLOW", queryPresetIntent = "options_flow", enableContractDetail = false, enableTimeSales = false, dataSourceLabel = null }: OptionsPageProps = {}) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [loadStage, setLoadStage] = useState("Initializing live scan...");
@@ -1535,7 +1536,7 @@ export default function OptionsPage({ apiBase = "/api/options", pageTitle = "OPT
     setChatMessages(prev => [...prev, { role: "user", text: q }]);
     setChatLoading(true);
     try {
-      const res = await fetch("/api/query", {
+      const res = await fetch(`${queryApiBase || ""}/api/query`, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({ query: q, preset_intent: queryPresetIntent, context_data: data, conversation_id: null, reasoning_model: "claude" }),
