@@ -1386,8 +1386,9 @@ function TimeSalesPanel({ symbol }: { symbol: string }) {
   );
 }
 
-type ScanTab = "megacap" | "large_cap" | "small_cap";
-const SCAN_TAB_LABELS: Record<ScanTab, string> = { megacap: "Megacap ($1T+)", large_cap: "Large Cap ($100B–$999B)", small_cap: "Small Cap ($500M–$99B)" };
+type ScanTab = "etf" | "megacap" | "large_cap" | "small_cap";
+const SCAN_TAB_LABELS: Record<ScanTab, string> = { etf: "ETFs", megacap: "Megacap ($1T+)", large_cap: "Large Cap ($100B–$999B)", small_cap: "Small Cap ($500M–$99B)" };
+const SCAN_TAB_ORDER: ScanTab[] = ["etf", "megacap", "large_cap", "small_cap"];
 
 export default function OptionsPage() {
   const [data, setData] = useState<any>(null);
@@ -1396,7 +1397,7 @@ export default function OptionsPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [scanTab, setScanTab] = useState<ScanTab>("megacap");
+  const [scanTab, setScanTab] = useState<ScanTab>("etf");
   const [tab, setTab] = useState<MainTab>("tickers");
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "ai"; text: string }>>([]);
@@ -1584,7 +1585,8 @@ export default function OptionsPage() {
   const scoreWeights = resp.score_weights || {};
   const cacheAge: number | null = data?.cache_age_seconds ?? null;
   const fromCache: boolean = data?.from_cache ?? false;
-  const availableTabs: ScanTab[] = (data?.available_tabs as ScanTab[] | undefined) || ["megacap", "large_cap", "small_cap"];
+  const rawAvailable: ScanTab[] = (data?.available_tabs as ScanTab[] | undefined) || ["etf", "megacap", "large_cap", "small_cap"];
+  const availableTabs: ScanTab[] = SCAN_TAB_ORDER.filter(t => rawAvailable.includes(t));
   const hasData = tickers.length > 0;
   const degradedSources = ensureArray((pipelineStats as any)?.degraded_sources || (mktSum as any)?.degraded_sources);
 
