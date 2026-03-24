@@ -4538,7 +4538,7 @@ async def _options_precompute_loop():
     Background screener loop for the Options Flow dashboard (Tradier-backed).
     Runs every 30 minutes. Precomputes ONLY stock-side/catalyst prefilter data
     from the supporting proprietary/free sources so the page can stay responsive.
-    Precomputes all three tabs (megacap, large_cap, small_cap).
+    Precomputes all tabs (etf, megacap, large_cap, small_cap).
     """
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _init_event.wait, 120)

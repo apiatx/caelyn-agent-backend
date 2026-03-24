@@ -505,6 +505,20 @@ class OptionsFlowEngine:
                 if sym in exclude_tickers:
                     del candidates[sym]
 
+        # ── Tab-specific candidate filtering (BEFORE preliminary sort/cut) ────
+        # This ensures the right instrument types compete for top slots.
+        seed_set = set(seed_tickers)
+        if tab == "etf":
+            # ETF tab: only keep ETFs — don't let stocks crowd them out
+            for sym in list(candidates.keys()):
+                if sym not in ETF_SET:
+                    del candidates[sym]
+        else:
+            # Stock tabs: remove ETFs early so they don't waste slots
+            for sym in list(candidates.keys()):
+                if sym in ETF_SET:
+                    del candidates[sym]
+
         # Small-cap has lower liquidity — cast a wider net
         prefilter_multiplier = 3 if tab == "small_cap" else 2
         total_raw = len(candidates)
@@ -537,15 +551,8 @@ class OptionsFlowEngine:
                 continue
 
             # Market cap gates — enforce separate universes per tab
-            is_etf = base.get("ticker") in ETF_SET
-            if tab == "etf":
-                # ETF tab: only keep ETFs, reject individual stocks
-                if not is_etf:
-                    continue
-            else:
-                # Stock tabs: reject ETFs, enforce mcap range
-                if is_etf:
-                    continue
+            # (ETFs already filtered above, so only stocks reach here for stock tabs)
+            if tab != "etf":
                 profile = enriched.get("profile") or {}
                 mcap = _safe_float(profile.get("market_cap"))
                 tier_min, tier_max = TIER_MCAP_RANGES.get(tab, (0, None))
@@ -554,7 +561,10 @@ class OptionsFlowEngine:
                         continue
                     if tier_max is not None and mcap > tier_max:
                         continue
-                # If mcap is unknown, keep (signal > certainty)
+                elif base.get("ticker") not in seed_set:
+                    # Unknown mcap: only keep if ticker is a seed for this tab.
+                    # Prevents random tickers from leaking into wrong tabs.
+                    continue
 
             merged = {**base, **enriched}
             merged["reasons"] = sorted(list(base.get("reasons", set())))
