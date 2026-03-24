@@ -4461,20 +4461,27 @@ async def test_altfins(symbol: str = "BTC", api_key: str = Header(None, alias="X
 
 # ── Options Screener: ticker universe ───────────────────────────────────────
 # Core high-volume tickers for the 90-second real-time Public.com precompute loop
-_OPTIONS_SCREENER_TICKERS = [
-    # ETFs — macro + sector flow
+# ── Seed tickers per tier ──────────────────────────────────────────────
+# Seeds guarantee coverage of known high-flow names. The prefilter also
+# pulls in Finviz screen results, so these are NOT the only tickers scanned.
+
+_OPTIONS_MEGACAP_SEEDS = [
+    # ETFs — macro + sector flow (exempt from mcap filter)
     "SPY", "QQQ", "IWM", "GLD", "TLT", "XLF", "XLK",
-    # Mega-cap stocks — market cap >$100B, highest-volume options universe
-    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
-    "JPM", "V", "UNH", "MA", "HD", "LLY", "AVGO", "XOM",
-    "COST", "WMT", "CRM", "ORCL", "AMD", "NFLX",
+    # $1 T+ mega-caps
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA",
 ]
 
-# High Growth tab: signal-rich seed tickers in $500M–$100B range
-# These are NOT the only tickers scanned — the prefilter casts a wide net via
-# Finviz mid-cap screens. These seeds just ensure coverage of known active names.
-_OPTIONS_HIGH_GROWTH_SEEDS = [
-    # Semis / hardware with active options flow
+_OPTIONS_LARGE_CAP_SEEDS = [
+    # $100 B – $999 B — blue-chip names with heavy options flow
+    "BRK-B", "JPM", "V", "UNH", "MA", "HD", "LLY", "AVGO", "XOM",
+    "COST", "WMT", "CRM", "ORCL", "AMD", "NFLX", "ADBE", "PEP",
+    "CSCO", "ABT", "TMO", "MRK", "ABBV", "ACN", "QCOM", "TXN",
+]
+
+_OPTIONS_SMALL_CAP_SEEDS = [
+    # $500 M – $99 B — signal-rich mid/small-cap names
+    # Semis / hardware
     "MRVL", "ON", "SMCI", "CRDO", "ALAB", "MCHP", "PSTG", "COHR",
     # Growth software / infra
     "SHOP", "NET", "DDOG", "SNOW", "CRWD", "ZS", "BILL", "CFLT",
@@ -4488,7 +4495,16 @@ _OPTIONS_HIGH_GROWTH_SEEDS = [
     "HIMS", "RXRX", "KRYS", "VERA",
 ]
 
-_OPTIONS_VALID_TABS = {"megacap", "high_growth"}
+_OPTIONS_VALID_TABS = {"megacap", "large_cap", "small_cap"}
+
+# Backwards-compat alias so old "high_growth" requests still work
+_TAB_ALIASES = {"high_growth": "small_cap"}
+
+_OPTIONS_TAB_SEEDS = {
+    "megacap": _OPTIONS_MEGACAP_SEEDS,
+    "large_cap": _OPTIONS_LARGE_CAP_SEEDS,
+    "small_cap": _OPTIONS_SMALL_CAP_SEEDS,
+}
 
 # Extended watchlist for Polygon historic data ingestion (runs at 5 calls/min)
 # Imported from the ingestion module — used by the background pipeline
@@ -4513,7 +4529,7 @@ async def _options_precompute_loop():
     Background screener loop for the Options Flow dashboard (Tradier-backed).
     Runs every 30 minutes. Precomputes ONLY stock-side/catalyst prefilter data
     from the supporting proprietary/free sources so the page can stay responsive.
-    Precomputes BOTH megacap and high_growth tabs.
+    Precomputes all three tabs (megacap, large_cap, small_cap).
     """
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _init_event.wait, 120)
@@ -4525,13 +4541,15 @@ async def _options_precompute_loop():
     import time as _time
     from data.cache import cache
 
-    _MEGACAP_SEED_SET = set(_OPTIONS_SCREENER_TICKERS)
-    _HG_SEED_SET = set(_OPTIONS_HIGH_GROWTH_SEEDS)
+    _all_seed_sets = {tab: set(seeds) for tab, seeds in _OPTIONS_TAB_SEEDS.items()}
 
     while True:
-        for tab, seeds in [("megacap", _OPTIONS_SCREENER_TICKERS), ("high_growth", _OPTIONS_HIGH_GROWTH_SEEDS)]:
+        for tab, seeds in _OPTIONS_TAB_SEEDS.items():
             try:
-                exclude = _HG_SEED_SET if tab == "megacap" else _MEGACAP_SEED_SET
+                exclude = set()
+                for other_tab, other_seeds in _all_seed_sets.items():
+                    if other_tab != tab:
+                        exclude |= other_seeds
                 print(f"[OPTIONS_PRECOMPUTE] [{tab}] Refreshing stock-side prefilter for {len(seeds)} seed tickers...")
                 t0 = _time.time()
 
@@ -4549,22 +4567,22 @@ async def _options_precompute_loop():
                 traceback.print_exc()
                 print(f"[OPTIONS_PRECOMPUTE] [{tab}] Error: {e}")
 
-        print(f"[OPTIONS_PRECOMPUTE] Both tabs refreshed. Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s.")
+        print(f"[OPTIONS_PRECOMPUTE] All {len(_OPTIONS_TAB_SEEDS)} tabs refreshed. Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s.")
         await asyncio.sleep(_OPTIONS_PRECOMPUTE_INTERVAL)
 
 
-_OPTIONS_DEFAULT_TICKERS = _OPTIONS_SCREENER_TICKERS
+_OPTIONS_DEFAULT_TICKERS = _OPTIONS_MEGACAP_SEEDS
 
-# In-memory user overrides for high_growth scan defaults (reset on restart).
-# Megacap tab defaults are NOT editable.
-_HIGH_GROWTH_USER_OVERRIDES: dict = {}
+# In-memory user overrides for scan defaults (reset on restart).
+# Market-cap ranges are NOT editable — only options-level params.
+_SCAN_USER_OVERRIDES: dict[str, dict] = {}   # keyed by tab name
 
-# Keys the user is allowed to override for the high_growth tab
+# Keys the user is allowed to override (options-level screening only).
+# Market-cap ranges are hardcoded in TIER_MCAP_RANGES and NOT here.
 _EDITABLE_SCAN_KEYS = {
     "prefilter_target", "options_inspection_limit", "min_stock_price",
-    "min_stock_liquidity", "high_growth_min_mcap", "high_growth_max_mcap",
-    "relative_volume_threshold", "min_dte", "max_dte",
-    "max_expirations_per_ticker",
+    "min_stock_liquidity", "relative_volume_threshold",
+    "min_dte", "max_dte", "max_expirations_per_ticker",
 }
 
 
@@ -4577,7 +4595,7 @@ async def options_dashboard(
 ):
     """
     Options flow screener — pure data endpoint, no Claude involved.
-    Accepts tab via query param (?tab=high_growth) or JSON body {"tab": "..."}.
+    Accepts tab via query param (?tab=large_cap) or JSON body {"tab": "..."}.
     Uses Tradier for live options data + Polygon Massive historical data from DB.
     """
     await _wait_for_init()
@@ -4590,20 +4608,23 @@ async def options_dashboard(
 
     # Parse tab from query param OR request body (default: megacap)
     tab = "megacap"
-    # 1) Check query parameter first  (?tab=high_growth)
+    # 1) Check query parameter first  (?tab=large_cap)
     query_tab = request.query_params.get("tab")
-    if query_tab and query_tab in _OPTIONS_VALID_TABS:
-        tab = query_tab
-    else:
-        # 2) Fall back to POST JSON body  ({"tab": "high_growth"})
+    raw_tab = query_tab
+    if not raw_tab:
+        # 2) Fall back to POST JSON body  ({"tab": "large_cap"})
         try:
             body = await request.json()
-            if isinstance(body, dict) and body.get("tab") in _OPTIONS_VALID_TABS:
-                tab = body["tab"]
+            if isinstance(body, dict):
+                raw_tab = body.get("tab")
         except Exception:
-            pass  # No body or invalid JSON → default tab
+            pass
+    if raw_tab:
+        raw_tab = _TAB_ALIASES.get(raw_tab, raw_tab)  # backwards compat
+        if raw_tab in _OPTIONS_VALID_TABS:
+            tab = raw_tab
 
-    seed_tickers = _OPTIONS_HIGH_GROWTH_SEEDS if tab == "high_growth" else _OPTIONS_SCREENER_TICKERS
+    seed_tickers = _OPTIONS_TAB_SEEDS.get(tab, _OPTIONS_MEGACAP_SEEDS)
 
     import time as _time
     from data.cache import cache
@@ -4635,9 +4656,12 @@ async def options_dashboard(
     t0 = _time.time()
 
     async def _full_scan():
-        overrides = _HIGH_GROWTH_USER_OVERRIDES if tab == "high_growth" and _HIGH_GROWTH_USER_OVERRIDES else None
+        overrides = _SCAN_USER_OVERRIDES.get(tab) or None
         engine = TradierFlowEngine(data_service, overrides=overrides)
-        exclude = set(_OPTIONS_HIGH_GROWTH_SEEDS) if tab == "megacap" else set(_OPTIONS_SCREENER_TICKERS)
+        exclude = set()
+        for other_tab, other_seeds in _OPTIONS_TAB_SEEDS.items():
+            if other_tab != tab:
+                exclude |= set(other_seeds)
         nonlocal prefilter_snapshot
         if not prefilter_snapshot:
             prefilter_snapshot = await engine.build_prefilter_snapshot(seed_tickers, tab=tab, exclude_tickers=exclude)
@@ -5143,39 +5167,44 @@ async def get_options_ingestion_summary(
         return JSONResponse(status_code=500, content={"error": str(e)[:200]})
 
 
-# ── Scan Defaults (editable for high_growth tab only) ───────────────────
+# ── Scan Defaults (options-level params, all tabs) ────────────────────
+# Market-cap ranges are hardcoded per tier (TIER_MCAP_RANGES) and NOT editable.
+# Only options-level screening params (OI, volume, spread, DTE, etc.) are editable.
 
 @app.get("/api/options/scan-defaults")
 @limiter.limit("30/minute")
 async def get_scan_defaults(
     request: Request,
-    tab: str = "high_growth",
+    tab: str = "megacap",
     api_key: str = Header(None, alias="X-API-Key"),
 ):
     """
-    Get current scan defaults. For high_growth, returns user overrides merged
-    with base defaults. For megacap, returns fixed defaults (not editable).
+    Get current scan defaults for any tab.
+    Market-cap ranges are hardcoded per tier and shown for info only.
     """
-    from data.options_flow_engine import OPTIONS_FLOW_DEFAULTS
-    base = dict(OPTIONS_FLOW_DEFAULTS)
+    from data.options_flow_engine import OPTIONS_FLOW_DEFAULTS, TIER_MCAP_RANGES
+    tab = _TAB_ALIASES.get(tab, tab)
+    if tab not in _OPTIONS_VALID_TABS:
+        tab = "megacap"
 
-    if tab == "high_growth":
-        merged = {**base, **{k: v for k, v in _HIGH_GROWTH_USER_OVERRIDES.items() if k in _EDITABLE_SCAN_KEYS}}
-        return {
-            "tab": "high_growth",
-            "editable": True,
-            "editable_keys": sorted(_EDITABLE_SCAN_KEYS),
-            "defaults": merged,
-            "user_overrides": dict(_HIGH_GROWTH_USER_OVERRIDES),
-        }
-    else:
-        return {
-            "tab": "megacap",
-            "editable": False,
-            "editable_keys": [],
-            "defaults": base,
-            "user_overrides": {},
-        }
+    base = dict(OPTIONS_FLOW_DEFAULTS)
+    user_ov = _SCAN_USER_OVERRIDES.get(tab, {})
+    merged = {**base, **{k: v for k, v in user_ov.items() if k in _EDITABLE_SCAN_KEYS}}
+
+    tier_min, tier_max = TIER_MCAP_RANGES.get(tab, (0, None))
+    return {
+        "tab": tab,
+        "editable": True,
+        "editable_keys": sorted(_EDITABLE_SCAN_KEYS),
+        "defaults": merged,
+        "user_overrides": dict(user_ov),
+        "tier_mcap_range": {
+            "min": tier_min,
+            "max": tier_max,
+            "note": "Market-cap range is hardcoded per tier and not editable via scan-defaults.",
+        },
+        "available_tabs": sorted(_OPTIONS_VALID_TABS),
+    }
 
 
 @app.put("/api/options/scan-defaults")
@@ -5186,23 +5215,25 @@ async def update_scan_defaults(
     api_key: str = Header(None, alias="X-API-Key"),
 ):
     """
-    Update scan defaults for the high_growth tab only.
+    Update scan defaults for any tab (options-level params only).
+    Market-cap ranges are NOT editable.
     Send {"reset": true} to clear all overrides back to defaults.
     """
     from data.options_flow_engine import OPTIONS_FLOW_DEFAULTS
 
-    tab = body.get("tab", "high_growth")
-    if tab != "high_growth":
+    tab = body.get("tab", "megacap")
+    tab = _TAB_ALIASES.get(tab, tab)
+    if tab not in _OPTIONS_VALID_TABS:
         return JSONResponse(
             status_code=400,
-            content={"error": "Only high_growth tab defaults are editable. Megacap defaults are fixed."},
+            content={"error": f"Invalid tab. Valid tabs: {sorted(_OPTIONS_VALID_TABS)}"},
         )
 
     if body.get("reset"):
-        _HIGH_GROWTH_USER_OVERRIDES.clear()
+        _SCAN_USER_OVERRIDES.pop(tab, None)
         from data.cache import cache
-        cache.delete(_options_cache_key("high_growth"))
-        return {"message": "High growth defaults reset to system defaults", "defaults": dict(OPTIONS_FLOW_DEFAULTS)}
+        cache.delete(_options_cache_key(tab))
+        return {"message": f"{tab} defaults reset to system defaults", "defaults": dict(OPTIONS_FLOW_DEFAULTS)}
 
     overrides = body.get("overrides", {})
     if not overrides:
@@ -5214,19 +5245,19 @@ async def update_scan_defaults(
         if k in _EDITABLE_SCAN_KEYS:
             try:
                 base_type = type(OPTIONS_FLOW_DEFAULTS[k])
-                _HIGH_GROWTH_USER_OVERRIDES[k] = base_type(v)
+                _SCAN_USER_OVERRIDES.setdefault(tab, {})[k] = base_type(v)
                 accepted[k] = base_type(v)
             except (ValueError, TypeError) as e:
                 rejected.append({"key": k, "error": str(e)})
         else:
-            rejected.append({"key": k, "error": "Not an editable key"})
+            rejected.append({"key": k, "error": f"Not an editable key. Editable: {sorted(_EDITABLE_SCAN_KEYS)}"})
 
     from data.cache import cache
-    cache.delete(_options_cache_key("high_growth"))
+    cache.delete(_options_cache_key(tab))
 
-    merged = {**OPTIONS_FLOW_DEFAULTS, **_HIGH_GROWTH_USER_OVERRIDES}
+    merged = {**OPTIONS_FLOW_DEFAULTS, **_SCAN_USER_OVERRIDES.get(tab, {})}
     return {
-        "message": f"Updated {len(accepted)} scan defaults for high_growth tab",
+        "message": f"Updated {len(accepted)} scan defaults for {tab} tab",
         "accepted": accepted,
         "rejected": rejected if rejected else None,
         "current_defaults": merged,
@@ -5450,7 +5481,7 @@ async def tradier_technicals(request: Request, symbol: str, api_key: str = Heade
 
 @app.get("/api/tradier/scan-defaults")
 @limiter.limit("30/minute")
-async def tradier_scan_defaults(request: Request, tab: str = "high_growth", api_key: str = Header(None, alias="X-API-Key")):
+async def tradier_scan_defaults(request: Request, tab: str = "megacap", api_key: str = Header(None, alias="X-API-Key")):
     return await get_scan_defaults(request, tab, api_key)
 
 @app.put("/api/tradier/scan-defaults")

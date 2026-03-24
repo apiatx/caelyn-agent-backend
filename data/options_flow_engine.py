@@ -43,9 +43,8 @@ OPTIONS_FLOW_DEFAULTS = {
     "options_inspection_limit": _env_int("OPTIONS_FLOW_INSPECTION_LIMIT", 15),
     "min_stock_price": _env_float("OPTIONS_FLOW_MIN_STOCK_PRICE", 8.0),
     "min_stock_liquidity": _env_float("OPTIONS_FLOW_MIN_STOCK_LIQUIDITY", 15_000_000.0),
-    "megacap_min_mcap": _env_float("OPTIONS_FLOW_MEGACAP_MIN_MCAP", 100_000_000_000.0),
-    "high_growth_min_mcap": _env_float("OPTIONS_FLOW_HG_MIN_MCAP", 500_000_000.0),
-    "high_growth_max_mcap": _env_float("OPTIONS_FLOW_HG_MAX_MCAP", 100_000_000_000.0),
+    # Market-cap ranges are hardcoded per tier — NOT user-editable.
+    # See TIER_MCAP_RANGES below for the authoritative gate values.
     "relative_volume_threshold": _env_float("OPTIONS_FLOW_RELATIVE_VOLUME_THRESHOLD", 1.5),
     "min_dte": _env_int("OPTIONS_FLOW_MIN_DTE", 7),
     "max_dte": _env_int("OPTIONS_FLOW_MAX_DTE", 45),
@@ -69,6 +68,16 @@ OPTIONS_FLOW_WEIGHTS = {
     "volatility_score": _env_float("OPTIONS_FLOW_WEIGHT_VOLATILITY", 0.15),
     "sentiment_score": _env_float("OPTIONS_FLOW_WEIGHT_SENTIMENT", 0.10),
     "stock_context_score": _env_float("OPTIONS_FLOW_WEIGHT_STOCK_CONTEXT", 0.10),
+}
+
+
+# ── Hardcoded market-cap tiers (not user-editable) ────────────────────────
+# Each tab has a fixed min/max mcap range.  Scan-defaults only control
+# options-level screening params (OI, volume, spread, DTE, etc.).
+TIER_MCAP_RANGES: dict[str, tuple[float, float | None]] = {
+    "megacap":   (1_000_000_000_000.0, None),               # $1 T+
+    "large_cap": (100_000_000_000.0, 999_999_999_999.0),    # $100 B – $999 B
+    "small_cap": (500_000_000.0, 99_999_999_999.0),         # $500 M – $99 B
 }
 
 
@@ -317,8 +326,8 @@ class OptionsFlowEngine:
     async def _build_prefilter(self, seed_tickers: list[str], tab: str = "megacap", exclude_tickers: set[str] | None = None) -> dict:
         degraded_sources: list[str] = []
 
-        if tab == "high_growth":
-            # Signal-focused screens targeting $500M–$100B market cap
+        if tab == "small_cap":
+            # Signal-focused screens targeting $500M–$99B market cap
             finviz_tasks = {
                 "midcap_unusual_volume": self.data.finviz.get_midcap_unusual_volume(),
                 "midcap_breakouts": self.data.finviz.get_midcap_breakouts(),
@@ -331,7 +340,20 @@ class OptionsFlowEngine:
                 "revenue_growth_leaders": self.data.finviz.get_revenue_growth_leaders(),
                 "earnings_growth_leaders": self.data.finviz.get_earnings_growth_leaders(),
             }
+        elif tab == "large_cap":
+            # Blend of market-flow + growth screens — $100B–$999B lands in both
+            finviz_tasks = {
+                "unusual_volume": self.data.finviz.get_unusual_volume(),
+                "most_active": self.data.finviz.get_most_active(),
+                "new_highs": self.data.finviz.get_new_highs(),
+                "top_losers": self.data.finviz.get_top_losers(),
+                "high_short_float": self.data.finviz.get_high_short_float(),
+                "earnings_this_week": self.data.finviz.get_earnings_this_week(),
+                "midlarge_volume_breakout": self.data.finviz.get_midlarge_volume_breakout(),
+                "midcap_breakouts": self.data.finviz.get_midcap_breakouts(),
+            }
         else:
+            # megacap ($1T+) — pure mega-cap market flow screens
             finviz_tasks = {
                 "unusual_volume": self.data.finviz.get_unusual_volume(),
                 "most_active": self.data.finviz.get_most_active(),
@@ -417,7 +439,7 @@ class OptionsFlowEngine:
                 if "earnings" in label:
                     row["catalyst_hint"] = "earnings"
 
-        if tab == "high_growth":
+        if tab == "small_cap":
             add_rows(source_map.get("midcap_unusual_volume", []), "midcap_unusual_volume", 24, "mid-cap unusual volume")
             add_rows(source_map.get("midcap_breakouts", []), "midcap_breakouts", 20, "mid-cap breakout")
             add_rows(source_map.get("midcap_momentum", []), "midcap_momentum", 18, "mid-cap momentum")
@@ -428,7 +450,17 @@ class OptionsFlowEngine:
             add_rows(source_map.get("stage2_breakouts", []), "stage2_breakouts", 18, "stage 2 breakout")
             add_rows(source_map.get("revenue_growth_leaders", []), "revenue_growth_leaders", 14, "revenue growth")
             add_rows(source_map.get("earnings_growth_leaders", []), "earnings_growth_leaders", 14, "earnings growth")
+        elif tab == "large_cap":
+            add_rows(source_map.get("unusual_volume", []), "unusual_volume", 22, "relative stock volume")
+            add_rows(source_map.get("most_active", []), "most_active", 14, "stock liquidity")
+            add_rows(source_map.get("new_highs", []), "new_highs", 16, "breakout setup")
+            add_rows(source_map.get("top_losers", []), "top_losers", 10, "reversal watch")
+            add_rows(source_map.get("high_short_float", []), "high_short_float", 14, "short squeeze context")
+            add_rows(source_map.get("earnings_this_week", []), "earnings_this_week", 12, "earnings catalyst")
+            add_rows(source_map.get("midlarge_volume_breakout", []), "midlarge_volume_breakout", 20, "institutional volume breakout")
+            add_rows(source_map.get("midcap_breakouts", []), "midcap_breakouts", 16, "breakout setup")
         else:
+            # megacap ($1T+)
             add_rows(source_map.get("unusual_volume", []), "unusual_volume", 22, "relative stock volume")
             add_rows(source_map.get("most_active", []), "most_active", 14, "stock liquidity")
             add_rows(source_map.get("new_highs", []), "new_highs", 16, "breakout setup")
@@ -462,11 +494,11 @@ class OptionsFlowEngine:
                 if sym in exclude_tickers:
                     del candidates[sym]
 
-        # For high_growth, cast a wider net — inspect more candidates
-        prefilter_multiplier = 3 if tab == "high_growth" else 2
+        # Small-cap has lower liquidity — cast a wider net
+        prefilter_multiplier = 3 if tab == "small_cap" else 2
         total_raw = len(candidates)
         preliminary = sorted(candidates.values(), key=lambda x: x["source_score"], reverse=True)
-        preliminary = preliminary[: max(self.defaults["prefilter_target"] * prefilter_multiplier, 60 if tab == "high_growth" else 40)]
+        preliminary = preliminary[: max(self.defaults["prefilter_target"] * prefilter_multiplier, 60 if tab == "small_cap" else 40)]
         print(f"[OPTIONS_FLOW] [{tab}] Prefilter: {total_raw} raw candidates → {len(preliminary)} preliminary (sources degraded: {degraded_sources})")
 
         quote_tasks = []
@@ -496,16 +528,13 @@ class OptionsFlowEngine:
             # Market cap gates — enforce separate universes per tab
             profile = enriched.get("profile") or {}
             mcap = _safe_float(profile.get("market_cap"))
-            if tab == "megacap":
-                # Megacap: >$100B only (ETFs exempt — they don't have market cap)
-                if base.get("ticker") not in ETF_SET:
-                    if mcap is not None and mcap < self.defaults["megacap_min_mcap"]:
-                        continue
-            elif tab == "high_growth":
-                if mcap is not None:
-                    if mcap < self.defaults["high_growth_min_mcap"] or mcap > self.defaults["high_growth_max_mcap"]:
-                        continue
-                # If mcap is unknown, keep the candidate (signal > certainty)
+            tier_min, tier_max = TIER_MCAP_RANGES.get(tab, (0, None))
+            if base.get("ticker") not in ETF_SET and mcap is not None:
+                if mcap < tier_min:
+                    continue
+                if tier_max is not None and mcap > tier_max:
+                    continue
+            # If mcap is unknown for non-megacap tiers, keep (signal > certainty)
 
             merged = {**base, **enriched}
             merged["reasons"] = sorted(list(base.get("reasons", set())))
@@ -890,14 +919,20 @@ class OptionsFlowEngine:
         }
 
     def _contract_filter(self, contract: dict, candidate: dict, *, tab: str = "megacap") -> bool:
-        # High-growth stocks ($500M–$100B cap) have inherently lower options
-        # liquidity than mega-caps, so we relax contract-level thresholds.
-        if tab == "high_growth":
+        # Smaller-cap tiers have inherently lower options liquidity,
+        # so we relax contract-level thresholds progressively.
+        if tab == "small_cap":
             min_volume = max(self.defaults["min_contract_volume"] // 3, 3)
             min_oi = max(self.defaults["min_open_interest"] // 5, 5)
             min_premium = self.defaults["min_premium_traded_estimate"] * 0.2
             max_spread = self.defaults["max_spread_pct"] * 1.67  # ~30%
             min_liquidity_quality = 10
+        elif tab == "large_cap":
+            min_volume = max(self.defaults["min_contract_volume"] // 2, 5)
+            min_oi = max(self.defaults["min_open_interest"] // 3, 8)
+            min_premium = self.defaults["min_premium_traded_estimate"] * 0.5
+            max_spread = self.defaults["max_spread_pct"] * 1.33  # ~24%
+            min_liquidity_quality = 15
         else:
             min_volume = self.defaults["min_contract_volume"]
             min_oi = self.defaults["min_open_interest"]
