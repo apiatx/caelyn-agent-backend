@@ -1386,8 +1386,8 @@ function TimeSalesPanel({ symbol }: { symbol: string }) {
   );
 }
 
-type ScanTab = "megacap" | "high_growth";
-const SCAN_TAB_LABELS: Record<ScanTab, string> = { megacap: "Megacap", high_growth: "High Growth" };
+type ScanTab = "megacap" | "large_cap" | "small_cap";
+const SCAN_TAB_LABELS: Record<ScanTab, string> = { megacap: "Megacap ($1T+)", large_cap: "Large Cap ($100B–$999B)", small_cap: "Small Cap ($500M–$99B)" };
 
 export default function OptionsPage() {
   const [data, setData] = useState<any>(null);
@@ -1412,6 +1412,7 @@ export default function OptionsPage() {
   const [scanDefaultsEditable, setScanDefaultsEditable] = useState<string[]>([]);
   const [scanDefaultsIsEditable, setScanDefaultsIsEditable] = useState(false);
   const [scanDefaultsOverrides, setScanDefaultsOverrides] = useState<Record<string, any>>({});
+  const [tierMcapRange, setTierMcapRange] = useState<Record<string, any> | null>(null);
   const [scanDefaultsSaving, setScanDefaultsSaving] = useState(false);
 
   const fetchScanDefaults = useCallback(async (t: ScanTab) => {
@@ -1423,6 +1424,7 @@ export default function OptionsPage() {
       setScanDefaultsEditable(json.editable_keys || []);
       setScanDefaultsIsEditable(json.editable !== false);
       setScanDefaultsOverrides({});
+      setTierMcapRange(json.tier_mcap_range || null);
     } catch { /* ignore */ }
   }, []);
 
@@ -1550,7 +1552,7 @@ export default function OptionsPage() {
   const scoreWeights = resp.score_weights || {};
   const cacheAge: number | null = data?.cache_age_seconds ?? null;
   const fromCache: boolean = data?.from_cache ?? false;
-  const availableTabs: ScanTab[] = (data?.available_tabs as ScanTab[] | undefined) || ["megacap", "high_growth"];
+  const availableTabs: ScanTab[] = (data?.available_tabs as ScanTab[] | undefined) || ["megacap", "large_cap", "small_cap"];
   const hasData = !loading && tickers.length > 0;
   const degradedSources = ensureArray((pipelineStats as any)?.degraded_sources || (mktSum as any)?.degraded_sources);
 
@@ -1626,7 +1628,7 @@ export default function OptionsPage() {
                     <div>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                         <div style={{ color: C.dim, fontSize: 9, fontFamily: font, textTransform: "uppercase" }}>Scan defaults</div>
-                        {scanDefaultsIsEditable && scanTab === "high_growth" && (
+                        {scanDefaultsIsEditable && (
                           <div style={{ display: "flex", gap: 6 }}>
                             {Object.keys(scanDefaultsOverrides).length > 0 && (
                               <button onClick={saveScanDefaults} disabled={scanDefaultsSaving} style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", fontSize: 9, fontWeight: 600, fontFamily: font, background: `${C.green}15`, border: `1px solid ${C.green}30`, borderRadius: 4, color: C.green, cursor: scanDefaultsSaving ? "not-allowed" : "pointer" }}>
@@ -1640,8 +1642,11 @@ export default function OptionsPage() {
                         )}
                       </div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {Object.entries(scanDefaults).filter(([, v]) => v !== null && v !== undefined && v !== "").slice(0, 12).map(([key, value]) => {
-                          const isEditable = scanDefaultsIsEditable && scanTab === "high_growth" && scanDefaultsEditable.includes(key);
+                        {tierMcapRange && (tierMcapRange.min != null || tierMcapRange.max != null || tierMcapRange.label) && (
+                          <Badge key="__tier_mcap" color={C.dim} sm>Mcap Range: {tierMcapRange.label || `${tierMcapRange.min != null ? fmtMaybeText(tierMcapRange.min) : "—"} – ${tierMcapRange.max != null ? fmtMaybeText(tierMcapRange.max) : "—"}`}</Badge>
+                        )}
+                        {Object.entries(scanDefaults).filter(([k, v]) => v !== null && v !== undefined && v !== "" && !/(^|_)(min|max)_mcap$|^mcap_/i.test(k)).slice(0, 12).map(([key, value]) => {
+                          const isEditable = scanDefaultsIsEditable && scanDefaultsEditable.includes(key);
                           const currentVal = scanDefaultsOverrides[key] ?? value;
                           if (isEditable) {
                             return (
