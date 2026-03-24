@@ -14,6 +14,8 @@ import {
   BarChart3,
   Database,
   CircleAlert,
+  Save,
+  RotateCcw,
 } from "lucide-react";
 import {
   BarChart,
@@ -815,40 +817,29 @@ function TickerDetailPanel({ symbol, ticker }: { symbol: string; ticker: TickerR
 }
 
 function DataIngestionWidget() {
-  const [coverage, setCoverage] = useState<any>(null);
-  const [progress, setProgress] = useState<any>(null);
+  const [summary, setSummary] = useState<any>(null);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     setLoading(true);
     try {
-      const [covRes, progRes] = await Promise.all([
-        fetch("/api/options/data-coverage", { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch("/api/options/fetch-progress", { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null),
-      ]);
-      setCoverage(covRes);
-      setProgress(progRes);
-    } finally {
+      const res = await fetch("/api/options/ingestion-summary", { headers: authHeaders() });
+      if (res.ok) setSummary(await res.json());
+    } catch { /* ignore */ } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (open && !coverage) fetchStatus();
-  }, [open, coverage, fetchStatus]);
+    if (open && !summary) fetchStatus();
+  }, [open, summary, fetchStatus]);
 
-  const tickersIngested = progress?.tickers_completed ?? coverage?.tickers_ingested ?? "?";
-  const tickersTotal = progress?.tickers_total ?? coverage?.tickers_total ?? "?";
-  const barsStored = coverage?.total_bars ?? "?";
-  const lastUpdated = coverage?.last_updated;
-  const timeAgo = lastUpdated ? (() => {
-    const diff = Date.now() - new Date(lastUpdated).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    return `${hrs}h ago`;
-  })() : "unknown";
+  const tickersIngested = summary?.tickers_ingested ?? "?";
+  const tickersTotal = summary?.tickers_total ?? "?";
+  const barsStored = summary?.total_bars ?? "?";
+  const lastUpdated = summary?.last_updated;
+  const formattedTime = lastUpdated ? new Date(lastUpdated).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "unknown";
 
   return (
     <div style={{ marginBottom: 12 }}>
@@ -874,7 +865,7 @@ function DataIngestionWidget() {
                 <span style={{ color: C.dim }}> bars stored</span>
               </div>
               <div style={{ color: C.dim, fontSize: 11, fontFamily: font }}>
-                Last updated: <span style={{ color: C.text }}>{timeAgo}</span>
+                Last updated: <span style={{ color: C.text }}>{formattedTime}</span>
               </div>
               <button onClick={fetchStatus} style={{ padding: "3px 8px", fontSize: 9, fontFamily: font, background: `${C.blue}12`, border: `1px solid ${C.blue}30`, borderRadius: 4, color: C.blue, cursor: "pointer" }}>
                 <RefreshCw className="w-3 h-3 inline-block" />
@@ -1204,6 +1195,65 @@ export default function OptionsPage() {
   const scanTabRef = useRef<ScanTab>(scanTab);
   scanTabRef.current = scanTab;
 
+  // Scan defaults state
+  const [scanDefaults, setScanDefaults] = useState<Record<string, any>>({});
+  const [scanDefaultsEditable, setScanDefaultsEditable] = useState<string[]>([]);
+  const [scanDefaultsIsEditable, setScanDefaultsIsEditable] = useState(false);
+  const [scanDefaultsOverrides, setScanDefaultsOverrides] = useState<Record<string, any>>({});
+  const [scanDefaultsSaving, setScanDefaultsSaving] = useState(false);
+
+  const fetchScanDefaults = useCallback(async (t: ScanTab) => {
+    try {
+      const res = await fetch(`/api/options/scan-defaults?tab=${t}`, { headers: authHeaders() });
+      if (!res.ok) return;
+      const json = await res.json();
+      setScanDefaults(json.defaults || {});
+      setScanDefaultsEditable(json.editable_keys || []);
+      setScanDefaultsIsEditable(json.editable !== false);
+      setScanDefaultsOverrides({});
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    fetchScanDefaults(scanTab);
+  }, [scanTab, fetchScanDefaults]);
+
+  const saveScanDefaults = async () => {
+    setScanDefaultsSaving(true);
+    try {
+      const res = await fetch("/api/options/scan-defaults", {
+        method: "PUT",
+        headers: authHeaders(),
+        body: JSON.stringify({ tab: scanTab, overrides: scanDefaultsOverrides }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setScanDefaults(json.defaults || {});
+        setScanDefaultsOverrides({});
+      }
+    } catch { /* ignore */ } finally {
+      setScanDefaultsSaving(false);
+    }
+  };
+
+  const resetScanDefaults = async () => {
+    setScanDefaultsSaving(true);
+    try {
+      const res = await fetch("/api/options/scan-defaults", {
+        method: "PUT",
+        headers: authHeaders(),
+        body: JSON.stringify({ tab: scanTab, reset: true }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setScanDefaults(json.defaults || {});
+        setScanDefaultsOverrides({});
+      }
+    } catch { /* ignore */ } finally {
+      setScanDefaultsSaving(false);
+    }
+  };
+
   const fetchDashboard = useCallback(async (tabOverride?: ScanTab) => {
     setLoading(true);
     setError("");
@@ -1295,8 +1345,6 @@ export default function OptionsPage() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <Zap className="w-5 h-5" style={{ color: C.green }} />
             <span style={{ color: C.bright, fontSize: 17, fontWeight: 800, fontFamily: font, letterSpacing: "-0.02em" }}>OPTIONS FLOW</span>
-            <span style={{ background: `${C.blue}15`, color: C.blue, border: `1px solid ${C.blue}30`, borderRadius: 999, padding: "2px 8px", fontSize: 10, fontWeight: 700, fontFamily: font }}>{resp.display_type || "SCREENER"}</span>
-            {resp.scan_type ? <Badge color={C.purple} sm>{resp.scan_type}</Badge> : null}
             {fromCache && cacheAge != null ? <span style={{ color: C.dim, fontSize: 10, fontFamily: font }}>Updated {cacheAge}s ago</span> : null}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -1349,11 +1397,45 @@ export default function OptionsPage() {
               <SectionCard>
                 <div style={{ padding: 12, display: "grid", gap: 10 }}>
                   {(mktSum as any).macro_context ? <div style={{ color: C.text, fontSize: 12, lineHeight: 1.6 }}><span style={{ color: C.dim, fontFamily: font, fontSize: 10, textTransform: "uppercase" }}>Macro context:</span> {(mktSum as any).macro_context as ReactNode}</div> : null}
-                  {filterEntries.length ? (
+                  {Object.keys(scanDefaults).length ? (
                     <div>
-                      <div style={{ color: C.dim, fontSize: 9, fontFamily: font, textTransform: "uppercase", marginBottom: 6 }}>Scan defaults</div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                        <div style={{ color: C.dim, fontSize: 9, fontFamily: font, textTransform: "uppercase" }}>Scan defaults</div>
+                        {scanDefaultsIsEditable && scanTab === "high_growth" && (
+                          <div style={{ display: "flex", gap: 6 }}>
+                            {Object.keys(scanDefaultsOverrides).length > 0 && (
+                              <button onClick={saveScanDefaults} disabled={scanDefaultsSaving} style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", fontSize: 9, fontWeight: 600, fontFamily: font, background: `${C.green}15`, border: `1px solid ${C.green}30`, borderRadius: 4, color: C.green, cursor: scanDefaultsSaving ? "not-allowed" : "pointer" }}>
+                                <Save className="w-3 h-3" /> Save
+                              </button>
+                            )}
+                            <button onClick={resetScanDefaults} disabled={scanDefaultsSaving} style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", fontSize: 9, fontWeight: 600, fontFamily: font, background: `${C.orange}15`, border: `1px solid ${C.orange}30`, borderRadius: 4, color: C.orange, cursor: scanDefaultsSaving ? "not-allowed" : "pointer" }}>
+                              <RotateCcw className="w-3 h-3" /> Reset to Defaults
+                            </button>
+                          </div>
+                        )}
+                      </div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {filterEntries.map(([key, value]) => <Badge key={key} color={C.blue} sm>{toTitleCase(key)}: {fmtMaybeText(value)}</Badge>)}
+                        {Object.entries(scanDefaults).filter(([, v]) => v !== null && v !== undefined && v !== "").slice(0, 12).map(([key, value]) => {
+                          const isEditable = scanDefaultsIsEditable && scanTab === "high_growth" && scanDefaultsEditable.includes(key);
+                          const currentVal = scanDefaultsOverrides[key] ?? value;
+                          if (isEditable) {
+                            return (
+                              <div key={key} style={{ display: "flex", alignItems: "center", gap: 4, background: `${C.blue}10`, border: `1px solid ${C.blue}25`, borderRadius: 5, padding: "2px 6px" }}>
+                                <span style={{ color: C.dim, fontSize: 9, fontFamily: font }}>{toTitleCase(key)}:</span>
+                                <input
+                                  type={typeof value === "number" ? "number" : "text"}
+                                  value={currentVal}
+                                  onChange={e => {
+                                    const v = typeof value === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value;
+                                    setScanDefaultsOverrides(prev => ({ ...prev, [key]: v }));
+                                  }}
+                                  style={{ width: 60, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, padding: "1px 4px", color: C.bright, fontSize: 10, fontFamily: font, outline: "none" }}
+                                />
+                              </div>
+                            );
+                          }
+                          return <Badge key={key} color={C.blue} sm>{toTitleCase(key)}: {fmtMaybeText(currentVal)}</Badge>;
+                        })}
                       </div>
                     </div>
                   ) : null}

@@ -1027,6 +1027,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/options/ingestion-summary — Aggregated ingestion summary
+  app.get('/api/options/ingestion-summary', async (req, res) => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const response = await fetch(`${AGENT_URL}/api/options/ingestion-summary`, {
+        headers: { 'X-API-Key': AGENT_KEY },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!response.ok) return res.status(response.status).json({ error: `Agent returned ${response.status}` });
+      res.json(await response.json());
+    } catch (error: any) {
+      console.error('Options ingestion-summary error:', error);
+      res.status(500).json({ error: 'Failed to fetch ingestion summary' });
+    }
+  });
+
+  // GET /api/options/scan-defaults — Get scan defaults for a tab
+  app.get('/api/options/scan-defaults', async (req, res) => {
+    try {
+      const tab = req.query.tab || 'megacap';
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const response = await fetch(`${AGENT_URL}/api/options/scan-defaults?tab=${encodeURIComponent(String(tab))}`, {
+        headers: { 'X-API-Key': AGENT_KEY },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!response.ok) return res.status(response.status).json({ error: `Agent returned ${response.status}` });
+      res.json(await response.json());
+    } catch (error: any) {
+      console.error('Options scan-defaults GET error:', error);
+      res.status(500).json({ error: 'Failed to fetch scan defaults' });
+    }
+  });
+
+  // PUT /api/options/scan-defaults — Update scan defaults for a tab
+  app.put('/api/options/scan-defaults', async (req, res) => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const response = await fetch(`${AGENT_URL}/api/options/scan-defaults`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': AGENT_KEY },
+        body: JSON.stringify(req.body),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!response.ok) return res.status(response.status).json({ error: `Agent returned ${response.status}` });
+      res.json(await response.json());
+    } catch (error: any) {
+      console.error('Options scan-defaults PUT error:', error);
+      res.status(500).json({ error: 'Failed to update scan defaults' });
+    }
+  });
+
   // GET /api/options/fetch-progress — Ingestion progress per ticker
   app.get('/api/options/fetch-progress', async (req, res) => {
     try {
