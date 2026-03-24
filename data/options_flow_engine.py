@@ -40,9 +40,10 @@ def _env_float(name: str, default: float) -> float:
 
 OPTIONS_FLOW_DEFAULTS = {
     "prefilter_target": _env_int("OPTIONS_FLOW_PREFILTER_TARGET", 24),
-    "options_inspection_limit": _env_int("OPTIONS_FLOW_INSPECTION_LIMIT", 6),
+    "options_inspection_limit": _env_int("OPTIONS_FLOW_INSPECTION_LIMIT", 15),
     "min_stock_price": _env_float("OPTIONS_FLOW_MIN_STOCK_PRICE", 8.0),
     "min_stock_liquidity": _env_float("OPTIONS_FLOW_MIN_STOCK_LIQUIDITY", 15_000_000.0),
+    "megacap_min_mcap": _env_float("OPTIONS_FLOW_MEGACAP_MIN_MCAP", 100_000_000_000.0),
     "high_growth_min_mcap": _env_float("OPTIONS_FLOW_HG_MIN_MCAP", 500_000_000.0),
     "high_growth_max_mcap": _env_float("OPTIONS_FLOW_HG_MAX_MCAP", 100_000_000_000.0),
     "relative_volume_threshold": _env_float("OPTIONS_FLOW_RELATIVE_VOLUME_THRESHOLD", 1.5),
@@ -50,12 +51,12 @@ OPTIONS_FLOW_DEFAULTS = {
     "max_dte": _env_int("OPTIONS_FLOW_MAX_DTE", 45),
     "max_expirations_per_ticker": _env_int("OPTIONS_FLOW_MAX_EXPIRATIONS", 2),
     "max_spread_pct": _env_float("OPTIONS_FLOW_MAX_SPREAD_PCT", 18.0),
-    "min_contract_volume": _env_int("OPTIONS_FLOW_MIN_CONTRACT_VOLUME", 25),
-    "min_open_interest": _env_int("OPTIONS_FLOW_MIN_OPEN_INTEREST", 75),
+    "min_contract_volume": _env_int("OPTIONS_FLOW_MIN_CONTRACT_VOLUME", 10),
+    "min_open_interest": _env_int("OPTIONS_FLOW_MIN_OPEN_INTEREST", 25),
     "preferred_delta_min": _env_float("OPTIONS_FLOW_PREFERRED_DELTA_MIN", 0.2),
     "preferred_delta_max": _env_float("OPTIONS_FLOW_PREFERRED_DELTA_MAX", 0.6),
-    "min_premium_traded_estimate": _env_float("OPTIONS_FLOW_MIN_PREMIUM_TRADED", 20_000.0),
-    "max_moneyness_pct": _env_float("OPTIONS_FLOW_MAX_MONEYNESS_PCT", 0.08),
+    "min_premium_traded_estimate": _env_float("OPTIONS_FLOW_MIN_PREMIUM_TRADED", 5_000.0),
+    "max_moneyness_pct": _env_float("OPTIONS_FLOW_MAX_MONEYNESS_PCT", 0.15),
     "max_contracts_per_ticker": _env_int("OPTIONS_FLOW_MAX_CONTRACTS_PER_TICKER", 60),
     "top_contracts_per_ticker": _env_int("OPTIONS_FLOW_TOP_CONTRACTS_PER_TICKER", 5),
 }
@@ -208,8 +209,9 @@ class OptionsFlowEngine:
         self,
         seed_tickers: list[str] | None = None,
         tab: str = "megacap",
+        exclude_tickers: set[str] | None = None,
     ) -> dict:
-        prefilter_data = await self._build_prefilter(seed_tickers or [], tab=tab)
+        prefilter_data = await self._build_prefilter(seed_tickers or [], tab=tab, exclude_tickers=exclude_tickers)
         return {
             "generated_at": datetime.utcnow().isoformat(),
             "filter_defaults": self.defaults,
@@ -235,9 +237,12 @@ class OptionsFlowEngine:
             macro = prefilter_data.get("macro", {}) or {}
 
         inspectable = candidates[: self.defaults["options_inspection_limit"]]
+        print(f"[OPTIONS_FLOW] [{tab}] Pipeline: {len(candidates)} prefilter → {len(inspectable)} inspectable")
         results = await self._inspect_shortlist(inspectable, macro)
+        dropped_tickers = [inspectable[i].get("ticker") for i, r in enumerate(results) if r is None]
         results = [r for r in results if r]
         results.sort(key=lambda row: row.get("composite_score", 0), reverse=True)
+        print(f"[OPTIONS_FLOW] [{tab}] Pipeline: {len(inspectable)} inspected → {len(results)} scored (dropped: {dropped_tickers})")
 
         snapshot_rows: list[dict] = []
         all_contracts: list[dict] = []
@@ -309,7 +314,7 @@ class OptionsFlowEngine:
     ) -> dict:
         return await self.run_live_scan(seed_tickers, prefilter_snapshot=prefilter_snapshot, tab=tab)
 
-    async def _build_prefilter(self, seed_tickers: list[str], tab: str = "megacap") -> dict:
+    async def _build_prefilter(self, seed_tickers: list[str], tab: str = "megacap", exclude_tickers: set[str] | None = None) -> dict:
         degraded_sources: list[str] = []
 
         if tab == "high_growth":
@@ -451,10 +456,18 @@ class OptionsFlowEngine:
             row["source_hits"].append("seed_watchlist")
             row["reasons"].add("watchlist inclusion")
 
+        # Cross-tab exclusion: remove tickers that belong to the other tab's universe
+        if exclude_tickers:
+            for sym in list(candidates.keys()):
+                if sym in exclude_tickers:
+                    del candidates[sym]
+
         # For high_growth, cast a wider net — inspect more candidates
         prefilter_multiplier = 3 if tab == "high_growth" else 2
+        total_raw = len(candidates)
         preliminary = sorted(candidates.values(), key=lambda x: x["source_score"], reverse=True)
         preliminary = preliminary[: max(self.defaults["prefilter_target"] * prefilter_multiplier, 60 if tab == "high_growth" else 40)]
+        print(f"[OPTIONS_FLOW] [{tab}] Prefilter: {total_raw} raw candidates → {len(preliminary)} preliminary (sources degraded: {degraded_sources})")
 
         quote_tasks = []
         for row in preliminary:
@@ -480,10 +493,15 @@ class OptionsFlowEngine:
             ):
                 continue
 
-            # Market cap gate for high_growth tab: $500M–$100B only
-            if tab == "high_growth":
-                profile = enriched.get("profile") or {}
-                mcap = _safe_float(profile.get("market_cap"))
+            # Market cap gates — enforce separate universes per tab
+            profile = enriched.get("profile") or {}
+            mcap = _safe_float(profile.get("market_cap"))
+            if tab == "megacap":
+                # Megacap: >$100B only (ETFs exempt — they don't have market cap)
+                if base.get("ticker") not in ETF_SET:
+                    if mcap is not None and mcap < self.defaults["megacap_min_mcap"]:
+                        continue
+            elif tab == "high_growth":
                 if mcap is not None:
                     if mcap < self.defaults["high_growth_min_mcap"] or mcap > self.defaults["high_growth_max_mcap"]:
                         continue
@@ -495,8 +513,10 @@ class OptionsFlowEngine:
             final_rows.append(merged)
 
         final_rows.sort(key=lambda x: x.get("prefilter_score", 0), reverse=True)
+        final_cut = final_rows[: self.defaults["prefilter_target"]]
+        print(f"[OPTIONS_FLOW] [{tab}] Prefilter: {len(preliminary)} preliminary → {len(final_rows)} enriched → {len(final_cut)} final candidates")
         return {
-            "candidates": final_rows[: self.defaults["prefilter_target"]],
+            "candidates": final_cut,
             "degraded_sources": degraded_sources,
             "macro": macro,
         }
@@ -644,6 +664,7 @@ class OptionsFlowEngine:
         expected_move_candidates = []
         approximate_metrics = []
         missing_flags = []
+        total_normalized = 0
 
         for exp, chain in zip(valid_expirations, chain_list):
             if isinstance(chain, Exception) or not isinstance(chain, dict):
@@ -658,10 +679,13 @@ class OptionsFlowEngine:
             for side, rows in (("call", calls), ("put", puts)):
                 for raw in rows:
                     contract = self._normalize_contract(symbol, side, exp, raw, price)
-                    if contract and self._contract_filter(contract, candidate):
-                        contracts.append(contract)
+                    if contract:
+                        total_normalized += 1
+                        if self._contract_filter(contract, candidate):
+                            contracts.append(contract)
 
         if not contracts:
+            print(f"[OPTIONS_FLOW] {symbol}: 0/{total_normalized} contracts passed filter")
             return None
 
         call_volume = sum(c["volume"] for c in contracts if c["type"] == "call")

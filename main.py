@@ -4463,8 +4463,10 @@ async def test_altfins(symbol: str = "BTC", api_key: str = Header(None, alias="X
 _OPTIONS_SCREENER_TICKERS = [
     # ETFs — macro + sector flow
     "SPY", "QQQ", "IWM", "GLD", "TLT", "XLF", "XLK",
-    # Stocks — highest-volume options universe
-    "AAPL", "NVDA", "TSLA", "AMZN", "META", "MSFT", "AMD", "GOOGL", "NFLX", "COIN",
+    # Mega-cap stocks — market cap >$100B, highest-volume options universe
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
+    "JPM", "V", "UNH", "MA", "HD", "LLY", "AVGO", "XOM",
+    "COST", "WMT", "CRM", "ORCL", "AMD", "NFLX",
 ]
 
 # High Growth tab: signal-rich seed tickers in $500M–$100B range
@@ -4480,7 +4482,7 @@ _OPTIONS_HIGH_GROWTH_SEEDS = [
     # Space / defense
     "RKLB", "LUNR", "ASTS", "PL", "AVAV",
     # Crypto-adjacent / digital infra
-    "COIN", "MARA", "CLSK", "HUT", "IONQ",
+    "MARA", "CLSK", "HUT", "IONQ",
     # Biotech / health with options activity
     "HIMS", "RXRX", "KRYS", "VERA",
 ]
@@ -4522,14 +4524,19 @@ async def _options_precompute_loop():
     import time as _time
     from data.cache import cache
 
+    _MEGACAP_SEED_SET = set(_OPTIONS_SCREENER_TICKERS)
+    _HG_SEED_SET = set(_OPTIONS_HIGH_GROWTH_SEEDS)
+
     while True:
         for tab, seeds in [("megacap", _OPTIONS_SCREENER_TICKERS), ("high_growth", _OPTIONS_HIGH_GROWTH_SEEDS)]:
             try:
+                # Exclude tickers from the other tab's seed list to prevent overlap
+                exclude = _HG_SEED_SET if tab == "megacap" else _MEGACAP_SEED_SET
                 print(f"[OPTIONS_PRECOMPUTE] [{tab}] Refreshing stock-side prefilter for {len(seeds)} seed tickers...")
                 t0 = _time.time()
 
                 prefilter_data = await OptionsFlowEngine(data_service).build_prefilter_snapshot(
-                    seeds, tab=tab
+                    seeds, tab=tab, exclude_tickers=exclude,
                 )
 
                 elapsed = _time.time() - t0
@@ -4631,9 +4638,10 @@ async def options_dashboard(
     async def _full_scan():
         overrides = _HIGH_GROWTH_USER_OVERRIDES if tab == "high_growth" and _HIGH_GROWTH_USER_OVERRIDES else None
         engine = OptionsFlowEngine(data_service, overrides=overrides)
+        exclude = set(_OPTIONS_HIGH_GROWTH_SEEDS) if tab == "megacap" else set(_OPTIONS_SCREENER_TICKERS)
         nonlocal prefilter_snapshot
         if not prefilter_snapshot:
-            prefilter_snapshot = await engine.build_prefilter_snapshot(seed_tickers, tab=tab)
+            prefilter_snapshot = await engine.build_prefilter_snapshot(seed_tickers, tab=tab, exclude_tickers=exclude)
             cache.set(prefilter_key, prefilter_snapshot, _OPTIONS_PREFILTER_CACHE_TTL)
 
         screener_data = await engine.run_live_scan(
