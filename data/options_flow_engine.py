@@ -539,11 +539,25 @@ class OptionsFlowEngine:
                 if sym in ETF_SET:
                     del candidates[sym]
 
-        # Small-cap has lower liquidity — cast a wider net
-        prefilter_multiplier = 3 if tab == "small_cap" else 2
+        # Adjust preliminary count per tab — no need to enrich 48 candidates
+        # when only a handful will pass the mcap/ETF gate.
+        if tab == "small_cap":
+            prefilter_multiplier = 3
+            preliminary_cap = 60
+        elif tab == "etf":
+            # ETFs already filtered — candidate pool IS the final pool
+            prefilter_multiplier = 1
+            preliminary_cap = 40
+        elif tab == "megacap":
+            # Very few $1T+ companies exist — don't waste time enriching 48
+            prefilter_multiplier = 1
+            preliminary_cap = 20
+        else:
+            prefilter_multiplier = 2
+            preliminary_cap = 40
         total_raw = len(candidates)
         preliminary = sorted(candidates.values(), key=lambda x: x["source_score"], reverse=True)
-        preliminary = preliminary[: max(self.defaults["prefilter_target"] * prefilter_multiplier, 60 if tab == "small_cap" else 40)]
+        preliminary = preliminary[: max(self.defaults["prefilter_target"] * prefilter_multiplier, preliminary_cap)]
         print(f"[OPTIONS_FLOW] [{tab}] Prefilter: {total_raw} raw candidates → {len(preliminary)} preliminary (sources degraded: {degraded_sources})")
 
         quote_tasks = []

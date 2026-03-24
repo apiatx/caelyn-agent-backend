@@ -4523,9 +4523,10 @@ _OPTIONS_TAB_SEEDS = {
 from data.options_ingestion import OPTIONS_WATCHLIST as _OPTIONS_FULL_WATCHLIST
 from data.tradier_flow_engine import TradierFlowEngine
 
-_OPTIONS_PRECOMPUTE_INTERVAL = 1800  # 30 minutes — stock-side prefilter only
-_OPTIONS_CACHE_TTL = 45              # short-lived page response cache
-_OPTIONS_PREFILTER_CACHE_TTL = 3600  # 1 hour — proprietary stock-side data only
+_OPTIONS_PRECOMPUTE_INTERVAL = 1800   # 30 minutes — full scan cycle
+_OPTIONS_CACHE_TTL = 120              # page response cache (2 min)
+_OPTIONS_PREFILTER_CACHE_TTL = 3600   # 1 hour — proprietary stock-side data only
+_OPTIONS_PRECOMPUTE_CACHE_TTL = 600   # 10 min — full results from precompute loop
 
 
 def _options_cache_key(tab: str) -> str:
@@ -4562,17 +4563,34 @@ async def _options_precompute_loop():
                 for other_tab, other_seeds in _all_seed_sets.items():
                     if other_tab != tab:
                         exclude |= other_seeds
-                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Refreshing stock-side prefilter for {len(seeds)} seed tickers...")
+                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Building prefilter + full scan for {len(seeds)} seed tickers...")
                 t0 = _time.time()
 
                 engine = TradierFlowEngine(data_service)
                 prefilter_data = await engine.build_prefilter_snapshot(
                     seeds, tab=tab, exclude_tickers=exclude,
                 )
-
-                elapsed = _time.time() - t0
                 cache.set(_options_prefilter_cache_key(tab), prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
-                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Cached {len(prefilter_data.get('candidates', []))} prefilter candidates in {elapsed:.1f}s.")
+                pf_elapsed = _time.time() - t0
+                n_candidates = len(prefilter_data.get("candidates", []))
+                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter: {n_candidates} candidates in {pf_elapsed:.1f}s. Running Tradier scan...")
+
+                # Build full scan results so dashboard serves from cache immediately
+                screener_data = await engine.run_live_scan(
+                    seeds, prefilter_snapshot=prefilter_data, tab=tab,
+                )
+                full_result = {
+                    "display_type": "options_screener",
+                    "scan_type": "options_flow",
+                    "tab": tab,
+                    "cached_at": _time.time(),
+                    "tickers_scanned": seeds,
+                    **screener_data,
+                }
+                cache.set(_options_cache_key(tab), full_result, _OPTIONS_PRECOMPUTE_CACHE_TTL)
+                elapsed = _time.time() - t0
+                n_tickers = len(screener_data.get("tickers", []))
+                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Full scan: {n_tickers} tickers, {len(screener_data.get('all_contracts', []))} contracts in {elapsed:.1f}s.")
 
             except Exception as e:
                 import traceback
@@ -4689,7 +4707,7 @@ async def options_dashboard(
         return screener_data
 
     try:
-        screener_data = await asyncio.wait_for(_full_scan(), timeout=50)
+        screener_data = await asyncio.wait_for(_full_scan(), timeout=90)
         elapsed = _time.time() - t0
 
         result = {
