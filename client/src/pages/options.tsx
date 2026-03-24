@@ -359,9 +359,9 @@ function SectionCard({ children }: { children: ReactNode }) {
 
 function MetricBlock({ label, value, color = C.bright, subtext }: { label: string; value: ReactNode; color?: string; subtext?: ReactNode }) {
   return (
-    <div style={{ padding: "10px 12px", borderRadius: 8, background: `${color}08`, border: `1px solid ${color}18`, minWidth: 110 }}>
+    <div style={{ padding: "10px 12px", borderRadius: 8, background: `${color}08`, border: `1px solid ${color}18`, minWidth: 110, transition: "opacity 0.15s ease, transform 0.2s ease" }}>
       <div style={{ color: C.dim, fontSize: 9, fontFamily: font, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>{label}</div>
-      <div style={{ color, fontSize: 14, fontFamily: font, fontWeight: 700 }}>{value}</div>
+      <div style={{ color, fontSize: 14, fontFamily: font, fontWeight: 700, transition: "color 0.15s ease" }}>{value}</div>
       {subtext ? <div style={{ color: C.text, fontSize: 10, marginTop: 4 }}>{subtext}</div> : null}
     </div>
   );
@@ -892,7 +892,7 @@ function TickerRows({ t, index, isExp, onToggle }: { t: TickerResult; index: num
   const modular = t.modular_scores || {};
   return (
     <Fragment>
-      <tr onClick={onToggle} style={{ borderTop: `1px solid ${C.border}`, cursor: "pointer", background: isExp ? `${C.blue}06` : "transparent", verticalAlign: "top" }}>
+      <tr onClick={onToggle} style={{ borderTop: `1px solid ${C.border}`, cursor: "pointer", background: isExp ? `${C.blue}06` : "transparent", verticalAlign: "top", transition: "opacity 0.15s ease, transform 0.2s ease" }}>
         <td style={{ padding: "12px 10px" }}>
           <div style={{ display: "grid", gap: 6 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -1393,6 +1393,8 @@ export default function OptionsPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [loadStage, setLoadStage] = useState("Initializing live scan...");
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [scanTab, setScanTab] = useState<ScanTab>("megacap");
   const [tab, setTab] = useState<MainTab>("tickers");
@@ -1403,6 +1405,7 @@ export default function OptionsPage() {
   const [contractDetailSymbol, setContractDetailSymbol] = useState<string | null>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tabCacheRef = useRef<Record<string, any>>({});
 
   const scanTabRef = useRef<ScanTab>(scanTab);
   scanTabRef.current = scanTab;
@@ -1469,38 +1472,60 @@ export default function OptionsPage() {
   };
 
   const fetchDashboard = useCallback(async (tabOverride?: ScanTab) => {
-    setLoading(true);
-    setError("");
+    const activeTab = tabOverride ?? scanTabRef.current;
+    const hasExistingData = !!tabCacheRef.current[activeTab];
+
+    // Background refresh: don't clear content, just show subtle indicator
+    if (hasExistingData) {
+      setIsRefreshing(true);
+      setRefreshError(null);
+    } else {
+      // Initial load: show full loading state
+      setLoading(true);
+      setError("");
+    }
+
     const stages = ["Running live scan...", "Scanning options chains...", "Aggregating flow & context...", "Scoring modular signals...", "Building market summary...", "Finalizing dashboard..."];
     let si = 0;
-    setLoadStage(stages[0]);
-    const stageTimer = setInterval(() => {
+    if (!hasExistingData) setLoadStage(stages[0]);
+    const stageTimer = !hasExistingData ? setInterval(() => {
       si = Math.min(si + 1, stages.length - 1);
       setLoadStage(stages[si]);
-    }, 2500);
+    }, 2500) : null;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 55_000);
     try {
-      const activeTab = tabOverride ?? scanTabRef.current;
       const url = `${API_BASE}/dashboard?tab=${encodeURIComponent(activeTab)}`;
-      console.log(`[OptionsPage] fetchDashboard → ${url}  (tabOverride=${tabOverride ?? "none"}, scanTabRef=${scanTabRef.current})`);
+      console.log(`[OptionsPage] fetchDashboard → ${url}  (tabOverride=${tabOverride ?? "none"}, scanTabRef=${scanTabRef.current}, background=${hasExistingData})`);
       const res = await fetch(url, { headers: authHeaders(), signal: controller.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       const resp = json?.response || {};
       console.log(`[OptionsPage] response keys:`, Object.keys(resp), `| tickers: ${(resp.tickers || []).length} | all_contracts: ${(resp.all_contracts || []).length} | tickers_scanned (seed, NOT used): ${resp.tickers_scanned ?? "n/a"}`);
-      setData(json);
+      // Update cache and state in-place
+      tabCacheRef.current[activeTab] = json;
+      if (activeTab === scanTabRef.current) {
+        setData(json);
+      }
+      setError("");
     } catch (e: any) {
-      if (e.name === "AbortError") {
-        setError("Request timed out (55s). The backend may still be building the cache — click Refresh to try again.");
+      if (hasExistingData) {
+        // Background refresh failed — keep old data, show toast
+        setRefreshError("Refresh failed, showing cached data");
+        setTimeout(() => setRefreshError(null), 5000);
       } else {
-        setError(e.message || "Failed to load options dashboard");
+        if (e.name === "AbortError") {
+          setError("Request timed out (55s). The backend may still be building the cache — click Refresh to try again.");
+        } else {
+          setError(e.message || "Failed to load options dashboard");
+        }
       }
     } finally {
       clearTimeout(timeout);
-      clearInterval(stageTimer);
+      if (stageTimer) clearInterval(stageTimer);
       setLoading(false);
       setLoadStage("");
+      setIsRefreshing(false);
     }
   }, []);
 
@@ -1511,9 +1536,16 @@ export default function OptionsPage() {
   }, [fetchDashboard]);
 
   const switchScanTab = (newTab: ScanTab) => {
-    if (newTab === scanTab || loading) return;
+    if (newTab === scanTab) return;
     setScanTab(newTab);
-    setData(null);
+    // Show cached data instantly if available, otherwise show loading
+    const cached = tabCacheRef.current[newTab];
+    if (cached) {
+      setData(cached);
+      setError("");
+    } else {
+      setData(null);
+    }
     fetchDashboard(newTab);
   };
 
@@ -1553,7 +1585,7 @@ export default function OptionsPage() {
   const cacheAge: number | null = data?.cache_age_seconds ?? null;
   const fromCache: boolean = data?.from_cache ?? false;
   const availableTabs: ScanTab[] = (data?.available_tabs as ScanTab[] | undefined) || ["megacap", "large_cap", "small_cap"];
-  const hasData = !loading && tickers.length > 0;
+  const hasData = tickers.length > 0;
   const degradedSources = ensureArray((pipelineStats as any)?.degraded_sources || (mktSum as any)?.degraded_sources);
 
   const filterEntries = Object.entries(filterDefaults).filter(([, value]) => value !== null && value !== undefined && value !== "").slice(0, 8);
@@ -1565,6 +1597,9 @@ export default function OptionsPage() {
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes pulse { 0%,100% { opacity:0.5; } 50% { opacity:1; } }
         @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+        @keyframes refreshBar { from { width: 0%; } to { width: 100%; } }
+        @keyframes toastIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+        @keyframes toastOut { from { opacity:1; } to { opacity:0; } }
       `}</style>
 
       <div style={{ padding: "16px 20px 10px", borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: C.bg, zIndex: 10 }}>
@@ -1573,6 +1608,7 @@ export default function OptionsPage() {
             <Zap className="w-5 h-5" style={{ color: C.green }} />
             <span style={{ color: C.bright, fontSize: 17, fontWeight: 800, fontFamily: font, letterSpacing: "-0.02em" }}>OPTIONS FLOW</span>
             {fromCache && cacheAge != null ? <span style={{ color: C.dim, fontSize: 10, fontFamily: font }}>Updated {cacheAge}s ago</span> : null}
+            {isRefreshing && <Loader2 className="w-3 h-3 animate-spin" style={{ color: C.blue, opacity: 0.7 }} />}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {scoreWeightEntries.length ? (
@@ -1580,9 +1616,9 @@ export default function OptionsPage() {
                 <BarChart3 className="w-3 h-3" /> How ranking works
               </button>
             ) : null}
-            <button onClick={fetchDashboard} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", background: `${C.blue}12`, border: `1px solid ${C.blue}30`, borderRadius: 7, color: loading ? C.dim : C.blue, fontSize: 12, fontWeight: 600, fontFamily: font, cursor: loading ? "not-allowed" : "pointer" }}>
-              <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
-              {loading ? loadStage : "Refresh"}
+            <button onClick={() => fetchDashboard()} disabled={loading || isRefreshing} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", background: `${C.blue}12`, border: `1px solid ${C.blue}30`, borderRadius: 7, color: (loading || isRefreshing) ? C.dim : C.blue, fontSize: 12, fontWeight: 600, fontFamily: font, cursor: (loading || isRefreshing) ? "not-allowed" : "pointer" }}>
+              <RefreshCw className={`w-3 h-3 ${(loading || isRefreshing) ? "animate-spin" : ""}`} />
+              {loading ? loadStage : isRefreshing ? "Refreshing..." : "Refresh"}
             </button>
           </div>
         </div>
@@ -1590,8 +1626,8 @@ export default function OptionsPage() {
         {/* Scan tab switcher */}
         <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
           {availableTabs.map(t => (
-            <button key={t} onClick={() => switchScanTab(t)} disabled={loading}
-              style={{ padding: "5px 16px", fontSize: 11, fontWeight: 700, fontFamily: font, background: scanTab === t ? `${C.green}18` : "transparent", color: scanTab === t ? C.green : C.dim, border: `1px solid ${scanTab === t ? C.green + "40" : C.border}`, borderRadius: 6, cursor: loading ? "not-allowed" : "pointer", opacity: loading && scanTab !== t ? 0.5 : 1, transition: "all 0.15s ease" }}>
+            <button key={t} onClick={() => switchScanTab(t)} disabled={loading && !hasData}
+              style={{ padding: "5px 16px", fontSize: 11, fontWeight: 700, fontFamily: font, background: scanTab === t ? `${C.green}18` : "transparent", color: scanTab === t ? C.green : C.dim, border: `1px solid ${scanTab === t ? C.green + "40" : C.border}`, borderRadius: 6, cursor: (loading && !hasData) ? "not-allowed" : "pointer", opacity: (loading && !hasData) && scanTab !== t ? 0.5 : 1, transition: "all 0.15s ease" }}>
               {SCAN_TAB_LABELS[t] || toTitleCase(t)}
             </button>
           ))}
@@ -1681,6 +1717,20 @@ export default function OptionsPage() {
         )}
       </div>
 
+      {/* Thin refresh progress bar */}
+      {isRefreshing && (
+        <div style={{ height: 2, background: C.border, overflow: "hidden", position: "relative" }}>
+          <div style={{ height: "100%", background: C.blue, animation: "refreshBar 8s ease-in-out infinite", opacity: 0.8 }} />
+        </div>
+      )}
+
+      {/* Refresh error toast */}
+      {refreshError && (
+        <div style={{ position: "fixed", top: 12, right: 12, zIndex: 100, background: `${C.orange}18`, border: `1px solid ${C.orange}40`, borderRadius: 8, padding: "8px 14px", color: C.orange, fontSize: 12, fontFamily: font, animation: "toastIn 0.2s ease", display: "flex", alignItems: "center", gap: 6 }}>
+          <CircleAlert className="w-3 h-3" /> {refreshError}
+        </div>
+      )}
+
       <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 140px)" }}>
         <div style={{ flex: 1, overflowY: "auto", padding: "14px 20px" }}>
           {loading && !hasData && (
@@ -1691,11 +1741,11 @@ export default function OptionsPage() {
             </div>
           )}
 
-          {error && !loading && (
+          {error && !loading && !hasData && (
             <div style={{ background: `${C.red}10`, border: `1px solid ${C.red}30`, borderRadius: 10, padding: "14px 18px", color: C.red, fontSize: 13, fontFamily: sans }}>⚠ {error}</div>
           )}
 
-          {!loading && !error && data && tickers.length === 0 && (
+          {!loading && !isRefreshing && !error && data && tickers.length === 0 && (
             <div style={{ background: `${C.yellow}08`, border: `1px solid ${C.yellow}25`, borderRadius: 10, padding: "24px 20px", textAlign: "center", animation: "fadeIn 0.3s ease" }}>
               <div style={{ color: C.yellow, fontSize: 14, fontWeight: 700, fontFamily: font, marginBottom: 8 }}>No tickers returned</div>
               <div style={{ color: C.text, fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>
