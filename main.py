@@ -4560,7 +4560,7 @@ _EDITABLE_SCAN_KEYS = {
 }
 
 
-@app.post("/api/options/dashboard")
+@app.api_route("/api/options/dashboard", methods=["GET", "POST"])
 @limiter.limit("60/minute")
 @traceable(name="main.options_dashboard")
 async def options_dashboard(
@@ -4569,7 +4569,7 @@ async def options_dashboard(
 ):
     """
     Options flow screener — pure data endpoint, no Claude involved.
-    Accepts optional JSON body {"tab": "megacap" | "high_growth"}.
+    Accepts tab via query param (?tab=high_growth) or JSON body {"tab": "..."}.
     Returns a live Public.com options scan over a stock-side shortlist that is
     pre-fetched periodically in the background. Claude remains available via
     the chat bar instead of being part of this route.
@@ -4582,14 +4582,20 @@ async def options_dashboard(
             content={"error": "Public.com options provider not configured. Set PUBLIC_COM_API_KEY in secrets."},
         )
 
-    # Parse tab from request body (default: megacap)
+    # Parse tab from query param OR request body (default: megacap)
     tab = "megacap"
-    try:
-        body = await request.json()
-        if isinstance(body, dict) and body.get("tab") in _OPTIONS_VALID_TABS:
-            tab = body["tab"]
-    except Exception:
-        pass  # No body or invalid JSON → default tab
+    # 1) Check query parameter first  (?tab=high_growth)
+    query_tab = request.query_params.get("tab")
+    if query_tab and query_tab in _OPTIONS_VALID_TABS:
+        tab = query_tab
+    else:
+        # 2) Fall back to POST JSON body  ({"tab": "high_growth"})
+        try:
+            body = await request.json()
+            if isinstance(body, dict) and body.get("tab") in _OPTIONS_VALID_TABS:
+                tab = body["tab"]
+        except Exception:
+            pass  # No body or invalid JSON → default tab
 
     seed_tickers = _OPTIONS_HIGH_GROWTH_SEEDS if tab == "high_growth" else _OPTIONS_SCREENER_TICKERS
 
