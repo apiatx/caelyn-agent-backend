@@ -5247,3 +5247,69 @@ async def update_scan_defaults(
         "rejected": rejected if rejected else None,
         "current_defaults": merged,
     }
+
+
+# ── Tradier page — mirrors Options Flow under /api/tradier/ ─────────────
+# Thin route aliases that delegate to the same handler functions.
+# No logic duplication — the Tradier page is an identical frontend view
+# that hits the same backend pipeline.
+
+@app.api_route("/api/tradier/dashboard", methods=["GET", "POST"])
+@limiter.limit("60/minute")
+async def tradier_dashboard(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    return await options_dashboard(request, api_key)
+
+@app.post("/api/tradier/query")
+@limiter.limit("10/minute")
+async def tradier_query(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    return await options_flow_query(request, api_key)
+
+@app.get("/api/tradier/chain/{symbol}")
+@limiter.limit("30/minute")
+async def tradier_chain(request: Request, symbol: str, api_key: str = Header(None, alias="X-API-Key")):
+    return await get_options_chain(request, symbol, api_key)
+
+@app.get("/api/tradier/expirations/{symbol}")
+@limiter.limit("30/minute")
+async def tradier_expirations(request: Request, symbol: str, api_key: str = Header(None, alias="X-API-Key")):
+    return await get_options_expirations(request, symbol, api_key)
+
+@app.get("/api/tradier/history/{symbol}")
+@limiter.limit("30/minute")
+async def tradier_history(request: Request, symbol: str, api_key: str = Header(None, alias="X-API-Key")):
+    return await get_options_history_endpoint(request, symbol, api_key)
+
+@app.get("/api/tradier/volume-summary/{symbol}")
+@limiter.limit("30/minute")
+async def tradier_volume_summary(request: Request, symbol: str, api_key: str = Header(None, alias="X-API-Key")):
+    return await get_options_volume_summary_endpoint(request, symbol, api_key)
+
+@app.get("/api/tradier/technicals/{symbol}")
+@limiter.limit("30/minute")
+async def tradier_technicals(request: Request, symbol: str, api_key: str = Header(None, alias="X-API-Key")):
+    return await get_options_technicals_endpoint(request, symbol, api_key)
+
+@app.get("/api/tradier/data-coverage")
+@limiter.limit("10/minute")
+async def tradier_data_coverage(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    return await get_options_data_coverage(request, api_key)
+
+@app.get("/api/tradier/fetch-progress")
+@limiter.limit("10/minute")
+async def tradier_fetch_progress(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    return await get_options_fetch_progress_endpoint(request, api_key)
+
+@app.get("/api/tradier/ingestion-summary")
+@limiter.limit("20/minute")
+async def tradier_ingestion_summary(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    return await get_options_ingestion_summary(request, api_key)
+
+@app.get("/api/tradier/scan-defaults")
+@limiter.limit("30/minute")
+async def tradier_scan_defaults(request: Request, tab: str = "high_growth", api_key: str = Header(None, alias="X-API-Key")):
+    return await get_scan_defaults(request, tab, api_key)
+
+@app.put("/api/tradier/scan-defaults")
+@limiter.limit("10/minute")
+async def tradier_update_scan_defaults(request: Request, body: dict = Body(...), api_key: str = Header(None, alias="X-API-Key")):
+    return await update_scan_defaults(request, body, api_key)
