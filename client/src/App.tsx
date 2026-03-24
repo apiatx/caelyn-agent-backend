@@ -53,7 +53,6 @@ import PortfolioPage from "@/pages/portfolio";
 import PredictPage from "@/pages/predict";
 import NotifAIPage from "@/pages/notifai";
 import OptionsPage from "@/pages/options";
-import TradierPage from "@/pages/tradier";
 import AboutPage from "@/pages/about";
 
 import NotFound from "@/pages/not-found";
@@ -159,8 +158,8 @@ function Router() {
       <Route path="/notifai" component={NotifAIPage} />
       <Route path="/app/options" component={OptionsPage} />
       <Route path="/options" component={OptionsPage} />
-      <Route path="/app/tradier" component={TradierPage} />
-      <Route path="/tradier" component={TradierPage} />
+      <Route path="/app/tradier"><Redirect to="/app/options" /></Route>
+      <Route path="/tradier"><Redirect to="/app/options" /></Route>
       <Route path="/app/predict" component={PredictPage} />
       <Route path="/predict" component={PredictPage} />
       <Route path="/app/portfolio" component={PortfolioPage} />

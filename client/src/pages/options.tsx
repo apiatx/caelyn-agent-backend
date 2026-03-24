@@ -37,6 +37,8 @@ import {
 } from "recharts";
 
 const AGENT_API_KEY = "hippo_ak_7f3x9k2m4p8q1w5t";
+const AGENT_BACKEND_URL = "https://fast-api-server-trading-agent-aidanpilon.replit.app";
+const API_BASE = `${AGENT_BACKEND_URL}/api/options`;
 
 function getToken(): string | null {
   return localStorage.getItem("caelyn_token") || sessionStorage.getItem("caelyn_token");
@@ -571,7 +573,7 @@ function TopContractsSection({ ticker, historyReady }: { ticker: TickerResult; h
   );
 }
 
-function TickerDetailPanel({ symbol, ticker, apiBase = "/api/options", enableTimeSales = false }: { symbol: string; ticker: TickerResult; apiBase?: string; enableTimeSales?: boolean }) {
+function TickerDetailPanel({ symbol, ticker }: { symbol: string; ticker: TickerResult }) {
   const [technicals, setTechnicals] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
   const [volumeSummary, setVolumeSummary] = useState<any>(null);
@@ -581,9 +583,9 @@ function TickerDetailPanel({ symbol, ticker, apiBase = "/api/options", enableTim
     let cancelled = false;
     setLoading(true);
     Promise.all([
-      fetch(`${apiBase}/technicals/${encodeURIComponent(symbol)}`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`${apiBase}/history/${encodeURIComponent(symbol)}?limit=60`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`${apiBase}/volume-summary/${encodeURIComponent(symbol)}?days=30`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API_BASE}/technicals/${encodeURIComponent(symbol)}`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API_BASE}/history/${encodeURIComponent(symbol)}?limit=60`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API_BASE}/volume-summary/${encodeURIComponent(symbol)}?days=30`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([tech, hist, vol]) => {
       if (cancelled) return;
       setTechnicals(tech);
@@ -816,12 +818,12 @@ function TickerDetailPanel({ symbol, ticker, apiBase = "/api/options", enableTim
         </div>
       ) : null}
 
-      {enableTimeSales && <TimeSalesPanel symbol={symbol} apiBase={apiBase} />}
+      <TimeSalesPanel symbol={symbol} />
     </div>
   );
 }
 
-function DataIngestionWidget({ apiBase = "/api/options" }: { apiBase?: string }) {
+function DataIngestionWidget() {
   const [summary, setSummary] = useState<any>(null);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -829,7 +831,7 @@ function DataIngestionWidget({ apiBase = "/api/options" }: { apiBase?: string })
   const fetchStatus = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${apiBase}/ingestion-summary`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/ingestion-summary`, { headers: authHeaders() });
       if (res.ok) setSummary(await res.json());
     } catch { /* ignore */ } finally {
       setLoading(false);
@@ -883,7 +885,7 @@ function DataIngestionWidget({ apiBase = "/api/options" }: { apiBase?: string })
   );
 }
 
-function TickerRows({ t, index, isExp, onToggle, apiBase = "/api/options", enableTimeSales = false }: { t: TickerResult; index: number; isExp: boolean; onToggle: () => void; apiBase?: string; enableTimeSales?: boolean }) {
+function TickerRows({ t, index, isExp, onToggle }: { t: TickerResult; index: number; isExp: boolean; onToggle: () => void }) {
   const confidence = getConfidence(t.confidence || t.data_quality?.confidence, t.confidence_score ?? t.data_quality?.confidence_score ?? null);
   const signalColor = getSignalColor(t.primary_signal);
   const tags = signalTagsForTicker(t);
@@ -969,7 +971,7 @@ function TickerRows({ t, index, isExp, onToggle, apiBase = "/api/options", enabl
       {isExp && (
         <tr>
           <td colSpan={7} style={{ padding: "14px 16px", background: C.cardAlt, borderTop: `1px solid ${C.border}` }} onClick={e => e.stopPropagation()}>
-            <TickerDetailPanel symbol={t.ticker} ticker={t} apiBase={apiBase} enableTimeSales={enableTimeSales} />
+            <TickerDetailPanel symbol={t.ticker} ticker={t} />
           </td>
         </tr>
       )}
@@ -977,7 +979,7 @@ function TickerRows({ t, index, isExp, onToggle, apiBase = "/api/options", enabl
   );
 }
 
-function TickerSummaryTab({ tickers, apiBase = "/api/options", enableTimeSales = false }: { tickers: TickerResult[]; apiBase?: string; enableTimeSales?: boolean }) {
+function TickerSummaryTab({ tickers }: { tickers: TickerResult[] }) {
   const [catFilter, setCatFilter] = useState<CatFilter>("all");
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -1042,8 +1044,6 @@ function TickerSummaryTab({ tickers, apiBase = "/api/options", enableTimeSales =
                   index={index}
                   isExp={expanded === t.ticker}
                   onToggle={() => setExpanded(expanded === t.ticker ? null : t.ticker)}
-                  apiBase={apiBase}
-                  enableTimeSales={enableTimeSales}
                 />
               ))}
             </tbody>
@@ -1183,7 +1183,7 @@ function FlowTab({ contracts, onContractClick }: { contracts: OptionContract[]; 
 }
 
 /* ── Contract Detail Modal (Tradier-only) ── */
-function ContractDetailModal({ occSymbol, apiBase, onClose }: { occSymbol: string; apiBase: string; onClose: () => void }) {
+function ContractDetailModal({ occSymbol, onClose }: { occSymbol: string; onClose: () => void }) {
   const [detail, setDetail] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1192,13 +1192,13 @@ function ContractDetailModal({ occSymbol, apiBase, onClose }: { occSymbol: strin
     let cancelled = false;
     setLoading(true);
     setError("");
-    fetch(`${apiBase}/contract-detail/${encodeURIComponent(occSymbol)}`, { headers: authHeaders() })
+    fetch(`${API_BASE}/contract-detail/${encodeURIComponent(occSymbol)}`, { headers: authHeaders() })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(json => { if (!cancelled) setDetail(json); })
       .catch(e => { if (!cancelled) setError(e.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [occSymbol, apiBase]);
+  }, [occSymbol]);
 
   const quote = detail?.quote;
   const history = detail?.history?.bars || detail?.history || [];
@@ -1314,14 +1314,14 @@ function ContractDetailModal({ occSymbol, apiBase, onClose }: { occSymbol: strin
 }
 
 /* ── Time & Sales Panel (for ticker detail, Tradier-only) ── */
-function TimeSalesPanel({ symbol, apiBase }: { symbol: string; apiBase: string }) {
+function TimeSalesPanel({ symbol }: { symbol: string }) {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetch(`${apiBase}/timesales/${encodeURIComponent(symbol)}?interval=5min`, { headers: authHeaders() })
+    fetch(`${API_BASE}/timesales/${encodeURIComponent(symbol)}?interval=5min`, { headers: authHeaders() })
       .then(r => r.ok ? r.json() : null)
       .then(json => {
         if (!cancelled) {
@@ -1332,7 +1332,7 @@ function TimeSalesPanel({ symbol, apiBase }: { symbol: string; apiBase: string }
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [symbol, apiBase]);
+  }, [symbol]);
 
   if (loading) return <div style={{ padding: 12, color: C.dim, fontSize: 11, fontFamily: font, display: "flex", alignItems: "center", gap: 6 }}><Loader2 className="w-3 h-3 animate-spin" /> Loading time & sales...</div>;
   if (!data.length) return <div style={{ padding: 12, color: C.dim, fontSize: 11, fontFamily: font }}>No intraday time & sales data available.</div>;
@@ -1389,17 +1389,7 @@ function TimeSalesPanel({ symbol, apiBase }: { symbol: string; apiBase: string }
 type ScanTab = "megacap" | "high_growth";
 const SCAN_TAB_LABELS: Record<ScanTab, string> = { megacap: "Megacap", high_growth: "High Growth" };
 
-interface OptionsPageProps {
-  apiBase?: string;
-  queryApiBase?: string;
-  pageTitle?: string;
-  queryPresetIntent?: string;
-  enableContractDetail?: boolean;
-  enableTimeSales?: boolean;
-  dataSourceLabel?: string | null;
-}
-
-export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pageTitle = "OPTIONS FLOW", queryPresetIntent = "options_flow", enableContractDetail = false, enableTimeSales = false, dataSourceLabel = null }: OptionsPageProps = {}) {
+export default function OptionsPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [loadStage, setLoadStage] = useState("Initializing live scan...");
@@ -1426,7 +1416,7 @@ export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pa
 
   const fetchScanDefaults = useCallback(async (t: ScanTab) => {
     try {
-      const res = await fetch(`${apiBase}/scan-defaults?tab=${t}`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/scan-defaults?tab=${t}`, { headers: authHeaders() });
       if (!res.ok) return;
       const json = await res.json();
       setScanDefaults(json.defaults || {});
@@ -1434,7 +1424,7 @@ export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pa
       setScanDefaultsIsEditable(json.editable !== false);
       setScanDefaultsOverrides({});
     } catch { /* ignore */ }
-  }, [apiBase]);
+  }, []);
 
   useEffect(() => {
     fetchScanDefaults(scanTab);
@@ -1443,7 +1433,7 @@ export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pa
   const saveScanDefaults = async () => {
     setScanDefaultsSaving(true);
     try {
-      const res = await fetch(`${apiBase}/scan-defaults`, {
+      const res = await fetch(`${API_BASE}/scan-defaults`, {
         method: "PUT",
         headers: authHeaders(),
         body: JSON.stringify({ tab: scanTab, overrides: scanDefaultsOverrides }),
@@ -1461,7 +1451,7 @@ export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pa
   const resetScanDefaults = async () => {
     setScanDefaultsSaving(true);
     try {
-      const res = await fetch(`${apiBase}/scan-defaults`, {
+      const res = await fetch(`${API_BASE}/scan-defaults`, {
         method: "PUT",
         headers: authHeaders(),
         body: JSON.stringify({ tab: scanTab, reset: true }),
@@ -1490,7 +1480,7 @@ export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pa
     const timeout = setTimeout(() => controller.abort(), 55_000);
     try {
       const activeTab = tabOverride ?? scanTabRef.current;
-      const url = `${apiBase}/dashboard?tab=${encodeURIComponent(activeTab)}`;
+      const url = `${API_BASE}/dashboard?tab=${encodeURIComponent(activeTab)}`;
       console.log(`[OptionsPage] fetchDashboard → ${url}  (tabOverride=${tabOverride ?? "none"}, scanTabRef=${scanTabRef.current})`);
       const res = await fetch(url, { headers: authHeaders(), signal: controller.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1510,7 +1500,7 @@ export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pa
       setLoading(false);
       setLoadStage("");
     }
-  }, [apiBase]);
+  }, []);
 
   useEffect(() => {
     fetchDashboard();
@@ -1536,10 +1526,10 @@ export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pa
     setChatMessages(prev => [...prev, { role: "user", text: q }]);
     setChatLoading(true);
     try {
-      const res = await fetch(`${queryApiBase || ""}/api/query`, {
+      const res = await fetch(`${AGENT_BACKEND_URL}/api/options/query`, {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify({ query: q, preset_intent: queryPresetIntent, context_data: data, conversation_id: null, reasoning_model: "claude" }),
+        body: JSON.stringify({ query: q, tab: scanTab, context_data: data, conversation_id: null }),
       });
       const json = await res.json();
       const text = json.analysis || json.response?.analysis || json.structured?.summary || json.text || "No response.";
@@ -1579,8 +1569,7 @@ export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pa
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: hasData ? 10 : 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <Zap className="w-5 h-5" style={{ color: C.green }} />
-            <span style={{ color: C.bright, fontSize: 17, fontWeight: 800, fontFamily: font, letterSpacing: "-0.02em" }}>{pageTitle}</span>
-            {dataSourceLabel && <span style={{ background: `${C.green}12`, border: `1px solid ${C.green}25`, borderRadius: 4, padding: "2px 8px", color: C.green, fontSize: 9, fontWeight: 700, fontFamily: font, textTransform: "uppercase" }}>Powered by {dataSourceLabel}</span>}
+            <span style={{ color: C.bright, fontSize: 17, fontWeight: 800, fontFamily: font, letterSpacing: "-0.02em" }}>OPTIONS FLOW</span>
             {fromCache && cacheAge != null ? <span style={{ color: C.dim, fontSize: 10, fontFamily: font }}>Updated {cacheAge}s ago</span> : null}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -1715,7 +1704,7 @@ export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pa
             </div>
           )}
 
-          {hasData && <DataIngestionWidget apiBase={apiBase} />}
+          {hasData && <DataIngestionWidget />}
 
           {hasData && (
             <div style={{ animation: "fadeIn 0.35s ease" }}>
@@ -1730,8 +1719,8 @@ export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pa
                   </button>
                 ))}
               </div>
-              {tab === "tickers" && <TickerSummaryTab tickers={tickers} apiBase={apiBase} enableTimeSales={enableTimeSales} />}
-              {tab === "flow" && <FlowTab contracts={allContracts} onContractClick={enableContractDetail ? (sym) => setContractDetailSymbol(sym) : undefined} />}
+              {tab === "tickers" && <TickerSummaryTab tickers={tickers} />}
+              {tab === "flow" && <FlowTab contracts={allContracts} onContractClick={(sym) => setContractDetailSymbol(sym)} />}
             </div>
           )}
         </div>
@@ -1759,11 +1748,10 @@ export default function OptionsPage({ apiBase = "/api/options", queryApiBase, pa
         </div>
       </div>
 
-      {/* Contract Detail Modal (Tradier-only) */}
-      {enableContractDetail && contractDetailSymbol && (
+      {/* Contract Detail Modal */}
+      {contractDetailSymbol && (
         <ContractDetailModal
           occSymbol={contractDetailSymbol}
-          apiBase={apiBase}
           onClose={() => setContractDetailSymbol(null)}
         />
       )}
