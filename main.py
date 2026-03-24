@@ -4465,10 +4465,18 @@ async def test_altfins(symbol: str = "BTC", api_key: str = Header(None, alias="X
 # Seeds guarantee coverage of known high-flow names. The prefilter also
 # pulls in Finviz screen results, so these are NOT the only tickers scanned.
 
+_OPTIONS_ETF_SEEDS = [
+    # Macro + sector ETFs — highest-volume options flow in the market
+    "SPY", "QQQ", "IWM", "DIA",     # Index
+    "GLD", "TLT", "HYG",            # Commodities / fixed income
+    "XLF", "XLK", "XLE", "XLV",     # Sector
+    "SMH", "SOXX",                   # Semis
+    "EEM", "ARKK",                   # Thematic
+    "VXX", "UVXY",                   # Volatility
+]
+
 _OPTIONS_MEGACAP_SEEDS = [
-    # ETFs — macro + sector flow (exempt from mcap filter)
-    "SPY", "QQQ", "IWM", "GLD", "TLT", "XLF", "XLK",
-    # $1 T+ mega-caps
+    # $1 T+ mega-caps (stocks only — ETFs are in their own tab)
     "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA",
 ]
 
@@ -4495,12 +4503,13 @@ _OPTIONS_SMALL_CAP_SEEDS = [
     "HIMS", "RXRX", "KRYS", "VERA",
 ]
 
-_OPTIONS_VALID_TABS = {"megacap", "large_cap", "small_cap"}
+_OPTIONS_VALID_TABS = {"megacap", "large_cap", "small_cap", "etf"}
 
 # Backwards-compat alias so old "high_growth" requests still work
 _TAB_ALIASES = {"high_growth": "small_cap"}
 
 _OPTIONS_TAB_SEEDS = {
+    "etf": _OPTIONS_ETF_SEEDS,
     "megacap": _OPTIONS_MEGACAP_SEEDS,
     "large_cap": _OPTIONS_LARGE_CAP_SEEDS,
     "small_cap": _OPTIONS_SMALL_CAP_SEEDS,

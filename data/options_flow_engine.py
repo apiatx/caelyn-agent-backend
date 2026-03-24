@@ -78,6 +78,7 @@ TIER_MCAP_RANGES: dict[str, tuple[float, float | None]] = {
     "megacap":   (1_000_000_000_000.0, None),               # $1 T+
     "large_cap": (100_000_000_000.0, 999_999_999_999.0),    # $100 B – $999 B
     "small_cap": (500_000_000.0, 99_999_999_999.0),         # $500 M – $99 B
+    "etf":       (0, None),                                  # No mcap filter — ETFs only
 }
 
 
@@ -352,6 +353,12 @@ class OptionsFlowEngine:
                 "midlarge_volume_breakout": self.data.finviz.get_midlarge_volume_breakout(),
                 "midcap_breakouts": self.data.finviz.get_midcap_breakouts(),
             }
+        elif tab == "etf":
+            # ETFs — broad market flow screens (same as megacap but filtered to ETFs only)
+            finviz_tasks = {
+                "unusual_volume": self.data.finviz.get_unusual_volume(),
+                "most_active": self.data.finviz.get_most_active(),
+            }
         else:
             # megacap ($1T+) — pure mega-cap market flow screens
             finviz_tasks = {
@@ -459,6 +466,10 @@ class OptionsFlowEngine:
             add_rows(source_map.get("earnings_this_week", []), "earnings_this_week", 12, "earnings catalyst")
             add_rows(source_map.get("midlarge_volume_breakout", []), "midlarge_volume_breakout", 20, "institutional volume breakout")
             add_rows(source_map.get("midcap_breakouts", []), "midcap_breakouts", 16, "breakout setup")
+        elif tab == "etf":
+            # ETF tab — seed tickers are the primary source; Finviz just adds volume context
+            add_rows(source_map.get("unusual_volume", []), "unusual_volume", 22, "relative volume")
+            add_rows(source_map.get("most_active", []), "most_active", 14, "liquidity")
         else:
             # megacap ($1T+)
             add_rows(source_map.get("unusual_volume", []), "unusual_volume", 22, "relative stock volume")
@@ -526,15 +537,24 @@ class OptionsFlowEngine:
                 continue
 
             # Market cap gates — enforce separate universes per tab
-            profile = enriched.get("profile") or {}
-            mcap = _safe_float(profile.get("market_cap"))
-            tier_min, tier_max = TIER_MCAP_RANGES.get(tab, (0, None))
-            if base.get("ticker") not in ETF_SET and mcap is not None:
-                if mcap < tier_min:
+            is_etf = base.get("ticker") in ETF_SET
+            if tab == "etf":
+                # ETF tab: only keep ETFs, reject individual stocks
+                if not is_etf:
                     continue
-                if tier_max is not None and mcap > tier_max:
+            else:
+                # Stock tabs: reject ETFs, enforce mcap range
+                if is_etf:
                     continue
-            # If mcap is unknown for non-megacap tiers, keep (signal > certainty)
+                profile = enriched.get("profile") or {}
+                mcap = _safe_float(profile.get("market_cap"))
+                tier_min, tier_max = TIER_MCAP_RANGES.get(tab, (0, None))
+                if mcap is not None:
+                    if mcap < tier_min:
+                        continue
+                    if tier_max is not None and mcap > tier_max:
+                        continue
+                # If mcap is unknown, keep (signal > certainty)
 
             merged = {**base, **enriched}
             merged["reasons"] = sorted(list(base.get("reasons", set())))
