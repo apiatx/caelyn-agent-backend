@@ -148,7 +148,7 @@ async def lifespan(app):
     asyncio.create_task(_smart_earnings_loop())
     asyncio.create_task(_edgar_cache_loop())
     asyncio.create_task(_options_precompute_loop())
-    asyncio.create_task(_tradier_precompute_loop())
+    # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
     asyncio.create_task(_polygon_options_ingestion_loop())
     yield
 
@@ -4493,7 +4493,6 @@ _OPTIONS_VALID_TABS = {"megacap", "high_growth"}
 # Extended watchlist for Polygon historic data ingestion (runs at 5 calls/min)
 # Imported from the ingestion module — used by the background pipeline
 from data.options_ingestion import OPTIONS_WATCHLIST as _OPTIONS_FULL_WATCHLIST
-from data.options_flow_engine import OptionsFlowEngine
 from data.tradier_flow_engine import TradierFlowEngine
 
 _OPTIONS_PRECOMPUTE_INTERVAL = 1800  # 30 minutes — stock-side prefilter only
@@ -4511,7 +4510,7 @@ def _options_prefilter_cache_key(tab: str) -> str:
 
 async def _options_precompute_loop():
     """
-    Background screener loop for the Options Flow dashboard.
+    Background screener loop for the Options Flow dashboard (Tradier-backed).
     Runs every 30 minutes. Precomputes ONLY stock-side/catalyst prefilter data
     from the supporting proprietary/free sources so the page can stay responsive.
     Precomputes BOTH megacap and high_growth tabs.
@@ -4519,8 +4518,8 @@ async def _options_precompute_loop():
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _init_event.wait, 120)
 
-    if data_service is None:
-        print("[OPTIONS_PRECOMPUTE] Data service not available, skipping loop")
+    if data_service is None or not data_service.tradier:
+        print("[OPTIONS_PRECOMPUTE] Tradier provider not available, skipping precompute loop")
         return
 
     import time as _time
@@ -4532,12 +4531,12 @@ async def _options_precompute_loop():
     while True:
         for tab, seeds in [("megacap", _OPTIONS_SCREENER_TICKERS), ("high_growth", _OPTIONS_HIGH_GROWTH_SEEDS)]:
             try:
-                # Exclude tickers from the other tab's seed list to prevent overlap
                 exclude = _HG_SEED_SET if tab == "megacap" else _MEGACAP_SEED_SET
                 print(f"[OPTIONS_PRECOMPUTE] [{tab}] Refreshing stock-side prefilter for {len(seeds)} seed tickers...")
                 t0 = _time.time()
 
-                prefilter_data = await OptionsFlowEngine(data_service).build_prefilter_snapshot(
+                engine = TradierFlowEngine(data_service)
+                prefilter_data = await engine.build_prefilter_snapshot(
                     seeds, tab=tab, exclude_tickers=exclude,
                 )
 
@@ -4579,16 +4578,14 @@ async def options_dashboard(
     """
     Options flow screener — pure data endpoint, no Claude involved.
     Accepts tab via query param (?tab=high_growth) or JSON body {"tab": "..."}.
-    Returns a live Public.com options scan over a stock-side shortlist that is
-    pre-fetched periodically in the background. Claude remains available via
-    the chat bar instead of being part of this route.
+    Uses Tradier for live options data + Polygon Massive historical data from DB.
     """
     await _wait_for_init()
 
-    if not data_service or not data_service.public_com:
+    if not data_service or not data_service.tradier:
         return JSONResponse(
             status_code=503,
-            content={"error": "Public.com options provider not configured. Set PUBLIC_COM_API_KEY in secrets."},
+            content={"error": "Tradier options provider not configured. Set TRADIER_API_KEY in secrets."},
         )
 
     # Parse tab from query param OR request body (default: megacap)
@@ -4639,7 +4636,7 @@ async def options_dashboard(
 
     async def _full_scan():
         overrides = _HIGH_GROWTH_USER_OVERRIDES if tab == "high_growth" and _HIGH_GROWTH_USER_OVERRIDES else None
-        engine = OptionsFlowEngine(data_service, overrides=overrides)
+        engine = TradierFlowEngine(data_service, overrides=overrides)
         exclude = set(_OPTIONS_HIGH_GROWTH_SEEDS) if tab == "megacap" else set(_OPTIONS_SCREENER_TICKERS)
         nonlocal prefilter_snapshot
         if not prefilter_snapshot:
@@ -4651,23 +4648,8 @@ async def options_dashboard(
             prefilter_snapshot=prefilter_snapshot,
             tab=tab,
         )
-
-        # Keep legacy enrichment fields the page may already rely on.
-        try:
-            from data.options_history_store import get_latest_technicals, get_options_volume_summary
-            for ticker_row in screener_data.get("tickers", []):
-                sym = ticker_row.get("ticker", "")
-                if not sym:
-                    continue
-                techs = get_latest_technicals(sym)
-                if techs and len(techs) > 1:
-                    ticker_row["technicals"] = techs
-                vol_summary = get_options_volume_summary(sym, days=30)
-                if vol_summary and vol_summary.get("call_total_volume"):
-                    ticker_row["historic_volume"] = vol_summary
-        except Exception as _enrich_err:
-            print(f"[OPTIONS_DASH] [{tab}] Enrichment warning (non-fatal): {_enrich_err}")
-
+        # TradierFlowEngine already handles Polygon enrichment (technicals +
+        # historic_volume) inside _inspect_one_ticker, so no extra enrichment needed.
         return screener_data
 
     try:
@@ -5251,229 +5233,17 @@ async def update_scan_defaults(
     }
 
 
-# ── Tradier page — independent data path backed by Tradier API ──────────
-# Uses TradierFlowEngine (Tradier for options data) instead of Public.com.
-# Shares Finviz/FMP/Finnhub prefilter logic but all options calls go to Tradier.
-
-_TRADIER_CACHE_TTL = 45
-_TRADIER_PREFILTER_CACHE_TTL = 3600
+# ── Tradier dashboard removed — Options Flow now uses TradierFlowEngine directly ──
+# The /api/tradier/dashboard endpoint has been consolidated into /api/options/dashboard.
+# Tradier-specific utility endpoints (chain, history, timesales, etc.) are kept below.
 
 
-def _tradier_cache_key(tab: str) -> str:
-    return f"tradier_screener_v1:{tab}"
+# ── Tradier-powered options utility endpoints ────────────────────────
+# These endpoints expose Tradier's richer data (chain with inline greeks,
+# history, timesales, contract detail) under /api/options/.
+# Legacy /api/tradier/ aliases are kept for backward compatibility.
 
-
-def _tradier_prefilter_cache_key(tab: str) -> str:
-    return f"tradier_prefilter_v1:{tab}"
-
-
-async def _tradier_precompute_loop():
-    """Background prefilter loop for the Tradier page (same cadence as Options Flow)."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _init_event.wait, 120)
-
-    if data_service is None or not data_service.tradier:
-        print("[TRADIER_PRECOMPUTE] Tradier provider not available, skipping loop")
-        return
-
-    import time as _time
-    from data.cache import cache
-
-    _MEGACAP_SEED_SET = set(_OPTIONS_SCREENER_TICKERS)
-    _HG_SEED_SET = set(_OPTIONS_HIGH_GROWTH_SEEDS)
-
-    while True:
-        for tab, seeds in [("megacap", _OPTIONS_SCREENER_TICKERS), ("high_growth", _OPTIONS_HIGH_GROWTH_SEEDS)]:
-            try:
-                exclude = _HG_SEED_SET if tab == "megacap" else _MEGACAP_SEED_SET
-                print(f"[TRADIER_PRECOMPUTE] [{tab}] Refreshing prefilter for {len(seeds)} seed tickers...")
-                t0 = _time.time()
-
-                engine = TradierFlowEngine(data_service)
-                prefilter_data = await engine.build_prefilter_snapshot(
-                    seeds, tab=tab, exclude_tickers=exclude,
-                )
-
-                elapsed = _time.time() - t0
-                cache.set(_tradier_prefilter_cache_key(tab), prefilter_data, _TRADIER_PREFILTER_CACHE_TTL)
-                print(f"[TRADIER_PRECOMPUTE] [{tab}] Cached {len(prefilter_data.get('candidates', []))} candidates in {elapsed:.1f}s.")
-
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"[TRADIER_PRECOMPUTE] [{tab}] Error: {e}")
-
-        print(f"[TRADIER_PRECOMPUTE] Both tabs refreshed. Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s.")
-        await asyncio.sleep(_OPTIONS_PRECOMPUTE_INTERVAL)
-
-
-@app.api_route("/api/tradier/dashboard", methods=["GET", "POST"])
-@limiter.limit("60/minute")
-@traceable(name="main.tradier_dashboard")
-async def tradier_dashboard(
-    request: Request,
-    api_key: str = Header(None, alias="X-API-Key"),
-):
-    """
-    Tradier-backed options flow screener — same UI contract as Options Flow
-    but all options data comes from Tradier API.
-    """
-    await _wait_for_init()
-
-    if not data_service or not data_service.tradier:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "Tradier options provider not configured. Set TRADIER_API_KEY in secrets."},
-        )
-
-    # Parse tab
-    tab = "megacap"
-    query_tab = request.query_params.get("tab")
-    if query_tab and query_tab in _OPTIONS_VALID_TABS:
-        tab = query_tab
-    else:
-        try:
-            body = await request.json()
-            if isinstance(body, dict) and body.get("tab") in _OPTIONS_VALID_TABS:
-                tab = body["tab"]
-        except Exception:
-            pass
-
-    seed_tickers = _OPTIONS_HIGH_GROWTH_SEEDS if tab == "high_growth" else _OPTIONS_SCREENER_TICKERS
-
-    import time as _time
-    from data.cache import cache
-
-    # ── Short-lived response cache ────────────────────────────────────
-    cache_key = _tradier_cache_key(tab)
-    cached = cache.get(cache_key)
-    if cached:
-        age = int(_time.time() - cached.get("cached_at", _time.time()))
-        print(f"[TRADIER_DASH] [{tab}] Cache hit (age={age}s, {len(cached.get('tickers', []))} tickers)")
-        return {
-            "response": cached,
-            "structured": True,
-            "preset": "options_screener",
-            "tab": tab,
-            "available_tabs": sorted(_OPTIONS_VALID_TABS),
-            "from_cache": True,
-            "cache_age_seconds": age,
-            "data_source": "tradier",
-        }
-
-    # ── Live scan using Tradier ───────────────────────────────────────
-    prefilter_key = _tradier_prefilter_cache_key(tab)
-    prefilter_snapshot = cache.get(prefilter_key)
-    if prefilter_snapshot:
-        pre_age = int(_time.time() - _dt.fromisoformat(prefilter_snapshot.get("generated_at")).timestamp()) if prefilter_snapshot.get("generated_at") else None
-        print(f"[TRADIER_DASH] [{tab}] Using prefilter cache (age={pre_age}s)")
-    else:
-        print(f"[TRADIER_DASH] [{tab}] Prefilter cache cold — building now...")
-    t0 = _time.time()
-
-    async def _full_scan():
-        overrides = _HIGH_GROWTH_USER_OVERRIDES if tab == "high_growth" and _HIGH_GROWTH_USER_OVERRIDES else None
-        engine = TradierFlowEngine(data_service, overrides=overrides)
-        exclude = set(_OPTIONS_HIGH_GROWTH_SEEDS) if tab == "megacap" else set(_OPTIONS_SCREENER_TICKERS)
-        nonlocal prefilter_snapshot
-        if not prefilter_snapshot:
-            prefilter_snapshot = await engine.build_prefilter_snapshot(seed_tickers, tab=tab, exclude_tickers=exclude)
-            cache.set(prefilter_key, prefilter_snapshot, _TRADIER_PREFILTER_CACHE_TTL)
-
-        screener_data = await engine.run_live_scan(
-            seed_tickers,
-            prefilter_snapshot=prefilter_snapshot,
-            tab=tab,
-        )
-
-        # Legacy enrichment (shared with Options Flow — reads from local DB, not Public.com)
-        try:
-            from data.options_history_store import get_latest_technicals, get_options_volume_summary
-            for ticker_row in screener_data.get("tickers", []):
-                sym = ticker_row.get("ticker", "")
-                if not sym:
-                    continue
-                techs = get_latest_technicals(sym)
-                if techs and len(techs) > 1:
-                    ticker_row["technicals"] = techs
-                vol_summary = get_options_volume_summary(sym, days=30)
-                if vol_summary and vol_summary.get("call_total_volume"):
-                    ticker_row["historic_volume"] = vol_summary
-        except Exception as _enrich_err:
-            print(f"[TRADIER_DASH] [{tab}] Enrichment warning (non-fatal): {_enrich_err}")
-
-        return screener_data
-
-    try:
-        screener_data = await asyncio.wait_for(_full_scan(), timeout=50)
-        elapsed = _time.time() - t0
-
-        result = {
-            "display_type": "options_screener",
-            "scan_type": "options_flow",
-            "tab": tab,
-            "cached_at": _time.time(),
-            "tickers_scanned": seed_tickers,
-            "data_source": "tradier",
-            **screener_data,
-        }
-        cache.set(cache_key, result, _TRADIER_CACHE_TTL)
-        print(f"[TRADIER_DASH] [{tab}] Live scan completed in {elapsed:.1f}s — {len(screener_data.get('tickers', []))} tickers")
-
-        return {
-            "response": result,
-            "structured": True,
-            "preset": "options_screener",
-            "tab": tab,
-            "available_tabs": sorted(_OPTIONS_VALID_TABS),
-            "from_cache": False,
-            "timing": {"total_seconds": round(elapsed, 1)},
-            "data_source": "tradier",
-        }
-
-    except asyncio.TimeoutError:
-        elapsed = _time.time() - t0
-        print(f"[TRADIER_DASH] [{tab}] Scan timed out after {elapsed:.1f}s")
-        from data.options_flow_engine import OPTIONS_FLOW_DEFAULTS, OPTIONS_FLOW_WEIGHTS
-        result = {
-            "display_type": "options_screener",
-            "scan_type": "options_flow",
-            "tab": tab,
-            "cached_at": _time.time(),
-            "tickers_scanned": seed_tickers,
-            "data_source": "tradier",
-            "tickers": [],
-            "all_contracts": [],
-            "filter_defaults": dict(OPTIONS_FLOW_DEFAULTS),
-            "score_weights": dict(OPTIONS_FLOW_WEIGHTS),
-            "pipeline_stats": {
-                "prefilter_candidate_count": len(prefilter_snapshot.get("candidates", [])) if prefilter_snapshot else 0,
-                "options_inspection_count": 0,
-                "ranked_result_count": 0,
-                "degraded_sources": [f"timeout:tradier_scan_exceeded_{int(elapsed)}s"],
-            },
-            "market_summary": {"error": "Tradier scan timed out. Data will appear after background precompute."},
-        }
-        return {
-            "response": result,
-            "structured": True,
-            "preset": "options_screener",
-            "tab": tab,
-            "available_tabs": sorted(_OPTIONS_VALID_TABS),
-            "from_cache": False,
-            "timing": {"total_seconds": round(elapsed, 1), "timed_out": True},
-            "data_source": "tradier",
-        }
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"[TRADIER_DASH] [{tab}] Error: {e}")
-        return JSONResponse(status_code=500, content={"error": f"Tradier screener error: {str(e)[:300]}"})
-
-
-# ── Tradier-specific endpoints (richer than Options Flow) ────────────
-
+@app.get("/api/options/chain/{symbol}")
 @app.get("/api/tradier/chain/{symbol}")
 @limiter.limit("30/minute")
 @traceable(name="main.tradier_chain")
@@ -5503,6 +5273,7 @@ async def tradier_chain(
     }
 
 
+@app.get("/api/options/expirations/{symbol}")
 @app.get("/api/tradier/expirations/{symbol}")
 @limiter.limit("30/minute")
 @traceable(name="main.tradier_expirations")
@@ -5531,6 +5302,7 @@ async def tradier_expirations(
     }
 
 
+@app.get("/api/options/strikes/{symbol}")
 @app.get("/api/tradier/strikes/{symbol}")
 @limiter.limit("30/minute")
 @traceable(name="main.tradier_strikes")
@@ -5555,6 +5327,7 @@ async def tradier_strikes(
     return {"strikes": strikes, "expiration": expiration, "data_source": "tradier"}
 
 
+@app.get("/api/options/history-live/{symbol}")
 @app.get("/api/tradier/history/{symbol}")
 @limiter.limit("30/minute")
 @traceable(name="main.tradier_history")
@@ -5578,6 +5351,7 @@ async def tradier_history(
     return {"history": bars, "symbol": symbol, "interval": interval, "data_source": "tradier"}
 
 
+@app.get("/api/options/timesales/{symbol}")
 @app.get("/api/tradier/timesales/{symbol}")
 @limiter.limit("30/minute")
 @traceable(name="main.tradier_timesales")
@@ -5601,6 +5375,7 @@ async def tradier_timesales(
     return {"timesales": ticks, "symbol": symbol, "interval": interval, "data_source": "tradier"}
 
 
+@app.get("/api/options/quote/{symbol}")
 @app.get("/api/tradier/quote/{symbol}")
 @limiter.limit("60/minute")
 @traceable(name="main.tradier_quote")
@@ -5618,6 +5393,7 @@ async def tradier_quote(
     return {"quote": quote, "data_source": "tradier"}
 
 
+@app.get("/api/options/contract-detail/{symbol}")
 @app.get("/api/tradier/contract-detail/{symbol}")
 @limiter.limit("30/minute")
 @traceable(name="main.tradier_contract_detail")
