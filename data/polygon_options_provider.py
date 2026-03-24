@@ -179,8 +179,8 @@ class PolygonOptionsProvider:
         six_months = (datetime.now() + timedelta(days=180)).strftime("%Y-%m-%d")
 
         params = {
-            "expiration_date.gte": today,
-            "expiration_date.lte": six_months,
+            "expiration_date_gte": today,
+            "expiration_date_lte": six_months,
         }
 
         if current_price and current_price > 0:

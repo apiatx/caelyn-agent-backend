@@ -40,7 +40,7 @@ def _env_float(name: str, default: float) -> float:
 
 OPTIONS_FLOW_DEFAULTS = {
     "prefilter_target": _env_int("OPTIONS_FLOW_PREFILTER_TARGET", 24),
-    "options_inspection_limit": _env_int("OPTIONS_FLOW_INSPECTION_LIMIT", 12),
+    "options_inspection_limit": _env_int("OPTIONS_FLOW_INSPECTION_LIMIT", 6),
     "min_stock_price": _env_float("OPTIONS_FLOW_MIN_STOCK_PRICE", 8.0),
     "min_stock_liquidity": _env_float("OPTIONS_FLOW_MIN_STOCK_LIQUIDITY", 15_000_000.0),
     "high_growth_min_mcap": _env_float("OPTIONS_FLOW_HG_MIN_MCAP", 500_000_000.0),
@@ -194,9 +194,13 @@ def _normalize_technicals(stored: dict | None, fallback: dict | None) -> dict:
 
 
 class OptionsFlowEngine:
-    def __init__(self, data_service):
+    def __init__(self, data_service, overrides: dict | None = None):
         self.data = data_service
         self.defaults = dict(OPTIONS_FLOW_DEFAULTS)
+        if overrides:
+            for k, v in overrides.items():
+                if k in self.defaults and v is not None:
+                    self.defaults[k] = type(self.defaults[k])(v)
         self.weights = dict(OPTIONS_FLOW_WEIGHTS)
 
     @traceable(name="options_flow_engine.build_prefilter_snapshot")
@@ -601,7 +605,7 @@ class OptionsFlowEngine:
         return _clip(score)
 
     async def _inspect_shortlist(self, candidates: list[dict], macro: dict) -> list[dict | None]:
-        sem = asyncio.Semaphore(3)
+        sem = asyncio.Semaphore(6)
 
         async def _bounded(candidate: dict):
             async with sem:

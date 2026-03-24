@@ -4547,6 +4547,18 @@ async def _options_precompute_loop():
 
 _OPTIONS_DEFAULT_TICKERS = _OPTIONS_SCREENER_TICKERS
 
+# In-memory user overrides for high_growth scan defaults (reset on restart).
+# Megacap tab defaults are NOT editable.
+_HIGH_GROWTH_USER_OVERRIDES: dict = {}
+
+# Keys the user is allowed to override for the high_growth tab
+_EDITABLE_SCAN_KEYS = {
+    "prefilter_target", "options_inspection_limit", "min_stock_price",
+    "min_stock_liquidity", "high_growth_min_mcap", "high_growth_max_mcap",
+    "relative_volume_threshold", "min_dte", "max_dte",
+    "max_expirations_per_ticker",
+}
+
 
 @app.post("/api/options/dashboard")
 @limiter.limit("60/minute")
@@ -4609,8 +4621,11 @@ async def options_dashboard(
     else:
         print(f"[OPTIONS_DASH] [{tab}] Prefilter cache cold — building stock-side shortlist now...")
     t0 = _time.time()
-    try:
-        engine = OptionsFlowEngine(data_service)
+
+    async def _full_scan():
+        overrides = _HIGH_GROWTH_USER_OVERRIDES if tab == "high_growth" and _HIGH_GROWTH_USER_OVERRIDES else None
+        engine = OptionsFlowEngine(data_service, overrides=overrides)
+        nonlocal prefilter_snapshot
         if not prefilter_snapshot:
             prefilter_snapshot = await engine.build_prefilter_snapshot(seed_tickers, tab=tab)
             cache.set(prefilter_key, prefilter_snapshot, _OPTIONS_PREFILTER_CACHE_TTL)
@@ -4620,7 +4635,6 @@ async def options_dashboard(
             prefilter_snapshot=prefilter_snapshot,
             tab=tab,
         )
-        elapsed = _time.time() - t0
 
         # Keep legacy enrichment fields the page may already rely on.
         try:
@@ -4637,6 +4651,12 @@ async def options_dashboard(
                     ticker_row["historic_volume"] = vol_summary
         except Exception as _enrich_err:
             print(f"[OPTIONS_DASH] [{tab}] Enrichment warning (non-fatal): {_enrich_err}")
+
+        return screener_data
+
+    try:
+        screener_data = await asyncio.wait_for(_full_scan(), timeout=50)
+        elapsed = _time.time() - t0
 
         result = {
             "display_type": "options_screener",
@@ -4659,11 +4679,226 @@ async def options_dashboard(
             "timing": {"total_seconds": round(elapsed, 1)},
         }
 
+    except asyncio.TimeoutError:
+        elapsed = _time.time() - t0
+        print(f"[OPTIONS_DASH] [{tab}] Full scan timed out after {elapsed:.1f}s — returning empty shell")
+        from data.options_flow_engine import OPTIONS_FLOW_DEFAULTS, OPTIONS_FLOW_WEIGHTS
+        result = {
+            "display_type": "options_screener",
+            "scan_type": "options_flow",
+            "tab": tab,
+            "cached_at": _time.time(),
+            "tickers_scanned": seed_tickers,
+            "tickers": [],
+            "all_contracts": [],
+            "filter_defaults": dict(OPTIONS_FLOW_DEFAULTS),
+            "score_weights": dict(OPTIONS_FLOW_WEIGHTS),
+            "pipeline_stats": {
+                "prefilter_candidate_count": len(prefilter_snapshot.get("candidates", [])) if prefilter_snapshot else 0,
+                "options_inspection_count": 0,
+                "ranked_result_count": 0,
+                "degraded_sources": [f"timeout:scan_exceeded_{int(elapsed)}s"],
+            },
+            "market_summary": {"error": "Scan timed out. Data will appear after the background precompute cycle completes (~30s after server start)."},
+        }
+        return {
+            "response": result,
+            "structured": True,
+            "preset": "options_screener",
+            "tab": tab,
+            "available_tabs": sorted(_OPTIONS_VALID_TABS),
+            "from_cache": False,
+            "timing": {"total_seconds": round(elapsed, 1), "timed_out": True},
+        }
+
     except Exception as e:
         import traceback
         traceback.print_exc()
         print(f"[OPTIONS_DASH] [{tab}] Error: {e}")
         return JSONResponse(status_code=500, content={"error": f"Options screener error: {str(e)[:300]}"})
+
+
+# ── OPTIONS FLOW — Agent chat query ─────────────────────────────────────
+
+@app.post("/api/options/query")
+@limiter.limit("10/minute")
+@traceable(name="main.options_flow_query")
+async def options_flow_query(
+    request: Request,
+    body: dict = Body(...),
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Agent-powered chat for the Options Flow page.
+    Sends the user's question + full cached dashboard data to Claude.
+    """
+    query = (body.get("query") or body.get("prompt") or "").strip()
+    tab = body.get("tab", "megacap")
+    conversation_id = body.get("conversation_id")
+    history = body.get("history") or []
+
+    if not query:
+        return JSONResponse(status_code=400, content={"error": "No query provided."})
+
+    await _wait_for_init()
+
+    if not _jwt_or_key(request, api_key):
+        return JSONResponse(status_code=403, content={"error": "Invalid or missing API key."})
+
+    # ── Gather all cached options data the user can see on screen ────────
+    from data.cache import cache
+    import json as _oj
+
+    context_parts = []
+
+    for _tab in sorted(_OPTIONS_VALID_TABS):
+        cached = cache.get(_options_cache_key(_tab))
+        if cached:
+            tickers = cached.get("tickers", [])
+            all_contracts = cached.get("all_contracts", [])
+            context_parts.append(f"=== OPTIONS FLOW DATA — {_tab.upper()} TAB ({len(tickers)} tickers, {len(all_contracts)} contracts) ===")
+
+            for t in tickers:
+                sym = t.get("ticker", "?")
+                price = t.get("price", "")
+                change_pct = t.get("change_pct", "")
+                composite = t.get("composite_score", "")
+                flow_score = t.get("flow_score", "")
+                gamma_score = t.get("gamma_score", "")
+                asymmetry_score = t.get("asymmetry_score", "")
+                volatility_score = t.get("volatility_score", "")
+                sentiment_score = t.get("sentiment_score", "")
+                stock_context_score = t.get("stock_context_score", "")
+                signal_type = t.get("signal_type", "")
+                confidence = t.get("confidence", "")
+                focus_dates = t.get("focus_dates", [])
+                tags = t.get("tags", [])
+                reasons = t.get("reasons", [])
+                total_vol = t.get("total_volume", "")
+                pc_ratio = t.get("pc_ratio", "")
+                calls = t.get("calls", "")
+                puts = t.get("puts", "")
+                iv_avg = t.get("iv_avg", "")
+                exp_move = t.get("expected_move", "")
+                rel_vol = t.get("relative_volume", "")
+                vol_ratio = t.get("volume_ratio", "")
+                oi_ratio = t.get("oi_ratio", "")
+                technicals = t.get("technicals", {})
+                hist_vol = t.get("historic_volume", {})
+
+                lines = [
+                    f"\n## {sym}  ${price}  {change_pct}%",
+                    f"   Composite: {composite} | Flow: {flow_score} | Gamma: {gamma_score} | Asymmetry: {asymmetry_score}",
+                    f"   Volatility: {volatility_score} | Sentiment: {sentiment_score} | StockContext: {stock_context_score}",
+                    f"   Signal: {signal_type} | Confidence: {confidence}",
+                    f"   Tags: {', '.join(tags) if tags else 'none'}",
+                    f"   Reasons: {'; '.join(reasons) if reasons else 'none'}",
+                    f"   Focus dates: {', '.join(focus_dates) if focus_dates else 'none'}",
+                    f"   Total Vol: {total_vol} | P/C Ratio: {pc_ratio} | Calls: {calls} | Puts: {puts}",
+                    f"   IV Avg: {iv_avg} | Exp Move: {exp_move} | Rel Vol: {rel_vol} | Vol Ratio: {vol_ratio} | OI Ratio: {oi_ratio}",
+                ]
+                if technicals:
+                    lines.append(f"   Technicals: {_oj.dumps(technicals, default=str)[:500]}")
+                if hist_vol:
+                    lines.append(f"   Historic Volume: {_oj.dumps(hist_vol, default=str)[:500]}")
+                context_parts.append("\n".join(lines))
+
+            # Include top contracts
+            if all_contracts:
+                context_parts.append(f"\n### Top Contracts ({_tab})")
+                for c in all_contracts[:30]:
+                    context_parts.append(
+                        f"  {c.get('underlying','?')} {c.get('contract_symbol','')} "
+                        f"Strike:{c.get('strike','')} Exp:{c.get('expiration','')} "
+                        f"Side:{c.get('side','')} Vol:{c.get('volume','')} OI:{c.get('open_interest','')} "
+                        f"IV:{c.get('iv','')} Delta:{c.get('delta','')} Gamma:{c.get('gamma','')} "
+                        f"Bid:{c.get('bid','')} Ask:{c.get('ask','')} Last:{c.get('last','')}"
+                    )
+
+    if not context_parts:
+        context_parts.append("(No cached options data available. Answering based on general options knowledge.)")
+
+    options_context = "\n".join(context_parts)
+
+    # ── Build system prompt ─────────────────────────────────────────────
+    system_prompt = f"""You are Caelyn, an elite options flow analyst at a quantitative hedge fund.
+You have access to LIVE options flow data from the user's dashboard. This data is real-time
+and comes from Public.com's brokerage API with proprietary composite scoring.
+
+DASHBOARD DATA (this is exactly what the user sees on their screen):
+{options_context}
+
+SCORING SYSTEM:
+- Composite Score (0-100): Weighted blend of all sub-scores. Higher = stronger signal.
+- Flow Score: Measures unusual volume vs open interest — high means new large positions.
+- Gamma Score: Measures gamma exposure concentration — high means market makers are heavily hedged.
+- Asymmetry Score: Risk/reward asymmetry of the options positioning.
+- Volatility Score: IV percentile and term structure signals.
+- Sentiment Score: Put/call ratio and directional bias.
+- Stock Context Score: Underlying stock technicals, price action quality.
+
+SIGNAL TYPES:
+- UNUSUAL_FLOW: Volume significantly exceeds open interest — new large positions being opened.
+- GAMMA_APPROX: Concentrated gamma near current price — potential for sharp moves.
+- BREAKOUT_CONFIRM: Options flow confirms a technical breakout pattern.
+
+CONFIDENCE LEVELS: HIGH_CONFIDENCE > MEDIUM > LOW
+
+RULES:
+1. Reference SPECIFIC data from the dashboard — cite actual numbers, scores, tickers.
+2. When asked for top picks, rank by composite score and explain the signal confluence.
+3. When asked about a specific ticker, give the full breakdown of all its scores and what they mean.
+4. For entry suggestions, consider: IV level (is premium expensive?), expiration timing, strike selection relative to expected move.
+5. Be direct and actionable. No generic advice — everything should reference the live data.
+6. If the user asks about a ticker not in the data, say so clearly.
+7. Put/call ratio below 0.7 = bullish, above 1.0 = bearish.
+8. Always mention risk factors alongside opportunities.
+9. Keep responses focused and scannable — use bullet points and bold for key numbers."""
+
+    # ── Build messages (with conversation history) ──────────────────────
+    messages = []
+    for msg in history[-10:]:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": query})
+
+    # ── Call Claude ──────────────────────────────────────────────────────
+    from config import ANTHROPIC_API_KEY
+    import anthropic
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        resp = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            system=system_prompt,
+            messages=messages,
+        )
+        answer = resp.content[0].text if resp.content else ""
+    except Exception as e:
+        print(f"[OPTIONS_QUERY] Claude error: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=502, content={"error": f"AI analysis error: {str(e)[:200]}"})
+
+    # ── Persist to conversation history ─────────────────────────────────
+    if conversation_id:
+        try:
+            from data.chat_history import append_message as _append_msg
+            _append_msg(conversation_id, "user", query, message_type="options_chat")
+            _append_msg(conversation_id, "assistant", answer, message_type="options_chat")
+        except Exception as e:
+            print(f"[OPTIONS_QUERY] History save error (non-fatal): {e}")
+
+    print(f"[OPTIONS_QUERY] Answered query ({len(query)} chars) -> {len(answer)} chars response")
+    return {
+        "response": answer,
+        "query": query,
+        "tab": tab,
+        "tickers_in_context": len([p for p in context_parts if p.startswith("\n##")]),
+    }
 
 
 @app.get("/api/options/chain/{symbol}")
@@ -4862,3 +5097,139 @@ async def get_options_fetch_progress_endpoint(
             return {"count": len(progress), "progress": progress}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)[:200]})
+
+
+# ── Ingestion Summary (for frontend "Ingestion Status" dropdown) ────────
+
+@app.get("/api/options/ingestion-summary")
+@limiter.limit("20/minute")
+async def get_options_ingestion_summary(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Aggregate ingestion stats for the frontend Ingestion Status dropdown.
+    """
+    from data.options_history_store import get_data_coverage, get_fetch_progress
+    try:
+        coverage = get_data_coverage()
+        progress = get_fetch_progress() or []
+
+        completed = sum(1 for p in progress if p.get("status") == "complete")
+        in_progress = sum(1 for p in progress if p.get("status") == "in_progress")
+        errored = sum(1 for p in progress if p.get("status") == "error")
+        pending = sum(1 for p in progress if p.get("status") == "pending")
+
+        last_updated = None
+        for p in progress:
+            ts = p.get("updated_at")
+            if ts and (last_updated is None or ts > last_updated):
+                last_updated = ts
+
+        oh = coverage.get("options_history", {})
+
+        return {
+            "tickers_ingested": completed,
+            "tickers_total": len(_OPTIONS_FULL_WATCHLIST),
+            "tickers_in_progress": in_progress,
+            "tickers_errored": errored,
+            "tickers_pending": pending,
+            "total_bars": oh.get("total_bars", 0),
+            "total_contracts": oh.get("contracts", 0),
+            "earliest_date": oh.get("earliest_date"),
+            "latest_date": oh.get("latest_date"),
+            "last_updated": last_updated,
+            "fetch_progress_by_status": coverage.get("fetch_progress", {}),
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)[:200]})
+
+
+# ── Scan Defaults (editable for high_growth tab only) ───────────────────
+
+@app.get("/api/options/scan-defaults")
+@limiter.limit("30/minute")
+async def get_scan_defaults(
+    request: Request,
+    tab: str = "high_growth",
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Get current scan defaults. For high_growth, returns user overrides merged
+    with base defaults. For megacap, returns fixed defaults (not editable).
+    """
+    from data.options_flow_engine import OPTIONS_FLOW_DEFAULTS
+    base = dict(OPTIONS_FLOW_DEFAULTS)
+
+    if tab == "high_growth":
+        merged = {**base, **{k: v for k, v in _HIGH_GROWTH_USER_OVERRIDES.items() if k in _EDITABLE_SCAN_KEYS}}
+        return {
+            "tab": "high_growth",
+            "editable": True,
+            "editable_keys": sorted(_EDITABLE_SCAN_KEYS),
+            "defaults": merged,
+            "user_overrides": dict(_HIGH_GROWTH_USER_OVERRIDES),
+        }
+    else:
+        return {
+            "tab": "megacap",
+            "editable": False,
+            "editable_keys": [],
+            "defaults": base,
+            "user_overrides": {},
+        }
+
+
+@app.put("/api/options/scan-defaults")
+@limiter.limit("10/minute")
+async def update_scan_defaults(
+    request: Request,
+    body: dict = Body(...),
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Update scan defaults for the high_growth tab only.
+    Send {"reset": true} to clear all overrides back to defaults.
+    """
+    from data.options_flow_engine import OPTIONS_FLOW_DEFAULTS
+
+    tab = body.get("tab", "high_growth")
+    if tab != "high_growth":
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Only high_growth tab defaults are editable. Megacap defaults are fixed."},
+        )
+
+    if body.get("reset"):
+        _HIGH_GROWTH_USER_OVERRIDES.clear()
+        from data.cache import cache
+        cache.delete(_options_cache_key("high_growth"))
+        return {"message": "High growth defaults reset to system defaults", "defaults": dict(OPTIONS_FLOW_DEFAULTS)}
+
+    overrides = body.get("overrides", {})
+    if not overrides:
+        return JSONResponse(status_code=400, content={"error": "No overrides provided. Send {\"overrides\": {\"key\": value}}"})
+
+    accepted = {}
+    rejected = []
+    for k, v in overrides.items():
+        if k in _EDITABLE_SCAN_KEYS:
+            try:
+                base_type = type(OPTIONS_FLOW_DEFAULTS[k])
+                _HIGH_GROWTH_USER_OVERRIDES[k] = base_type(v)
+                accepted[k] = base_type(v)
+            except (ValueError, TypeError) as e:
+                rejected.append({"key": k, "error": str(e)})
+        else:
+            rejected.append({"key": k, "error": "Not an editable key"})
+
+    from data.cache import cache
+    cache.delete(_options_cache_key("high_growth"))
+
+    merged = {**OPTIONS_FLOW_DEFAULTS, **_HIGH_GROWTH_USER_OVERRIDES}
+    return {
+        "message": f"Updated {len(accepted)} scan defaults for high_growth tab",
+        "accepted": accepted,
+        "rejected": rejected if rejected else None,
+        "current_defaults": merged,
+    }

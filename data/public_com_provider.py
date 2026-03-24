@@ -252,15 +252,19 @@ class PublicComProvider:
 
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                for batch in batches:
+                async def _fetch_batch(batch):
                     params = "&".join([f"osiSymbols={s}" for s in batch])
                     resp = await client.get(
                         f"{self.BASE_URL}/option-details/{account_id}/greeks?{params}",
                         headers=self._make_headers(self._access_token),
                     )
                     if resp.status_code == 200:
-                        data = resp.json()
-                        all_greeks.extend(data.get("greeks", []))
+                        return resp.json().get("greeks", [])
+                    return []
+
+                batch_results = await asyncio.gather(*[_fetch_batch(b) for b in batches])
+                for greeks in batch_results:
+                    all_greeks.extend(greeks)
 
             cache.set(cache_key, all_greeks, OPTIONS_CACHE_TTL)
             return all_greeks
