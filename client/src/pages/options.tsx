@@ -1397,7 +1397,7 @@ export default function OptionsPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [scanTab, setScanTab] = useState<ScanTab>("etf");
+  const [scanTab, setScanTab] = useState<ScanTab>("megacap");
   const [tab, setTab] = useState<MainTab>("tickers");
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "ai"; text: string }>>([]);
@@ -1410,6 +1410,9 @@ export default function OptionsPage() {
 
   const scanTabRef = useRef<ScanTab>(scanTab);
   scanTabRef.current = scanTab;
+
+  // Track available tabs separately so they don't jump around when switching tabs
+  const [knownAvailableTabs, setKnownAvailableTabs] = useState<ScanTab[]>(SCAN_TAB_ORDER);
 
   // Scan defaults state
   const [scanDefaults, setScanDefaults] = useState<Record<string, any>>({});
@@ -1505,6 +1508,14 @@ export default function OptionsPage() {
       console.log(`[OptionsPage] response keys:`, Object.keys(resp), `| tickers: ${(resp.tickers || []).length} | all_contracts: ${(resp.all_contracts || []).length} | tickers_scanned (seed, NOT used): ${resp.tickers_scanned ?? "n/a"}`);
       // Update cache and state in-place
       tabCacheRef.current[activeTab] = json;
+      // Update known available tabs from API response (merged, not replaced)
+      const apiTabs = json?.available_tabs as ScanTab[] | undefined;
+      if (apiTabs?.length) {
+        setKnownAvailableTabs(prev => {
+          const merged = new Set([...prev, ...apiTabs]);
+          return SCAN_TAB_ORDER.filter(t => merged.has(t));
+        });
+      }
       if (activeTab === scanTabRef.current) {
         setData(json);
       }
@@ -1585,8 +1596,8 @@ export default function OptionsPage() {
   const scoreWeights = resp.score_weights || {};
   const cacheAge: number | null = data?.cache_age_seconds ?? null;
   const fromCache: boolean = data?.from_cache ?? false;
-  const rawAvailable: ScanTab[] = (data?.available_tabs as ScanTab[] | undefined) || ["etf", "megacap", "large_cap", "small_cap"];
-  const availableTabs: ScanTab[] = SCAN_TAB_ORDER.filter(t => rawAvailable.includes(t));
+  // Always use stable knownAvailableTabs so tabs never jump around on click
+  const availableTabs: ScanTab[] = knownAvailableTabs;
   const hasData = tickers.length > 0;
   const degradedSources = ensureArray((pipelineStats as any)?.degraded_sources || (mktSum as any)?.degraded_sources);
 
