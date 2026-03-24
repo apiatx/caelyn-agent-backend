@@ -889,9 +889,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/options/dashboard', async (req, res) => {
     try {
       const tab = (req.query.tab as string) || 'megacap';
+      const upstreamUrl = `${AGENT_URL}/api/options/dashboard?tab=${encodeURIComponent(tab)}`;
+      console.log(`[options/dashboard] tab=${tab} → ${upstreamUrl}`);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 90000);
-      const response = await fetch(`${AGENT_URL}/api/options/dashboard?tab=${encodeURIComponent(tab)}`, {
+      const response = await fetch(upstreamUrl, {
         method: 'GET',
         headers: { 'X-API-Key': AGENT_KEY },
         signal: controller.signal,

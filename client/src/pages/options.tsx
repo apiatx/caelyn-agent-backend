@@ -1268,9 +1268,13 @@ export default function OptionsPage() {
     const timeout = setTimeout(() => controller.abort(), 55_000);
     try {
       const activeTab = tabOverride ?? scanTabRef.current;
-      const res = await fetch(`/api/options/dashboard?tab=${encodeURIComponent(activeTab)}`, { headers: authHeaders(), signal: controller.signal });
+      const url = `/api/options/dashboard?tab=${encodeURIComponent(activeTab)}`;
+      console.log(`[OptionsPage] fetchDashboard → ${url}  (tabOverride=${tabOverride ?? "none"}, scanTabRef=${scanTabRef.current})`);
+      const res = await fetch(url, { headers: authHeaders(), signal: controller.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
+      const resp = json?.response || {};
+      console.log(`[OptionsPage] response keys:`, Object.keys(resp), `| tickers: ${(resp.tickers || []).length} | all_contracts: ${(resp.all_contracts || []).length} | tickers_scanned (seed, NOT used): ${resp.tickers_scanned ?? "n/a"}`);
       setData(json);
     } catch (e: any) {
       if (e.name === "AbortError") {
