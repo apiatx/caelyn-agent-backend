@@ -12,6 +12,7 @@ import { cmcPortfolioService } from './cmc-portfolio-service';
 import { coinbasePortfolioService } from './coinbase-portfolio-service';
 import { ETFService } from './etf-service';
 import { fmpService } from './fmp-service';
+import { macroDashboardService } from './macro-dashboard-service';
 import { z } from "zod";
 import { insertPremiumAccessSchema } from "@shared/schema";
 import fs from 'fs';
@@ -879,6 +880,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ message: "Prices updated successfully" });
     } catch (error) {
       res.status(500).json({ message: "Failed to update prices" });
+    }
+  });
+
+  // === Macro Dashboard (benchmark ETFs + VIX) ===
+  app.get('/api/macro/dashboard', async (req, res) => {
+    try {
+      const data = await macroDashboardService.getDashboard();
+      res.json(data);
+    } catch (error) {
+      console.error('Error fetching macro dashboard:', error);
+      res.status(500).json({ error: 'Failed to fetch macro dashboard data' });
     }
   });
 
