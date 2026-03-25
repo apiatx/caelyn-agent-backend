@@ -5542,7 +5542,7 @@ def _get_macro_provider():
 
 # ── Background refresh loop ──────────────────────────────────────────
 
-_MACRO_PRECOMPUTE_INTERVAL = 14400  # 4 hours
+_MACRO_PRECOMPUTE_INTERVAL = 720  # 12 minutes (cache TTL is 15 min)
 
 
 async def _macro_precompute_loop():
@@ -5561,23 +5561,8 @@ async def _macro_precompute_loop():
 
         try:
             t0 = _time.time()
-            # Fetch FRED data (synchronous — run in thread)
-            dashboard = await asyncio.to_thread(mp.get_dashboard)
-
-            # Fetch commodity prices (async)
-            commodities = await mp.get_commodities_async()
-            if commodities:
-                dashboard["commodities"]["wti_oil"] = commodities.get("wti_oil")
-                dashboard["commodities"]["gold"] = commodities.get("gold")
-                oil_price = commodities.get("wti_oil")
-                gold_price = commodities.get("gold")
-                dashboard["commodities"]["commentary"] = (
-                    f"WTI crude at ${oil_price}, gold at ${gold_price}."
-                    if oil_price and gold_price else "Commodity data unavailable."
-                )
-                # Update the cached dashboard with commodity data
-                from data.cache import cache as _cache
-                _cache.set("macro:dashboard:v1", dashboard, 14400)
+            # Hybrid async: FMP real-time + FRED economic releases
+            dashboard = await mp.get_dashboard()
 
             # Pre-warm indicators
             await asyncio.to_thread(mp.get_indicators)
@@ -5619,20 +5604,8 @@ async def macro_dashboard(
         import time as _time
         t0 = _time.time()
 
-        # FRED data is synchronous — run in thread to avoid blocking
-        dashboard = await asyncio.to_thread(mp.get_dashboard)
-
-        # Enrich with commodity prices (async, from FMP)
-        commodities = await mp.get_commodities_async()
-        if commodities:
-            dashboard["commodities"]["wti_oil"] = commodities.get("wti_oil")
-            dashboard["commodities"]["gold"] = commodities.get("gold")
-            oil_price = commodities.get("wti_oil")
-            gold_price = commodities.get("gold")
-            dashboard["commodities"]["commentary"] = (
-                f"WTI crude at ${oil_price}, gold at ${gold_price}."
-                if oil_price and gold_price else "Commodity data unavailable."
-            )
+        # Hybrid async: FMP real-time market data + FRED economic releases
+        dashboard = await mp.get_dashboard()
 
         elapsed = _time.time() - t0
         return {

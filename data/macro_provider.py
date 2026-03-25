@@ -26,11 +26,12 @@ except ImportError:
 
 
 # ── Cache TTLs ────────────────────────────────────────────────────────
-_MACRO_DASHBOARD_TTL = 14400   # 4 hours for FRED economic data
-_MACRO_INDICATORS_TTL = 14400  # 4 hours
+_MACRO_DASHBOARD_TTL = 900     # 15 min — blends FRED + FMP real-time
+_MACRO_INDICATORS_TTL = 900    # 15 min
 _MACRO_CALENDAR_TTL = 1800     # 30 min for calendar
-_MACRO_HISTORY_TTL = 14400     # 4 hours for time-series
+_MACRO_HISTORY_TTL = 14400     # 4 hours for time-series (FRED only)
 _MACRO_COMMODITIES_TTL = 900   # 15 min for market prices
+_MACRO_FRED_SERIES_TTL = 14400 # 4 hours for raw FRED series cache
 
 # ── FRED series mapping ──────────────────────────────────────────────
 _FRED_SERIES = {
@@ -93,7 +94,7 @@ class MacroProvider:
             data = self._fred_api.get_series(series_id, observation_start=start)
             if data is not None and not data.empty:
                 data = data.dropna()
-                cache.set(cache_key, data, _MACRO_DASHBOARD_TTL)
+                cache.set(cache_key, data, _MACRO_FRED_SERIES_TTL)
                 return data
         except Exception as e:
             print(f"[MACRO] FRED series {series_id} error: {e}")
@@ -120,45 +121,81 @@ class MacroProvider:
     # ── Dashboard ────────────────────────────────────────────────────
 
     @traceable(name="macro.get_dashboard")
-    def get_dashboard(self) -> dict:
-        cache_key = "macro:dashboard:v1"
+    async def get_dashboard(self) -> dict:
+        """
+        Hybrid dashboard: FMP real-time for market prices + FRED for economic releases.
+
+        FMP (real-time, ~15 min delay on free tier):
+          - Market indices (S&P 500, Dow, Nasdaq, VIX)
+          - Treasury yields (2Y, 10Y, 30Y)
+          - Commodities (oil, gold, gas)
+
+        FRED (official releases, inherently lagged):
+          - Fed funds rate, CPI, PCE, PPI, unemployment, GDP, NFP,
+            wages, JOLTS, M2, ISM, mortgage rates, yield spreads
+        """
+        cache_key = "macro:dashboard:v2"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
 
-        fed_rate, fed_date = self._latest("FEDFUNDS", 365)
-        cpi_yoy = self._yoy_pct("CPIAUCSL")
-        core_pce_yoy = self._yoy_pct("PCEPILFE")
-        ppi_yoy = self._yoy_pct("PPIFIS")
-        unemp, unemp_date = self._latest("UNRATE", 365)
-        wages, _ = self._latest("CES0500000003", 365)
-        wages_yoy = self._yoy_pct("CES0500000003")
-        jolts, _ = self._latest("JTSJOL", 365)
-        us10y, _ = self._latest("DGS10", 90)
-        us2y, _ = self._latest("DGS2", 90)
-        spread_2s10s, _ = self._latest("T10Y2Y", 365)
-        spread_10y3m, _ = self._latest("T10Y3M", 365)
-        mortgage, _ = self._latest("MORTGAGE30US", 365)
-        m2, _ = self._latest("M2SL", 730)
-        m2_yoy = self._yoy_pct("M2SL")
-        vix, _ = self._latest("VIXCLS", 90)
+        # ── Fetch FMP real-time market data (async) ──────────────────
+        fmp_indices = {}
+        fmp_treasury = {}
+        fmp_commodities = {}
+        if self.fmp:
+            try:
+                idx_task = self.fmp.get_market_indices()
+                treas_task = self.fmp.get_treasury_rates()
+                comm_task = self.fmp.get_key_commodities()
+                idx_raw, treas_raw, comm_raw = await asyncio.gather(
+                    idx_task, treas_task, comm_task, return_exceptions=True,
+                )
+                fmp_indices = idx_raw if not isinstance(idx_raw, Exception) else {}
+                fmp_treasury = treas_raw if not isinstance(treas_raw, Exception) else {}
+                fmp_commodities = comm_raw if not isinstance(comm_raw, Exception) else {}
+            except Exception as e:
+                print(f"[MACRO] FMP real-time fetch error: {e}")
 
-        # GDP quarterly
-        gdp_data = self._get_series("A191RL1Q225SBEA", 730)
-        gdp_quarterly = []
-        if gdp_data is not None and not gdp_data.empty:
-            for idx, val in gdp_data.tail(5).items():
-                q = f"Q{(idx.month - 1) // 3 + 1} {idx.year}"
-                gdp_quarterly.append({"quarter": q, "gdp": _round(val, 1)})
+        # Extract real-time values from FMP
+        sp500 = fmp_indices.get("^GSPC", {})
+        vix_data = fmp_indices.get("^VIX", {})
+        vix_price = _safe(vix_data.get("price"))
+        us10y_rt = _safe(fmp_treasury.get("year_10"))
+        us2y_rt = _safe(fmp_treasury.get("year_2"))
+        us30y_rt = _safe(fmp_treasury.get("year_30"))
+        oil_price = _safe(fmp_commodities.get("CLUSD", {}).get("price"))
+        gold_price = _safe(fmp_commodities.get("GCUSD", {}).get("price"))
+        gas_price = _safe(fmp_commodities.get("NGUSD", {}).get("price"))
 
-        # NFP (total nonfarm payrolls) — MoM change
-        nfp_data = self._get_series("PAYEMS", 365)
-        nfp_last = None
-        if nfp_data is not None and len(nfp_data) >= 2:
-            nfp_last = int(float(nfp_data.iloc[-1]) - float(nfp_data.iloc[-2])) * 1000
+        # Compute spreads from real-time yields
+        spread_2s10s_rt = round(us10y_rt - us2y_rt, 2) if us10y_rt and us2y_rt else None
+        us3m_rt = _safe(fmp_treasury.get("month_3"))
+        spread_10y3m_rt = round(us10y_rt - us3m_rt, 2) if us10y_rt and us3m_rt else None
 
-        # ISM Manufacturing (use MANEMP as proxy or direct ISM if available)
-        ism_mfg, _ = self._latest("MANEMP", 365)
+        # ── Fetch FRED economic releases (sync — run in thread pool) ─
+        fred_data = await asyncio.to_thread(self._get_fred_economic_data)
+
+        fed_rate = fred_data.get("fed_rate")
+        cpi_yoy = fred_data.get("cpi_yoy")
+        core_pce_yoy = fred_data.get("core_pce_yoy")
+        ppi_yoy = fred_data.get("ppi_yoy")
+        unemp = fred_data.get("unemployment")
+        wages_yoy = fred_data.get("wages_yoy")
+        jolts = fred_data.get("jolts")
+        mortgage = fred_data.get("mortgage")
+        m2 = fred_data.get("m2")
+        m2_yoy = fred_data.get("m2_yoy")
+        gdp_quarterly = fred_data.get("gdp_quarterly", [])
+        nfp_last = fred_data.get("nfp_last")
+        ism_mfg = fred_data.get("ism_mfg")
+
+        # Use FMP real-time yields, fall back to FRED if FMP unavailable
+        us10y = us10y_rt or fred_data.get("us10y")
+        us2y = us2y_rt or fred_data.get("us2y")
+        spread_2s10s = spread_2s10s_rt or fred_data.get("spread_2s10s")
+        spread_10y3m = spread_10y3m_rt or fred_data.get("spread_10y3m")
+        vix = vix_price or fred_data.get("vix")
 
         # Inflation trend
         inflation_trend = "sticky"
@@ -180,15 +217,28 @@ class MacroProvider:
 
         result = {
             "last_updated": datetime.utcnow().isoformat() + "Z",
+            "data_sources": {
+                "market_prices": "FMP (real-time)" if fmp_indices else "FRED (1-2 day lag)",
+                "yields": "FMP (real-time)" if fmp_treasury else "FRED (1-2 day lag)",
+                "commodities": "FMP (real-time)" if fmp_commodities else "unavailable",
+                "economic_releases": "FRED (official release schedule)",
+            },
+            "market_snapshot": {
+                "sp500": _round(sp500.get("price")),
+                "sp500_change_pct": _round(sp500.get("change_pct"), 2),
+                "dow": _round(fmp_indices.get("^DJI", {}).get("price")),
+                "nasdaq": _round(fmp_indices.get("^IXIC", {}).get("price")),
+                "russell_2000": _round(fmp_indices.get("^RUT", {}).get("price")),
+            },
             "fed": {
                 "funds_rate": _round(fed_rate),
                 "funds_rate_range": f"{_round(fed_rate)}-{_round((_safe(fed_rate) or 0) + 0.25)}" if fed_rate else None,
-                "next_meeting": None,  # static — updated via calendar
+                "next_meeting": None,
                 "commentary": f"Fed funds rate at {_round(fed_rate)}%. {'Restrictive territory.' if (_safe(fed_rate) or 0) > 4 else 'Easing cycle underway.' if (_safe(fed_rate) or 0) < 4 else 'Holding steady.'}"
             },
             "inflation": {
                 "cpi_yoy": _round(cpi_yoy, 1),
-                "core_cpi_yoy": _round(cpi_yoy, 1),  # CPI as proxy; separate core CPI series if needed
+                "core_cpi_yoy": _round(cpi_yoy, 1),
                 "core_pce_yoy": _round(core_pce_yoy, 1),
                 "ppi_yoy": _round(ppi_yoy, 1),
                 "trend": inflation_trend,
@@ -198,7 +248,7 @@ class MacroProvider:
                 "nfp_last": nfp_last,
                 "unemployment_rate": _round(unemp, 1),
                 "wage_growth_yoy": _round(wages_yoy, 1),
-                "jolts_openings": _round((_safe(jolts) or 0) / 1000, 1) if jolts else None,  # in millions
+                "jolts_openings": _round((_safe(jolts) or 0) / 1000, 1) if jolts else None,
                 "commentary": f"Unemployment at {_round(unemp, 1)}%. {'Tight labor market.' if (_safe(unemp) or 5) < 4.5 else 'Labor market softening.'}"
             },
             "gdp": {
@@ -209,22 +259,24 @@ class MacroProvider:
             "rates_and_yields": {
                 "us_10y": _round(us10y),
                 "us_2y": _round(us2y),
+                "us_30y": _round(us30y_rt),
                 "spread_2s10s": _round(spread_2s10s),
                 "spread_10y3m": _round(spread_10y3m),
                 "mortgage_30y": _round(mortgage),
-                "commentary": f"10Y at {_round(us10y)}%, 2s10s spread {_round(spread_2s10s)}bp. {'Curve inverted — recession signal.' if (_safe(spread_2s10s) or 0) < 0 else 'Normal yield curve.'}"
+                "commentary": f"10Y at {_round(us10y)}%, 2s10s spread {_round(spread_2s10s)}. {'Curve inverted — recession signal.' if (_safe(spread_2s10s) or 0) < 0 else 'Normal yield curve.'}"
             },
             "liquidity": {
-                "m2_current_trillion": _round((_safe(m2) or 0) / 1000, 1) if m2 else None,  # FRED M2 is in billions
+                "m2_current_trillion": _round((_safe(m2) or 0) / 1000, 1) if m2 else None,
                 "m2_yoy_growth": _round(m2_yoy, 1),
                 "m2_trend": m2_trend,
-                "commentary": f"M2 money supply {'expanding' if m2_trend == 'expanding' else 'contracting' if m2_trend == 'contracting' else 'stable'} at {_round(m2_yoy, 1)}% YoY."
+                "commentary": f"M2 money supply {m2_trend} at {_round(m2_yoy, 1)}% YoY."
             },
             "commodities": {
-                "wti_oil": None,    # filled by async commodities fetch
-                "gold": None,
-                "gas_price_avg": None,
-                "commentary": "Commodity data loading..."
+                "wti_oil": _round(oil_price),
+                "gold": _round(gold_price),
+                "natural_gas": _round(gas_price),
+                "gas_price_avg": _round(gas_price),
+                "commentary": f"WTI crude at ${_round(oil_price)}, gold at ${_round(gold_price)}." if oil_price and gold_price else "Commodity data unavailable."
             },
             "manufacturing": {
                 "ism_manufacturing": _round(ism_mfg, 1),
@@ -234,7 +286,7 @@ class MacroProvider:
                 "commentary": f"Manufacturing employment index at {_round(ism_mfg, 1)}."
             },
             "geopolitical": {
-                "events": []  # static — no free API for this
+                "events": []
             },
             "scenarios": {
                 "bull": [
@@ -258,34 +310,46 @@ class MacroProvider:
         cache.set(cache_key, result, _MACRO_DASHBOARD_TTL)
         return result
 
-    # ── Commodities (async — uses FMP) ───────────────────────────────
+    def _get_fred_economic_data(self) -> dict:
+        """Synchronous helper: fetch all FRED economic releases."""
+        fed_rate, _ = self._latest("FEDFUNDS", 365)
+        cpi_yoy = self._yoy_pct("CPIAUCSL")
+        core_pce_yoy = self._yoy_pct("PCEPILFE")
+        ppi_yoy = self._yoy_pct("PPIFIS")
+        unemp, _ = self._latest("UNRATE", 365)
+        wages_yoy = self._yoy_pct("CES0500000003")
+        jolts, _ = self._latest("JTSJOL", 365)
+        us10y, _ = self._latest("DGS10", 90)
+        us2y, _ = self._latest("DGS2", 90)
+        spread_2s10s, _ = self._latest("T10Y2Y", 365)
+        spread_10y3m, _ = self._latest("T10Y3M", 365)
+        mortgage, _ = self._latest("MORTGAGE30US", 365)
+        m2, _ = self._latest("M2SL", 730)
+        m2_yoy = self._yoy_pct("M2SL")
+        vix, _ = self._latest("VIXCLS", 90)
 
-    @traceable(name="macro.get_commodities")
-    async def get_commodities_async(self) -> dict:
-        """Fetch commodity prices from FMP."""
-        cache_key = "macro:commodities:v1"
-        cached = cache.get(cache_key)
-        if cached is not None:
-            return cached
+        gdp_data = self._get_series("A191RL1Q225SBEA", 730)
+        gdp_quarterly = []
+        if gdp_data is not None and not gdp_data.empty:
+            for idx, val in gdp_data.tail(5).items():
+                q = f"Q{(idx.month - 1) // 3 + 1} {idx.year}"
+                gdp_quarterly.append({"quarter": q, "gdp": _round(val, 1)})
 
-        if not self.fmp:
-            return {}
+        nfp_data = self._get_series("PAYEMS", 365)
+        nfp_last = None
+        if nfp_data is not None and len(nfp_data) >= 2:
+            nfp_last = int(float(nfp_data.iloc[-1]) - float(nfp_data.iloc[-2])) * 1000
 
-        try:
-            data = await self.fmp.get_key_commodities()
-            result = {}
-            for sym, info in (data or {}).items():
-                result[sym] = info
-            # Extract key prices
-            oil = data.get("CLUSD", {}).get("price")
-            gold = data.get("GCUSD", {}).get("price")
-            result["wti_oil"] = _round(oil)
-            result["gold"] = _round(gold)
-            cache.set(cache_key, result, _MACRO_COMMODITIES_TTL)
-            return result
-        except Exception as e:
-            print(f"[MACRO] Commodities fetch error: {e}")
-            return {}
+        ism_mfg, _ = self._latest("MANEMP", 365)
+
+        return {
+            "fed_rate": fed_rate, "cpi_yoy": cpi_yoy, "core_pce_yoy": core_pce_yoy,
+            "ppi_yoy": ppi_yoy, "unemployment": unemp, "wages_yoy": wages_yoy,
+            "jolts": jolts, "mortgage": mortgage, "m2": m2, "m2_yoy": m2_yoy,
+            "us10y": us10y, "us2y": us2y, "spread_2s10s": spread_2s10s,
+            "spread_10y3m": spread_10y3m, "vix": vix,
+            "gdp_quarterly": gdp_quarterly, "nfp_last": nfp_last, "ism_mfg": ism_mfg,
+        }
 
     # ── Indicators ───────────────────────────────────────────────────
 
