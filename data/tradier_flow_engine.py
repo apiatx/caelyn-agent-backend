@@ -266,10 +266,21 @@ class TradierFlowEngine(OptionsFlowEngine):
     async def _inspect_one_ticker(self, candidate: dict, macro: dict, *, tab: str = "megacap") -> dict | None:
         """
         Override parent to:
-        1. Call Tradier directly for expirations + chains
-        2. After scoring, enrich each contract with Polygon historical data from DB
-        3. Re-score volatility with the enriched data
+        1. Backfill missing price from Tradier (seed tickers may lack Finnhub/FMP price)
+        2. Call Tradier directly for expirations + chains
+        3. After scoring, enrich each contract with Polygon historical data from DB
+        4. Re-score volatility with the enriched data
         """
+        # Backfill price from Tradier if enrichment didn't provide one
+        if not _safe_float(candidate.get("price")):
+            try:
+                quote = await self._tradier.get_quote(candidate["ticker"])
+                if quote and _safe_float(quote.get("last")):
+                    candidate["price"] = _safe_float(quote["last"])
+                    candidate["change_pct"] = _safe_float(quote.get("change_percentage"))
+            except Exception:
+                pass  # Will fail in parent if still no price
+
         # Call parent — which now hits Tradier via the swap in run_live_scan
         result = await super()._inspect_one_ticker(candidate, macro, tab=tab)
         if result is None:

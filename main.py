@@ -4530,11 +4530,11 @@ _OPTIONS_PRECOMPUTE_CACHE_TTL = 600   # 10 min — full results from precompute 
 
 
 def _options_cache_key(tab: str) -> str:
-    return f"options_screener_v7:{tab}"
+    return f"options_screener_v8:{tab}"
 
 
 def _options_prefilter_cache_key(tab: str) -> str:
-    return f"options_screener_prefilter_v6:{tab}"
+    return f"options_screener_prefilter_v7:{tab}"
 
 
 async def _options_precompute_loop():
