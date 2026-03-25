@@ -526,44 +526,41 @@ function TopContractsSection({ ticker, historyReady }: { ticker: TickerResult; h
     );
   }
 
+  const metricStyle = { color: C.dim, fontSize: 9, fontFamily: font, textTransform: "uppercase" as const };
+  const valStyle = { fontSize: 11, fontWeight: 600, fontFamily: font };
+
   return (
-    <div style={{ display: "grid", gap: 10 }}>
+    <div style={{ display: "grid", gap: 4 }}>
       {primaryContracts.map((raw, index) => {
         const contract = normalizeContract(raw);
         const spreadWide = contract.spread_pct != null && contract.spread_pct > 15;
         const liquidityText = String(contract.contract_liquidity_quality || (spreadWide ? "wide spread" : contract.openInterest && contract.openInterest > 500 ? "strong liquidity" : "standard liquidity"));
         return (
-          <div key={`${contract.contract_symbol || contract.symbol || index}`} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start", marginBottom: 10, flexWrap: "wrap" }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <div style={{ color: C.bright, fontFamily: font, fontWeight: 700, fontSize: 13 }}>{contract.underlying || ticker.ticker}</div>
-                <Badge color={sideColor(contract.side)} sm>{contract.side || "contract"}</Badge>
-                <Badge color={scoreColor(normalizeScore(contract.contract_score))} sm>Score {normalizeScore(contract.contract_score) != null ? fmtNum(normalizeScore(contract.contract_score), 0) : "—"}</Badge>
-                {contract.contract_liquidity_quality ? <Badge color={liquidityText.toLowerCase().includes("strong") ? C.green : spreadWide ? C.red : C.blue} sm>{contract.contract_liquidity_quality}</Badge> : null}
-                {spreadWide ? <Badge color={C.red} sm>Wide Spread</Badge> : null}
-                {contract.repeated_flow_score != null ? <Badge color={historyReady ? C.purple : C.orange} sm>{historyReady ? `Repeated Flow ${fmtNum(normalizeScore(contract.repeated_flow_score), 0)}` : "Repeated Flow Limited"}</Badge> : null}
-              </div>
-              <div style={{ color: sideColor(contract.side), fontFamily: font, fontWeight: 700, fontSize: 13 }}>${contract.strike} · {compactDate(contract.expiration)}{contract.dte != null ? ` · ${contract.dte}D` : ""}</div>
+          <div key={`${contract.contract_symbol || contract.symbol || index}`} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 12px" }}>
+            {/* Row 1: identity + key metrics inline */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ color: C.bright, fontFamily: font, fontWeight: 700, fontSize: 12, minWidth: 40 }}>{contract.underlying || ticker.ticker}</span>
+              <Badge color={sideColor(contract.side)} sm>{contract.side || "?"}</Badge>
+              <Badge color={scoreColor(normalizeScore(contract.contract_score))} sm>Score {normalizeScore(contract.contract_score) != null ? fmtNum(normalizeScore(contract.contract_score), 0) : "—"}</Badge>
+              {spreadWide ? <Badge color={C.red} sm>Wide Spread</Badge> : contract.contract_liquidity_quality ? <Badge color={liquidityText.toLowerCase().includes("strong") ? C.green : C.blue} sm>{contract.contract_liquidity_quality}</Badge> : null}
+              {contract.repeated_flow_score != null ? <Badge color={historyReady ? C.purple : C.orange} sm>{historyReady ? `Repeated ${fmtNum(normalizeScore(contract.repeated_flow_score), 0)}` : "Rpt Limited"}</Badge> : null}
+              <span style={{ color: sideColor(contract.side), fontFamily: font, fontWeight: 700, fontSize: 11 }}>${contract.strike} · {compactDate(contract.expiration)}{contract.dte != null ? ` · ${contract.dte}D` : ""}</span>
+              <span style={{ flex: 1 }} />
+              {/* Inline metrics */}
+              <span style={metricStyle}>Bid/Ask</span> <span style={{ ...valStyle, color: C.text }}>{contract.bid != null && contract.ask != null ? `${fmtMoney(contract.bid)}/${fmtMoney(contract.ask)}` : "—"}</span>
+              <span style={metricStyle}>Vol/OI</span> <span style={{ ...valStyle, color: C.blue }}>{`${fmtVol(contract.volume)}/${fmtVol(contract.openInterest)}`}{contract.volumeToOi != null ? ` (${fmtNum(contract.volumeToOi, 1)}×)` : ""}</span>
+              <span style={metricStyle}>IV</span> <span style={{ ...valStyle, color: C.yellow }}>{contract.iv != null ? fmtRatioPct(contract.iv) : "—"}</span>
+              <span style={metricStyle}>Δ</span> <span style={{ ...valStyle, color: C.green }}>{fmtNum(contract.delta, 2)}</span>
+              <span style={metricStyle}>BE</span> <span style={{ ...valStyle, color: C.orange }}>{fmtMoney(contract.break_even)}{contract.break_even_distance_pct != null ? ` (${fmtSmartPct(contract.break_even_distance_pct)})` : ""}</span>
+              {contract.premium_traded_estimate != null && (<><span style={metricStyle}>Prem</span> <span style={{ ...valStyle, color: C.purple }}>{fmtMoney(contract.premium_traded_estimate, 0)}</span></>)}
             </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
-              <MetricBlock label="Bid / Ask" value={contract.bid != null && contract.ask != null ? `${fmtMoney(contract.bid)} / ${fmtMoney(contract.ask)}` : "—"} color={C.text} />
-              <MetricBlock label="Last / Mid" value={`${fmtMoney(contract.last)} / ${fmtMoney(contract.mid)}`} color={C.bright} />
-              <MetricBlock label="Volume / OI" value={`${fmtVol(contract.volume)} / ${fmtVol(contract.openInterest)}`} color={C.blue} subtext={contract.volumeToOi != null ? `V/OI ${fmtNum(contract.volumeToOi, 1)}×` : undefined} />
-              <MetricBlock label="IV" value={contract.iv != null ? fmtRatioPct(contract.iv) : "—"} color={C.yellow} subtext={contract.iv_rank != null || contract.iv_percentile != null ? `IV Rank ${contract.iv_rank != null ? fmtNum(normalizeScore(contract.iv_rank), 0) : "—"} · IV %ile ${contract.iv_percentile != null ? fmtNum(normalizeScore(contract.iv_percentile), 0) : "—"}` : undefined} />
-              <MetricBlock label="Greeks" value={contract.delta != null || contract.gamma != null ? `Δ ${fmtNum(contract.delta, 2)} · Γ ${fmtNum(contract.gamma, 3)}` : "Missing greeks"} color={contract.delta != null || contract.gamma != null ? C.green : C.dim} subtext={contract.theta != null || contract.vega != null ? `Θ ${fmtNum(contract.theta, 3)} · Vega ${fmtNum(contract.vega, 2)}` : undefined} />
-              <MetricBlock label="Break-even" value={fmtMoney(contract.break_even)} color={C.orange} subtext={contract.break_even_distance_pct != null ? `Distance ${fmtSmartPct(contract.break_even_distance_pct)}` : undefined} />
-              <MetricBlock label="Premium Traded" value={contract.premium_traded_estimate != null ? fmtMoney(contract.premium_traded_estimate, 0) : "—"} color={C.purple} subtext={contract.spread_pct != null ? `Spread ${fmtPlainPct(contract.spread_pct)}` : undefined} />
-            </div>
-
+            {/* Row 2 (optional): thesis + scores */}
             {(contract.short_thesis || contract.flow_score != null || contract.asymmetry_score != null) && (
-              <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-                {contract.short_thesis ? <div style={{ color: C.text, fontSize: 12, lineHeight: 1.6 }}>{contract.short_thesis}</div> : null}
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {contract.flow_score != null ? <Badge color={C.blue} sm>Flow {fmtNum(normalizeScore(contract.flow_score), 0)}</Badge> : null}
-                  {contract.asymmetry_score != null ? <Badge color={C.green} sm>Asymmetry {fmtNum(normalizeScore(contract.asymmetry_score), 0)}</Badge> : null}
-                  {contract.iv_rank != null && !historyReady ? <Badge color={C.orange} sm>History Limited</Badge> : null}
-                </div>
+              <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {contract.short_thesis ? <span style={{ color: C.dim, fontSize: 11, lineHeight: 1.4, flex: 1, minWidth: 200 }}>{contract.short_thesis}</span> : null}
+                {contract.flow_score != null ? <Badge color={C.blue} sm>Flow {fmtNum(normalizeScore(contract.flow_score), 0)}</Badge> : null}
+                {contract.asymmetry_score != null ? <Badge color={C.green} sm>Asymmetry {fmtNum(normalizeScore(contract.asymmetry_score), 0)}</Badge> : null}
+                {contract.iv_rank != null && !historyReady ? <Badge color={C.orange} sm>History Limited</Badge> : null}
               </div>
             )}
           </div>
@@ -782,26 +779,6 @@ function TickerDetailPanel({ symbol, ticker }: { symbol: string; ticker: TickerR
           </div>
         )}
 
-        {volumeSummary && (
-          <div style={chartStyle}>
-            {chartLabel("30-Day Volume Summary")}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, padding: "4px 4px" }}>
-              {[
-                { label: "Call Total Vol", value: fmtVol(volumeSummary.call_total_volume), color: C.green },
-                { label: "Put Total Vol", value: fmtVol(volumeSummary.put_total_volume), color: C.red },
-                { label: "Call Avg Daily", value: fmtVol(volumeSummary.call_avg_daily_vol), color: C.green },
-                { label: "Put Avg Daily", value: fmtVol(volumeSummary.put_avg_daily_vol), color: C.red },
-                { label: "Call Contracts", value: fmtVol(volumeSummary.call_unique_contracts), color: C.blue },
-                { label: "Put Contracts", value: fmtVol(volumeSummary.put_unique_contracts), color: C.purple },
-              ].map(s => (
-                <div key={s.label} style={{ padding: "5px 8px", background: `${s.color}08`, borderRadius: 5, border: `1px solid ${s.color}15` }}>
-                  <div style={{ color: C.dim, fontSize: 8, fontFamily: font, textTransform: "uppercase", marginBottom: 2 }}>{s.label}</div>
-                  <div style={{ color: s.color, fontSize: 13, fontWeight: 700, fontFamily: font }}>{s.value}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       {smaData.length <= 1 && rsiData.length <= 1 && macdData.length <= 1 && volumeChartData.length === 0 && !volumeSummary && (
@@ -811,12 +788,37 @@ function TickerDetailPanel({ symbol, ticker }: { symbol: string; ticker: TickerR
         </div>
       )}
 
-      {!!ticker.top_calls?.length || !!ticker.top_puts?.length ? (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 4 }}>
-          <ContractsMini contracts={ticker.top_calls || []} side="call" />
-          <ContractsMini contracts={ticker.top_puts || []} side="put" />
+      {/* Volume summary + Legacy top calls/puts side by side */}
+      {(volumeSummary || !!ticker.top_calls?.length || !!ticker.top_puts?.length) && (
+        <div style={{ display: "grid", gridTemplateColumns: volumeSummary && (!!ticker.top_calls?.length || !!ticker.top_puts?.length) ? "1fr 2fr" : "1fr", gap: 12, marginTop: 4 }}>
+          {volumeSummary && (
+            <div style={chartStyle}>
+              {chartLabel("30-Day Volume Summary")}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, padding: "4px 4px" }}>
+                {[
+                  { label: "Call Total Vol", value: fmtVol(volumeSummary.call_total_volume), color: C.green },
+                  { label: "Put Total Vol", value: fmtVol(volumeSummary.put_total_volume), color: C.red },
+                  { label: "Call Avg Daily", value: fmtVol(volumeSummary.call_avg_daily_vol), color: C.green },
+                  { label: "Put Avg Daily", value: fmtVol(volumeSummary.put_avg_daily_vol), color: C.red },
+                  { label: "Call Contracts", value: fmtVol(volumeSummary.call_unique_contracts), color: C.blue },
+                  { label: "Put Contracts", value: fmtVol(volumeSummary.put_unique_contracts), color: C.purple },
+                ].map(s => (
+                  <div key={s.label} style={{ padding: "5px 8px", background: `${s.color}08`, borderRadius: 5, border: `1px solid ${s.color}15` }}>
+                    <div style={{ color: C.dim, fontSize: 8, fontFamily: font, textTransform: "uppercase", marginBottom: 2 }}>{s.label}</div>
+                    <div style={{ color: s.color, fontSize: 13, fontWeight: 700, fontFamily: font }}>{s.value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {(!!ticker.top_calls?.length || !!ticker.top_puts?.length) && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <ContractsMini contracts={ticker.top_calls || []} side="call" />
+              <ContractsMini contracts={ticker.top_puts || []} side="put" />
+            </div>
+          )}
         </div>
-      ) : null}
+      )}
 
       <TimeSalesPanel symbol={symbol} />
     </div>
@@ -921,7 +923,7 @@ function TickerRows({ t, index, isExp, onToggle }: { t: TickerResult; index: num
         </td>
         <td style={{ padding: "12px 10px" }}>
           <div style={{ display: "grid", gap: 8 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(72px, 1fr))", gap: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(56px, 1fr))", gap: 6 }}>
               <MetricBlock label="Total Vol" value={fmtVol(t.total_volume)} color={C.bright} />
               <MetricBlock label="P/C Ratio" value={t.pc_ratio != null ? fmtNum(t.pc_ratio, 2) : "—"} color={pcColor(t.pc_ratio ?? null)} />
               <MetricBlock label="Calls" value={fmtVol(t.call_volume)} color={C.green} />
@@ -1615,7 +1617,7 @@ export default function OptionsPage() {
         @keyframes toastOut { from { opacity:1; } to { opacity:0; } }
       `}</style>
 
-      <div style={{ padding: "16px 20px 10px", borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: C.bg, zIndex: 10 }}>
+      <div style={{ padding: "16px 20px 10px", borderBottom: `1px solid ${C.border}`, background: C.bg, zIndex: 10 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: hasData ? 10 : 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <Zap className="w-5 h-5" style={{ color: C.green }} />
