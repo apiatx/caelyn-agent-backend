@@ -557,7 +557,17 @@ class OptionsFlowEngine:
             preliminary_cap = 40
         total_raw = len(candidates)
         preliminary = sorted(candidates.values(), key=lambda x: x["source_score"], reverse=True)
-        preliminary = preliminary[: max(self.defaults["prefilter_target"] * prefilter_multiplier, preliminary_cap)]
+        cut = max(self.defaults["prefilter_target"] * prefilter_multiplier, preliminary_cap)
+        preliminary = preliminary[:cut]
+
+        # Guarantee seed tickers survive the preliminary cut — they may have
+        # low source_score (5) but are essential for tabs like megacap where
+        # Finviz screens return mostly non-$1T stocks that later fail mcap gate.
+        preliminary_tickers = {row["ticker"] for row in preliminary}
+        for seed_sym in seed_tickers:
+            if seed_sym not in preliminary_tickers and seed_sym in candidates:
+                preliminary.append(candidates[seed_sym])
+
         print(f"[OPTIONS_FLOW] [{tab}] Prefilter: {total_raw} raw candidates → {len(preliminary)} preliminary (sources degraded: {degraded_sources})")
 
         quote_tasks = []
