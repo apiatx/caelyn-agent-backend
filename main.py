@@ -5537,6 +5537,7 @@ def _get_macro_provider():
                 fred_provider=data_service.fred,
                 fmp_provider=data_service.fmp if hasattr(data_service, "fmp") else None,
                 tradier_provider=data_service.tradier if hasattr(data_service, "tradier") else None,
+                fear_greed_provider=data_service.fear_greed if hasattr(data_service, "fear_greed") else None,
             )
     return _macro_provider
 
@@ -5571,8 +5572,18 @@ async def _macro_precompute_loop():
             # Pre-warm calendar
             await mp.get_calendar(days_ahead=14)
 
+            # Pre-warm tab endpoints (rates, inflation, growth, labor, risk)
+            await asyncio.gather(
+                mp.get_rates(),
+                mp.get_inflation(),
+                mp.get_growth(),
+                mp.get_labor(),
+                mp.get_risk(),
+                return_exceptions=True,
+            )
+
             elapsed = _time.time() - t0
-            print(f"[MACRO_PRECOMPUTE] Refreshed dashboard + indicators + calendar in {elapsed:.1f}s")
+            print(f"[MACRO_PRECOMPUTE] Refreshed dashboard + indicators + calendar + tabs in {elapsed:.1f}s")
 
         except Exception as e:
             import traceback
@@ -5703,4 +5714,144 @@ async def macro_history(
             return JSONResponse(status_code=400, content=result)
         return {"response": result, "structured": True, "preset": "macro_history"}
     except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ── GET /api/macro/rates ─────────────────────────────────────────
+
+@app.get("/api/macro/rates")
+@limiter.limit("60/minute")
+@traceable(name="main.macro_rates")
+async def macro_rates(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """RATES tab: yield curve, Fed policy, spreads, mortgage, credit."""
+    await _wait_for_init()
+
+    mp = _get_macro_provider()
+    if not mp:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Macro data provider not configured."},
+        )
+
+    try:
+        result = await mp.get_rates()
+        return {"response": result, "structured": True, "preset": "macro_rates"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ── GET /api/macro/inflation ─────────────────────────────────────
+
+@app.get("/api/macro/inflation")
+@limiter.limit("60/minute")
+@traceable(name="main.macro_inflation")
+async def macro_inflation(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """INFLATION tab: CPI, PCE, PPI, breakevens, alternative measures."""
+    await _wait_for_init()
+
+    mp = _get_macro_provider()
+    if not mp:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Macro data provider not configured."},
+        )
+
+    try:
+        result = await mp.get_inflation()
+        return {"response": result, "structured": True, "preset": "macro_inflation"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ── GET /api/macro/growth ────────────────────────────────────────
+
+@app.get("/api/macro/growth")
+@limiter.limit("60/minute")
+@traceable(name="main.macro_growth")
+async def macro_growth(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """GROWTH tab: GDP, ISM, retail sales, industrial production, sentiment."""
+    await _wait_for_init()
+
+    mp = _get_macro_provider()
+    if not mp:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Macro data provider not configured."},
+        )
+
+    try:
+        result = await mp.get_growth()
+        return {"response": result, "structured": True, "preset": "macro_growth"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ── GET /api/macro/labor ─────────────────────────────────────────
+
+@app.get("/api/macro/labor")
+@limiter.limit("60/minute")
+@traceable(name="main.macro_labor")
+async def macro_labor(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """LABOR tab: NFP, unemployment, claims, wages, JOLTS, participation."""
+    await _wait_for_init()
+
+    mp = _get_macro_provider()
+    if not mp:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Macro data provider not configured."},
+        )
+
+    try:
+        result = await mp.get_labor()
+        return {"response": result, "structured": True, "preset": "macro_labor"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ── GET /api/macro/risk ──────────────────────────────────────────
+
+@app.get("/api/macro/risk")
+@limiter.limit("60/minute")
+@traceable(name="main.macro_risk")
+async def macro_risk(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """RISK tab: VIX, credit spreads, Fear & Greed, DXY, yield curve risk."""
+    await _wait_for_init()
+
+    mp = _get_macro_provider()
+    if not mp:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Macro data provider not configured."},
+        )
+
+    try:
+        result = await mp.get_risk()
+        return {"response": result, "structured": True, "preset": "macro_risk"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
