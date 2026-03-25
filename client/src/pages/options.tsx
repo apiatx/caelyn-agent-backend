@@ -359,7 +359,7 @@ function SectionCard({ children }: { children: ReactNode }) {
 
 function MetricBlock({ label, value, color = C.bright, subtext }: { label: string; value: ReactNode; color?: string; subtext?: ReactNode }) {
   return (
-    <div style={{ padding: "10px 12px", borderRadius: 8, background: `${color}08`, border: `1px solid ${color}18`, minWidth: 110, transition: "opacity 0.15s ease, transform 0.2s ease" }}>
+    <div style={{ padding: "10px 12px", borderRadius: 8, background: `${color}08`, border: `1px solid ${color}18`, minWidth: 0, transition: "opacity 0.15s ease, transform 0.2s ease" }}>
       <div style={{ color: C.dim, fontSize: 9, fontFamily: font, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>{label}</div>
       <div style={{ color, fontSize: 14, fontFamily: font, fontWeight: 700, transition: "color 0.15s ease" }}>{value}</div>
       {subtext ? <div style={{ color: C.text, fontSize: 10, marginTop: 4 }}>{subtext}</div> : null}
@@ -923,7 +923,7 @@ function TickerRows({ t, index, isExp, onToggle }: { t: TickerResult; index: num
         </td>
         <td style={{ padding: "12px 10px" }}>
           <div style={{ display: "grid", gap: 8 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(56px, 1fr))", gap: 6 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
               <MetricBlock label="Total Vol" value={fmtVol(t.total_volume)} color={C.bright} />
               <MetricBlock label="P/C Ratio" value={t.pc_ratio != null ? fmtNum(t.pc_ratio, 2) : "—"} color={pcColor(t.pc_ratio ?? null)} />
               <MetricBlock label="Calls" value={fmtVol(t.call_volume)} color={C.green} />
@@ -1746,8 +1746,8 @@ export default function OptionsPage() {
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 140px)" }}>
-        <div style={{ flex: 1, overflowY: "auto", padding: "14px 20px" }}>
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "14px 20px" }}>
           {loading && !hasData && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, padding: "60px 20px" }}>
               <div style={{ width: 40, height: 40, border: `3px solid ${C.border}`, borderTop: `3px solid ${C.blue}`, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
