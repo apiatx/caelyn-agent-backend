@@ -74,9 +74,10 @@ def _round(v: Any, n: int = 2) -> float | None:
 class MacroProvider:
     """Aggregates FRED + FMP data for the Macro Terminal."""
 
-    def __init__(self, fred_provider, fmp_provider=None):
+    def __init__(self, fred_provider, fmp_provider=None, tradier_provider=None):
         self.fred = fred_provider          # FredProvider instance
         self.fmp = fmp_provider            # FMPProvider instance (optional)
+        self.tradier = tradier_provider    # TradierProvider instance (optional)
         self._fred_api = fred_provider.fred if fred_provider else None  # raw fredapi.Fred
 
     # ── Helpers to fetch raw FRED series ─────────────────────────────
@@ -139,25 +140,52 @@ class MacroProvider:
         if cached is not None:
             return cached
 
-        # ── Fetch FMP real-time market data (async) ──────────────────
-        fmp_indices = {}
-        fmp_treasury = {}
-        fmp_commodities = {}
+        # ── Build async tasks ─────────────────────────────────────────
+        # FMP real-time market data
+        fmp_task = None
         if self.fmp:
-            try:
-                idx_task = self.fmp.get_market_indices()
-                treas_task = self.fmp.get_treasury_rates()
-                comm_task = self.fmp.get_key_commodities()
-                idx_raw, treas_raw, comm_raw = await asyncio.gather(
-                    idx_task, treas_task, comm_task, return_exceptions=True,
-                )
-                fmp_indices = idx_raw if not isinstance(idx_raw, Exception) else {}
-                fmp_treasury = treas_raw if not isinstance(treas_raw, Exception) else {}
-                fmp_commodities = comm_raw if not isinstance(comm_raw, Exception) else {}
-            except Exception as e:
-                print(f"[MACRO] FMP real-time fetch error: {e}")
+            async def _fetch_fmp():
+                idx = await self.fmp.get_market_indices()
+                treas = await self.fmp.get_treasury_rates()
+                comm = await self.fmp.get_key_commodities()
+                return idx, treas, comm
+            fmp_task = _fetch_fmp()
 
-        # Extract real-time values from FMP
+        # Tradier benchmark ETF quotes (SPY, QQQ, TLT, GLD, USO, HYG, VIX)
+        _BENCHMARK_ETFS = ["SPY", "QQQ", "TLT", "GLD", "USO", "HYG"]
+        tradier_task = None
+        if self.tradier:
+            tradier_task = self.tradier.get_quotes(_BENCHMARK_ETFS)
+
+        # FRED economic releases (sync — run in thread pool)
+        fred_task = asyncio.to_thread(self._get_fred_economic_data)
+
+        # Run all three in parallel
+        tasks = []
+        task_names = []
+        if fmp_task:
+            tasks.append(fmp_task)
+            task_names.append("fmp")
+        if tradier_task:
+            tasks.append(tradier_task)
+            task_names.append("tradier")
+        tasks.append(fred_task)
+        task_names.append("fred")
+
+        all_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Unpack results by name
+        result_map = {}
+        for name, res in zip(task_names, all_results):
+            result_map[name] = res if not isinstance(res, Exception) else None
+            if isinstance(res, Exception):
+                print(f"[MACRO] {name} fetch error: {res}")
+
+        # ── FMP results ───────────────────────────────────────────────
+        fmp_indices, fmp_treasury, fmp_commodities = {}, {}, {}
+        if result_map.get("fmp"):
+            fmp_indices, fmp_treasury, fmp_commodities = result_map["fmp"]
+
         sp500 = fmp_indices.get("^GSPC", {})
         vix_data = fmp_indices.get("^VIX", {})
         vix_price = _safe(vix_data.get("price"))
@@ -173,8 +201,26 @@ class MacroProvider:
         us3m_rt = _safe(fmp_treasury.get("month_3"))
         spread_10y3m_rt = round(us10y_rt - us3m_rt, 2) if us10y_rt and us3m_rt else None
 
-        # ── Fetch FRED economic releases (sync — run in thread pool) ─
-        fred_data = await asyncio.to_thread(self._get_fred_economic_data)
+        # ── Tradier benchmark ETF quotes ──────────────────────────────
+        benchmark_quotes = []
+        tradier_raw = result_map.get("tradier") or []
+        for q in tradier_raw:
+            sym = (q.get("symbol") or "").upper()
+            price = _safe(q.get("last"))
+            if not sym or not price:
+                continue
+            w52h = _safe(q.get("week_52_high"))
+            pct_from_high = round(((price - w52h) / w52h) * 100, 1) if w52h and w52h > 0 else None
+            benchmark_quotes.append({
+                "ticker": sym,
+                "price": _round(price),
+                "change_pct": _round(q.get("change_percentage")),
+                "week_52_high": _round(w52h),
+                "pct_from_52w_high": pct_from_high,
+            })
+
+        # ── FRED results ──────────────────────────────────────────────
+        fred_data = result_map.get("fred") or {}
 
         fed_rate = fred_data.get("fed_rate")
         cpi_yoy = fred_data.get("cpi_yoy")
@@ -219,6 +265,7 @@ class MacroProvider:
             "last_updated": datetime.utcnow().isoformat() + "Z",
             "data_sources": {
                 "market_prices": "FMP (real-time)" if fmp_indices else "FRED (1-2 day lag)",
+                "benchmark_etfs": "Tradier (real-time)" if benchmark_quotes else "unavailable",
                 "yields": "FMP (real-time)" if fmp_treasury else "FRED (1-2 day lag)",
                 "commodities": "FMP (real-time)" if fmp_commodities else "unavailable",
                 "economic_releases": "FRED (official release schedule)",
@@ -230,6 +277,7 @@ class MacroProvider:
                 "nasdaq": _round(fmp_indices.get("^IXIC", {}).get("price")),
                 "russell_2000": _round(fmp_indices.get("^RUT", {}).get("price")),
             },
+            "benchmark_etfs": benchmark_quotes,
             "fed": {
                 "funds_rate": _round(fed_rate),
                 "funds_rate_range": f"{_round(fed_rate)}-{_round((_safe(fed_rate) or 0) + 0.25)}" if fed_rate else None,

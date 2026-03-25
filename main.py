@@ -5536,6 +5536,7 @@ def _get_macro_provider():
             _macro_provider = MacroProvider(
                 fred_provider=data_service.fred,
                 fmp_provider=data_service.fmp if hasattr(data_service, "fmp") else None,
+                tradier_provider=data_service.tradier if hasattr(data_service, "tradier") else None,
             )
     return _macro_provider
 
