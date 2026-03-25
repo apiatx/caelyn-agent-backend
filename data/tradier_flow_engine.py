@@ -16,6 +16,7 @@ import asyncio
 from typing import Any
 
 from data.options_flow_engine import (
+    ETF_SET,
     OptionsFlowEngine,
     _clip,
     _days_to_expiration,
@@ -95,11 +96,66 @@ class TradierFlowEngine(OptionsFlowEngine):
         tab: str = "megacap",
         exclude_tickers: set[str] | None = None,
     ) -> dict:
-        return await super().build_prefilter_snapshot(
-            seed_tickers=seed_tickers,
-            tab=tab,
-            exclude_tickers=exclude_tickers,
+        seeds = seed_tickers or []
+
+        # Pre-fetch Tradier quotes for ALL seeds in one batch call.
+        # This ensures seeds have prices even when Finnhub/FMP are
+        # rate-limited during cold starts.
+        seed_quotes: dict[str, dict] = {}
+        if seeds:
+            try:
+                raw_quotes = await self._tradier.get_quotes(seeds)
+                for q in raw_quotes or []:
+                    sym = (q.get("symbol") or "").upper()
+                    if sym and _safe_float(q.get("last")):
+                        seed_quotes[sym] = q
+            except Exception as exc:
+                print(f"[TRADIER_FLOW] Seed quote pre-fetch failed: {exc}")
+
+        result = await super().build_prefilter_snapshot(
+            seed_tickers=seeds, tab=tab, exclude_tickers=exclude_tickers,
         )
+
+        candidates = result.get("candidates", [])
+        existing_tickers = {c["ticker"] for c in candidates}
+
+        # Backfill prices for candidates that survived but have price=None
+        for c in candidates:
+            if c.get("price") is None and c["ticker"] in seed_quotes:
+                q = seed_quotes[c["ticker"]]
+                c["price"] = _safe_float(q["last"])
+                c["change_pct"] = _safe_float(q.get("change_percentage"))
+
+        # Re-add seed tickers that were dropped by the base pipeline
+        # (e.g. price check filtered them out because Finnhub was down)
+        for seed in seeds:
+            if seed not in existing_tickers and seed in seed_quotes:
+                q = seed_quotes[seed]
+                candidates.append({
+                    "ticker": seed,
+                    "price": _safe_float(q["last"]),
+                    "change_pct": _safe_float(q.get("change_percentage")),
+                    "volume": _safe_int(q.get("volume")) or 0,
+                    "avg_volume": _safe_int(q.get("average_volume")),
+                    "category": "etf" if seed in ETF_SET else "stock",
+                    "source_score": 5.0,
+                    "source_hits": ["seed_watchlist"],
+                    "reasons": ["watchlist inclusion"],
+                    "prefilter_score": 5.0,
+                    "profile": {},
+                    "technicals": {},
+                    "stock_relative_volume": None,
+                    "liquidity_dollars": None,
+                    "liquidity_supported": False,
+                })
+
+        if seed_quotes:
+            added = len(candidates) - len(existing_tickers)
+            backfilled = sum(1 for c in candidates if c["ticker"] in seed_quotes and c["ticker"] in existing_tickers)
+            print(f"[TRADIER_FLOW] [{tab}] Seed quotes: {len(seed_quotes)} fetched, {backfilled} backfilled, {added} re-added")
+
+        result["candidates"] = candidates
+        return result
 
     # ── Contract normalisation — preserves Tradier-specific fields ────
 

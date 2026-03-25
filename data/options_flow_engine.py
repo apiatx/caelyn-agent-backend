@@ -267,6 +267,12 @@ class OptionsFlowEngine:
             macro = prefilter_data.get("macro", {}) or {}
 
         inspectable = candidates[: self.defaults["options_inspection_limit"]]
+        # Guarantee seed tickers get inspected even if ranked low
+        if seed_tickers:
+            inspectable_tickers = {c["ticker"] for c in inspectable}
+            for c in candidates:
+                if c["ticker"] in set(seed_tickers) and c["ticker"] not in inspectable_tickers:
+                    inspectable.append(c)
         print(f"[OPTIONS_FLOW] [{tab}] Pipeline: {len(candidates)} prefilter → {len(inspectable)} inspectable")
         results = await self._inspect_shortlist(inspectable, macro, tab=tab)
         dropped_tickers = [inspectable[i].get("ticker") for i, r in enumerate(results) if r is None]
@@ -582,12 +588,8 @@ class OptionsFlowEngine:
                 continue
             if not enriched:
                 continue
-            is_seed = base.get("ticker") in seed_set
             if enriched.get("price") is None or enriched.get("price", 0) < self.defaults["min_stock_price"]:
-                if not is_seed:
-                    continue
-                # Seed tickers survive even without a price — Tradier will
-                # provide one during _inspect_one_ticker.
+                continue
             liquidity_dollars = enriched.get("liquidity_dollars")
             liquidity_supported = enriched.get("liquidity_supported", False)
             if (
@@ -595,7 +597,6 @@ class OptionsFlowEngine:
                 and liquidity_dollars is not None
                 and liquidity_dollars < self.defaults["min_stock_liquidity"]
                 and base.get("source_score", 0) < 28
-                and not is_seed
             ):
                 continue
 
