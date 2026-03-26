@@ -100,7 +100,7 @@ def transform_dashboard(raw: dict) -> dict:
     rates = raw.get("rates_and_yields", {})
     yield_snapshot = {
         "2Y": _r(rates.get("us_2y")),
-        "5Y": None,
+        "5Y": _r(rates.get("us_5y")),
         "10Y": _r(rates.get("us_10y")),
         "30Y": _r(rates.get("us_30y")),
     }
