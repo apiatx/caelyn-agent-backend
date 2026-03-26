@@ -270,6 +270,7 @@ def transform_rates(raw: dict) -> dict:
         })
 
     return {
+        **raw,
         "yield_curve": yield_curve,
         "spreads": spreads,
         "indicators": indicators,
@@ -383,6 +384,7 @@ def transform_inflation(raw: dict) -> dict:
     })
 
     return {
+        **raw,
         "headline": headline,
         "history": history,
         "cpi_components": cpi_components,
@@ -473,6 +475,7 @@ def transform_growth(raw: dict) -> dict:
         })
 
     return {
+        **raw,
         "gdp": gdp,
         "pmi": pmi,
         "indicators": indicators,
@@ -569,6 +572,7 @@ def transform_labor(raw: dict) -> dict:
         })
 
     return {
+        **raw,
         "unemployment": unemployment,
         "nfp": nfp,
         "indicators": indicators,
@@ -722,6 +726,7 @@ def transform_risk(raw: dict) -> dict:
         })
 
     return {
+        **raw,
         "risk_framework": risk_framework,
         "vix_history": vix_history,
         "confidence": confidence,
