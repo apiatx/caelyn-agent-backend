@@ -47,7 +47,9 @@ _FRED_SERIES = {
     "jolts":            "JTSJOL",              # JOLTS openings
     "10y-yield":        "DGS10",
     "2y-yield":         "DGS2",
+    "3y-yield":         "DGS3",               # 3-Year Treasury
     "5y-yield":         "DGS5",
+    "7y-yield":         "DGS7",               # 7-Year Treasury
     "1y-yield":         "DGS1",
     "6m-yield":         "DGS6MO",
     "3m-yield":         "DGS3MO",
@@ -226,6 +228,7 @@ class MacroProvider:
         vix_price = _safe(vix_data.get("price"))
         us10y_rt = _safe(fmp_treasury.get("year_10"))
         us2y_rt = _safe(fmp_treasury.get("year_2"))
+        us5y_rt = _safe(fmp_treasury.get("year_5"))
         us30y_rt = _safe(fmp_treasury.get("year_30"))
         oil_price = _safe(fmp_commodities.get("CLUSD", {}).get("price"))
         gold_price = _safe(fmp_commodities.get("GCUSD", {}).get("price"))
@@ -342,6 +345,7 @@ class MacroProvider:
             "rates_and_yields": {
                 "us_10y": _round(us10y),
                 "us_2y": _round(us2y),
+                "us_5y": _round(us5y_rt),
                 "us_30y": _round(us30y_rt),
                 "spread_2s10s": _round(spread_2s10s),
                 "spread_10y3m": _round(spread_10y3m),
@@ -638,7 +642,9 @@ class MacroProvider:
             ("6M",  "month_6",  "DGS6MO"),
             ("1Y",  "year_1",   "DGS1"),
             ("2Y",  "year_2",   "DGS2"),
+            ("3Y",  "year_3",   "DGS3"),
             ("5Y",  "year_5",   "DGS5"),
+            ("7Y",  "year_7",   "DGS7"),
             ("10Y", "year_10",  "DGS10"),
             ("20Y", "year_20",  None),
             ("30Y", "year_30",  None),
