@@ -1,0 +1,87 @@
+Fix the backend regression that broke sector preset prompt responses.
+
+You only have access to the BACKEND repo.
+
+Important context:
+- Before the recent sector-routing changes, the sector preset prompt buttons were working and returned non-blank responses.
+- We made a small set of routing/prompt-contract changes intended to improve sector-specific output.
+- After those changes, sector prompt buttons now return blank / empty responses.
+- Do NOT assume the frontend is the problem.
+- Do NOT ask for frontend changes.
+- The goal is to restore working sector preset responses first, with the smallest possible backend fix.
+
+## Your task
+Audit the recent sector-related backend changes and identify exactly why sector preset prompts now return blank responses.
+
+Do this before making broad changes:
+1. Trace the full backend request path for a sector preset button click.
+2. Identify where the response becomes blank / empty / invalid.
+3. Compare the current broken path vs the last known working behavior.
+4. Fix the regression with the minimum necessary changes.
+5. Preserve the intended improvements if possible, but restoring working responses is the priority.
+
+## Areas to audit
+Specifically audit:
+- preset routing / alias resolution
+- category mapping for sector preset keys
+- thematic/sector data gathering path
+- prompt building / contract injection
+- response parsing / display_type handling
+- any new required fields introduced by SECTOR_INTEL_CONTRACT
+- any code that could cause Claude/model output to fail validation, return empty structured payloads, or be dropped
+- any mismatch between expected output schema and actual model response
+- any exception handling that now swallows the result and returns blank
+
+## Strong suspicion areas to verify
+Check whether one of these happened:
+- the new sector alias mapping routes correctly but produces a prompt shape the parser cannot handle
+- SECTOR_INTEL_CONTRACT introduced required fields that the model is not reliably returning
+- the response formatter/parser rejects the new sector_intel structure and returns empty output
+- the backend now expects display_type: sector_intel but the rendering payload builder only supports previous display types
+- a new thematic category/profile exists but does not return data in the shape downstream code expects
+- the prompt builder injects sector metadata in a way that breaks generation or post-processing
+- a blank response is caused by validation/parsing fallback, not by missing data gathering
+
+## Requirements
+- Restore non-blank, usable sector preset responses.
+- Do not make frontend changes.
+- Do not refactor unrelated code.
+- Keep changes as small and surgical as possible.
+- If needed, temporarily relax the new sector-specific output contract so working responses return again.
+- If the new display_type or output schema is the issue, make backend backward-compatible rather than forcing frontend changes right now.
+
+## Desired outcome
+When a sector preset button is clicked, the backend should again return a valid non-empty response payload.
+
+Priority order:
+1. Sector preset buttons work again
+2. Response is non-blank and useful
+3. Sector-specific improvements remain where possible
+4. No frontend changes required for the fix
+
+## Deliverables
+1. Identify the exact root cause of the regression.
+2. Implement the minimum backend fix.
+3. Show the exact files changed.
+4. Explain why the sector preset responses became blank after the recent changes.
+5. Explain how your fix restores backward compatibility.
+6. Confirm which sector presets were tested:
+   - Energy
+   - Materials
+   - Aerospace/Defense
+   - Tech
+   - AI/Compute
+   - Quantum
+   - Fintech
+   - Biotech
+   - Real Estate
+
+## Acceptance criteria
+The task is done when:
+- sector preset prompt buttons return non-empty responses again
+- no frontend changes are required for the fix
+- the regression root cause is clearly identified
+- the fix is minimal and targeted
+- existing non-sector prompts are not broken
+
+Start by auditing the exact recent changes to sector routing, prompt contracts, and response parsing, then fix the regression with the minimum necessary backend change.

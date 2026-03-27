@@ -1,0 +1,183 @@
+Please make the agent fully conversational. Right now each query is a standalone request — Claude has no memory of previous messages. I need the agent to support multi-turn conversation where the user can follow up on any response, and Claude has access to both the conversation history AND the data sources.
+STEP 1: Add conversation history to the API
+Update the /api/query request model to accept a conversation history array:
+pythonfrom pydantic import BaseModel
+from typing import List, Optional
+
+class Message(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+class QueryRequest(BaseModel):
+    query: str
+    conversation_history: Optional[List[Message]] = []
+STEP 2: Update the agent to use conversation history
+In agent/claude_agent.py, modify the main process_query method to accept and use conversation history:
+pythonasync def process_query(self, query: str, conversation_history: list = None):
+    if conversation_history is None:
+        conversation_history = []
+    
+    import time
+    start = time.time()
+    
+    # STEP A: Classify the query
+    # For follow-up messages, check if this is a follow-up or a new scan
+    is_followup = len(conversation_history) > 0
+    
+    if is_followup:
+        # Check if the user is asking a NEW scan or following up on the existing conversation
+        needs_new_data = self._needs_fresh_data(query)
+        
+        if needs_new_data:
+            # New scan requested mid-conversation — gather fresh data
+            category = await self._classify_with_fallback(query)
+            raw_data = await self._gather_data_safe(category, query)
+            compressed = compress_data(raw_data, scan_type=category)
+            data_context = json.dumps(compressed, default=str)
+        else:
+            # Follow-up question — no new data needed, Claude uses conversation context
+            category = "followup"
+            data_context = None
+    else:
+        # First message — always gather data
+        category = await self._classify_with_fallback(query)
+        raw_data = await self._gather_data_safe(category, query)
+        compressed = compress_data(raw_data, scan_type=category)
+        data_context = json.dumps(compressed, default=str)
+    
+    print(f"[AGENT] Category: {category}, is_followup: {is_followup}, has_data: {data_context is not None} ({time.time()-start:.1f}s)")
+    
+    # STEP B: Build messages array for Claude
+    messages = []
+    
+    # Add conversation history (last 10 turns max to stay within token limits)
+    recent_history = conversation_history[-10:]
+    for msg in recent_history:
+        messages.append({
+            "role": msg["role"] if isinstance(msg, dict) else msg.role,
+            "content": msg["content"] if isinstance(msg, dict) else msg.content,
+        })
+    
+    # Add the current user message
+    if data_context:
+        # Attach fresh data to this message
+        user_content = f"""[MARKET DATA — use this to inform your analysis]
+{data_context}
+
+[USER QUERY]
+{query}"""
+    else:
+        # Follow-up — just the question, Claude has prior context
+        user_content = query
+    
+    messages.append({"role": "user", "content": user_content})
+    
+    # STEP C: Call Claude
+    response = await self._call_claude(messages, is_followup=is_followup)
+    
+    return response
+
+
+def _needs_fresh_data(self, query: str) -> bool:
+    """Determine if a follow-up message needs fresh market data or can use existing context."""
+    q = query.lower().strip()
+    
+    # These phrases indicate the user wants a NEW scan, not a follow-up
+    new_scan_triggers = [
+        "scan", "screen", "what's trending", "best trades", "macro overview",
+        "crypto scan", "sector rotation", "daily briefing", "earnings watch",
+        "commodities", "volume spikes", "short squeeze", "show me",
+        "run a", "pull up", "find me", "search for",
+    ]
+    
+    for trigger in new_scan_triggers:
+        if trigger in q:
+            return True
+    
+    # If the message references a prompt button's exact text, it's a new scan
+    button_prompts = [
+        "trending now", "daily briefing", "macro overview", "sector rotation",
+        "stage 2 breakouts", "best trades", "best investments", "improving fundamentals",
+        "asymmetric only", "earnings watch", "short squeeze", "social momentum",
+        "volume spikes", "bearish setups", "small cap spec", "ai/compute",
+        "uranium", "commodities", "crypto scanner", "watchlist review",
+    ]
+    for bp in button_prompts:
+        if bp in q:
+            return True
+    
+    # Otherwise it's a follow-up — no new data needed
+    return False
+STEP 3: Update the Claude call to handle both modes
+Modify _call_claude (or whatever method sends the request to Anthropic) to handle follow-ups differently:
+pythonasync def _call_claude(self, messages: list, is_followup: bool = False):
+    import asyncio
+    
+    # For follow-ups, tell Claude it can respond conversationally
+    system = self.system_prompt
+    if is_followup:
+        system += """
+
+FOLLOW-UP MODE: The user is continuing a conversation. You have the full conversation history above. 
+- If the user asks about a specific ticker or pick from your previous response, go deeper on that specific item.
+- If the user asks a general question, answer it using your trading expertise and any data from the conversation.
+- You can respond conversationally — you don't need to use a structured JSON display_type for follow-ups.
+- For follow-up responses, use display_type "chat" with a "message" field containing your analysis.
+- BUT if the user asks you to analyze a new ticker or run a new type of scan, you should still use the appropriate display_type.
+- Keep your trader personality — be direct, opinionated, and cut through noise.
+- You still have access to all the data from the original scan in the conversation history. Reference specific data points when relevant.
+"""
+    
+    try:
+        response = await asyncio.wait_for(
+            self.client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=system,
+                messages=messages,
+            ),
+            timeout=60.0,
+        )
+        return self._parse_response(response)
+    except asyncio.TimeoutError:
+        return {"display_type": "chat", "message": "Request timed out. Try again."}
+    except Exception as e:
+        print(f"[AGENT] Claude API error: {e}")
+        return {"display_type": "chat", "message": f"Error: {str(e)}"}
+STEP 4: Update the /api/query route to pass conversation history
+python@app.post("/api/query")
+async def query_agent(request: QueryRequest):
+    try:
+        result = await asyncio.wait_for(
+            agent.process_query(
+                query=request.query,
+                conversation_history=request.conversation_history or [],
+            ),
+            timeout=90.0,
+        )
+        return result
+    except asyncio.TimeoutError:
+        return {
+            "display_type": "chat",
+            "message": "Request timed out after 90 seconds. Please try again.",
+        }
+    except Exception as e:
+        print(f"[AGENT] Route error: {e}")
+        return {
+            "display_type": "chat",
+            "message": f"Something went wrong: {str(e)}",
+        }
+STEP 5: Trim conversation history to prevent token overflow
+Add a helper that ensures conversation history doesn't blow up the context window:
+pythondef _trim_history(self, messages: list, max_chars: int = 100000) -> list:
+    """Keep conversation history under a character limit by removing oldest messages first."""
+    total = sum(len(m.get("content", "")) for m in messages)
+    
+    while total > max_chars and len(messages) > 2:
+        removed = messages.pop(0)
+        total -= len(removed.get("content", ""))
+    
+    return messages
+Call this before sending to Claude:
+pythonmessages = self._trim_history(messages, max_chars=100000)
+Re-deploy after all changes.

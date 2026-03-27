@@ -1,0 +1,211 @@
+The agent needs to handle free-form conversation just as well as structured scans. Right now every query gets forced through a category classifier and runs a fixed data pipeline. I need a "smart" mode where Claude itself decides what data it needs, OR where conversational queries skip the heavy data pipeline entirely.
+STEP 1: Add a "chat" fast path that skips data gathering
+In the query classifier (both the Claude-based one and the keyword fallback), add logic to detect conversational messages that don't need a data scan:
+pythondef _keyword_classify(self, query: str) -> str:
+    q = query.lower().strip()
+    
+    # FIRST: Check if this is a conversational/opinion query that doesn't need data
+    # These should go straight to Claude with no data pipeline
+    conversational_signals = [
+        "what do you think",
+        "your opinion",
+        "how would you",
+        "explain",
+        "why is",
+        "why are",
+        "what's the difference",
+        "should i",
+        "would you",
+        "tell me about",
+        "how does",
+        "what happens if",
+        "compare",
+        "pros and cons",
+        "risk of",
+        "is it worth",
+        "help me understand",
+        "what's your take",
+        "do you like",
+        "what would you do",
+        "strategy for",
+        "thoughts on",
+    ]
+    
+    # If the query is short and conversational, skip the data pipeline
+    is_conversational = any(signal in q for signal in conversational_signals)
+    
+    # Also skip if it's a follow-up-style message (short, no specific scan request)
+    is_short_followup = len(q.split()) < 10 and not any(w in q for w in [
+        "scan", "screen", "trending", "best trades", "briefing", "watchlist",
+        "crypto scan", "macro overview", "sector rotation",
+    ])
+    
+    if is_conversational and is_short_followup:
+        return "chat"
+    
+    # ... rest of existing keyword classifier ...
+STEP 2: For "chat" category, send query to Claude with MINIMAL data context
+In _gather_data, when category is "chat", pull only lightweight context — not a full scan:
+pythonasync def _gather_data(self, category, query):
+    import asyncio
+    
+    if category == "chat":
+        # Lightweight context only — no heavy scans
+        context = {}
+        
+        # Quick fear & greed for market context (1 fast API call)
+        try:
+            context["fear_greed"] = await asyncio.wait_for(
+                self.data.fear_greed.get_fear_greed_index(),
+                timeout=5.0,
+            )
+        except:
+            pass
+        
+        # If the user mentions specific tickers, pull just those
+        import re
+        tickers_mentioned = re.findall(r'\b([A-Z]{2,5})\b', query)
+        # Filter out common words
+        common = {"THE", "AND", "FOR", "ARE", "BUT", "NOT", "YOU", "ALL", "CAN",
+                  "WAS", "ONE", "OUR", "OUT", "HAS", "HOW", "ITS", "MAY", "NEW",
+                  "NOW", "OLD", "WAY", "WHO", "DID", "GET", "LET", "SAY", "SHE",
+                  "TOO", "USE", "CEO", "IPO", "ETF", "IMO", "FYI", "JUST", "LIKE",
+                  "THIS", "THAT", "WITH", "HAVE", "FROM", "BEEN", "WILL", "MORE",
+                  "WHEN", "SOME", "THAN", "VERY", "WHAT", "OVER", "GOOD", "BACK",
+                  "ALSO", "INTO", "YOUR", "NEXT", "LONG", "BEST"}
+        tickers_mentioned = [t for t in tickers_mentioned if t not in common]
+        
+        if tickers_mentioned:
+            # Pull quick data for mentioned tickers only (max 3)
+            for ticker in tickers_mentioned[:3]:
+                try:
+                    overview = await asyncio.wait_for(
+                        self.data.stockanalysis.get_overview(ticker),
+                        timeout=6.0,
+                    )
+                    if overview:
+                        context[f"ticker_{ticker}"] = overview
+                except:
+                    pass
+                await asyncio.sleep(0.5)
+        
+        return context
+    
+    # ... rest of existing _gather_data for other categories ...
+```
+
+### STEP 3: Update Claude's system prompt for conversational mode
+
+**Add this to the system prompt:**
+```
+## CONVERSATIONAL MODE
+
+When the user asks a general question, opinion, or discussion topic (not a scan request), respond conversationally like a knowledgeable trading partner. You don't need to run a full data pipeline for every question.
+
+For conversational queries:
+- Use display_type "chat" with a "message" field
+- Answer from your expertise as a master trader
+- If you have data context (fear & greed, specific ticker data), reference it naturally
+- If you DON'T have specific data, still give your best informed opinion and be transparent about what you're basing it on
+- Don't say "I don't have data on that" and refuse to answer. Give your opinion based on what you know, and flag if you'd want to verify something with fresh data.
+- Keep the same direct, opinionated trader personality
+- You can suggest the user run a specific scan if you think it would help: "Try running the Sector Rotation scan to see where the money is flowing right now"
+
+Examples of good conversational responses:
+- User: "What do you think about holding NVDA through earnings?"
+  → Give your actual opinion on NVDA's setup, valuation, risk, and whether the risk/reward of holding through earnings makes sense. Use any ticker data provided. Be direct.
+
+- User: "Is the market topping?"
+  → Give your read on market conditions using fear & greed, recent price action knowledge, and macro context. Be specific about what signals you're watching.
+
+- User: "Explain the bull case for uranium"
+  → Lay out the thesis clearly — supply deficit, reactor restarts, utility contracts, policy tailwinds. You know this. No scan needed.
+
+- User: "Should I take profits on my tech positions?"  
+  → Discuss current tech sector conditions, valuation concerns, macro headwinds/tailwinds, and give a framework for the decision. Don't just say "it depends."
+STEP 4: Make sure the response parser handles plain chat responses
+The response parser should gracefully handle when Claude returns a simple chat response:
+pythondef _parse_response(self, response):
+    text = response.content[0].text.strip()
+    
+    # Try JSON parse first
+    try:
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        parsed = json.loads(text)
+        return parsed
+    except json.JSONDecodeError:
+        pass
+    
+    # Try to find JSON inside the text
+    try:
+        import re
+        match = re.search(r'\{[\s\S]*\}', text)
+        if match:
+            candidate = match.group(0)
+            parsed = json.loads(candidate)
+            if "display_type" in parsed:
+                return parsed
+    except:
+        pass
+    
+    # No valid JSON — this is a conversational response
+    # Wrap it as a chat message
+    return {
+        "display_type": "chat",
+        "message": text,
+    }
+STEP 5: For queries that mention 1-2 specific tickers, do a quick enrichment
+If someone types "What do you think about CRDO?" or "Analyze SMCI", pull data for just that ticker quickly — don't run the whole market scan pipeline:
+python# In _gather_data, add a "single_ticker" detection:
+if category == "chat" or category == "analysis":
+    # Check if user is asking about 1-2 specific tickers
+    import re
+    tickers = re.findall(r'\$?([A-Z]{2,5})\b', query)
+    tickers = [t for t in tickers if t not in common_words]
+    
+    if 1 <= len(tickers) <= 2:
+        # Quick single-ticker deep dive
+        data = {}
+        for ticker in tickers:
+            ticker_data = {"ticker": ticker}
+            
+            # StockAnalysis overview
+            try:
+                overview = await asyncio.wait_for(
+                    self.data.stockanalysis.get_overview(ticker),
+                    timeout=6.0,
+                )
+                if overview:
+                    ticker_data.update(overview)
+            except:
+                pass
+            
+            # StockTwits sentiment
+            try:
+                sentiment = await asyncio.wait_for(
+                    self.data.stocktwits.get_sentiment(ticker),
+                    timeout=5.0,
+                )
+                if sentiment:
+                    ticker_data["social_sentiment"] = sentiment
+            except:
+                pass
+            
+            # FMP news for this ticker
+            try:
+                if self.data.fmp:
+                    news = await asyncio.wait_for(
+                        self.data.fmp.get_stock_news(ticker, limit=5),
+                        timeout=5.0,
+                    )
+                    if news:
+                        ticker_data["recent_news"] = news
+            except:
+                pass
+            
+            data[ticker] = ticker_data
+        
+        return data
+This means "Analyze SMCI" takes 5-10 seconds (3 quick API calls) instead of 2-3 minutes (full market scan with 30+ calls).
+Re-deploy after all changes.

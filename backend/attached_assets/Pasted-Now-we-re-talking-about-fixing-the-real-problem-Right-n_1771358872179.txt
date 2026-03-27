@@ -1,0 +1,294 @@
+Now we’re talking about fixing the real problem.
+
+Right now your system is keyword-routed.
+You want it to be intent-routed.
+
+That’s a massive difference.
+
+You don’t want:
+
+“If query contains ‘crypto’ → crypto flow.”
+
+You want:
+
+“Understand what the user is asking at a portfolio-manager level, then dynamically decide what to pull.”
+
+That requires:
+
+Removing rigid keyword routing.
+
+Giving OpenAI a formal orchestration contract.
+
+Forcing it to explicitly declare:
+
+Intent
+
+Asset classes
+
+Required data modules
+
+Required reasoning layers
+
+Then executing those modules.
+
+Then handing structured output to Claude for final synthesis.
+
+You are building a real multi-agent system now.
+
+Below is exactly what to give Replit.
+
+🔒 REPLIT INSTRUCTION — CONVERT TO INTENT-DRIVEN ORCHESTRATION
+
+You are upgrading the agent routing logic from keyword-based classification to intent-based orchestration.
+
+You must NOT:
+
+Change Claude reasoning prompt text
+
+Change Grok/XAI logic
+
+Refactor data providers
+
+Change frontend contracts
+
+Modify schemas returned to frontend
+
+Break existing workflows
+
+Remove current API integrations
+
+Change token limits
+
+Change temperatures
+
+You may:
+
+Replace keyword-based classification with OpenAI intent orchestration
+
+Add a structured orchestration schema
+
+Route flows dynamically based on intent
+
+Add a new orchestration function
+
+OBJECTIVE
+
+When the user submits a prompt:
+
+OpenAI (GPT-4o or GPT-5) must:
+
+Parse user intent.
+
+Determine:
+
+Asset classes required (equity, crypto, commodities, macro).
+
+Whether sentiment analysis is required.
+
+Whether macro regime check is required.
+
+Whether FA/TA validation is required.
+
+Select which predefined internal data modules to execute.
+
+Return a structured orchestration plan.
+
+The system must then:
+
+Execute selected modules.
+Aggregate data.
+Pass structured dataset into Claude Sonnet.
+Claude performs final institutional-grade reasoning and response generation.
+
+STEP 1 — REMOVE KEYWORD ROUTING
+
+Delete or bypass logic that does:
+
+if "crypto" in query:
+    category = "crypto"
+
+
+Replace with:
+
+orchestration_plan = openai_orchestrate(query)
+
+
+No keyword shortcuts.
+
+STEP 2 — OPENAI ORCHESTRATION SCHEMA
+
+OpenAI must output strictly:
+
+{
+  "intent": "cross_asset_trending | deep_dive | sector_rotation | macro_outlook | single_asset_analysis | portfolio_construction | event_driven",
+  "asset_classes": ["equities", "crypto", "commodities", "macro"],
+  "modules": {
+    "x_sentiment": true/false,
+    "stocktwits_sentiment": true/false,
+    "technical_scan": true/false,
+    "fundamental_validation": true/false,
+    "macro_context": true/false,
+    "liquidity_filter": true/false
+  },
+  "risk_framework": "risk_on | risk_off | neutral",
+  "response_style": "institutional_brief | full_thesis | ranked_list | tactical_trade",
+  "priority_depth": "light | medium | deep"
+}
+
+
+OpenAI must not produce narrative text.
+Only structured JSON.
+
+STEP 3 — EXECUTION LAYER
+
+Based on orchestration_plan:
+
+If "x_sentiment": true
+→ Call Grok/XAI module.
+
+If "stocktwits_sentiment": true
+→ Call StockTwits module.
+
+If "technical_scan": true
+→ Call:
+
+wide_scan_and_rank (equities)
+
+crypto scanner
+
+commodities dashboard
+
+If "fundamental_validation": true
+→ Pull from:
+
+FMP
+
+Finnhub
+
+StockAnalysis
+
+AlphaVantage
+
+FRED (if macro)
+
+If "macro_context": true
+→ Pull macro dataset.
+
+If "liquidity_filter": true
+→ Apply market cap and volume filters.
+
+No module should run unless explicitly requested by the plan.
+
+STEP 4 — STRUCTURED DATA PACKAGE TO CLAUDE
+
+Before calling Claude:
+
+Build a structured dataset:
+
+{
+  "macro_context": {...},
+  "equity_candidates": [...],
+  "crypto_candidates": [...],
+  "commodity_candidates": [...],
+  "sentiment_summary": {...},
+  "technical_summary": {...},
+  "fundamental_summary": {...}
+}
+
+
+Claude receives:
+
+Original user query
+
+Structured dataset
+
+Existing SYSTEM_PROMPT
+
+No routing instructions
+
+Claude does final synthesis only.
+
+Claude must not fetch data.
+Claude must not decide what modules to run.
+Claude must not classify intent.
+
+Claude is reasoning + writing only.
+
+STEP 5 — PRIORITY OVERRIDES
+
+If user prompt contains:
+
+“across all markets”
+
+“cross asset”
+
+“stocks, crypto, commodities”
+
+“global”
+
+Force asset_classes = all available classes.
+
+If user prompt contains:
+
+“highest conviction”
+
+“institutional”
+
+“serious”
+
+“not hype”
+
+Automatically enable:
+
+liquidity_filter = true
+
+fundamental_validation = true
+
+macro_context = true
+
+STEP 6 — FAILURE SAFETY
+
+If OpenAI fails to produce valid JSON:
+Fallback to:
+
+cross_asset_trending
+
+All modules true
+
+institutional_brief response style
+
+No keyword routing fallback.
+
+RESULTING FLOW
+
+User Prompt
+→ OpenAI (Intent + Plan)
+→ Data Modules Execute
+→ Structured Dataset
+→ Claude Sonnet (Final Institutional Thesis)
+→ Frontend
+
+Grok/XAI is first-layer sentiment.
+Claude is final reasoning layer.
+OpenAI is control brain.
+
+Why This Fixes Your Problem
+
+Right now:
+Your routing is lexical.
+Crypto dominates because it’s loud.
+
+After this:
+Routing becomes semantic.
+Modules activate only when needed.
+Cross-asset intent is enforced.
+Institutional filters are enforced.
+Claude synthesizes instead of guessing.
+
+Important
+
+Do NOT try to let Claude orchestrate.
+Claude must not control tool routing.
+Claude must only reason over structured data.
+
+Control brain and reasoning brain must stay separate.

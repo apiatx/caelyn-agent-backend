@@ -1,0 +1,241 @@
+## Two Fixes: "Trending Now" Large Cap Spam + "Best Investments" Empty Results
+
+### CRITICAL NON-NEGOTIABLES
+- Do NOT change any response schemas or frontend contracts
+- Do NOT change display_type formats
+- Do NOT break any existing preset routing
+
+---
+
+### Fix 1: "Trending Now" Returns Too Many Boring Large Caps
+
+#### Problem
+The Grok cross-asset prompt asks for "1-3 large_caps with market cap >= $100B" but these end up being boring mega-caps like AAPL, MSFT, AMZN that are always "trending" by volume alone. The user wants the Trending Now scan to surface genuinely interesting movers — not just the biggest companies.
+
+#### Fix 1A: Tighten the Grok cross-asset prompt in `xai_sentiment_provider.py`
+
+Find the cross_asset prompt (the section starting `if mode == "cross_asset":`, around line 276). Replace the equities bucket instructions:
+
+OLD:
+Equities buckets and counts:
+
+large_caps: 1-3 tickers with market cap >= $100B
+mid_caps: 2-5 tickers with market cap $15B-$100B
+small_micro_caps: 2-5 tickers with market cap $50M-$15B
+
+
+NEW:
+Equities buckets and counts:
+
+large_caps: 0-2 tickers with market cap >= $100B — ONLY include a large cap if it has a SPECIFIC catalyst driving unusual social activity RIGHT NOW (earnings surprise, major news, regulatory event, technical breakout to new highs). Do NOT include a large cap just because it gets mentioned a lot — AAPL, MSFT, NVDA are always discussed. Include them ONLY if something NEW and material is happening today.
+mid_caps: 3-6 tickers with market cap $15B-$100B — This is your sweet spot. Mid-caps with momentum and catalysts are where the best trending signals live.
+small_micro_caps: 3-6 tickers with market cap $50M-$15B — High-conviction small caps with real catalysts, not pump-and-dump noise. Flag any that look like coordinated pumps.
+
+
+Also, in the same prompt, after the line `Also return: sector_focus (3-6)...`, add:
+IMPORTANT BIAS: Favor tickers where social velocity is ACCELERATING (new catalysts, breaking news, fresh momentum) over tickers that are ALWAYS discussed (mega-caps with no new catalyst). The user wants to discover what's NEWLY hot, not what's always popular. If you can only find 1 genuine large-cap catalyst, return only 1 large cap. Zero large caps is acceptable if nothing meaningful is happening in mega-cap land.
+
+#### Fix 1B: Reduce large-cap coverage quota in `cross_asset_ranker.py`
+
+Find `COVERAGE_QUOTAS` (around line 39):
+
+OLD:
+```python
+COVERAGE_QUOTAS = {
+    "equities_large": 1,
+    "equities_mid": 2,
+    "equities_small": 2,
+    "crypto": 2,
+    "commodities": 2,
+}
+```
+
+NEW:
+```python
+COVERAGE_QUOTAS = {
+    "equities_large": 0,
+    "equities_mid": 3,
+    "equities_small": 2,
+    "crypto": 2,
+    "commodities": 2,
+}
+```
+
+This means large caps are no longer GUARANTEED a slot — they have to earn it on score alone, like everything else.
+
+---
+
+### Fix 2: "Best Investments" Returns Empty / "No trade signals"
+
+#### Problem
+The "Best Investments" preset routes to `investment_ideas` → category `investments` → `wide_scan_and_rank("investments")`. The Finviz filter is:
+sh_avgvol_o300,fa_salesqoq_o10,fa_epsqoq_o10,ta_sma200_pa,sh_price_o10
+
+This filter requires BOTH sales growth >10% QoQ AND EPS growth >10% QoQ AND price above SMA200 AND avg volume >300K AND price >$10. This is too restrictive — in many market conditions, very few stocks pass all these filters simultaneously, resulting in an empty scan.
+
+Also, the `investment_ideas` profile has `x_sentiment: False` and `social_sentiment: False`, meaning it completely ignores social signal. For a "Best Investments" scan, the user wants: strong growth + strong fundamentals + positive social sentiment + good TA entries + right sector exposure (AI/tech revolution bottleneck plays).
+
+#### Fix 2A: Loosen the Finviz filters and add fallback screens in `market_data_service.py`
+
+Find `CATEGORY_FILTERS` and replace the `investments` entry:
+
+OLD:
+```python
+        "investments": {
+            "filters": "sh_avgvol_o300,fa_salesqoq_o10,fa_epsqoq_o10,ta_sma200_pa,sh_price_o10",
+            "limit": 40,
+            "enrich_top": 12,
+        },
+```
+
+NEW:
+```python
+        "investments": {
+            "filters": "sh_avgvol_o300,fa_salesqoq_o10,ta_sma50_pa,sh_price_o5",
+            "limit": 50,
+            "enrich_top": 15,
+            "fallback_filters": [
+                "sh_avgvol_o200,fa_salesqoq_o5,ta_sma200_pa,sh_price_o5",
+                "sh_avgvol_o200,fa_epsqoq_o10,ta_sma50_pa,sh_price_o3",
+            ],
+        },
+```
+
+Changes: removed the double growth requirement (sales AND eps QoQ), relaxed to SMA50 instead of SMA200 (catches stocks in earlier uptrends), lowered price floor to $5, increased limit to 50. Added fallback filters for when the primary is too tight.
+
+#### Fix 2B: Add fallback logic to `wide_scan_and_rank` in `market_data_service.py`
+
+In `wide_scan_and_rank()`, after the primary Finviz screen (around line 862-868), add fallback logic:
+
+Find this section:
+```python
+        if isinstance(screener_results, Exception):
+            print(f"[Wide Scan] Screener failed: {screener_results}")
+            screener_results = []
+```
+
+Replace with:
+```python
+        if isinstance(screener_results, Exception):
+            print(f"[Wide Scan] Screener failed: {screener_results}")
+            screener_results = []
+        
+        # Fallback: if primary screen returns too few results, try fallback filters
+        if len(screener_results) < 5 and cat_config.get("fallback_filters"):
+            for fallback_filter in cat_config["fallback_filters"]:
+                print(f"[Wide Scan] Primary returned only {len(screener_results)} results, trying fallback: {fallback_filter}")
+                try:
+                    fallback_results = await self.finviz._custom_screen(
+                        f"v=111&f={fallback_filter}&ft=4&o=-change"
+                    )
+                    if isinstance(fallback_results, list) and fallback_results:
+                        # Merge without duplicates
+                        existing_tickers = {item.get("ticker", "").upper() for item in screener_results if isinstance(item, dict)}
+                        for item in fallback_results:
+                            if isinstance(item, dict) and item.get("ticker", "").upper() not in existing_tickers:
+                                screener_results.append(item)
+                                existing_tickers.add(item.get("ticker", "").upper())
+                        print(f"[Wide Scan] Fallback added {len(fallback_results)} results, total now {len(screener_results)}")
+                        if len(screener_results) >= 15:
+                            break
+                except Exception as e:
+                    print(f"[Wide Scan] Fallback screen failed: {e}")
+```
+
+#### Fix 2C: Enable social sentiment for investments preset in `claude_agent.py`
+
+Find the `investment_ideas` INTENT_PROFILE (around line 996-1012) and update the modules:
+
+OLD:
+```python
+        "investment_ideas": {
+            "intent": "investment_ideas",
+            "asset_classes": ["equities"],
+            "modules": {
+                "x_sentiment": False,
+                "social_sentiment": False,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": True,
+                "liquidity_filter": True,
+                "earnings_data": True,
+                "ticker_research": False,
+            },
+            "risk_framework": "conservative",
+            "response_style": "deep_thesis",
+            "priority_depth": "deep",
+        },
+```
+
+NEW:
+```python
+        "investment_ideas": {
+            "intent": "investment_ideas",
+            "asset_classes": ["equities"],
+            "modules": {
+                "x_sentiment": True,
+                "x_social_scan": False,
+                "social_sentiment": True,
+                "technical_scan": True,
+                "fundamental_validation": True,
+                "macro_context": True,
+                "liquidity_filter": True,
+                "earnings_data": True,
+                "ticker_research": False,
+            },
+            "risk_framework": "conservative",
+            "response_style": "deep_thesis",
+            "priority_depth": "deep",
+        },
+```
+
+Changes: enabled `x_sentiment: True` and `social_sentiment: True` so that the overlay in `_execute_orchestration_plan` will add social context. Also explicitly set `x_social_scan: False` since we don't need a full Grok trending scan for investments.
+
+#### Fix 2D: Add investment-specific guidance to the scoring engine
+
+In `scoring_engine.py`, find the `score_for_investments` function (or the investments scoring logic). The scoring currently doesn't weight revenue growth heavily enough. Find where investments are scored and ensure these weights:
+
+- Revenue growth YoY > 20% gets a strong bonus (+15 points)
+- Revenue growth YoY > 40% gets an extra bonus (+10 more)
+- Positive EPS surprise last quarter gets +10
+- Analyst consensus "buy" or "strong buy" gets +10
+- Sector in ["technology", "semiconductors", "software", "ai", "cloud"] gets +5
+
+If a `score_for_investments` function exists, make sure it has this weighting logic. If it doesn't have these specific weights, add them.
+
+#### Fix 2E: Update the PRESET_BUDGETS in `market_data_service.py`
+
+Find `PRESET_BUDGETS` (around line 48) and add/update the investments entry:
+```python
+    "investments": {"max_points": 60, "max_seconds": 14, "allow_deep_dive": True},
+```
+
+This gives the investments scan more budget (was 55 points / 12 seconds). It needs more room because it now pulls social sentiment + deeper fundamentals.
+
+---
+
+### Testing Checklist
+
+1. **"Trending Now"** — Click it. Verify:
+   - Large caps are 0-2 max, and only ones with genuine catalysts today
+   - Mid-caps and small-caps dominate the list (8-12 tickers)
+   - Output still renders in cross-asset trending format
+
+2. **"Best Investments"** — Click it. Verify:
+   - Returns actual investment recommendations, NOT empty / "no signals"
+   - Each recommendation has fundamental data (revenue growth, PE, etc.)
+   - Results include companies with strong growth profiles
+   - Check logs for `[Wide Scan] investments:` showing candidates found > 0
+   - If primary screen has few results, check for `[Wide Scan] Primary returned only X results, trying fallback` in logs
+
+3. **"Best Trades"** — Verify still works, unchanged
+4. **"Daily Briefing"** — Verify still works, unchanged
+5. **All 6 screener presets** — Verify still work, unchanged
+6. **Run `python -m pytest`** — All tests must pass
+
+### Success Criteria
+- "Trending Now" surfaces interesting mid/small cap movers, not just AAPL/MSFT/NVDA
+- "Best Investments" ALWAYS returns results — never empty
+- Results include growth leaders with strong fundamentals and positive sentiment
+- All other presets still work correctly
+- All tests pass

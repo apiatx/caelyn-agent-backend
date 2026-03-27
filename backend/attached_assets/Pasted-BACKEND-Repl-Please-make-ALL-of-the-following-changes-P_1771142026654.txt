@@ -1,0 +1,284 @@
+BACKEND Repl — Please make ALL of the following changes:
+PART 1: Add Global Market Cap Filtering to the Scoring Engine
+In data/scoring_engine.py, add this function near the top of the file, after the imports:
+python# ── Global Market Cap Configuration ──
+# Default ceiling: $150B. No stock above this shows up in any scan
+# except when explicitly overridden (e.g. blue chip scanner).
+DEFAULT_MARKET_CAP_CEILING = 150e9  # $150 billion
+
+# Category-specific caps (override the default)
+CATEGORY_MARKET_CAP_CAPS = {
+    "small_cap_spec": 2e9,       # $2B max
+    "squeeze": 10e9,              # $10B max (squeezes don't happen in mega caps)
+    "social_momentum": 50e9,      # $50B max (meme plays are mid/small)
+    "volume_spikes": 150e9,       # Default
+    "market_scan": 150e9,         # Default
+    "trades": 150e9,              # Default
+    "investments": 150e9,         # Default
+    "fundamentals_scan": 150e9,   # Default
+    "asymmetric": 50e9,           # $50B max (asymmetric = smaller names)
+    "bearish": 150e9,             # Default (can short anything)
+    "blue_chip": None,            # No cap — explicitly for large caps
+}
+
+# Category-specific floors (minimum market cap)
+CATEGORY_MARKET_CAP_FLOORS = {
+    "small_cap_spec": 50e6,      # $50M min (filter out untradeable penny stocks)
+    "squeeze": 50e6,
+    "social_momentum": 30e6,
+    "volume_spikes": 50e6,
+    "market_scan": 100e6,        # $100M min
+    "trades": 100e6,
+    "investments": 100e6,
+    "fundamentals_scan": 100e6,
+    "asymmetric": 50e6,
+    "bearish": 100e6,
+    "blue_chip": 50e9,           # $50B min for blue chips
+}
+
+
+def get_market_cap(ticker_data: dict) -> float | None:
+    """Extract market cap from any available data source."""
+    # Try details first (Polygon)
+    details = ticker_data.get("details", {})
+    if isinstance(details, dict):
+        mc = details.get("market_cap")
+        if mc is not None:
+            try:
+                return float(mc)
+            except (TypeError, ValueError):
+                pass
+
+    # Try overview (StockAnalysis)
+    overview = ticker_data.get("overview", {})
+    if isinstance(overview, dict):
+        mc = overview.get("market_cap")
+        if mc is not None:
+            try:
+                return float(mc)
+            except (TypeError, ValueError):
+                pass
+
+    # Try snapshot (sometimes has it)
+    snapshot = ticker_data.get("snapshot", {})
+    if isinstance(snapshot, dict):
+        mc = snapshot.get("market_cap")
+        if mc is not None:
+            try:
+                return float(mc)
+            except (TypeError, ValueError):
+                pass
+
+    return None
+
+
+def passes_market_cap_filter(ticker_data: dict, category: str) -> bool:
+    """
+    Check if a ticker passes the market cap filter for this category.
+    Returns True if it passes, False if it should be excluded.
+    """
+    mc = get_market_cap(ticker_data)
+
+    # If we can't determine market cap, let it through
+    # (Claude can filter later, better to include than miss)
+    if mc is None:
+        return True
+
+    # Get ceiling for this category
+    ceiling = CATEGORY_MARKET_CAP_CAPS.get(category, DEFAULT_MARKET_CAP_CEILING)
+    floor = CATEGORY_MARKET_CAP_FLOORS.get(category, 0)
+
+    # No ceiling means no limit (blue chip mode)
+    if ceiling is not None and mc > ceiling:
+        return False
+
+    if floor and mc < floor:
+        return False
+
+    return True
+
+
+def apply_market_cap_score_adjustment(base_score: float, ticker_data: dict, category: str) -> float:
+    """
+    Apply market cap-based score adjustments.
+    Smaller caps get bonuses in most categories because they have
+    more upside potential and less analyst coverage (more mispricing).
+    """
+    mc = get_market_cap(ticker_data)
+    if mc is None:
+        return base_score
+
+    if category in ["blue_chip"]:
+        # Blue chips: no adjustment
+        return base_score
+
+    if category in ["small_cap_spec"]:
+        # Already handled by score_for_small_cap
+        return base_score
+
+    # For all other categories: slight bonus for smaller caps
+    if mc < 500e6:        # Under $500M
+        return base_score * 1.15  # 15% bonus
+    elif mc < 2e9:         # $500M - $2B
+        return base_score * 1.10  # 10% bonus
+    elif mc < 10e9:        # $2B - $10B
+        return base_score * 1.05  # 5% bonus
+    elif mc < 50e9:        # $10B - $50B
+        return base_score * 1.0   # No adjustment
+    elif mc < 150e9:       # $50B - $150B
+        return base_score * 0.90  # 10% penalty
+    else:                   # >$150B (shouldn't reach here due to filter)
+        return base_score * 0.70  # 30% penalty
+
+    return base_score
+PART 2: Update rank_candidates to Use Market Cap Filtering
+In data/scoring_engine.py, replace the entire rank_candidates function with:
+pythondef rank_candidates(candidates: dict, category: str, top_n: int = 12) -> list:
+    """
+    Takes a dict of {ticker: raw_data}, filters by market cap,
+    scores each ticker for the given category, applies market cap
+    adjustments, and returns the top N ranked by adjusted score.
+
+    Returns list of (ticker, score, raw_data) tuples, sorted descending.
+    """
+    scoring_fn = SCORING_FUNCTIONS.get(category, score_for_trades)
+
+    scored = []
+    filtered_out = 0
+
+    for ticker, data in candidates.items():
+        if not isinstance(data, dict):
+            continue
+
+        # Market cap filter — hard cutoff
+        if not passes_market_cap_filter(data, category):
+            filtered_out += 1
+            continue
+
+        try:
+            base_score = scoring_fn(data)
+            # Apply market cap adjustment (smaller caps get slight bonus)
+            adjusted_score = apply_market_cap_score_adjustment(base_score, data, category)
+            scored.append((ticker, round(adjusted_score, 1), data))
+        except Exception as e:
+            print(f"Scoring error for {ticker}: {e}")
+            continue
+
+    # Sort by score descending
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    if filtered_out > 0:
+        print(f"[Scoring] Filtered out {filtered_out} tickers by market cap for category '{category}'")
+
+    return scored[:top_n]
+PART 3: Enhance Social Sentiment Collection Across All Categories
+In data/market_data_service.py, find the wide_scan_and_rank method. Find where needs_social is defined. Replace that line with:
+python        # Social sentiment is valuable for ALL scan types — always fetch it
+        # It's lightweight (one StockTwits API call per ticker) and adds
+        # sentiment data that improves scoring across every category
+        needs_social = True
+PART 4: Add Social Sentiment Weighting to Investment and Fundamentals Scoring
+In data/scoring_engine.py, find the score_for_investments function. Before the return statement at the end, add this block:
+python    # --- Social Sentiment Bonus (5 pts max, bonus on top of 100) ---
+    # Not a core factor for investments, but strong bullish sentiment
+    # combined with good fundamentals = confirmation signal
+    sentiment = ticker_data.get("sentiment", {}) or ticker_data.get("stocktwits", {})
+    if isinstance(sentiment, dict):
+        bull_pct = sentiment.get("bull_pct") or sentiment.get("bullish_pct")
+        if bull_pct is not None:
+            try:
+                bull = float(bull_pct)
+                if bull >= 70:
+                    score += 5
+                elif bull >= 55:
+                    score += 3
+            except (TypeError, ValueError):
+                pass
+In data/scoring_engine.py, find the score_for_fundamentals function. Before the return statement at the end, add the same block:
+python    # --- Social Sentiment Bonus (5 pts max) ---
+    sentiment = ticker_data.get("sentiment", {}) or ticker_data.get("stocktwits", {})
+    if isinstance(sentiment, dict):
+        bull_pct = sentiment.get("bull_pct") or sentiment.get("bullish_pct")
+        if bull_pct is not None:
+            try:
+                bull = float(bull_pct)
+                if bull >= 70:
+                    score += 5
+                elif bull >= 55:
+                    score += 3
+            except (TypeError, ValueError):
+                pass
+In data/scoring_engine.py, find the score_for_squeeze function. In the Social Buzz section, add volume-weighted social scoring. Replace the existing social section with:
+python    # --- Social Buzz (15 pts max) ---
+    sentiment = ticker_data.get("sentiment", {}) or ticker_data.get("stocktwits", {})
+    if isinstance(sentiment, dict):
+        bull_pct = sentiment.get("bull_pct") or sentiment.get("bullish_pct")
+        watchers = sentiment.get("watchers") or sentiment.get("watcher_count")
+
+        if bull_pct is not None:
+            try:
+                bull = float(bull_pct)
+                if bull >= 80:
+                    score += 10
+                elif bull >= 65:
+                    score += 7
+                elif bull >= 50:
+                    score += 4
+            except (TypeError, ValueError):
+                pass
+
+        # Watcher count indicates buzz level
+        if watchers is not None:
+            try:
+                w = int(watchers)
+                if w >= 10000:
+                    score += 5   # Very high attention
+                elif w >= 5000:
+                    score += 3
+                elif w >= 1000:
+                    score += 1
+            except (TypeError, ValueError):
+                pass
+```
+
+## PART 5: Tell Claude About the Market Cap Filtering
+
+**In `agent/prompts.py`, add this section to the SYSTEM_PROMPT, right after the QUANTITATIVE PRE-SCORING section:**
+```
+## MARKET CAP FILTERING
+
+A hard market cap ceiling is applied BEFORE you receive data:
+- Default ceiling: $150B — no stock above $150B appears in any scan
+- Small Cap Spec: $2B ceiling, $50M floor
+- Short Squeeze: $10B ceiling (squeezes don't happen in mega caps)
+- Social Momentum: $50B ceiling
+- Asymmetric Only: $50B ceiling
+- The only exception would be a "blue chip" query where the user explicitly asks for large caps
+
+Smaller caps also receive a scoring bonus:
+- Under $500M: +15% score bonus (more mispricing, more upside)
+- $500M-$2B: +10% bonus
+- $2B-$10B: +5% bonus
+- $10B-$50B: no adjustment
+- $50B-$150B: -10% penalty
+
+This reflects the user's philosophy: 84% of 350%+ returning stocks were under $2B market cap. Power Law returns come from smaller, under-covered names.
+
+If the user asks for "blue chip" stocks, large cap stocks, or mega cap names specifically, acknowledge that the normal $150B filter does not apply and analyze accordingly. For ALL other queries, respect the ceiling.
+```
+
+## PART 6: Update System Prompt — Social Data Sources
+
+**In `agent/prompts.py`, find the data sources section. Update the social sentiment description to:**
+```
+- StockTwits: Real-time bull/bear sentiment percentages, watcher count (attention level), trending tickers (what retail traders are focused on). This is effectively the financial Twitter — same audience, same momentum signals. Bull % above 70 = strong bullish consensus. Below 40 = bearish.
+- Finnhub Social Sentiment: Composite social mention tracking across Reddit, Twitter, and StockTwits. Tracks mention velocity and sentiment trends.
+- Alpha Vantage News Sentiment: NLP-analyzed sentiment scores on financial news headlines. Positive/negative/neutral scoring with relevance weighting.
+
+SOCIAL SENTIMENT INTERPRETATION:
+- StockTwits bull% >75% + volume surge = strong confirmation signal
+- StockTwits bull% >75% + NO volume = hype without conviction (caution)
+- Rapidly increasing watcher count = attention accelerating (early signal)
+- High watcher count + declining bull% = sentiment turning (distribution)
+- Social buzz WITHOUT price/volume confirmation = noise, not signal
+- Always cross-reference social with volume. Social alone is unreliable.

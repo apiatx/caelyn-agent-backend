@@ -1,0 +1,391 @@
+Please add chat history persistence so users can see and click into their past conversations from the last 3 days. Conversations older than 3 days get auto-deleted.
+STEP 1: Create a chat history storage system
+Create a new file data/chat_history.py:
+python"""
+Simple file-based chat history storage.
+Stores conversations as JSON files on disk.
+Auto-deletes conversations older than 3 days.
+Zero external dependencies, zero storage costs.
+"""
+import json
+import os
+import time
+import uuid
+from datetime import datetime, timedelta
+from pathlib import Path
+
+HISTORY_DIR = Path("data/chat_history_store")
+MAX_AGE_DAYS = 3
+
+
+def _ensure_dir():
+    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _cleanup_old():
+    """Delete conversations older than MAX_AGE_DAYS."""
+    _ensure_dir()
+    cutoff = time.time() - (MAX_AGE_DAYS * 86400)
+    deleted = 0
+    for f in HISTORY_DIR.glob("*.json"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                deleted += 1
+        except Exception:
+            pass
+    if deleted:
+        print(f"[CHAT_HISTORY] Cleaned up {deleted} old conversations")
+
+
+def create_conversation(first_query: str) -> dict:
+    """Create a new conversation and return its metadata."""
+    _ensure_dir()
+    _cleanup_old()  # Clean up on every create
+    
+    conv_id = str(uuid.uuid4())[:12]
+    now = datetime.now()
+    
+    # Generate a title from the first query (first 60 chars)
+    title = first_query.strip()[:60]
+    if len(first_query.strip()) > 60:
+        title += "..."
+    
+    conversation = {
+        "id": conv_id,
+        "title": title,
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        "messages": [],
+    }
+    
+    filepath = HISTORY_DIR / f"{conv_id}.json"
+    with open(filepath, "w") as f:
+        json.dump(conversation, f)
+    
+    return conversation
+
+
+def save_messages(conv_id: str, messages: list):
+    """Save/update messages for a conversation."""
+    _ensure_dir()
+    filepath = HISTORY_DIR / f"{conv_id}.json"
+    
+    if not filepath.exists():
+        return False
+    
+    try:
+        with open(filepath, "r") as f:
+            conversation = json.load(f)
+        
+        conversation["messages"] = messages
+        conversation["updated_at"] = datetime.now().isoformat()
+        
+        # Update title from first user message if still default
+        if messages and messages[0].get("role") == "user":
+            title = messages[0]["content"].strip()[:60]
+            if len(messages[0]["content"].strip()) > 60:
+                title += "..."
+            conversation["title"] = title
+        
+        with open(filepath, "w") as f:
+            json.dump(conversation, f)
+        
+        return True
+    except Exception as e:
+        print(f"[CHAT_HISTORY] Error saving: {e}")
+        return False
+
+
+def get_conversation(conv_id: str) -> dict:
+    """Load a full conversation by ID."""
+    _ensure_dir()
+    filepath = HISTORY_DIR / f"{conv_id}.json"
+    
+    if not filepath.exists():
+        return None
+    
+    try:
+        with open(filepath, "r") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def list_conversations() -> list:
+    """List all conversations (metadata only, no messages) sorted by most recent."""
+    _ensure_dir()
+    _cleanup_old()
+    
+    conversations = []
+    for f in HISTORY_DIR.glob("*.json"):
+        try:
+            with open(f, "r") as fh:
+                conv = json.load(fh)
+            conversations.append({
+                "id": conv["id"],
+                "title": conv["title"],
+                "created_at": conv["created_at"],
+                "updated_at": conv["updated_at"],
+                "message_count": len(conv.get("messages", [])),
+            })
+        except Exception:
+            pass
+    
+    # Sort by updated_at descending (most recent first)
+    conversations.sort(key=lambda x: x["updated_at"], reverse=True)
+    return conversations
+
+
+def delete_conversation(conv_id: str) -> bool:
+    """Delete a specific conversation."""
+    filepath = HISTORY_DIR / f"{conv_id}.json"
+    if filepath.exists():
+        filepath.unlink()
+        return True
+    return False
+STEP 2: Add API routes for chat history
+In main.py, add these routes:
+pythonfrom data.chat_history import (
+    create_conversation, save_messages, get_conversation,
+    list_conversations, delete_conversation,
+)
+
+# List all recent conversations (sidebar data)
+@app.get("/api/conversations")
+async def get_conversations():
+    return {"conversations": list_conversations()}
+
+# Get a specific conversation with full messages
+@app.get("/api/conversations/{conv_id}")
+async def get_conversation_detail(conv_id: str):
+    conv = get_conversation(conv_id)
+    if not conv:
+        return {"error": "Conversation not found"}, 404
+    return conv
+
+# Create a new conversation
+@app.post("/api/conversations")
+async def create_new_conversation(request: dict):
+    first_query = request.get("first_query", "New conversation")
+    conv = create_conversation(first_query)
+    return conv
+
+# Save messages to a conversation
+@app.put("/api/conversations/{conv_id}")
+async def update_conversation(conv_id: str, request: dict):
+    messages = request.get("messages", [])
+    success = save_messages(conv_id, messages)
+    return {"success": success}
+
+# Delete a conversation
+@app.delete("/api/conversations/{conv_id}")
+async def delete_conv(conv_id: str):
+    success = delete_conversation(conv_id)
+    return {"success": success}
+STEP 3: Update QueryRequest to include conversation_id
+pythonclass QueryRequest(BaseModel):
+    query: str
+    conversation_history: Optional[List[Message]] = []
+    conversation_id: Optional[str] = None
+STEP 4: Auto-save after each agent response
+In the /api/query route, after getting the agent's response, save the updated conversation:
+python@app.post("/api/query")
+async def query_agent(request: QueryRequest):
+    try:
+        result = await asyncio.wait_for(
+            agent.process_query(
+                query=request.query,
+                conversation_history=request.conversation_history or [],
+            ),
+            timeout=90.0,
+        )
+        
+        # Auto-save conversation if conv_id provided
+        if request.conversation_id:
+            updated_messages = [
+                m.dict() if hasattr(m, 'dict') else m 
+                for m in (request.conversation_history or [])
+            ]
+            # Add current exchange
+            updated_messages.append({"role": "user", "content": request.query})
+            updated_messages.append({"role": "assistant", "content": json.dumps(result)})
+            save_messages(request.conversation_id, updated_messages)
+        
+        return result
+    except asyncio.TimeoutError:
+        return {"display_type": "chat", "message": "Request timed out. Please try again."}
+    except Exception as e:
+        return {"display_type": "chat", "message": f"Error: {str(e)}"}
+```
+
+**Re-deploy backend.**
+
+---
+
+Now give this to your **frontend Replit Agent:**
+
+---
+
+**Please add a chat history sidebar to the agent page. Users should see their past conversations from the last 3 days and be able to click into any of them to resume or review.**
+
+### Layout Change
+
+**The agent page should now have two sections:**
+
+1. **Left sidebar (260px wide on desktop)** — shows conversation history list
+2. **Main area (rest of the width)** — the existing chat interface (buttons, messages, input)
+
+**On mobile (<768px):** The sidebar becomes a slide-out panel triggered by a history icon button in the header.
+
+### Sidebar: Conversation History
+
+**The sidebar shows:**
+```
+[+ New Chat]                    ← button at top, starts fresh conversation
+
+Today
+  🔥 Best trades today scan...   ← clickable, shows title from first message  
+  📊 Macro overview with Fed...   12:34 PM
+  
+Yesterday  
+  🪙 Crypto scanner funding...    3:15 PM
+  💎 Best investments long...     9:22 AM
+
+Feb 13
+  🔄 Sector rotation stage...     4:45 PM
+
+Group conversations by day (Today, Yesterday, or date)
+Show the conversation title (first 50-60 chars of the first user message)
+Show time of last update
+Show message count as a subtle badge
+Active/selected conversation is highlighted
+Hovering a conversation shows a small trash icon to delete it
+
+State Management
+tsxconst [conversations, setConversations] = useState([]);
+const [activeConvId, setActiveConvId] = useState(null);
+const [messages, setMessages] = useState([]);
+Fetching Conversations
+On page load, fetch the conversation list:
+tsxuseEffect(() => {
+  fetch("/api/conversations")
+    .then(r => r.json())
+    .then(data => setConversations(data.conversations || []));
+}, []);
+Refresh the list after every new conversation is created or a message is sent.
+Creating Conversations
+When the user clicks a prompt button OR sends their first typed message:
+tsxconst startNewConversation = async (query: string) => {
+  // Create conversation on backend
+  const res = await fetch("/api/conversations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ first_query: query }),
+  });
+  const conv = await res.json();
+  
+  setActiveConvId(conv.id);
+  setMessages([]);  // Clear messages for fresh start
+  
+  // Now send the actual query with the new conv_id
+  sendMessage(query, conv.id);
+  
+  // Refresh sidebar
+  refreshConversations();
+};
+Sending Messages (Updated)
+Include conversation_id in every request so the backend auto-saves:
+tsxconst sendMessage = async (query: string, convId?: string) => {
+  const currentConvId = convId || activeConvId;
+  
+  const newUserMsg = { role: "user", content: query };
+  const updatedHistory = [...messages, newUserMsg];
+  setMessages(updatedHistory);
+  setIsLoading(true);
+
+  const response = await fetch("/api/query", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query,
+      conversation_history: updatedHistory,
+      conversation_id: currentConvId,
+    }),
+  });
+
+  const data = await response.json();
+  const assistantMsg = { role: "assistant", content: JSON.stringify(data), parsed: data };
+  setMessages(prev => [...prev, assistantMsg]);
+  setIsLoading(false);
+  
+  refreshConversations();  // Update sidebar with latest title/time
+};
+Loading a Past Conversation
+When the user clicks a conversation in the sidebar:
+tsxconst loadConversation = async (convId: string) => {
+  const res = await fetch(`/api/conversations/${convId}`);
+  const conv = await res.json();
+  
+  setActiveConvId(convId);
+  
+  // Parse messages — assistant messages need their content parsed back to JSON for rendering
+  const parsedMessages = (conv.messages || []).map(msg => {
+    if (msg.role === "assistant") {
+      try {
+        return { ...msg, parsed: JSON.parse(msg.content) };
+      } catch {
+        return { ...msg, parsed: { display_type: "chat", message: msg.content } };
+      }
+    }
+    return msg;
+  });
+  
+  setMessages(parsedMessages);
+};
+Deleting a Conversation
+When the user clicks the trash icon:
+tsxconst deleteConversation = async (convId: string) => {
+  await fetch(`/api/conversations/${convId}`, { method: "DELETE" });
+  
+  // If deleting the active conversation, reset to new chat
+  if (convId === activeConvId) {
+    setActiveConvId(null);
+    setMessages([]);
+  }
+  
+  refreshConversations();
+};
+New Chat Button
+Clicking "+ New Chat" resets everything:
+tsxconst newChat = () => {
+  setActiveConvId(null);
+  setMessages([]);
+  // Show prompt buttons in full again
+};
+Prompt Button Behavior
+When a prompt button is clicked, ALWAYS start a new conversation:
+tsxconst onPromptClick = (promptText: string) => {
+  startNewConversation(promptText);
+};
+When the user types in the input and there's no active conversation yet, create one first, then send.
+Sidebar Styling
+
+Background: slightly darker than the main area (e.g., rgba(0,0,0,0.3))
+Border-right: 1px solid rgba(255,255,255,0.06)
+Conversation items: padding: 12px 16px, hover background rgba(255,255,255,0.04)
+Active conversation: left border accent in purple, slightly brighter background
+Title text: font-size: 13px, color: #ccc, truncated with ellipsis
+Time text: font-size: 11px, color: #666
+The "+ New Chat" button should be prominent at the top with the purple accent color
+Trash icon: only visible on hover, color: #666 changing to red on hover
+
+Mobile Sidebar
+On mobile (<768px):
+
+Hide the sidebar by default
+Add a history icon (clock or list icon) in the top header bar
+Clicking it slides the sidebar in from the left as a full-height overlay (same as the hamburger nav pattern)
+Tapping a conversation loads it and auto-closes the sidebar
+
+Re-deploy after all changes.

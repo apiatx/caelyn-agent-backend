@@ -1,0 +1,428 @@
+Please make ALL of the following changes. Do not delete or modify any existing code unless I specifically say "replace."
+STEP 0: Get Your FMP API Key
+
+Go to https://site.financialmodelingprep.com/register
+Create a free account
+After signing in, go to your Dashboard — your API key will be shown
+Copy the API key
+
+STEP 1: Add the API Key as a Secret
+In your backend Repl, go to the Secrets panel (lock icon) and add:
+
+Key: FMP_API_KEY
+Value: (paste your FMP API key)
+
+STEP 2: Update config.py
+In config.py, add this line after the existing lines:
+pythonFMP_API_KEY = os.getenv("FMP_API_KEY")
+STEP 3: Create the FMP Provider
+Create a new file data/fmp_provider.py with this content:
+pythonimport httpx
+
+class FMPProvider:
+    """
+    Financial Modeling Prep API provider.
+    Free tier: 250 calls/day, end-of-day data.
+    Covers: DXY, oil, gold, commodities, sector ETFs, economic calendar,
+    forex, indices, and financial statements.
+    """
+
+    BASE_URL = "https://financialmodelingprep.com/api/v3"
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    async def _get(self, endpoint: str, params: dict = None) -> dict | list:
+        """Make a GET request to FMP API."""
+        if params is None:
+            params = {}
+        params["apikey"] = self.api_key
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{self.BASE_URL}/{endpoint}",
+                    params=params,
+                    timeout=15,
+                )
+            if resp.status_code != 200:
+                print(f"FMP error {resp.status_code}: {endpoint}")
+                return []
+            return resp.json()
+        except Exception as e:
+            print(f"FMP request failed ({endpoint}): {e}")
+            return []
+
+    # ── Market Quotes ──────────────────────────────
+
+    async def get_forex_quotes(self) -> list:
+        """Get real-time forex quotes including DXY."""
+        return await self._get("quotes/forex")
+
+    async def get_dxy(self) -> dict:
+        """Get US Dollar Index (DXY) quote."""
+        data = await self._get("quote/DX-Y.NYB")
+        if data and len(data) > 0:
+            d = data[0]
+            return {
+                "symbol": "DXY",
+                "price": d.get("price"),
+                "change": d.get("change"),
+                "change_pct": d.get("changesPercentage"),
+                "day_high": d.get("dayHigh"),
+                "day_low": d.get("dayLow"),
+                "year_high": d.get("yearHigh"),
+                "year_low": d.get("yearLow"),
+                "prev_close": d.get("previousClose"),
+            }
+        return {"symbol": "DXY", "error": "No data"}
+
+    async def get_commodity_quotes(self) -> list:
+        """Get all commodity quotes (oil, gold, silver, etc.)."""
+        return await self._get("quotes/commodity")
+
+    async def get_key_commodities(self) -> dict:
+        """Get prices for key commodities: oil, gold, silver, natural gas."""
+        symbols = "CLUSD,GCUSD,SIUSD,NGUSD,HGUSD"
+        data = await self._get(f"quote/{symbols}")
+        result = {}
+        name_map = {
+            "CLUSD": "Crude Oil (WTI)",
+            "GCUSD": "Gold",
+            "SIUSD": "Silver",
+            "NGUSD": "Natural Gas",
+            "HGUSD": "Copper",
+        }
+        for item in (data or []):
+            symbol = item.get("symbol", "")
+            result[symbol] = {
+                "name": name_map.get(symbol, symbol),
+                "price": item.get("price"),
+                "change": item.get("change"),
+                "change_pct": item.get("changesPercentage"),
+                "day_high": item.get("dayHigh"),
+                "day_low": item.get("dayLow"),
+            }
+        return result
+
+    # ── Sector & ETF Performance ──────────────────
+
+    async def get_sector_performance(self) -> list:
+        """Get real-time sector performance (S&P 500 sectors)."""
+        return await self._get("sectors-performance")
+
+    async def get_sector_performance_historical(self) -> list:
+        """Get historical sector performance."""
+        return await self._get("historical-sectors-performance")
+
+    async def get_etf_quotes(self, symbols: list) -> dict:
+        """Get quotes for a list of ETF symbols."""
+        symbols_str = ",".join(symbols)
+        data = await self._get(f"quote/{symbols_str}")
+        result = {}
+        for item in (data or []):
+            sym = item.get("symbol", "")
+            result[sym] = {
+                "price": item.get("price"),
+                "change": item.get("change"),
+                "change_pct": item.get("changesPercentage"),
+                "volume": item.get("volume"),
+                "avg_volume": item.get("avgVolume"),
+                "day_high": item.get("dayHigh"),
+                "day_low": item.get("dayLow"),
+                "year_high": item.get("yearHigh"),
+                "year_low": item.get("yearLow"),
+                "pe": item.get("pe"),
+                "market_cap": item.get("marketCap"),
+            }
+        return result
+
+    async def get_sector_etf_snapshot(self) -> dict:
+        """
+        Get a complete sector rotation snapshot using sector ETFs.
+        Returns performance data for all major sector ETFs.
+        """
+        sector_etfs = [
+            "XLK", "XLV", "XLF", "XLE", "XLI", "XLP", "XLY",
+            "XLB", "XLU", "XLRE", "XLC",
+            "SPY", "QQQ", "IWM", "DIA",
+            "SMH", "URA", "HACK", "XBI", "GDX", "XOP",
+        ]
+        quotes = await self.get_etf_quotes(sector_etfs)
+        sector_perf = await self.get_sector_performance()
+
+        return {
+            "etf_quotes": quotes,
+            "sector_performance": sector_perf,
+        }
+
+    # ── Economic Calendar ──────────────────────────
+
+    async def get_economic_calendar(self, from_date: str = None, to_date: str = None) -> list:
+        """
+        Get upcoming economic events (CPI, PPI, FOMC, NFP, etc.).
+        Dates in YYYY-MM-DD format.
+        """
+        params = {}
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        return await self._get("economic_calendar", params)
+
+    async def get_upcoming_economic_events(self) -> list:
+        """Get economic events for the next 7 days."""
+        from datetime import datetime, timedelta
+        today = datetime.now().strftime("%Y-%m-%d")
+        next_week = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+        events = await self.get_economic_calendar(today, next_week)
+
+        # Filter to important US events
+        important_keywords = [
+            "CPI", "PPI", "FOMC", "Fed", "Interest Rate", "NFP",
+            "Non-Farm", "GDP", "Unemployment", "Retail Sales",
+            "Consumer Confidence", "PMI", "ISM", "PCE",
+            "Jobless Claims", "Housing", "Durable Goods",
+        ]
+        important_events = []
+        other_events = []
+
+        for event in (events or []):
+            country = event.get("country", "")
+            event_name = event.get("event", "")
+            if country == "US":
+                is_important = any(
+                    kw.lower() in event_name.lower()
+                    for kw in important_keywords
+                )
+                formatted = {
+                    "date": event.get("date"),
+                    "event": event_name,
+                    "country": country,
+                    "actual": event.get("actual"),
+                    "previous": event.get("previous"),
+                    "estimate": event.get("estimate"),
+                    "impact": event.get("impact", ""),
+                    "is_high_impact": is_important,
+                }
+                if is_important:
+                    important_events.append(formatted)
+                else:
+                    other_events.append(formatted)
+
+        return {
+            "high_impact_events": important_events[:15],
+            "other_us_events": other_events[:10],
+        }
+
+    # ── Index & Market Data ──────────────────────
+
+    async def get_market_indices(self) -> dict:
+        """Get major market index quotes."""
+        symbols = "^GSPC,^DJI,^IXIC,^RUT,^VIX"
+        data = await self._get(f"quote/{symbols}")
+        result = {}
+        name_map = {
+            "^GSPC": "S&P 500",
+            "^DJI": "Dow Jones",
+            "^IXIC": "Nasdaq",
+            "^RUT": "Russell 2000",
+            "^VIX": "VIX",
+        }
+        for item in (data or []):
+            sym = item.get("symbol", "")
+            result[sym] = {
+                "name": name_map.get(sym, sym),
+                "price": item.get("price"),
+                "change": item.get("change"),
+                "change_pct": item.get("changesPercentage"),
+            }
+        return result
+
+    # ── Treasury & Bonds ──────────────────────────
+
+    async def get_treasury_rates(self) -> dict:
+        """Get current Treasury yields."""
+        data = await self._get("treasury")
+        if data and len(data) > 0:
+            latest = data[0]
+            return {
+                "date": latest.get("date"),
+                "month_1": latest.get("month1"),
+                "month_3": latest.get("month3"),
+                "month_6": latest.get("month6"),
+                "year_1": latest.get("year1"),
+                "year_2": latest.get("year2"),
+                "year_5": latest.get("year5"),
+                "year_10": latest.get("year10"),
+                "year_20": latest.get("year20"),
+                "year_30": latest.get("year30"),
+            }
+        return {}
+
+    # ── Combined Macro Dashboard ──────────────────
+
+    async def get_macro_market_data(self) -> dict:
+        """
+        Full macro market data snapshot:
+        DXY, oil, gold, treasuries, indices, sector performance.
+        Uses ~8 API calls.
+        """
+        import asyncio
+        dxy, commodities, indices, treasuries, sector_perf, econ_events = (
+            await asyncio.gather(
+                self.get_dxy(),
+                self.get_key_commodities(),
+                self.get_market_indices(),
+                self.get_treasury_rates(),
+                self.get_sector_performance(),
+                self.get_upcoming_economic_events(),
+                return_exceptions=True,
+            )
+        )
+
+        return {
+            "dxy": dxy if not isinstance(dxy, Exception) else {},
+            "commodities": commodities if not isinstance(commodities, Exception) else {},
+            "indices": indices if not isinstance(indices, Exception) else {},
+            "treasury_yields": treasuries if not isinstance(treasuries, Exception) else {},
+            "sector_performance": sector_perf if not isinstance(sector_perf, Exception) else [],
+            "economic_calendar": econ_events if not isinstance(econ_events, Exception) else {},
+        }
+STEP 4: Wire FMP into Market Data Service
+In data/market_data_service.py, add the import at the top of the file (with other imports):
+pythonfrom data.fmp_provider import FMPProvider
+In data/market_data_service.py, find the __init__ method of the class. Add this line at the end of __init__ (after the other provider initializations):
+python        self.fmp = FMPProvider(fmp_key) if fmp_key else None
+Also update the __init__ method signature to accept fmp_key. Find the existing signature and replace it with:
+python    def __init__(self, polygon_key: str, finnhub_key: str = None, alphavantage_key: str = None, fred_key: str = None, fmp_key: str = None):
+If the init signature is different, just make sure fmp_key: str = None is added as a parameter, and self.fmp = FMPProvider(fmp_key) if fmp_key else None is added inside the method body.
+STEP 5: Update main.py to Pass FMP Key
+In main.py, add the import:
+pythonfrom config import FMP_API_KEY
+(If config imports are already on one line, just add FMP_API_KEY to the existing import.)
+Find where MarketDataService is initialized and add fmp_key=FMP_API_KEY. For example, if it currently says:
+pythondata_service = MarketDataService(polygon_key=POLYGON_API_KEY)
+Replace it with:
+pythondata_service = MarketDataService(polygon_key=POLYGON_API_KEY, fmp_key=FMP_API_KEY)
+(If the constructor already has more arguments like finnhub_key, alphavantage_key, fred_key, just add fmp_key=FMP_API_KEY at the end.)
+STEP 6: Enhance Existing Methods with FMP Data
+In data/market_data_service.py, replace the existing get_macro_overview method (or add it if it doesn't exist) with this:
+python    async def get_macro_overview(self) -> dict:
+        """
+        Comprehensive macro dashboard combining FRED + FMP + Fear & Greed.
+        FRED: Fed rate, CPI, Core PCE, GDP, unemployment, yield curve, VIX, jobless claims
+        FMP: DXY, oil, gold, treasuries, sector performance, economic calendar, indices
+        Fear & Greed: CNN sentiment index
+        """
+        import asyncio
+
+        # FRED macro data
+        fred_macro = self.fred.get_full_macro_dashboard()
+
+        # FMP macro market data + Fear & Greed (in parallel)
+        fmp_data = {}
+        fear_greed = {}
+
+        if self.fmp:
+            fmp_result, fg_result = await asyncio.gather(
+                self.fmp.get_macro_market_data(),
+                self.fear_greed.get_fear_greed_index(),
+                return_exceptions=True,
+            )
+            fmp_data = fmp_result if not isinstance(fmp_result, Exception) else {}
+            fear_greed = fg_result if not isinstance(fg_result, Exception) else {}
+        else:
+            fear_greed_result = await self.fear_greed.get_fear_greed_index()
+            fear_greed = fear_greed_result if not isinstance(fear_greed_result, Exception) else {}
+
+        return {
+            "fred_economic_data": fred_macro,
+            "market_data": fmp_data,
+            "fear_greed_index": fear_greed,
+        }
+Replace the existing get_sector_rotation method with this enhanced version:
+python    async def get_sector_rotation(self) -> dict:
+        """
+        Enhanced sector rotation using FMP sector ETF data + FRED macro.
+        """
+        import asyncio
+
+        fmp_sectors = {}
+        if self.fmp:
+            fmp_sectors = await self.fmp.get_sector_etf_snapshot()
+
+        # Also get Polygon technicals for key ETFs
+        key_etfs = ["XLK", "XLV", "XLF", "XLE", "XLI", "XLP", "XLY", "XLB", "XLU", "SPY", "QQQ", "IWM", "SMH", "URA"]
+
+        async def get_etf_technicals(ticker):
+            return {
+                "technicals": self.polygon.get_technicals(ticker),
+                "snapshot": self.polygon.get_snapshot(ticker),
+            }
+
+        tech_results = await asyncio.gather(
+            *[asyncio.to_thread(lambda t=t: get_etf_technicals(t)) for t in key_etfs],
+            return_exceptions=True,
+        )
+        etf_technicals = {}
+        for ticker, result in zip(key_etfs, tech_results):
+            if not isinstance(result, Exception):
+                etf_technicals[ticker] = result
+
+        macro = self.fred.get_quick_macro()
+        fear_greed = await self.fear_greed.get_fear_greed_index()
+
+        # Get DXY and commodities for context
+        dxy = {}
+        commodities = {}
+        if self.fmp:
+            dxy_result, comm_result = await asyncio.gather(
+                self.fmp.get_dxy(),
+                self.fmp.get_key_commodities(),
+                return_exceptions=True,
+            )
+            dxy = dxy_result if not isinstance(dxy_result, Exception) else {}
+            commodities = comm_result if not isinstance(comm_result, Exception) else {}
+
+        return {
+            "fmp_sector_data": fmp_sectors,
+            "etf_technicals": etf_technicals,
+            "macro_data": macro,
+            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+            "dxy": dxy,
+            "commodities": commodities,
+        }
+```
+
+## STEP 7: Update System Prompt with FMP Data Context
+
+**In `agent/prompts.py`, find the section in SYSTEM_PROMPT that lists data sources (the `## DATA SOURCES AVAILABLE TO YOU` section). Add this entry after the CNN Fear & Greed Index entry:**
+```
+- Financial Modeling Prep (FMP): DXY (US Dollar Index), crude oil / gold / silver / natural gas / copper prices, sector ETF performance, economic calendar (CPI, PPI, FOMC, NFP dates with estimates and actuals), Treasury yield curve, major market indices (S&P 500, Nasdaq, Dow, Russell 2000, VIX)
+```
+
+**Also find the `### 7. MACRO CONTEXT` section in the system prompt and add these lines after the existing macro instructions:**
+```
+**DXY (US Dollar Index):**
+- Strengthening dollar = headwind for commodities, emerging markets, and multinational earnings
+- Weakening dollar = tailwind for commodities, gold, emerging markets
+- DXY above 105 = strong dollar environment. Below 100 = weak dollar.
+- Rapid DXY moves (>1% in a day) can trigger cross-asset volatility
+
+**Commodities:**
+- Oil (WTI): Above $80 = inflationary pressure, below $60 = deflationary signal
+- Gold: Rising gold + rising stocks = inflation hedge demand. Rising gold + falling stocks = fear/safe haven.
+- Copper: "Dr. Copper" — rising copper = economic expansion signal, falling copper = contraction signal
+
+**Economic Calendar:**
+- Always mention upcoming high-impact events (CPI, FOMC, NFP) when they're within 3 days
+- Pre-CPI: volatility typically increases, positioning gets defensive
+- FOMC day: expect increased volatility, wait for the dust to settle before entering new positions
+- NFP Friday: labor data can shift Fed expectations — strong = hawkish, weak = dovish
+
+**Treasury Yields:**
+- 2-year yield = market's expectation of near-term Fed policy
+- 10-year yield = longer-term growth/inflation expectations
+- 2Y > 10Y = inverted yield curve = recession signal (check FRED yield curve spread)
+- Rapidly rising yields = pressure on growth stocks and high-duration assets
+Re-publish/deploy the backend.

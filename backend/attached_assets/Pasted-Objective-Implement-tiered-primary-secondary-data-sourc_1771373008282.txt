@@ -1,0 +1,157 @@
+Objective:
+Implement tiered primary/secondary data sources, scan budgeting, and local TA computation.
+
+Do NOT modify:
+
+Claude prompts
+
+OpenAI orchestration
+
+Preset routing
+
+Frontend contracts
+
+API request schema
+
+Response structure
+
+Only modify data-fetching layer.
+
+STEP 1 — Define Tiered Data Sources
+
+Create a central configuration block:
+
+DATA_SOURCES = {
+    "equity_price": {
+        "primary": "finnhub",
+        "secondary": "massive"
+    },
+    "fundamentals": {
+        "primary": "fmp",
+        "secondary": "finnhub"
+    },
+    "crypto": {
+        "primary": "coingecko",
+        "secondary": "cmc"
+    },
+    "macro": {
+        "primary": "fred",
+        "secondary": None
+    }
+}
+
+STEP 2 — Implement Fallback Wrapper
+
+For each data category:
+
+async def fetch_with_fallback(category, fetch_primary, fetch_secondary):
+    try:
+        return await fetch_primary()
+    except Exception:
+        if fetch_secondary:
+            try:
+                return await fetch_secondary()
+            except Exception:
+                return None
+        return None
+
+
+Add 2–3 second timeout per call.
+
+Do NOT retry endlessly.
+
+STEP 3 — Implement Scan Budget
+
+Add global per-request limits:
+
+MAX_TICKERS_DEEP_DIVE = 10
+MAX_EXTERNAL_CALLS = 40
+MAX_DATA_GATHER_SECONDS = 10
+
+
+Before deep dive:
+
+Social scan wide
+
+Filter to top 10 max
+
+Deep dive only those
+
+Abort further expansion if time or call budget exceeded.
+
+Do NOT break existing routing logic.
+
+STEP 4 — Move TA Computation Local
+
+Create utility module:
+
+def compute_rsi(...)
+def compute_macd(...)
+def compute_sma(...)
+def compute_ema(...)
+
+
+Use OHLC data from Finnhub.
+
+Remove dependence on:
+
+Alpha Vantage for indicators
+
+altFINS except for crypto conditional scans
+
+Only call altFINS in:
+
+crypto_scanner preset
+
+breakout-specific presets
+
+STEP 5 — Cache Macro + Sector
+
+Add simple in-memory cache:
+
+Macro indicators: 10 min TTL
+
+Sector ETF performance: 5 min TTL
+
+Fear & Greed: 5 min TTL
+
+Do NOT cache:
+
+Real-time price
+
+Sentiment spikes
+
+STEP 6 — Do NOT Change Frontend
+
+Confirm:
+
+API request format unchanged
+
+Response JSON unchanged
+
+No new required fields
+
+No change to conversation handling
+
+🟢 FRONTEND
+
+No changes required.
+
+Frontend remains:
+Transport layer only.
+
+What This Achieves
+
+No additional APIs needed
+
+No upgrade to Massive needed
+
+No rate exhaustion
+
+Faster responses
+
+Lower API waste
+
+Same reasoning quality
+
+Same Claude pipeline

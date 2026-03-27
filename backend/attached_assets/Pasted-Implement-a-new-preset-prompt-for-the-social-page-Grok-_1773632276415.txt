@@ -1,0 +1,144 @@
+Implement a new preset prompt for the social page Grok-solo agent called:
+
+"Consensus tickers among top X traders"
+
+You only have access to the BACKEND repo.
+
+Important constraints:
+- Do NOT redesign the social page.
+- Do NOT change unrelated preset behavior.
+- Do NOT break existing Grok-social prompt buttons.
+- Keep changes limited to the minimum necessary files.
+- This feature is specifically for the social page / Grok-solo social workflow.
+
+## Feature goal
+Add a new preset workflow that analyzes the last 30 days of posts from a fixed list of X accounts and returns:
+- the tickers they are most collectively bullish on
+- what they increasingly agree on
+- the core thesis for each ticker
+- what is gaining momentum across these traders
+- a final opinion on what the user should consider buying, based on the consensus and strength of conviction
+
+## Accounts to analyze
+Use this exact fixed list of X accounts:
+
+- @StockSavvyShay
+- @HyperTechInvest
+- @crux_capital_
+- @SJCapitalInvest
+- @BlackPantherCap
+- @Kaizen_Investor
+- @Venu_7_
+- @CKCapitalxx
+- @TheTape_TNM
+- @equitydd
+- @Speculator_io
+
+## Required backend behavior
+
+### 1) Add a new preset key / preset route
+Add a new preset intent for the social page, with a human-facing label:
+- "Consensus tickers among top X traders"
+
+Use a stable internal preset key, for example something like:
+- x_trader_consensus
+or another project-consistent key
+
+### 2) Scope the analysis window to the last 30 days
+The backend should analyze posts from the last month for the listed accounts.
+
+### 3) Pull and aggregate posts from only those accounts
+For this preset, the backend should:
+- collect posts from those exact X accounts only
+- within the last 30 days
+- using the existing social/X/Grok data flow already present in the backend where possible
+
+Do not broaden the universe to all accounts.
+
+### 4) Extract consensus bullishness and thesis
+The backend should identify:
+- which tickers are mentioned most often
+- which tickers are being discussed with the strongest bullish conviction
+- which names are gaining momentum across multiple traders
+- what the shared thesis is for each ticker
+- whether the bullishness is increasing / recurring / converging
+
+This should not just be a raw mention count.
+It should synthesize:
+- frequency
+- conviction
+- recency
+- agreement across multiple accounts
+- thesis quality / consistency
+
+### 5) Produce a structured output
+Return a structured response specifically for this preset.
+
+Desired output sections:
+
+- title / header
+- analysis window
+- trader accounts analyzed
+- consensus summary
+- top consensus tickers
+- thesis for each ticker
+- why conviction is building
+- increasing bullishness / momentum notes
+- risks / disagreements if visible
+- final opinion / what to consider buying
+
+### 6) Top ticker output
+For each top ticker, include as much of this as the existing data supports:
+- ticker
+- consensus strength
+- number of traders discussing it bullishly
+- total post frequency or weighted signal count
+- short consensus thesis
+- what is making them more bullish
+- representative supporting reasons/themes
+- confidence / conviction level
+
+### 7) Final opinion
+At the end, provide a clear synthesized opinion:
+- what appears to be the strongest consensus buy ideas
+- what looks early vs crowded
+- what the user should be paying closest attention to
+
+This should be based on the aggregated evidence from those traders, not generic market commentary.
+
+## Important implementation notes
+
+### Use project-grounded logic
+Audit the current social/Grok preset pipeline first and use the real project flow.
+Do not invent a separate fake path if an existing social analysis path already exists.
+
+### Keep the preset isolated
+This new preset should only affect this new social-page button and should not alter existing social prompt buttons.
+
+### Make the result consistent
+The response shape should be stable and renderable regardless of whether the social page is using Grok solo or a compatible social-agent flow.
+
+### Handle sparse data gracefully
+If some accounts have fewer recent posts, do not fail.
+Still produce the best consensus output possible from the available posts.
+
+## Deliverables
+1. Implement the new backend preset.
+2. Show exact files changed.
+3. Explain how the preset is routed.
+4. Explain how the last-30-days account scan works.
+5. Explain how consensus ticker ranking is determined.
+6. Show an example output/response structure for the new preset.
+7. Confirm that only those exact listed accounts are used.
+
+## Acceptance criteria
+The task is done when:
+- a new backend preset exists for "Consensus tickers among top X traders"
+- it analyzes the last 30 days of posts from the exact listed X accounts
+- it returns the top consensus bullish tickers
+- it explains the thesis for each ticker
+- it identifies what these traders are increasingly bullish on and what they agree on most
+- it provides a final synthesized opinion on what looks best to buy
+- existing social presets are not broken
+
+Before coding, audit the current social/Grok preset flow and then implement the smallest safe change to add this new preset.

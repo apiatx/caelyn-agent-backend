@@ -1,0 +1,67 @@
+BACKEND FIX: Rate limit efficiency for portfolio dashboard
+
+The portfolio dashboard is making too many API calls on every refresh. Add caching and reduce redundant calls.
+
+=== FIX 1: Cache portfolio quotes for 60 seconds ===
+
+In the /api/portfolio/quotes endpoint, add response-level caching. If the same set of tickers was requested in the last 60 seconds, return the cached response instead of hitting Yahoo/CoinGecko/FMP again.
+
+At the top of the endpoint, after parsing tickers:
+
+from data.cache import cache
+
+cache_key = f"portfolio:quotes:{','.join(sorted(tickers))}"
+cached_quotes = cache.get(cache_key)
+if cached_quotes is not None:
+    print(f"[PORTFOLIO] Returning cached quotes for {len(tickers)} tickers")
+    return {"quotes": cached_quotes}
+
+At the bottom, before returning:
+
+cache.set(cache_key, quotes, 60)  # Cache for 60 seconds
+
+This means rapid refreshes or page reloads don't hammer the APIs. One fresh call per minute max.
+
+=== FIX 2: Cache FMP profile/sector data for 24 hours ===
+
+The FMP /stable/profile call to get sector data does NOT need to run on every refresh — a stock's sector doesn't change. Cache it for 24 hours.
+
+Where the profile lookup happens for sector data, wrap it with caching:
+
+sector_cache_key = f"sector:{ticker}"
+cached_sector = cache.get(sector_cache_key)
+if cached_sector is not None:
+    quotes[ticker]["sector"] = cached_sector.get("sector", "Other")
+    quotes[ticker]["industry"] = cached_sector.get("industry", "")
+    quotes[ticker]["company_name"] = cached_sector.get("company_name", "")
+else:
+    # ... existing FMP profile fetch ...
+    # After successful fetch, cache it:
+    cache.set(sector_cache_key, {
+        "sector": sector,
+        "industry": industry,
+        "company_name": company_name,
+    }, 86400)  # 24 hours
+
+This reduces FMP profile calls from ~5 per refresh to ~5 per day.
+
+=== FIX 3: Batch CoinGecko calls (confirm this is happening) ===
+
+Verify that ALL crypto tickers are fetched in ONE CoinGecko /simple/price call with comma-separated IDs, NOT one call per ticker. If they're already batched, good. If they're individual calls, combine them into one request:
+
+ids_str = ",".join(all_coingecko_ids)
+resp = await client.get("https://api.coingecko.com/api/v3/simple/price", params={
+    "ids": ids_str,
+    "vs_currencies": "usd",
+    "include_24hr_change": "true",
+    "include_24hr_vol": "true",
+    "include_market_cap": "true",
+})
+
+One call for all crypto, not one per coin.
+
+=== FIX 4: Set frontend auto-refresh to 2 minutes instead of 30-60 seconds ===
+
+This is a FRONTEND change but I'm including it here for context. The portfolio auto-refresh interval should be 2 minutes (120 seconds), not 30 or 60 seconds. Stock prices don't change meaningfully in 30 seconds for a portfolio tracker. The user can always click "Refresh" manually for instant updates.
+
+Find wherever the auto-refresh interval is set in the frontend portfolio component and change it to 120000 milliseconds (2 minutes). If there's a setInterval or setTimeout for refreshing quotes, update the interval value.

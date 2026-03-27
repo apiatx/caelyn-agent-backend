@@ -1,0 +1,174 @@
+Fix sector preset prompt handling in CaelynAI so sector-specific preset buttons return true sector intelligence, not a generic theme scan.
+
+You only have access to the BACKEND repo.
+
+Context:
+- The frontend has sector preset buttons:
+  - Energy
+  - Materials
+  - Aerospace/Defense
+  - Tech
+  - AI/Compute
+  - Quantum
+  - Fintech
+  - Biotech
+  - Real Estate
+- When a user clicks one of these sector preset buttons, the backend should generate a sector-specific response based on the selected sector.
+- Right now, clicking a sector preset (example: AI/Compute) is returning a generic thematic output labeled like "ai_compute" and behaving more like a broad scanner/theme report than a true sector-focused preset result.
+- The current response structure is close to useful, but needs to be constrained and renamed in important ways.
+
+## Main backend goals
+
+### 1) Sector preset buttons must map to true sector-specific analysis
+When a sector preset button is clicked, the backend must:
+- detect the selected sector preset key reliably
+- use a sector-specific query path / prompt template / response builder
+- constrain the response to that sector
+- avoid falling back to generic market-theme or broad watchlist behavior unless explicitly intended
+
+Examples:
+- Energy → energy sector intelligence
+- Materials → materials sector intelligence
+- Aerospace/Defense → aerospace/defense sector intelligence
+- Tech → broad tech sector intelligence
+- AI/Compute → AI/compute/infrastructure sector intelligence
+- Quantum → quantum sector intelligence
+- Fintech → fintech sector intelligence
+- Biotech → biotech sector intelligence
+- Real Estate → real estate / REIT / housing-related sector intelligence
+
+### 2) Sector output should include the relevant sector ETF / benchmark ticker(s)
+When a sector preset is clicked, the response should prominently reference the relevant sector ETF or benchmark(s), not generic macro placeholders only.
+
+Examples:
+- Energy → XLE
+- Materials → XLB
+- Aerospace/Defense → ITA or XAR
+- Tech → XLK
+- Real Estate → XLRE
+- Fintech / AI / Quantum / Biotech may use best-fit ETF(s), index proxies, or curated thematic benchmark tickers where standard SPDR sector ETFs do not exist
+
+Important:
+- The sector response should not default to generic rows like SPY/QQQ/IWM/VIX with N/A everywhere as the primary focus.
+- Macro context can still exist, but the lead benchmark rows should be sector-relevant.
+
+### 3) Keep the overall rich response style, but improve the stock-selection section
+The current response style is directionally good.
+Keep the broader structure, but make these changes:
+
+#### Rename:
+- "Top Moves Today" → "Top Stocks to Watch"
+
+#### Change the stock selection logic:
+Show:
+- 1–3 large caps
+- 1–3 mid caps
+- 1–3 small/micro caps
+
+These names should be selected from the chosen sector only and should represent stocks that currently show some combination of:
+- relative strength
+- current or upcoming catalysts
+- hype / social attention
+- unusual institutional flows
+- insider buying if available
+- news momentum
+- strong fundamentals where relevant
+- strong technical setups where relevant
+
+This should not be random. It should be an intentionally ranked “watch list” for that sector.
+
+### 4) Preserve rich sector intelligence
+When a sector preset is clicked, the response should still include rich intelligence like:
+- sector verdict / bias
+- why the sector matters now
+- what’s moving in the sector
+- top signals from different scanners/sources if available
+- upcoming catalysts
+- portfolio / tactical bias
+
+But the full output must stay tied to that sector.
+
+### 5) Improve preset routing / response typing
+Audit the current preset-button backend logic and identify:
+- how sector preset buttons are mapped
+- why they are producing generic theme output
+- where preset keys are converted into internal scan types or prompt payloads
+- where labels like `ai_compute` are coming from
+
+Fix this so that:
+- sector preset buttons use the correct sector-specific route/template/formatter
+- response metadata is sector-friendly
+- the displayed title/identifier is human-friendly, not raw internal slug text unless intentionally desired
+
+---
+
+## Desired sector response shape
+
+For a sector preset response, the backend should aim to return something like:
+
+- sector key / name
+- timestamp
+- bias / risk posture
+- short sector thesis
+- sector benchmark rows (XLE / XLK / XLRE / etc. depending on sector)
+- what's moving
+- top signal from each scanner
+- top stocks to watch
+  - 1–3 large caps
+  - 1–3 mid caps
+  - 1–3 small/micro caps
+- upcoming catalysts
+- portfolio / tactical bias
+
+Important:
+- Use sector-relevant benchmarks
+- Use sector-relevant tickers
+- Do not overfill with irrelevant broad-market placeholders unless they truly add context
+
+---
+
+## Specific audit/fix requests
+
+1. Audit the current preset button backend flow for sector buttons.
+2. Identify exactly why AI/Compute and other sector presets are returning generic thematic outputs.
+3. Fix the preset routing so each sector maps to the proper sector-specific logic.
+4. Ensure the response title/slug/label shown to frontend is human-friendly for the selected sector.
+5. Rename "Top Moves Today" to "Top Stocks to Watch".
+6. Implement or fix stock-ranking logic so it returns:
+   - 1–3 large cap names
+   - 1–3 mid cap names
+   - 1–3 small/micro cap names
+   within the selected sector.
+7. Ensure selection prioritizes relative strength + catalysts + flows + social/news/fundamental/technical relevance.
+8. Return sector benchmark rows that match the chosen preset.
+9. Preserve the rest of the rich response structure where possible.
+
+---
+
+## Deliverables
+
+1. Implement the backend fix.
+2. Show exact files changed.
+3. Explain why sector presets were previously returning generic theme output.
+4. Explain how sector preset routing now works.
+5. Show the mapping for each sector preset to its benchmark/sector logic.
+6. Show an example JSON/output structure for:
+   - Energy
+   - AI/Compute
+   - Real Estate
+7. Explain how “Top Stocks to Watch” names are selected and bucketed by market cap.
+8. Call out any data limitations (for example, insider buys or institutional flows only if available).
+
+---
+
+## Acceptance criteria
+
+The task is done when:
+- Clicking a sector preset produces a sector-specific response, not a generic theme scan
+- The response prominently references the correct sector ETF/benchmark(s)
+- "Top Moves Today" is renamed to "Top Stocks to Watch"
+- The response shows 1–3 large caps, 1–3 mid caps, and 1–3 small/micro caps from that sector
+- These names are selected based on meaningful current relevance (relative strength, catalysts, hype, flows, news, fundamentals, technicals)
+- The rest of the rich response structure remains useful and sector-specific
+- Human-friendly response metadata is returned for frontend display
+- Limit changes to the minimum necessary files and avoid unrelated refactors or formatting-only edits

@@ -1,0 +1,118 @@
+Three changes, in priority order:
+1. Stop re-fetching what Finviz already gave you
+In run_deterministic_screener, your Finviz discovery results already contain price, change, volume, market_cap fields. But in _enrich_one (line 3832), you immediately call self.finnhub.get_quote(ticker) for every single candidate — even though you already have a price.
+Fix in market_data_service.py, inside _enrich_one:
+python# BEFORE (line 3831-3837): Always calls Finnhub
+try:
+    quote = await asyncio.to_thread(self.finnhub.get_quote, ticker)
+    if quote and quote.get("price"):
+        row["price"] = quote["price"]
+        row["chg_pct"] = quote.get("change_pct")
+except Exception:
+    pass
+
+# AFTER: Use Finviz data first, only call Finnhub if missing
+finviz_price = _parse_num(item.get("price"))
+finviz_chg = _parse_pct(item.get("change"))
+if finviz_price and finviz_price > 0:
+    row["price"] = finviz_price
+    row["chg_pct"] = finviz_chg
+else:
+    try:
+        quote = await asyncio.to_thread(self.finnhub.get_quote, ticker)
+        if quote and quote.get("price"):
+            row["price"] = quote["price"]
+            row["chg_pct"] = quote.get("change_pct")
+    except Exception:
+        pass
+Impact: For a typical screener run with 30 candidates, Finviz will have price data for ~25-28 of them. This cuts Finnhub quote calls from 30 to ~2-5 per screener run. That alone saves ~25 Finnhub calls per preset.
+2. Same fix for Best Trades Phase 1
+In get_best_trades_scan, the ticker_sources dict already stores "finviz": item per ticker. But the enrichment phase doesn't extract the price/change from it before making API calls. Apply the same Finviz-first pattern there.
+3. Global Daily Budget Tracker
+New file: api_budget.py
+python"""
+Global daily API budget tracker.
+Persists call counts per provider per day.
+Logs warnings at 70% and hard-stops at 90% to preserve headroom.
+"""
+import time
+from datetime import datetime
+
+
+class DailyBudgetTracker:
+    DAILY_LIMITS = {
+        "fmp": 250,
+        "alphavantage": 25,
+        "twelvedata": 800,
+        "coingecko": 333,  # 10K/mo ÷ 30
+        "cmc": 333,
+        "finnhub": 3600,   # 60/min × 60min practical ceiling
+    }
+
+    WARN_PCT = 0.70
+    HARD_STOP_PCT = 0.90
+
+    def __init__(self):
+        self._counts: dict[str, int] = {}
+        self._day: str = ""
+        self._reset_if_new_day()
+
+    def _reset_if_new_day(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        if today != self._day:
+            self._day = today
+            self._counts = {k: 0 for k in self.DAILY_LIMITS}
+
+    def spend(self, provider: str, n: int = 1) -> bool:
+        """Record n calls. Returns True if allowed, False if hard-stopped."""
+        self._reset_if_new_day()
+        provider = provider.lower()
+        if provider not in self.DAILY_LIMITS:
+            return True
+
+        limit = self.DAILY_LIMITS[provider]
+        current = self._counts.get(provider, 0)
+
+        if current + n > limit * self.HARD_STOP_PCT:
+            print(f"[BUDGET] HARD STOP: {provider} at {current}/{limit} "
+                  f"({current/limit*100:.0f}%) — refusing {n} calls")
+            return False
+
+        self._counts[provider] = current + n
+
+        if self._counts[provider] > limit * self.WARN_PCT:
+            print(f"[BUDGET] WARNING: {provider} at {self._counts[provider]}/{limit} "
+                  f"({self._counts[provider]/limit*100:.0f}%)")
+
+        return True
+
+    def can_spend(self, provider: str, n: int = 1) -> bool:
+        """Check without spending."""
+        self._reset_if_new_day()
+        provider = provider.lower()
+        if provider not in self.DAILY_LIMITS:
+            return True
+        current = self._counts.get(provider, 0)
+        return (current + n) <= self.DAILY_LIMITS[provider] * self.HARD_STOP_PCT
+
+    def status(self) -> dict:
+        self._reset_if_new_day()
+        return {
+            provider: {
+                "used": self._counts.get(provider, 0),
+                "limit": limit,
+                "pct": round(self._counts.get(provider, 0) / limit * 100, 1),
+            }
+            for provider, limit in self.DAILY_LIMITS.items()
+        }
+
+
+daily_budget = DailyBudgetTracker()
+Then wire daily_budget.spend("finnhub") into get_quote, get_candles, etc. — and expose daily_budget.status() on a /api/health/budget endpoint so you can see where you stand.
+Test Checklist
+
+Run oversold_growing screener — logs should show [SCREENER] using Finviz price for most rows, Finnhub only for misses
+Run all 6 screener presets back-to-back — verify Finnhub usage stays under ~30 calls total (was ~180 before)
+Run Best Trades — verify candle budget stats unchanged (this fix is quote-only)
+Hit /api/health/budget after a full run — confirm daily counts are tracking
+Success: no price: null rows, screener completes 2-3s faster, daily API budget visible

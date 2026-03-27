@@ -1,0 +1,324 @@
+Please make the following changes to my backend project. Do not delete or modify any existing code unless I specifically say "replace."
+No API key needed — this scrapes CNN's publicly available Fear & Greed data.
+1. Create a new file data/fear_greed_provider.py with this code:
+pythonimport httpx
+
+
+class FearGreedProvider:
+    """
+    Fetches the CNN Fear & Greed Index.
+    
+    The index ranges from 0 to 100:
+    - 0-25: Extreme Fear (contrarian buy signal)
+    - 25-45: Fear
+    - 45-55: Neutral
+    - 55-75: Greed
+    - 75-100: Extreme Greed (contrarian sell signal)
+    
+    The index is calculated from 7 market indicators:
+    1. Market Momentum (S&P 500 vs 125-day avg)
+    2. Stock Price Strength (52-week highs vs lows)
+    3. Stock Price Breadth (advancing vs declining volume)
+    4. Put/Call Ratio
+    5. Market Volatility (VIX)
+    6. Safe Haven Demand (stocks vs bonds performance)
+    7. Junk Bond Demand (yield spread)
+    """
+
+    API_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+
+    HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+        "Referer": "https://www.cnn.com/markets/fear-and-greed",
+    }
+
+    async def get_fear_greed_index(self) -> dict:
+        """
+        Get the current Fear & Greed Index value and its components.
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    self.API_URL,
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+
+            if resp.status_code != 200:
+                # Fallback: try the alternate endpoint
+                return await self._fallback_fetch()
+
+            data = resp.json()
+
+            # Extract the main score
+            fear_greed = data.get("fear_and_greed", {})
+            score = fear_greed.get("score")
+            rating = fear_greed.get("rating")
+            timestamp = fear_greed.get("timestamp")
+
+            # Extract historical values
+            previous_close = data.get("fear_and_greed_historical", {}).get(
+                "previousClose", {}
+            )
+            one_week_ago = data.get("fear_and_greed_historical", {}).get(
+                "oneWeekAgo", {}
+            )
+            one_month_ago = data.get("fear_and_greed_historical", {}).get(
+                "oneMonthAgo", {}
+            )
+            one_year_ago = data.get("fear_and_greed_historical", {}).get(
+                "oneYearAgo", {}
+            )
+
+            # Extract individual components
+            components = {}
+            component_keys = [
+                "market_momentum_sp500",
+                "stock_price_strength",
+                "stock_price_breadth",
+                "put_call_options",
+                "market_volatility_vix",
+                "safe_haven_demand",
+                "junk_bond_demand",
+            ]
+            for key in component_keys:
+                comp_data = data.get(key, {})
+                if comp_data:
+                    components[key] = {
+                        "score": comp_data.get("score"),
+                        "rating": comp_data.get("rating"),
+                    }
+
+            result = {
+                "current_score": round(float(score), 1) if score else None,
+                "current_rating": rating,
+                "timestamp": timestamp,
+                "signal": self._interpret_score(score),
+                "historical": {
+                    "previous_close": {
+                        "score": previous_close.get("score"),
+                        "rating": previous_close.get("rating"),
+                    }
+                    if previous_close
+                    else None,
+                    "one_week_ago": {
+                        "score": one_week_ago.get("score"),
+                        "rating": one_week_ago.get("rating"),
+                    }
+                    if one_week_ago
+                    else None,
+                    "one_month_ago": {
+                        "score": one_month_ago.get("score"),
+                        "rating": one_month_ago.get("rating"),
+                    }
+                    if one_month_ago
+                    else None,
+                    "one_year_ago": {
+                        "score": one_year_ago.get("score"),
+                        "rating": one_year_ago.get("rating"),
+                    }
+                    if one_year_ago
+                    else None,
+                },
+                "components": components,
+                "momentum_shift": self._detect_momentum_shift(
+                    score,
+                    previous_close.get("score") if previous_close else None,
+                    one_week_ago.get("score") if one_week_ago else None,
+                ),
+            }
+
+            return result
+        except Exception as e:
+            print(f"Fear & Greed Index error: {e}")
+            return await self._fallback_fetch()
+
+    async def _fallback_fetch(self) -> dict:
+        """
+        Fallback method if the primary API endpoint doesn't work.
+        Tries an alternate CNN endpoint.
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    "https://production.dataviz.cnn.io/index/fearandgreed/current",
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+
+            if resp.status_code != 200:
+                return {
+                    "current_score": None,
+                    "error": "Could not fetch Fear & Greed Index",
+                }
+
+            data = resp.json()
+            score = data.get("fear_and_greed", {}).get("score")
+            rating = data.get("fear_and_greed", {}).get("rating")
+
+            return {
+                "current_score": round(float(score), 1) if score else None,
+                "current_rating": rating,
+                "signal": self._interpret_score(score),
+                "historical": None,
+                "components": None,
+                "momentum_shift": None,
+            }
+        except Exception as e:
+            print(f"Fear & Greed fallback error: {e}")
+            return {
+                "current_score": None,
+                "error": str(e),
+            }
+
+    def _interpret_score(self, score) -> str:
+        """Interpret the Fear & Greed score for trading context."""
+        if score is None:
+            return "no data available"
+        try:
+            score = float(score)
+        except (ValueError, TypeError):
+            return "no data available"
+
+        if score <= 10:
+            return (
+                "EXTREME FEAR — Market is in panic mode. Historically this is "
+                "one of the best times to buy. Warren Buffett: 'Be greedy when "
+                "others are fearful.' Look for oversold quality stocks."
+            )
+        if score <= 25:
+            return (
+                "EXTREME FEAR — Strong contrarian buy signal. Markets are "
+                "deeply pessimistic. Look for high-quality stocks that have "
+                "been unfairly sold off."
+            )
+        if score <= 40:
+            return (
+                "FEAR — Market sentiment is negative. Good conditions for "
+                "accumulating positions in strong stocks at discount prices."
+            )
+        if score <= 55:
+            return (
+                "NEUTRAL — Market is balanced between fear and greed. "
+                "No strong contrarian signal. Trade based on individual "
+                "stock setups rather than broad sentiment."
+            )
+        if score <= 70:
+            return (
+                "GREED — Market is optimistic. Be selective with new "
+                "positions. Consider tightening stop losses on existing "
+                "positions."
+            )
+        if score <= 85:
+            return (
+                "EXTREME GREED — Market is euphoric. High risk of pullback. "
+                "Take profits on winners, avoid chasing momentum, and "
+                "consider hedging with puts or raising cash."
+            )
+        return (
+            "EXTREME GREED — Market is at peak euphoria. Maximum caution. "
+            "Historically this level precedes significant corrections. "
+            "Strongly consider taking profits and raising cash positions."
+        )
+
+    def _detect_momentum_shift(self, current, previous_close, one_week_ago) -> str:
+        """Detect if sentiment is shifting direction."""
+        if current is None:
+            return "no data"
+
+        try:
+            current = float(current)
+        except (ValueError, TypeError):
+            return "no data"
+
+        shifts = []
+
+        if previous_close is not None:
+            try:
+                prev = float(previous_close)
+                daily_change = current - prev
+                if abs(daily_change) > 5:
+                    direction = "up" if daily_change > 0 else "down"
+                    shifts.append(
+                        f"Shifted {direction} {abs(round(daily_change, 1))} points since yesterday"
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        if one_week_ago is not None:
+            try:
+                week = float(one_week_ago)
+                weekly_change = current - week
+                if abs(weekly_change) > 10:
+                    direction = "more greedy" if weekly_change > 0 else "more fearful"
+                    shifts.append(
+                        f"Market has become significantly {direction} over the past week "
+                        f"({round(weekly_change, 1)} point shift)"
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        if not shifts:
+            return "Sentiment relatively stable"
+
+        return ". ".join(shifts)
+2. In data/market_data_service.py, make these changes:
+
+Add this import after the existing imports at the top:
+
+pythonfrom data.fear_greed_provider import FearGreedProvider
+
+In the __init__ method, add this line after the other self. assignments:
+
+python        self.fear_greed = FearGreedProvider()
+
+In the scan_market method, find the line:
+
+python        macro = self.fred.get_quick_macro()
+Add this right AFTER it:
+python        fear_greed = await self.fear_greed.get_fear_greed_index()
+
+Then in the same method's return statement, add this new line alongside the other data:
+
+python            "fear_greed_index": fear_greed,
+So the return block in scan_market should include "fear_greed_index": fear_greed, alongside the existing entries like "macro_economic_data": macro,.
+
+Replace the get_macro_overview method with:
+
+python    async def get_macro_overview(self) -> dict:
+        """
+        Dedicated macro economics dashboard.
+        Used for "what's happening with the economy" type queries.
+        Returns the full macro dashboard from FRED, Alpha Vantage
+        market news sentiment, and Fear & Greed Index.
+        """
+        fred_data = self.fred.get_full_macro_dashboard()
+        market_sentiment = await self.alphavantage.get_market_news_sentiment(
+            "economy_macro"
+        )
+        fear_greed = await self.fear_greed.get_fear_greed_index()
+        return {
+            "macro_indicators": fred_data,
+            "macro_news_sentiment": market_sentiment,
+            "fear_greed_index": fear_greed,
+        }
+```
+
+**3. In `agent/prompts.py`, add these lines after the existing FRED-related instructions in the SYSTEM_PROMPT:**
+```
+- Fear & Greed Index (use CNN's Fear & Greed Index as an overall market sentiment gauge)
+- The index ranges from 0 (extreme fear) to 100 (extreme greed) and is calculated from 7 market indicators
+- ALWAYS mention the current Fear & Greed score when answering broad market questions like "best trades today" or "what's the market outlook"
+- Extreme Fear (0-25) is historically a strong contrarian BUY signal — mention this when recommending trades during fearful markets
+- Extreme Greed (75-100) is historically a WARNING signal — recommend caution, profit-taking, and tighter stops during greedy markets
+- Use the momentum shift data to identify if sentiment is changing direction — a rapid shift from greed to fear (or vice versa) often precedes significant market moves
+- Compare the current score to one week ago and one month ago to identify sentiment trends
+- Use the individual components (VIX, put/call ratio, market breadth, etc.) to add depth to your analysis when they tell different stories
+- Example: "The Fear & Greed Index is at 23 (Extreme Fear), down from 45 last week. This rapid sentiment deterioration, combined with oversold technicals on several quality names, creates a strong buying opportunity."
+- Example: "With the Fear & Greed Index at 82 (Extreme Greed), I'd recommend taking partial profits on winners and avoiding new positions in extended stocks."
+4. Re-publish/deploy the project when done.

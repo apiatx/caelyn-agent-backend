@@ -1,0 +1,241 @@
+Please add three new data sources to the agent: economic calendar, Reddit/WSB sentiment, and enhanced news scanning. These should integrate into the existing pipeline so every scan checks news/sentiment BEFORE recommending tickers.
+SOURCE 1: Economic Calendar (FMP — already have the API key)
+Add this method to data/fmp_provider.py:
+pythonasync def get_economic_calendar(self, days_ahead: int = 7) -> list:
+    """
+    Get upcoming economic events for the next N days.
+    Returns: event name, date, country, previous, consensus, actual, impact level.
+    """
+    from datetime import datetime, timedelta
+    
+    date_from = datetime.now().strftime("%Y-%m-%d")
+    date_to = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+    
+    resp = await self._get(f"/v3/economic_calendar", {
+        "from": date_from,
+        "to": date_to,
+    })
+    
+    if not isinstance(resp, list):
+        return []
+    
+    # Filter to high-impact US events only (keep it focused)
+    high_impact = []
+    important_keywords = [
+        "fed", "fomc", "interest rate", "cpi", "inflation", "ppi",
+        "nonfarm", "payroll", "employment", "unemployment", "jobs",
+        "gdp", "retail sales", "consumer confidence", "pce",
+        "ism", "manufacturing", "housing", "home sales",
+        "trade balance", "treasury", "powell",
+    ]
+    
+    for event in resp:
+        country = (event.get("country") or "").lower()
+        name = (event.get("event") or "").lower()
+        
+        if country != "us":
+            continue
+        
+        # Check if this is a high-impact event
+        is_important = any(kw in name for kw in important_keywords)
+        if is_important:
+            high_impact.append({
+                "event": event.get("event", ""),
+                "date": event.get("date", ""),
+                "previous": event.get("previous"),
+                "consensus": event.get("estimate") or event.get("consensus"),
+                "actual": event.get("actual"),
+                "impact": event.get("impact", ""),
+            })
+    
+    return high_impact[:20]
+SOURCE 2: Reddit / WSB Sentiment (ApeWisdom — free, no key needed)
+Create a new file data/reddit_provider.py:
+python"""
+Reddit/WSB sentiment via ApeWisdom API.
+Free, no API key required.
+Tracks stock mentions and sentiment across:
+- r/wallstreetbets, r/stocks, r/options, r/investing, r/daytrading
+- Also crypto subreddits and 4chan
+"""
+import httpx
+from data.cache import cache
+
+REDDIT_CACHE_TTL = 300  # 5 minutes
+
+
+class RedditSentimentProvider:
+    BASE_URL = "https://apewisdom.io/api/v1.0"
+
+    async def _get(self, endpoint: str) -> dict:
+        cache_key = f"reddit:{endpoint}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{self.BASE_URL}/{endpoint}",
+                    headers={"User-Agent": "TradingAgent/1.0"},
+                )
+            if resp.status_code != 200:
+                print(f"[REDDIT] Error {resp.status_code}: {endpoint}")
+                return {}
+            data = resp.json()
+            cache.set(cache_key, data, REDDIT_CACHE_TTL)
+            return data
+        except Exception as e:
+            print(f"[REDDIT] Request failed ({endpoint}): {e}")
+            return {}
+
+    async def get_wsb_trending(self) -> list:
+        """
+        Top mentioned stocks on r/wallstreetbets.
+        Returns: rank, ticker, name, mentions, upvotes, rank_24h_ago, mentions_24h_ago.
+        """
+        data = await self._get("filter/wallstreetbets")
+        results = data.get("results", [])
+        
+        # Add momentum signal: compare current mentions to 24h ago
+        for r in results:
+            prev = int(r.get("mentions_24h_ago") or 0)
+            curr = int(r.get("mentions") or 0)
+            if prev > 0:
+                r["mention_change_pct"] = round((curr - prev) / prev * 100, 1)
+            else:
+                r["mention_change_pct"] = None
+        
+        return results[:30]
+
+    async def get_all_stocks_trending(self) -> list:
+        """
+        Top mentioned stocks across ALL stock subreddits combined.
+        (WSB + stocks + options + investing + daytrading + SPACs)
+        """
+        data = await self._get("filter/all-stocks")
+        results = data.get("results", [])
+        
+        for r in results:
+            prev = int(r.get("mentions_24h_ago") or 0)
+            curr = int(r.get("mentions") or 0)
+            if prev > 0:
+                r["mention_change_pct"] = round((curr - prev) / prev * 100, 1)
+            else:
+                r["mention_change_pct"] = None
+        
+        return results[:30]
+
+    async def get_crypto_trending(self) -> list:
+        """
+        Top mentioned crypto across all crypto subreddits.
+        """
+        data = await self._get("filter/all-crypto")
+        return data.get("results", [])[:20]
+
+    async def get_ticker_rank(self, ticker: str) -> dict:
+        """
+        Check if a specific ticker is being discussed on Reddit.
+        Search through the trending list.
+        """
+        all_stocks = await self.get_all_stocks_trending()
+        for stock in all_stocks:
+            if stock.get("ticker", "").upper() == ticker.upper():
+                return {
+                    "rank": stock.get("rank"),
+                    "mentions": stock.get("mentions"),
+                    "upvotes": stock.get("upvotes"),
+                    "mention_change_pct": stock.get("mention_change_pct"),
+                    "on_reddit": True,
+                }
+        return {"on_reddit": False}
+
+    async def get_full_reddit_dashboard(self) -> dict:
+        """Pull WSB + all-stocks + crypto trending in parallel."""
+        import asyncio
+        
+        wsb, all_stocks, crypto = await asyncio.gather(
+            self.get_wsb_trending(),
+            self.get_all_stocks_trending(),
+            self.get_crypto_trending(),
+            return_exceptions=True,
+        )
+        
+        return {
+            "wsb_trending": wsb if not isinstance(wsb, Exception) else [],
+            "all_stocks_trending": all_stocks if not isinstance(all_stocks, Exception) else [],
+            "crypto_trending": crypto if not isinstance(crypto, Exception) else [],
+        }
+SOURCE 3: Wire everything into the data service
+In data/market_data_service.py:
+
+Import and initialize the Reddit provider:
+
+pythonfrom data.reddit_provider import RedditSentimentProvider
+
+# In __init__:
+self.reddit = RedditSentimentProvider()
+
+Update get_market_news_context to include economic calendar and Reddit data:
+
+pythonasync def get_market_news_context(self, tickers: list = None) -> dict:
+    import asyncio
+    
+    tasks = {
+        "reddit": self.reddit.get_full_reddit_dashboard(),
+    }
+    
+    if self.fmp:
+        tasks["market_news"] = self.fmp.get_market_news(limit=15)
+        tasks["economic_calendar"] = self.fmp.get_economic_calendar(days_ahead=7)
+    
+    # If specific tickers, get their news
+    if tickers and self.fmp:
+        ticker_str = ",".join(tickers[:10])
+        tasks["ticker_news"] = self.fmp.get_stock_news_batch(ticker_str, limit=30)
+    
+    results = {}
+    for name, task in tasks.items():
+        try:
+            results[name] = await asyncio.wait_for(task, timeout=10.0)
+        except Exception as e:
+            print(f"[NEWS] {name} failed: {e}")
+            results[name] = [] if name != "reddit" else {}
+    
+    return results
+SOURCE 4: Add Reddit data to the cross-platform trending aggregator
+In the get_cross_platform_trending method, add Reddit as a source:
+python# Add alongside the other sources:
+try:
+    reddit_trending = await self.reddit.get_all_stocks_trending()
+    for stock in reddit_trending[:20]:
+        ticker = stock.get("ticker", "").upper()
+        if ticker:
+            all_tickers[ticker]["sources"].append("Reddit")
+            all_tickers[ticker]["reddit_mentions"] = stock.get("mentions")
+            all_tickers[ticker]["reddit_rank"] = stock.get("rank")
+            all_tickers[ticker]["reddit_mention_change"] = stock.get("mention_change_pct")
+except Exception as e:
+    print(f"[TRENDING] Reddit failed: {e}")
+```
+
+### SOURCE 5: Update the system prompt with new data source context
+
+**Add this to the system prompt in `agent/prompts.py`:**
+```
+## ECONOMIC CALENDAR CONTEXT
+You receive upcoming economic events for the next 7 days. Use this to:
+- Flag tickers that will be directly affected by upcoming data releases (e.g., bank stocks before Fed, retail stocks before retail sales)
+- Warn about holding positions through high-impact events (FOMC, CPI, NFP)
+- Identify potential catalysts: if CPI is expected to come in hot, inflation hedges (commodities, TIPS) benefit
+- Note if a major event just happened and the market is still digesting it
+
+## REDDIT / WSB SENTIMENT
+You receive trending stocks from Reddit (r/wallstreetbets, r/stocks, r/options, r/investing, r/daytrading).
+- mention_change_pct shows if buzz is ACCELERATING (>50% = significant surge) or FADING (<-30% = losing attention)
+- WSB trending = speculative retail attention. High mentions + bullish sentiment = potential momentum but also crowding risk
+- If a stock is trending on Reddit AND StockTwits AND Finviz simultaneously, that's maximum retail convergence
+- Reddit mentions surging + price dropping = potential capitulation or controversy (investigate before buying)
+- Reddit mentions surging + price rising = momentum play, but watch for the top
+- A stock NOT on Reddit that has great fundamentals + clean chart = less crowded, potentially better entry
+Re-deploy after all changes.

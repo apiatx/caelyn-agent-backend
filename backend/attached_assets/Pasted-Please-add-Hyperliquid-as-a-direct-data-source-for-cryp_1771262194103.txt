@@ -1,0 +1,388 @@
+Please add Hyperliquid as a direct data source for crypto perpetual/derivatives data. Hyperliquid is the largest on-chain perp DEX and provides real-time funding rates, open interest, volume, and prices with NO API key required. This is free, fast, and more reliable than CoinGecko's derivatives endpoint.
+STEP 1: Create the Hyperliquid provider
+Create a new file data/hyperliquid_provider.py:
+python"""
+Hyperliquid API provider for perpetual futures data.
+Completely free, no API key required.
+Single POST request returns funding rates, open interest, volume,
+and prices for ALL listed perpetuals.
+
+API endpoint: https://api.hyperliquid.xyz/info
+Docs: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals
+"""
+import httpx
+from data.cache import cache
+
+HL_CACHE_TTL = 60  # 1 minute — data is real-time, keep it fresh
+HL_FUNDING_HISTORY_CACHE_TTL = 300  # 5 minutes for historical data
+
+
+class HyperliquidProvider:
+    BASE_URL = "https://api.hyperliquid.xyz/info"
+
+    async def _post(self, payload: dict, cache_key: str = None, ttl: int = HL_CACHE_TTL) -> dict | list:
+        if cache_key:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    self.BASE_URL,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+            if resp.status_code != 200:
+                print(f"[HYPERLIQUID] Error {resp.status_code}: {payload.get('type', 'unknown')}")
+                return []
+            data = resp.json()
+            if cache_key:
+                cache.set(cache_key, data, ttl)
+            return data
+        except Exception as e:
+            print(f"[HYPERLIQUID] Request failed: {e}")
+            return []
+
+    async def get_all_perps(self) -> dict:
+        """
+        Get metadata + live market data for ALL perpetuals in a single call.
+        Returns: universe (coin list with max leverage) + asset contexts
+        (mark price, funding rate, open interest, 24h volume, oracle price, premium).
+        
+        This is the most important endpoint — ONE call gives you everything.
+        """
+        data = await self._post(
+            {"type": "metaAndAssetCtxs"},
+            cache_key="hl:all_perps",
+            ttl=HL_CACHE_TTL,
+        )
+
+        if not data or not isinstance(data, list) or len(data) < 2:
+            return {"universe": [], "assets": []}
+
+        # data[0] has universe metadata, data[1] has live asset contexts
+        universe = data[0].get("universe", []) if isinstance(data[0], dict) else []
+        asset_contexts = data[1] if isinstance(data[1], list) else []
+
+        # Merge universe info with asset contexts
+        assets = []
+        for i, ctx in enumerate(asset_contexts):
+            if i >= len(universe):
+                break
+
+            coin_info = universe[i]
+            coin_name = coin_info.get("name", "")
+            
+            funding_rate = float(ctx.get("funding", "0") or "0")
+            open_interest = float(ctx.get("openInterest", "0") or "0")
+            mark_price = float(ctx.get("markPx", "0") or "0")
+            oracle_price = float(ctx.get("oraclePx", "0") or "0")
+            volume_24h = float(ctx.get("dayNtlVlm", "0") or "0")
+            prev_day_price = float(ctx.get("prevDayPx", "0") or "0")
+            premium = float(ctx.get("premium", "0") or "0")
+
+            # Calculate 24h price change
+            price_change_24h = 0
+            if prev_day_price > 0 and mark_price > 0:
+                price_change_24h = round((mark_price - prev_day_price) / prev_day_price * 100, 2)
+
+            # Calculate OI in USD
+            oi_usd = open_interest * mark_price if mark_price > 0 else 0
+
+            assets.append({
+                "coin": coin_name,
+                "mark_price": round(mark_price, 6),
+                "oracle_price": round(oracle_price, 6),
+                "funding_rate": round(funding_rate, 8),
+                "funding_rate_annualized": round(funding_rate * 8 * 365 * 100, 2),  # Annualized %
+                "open_interest": round(open_interest, 2),
+                "open_interest_usd": round(oi_usd, 0),
+                "volume_24h_usd": round(volume_24h, 0),
+                "price_change_24h_pct": price_change_24h,
+                "premium": round(premium, 6),
+                "max_leverage": coin_info.get("maxLeverage", 0),
+            })
+
+        return {"universe": universe, "assets": assets}
+
+    async def get_funding_analysis(self) -> dict:
+        """
+        Analyze funding rates across ALL perps to find:
+        1. Crowded longs (high positive funding — correction risk)
+        2. Crowded shorts / squeeze candidates (negative funding)
+        3. Funding rate divergences (price moving opposite to positioning)
+        4. Overall market bias
+        """
+        perp_data = await self.get_all_perps()
+        assets = perp_data.get("assets", [])
+
+        if not assets:
+            return {}
+
+        # Filter to assets with meaningful volume (>$100K daily)
+        active_assets = [a for a in assets if a["volume_24h_usd"] > 100000]
+
+        if not active_assets:
+            return {"error": "No active assets found"}
+
+        # Sort by funding rate
+        sorted_by_funding = sorted(active_assets, key=lambda x: x["funding_rate"], reverse=True)
+
+        # Highest funding — crowded longs, correction risk
+        crowded_longs = []
+        for a in sorted_by_funding[:15]:
+            if a["funding_rate"] > 0.0001:  # >0.01% per hour = significant
+                signal = "EXTREME crowded longs — high liquidation risk" if a["funding_rate"] > 0.0003 else "Elevated long bias"
+                crowded_longs.append({
+                    "coin": a["coin"],
+                    "funding_rate": a["funding_rate"],
+                    "funding_annualized": a["funding_rate_annualized"],
+                    "open_interest_usd": a["open_interest_usd"],
+                    "volume_24h_usd": a["volume_24h_usd"],
+                    "price_change_24h": a["price_change_24h_pct"],
+                    "signal": signal,
+                })
+
+        # Most negative funding — crowded shorts, squeeze potential
+        squeeze_candidates = []
+        for a in sorted_by_funding[-15:]:
+            if a["funding_rate"] < -0.0001:
+                signal = "EXTREME short crowding — HIGH squeeze probability" if a["funding_rate"] < -0.0003 else "Short bias — squeeze potential"
+                
+                # Extra signal: negative funding + positive price action = active squeeze
+                if a["price_change_24h_pct"] > 2:
+                    signal = "ACTIVE SQUEEZE — negative funding + price rising"
+                
+                squeeze_candidates.append({
+                    "coin": a["coin"],
+                    "funding_rate": a["funding_rate"],
+                    "funding_annualized": a["funding_rate_annualized"],
+                    "open_interest_usd": a["open_interest_usd"],
+                    "volume_24h_usd": a["volume_24h_usd"],
+                    "price_change_24h": a["price_change_24h_pct"],
+                    "signal": signal,
+                })
+
+        # Reverse so most extreme shorts are first
+        squeeze_candidates.reverse()
+
+        # Funding divergences — price and funding disagree
+        divergences = []
+        for a in active_assets:
+            # Price rising but funding negative = shorts getting squeezed (BULLISH)
+            if a["price_change_24h_pct"] > 3 and a["funding_rate"] < -0.00005:
+                divergences.append({
+                    "coin": a["coin"],
+                    "funding_rate": a["funding_rate"],
+                    "price_change_24h": a["price_change_24h_pct"],
+                    "type": "BULLISH_DIVERGENCE",
+                    "signal": f"Price up {a['price_change_24h_pct']}% but shorts still paying — squeeze fuel remains",
+                })
+            # Price falling but funding very positive = longs getting liquidated (BEARISH)
+            elif a["price_change_24h_pct"] < -3 and a["funding_rate"] > 0.0001:
+                divergences.append({
+                    "coin": a["coin"],
+                    "funding_rate": a["funding_rate"],
+                    "price_change_24h": a["price_change_24h_pct"],
+                    "type": "BEARISH_DIVERGENCE",
+                    "signal": f"Price down {a['price_change_24h_pct']}% but longs still crowded — more liquidations likely",
+                })
+
+        # Overall market bias
+        avg_funding = sum(a["funding_rate"] for a in active_assets) / len(active_assets)
+        total_oi = sum(a["open_interest_usd"] for a in active_assets)
+        total_volume = sum(a["volume_24h_usd"] for a in active_assets)
+
+        if avg_funding > 0.00015:
+            market_bias = "Strong long bias — market is leveraged bullish"
+        elif avg_funding > 0.00005:
+            market_bias = "Mild long bias — healthy uptrend positioning"
+        elif avg_funding < -0.00015:
+            market_bias = "Strong short bias — contrarian bullish signal"
+        elif avg_funding < -0.00005:
+            market_bias = "Mild short bias — cautious market"
+        else:
+            market_bias = "Neutral — no crowding, trend likely sustainable"
+
+        # Top assets by open interest (most liquid/active)
+        top_by_oi = sorted(active_assets, key=lambda x: x["open_interest_usd"], reverse=True)[:10]
+        top_oi_summary = [{
+            "coin": a["coin"],
+            "open_interest_usd": a["open_interest_usd"],
+            "volume_24h_usd": a["volume_24h_usd"],
+            "funding_rate": a["funding_rate"],
+            "price_change_24h": a["price_change_24h_pct"],
+        } for a in top_by_oi]
+
+        # Top movers by price change
+        top_gainers = sorted(active_assets, key=lambda x: x["price_change_24h_pct"], reverse=True)[:10]
+        top_losers = sorted(active_assets, key=lambda x: x["price_change_24h_pct"])[:10]
+
+        return {
+            "market_summary": {
+                "total_assets_tracked": len(active_assets),
+                "avg_funding_rate": round(avg_funding, 8),
+                "avg_funding_annualized": round(avg_funding * 8 * 365 * 100, 2),
+                "market_bias": market_bias,
+                "total_open_interest_usd": round(total_oi, 0),
+                "total_volume_24h_usd": round(total_volume, 0),
+            },
+            "crowded_longs": crowded_longs[:10],
+            "squeeze_candidates": squeeze_candidates[:10],
+            "funding_divergences": divergences[:10],
+            "top_by_open_interest": top_oi_summary,
+            "top_gainers": [{
+                "coin": a["coin"],
+                "price_change_24h": a["price_change_24h_pct"],
+                "funding_rate": a["funding_rate"],
+                "volume_24h_usd": a["volume_24h_usd"],
+            } for a in top_gainers],
+            "top_losers": [{
+                "coin": a["coin"],
+                "price_change_24h": a["price_change_24h_pct"],
+                "funding_rate": a["funding_rate"],
+                "volume_24h_usd": a["volume_24h_usd"],
+            } for a in top_losers],
+        }
+
+    async def get_funding_history(self, coin: str, hours_back: int = 72) -> list:
+        """
+        Get historical funding rates for a specific coin.
+        Useful for seeing if funding is trending up/down over time.
+        """
+        import time
+        start_time = int((time.time() - (hours_back * 3600)) * 1000)
+
+        data = await self._post(
+            {
+                "type": "fundingHistory",
+                "coin": coin.upper(),
+                "startTime": start_time,
+            },
+            cache_key=f"hl:funding_history:{coin}:{hours_back}",
+            ttl=HL_FUNDING_HISTORY_CACHE_TTL,
+        )
+
+        if not isinstance(data, list):
+            return []
+
+        # Summarize the history
+        rates = [float(entry.get("fundingRate", "0") or "0") for entry in data]
+        
+        if not rates:
+            return []
+
+        return {
+            "coin": coin.upper(),
+            "data_points": len(rates),
+            "hours_covered": hours_back,
+            "current_rate": rates[-1] if rates else 0,
+            "avg_rate": round(sum(rates) / len(rates), 8),
+            "max_rate": round(max(rates), 8),
+            "min_rate": round(min(rates), 8),
+            "trend": "increasing" if len(rates) > 10 and sum(rates[-5:]) / 5 > sum(rates[:5]) / 5 else "decreasing" if len(rates) > 10 and sum(rates[-5:]) / 5 < sum(rates[:5]) / 5 else "stable",
+            "recent_rates": [{"rate": round(r, 8), "time": data[i].get("time")} for i, r in enumerate(rates[-12:])],
+        }
+
+    async def get_crypto_dashboard(self) -> dict:
+        """
+        Complete Hyperliquid dashboard for the crypto scanner.
+        Single method that returns everything the agent needs.
+        Uses just 1 API call (metaAndAssetCtxs) + funding analysis built on top.
+        """
+        funding_analysis = await self.get_funding_analysis()
+
+        # Get funding history for BTC and ETH (the market leaders)
+        import asyncio
+        btc_history, eth_history = await asyncio.gather(
+            self.get_funding_history("BTC", hours_back=72),
+            self.get_funding_history("ETH", hours_back=72),
+            return_exceptions=True,
+        )
+
+        return {
+            "source": "Hyperliquid (largest on-chain perp DEX)",
+            "funding_analysis": funding_analysis,
+            "btc_funding_trend": btc_history if not isinstance(btc_history, Exception) else {},
+            "eth_funding_trend": eth_history if not isinstance(eth_history, Exception) else {},
+        }
+STEP 2: Wire into Market Data Service
+In data/market_data_service.py:
+pythonfrom data.hyperliquid_provider import HyperliquidProvider
+
+# In __init__, add (no API key needed):
+self.hyperliquid = HyperliquidProvider()
+STEP 3: Replace or supplement CoinGecko derivatives data in the crypto scanner
+In the get_crypto_scanner method, add Hyperliquid data alongside the existing sources. Find where CoinGecko derivatives are fetched and add Hyperliquid in parallel:
+python# In get_crypto_scanner, add to the parallel tasks:
+tasks["hyperliquid"] = self.hyperliquid.get_crypto_dashboard()
+In the return dict of get_crypto_scanner, add:
+python# Hyperliquid derivatives data (more reliable than CoinGecko for funding rates)
+"hyperliquid": data.get("hyperliquid", {}),
+```
+
+**You can also REMOVE the CoinGecko derivatives call (`self.coingecko.get_derivatives_tickers()`) since Hyperliquid provides better, more direct funding rate data. Or keep both and let Claude cross-reference. Up to you — removing it saves 1 API call.**
+
+### STEP 4: Update the system prompt
+
+**Add this to the system prompt in `agent/prompts.py`:**
+```
+## HYPERLIQUID DATA (PRIMARY SOURCE FOR CRYPTO DERIVATIVES)
+
+You receive real-time perpetual futures data directly from Hyperliquid, the largest on-chain perp DEX. This is your PRIMARY source for funding rates and derivatives positioning — it's more reliable and real-time than CoinGecko's aggregated derivatives data.
+
+Data includes:
+- Real-time funding rates for ALL listed perps (100+ assets)
+- Open interest per asset (in USD)
+- 24h volume per asset
+- Mark price, oracle price, and premium
+- Pre-computed analysis: crowded longs, squeeze candidates, funding divergences
+
+KEY SIGNALS FROM HYPERLIQUID:
+
+1. **Funding Divergences** (HIGHEST CONVICTION SIGNALS):
+   - BULLISH_DIVERGENCE: Price rising + funding negative = shorts are getting squeezed, more upside likely
+   - BEARISH_DIVERGENCE: Price falling + funding positive = longs getting liquidated, more downside likely
+   - These divergences are the single most actionable signal in crypto derivatives
+
+2. **Crowded Longs** (funding_rate > 0.01% per hour):
+   - Longs are paying a high premium to maintain positions
+   - Correction risk increases — a dip triggers cascading liquidations
+   - The higher the funding + the higher the OI, the bigger the potential flush
+
+3. **Squeeze Candidates** (funding_rate < -0.01% per hour):
+   - Shorts are paying to maintain positions
+   - If price starts rising, shorts are forced to cover → squeeze
+   - Negative funding + rising price + rising OI = squeeze IN PROGRESS
+
+4. **Market Bias**:
+   - Average funding across all perps tells you overall leverage positioning
+   - Strong long bias = market is overleveraged bullish (contrarian bearish)
+   - Strong short bias = market is overleveraged bearish (contrarian bullish)
+   - Neutral = healthiest environment for trend continuation
+
+5. **BTC and ETH Funding Trends** (72-hour history):
+   - Funding TRENDING UP = increasing bullish leverage (eventually gets crowded)
+   - Funding TRENDING DOWN = increasing bearish leverage or longs closing
+   - Stable near zero = healthy, sustainable trend
+
+ALWAYS reference Hyperliquid data when discussing crypto. It's the most direct, real-time derivatives data you have.
+STEP 5: Make sure the data compressor doesn't strip Hyperliquid fields
+In agent/data_compressor.py, verify that STRIP_FIELDS does NOT contain any of these:
+
+funding_rate, funding_annualized, open_interest, open_interest_usd
+volume_24h_usd, mark_price, oracle_price, premium
+market_bias, crowded_longs, squeeze_candidates, funding_divergences
+coin, signal, price_change_24h
+
+These should all survive compression. If any are in STRIP_FIELDS, remove them.
+Re-deploy after all changes.
+
+What this gives you:
+
+1 API call gets funding rates + OI + volume + prices for ALL 100+ Hyperliquid perps
+Zero cost, zero API key, no rate limit concerns at reasonable usage
+Pre-computed analysis so Claude gets crowded longs, squeeze candidates, and divergences already identified
+BTC/ETH funding trends (72-hour history) show whether leverage is building or unwinding
+3 total API calls per crypto scan (1 for all perps + 2 for BTC/ETH history) — extremely lightweight

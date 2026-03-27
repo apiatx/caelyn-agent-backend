@@ -1,0 +1,73 @@
+BACKEND ONLY — DO NOT CHANGE RESPONSE FORMAT OR FRONTEND
+
+Goal:
+In daily_briefing (and any other briefing-style responses that populate `signal_highlights`), never return N/A for:
+- signal_highlights.best_ta_setup
+- signal_highlights.biggest_volume
+
+Keep the output structure EXACTLY the same as today (same keys, same display_type, same formatting). Only change selection logic.
+
+1) Fix best_ta_setup fallback
+Current behavior returns N/A when strict criteria is not met.
+
+Change:
+- Always select the best available TA candidate even if it does not hit the strict “breakout” threshold.
+- Implement a fallback ladder:
+
+Step A (strict): choose top candidate where:
+  - technical_score >= 70 OR stage2_breakout == true OR (macd_crossover && near_52w_high)
+Step B (fallback): if none match Step A, choose highest technical_score among candidates with:
+  - technical_score >= 60
+Step C (final fallback): if still none, choose highest technical_score overall (as long as there is at least 1 candidate)
+
+Output:
+- Always populate:
+  signal_highlights.best_ta_setup = { "ticker": "<symbol>", "signal": "<short reason>" }
+- The "signal" string should explain the best available setup based on what exists (examples):
+  - "Near breakout + improving momentum (RSI rising, MACD improving)"
+  - "Strong trend (price > key MAs) despite low breakout count"
+  - "Best relative strength in scan (no clean breakouts today)"
+
+Important:
+- Do NOT output "N/A" if candidates exist.
+- Only output N/A if there are literally zero equity candidates.
+
+2) Redefine biggest_volume to “biggest volume % increase”
+Current behavior appears to rely on absolute volume or missing volume.
+
+Change:
+- Compute volume_pct_increase for each candidate when possible:
+  volume_pct_increase = ((today_volume / avg_volume_30d) - 1) * 100
+- If intraday volume is not available, use the best available proxy you already have:
+  - If you have relative_volume / rvol: convert to % increase: (rvol - 1) * 100
+  - If you have volume vs avgVolume fields from any provider, use those.
+
+Selection:
+- Choose the candidate with the highest volume_pct_increase, minimum threshold:
+  - Require today_volume and avg_volume_30d (or rvol) to be present
+  - volume_pct_increase must be > 0
+Fallback:
+- If no candidate has sufficient data, do NOT return N/A if there are candidates with any volume signal.
+  - Fall back to highest available rvol
+  - Or highest available raw volume only if NOTHING else exists
+- Only return N/A if volume data is missing for all candidates.
+
+Output:
+- Keep the existing key:
+  signal_highlights.biggest_volume = { "ticker": "<symbol>", "signal": "<short string>" }
+- The signal string must explicitly reference % increase:
+  - "Volume +185% vs 30D avg (2.85x)"
+  - "RVOL 3.2x (approx +220% vs avg)"
+
+3) Add a tiny debug log (backend only)
+Add one log line (no schema change):
+- [HIGHLIGHTS] best_ta=<ticker> biggest_vol=<ticker> vol_pct=<value or NA> ta_score=<value>
+
+4) Test cases (run locally)
+- Run daily_briefing twice (to test cache) and confirm:
+  - best_ta_setup is never N/A when there are candidates
+  - biggest_volume is never N/A when any volume/rvol exists
+  - biggest_volume signal uses % increase wording
+
+Publish instruction:
+After tests pass, publish the FastAPI backend (the public URL project).

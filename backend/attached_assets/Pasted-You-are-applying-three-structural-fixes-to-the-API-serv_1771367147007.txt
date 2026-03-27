@@ -1,0 +1,153 @@
+You are applying three structural fixes to the API server.
+
+Do NOT:
+
+Change Claude prompts
+
+Change scoring logic
+
+Change orchestration math
+
+Change module logic
+
+Refactor data providers
+
+Break existing pipeline
+
+You may:
+
+Harden preset routing
+
+Fix fallback behavior
+
+Remove client-controlled history
+
+Allow preset + query refinement
+
+1️⃣ Remove Client-Controlled History
+
+The backend must ignore history sent from the frontend.
+
+Modify the request model:
+
+Remove history field entirely
+OR
+
+Accept it but ignore it completely.
+
+Conversation memory must only be loaded server-side using conversation_id.
+
+The request model should be:
+
+class QueryRequest(BaseModel):
+    query: str = ""
+    preset_intent: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
+Never trust or use history from client.
+
+2️⃣ Add Preset Guard
+
+Inside handle_query:
+
+Replace preset logic with:
+
+if request.preset_intent:
+    if request.preset_intent not in INTENT_PROFILES:
+        log_warning("Unknown preset_intent:", request.preset_intent)
+        orchestration_plan = classify_with_openai(request.query)
+    else:
+        orchestration_plan = build_plan_from_profile(
+            INTENT_PROFILES[request.preset_intent]
+        )
+
+
+Never crash on bad preset.
+Fallback to classifier safely.
+
+3️⃣ Improve OpenAI 429 Fallback
+
+Currently:
+429 → default trending plan
+
+Replace that behavior with:
+
+If OpenAI classification fails:
+Attempt minimal heuristic plan:
+- If ticker detected → single_asset_analysis
+- If "earnings" in query → earnings_watch
+- If "macro" in query → macro_outlook
+- Else → cross_asset_trending
+Log clearly that fallback occurred.
+
+Do NOT automatically route everything to trending.
+
+4️⃣ Allow Preset + Query Refinement
+
+Currently preset bypasses classifier entirely.
+
+Modify logic:
+
+If preset_intent exists:
+
+base_profile = INTENT_PROFILES[preset_intent]
+
+if request.query.strip():
+    refinement = refine_profile_with_query(request.query)
+    orchestration_plan = merge_profiles(base_profile, refinement)
+else:
+    orchestration_plan = base_profile
+
+
+Refinement should only:
+
+Adjust weighting
+
+Enable additional modules
+
+Narrow asset class
+
+Adjust response style
+
+It must NOT override the base preset completely.
+
+5️⃣ Log All Routing Decisions
+
+Before execution, log:
+
+[ROUTING]
+preset: X
+query: Y
+asset_classes: [...]
+modules: [...]
+response_style: ...
+
+
+This is critical for debugging quality issues later.
+
+6️⃣ Do NOT Modify Claude Call
+
+Claude remains final reasoning layer.
+
+Do not change:
+
+system prompt
+
+message format
+
+token settings
+
+scoring logic
+
+When done, confirm:
+
+Preset routing works
+
+Free-form routing works
+
+429 fallback works
+
+No client history used
+
+Logs show routing decisions

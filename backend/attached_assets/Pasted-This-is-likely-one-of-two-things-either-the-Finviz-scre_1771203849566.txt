@@ -1,0 +1,250 @@
+This is likely one of two things: either the Finviz screener calls for the Weinstein stage analysis are timing out/returning empty, or the data comes back but the compressor strips it too aggressively, leaving Claude with nothing to analyze.
+Give this to your backend Replit Agent:
+
+The Stage 2 Breakouts / Sector Rotation scan is returning a blank response. Please diagnose and fix:
+STEP 1: Add logging to the sector rotation method
+In data/market_data_service.py, find the get_sector_rotation_with_stages() method (or whatever method handles the "sector_rotation" category) and add print statements at every step:
+pythonasync def get_sector_rotation_with_stages(self):
+    import time
+    start = time.time()
+    print(f"[SECTOR] Starting sector rotation scan...")
+    
+    # After getting sector stage counts:
+    print(f"[SECTOR] Sector stages: {len(sectors)} sectors processed ({time.time()-start:.1f}s)")
+    for s in sectors:
+        print(f"[SECTOR]   {s.get('sector')}: stage2={s.get('stage2_pct')}%, stage4={s.get('stage4_pct')}%")
+    
+    # After getting breakout candidates:
+    print(f"[SECTOR] Breakout candidates: {len(breakout_candidates)} found ({time.time()-start:.1f}s)")
+    
+    # After enrichment:
+    print(f"[SECTOR] Enriched candidates: {len(enriched)} ({time.time()-start:.1f}s)")
+    
+    # Before returning:
+    result = { ... }
+    print(f"[SECTOR] Final result size: {len(str(result))} chars ({time.time()-start:.1f}s)")
+    return result
+Deploy, trigger "Stage 2 Breakouts", and check the server logs to see where it fails or returns empty.
+STEP 2: The most likely problem — Finviz screener calls timing out
+The Weinstein stage scan makes 30+ Finviz requests (3 per sector × 11 sectors) to count how many stocks are above/below SMA200 and SMA50. On a server with rate limiting or slow connections, many of these fail silently and return 0 results, making every sector show 0% Stage 2.
+Fix: Add error handling and reduce the number of Finviz calls. Instead of screening each sector individually, do fewer broader screens:
+pythonasync def get_sector_rotation_with_stages(self):
+    """
+    Simplified Weinstein sector rotation.
+    Instead of 33 individual Finviz calls, do 3 broad screens and count by sector.
+    """
+    import asyncio
+    
+    try:
+        # Screen 1: All stocks above SMA200 AND above SMA50 (Stage 2 proxy)
+        # Screen 2: All stocks below SMA200 AND below SMA50 (Stage 4 proxy)
+        # Screen 3: All stocks with avg volume > 300K (total universe)
+        
+        stage2_task = self.finviz.get_screener_results(
+            filters="ta_sma200_pa,ta_sma50_pa,sh_avgvol_o300",
+            limit=500
+        )
+        stage4_task = self.finviz.get_screener_results(
+            filters="ta_sma200_pb,ta_sma50_pb,sh_avgvol_o300",
+            limit=500
+        )
+        total_task = self.finviz.get_screener_results(
+            filters="sh_avgvol_o300",
+            limit=500
+        )
+        
+        stage2_stocks, stage4_stocks, total_stocks = await asyncio.gather(
+            stage2_task, stage4_task, total_task,
+            return_exceptions=True,
+        )
+        
+        # Handle failures
+        if isinstance(stage2_stocks, Exception):
+            print(f"[SECTOR] Stage 2 screen failed: {stage2_stocks}")
+            stage2_stocks = []
+        if isinstance(stage4_stocks, Exception):
+            print(f"[SECTOR] Stage 4 screen failed: {stage4_stocks}")
+            stage4_stocks = []
+        if isinstance(total_stocks, Exception):
+            print(f"[SECTOR] Total screen failed: {total_stocks}")
+            total_stocks = []
+        
+        print(f"[SECTOR] Raw counts: Stage2={len(stage2_stocks)}, Stage4={len(stage4_stocks)}, Total={len(total_stocks)}")
+        
+        # If ALL screens returned empty, Finviz is likely blocking us
+        if not stage2_stocks and not stage4_stocks and not total_stocks:
+            print("[SECTOR] WARNING: All Finviz screens returned empty. Finviz may be blocking requests.")
+            return {
+                "error": "Finviz screener returned no data. The service may be temporarily unavailable.",
+                "sectors": [],
+                "breakout_candidates": [],
+            }
+        
+        # Count by sector
+        sectors_map = {}
+        
+        for stock in total_stocks:
+            sector = stock.get("Sector") or stock.get("sector") or "Unknown"
+            if sector == "Unknown" or sector == "":
+                continue
+            if sector not in sectors_map:
+                sectors_map[sector] = {"total": 0, "stage2": 0, "stage4": 0}
+            sectors_map[sector]["total"] += 1
+        
+        for stock in stage2_stocks:
+            sector = stock.get("Sector") or stock.get("sector") or "Unknown"
+            if sector in sectors_map:
+                sectors_map[sector]["stage2"] += 1
+        
+        for stock in stage4_stocks:
+            sector = stock.get("Sector") or stock.get("sector") or "Unknown"
+            if sector in sectors_map:
+                sectors_map[sector]["stage4"] += 1
+        
+        # Build sector analysis
+        sectors = []
+        for sector_name, counts in sectors_map.items():
+            total = counts["total"]
+            if total == 0:
+                continue
+            
+            s2_pct = round(counts["stage2"] / total * 100, 1)
+            s4_pct = round(counts["stage4"] / total * 100, 1)
+            
+            if s2_pct >= 60:
+                stage = "Stage 2 - Advancing"
+                signal = "STRONG — Fish here for breakouts"
+            elif s2_pct >= 40:
+                stage = "Early Stage 2 / Late Stage 1"
+                signal = "EMERGING — Watch for breakout confirmation"
+            elif s4_pct >= 50:
+                stage = "Stage 4 - Declining"
+                signal = "AVOID — Don't buy stocks in this sector"
+            elif s4_pct >= 30:
+                stage = "Stage 3 - Topping"
+                signal = "CAUTION — Reduce exposure"
+            else:
+                stage = "Stage 1 - Basing"
+                signal = "WATCH — Not ready yet"
+            
+            sectors.append({
+                "sector": sector_name,
+                "stage2_pct": s2_pct,
+                "stage4_pct": s4_pct,
+                "stage2_count": counts["stage2"],
+                "stage4_count": counts["stage4"],
+                "total_count": total,
+                "sector_stage": stage,
+                "signal": signal,
+            })
+        
+        # Sort by stage2_pct descending (strongest sectors first)
+        sectors.sort(key=lambda x: x["stage2_pct"], reverse=True)
+        
+        print(f"[SECTOR] Processed {len(sectors)} sectors")
+        for s in sectors:
+            print(f"[SECTOR]   {s['sector']}: {s['stage2_pct']}% Stage 2, {s['stage4_pct']}% Stage 4 — {s['sector_stage']}")
+        
+        # Get breakout candidates from top 3 Stage 2 sectors
+        top_sectors = [s["sector"] for s in sectors[:3] if s["stage2_pct"] >= 40]
+        breakout_candidates = []
+        
+        if top_sectors:
+            # Find Stage 2 stocks with unusual volume from the top sectors
+            for stock in stage2_stocks:
+                sector = stock.get("Sector") or stock.get("sector")
+                if sector in top_sectors:
+                    ticker = stock.get("Ticker") or stock.get("ticker")
+                    if ticker:
+                        breakout_candidates.append({
+                            "ticker": ticker,
+                            "company": stock.get("Company") or stock.get("company", ""),
+                            "sector": sector,
+                            "price": stock.get("Price") or stock.get("price"),
+                            "change": stock.get("Change") or stock.get("change"),
+                            "volume": stock.get("Volume") or stock.get("volume"),
+                        })
+            
+            # Take top 15 breakout candidates
+            breakout_candidates = breakout_candidates[:15]
+            
+            print(f"[SECTOR] Found {len(breakout_candidates)} breakout candidates from top sectors: {top_sectors}")
+            
+            # Enrich top 8 with StockAnalysis data
+            enriched = []
+            for candidate in breakout_candidates[:8]:
+                ticker = candidate["ticker"]
+                try:
+                    overview = await asyncio.wait_for(
+                        self.stockanalysis.get_overview(ticker),
+                        timeout=8.0,
+                    )
+                    candidate.update(overview or {})
+                except Exception as e:
+                    print(f"[SECTOR] Failed to enrich {ticker}: {e}")
+                enriched.append(candidate)
+            
+            breakout_candidates = enriched
+        
+        # Get Fear & Greed
+        fear_greed = {}
+        try:
+            fear_greed = await asyncio.wait_for(
+                self.fear_greed.get_fear_greed_index(),
+                timeout=8.0,
+            )
+        except Exception:
+            pass
+        
+        result = {
+            "sectors": sectors,
+            "breakout_candidates": breakout_candidates,
+            "top_sectors": top_sectors,
+            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+            "scan_summary": {
+                "total_stocks_scanned": len(total_stocks),
+                "stage2_total": len(stage2_stocks),
+                "stage4_total": len(stage4_stocks),
+                "sectors_analyzed": len(sectors),
+            },
+        }
+        
+        print(f"[SECTOR] Final result: {len(str(result))} chars")
+        return result
+        
+    except Exception as e:
+        print(f"[SECTOR] Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "error": f"Sector rotation scan failed: {str(e)}",
+            "sectors": [],
+            "breakout_candidates": [],
+        }
+STEP 3: Check if the data compressor is stripping sector data
+In agent/data_compressor.py, make sure the STRIP_FIELDS set does NOT include any fields that the sector rotation returns. Specifically verify these fields survive compression:
+
+sector, stage2_pct, stage4_pct, sector_stage, signal
+breakout_candidates array
+scan_summary
+
+If any of these field names appear in the STRIP_FIELDS set, remove them.
+STEP 4: Check the classifier
+Make sure the keyword fallback classifier maps sector rotation queries correctly. In the _keyword_classify method, verify this line exists:
+pythonif any(w in q for w in ["sector", "rotation", "stage 2", "weinstein", "breakout"]):
+    return "sector_rotation"
+And in the _gather_data method, verify that sector_rotation maps to the correct method:
+pythonelif category == "sector_rotation":
+    return await self.data.get_sector_rotation_with_stages()
+STEP 5: Check the Finviz screener method
+The get_screener_results method in data/finviz_scraper.py needs to handle the filter string format correctly. Verify it builds the Finviz URL properly:
+The Finviz screener URL format is: https://finviz.com/screener.ashx?v=111&f=FILTERS&r=1
+Where filters are comma-separated like: ta_sma200_pa,ta_sma50_pa,sh_avgvol_o300
+Make sure the method:
+
+Uses proper headers (User-Agent) to avoid being blocked
+Handles the response HTML correctly (Finviz changes their HTML periodically)
+Returns an empty list on failure instead of crashing
+Has a 10-second timeout
+
+Re-deploy and test the Stage 2 Breakouts button. Check server logs for the [SECTOR] print statements to see exactly what happened.

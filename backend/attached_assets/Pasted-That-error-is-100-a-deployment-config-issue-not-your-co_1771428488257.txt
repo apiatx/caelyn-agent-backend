@@ -1,0 +1,86 @@
+That error is 100% a deployment config issue, not your code.
+
+Replit’s deploy runtime expects your server to bind to a real port, and it exposes that port via the $PORT environment variable. Your run command currently has --port with nothing after it, so Uvicorn crash-loops.
+
+Fix (Backend project only)
+What your run command must look like
+
+Use exactly this pattern:
+
+uvicorn main:app --host 0.0.0.0 --port $PORT
+
+
+If your FastAPI app lives in a different file/module, swap main:app accordingly (examples below).
+
+Where to change it in Replit
+Option A (most common): .replit file
+
+Open the backend Replit project
+
+Find the .replit file
+
+Set:
+
+run = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+
+Option B: replit.toml
+
+If your project uses replit.toml, look for the run command and set it to the same thing:
+
+run = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+
+Option C: Deployments “Run command” field
+
+If you’re using Replit Deployments:
+
+Deployments → your deployment → Settings → Run command
+
+Paste:
+
+uvicorn main:app --host 0.0.0.0 --port $PORT
+
+If your app is not main.py
+
+Use the correct import path:
+
+app.py with app = FastAPI():
+
+uvicorn app:app --host 0.0.0.0 --port $PORT
+
+
+src/main.py:
+
+uvicorn src.main:app --host 0.0.0.0 --port $PORT
+
+
+If your variable is named api instead of app:
+
+uvicorn main:api --host 0.0.0.0 --port $PORT
+
+Exact prompt to paste to your BACKEND Replit agent
+
+Copy/paste this:
+
+BACKEND DEPLOY FIX ONLY.
+
+Deployment is failing because the run command has `--port` with no value. Update the Replit run command to bind to the injected $PORT.
+
+Set run command to:
+uvicorn main:app --host 0.0.0.0 --port $PORT
+
+If the FastAPI app is not in main.py or the variable isn't named app, detect the correct module:function (e.g., app:app, src.main:app) and set it accordingly.
+
+After changing, restart and confirm logs show Uvicorn listening on 0.0.0.0:<PORT> and /ping returns 200.
+Do not change any application logic.
+
+Quick sanity check after you change it
+
+In logs you should see something like:
+
+“Uvicorn running on http://0.0.0.0:XXXXX”
+
+Hit:
+
+/ping
+
+/health

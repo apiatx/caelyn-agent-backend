@@ -1,0 +1,156 @@
+DO NOT MODIFY EXISTING SYSTEM LOGIC
+
+You are NOT allowed to refactor, restructure, or modify any existing codebase logic.
+
+The ONLY permitted change is:
+
+Replace the current Anthropic (Claude) API call used in the Orchestrator layer with an OpenAI API call.
+
+Everything else must remain exactly the same.
+
+Constraints
+
+Do NOT modify:
+
+Data fetching functions
+
+API adapters (FMP, CMC, CoinGecko, etc.)
+
+Grok sentiment module
+
+Claude reasoning layer
+
+Response schema
+
+JSON output format
+
+Frontend contracts
+
+Environment variable structure (except adding OPENAI_API_KEY)
+
+Tool definitions
+
+Function signatures
+
+The OpenAI model must only replace the orchestration decision engine.
+
+The OpenAI call must:
+
+Receive the same prompt currently sent to Claude orchestrator
+
+Return tool selection decisions in the same schema format
+
+Preserve existing parsing logic
+
+Maintain deterministic structured output
+
+Do NOT change:
+
+Temperature (unless required for API compatibility)
+
+Token limits
+
+Error handling structure
+
+The Claude Sonnet reasoning layer must remain untouched.
+
+Required Implementation Change
+
+Replace:
+
+Anthropic client.messages.create(...)
+(or equivalent Claude orchestration call)
+
+With:
+
+OpenAI client.responses.create(...)
+Using GPT-4o or GPT-5 class model.
+
+The output must match the current orchestration JSON schema exactly.
+
+Output Format Requirements
+
+The OpenAI orchestrator must output:
+
+{
+"apis_to_call": [],
+"reasoning_priority": "",
+"sentiment_required": true/false,
+"notes": ""
+}
+
+Match current schema precisely.
+
+No additional keys.
+No formatting changes.
+No structural edits.
+
+Environment Changes
+
+Add:
+
+OPENAI_API_KEY to secrets.
+
+Do NOT remove ANTHROPIC_API_KEY because Claude is still used as reasoning layer.
+
+Final Condition
+
+If any change impacts:
+
+Claude reasoning
+
+Grok sentiment
+
+Data adapters
+
+Frontend rendering
+
+Response formatting
+
+The change must be rejected.
+
+Only the orchestration LLM provider changes.
+
+Nothing else.
+
+🔧 Why This Works
+
+Because you are isolating:
+
+Orchestration = control brain
+Reasoning = critique brain
+
+That’s professional architecture.
+
+🧠 Bonus: Model Recommendation
+
+Use:
+
+gpt-4o for speed
+or
+gpt-5 (if available to you) for stronger planning
+
+Keep temperature low for orchestration:
+0.1 – 0.2
+
+Planner should be deterministic.
+
+⚠️ Important
+
+Do NOT let Replit AI:
+
+“Improve” the code
+
+Refactor to OpenAI Agents SDK
+
+Add streaming changes
+
+Modify schema
+
+Consolidate modules
+
+It will try.
+
+Don’t let it.
+
+This is a surgical swap.

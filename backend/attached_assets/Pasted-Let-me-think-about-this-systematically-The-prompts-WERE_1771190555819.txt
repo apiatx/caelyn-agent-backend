@@ -1,0 +1,209 @@
+Let me think about this systematically. The prompts WERE working, then broke after a series of changes. The most likely culprits:
+1. The system prompt rewrite may have broken the JSON output format. Going from 1,540 lines to 130 lines is a 91% reduction. Even though the format schemas survived, Claude may not be generating valid JSON anymore if the instructions around HOW to use those schemas got too thin. If Claude returns malformed JSON, the frontend can't parse it → shows nothing.
+2. The data compression may be stripping too aggressively. If the compressor is returning nearly empty dicts, Claude has nothing to analyze → generates a short/broken response.
+3. Backend timeouts. The Polygon rate limiting (429s) was causing extreme delays. If every request hits Polygon retries, the backend times out before responding.
+4. The query classifier failure. If the Anthropic credit issue was causing classification to fail, EVERY query falls back to market_scan — the heaviest scan type that calls every data source. Even with credits replenished, if the classifier code was changed during the refactor, it might still be broken.
+Here's how to diagnose and fix. Give this to your backend Replit Agent:
+
+URGENT: No prompts are returning responses. They load for 4 minutes then show nothing. I need you to diagnose and fix this. Follow these steps IN ORDER:
+STEP 1: Add logging to find exactly where it's hanging
+In agent/claude_agent.py, add print/logging statements at every major step so we can see in the server logs where the request gets stuck:
+pythonimport time
+
+# At the start of the main query handler method (whatever handles /api/query):
+print(f"[AGENT] === NEW REQUEST ===")
+print(f"[AGENT] Query: {query[:100]}")
+start_time = time.time()
+
+# After query classification:
+print(f"[AGENT] Classified as: {category} ({time.time() - start_time:.1f}s)")
+
+# After data gathering:
+print(f"[AGENT] Data gathered: {len(str(gathered_data))} chars ({time.time() - start_time:.1f}s)")
+
+# After data compression:
+print(f"[AGENT] Data compressed: {len(str(compressed_data))} chars ({time.time() - start_time:.1f}s)")
+
+# Before sending to Claude:
+print(f"[AGENT] Sending to Claude... prompt size: {len(prompt_text)} chars ({time.time() - start_time:.1f}s)")
+
+# After Claude responds:
+print(f"[AGENT] Claude responded: {len(response_text)} chars ({time.time() - start_time:.1f}s)")
+
+# After parsing response:
+print(f"[AGENT] Response parsed, display_type: {parsed.get('display_type', 'unknown')} ({time.time() - start_time:.1f}s)")
+Deploy this first, then trigger ONE prompt (try "Macro Overview") and immediately check the server logs. Tell me exactly which log line is the LAST one that appears before it hangs.
+STEP 2: Add a global timeout to the entire request pipeline
+In main.py (or wherever the FastAPI route is defined), wrap the entire handler in a timeout:
+pythonimport asyncio
+
+@app.post("/api/query")
+async def query_agent(request: QueryRequest):
+    try:
+        result = await asyncio.wait_for(
+            agent.process_query(request.query),
+            timeout=90.0  # 90 second hard timeout
+        )
+        return result
+    except asyncio.TimeoutError:
+        return {
+            "display_type": "chat",
+            "message": "Request timed out after 90 seconds. The data sources may be slow. Please try again."
+        }
+    except Exception as e:
+        print(f"[AGENT] ERROR: {str(e)}")
+        return {
+            "display_type": "chat", 
+            "message": f"Something went wrong: {str(e)}"
+        }
+STEP 3: Fix the query classifier to not hang
+The classifier makes its own Claude API call to determine the category. If this fails or hangs, everything stalls. Find the classification code and add a timeout + reliable fallback:
+python# In the classification method:
+try:
+    category = await asyncio.wait_for(
+        self._classify_query(query),
+        timeout=10.0  # 10 second max for classification
+    )
+    print(f"[AGENT] Classification succeeded: {category}")
+except Exception as e:
+    print(f"[AGENT] Classification failed: {e}, using keyword fallback")
+    category = self._keyword_classify(query)
+Add a keyword-based fallback classifier that doesn't need an API call:
+pythondef _keyword_classify(self, query: str) -> str:
+    q = query.lower()
+    
+    if any(w in q for w in ["crypto", "bitcoin", "btc", "eth", "solana", "altcoin", "defi", "funding rate"]):
+        return "crypto"
+    if any(w in q for w in ["macro", "fed", "interest rate", "inflation", "gdp", "economy", "dollar"]):
+        return "macro"
+    if any(w in q for w in ["briefing", "morning", "daily brief", "intelligence"]):
+        return "briefing"
+    if any(w in q for w in ["commodity", "commodities", "oil", "gold", "uranium", "copper", "natural gas"]):
+        return "commodities"
+    if any(w in q for w in ["trending", "trend", "what's hot", "popular"]):
+        return "trending"
+    if any(w in q for w in ["sector", "rotation", "stage 2", "weinstein", "breakout"]):
+        return "sector_rotation"
+    if any(w in q for w in ["squeeze", "short squeeze", "short interest", "short float"]):
+        return "squeeze"
+    if any(w in q for w in ["invest", "long term", "best investment", "hold", "dividend"]):
+        return "investments"
+    if any(w in q for w in ["earnings", "earnings watch", "reporting"]):
+        return "earnings"
+    if any(w in q for w in ["portfolio", "watchlist", "review my"]):
+        return "portfolio"
+    if any(w in q for w in ["screen", "screener", "filter", "scan for"]):
+        return "ai_screener"
+    if any(w in q for w in ["bearish", "short", "puts", "downside"]):
+        return "bearish"
+    if any(w in q for w in ["social", "stocktwits", "sentiment", "buzz"]):
+        return "social_momentum"
+    if any(w in q for w in ["volume", "unusual volume", "volume spike"]):
+        return "volume"
+    if any(w in q for w in ["asymmetric", "risk reward", "r/r"]):
+        return "asymmetric"
+    if any(w in q for w in ["ai", "compute", "semiconductor", "chip", "nvidia"]):
+        return "ai_compute"
+    if any(w in q for w in ["fundamental", "revenue growth", "improving"]):
+        return "fundamentals"
+    if any(w in q for w in ["trade", "best trade", "setup", "swing"]):
+        return "trades"
+    
+    return "market_scan"  # default
+STEP 4: Add timeouts to EVERY data source call
+The Polygon API was hitting 429s and retrying, causing multi-minute delays. Every external API call needs a timeout. Find all the data fetching methods and ensure they have timeouts:
+python# In EVERY httpx.AsyncClient call across ALL providers:
+async with httpx.AsyncClient(timeout=10.0) as client:  # 10 second timeout per call
+    resp = await client.get(url, params=params)
+Specifically check these files for missing timeouts:
+
+data/polygon_provider.py — add 8 second timeout, remove retry logic (retries cause cascading delays)
+data/finviz_scraper.py — add 10 second timeout
+data/stockanalysis_scraper.py — add 10 second timeout
+data/coingecko_provider.py — should already have timeout=15, reduce to 10
+data/cmc_provider.py — should already have timeout=15, reduce to 10
+data/fmp_provider.py — add 10 second timeout
+data/stocktwits_provider.py — add 8 second timeout
+
+CRITICAL: In the Polygon provider, REMOVE any retry logic. If Polygon returns 429, return an empty dict immediately. Do NOT retry. The retries are what's causing the 4-minute delays:
+python# In polygon provider - REMOVE any retry loops
+# Replace with:
+if resp.status_code == 429:
+    print("[POLYGON] Rate limited, skipping")
+    return {}  # Return empty immediately, do NOT retry
+STEP 5: Make data gathering fail gracefully with partial data
+In the _gather_data method, wrap EACH data source in its own try/except with a timeout, so one slow source doesn't block everything:
+pythonasync def _gather_data(self, category, query):
+    import asyncio
+    
+    tasks = {}
+    
+    if category == "crypto":
+        tasks["crypto"] = asyncio.wait_for(
+            self.data.get_crypto_scanner(), timeout=30.0
+        )
+    elif category == "macro":
+        tasks["macro"] = asyncio.wait_for(
+            self.data.get_macro_overview(), timeout=30.0
+        )
+    # ... etc for each category
+    
+    results = {}
+    for name, task in tasks.items():
+        try:
+            results[name] = await task
+        except asyncio.TimeoutError:
+            print(f"[AGENT] {name} timed out, continuing with partial data")
+            results[name] = {"error": f"{name} data source timed out"}
+        except Exception as e:
+            print(f"[AGENT] {name} failed: {e}")
+            results[name] = {"error": str(e)}
+    
+    return results
+STEP 6: Verify the Claude API call itself isn't hanging
+Find where the actual Anthropic API call is made (something like client.messages.create(...) or httpx.post("https://api.anthropic.com/...")) and add a timeout there too:
+python# If using the Anthropic Python SDK:
+response = await asyncio.wait_for(
+    client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4096,
+        system=system_prompt,
+        messages=messages,
+    ),
+    timeout=60.0  # 60 second timeout for Claude response
+)
+python# If using httpx directly:
+async with httpx.AsyncClient(timeout=60.0) as client:
+    response = await client.post(
+        "https://api.anthropic.com/v1/messages",
+        headers=headers,
+        json=payload,
+    )
+STEP 7: Quick smoke test route
+Add a simple test endpoint that bypasses all data gathering and just tests if Claude is responding:
+python@app.get("/api/health")
+async def health_check():
+    """Test that the agent can reach Claude and get a response."""
+    try:
+        # Try a minimal Claude call
+        response = await asyncio.wait_for(
+            agent.client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=50,
+                messages=[{"role": "user", "content": "Say 'ok' and nothing else."}],
+            ),
+            timeout=15.0,
+        )
+        text = response.content[0].text
+        return {"status": "ok", "claude_says": text, "api_working": True}
+    except Exception as e:
+        return {"status": "error", "error": str(e), "api_working": False}
+After deploying, hit /api/health in a browser. If that returns an error, the problem is the Claude API connection (credits, key, etc.). If it returns "ok", the problem is in the data pipeline.
+DEPLOY ORDER:
+
+Deploy all changes
+Hit /api/health first — confirm Claude API is reachable
+Check server logs while triggering "Macro Overview"
+The logs will show EXACTLY where it hangs — share that with me
+
+Re-deploy after all changes.

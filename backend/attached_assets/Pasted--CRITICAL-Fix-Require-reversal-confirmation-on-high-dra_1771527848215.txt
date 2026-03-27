@@ -1,0 +1,225 @@
+## CRITICAL Fix: Require reversal confirmation on high-drawdown stocks (prevent KLAR-type failure)
+
+### Context
+The system recommended KLAR (down 76% from IPO, no technical reversal, pure social hype) as "Strong Buy" with 90 conviction. This was a terrible recommendation.
+
+HOWEVER — we do NOT want to blanket-penalize all stocks that are down significantly from their highs. Many great trades come from:
+- Bottoming patterns (rounded bottom, double bottom, inverse H&S)
+- Short squeezes on beaten-down stocks
+- Post-IPO selloffs where fundamentals finally catch up and price starts turning
+
+The fix is NOT "penalize drawdown." The fix is: **when a stock has a large drawdown, REQUIRE technical reversal confirmation before recommending it as a buy.** No reversal confirmation + large drawdown = AVOID. Reversal confirmation + large drawdown = potentially great trade.
+
+### The Rule
+"The bigger the decline, the stronger the reversal evidence must be."
+
+- Down <25% from high → Normal scoring, no extra requirements
+- Down 25-50% from high → Require at least ONE reversal signal (price > SMA20, RSI > 40, volume expansion, MACD bull cross)
+- Down >50% from high → Require at least TWO reversal signals to recommend as buy. Without them, label as "AVOID — falling knife, needs reversal confirmation"
+
+### Implementation: Four changes
+
+#### 1. Add reversal confirmation logic to `institutional_scorer.py`
+
+In `_compute_technical_score()` (starts around line 114), REPLACE the current function with an enhanced version that detects drawdown AND checks for reversal signals:
+
+Keep all the existing scoring logic (RSI, SMA, volume ratio, price change). After the existing checks but BEFORE the return statement, add:
+```python
+    # DRAWDOWN + REVERSAL CONFIRMATION FRAMEWORK
+    # When a stock has declined significantly, require reversal evidence
+    high_52w = data.get("overview", {}).get("52_week_high") or data.get("details", {}).get("high_52w")
+    ipo_price = data.get("overview", {}).get("ipo_price")
+    
+    drawdown = None
+    if high_52w and price:
+        try:
+            h = float(str(high_52w).replace(",", "").replace("$", ""))
+            p = float(price)
+            if h > 0 and p > 0:
+                drawdown = (h - p) / h
+        except (TypeError, ValueError):
+            pass
+    
+    if drawdown is not None and drawdown > 0.25:
+        # Stock is down >25% from high — check for reversal signals
+        reversal_signals = 0
+        reversal_details = []
+        
+        # Signal 1: Price above SMA20 (short-term trend turning up)
+        if price and sma_20:
+            try:
+                if float(price) > float(sma_20):
+                    reversal_signals += 1
+                    reversal_details.append("above_sma20")
+            except (TypeError, ValueError):
+                pass
+        
+        # Signal 2: Price above SMA50 (medium-term trend turning)
+        if price and sma_50:
+            try:
+                if float(price) > float(sma_50):
+                    reversal_signals += 1
+                    reversal_details.append("above_sma50")
+            except (TypeError, ValueError):
+                pass
+        
+        # Signal 3: RSI above 40 and rising (momentum shifting)
+        if rsi is not None:
+            try:
+                r = float(rsi)
+                if r > 40:
+                    reversal_signals += 1
+                    reversal_details.append(f"rsi_{r:.0f}")
+                elif r < 30:
+                    # Extremely oversold can be a contrarian reversal signal
+                    reversal_signals += 1
+                    reversal_details.append(f"oversold_rsi_{r:.0f}")
+            except (TypeError, ValueError):
+                pass
+        
+        # Signal 4: Volume expansion (accumulation)
+        if volume and avg_vol:
+            try:
+                ratio = float(volume) / float(avg_vol)
+                if ratio >= 1.5:
+                    reversal_signals += 1
+                    reversal_details.append(f"vol_{ratio:.1f}x")
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+        
+        # Signal 5: Positive daily change (immediate momentum)
+        if change is not None:
+            pct_change = parse_pct(change)
+            if pct_change is not None and pct_change > 0.02:
+                reversal_signals += 1
+                reversal_details.append(f"up_{pct_change:.1%}")
+        
+        # Apply the framework
+        required_signals = 1 if drawdown <= 0.50 else 2
+        
+        if reversal_signals >= required_signals:
+            # Reversal confirmed — this could be a great bottoming play
+            # Small bonus for confirmed reversal on a beaten-down stock
+            score += 5
+            data["_reversal_confirmed"] = True
+            data["_reversal_signals"] = reversal_details
+            data["_drawdown_pct"] = round(drawdown * 100, 1)
+        else:
+            # No reversal confirmation — penalize as falling knife
+            if drawdown > 0.50:
+                score -= 25  # Severe: down >50% with no reversal = falling knife
+            else:
+                score -= 12  # Moderate: down 25-50% with insufficient reversal evidence
+            data["_falling_knife"] = True
+            data["_drawdown_pct"] = round(drawdown * 100, 1)
+            data["_reversal_signals_found"] = reversal_signals
+            data["_reversal_signals_required"] = required_signals
+            data["_reversal_details"] = reversal_details
+    
+    # Also check: if NO OHLC data exists AND we can detect large drawdown from other sources
+    # (e.g., analyst upside >100% implies price collapsed well below targets)
+    if not has_ohlc:
+        analyst_upside = data.get("overview", {}).get("price_target_upside") or data.get("overview", {}).get("analyst_upside")
+        if analyst_upside:
+            try:
+                upside = parse_pct(analyst_upside)
+                if upside and upside > 1.0:
+                    # >100% analyst upside without any TA data = very likely a falling knife
+                    # We can't confirm reversal without OHLC, so flag it
+                    score -= 15
+                    data["_suspected_falling_knife"] = True
+                    data["_note"] = "Analyst upside >100% without TA confirmation suggests price collapse"
+            except (TypeError, ValueError):
+                pass
+```
+
+#### 2. Lower the no-OHLC default, but not too much
+
+Change line 116:
+
+OLD:
+```python
+    if not has_ohlc:
+        return 50.0
+```
+
+NEW:
+```python
+    if not has_ohlc:
+        return 40.0  # Unknown trend = mild risk, not neutral. Reversal can't be confirmed without charts.
+```
+
+#### 3. Update `cross_asset_ranker.py` to flag falling knives
+
+In `_score_candidates()` (around line 490), after the catalyst scoring block (around line 538), add:
+```python
+        # Falling knife detection via analyst upside proxy
+        # (when we don't have full OHLC, analyst upside >100% suggests collapsed price)
+        analyst_upside = c.get("price_target_upside") or c.get("analyst_upside")
+        if analyst_upside is not None:
+            try:
+                from data.scoring_engine import parse_pct
+                upside = parse_pct(analyst_upside)
+                if upside and upside > 1.0:
+                    # >100% upside = likely price collapsed well below targets
+                    # Penalize unless we have reversal confirmation
+                    if not c.get("_reversal_confirmed"):
+                        c["_penalty"] = c.get("_penalty", 1.0) * 0.6  # 40% score penalty
+                        c["_falling_knife_flag"] = True
+                    # If reversal IS confirmed, no penalty — could be a great trade
+                elif upside and upside > 0.5:
+                    if not c.get("_reversal_confirmed"):
+                        c["_penalty"] = c.get("_penalty", 1.0) * 0.8  # 20% penalty
+            except (TypeError, ValueError):
+                pass
+        
+        # Also degrade catalyst score for falling knives
+        if c.get("_falling_knife_flag"):
+            factors["catalyst"] = min(factors.get("catalyst", 0), 0.3)
+```
+
+#### 4. Update Claude's system prompt in `prompts.py`
+
+In the SYSTEM_PROMPT, add this after the "COUNTER-ARGUMENT REQUIREMENT" section:
+DRAWDOWN + REVERSAL FRAMEWORK (MANDATORY):
+When a stock is down significantly from its highs (>25%), you MUST evaluate reversal quality before recommending:
+DOWN 25-50% FROM HIGH:
+
+WITH reversal signals (price > SMA20, volume expanding, RSI turning up, MACD bull cross) → This could be a great bottoming trade. Label as "REVERSAL PLAY" and explain what confirms the turn.
+WITHOUT reversal signals → Label as "FALLING KNIFE — AVOID" or "WATCHLIST — needs base to form"
+
+DOWN >50% FROM HIGH:
+
+WITH multiple reversal signals (price > SMA20+SMA50, volume spike, RSI divergence) → This could be a squeeze or major reversal. Label as "HIGH-RISK REVERSAL" with tight stops.
+WITH only one reversal signal → "EARLY — needs more confirmation before entry"
+WITHOUT reversal signals → "FALLING KNIFE — AVOID. Social buzz on a falling knife = retail bag-holders, not institutional accumulation."
+
+If a stock has _falling_knife: true OR _suspected_falling_knife: true in the data, you MUST acknowledge this and NOT recommend it as a buy unless you can identify specific reversal evidence in the TA data.
+If a stock has _reversal_confirmed: true with _reversal_signals, this IS a valid trade setup. Explain the reversal thesis clearly: "Down X% from high but showing [reversal signals]. This is a bottoming play, not a falling knife."
+The key distinction: MOMENTUM DIRECTION matters more than DISTANCE FROM HIGH. A stock down 70% but now above SMA20 with volume expansion is a better trade than a stock down 30% and still making lower lows.
+
+Also add to the CROSS_ASSET_TRENDING_CONTRACT:
+FALLING KNIFE RULE: Any ticker flagged with _falling_knife or _suspected_falling_knife in the data MUST be labeled "AVOID" or "WARNING" — never "Strong Buy" or "Buy". If the data shows _reversal_confirmed, you may label it as a "REVERSAL PLAY" with appropriate risk warnings.
+
+### Testing
+
+1. **"Trending Now"** — If KLAR or similar fallen stocks appear:
+   - Without reversal signals → labeled "AVOID" or "WARNING"
+   - With reversal signals → labeled "REVERSAL PLAY" with risk note
+
+2. **"Best Trades"** — Stocks that are down big BUT have bottoming patterns should still appear as trade ideas (these have candle data + TA confirmation)
+
+3. **Short Squeeze screener** — Should still surface beaten-down stocks with squeeze potential (high short interest + volume expansion)
+
+4. **"Best Investments"** — Stocks with strong fundamentals that sold off post-IPO but are now turning should be flagged as opportunities, not avoided
+
+5. **Check logs**: Look for `_falling_knife: True` and `_reversal_confirmed: True` flags in scored candidates
+
+6. **Run `python -m pytest`** — All tests pass
+
+### Success Criteria
+- KLAR-type recommendations (down 76%, no reversal, pure social hype) → NEVER recommended as buy
+- Beaten-down stocks with genuine reversal signals (volume spike, price > SMA20, RSI divergence) → Still recommended with appropriate "REVERSAL PLAY" labeling
+- Short squeeze candidates with high short interest + volume expansion → Still surfaced
+- Post-IPO selloffs with improving fundamentals + price stabilization → Still surfaced as investment ideas
+- Normal uptrending stocks → Completely unaffected by these changes

@@ -1,0 +1,114 @@
+Do I need to give any updates to my backend agent to accomodate this new layout and make sure it doesn't mess anything up with the agent responses, etc. or is this completely nonissue?? 
+
+Mostly a nonissue if your backend already returns structured data (or at least a stable JSON shape) and your frontend just renders it differently.
+
+But a “terminal UI” usually wants more structure and more consistency than a chat UI. If your backend responses are even a little inconsistent, the new layout will expose it fast (panels can’t gracefully “hand-wave” like a chat bubble can).
+
+Here’s the truth: you don’t need a big backend rewrite, but you probably want a small backend update (or a thin adapter layer) so the frontend can route outputs to panels reliably.
+
+When it’s truly a nonissue
+
+You’re fine with zero backend changes if:
+
+Every prompt already hits a specific endpoint or passes a clear prompt_id
+
+The backend returns a consistent JSON schema every time
+
+You already have separate fields for things like tables, tickers, timeframe, sources, citations, etc (or you don’t mind rendering everything in one “Summary” panel)
+
+If that’s your setup, this is basically just UI rearranging furniture.
+
+When it will mess things up
+
+You’ll run into problems if any of these are true:
+
+The backend sometimes returns a plain text blob, sometimes JSON, sometimes “markdown-ish”
+
+“Reasons” and “data” aren’t separated (panels need that split)
+
+Different prompts produce totally different shapes with no common fields
+
+You can’t tell what kind of result it is (news vs screen vs macro vs technical)
+
+You don’t have stable identifiers for prompts/actions (so “command bar” can’t map cleanly)
+
+In those cases, your frontend will either:
+
+dump everything into one panel (works, but feels less terminal), or
+
+break routing and formatting intermittently (annoying, looks buggy)
+
+Minimal backend update that makes this bulletproof
+
+If you do one thing, do this: wrap every response in a consistent envelope.
+
+Response envelope (recommended)
+
+Have your backend return this for every prompt and chat command:
+
+{
+  "request_id": "uuid",
+  "prompt_id": "stage_2_breakouts",
+  "intent": "scan",
+  "query": "Stage 2 breakouts in AI/Compute under $2B",
+  "as_of": "2026-02-17T20:12:00Z",
+  "entities": {
+    "tickers": ["NVDA", "SMCI"],
+    "sectors": ["AI/Compute"],
+    "timeframe": "1D"
+  },
+  "panels": {
+    "summary": { "type": "markdown", "content": "..." },
+    "table": { "type": "table", "columns": ["Ticker","Score"], "rows": [["X", 92]] },
+    "news": { "type": "items", "items": [{ "title": "...", "source": "...", "url": "..." }] },
+    "sentiment": { "type": "items", "items": [{ "ticker": "X", "score": 0.72, "notes": "..." }] }
+  },
+  "sources_used": ["x", "news", "fundamentals", "macro"],
+  "warnings": []
+}
+
+
+Why this matters: your UI can render panels deterministically without guessing.
+
+Ultra-minimal version (if you want to avoid touching logic)
+
+If you don’t want to restructure outputs yet, you can still add a tiny wrapper:
+
+{
+  "request_id": "uuid",
+  "prompt_id": "whatever",
+  "intent": "unknown",
+  "output": {
+    "type": "markdown",
+    "content": "the exact text you already return today"
+  },
+  "meta": {
+    "tickers": [],
+    "sources_used": []
+  }
+}
+
+
+Then the terminal UI can dump that into the “Insight Summary” panel and you can gradually enrich later.
+
+One more backend tweak you’ll want for the Command Bar
+
+The command bar needs a routing hint. That can be:
+
+prompt_id explicitly, OR
+
+intent classification (scan|analyze|news|sentiment|macro|watch) that maps to existing actions.
+
+If your command bar is sending freeform text, your backend needs one of:
+
+A lightweight intent classifier (can be rules-based), or
+
+A “router” prompt that picks the prompt_id and passes it to your existing pipeline
+
+Lowest-risk approach
+
+Frontend command palette maps text to a prompt_id locally when possible (via prompt registry)
+
+Backend only receives prompt_id + args
+
+Freeform only used when user chooses “Chat panel”

@@ -1,0 +1,93 @@
+In main.py, find the request model class (or create one if it doesn't exist). Replace it with:
+pythonfrom pydantic import BaseModel
+from typing import List, Optional
+
+class ChatMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+class QueryRequest(BaseModel):
+    prompt: str
+    history: Optional[List[ChatMessage]] = None
+In main.py, update the /api/query endpoint to accept and pass history. Find the existing endpoint function and replace it with:
+python@app.post("/api/query")
+async def query_agent(request: QueryRequest):
+    try:
+        result = await agent.handle_query(
+            request.prompt,
+            history=[h.dict() for h in request.history] if request.history else None,
+        )
+        return result
+    except Exception as e:
+        print(f"Error in /api/query: {e}")
+        return {"error": str(e), "type": "chat", "analysis": f"Error: {str(e)}"}
+In agent/claude_agent.py, update the handle_query method to accept history. Replace the existing handle_query method with:
+python    async def handle_query(self, user_prompt: str, history: list = None) -> dict:
+        """
+        Main entry point. Classify the query, gather data, ask Claude.
+        """
+        query_info = self._classify_query(user_prompt)
+        market_data = await self._gather_data(query_info)
+        raw_response = self._ask_claude(user_prompt, market_data, history)
+        return self._parse_response(raw_response)
+In agent/claude_agent.py, replace the _ask_claude method with this (adds history support):
+python    def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None) -> str:
+        """Send the user's question + market data to Claude with conversation history."""
+        data_str = json.dumps(market_data, indent=2, default=str)
+
+        # Extract filters if present
+        filters = market_data.get("user_filters", {})
+        filter_instructions = ""
+        if filters:
+            if filters.get("market_cap"):
+                cap = filters["market_cap"]
+                if cap == "small_cap":
+                    filter_instructions += "\n⚠️ USER WANTS SMALL CAP STOCKS ONLY (under $2B market cap). Do NOT recommend any stock with a market cap above $2B. Filter out all large caps like RIVN, NVDA, AAPL, etc."
+                elif cap == "mid_cap":
+                    filter_instructions += "\n⚠️ USER WANTS MID CAP STOCKS ONLY ($2B-$10B market cap). Filter out small caps and large caps."
+                elif cap == "large_cap":
+                    filter_instructions += "\n⚠️ USER WANTS LARGE CAP STOCKS ONLY (over $10B market cap). Filter out small and mid caps."
+                elif cap == "mega_cap":
+                    filter_instructions += "\n⚠️ USER WANTS MEGA CAP STOCKS ONLY (over $200B market cap)."
+            if filters.get("sector"):
+                filter_instructions += f"\n⚠️ USER WANTS {filters['sector'].upper()} SECTOR ONLY. Only recommend stocks in this sector."
+            if filters.get("style"):
+                style = filters["style"]
+                if style == "day_trade":
+                    filter_instructions += "\n⚠️ USER WANTS DAY TRADES. Focus on high volume, high volatility stocks with intraday setups. Mention specific entry/exit levels and timeframes."
+                elif style == "swing":
+                    filter_instructions += "\n⚠️ USER WANTS SWING TRADES (days to weeks). Focus on stocks with developing technical patterns and upcoming catalysts."
+                elif style == "position":
+                    filter_instructions += "\n⚠️ USER WANTS POSITION TRADES (weeks to months). Focus on fundamental value and longer-term technical trends."
+
+        # Build messages array with history
+        messages = []
+
+        # Add conversation history (last 10 exchanges max to manage token usage)
+        if history:
+            recent_history = history[-20:]  # Last 10 user + 10 assistant messages
+            for msg in recent_history:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"],
+                })
+
+        # Add current user message with market data
+        messages.append({
+            "role": "user",
+            "content": (
+                f"## Real-Time Market Data\n"
+                f"{data_str}\n\n"
+                f"{filter_instructions}\n\n"
+                f"## User Question\n"
+                f"{user_prompt}"
+            ),
+        })
+
+        response = self.client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=4096,
+            system=SYSTEM_PROMPT,
+            messages=messages,
+        )
+        return response.content[0].text
