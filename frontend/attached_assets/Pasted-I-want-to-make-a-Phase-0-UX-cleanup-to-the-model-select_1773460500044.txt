@@ -1,0 +1,82 @@
+I want to make a Phase 0 UX cleanup to the model selection and collaboration controls in my app. This is a UI/UX rename and interaction cleanup only. Do NOT refactor the core routing logic yet unless absolutely necessary to support the rename.
+
+Goal:
+- Make "Caelyn" in the main top model selection row represent the smart automatic house mode.
+- Rename the current advanced collaboration/configuration panel from "Caelyn" to "Customize".
+- The user should clearly understand:
+  1) "Caelyn" = automatic intelligent mode
+  2) "Customize" = manual advanced collaboration settings
+
+Requirements:
+1. In the main model selection row, the first/main option should be labeled:
+   - Caelyn
+
+2. Keep the raw model buttons alongside it, such as:
+   - Claude
+   - GPT-4o / ChatGPT (whatever is currently used)
+   - Grok
+   - Gemini
+   - Perplexity
+
+3. The existing dropdown/panel that currently represents the configurable collaboration setup should be renamed from:
+   - Caelyn
+   to:
+   - Customize
+
+4. Any references in the UI, labels, headings, tooltips, or button text that imply that this advanced settings drawer is "Caelyn" should be updated to "Customize" where appropriate.
+
+5. Important UX distinction:
+   - Selecting "Caelyn" in the top row should feel like choosing the app’s default smart mode
+   - Opening "Customize" should feel like entering an advanced manual control panel
+
+6. Preserve all current advanced settings functionality:
+   - preset selection
+   - reasoning model selection
+   - collaborator toggles
+   - custom collaboration controls
+   These should remain functional, just relabeled under "Customize"
+
+7. If the current implementation has a "Default" preset inside the advanced panel:
+   - Keep it for now unless renaming it is trivial and low-risk
+   - If renamed, it should become something like "Auto" or "House Default"
+   - But do not break functionality just to rename this internal preset
+
+8. Add a small helper/subtitle/status text in the Customize panel if useful, something like:
+   - "Manual model and collaboration controls"
+   or
+   - "Advanced collaboration settings"
+   Keep it visually consistent with the existing design.
+
+9. For the main "Caelyn" mode, if there is room in the UI, add a subtle descriptive helper text or tooltip indicating this is the automatic smart mode. Example ideas:
+   - "Automatic multi-model intelligence"
+   - "Smart default mode"
+   Only do this if it fits the current design cleanly.
+
+10. Preserve existing styling language and visual hierarchy:
+   - dark terminal aesthetic
+   - current spacing, borders, glow, typography
+   - do not redesign the page
+   - this is a naming and UX clarity pass only
+
+Implementation guidance:
+- Make the smallest clean changes possible
+- Avoid breaking current state management
+- Avoid changing backend APIs unless needed
+- Reuse existing components where possible
+- Update labels, internal display names, and UI references consistently
+- If there are tests for these components, update them
+
+What I want from you:
+1. Find the frontend components responsible for:
+   - top model selection row
+   - collaboration/config drawer
+   - labels/tooltips for that area
+2. Make the rename cleanly and consistently
+3. Tell me exactly which files were changed
+4. Summarize any assumptions you had to make
+5. Flag any places where the backend naming still uses old terminology and may need alignment later
+
+Important:
+This is Phase 0 only. Do not implement the full new routing/orchestration logic yet. The goal is just to make the UX clean so that:
+- Caelyn = automatic house mode
+- Customize = advanced manual controls

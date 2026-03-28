@@ -1,0 +1,57 @@
+## Add: Futures/Perps section to crypto scan response display
+
+### What's changing
+The backend crypto response now includes HyperLiquid perpetual futures data. A new section needs to be rendered in the crypto scan panel.
+
+### New sections to render (after Hot Categories, before or after Top Momentum Picks):
+
+#### 1. "Futures & Perps — Hyperliquid" section header
+
+#### 2. Market Summary bar (horizontal stats bar, similar to how BTC/ETH cards are laid out):
+Total OI: $X.XB  |  24h Volume: $X.XB  |  Avg Funding: X.XXX%  |  Bias: [market_bias text]
+Data source: `perps_overview.market_summary`
+
+Style this as a single card with stats spread horizontally. Use ice-blue for the numbers.
+
+#### 3. Squeeze Candidates (HIGH PRIORITY — these are the best trade signals)
+Render as cards similar to Top Momentum Picks. Each card shows:
+[COIN]    Funding: -X.XX%    OI: $X.XM    24h: +X.X%
+Signal: [signal text]
+- Use a RED/ORANGE accent border for these cards (high-signal trades)
+- "SQUEEZE" badge in orange/red
+- Data source: `perps_squeezes` array
+
+#### 4. Crowded Longs (liquidation risk warnings)
+Render as smaller cards or a compact list:
+[COIN]    Funding: +X.XX%    OI: $X.XM    ⚠️ [signal]
+- Use YELLOW accent for warning
+- Data source: `perps_crowded_longs` array
+
+#### 5. Funding Divergences (if present)
+[COIN]   Type: BULLISH_DIVERGENCE   Funding: -X.XX%   Price: +X.X%
+[signal text]
+- BULLISH_DIVERGENCE → green accent
+- BEARISH_DIVERGENCE → red accent
+- Data source: `perps_divergences` array
+
+#### 6. Top Perps by Volume (compact list/table)
+Show as a small table or horizontal scroll of the most active futures:
+Coin    Volume 24h    Funding    24h Change
+BTC     $XX.XB       +0.001%    +0.5%
+ETH     $XX.XB       +0.002%    -0.8%
+...
+- Data source: `perps_top_volume` array
+
+### Styling
+Match the existing crypto scan card styling (dark backgrounds, monospace for numbers, colored percentages). The perps section should feel like a natural extension of the existing crypto scan output.
+
+### Graceful fallback
+If `perps_overview` or any perps field is missing/null, don't show that section. Don't show empty sections.
+
+### Testing
+1. Click "Crypto" → should see a "Futures & Perps" section below Hot Categories
+2. Squeeze candidates should display with funding rates
+3. Crowded longs should display with warning signals
+4. Market summary bar should show total OI and volume
+5. If HyperLiquid data is unavailable, section simply doesn't appear
+6. All existing crypto sections (BTC/ETH, Hot Categories, Top Momentum) still render correctly

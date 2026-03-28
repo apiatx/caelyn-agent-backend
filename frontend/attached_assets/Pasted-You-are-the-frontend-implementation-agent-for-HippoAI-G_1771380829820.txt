@@ -1,0 +1,81 @@
+You are the frontend implementation agent for HippoAI. Goal: redesign the homepage UI to feel like a Bloomberg Terminal workspace, while preserving 100% of existing prompts and functionality. Do not delete or rename any prompt. Only reorganize, restyle, and improve interaction patterns.
+
+PRIMARY OUTCOME
+Convert the current prompt-button wall into a terminal-style layout with:
+1) Top Command Bar (global run input)
+2) Left Rail Navigator (all prompts grouped + searchable)
+3) Main Workspace (dockable/resizable panels for results)
+4) Right Sidebar (persistent context + filters)
+5) Bottom Ticker Tape (headlines/movers/sentiment)
+
+NON-NEGOTIABLES
+- Keep every prompt and its exact underlying action intact.
+- No loss of functionality: prompt buttons, natural language chat, screening, analysis output, multi-source reasoning.
+- Existing backend calls remain unchanged where possible. Refactor only UI layer and state wiring.
+- Ensure mobile responsiveness but prioritize desktop terminal experience.
+- No large “ChatGPT chat” center column. Chat becomes a panel/module, not the entire product.
+
+INFORMATION ARCHITECTURE
+A) Top Command Bar (sticky):
+- Input supports natural language queries and explicit commands.
+- Support commands: /scan /analyze /news /sentiment /macro /watch
+- Enter runs query using existing backend endpoint.
+- Shift+Enter queues query (store in state as pending run).
+- Show small inline toggles: timeframe, universe, risk mode, sources.
+
+B) Left Rail Navigator:
+- Collapsible groups: All-Encompassing, Sectors, Technical Analysis, Fundamental Analysis, Buzz.
+- Each existing prompt becomes a compact list item, not a large pill button.
+- Add a prompt search input at top filtering prompt items in real time.
+- Clicking a prompt triggers its existing action and renders results to Main Workspace panels.
+
+C) Main Workspace Panels:
+- Implement a panel system: grid layout with resizable panels.
+- Default panels: Results Table, Insight Summary, News, Sentiment, Macro, Chart Snapshot, Chat.
+- Each run updates appropriate panels based on the action type.
+- Panels have header controls: pin, close, popout, refresh, copy.
+- Preserve the current response content, but render it inside panels with structured sections and tables.
+
+D) Right Sidebar:
+- Persistent filters and context that apply across runs:
+  - Active symbols, watchlist, sector, market cap range, liquidity filter
+  - Regime indicator and source toggles
+- Store in global state and apply to queries sent to backend as metadata when available.
+
+E) Bottom Ticker Tape:
+- Compact scrolling strip that displays:
+  - breaking headlines
+  - top movers
+  - sentiment spikes
+  - upcoming catalysts
+- Pull from existing data sources if available; otherwise show placeholders with hook points.
+
+DESIGN SYSTEM (Terminal look)
+- Use compact spacing and subtle borders.
+- Use mono or mono-like font for tickers/numbers.
+- Replace large rounded pills with squared or lightly rounded controls.
+- Prioritize tables first, narrative second.
+- Keep color minimal: use one accent color for highlights only.
+
+STATE + DATA FLOW
+- Create a Prompt Registry: a single data structure listing every prompt with id, group, label, icon, action handler.
+- Actions route to a unified “runCommand” function that calls existing backend.
+- Results normalized into a “panelData” store keyed by panel type.
+- Keep chat as one panel that can also run commands and update panels.
+
+ACCEPTANCE CRITERIA
+- Every prompt visible in the left rail and runnable.
+- Command bar can run the same actions as prompts using natural language.
+- Results appear in panels, not as a chat-first feed.
+- No regressions in backend integration.
+- UI feels dense, fast, and terminal-like on desktop.
+
+DELIVERABLES
+1) New page layout implementation
+2) Prompt Registry + left rail rendering
+3) Command bar + command palette
+4) Panel system with at least 6 default panels + chat panel
+5) Persistent sidebar filters wired into runCommand metadata
+6) Ticker tape component with data hook points
+
+Implement in React with clean components and minimal rework of existing API calls.

@@ -1,0 +1,60 @@
+Two fixes needed on the Portfolio Dashboard:
+FIX 1: Prices not loading
+Find where the frontend calls the quotes API after holdings are loaded. Make sure:
+
+The frontend calls /api/portfolio/quotes as a POST with {"tickers": ["IREN", "CIFR"]} immediately after loading holdings
+When quotes come back, calculate and display for each row:
+
+Price: quotes[ticker].price
+Daily P&L: (quotes[ticker].change * shares) — format as green +X.XXorred−X.XX or red -
+X.XXorred−X.XX
+
+Total P&L: ((quotes[ticker].price - avg_cost) * shares) — green or red
+Weight%: ((quotes[ticker].price * shares) / total_portfolio_value * 100)
+
+
+If quotes haven't loaded yet, show a loading spinner in those cells instead of dashes
+Add error handling — if /api/portfolio/quotes fails, show "Price unavailable" instead of blank
+
+Check the browser console for any errors when the page loads. The most likely issue is the fetch call isn't firing, the URL is wrong, or the response isn't being mapped to the table rows correctly.
+FIX 2: AI Portfolio Review button
+Update the AI Portfolio Review button to call the new /api/portfolio/review endpoint instead of /api/watchlist:
+tsxconst handleAIReview = async () => {
+  if (holdings.length === 0) {
+    alert("Add some holdings first");
+    return;
+  }
+  
+  setReviewLoading(true);
+  setReviewResult(null);
+  
+  try {
+    const response = await fetch("/api/portfolio/review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ holdings }),
+    });
+    
+    const data = await response.json();
+    
+    if (data.message) {
+      setReviewResult(data.message);
+    } else if (data.display_type === "chat") {
+      setReviewResult(data.message || "No analysis returned");
+    } else {
+      setReviewResult(JSON.stringify(data, null, 2));
+    }
+  } catch (err) {
+    setReviewResult("Failed to get portfolio review. Please try again.");
+  }
+  
+  setReviewLoading(false);
+};
+Display the review result in a styled text block below the button:
+
+Render the message text with proper line breaks (convert \n to <br> or use white-space: pre-wrap)
+Bold any text between ** markers (basic markdown rendering)
+Style it in a card with the same dark glass-morphism as the rest of the page
+Show a loading spinner with "Analyzing your portfolio..." text while waiting
+
+Re-deploy frontend.

@@ -1,0 +1,48 @@
+## Remove Index/Indices from Portfolio Dashboard completely
+
+### Changes needed:
+
+#### 1. Remove "Index" from the Add Holding type dropdown
+Find the asset type dropdown in the Add Holding form. Remove the "Index" option. The dropdown should only have:
+- Stock
+- ETF
+- Crypto
+- Commodity
+
+#### 2. Remove "Indices" from the Asset Allocation chart
+Find the Asset Allocation donut chart component. Remove the "Indices" category from the chart categories. Only these categories should exist:
+- Stocks (green)
+- ETFs (blue)
+- Crypto (amber)
+- Commodities (red)
+
+If any existing holdings have type "Index" or "index", reclassify them as "ETF" for display purposes in the chart.
+
+#### 3. Handle any existing index holdings gracefully
+If a user already has holdings with type "Index" saved in their portfolio data:
+- Display them as normal rows in the table (don't hide or delete them)
+- Treat them as "ETF" for the Asset Allocation chart
+- Show a small note or toast suggesting the user delete the index holding and re-add as the ETF equivalent
+
+#### 4. Revert any index-specific TradingView chart logic
+If any index-specific TradingView symbol mappings were added to the portfolio chart component (VIX → VIXY, SPX → SPY, etc.), remove them. The portfolio page should only handle:
+- Stocks: use raw ticker (e.g., NVDA)
+- ETFs: use raw ticker (e.g., SPY, QQQ)
+- Crypto: use BINANCE:{ticker}USDT mapping
+- Commodities: use raw ticker (e.g., GLD, SLV, USO)
+
+No index-specific chart handling needed since we're removing index support.
+
+#### 5. Do NOT touch anything outside the Portfolio Dashboard page
+- Do NOT change the main chat/agent page
+- Do NOT change the ticker strip at the top of the site
+- Do NOT change the macro dashboard
+- Do NOT change how Daily Briefing, Trending Now, or Best Trades reference indices
+- These all use separate backend endpoints that correctly handle VIX, SPX, DJI as indices
+
+### Testing
+1. Add Holding dropdown shows only: Stock, ETF, Crypto, Commodity — no Index option
+2. Asset Allocation chart shows only: Stocks, ETFs, Crypto, Commodities categories
+3. If VIX/SPX holdings exist from before, they still appear in the table (user can delete them manually)
+4. All stock, ETF, crypto, commodity holdings display correctly with prices, P&L, charts
+5. Main agent page (Daily Briefing, Trending Now, Best Trades) is completely unaffected

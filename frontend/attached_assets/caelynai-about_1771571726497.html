@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>About — CaelynAI</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg-deep: #050510;
+    --bg-primary: #0a0b1a;
+    --bg-card: #111228;
+    --bg-card-hover: #161838;
+    --border: #1e2148;
+    --border-glow: rgba(59, 130, 246, 0.15);
+    --ice-blue: #38bdf8;
+    --ice-glow: rgba(56, 189, 248, 0.3);
+    --frost: #e2e8f0;
+    --muted: #64748b;
+    --dim: #475569;
+    --accent-purple: #6366f1;
+    --accent-cyan: #06b6d4;
+    --accent-green: #22c55e;
+    --accent-orange: #f97316;
+    --accent-red: #ef4444;
+    --gradient-brand: linear-gradient(135deg, #6366f1, #3b82f6, #06b6d4);
+    --gradient-hero: linear-gradient(135deg, #6366f1 0%, #3b82f6 40%, #06b6d4 100%);
+  }
+
+  body {
+    background: var(--bg-deep);
+    color: var(--frost);
+    font-family: 'Outfit', sans-serif;
+    font-weight: 400;
+    line-height: 1.65;
+    overflow-x: hidden;
+  }
+
+  /* === BACKGROUND ATMOSPHERE === */
+  body::before {
+    content: '';
+    position: fixed;
+    top: -40%; left: -20%;
+    width: 140%; height: 140%;
+    background:
+      radial-gradient(ellipse 800px 600px at 20% 15%, rgba(99, 102, 241, 0.06) 0%, transparent 70%),
+      radial-gradient(ellipse 600px 500px at 80% 70%, rgba(6, 182, 212, 0.04) 0%, transparent 70%),
+      radial-gradient(ellipse 900px 400px at 50% 50%, rgba(59, 130, 246, 0.03) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .page { position: relative; z-index: 1; }
+
+  /* === NAV === */
+  nav {
+    padding: 1.5rem 3rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px);
+    background: rgba(10, 11, 26, 0.8);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .nav-logo {
+    font-size: 1.3rem;
+    font-weight: 600;
+    background: var(--gradient-brand);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -0.02em;
+  }
+
+  .nav-links { display: flex; gap: 2rem; }
+  .nav-links a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: color 0.2s;
+  }
+  .nav-links a:hover { color: var(--frost); }
+  .nav-links a.active { color: var(--ice-blue); }
+
+  /* === HERO === */
+  .hero {
+    padding: 8rem 3rem 5rem;
+    max-width: 900px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .hero-badge {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ice-blue);
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    border-radius: 100px;
+    padding: 0.4rem 1.2rem;
+    margin-bottom: 2.5rem;
+    background: rgba(56, 189, 248, 0.05);
+  }
+
+  .hero h1 {
+    font-size: clamp(2.4rem, 5vw, 3.6rem);
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.03em;
+    margin-bottom: 1.5rem;
+  }
+
+  .hero h1 .gradient-text {
+    background: var(--gradient-hero);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .hero-sub {
+    font-size: 1.15rem;
+    color: var(--muted);
+    max-width: 680px;
+    margin: 0 auto;
+    line-height: 1.7;
+  }
+
+  /* === SECTIONS === */
+  section {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 4rem 3rem;
+  }
+
+  .section-divider {
+    width: 60px;
+    height: 2px;
+    background: var(--gradient-brand);
+    margin: 0 auto 4rem;
+    border-radius: 2px;
+  }
+
+  h2 {
+    font-size: 1.6rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin-bottom: 1rem;
+  }
+
+  h2 .ice { color: var(--ice-blue); }
+
+  h3 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ice-blue);
+    margin-bottom: 0.75rem;
+  }
+
+  p { color: var(--dim); margin-bottom: 1.25rem; }
+  p.lead { color: var(--muted); font-size: 1.05rem; }
+
+  /* === DATA GRID === */
+  .data-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 2.5rem 0;
+  }
+
+  .data-cell {
+    background: var(--bg-card);
+    padding: 1.5rem;
+    transition: background 0.2s;
+  }
+  .data-cell:hover { background: var(--bg-card-hover); }
+
+  .data-cell .label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.5rem;
+  }
+
+  .data-cell .value {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--frost);
+    line-height: 1.4;
+  }
+
+  .data-cell .value .ice { color: var(--ice-blue); }
+
+  /* === FEATURE ROWS === */
+  .feature-row {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 2rem;
+    padding: 2rem 0;
+    border-bottom: 1px solid var(--border);
+    align-items: start;
+  }
+  .feature-row:last-child { border-bottom: none; }
+
+  .feature-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    color: var(--ice-blue);
+    padding-top: 0.15rem;
+  }
+
+  .feature-desc { color: var(--dim); font-size: 0.95rem; }
+  .feature-desc strong { color: var(--frost); font-weight: 500; }
+
+  /* === PIPELINE === */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 2.5rem 0;
+    position: relative;
+  }
+
+  .pipeline::before {
+    content: '';
+    position: absolute;
+    left: 15px;
+    top: 24px;
+    bottom: 24px;
+    width: 1px;
+    background: linear-gradient(to bottom, var(--accent-purple), var(--ice-blue), var(--accent-cyan));
+    opacity: 0.4;
+  }
+
+  .pipeline-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 1.25rem;
+    padding: 0.9rem 0;
+    position: relative;
+  }
+
+  .pipeline-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--ice-blue);
+    box-shadow: 0 0 8px var(--ice-glow);
+    margin-top: 5px;
+    flex-shrink: 0;
+    margin-left: 10px;
+  }
+
+  .pipeline-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    color: var(--dim);
+    line-height: 1.5;
+  }
+  .pipeline-text strong { color: var(--frost); font-weight: 500; }
+
+  /* === COMPARISON === */
+  .compare-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 2rem 0;
+    font-size: 0.88rem;
+  }
+
+  .compare-table th {
+    background: var(--bg-card);
+    padding: 1rem 1.25rem;
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .compare-table td {
+    padding: 0.85rem 1.25rem;
+    border-bottom: 1px solid rgba(30, 33, 72, 0.5);
+    color: var(--dim);
+  }
+
+  .compare-table tr:last-child td { border-bottom: none; }
+
+  .compare-table .them { color: var(--muted); }
+  .compare-table .us { color: var(--ice-blue); font-weight: 500; }
+
+  .tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .tag-green { background: rgba(34, 197, 94, 0.12); color: var(--accent-green); }
+  .tag-red { background: rgba(239, 68, 68, 0.12); color: var(--accent-red); }
+  .tag-blue { background: rgba(56, 189, 248, 0.12); color: var(--ice-blue); }
+
+  /* === SOURCE LIST === */
+  .source-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.75rem;
+    margin: 1.5rem 0;
+  }
+
+  .source-item {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--dim);
+    padding: 0.6rem 0.9rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .source-item .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .dot-blue { background: var(--ice-blue); }
+  .dot-green { background: var(--accent-green); }
+  .dot-purple { background: var(--accent-purple); }
+  .dot-orange { background: var(--accent-orange); }
+  .dot-cyan { background: var(--accent-cyan); }
+
+  /* === FOOTER === */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 3rem;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
+  footer .brand {
+    background: var(--gradient-brand);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 600;
+  }
+
+  /* === RESPONSIVE === */
+  @media (max-width: 700px) {
+    nav { padding: 1rem 1.5rem; }
+    .hero { padding: 5rem 1.5rem 3rem; }
+    section { padding: 3rem 1.5rem; }
+    .feature-row { grid-template-columns: 1fr; gap: 0.5rem; }
+    .data-grid { grid-template-columns: 1fr 1fr; }
+    .source-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<!-- NAV -->
+<nav>
+  <div class="nav-logo">CaelynAI</div>
+  <div class="nav-links">
+    <a href="#">Dashboard</a>
+    <a href="#" class="active">About</a>
+    <a href="#">Portfolio</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-badge">Cross-Asset Trading Intelligence</div>
+  <h1>
+    One agent. Every market.<br>
+    <span class="gradient-text">Institutional-grade signal.</span>
+  </h1>
+  <p class="hero-sub">
+    CaelynAI is an AI trading terminal that aggregates 19 real-time data sources, scores opportunities across stocks, crypto, and commodities using a deterministic framework, and delivers actionable trade plans — not market commentary.
+  </p>
+</div>
+
+<div class="section-divider"></div>
+
+<!-- WHAT IT IS -->
+<section>
+  <h3>What CaelynAI Is</h3>
+  <h2>A <span class="ice">decision engine</span> for active traders</h2>
+  <p class="lead">
+    CaelynAI replaces the 20-tab workflow. It pulls real-time price action, technical indicators, fundamental data, derivatives positioning, social sentiment, and macro signals — then a scoring engine ranks everything by conviction before an AI strategist synthesizes the output into specific trades with entries, stops, and targets.
+  </p>
+  <p>
+    Every recommendation passes a simple test: would a portfolio manager with $2M of their own capital actually size into this position? If the answer is no, it doesn't make the cut. If nothing qualifies, CaelynAI says so. Capital preservation is a valid output.
+  </p>
+</section>
+
+<!-- WHAT IT COVERS -->
+<section>
+  <h3>Coverage</h3>
+  <h2>Stocks. Crypto. Commodities. <span class="ice">Ranked together.</span></h2>
+  <p>
+    Most tools silo asset classes. CaelynAI evaluates them on the same scorecard. If the best risk-adjusted setup today is a gold ETF, it surfaces a gold ETF — not a mediocre tech stock just because you opened the equity tab.
+  </p>
+
+  <div class="data-grid">
+    <div class="data-cell">
+      <div class="label">Equities</div>
+      <div class="value">Large, mid, small, and <span class="ice">micro-cap</span> stocks. Screeners for oversold bounces, value-momentum, insider breakouts, high-growth small caps, dividend value, and short squeezes.</div>
+    </div>
+    <div class="data-cell">
+      <div class="label">Crypto</div>
+      <div class="value">Top 500 coins via CoinGecko and CMC. <span class="ice">HyperLiquid perps</span> with real-time funding rates, squeeze candidates, and open interest. altFINS technical analysis across 2,000+ tokens. Grok-powered X sentiment.</div>
+    </div>
+    <div class="data-cell">
+      <div class="label">Commodities</div>
+      <div class="value">Gold, oil, silver, copper, natural gas, uranium. Tracked through ETF proxies with the same TA and macro overlay applied to equities.</div>
+    </div>
+    <div class="data-cell">
+      <div class="label">Macro</div>
+      <div class="value">Fed rate trajectory, CPI, PCE, GDP, unemployment, yield curve, VIX, DXY, and <span class="ice">Fear & Greed</span> — woven into every single recommendation as the decision lens.</div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section>
+  <h3>Architecture</h3>
+  <h2>How the <span class="ice">pipeline</span> works</h2>
+  <p>
+    Every scan follows the same disciplined flow. No shortcuts, no vibes-based analysis.
+  </p>
+
+  <div class="pipeline">
+    <div class="pipeline-step">
+      <div class="pipeline-dot"></div>
+      <div class="pipeline-text"><strong>Routing</strong> — Preset intents resolve deterministically. Free-text queries go through an orchestrator that builds a data-gathering plan based on asset classes, modules, and filters.</div>
+    </div>
+    <div class="pipeline-step">
+      <div class="pipeline-dot"></div>
+      <div class="pipeline-text"><strong>Data Gathering</strong> — Parallel API calls with per-source timeouts, circuit breakers on repeated failures, tiered fallbacks, and a caching layer. If a source is down, the pipeline degrades gracefully — never returns blank.</div>
+    </div>
+    <div class="pipeline-step">
+      <div class="pipeline-dot"></div>
+      <div class="pipeline-text"><strong>Regime Detection</strong> — Macro regime (risk-on / risk-off / neutral) is computed from VIX, DXY, yield curve, Fear & Greed. This regime gates which asset classes and sectors get elevated or penalized.</div>
+    </div>
+    <div class="pipeline-step">
+      <div class="pipeline-dot"></div>
+      <div class="pipeline-text"><strong>Deterministic Scoring</strong> — Each candidate is scored 0–100 using weighted components: 30% Technical (Weinstein stage, trend, volume, pattern), 30% Catalyst (specificity, time-bound, repricing potential), 20% Sector Alignment, 10% Social Momentum, 10% Risk/Reward.</div>
+    </div>
+    <div class="pipeline-step">
+      <div class="pipeline-dot"></div>
+      <div class="pipeline-text"><strong>AI Synthesis</strong> — Claude receives the scored, compressed data and produces the final output: trade plans with entry, stop, target, R:R, conviction, position sizing tier, and a thesis grounded in the data — not generated from memory.</div>
+    </div>
+  </div>
+</section>
+
+<!-- CRYPTO DEPTH -->
+<section>
+  <h3>Crypto Intelligence</h3>
+  <h2>Built for <span class="ice">derivatives traders</span></h2>
+  <p>
+    The crypto module treats BTC as the only true investment. Everything else is a trade based on hype cycles paired with real technical momentum or catalysts. The system is built around this philosophy.
+  </p>
+
+  <div class="feature-row">
+    <div class="feature-label">HyperLiquid Perps</div>
+    <div class="feature-desc"><strong>Real-time funding rates, open interest, and volume</strong> across every perpetual future on HyperLiquid. Squeeze candidates (extreme negative funding + rising price), crowded longs (liquidation risk), and funding divergences — the highest-signal trades in crypto.</div>
+  </div>
+  <div class="feature-row">
+    <div class="feature-label">X Sentiment via Grok</div>
+    <div class="feature-desc"><strong>Social velocity detection</strong> — not just who's mentioned, but whose mentions are accelerating fastest. A micro-cap going from 100 to 1,000 mentions is higher signal than a large-cap with steady 5,000. Grok scans X in real-time and returns structured sentiment with BTC context.</div>
+  </div>
+  <div class="feature-row">
+    <div class="feature-label">altFINS TA</div>
+    <div class="feature-desc"><strong>Pre-computed technical analysis across 2,000+ crypto assets.</strong> RSI, MACD, SMA/EMA crossovers, chart patterns, candlestick patterns, support/resistance, and trend scores. CaelynAI never calculates indicators from raw candles — it uses institutional-grade pre-computed signals.</div>
+  </div>
+  <div class="feature-row">
+    <div class="feature-label">Narrative Rotation</div>
+    <div class="feature-desc"><strong>Hot category tracking</strong> from CoinGecko and CMC. Which sectors (AI, gaming, RWA, meme coins, L2s, DePIN) are gaining market cap? Dual-trending across both platforms is the strongest momentum signal.</div>
+  </div>
+</section>
+
+<!-- VS ALTERNATIVES -->
+<section>
+  <h3>The Difference</h3>
+  <h2>What this <span class="ice">replaces</span></h2>
+
+  <table class="compare-table">
+    <thead>
+      <tr>
+        <th></th>
+        <th>Typical AI Tool</th>
+        <th>CaelynAI</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Output</td>
+        <td class="them">"NVDA looks interesting. Consider doing more research."</td>
+        <td class="us">Entry $142.50 · Stop $138 · Target $158 · R:R 3.4:1 · HIGH conviction · Tier 2 size</td>
+      </tr>
+      <tr>
+        <td>Data</td>
+        <td class="them">ChatGPT training data (months old)</td>
+        <td class="us">19 live APIs aggregated per request <span class="tag tag-green">real-time</span></td>
+      </tr>
+      <tr>
+        <td>Scope</td>
+        <td class="them">Stocks only, or crypto only</td>
+        <td class="us">Stocks + crypto + commodities ranked on one scorecard <span class="tag tag-blue">cross-asset</span></td>
+      </tr>
+      <tr>
+        <td>Crypto Derivatives</td>
+        <td class="them">None</td>
+        <td class="us">HyperLiquid funding, OI, squeezes, divergences <span class="tag tag-green">live</span></td>
+      </tr>
+      <tr>
+        <td>Social Signal</td>
+        <td class="them">Summarizes Reddit threads</td>
+        <td class="us">Grok scans X for social velocity + StockTwits + Reddit, cross-referenced with volume</td>
+      </tr>
+      <tr>
+        <td>When nothing's good</td>
+        <td class="them">Forces 10 picks anyway</td>
+        <td class="us">"Nothing actionable. Cash is the position." <span class="tag tag-blue">honest</span></td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- DATA SOURCES -->
+<section>
+  <h3>Data Sources</h3>
+  <h2><span class="ice">19</span> providers. One unified view.</h2>
+  <p>
+    Every scan pulls from multiple sources in parallel. If one is rate-limited or down, the others fill the gap. No single point of failure.
+  </p>
+
+  <div class="source-grid">
+    <div class="source-item"><span class="dot dot-blue"></span>Finnhub</div>
+    <div class="source-item"><span class="dot dot-blue"></span>Finviz</div>
+    <div class="source-item"><span class="dot dot-blue"></span>StockAnalysis</div>
+    <div class="source-item"><span class="dot dot-blue"></span>AlphaVantage</div>
+    <div class="source-item"><span class="dot dot-blue"></span>Polygon</div>
+    <div class="source-item"><span class="dot dot-blue"></span>TwelveData</div>
+    <div class="source-item"><span class="dot dot-blue"></span>FMP</div>
+    <div class="source-item"><span class="dot dot-green"></span>CoinGecko</div>
+    <div class="source-item"><span class="dot dot-green"></span>CoinMarketCap</div>
+    <div class="source-item"><span class="dot dot-green"></span>HyperLiquid</div>
+    <div class="source-item"><span class="dot dot-green"></span>altFINS</div>
+    <div class="source-item"><span class="dot dot-purple"></span>Grok / xAI</div>
+    <div class="source-item"><span class="dot dot-purple"></span>StockTwits</div>
+    <div class="source-item"><span class="dot dot-purple"></span>Reddit</div>
+    <div class="source-item"><span class="dot dot-orange"></span>FRED</div>
+    <div class="source-item"><span class="dot dot-orange"></span>Fear & Greed</div>
+    <div class="source-item"><span class="dot dot-orange"></span>SEC / EDGAR</div>
+    <div class="source-item"><span class="dot dot-cyan"></span>Options Flow</div>
+    <div class="source-item"><span class="dot dot-cyan"></span>Claude (Anthropic)</div>
+  </div>
+</section>
+
+<!-- PRESETS -->
+<section>
+  <h3>Capabilities</h3>
+  <h2>What you can <span class="ice">ask</span></h2>
+
+  <div class="data-grid">
+    <div class="data-cell">
+      <div class="label">Daily Briefing</div>
+      <div class="value">Market pulse, top scanner signals, sector rotation, portfolio bias, and macro catalysts. One scan, full context.</div>
+    </div>
+    <div class="data-cell">
+      <div class="label">Trending Now</div>
+      <div class="value">Cross-asset shortlist with social receipts, technical confirmations, ratings, confidence scores, and position sizing.</div>
+    </div>
+    <div class="data-cell">
+      <div class="label">Best Trades</div>
+      <div class="value">Technical-first. Multiple indicator confirmation. Entry, stop, targets, timeframe, R:R, and TradingView-linked symbols.</div>
+    </div>
+    <div class="data-cell">
+      <div class="label">Crypto Scanner</div>
+      <div class="value">BTC/ETH dominance, Fear & Greed, HyperLiquid perps, squeeze candidates, X sentiment velocity, narrative rotation, and momentum picks.</div>
+    </div>
+    <div class="data-cell">
+      <div class="label">6 Equity Screeners</div>
+      <div class="value">Oversold+Growing, Value+Momentum, Insider+Breakout, High Growth Small Cap, Dividend Value, Short Squeeze. Deterministic filters, not AI guesses.</div>
+    </div>
+    <div class="data-cell">
+      <div class="label">Natural Language</div>
+      <div class="value">Ask anything. "What's the best squeeze play right now?" "Compare NVDA and AMD." "Is this a good time to buy gold?" The agent routes to the right data automatically.</div>
+    </div>
+  </div>
+</section>
+
+<!-- PORTFOLIO -->
+<section>
+  <h3>Portfolio</h3>
+  <h2>Track positions. Get <span class="ice">AI portfolio review.</span></h2>
+  <p>
+    Add your holdings — stocks, ETFs, crypto, commodities. See real-time P&L, asset allocation, and concentration risk. Then hit "AI Portfolio Review" for a position-by-position verdict: BUY MORE, HOLD, TRIM, or SELL — each grounded in current technicals, fundamentals, and macro context.
+  </p>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <p><span class="brand">CaelynAI</span> — Signal over noise.</p>
+  <p style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--dim);">
+    Not financial advice. CaelynAI is a research tool. All trading involves risk.
+  </p>
+</footer>
+
+</div>
+</body>
+</html>

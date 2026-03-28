@@ -1,0 +1,120 @@
+Goal: Preview is using a stale dev domain: …kirk.replit.dev. I need a fresh, working Preview URL. Do these steps exactly and report proof.
+
+1) Verify the problem
+
+Run and paste outputs:
+
+printenv | grep -i REPLIT_DEV_DOMAIN
+printenv | grep -i REPLIT_DOMAINS
+echo "PORT=$PORT"
+curl -sS http://127.0.0.1:$PORT/deployment-health || curl -sS http://127.0.0.1:$PORT/ || echo "LOCAL_FAIL"
+
+
+If local curl prints content, server is fine. The issue is Preview domain.
+
+2) Make Preview simple
+
+Open .replit and set only:
+
+run = "npm run start"
+
+
+Remove every [[ports]] block. Save.
+
+Confirm the server binds to 0.0.0.0 and $PORT in code. If not, change it:
+
+const port = Number(process.env.PORT || 5000);
+const host = '0.0.0.0';
+app.listen(port, host, () => console.log('listening', host, port));
+
+3) Hard restart the workspace
+
+Use the command palette:
+
+Reload workspace
+Then:
+
+Click Stop, then Run.
+Paste the current Preview globe URL you see now.
+
+4) If REPLIT_DEV_DOMAIN is still the old kirk host, regenerate it
+
+Try in order, stopping after one works. Paste outputs after each:
+
+A. Rebuild environment
+
+Open replit.nix → click Rebuild.
+
+Stop → Run.
+
+Paste:
+
+printenv | grep -i REPLIT_DEV_DOMAIN
+
+
+B. Sanity server to wake router
+Create a tiny server and run it once:
+
+printf '%s\n' "import http from 'http';
+const port = Number(process.env.PORT||5000);
+http.createServer((_,res)=>res.end('ok')).listen(port,'0.0.0.0',()=>console.log('listening',port));" > sanity.mjs
+
+
+Temporarily set .replit:
+
+run = "node sanity.mjs"
+
+
+Stop → Run → wait for “listening”.
+Copy the globe URL and test:
+
+curl -I "<GLOBE_URL>" | head -n 5 || echo GLOBE_FAIL
+printenv | grep -i REPLIT_DEV_DOMAIN
+
+
+Then restore .replit to:
+
+run = "npm run start"
+
+
+Stop → Run.
+
+C. Create a fresh workspace
+If A/B didn’t change the domain:
+
+Use Remix or Duplicate from dashboard to make a new repl from the same code.
+
+In the new repl: set .replit to run = "npm run start", Stop → Run.
+
+Paste:
+
+printenv | grep -i REPLIT_DEV_DOMAIN
+
+
+Copy the new globe URL.
+
+5) Acceptance criteria (must satisfy all)
+
+printenv | grep -i REPLIT_DEV_DOMAIN shows a non-kirk domain (typically *.replit.app or *.repl.co).
+
+curl -sS http://127.0.0.1:$PORT/ | head -n 1 returns content.
+
+curl -I "<current Preview globe URL>" | head -n 5 shows HTTP 200/301/302.
+
+Agent replies with:
+
+The final .replit run line
+
+The exact globe URL used
+
+The HTTP status code from curl -I "<globe>"
+
+The current REPLIT_DEV_DOMAIN value
+
+6) Rules
+
+Do not reuse any kirk.replit.dev link from history.
+
+Do not add [[ports]] unless required. Keep Preview auto-detect.
+
+Keep npm run start as the Run command so the port opens quickly.

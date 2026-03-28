@@ -1,0 +1,137 @@
+Goal: I added an <iframe> and now I get “Application error: a client-side exception has occurred.” Find the exact client-side error, confirm whether the target URL allows embedding, and fix the app so Preview renders.
+
+Step 1 — Capture the real error
+
+Run these and paste outputs:
+
+# 1) Build and start like prod
+npm run build && npm run start & sleep 2
+
+# 2) Hit root to ensure server is up
+curl -sSI http://127.0.0.1:$PORT/ | head -n 20
+
+# 3) Print the last 200 lines of console logs from the running app
+# (adjust if logs are elsewhere)
+tail -n 200 -f /home/runner/.cache/replit/workspace-logs 2>/dev/null | head -n 200 || true
+
+
+In the browser devtools Console, copy the first red error stack and the component name where it throws. Paste that in your reply.
+
+Step 2 — Check if the iframe target even allows embedding
+
+Replace <IFRAME_URL> with the exact src you set.
+
+export IFRAME_URL="<IFRAME_URL>"
+# Show frame-ancestors or X-Frame-Options on the target
+curl -sSI "$IFRAME_URL" | grep -iE 'x-frame-options|content-security-policy|frame-ancestors|cross-origin'
+
+
+If you see X-Frame-Options: DENY or SAMEORIGIN or CSP frame-ancestors 'none' or excludes our origin, embedding is blocked by the remote site. We must use a link or a proxy. Do not keep trying to iframe it.
+
+Step 3 — Fix our app so it does not crash
+
+Apply both fixes unless Step 2 proves the site is blocked.
+
+Add an Error Boundary around the iframe page so the app never hard-crashes:
+
+// client/src/components/ErrorBoundary.tsx
+import React from "react";
+export class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean}> {
+  constructor(props:any){ super(props); this.state = { hasError:false }; }
+  static getDerivedStateFromError(){ return { hasError:true }; }
+  componentDidCatch(err:any, info:any){ console.error("Boundary caught:", err, info); }
+  render(){ return this.state.hasError ? <div style={{padding:16}}>Widget failed to load.</div> : this.props.children; }
+}
+
+
+Wrap your page:
+
+// client/src/pages/your-page.tsx
+import { ErrorBoundary } from "../components/ErrorBoundary";
+
+export default function YourPage(){
+  return (
+    <ErrorBoundary>
+      <SafeIframe src="<IFRAME_URL>" title="partner" />
+    </ErrorBoundary>
+  );
+}
+
+
+Use a hardened iframe component so bad URLs do not throw:
+
+// client/src/components/SafeIframe.tsx
+import React, { useMemo, useState } from "react";
+
+const ALLOW_HOSTS = ["app.aark.digital","aark.digital","your-allowed-host.com"];
+
+function sanitize(url: string){
+  try{
+    const u = new URL(url);
+    if (u.protocol !== "https:") return null;
+    const ok = ALLOW_HOSTS.some(h => u.hostname === h || u.hostname.endsWith("."+h));
+    return ok ? u.toString() : null;
+  }catch{ return null; }
+}
+
+export function SafeIframe({ src, title }:{src:string; title:string}){
+  const clean = useMemo(()=>sanitize(src),[src]);
+  const [failed, setFailed] = useState(false);
+
+  if (!clean) return <div style={{padding:16}}>Blocked: unsafe or disallowed URL</div>;
+
+  return failed ? (
+    <div style={{padding:16}}>Couldn’t load widget. <a href={clean} target="_blank" rel="noopener noreferrer">Open in new tab</a></div>
+  ) : (
+    <iframe
+      src={clean}
+      title={title}
+      style={{width:"100%", height:"80vh", border:0}}
+      sandbox="allow-scripts allow-same-origin"
+      referrerPolicy="no-referrer"
+      loading="lazy"
+      onError={()=>setFailed(true)}
+    />
+  );
+}
+
+Step 4 — Headers that let Preview embed us (and let us embed others)
+
+If we use Helmet or set headers, ensure we are iframe-friendly in Preview:
+
+// server/index.ts
+import helmet from "helmet";
+
+app.use(helmet({
+  frameguard: false,
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      "frame-ancestors": ["'self'", "*.replit.dev", "*.repl.co", "*.replit.app"]
+    }
+  }
+}));
+
+
+If the remote site blocks embedding (Step 2), we cannot override that from our end. Provide an “Open in new tab” fallback and stop iframing it.
+
+Step 5 — Validate and report back
+
+Run and paste:
+
+# local health
+curl -sSI http://127.0.0.1:$PORT/ | head -n 20
+# show our headers relevant to iframe
+curl -sSI http://127.0.0.1:$PORT/ | grep -iE 'x-frame-options|content-security-policy|frame-ancestors' || echo NO_IFRAME_BLOCKERS
+# test the target headers again
+curl -sSI "$IFRAME_URL" | grep -iE 'x-frame-options|content-security-policy|frame-ancestors' || echo NO_TARGET_BLOCKERS
+
+
+Acceptance criteria:
+
+My app’s root shows no X-Frame-Options and has CSP frame-ancestors 'self' *.replit.dev *.repl.co *.replit.app.
+
+If the target allows embedding, the iframe renders in Preview without throwing.
+
+If the target blocks embedding, the page does not crash; instead I see a clear fallback with a link.

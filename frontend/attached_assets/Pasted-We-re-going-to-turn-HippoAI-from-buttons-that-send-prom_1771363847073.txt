@@ -1,0 +1,483 @@
+We’re going to turn HippoAI from “buttons that send prompts” into a command-driven market terminal.
+
+No fluff. Clean architecture. Deterministic behavior.
+
+🧠 CANONICAL INTENT LIST (Master Control Layer)
+
+These are the ONLY intents your backend should understand.
+
+Everything else maps into one of these.
+
+1️⃣ cross_asset_trending
+
+Purpose: What is moving right now across markets.
+
+Use when:
+
+Trending Now
+
+Daily Briefing
+
+Social Momentum (cross-asset)
+
+“What’s hot?”
+
+Modules:
+
+x_sentiment = true
+
+stocktwits_sentiment = true
+
+technical_scan = true
+
+fundamental_validation = true
+
+macro_context = true
+
+liquidity_filter = true
+
+Response Style:
+
+ranked_list
+
+institutional_brief
+
+2️⃣ daily_briefing
+
+Purpose: Structured start-of-day overview.
+
+Modules:
+
+macro_context = true
+
+sector_rotation = true
+
+technical_scan = true
+
+sentiment_summary = true
+
+liquidity_filter = true
+
+Response Style:
+
+institutional_brief
+
+portfolio_bias
+
+3️⃣ tactical_trades
+
+Purpose: Short-term setups.
+
+Modules:
+
+technical_scan = true
+
+volume_movers = true
+
+short_squeeze_scan = true
+
+sentiment = true
+
+liquidity_filter = true
+
+Response Style:
+
+tactical_trade
+
+ranked_list
+
+4️⃣ long_term_conviction
+
+Purpose: Investment-grade ideas.
+
+Modules:
+
+fundamental_validation = true
+
+sector_alignment = true
+
+macro_context = true
+
+liquidity_filter = true
+
+Response Style:
+
+full_thesis
+
+investment_brief
+
+5️⃣ macro_outlook
+
+Purpose: Big picture regime + allocation.
+
+Modules:
+
+macro_context = true
+
+sector_rotation = true
+
+risk_framework = true
+
+Response Style:
+
+macro_report
+
+6️⃣ sector_rotation
+
+Purpose: Hot / cold sector flows.
+
+Modules:
+
+sector_strength_scan = true
+
+macro_context = true
+
+relative_strength = true
+
+Response Style:
+
+ranked_sector_list
+
+7️⃣ sector_focus
+
+Purpose: Deep dive within a sector.
+
+Requires parameter:
+
+sector_name
+
+Modules:
+
+technical_scan (sector filtered)
+
+fundamental_validation
+
+sentiment
+
+liquidity_filter
+
+Response Style:
+
+ranked_list + mini thesis per name
+
+8️⃣ crypto_focus
+
+Purpose: Crypto-only scan.
+
+Modules:
+
+x_sentiment = true
+
+crypto_technical = true
+
+catalyst_validation = true
+
+liquidity_filter = true
+
+Response Style:
+
+ranked_crypto_list
+
+9️⃣ technical_scan
+
+Purpose: Pure TA scan.
+
+Subtypes:
+
+stage2
+
+breakout
+
+breakdown
+
+oversold
+
+crossover
+
+momentum_shift
+
+Modules:
+
+technical_scan = true
+
+volume_confirmation = true
+
+liquidity_filter = true
+
+Response Style:
+
+ranked_list
+
+🔟 microcap_asymmetry
+
+Purpose: High-upside small caps with real catalysts.
+
+Modules:
+
+catalyst_validation = true
+
+sector_alignment = true
+
+early_technical_shift = true
+
+sentiment_quality_filter = true
+
+liquidity_floor (lower threshold)
+
+Response Style:
+
+asymmetric_thesis
+
+1️⃣1️⃣ fundamental_scan
+
+Purpose: Fundamentals-only leaders.
+
+Subtypes:
+
+improving_fundamentals
+
+earnings_watch
+
+fundamental_leaders
+
+Modules:
+
+fundamental_validation = true
+
+earnings_calendar = true
+
+liquidity_filter = true
+
+Response Style:
+
+ranked_list
+
+1️⃣2️⃣ sentiment_scan
+
+Purpose: Buzz-based but filtered.
+
+Modules:
+
+x_sentiment = true
+
+stocktwits_sentiment = true
+
+spam_filter = true
+
+liquidity_filter = true
+
+Response Style:
+
+ranked_list + risk_flag
+
+🎯 NOW — MAP EVERY BUTTON YOU SHOWED
+🔥 All-Encompassing
+🔥 Trending Now
+
+→ intent: cross_asset_trending
+
+✨ Daily Briefing
+
+→ intent: daily_briefing
+
+🔥 Best Trades
+
+→ intent: tactical_trades
+
+💎 Best Investments
+
+→ intent: long_term_conviction
+
+🌍 Macro Overview
+
+→ intent: macro_outlook
+
+🏛 Sectors
+Sector Rotation
+
+→ intent: sector_rotation
+
+Crypto
+
+→ intent: crypto_focus
+
+Energy
+
+→ intent: sector_focus
+parameter: "energy"
+
+AI/Compute
+
+→ intent: sector_focus
+parameter: "ai_compute"
+
+Materials
+
+→ intent: sector_focus
+parameter: "materials"
+
+Quantum
+
+→ intent: sector_focus
+parameter: "quantum"
+
+Aerospace/Defense
+
+→ intent: sector_focus
+parameter: "aerospace_defense"
+
+Tech
+
+→ intent: sector_focus
+parameter: "technology"
+
+Finance
+
+→ intent: sector_focus
+parameter: "financials"
+
+Commodities
+
+→ intent: sector_focus
+parameter: "commodities"
+
+Healthcare
+
+→ intent: sector_focus
+parameter: "healthcare"
+
+Real Estate
+
+→ intent: sector_focus
+parameter: "real_estate"
+
+Uranium/Nuclear
+
+→ intent: sector_focus
+parameter: "uranium_nuclear"
+
+📊 Technical Analysis
+Stage 2 Breakouts
+
+→ intent: technical_scan
+subtype: "stage2"
+
+Bearish Setups
+
+→ intent: technical_scan
+subtype: "bearish_setup"
+
+Asymmetric Only
+
+→ intent: microcap_asymmetry
+
+Small Cap Spec
+
+→ intent: microcap_asymmetry
+
+Short Squeeze
+
+→ intent: technical_scan
+subtype: "short_squeeze"
+
+Bullish Breakouts
+
+→ intent: technical_scan
+subtype: "bullish_breakout"
+
+Bearish Breakdowns
+
+→ intent: technical_scan
+subtype: "bearish_breakdown"
+
+Oversold Bounces
+
+→ intent: technical_scan
+subtype: "oversold"
+
+Overbought Warnings
+
+→ intent: technical_scan
+subtype: "overbought"
+
+Crossover Signals
+
+→ intent: technical_scan
+subtype: "crossover"
+
+Momentum Shifts
+
+→ intent: technical_scan
+subtype: "momentum_shift"
+
+Trend Status
+
+→ intent: technical_scan
+subtype: "trend_status"
+
+Volume & Movers
+
+→ intent: tactical_trades
+
+📈 Fundamental Analysis
+Fundamental Leaders
+
+→ intent: fundamental_scan
+subtype: "leaders"
+
+Rapidly Improving Fundamentals
+
+→ intent: fundamental_scan
+subtype: "improving"
+
+Earnings Watch
+
+→ intent: fundamental_scan
+subtype: "earnings_watch"
+
+📡 Buzz
+Social Momentum
+
+→ intent: sentiment_scan
+
+News Headline Leaders
+
+→ intent: sentiment_scan
+subtype: "news_weighted"
+
+Upcoming Catalysts
+
+→ intent: fundamental_scan
+subtype: "catalyst_watch"
+
+🔐 Implementation Philosophy
+
+Frontend sends:
+
+{
+  preset_intent: "microcap_asymmetry",
+  subtype: "stage2",
+  sector: "ai_compute"
+}
+
+
+Backend constructs orchestration_plan.
+
+Claude never sees preset names.
+
+Claude sees:
+
+Structured dataset
+
+System prompt
+
+User query
+
+🏁 What This Achieves
+
+• Clean architecture
+• Deterministic behavior
+• No prompt corruption
+• Scalable design
+• Zero frontend AI logic
+• Institutional-grade command system

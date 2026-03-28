@@ -1,0 +1,116 @@
+## CRITICAL Bug: Crypto scan results disappear from screen before user can read them
+
+### Problem
+When the user clicks "Crypto" in the sidebar, the response loads and renders on screen (BTC/ETH cards, Hot Categories, Top Momentum, Perps data all appear). But then after a few seconds, the entire response DISAPPEARS. The user doesn't navigate away — the panel just clears itself. This happened twice in a row.
+
+The crypto scan takes 60-90 seconds to return data. Once it finally renders, it should stay on screen permanently until the user:
+- Clicks a different preset
+- Clicks "NEW" to start a new conversation
+- Navigates to a different page
+- Manually closes the panel
+
+### Diagnosis Steps
+
+Search the frontend codebase for ANY of these patterns that could cause auto-clearing:
+
+1. **setTimeout or setInterval that clears response state:**
+```bash
+grep -rn "setTimeout\|setInterval" --include="*.tsx" --include="*.ts" --include="*.jsx" --include="*.js" src/ client/ frontend/ app/ 2>/dev/null | grep -i "clear\|reset\|null\|remove\|dismiss\|empty\|\[\]\|''" | grep -v node_modules
+```
+
+2. **Response timeout that clears displayed data:**
+```bash
+grep -rn "timeout\|TIMEOUT\|stale\|expire\|ttl\|max_age\|maxAge" --include="*.tsx" --include="*.ts" --include="*.jsx" --include="*.js" src/ client/ frontend/ app/ 2>/dev/null | grep -v node_modules | head -30
+```
+
+3. **Polling or refetch that overwrites the response:**
+```bash
+grep -rn "polling\|refetch\|setInterval\|useInterval\|auto.*refresh" --include="*.tsx" --include="*.ts" --include="*.jsx" --include="*.js" src/ client/ frontend/ app/ 2>/dev/null | grep -v node_modules | head -20
+```
+
+4. **WebSocket message handler that resets state:**
+```bash
+grep -rn "onmessage\|addEventListener.*message\|socket.*on\|ws.*on" --include="*.tsx" --include="*.ts" --include="*.jsx" --include="*.js" src/ client/ frontend/ app/ 2>/dev/null | grep -v node_modules | head -20
+```
+
+5. **State management that resets panels:**
+```bash
+grep -rn "setPanels\|setResponse\|setMessages\|setResult\|setChatMessages" --include="*.tsx" --include="*.ts" --include="*.jsx" --include="*.js" src/ client/ frontend/ app/ 2>/dev/null | grep -v node_modules | head -30
+```
+
+### Common culprits and fixes:
+
+#### A. If there's a setTimeout that clears the response:
+```javascript
+// BAD — auto-clears after timeout
+setTimeout(() => {
+    setResponse(null);  // or setPanels([]) or setMessages([])
+}, 30000);
+```
+REMOVE this timeout entirely. Responses should persist until explicitly dismissed.
+
+#### B. If there's a "stale data" check:
+```javascript
+// BAD — clears "old" responses
+if (Date.now() - responseTimestamp > SOME_TIMEOUT) {
+    clearResponse();
+}
+```
+REMOVE this check. Data should stay visible regardless of age.
+
+#### C. If there's a polling/refetch cycle that overwrites:
+```javascript
+// BAD — periodic refetch that overwrites the current panel
+setInterval(() => {
+    fetchLatestData().then(data => setResponse(data));
+}, 10000);
+```
+Don't auto-refetch while a response is displayed. Only refetch when user explicitly requests it.
+
+#### D. If the issue is a race condition with the loading state:
+```javascript
+// BAD — loading state toggles back and clears data
+setLoading(true);
+// ... fetch completes ...
+setLoading(false);
+setResponse(data);
+// But then something else sets loading to true again, which clears response
+```
+Make sure setting loading state doesn't clear the response data.
+
+#### E. If the API request has a client-side abort/timeout:
+```javascript
+// BAD — AbortController kills the request, then error handler clears display
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 30000);
+
+// In catch block:
+catch(err) {
+    if (err.name === 'AbortError') {
+        setResponse(null);  // This clears what was displayed!
+    }
+}
+```
+The crypto response takes 60-90 seconds. If there's a client-side fetch timeout shorter than this, it will abort the request. But since the user IS seeing the data briefly before it disappears, the data IS arriving. So the issue is more likely a post-render cleanup, not a fetch abort.
+
+#### F. If there's a second request being fired that overwrites the first:
+Check if clicking "Crypto" fires the request twice (React strict mode, double-render, or the preset click handler firing twice). The second request might return an error or empty result that overwrites the first successful response.
+```bash
+grep -rn "handlePreset\|handleScan\|onPresetClick\|handleSubmit" --include="*.tsx" --include="*.ts" --include="*.jsx" --include="*.js" src/ client/ frontend/ app/ 2>/dev/null | grep -v node_modules | head -20
+```
+
+If double-firing, add a guard:
+```javascript
+if (isLoading) return; // Don't fire again while already loading
+```
+
+### The fix principle
+Whatever the cause: **once a response is rendered on screen, it MUST stay visible until the user takes an explicit action to dismiss or replace it.** No auto-clearing, no timeouts, no background refreshes that overwrite displayed data.
+
+### Testing
+1. Click "Crypto" → wait for full response to load (60-90 seconds)
+2. Response appears with BTC/ETH, Hot Categories, Momentum Picks, Perps data
+3. Wait 5 minutes — response MUST still be visible
+4. Only disappears when user clicks NEW, clicks a different preset, or navigates away
+5. Test other presets too (Daily Briefing, Trending Now) — make sure they also persist
+6. No duplicate requests in Network tab when clicking a preset once

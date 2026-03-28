@@ -1,0 +1,40 @@
+Frontend only. Give this to your frontend Replit Agent:
+
+Remove the separate "Enter your tickers" watchlist input bar entirely. The main chat input ("Best trades today... Analyze NVDA...") already handles everything — users can just type "Review NVDA, AMD, SMCI, CCJ, UEC, SMR, PLTR, CRDO" in the chat input and it should work. We don't need two input fields for this.
+
+Delete the entire watchlist ticker input section — the "Enter your tickers (up to 25, separated by commas or spaces)" box, the "Review" button, and the example text below it. Remove it completely from the page.
+Update the chat input placeholder to hint that watchlist review is supported. Change the placeholder from:
+"Best trades today... Analyze NVDA... Best improving fundamentals..."
+to:
+"Best trades today... Review NVDA, AMD, PLTR... Analyze SMCI... Screen for small caps..."
+In the send message handler, detect when the user enters a comma-separated list of tickers and automatically route it to the /api/watchlist endpoint instead of /api/query:
+
+tsxconst sendMessage = async (query: string) => {
+  // Detect if this looks like a watchlist review (multiple tickers)
+  const tickerPattern = /^(review|analyze|check|watchlist)?\s*[A-Z]{1,5}(\s*[,\s]\s*[A-Z]{1,5}){2,}/i;
+  const cleanedQuery = query.trim();
+  
+  // If it matches "NVDA, AMD, PLTR" or "Review NVDA AMD PLTR" pattern (3+ tickers)
+  if (tickerPattern.test(cleanedQuery)) {
+    // Extract tickers
+    const tickers = cleanedQuery
+      .replace(/^(review|analyze|check|watchlist|my)\s*/i, "")
+      .split(/[,\s]+/)
+      .map(t => t.trim().toUpperCase())
+      .filter(t => /^[A-Z]{1,5}$/.test(t))
+      .slice(0, 25);
+    
+    if (tickers.length >= 3) {
+      // Route to watchlist endpoint
+      await sendWatchlistReview(tickers);
+      return;
+    }
+  }
+  
+  // Otherwise, send to normal /api/query endpoint
+  await sendNormalQuery(query);
+};
+
+Keep everything else the same — the AI screener section stays, the prompt buttons stay, the chat history stays. Only the duplicate ticker input bar is removed.
+
+Re-deploy after changes.

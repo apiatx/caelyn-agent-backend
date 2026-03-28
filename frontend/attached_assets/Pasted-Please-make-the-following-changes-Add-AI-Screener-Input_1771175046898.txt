@@ -1,0 +1,31 @@
+Please make the following changes:
+Add AI Screener Input Section
+Below the Watchlist Review button row, add a new section for the AI screener. This should have:
+
+A section header styled as a subtle label, something like "AI Screener" in dim text with a small icon
+A taller text input (textarea, 2-3 lines) with placeholder text:
+"Screen for stocks... e.g. 'Small caps under $2B, revenue growth >30%, positive EBITDA, RSI under 40, insider buying in last 30 days'"
+A "Scan" button next to or below the textarea (styled like the Analyze button but maybe with a different accent color like green or the purple theme color)
+Quick filter chips below the textarea — small clickable pill buttons that pre-fill common screens:
+
+Oversold + Growing → prefills: "Stocks with RSI under 35, revenue growth >20%, above SMA200, avg volume >300K"
+Value + Momentum → prefills: "P/E under 20, revenue growth >15%, above SMA50 and SMA200, relative volume >1.5x"
+Insider + Breakout → prefills: "Insider buying last 30 days, above SMA50 and SMA200, unusual volume, market cap under $10B"
+High Growth Small Cap → prefills: "Market cap under $2B, revenue growth >30%, EPS growth >25%, positive margins"
+Dividend Value → prefills: "Dividend yield >3%, P/E under 20, debt to equity under 0.5, market cap over $2B"
+Short Squeeze Setup → prefills: "Short float >15%, RSI under 40, above SMA50, unusual volume, market cap under $5B"
+
+
+When the user clicks "Scan" or hits Enter, it sends the textarea content as the prompt to the same /api/query endpoint, just like the other buttons
+The results should render using a new renderScreener function that displays the data as a clean table/grid:
+
+Sortable columns (click column header to sort)
+Columns: Ticker, Company, Price, Change%, Market Cap, Rev Growth, Margin, P/E, RSI, Volume, Analyst Rating, Upside
+Highlighted rows for top picks
+Expandable rows that show the full detail + trade plan when clicked
+A "Top Picks" summary section above the table showing Claude's highlighted favorites with analysis
+
+
+
+Style the AI screener section to feel visually distinct from the buttons above — like a "pro tool" section. Maybe a slightly different background shade or a border separating it.
+Re-deploy the frontend.

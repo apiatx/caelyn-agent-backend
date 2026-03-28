@@ -1,0 +1,202 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* ─── Enterprise Terminal Palette (ice-blue accent) ─── */
+  --background: hsl(220, 14%, 3%);
+  --foreground: hsl(210, 20%, 93%);
+  --muted: hsl(220, 12%, 8%);
+  --muted-foreground: hsl(215, 10%, 52%);
+  --popover: hsl(220, 14%, 4%);
+  --popover-foreground: hsl(210, 20%, 93%);
+  --card: hsl(220, 12%, 5%);
+  --card-foreground: hsl(210, 20%, 93%);
+  --border: hsla(210, 20%, 50%, 0.10);
+  --input: hsl(220, 12%, 8%);
+  --primary: hsl(200, 85%, 55%);
+  --primary-foreground: hsl(220, 14%, 3%);
+  --secondary: hsl(220, 12%, 8%);
+  --secondary-foreground: hsl(210, 20%, 93%);
+  --accent: hsl(220, 12%, 10%);
+  --accent-foreground: hsl(210, 20%, 93%);
+  --destructive: hsl(0, 72%, 51%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --ring: hsl(200, 85%, 55%);
+  --radius: 0.75rem;
+
+  /* ─── Crypto Status Colors (refined, not neon) ─── */
+  --crypto-black: hsl(220, 14%, 3%);
+  --crypto-charcoal: hsl(220, 12%, 8%);
+  --crypto-silver: hsl(215, 12%, 60%);
+  --crypto-success: hsl(160, 72%, 40%);
+  --crypto-danger: hsl(0, 75%, 52%);
+  --crypto-warning: hsl(42, 90%, 55%);
+
+  /* ─── Ice Blue Brand Accent (matches logo) ─── */
+  --ice-blue: hsl(200, 90%, 58%);
+  --ice-blue-light: hsl(200, 70%, 78%);
+  --ice-blue-dim: hsl(200, 60%, 30%);
+  --ice-blue-glow: hsla(200, 90%, 58%, 0.12);
+}
+
+.dark {
+  --background: hsl(220, 14%, 3%);
+  --foreground: hsl(210, 20%, 93%);
+  --muted: hsl(220, 12%, 8%);
+  --muted-foreground: hsl(215, 10%, 45%);
+  --popover: hsl(220, 14%, 4%);
+  --popover-foreground: hsl(210, 20%, 93%);
+  --card: hsl(220, 12%, 5%);
+  --card-foreground: hsl(210, 20%, 93%);
+  --border: hsla(210, 20%, 50%, 0.10);
+  --input: hsl(220, 12%, 8%);
+  --primary: hsl(200, 85%, 55%);
+  --primary-foreground: hsl(220, 14%, 3%);
+  --secondary: hsl(220, 12%, 8%);
+  --secondary-foreground: hsl(210, 20%, 93%);
+  --accent: hsl(220, 12%, 10%);
+  --accent-foreground: hsl(210, 20%, 93%);
+  --destructive: hsl(0, 62%, 35%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --ring: hsl(200, 85%, 55%);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply font-sans antialiased text-foreground min-h-screen;
+    background: #050608;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer utilities {
+  /* ─── Glass Card: refined enterprise glassmorphism ─── */
+  .glass-card {
+    @apply backdrop-blur-xl border rounded-xl;
+    background: linear-gradient(145deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.006) 100%);
+    border-color: rgba(255,255,255,0.06);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.03),
+      0 0 0 0.5px rgba(255,255,255,0.02),
+      0 2px 16px rgba(0,0,0,0.3);
+  }
+
+  .glass-card:hover {
+    border-color: rgba(255,255,255,0.09);
+  }
+
+  /* ─── Glass Card Dark: sticky headers ─── */
+  .glass-card-dark {
+    @apply backdrop-blur-xl border-b;
+    background: rgba(6,7,10,0.90);
+    border-color: rgba(255,255,255,0.05);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.02);
+    border-radius: 0;
+  }
+
+  /* ─── Crypto Status Colors ─── */
+  .text-crypto-success { color: var(--crypto-success); }
+  .text-crypto-danger { color: var(--crypto-danger); }
+  .text-crypto-warning { color: var(--crypto-warning); }
+  .text-crypto-silver { color: var(--crypto-silver); }
+
+  .bg-crypto-success { background-color: var(--crypto-success); }
+  .bg-crypto-danger { background-color: var(--crypto-danger); }
+  .bg-crypto-warning { background-color: var(--crypto-warning); }
+
+  .border-crypto-success { border-color: var(--crypto-success); }
+  .border-crypto-danger { border-color: var(--crypto-danger); }
+  .border-crypto-warning { border-color: var(--crypto-warning); }
+  .border-crypto-silver { border-color: var(--crypto-silver); }
+
+  /* ─── Scrollbar Utility ─── */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ─── Global Scrollbar ─── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.12);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ─── Selection ─── */
+::selection {
+  background: hsla(200, 90%, 58%, 0.25);
+  color: #fff;
+}
+
+/* ─── Mobile Responsiveness ─── */
+@media (max-width: 767px) {
+  html, body {
+    overflow-x: hidden !important;
+    width: 100% !important;
+    max-width: 100vw !important;
+  }
+
+  #root {
+    overflow-x: hidden !important;
+    max-width: 100vw !important;
+  }
+
+  * {
+    max-width: 100vw;
+    box-sizing: border-box;
+  }
+
+  h1 { font-size: 1.5rem !important; }
+  h2 { font-size: 1.25rem !important; }
+  h3 { font-size: 1.1rem !important; }
+
+  table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  iframe {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 250px;
+  }
+}
+
+iframe {
+  max-width: 100%;
+}
+
+@media (max-width: 767px) {
+  .mobile-touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+.chatbot-chips-bar::-webkit-scrollbar {
+  display: none;
+}

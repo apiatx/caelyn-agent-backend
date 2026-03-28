@@ -1,0 +1,85 @@
+FRONTEND: Make Trending Now render with the same polished UI quality as Daily Briefing, without changing backend response quality.
+
+Goal:
+Trending Now currently displays as plain analyst text (analysis string). Daily Briefing is pretty because we render a structured panel. Implement the same approach for Trending Now.
+
+Constraints:
+- Do NOT change payload contract.
+- Do NOT change backend prompts or scoring.
+- Do NOT reintroduce JSON.stringify into chat bubble.
+- Keep storing full parsed response in panel.data.parsed for debugging.
+- Only change the renderer: how we display the existing response.
+
+Steps:
+
+1) Identify the display_type for Trending Now
+- In the response envelope, look at:
+  data.structured.display_type OR data.type OR data.structured.type (whichever you use)
+- Confirm what value is coming back when clicking Trending Now.
+  Likely: "cross_asset_trending" or similar.
+
+2) Build a dedicated renderer for Trending Now
+Create a component like:
+  CrossAssetTrendingPanel.tsx
+(or add it into the existing panel switch)
+
+It should render sections with clean styling (use the Daily Briefing UI patterns):
+- Section header row with an icon + title + small subtitle
+- Card containers for each group
+- Badges for regime, rating, velocity
+- Confidence as a pill or right-aligned badge (0-100)
+
+3) Render from structured fields first
+Use:
+  const s = panel.data.parsed?.structured ?? panel.data.structured ?? null
+
+We want:
+- Macro block:
+  - Macro Regime (regime + confidence)
+  - Key numbers (Fear & Greed, VIX)
+  - Optional summary paragraph
+- Asset class outlook block:
+  - Equities, Crypto, Commodities with short 1-liners
+- Lists:
+  - Equities: Large Caps, Mid Caps, Small/Micro
+  - Crypto
+  - Commodities
+
+Each asset row/card should show:
+- Ticker (bold)
+- Tag like [TRADE IDEA] or [WATCHLIST] as a badge
+- Rating badge (Strong Buy / Buy / Hold / Sell)
+- Confidence score badge (0-100)
+- Optional: market cap, change, velocity
+- 2 to 4 bullets max:
+  - reason/thesis
+  - catalyst
+  - confirmations (TA/VOL/CAT/FA) as small chips
+  - risk line in muted text
+- Position tier shown as small text at bottom right
+
+4) If structured data is missing fields, do graceful fallback
+If s is null or missing the arrays:
+- Show analysis text as a fallback (same behavior as today)
+- BUT do not show "Response received. See panel data for details."
+Always show something.
+
+5) Update the panel router
+Where you route based on display_type, add:
+- case "cross_asset_trending": render <CrossAssetTrendingPanel ... />
+
+6) Keep chat bubble clean
+Chat bubble should show a short title only, like:
+"Trending Now"
+and not the entire analysis block.
+
+7) Testing
+- Click Daily Briefing: unchanged.
+- Click Trending Now: should render in sections/cards, with confidence next to each ticker.
+- Confirm no JSON dumps.
+- Confirm the panel renders even when some fields are missing (analysis fallback).
+
+Deliverable:
+- Commit the new panel component
+- Confirm display_type mapping used
+- Provide a screenshot-style description of the new layout

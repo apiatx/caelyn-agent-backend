@@ -1,0 +1,50 @@
+## Add: USDT.d and Others.d dominance cards to crypto scan response
+
+### What's changing
+The backend crypto response now includes dominance data in the JSON. Two new data points need to be displayed alongside BTC and ETH in the crypto scan response:
+
+1. **USDT.d** (USDT Dominance) — shows what % of crypto market cap is in Tether stablecoins
+2. **Others.d** (Others Dominance) — shows what % of market cap is in altcoins (everything except BTC, ETH, USDT)
+
+### Implementation
+
+Find the crypto scan response renderer — specifically where the BTC and ETH summary cards are displayed (the two cards that show "BTC $67,248" and "ETH $1,952").
+
+Add two more cards in the same row (or a second row if space is tight):
+
+**USDT.d card:**
+USDT.d          X.X%
+Signal: Rising = risk-off (bearish alts) / Falling = risk-on (bullish alts)
+- Color: If USDT.d > 5%, show in red/amber (money in stables = cautious). If < 4%, show in green (money deployed)
+- The value comes from the response JSON: `dominance.usdt` or `btc_eth_summary.dominance.usdt`
+
+**Others.d card:**
+OTHERS.d        X.X%
+Signal: Rising = alt season / Falling = BTC season
+- Color: If Others.d is rising (mentioned in signal text), show in green. If falling, show in amber/red.
+- The value comes from: `dominance.others` or `btc_eth_summary.dominance.others`
+
+Style these cards to match the existing BTC and ETH cards (same dark background, same font sizes, same layout).
+
+If the dominance data is not present in the response (null/undefined), don't show the cards — just show BTC and ETH as before.
+
+### Also fix: 7d change showing N/A
+
+The momentum picks show `7d: N/A`. The backend now includes `change_7d` in the data. Check the momentum card rendering — find where `7d` is displayed and make sure it reads from the correct field:
+
+The response JSON for each momentum pick should have:
+- `change_24h` — the 24h change
+- `change_7d` — the 7d change  
+- `change_30d` — the 30d change (optional)
+
+If the field name in the response doesn't match what the frontend expects, update the frontend to check both possible field names:
+```javascript
+const change7d = pick.change_7d || pick.price_change_7d || pick["7d_change"];
+```
+
+### Testing
+1. Click "Crypto" → should see 4 cards: BTC, ETH, USDT.d, Others.d
+2. USDT.d should show a percentage
+3. Others.d should show a percentage
+4. Momentum picks should show 7d change percentages (not N/A)
+5. If dominance data is missing, only BTC and ETH cards show (graceful fallback)

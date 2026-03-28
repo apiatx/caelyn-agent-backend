@@ -1,0 +1,45 @@
+Three fixes on the Portfolio Dashboard page:
+
+=== FIX 1: REMOVE DUPLICATE SECTION, KEEP CHART FEATURE ===
+
+There is a "Position Details" section below the Sector Allocation and Daily P&L charts that duplicates the main holdings table. Remove the entire "Position Details" section. BUT keep its expandable TradingView chart functionality. Add that same dropdown/expand behavior to each row in the MAIN holdings table (the one with Ticker, Shares, Avg Cost, Price, Daily P&L, Total P&L, Weight% columns). When a user clicks a row or clicks an expand arrow on a row, it should expand to show the TradingView chart widget for that ticker, exactly like the Position Details section currently does.
+
+=== FIX 2: TICKER ASSET TYPE SELECTOR ===
+
+NO backend changes needed for this fix.
+
+In the "Add Holding" section of the Portfolio Dashboard, add an asset type dropdown selector next to the ticker input field. The dropdown should appear inline with the other fields (Ticker, Shares, Avg Cost). The options are:
+
+- Stock (default)
+- ETF
+- Index
+- Crypto
+- Commodity
+
+Style it to match the existing dark theme. It should be a simple select dropdown or a row of small toggle buttons, whatever looks cleaner with the current layout.
+
+When saving a holding via POST /api/portfolio/holdings, include the selected asset_type in the holding object. Each holding should now be: {ticker, shares, avg_cost, asset_type}
+
+Make sure existing holdings that don't have an asset_type default to "stock" so nothing breaks.
+
+=== FIX 3: SECTOR ALLOCATION CHART ===
+
+BACKEND CHANGE — In main.py in the /api/portfolio/quotes endpoint:
+
+After each quote is added to the quotes dict, make sure the "sector" field is always present:
+
+1. Quotes from FMP (source: "fmp") already have a sector field from the API response — keep it as-is
+2. Quotes from CoinGecko (source: "coingecko") — set sector to "Crypto"
+3. Quotes from FMP commodity (source: "fmp_commodity") — set sector to "Commodities"
+4. Quotes from FMP short (source: "fmp_short") — sector may be missing, set to "Other" if empty
+5. Any quote where sector is empty, null, or missing — set to "Other"
+
+FRONTEND CHANGE — After fetching quotes from /api/portfolio/quotes:
+
+1. Read the "sector" field from each quote
+2. For holdings where asset_type is "crypto" and sector is missing, use "Crypto"
+3. For holdings where asset_type is "commodity" and sector is missing, use "Commodities"
+4. For holdings where asset_type is "etf" and sector is missing, use "ETFs"
+5. For holdings where asset_type is "index" and sector is missing, use "Indices"
+6. Group holdings by sector, calculate each sector's total market value (price * shares), and compute percentages
+7. Pass this data to the Sector Allocation donut chart

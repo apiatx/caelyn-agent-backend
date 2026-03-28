@@ -1,0 +1,54 @@
+
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+🚀 Starting real-time price tracking service...
+📊 Fetching authentic live prices from multiple sources...
+📈 Real-time price updates started (5s intervals)
+🚀 [Market Overview] Server started - will fetch fresh CMC data on first request
+✅ [Market Overview] Loaded persistent cache from disk (real-time data strategy)
+🔒 Security Configuration:
+  Environment: development
+  Force HTTPS: false
+  HSTS Max Age: 31536000s
+  Rate Limit: 100 requests per 900000ms
+  CORS Origins: 2 configured
+  CSP Report Only: false
+  JWT Expires: 24h
+  API Keys Available:
+    - Anthropic: ✅
+    - Basescan: ✅
+    - Etherscan: ✅
+    - TaoStats: ✅
+9:22:28 PM [express] serving on port 5000
+9:22:28 PM [express] Server is ready and healthy
+9:22:28 PM [express] Health check endpoints available at:
+9:22:28 PM [express]   - http://0.0.0.0:5000/deployment-health (priority)
+9:22:28 PM [express]   - http://0.0.0.0:5000/
+9:22:28 PM [express]   - http://0.0.0.0:5000/health
+9:22:28 PM [express]   - http://0.0.0.0:5000/ready
+9:22:28 PM [express]   - http://0.0.0.0:5000/api/health
+9:22:28 PM [express]   - http://0.0.0.0:5000/api/ready
+💎 Real ETH price from DexScreener: $4712.36
+💎 Real ETH price from CoinGecko: $4463.2
+💰 Updated 52 token prices with REAL market data at 9:22:28 PM
+9:22:29 PM [express] Starting background services...
+🐋 Whale monitoring service started
+📊 Market data service started
+📈 Portfolio value tracking started
+9:22:29 PM [express] Background services started successfully
+📈 Created initial history (50 points) for portfolio 1 with base value: $0.00
+📈 Tracked portfolio 1 value: $0.00
+Browserslist: browsers data (caniuse-lite) is 10 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+📊 Fetching authentic live prices from multiple sources...
+9:22:32 PM [vite] Pre-transform error: /home/runner/workspace/client/src/components/alpha-section.tsx: Adjacent JSX elements must be wrapped in an enclosing tag. Did you want a JSX fragment <>...</>? (264:6)
+
+  262 |       </GlassCard>
+  263 |
+> 264 |       <GlassCard className="p-6">
+      |       ^
+  265 |         <div className="mt-6">
+  266 |           <div className="flex items-center justify-between mb-4">
+  267 |             <div className="flex items-center gap-2">

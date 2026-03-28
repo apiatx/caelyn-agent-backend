@@ -1,0 +1,45 @@
+FRONTEND FIX: Two remaining issues on Portfolio Dashboard
+
+=== FIX 1: SPX TradingView chart not working ===
+
+SP:SPX requires a paid TradingView data subscription and won't render in the free widget. Change the SPX mapping to use a free symbol that works.
+
+Find the INDEX_TV_SYMBOLS map and change SPX to:
+"SPX": "FOREXCOM:SPX500"
+
+This is the free CFD-based S&P 500 symbol on TradingView. It works without a subscription.
+
+Also update these in case they have the same issue:
+"NDX": "FOREXCOM:USNAS100"
+"IXIC": "FOREXCOM:USNAS100"
+
+Keep DJI as "FOREXCOM:DJI" since that already works.
+
+=== FIX 2: Stocks missing Market Cap and Sector in dropdown data cards ===
+
+Stocks like SPAI only show Price Change and Volume but are missing Market Cap and Sector. The backend returns this data from the FMP /stable/profile endpoint but the frontend either isn't reading those fields or the field names don't match.
+
+Step 1 — Debug: Add this console.log right after the quotes response is received:
+
+Object.entries(quotesData).forEach(([ticker, quote]) => {
+  console.log(`[DEBUG] ${ticker} fields:`, Object.keys(quote), 'sector:', quote.sector, 'market_cap:', quote.market_cap, 'marketCap:', quote.marketCap);
+});
+
+Step 2 — Check what the backend actually returns and match the field names. The backend might be returning:
+- "sector" or "Sector"
+- "market_cap" or "marketCap" or "mktCap" or "MarketCap"
+- "industry" or "Industry"
+
+Step 3 — Update the data card rendering. Where the dropdown data cards are generated for each holding, find where it checks which cards to show. Make sure it reads ALL possible field name variations:
+
+const marketCap = quote.market_cap || quote.marketCap || quote.mktCap || quote.MarketCap;
+const sector = quote.sector || quote.Sector;
+
+Step 4 — If the fields are genuinely not in the quotes response at all (the console.log shows undefined for all variations), then the backend sector/profile caching fix hasn't been applied or isn't working. In that case, the frontend can fetch sector data separately using a simple Yahoo Finance approach:
+
+As a frontend fallback, for any stock where sector is missing, you can use the company name displayed in the row. But the real fix is confirming the backend returns these fields. Check the backend Replit logs for lines like:
+"[PORTFOLIO] SPAI sector from profile: Technology"
+or
+"[PORTFOLIO] Fetching sector via /stable/profile for: ['SPAI']"
+
+If those log lines don't appear, the backend sector fix wasn't applied. Let me know and I'll provide the backend prompt again.

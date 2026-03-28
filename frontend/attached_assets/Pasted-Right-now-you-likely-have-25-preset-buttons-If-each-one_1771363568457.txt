@@ -1,0 +1,191 @@
+Right now you likely have 25+ preset buttons.
+
+If each one:
+
+• Sends a malformed string
+• Or sends a vague 1–2 word prompt
+• Or relies on backend keyword routing
+
+You will keep fighting chaos.
+
+You need to centralize this properly.
+
+The Real Fix
+
+You should NOT hardcode long prompt text directly in each button.
+
+Instead:
+
+🔥 Every button should send a clean INTENT KEY, not a paragraph.
+
+Example:
+
+When user clicks:
+
+“Daily Briefing”
+
+Frontend should send:
+
+{
+  query: "",
+  preset_intent: "daily_briefing"
+}
+
+
+Not a giant text block.
+
+Not token fragments.
+
+Not comma-separated words.
+
+Why This Is Better
+
+Because your backend is now intent-driven.
+
+Let the orchestrator interpret:
+
+preset_intent: "daily_briefing"
+
+And map that internally to:
+
+cross-asset
+
+macro_context: true
+
+technical_scan: true
+
+sentiment: true
+
+fundamental_validation: true
+
+response_style: institutional_brief
+
+This keeps:
+
+Frontend = dumb
+Backend = intelligent
+
+Right now your frontend is trying to be clever.
+
+That’s what broke it.
+
+Updated Replit Instructions (Improved Version)
+
+Instead of hardcoding giant prompt templates in the frontend, do this:
+
+FRONTEND TASK — Convert Presets to Intent Keys
+
+You are replacing all preset buttons.
+
+Do NOT:
+
+Send full text prompts
+
+Construct strings dynamically
+
+Use token splitting logic
+
+Each preset button should send:
+
+{
+  query: userInputOrEmptyString,
+  preset_intent: "intent_name"
+}
+
+
+Examples:
+
+Trending Now → "cross_asset_trending"
+Daily Briefing → "daily_briefing"
+Best Trades → "tactical_trades"
+Best Investments → "long_term_conviction"
+Macro Overview → "macro_outlook"
+Sector Rotation → "sector_rotation"
+Crypto → "crypto_focus"
+AI/Compute → "sector_ai"
+Stage 2 Breakouts → "technical_stage2"
+Small Cap Spec → "microcap_asymmetry"
+Rapidly Improving Fundamentals → "fundamental_acceleration"
+Social Momentum → "social_momentum_scan"
+
+No actual prompt text sent from frontend.
+
+BACKEND TASK — Map preset_intent
+
+Inside orchestration layer:
+
+If preset_intent exists:
+
+Bypass OpenAI classification.
+Directly construct orchestration_plan internally.
+
+Example:
+
+if preset_intent == "daily_briefing":
+    orchestration_plan = {
+        intent: "cross_asset_trending",
+        asset_classes: ["equities", "crypto", "commodities"],
+        modules: {
+            x_sentiment: true,
+            stocktwits_sentiment: true,
+            technical_scan: true,
+            fundamental_validation: true,
+            macro_context: true,
+            liquidity_filter: true
+        },
+        response_style: "institutional_brief",
+        priority_depth: "medium"
+    }
+
+
+Then run normal execution flow.
+
+Why This Is Superior
+
+• You eliminate prompt corruption
+• You eliminate token bugs
+• You eliminate frontend template sprawl
+• You eliminate routing conflicts
+• You remove API waste
+• You create deterministic behavior
+
+Frontend buttons become:
+
+“Feature selectors”
+Not “mini AI prompts.”
+
+Should You Send My Previous Instructions As-Is?
+
+No.
+
+Update them slightly to:
+
+Stop sending full paragraph preset prompts.
+
+Send intent keys instead.
+
+Let backend own all logic.
+
+That is cleaner.
+More scalable.
+More professional.
+And cheaper.
+
+Think Bigger
+
+Right now you’re building:
+
+“ChatGPT with buttons.”
+
+You should be building:
+
+“A portfolio terminal with structured commands.”
+
+That requires:
+
+Preset = Command
+Backend = Execution engine
+
+Not:
+
+Preset = Prompt blob

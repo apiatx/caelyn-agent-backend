@@ -1,0 +1,127 @@
+## Add: Futures/Perps section to crypto scan response display
+
+### Context
+The backend crypto response now includes HyperLiquid perpetual futures data in the JSON. New fields are: `perps_overview`, `perps_top_volume`, `perps_top_oi`, `perps_squeezes`, `perps_crowded_longs`, `perps_divergences`, `perps_gainers`, `perps_losers`. These need to be rendered as a new section in the crypto scan panel.
+
+### Where to add it
+Find the crypto scan response renderer — the component that displays the "crypto_focus" panel with BTC/ETH cards, Hot Categories, and Top Momentum Picks. Add the new Futures/Perps section BETWEEN "Hot Categories" and "Top Momentum Picks".
+
+### New sections to render:
+
+#### 1. Section Header
+```html
+<h3>Futures & Perps — Hyperliquid</h3>
+```
+Same styling as the existing "Narrative Rotation — Hot Categories" and "Top Momentum Picks" headers (bold, white, left-aligned).
+
+#### 2. Market Summary Bar
+A single card with stats laid out horizontally (flex-row, space-between):
+Total OI: $XX.XB   |   24h Vol: $XX.XB   |   Avg Funding: X.XXX%   |   Bias: [text]
+
+Data mapping from response JSON:
+- Total OI: `perps_overview.market_summary.total_open_interest_usd` — format as billions (divide by 1e9, show 2 decimals, append "B")
+- 24h Volume: `perps_overview.market_summary.total_volume_24h_usd` — same format
+- Avg Funding: `perps_overview.market_summary.avg_funding_annualized` — append "%" and show as annualized
+- Bias: `perps_overview.market_summary.market_bias` — show the text string
+
+Style: dark card background matching existing cards (`#141632` or whatever the crypto cards use). Numbers in ice-blue (`#38bdf8`). Bias text colored: green if contains "long" or "bullish", red if contains "short" or "bearish", neutral gray if "Neutral".
+
+#### 3. Squeeze Candidates (most important — show these prominently)
+Render each as a card similar to Top Momentum Picks cards. For each item in `perps_squeezes`:
+[COIN]                                          🔥 SQUEEZE
+Funding: -X.XX% (annualized: -XX.X%)    OI: $XXM    24h: +X.X%
+Signal: [signal text in italic]
+
+- Card styling: left border accent in orange (#f97316) 
+- "SQUEEZE" badge: orange background, white text, small pill shape (like the existing "HIGH"/"MEDIUM" conviction badges)
+- Funding rate: show in RED if negative (shorts paying = squeeze fuel), GREEN if positive
+- 24h change: green if positive, red if negative
+- OI: format as millions ($XXM) or billions ($X.XB)
+
+Data mapping:
+- coin: `item.coin`
+- funding_rate: `item.funding_rate` — multiply by 100 for percentage display
+- funding_annualized: `item.funding_annualized` — already in percentage
+- open_interest_usd: `item.open_interest_usd`
+- price_change_24h: `item.price_change_24h`
+- signal: `item.signal`
+
+#### 4. Crowded Longs (liquidation warnings)
+Render as compact cards or a list with warning styling:
+[COIN]    Funding: +X.XX%    OI: $XXM    ⚠️ [signal]
+
+- Left border accent: yellow (#eab308)
+- "⚠️ CROWDED" or just the signal text
+- Smaller cards than squeeze candidates (these are warnings, not trade ideas)
+
+Data mapping from `perps_crowded_longs`:
+- Same fields as squeezes
+
+#### 5. Funding Divergences (if present)
+Only show if `perps_divergences` array has items:
+[COIN]    [BULLISH ↑ or BEARISH ↓]    Funding: X.XX%    Price: +X.X%
+[signal text]
+
+- BULLISH_DIVERGENCE: green left border, green "BULLISH ↑" badge
+- BEARISH_DIVERGENCE: red left border, red "BEARISH ↓" badge
+
+Data mapping from `perps_divergences`:
+- coin: `item.coin`
+- type: `item.type` — "BULLISH_DIVERGENCE" or "BEARISH_DIVERGENCE"
+- funding_rate: `item.funding_rate`
+- price_change_24h: `item.price_change_24h`
+- signal: `item.signal`
+
+#### 6. Top Perps by Volume (compact table)
+Show as a small table below the signal cards:
+Coin      Volume 24h      OI           Funding      24h
+BTC       $45.2B         $8.1B        +0.001%      +0.5%
+ETH       $12.3B         $4.2B        +0.002%      -0.8%
+SOL       $3.1B          $1.8B        -0.003%      +2.1%
+
+- Table styling matching the portfolio holdings table (dark bg, subtle row borders, hover state)
+- Header row: muted gray text, uppercase, small font
+- Funding column: green if positive (longs paying), red if negative (shorts paying)
+- 24h column: green if positive, red if negative
+- Volume/OI: format as billions or millions
+
+Data mapping from `perps_top_volume`:
+- coin, volume_24h_usd, funding_rate, price_change_24h
+
+If `perps_top_oi` is also available, use it for the OI column (match by coin name).
+
+### Formatting helpers
+```javascript
+function formatLargeNumber(num) {
+    if (!num) return 'N/A';
+    if (num >= 1e9) return `$${(num / 1e9).toFixed(2)}B`;
+    if (num >= 1e6) return `$${(num / 1e6).toFixed(1)}M`;
+    if (num >= 1e3) return `$${(num / 1e3).toFixed(1)}K`;
+    return `$${num.toFixed(0)}`;
+}
+
+function formatFunding(rate) {
+    if (rate === null || rate === undefined) return 'N/A';
+    // Raw rate is like 0.0001, display as percentage
+    return `${(rate * 100).toFixed(4)}%`;
+}
+
+function formatFundingAnnualized(rate) {
+    if (rate === null || rate === undefined) return '';
+    return `${rate.toFixed(1)}%`;
+}
+```
+
+### Graceful fallback
+If ANY perps section data is missing/null/empty, don't render that section. Don't show empty cards or empty tables. If ALL perps data is missing (perps_overview is null), don't show the "Futures & Perps" header at all.
+
+### Testing
+1. Click "Crypto" → should see "Futures & Perps — Hyperliquid" section between Hot Categories and Top Momentum Picks
+2. Market Summary bar shows total OI, volume, avg funding, bias
+3. Squeeze candidates show with orange accent, funding rates, signals
+4. Crowded longs show with yellow accent, warning signals
+5. Divergences show with green/red badges based on type
+6. Top Perps table shows most active futures
+7. If HyperLiquid data is empty, perps section simply doesn't appear
+8. All existing sections (BTC/ETH, Hot Categories, Top Momentum) render correctly
+9. Natural language crypto queries ("what's happening in crypto") return the same response format

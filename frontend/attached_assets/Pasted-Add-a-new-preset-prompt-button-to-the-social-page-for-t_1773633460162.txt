@@ -1,0 +1,169 @@
+Add a new preset prompt button to the social page for the Grok-solo agent and render the new x_trader_consensus structured response correctly.
+
+You only have access to the FRONTEND repo.
+
+Important constraints:
+- Do NOT redesign the social page.
+- Do NOT move existing buttons unless necessary for placement.
+- Do NOT change unrelated preset behavior.
+- Keep changes limited to the minimum necessary files.
+- Backend is already implemented. Use the backend response shape as the source of truth.
+
+## Feature goal
+Add a new preset prompt button on the social page.
+
+The button label must be exactly:
+
+"Consensus tickers among top X traders"
+
+## Placement
+Place this new preset button as the first button in the preset list directly under the free-form prompt query bar on the social page.
+
+It should appear above the existing social preset buttons in that section.
+
+## Backend preset key
+When clicked, this button must send the backend preset key:
+
+x_trader_consensus
+
+Do not invent another key.
+Do not use an alias unless the existing frontend preset system strictly requires it.
+Prefer the canonical backend key above.
+
+## Backend response shape to support
+Backend now returns a structured social response like:
+
+{
+  "display_type": "social",
+  "scan_type": "x_trader_consensus",
+  "title": "Consensus Tickers Among Top X Traders",
+  "analysis_window": "Last 30 days",
+  "accounts_analyzed": ["@StockSavvyShay", "...18 total"],
+  "consensus_summary": "...",
+  "consensus_tickers": [
+    {
+      "rank": 1,
+      "ticker": "CRDO",
+      "trader_count": 9,
+      "consensus_strength": "Very High",
+      "conviction": "High",
+      "signal_weight": 87,
+      "thesis": "...",
+      "why_bullish": "...",
+      "momentum": "Increasing",
+      "risks": "...",
+      "representative_reasons": ["..."]
+    }
+  ],
+  "momentum_leaders": [
+    {
+      "ticker": "BBAI",
+      "note": "3 new accounts this week"
+    }
+  ],
+  "early_vs_crowded": {
+    "early_stage": [
+      {
+        "ticker": "BBAI",
+        "note": "Only 2 accounts, thesis forming"
+      }
+    ],
+    "crowded": [
+      {
+        "ticker": "NVDA",
+        "note": "High consensus / crowded"
+      }
+    ]
+  },
+  "final_opinion": {
+    "strongest_buys": ["CRDO", "SMCI"],
+    "watch_closely": ["BBAI"],
+    "reasoning": "..."
+  }
+}
+
+## Required frontend behavior
+
+### 1) Add the new button
+Add the new preset button in the social page preset-button section as the first button below the free-form prompt bar.
+
+### 2) Wire it into the existing social request flow
+Clicking the button must use the same social-page preset request flow that the current Grok-solo social preset buttons use.
+Do not create a new request mechanism.
+
+### 3) Render the structured response cleanly
+Use the existing structured/social result component path where possible.
+
+Make sure the UI supports rendering these sections when present:
+- title
+- analysis window
+- accounts analyzed
+- consensus summary
+- consensus tickers
+- momentum leaders
+- early vs crowded
+- final opinion
+
+Do not flatten the response into plain text if the structured fields are present.
+
+### 4) Consensus tickers rendering
+For each item in consensus_tickers, render:
+- rank
+- ticker
+- trader_count
+- consensus_strength
+- conviction
+- signal_weight
+- thesis
+- why_bullish
+- momentum
+- risks
+- representative_reasons
+
+If some optional fields are missing, fail gracefully.
+
+### 5) Render momentum leaders
+If momentum_leaders exists, render it as a separate section.
+
+### 6) Render early vs crowded
+If early_vs_crowded exists, render:
+- early_stage
+- crowded
+
+This was one of the backend meaningful keys and should not be ignored by frontend rendering.
+
+### 7) Render final opinion
+If final_opinion exists, render:
+- strongest_buys
+- watch_closely
+- reasoning
+
+### 8) Keep everything else unchanged
+Do not alter other social preset buttons or unrelated social-page behavior.
+
+## Strong suspicion areas to audit
+Before coding, explicitly check whether the current frontend social renderer is:
+- only rendering generic text and ignoring structured social fields
+- missing support for early_vs_crowded
+- missing support for consensus_tickers arrays
+- using scan_type/display_type logic that would hide this new response type
+
+## Deliverables
+1. Add the new button.
+2. Show exact files changed.
+3. Explain where it was inserted in the preset list.
+4. Explain what preset key it sends.
+5. Explain how the structured response is rendered.
+6. Confirm that early_vs_crowded and final_opinion are visible if returned.
+7. Confirm no other social preset buttons were changed.
+
+## Acceptance criteria
+The task is done when:
+- the social page shows a new first preset button under the free-form prompt bar
+- the button label is exactly "Consensus tickers among top X traders"
+- clicking it sends preset_intent = "x_trader_consensus"
+- the response renders through the normal social-page agent flow
+- structured sections like consensus_tickers, momentum_leaders, early_vs_crowded, and final_opinion are visible
+- no other social preset buttons are broken
+
+Before coding, audit the current social page preset button component and the current social structured-response renderer, then make only the minimum required changes.

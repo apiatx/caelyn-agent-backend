@@ -1,0 +1,65 @@
+The Watchlist Review input needs to call the new dedicated /api/watchlist endpoint instead of the generic /api/query endpoint. Find the watchlist review component (the input where users enter tickers and click "Review") and update it:
+Update the submit handler:
+tsxconst handleWatchlistSubmit = async () => {
+  // Parse tickers from input (support commas, spaces, or both)
+  const rawInput = watchlistInput.trim();
+  if (!rawInput) return;
+  
+  const tickers = rawInput
+    .split(/[,\s]+/)
+    .map(t => t.trim().toUpperCase())
+    .filter(t => t.length > 0 && t.length <= 5)
+    .slice(0, 25);
+  
+  if (tickers.length === 0) return;
+  
+  setIsLoading(true);
+  
+  // Create a new conversation for this watchlist review
+  let convId = activeConvId;
+  if (!convId) {
+    const convRes = await fetch("/api/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ first_query: `Watchlist: ${tickers.join(", ")}` }),
+    });
+    const conv = await convRes.json();
+    convId = conv.id;
+    setActiveConvId(convId);
+  }
+  
+  // Add user message to chat
+  const userMsg = { role: "user", content: `Review my watchlist: ${tickers.join(", ")}` };
+  setMessages(prev => [...prev, userMsg]);
+  
+  try {
+    const response = await fetch("/api/watchlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tickers: tickers,
+        conversation_id: convId,
+      }),
+    });
+    
+    const data = await response.json();
+    const assistantMsg = { role: "assistant", content: JSON.stringify(data), parsed: data };
+    setMessages(prev => [...prev, assistantMsg]);
+  } catch (err) {
+    setMessages(prev => [...prev, {
+      role: "assistant",
+      content: JSON.stringify({ display_type: "chat", message: "Watchlist review failed. Please try again." }),
+      parsed: { display_type: "chat", message: "Watchlist review failed. Please try again." },
+    }]);
+  }
+  
+  setIsLoading(false);
+  refreshConversations();
+};
+Make sure the portfolio renderer handles the response
+The response will come back with display_type: "portfolio" and either structured JSON or a message field with Claude's prose analysis. The renderer should handle both:
+
+If the response has structured fields (individual ticker analyses), render them as expandable cards
+If the response has a message field with prose, render it as formatted text with proper line breaks, bold tickers, and section headers
+
+Re-deploy frontend.

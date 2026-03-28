@@ -1,0 +1,85 @@
+Add a new social-page preset prompt button next to the existing trader-consensus button, wired to the new curated-trader backend preset.
+
+You only have access to the FRONTEND repo.
+
+Important constraints:
+- Do NOT redesign the Social page.
+- Do NOT change unrelated preset buttons.
+- Do NOT change the behavior of the existing "Consensus tickers among top X traders" button.
+- Keep changes minimal and targeted.
+- Match the styling, spacing, and sizing of the existing preset buttons exactly.
+- Use the existing social-page request flow and existing structured social-response renderer.
+
+## Context
+There is already an existing preset button on the Social page:
+"Consensus tickers among top X traders"
+
+Keep that button exactly as-is.
+
+A new backend preset now exists with key:
+x_select_trader_consensus
+
+This is a separate preset from the existing x_trader_consensus preset.
+
+I want a second new button immediately to the right of the existing trader-consensus button.
+
+The new button label must be exactly:
+
+"Concensus tickers among select X traders"
+
+Important:
+- Keep the label exactly as written above, including spelling.
+- The new button must send:
+  preset_intent = "x_select_trader_consensus"
+- Do NOT point it to x_trader_consensus.
+- Do NOT change the original button’s key.
+
+## Placement
+- Place the new button immediately to the right of the existing "Consensus tickers among top X traders" button
+- Keep alignment and wrapping visually consistent with the current Social page preset-button layout
+- Do not move other buttons unless necessary for proper wrapping/layout
+
+## Behavior
+When clicked, the new button should:
+- use the same Grok/XAI social-page preset request flow as the other social preset buttons
+- send preset_intent = "x_select_trader_consensus"
+- render through the same structured social response renderer already used for trader-consensus responses
+
+## Rendering
+The new backend preset returns the same general structured response family as the existing trader-consensus feature, with a different:
+- scan_type
+- title
+
+So no custom one-off renderer should be needed if the current structured social renderer is already working.
+
+Just ensure:
+- the new button triggers the new preset key
+- the response is passed through the normal structured social rendering path
+- the original top-X button remains untouched
+
+## Audit requirements before coding
+Please verify:
+1. where the current Social page preset buttons are defined
+2. how the existing "Consensus tickers among top X traders" button is wired
+3. where preset_intent is sent in the social-page request flow
+4. whether the current structured social renderer already handles this response family without additional changes
+
+## Deliverables
+1. Add the new button.
+2. Show exact files changed.
+3. Explain where it was inserted in the button layout.
+4. Confirm the exact preset key it sends:
+   x_select_trader_consensus
+5. Confirm the original "Consensus tickers among top X traders" button was not changed.
+6. Confirm no other social preset buttons were changed.
+
+## Acceptance criteria
+The task is done when:
+- the original "Consensus tickers among top X traders" button still exists and behaves the same
+- a new button appears immediately to its right
+- the new button label is exactly "Concensus tickers among select X traders"
+- clicking the new button sends preset_intent = "x_select_trader_consensus"
+- the response renders through the normal social-page structured response flow
+- no other social preset buttons are broken
+
+Before coding, audit the current Social page preset button component and make only the minimum necessary change.

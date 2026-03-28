@@ -1,0 +1,13 @@
+#!/bin/bash
+# Production startup script for Replit autoscale deployment
+echo "🚀 Starting production server for autoscale deployment..."
+
+# Check if build artifacts exist
+if [ ! -f "dist/index.js" ]; then
+    echo "❌ Build artifacts not found. Make sure 'npm run build' was executed during build phase."
+    exit 1
+fi
+
+# Start the production server
+echo "🌐 Starting Express server..."
+NODE_ENV=production node dist/index.js

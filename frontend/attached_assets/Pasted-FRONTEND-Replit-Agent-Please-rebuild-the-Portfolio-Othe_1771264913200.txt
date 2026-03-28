@@ -1,0 +1,64 @@
+FRONTEND Replit Agent:
+Please rebuild the Portfolio + Other page from a boring link page into a full portfolio tracking dashboard. Remove the existing link cards (Yahoo Finance, Snowball, Simply Wall St, Schwab, Robinhood, Empower). Replace with:
+Section 1: Portfolio Input (top of page)
+A clean form where the user can add holdings:
+[Ticker Input] [Shares Input] [Avg Cost Input] [Add +]
+Below the input, show the current portfolio as an editable table:
+Ticker | Shares | Avg Cost | Current Price | Daily P&L | Total P&L | Weight% | [Delete]
+NVDA   | 50     | $120.00  | $138.50       | +$2.30    | +$925.00  | 22.4%   | 🗑️
+AMD    | 100    | $155.00  | $162.30       | -$1.20    | +$730.00  | 18.1%   | 🗑️
+...
+                             TOTAL VALUE: $30,850    Daily: +$145   Total: +$4,230
+
+Store holdings in the backend using a new /api/portfolio/holdings endpoint (same JSON file approach as chat history — zero cost)
+Current prices fetched from the backend via FMP quotes
+Auto-refresh prices every 60 seconds during market hours
+Sortable columns (click to sort by P&L, weight, etc.)
+
+Section 2: Portfolio Visualization
+Two charts side by side:
+
+Allocation Pie Chart — Sector breakdown of your portfolio (use Recharts pie chart). Each slice shows sector name + percentage. Color-coded.
+Daily P&L Bar Chart — Today's gain/loss per position as horizontal bars. Green for up, red for down. Biggest movers at top.
+
+Section 3: Position Health Cards
+For each holding, show an expandable card with:
+
+Mini TradingView chart (use TradingView lightweight widget iframe):
+
+html  <iframe src="https://s.tradingview.com/widgetembed/?symbol=TICKER&interval=D&theme=dark&style=1&timezone=America/New_York&width=100%&height=200" width="100%" height="200" frameBorder="0"></iframe>
+```
+- Analyst consensus (from FMP or StockAnalysis): Strong Buy / Buy / Hold / Sell
+- Average price target vs current price
+- Upcoming earnings date
+- Upcoming ex-dividend date
+- Social sentiment badge (StockTwits bullish/bearish %)
+
+Cards are collapsed by default showing just ticker, price, P&L. Click to expand for full detail.
+
+### Section 4: AI Portfolio Review Button
+
+**A prominent button at the top: "🤖 AI Portfolio Review"**
+
+When clicked, it takes all the user's holdings and sends them to the existing `/api/watchlist` endpoint (same one the chat uses). The agent then returns a full portfolio analysis. Display the response in-page using the same renderer as the chat interface.
+
+### Section 5: Upcoming Events for My Holdings
+
+**A timeline/calendar view showing:**
+- Earnings dates for holdings (from FMP earnings calendar endpoint)
+- Ex-dividend dates (from FMP dividend calendar endpoint)
+- Sorted chronologically, next event first
+- Color-coded: orange for earnings within 7 days, blue for dividends
+
+### Section 6: Quick Links (keep a small version)
+
+**Keep the broker links but make them a small row of icon buttons at the very bottom of the page, not the main content:**
+```
+[Schwab] [Chase] [Robinhood] [Yahoo Finance] [Empower]
+Small icon-only buttons that open in new tabs. These are utilities, not the main feature.
+Styling
+
+Match the existing dark theme of the site
+Use the same purple accent color for highlights
+Cards should have the same dark glass-morphism style as the rest of the site
+Responsive — portfolio table becomes scrollable cards on mobile

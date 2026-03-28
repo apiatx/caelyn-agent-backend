@@ -1,0 +1,48 @@
+## Fix: Crypto tickers show wrong stock chart on TradingView embed
+
+### Problem
+When the backend returns crypto picks like TRX (TRON) or LINK (Chainlink), the TradingView chart widget resolves them to stocks with the same ticker (TRX Gold Corporation, Interlink Electronics) instead of the crypto asset.
+
+### Solution
+The backend now includes a `tradingview_symbol` field on crypto picks (e.g., `BINANCE:TRXUSDT` for TRON). The frontend TradingView embed should use this field when present, instead of the raw ticker.
+
+### Implementation
+
+Find the component that renders the TradingView chart widget for each pick/recommendation. It currently passes the raw `ticker` to the TradingView embed URL or widget config.
+
+Change it to:
+1. Check if the pick has a `tradingview_symbol` field — if yes, use that
+2. Otherwise check if the pick has `asset_class === "crypto"` — if yes, construct `BINANCE:${ticker}USDT` as fallback
+3. Otherwise use the raw ticker (for stocks/ETFs)
+
+Example logic:
+```javascript
+function getTradingViewSymbol(pick) {
+    // Use explicit TradingView symbol if backend provides it
+    if (pick.tradingview_symbol) {
+        return pick.tradingview_symbol;
+    }
+    // Fallback for crypto assets without explicit mapping
+    if (pick.asset_class === "crypto" || pick.asset_type === "crypto" || pick.category === "crypto") {
+        return `BINANCE:${pick.ticker}USDT`;
+    }
+    // Stocks and ETFs use raw ticker
+    return pick.ticker;
+}
+```
+
+Apply this wherever TradingView widgets/embeds are rendered — this includes:
+- Trending Now pick cards
+- Cross-asset trending results
+- Crypto scan results  
+- Any component that shows a TradingView chart for an individual pick
+
+Also check: the TradingView widget URL format. It should support exchange-prefixed symbols like `BINANCE:TRXUSDT`. Most TradingView embed formats do, e.g.:
+- Widget: `symbol: "BINANCE:TRXUSDT"`
+- URL: `https://www.tradingview.com/chart/?symbol=BINANCE:TRXUSDT`
+
+### Testing
+1. Run "Trending Now" — if TRX appears, chart should show TRON crypto, not TRX Gold Corp
+2. Run "Crypto" scan — all charts should show the correct crypto asset
+3. Run "Best Trades" — stock charts should still work normally (AAPL shows Apple, etc.)
+4. Click the "TradingView" button on a crypto pick — should open the correct crypto chart

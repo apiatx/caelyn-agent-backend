@@ -1,0 +1,59 @@
+We have a frontend/UI validation and payload-alignment bug-fix pass. This is not a redesign.
+
+Two regressions to audit and fix:
+
+BUG 1 — Trending Now / commodities TradingView charts are wrong
+Symptoms:
+- The card text and the embedded TradingView chart symbol are not aligned.
+- Example: a commodities/futures card references one instrument, but the chart widget shows a different symbol.
+- This worked before and regressed.
+
+Tasks:
+1. Audit the frontend rendering path for any card that includes:
+   - TradingView widget
+   - tradingview_url
+   - symbol / chart symbol / instrument metadata
+2. Confirm which response field the frontend currently uses to decide what symbol/chart to render.
+3. Identify whether the frontend is:
+   - ignoring the backend-provided TradingView symbol
+   - defaulting to a fallback symbol
+   - deriving the widget symbol from the wrong field
+   - using stale local mapping logic
+4. Fix it so the frontend always renders the chart/widget for the actual symbol/instrument attached to that card.
+
+Expected outcome:
+- If backend returns a card for CL1! / WTI Crude Oil, the frontend chart must use the corresponding correct TradingView symbol for that exact instrument.
+- If backend returns GC1! / Gold, the frontend chart must match Gold.
+- Card title, ticker badge, and chart symbol must stay aligned.
+
+BUG 2 — Solo model mode must still display the full structured preset response
+Symptoms:
+- When a user selects a solo model from the top model row (Claude / ChatGPT / Grok / Gemini / Perplexity), the backend may now return the correct structured response after the backend fix, but the frontend must correctly render it.
+- Currently Grok solo is showing generic text-like output and not the full intended preset visualization.
+
+Tasks:
+1. Audit whether the frontend treats solo-model responses differently from Caelyn responses.
+2. Confirm that if the backend returns a structured preset response for a solo model, the frontend uses the exact same renderer/components it uses for Caelyn/preset outputs.
+3. Ensure the frontend does NOT downgrade solo-model responses into generic text rendering if display_type / structured payload is present.
+4. Preserve direct-model badges/labels in the UI, but do not change the actual response rendering logic when structured preset data is available.
+
+Payload / state checks:
+1. Confirm that when user selects:
+   - Caelyn mode
+   - Customize mode
+   - direct solo model mode
+   the frontend sends the correct payload fields to backend and does not accidentally drop preset_intent.
+2. Confirm preset button clicks still send canonical or alias-safe preset_intent values.
+3. Confirm solo model selection does NOT strip away preset context.
+
+What I want before coding:
+1. audit the relevant request + rendering flow
+2. identify exact files to change
+3. explain whether Bug 1 is backend-only, frontend-only, or both
+4. explain whether Bug 2 is backend-only, frontend-only, or both
+
+What I want after coding:
+1. exact files changed
+2. exact rendering/path bug for TradingView symbol alignment
+3. confirmation that solo model structured preset responses render through the normal preset UI
+4. confirmation that preset_intent remains attached when using solo model selections

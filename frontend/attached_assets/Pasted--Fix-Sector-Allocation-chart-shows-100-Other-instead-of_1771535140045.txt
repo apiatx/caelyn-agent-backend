@@ -1,0 +1,91 @@
+## Fix: Sector Allocation chart shows "100% Other" instead of actual asset categories
+
+### Problem
+The Sector Allocation donut chart on the Portfolio Dashboard shows "Other 100%" for all holdings. It should categorize holdings into 5 asset classes: Stocks, ETFs, Crypto, Commodities, Indices.
+
+### Fix
+
+The chart is likely trying to read a "sector" field (like "Technology", "Healthcare") from each holding, which doesn't exist in the locally-stored portfolio data. Instead, it should categorize by **asset type** based on the dropdown the user selects when adding a holding (the "Stock" dropdown visible in the Add Holding form).
+
+#### 1. Use the asset type from the holding data
+
+When a user adds a holding, they select from the type dropdown (Stock, ETF, Crypto, etc.). This value should be stored with each holding. Check the holdings data structure — each holding should have a `type` or `asset_type` field. If it doesn't, add it.
+
+The "Add Holding" form already has a type dropdown. Make sure it saves the selected type with the holding:
+```javascript
+// When saving a new holding:
+const newHolding = {
+    ticker: tickerInput,
+    shares: sharesInput,
+    avg_cost: avgCostInput,
+    type: selectedType, // "Stock", "ETF", "Crypto", "Commodity", "Index"
+};
+```
+
+#### 2. Update the Sector Allocation chart to group by asset type
+
+Find the Sector Allocation chart component. Replace the sector-based grouping with asset-type grouping:
+```javascript
+function getAssetAllocation(holdings) {
+    const categories = {
+        'Stocks': { value: 0, color: '#10b981' },      // green
+        'ETFs': { value: 0, color: '#3b82f6' },         // blue
+        'Crypto': { value: 0, color: '#f59e0b' },       // amber
+        'Commodities': { value: 0, color: '#ef4444' },  // red
+        'Indices': { value: 0, color: '#8b5cf6' },      // purple
+    };
+    
+    for (const holding of holdings) {
+        // Get the market value (shares * current price, or fallback to cost basis)
+        const marketValue = holding.marketValue || (holding.shares * (holding.price || holding.avg_cost || 0));
+        
+        // Map the holding type to a category
+        const type = (holding.type || holding.asset_type || 'Stock').toLowerCase();
+        
+        if (type === 'stock' || type === 'stocks') {
+            categories['Stocks'].value += marketValue;
+        } else if (type === 'etf' || type === 'etfs') {
+            categories['ETFs'].value += marketValue;
+        } else if (type === 'crypto' || type === 'cryptocurrency') {
+            categories['Crypto'].value += marketValue;
+        } else if (type === 'commodity' || type === 'commodities') {
+            categories['Commodities'].value += marketValue;
+        } else if (type === 'index' || type === 'indices') {
+            categories['Indices'].value += marketValue;
+        } else {
+            // Default unknown types to Stocks
+            categories['Stocks'].value += marketValue;
+        }
+    }
+    
+    // Filter out categories with zero value
+    return Object.entries(categories)
+        .filter(([_, data]) => data.value > 0)
+        .map(([name, data]) => ({
+            name,
+            value: data.value,
+            color: data.color,
+        }));
+}
+```
+
+#### 3. Rename the chart
+
+Change the chart title from "Sector Allocation" to "Asset Allocation" since it now shows asset classes, not sectors.
+
+#### 4. Handle existing holdings without a type
+
+For holdings that were already added before this fix (and don't have a `type` field), default them to "Stock". The user's current holdings (ATOM, NVDA, OSS) are all stocks.
+```javascript
+// When loading holdings, ensure type exists
+const normalizedHoldings = holdings.map(h => ({
+    ...h,
+    type: h.type || h.asset_type || 'Stock',
+}));
+```
+
+### Testing
+1. Portfolio page should show "Asset Allocation" chart with "Stocks 100%" for current holdings (ATOM, NVDA, OSS are all stocks)
+2. Add a crypto holding (e.g., BTC, select "Crypto" from dropdown) — chart should show two segments: Stocks and Crypto
+3. Remove the crypto holding — chart should go back to "Stocks 100%"
+4. The chart colors should match: Stocks=green, ETFs=blue, Crypto=amber, Commodities=red, Indices=purple

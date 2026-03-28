@@ -1,0 +1,131 @@
+# FRONTEND FIX: Portfolio Dashboard — Asset Types & Chart Symbols
+
+## Fix 1: Pass asset_types to the quotes endpoint
+
+When calling POST /api/portfolio/quotes, the request body currently sends only tickers:
+```json
+{"tickers": ["BTC", "ETH", "IREN", "SILVER", "HYPE"]}
+```
+
+Update it to also send an asset_types map built from the saved holdings data:
+```json
+{
+  "tickers": ["BTC", "ETH", "IREN", "SILVER", "HYPE"],
+  "asset_types": {
+    "BTC": "crypto",
+    "ETH": "crypto",
+    "IREN": "stock",
+    "SILVER": "commodity",
+    "HYPE": "crypto"
+  }
+}
+```
+
+Build the asset_types map by reading the asset_type field from each holding in your holdings array. Every holding saved via the "Add Holding" form should already have an asset_type field from the dropdown selector. For any legacy holding that doesn't have an asset_type, default to "stock".
+
+## Fix 2: Fix TradingView chart symbols for crypto and commodity holdings
+
+When the expandable TradingView chart renders for a holding, it currently uses the raw ticker symbol. This works for stocks but fails for crypto (shows Grayscale ETFs) and commodities (shows nothing).
+
+Update the TradingView widget symbol based on the holding's asset_type:
+
+**Stocks/ETFs/Indices:** Use the ticker as-is.
+- IREN → "IREN"
+- CIFR → "CIFR"
+- SPY → "SPY"
+
+**Crypto:** Use "BINANCE:{ticker}USDT" format. Add a mapping for common crypto that need special TradingView symbols:
+```javascript
+const CRYPTO_TV_SYMBOLS = {
+  "BTC": "BINANCE:BTCUSDT",
+  "ETH": "BINANCE:ETHUSDT",
+  "SOL": "BINANCE:SOLUSDT",
+  "DOGE": "BINANCE:DOGEUSDT",
+  "XRP": "BINANCE:XRPUSDT",
+  "ADA": "BINANCE:ADAUSDT",
+  "AVAX": "BINANCE:AVAXUSDT",
+  "LINK": "BINANCE:LINKUSDT",
+  "DOT": "BINANCE:DOTUSDT",
+  "UNI": "BINANCE:UNIUSDT",
+  "SHIB": "BINANCE:SHIBUSDT",
+  "NEAR": "BINANCE:NEARUSDT",
+  "SUI": "BINANCE:SUIUSDT",
+  "APT": "BINANCE:APTUSDT",
+  "ARB": "BINANCE:ARBUSDT",
+  "OP": "BINANCE:OPUSDT",
+  "PEPE": "BINANCE:PEPEUSDT",
+  "WIF": "BINANCE:WIFUSDT",
+  "RENDER": "BINANCE:RENDERUSDT",
+  "FET": "BINANCE:FETUSDT",
+  "INJ": "BINANCE:INJUSDT",
+  "TIA": "BINANCE:TIAUSDT",
+  "SEI": "BINANCE:SEIUSDT",
+  "HYPE": "BINANCE:HYPEUSDT",
+  "FIL": "BINANCE:FILUSDT",
+  "LTC": "BINANCE:LTCUSDT",
+  "BCH": "BINANCE:BCHUSDT",
+  "AAVE": "BINANCE:AAVEUSDT",
+  "TAO": "BINANCE:TAOUSDT",
+  "MATIC": "BINANCE:MATICUSDT",
+};
+
+// Usage: get TradingView symbol for a holding
+function getTradingViewSymbol(ticker, assetType) {
+  if (assetType === "crypto") {
+    return CRYPTO_TV_SYMBOLS[ticker] || `BINANCE:${ticker}USDT`;
+  }
+  if (assetType === "commodity") {
+    const COMMODITY_TV_SYMBOLS = {
+      "SILVER": "TVC:SILVER",
+      "GOLD": "TVC:GOLD",
+      "OIL": "TVC:USOIL",
+      "CRUDE": "TVC:USOIL",
+      "NATGAS": "TVC:NATURALGAS",
+      "COPPER": "TVC:COPPER",
+      "PLATINUM": "TVC:PLATINUM",
+      "PALLADIUM": "TVC:PALLADIUM",
+      "WHEAT": "CBOT:ZW1!",
+      "CORN": "CBOT:ZC1!",
+    };
+    return COMMODITY_TV_SYMBOLS[ticker] || ticker;
+  }
+  // Stock, ETF, Index — use as-is
+  return ticker;
+}
+```
+
+Use this function wherever the TradingView widget symbol is set for the expandable chart in the holdings table.
+
+## Fix 3: Sector Allocation chart
+
+After fetching quotes from /api/portfolio/quotes, the response now includes a "sector" field on every quote (backend fix ensures this). Build the Sector Allocation donut chart data:
+
+1. For each holding, get the sector from the matching quote response
+2. As a fallback (in case backend sector is missing), use asset_type from the holding:
+   - asset_type "crypto" → sector "Crypto"
+   - asset_type "commodity" → sector "Commodities"
+   - asset_type "etf" → sector "ETFs"
+   - asset_type "index" → sector "Indices"
+   - anything else → sector "Other"
+3. Calculate position value: price * shares (or price * amount for crypto)
+4. Group by sector, sum the values
+5. Calculate percentages of total portfolio value
+6. Pass the grouped data to the donut chart component
+
+Example output data for the chart:
+```javascript
+[
+  { name: "Technology", value: 5864, percentage: 66.0 },
+  { name: "Crypto", value: 2450, percentage: 27.6 },
+  { name: "Commodities", value: 570, percentage: 6.4 },
+]
+```
+
+## Fix 4: Dynamic label for Shares/Amount field
+
+In the "Add Holding" form, change the "Shares" input label dynamically based on the selected asset_type:
+- Stock → "Shares"
+- ETF → "Shares"
+- Index → "Units"
+- Crypto → "Amount"
+- Commodity → "Units"

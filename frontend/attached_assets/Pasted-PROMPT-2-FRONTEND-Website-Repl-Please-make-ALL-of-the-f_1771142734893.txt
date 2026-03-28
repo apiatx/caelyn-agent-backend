@@ -1,0 +1,161 @@
+PROMPT 2 — FRONTEND (Website Repl)Please make ALL of the following changes.PART 1: Add Briefing ButtonIn client/src/components/TradingAgent.tsx, find the FIRST row of quick prompt buttons (the Core row). Add this as the FIRST button in the array (before Best Trades):tsx            {l:'⚡ Daily Briefing', p:'Give me the full daily intelligence briefing. Market pulse, key numbers (SPY, QQQ, VIX, Fear & Greed, DXY, 10Y yield, oil, gold), what is moving across all scanners, the top signal from each category (best TA setup, best fundamental play, hottest social name, top squeeze, biggest volume spike, strongest sector), and your top 3-5 highest conviction actionable moves today with full trade plans. I want to know exactly what to do in 60 seconds.'},PART 2: Add Briefing RendererAdd this renderer function right before the // ─── Main Render comment:tsx  function renderBriefing(s: any) {
+    const pulse = s.market_pulse || {};
+    const numbers = s.key_numbers || {};
+    const moving = s.whats_moving || [];
+    const highlights = s.signal_highlights || {};
+    const topMoves = s.top_moves || [];
+    const catalysts = s.upcoming_catalysts || [];
+
+    const verdictColor = (v?: string) => {
+      if (!v) return C.dim;
+      const lower = v.toLowerCase();
+      if (lower.includes('bullish') && !lower.includes('cautious')) return C.green;
+      if (lower.includes('cautiously bullish')) return '#4ade80';
+      if (lower.includes('neutral')) return C.gold;
+      if (lower.includes('cautiously bearish')) return '#f97316';
+      if (lower.includes('bearish')) return C.red;
+      return C.dim;
+    };
+
+    const regimeColor = (r?: string) => {
+      if (!r) return C.dim;
+      if (r.toLowerCase().includes('risk-on')) return C.green;
+      if (r.toLowerCase().includes('risk-off')) return C.red;
+      return C.gold;
+    };
+
+    return <div>
+      {/* ── Market Pulse ── */}
+      <div style={{ padding:'20px 24px', background:`linear-gradient(135deg, ${C.card} 0%, ${C.bg} 100%)`, border:`1px solid ${C.border}`, borderRadius:12, marginBottom:16 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+            <span style={{ fontSize:22 }}>⚡</span>
+            <span style={{ color:verdictColor(pulse.verdict), fontSize:20, fontWeight:800, fontFamily:sansFont }}>{pulse.verdict || 'Loading...'}</span>
+          </div>
+          {pulse.regime && <Badge color={regimeColor(pulse.regime)}>{pulse.regime}</Badge>}
+        </div>
+        {pulse.summary && <div style={{ color:C.text, fontSize:13, lineHeight:1.7, fontFamily:sansFont }}>{pulse.summary}</div>}
+      </div>
+
+      {/* ── Key Numbers Grid ── */}
+      {Object.keys(numbers).length > 0 && <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(140px, 1fr))', gap:8, marginBottom:16 }}>
+        {Object.entries(numbers).map(([key, val]: [string, any]) => (
+          <div key={key} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:'10px 12px' }}>
+            <div style={{ color:C.dim, fontSize:9, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:4 }}>{key.replace(/_/g, ' ')}</div>
+            <div style={{ display:'flex', alignItems:'baseline', gap:6 }}>
+              <span style={{ color:C.bright, fontSize:15, fontWeight:700, fontFamily:font }}>{val?.price || val?.value || 'N/A'}</span>
+              {val?.change && <span style={{ color:changeColor(val.change), fontSize:11, fontWeight:600, fontFamily:font }}>{val.change}</span>}
+            </div>
+            {val?.trend && <div style={{ color:trendColor(val.trend), fontSize:10, fontFamily:font, marginTop:2 }}>{val.trend}</div>}
+            {val?.label && <div style={{ color:trendColor(val.label), fontSize:10, fontFamily:font, marginTop:2 }}>{val.label}</div>}
+          </div>
+        ))}
+      </div>}
+
+      {/* ── What's Moving ── */}
+      {moving.length > 0 && <div style={{ marginBottom:16 }}>
+        <div style={{ color:C.bright, fontSize:13, fontWeight:700, fontFamily:sansFont, marginBottom:10 }}>What's Moving</div>
+        <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+          {moving.map((item: any, i: number) => (
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 14px', background:C.card, border:`1px solid ${C.border}`, borderRadius:8 }}>
+              <Badge color={C.blue}>{item.category}</Badge>
+              <span style={{ color:C.text, fontSize:12, fontFamily:sansFont, flex:1 }}>{item.headline}</span>
+            </div>
+          ))}
+        </div>
+      </div>}
+
+      {/* ── Signal Highlights ── */}
+      {Object.keys(highlights).length > 0 && <div style={{ marginBottom:16 }}>
+        <div style={{ color:C.bright, fontSize:13, fontWeight:700, fontFamily:sansFont, marginBottom:10 }}>Top Signal From Each Scanner</div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px, 1fr))', gap:10 }}>
+          {Object.entries(highlights).map(([key, val]: [string, any]) => {
+            const labelMap: Record<string, {icon: string, color: string}> = {
+              'best_ta_setup': {icon: '📈', color: C.blue},
+              'best_fundamental': {icon: '💎', color: C.green},
+              'hottest_social': {icon: '🚀', color: C.purple},
+              'top_squeeze': {icon: '💥', color: C.red},
+              'biggest_volume': {icon: '📊', color: C.gold},
+              'strongest_sector': {icon: '🔄', color: '#06b6d4'},
+            };
+            const cfg = labelMap[key] || {icon: '•', color: C.dim};
+            return <div key={key} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:14 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+                <span style={{ fontSize:14 }}>{cfg.icon}</span>
+                <span style={{ color:cfg.color, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', letterSpacing:'0.04em' }}>{key.replace(/_/g, ' ')}</span>
+              </div>
+              <div style={{ color:C.bright, fontSize:14, fontWeight:700, fontFamily:font, marginBottom:4 }}>{val?.ticker || val?.sector || 'N/A'}</div>
+              <div style={{ color:C.text, fontSize:11, lineHeight:1.5, fontFamily:sansFont }}>{val?.signal || ''}</div>
+            </div>;
+          })}
+        </div>
+      </div>}
+
+      {/* ── Top Moves (MAIN EVENT) ── */}
+      {topMoves.length > 0 && <div style={{ marginBottom:16 }}>
+        <div style={{ color:C.bright, fontSize:14, fontWeight:800, fontFamily:sansFont, marginBottom:10 }}>Top Moves Today</div>
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          {topMoves.map((move: any, i: number) => {
+            const isExp = expandedTicker === `brief-${i}`;
+            return <CardWrap key={i} onClick={() => setExpandedTicker(isExp ? null : `brief-${i}`)} expanded={isExp}>
+              <div style={{ padding:'16px 20px' }}>
+                {/* Header row */}
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                    <span style={{ color:C.gold, fontWeight:800, fontSize:18, fontFamily:font }}>#{move.rank}</span>
+                    <span style={{ color:C.blue, fontWeight:800, fontSize:18, fontFamily:font }}>{move.ticker}</span>
+                    <Badge color={move.action === 'BUY' ? C.green : move.action === 'SHORT' ? C.red : C.gold}>{move.action}</Badge>
+                    <Badge color={convColor(move.conviction)}>{move.conviction}</Badge>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                    <span style={{ color:C.gold, fontSize:11, fontWeight:700, fontFamily:font }}>{move.signal_count} signals</span>
+                  </div>
+                </div>
+                {/* Signal sources */}
+                {move.signals_stacking && <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:8 }}>
+                  {move.signals_stacking.map((sig: string, j: number) => (
+                    <span key={j} style={{ padding:'2px 8px', borderRadius:4, fontSize:9, fontWeight:600, fontFamily:font, color:C.gold, background:`${C.gold}10`, border:`1px solid ${C.gold}20` }}>{sig.replace(/_/g, ' ')}</span>
+                  ))}
+                </div>}
+                {/* Thesis */}
+                <div style={{ color:C.text, fontSize:12, lineHeight:1.7, fontFamily:sansFont }}>{move.thesis}</div>
+              </div>
+              {/* Expanded: Trade plan + chart */}
+              {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:18 }}>
+                <TradingViewMini ticker={move.ticker} />
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(120px, 1fr))', gap:8, marginTop:12 }}>
+                  {[
+                    ['Entry', move.entry, C.bright],
+                    ['Stop Loss', move.stop, C.red],
+                    ['Target', move.target, C.green],
+                    ['R/R', move.risk_reward, C.gold],
+                    ['Timeframe', move.timeframe, C.dim],
+                  ].map(([l, v, c]) => v ? <div key={l as string}>
+                    <div style={{ color:C.dim, fontSize:9, fontFamily:font, textTransform:'uppercase' }}>{l as string}</div>
+                    <div style={{ color:c as string, fontSize:15, fontWeight:700, fontFamily:font, marginTop:2 }}>{v as string}</div>
+                  </div> : null)}
+                </div>
+              </div>}
+            </CardWrap>;
+          })}
+        </div>
+      </div>}
+
+      {/* ── Upcoming Catalysts ── */}
+      {catalysts.length > 0 && <div style={{ marginBottom:16 }}>
+        <div style={{ color:C.bright, fontSize:13, fontWeight:700, fontFamily:sansFont, marginBottom:8 }}>Upcoming Catalysts</div>
+        <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:12 }}>
+          {catalysts.map((cat: string, i: number) => (
+            <div key={i} style={{ padding:'5px 0', borderBottom: i < catalysts.length - 1 ? `1px solid ${C.border}` : 'none', color:C.text, fontSize:11, fontFamily:sansFont, display:'flex', gap:8 }}>
+              <span style={{ color:C.gold }}>📅</span> {cat}
+            </div>
+          ))}
+        </div>
+      </div>}
+
+      {/* ── Portfolio Bias ── */}
+      {s.portfolio_bias && <div style={{ padding:'14px 18px', background:`${C.blue}06`, border:`1px solid ${C.blue}15`, borderRadius:10, marginBottom:16, color:C.text, fontSize:12, lineHeight:1.7, fontFamily:sansFont }}>
+        <span style={{ color:C.blue, fontWeight:700 }}>Portfolio Bias: </span>{s.portfolio_bias}
+      </div>}
+    </div>;
+  }PART 3: Add to Main RenderFind the main render results section and add this line alongside the other display_type checks:tsx        {s.display_type === 'briefing' && renderBriefing(s)}Re-publish/deploy the frontend.

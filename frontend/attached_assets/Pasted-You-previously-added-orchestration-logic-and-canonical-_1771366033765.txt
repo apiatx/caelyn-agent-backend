@@ -1,0 +1,93 @@
+You previously added orchestration logic and canonical intent definitions to the frontend. That is incorrect architecture.
+
+We are reverting the frontend to a lightweight command layer.
+
+Do the following:
+
+Remove all orchestration logic, scoring logic, and intent profile definitions from the frontend.
+
+Remove any large preset prompt text blobs from button handlers.
+
+Remove any business logic related to:
+
+module activation
+
+asset filtering
+
+fundamental/technical weighting
+
+sentiment rules
+
+Frontend must NOT define intelligence.
+
+Replace All Preset Buttons With Intent Keys Only
+
+Each button should send a minimal payload:
+
+await fetch("/analyze", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    query: userInput || "",
+    preset_intent: "daily_briefing"
+  })
+})
+
+
+Each button only sends:
+
+preset_intent: "<intent_key>"
+
+
+No prompt strings.
+No keyword arrays.
+No text concatenation.
+No template text.
+
+Button → Intent Mapping (Frontend Only Sends These Keys)
+
+Trending Now → "cross_asset_trending"
+Daily Briefing → "daily_briefing"
+Best Trades → "tactical_trades"
+Best Investments → "long_term_conviction"
+Macro Overview → "macro_outlook"
+
+Sector Rotation → "sector_rotation"
+Crypto → "crypto_focus"
+Energy → "sector_energy"
+AI/Compute → "sector_ai"
+Materials → "sector_materials"
+Quantum → "sector_quantum"
+Aerospace/Defense → "sector_defense"
+Tech → "sector_tech"
+Finance → "sector_financials"
+Commodities → "commodities_focus"
+Healthcare → "sector_healthcare"
+Real Estate → "sector_real_estate"
+Uranium/Nuclear → "sector_nuclear"
+
+Stage 2 Breakouts → "technical_stage2"
+Bearish Setups → "technical_bearish_setups"
+Asymmetric Only → "asymmetric_high_risk"
+Small Cap Spec → "microcap_asymmetry"
+Short Squeeze → "short_squeeze_scan"
+Bullish Breakouts → "technical_bullish_breakout"
+Bearish Breakdowns → "technical_bearish_breakdown"
+Oversold Bounces → "technical_oversold_bounce"
+Overbought Warnings → "technical_overbought"
+Crossover Signals → "technical_crossover"
+Momentum Shifts → "technical_momentum_shift"
+Trend Status → "trend_status"
+Volume & Movers → "volume_movers"
+
+Fundamental Leaders → "fundamental_leaders"
+Rapidly Improving Fundamentals → "fundamental_acceleration"
+Earnings Watch → "earnings_watch"
+
+Social Momentum → "social_momentum_scan"
+News Headline Leaders → "news_leaders"
+Upcoming Catalysts → "catalyst_scan"
+
+That is ALL frontend does.
+
+Nothing else.

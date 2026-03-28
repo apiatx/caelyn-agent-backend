@@ -1,0 +1,108 @@
+Options Screener — Frontend Integration Guide
+Endpoint (unchanged)
+POST /api/options/dashboard
+Content-Type: application/json
+Body: {} (empty — no parameters needed)
+Response Shape (new)
+The top-level envelope:
+
+{
+  "response": { ... },       // all screener data lives here
+  "structured": true,
+  "preset": "options_screener",
+  "from_cache": true,
+  "cache_age_seconds": 14    // how old the data is (refreshes every 90s)
+}
+Inside response:
+
+{
+  "display_type": "options_screener",
+  "tickers": [ ... ],          // 17 rows — one per ticker
+  "all_contracts": [ ... ],    // up to 500 individual contracts (flat)
+  "market_summary": { ... },   // aggregated totals
+  "tickers_scanned": ["SPY", "QQQ", ...]
+}
+market_summary — for the header/banner
+{
+  "tickers_scanned": 17,
+  "total_call_volume": 2382801,
+  "total_put_volume": 2046002,
+  "market_pc_ratio": 0.859,     // market-wide put/call ratio
+  "total_contracts": 500,
+  "most_active_ticker": "SPY"
+}
+tickers[] — for the Ticker Summary table (sortable by any column)
+Each row:
+
+{
+  "ticker": "TSLA",
+  "category": "stock",          // "stock" or "etf"
+  "expiration": "2026-03-28",   // nearest expiry scanned
+  // Volume
+  "call_volume": 258408,
+  "put_volume": 197771,
+  "total_volume": 456179,
+  "pc_ratio": 0.765,            // put_volume / call_volume
+  // Open Interest
+  "call_oi": 1250000,
+  "put_oi": 980000,
+  "total_oi": 2230000,
+  // Implied Volatility (volume-weighted average across active contracts)
+  "avg_call_iv": 0.353,         // null for SPY/QQQ (API limitation)
+  "avg_put_iv": 0.420,
+  "iv_skew": 0.067,             // avg_put_iv - avg_call_iv; positive = put premium
+  // Max pain
+  "max_pain": 320.0,            // strike with highest combined OI concentration
+  // Top contracts (full greeks — use for expanded row / drill-down)
+  "top_calls": [ ...10 contracts ],
+  "top_puts":  [ ...10 contracts ]
+}
+Recommended sort columns: total_volume, call_volume, put_volume, pc_ratio, avg_call_iv, iv_skew, total_oi
+
+Recommended filters: category === "stock" or category === "etf" → drives your Stocks / ETFs tabs
+
+all_contracts[] — for the Flow / Contracts table (flat, sortable by any column)
+Each row:
+
+{
+  "underlying": "TSLA",
+  "category": "stock",           // "stock" or "etf"
+  "side": "call",                // "call" or "put"
+  "expiration": "2026-03-28",
+  "strike": 320.0,
+  "symbol": "TSLA260328C00320000",  // OSI format
+  // Pricing
+  "bid": "12.50",
+  "ask": "12.70",
+  "last": "12.60",
+  // Activity
+  "volume": 15420,
+  "openInterest": 8200,
+  "vol_oi_ratio": 1.88,          // null if OI is 0
+  // Greeks (null for some ETFs)
+  "delta": "0.54",
+  "gamma": "0.012",
+  "theta": "-0.18",
+  "vega": "0.45",
+  "iv": "0.353"
+}
+Recommended sort columns: volume, openInterest, vol_oi_ratio, iv, delta
+
+Filter ideas: side (call/put), category (stock/etf), vol_oi_ratio > 3 for unusual activity
+
+What no longer exists
+The old response had these Claude-generated fields — remove all references to them:
+
+unusual_activity[]
+high_conviction_setups[]
+iv_watch[]
+flow_summary
+market_context
+tabs.stocks / tabs.etfs
+The Stocks/ETFs tab split is now done client-side by filtering category === "stock" or "etf" on either tickers[] or all_contracts[].
+
+Refresh behavior
+The data refreshes every 90 seconds in the background. cache_age_seconds in the response tells the frontend exactly how stale the data is — you can show "Updated 14s ago" in the UI. Polling every 90–120 seconds is appropriate.
+
+Claude chat bar (unchanged)
+The existing conversational chat endpoint is unchanged. Users can ask things like "why is TSLA call volume so high today?" and Claude will analyze and respond. No changes needed there.

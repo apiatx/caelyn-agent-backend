@@ -1,0 +1,107 @@
+You are modifying the frontend only.
+
+Do NOT modify:
+
+Backend endpoints
+
+Data providers
+
+Model logic
+
+Claude prompts
+
+OpenAI classifier logic
+
+Your job:
+
+REMOVE all orchestration logic, intent profiles, module configs, scoring logic from the frontend.
+
+Ensure each preset button sends ONLY an intent key.
+
+Each button click should send a payload like:
+
+{
+  "query": "",
+  "preset_intent": "intent_key_here"
+}
+
+
+If user types in the input box and clicks Analyze:
+
+{
+  "query": "user typed message",
+  "preset_intent": null
+}
+
+
+DO NOT construct prompt templates in frontend.
+
+DO NOT build keyword-based strings.
+
+DO NOT append system instructions.
+
+DO NOT modify user query text.
+
+Frontend is a transport layer only.
+
+BUTTON → INTENT KEY MAP
+
+Trending Now → "cross_asset_trending"
+Daily Briefing → "daily_briefing"
+Best Trades → "tactical_trades"
+Best Investments → "long_term_conviction"
+Macro Overview → "macro_outlook"
+
+Sector Rotation → "sector_rotation"
+Crypto → "crypto_focus"
+Energy → "sector_energy"
+AI/Compute → "sector_ai"
+Materials → "sector_materials"
+Quantum → "sector_quantum"
+Aerospace/Defense → "sector_defense"
+Tech → "sector_tech"
+Finance → "sector_financials"
+Commodities → "commodities_focus"
+Healthcare → "sector_healthcare"
+Real Estate → "sector_real_estate"
+Uranium/Nuclear → "sector_uranium"
+
+Stage 2 Breakouts → "technical_stage2"
+Bearish Setups → "technical_bearish_setups"
+Asymmetric Only → "microcap_asymmetry"
+Small Cap Spec → "microcap_spec"
+Short Squeeze → "short_squeeze_scan"
+Bullish Breakouts → "technical_bullish_breakouts"
+Bearish Breakdowns → "technical_breakdowns"
+Oversold Bounces → "technical_oversold"
+Overbought Warnings → "technical_overbought"
+Crossover Signals → "technical_crossovers"
+Momentum Shifts → "momentum_shift_scan"
+Trend Status → "trend_status_scan"
+Volume & Movers → "volume_movers_scan"
+
+Fundamental Leaders → "fundamental_leaders"
+Rapidly Improving Fundamentals → "fundamental_acceleration"
+Earnings Watch → "earnings_watch"
+
+Social Momentum → "social_momentum_scan"
+News Headline Leaders → "news_leaders"
+Upcoming Catalysts → "catalyst_scan"
+
+Ensure no token-splitting or comma-joining logic exists.
+
+Ensure chat history stores:
+
+query
+
+preset_intent
+
+response
+
+timestamp
+
+When loading previous chat, re-send conversation context exactly as stored.
+
+Do NOT reintroduce orchestration logic into frontend.
+
+Frontend must remain a clean UI transport layer.

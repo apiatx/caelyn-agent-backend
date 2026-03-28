@@ -1,0 +1,184 @@
+PROMPT 2 — FRONTEND (Website Repl)
+Please make ALL of the following changes.
+PART 1: Add Portfolio Review Button and Ticker Input
+In client/src/components/TradingAgent.tsx, add this state variable alongside the existing state declarations:
+tsx  const [showTickerInput, setShowTickerInput] = useState(false);
+  const [tickerInput, setTickerInput] = useState('');
+Find the Advanced quick prompt buttons section (the second row of buttons). Add this button to the END of that array:
+tsx            {l:'📋 Portfolio Review', p:'__PORTFOLIO__'},
+Now find the askAgent function. At the very top of the function, BEFORE the existing logic, add this block:
+tsx  async function askAgent(customPrompt?: string) {
+    const q = customPrompt || prompt;
+
+    // Portfolio review: show ticker input instead of sending immediately
+    if (q === '__PORTFOLIO__') {
+      setShowTickerInput(true);
+      return;
+    }
+
+    if (!q.trim()) return;
+Add a new function right after askAgent for submitting the portfolio:
+tsx  function submitPortfolio() {
+    if (!tickerInput.trim()) return;
+    const tickers = tickerInput.toUpperCase().split(/[,\s]+/).filter(t => t.length >= 1 && t.length <= 5);
+    if (tickers.length === 0) return;
+    setShowTickerInput(false);
+    const portfolioPrompt = `Review and rate these positions: ${tickers.join(', ')}. For each ticker give me a rating (Strong Buy, Buy, Hold, Sell, or Short) with full technical summary, fundamental summary, sentiment, key risk, insider activity, relative strength vs SPY, and suggested action. Then give me portfolio-level insights: sector concentration, risk flags, and suggested changes.`;
+    askAgent(portfolioPrompt);
+  }
+Add the ticker input UI. Find the section right after the quick prompt buttons (after the closing </div> of the second button row). Add this:
+tsx        {/* Portfolio Ticker Input */}
+        {showTickerInput && (
+          <div style={{ marginTop:10, padding:16, background:C.card, border:`1px solid ${C.blue}30`, borderRadius:10 }}>
+            <div style={{ color:C.bright, fontSize:13, fontWeight:600, fontFamily:sansFont, marginBottom:8 }}>
+              Enter your tickers (up to 25, separated by commas or spaces)
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <input
+                type="text"
+                value={tickerInput}
+                onChange={e => setTickerInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && submitPortfolio()}
+                placeholder="NVDA, AMD, SMCI, CCJ, UEC, SMR, PLTR, CRDO..."
+                style={{ flex:1, padding:'12px 16px', border:`1px solid ${C.border}`, borderRadius:8, background:C.bg, color:C.bright, fontSize:13, fontFamily:font, outline:'none' }}
+                autoFocus
+              />
+              <button
+                onClick={submitPortfolio}
+                style={{ padding:'10px 24px', background:`linear-gradient(135deg, ${C.blue}, #2563eb)`, color:'white', border:'none', borderRadius:8, cursor:'pointer', fontWeight:700, fontSize:13, fontFamily:sansFont }}
+              >
+                Analyze
+              </button>
+              <button
+                onClick={() => setShowTickerInput(false)}
+                style={{ padding:'10px 16px', background:C.card, border:`1px solid ${C.border}`, borderRadius:8, color:C.dim, cursor:'pointer', fontSize:12, fontFamily:font }}
+              >
+                Cancel
+              </button>
+            </div>
+            <div style={{ color:C.dim, fontSize:10, fontFamily:font, marginTop:6 }}>
+              Example: NVDA, AMD, AVGO, MRVL, CRDO, SMCI, CCJ, UEC, PLTR, VRT
+            </div>
+          </div>
+        )}
+PART 2: Add Portfolio Renderer
+Add this renderer function right before the // ─── Main Render comment:
+tsx  function renderPortfolio(s: any) {
+    const positions = s.positions || [];
+    const insights = s.portfolio_insights || {};
+
+    const ratingConfig: Record<string, {color: string, bg: string}> = {
+      'Strong Buy': { color: '#22c55e', bg: '#22c55e12' },
+      'Buy': { color: '#4ade80', bg: '#4ade8012' },
+      'Hold': { color: '#f59e0b', bg: '#f59e0b12' },
+      'Sell': { color: '#ef4444', bg: '#ef444412' },
+      'Short': { color: '#dc2626', bg: '#dc262612' },
+    };
+
+    return <div>
+      {/* Summary */}
+      {s.summary && <div style={{ padding:'16px 20px', background:`${C.blue}08`, border:`1px solid ${C.blue}15`, borderRadius:10, marginBottom:16, color:C.text, fontSize:12, fontFamily:sansFont, lineHeight:1.7 }}>{s.summary}</div>}
+
+      {/* SPY Context */}
+      {s.spy_context && <div style={{ display:'flex', alignItems:'center', gap:16, padding:'10px 16px', background:C.card, border:`1px solid ${C.border}`, borderRadius:8, marginBottom:16 }}>
+        <span style={{ color:C.dim, fontSize:11, fontWeight:700, fontFamily:font }}>SPY BENCHMARK</span>
+        <span style={{ color:C.bright, fontSize:14, fontWeight:700, fontFamily:font }}>{s.spy_context.price}</span>
+        <span style={{ color:changeColor(s.spy_context.change), fontSize:12, fontWeight:600, fontFamily:font }}>{s.spy_context.change}</span>
+        <span style={{ color:trendColor(s.spy_context.trend), fontSize:11, fontFamily:font }}>{s.spy_context.trend}</span>
+      </div>}
+
+      {/* Position Cards */}
+      <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:16 }}>
+        {positions.map((p: any, i: number) => {
+          const isExp = expandedTicker === `port-${i}`;
+          const rc = ratingConfig[p.rating] || ratingConfig['Hold'];
+          return <CardWrap key={i} onClick={() => setExpandedTicker(isExp ? null : `port-${i}`)} expanded={isExp}>
+            {/* Header */}
+            <div style={{ padding:'14px 18px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                <span style={{ color:C.blue, fontWeight:800, fontSize:16, fontFamily:font }}>{p.ticker}</span>
+                <span style={{ color:C.dim, fontSize:11 }}>{p.company}</span>
+                <span style={{ color:changeColor(p.change), fontWeight:600, fontSize:13, fontFamily:font }}>{p.price} {p.change}</span>
+              </div>
+              <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                <Badge color={C.dim}>{p.market_cap}</Badge>
+                {/* Rating Badge */}
+                <span style={{ display:'inline-block', padding:'4px 14px', borderRadius:6, fontSize:11, fontWeight:800, fontFamily:font, color:rc.color, background:rc.bg, border:`1px solid ${rc.color}30`, letterSpacing:'0.04em', textTransform:'uppercase' }}>{p.rating}</span>
+              </div>
+            </div>
+            {/* Score Bar */}
+            <div style={{ padding:'0 18px 10px', display:'flex', gap:16, fontSize:10, fontFamily:font }}>
+              <span style={{ color:C.dim }}>Combined: <span style={{ color:C.bright, fontWeight:700 }}>{p.combined_score}</span></span>
+              <span style={{ color:C.dim }}>Trade: <span style={{ color:C.blue }}>{p.trade_score}</span></span>
+              <span style={{ color:C.dim }}>Invest: <span style={{ color:C.green }}>{p.invest_score}</span></span>
+              {p.relative_strength && <span style={{ color:C.dim }}>vs SPY: <span style={{ color:trendColor(p.relative_strength) }}>{p.relative_strength}</span></span>}
+            </div>
+            {/* Thesis */}
+            <div style={{ padding:'0 18px 14px', color:C.text, fontSize:12, lineHeight:1.6, fontFamily:sansFont }}>{p.thesis}</div>
+            {/* Expanded */}
+            {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:18 }}>
+              <TradingViewMini ticker={p.ticker} />
+              {/* Data Grid */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:14 }}>
+                <div style={{ background:C.bg, borderRadius:8, padding:12, border:`1px solid ${C.border}` }}>
+                  <div style={{ color:C.blue, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:6 }}>Technical</div>
+                  <div style={{ color:C.text, fontSize:11, lineHeight:1.7, fontFamily:sansFont }}>{p.ta_summary}</div>
+                </div>
+                <div style={{ background:C.bg, borderRadius:8, padding:12, border:`1px solid ${C.border}` }}>
+                  <div style={{ color:C.green, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:6 }}>Fundamentals</div>
+                  <div style={{ color:C.text, fontSize:11, lineHeight:1.7, fontFamily:sansFont }}>{p.fundamental_summary}</div>
+                </div>
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, marginBottom:14 }}>
+                {p.sentiment && <div style={{ background:C.bg, borderRadius:8, padding:10, border:`1px solid ${C.border}` }}>
+                  <div style={{ color:C.purple, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:4 }}>Sentiment</div>
+                  <div style={{ color:C.text, fontSize:11, fontFamily:sansFont }}>{p.sentiment}</div>
+                </div>}
+                {p.insider_activity && <div style={{ background:C.bg, borderRadius:8, padding:10, border:`1px solid ${C.border}` }}>
+                  <div style={{ color:C.gold, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:4 }}>Insider Activity</div>
+                  <div style={{ color:C.text, fontSize:11, fontFamily:sansFont }}>{p.insider_activity}</div>
+                </div>}
+                {p.key_risk && <div style={{ background:`${C.red}06`, borderRadius:8, padding:10, border:`1px solid ${C.red}12` }}>
+                  <div style={{ color:C.red, fontSize:9, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:4 }}>Key Risk</div>
+                  <div style={{ color:C.text, fontSize:11, fontFamily:sansFont }}>{p.key_risk}</div>
+                </div>}
+              </div>
+              {/* Action */}
+              {p.action && <div style={{ padding:12, background:`${rc.bg}`, border:`1px solid ${rc.color}20`, borderRadius:8, color:C.bright, fontSize:12, fontWeight:600, fontFamily:sansFont }}>
+                <span style={{ color:rc.color, fontWeight:700 }}>Action: </span>{p.action}
+              </div>}
+            </div>}
+          </CardWrap>;
+        })}
+      </div>
+
+      {/* Portfolio Insights */}
+      {Object.keys(insights).length > 0 && <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:18, marginBottom:16 }}>
+        <div style={{ color:C.bright, fontSize:14, fontWeight:700, fontFamily:sansFont, marginBottom:14 }}>Portfolio Insights</div>
+        {insights.sector_concentration && <div style={{ marginBottom:12 }}>
+          <div style={{ color:C.blue, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:6 }}>Sector Concentration</div>
+          <div style={{ color:C.text, fontSize:12, fontFamily:sansFont }}>{insights.sector_concentration}</div>
+        </div>}
+        {insights.risk_flags && insights.risk_flags.length > 0 && <div style={{ marginBottom:12 }}>
+          <div style={{ color:C.red, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:6 }}>Risk Flags</div>
+          {insights.risk_flags.map((flag: string, i: number) => (
+            <div key={i} style={{ padding:'6px 0', borderBottom: i < insights.risk_flags.length - 1 ? `1px solid ${C.border}` : 'none', color:C.text, fontSize:11, fontFamily:sansFont, display:'flex', gap:8 }}>
+              <span style={{ color:C.red }}>⚠️</span> {flag}
+            </div>
+          ))}
+        </div>}
+        {insights.suggested_actions && insights.suggested_actions.length > 0 && <div>
+          <div style={{ color:C.green, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:6 }}>Suggested Actions</div>
+          {insights.suggested_actions.map((action: string, i: number) => (
+            <div key={i} style={{ padding:'6px 0', borderBottom: i < insights.suggested_actions.length - 1 ? `1px solid ${C.border}` : 'none', color:C.text, fontSize:11, fontFamily:sansFont, display:'flex', gap:8 }}>
+              <span style={{ color:C.green }}>→</span> {action}
+            </div>
+          ))}
+        </div>}
+      </div>}
+    </div>;
+  }
+PART 3: Add Portfolio to Main Render
+Find the main render results section and add this line alongside the other display_type checks:
+tsx        {s.display_type === 'portfolio' && renderPortfolio(s)}
+Re-publish/deploy the frontend.

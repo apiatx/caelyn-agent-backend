@@ -1,0 +1,65 @@
+Please make the agent chat fully conversational. The user needs to be able to send follow-up messages after any prompt response, and the full conversation history should be maintained and sent with each request.
+Requirements:
+
+Maintain a conversation history array in React state:
+
+tsxconst [messages, setMessages] = useState<Array<{role: string, content: string, parsed?: any}>>([]);
+Each message has role ("user" or "assistant"), content (raw text), and optionally parsed (the parsed JSON response for rendering).
+
+When the user sends a message (typed or via prompt button), add it to the history and send the FULL history with the request:
+
+tsxconst sendMessage = async (query: string) => {
+  // Add user message to history
+  const newUserMsg = { role: "user", content: query };
+  const updatedHistory = [...messages, newUserMsg];
+  setMessages(updatedHistory);
+  setIsLoading(true);
+
+  try {
+    const response = await fetch("/api/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: query,
+        conversation_history: updatedHistory.map(m => ({
+          role: m.role,
+          content: m.role === "assistant" ? m.content : m.content,
+        })),
+      }),
+    });
+
+    const data = await response.json();
+    
+    // Add assistant response to history
+    const assistantMsg = {
+      role: "assistant",
+      content: JSON.stringify(data),
+      parsed: data,
+    };
+    setMessages(prev => [...prev, assistantMsg]);
+  } catch (err) {
+    setMessages(prev => [...prev, {
+      role: "assistant",
+      content: JSON.stringify({ display_type: "chat", message: "Something went wrong. Please try again." }),
+      parsed: { display_type: "chat", message: "Something went wrong. Please try again." },
+    }]);
+  }
+  
+  setIsLoading(false);
+};
+
+Display ALL messages in the chat area, not just the latest response. Render the conversation as a scrollable chat thread:
+
+
+User messages: Right-aligned bubble with the user's query text, styled with a subtle background (e.g., the purple accent at 10% opacity)
+Assistant messages: Left-aligned, rendered using the existing display_type renderers (renderTrades, renderCrypto, renderMacro, etc.) for structured responses, or as a simple text bubble for display_type: "chat" responses
+Auto-scroll to the bottom when new messages appear
+
+
+The chat input should ALWAYS be visible at the bottom — after the initial prompt button response, the user should see their rendered response AND the input field below it ready for follow-up. The input placeholder should change from "Best trades today... Analyze NVDA..." to "Ask a follow-up..." after the first message.
+The prompt buttons should still be visible but move them ABOVE the chat thread area. After the first message is sent, the buttons can collapse into a compact single scrollable row (or hide behind a "New Scan" button that re-expands them) to give more room to the conversation.
+Add a "New Chat" / "Clear" button in the header area that resets the conversation history, clears all messages, and shows the prompt buttons in full again.
+When a prompt button is clicked, it starts a NEW conversation (clear history) and sends that prompt as the first message. When the user TYPES a follow-up in the input, it continues the existing conversation.
+For follow-up assistant responses with display_type: "chat", render the message as a styled text block — not raw JSON. Just show the message field as formatted text with the same font/color scheme as the rest of the UI.
+
+Re-deploy after all changes.

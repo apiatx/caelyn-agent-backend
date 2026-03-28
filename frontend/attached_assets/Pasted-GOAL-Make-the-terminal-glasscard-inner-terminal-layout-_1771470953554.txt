@@ -1,0 +1,69 @@
+GOAL
+Make the terminal (glasscard + inner terminal layout) larger and “fit to page” directly under the TOP TradingView widget, with no extra gap outside the terminal glasscard. Do not change any terminal functionality, prompt list, panels, sidebar, screener, or any internal terminal components. Do not remove or modify the TradingView widget at the top of the page. Do not remove or modify the TradingView widget currently at the bottom of the terminal.
+
+CHANGE #1 (Layout sizing: terminal fit-to-page)
+1) The top TradingView widget stays at the top of the page.
+2) The terminal glasscard container must begin immediately below the top TradingView widget with no extra vertical gap outside the glasscard.
+3) The terminal glasscard must expand to fill the remaining viewport height (minus the height of the top TradingView widget).
+4) The terminal glasscard width should be responsive and nearly full width of the page (match current max width rules, but remove the “small centered card” feeling). Keep a small, consistent page gutter.
+5) The terminal glasscard must contain the bottom TradingView widget inside it exactly as it is now. The terminal’s main content area should scroll if needed, not the entire page, unless it already does.
+
+IMPLEMENTATION DETAILS (CSS)
+- Create a page wrapper that is viewport height and uses a column layout:
+  - Top section: TradingView widget (fixed height or intrinsic).
+  - Bottom section: terminal glasscard set to flex: 1; min-height: 0; so it can grow and allow internal scrolling.
+- Remove any margin/padding that creates a gap between top widget and terminal glasscard. If you need spacing, it must be inside the glasscard, not outside it.
+
+Example layout approach:
+- Outer container: height: 100vh; display: flex; flex-direction: column;
+- Top widget wrapper: flex: 0 0 auto;
+- Terminal wrapper: flex: 1 1 auto; min-height: 0;
+- Terminal glasscard: height: 100%; width: 100%;
+- If you have a max-width container, increase it (or allow full width with a small horizontal padding like 16-24px).
+
+CHANGE #2 (Move hero logo + title into terminal empty-state center)
+You currently have a centered hero area above the terminal with:
+- Hippo logo image
+- Text: “HippoAI” and “Your AI-powered trading assistant”
+
+Inside the terminal main area, you currently show an empty-state with:
+- “HippoAI Terminal”
+- Instruction text: “Type a query in the command bar…”
+- Quick command chips: /briefing /trades /crypto /scan
+
+Requirement:
+- Move the existing hero logo + “HippoAI” + “Your AI-powered trading assistant” into the terminal empty-state center area.
+- It must REPLACE the “HippoAI Terminal” header and the instruction sentence text.
+- Keep the quick command chips (/briefing /trades /crypto /scan) exactly as they are and still visible under the moved hero content.
+- Do not change the command bar at the top of the terminal.
+- Do not change left rail, right sidebar, or any prompts.
+
+SPECIFIC EMPTY-STATE STRUCTURE
+In the terminal empty-state component:
+- Replace the existing title line “HippoAI Terminal” with:
+  - the hippo logo image (same asset and size as current hero, but scale it down slightly if it causes overflow)
+  - a heading “HippoAI”
+  - a subheading “Your AI-powered trading assistant”
+- Remove the current instruction paragraph entirely (the “Type a query…” line).
+- Keep the quick command chip row exactly as it is, directly below the subheading.
+
+CHANGE #3 (Remove old hero block outside terminal)
+After moving the hero content into the terminal empty-state:
+- Delete or hide the old centered hero block above the glasscard so it’s no longer taking vertical space.
+- Do not remove the top TradingView widget. Only remove the hero block.
+
+DO NOT CHANGE LIST
+- No changes to backend calls or response parsing.
+- No changes to prompt registry, prompt ids, or actions.
+- No changes to terminal panels or panel routing.
+- No changes to top TradingView widget.
+- No changes to bottom TradingView widget inside terminal.
+- No changes to overall theme other than required spacing/sizing adjustments described.
+
+ACCEPTANCE CRITERIA
+1) Top TradingView widget remains at top.
+2) Terminal glasscard sits directly beneath it, snug, with no outside gap.
+3) Terminal glasscard fills remaining viewport height.
+4) Hero logo + “HippoAI” + “Your AI-powered trading assistant” appear centered inside the terminal empty-state, replacing “HippoAI Terminal” and the instruction text.
+5) Quick command chips remain unchanged and visible under the hero content.
+6) Bottom TradingView widget remains visible inside the terminal.

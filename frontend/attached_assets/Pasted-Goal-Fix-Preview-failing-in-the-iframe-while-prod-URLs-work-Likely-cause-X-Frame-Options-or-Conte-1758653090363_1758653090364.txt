@@ -1,0 +1,98 @@
+Goal: Fix Preview failing in the iframe while prod URLs work. Likely cause: X-Frame-Options or Content-Security-Policy blocking embedding. Remove/relax those headers and prove Preview loads.
+
+Step 1 — Verify headers
+
+Run and paste results:
+
+# Show headers from the local server and the preview globe URL
+echo "PORT=$PORT"
+curl -sSI http://127.0.0.1:$PORT/ | grep -iE 'x-frame-options|content-security-policy|frame-ancestors' || echo "NO_BLOCK_HEADERS_LOCAL"
+GLOBE_URL="$(printenv REPLIT_DEV_DOMAIN)"
+echo "GLOBE=$GLOBE_URL"
+curl -sSI "https://$GLOBE_URL/" | grep -iE 'x-frame-options|content-security-policy|frame-ancestors' || echo "NO_BLOCK_HEADERS_GLOBE"
+
+
+If any of these appear with blocking values, we must change them:
+
+X-Frame-Options: DENY or SAMEORIGIN
+
+Content-Security-Policy: frame-ancestors 'none' (or missing replit domains)
+
+Step 2 — Remove or relax blocking headers (Express)
+
+Edit the server to allow Replit’s preview domain. If using Helmet, configure like this:
+
+// server/index.(ts|js)
+import helmet from 'helmet';
+
+// Turn off frameguard (X-Frame-Options) and set CSP frame-ancestors to include Replit
+app.disable('x-powered-by');
+app.use(helmet({
+  frameguard: false, // removes X-Frame-Options that breaks Preview
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      // allow embedding by Replit preview + your prod domain
+      'frame-ancestors': ["'self'", "*.replit.dev", "*.repl.co", "*.replit.app"]
+    }
+  }
+}));
+
+// If not using Helmet but you set headers manually, remove X-Frame-Options and add:
+app.use((_req, res, next) => {
+  res.removeHeader('X-Frame-Options');
+  res.setHeader('Content-Security-Policy',
+    "frame-ancestors 'self' *.replit.dev *.repl.co *.replit.app");
+  next();
+});
+
+
+If you’re serving via another framework, apply the same idea: no X-Frame-Options and CSP frame-ancestors must include *.replit.dev, *.repl.co, *.replit.app.
+
+Step 3 — Ensure fast start & single run command
+
+Open .replit and set only:
+
+run = "npm run start"
+
+
+Make sure the server binds:
+
+const port = Number(process.env.PORT || 5000);
+const host = '0.0.0.0';
+app.listen(port, host, () => console.log('listening', host, port));
+
+
+Remove any [[ports]] blocks.
+
+Step 4 — Restart and validate
+
+Stop → Run.
+
+Copy the Preview globe URL shown now.
+
+Prove success with:
+
+# Headers should NOT show X-Frame-Options DENY/SAMEORIGIN
+curl -sSI "https://$REPLIT_DEV_DOMAIN/" | grep -iE 'x-frame-options|content-security-policy|frame-ancestors' || true
+# And Preview iframe should render; also open in new tab should 200:
+curl -I "https://$REPLIT_DEV_DOMAIN/" | head -n 5
+
+Acceptance criteria (must include all in your reply)
+
+The exact headers now sent on / (showing no X-Frame-Options or a CSP with frame-ancestors 'self' *.replit.dev *.repl.co *.replit.app).
+
+The final .replit run line.
+
+The current Preview globe URL.
+
+curl -I "<globe-url>" returns HTTP 200, and Preview panel renders.
+
+Rules
+
+Do not suggest using the old kirk.replit.dev tab if it fails; use the current globe URL only.
+
+Do not re-add multiple [[ports]] mappings.
+
+If you can’t edit .replit via UI, use the file editor to change it.

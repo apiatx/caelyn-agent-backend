@@ -1,0 +1,97 @@
+## Fix: Index holdings (VIX, SPX) still show dashes for Price, Daily P&L, Total P&L, Weight%
+
+### Problem  
+The backend returns quote data for index tickers, but the frontend portfolio table still shows dashes. This means either:
+1. The frontend is not sending the correct `asset_types` in the quotes request, so VIX gets routed as a stock (and Finnhub returns nothing for "VIX" as a stock), OR
+2. The frontend receives the quote but doesn't apply it to the index row
+
+### Step 1: Check the quotes request
+
+Find where the frontend calls `/api/portfolio/quotes`. Check if it sends `asset_types` with the correct mapping. It should look like:
+```javascript
+const assetTypes = {};
+holdings.forEach(h => {
+    assetTypes[h.ticker.toUpperCase()] = (h.type || 'stock').toLowerCase();
+});
+
+const response = await fetch('/api/portfolio/quotes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+    body: JSON.stringify({ 
+        tickers: holdings.map(h => h.ticker),
+        asset_types: assetTypes  // THIS IS CRITICAL
+    }),
+});
+```
+
+If `asset_types` is not being sent, or if index holdings have `type: "Index"` (capital I) but the backend checks for `"index"` (lowercase), the index tickers get misrouted as stocks. Fix by normalizing to lowercase:
+```javascript
+assetTypes[h.ticker.toUpperCase()] = (h.type || 'stock').toLowerCase();
+// "Index" -> "index", "Stock" -> "stock", "Crypto" -> "crypto"
+```
+
+### Step 2: Check quote application to index rows
+
+After receiving quotes, find where the quote data is applied to each holding row. Make sure index holdings are not being skipped. The logic should be:
+```javascript
+holdings.forEach(h => {
+    const quote = quotesData[h.ticker.toUpperCase()];
+    if (quote && quote.price) {
+        h.currentPrice = quote.price;
+        h.dailyPnL = quote.change ? (quote.change * h.shares) : null; // This needs to be change per share, not total change
+        h.totalPnL = (quote.price - h.avgCost) * h.shares;
+        h.marketValue = quote.price * h.shares;
+    }
+});
+```
+
+Make sure there's no filter like `if (h.type === 'Stock')` that skips indices.
+
+### Step 3: Fix the TradingView chart for indices
+
+For the TradingView embed on the portfolio page, use these symbols that actually work in the free embed widget:
+```javascript
+function getPortfolioChartSymbol(holding) {
+    const ticker = (holding.ticker || '').toUpperCase();
+    
+    // Index ETF proxy charts (actual index symbols don't work in free embeds)
+    const indexCharts = {
+        'VIX': { symbol: 'AMEX:VIXY', note: 'Chart shows VIXY which tracks VIX' },
+        'SPX': { symbol: 'AMEX:SPY', note: 'Chart shows SPY which tracks SPX' },
+        'DJI': { symbol: 'AMEX:DIA', note: 'Chart shows DIA which tracks DJI' },
+        'IXIC': { symbol: 'NASDAQ:QQQ', note: 'Chart shows QQQ which tracks NASDAQ' },
+        'NDX': { symbol: 'NASDAQ:QQQ', note: 'Chart shows QQQ which tracks NDX' },
+        'RUT': { symbol: 'AMEX:IWM', note: 'Chart shows IWM which tracks RUT' },
+    };
+    
+    if (indexCharts[ticker]) {
+        return indexCharts[ticker]; // Returns {symbol, note}
+    }
+    
+    // Crypto
+    const cryptoMap = {
+        'BTC': 'BINANCE:BTCUSDT', 'ETH': 'BINANCE:ETHUSDT', 'SOL': 'BINANCE:SOLUSDT',
+        // ... other crypto mappings
+    };
+    if (holding.type?.toLowerCase() === 'crypto' || cryptoMap[ticker]) {
+        return { symbol: cryptoMap[ticker] || `BINANCE:${ticker}USDT`, note: null };
+    }
+    
+    // Stocks/ETFs
+    return { symbol: ticker, note: null };
+}
+```
+
+When rendering the chart, if `note` is not null, show it as a small gray text below the chart.
+
+**Important**: The chart showing VIXY for VIX is acceptable (similar shape/trend) — what matters is that the PRICE DATA in the table shows the actual VIX value (from FRED via the backend), not the VIXY price. The chart is just a visual reference.
+
+### Testing
+1. Open browser dev tools Network tab
+2. Click Refresh on portfolio page
+3. Find the `/api/portfolio/quotes` request
+4. Check the request payload — does it include `asset_types: {"VIX": "index", "SPX": "index", ...}`?
+5. Check the response — does VIX have a price value?
+6. Check the table — does VIX row now show Price, Daily P&L, Total P&L, Weight%?
+7. VIX chart should show VIXY with a note, no error popup
+8. Regular stocks still work normally

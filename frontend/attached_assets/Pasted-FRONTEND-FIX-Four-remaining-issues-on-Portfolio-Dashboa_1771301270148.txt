@@ -1,0 +1,80 @@
+FRONTEND FIX: Four remaining issues on Portfolio Dashboard
+
+=== FIX 1: HYPE showing "Supreme Finance USD" instead of "Hyperliquid" ===
+
+The backend sometimes returns the wrong name for HYPE due to caching/fallback conflicts. Fix by adding a static display name override map for crypto tickers. When rendering the name under a ticker in the holdings table, check this map first if asset_type is "crypto":
+
+const CRYPTO_DISPLAY_NAMES = {
+  "BTC": "Bitcoin",
+  "ETH": "Ethereum",
+  "SOL": "Solana",
+  "HYPE": "Hyperliquid",
+  "DOGE": "Dogecoin",
+  "XRP": "Ripple",
+  "ADA": "Cardano",
+  "AVAX": "Avalanche",
+  "LINK": "Chainlink",
+  "DOT": "Polkadot",
+  "UNI": "Uniswap",
+  "SHIB": "Shiba Inu",
+  "NEAR": "NEAR Protocol",
+  "SUI": "Sui",
+  "APT": "Aptos",
+  "ARB": "Arbitrum",
+  "OP": "Optimism",
+  "PEPE": "Pepe",
+  "WIF": "dogwifhat",
+  "RENDER": "Render",
+  "FET": "Fetch.ai",
+  "TAO": "Bittensor",
+  "FIL": "Filecoin",
+  "INJ": "Injective",
+  "TIA": "Celestia",
+  "SEI": "Sei",
+  "LTC": "Litecoin",
+  "AAVE": "Aave",
+  "MATIC": "Polygon",
+};
+
+Use: CRYPTO_DISPLAY_NAMES[ticker] || apiReturnedName
+
+=== FIX 2: SPX showing wrong chart (Stellar AfricaGold instead of S&P 500) ===
+
+Add an INDEX_TV_SYMBOLS map for the TradingView chart widget. When asset_type is "index", use this mapping:
+
+const INDEX_TV_SYMBOLS = {
+  "SPX": "SP:SPX",
+  "SPY": "AMEX:SPY",
+  "DJI": "FOREXCOM:DJI",
+  "IXIC": "NASDAQ:IXIC",
+  "NDX": "NASDAQ:NDX",
+  "QQQ": "NASDAQ:QQQ",
+  "RUT": "TVC:RUT",
+  "VIX": "TVC:VIX",
+  "DXY": "TVC:DXY",
+};
+
+In the function that determines the TradingView symbol, add:
+if (assetType === "index") {
+  return INDEX_TV_SYMBOLS[ticker] || ticker;
+}
+
+=== FIX 3: Missing Market Cap and Sector in dropdown data fields ===
+
+The expanded row data cards below the chart are missing Market Cap for stocks and crypto, and Sector for stocks.
+
+Debug first: Add console.log("Quote data for IREN:", quotes["IREN"]) after fetching quotes to see exact field names.
+
+Then update the data field rendering to handle both camelCase and snake_case field names from the backend:
+
+Market Cap: quote.market_cap || quote.marketCap — format as "$X.XB" for billions, "$X.XM" for millions, "$X.XT" for trillions
+Sector: quote.sector — if empty, use asset_type fallback ("Crypto", "Commodities", "Index", "ETFs", "Other")
+Volume: already working
+Price Change: quote.change_pct || quote.changePct || quote.changesPercentage — format with color
+
+Show these fields per asset type:
+- Stock: Market Cap, Volume, Sector, Price Change
+- Crypto: Market Cap, Volume, Sector, Price Change
+- Commodity: Volume, Sector, Price Change
+- ETF: Volume, Sector, Price Change
+- Index: Sector (show "Index"), Price Change

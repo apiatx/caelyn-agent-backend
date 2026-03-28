@@ -1,0 +1,51 @@
+FRONTEND FIX: Two issues on Portfolio Dashboard
+
+=== FIX 1: Wrong TradingView chart symbols ===
+
+The TradingView symbol mapping for crypto and commodities needs corrections. Some symbols like BINANCE:HYPEUSDT and TVC:COPPER don't exist on TradingView. 
+
+Update the CRYPTO_TV_SYMBOLS mapping. Not all crypto are on Binance. Use this updated mapping:
+
+HYPE → "BYBIT:HYPEUSDT" (Hyperliquid is on Bybit, not Binance)
+TAO → "BYBIT:TAOUSDT"
+WIF → "BYBIT:WIFUSDT"
+TIA → "BYBIT:TIAUSDT"
+SEI → "BYBIT:SEIUSDT"
+
+All other major crypto (BTC, ETH, SOL, DOGE, XRP, etc.) stay as BINANCE:{ticker}USDT — those are fine.
+
+For the fallback when a ticker isn't in the map, try multiple exchanges:
+Instead of defaulting to just BINANCE:{ticker}USDT, use this fallback logic:
+1. Check the explicit map first
+2. If not in map, default to "CRYPTO:{ticker}USD" — this is TradingView's aggregate crypto symbol format that works for most coins
+
+Update the COMMODITY_TV_SYMBOLS mapping — some are wrong:
+
+COPPER → "COMEX:HG1!" (not TVC:COPPER)
+SILVER → "TVC:SILVER" (this one already works, keep it)
+GOLD → "TVC:GOLD" (keep)
+OIL → "TVC:USOIL" (keep)
+CRUDE → "TVC:USOIL" (keep)
+NATGAS → "NYMEX:NG1!" (more reliable than TVC:NATURALGAS)
+PLATINUM → "NYMEX:PL1!"
+PALLADIUM → "NYMEX:PA1!"
+WHEAT → "CBOT:ZW1!"
+CORN → "CBOT:ZC1!"
+
+=== FIX 2: Crypto and commodity prices not displaying ===
+
+The Price, Daily P&L, Total P&L, and Weight% columns show dashes for HYPE, SILVER, COPPER, and possibly other crypto/commodities. This means either:
+
+A) The frontend is not reading the price data from the quotes API response for these tickers, OR
+B) The quotes API is not returning price data for them
+
+Debug step: After fetching from /api/portfolio/quotes, add a console.log of the full response. Check if HYPE, SILVER, COPPER have price data in the response. 
+
+If prices ARE in the response but not displaying: The frontend is probably matching quotes to holdings by ticker but the case or format doesn't match. Make sure the matching is case-insensitive.
+
+If prices are NOT in the response: The backend fix hasn't been applied yet or isn't working. Check the backend Replit logs for print statements like "[PORTFOLIO] CoinGecko: HYPE = $XX" or "[PORTFOLIO] Commodity: SILVER = $XX". If these logs don't appear, the backend routing by asset_type isn't working.
+
+Add a console.log right after the quotes fetch:
+console.log("Quotes response:", JSON.stringify(quotesData));
+
+This will tell us exactly where the data breaks.

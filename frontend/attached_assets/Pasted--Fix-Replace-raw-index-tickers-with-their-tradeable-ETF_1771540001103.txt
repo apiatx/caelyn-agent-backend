@@ -1,0 +1,77 @@
+## Fix: Replace raw index tickers with their tradeable ETF equivalents at input time
+
+### Problem
+Users can add raw index symbols (SPX, DJI, VIX) to their portfolio, but no free-tier API reliably provides actual index price data in production. This causes dashes in Price, P&L, and Weight% columns.
+
+The real solution: raw indices aren't tradeable instruments. Guide users to add the actual ETF equivalents instead.
+
+### Implementation
+
+#### 1. Add auto-suggestion when user types an index ticker
+
+In the "Add Holding" form, when the user types a ticker in the input field, check if it's a known raw index and show a suggestion to use the ETF instead:
+```javascript
+const INDEX_TO_ETF = {
+    'SPX': { etf: 'SPY', name: 'SPDR S&P 500 ETF', index: 'S&P 500' },
+    'GSPC': { etf: 'SPY', name: 'SPDR S&P 500 ETF', index: 'S&P 500' },
+    'DJI': { etf: 'DIA', name: 'SPDR Dow Jones ETF', index: 'Dow Jones' },
+    'DJIA': { etf: 'DIA', name: 'SPDR Dow Jones ETF', index: 'Dow Jones' },
+    'IXIC': { etf: 'QQQ', name: 'Invesco QQQ Trust', index: 'NASDAQ Composite' },
+    'NDX': { etf: 'QQQ', name: 'Invesco QQQ Trust', index: 'NASDAQ 100' },
+    'RUT': { etf: 'IWM', name: 'iShares Russell 2000 ETF', index: 'Russell 2000' },
+    'VIX': { etf: 'UVXY', name: 'ProShares Ultra VIX Short-Term Futures ETF', index: 'VIX' },
+};
+```
+
+When the user types a ticker and it matches a key in INDEX_TO_ETF, show a small inline suggestion below the input:
+💡 SPX is an index and can't be directly traded. Consider adding SPY (SPDR S&P 500 ETF) instead for accurate price tracking.  [Use SPY]
+
+The `[Use SPY]` button auto-fills the ticker field with "SPY" and changes the type dropdown to "ETF".
+
+#### 2. Auto-convert on submission (optional but recommended)
+
+If the user ignores the suggestion and submits a raw index ticker anyway, auto-convert it:
+```javascript
+function normalizeHolding(ticker, type) {
+    const upper = ticker.toUpperCase().trim();
+    const indexInfo = INDEX_TO_ETF[upper];
+    
+    if (indexInfo && type?.toLowerCase() === 'index') {
+        // Auto-convert to ETF
+        return {
+            ticker: indexInfo.etf,
+            type: 'ETF',
+            converted: true,
+            originalTicker: upper,
+            note: `Converted from ${upper} (${indexInfo.index}) to ${indexInfo.etf} (${indexInfo.name}) for accurate price tracking`,
+        };
+    }
+    
+    return { ticker: upper, type, converted: false };
+}
+```
+
+If auto-converting, show a brief toast/notification: "Converted SPX to SPY for accurate price tracking"
+
+#### 3. Remove "Index" from the type dropdown OR keep it but with the auto-suggestion
+
+Either:
+- **Option A**: Remove "Index" from the asset type dropdown entirely. Indices should be tracked via ETFs.
+- **Option B**: Keep "Index" but always show the ETF suggestion. If user insists on adding the raw index, allow it but show a warning that price data may be unavailable.
+
+I recommend **Option B** — keep the choice available but strongly guide toward ETFs.
+
+#### 4. For VIX specifically
+
+VIX is special because the backend CAN get the actual VIX value from FRED. So VIX is the one index where the user CAN keep "VIX" as an index and get accurate data. Don't auto-convert VIX — just make sure the frontend properly displays VIX quote data from the backend.
+
+Update the suggestion for VIX:
+💡 VIX index data is available but limited. For active trading, consider UVXY or VIXY (VIX ETFs) which have full price tracking and charts.
+
+### Testing
+1. Type "SPX" in ticker field → should see suggestion to use SPY with a quick-action button
+2. Type "DJI" → suggestion for DIA
+3. Type "VIX" → mild suggestion but allow keeping VIX
+4. Type "NVDA" → no suggestion (it's a normal stock)
+5. Type "BTC" → no suggestion (it's crypto, handled separately)
+6. If user clicks [Use SPY], ticker field changes to SPY and type changes to ETF

@@ -1,0 +1,156 @@
+PROMPT 2 — FRONTEND (Website Repl)
+Please make ALL of the following changes.
+PART 1: Add Crypto Renderer
+In client/src/components/TradingAgent.tsx, add this renderer function right before the // ─── Main Render comment:
+tsx  function renderCrypto(s: any) {
+    const momentum = s.top_momentum || [];
+    const categories = s.hot_categories || [];
+    const funding = s.funding_analysis || {};
+    const catalysts = s.upcoming_catalysts || [];
+    const onChain = s.on_chain_signals || {};
+    const btcEth = s.btc_eth_summary || {};
+
+    return <div>
+      {/* Market Overview */}
+      {s.market_overview && <div style={{ padding:'16px 20px', background:`${C.purple}08`, border:`1px solid ${C.purple}20`, borderRadius:10, marginBottom:16, color:C.text, fontSize:12, fontFamily:sansFont, lineHeight:1.7 }}>{s.market_overview}</div>}
+
+      {/* BTC / ETH Summary */}
+      {(btcEth.btc || btcEth.eth) && <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+        {['btc', 'eth'].map(key => {
+          const d = btcEth[key];
+          if (!d) return null;
+          return <div key={key} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:14 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+              <span style={{ color:key === 'btc' ? '#f7931a' : '#627eea', fontWeight:800, fontSize:16, fontFamily:font }}>{key.toUpperCase()}</span>
+              <span style={{ color:C.bright, fontSize:18, fontWeight:700, fontFamily:font }}>{d.price}</span>
+            </div>
+            <div style={{ display:'flex', gap:12, fontSize:11, fontFamily:font, marginBottom:8 }}>
+              <span style={{ color:C.dim }}>24h: <span style={{ color:changeColor(d.change_24h), fontWeight:600 }}>{d.change_24h}</span></span>
+              {d.change_7d && <span style={{ color:C.dim }}>7d: <span style={{ color:changeColor(d.change_7d), fontWeight:600 }}>{d.change_7d}</span></span>}
+              {d.dominance && <span style={{ color:C.dim }}>Dom: <span style={{ color:C.bright }}>{d.dominance}</span></span>}
+              {d.funding_rate && <span style={{ color:C.dim }}>Funding: <span style={{ color:parseFloat(d.funding_rate) > 0.03 ? C.red : parseFloat(d.funding_rate) < -0.01 ? C.green : C.text, fontWeight:600 }}>{d.funding_rate}</span></span>}
+            </div>
+            {d.signal && <div style={{ color:trendColor(d.signal), fontSize:11, fontFamily:sansFont }}>{d.signal}</div>}
+          </div>;
+        })}
+      </div>}
+
+      {/* Funding Rate Analysis */}
+      {Object.keys(funding).length > 0 && <div style={{ marginBottom:16 }}>
+        <div style={{ color:C.bright, fontSize:13, fontWeight:700, fontFamily:sansFont, marginBottom:10 }}>Derivatives & Funding Rates</div>
+        {funding.market_bias && <div style={{ padding:'10px 16px', background:C.card, border:`1px solid ${C.border}`, borderRadius:8, marginBottom:10, display:'flex', gap:16, fontSize:11, fontFamily:font }}>
+          <span style={{ color:C.dim }}>Market Bias: <span style={{ color:trendColor(funding.market_bias), fontWeight:600 }}>{funding.market_bias}</span></span>
+          <span style={{ color:C.dim }}>Avg Funding: <span style={{ color:C.bright }}>{funding.avg_funding_rate}%</span></span>
+          <span style={{ color:C.dim }}>Perps Tracked: <span style={{ color:C.bright }}>{funding.total_perps_tracked}</span></span>
+        </div>}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+          {funding.crowded_longs && funding.crowded_longs.length > 0 && <div style={{ background:`${C.red}06`, border:`1px solid ${C.red}12`, borderRadius:8, padding:12 }}>
+            <div style={{ color:C.red, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:8 }}>Crowded Longs (Correction Risk)</div>
+            {funding.crowded_longs.slice(0, 5).map((f: any, i: number) => (
+              <div key={i} style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', borderBottom: i < 4 ? `1px solid ${C.border}` : 'none', fontSize:11, fontFamily:font }}>
+                <span style={{ color:C.bright }}>{f.symbol}</span>
+                <span style={{ color:C.red, fontWeight:600 }}>+{f.funding}%</span>
+              </div>
+            ))}
+          </div>}
+          {funding.squeeze_candidates && funding.squeeze_candidates.length > 0 && <div style={{ background:`${C.green}06`, border:`1px solid ${C.green}12`, borderRadius:8, padding:12 }}>
+            <div style={{ color:C.green, fontSize:10, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:8 }}>Squeeze Candidates (Short Crowding)</div>
+            {funding.squeeze_candidates.slice(0, 5).map((f: any, i: number) => (
+              <div key={i} style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', borderBottom: i < 4 ? `1px solid ${C.border}` : 'none', fontSize:11, fontFamily:font }}>
+                <span style={{ color:C.bright }}>{f.symbol}</span>
+                <span style={{ color:C.green, fontWeight:600 }}>{f.funding}%</span>
+              </div>
+            ))}
+          </div>}
+        </div>
+      </div>}
+
+      {/* Hot Categories */}
+      {categories.length > 0 && <div style={{ marginBottom:16 }}>
+        <div style={{ color:C.bright, fontSize:13, fontWeight:700, fontFamily:sansFont, marginBottom:10 }}>Narrative Rotation — Hot Categories</div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px, 1fr))', gap:10 }}>
+          {categories.map((cat: any, i: number) => (
+            <div key={i} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:12 }}>
+              <div style={{ color:C.purple, fontWeight:700, fontSize:12, fontFamily:font, marginBottom:4 }}>{cat.name}</div>
+              <div style={{ color:changeColor(cat.market_cap_change_24h), fontSize:16, fontWeight:700, fontFamily:font, marginBottom:4 }}>{cat.market_cap_change_24h}</div>
+              {cat.top_coins && <div style={{ color:C.dim, fontSize:10, fontFamily:font }}>Leaders: <span style={{ color:C.text }}>{cat.top_coins}</span></div>}
+              {cat.signal && <div style={{ color:trendColor(cat.signal), fontSize:10, fontFamily:sansFont, marginTop:4 }}>{cat.signal}</div>}
+            </div>
+          ))}
+        </div>
+      </div>}
+
+      {/* Top Momentum Coins */}
+      {momentum.length > 0 && <div style={{ marginBottom:16 }}>
+        <div style={{ color:C.bright, fontSize:13, fontWeight:700, fontFamily:sansFont, marginBottom:10 }}>Top Momentum Picks</div>
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          {momentum.map((c: any, i: number) => {
+            const isExp = expandedTicker === `crypto-${i}`;
+            return <CardWrap key={i} onClick={() => setExpandedTicker(isExp ? null : `crypto-${i}`)} expanded={isExp}>
+              <div style={{ padding:'14px 18px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                  <span style={{ color:C.purple, fontWeight:800, fontSize:15, fontFamily:font }}>{c.symbol}</span>
+                  <span style={{ color:C.dim, fontSize:11 }}>{c.coin}</span>
+                  <span style={{ color:C.bright, fontSize:15, fontWeight:700, fontFamily:font }}>{c.price}</span>
+                  <span style={{ color:changeColor(c.change_24h), fontWeight:600, fontSize:12, fontFamily:font }}>{c.change_24h}</span>
+                </div>
+                <div style={{ display:'flex', gap:8 }}>
+                  <Badge color={C.dim}>{c.market_cap}</Badge>
+                  <Badge color={convColor(c.conviction)}>{c.conviction}</Badge>
+                </div>
+              </div>
+              <div style={{ padding:'0 18px 10px', display:'flex', gap:14, fontSize:11, fontFamily:font }}>
+                <span style={{ color:C.dim }}>7d: <span style={{ color:changeColor(c.change_7d), fontWeight:600 }}>{c.change_7d}</span></span>
+                <span style={{ color:C.dim }}>30d: <span style={{ color:changeColor(c.change_30d), fontWeight:600 }}>{c.change_30d}</span></span>
+                <span style={{ color:C.dim }}>Funding: <span style={{ color:parseFloat(c.funding_rate || '0') > 0.03 ? C.red : parseFloat(c.funding_rate || '0') < -0.01 ? C.green : C.text, fontWeight:600 }}>{c.funding_rate}</span></span>
+                <span style={{ color:C.dim }}>OI: <span style={{ color:C.bright }}>{c.open_interest}</span></span>
+              </div>
+              <div style={{ padding:'0 18px 14px', color:C.text, fontSize:12, lineHeight:1.6, fontFamily:sansFont }}>{c.thesis}</div>
+              {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:18 }}>
+                {/* Social Metrics */}
+                {c.social && <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(130px, 1fr))', gap:8, marginBottom:14 }}>
+                  {c.social.twitter_followers && <IndicatorPill label="Twitter" value={c.social.twitter_followers} />}
+                  {c.social.reddit_subscribers && <IndicatorPill label="Reddit" value={c.social.reddit_subscribers} />}
+                  {c.social.dev_activity && <IndicatorPill label="Dev Activity" value="—" signal={c.social.dev_activity} />}
+                  {c.social.sentiment && <IndicatorPill label="Sentiment" value={c.social.sentiment} />}
+                </div>}
+                {c.setup && <div style={{ padding:10, background:`${C.blue}06`, border:`1px solid ${C.blue}15`, borderRadius:8, marginBottom:12, color:C.text, fontSize:11, fontFamily:sansFont }}><span style={{ color:C.blue, fontWeight:700 }}>Setup: </span>{c.setup}</div>}
+                {c.risk && <div style={{ padding:10, background:`${C.red}06`, border:`1px solid ${C.red}12`, borderRadius:8, marginBottom:12, color:C.text, fontSize:11, fontFamily:sansFont }}><span style={{ color:C.red, fontWeight:700 }}>Risk: </span>{c.risk}</div>}
+                {c.trade_plan && <div style={{ background:`${C.green}06`, border:`1px solid ${C.green}15`, borderRadius:8, padding:14 }}>
+                  <div style={{ color:C.green, fontSize:11, fontWeight:700, fontFamily:font, marginBottom:10, textTransform:'uppercase' }}>Trade Plan</div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(120px, 1fr))', gap:8 }}>
+                    {[['Entry', c.trade_plan.entry, C.bright], ['Stop', c.trade_plan.stop, C.red], ['Target 1', c.trade_plan.target_1, C.green], ['Target 2', c.trade_plan.target_2, C.green], ['R/R', c.trade_plan.risk_reward, C.gold]].map(([l,v,col]) => v ? <div key={l as string}><div style={{ color:C.dim, fontSize:9, fontFamily:font, textTransform:'uppercase' }}>{l as string}</div><div style={{ color:col as string, fontSize:14, fontWeight:700, fontFamily:font, marginTop:2 }}>{v as string}</div></div> : null)}
+                  </div>
+                </div>}
+              </div>}
+            </CardWrap>;
+          })}
+        </div>
+      </div>}
+
+      {/* On-Chain Signals */}
+      {Object.keys(onChain).length > 0 && <div style={{ marginBottom:16 }}>
+        <div style={{ color:C.bright, fontSize:13, fontWeight:700, fontFamily:sansFont, marginBottom:10 }}>On-Chain Signals</div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px, 1fr))', gap:8 }}>
+          {Object.entries(onChain).map(([k, v]) => <IndicatorPill key={k} label={k.replace(/_/g, ' ')} value={v as string} />)}
+        </div>
+      </div>}
+
+      {/* Catalysts */}
+      {catalysts.length > 0 && <div style={{ marginBottom:16 }}>
+        <div style={{ color:C.bright, fontSize:13, fontWeight:700, fontFamily:sansFont, marginBottom:10 }}>Upcoming Catalysts</div>
+        <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:14 }}>
+          {catalysts.map((cat: string, i: number) => (
+            <div key={i} style={{ padding:'6px 0', borderBottom: i < catalysts.length - 1 ? `1px solid ${C.border}` : 'none', color:C.text, fontSize:12, fontFamily:sansFont }}>📅 {cat}</div>
+          ))}
+        </div>
+      </div>}
+    </div>;
+  }
+PART 2: Add Crypto to Main Render
+Add alongside the other display_type checks:
+tsx        {s.display_type === 'crypto' && renderCrypto(s)}
+PART 3: Add Crypto Button
+Add this to the Advanced quick prompt buttons array:
+tsx            {l:'🪙 Crypto Scanner', p:'Full crypto market scan. Show me: global market state (total cap, BTC dominance, volume), funding rate analysis across all perps (which coins have crowded longs? which have squeeze potential from negative funding?), which crypto categories/narratives are leading (AI, memes, DeFi, L2, gaming), top momentum coins with social buzz + dev activity + funding rate data, and your highest conviction crypto trades with entry/stop/target. I want to see funding rate divergences — where price action disagrees with derivatives positioning.'},
+Re-publish/deploy the frontend.

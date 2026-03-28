@@ -1,0 +1,69 @@
+## Add: X/Twitter Sentiment section to crypto scan display + fix OI display
+
+### 1. Fix OI column in Top Perps by Volume table
+The OI column currently shows "-" for all coins. The backend now sends `open_interest_usd` in each item of the perps_top_volume array. Update the table rendering to display it:
+```javascript
+// Format OI value
+const oi = item.open_interest_usd;
+const oiDisplay = oi ? formatLargeNumber(oi) : '—';
+```
+
+Make sure the table has 5 rows (not 4) and the OI column displays properly.
+
+### 2. Add "X Sentiment — Powered by Grok" section
+The backend response now includes an `x_sentiment` object. Render this as a new section AFTER the "Futures & Perps" section and BEFORE "Top Momentum Picks".
+
+#### Section Header:
+𝕏 Sentiment — Powered by Grok
+
+#### BTC Sentiment Card (always show first):
+BTC Sentiment: [BULLISH/BEARISH/NEUTRAL]    Score: [X.X]
+[key_narrative text]
+- Green background tint if bullish, red if bearish, gray if neutral
+- Data: `x_sentiment.btc_sentiment`
+
+#### Market Mood Badge:
+Show as a colored pill next to the header:
+- "risk-on" → green pill
+- "risk-off" → red pill
+- "euphoric" → bright green pill
+- "fearful" → bright red pill
+- "mixed" → gray pill
+
+Data: `x_sentiment.market_mood`
+
+#### Top Social Movers (cards, similar to momentum picks):
+For each item in `x_sentiment.top_social_movers` (or `x_sentiment.trending_tickers`):
+[SYMBOL]                    [social_velocity badge]   [sentiment badge]
+[why_trending text]
+Catalyst: [catalyst text]
+
+- social_velocity badges: "exploding" = bright red/orange pulsing, "surging" = orange, "rising" = yellow, "steady" = gray
+- sentiment badges: "bullish" = green, "bearish" = red, "mixed" = gray
+- Show up to 8 tokens
+
+#### Narrative Heat (horizontal card row, similar to Hot Categories):
+[Narrative Name]
+[buzz_level]  [direction]
+Top tokens: SYM1, SYM2
+- Hot = red/orange accent, Warm = yellow accent, Cold = blue accent
+- Data: `x_sentiment.narrative_heat`
+
+#### Contrarian Signals (if present):
+Show as a small callout box with ⚠️ icon:
+⚠️ Contrarian Signal: [signal text]
+- Yellow/amber accent border
+- Only show if array has items
+
+#### Summary:
+Show `x_sentiment.summary` as a paragraph below the cards, similar to how the market overview text appears at the top of the crypto response.
+
+### Graceful fallback
+If `x_sentiment` is null/empty/undefined, don't show the section at all. Don't show empty headers.
+
+### Testing
+1. Click "Crypto" → X Sentiment section appears with BTC sentiment, social movers, narrative heat
+2. Top Perps table shows 5 rows with OI values (not "-")
+3. Social velocity badges render correctly
+4. If X data is unavailable, section simply doesn't appear
+5. All existing sections still render correctly

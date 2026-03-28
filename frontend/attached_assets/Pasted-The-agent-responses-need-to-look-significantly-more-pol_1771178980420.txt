@@ -1,0 +1,22 @@
+The agent responses need to look significantly more polished and professional. The current rendering has too much whitespace, inconsistent spacing, and raw text dumps. Please make these global styling changes that apply to ALL response renderers (renderTrades, renderInvestments, renderMacro, renderPortfolio, renderCrypto, and any future renderers):
+Global Response Styling Fixes:
+
+Tighten all vertical spacing. Reduce marginBottom on all card sections from 16px to 10px. Reduce padding inside cards from 18px to 14px. Reduce gap between expandable sections from 14px to 8px.
+Make ticker cards more visually distinct. Each ticker card should have a clear left border accent (3px solid, using the conviction color — green for High, yellow for Medium, red for Low/Avoid). This immediately tells the user at a glance which picks are strong.
+Add a ticker NUMBER badge — show "1", "2", "3" etc. as a small circle badge at the top-left of each card so users can quickly reference "pick #3" etc.
+Compact the header row of each ticker card. Ticker symbol, company name, price, change%, market cap, and conviction badge should all be on ONE line (or two lines max on mobile). Currently these are spread across too many lines.
+One-line data rows. TA summary, fundamental snapshot, and sentiment should each be a SINGLE compact line with a dim label and bright value, not multi-line paragraphs. Use a consistent format like:
+
+TA: RSI 62 · Above SMA20 · Below SMA50 · MACD ↑
+Fundamentals: Rev $1.47B (+12%) · P/E 9.7x · Margin 18% · Insider 52%
+Sentiment: 92% bull (StockTwits) · 23K watchers · Not on Yahoo
+
+
+The thesis/why_trending should be 2-3 lines max in a slightly different background shade to stand out as the "key insight."
+Sources badges for trending. When a ticker has sources data, show small colored pill badges for each platform (e.g., "StockTwits" "Finviz Active" "Yahoo") so the user can see at a glance which platforms flagged it.
+Verdict/conviction should be a prominent colored banner at the bottom of the collapsed card — not buried in the text. Something like a full-width strip: green "HIGH CONVICTION — FUNDAMENTALS + SQUEEZE" or red "AVOID — HYPE WITHOUT SUBSTANCE"
+Remove ALL raw markdown rendering. If any response text contains #, ##, ---, or **bold** markdown syntax, strip it before rendering. Replace # headers with styled div elements. Replace --- with nothing. Replace **text** with <span style={{fontWeight:700}}>text</span>.
+Consistent card collapse behavior. Collapsed cards show: rank number, ticker, company, price, change, conviction badge, and one-line thesis. Expanded cards show everything else. Currently too much info shows in the collapsed state.
+
+These changes should make the UI look like a professional Bloomberg/Koyfin terminal, not a markdown blog post.
+Re-deploy after all changes.

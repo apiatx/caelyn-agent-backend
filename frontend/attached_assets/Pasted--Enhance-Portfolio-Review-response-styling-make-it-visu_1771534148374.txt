@@ -1,0 +1,151 @@
+## Enhance: Portfolio Review response styling — make it visually stunning without changing content
+
+### Context
+The AI Portfolio Review now returns great analysis content. But it renders as plain markdown text, which is hard to scan and looks boring. I want it to look like a professional portfolio dashboard with clear visual hierarchy, color-coded verdicts, and separated sections — WITHOUT changing the backend response at all.
+
+The backend returns a `message` field containing formatted text with this consistent structure:
+- `## INDIVIDUAL POSITIONS` header
+- `### TICKER (weight) - P&L` per position
+- `VERDICT: BUY MORE / HOLD / TRIM / SELL`
+- `THESIS:`, `KEY RISK:`, `CATALYST:`, `POSITION SIZE:` fields
+- `## OVERALL ASSESSMENT` header
+- `PORTFOLIO GRADE: A-F`
+- Various assessment points
+- `## ACTION ITEMS` or similar
+- `## NEW POSITION TO ADD` or similar
+
+### Implementation
+
+Parse the markdown response and render it as styled components instead of raw text. Here's what each section should look like:
+
+#### 1. Individual Position Cards
+Each position (`### TICKER...`) should be its own card with:
+- **Header bar**: Ticker symbol (large, bold), weight %, P&L (green if positive, red if negative)
+- **Verdict badge**: Color-coded pill/badge
+  - `BUY MORE` → bright green background, white text
+  - `HOLD` → blue/gray background, white text  
+  - `TRIM` → orange/amber background, dark text
+  - `SELL` → red background, white text
+- **Thesis**: Normal text below the verdict
+- **Key Risk**: Styled with a subtle red/warning accent (red left border or red icon)
+- **Catalyst**: Styled with a subtle green/opportunity accent (green left border or green icon)
+- **Position Size**: Styled with a neutral info accent
+
+Each card should have a dark background (matching your existing UI theme), rounded corners, and subtle border. Cards should be visually separated with spacing.
+
+#### 2. Overall Assessment Section
+- **Portfolio Grade**: Large, prominent display — color coded:
+  - A/A+ → green
+  - B → blue  
+  - C → yellow/amber
+  - D → orange
+  - F → red
+- Assessment points as clean bullet items with subtle icons or colored left borders
+- Rebalancing recommendations in a highlighted box
+
+#### 3. Action Items Section
+- Numbered list with prominent styling
+- Each action item in its own mini-card or highlighted row
+- Use a subtle accent color (blue or green) for the action item numbers
+
+#### 4. New Position Recommendation
+- Styled like a mini trade card (similar to Best Trades cards)
+- Ticker prominently displayed
+- Thesis text below
+
+### Parsing Logic
+
+Parse the markdown message string into structured sections:
+```javascript
+function parsePortfolioReview(message) {
+    const sections = {
+        positions: [],
+        overallAssessment: null,
+        actionItems: [],
+        newPosition: null,
+    };
+    
+    // Split by ## headers
+    const parts = message.split(/^## /gm).filter(Boolean);
+    
+    for (const part of parts) {
+        if (part.startsWith('INDIVIDUAL POSITIONS')) {
+            // Split positions by ### headers
+            const positionBlocks = part.split(/^### /gm).filter(Boolean).slice(1);
+            for (const block of positionBlocks) {
+                const lines = block.trim().split('\n').filter(l => l.trim());
+                const headerMatch = lines[0].match(/(\w+)\s*\((.+?)\)\s*-\s*(.+)/);
+                const position = {
+                    ticker: headerMatch ? headerMatch[1] : lines[0],
+                    weight: headerMatch ? headerMatch[2] : '',
+                    pnl: headerMatch ? headerMatch[3] : '',
+                    verdict: '',
+                    thesis: '',
+                    keyRisk: '',
+                    catalyst: '',
+                    positionSize: '',
+                };
+                
+                for (const line of lines.slice(1)) {
+                    if (line.startsWith('VERDICT:') || line.includes('**VERDICT:')) {
+                        position.verdict = line.replace(/\*\*/g, '').replace('VERDICT:', '').trim();
+                    } else if (line.startsWith('THESIS:') || line.includes('**THESIS:')) {
+                        position.thesis = line.replace(/\*\*/g, '').replace('THESIS:', '').trim();
+                    } else if (line.startsWith('KEY RISK:') || line.includes('**KEY RISK:')) {
+                        position.keyRisk = line.replace(/\*\*/g, '').replace('KEY RISK:', '').trim();
+                    } else if (line.startsWith('CATALYST:') || line.includes('**CATALYST:')) {
+                        position.catalyst = line.replace(/\*\*/g, '').replace('CATALYST:', '').trim();
+                    } else if (line.startsWith('POSITION SIZE:') || line.includes('**POSITION SIZE:')) {
+                        position.positionSize = line.replace(/\*\*/g, '').replace('POSITION SIZE:', '').trim();
+                    }
+                }
+                
+                sections.positions.push(position);
+            }
+        } else if (part.startsWith('OVERALL ASSESSMENT') || part.startsWith('OVERALL')) {
+            sections.overallAssessment = part.replace(/^OVERALL\s*ASSESSMENT\s*/i, '').trim();
+            // Extract portfolio grade
+            const gradeMatch = part.match(/PORTFOLIO GRADE:\s*([A-F][+-]?)/i);
+            if (gradeMatch) {
+                sections.grade = gradeMatch[1];
+            }
+        } else if (part.match(/ACTION ITEM/i)) {
+            sections.actionItems = part.split('\n').filter(l => l.trim() && !l.match(/^#|^ACTION/i));
+        } else if (part.match(/NEW POSITION|ADD.*POSITION/i)) {
+            sections.newPosition = part.replace(/^NEW POSITION.*\n/i, '').trim();
+        }
+    }
+    
+    return sections;
+}
+```
+
+### Color scheme (match your existing dark theme)
+- Card background: `#1a1b2e` or similar dark
+- Card border: `#2a2b3e` subtle
+- Verdict BUY MORE: `bg-emerald-600 text-white`
+- Verdict HOLD: `bg-slate-600 text-white`
+- Verdict TRIM: `bg-amber-600 text-black`
+- Verdict SELL: `bg-red-600 text-white`
+- Grade A: `text-emerald-400`
+- Grade B: `text-blue-400`
+- Grade C: `text-amber-400`
+- Grade D: `text-orange-400`
+- Grade F: `text-red-400`
+- Positive P&L: `text-emerald-400`
+- Negative P&L: `text-red-400`
+- Risk accent: left border `border-l-red-500`
+- Catalyst accent: left border `border-l-emerald-500`
+
+### Important
+- Only apply this styled rendering to Portfolio Review responses (when the AI Portfolio Analysis panel is showing)
+- If the parsing fails for any reason, fall back to rendering the raw markdown as-is
+- Do NOT change the backend response format — parse whatever text Claude returns
+- The styled version should contain ALL the same information as the raw text — don't hide anything
+
+### Testing
+1. Click "AI Portfolio Review" — should render as styled cards, not raw text
+2. Each position should be its own card with color-coded verdict badge
+3. Portfolio grade should be large and color-coded
+4. If you add a new holding and review again, the new position should also render as a styled card
+5. Verify no content is lost — every piece of information from the raw text appears in the styled version

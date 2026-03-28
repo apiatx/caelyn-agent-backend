@@ -1,0 +1,187 @@
+Dashboard Rendering
+In your WEBSITE Repl, open client/src/components/TradingAgent.tsx.
+Add this interface after the existing interfaces (if it doesn't already exist):
+tsxinterface DashboardRow {
+  ticker: string;
+  company?: string;
+  price?: string;
+  change?: string;
+  volume?: string;
+  market_cap?: string;
+  rsi?: string;
+  setup?: string;
+  catalyst?: string;
+  buzz?: string;
+  conviction?: string;
+}
+Update the AgentResult interface to include dashboard fields. Replace it with (if not already updated):
+tsxinterface AgentResult {
+  type: 'screener' | 'analysis' | 'chat' | 'dashboard';
+  analysis: string;
+  data?: RowData[];
+  tickers?: string[];
+  technicals?: Technicals;
+  key_stats?: KeyStats;
+  ta_setups?: DashboardRow[];
+  fundamental_catalysts?: DashboardRow[];
+  social_buzz?: DashboardRow[];
+  triple_threats?: string[];
+}
+Add this state if it doesn't already exist:
+tsx  const [expandedDashboardRow, setExpandedDashboardRow] = useState<string | null>(null);
+Add this helper function inside the component, before the return statement (if it doesn't already exist):
+tsx  function renderDashboardColumn(
+    title: string,
+    icon: string,
+    rows: DashboardRow[] | undefined,
+    detailField: 'setup' | 'catalyst' | 'buzz',
+    tripleThreats: string[]
+  ) {
+    if (!rows || rows.length === 0) return null;
+
+    return (
+      <div style={{
+        background: '#0a0b0f', border: '1px solid #1e2028',
+        borderRadius: 12, overflow: 'hidden', flex: 1, minWidth: 320,
+      }}>
+        <div style={{
+          padding: '14px 18px', borderBottom: '1px solid #1e2028',
+          background: '#0d0e13',
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#e0e2e9' }}>
+            {icon} {title}
+          </div>
+        </div>
+
+        {rows.map((row, i) => {
+          const changeVal = parseFloat(row.change || '0');
+          const isTriple = tripleThreats.includes(row.ticker);
+          const rowKey = `${detailField}-${i}`;
+          const isExpanded = expandedDashboardRow === rowKey;
+
+          return (
+            <div key={i}>
+              <div
+                onClick={() => setExpandedDashboardRow(isExpanded ? null : rowKey)}
+                style={{
+                  padding: '12px 16px', borderBottom: '1px solid #1e2028',
+                  cursor: 'pointer',
+                  background: isExpanded ? '#111318' : isTriple ? '#0d1117' : 'transparent',
+                  transition: 'background 0.15s', position: 'relative',
+                }}
+              >
+                {isTriple && (
+                  <div style={{
+                    position: 'absolute', top: 6, right: 12,
+                    fontSize: 8, fontWeight: 700, color: '#f59e0b',
+                    background: '#f59e0b15', padding: '2px 6px',
+                    borderRadius: 3, border: '1px solid #f59e0b30',
+                    textTransform: 'uppercase', letterSpacing: '0.08em',
+                  }}>
+                    ⚡ Triple Threat
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontWeight: 700, color: '#3b82f6', fontSize: 14 }}>{row.ticker}</span>
+                    <span style={{ color: '#6b7280', fontSize: 11 }}>{row.company || ''}</span>
+                  </div>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+                    color: getConvictionColor(row.conviction),
+                    background: `${getConvictionColor(row.conviction)}15`,
+                    border: `1px solid ${getConvictionColor(row.conviction)}30`,
+                    textTransform: 'uppercase',
+                  }}>
+                    {row.conviction || '—'}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
+                  <span style={{ color: '#e0e2e9', fontWeight: 600 }}>{row.price}</span>
+                  <span style={{ color: changeVal >= 0 ? '#22c55e' : '#ef4444', fontWeight: 600 }}>{row.change}</span>
+                  <span style={{ color: '#9ca3af' }}>{row.volume || ''}</span>
+                  <span style={{ color: '#6b7280' }}>{row.market_cap || ''}</span>
+                </div>
+
+                {row[detailField] && (
+                  <div style={{
+                    marginTop: 8, fontSize: 11, color: '#9ca3af',
+                    lineHeight: 1.5, overflow: 'hidden',
+                    maxHeight: isExpanded ? 'none' : 40,
+                  }}>
+                    {row[detailField]}
+                  </div>
+                )}
+              </div>
+
+              {isExpanded && (
+                <div style={{ padding: '0 16px 14px', background: '#111318', borderBottom: '1px solid #1e2028' }}>
+                  <div style={{ marginBottom: 10, borderRadius: 8, overflow: 'hidden', border: '1px solid #1e2028' }}>
+                    <iframe
+                      src={`https://s.tradingview.com/widgetembed/?symbol=${row.ticker}&interval=D&theme=dark&style=1&locale=en&hide_top_toolbar=1&hide_side_toolbar=1&allow_symbol_change=0&save_image=0&width=100%25&height=180`}
+                      style={{ width: '100%', height: 180, border: 'none', display: 'block' }}
+                      title={`${row.ticker} chart`}
+                    />
+                  </div>
+                  {row.rsi && (
+                    <span style={{
+                      display: 'inline-block', padding: '3px 10px', borderRadius: 4,
+                      fontSize: 11, fontWeight: 600,
+                      color: getRsiColor(parseFloat(row.rsi)),
+                      background: `${getRsiColor(parseFloat(row.rsi))}15`,
+                      border: `1px solid ${getRsiColor(parseFloat(row.rsi))}30`,
+                    }}>
+                      RSI: {row.rsi}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+Add the dashboard render block in the JSX. Find the section {/* ========== CHAT RESPONSE ========== */} and add this entire block right BEFORE it (if it doesn't already exist):
+tsx      {/* ========== DASHBOARD VIEW ========== */}
+      {result && result.type === 'dashboard' && (
+        <div>
+          {result.triple_threats && result.triple_threats.length > 0 && (
+            <div style={{
+              padding: '14px 20px', marginBottom: 16,
+              background: 'linear-gradient(135deg, #1a1400 0%, #0a0b0f 100%)',
+              border: '1px solid #f59e0b30', borderRadius: 12,
+              display: 'flex', alignItems: 'center', gap: 12,
+            }}>
+              <span style={{ fontSize: 20 }}>⚡</span>
+              <div>
+                <div style={{ color: '#f59e0b', fontWeight: 700, fontSize: 13 }}>TRIPLE THREAT PICKS</div>
+                <div style={{ color: '#c9a84c', fontSize: 12, marginTop: 2 }}>
+                  Strong TA + fundamental catalyst + social buzz:
+                  {' '}{result.triple_threats.map((t, i) => (
+                    <span key={t} style={{ fontWeight: 700, color: '#f59e0b' }}>
+                      {t}{i < result.triple_threats!.length - 1 ? ', ' : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+            {renderDashboardColumn('Best TA Setups', '🔥', result.ta_setups, 'setup', result.triple_threats || [])}
+            {renderDashboardColumn('Fundamental Catalysts', '📊', result.fundamental_catalysts, 'catalyst', result.triple_threats || [])}
+            {renderDashboardColumn('Social Buzz', '🚀', result.social_buzz, 'buzz', result.triple_threats || [])}
+          </div>
+
+          <div
+            style={{
+              padding: 20, background: '#0a0b0f', border: '1px solid #1e2028',
+              borderRadius: 12, color: '#c9cdd6', lineHeight: 1.75, fontSize: 13,
+            }}
+            dangerouslySetInnerHTML={{ __html: formatText(result.analysis) }}
+          />
+        </div>
+      )}

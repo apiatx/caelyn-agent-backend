@@ -1,0 +1,178 @@
+Chat History + Quick Prompts + Progress Indicator
+In your WEBSITE Repl, open client/src/components/TradingAgent.tsx.
+Find the state declarations at the top of the component (the useState lines). Add these new states after the existing ones:
+tsx  const [chatHistory, setChatHistory] = useState<Array<{role: string, content: string}>>([]);
+  const [loadingStage, setLoadingStage] = useState('');
+Replace the askAgent function with this:
+tsx  async function askAgent(customPrompt?: string) {
+    const queryText = customPrompt || prompt;
+    if (!queryText.trim()) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setExpandedRow(null);
+    setExpandedDashboardRow(null);
+    setPrompt('');
+
+    // Show progress stages
+    setLoadingStage('Classifying query...');
+    const progressStages = [
+      'Scanning market data...',
+      'Pulling technicals & volume...',
+      'Checking social sentiment...',
+      'Analyzing insider activity...',
+      'Fetching options flow...',
+      'Checking SEC filings...',
+      'Reading macro indicators...',
+      'Generating analysis with AI...',
+    ];
+    let stageIndex = 0;
+    const progressInterval = setInterval(() => {
+      if (stageIndex < progressStages.length) {
+        setLoadingStage(progressStages[stageIndex]);
+        stageIndex++;
+      }
+    }, 1800);
+
+    try {
+      const res = await fetch(`${AGENT_BACKEND_URL}/api/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: queryText.trim(),
+          history: chatHistory.slice(-20),
+        }),
+      });
+      if (!res.ok) throw new Error(`Backend returned status ${res.status}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setResult(data);
+
+      // Update chat history
+      setChatHistory(prev => [
+        ...prev,
+        { role: 'user', content: queryText.trim() },
+        { role: 'assistant', content: data.analysis || '' },
+      ]);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      clearInterval(progressInterval);
+      setLoadingStage('');
+      setLoading(false);
+    }
+  }
+Replace the loading indicator section (find {loading && ( block) with this:
+tsx      {loading && (
+        <div style={{ textAlign: 'center', padding: 60, color: '#6b7280' }}>
+          <div style={{
+            width: 32, height: 32, margin: '0 auto 16px',
+            border: '3px solid #1e2028', borderTopColor: '#3b82f6',
+            borderRadius: '50%', animation: 'agent-spin 0.7s linear infinite',
+          }} />
+          <div style={{ fontSize: 14, color: '#c9cdd6', marginBottom: 4 }}>{loadingStage}</div>
+          <div style={{ fontSize: 11, color: '#555' }}>
+            Polygon · Finviz · StockTwits · Finnhub · SEC EDGAR · FRED · Alpha Vantage · CNN Fear &amp; Greed
+          </div>
+          {/* Progress Bar */}
+          <div style={{
+            width: 200, height: 3, background: '#1e2028', borderRadius: 2,
+            margin: '16px auto 0', overflow: 'hidden',
+          }}>
+            <div style={{
+              height: '100%', background: 'linear-gradient(90deg, #3b82f6, #8b5cf6)',
+              borderRadius: 2, animation: 'agent-progress 12s ease-in-out forwards',
+            }} />
+          </div>
+        </div>
+      )}
+Find the input bar section (the <div> containing the input and Analyze button). Replace the entire input bar section with this:
+tsx      {/* Input Bar */}
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            type="text"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && askAgent()}
+            placeholder="Best small cap trades today... Analyze NVDA... What's the macro outlook..."
+            style={{
+              flex: 1, padding: '14px 18px', border: '1px solid #2a2d35',
+              borderRadius: 10, background: '#0a0b0f', color: '#e0e2e9',
+              fontSize: 14, outline: 'none',
+            }}
+          />
+          <button
+            onClick={() => askAgent()}
+            disabled={loading}
+            style={{
+              padding: '12px 28px', background: loading ? '#1e2028' : 'linear-gradient(135deg, #3b82f6, #2563eb)',
+              color: loading ? '#555' : 'white', border: 'none', borderRadius: 10,
+              cursor: loading ? 'not-allowed' : 'pointer',
+              fontWeight: 600, fontSize: 14, letterSpacing: '0.02em',
+            }}
+          >
+            {loading ? 'Scanning...' : 'Analyze'}
+          </button>
+        </div>
+
+        {/* Quick Prompt Buttons */}
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+          {[
+            { label: '🔥 Best Trades Today', prompt: 'Show me the best trades today with full TA, fundamentals, and social buzz' },
+            { label: '📊 Full Dashboard', prompt: 'Show me the full dashboard with TA setups, fundamental catalysts, and social buzz' },
+            { label: '🚀 Short Squeeze Scan', prompt: 'Scan for the best short squeeze setups right now — high short interest, low float, rising volume, social momentum' },
+            { label: '🌍 Macro Overview', prompt: 'Give me a full macro overview — Fed rate, inflation, yield curve, VIX, Fear & Greed, and what it means for trading' },
+          ].map((qp) => (
+            <button
+              key={qp.label}
+              onClick={() => askAgent(qp.prompt)}
+              disabled={loading}
+              style={{
+                padding: '6px 14px', background: '#111318', border: '1px solid #1e2028',
+                borderRadius: 8, color: '#9ca3af', fontSize: 12, cursor: loading ? 'not-allowed' : 'pointer',
+                transition: 'all 0.15s', whiteSpace: 'nowrap',
+              }}
+              onMouseEnter={(e) => { if (!loading) { e.currentTarget.style.borderColor = '#3b82f6'; e.currentTarget.style.color = '#e0e2e9'; }}}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#1e2028'; e.currentTarget.style.color = '#9ca3af'; }}
+            >
+              {qp.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Chat History Indicator */}
+      {chatHistory.length > 0 && !loading && !result && (
+        <div style={{
+          padding: '10px 16px', background: '#0a0b0f', border: '1px solid #1e2028',
+          borderRadius: 8, marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <span style={{ color: '#6b7280', fontSize: 12 }}>
+            {Math.floor(chatHistory.length / 2)} previous message{Math.floor(chatHistory.length / 2) !== 1 ? 's' : ''} in context
+          </span>
+          <button
+            onClick={() => setChatHistory([])}
+            style={{
+              padding: '4px 10px', background: 'transparent', border: '1px solid #2a2d35',
+              borderRadius: 6, color: '#6b7280', fontSize: 11, cursor: 'pointer',
+            }}
+          >
+            Clear History
+          </button>
+        </div>
+      )}
+Update the CSS animation block at the bottom. Find the <style> tag and replace it with:
+tsx      <style>{`
+        @keyframes agent-spin {
+          to { transform: rotate(360deg); }
+        }
+        @keyframes agent-progress {
+          0% { width: 0%; }
+          15% { width: 15%; }
+          40% { width: 45%; }
+          70% { width: 70%; }
+          90% { width: 85%; }
+          100% { width: 95%; }
+        }
+      `}</style>

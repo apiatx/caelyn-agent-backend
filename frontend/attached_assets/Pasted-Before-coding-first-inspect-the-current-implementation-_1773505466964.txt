@@ -1,0 +1,93 @@
+Before coding, first inspect the current implementation and show me the minimum-change plan, including the exact files you expect to modify.
+
+We need a targeted frontend fix + feature pass for the History page. Do NOT redesign the whole app. Keep the current layout and styling as much as possible.
+
+Goals:
+1. Fix the History page so saved responses display consistently again.
+2. Reorder and relabel sections.
+3. Display each section’s collective gain/loss % directly in the History menu.
+4. Preserve the current visual style.
+
+REQUIREMENTS
+
+A) Fix history rendering
+1. Audit the current History page data fetch/render flow.
+2. Identify whether the frontend is:
+   - failing to fetch history data
+   - grouping incorrectly
+   - filtering incorrectly
+   - rendering empty groups even when backend returns items
+3. Fix the smallest root cause possible.
+
+B) Section labels and order
+The History page sections should appear in this exact order:
+1. Terminal Chat
+2. Overview
+3. Trades & Ideas
+4. Fundamental
+5. Sectors
+6. TA Screener
+7. Earnings
+8. Prediction Markets
+9. NotifAI
+
+Required label changes:
+- "Terminal" -> "Terminal Chat"
+- "Earnings Agent" -> "Earnings"
+
+C) Display collective gain/loss % on the History menu
+On each History section row (before expanding/clicking into it), display the collective basket gain/loss % returned by backend.
+
+Expected display behavior:
+- show count as currently done
+- show gain/loss % for that section if available
+- green for positive, red for negative, muted if unavailable
+- do NOT calculate this in frontend; use backend-provided values
+- if backend returns partial/unavailable, display a subtle fallback label
+
+Examples:
+- Trades & Ideas (12) +8.4%
+- Sectors (7) -2.1%
+- Terminal Chat (5) —
+or similar tasteful fallback
+
+D) Group rendering
+The frontend should use backend-normalized category keys / labels rather than trying to invent its own inconsistent category grouping.
+
+E) Terminal Chat behavior
+Ensure History correctly shows free-form Terminal chat responses under "Terminal Chat".
+
+F) Preserve current look/feel
+Everything else in the History page layout is good. Do not redesign it. Only fix:
+- rendering reliability
+- labels
+- order
+- section-level performance display
+
+Implementation guidance:
+- use backend-provided display category/order/performance metadata if present
+- keep accordion behavior
+- keep current modal/page structure
+- keep current styling language
+- do not introduce heavy client-side data logic
+
+What I want before coding:
+1. audit the current History page fetch/group/render path
+2. identify the minimum-change plan
+3. explain whether the current history-empty problem is frontend-only, backend-only, or both
+4. list exact files to modify
+
+What I want after coding:
+1. exact files changed
+2. exact root cause of the rendering issue on the frontend side
+3. confirmation of final section order
+4. confirmation of label changes:
+   - Terminal Chat
+   - Earnings
+5. confirmation that section-level gain/loss % is rendered from backend data
+6. screenshots or a precise summary of expected rendered behavior
+
+Important constraints:
+- no major redesign
+- no client-side AI or ticker parsing
+- no duplicate performance logic in frontend

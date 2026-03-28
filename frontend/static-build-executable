@@ -1,0 +1,10 @@
+#!/bin/bash
+# CryptoHippo deployment executable
+# This provides the missing 'static-build' command that .replit deployment is looking for
+
+echo "🚀 CryptoHippo: Starting deployment server..."
+echo "📂 Project directory: $(pwd)"
+echo "📦 Static files: $(ls -la static-build/ 2>/dev/null || echo 'Building now...')"
+
+# Execute the Cloud Run server
+exec node cloud-run-server.js

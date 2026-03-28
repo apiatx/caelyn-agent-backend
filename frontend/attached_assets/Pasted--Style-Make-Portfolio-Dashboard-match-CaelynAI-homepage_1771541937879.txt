@@ -1,0 +1,63 @@
+## Style: Make Portfolio Dashboard match CaelynAI homepage branding
+
+### Context
+The CaelynAI homepage has a polished dark theme with specific styling (deep navy/dark blue backgrounds, subtle gradient accents, the CaelynAI logo/mascot, consistent color palette). The Portfolio Dashboard page works perfectly but uses a more generic dark theme that doesn't match. I want visual consistency across both pages WITHOUT changing any functionality or layout.
+
+### What to match from the CaelynAI homepage:
+- Background: Deep dark navy/charcoal (not pure black) — match the exact background color from the homepage
+- Card backgrounds: Slightly lighter than the page background with subtle borders — match the homepage card style
+- Accent colors: The homepage uses a blue/cyan/teal accent theme (visible in the sidebar active state, buttons, links)
+- Font styling: Match the homepage typography (font family, heading weights, text colors)
+- The CaelynAI branding at the top of the sidebar should be consistent across both pages (same logo, same styling)
+- Button style: The "AI Portfolio Review" button and "+ Add" button should use the same button styling as the homepage (gradient or accent-colored buttons)
+- Table styling: The holdings table should feel like it belongs on the same site as the homepage — matching row hover states, border colors, text colors
+- Green/red for positive/negative P&L should stay as-is (this is universal trading convention)
+
+### Specific changes needed:
+
+#### 1. Page background
+Match the homepage background color exactly. Check what CSS the homepage uses for its main background and apply the same to the Portfolio Dashboard page.
+
+#### 2. Card/panel backgrounds
+The Asset Allocation chart, Daily P&L chart, and the holdings table container should use the same card background and border style as the homepage panels.
+
+#### 3. Header area
+The "Portfolio Dashboard" header with total/day/total P&L should match the styling of headers on the homepage. Use the same font weights and colors.
+
+#### 4. Buttons
+- "AI Portfolio Review" button: Use the same gradient/accent style as primary buttons on the homepage
+- "Refresh" button: Use the same secondary button style as the homepage
+- "+ Add" button: Match the primary button style
+- Dropdown: Match the select/dropdown styling from the homepage
+
+#### 5. Table
+- Row backgrounds, hover states, borders should match the homepage aesthetic
+- Ticker names should be bold/white matching how tickers appear on the homepage
+- The company name subtitle should be the same muted gray as the homepage uses
+
+#### 6. Charts
+- The donut chart and bar chart backgrounds should match card styling
+- Chart colors (green for stocks, blue for ETFs, amber for crypto, red for commodities) can stay as they are — these are good
+- Chart label text colors should match the homepage text colors
+
+#### 7. Sidebar
+Make sure the sidebar on the Portfolio Dashboard page matches exactly the sidebar on the homepage — same logo, same menu items, same active state styling, same colors. If there are any differences, make them identical.
+
+### CRITICAL: Do NOT change:
+- Any functionality (data fetching, calculations, P&L logic, chart data)
+- The layout/structure of the page (keep the same arrangement of elements)
+- The holdings table columns or data
+- The Add Holding form fields
+- The AI Portfolio Review button behavior
+- Chart types or data sources
+- Any backend API calls
+
+This is purely a CSS/styling pass to make the Portfolio Dashboard visually consistent with the CaelynAI homepage.
+
+### Testing
+1. Open CaelynAI homepage and Portfolio Dashboard side by side — they should feel like the same app
+2. All data still displays correctly (prices, P&L, percentages, charts)
+3. All buttons still work (AI Portfolio Review, Refresh, Add, Delete)
+4. Charts still render with correct data
+5. Sidebar navigation works identically on both pages
+6. Mobile responsiveness is not broken

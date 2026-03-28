@@ -1,0 +1,96 @@
+PART 5: Frontend — Expanded Quick Prompt Buttons
+In your WEBSITE Repl, open client/src/components/TradingAgent.tsx. Find the quick prompt buttons array (the section with {l:'🔥 Best Trades'...). Replace that entire array with this:
+tsx          {/* Quick Prompts — Core */}
+          {[
+            {l:'🔥 Best Trades', p:'Show me the best short-term trades (swing, 2-10 days) with full TA, sentiment, and trade plans. Rank by asymmetric R/R. Exclude low liquidity.'},
+            {l:'💎 Best Investments', p:'Show me the best investment opportunities (3-12 month horizon) with full fundamentals, SQGLP assessment, moat analysis, and insider activity.'},
+            {l:'📈 Improving Fundamentals', p:'Show me stocks with the most rapidly improving fundamentals — revenue acceleration, EBITDA margin expansion, raised guidance, earnings beats. Show me the numbers.'},
+            {l:'🌍 Macro Overview', p:'Give me a full macro overview — Fed rate, inflation (CPI + Core PCE), yield curve, VIX, Fear & Greed, DXY trend, sector rotation signals. Is it risk-on or risk-off? What sectors should I favor?'},
+            {l:'💥 Short Squeeze', p:'Scan for the best short squeeze setups — high short interest (>20%), low float, rising borrow cost, increasing volume, social acceleration, breakout structure.'},
+          ].map(q => <button key={q.l} onClick={() => askAgent(q.p)} disabled={loading} style={{ padding:'6px 14px', background:C.card, border:`1px solid ${C.border}`, borderRadius:8, color:C.dim, fontSize:11, cursor:loading?'not-allowed':'pointer', fontFamily:font, transition:'all 0.15s' }} onMouseEnter={e => { e.currentTarget.style.borderColor = C.blue; e.currentTarget.style.color = C.bright; }} onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.dim; }}>{q.l}</button>)}
+        </div>
+        <div style={{ display:'flex', gap:8, marginTop:6, flexWrap:'wrap' }}>
+          {/* Quick Prompts — Advanced */}
+          {[
+            {l:'🚀 Social Momentum', p:'Show me the top stocks with accelerating social media mentions and positive sentiment in the last 24-48 hours across StockTwits, Reddit, and Twitter. What is NEW and trending, not stale.'},
+            {l:'📊 Volume Spikes', p:'Scan for stocks with unusual volume spikes vs 30-day average today. Show me the volume ratios and what is likely causing the spike.'},
+            {l:'📅 Earnings Watch', p:'Show me upcoming earnings in the next 7 days. Rank by volatility potential, beat probability, and implied move. Include pre-earnings trend and suggested plays.'},
+            {l:'🔄 Sector Rotation', p:'Show me a sector rotation analysis — which sectors are gaining institutional inflows, relative strength vs SPY, and 20-day momentum. Where should I be allocated?'},
+            {l:'⚡ Asymmetric Only', p:'Only show me asymmetric setups with 4:1+ risk/reward. Compressed valuations, clear catalysts, defined floor. Show me the math on floor vs ceiling.'},
+            {l:'🔻 Bearish Setups', p:'Show me the weakest stocks breaking down — Stage 3/4 transitions, deteriorating fundamentals, heavy insider selling, sector weakness. What should I avoid or hedge against?'},
+            {l:'🤖 AI/Compute Check', p:'Run a momentum check on AI and compute infrastructure stocks — NVDA, AMD, AVGO, MRVL, CRDO, SMCI, VRT, ANET. Show relative strength, which are leading, which are lagging.'},
+            {l:'⚛️ Uranium/Nuclear', p:'Run a momentum check on uranium and nuclear stocks — CCJ, UEC, UUUU, DNN, LEU, SMR, OKLO, VST, CEG. Show relative strength and sector trend.'},
+            {l:'🎯 Small Cap Spec', p:'Scan for speculative small cap stocks (under $2B) with high volatility, increasing volume, positive sentiment, and clean breakout structure. High risk high reward.'},
+          ].map(q => <button key={q.l} onClick={() => askAgent(q.p)} disabled={loading} style={{ padding:'6px 14px', background:C.card, border:`1px solid ${C.border}`, borderRadius:8, color:C.dim, fontSize:11, cursor:loading?'not-allowed':'pointer', fontFamily:font, transition:'all 0.15s' }} onMouseEnter={e => { e.currentTarget.style.borderColor = C.blue; e.currentTarget.style.color = C.bright; }} onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.dim; }}>{q.l}</button>)}
+PART 6: Frontend — Add Sector Rotation and Earnings Catalyst Renderers
+In TradingAgent.tsx, add these two renderer functions right before the // ─── Main Render comment:
+tsx  function renderSectorRotation(s: any) {
+    const sectors = s.sectors || [];
+    return <div>
+      {s.summary && <div style={{ padding:'14px 18px', background:`${C.blue}08`, border:`1px solid ${C.blue}15`, borderRadius:10, marginBottom:16, color:C.text, fontSize:12, fontFamily:sansFont, lineHeight:1.6 }}>{s.summary}</div>}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px, 1fr))', gap:10, marginBottom:16 }}>
+        {sectors.map((sec: any, i: number) => {
+          const isPos = parseFloat(sec.change_today) >= 0;
+          return <div key={i} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:14 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+              <div>
+                <span style={{ color:C.blue, fontWeight:700, fontSize:13, fontFamily:font }}>{sec.etf}</span>
+                <span style={{ color:C.dim, fontSize:11, marginLeft:8 }}>{sec.sector}</span>
+              </div>
+              <Badge color={convColor(sec.conviction)}>{sec.conviction}</Badge>
+            </div>
+            <div style={{ color:isPos ? C.green : C.red, fontSize:18, fontWeight:700, fontFamily:font, marginBottom:6 }}>{sec.change_today}</div>
+            <StatRow label="RSI" value={String(sec.rsi)} />
+            <StatRow label="Trend" value={sec.trend} />
+            <StatRow label="vs SPY" value={sec.vs_spy} />
+            <div style={{ marginTop:8, color:trendColor(sec.signal), fontSize:11, fontWeight:600, fontFamily:sansFont }}>{sec.signal}</div>
+          </div>;
+        })}
+      </div>
+      {s.rotation_signal && <div style={{ padding:'14px 18px', background:`${C.gold}08`, border:`1px solid ${C.gold}15`, borderRadius:10, marginBottom:16, color:C.text, fontSize:12, fontFamily:sansFont, lineHeight:1.6 }}><span style={{ color:C.gold, fontWeight:700 }}>Rotation Signal: </span>{s.rotation_signal}</div>}
+      {s.macro_context && <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(140px, 1fr))', gap:8 }}>
+        {Object.entries(s.macro_context).map(([k, v]) => <IndicatorPill key={k} label={k.replace(/_/g, ' ')} value={v as string} />)}
+      </div>}
+    </div>;
+  }
+
+  function renderEarningsCatalyst(s: any) {
+    const upcoming = s.upcoming || [];
+    return <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+      {upcoming.map((e: any, i: number) => {
+        const isExp = expandedTicker === `earn-${i}`;
+        return <CardWrap key={i} onClick={() => setExpandedTicker(isExp ? null : `earn-${i}`)} expanded={isExp}>
+          <div style={{ padding:'14px 18px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+              <span style={{ color:C.blue, fontWeight:800, fontSize:16, fontFamily:font }}>{e.ticker}</span>
+              <span style={{ color:C.dim, fontSize:12 }}>{e.company}</span>
+              <Badge color={C.gold}>{e.earnings_date} ({e.days_away}d)</Badge>
+            </div>
+            <Badge color={C.dim}>{e.market_cap}</Badge>
+          </div>
+          {isExp && <div style={{ borderTop:`1px solid ${C.border}`, padding:18 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+              <div>
+                <div style={{ color:C.green, fontSize:11, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:10 }}>Estimates</div>
+                <StatRow label="EPS Estimate" value={e.eps_estimate} color={C.bright} />
+                <StatRow label="Revenue Est." value={e.revenue_estimate} color={C.bright} />
+                <StatRow label="Beat Streak" value={e.beat_streak} />
+                <StatRow label="Avg Move" value={e.avg_move_on_earnings} />
+                <StatRow label="Implied Move" value={e.implied_move} />
+              </div>
+              <div>
+                <div style={{ color:C.blue, fontSize:11, fontWeight:700, fontFamily:font, textTransform:'uppercase', marginBottom:10 }}>Setup</div>
+                <StatRow label="Sentiment" value={e.sentiment} />
+                <StatRow label="Pre-Earnings" value={e.pre_earnings_trend} />
+                <StatRow label="Risk Level" value={e.risk_level} />
+              </div>
+            </div>
+            {e.play && <div style={{ marginTop:14, padding:12, background:`${C.blue}06`, border:`1px solid ${C.blue}15`, borderRadius:8, color:C.bright, fontSize:12, fontWeight:600, fontFamily:sansFont }}>{e.play}</div>}
+          </div>}
+        </CardWrap>;
+      })}
+    </div>;
+  }
+Then update the main render section. Find the results rendering block and add these two lines after the existing display_type checks:
+tsx        {s.display_type === 'sector_rotation' && renderSectorRotation(s)}
+        {s.display_type === 'earnings_catalyst' && renderEarningsCatalyst(s)}

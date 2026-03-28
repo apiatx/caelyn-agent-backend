@@ -1,0 +1,103 @@
+Please implement a persistent floating chatbot widget that appears on ALL pages of the website EXCEPT the dedicated trading agent page (since that page already has the full agent UI). Here are the requirements:
+Architecture
+
+Create a new component ChatbotWidget.tsx that renders a floating chat bubble + expandable chat panel in the bottom-right corner of the screen.
+Mount it in the root layout/app component (e.g., App.tsx or _app.tsx or layout.tsx — wherever the router lives) so it persists across ALL page navigations. It should be OUTSIDE the <Routes> or page router so it never unmounts when the user switches pages.
+Hide the widget on the dedicated agent page — check the current route/path and if the user is on the full trading agent page (e.g., /app or /agent or whatever the path is), don't render the widget since that page already has the full UI.
+
+Component: ChatbotWidget.tsx
+Three states:
+State 1: Collapsed (default) — A floating circular button (56px) in the bottom-right corner with the CryptoHippo logo or a chat icon. Shows a small unread badge if there's an active response. Fixed position: bottom: 24px; right: 24px; z-index: 9999;
+State 2: Small chat panel — When clicked, expands to a chat panel approximately 400px wide × 500px tall, anchored to the bottom-right. This panel has:
+
+A header bar with "CryptoHippo AI" title, a maximize button (↗), and a close/minimize button (✕)
+A scrollable message area showing the conversation history
+An input bar at the bottom with a text field and send button
+The same quick prompt chips/buttons from the main agent (but in a compact horizontal scrollable row): Best Trades, Trending, Macro Overview, etc. — maybe show 6-8 most popular ones as small pills above the input
+Messages render with the same card styling as the main agent but scaled down — compact ticker cards, tight spacing
+
+State 3: Expanded/maximized — When the user clicks the maximize button (↗), the panel expands to roughly 700px wide × 80vh tall (or larger on big screens). This gives a near-full experience without leaving the current page. A minimize button (↙) shrinks it back to the small panel.
+Conversation Persistence
+
+Store the conversation state (messages array, loading state, current streaming response) in a React context provider (ChatbotContext) that wraps the entire app at the root level
+When the user navigates between pages, the context persists — the conversation continues uninterrupted
+If Claude is mid-response when the user switches pages, the response continues streaming into the context and the widget shows it when the user opens it again
+Store conversation in React state (NOT localStorage since artifacts don't support it) — the conversation persists for the session but resets on page refresh
+
+API Integration
+
+Use the EXACT same API endpoint and request format as the main trading agent page (/api/query with the same headers and API key)
+The widget should share no state with the main agent page — they are independent conversations
+Include a "Clear chat" button in the header to reset the conversation
+
+Styling
+
+Match the existing dark theme of the website (use the same color variables: background, card, border, text, purple accent, etc.)
+The floating button should have a subtle glow/shadow effect so it's noticeable but not distracting
+The chat panel should have a backdrop-filter: blur(12px) frosted glass effect on the background
+Smooth animations for open/close/expand transitions (200ms ease-out)
+The panel should have box-shadow: 0 8px 32px rgba(0,0,0,0.4) for depth
+On mobile (screen width < 768px), the small panel should be full-width and the expanded panel should be full-screen
+The input bar should match the styling of the main agent's input
+
+Message Rendering
+
+Use the SAME response renderers from the main agent page (renderTrades, renderInvestments, renderMacro, renderCrypto, renderScreener, etc.)
+Import these renderer functions so they're shared, not duplicated
+In the small panel view, the renderers should work but with tighter spacing (scale down padding/fonts slightly)
+In the expanded view, renderers display at full size
+If the response is plain text (display_type: "chat"), render it as a simple message bubble
+Show a typing indicator (three animated dots) while waiting for the API response
+Show the user's prompt as a right-aligned message bubble before the response
+
+Quick Prompt Chips
+
+Above the input field, show a horizontally scrollable row of compact pill buttons:
+Trending Best Trades Macro Sector Rotation Crypto Screener
+Clicking one fills the input and auto-sends (same behavior as the main page buttons)
+After the first message is sent, hide the chips to save space (show them again if the user clears the chat)
+
+Header Bar
+[CryptoHippo AI 🦛]          [↗ expand] [✕ close]
+When expanded:
+[CryptoHippo AI 🦛]    [Clear chat] [↙ minimize] [✕ close]
+Z-index and Positioning
+
+The widget must be ABOVE everything else on the page: z-index: 9999
+It should not interfere with the page content — no overlay on the page behind it
+The collapsed button should be slightly translucent when the user is scrolling (opacity 0.7) and fully opaque when idle or hovered
+
+Example Component Structure
+tsx// In App.tsx or root layout:
+<ChatbotProvider>
+  <Router>
+    <Routes>
+      {/* all your pages */}
+    </Routes>
+  </Router>
+  <ChatbotWidget />  {/* Outside router — always mounted */}
+</ChatbotProvider>
+tsx// ChatbotWidget.tsx pseudo-structure:
+function ChatbotWidget() {
+  const { pathname } = useLocation();
+  const [mode, setMode] = useState<'collapsed' | 'small' | 'expanded'>('collapsed');
+  const { messages, sendMessage, isLoading } = useChatbot();
+
+  // Hide on the dedicated agent page
+  if (pathname === '/app') return null;
+
+  if (mode === 'collapsed') return <FloatingButton onClick={() => setMode('small')} />;
+
+  return (
+    <ChatPanel
+      mode={mode}
+      onExpand={() => setMode('expanded')}
+      onMinimize={() => setMode('small')}
+      onClose={() => setMode('collapsed')}
+      messages={messages}
+      onSend={sendMessage}
+      isLoading={isLoading}
+    />
+  );
+}
+Re-deploy after implementation.

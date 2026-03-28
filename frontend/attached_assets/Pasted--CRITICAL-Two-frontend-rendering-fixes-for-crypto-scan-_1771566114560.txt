@@ -1,0 +1,180 @@
+## CRITICAL: Two frontend rendering fixes for crypto scan response
+
+The backend is returning all the data correctly but the frontend isn't rendering two things:
+
+### Fix 1: Add X Sentiment section renderer
+
+The crypto scan response JSON now includes an `x_sentiment` object. The frontend has NO renderer for this section — it needs to be added.
+
+The `x_sentiment` object in the response looks like this:
+```json
+{
+    "x_sentiment": {
+        "btc_sentiment": {
+            "overall": "bullish",
+            "score": 0.6,
+            "key_narrative": "Institutional accumulation narrative..."
+        },
+        "market_mood": "risk-on",
+        "top_social_movers": [
+            {
+                "symbol": "OM",
+                "social_velocity": "exploding",
+                "sentiment": "bullish",
+                "sentiment_score": 0.8,
+                "why_trending": "Massive squeeze play gaining attention...",
+                "catalyst": "Short squeeze with -849% annualized funding"
+            }
+        ],
+        "narrative_heat": [
+            {
+                "narrative": "Gaming Revival",
+                "buzz_level": "hot",
+                "direction": "bullish",
+                "top_tokens": ["AXS", "GALA", "IMX"]
+            }
+        ],
+        "contrarian_signals": ["BTC sentiment overly bullish..."],
+        "summary": "Crypto Twitter is focused on squeeze plays..."
+    }
+}
+```
+
+**NOTE**: The field might also be `trending_tickers` instead of `top_social_movers` — check for both:
+```javascript
+const socialMovers = xSentiment.top_social_movers || xSentiment.trending_tickers || [];
+```
+
+**Where to add it**: Find the crypto response renderer component. Look for where "Futures & Perps" or "Top Momentum Picks" sections are rendered. Add the X Sentiment section BETWEEN the perps section and the momentum picks section.
+
+**Rendering structure**:
+𝕏 Sentiment — Powered by Grok    [market_mood badge]
+[BTC Sentiment Card]
+BTC:  [overall badge]  Score: [score]
+[key_narrative text]
+[Top Social Movers - cards]
+For each mover:
+[SYMBOL]   [social_velocity badge]   [sentiment badge]
+[why_trending]
+Catalyst: [catalyst]
+[Narrative Heat - horizontal cards like Hot Categories]
+[narrative name]
+[buzz_level] [direction]
+Top: SYM1, SYM2, SYM3
+[Contrarian Signals - if present]
+⚠️ [signal text]
+[Summary paragraph]
+
+**Styling details**:
+
+Social velocity badges:
+- "exploding": background `#dc2626` (red), white text, subtle pulse animation
+- "surging": background `#f97316` (orange), white text
+- "rising": background `#eab308` (yellow), dark text
+- "steady": background `#374151` (gray), light text
+
+Sentiment badges (reuse existing pattern):
+- "bullish": green
+- "bearish": red  
+- "mixed": gray
+- "neutral": gray
+
+Market mood badge (next to section header):
+- "risk-on": green pill
+- "risk-off": red pill
+- "euphoric": bright green
+- "fearful": bright red
+- "mixed": gray
+
+BTC sentiment card: Same styling as existing BTC card at top of response. Show overall sentiment as colored badge, score as number, key_narrative as text below.
+
+Narrative heat cards: Same styling as "Hot Categories" cards (horizontal row of cards with name, percentage/level, leaders).
+
+Contrarian signals: Small yellow-bordered callout boxes with ⚠️ icon.
+
+**Graceful fallback**: If `x_sentiment` is null, undefined, empty object, or missing — don't render the section at all. Check:
+```javascript
+const xSentiment = response.x_sentiment;
+const hasXSentiment = xSentiment && (
+    xSentiment.summary || 
+    (xSentiment.top_social_movers || xSentiment.trending_tickers || []).length > 0
+);
+if (!hasXSentiment) return null; // Don't render section
+```
+
+### Fix 2: Fix 7d and 30d display in Top Momentum Picks
+
+The momentum picks cards show "7d: N/A" and "30d: —" even when the backend sends the data. The issue is likely a field name mismatch between what the backend returns and what the frontend reads.
+
+The backend may return the 7d change as ANY of these field names:
+- `change_7d`
+- `price_change_7d`
+- `7d_change`
+- `change_7d_pct`
+
+And the price as:
+- `price`
+- `current_price`
+- `mark_price`
+
+**Find the momentum picks renderer** and update the field reading to check multiple names:
+```javascript
+// For each momentum pick, read with fallbacks:
+const price = pick.price || pick.current_price || pick.mark_price;
+const change24h = pick.change_24h || pick.price_change_24h;
+const change7d = pick.change_7d || pick.price_change_7d || pick["7d_change"];
+const change30d = pick.change_30d || pick.price_change_30d || pick["30d_change"];
+const fundingRate = pick.funding_rate || pick.fundingRate;
+const openInterest = pick.open_interest || pick.openInterest || pick.open_interest_usd;
+const marketCap = pick.market_cap || pick.marketCap;
+
+// Display logic — only show "N/A" if truly missing
+const display7d = change7d != null && change7d !== "" && change7d !== "N/A" 
+    ? `${change7d > 0 ? '+' : ''}${typeof change7d === 'number' ? change7d.toFixed(2) : change7d}%`
+    : null;  // Don't show "N/A", just hide the field
+
+const displayFunding = fundingRate != null && fundingRate !== "" && fundingRate !== "N/A"
+    ? `${(typeof fundingRate === 'number' ? (fundingRate * 100).toFixed(4) : fundingRate)}%`
+    : null;
+
+const displayOI = openInterest != null && openInterest !== ""
+    ? formatLargeNumber(typeof openInterest === 'number' ? openInterest : parseFloat(openInterest))
+    : null;
+```
+
+**Important**: If Claude outputs funding_rate as already formatted (e.g., "-0.29%"), don't multiply by 100 again. Check if it's a raw decimal (like 0.0029) or already a percentage string:
+```javascript
+function formatFundingDisplay(rate) {
+    if (rate == null || rate === "" || rate === "N/A") return null;
+    if (typeof rate === 'string' && rate.includes('%')) return rate; // Already formatted
+    if (typeof rate === 'number') {
+        if (Math.abs(rate) < 1) {
+            // Raw rate like 0.0029 — multiply by 100
+            return `${(rate * 100).toFixed(4)}%`;
+        } else {
+            // Already percentage like -0.29
+            return `${rate.toFixed(4)}%`;
+        }
+    }
+    return String(rate);
+}
+```
+
+Also for the price display — if price is null or "N/A", don't show "N/A", just show the change percentage without a dollar amount:
+```javascript
+const displayPrice = price != null && price !== "" && price !== "N/A" && price !== 0
+    ? `$${typeof price === 'number' ? price.toLocaleString() : price}`
+    : null;  // Don't show N/A, just skip
+```
+
+### Testing
+1. Click "Crypto" → X Sentiment section appears between Perps and Momentum Picks
+2. X Sentiment shows BTC sentiment card with colored badge
+3. X Sentiment shows social movers with velocity badges
+4. X Sentiment shows narrative heat cards
+5. If Grok data is unavailable, section doesn't appear (no empty section)
+6. Momentum picks show funding rates (not "-") for OM, AXS etc.
+7. Momentum picks show 7d change when available, hide field when unavailable (don't show "N/A")
+8. Momentum picks don't show "N/A" for price — either show actual price or just show % change
+9. All existing sections (BTC/ETH, Hot Categories, Perps, etc.) still render correctly
+10. Top Perps by Volume table shows OI values

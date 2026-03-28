@@ -1,0 +1,70 @@
+FRONTEND FEATURE: Pretty renderer for Trending Now (cross_asset_trending)
+
+Goal:
+Render display_type = "cross_asset_trending" as a rich panel like daily_briefing.
+Do not change the payload contract. Do not change the button mapping.
+Backend already returns { type, analysis, structured }. Use structured.
+
+A) Add a new panel renderer
+In the panel rendering switch/case (where daily_briefing is rendered), add:
+case "cross_asset_trending": render a CrossAssetTrendingPanel using data.structured
+
+B) Layout requirements (match Daily Briefing vibe)
+Panel sections in this order:
+
+1) Header strip
+- Title: "Trending Now"
+- Regime badge (if present): structured.meta.regime or structured.market_pulse.regime
+- As-of time (structured.as_of or structured.meta.as_of_utc)
+
+2) Social Trading Signal card (the hero)
+Use structured.social_trading_signal object:
+- Left: symbol + asset_class + classification pill (TRADE IDEA or WATCHLIST)
+- Right: Rating pill + Confidence number
+- Middle: Thesis bullets (2-4)
+- Confirmation grid: TA / Volume / Catalyst / FA with green check or gray dash
+- Receipts: show 2 quote blocks (each <= 20 words)
+- Footer: Position size guidance
+
+If social_trading_signal is missing, show a fallback card:
+"Social signal unavailable, showing best-ranked candidates instead."
+
+3) Buckets section
+Render 5 collapsible groups (or simple headers) with compact cards:
+- Equities: Large Caps
+- Equities: Mid Caps
+- Equities: Small + Micro
+- Crypto
+- Commodities
+
+Each item card should show:
+- Symbol
+- Rating + Confidence
+- One-line reason
+- Badges: social_velocity_label, score (optional), classification
+- Mini confirmations row (TA/Vol/Cat/FA as icons)
+
+Do NOT render any “Excluded” section even if the backend accidentally sends it in analysis text.
+Only use structured lists for the UI.
+
+C) Keep chat bubble clean
+Chat bubble text should remain short like:
+"Trending Now updated. See panel."
+
+The detailed content must live in the panel UI, not the chat bubble.
+
+D) Defensive parsing
+If structured is missing or malformed:
+- show analysis text as a plain fallback inside the panel (not the bubble)
+- show a small warning badge: "Limited structured data"
+
+E) No other changes
+Do not modify askAgent payload.
+Do not modify daily_briefing renderer.
+Only add the cross_asset_trending panel renderer + small helper components.
+
+After changes:
+- run locally
+- click Trending Now
+- confirm the panel shows the hero card + grouped buckets
+- publish frontend only if code changed

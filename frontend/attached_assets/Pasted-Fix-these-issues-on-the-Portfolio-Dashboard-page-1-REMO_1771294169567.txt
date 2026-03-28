@@ -1,0 +1,11 @@
+Fix these issues on the Portfolio Dashboard page:
+
+1. REMOVE DUPLICATE SECTION: There is a "Position Details" section below the Sector Allocation and Daily P&L charts that duplicates the main holdings table. Remove the entire "Position Details" section. BUT — keep its expandable TradingView chart functionality. Add that same dropdown/expand behavior to each row in the MAIN holdings table (the one with Ticker, Shares, Avg Cost, Price, Daily P&L, Total P&L, Weight% columns). When a user clicks a row or clicks an expand arrow on a row, it should expand to show the TradingView chart widget for that ticker, exactly like the Position Details section currently does for SPAI.
+
+2. FIX TICKER AMBIGUITY: When a user adds a holding, some tickers map to the wrong asset. For example, "HYPE" maps to an iShares EUR High Yield ETF instead of Hyperliquid, and "SILVER" doesn't resolve at all because it's a commodity/futures ticker. Fix this by adding a dropdown/autocomplete when the user types a ticker in the "Add Holding" input. The dropdown should show multiple matches with the full name and asset type (stock, crypto, commodity) so the user can pick the correct one. For example, typing "HYPE" should show:
+   - HYPE — Hyperliquid (Crypto)
+   - HYPE — iShares EUR High Yield Corp Bond ETF (ETF)
+   
+   The user picks which one they mean. Store the asset_type alongside the ticker in the holdings data so the quotes endpoint knows whether to look it up via FMP (stocks/ETFs), CoinGecko (crypto), or FMP commodity symbols (commodities/futures).
+
+3. FIX SECTOR ALLOCATION CHART: The Sector Allocation donut chart shows "Unknown 100.0%" because sector data isn't being passed to the chart. The /api/portfolio/quotes endpoint already returns a "sector" field for stocks from FMP. Make sure the frontend reads the sector field from the quotes response and passes it to the Sector Allocation chart. For crypto holdings, label the sector as "Crypto". For commodities, label as "Commodities". For any stock where sector comes back empty, use the company name or label as "Other".

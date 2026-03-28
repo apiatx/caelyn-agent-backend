@@ -1,0 +1,99 @@
+## CRITICAL: X Sentiment section not rendering — verify the renderer exists
+
+The backend is being fixed to ensure X sentiment data reaches Claude. But the frontend may also be missing the renderer.
+
+### Step 1: Find where crypto response sections are rendered
+
+Search for where the crypto scan response is displayed — look for references to "Hot Categories", "Top Momentum Picks", "Futures & Perps", "Squeeze Candidates" etc. These are the existing rendered sections.
+
+### Step 2: Verify x_sentiment renderer exists
+
+In that same component/file, search for "x_sentiment" or "X Sentiment" or "social_movers" or "Grok". If NO renderer exists for x_sentiment, ADD ONE.
+
+The x_sentiment data in the response JSON looks like:
+```json
+{
+    "x_sentiment": {
+        "btc_sentiment": {"overall": "bullish", "score": 0.6, "key_narrative": "..."},
+        "market_mood": "risk-on",
+        "trending_tickers": [
+            {"ticker": "OM", "social_velocity": "exploding", "sentiment": "bullish", "why_trending": "...", "catalyst": "..."}
+        ],
+        "top_social_movers": [...],  // Alternative field name
+        "narrative_heat": [{"narrative": "Gaming", "buzz_level": "hot", "direction": "bullish", "top_tokens": ["AXS", "GALA"]}],
+        "contrarian_signals": ["..."],
+        "summary": "..."
+    }
+}
+```
+
+NOTE: The trending tickers might be under `trending_tickers` OR `top_social_movers` — check both.
+
+### Step 3: Place the section ABOVE Top Momentum Picks
+
+The render order should be:
+1. Market Overview
+2. BTC / ETH cards
+3. Hot Categories
+4. Futures & Perps (squeeze candidates, crowded longs, divergences, top perps table)
+5. **𝕏 Sentiment — Powered by Grok** ← HERE
+6. Top Momentum Picks
+7. Upcoming Catalysts
+
+### Step 4: Render these sub-sections:
+
+**Section header**: `𝕏 Sentiment — Powered by Grok` with market_mood badge (green pill for risk-on, red for risk-off, gray for mixed)
+
+**BTC Sentiment card** (always first):
+- Background: same as BTC card at top
+- Show: `BTC  [BULLISH badge]  Score: 0.6`
+- Below: `key_narrative` text
+- Read from: `x_sentiment.btc_sentiment.overall` (or `.sentiment`), `.score`, `.key_narrative`
+
+**Top Social Movers** (card list):
+[SYMBOL]    [velocity badge]    [sentiment badge]
+[why_trending text]
+Catalyst: [catalyst text]
+- Read from: `x_sentiment.trending_tickers` OR `x_sentiment.top_social_movers`
+- Velocity badges: "exploding" = red bg, "surging" = orange, "rising" = yellow, "steady" = gray
+- Sentiment badges: "bullish" = green, "bearish" = red, "mixed"/"neutral" = gray
+- Show up to 8 items
+
+**Narrative Heat** (horizontal cards like Hot Categories):
+[Narrative Name]
+[buzz_level badge]  [direction]
+Top: SYM1, SYM2, SYM3
+- Read from: `x_sentiment.narrative_heat`
+- hot = red/orange accent, warm = yellow, cold = blue
+
+**Contrarian Signals** (if present):
+⚠️ [signal text]
+- Yellow border callout box
+- Only show if array has items
+
+**Summary** paragraph at bottom of section.
+
+### Step 5: Remove "Funding" from Top Momentum Picks
+
+In the momentum picks card renderer, remove the "Funding:" data field line. It's redundant with the Funding Divergences section above it. The thesis text already mentions funding when relevant.
+
+### Graceful fallback
+If `x_sentiment` is null/undefined/empty, don't show the section header or any cards. Check:
+```javascript
+const xData = response.x_sentiment;
+const hasSocial = xData && (
+    (xData.trending_tickers?.length > 0) || 
+    (xData.top_social_movers?.length > 0) ||
+    xData.summary
+);
+if (!hasSocial) return null;
+```
+
+### Testing
+1. Click "Crypto" → X Sentiment section appears between Perps and Momentum Picks
+2. BTC sentiment card shows with colored badge
+3. Social movers show with velocity badges
+4. Narrative heat cards display
+5. If Grok data unavailable, section doesn't render (no empty section)
+6. Momentum picks don't show "Funding:" line anymore
+7. All other sections still work

@@ -1,0 +1,236 @@
+Fix the frontend rendering for the sector preset response "Watchlist Today" section on the terminal page.
+
+You only have access to the FRONTEND repo.
+
+Important constraints:
+- Do NOT redesign the terminal page.
+- Do NOT change unrelated response types.
+- Do NOT change non-sector preset rendering.
+- Do NOT invent frontend-only business logic for ranking or stock selection.
+- Backend is now already returning the watchlist data. Your job is to render it correctly.
+- Keep changes minimal and targeted.
+
+## Context
+On the terminal page, under the "Sectors" preset prompt section, these buttons exist:
+- Energy
+- Materials
+- Aerospace/Defense
+- Tech
+- AI/Compute
+- Quantum
+- Fintech
+- Biotech
+- Real Estate
+
+The backend now guarantees that sector responses include a nested watchlist_today object inside structured.
+
+The issue:
+- "Watchlist Today" is still blank in the frontend response, even though backend says it is now populating the data.
+- I need the frontend to correctly read and render the backend watchlist_today structure.
+
+## Backend response shape to support
+For sector preset responses, backend now returns something like:
+
+{
+  "structured": {
+    "display_type": "briefing",
+    "sector_key": "energy",
+    "human_label": "Energy",
+    "watchlist_today": {
+      "large_cap": [
+        {
+          "rank": 1,
+          "ticker": "XOM",
+          "company": "ExxonMobil Corp",
+          "market_cap_tier": "large",
+          "why_now": "Backend-ranked #1 by quant score, social sentiment, and revenue growth (composite=68.4)",
+          "catalyst": "rev_growth=12%, analyst=Strong Buy, upside=+22%, earnings=Apr 25",
+          "conviction": "High",
+          "conviction_score": 68
+        }
+      ],
+      "mid_cap": [
+        {
+          "rank": 1,
+          "ticker": "NOG",
+          "company": "Northern Oil & Gas",
+          "market_cap_tier": "mid",
+          "why_now": "...",
+          "catalyst": "...",
+          "conviction": "Medium",
+          "conviction_score": 38
+        }
+      ],
+      "low_cap": [
+        {
+          "rank": 1,
+          "ticker": "KOS",
+          "company": "Kosmos Energy",
+          "market_cap_tier": "low",
+          "why_now": "...",
+          "catalyst": "...",
+          "conviction": "Watch",
+          "conviction_score": 21
+        }
+      ],
+      "buy_right_now": {
+        "ticker": "XOM",
+        "company": "ExxonMobil Corp",
+        "market_cap_tier": "",
+        "why_now": "Highest composite score across all market cap tiers (score=68) — strongest overall setup in this sector right now",
+        "catalyst": "rev_growth=12%, analyst=Strong Buy, upside=+22%",
+        "conviction": "High",
+        "conviction_score": 68
+      }
+    }
+  }
+}
+
+## Key backend facts
+- large_cap, mid_cap, low_cap are arrays
+- buy_right_now is a single object, not an array
+- some arrays may be empty for certain sectors
+- this is only for sector preset responses
+- sector preset responses are identified by:
+  - structured.display_type === "briefing"
+  - structured.sector_key exists
+
+## Your task
+Update the frontend sector response rendering so "Watchlist Today" correctly displays the backend-provided data.
+
+## Required frontend behavior
+
+### 1) Detect sector preset responses
+Use logic equivalent to:
+
+- structured.display_type === "briefing"
+- structured.sector_key is present
+
+Only for these sector responses, render the watchlist_today content.
+
+### 2) Read these exact fields
+From structured.watchlist_today, read:
+
+- large_cap
+- mid_cap
+- low_cap
+- buy_right_now
+
+Use safe fallbacks:
+- large_cap ?? []
+- mid_cap ?? []
+- low_cap ?? []
+- buy_right_now ?? {}
+
+### 3) Render "Watchlist Today" with 4 sub-sections
+
+#### A. Large Caps
+Render cards/rows for watchlist_today.large_cap
+
+For each entry render:
+- ticker
+- company
+- why_now
+- catalyst
+- conviction
+- conviction_score
+
+If empty, render:
+- "No large-cap setups identified for this sector."
+
+#### B. Mid-Cap Growth
+Render cards/rows for watchlist_today.mid_cap
+
+Same fields:
+- ticker
+- company
+- why_now
+- catalyst
+- conviction
+- conviction_score
+
+If empty, render:
+- "No mid-cap setups identified."
+
+#### C. Low Caps
+Render cards/rows for watchlist_today.low_cap
+
+Same fields:
+- ticker
+- company
+- why_now
+- catalyst
+- conviction
+- conviction_score
+
+If empty, render:
+- "No small-cap setups identified."
+
+#### D. #1 Buy Right Now
+Render a featured card for watchlist_today.buy_right_now
+
+This is a single object, not an array.
+
+Render:
+- ticker
+- company
+- why_now
+- catalyst
+- conviction
+- conviction_score
+
+If buy_right_now.ticker is missing/empty, render:
+- "No top pick identified."
+
+### 4) Prevent blank rendering
+The current problem is likely that the frontend is not traversing the nested structure correctly or is expecting old fields.
+
+Add rendering guards so cards are only rendered when ticker exists.
+
+Equivalent logic:
+- for arrays: render entries where entry.ticker is non-empty
+- for buy_right_now: render only if buy_right_now.ticker exists
+
+### 5) Do not change ranking logic
+Do not compute or rank names in frontend.
+Do not invent fallbacks beyond display-safe defaults.
+Backend is already handling the content selection.
+
+### 6) Keep everything else unchanged
+Do not alter:
+- other terminal response sections
+- non-sector prompt responses
+- preset button behavior
+- unrelated formatting/layout outside the minimal watchlist rendering update
+
+## Strong suspicion to audit
+Please explicitly audit whether the current frontend is doing one of these:
+- reading old fields instead of structured.watchlist_today
+- expecting watchlist_today to be flat instead of nested
+- expecting buy_right_now to be an array instead of an object
+- refusing to render if one subsection is empty
+- using the wrong response object path
+
+## Deliverables
+1. Implement the minimal frontend fix.
+2. Show exact files changed.
+3. Explain why Watchlist Today was blank in the frontend.
+4. Show exactly how you now read:
+   - structured.watchlist_today.large_cap
+   - structured.watchlist_today.mid_cap
+   - structured.watchlist_today.low_cap
+   - structured.watchlist_today.buy_right_now
+5. Confirm no unrelated response types were changed.
+
+## Acceptance criteria
+The task is done when:
+- sector preset responses show populated Watchlist Today content
+- Large Caps renders correctly
+- Mid-Cap Growth renders correctly
+- Low Caps renders correctly
+- #1 Buy Right Now renders correctly
+- empty buckets fail gracefully without blanking the whole section
+- non-sector responses are unchanged
+- only minimal frontend changes were made
+
+Before coding, audit the current sector response rendering path and identify exactly why the nested watchlist_today data is not being displayed.

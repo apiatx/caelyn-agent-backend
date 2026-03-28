@@ -1,0 +1,73 @@
+## Bug: "AI Portfolio Review" shows "Failed to get portfolio review (Status 502)" but backend works
+
+The backend endpoint /api/portfolio/review works correctly when tested directly (returns 200 in ~21 seconds). But the frontend shows Status 502.
+
+### Step 1: Check what the frontend is actually doing
+
+Find the code that handles the "AI Portfolio Review" button click. Check:
+
+1. What URL is it calling? Is it hitting the correct backend URL (the deployed backend, not localhost)?
+2. What timeout is set on the fetch/axios request? If the frontend has a 10-15 second timeout, it will abort before the backend responds (which takes ~21 seconds).
+3. Is there a proxy or middleware that has its own timeout?
+4. Is the error actually a 502 from the server, or is it a network timeout that the frontend is displaying as 502?
+
+### Step 2: Increase the frontend request timeout
+
+The portfolio review takes ~20-25 seconds because it fetches data for all holdings in parallel, then runs Claude analysis. The frontend fetch call needs a timeout of at least 60 seconds.
+
+Find the fetch/axios call for /api/portfolio/review and set the timeout to 60000ms (60 seconds):
+
+If using fetch:
+```javascript
+const controller = new AbortController();
+const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+
+const response = await fetch('/api/portfolio/review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+    body: JSON.stringify({ holdings }),
+    signal: controller.signal,
+});
+
+clearTimeout(timeoutId);
+```
+
+If using axios:
+```javascript
+const response = await axios.post('/api/portfolio/review', { holdings }, {
+    headers: { 'X-API-Key': apiKey },
+    timeout: 60000, // 60 seconds
+});
+```
+
+### Step 3: Add a loading state
+
+Since the review takes 20-25 seconds, show a loading indicator that says "Analyzing your portfolio... this takes about 20 seconds" so the user knows it's working.
+
+### Step 4: Check the error handling
+
+The current error handler shows "Status 502" — check if it's actually receiving a 502 status code from the server, or if it's catching a timeout/abort error and displaying it as 502.
+
+Update the error handling to differentiate:
+```javascript
+try {
+    const response = await fetch(...);
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Server returned ${response.status}: ${errorText}`);
+    }
+    const data = await response.json();
+    // ... handle success
+} catch (error) {
+    if (error.name === 'AbortError') {
+        showError('Portfolio review timed out. Please try again.');
+    } else {
+        showError(`Failed to get portfolio review: ${error.message}`);
+    }
+}
+```
+
+### Testing
+1. Click "AI Portfolio Review" — should show loading state for ~20 seconds, then display analysis
+2. Check browser network tab — the request should complete with status 200, not 502
+3. If it still fails, check the browser console for the actual error message

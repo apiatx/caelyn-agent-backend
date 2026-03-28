@@ -1,0 +1,98 @@
+Make a minimal, targeted UI update for sector preset responses in CaelynAI.
+
+You only have access to the FRONTEND repo.
+
+Important constraints:
+- Do NOT redesign the terminal page.
+- Do NOT refactor unrelated UI components.
+- Do NOT change non-sector preset rendering.
+- Do NOT invent new frontend-only business logic.
+- Backend is the source of truth for the sector response structure.
+
+Context:
+The terminal page has sector preset buttons:
+- Energy
+- Materials
+- Aerospace/Defense
+- Tech
+- AI/Compute
+- Quantum
+- Fintech
+- Biotech
+- Real Estate
+
+Backend is being updated so that sector preset responses keep the same overall structure, but with these exact changes:
+1. "Top Moves Today" becomes "Watchlist Today"
+2. "What's Moving" rows use tickers instead of the repeated sector name
+3. "Strongest Sector" becomes "Strongest Overall"
+4. "Watchlist Today" will contain:
+   - 1–3 large caps
+   - 1–3 mid-cap growth
+   - 1–3 low caps
+   - #1 Buy Right Now
+
+## Your task
+Update the frontend rendering for sector preset responses only so it correctly displays the backend’s updated sector response shape.
+
+## Required frontend changes
+
+### Change 1 — Section label update
+Where the sector preset response currently displays the section that appears as "Top Moves Today", update the rendering so it shows:
+- "Watchlist Today"
+
+Do not change unrelated sections.
+
+### Change 2 — Watchlist Today rendering
+Render the backend’s updated watchlist structure cleanly, showing:
+- large caps
+- mid-cap growth
+- low caps
+- #1 Buy Right Now
+
+Do not flatten everything into one messy block if the backend returns structured buckets.
+
+### Change 3 — What's Moving labels
+Make sure the UI displays the backend-provided ticker labels for "What's Moving" items.
+Do not keep showing the repeated sector name if backend now sends tickers.
+
+### Change 4 — Strongest Overall
+Inside the "Top Signal From Each Scanner" area, update the displayed signal label from:
+- "Strongest Sector"
+to:
+- "Strongest Overall"
+
+This should reflect backend-provided data; do not create independent frontend ranking logic.
+
+### Change 5 — Preserve model consistency
+Do not make the rendering depend on which model answered.
+The same sector response layout should display correctly for:
+- Caelyn / collaboration mode
+- solo LLM modes
+- any model combination
+
+## Important rules
+- Keep changes limited to sector preset response rendering only
+- Do not alter other terminal response types
+- Do not change preset button behavior unless necessary to consume the backend response correctly
+- Prefer backend-provided labels/fields over hardcoded frontend assumptions where possible
+- If backend response is temporarily missing one watchlist bucket, fail gracefully without breaking the whole component
+
+## Deliverables
+1. Implement only the minimal frontend changes needed for these sector-response updates.
+2. Show exact files changed.
+3. Explain how the sector preset response renderer was updated for:
+   - Watchlist Today
+   - ticker labels in What's Moving
+   - Strongest Overall
+4. Confirm no unrelated UI behavior was changed.
+
+## Acceptance criteria
+The task is done when:
+- sector preset responses display "Watchlist Today"
+- the watchlist buckets render correctly
+- "What's Moving" shows ticker labels from backend
+- "Strongest Overall" appears instead of "Strongest Sector"
+- the same rendering works regardless of which model produced the sector response
+- nothing else in the terminal UI is changed
+
+Make the smallest safe frontend change necessary to match the backend’s updated sector response structure.

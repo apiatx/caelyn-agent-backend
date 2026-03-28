@@ -1,0 +1,214 @@
+URGENT: Full mobile responsiveness overhaul. The website currently does not work on mobile — navigation is broken, pages aren't reachable, layouts overflow, and the agent is unusable on small screens. This needs to be fixed across the ENTIRE site. Mobile is 50%+ of users.
+1. Navigation — Mobile Hamburger Menu
+The current navigation (sidebar or top nav with multiple page links) doesn't work on mobile. Replace it with a responsive nav:
+Desktop (>1024px): Keep the existing navigation as-is (sidebar or top nav bar).
+Tablet (768-1024px): Collapse the sidebar into a top nav bar with horizontally scrollable page links.
+Mobile (<768px): Replace the entire nav with a hamburger menu:
+[🦛 CryptoHippo]                    [☰]
+
+Tapping ☰ opens a full-screen overlay slide-in menu from the right
+Menu shows ALL page links stacked vertically, large touch targets (48px+ height per link)
+Active page is highlighted
+Tapping a link navigates and auto-closes the menu
+Menu has a close ✕ button in the top-right
+Background is dimmed/blurred when menu is open
+Add overflow: hidden to body when menu is open to prevent scroll-behind
+
+tsx// Pseudo-structure:
+const [menuOpen, setMenuOpen] = useState(false);
+
+// In header:
+<button className="md:hidden" onClick={() => setMenuOpen(true)}>☰</button>
+
+// Mobile menu overlay:
+{menuOpen && (
+  <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm">
+    <nav className="absolute right-0 top-0 h-full w-72 bg-[your-dark-bg] p-6">
+      <button onClick={() => setMenuOpen(false)}>✕</button>
+      {pages.map(page => (
+        <Link 
+          key={page.path} 
+          to={page.path} 
+          onClick={() => setMenuOpen(false)}
+          className="block py-4 text-lg border-b border-white/10"
+        >
+          {page.icon} {page.name}
+        </Link>
+      ))}
+    </nav>
+  </div>
+)}
+2. Agent Page — Mobile Layout
+The trading agent page has three areas: quick prompt buttons, chat input, and response area. On mobile:
+Quick prompt buttons:
+
+Change from the 5-column grid to a 2-column grid on mobile (grid-template-columns: repeat(2, 1fr))
+Buttons should be full-width within their column, vertically stacked
+Font size: 13px on mobile (down from whatever desktop size is)
+Reduce padding inside buttons to 8px 10px
+The 4 rows become ~10 rows of 2, which is fine — users scroll
+
+Chat input area:
+
+Full width, no side margins
+Input field and send button on the same line
+Input should be font-size: 16px (prevents iOS zoom on focus)
+Sticky at the bottom of the screen: position: sticky; bottom: 0;
+
+Response area:
+
+Cards should be full-width with no horizontal overflow
+All text wraps properly — no horizontal scroll anywhere
+Tables inside responses should become horizontally scrollable: wrap any <table> in a <div style="overflow-x: auto">
+Ticker cards: the header row (ticker, price, change, market cap) should wrap to 2 lines on mobile instead of one long line
+
+AI Screener section:
+
+Textarea: full width
+Quick filter chips: horizontally scrollable row (overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch;)
+Scan button: full width below textarea
+
+3. Dashboard Pages — Responsive Grids
+For any page that uses a multi-column grid layout for cards/widgets/iframes:
+css/* Desktop: multi-column */
+@media (min-width: 1024px) {
+  .dashboard-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* Tablet: 2 columns */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .dashboard-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Mobile: single column, full width */
+@media (max-width: 767px) {
+  .dashboard-grid { grid-template-columns: 1fr; }
+}
+4. Iframes & Widgets — Mobile Sizing
+Iframes (TradingView, Finviz, CoinGecko embeds, etc.) need to be responsive:
+css/* Make all iframes responsive */
+iframe {
+  width: 100% !important;
+  max-width: 100%;
+  height: auto;
+  min-height: 300px;  /* Don't let them get too short */
+  aspect-ratio: 16/9;  /* Maintain reasonable proportions */
+}
+
+/* On mobile, give iframes more vertical space since they're narrower */
+@media (max-width: 767px) {
+  iframe {
+    min-height: 250px;
+    aspect-ratio: 4/3;  /* Taller ratio on mobile */
+  }
+}
+If any iframe has a hardcoded width or height attribute in the HTML tag, remove those and use CSS instead. Hardcoded pixel dimensions are the #1 cause of horizontal overflow on mobile.
+5. Typography & Spacing — Mobile Scale
+css@media (max-width: 767px) {
+  /* Reduce all excessive padding */
+  .page-container, .main-content, .section {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  /* Scale down headers */
+  h1 { font-size: 1.5rem !important; }
+  h2 { font-size: 1.25rem !important; }
+  h3 { font-size: 1.1rem !important; }
+
+  /* Prevent ANY horizontal overflow */
+  body, html, #root, .app-container {
+    overflow-x: hidden !important;
+    max-width: 100vw !important;
+  }
+
+  /* Make sure no element breaks out */
+  * {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Tables scroll horizontally */
+  table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+6. Floating Chatbot Widget — Mobile Adaptation
+On mobile (<768px), the chatbot widget needs special handling:
+Collapsed state: Smaller floating button (48px instead of 56px), positioned bottom: 16px; right: 16px;
+Small panel state: Instead of 400x500px floating panel, go FULL WIDTH:
+css@media (max-width: 767px) {
+  .chatbot-panel {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 60vh;
+    width: 100%;
+    border-radius: 16px 16px 0 0;  /* Rounded top corners only */
+  }
+}
+Expanded state: On mobile, expanded = full screen:
+css@media (max-width: 767px) {
+  .chatbot-panel-expanded {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+  }
+}
+The chatbot input must have font-size: 16px on mobile — anything smaller triggers iOS Safari auto-zoom which breaks the layout.
+7. Touch Targets
+Every clickable element must be at least 44x44px on mobile (Apple's Human Interface Guidelines). This includes:
+
+Nav links
+Prompt buttons
+Expand/collapse buttons on ticker cards
+Close/minimize buttons
+Filter chips
+Any icon buttons
+
+If any button or link is smaller than 44px, add padding to increase the touch target:
+css@media (max-width: 767px) {
+  button, a, .clickable {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+8. Viewport Meta Tag
+Make sure the HTML <head> includes:
+html<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+The maximum-scale=1.0 and user-scalable=no prevent accidental pinch-zoom that breaks the layout. (Note: this is fine for a web app — NOT recommended for content sites, but for a trading dashboard it's the right call.)
+9. Prevent Horizontal Scroll
+This is the most common mobile bug. Add this global rule:
+csshtml, body {
+  overflow-x: hidden;
+  width: 100%;
+  max-width: 100vw;
+}
+Then audit every component for:
+
+Hardcoded widths (replace width: 800px with width: 100%; max-width: 800px)
+Flex containers that don't wrap (add flex-wrap: wrap where needed)
+Grid containers with fixed columns that don't have mobile breakpoints
+Images without max-width: 100%
+Pre-formatted text or code blocks (add overflow-x: auto; word-break: break-word)
+
+10. Test Checklist
+After implementing, verify on a mobile viewport (375px width — iPhone SE/13 mini):
+
+ Can navigate to EVERY page via hamburger menu
+ No horizontal scrolling on ANY page
+ Agent prompt buttons are tappable and visible (2-column grid)
+ Agent chat input doesn't trigger iOS zoom
+ Agent responses render without overflow
+ Chatbot widget opens, expands, closes correctly
+ All iframes fit within the screen width
+ Dashboard cards stack vertically in single column
+ Screener textarea and chips are usable
+ All text is readable without zooming (minimum 14px body text)
+
+Re-deploy after all changes.

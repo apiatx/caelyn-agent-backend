@@ -1,0 +1,72 @@
+
+//@version=6
+indicator(title = "Global M2 12-Week Lead (for bitcoin)", shorttitle = 'Global M2', overlay=true, scale=scale.left)
+
+// Slide weeks input (in weeks)
+slide_weeks = input.int(defval=12, title="Slide Weeks Forward", minval=-52, maxval=52, tooltip="Number of weeks to slide the indicator forward")
+
+// Enable settings for each country's M2
+usa_active = input(true, title = "USM2 (USA Money Supply)")
+europe_active = input(true, title = "EUM2 (Eurozone Money Supply)")
+china_active = input(true, title = "CNM2 (China Money Supply)")
+japan_active = input(true, title = "JPM2 (Japan Money Supply)")
+uk_active = input(true, title = "UKM2 (United Kingdom Money Supply)")
+canada_active = input(true, title = "CAM2 (Canada Money Supply)")
+australia_active = input(true, title = "AUM3 (Australia Money Supply)")
+india_active = input(true, title = "INM2 (India Money Supply)")
+korea_active = input(true, title = "KRM2 (South Korea Money Supply)")
+brazil_active = input(true, title = "BRM2 (Brazil Money Supply)")
+russia_active = input(true, title = "RUM2 (Russia Money Supply)")
+switzerland_active = input(true, title = "CHM2 (Switzerland Money Supply)")
+mexico_active = input(true, title = "MXM2 (Mexico Money Supply)")
+indonesia_active = input(true, title = "IDM2 (Indonesia Money Supply)")
+turkey_active = input(true, title = "TRM2 (Turkey Money Supply)")
+saudi_active = input(true, title = "SAM2 (Saudi Arabia Money Supply)")
+argentina_active = input(true, title = "ARM2 (Argentina Money Supply)")
+southafrica_active = input(true, title = "ZAM2 (South Africa Money Supply)")
+
+// Daily timeframe for economic data
+tf = "D"
+
+// Get M2 data for each country and convert to USD
+us_m2 = usa_active ? request.security("ECONOMICS:USM2", tf, close) : 0
+eu_m2 = europe_active ? request.security("ECONOMICS:EUM2", tf, close) * request.security("FX_IDC:EURUSD", tf, close) : 0
+china_m2 = china_active ? request.security("ECONOMICS:CNM2", tf, close) * request.security("FX_IDC:CNYUSD", tf, close) : 0
+japan_m2 = japan_active ? request.security("ECONOMICS:JPM2", tf, close) * request.security("FX_IDC:JPYUSD", tf, close) : 0
+uk_m2 = uk_active ? request.security("ECONOMICS:GBM2", tf, close) * request.security("FX_IDC:GBPUSD", tf, close) : 0
+canada_m2 = canada_active ? request.security("ECONOMICS:CAM2", tf, close) * request.security("FX_IDC:CADUSD", tf, close) : 0
+australia_m2 = australia_active ? request.security("ECONOMICS:AUM3", tf, close) * request.security("FX_IDC:AUDUSD", tf, close) : 0
+india_m2 = india_active ? request.security("ECONOMICS:INM2", tf, close) * request.security("FX_IDC:INRUSD", tf, close) : 0
+korea_m2 = korea_active ? request.security("ECONOMICS:KRM2", tf, close) * request.security("FX_IDC:KRWUSD", tf, close) : 0
+brazil_m2 = brazil_active ? request.security("ECONOMICS:BRM2", tf, close) * request.security("FX_IDC:BRLUSD", tf, close) : 0
+russia_m2 = russia_active ? request.security("ECONOMICS:RUM2", tf, close) * request.security("FX_IDC:RUBUSD", tf, close) : 0
+switzerland_m2 = switzerland_active ? request.security("ECONOMICS:CHM2", tf, close) * request.security("FX_IDC:CHFUSD", tf, close) : 0
+mexico_m2 = mexico_active ? request.security("ECONOMICS:MXM2", tf, close) * request.security("FX_IDC:MXNUSD", tf, close) : 0
+indonesia_m2 = indonesia_active ? request.security("ECONOMICS:IDM2", tf, close) * request.security("FX_IDC:IDRUSD", tf, close) : 0
+turkey_m2 = turkey_active ? request.security("ECONOMICS:TRM2", tf, close) * request.security("FX_IDC:TRYUSD", tf, close) : 0
+saudi_m2 = saudi_active ? request.security("ECONOMICS:SAM2", tf, close) * request.security("FX_IDC:SARUSD", tf, close) : 0
+argentina_m2 = argentina_active ? request.security("ECONOMICS:ARM2", tf, close) * request.security("FX_IDC:ARSUSD", tf, close) : 0
+southafrica_m2 = southafrica_active ? request.security("ECONOMICS:ZAM2", tf, close) * request.security("FX_IDC:ZARUSD", tf, close) : 0
+
+// Calculate total liquidity (In Trillions USD)
+total = (us_m2 + eu_m2 + china_m2 + japan_m2 + uk_m2 + canada_m2 + australia_m2 + india_m2 + 
+         korea_m2 + brazil_m2 + russia_m2 + switzerland_m2 + mexico_m2 + indonesia_m2 + 
+         turkey_m2 + saudi_m2 + argentina_m2 + southafrica_m2) / 1000000000000
+
+// Calculate minutes per bar based on timeframe
+var float minutes_per_bar = 0
+if timeframe.isminutes
+    minutes_per_bar := timeframe.multiplier * 1
+else if timeframe.isdaily
+    minutes_per_bar := timeframe.multiplier * 1440  // 1440 minutes = 1 day
+else if timeframe.isweekly
+    minutes_per_bar := timeframe.multiplier * 10080  // 10080 minutes = 1 week
+else if timeframe.ismonthly
+    minutes_per_bar := timeframe.multiplier * 43200  // 43200 minutes ≈ 1 month (30 days)
+
+// Convert weeks to bars: (weeks * days/week * minutes/day) / minutes_per_bar
+bars_offset = math.round(slide_weeks * 7 * 1440 / minutes_per_bar)
+
+// Plot total liquidity with dynamic offset
+plot(total, offset=bars_offset, color=color.blue, linewidth=2)
+

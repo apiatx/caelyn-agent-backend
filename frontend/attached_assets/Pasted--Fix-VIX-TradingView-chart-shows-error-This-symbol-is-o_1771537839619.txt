@@ -1,0 +1,58 @@
+## Fix: VIX TradingView chart shows error "This symbol is only available on TradingView"
+
+### Problem
+The VIX chart embed uses `TVC:VIX` which doesn't work in the embedded TradingView widget — it only works on TradingView's own website. The embed shows "This symbol is only available on TradingView" error.
+
+### Fix
+Update the index TradingView symbol mapping to use symbols that work in the embedded widget:
+```javascript
+const indexMap = {
+    'VIX': 'CBOE:VIX',           // Works in embed
+    'SPX': 'FOREXCOM:SPXUSD',    // Works in embed  
+    'DJI': 'FOREXCOM:DJI',       // Works in embed
+    'IXIC': 'NASDAQ:IXIC',       // Works in embed
+    'NDX': 'NASDAQ:NDX',         // Works in embed
+    'RUT': 'FOREXCOM:RUTUSD',    // Works in embed
+    'DXY': 'INDEX:DXY',          // Works in embed
+    'TNX': 'CBOE:TNX',           // Works in embed
+};
+```
+
+Find the `getTradingViewSymbol` function (or equivalent) that was added for the portfolio page and update the index mappings. The key change is `VIX` from `TVC:VIX` to `CBOE:VIX`.
+
+Also: the backend now returns a `tradingview_symbol` field in the quotes response for indices. Make sure the frontend uses this field if present, falling back to the local map:
+```javascript
+function getTradingViewSymbol(holding, quoteData) {
+    // First check quote data from backend
+    if (quoteData && quoteData.tradingview_symbol) {
+        return quoteData.tradingview_symbol;
+    }
+    
+    // Local fallback for indices
+    const ticker = (holding.ticker || '').toUpperCase();
+    const indexMap = {
+        'VIX': 'CBOE:VIX',
+        'SPX': 'FOREXCOM:SPXUSD',
+        'DJI': 'FOREXCOM:DJI',
+        'IXIC': 'NASDAQ:IXIC',
+        'NDX': 'NASDAQ:NDX',
+        'RUT': 'FOREXCOM:RUTUSD',
+        'DXY': 'INDEX:DXY',
+        'TNX': 'CBOE:TNX',
+    };
+    if (indexMap[ticker]) return indexMap[ticker];
+    
+    // Crypto
+    if (holding.type === 'Crypto') return `BINANCE:${ticker}USDT`;
+    
+    // Default
+    return ticker;
+}
+```
+
+### Testing
+1. VIX → chart should show actual VIX volatility chart, no error popup
+2. SPX → should show S&P 500 chart
+3. BTC → should show BINANCE:BTCUSDT chart
+4. NVDA → should show normal NVDA stock chart
+5. No "This symbol is only available on TradingView" popups for any holding

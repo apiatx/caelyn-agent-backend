@@ -1,0 +1,66 @@
+FRONTEND FIX: Three issues in the Portfolio Dashboard holdings table dropdown
+
+=== FIX 1: COPPER TradingView chart symbol wrong ===
+
+The COMEX:HG1! symbol requires a TradingView subscription and won't render in the free widget. Change the copper mapping to use the free CFD symbol instead.
+
+In the commodity TradingView symbol mapping, change:
+COPPER → "TVC:COPPER" 
+
+Wait — that was the original and it didn't work either. The correct free symbol for copper on TradingView is:
+COPPER → "PEPPERSTONE:COPPER"
+
+If that doesn't work, try: "OANDA:XCUUSD"
+
+The issue is that futures symbols (COMEX:HG1!) require a paid TradingView data subscription. CFD symbols from brokers like Pepperstone or Oanda are free. Silver works because TVC:SILVER is a free CFD-based symbol.
+
+Update the commodity mapping to use free symbols:
+COPPER → "PEPPERSTONE:COPPER" (or fallback "OANDA:XCUUSD")
+NATGAS → "PEPPERSTONE:NATGAS" (or fallback "TVC:NATURALGAS") 
+PLATINUM → "TVC:PLATINUM"
+PALLADIUM → "TVC:PALLADIUM"
+WHEAT → "PEPPERSTONE:WHEAT"
+CORN → "PEPPERSTONE:CORN"
+
+Keep SILVER → "TVC:SILVER" and GOLD → "TVC:GOLD" and OIL → "TVC:USOIL" since those already work.
+
+=== FIX 2: Remove the "000" text and fix data fields in dropdown ===
+
+When a holding row is expanded, there is a "000" showing below the chart. This is a rendering bug — probably a placeholder or malformed data field. Remove it entirely.
+
+=== FIX 3: Show correct data fields per asset type in the dropdown ===
+
+Below the TradingView chart in each expanded row, show data cards/badges with relevant info from the quotes response. The fields shown should vary by asset type:
+
+For STOCKS:
+- Market Cap (from quotes response "market_cap" field, format as $X.XB or $X.XM)
+- Volume (from quotes response "volume" field, format as X.XM or X.XK)
+- Sector (from quotes response "sector" field)
+- Price Change (from quotes response "change_pct" field, format as +X.XX% in green or -X.XX% in red)
+
+For CRYPTO:
+- Market Cap (from quotes response "market_cap" field)
+- Volume (from quotes response "volume" field)
+- Sector (show "Crypto")
+- Price Change (from quotes response "change_pct" field)
+
+For COMMODITIES:
+- Volume (from quotes response "volume" field)
+- Sector (show "Commodities")
+- Price Change (from quotes response "change_pct" field)
+
+For ETFs:
+- Volume (from quotes response "volume" field)
+- Sector (from quotes response "sector" field or "ETFs")
+- Price Change (from quotes response "change_pct" field)
+
+For INDICES:
+- Price Change (from quotes response "change_pct" field)
+
+Use the holding's asset_type to determine which fields to show. Style them as small cards/badges in a horizontal row below the chart, matching the current dark theme. If a field's value is null or undefined, don't show that card at all — don't show "000" or empty values.
+
+The current layout already shows these cards (Volume, Sector, Industry are visible in the screenshots). Just:
+1. Remove the "000" text
+2. Replace "Industry" with "Price Change" 
+3. Add "Market Cap" for stocks and crypto
+4. Conditionally show/hide fields based on asset_type as described above
