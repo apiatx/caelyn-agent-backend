@@ -1,0 +1,290 @@
+You don’t want:
+
+“Only mega caps are safe.”
+
+Or “All small caps are trash.”
+
+You want:
+
+Asymmetric small/micro caps with real catalysts and sector tailwinds — not Twitter trash.
+
+That requires a different scoring logic.
+
+Right now your system is doing one of two extremes:
+
+Crypto-heavy hype mode
+
+Institutional large-cap bias mode
+
+You want the middle:
+
+Disciplined Speculation Mode.
+
+The Core Issue
+
+Your new institutional logic likely:
+
+Penalizes small caps heavily
+
+Requires strong fundamentals today
+
+Requires full technical confirmation
+
+Requires liquidity floor
+
+But microcaps rarely have:
+
+Clean earnings
+
+Full trend confirmation
+
+High liquidity
+
+Multi-quarter financial history
+
+Yet they reprice on:
+
+Narrative shifts
+
+Pre-earnings inflections
+
+Contract wins
+
+Regulatory milestones
+
+Product launches
+
+Strategic partnerships
+
+Sector rotation
+
+If your framework only rewards present strength, it kills early-stage upside.
+
+You need a separate scoring track.
+
+The Fix: Two-Tier Conviction System
+
+Instead of one scoring model, you need:
+
+1️⃣ Institutional Conviction
+
+For large/mid caps.
+Strict filters.
+Liquidity heavy.
+Confirmed strength.
+
+2️⃣ Asymmetric Opportunity Mode
+
+For small/micro caps.
+Catalyst-driven.
+Sector-aligned.
+Early inflection detection.
+
+Both coexist.
+
+The user prompt determines weighting.
+
+How To Enable “Disciplined Microcap Discovery”
+
+Add a new logic layer:
+
+When user asks for:
+
+“high conviction small caps”
+
+“asymmetric plays”
+
+“re-rating candidates”
+
+“early stage”
+
+“microcap with real catalyst”
+
+Switch scoring weights.
+
+Microcap Scoring Framework
+Step 1: Hard Sanity Filters
+
+Still necessary.
+
+No OTC junk.
+
+Minimum real revenue (if applicable).
+
+Real product or tech.
+
+At least one verifiable catalyst.
+
+Market cap above absolute floor (ex: $50M).
+
+Step 2: Catalyst Strength (Highest Weight)
+
+Score high if:
+
+Contract win
+
+FDA approval
+
+Product launch
+
+Strategic partnership
+
+New revenue stream
+
+Sector momentum alignment
+
+Catalyst must be time-bound.
+
+“Influencer thread” alone = zero score.
+
+Step 3: Sector Alignment Score
+
+Small cap must sit inside:
+
+AI infra
+
+Defense
+
+Energy transition
+
+Robotics
+
+Biotech with real trial milestone
+
+Critical minerals
+
+Etc.
+
+If sector is cold → penalize heavily.
+
+Step 4: Early Technical Inflection
+
+Instead of:
+
+“Must be in confirmed uptrend”
+
+Look for:
+
+Volatility compression
+
+Break above 50 MA
+
+Volume surge relative to baseline
+
+Accumulation pattern
+
+You want early rotation, not late confirmation.
+
+Step 5: Valuation Asymmetry
+
+Instead of current earnings strength, look for:
+
+Revenue growth acceleration
+
+TAM narrative with credibility
+
+Undervalued vs peers
+
+EV/Revenue discount relative to sector
+
+Cash runway
+
+New Microcap Score Formula
+
+For microcaps:
+
+FinalScore =
+0.35 * CatalystStrength
+0.25 * SectorAlignment
+0.20 * EarlyTechnicalShift
+0.15 * SocialMomentum (quality-adjusted)
+0.05 * Liquidity
+
+Notice liquidity is still required but not dominant.
+
+Critical Rule
+
+Microcap must pass:
+
+Catalyst >= 70
+
+SectorAlignment >= 65
+
+Not flagged as spam/hype
+
+Minimum liquidity threshold
+
+If not → discard regardless of social hype.
+
+How To Implement Without Breaking Architecture
+
+Do NOT change models.
+
+Add:
+
+if intent == "cross_asset_trending" AND
+   user mentions small cap / asymmetric / early stage:
+       scoring_mode = "microcap_asymmetry"
+else:
+       scoring_mode = "institutional"
+
+
+Same pipeline.
+Different weights.
+Different filters.
+
+Why Your Current Output Feels Useless
+
+Because your new institutional logic did this:
+
+“Risk-off → small caps bad → default to mega caps.”
+
+But that ignores:
+
+Selective repricing pockets.
+
+Sector micro rotations.
+
+Pre-fundamental breakout names.
+
+Your system needs to differentiate:
+
+“Speculative garbage”
+vs
+“Early-stage asymmetric with catalyst.”
+
+That’s a logic layer issue.
+
+The Psychological Trap You Want To Avoid
+
+If you lean too hard into:
+
+“Must have strong fundamentals now”
+
+You will miss:
+
+Pre-earnings turnarounds
+
+Defense contract announcements
+
+Early AI infra plays
+
+Biotech trial milestones
+
+Small caps reprice BEFORE fundamentals look perfect.
+
+Your scoring must reflect that.
+
+Concrete Upgrade For You
+
+Add a third user-detectable mode:
+
+Modes:
+
+Institutional (default)
+
+Cross-asset neutral
+
+Asymmetric small-cap hunt
+
+And force OpenAI orchestrator to select scoring_mode.

@@ -1,0 +1,88 @@
+BACKEND QUALITY FIX: cross_asset_trending is collapsing to a single pick (ex: only 1 crypto) and returning a thin narrative. We need to guarantee a cross-asset shortlist and then apply TA/FA/catalyst confirmation per item.
+
+Do NOT change daily_briefing. Only modify cross_asset_trending pipeline + Claude prompt for that display_type.
+
+GOAL OUTPUT (non-negotiable):
+Trending Now MUST return grouped sections:
+- Equities: Large (1-3), Mid (2-5), Small/Micro (2-5)
+- Crypto (2-4)
+- Commodities (2-4 + equity proxy where possible)
+Each item should include:
+- ticker/commodity
+- WHY trending (include 1 X receipt excerpt if available)
+- TA check (even if partial)
+- FA sanity check (even if partial)
+- Catalyst check (explicitly “confirmed” or “unconfirmed” with reason)
+- Rating (Strong Buy/Buy/Hold/Sell) + Confidence 0-100
+- Data gaps line if needed
+
+ROOT CAUSE LIKELY: candidate-set collapse due to strict scoring completeness + microcap guardrails. Fix by separating:
+(A) DISCOVERY SHORTLIST (breadth) from
+(B) CONFIRMATION / SCORING (ranking)
+
+IMPLEMENT THESE CHANGES:
+
+1) Add a "discovery shortlist lock" BEFORE deterministic scoring:
+   - Build candidates from:
+     a) Grok x_social_scan cross_asset (primary)
+     b) cross-market scanner / ranker (secondary)
+     c) sector rotation / thematic scan (optional)
+   - Enforce minimums at this stage (BEFORE scoring):
+     equities_total >= 10 with at least:
+       large>=1, mid>=2, small>=2
+     crypto>=2
+     commodities>=2
+   - If below minimums:
+     - Broaden using LIGHT methods only (no deep enrichment):
+       * equities: trending tickers list + sector ETFs proxies
+       * crypto: CMC/coingecko top movers + alt velocity
+       * commodities: macro/commodities snapshot + proxy ETFs (GLD/SLV/USO/URA etc)
+     - hard stop broadening after 12 seconds total
+   - Log:
+     [CANDIDATES] pre_score equities=L/M/S counts, crypto count, commodities count, source breakdown
+
+2) Modify scoring so it DOES NOT delete candidates:
+   - Scoring should rank, not filter.
+   - For missing TA/FA/catalyst data, set component as "unconfirmed" and apply a penalty to confidence, NOT removal.
+   - Only exclude a candidate if:
+     - symbol invalid OR
+     - liquidity is truly unusable (ex: avg $ volume below absolute floor), but still allow 1-2 “speculative” slots if Grok velocity is extreme.
+
+3) Add a "coverage quota" after scoring:
+   - Select final output ensuring bucket coverage:
+     - equities: at least 1 large, 2 mid, 2 small
+     - crypto: at least 2
+     - commodities: at least 2 (and add equity proxy if possible)
+   - If scoring top-N doesn’t satisfy coverage, backfill from remaining candidates in that bucket even if score is lower.
+   - Mark backfilled items as "watchlist" with lower confidence if needed.
+   - Log:
+     [SHORTLIST] post_score equities=L/M/S, crypto, commodities, backfilled=<n>
+
+4) Upgrade Grok usage for receipts:
+   - If Grok returns fewer than required items OR data_quality_flag != high:
+     - still proceed, but set receipts_missing=true and allow fallback receipts from Stocktwits/Finnhub news headlines if available.
+   - Claude must never output “only one asset exists” unless ALL buckets truly empty AND it must explain why.
+
+5) Tighten Claude contract for cross_asset_trending:
+   - Add a hard rule:
+     "You MUST output all groups even if some have fewer items. If you have only 1 item in a bucket, say 'Only 1 met confirmation; others are watchlist due to data gaps' and still list watchlist items."
+   - Ban the thin narrative:
+     "Never answer with a single pick-only response. Always provide cross-asset context + shortlist."
+
+6) Add debug fields in meta (do not show in analysis text):
+   meta.cross_asset_debug = {
+     grok_counts: {...},
+     pre_score_counts: {...},
+     post_score_counts: {...},
+     backfill_count: n,
+     timeouts: {...},
+     data_gaps_summary: {...}
+   }
+
+TESTS:
+- Trending Now preset returns at least:
+  equities >=5 tickers, crypto >=2, commodities >=2
+- If APIs timeout, still returns Grok shortlist + watchlist backfills (no single-pick answer).
+- Daily briefing unchanged.
+
+After tests pass: Publish the FastAPI backend.

@@ -1,0 +1,57 @@
+GOAL: Fix candle/TA data reliability and regime detection without hitting rate limits. Do not change any response schemas, display_type contracts, or frontend payloads.
+
+CURRENT ISSUE: Finnhub candle endpoint returns 403 on free, so TA + regime candles fail. Polygon candles work but free tier rate limits cause Best Trades to miss OHLCV for many tickers.
+
+TASK: Add TwelveData as the new PRIMARY candle provider, keep Polygon as fallback, keep Finnhub quotes unchanged.
+
+REQUIREMENTS (backend only):
+
+Create a new provider file data/twelvedata_provider.py with a method get_daily_bars(symbol, lookback_days) returning normalized bars compatible with our existing ta_utils (date, open, high, low, close, volume).
+
+Wire it into the existing centralized candle fetcher MarketDataService.get_candles() with this priority order:
+
+cache hit
+
+TwelveData bars
+
+Polygon bars
+
+(optional) Finnhub bars only if not circuit-broken, otherwise skip
+
+Add a circuit breaker and budget tracking for TwelveData similar to Finnhub and Polygon:
+
+If TwelveData returns auth/limit errors, trip breaker for 15 minutes and fall back to Polygon.
+
+Track per-request usage in the candle log line: twelvedata_used, polygon_used, cache_hits, blocked.
+
+Regime engine must use the same get_candles() so SPY/UUP/IBIT always have a working candle source. Keep the existing regime cache behavior.
+
+Best Trades must:
+
+keep shortlist-before-candles approach
+
+attempt candles for top 8 tickers
+
+prefer TwelveData so we actually get 8/8 most runs
+
+only use Polygon when TwelveData fails or is circuit-broken
+
+Add one new debug endpoint (or a preset) that returns candle provider stats for the last request only, so I can ask “what did we hit and what failed” without printing it on every response.
+
+Run tests and confirm server starts clean.
+
+DO NOT:
+
+change Claude prompts or scoring logic in this pass
+
+change response schemas
+
+change any frontend contracts
+
+OUTPUT: summarize exactly what changed, and show sample log lines proving:
+
+TwelveData used as primary
+
+regime candles succeed
+
+Best Trades gets TA bars for more tickers without rate limiting

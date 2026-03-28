@@ -1,0 +1,233 @@
+# HippoAI Trading Agent — Full API Audit & Optimization Guide
+
+## Your Full Data Stack (19 sources)
+
+| # | Provider | Type | Rate Limit | Currently Used For | Status |
+|---|----------|------|------------|-------------------|--------|
+| 1 | **Anthropic** (PAID) | AI Brain | Pay per token | Claude agent reasoning | ✅ Good |
+| 2 | **xAI** (PAID) | AI + X data | Pay per token | Grok X/Twitter sentiment (pending) | 🔜 Not wired yet |
+| 3 | **Polygon** | Stocks | 5/min free | Snapshots, technicals, news, bars, ticker details | ⚠️ Underused — only 5/min so used selectively |
+| 4 | **Finnhub** | Stocks | 60/min | Insider sentiment, earnings, recommendations, social | ⚠️ Underused — has quote + profile endpoints not used |
+| 5 | **Alpha Vantage** | Mixed | 25/DAY | News sentiment, macro data (CPI, fed rate, unemployment) | ⚠️ Wasted on macro — FRED does this better |
+| 6 | **FRED** | Macro | 120/min | Fed rate, CPI, PCE, GDP, yields, VIX, jobless | ✅ Good |
+| 7 | **FMP** | Stocks | ~250/day | Macro market data, commodities, screener, profiles | ⚠️ Budget spread thin |
+| 8 | **CoinGecko** | Crypto | 10-30/min | Top coins, trending, derivatives, categories, deep dive | ⚠️ Rate limited constantly |
+| 9 | **CoinMarketCap** | Crypto | 333/day | Trending, most visited, new listings, volume, metadata | ✅ Good — properly cross-referenced with CG |
+| 10 | **AltFINS** | Crypto TA | Unknown | TA signals, chart patterns, screener | ✅ Good — unique data |
+| 11 | **Hyperliquid** | Crypto DEX | Unlimited | Funding rates, perp data | ✅ Good — no key needed |
+| 12 | **TaoStats** | Bittensor | Unknown | TAO network data | ❌ Not wired into anything |
+| 13 | **GetLate** | Unknown | Unknown | Not clear what this provides | ❌ Not wired in |
+| 14 | **Finviz** | Stocks | Scraping | Screener, technical scans, trending | ✅ Heavy use, working well |
+| 15 | **StockTwits** | Sentiment | Scraping | Ticker sentiment, trending | ✅ Good |
+| 16 | **StockAnalysis** | Fundamentals | Scraping | Overview, financials, analyst ratings | ✅ Good |
+| 17 | **Reddit** | Sentiment | API (free) | WSB trending, all stocks, crypto trending | ✅ Good |
+| 18 | **Edgar/SEC** | Filings | Free | 8-K, insider filings, institutional holders | ✅ Good |
+| 19 | **Fear & Greed** | Sentiment | Scraping | CNN Fear & Greed index | ✅ Good |
+
+---
+
+## KEY INEFFICIENCIES FOUND
+
+### 1. Alpha Vantage is wasted on macro data (FRED already covers this better)
+
+**Problem:** `alphavantage_provider.py` has `get_fed_funds_rate()`, `get_cpi()`, `get_unemployment()`, `get_macro_overview()` — but FRED already provides ALL of this with 120 calls/min vs Alpha Vantage's 25 calls/DAY.
+
+**Alpha Vantage's UNIQUE value** is its `get_news_sentiment()` endpoint — AI-analyzed news with sentiment scores per ticker. That's genuinely useful and no other provider gives this.
+
+**Fix:** Stop using Alpha Vantage for macro data entirely. Only use it for `get_news_sentiment()`. This frees up ~10-15 of your 25 daily calls for news sentiment where it actually matters.
+
+**BACKEND change:** In `market_data_service.py`, in `get_macro_overview()`, remove any Alpha Vantage macro calls. FRED already handles everything there. In `research_ticker()`, KEEP the `self.alphavantage.get_news_sentiment(ticker)` call — that's valuable.
+
+### 2. Finnhub has stock quotes + profiles but you're not using them
+
+**Problem:** Finnhub gives you `get_quote()` and `get_company_profile()` at 60 calls/min, but your `finnhub_provider.py` doesn't even have these methods. You built insider sentiment, earnings, recommendations — but missed the basics.
+
+**Fix:** Add these two methods to `finnhub_provider.py`:
+
+```python
+def get_quote(self, ticker: str) -> dict:
+    """Get real-time quote from Finnhub."""
+    resp = requests.get(
+        f"{self.base_url}/quote",
+        params={"symbol": ticker, "token": self.api_key},
+    )
+    if resp.status_code == 200:
+        data = resp.json()
+        return {
+            "price": data.get("c"),
+            "change": data.get("d"),
+            "change_pct": data.get("dp"),
+            "high": data.get("h"),
+            "low": data.get("l"),
+            "open": data.get("o"),
+            "prev_close": data.get("pc"),
+        }
+    return {}
+
+def get_company_profile(self, ticker: str) -> dict:
+    """Get company profile with sector, market cap, industry."""
+    resp = requests.get(
+        f"{self.base_url}/stock/profile2",
+        params={"symbol": ticker, "token": self.api_key},
+    )
+    if resp.status_code == 200:
+        data = resp.json()
+        return {
+            "name": data.get("name"),
+            "sector": data.get("finnhubIndustry"),
+            "market_cap": data.get("marketCapitalization"),
+            "industry": data.get("finnhubIndustry"),
+            "logo": data.get("logo"),
+            "exchange": data.get("exchange"),
+            "ipo_date": data.get("ipo"),
+            "country": data.get("country"),
+            "web_url": data.get("weburl"),
+        }
+    return {}
+```
+
+**Use these in the portfolio quotes endpoint** as the PRIMARY source for stock data instead of FMP profiles. This saves your FMP daily budget for screener usage.
+
+### 3. Polygon is rate-limited to 5/min but used for every ticker deep dive
+
+**Problem:** `research_ticker()` makes 4 Polygon calls per ticker (snapshot, technicals, details, news). If you research 3 tickers in a minute, that's 12 Polygon calls — already over the limit.
+
+**Current mitigation:** The `wide_scan_and_rank()` method only uses Polygon for the top 3-5 tickers (good). But `research_ticker()` always hits all 4.
+
+**Fix:** For research_ticker, use Finnhub for the quote/profile data (60/min), keep Polygon only for technicals (unique — RSI, MACD, SMA calculations from bar data). Move news to Polygon (it's already there) but add Finnhub news as fallback.
+
+### 4. The `wide_scan_and_rank` enrichment chain is HEAVY
+
+**Problem:** For a market scan, this method:
+1. Finviz screen → 20-50 tickers
+2. Light enrich top 15: StockAnalysis overview + Finviz individual + Polygon snapshot (for top 3)
+3. Score and rank
+4. Deep enrich top 5-8: StockAnalysis financials + analyst ratings + Polygon technicals + StockTwits sentiment + Finnhub insider + Finnhub recommendations + Finnhub earnings
+
+That's 30-50+ API calls per scan. Most of the calls are fine (scrapers + Finnhub at 60/min), but Polygon calls for the top 3 snapshots can bottleneck.
+
+**Fix:** Replace the Polygon snapshot call with Finnhub quote for the light enrich step. Polygon snapshot returns more data (daily bars, volume, etc.) but Finnhub quote returns the essential price/change data at 12x the rate limit.
+
+### 5. CoinGecko is hammered by a background service
+
+**Problem:** The Replit Agent mentioned a background real-time price service calling CoinGecko every 5 seconds. This consumes all rate limit headroom for actual user-triggered crypto scans.
+
+**Fix (already partially applied):** The agent throttled it to 60 seconds. But ideally, remove the background CoinGecko polling entirely and use CoinMarketCap for any background price needs, or just cache aggressively and only refresh on user action (like you decided for portfolio).
+
+### 6. FMP daily budget is spread across too many features
+
+**Current FMP usage across your codebase:**
+- Macro overview: `get_macro_market_data()` — DXY, indices, sector perf, economic calendar
+- Commodities dashboard: `get_full_commodity_dashboard()` + DXY + treasury rates + economic events
+- Portfolio quotes: stock quotes (being replaced by Finnhub)
+- Profile enrichment: `/stable/profile` for sector/market cap (being replaced by Finnhub)
+- Screener: `run_ai_screener()` enriches results with StockAnalysis (not FMP)
+- Trending: `stock_market/gainers` + `stock_market/actives` in `scrape_stockanalysis_trending()`
+
+**Fix:** Prioritize FMP for what ONLY FMP does well:
+- Commodities pricing (unique — Yahoo futures can supplement)
+- Economic calendar
+- Treasury rates
+- Keep trending (gainers/actives) since it's only 2 calls
+
+Move these AWAY from FMP:
+- Stock profiles → Finnhub (60/min vs 250/day)
+- Stock quotes → Finnhub
+- DXY → FRED or Yahoo (free)
+
+### 7. TaoStats and GetLate are not wired in
+
+You're paying for/have keys for TaoStats (Bittensor network data) and GetLate but neither appears in your codebase. Either wire them in or don't carry the keys.
+
+**TaoStats** could be useful if you trade TAO — subnet data, validator stats, emission rates. Could add a `taostats_provider.py` that feeds into the crypto scanner when TAO is specifically queried.
+
+---
+
+## RECOMMENDED API ROUTING (OPTIMIZED)
+
+### Stock Quote + Profile
+```
+PRIMARY: Finnhub /quote + /stock/profile2 (60/min)
+FALLBACK: Yahoo Finance (free, unofficial)
+LAST RESORT: FMP /stable/quote + /stable/profile (save budget)
+```
+
+### Stock Deep Dive (research_ticker)
+```
+Quote: Finnhub /quote
+Profile: Finnhub /stock/profile2 (cache 24h)
+Technicals: Polygon get_technicals (unique — calculated from bars)
+News: Polygon get_news + Alpha Vantage get_news_sentiment
+Insider: Finnhub insider_sentiment + insider_transactions  
+Earnings: Finnhub earnings_calendar + earnings_surprises
+Social: StockTwits + Finnhub social_sentiment
+Fundamentals: StockAnalysis (scraper, free)
+Filings: Edgar (free)
+Options: Options scraper (free)
+```
+
+### Crypto
+```
+Prices: CoinGecko (batch, PRIMARY) → CoinMarketCap (FALLBACK)
+Trending: CoinGecko + CoinMarketCap (cross-reference)
+TA Signals: AltFINS (unique)
+Funding/Perps: Hyperliquid (unique, unlimited)
+News: Alpha Vantage get_news_sentiment("CRYPTO:BTC")
+Deep dive: CoinGecko coin detail
+X Sentiment: Grok/xAI (pending)
+```
+
+### Macro
+```
+Economic data: FRED (120/min — primary for everything macro)
+Fear & Greed: CNN scraper (free)
+Commodities: FMP commodity dashboard (unique)
+Treasury rates: FMP (unique) OR FRED get_ten_year_yield/get_two_year_yield
+Economic calendar: FMP (unique)
+DXY: FRED or FMP
+```
+
+### Screener
+```
+Stock screen: Finviz (scraper, free, unlimited)
+Enrichment: StockAnalysis (scraper) + Finnhub profile (for sector/mcap)
+Scoring: Your scoring engine (local, free)
+```
+
+---
+
+## PRIORITY CHANGES (Backend Prompts)
+
+### Priority 1: Add Finnhub quote + profile methods
+Add `get_quote()` and `get_company_profile()` to `finnhub_provider.py`. Use Finnhub as primary for stock quotes and profiles throughout the codebase.
+
+### Priority 2: Stop using Alpha Vantage for macro
+Remove AV macro calls from `get_macro_overview()`. FRED already covers this. Save AV's 25/day limit for news sentiment only.
+
+### Priority 3: Replace FMP profile with Finnhub profile in portfolio quotes
+The portfolio backend should use Finnhub for sector/market cap, not FMP. This saves ~5-10 FMP calls per portfolio refresh.
+
+### Priority 4: Wire in xAI/Grok (from your existing instructions doc)
+This is already documented. When implemented, it adds X/Twitter sentiment as a data layer.
+
+### Priority 5: Cache aggressively
+- Finnhub profiles: 24 hours
+- FRED macro data: 1 hour  
+- Fear & Greed: 15 minutes
+- Finviz screens: 5 minutes (already done)
+- CoinGecko trending: 5 minutes
+- StockAnalysis fundamentals: 1 hour
+
+---
+
+## CALLS PER TYPICAL USER SESSION (After Optimization)
+
+| Action | API Calls | Providers Hit |
+|--------|-----------|---------------|
+| Open Portfolio (5 stocks, 3 crypto, 2 commodities) | ~12 | Finnhub (5 quote + 5 profile), CoinGecko (1 batch), Yahoo (2 commodity) |
+| "Best Trades" scan | ~35 | Finviz (1), StockAnalysis (15), Finnhub (10), StockTwits (5), Polygon (3-5 technicals) |
+| "Crypto Scanner" | ~8 | CoinGecko (3), CMC (3), Hyperliquid (1), AltFINS (1) |
+| "Macro Overview" | ~5 | FRED (1 batch), FMP (2), Fear & Greed (1) |
+| Single ticker research | ~15 | Polygon (2), Finnhub (7), StockAnalysis (3), StockTwits (1), AV (1 news), Edgar (1) |
+
+**Total for a busy hour:** ~150-200 calls spread across providers. No single provider gets hammered.

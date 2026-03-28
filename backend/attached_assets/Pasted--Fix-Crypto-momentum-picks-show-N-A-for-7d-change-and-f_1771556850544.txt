@@ -1,0 +1,204 @@
+## Fix: Crypto momentum picks show N/A for 7d change and funding rate — data exists but isn't reaching Claude
+
+### Root Cause
+Both data sources already return this data:
+- CoinGecko `/coins/markets` already requests `price_change_percentage: "1h,24h,7d,30d"` and returns `price_change_percentage_7d_in_currency`
+- HyperLiquid already returns `funding_rate` per coin in its dashboard
+
+The problem is the crypto compressor strips the 7d field, and HyperLiquid funding data isn't cross-referenced with the top coins when building the compressed output.
+
+### Step 1: Diagnose — log the raw data to confirm fields exist
+
+Add this TEMPORARY logging at the very beginning of the crypto compression function (wherever `_compress_crypto` or `_compress_crypto_scanner` is defined in `data_compressor.py`):
+```python
+def _compress_crypto(data):
+    # TEMP DEBUG: Check what fields CoinGecko actually returns
+    top_coins = data.get("cg_top_coins", [])
+    if top_coins:
+        sample = top_coins[0]
+        print(f"[CRYPTO_DEBUG] CoinGecko sample coin: {sample.get('symbol')}")
+        print(f"[CRYPTO_DEBUG] All keys: {sorted(sample.keys())}")
+        # Check every key that might contain "7d"
+        for k, v in sample.items():
+            if "7d" in k.lower() or "7" in k.lower() or "week" in k.lower():
+                print(f"[CRYPTO_DEBUG]   {k} = {v}")
+    
+    # TEMP DEBUG: Check HyperLiquid data
+    hl = data.get("hyperliquid", {})
+    if isinstance(hl, dict):
+        print(f"[CRYPTO_DEBUG] HyperLiquid keys: {list(hl.keys())}")
+        funding_analysis = hl.get("funding_analysis", hl)
+        if isinstance(funding_analysis, dict):
+            print(f"[CRYPTO_DEBUG] HL funding_analysis keys: {list(funding_analysis.keys())}")
+            squeeze = funding_analysis.get("squeeze_candidates", [])
+            if squeeze:
+                print(f"[CRYPTO_DEBUG] HL sample squeeze: {squeeze[0]}")
+    
+    # Continue with normal compression...
+```
+
+Click "Crypto", check logs, then remove the debug logging.
+
+### Step 2: Build a funding rate lookup from HyperLiquid
+
+In the crypto compression function, BEFORE building the top_coins list, create a lookup dict from HyperLiquid data so we can attach funding rates to each coin:
+```python
+    # Build funding rate lookup from HyperLiquid
+    hl_data = data.get("hyperliquid", {})
+    funding_lookup = {}
+    
+    if isinstance(hl_data, dict):
+        # Check if it's the funding_analysis format or raw dashboard
+        funding_analysis = hl_data.get("funding_analysis", hl_data)
+        
+        # Build lookup from all available HL data
+        for source_key in ["top_by_open_interest", "crowded_longs", "squeeze_candidates", 
+                           "funding_divergences", "top_gainers", "top_losers"]:
+            items = funding_analysis.get(source_key, hl_data.get(source_key, []))
+            if isinstance(items, list):
+                for item in items:
+                    coin = item.get("coin", "").upper()
+                    if coin and coin not in funding_lookup:
+                        funding_lookup[coin] = {
+                            "funding_rate": item.get("funding_rate"),
+                            "funding_annualized": item.get("funding_rate_annualized") or item.get("funding_annualized"),
+                            "open_interest_usd": item.get("open_interest_usd"),
+                            "price_change_24h": item.get("price_change_24h"),
+                        }
+        
+        # Also check market_summary for overall data
+        market_summary = hl_data.get("market_summary", funding_analysis.get("market_summary", {}))
+        if isinstance(market_summary, dict):
+            funding_lookup["_market"] = {
+                "avg_funding_rate": market_summary.get("avg_funding_rate"),
+                "avg_funding_annualized": market_summary.get("avg_funding_annualized"),
+                "market_bias": market_summary.get("market_bias"),
+                "total_oi": market_summary.get("total_open_interest_usd"),
+                "total_volume": market_summary.get("total_volume_24h_usd"),
+            }
+    
+    print(f"[CRYPTO_COMPRESS] Built funding lookup for {len(funding_lookup)} coins: {list(funding_lookup.keys())[:10]}")
+```
+
+### Step 3: Include 7d change AND funding in the compressed top_coins
+
+Now update the top_coins compression to include both 7d data and HyperLiquid funding:
+```python
+    top_coins_raw = data.get("cg_top_coins", [])
+    compressed["top_coins"] = []
+    for c in (top_coins_raw or [])[:15]:
+        symbol = (c.get("symbol") or "").upper()
+        hl_funding = funding_lookup.get(symbol, {})
+        
+        compressed["top_coins"].append({
+            "symbol": symbol,
+            "name": c.get("name"),
+            "price": c.get("current_price"),
+            "change_1h": c.get("price_change_percentage_1h_in_currency"),
+            "change_24h": c.get("price_change_percentage_24h"),
+            "change_7d": c.get("price_change_percentage_7d_in_currency"),
+            "change_30d": c.get("price_change_percentage_30d_in_currency"),
+            "market_cap": c.get("market_cap"),
+            "volume_24h": c.get("total_volume"),
+            "mcap_rank": c.get("market_cap_rank"),
+            # HyperLiquid funding data cross-referenced
+            "funding_rate": hl_funding.get("funding_rate"),
+            "funding_annualized": hl_funding.get("funding_annualized"),
+            "open_interest_usd": hl_funding.get("open_interest_usd"),
+        })
+```
+
+### Step 4: Include HyperLiquid market-level data in compression
+
+Add the HL market summary and key signals:
+```python
+    # HyperLiquid derivatives intelligence
+    hl_market = funding_lookup.get("_market", {})
+    compressed["derivatives"] = {
+        "avg_funding_rate": hl_market.get("avg_funding_rate"),
+        "avg_funding_annualized": hl_market.get("avg_funding_annualized"),
+        "market_bias": hl_market.get("market_bias"),
+        "total_open_interest": hl_market.get("total_oi"),
+        "total_volume_24h": hl_market.get("total_volume"),
+    }
+    
+    # Squeeze candidates from HyperLiquid (high value signals)
+    hl_squeezes = (hl_data if isinstance(hl_data, dict) else {}).get("squeeze_candidates", [])
+    if not hl_squeezes:
+        fa = hl_data.get("funding_analysis", {}) if isinstance(hl_data, dict) else {}
+        hl_squeezes = fa.get("squeeze_candidates", [])
+    
+    compressed["squeeze_candidates"] = [
+        {
+            "coin": s.get("coin"),
+            "funding_rate": s.get("funding_rate"),
+            "funding_annualized": s.get("funding_annualized"),
+            "open_interest_usd": s.get("open_interest_usd"),
+            "signal": s.get("signal"),
+        }
+        for s in (hl_squeezes or [])[:8]
+    ]
+    
+    # Funding divergences (price moving opposite to funding — strong signal)
+    hl_divergences = (hl_data if isinstance(hl_data, dict) else {}).get("funding_divergences", [])
+    if not hl_divergences:
+        fa = hl_data.get("funding_analysis", {}) if isinstance(hl_data, dict) else {}
+        hl_divergences = fa.get("funding_divergences", [])
+    
+    compressed["funding_divergences"] = [
+        {
+            "coin": d.get("coin"),
+            "funding_rate": d.get("funding_rate"),
+            "price_change_24h": d.get("price_change_24h"),
+            "type": d.get("type"),
+            "signal": d.get("signal"),
+        }
+        for d in (hl_divergences or [])[:5]
+    ]
+```
+
+### Step 5: Update Claude's crypto prompt to use this data
+
+In the crypto-specific instructions that get prepended to the Claude prompt, update:
+DATA MAPPING FOR YOUR RESPONSE:
+
+top_coins[].change_7d → put this in each momentum pick's change_7d field. This is CoinGecko 7-day price change.
+top_coins[].change_30d → put this in each momentum pick's change_30d field.
+top_coins[].funding_rate → put this in each momentum pick's funding_rate field. This is from HyperLiquid real-time data.
+top_coins[].open_interest_usd → put this in each momentum pick's open_interest field.
+derivatives.market_bias → use this in your funding_rate_analysis.market_bias
+squeeze_candidates[] → these are HyperLiquid-confirmed squeeze setups. Feature prominently.
+funding_divergences[] → price vs funding divergences. These are the highest-signal trades.
+
+CRITICAL: For EVERY momentum pick, you MUST include change_7d and funding_rate from the data. Do NOT output "N/A" if the data exists in top_coins — look it up by symbol. If a coin is not in top_coins (smaller altcoin), check squeeze_candidates and funding_divergences for its funding data.
+
+### Step 6: Also do the same for CMC listings compression
+```python
+    cmc_listings = data.get("cmc_listings", [])
+    compressed["cmc_top"] = [
+        {
+            "symbol": c.get("symbol"),
+            "name": c.get("name"),
+            "price": c.get("quote", {}).get("USD", {}).get("price"),
+            "change_24h": c.get("quote", {}).get("USD", {}).get("percent_change_24h"),
+            "change_7d": c.get("quote", {}).get("USD", {}).get("percent_change_7d"),
+            "change_30d": c.get("quote", {}).get("USD", {}).get("percent_change_30d"),
+            "volume_24h": c.get("quote", {}).get("USD", {}).get("volume_24h"),
+            "volume_change_24h": c.get("quote", {}).get("USD", {}).get("volume_change_24h"),
+            "market_cap": c.get("quote", {}).get("USD", {}).get("market_cap"),
+        }
+        for c in (cmc_listings or [])[:12]
+    ]
+```
+
+### Testing
+
+1. Click "Crypto" → check logs for `[CRYPTO_DEBUG]` output showing CoinGecko 7d field name and HyperLiquid funding data
+2. Check logs for `[CRYPTO_COMPRESS] Built funding lookup for X coins`
+3. Top Momentum Picks should show 7d values (not N/A)
+4. Top Momentum Picks should show funding rates (not blank/dash)
+5. Squeeze candidates should appear with HyperLiquid funding data
+6. BTC and ETH cards should show funding rates
+7. Remove the TEMP DEBUG logging after confirming it works
+8. All other presets still work
+9. `python -m pytest` passes

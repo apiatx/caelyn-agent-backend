@@ -1,0 +1,101 @@
+STOP. Do not add any new features. The agent is broken — buttons that were previously working are now returning nothing. I need you to do a full diagnostic and fix the core pipeline.
+Step 1: Hit the /api/health endpoint in the browser. If that doesn't exist yet, create it:
+python@app.get("/api/health")
+async def health():
+    import asyncio
+    errors = []
+    
+    # Test 1: Can we reach Claude?
+    try:
+        resp = await asyncio.wait_for(
+            agent.client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=20,
+                messages=[{"role": "user", "content": "Say ok"}],
+            ),
+            timeout=15.0,
+        )
+        claude_ok = True
+    except Exception as e:
+        claude_ok = False
+        errors.append(f"Claude API: {str(e)}")
+    
+    # Test 2: Can we reach Finviz?
+    try:
+        result = await asyncio.wait_for(
+            agent.data.finviz.get_screener_results("sh_avgvol_o500", limit=5),
+            timeout=10.0,
+        )
+        finviz_ok = len(result) > 0
+        if not finviz_ok:
+            errors.append("Finviz returned 0 results")
+    except Exception as e:
+        finviz_ok = False
+        errors.append(f"Finviz: {str(e)}")
+    
+    # Test 3: Can we reach StockAnalysis?
+    try:
+        result = await asyncio.wait_for(
+            agent.data.stockanalysis.get_overview("AAPL"),
+            timeout=10.0,
+        )
+        sa_ok = result is not None and len(result) > 0
+        if not sa_ok:
+            errors.append("StockAnalysis returned empty for AAPL")
+    except Exception as e:
+        sa_ok = False
+        errors.append(f"StockAnalysis: {str(e)}")
+    
+    return {
+        "claude_api": claude_ok,
+        "finviz": finviz_ok,
+        "stockanalysis": sa_ok,
+        "errors": errors,
+        "status": "ok" if (claude_ok and finviz_ok) else "broken",
+    }
+Deploy this, then open /api/health in the browser and tell me exactly what it returns.
+Step 2: Check the server logs right now. Look at the last 50 lines of logs. Are there import errors? Syntax errors? Missing module errors? Any Python traceback on startup? If the server isn't even starting cleanly, nothing will work.
+Step 3: If the server IS running, try sending a raw request to test the pipeline:
+Open the browser console on any page and run:
+javascriptfetch("/api/query", {
+  method: "POST",
+  headers: {"Content-Type": "application/json"},
+  body: JSON.stringify({query: "What are the best trades today?", conversation_history: []})
+}).then(r => r.json()).then(d => console.log(d)).catch(e => console.error(e));
+Tell me exactly what this returns — the full JSON response or error message.
+Step 4: If Steps 1-3 reveal the problem, fix it. Common things to check:
+
+Import errors — Did any recent file changes break an import? Check that agent/claude_agent.py, agent/data_compressor.py, data/market_data_service.py, and main.py all import cleanly with no errors.
+Function signature mismatches — Did process_query change its signature but the route in main.py still calls it the old way? Make sure the /api/query route passes query and conversation_history in the exact format process_query expects.
+The data compressor returning None or empty — Add a safety check: if compress_data returns None or empty dict, log a warning and pass the raw data (truncated to first 50K chars) instead.
+The system prompt variable name changed — If the prompt rewrite changed the variable name (e.g., from SYSTEM_PROMPT to MAIN_PROMPT), every reference to it breaks silently.
+The response parser breaking on new Claude output — If Claude returns prose instead of JSON after the prompt rewrite, the parser crashes and returns nothing. Add a fallback:
+
+pythondef _parse_response(self, response):
+    text = response.content[0].text.strip()
+    
+    # Try JSON parse
+    try:
+        # Strip markdown code fences if present
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    
+    # Try to find JSON inside the text
+    try:
+        import re
+        match = re.search(r'\{[\s\S]*\}', text)
+        if match:
+            return json.loads(match.group(0))
+    except:
+        pass
+    
+    # Fallback: wrap as chat response
+    return {
+        "display_type": "chat",
+        "message": text,
+    }
+Step 5: Once the basic pipeline works, test EACH button one at a time. Start with "Best Trades" since it's the simplest scan. If that works, try "Macro Overview", then "Crypto Scanner", then work through the rest. Fix each one before moving to the next.
+Do NOT make any other changes until all buttons return a response (even if the response isn't perfect — a response is better than a blank screen).

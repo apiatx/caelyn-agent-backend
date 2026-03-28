@@ -1,0 +1,126 @@
+Parallel Data Fetching (SPEED)
+In data/market_data_service.py, add this import at the very top of the file:
+pythonimport asyncio
+Replace the research_ticker method with this parallelized version:
+python    async def research_ticker(self, ticker: str) -> dict:
+        """
+        Get everything about a single stock — all sources in parallel.
+        """
+        ticker = ticker.upper()
+
+        # Synchronous calls (Polygon + Finnhub use sync clients)
+        sync_data = {
+            "snapshot": self.polygon.get_snapshot(ticker),
+            "technicals": self.polygon.get_technicals(ticker),
+            "details": self.polygon.get_ticker_details(ticker),
+            "news": self.polygon.get_news(ticker, limit=10),
+            "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
+            "insider_transactions": self.finnhub.get_insider_transactions(ticker),
+            "earnings_history": self.finnhub.get_earnings_surprises(ticker),
+            "earnings_upcoming": self.finnhub.get_earnings_calendar(ticker),
+            "recommendation_trends": self.finnhub.get_recommendation_trends(ticker),
+            "social_sentiment": self.finnhub.get_social_sentiment(ticker),
+            "peer_companies": self.finnhub.get_company_peers(ticker),
+        }
+
+        # Async calls — run in parallel
+        async_results = await asyncio.gather(
+            self.stocktwits.get_sentiment(ticker),
+            self.stockanalysis.get_overview(ticker),
+            self.stockanalysis.get_financials(ticker),
+            self.stockanalysis.get_analyst_ratings(ticker),
+            self.options.get_put_call_ratio(ticker),
+            self.alphavantage.get_news_sentiment(ticker),
+            self.edgar.get_company_summary(ticker),
+            return_exceptions=True,
+        )
+
+        # Map results
+        async_keys = [
+            "sentiment", "fundamentals", "financials", "analyst_ratings",
+            "options_put_call", "news_sentiment_ai", "sec_filings",
+        ]
+        for key, result in zip(async_keys, async_results):
+            if isinstance(result, Exception):
+                sync_data[key] = {"error": str(result)}
+            else:
+                sync_data[key] = result
+
+        return sync_data
+Replace the scan_market method with this parallelized version:
+python    async def scan_market(self) -> dict:
+        """Broad market overview — parallelized for speed."""
+        movers = self.polygon.get_market_movers()
+
+        top_gainer_tickers = [
+            g["ticker"] for g in movers.get("gainers", [])[:5]
+        ]
+
+        # Fetch catalyst data for each top gainer in parallel
+        async def get_catalyst(ticker):
+            async_results = await asyncio.gather(
+                self.stocktwits.get_sentiment(ticker),
+                self.stockanalysis.get_overview(ticker),
+                self.stockanalysis.get_analyst_ratings(ticker),
+                self.edgar.get_8k_filings(ticker),
+                return_exceptions=True,
+            )
+            return {
+                "details": self.polygon.get_ticker_details(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+                "news": self.polygon.get_ticker_events(ticker)["news"],
+                "sentiment": async_results[0] if not isinstance(async_results[0], Exception) else {},
+                "fundamentals": async_results[1] if not isinstance(async_results[1], Exception) else {},
+                "analyst_ratings": async_results[2] if not isinstance(async_results[2], Exception) else {},
+                "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
+                "earnings_upcoming": self.finnhub.get_earnings_calendar(ticker),
+                "recent_sec_filings": async_results[3] if not isinstance(async_results[3], Exception) else [],
+            }
+
+        # Run all catalyst fetches in parallel
+        catalyst_results = await asyncio.gather(
+            *[get_catalyst(t) for t in top_gainer_tickers],
+            return_exceptions=True,
+        )
+        catalyst_data = {}
+        for ticker, result in zip(top_gainer_tickers, catalyst_results):
+            if not isinstance(result, Exception):
+                catalyst_data[ticker] = result
+
+        # Run other data fetches in parallel
+        trending, unusual_options, options_volume_leaders, upcoming_earnings, fear_greed = (
+            await asyncio.gather(
+                self.stocktwits.get_trending(),
+                self.options.get_unusual_options_activity(),
+                self.options.get_options_volume_leaders(),
+                asyncio.to_thread(self.finnhub.get_upcoming_earnings),
+                self.fear_greed.get_fear_greed_index(),
+                return_exceptions=True,
+            )
+        )
+
+        # Handle exceptions
+        if isinstance(trending, Exception): trending = []
+        if isinstance(unusual_options, Exception): unusual_options = []
+        if isinstance(options_volume_leaders, Exception): options_volume_leaders = []
+        if isinstance(upcoming_earnings, Exception): upcoming_earnings = []
+        if isinstance(fear_greed, Exception): fear_greed = {}
+
+        options_signals = self.options.interpret_flow(unusual_options) if unusual_options else {}
+        macro = self.fred.get_quick_macro()
+
+        screener_gainers = await self.finviz.get_screener_results("ta_topgainers")
+
+        return {
+            "movers": movers,
+            "market_news": self.polygon.get_news(limit=15),
+            "screener_gainers": screener_gainers,
+            "catalyst_data": catalyst_data,
+            "stocktwits_trending": trending,
+            "unusual_options_activity": unusual_options,
+            "options_flow_signals": options_signals,
+            "options_volume_leaders": options_volume_leaders,
+            "upcoming_earnings_this_week": upcoming_earnings,
+            "macro_economic_data": macro,
+            "fear_greed_index": fear_greed,
+        }

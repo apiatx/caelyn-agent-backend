@@ -1,0 +1,400 @@
+Please make the following changes to my backend project. Do not delete or modify any existing code unless I specifically say "replace."
+No API key needed — SEC EDGAR is completely free and public. However, SEC requires a User-Agent header with your name and email. This is not authentication, just identification so they can contact you if your requests cause issues.
+1. Create a new file data/edgar_provider.py with this code:
+pythonimport httpx
+from datetime import datetime, timedelta
+
+
+class EdgarProvider:
+    """
+    Provides SEC filing data from EDGAR (Electronic Data Gathering,
+    Analysis, and Retrieval). Completely free, no API key needed.
+    
+    Covers:
+    - Recent SEC filings (10-K, 10-Q, 8-K, etc.)
+    - Institutional holdings (13-F filings)
+    - Insider transactions (Form 3, 4, 5)
+    - Company facts and financials
+    
+    SEC requires a User-Agent header with contact info.
+    """
+
+    BASE_URL = "https://efts.sec.gov/LATEST"
+    DATA_URL = "https://data.sec.gov"
+    HEADERS = {
+        "User-Agent": "TradingAgent/1.0 (apixbt@gmail.com)",
+        "Accept": "application/json",
+    }
+
+    def _get_cik(self, ticker: str) -> str:
+        """Convert a ticker symbol to a CIK number (SEC's company ID)."""
+        ticker = ticker.upper()
+        try:
+            resp = httpx.get(
+                "https://www.sec.gov/files/company_tickers.json",
+                headers=self.HEADERS,
+                timeout=15,
+            )
+            data = resp.json()
+            for entry in data.values():
+                if entry.get("ticker", "").upper() == ticker:
+                    # CIK needs to be zero-padded to 10 digits
+                    return str(entry["cik_str"]).zfill(10)
+        except Exception as e:
+            print(f"EDGAR CIK lookup error for {ticker}: {e}")
+        return None
+
+    async def get_recent_filings(self, ticker: str, filing_type: str = None) -> list:
+        """
+        Get recent SEC filings for a company.
+        
+        Common filing types:
+        - 10-K: Annual report (full financials)
+        - 10-Q: Quarterly report
+        - 8-K: Material events (acquisitions, leadership changes, etc.)
+        - 4: Insider transactions
+        - SC 13G/A: Institutional ownership changes
+        - S-1: IPO registration
+        - DEF 14A: Proxy statement
+        """
+        ticker = ticker.upper()
+        try:
+            cik = self._get_cik(ticker)
+            if not cik:
+                return [{"error": f"Could not find CIK for {ticker}"}]
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{self.DATA_URL}/submissions/CIK{cik}.json",
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+
+            if resp.status_code != 200:
+                return [{"error": f"SEC returned status {resp.status_code}"}]
+
+            data = resp.json()
+            recent = data.get("filings", {}).get("recent", {})
+
+            forms = recent.get("form", [])
+            dates = recent.get("filingDate", [])
+            descriptions = recent.get("primaryDocDescription", [])
+            accession_numbers = recent.get("accessionNumber", [])
+            primary_docs = recent.get("primaryDocument", [])
+
+            filings = []
+            for i in range(min(len(forms), 50)):
+                # Filter by filing type if specified
+                if filing_type and forms[i] != filing_type:
+                    continue
+
+                accession_clean = accession_numbers[i].replace("-", "")
+                filing_url = (
+                    f"https://www.sec.gov/Archives/edgar/data/"
+                    f"{cik.lstrip('0')}/{accession_clean}/{primary_docs[i]}"
+                )
+
+                filings.append({
+                    "form_type": forms[i],
+                    "filing_date": dates[i],
+                    "description": descriptions[i] if i < len(descriptions) else "",
+                    "url": filing_url,
+                })
+
+                if len(filings) >= 10:
+                    break
+
+            return filings
+        except Exception as e:
+            print(f"EDGAR filings error for {ticker}: {e}")
+            return [{"error": str(e)}]
+
+    async def get_8k_filings(self, ticker: str) -> list:
+        """
+        Get recent 8-K filings — these are MATERIAL EVENTS.
+        8-Ks are filed when something significant happens:
+        earnings releases, acquisitions, executive departures,
+        bankruptcy, material agreements, etc.
+        This is often the fastest way to find out WHY a stock moved.
+        """
+        return await self.get_recent_filings(ticker, filing_type="8-K")
+
+    async def get_insider_filings(self, ticker: str) -> list:
+        """
+        Get Form 4 filings — insider buy/sell transactions.
+        Supplements Finnhub's insider data with direct SEC source.
+        """
+        return await self.get_recent_filings(ticker, filing_type="4")
+
+    async def get_institutional_holders(self, ticker: str) -> dict:
+        """
+        Get institutional ownership data from company facts.
+        Shows major institutional holders from 13-F filings.
+        """
+        ticker = ticker.upper()
+        try:
+            cik = self._get_cik(ticker)
+            if not cik:
+                return {"ticker": ticker, "error": f"Could not find CIK for {ticker}"}
+
+            # Get company facts which include shares outstanding
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{self.DATA_URL}/api/xbrl/companyfacts/CIK{cik}.json",
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+
+            if resp.status_code != 200:
+                return {"ticker": ticker, "error": f"SEC returned status {resp.status_code}"}
+
+            data = resp.json()
+            facts = data.get("facts", {})
+            us_gaap = facts.get("us-gaap", {})
+
+            result = {"ticker": ticker}
+
+            # Extract key financial facts
+            # Shares outstanding
+            shares_data = us_gaap.get("CommonStockSharesOutstanding", {})
+            if shares_data:
+                units = shares_data.get("units", {})
+                shares_list = units.get("shares", [])
+                if shares_list:
+                    latest = shares_list[-1]
+                    result["shares_outstanding"] = latest.get("val")
+                    result["shares_date"] = latest.get("end")
+
+            # Revenue
+            revenue_data = us_gaap.get("Revenues", {}) or us_gaap.get("RevenueFromContractWithCustomerExcludingAssessedTax", {})
+            if revenue_data:
+                units = revenue_data.get("units", {})
+                usd_list = units.get("USD", [])
+                # Get the most recent annual figures
+                annual = [
+                    r for r in usd_list
+                    if r.get("form") == "10-K"
+                ]
+                if annual:
+                    latest = annual[-1]
+                    result["annual_revenue"] = latest.get("val")
+                    result["revenue_period"] = latest.get("end")
+
+            # Net Income
+            net_income_data = us_gaap.get("NetIncomeLoss", {})
+            if net_income_data:
+                units = net_income_data.get("units", {})
+                usd_list = units.get("USD", [])
+                annual = [
+                    r for r in usd_list
+                    if r.get("form") == "10-K"
+                ]
+                if annual:
+                    latest = annual[-1]
+                    result["annual_net_income"] = latest.get("val")
+                    result["net_income_period"] = latest.get("end")
+
+            # Total Assets
+            assets_data = us_gaap.get("Assets", {})
+            if assets_data:
+                units = assets_data.get("units", {})
+                usd_list = units.get("USD", [])
+                if usd_list:
+                    latest = usd_list[-1]
+                    result["total_assets"] = latest.get("val")
+
+            # Total Debt
+            debt_data = us_gaap.get("LongTermDebt", {}) or us_gaap.get("LongTermDebtNoncurrent", {})
+            if debt_data:
+                units = debt_data.get("units", {})
+                usd_list = units.get("USD", [])
+                if usd_list:
+                    latest = usd_list[-1]
+                    result["long_term_debt"] = latest.get("val")
+
+            # Cash
+            cash_data = us_gaap.get("CashAndCashEquivalentsAtCarryingValue", {})
+            if cash_data:
+                units = cash_data.get("units", {})
+                usd_list = units.get("USD", [])
+                if usd_list:
+                    latest = usd_list[-1]
+                    result["cash_and_equivalents"] = latest.get("val")
+
+            return result
+        except Exception as e:
+            print(f"EDGAR institutional data error for {ticker}: {e}")
+            return {"ticker": ticker, "error": str(e)}
+
+    async def get_company_summary(self, ticker: str) -> dict:
+        """
+        Get a combined summary: recent material filings + key financials.
+        This is the main method to call for a quick SEC overview.
+        """
+        ticker = ticker.upper()
+
+        eight_k = await self.get_8k_filings(ticker)
+        financials = await self.get_institutional_holders(ticker)
+        recent_all = await self.get_recent_filings(ticker)
+
+        # Identify what types of filings have been made recently
+        recent_filing_types = {}
+        for f in recent_all:
+            ftype = f.get("form_type", "")
+            if ftype not in recent_filing_types:
+                recent_filing_types[ftype] = f.get("filing_date")
+
+        return {
+            "ticker": ticker,
+            "material_events_8k": eight_k[:5],
+            "key_financials_from_sec": financials,
+            "recent_filing_types": recent_filing_types,
+            "most_recent_filing": recent_all[0] if recent_all else None,
+        }
+
+    async def search_filings(self, query: str, date_range: str = None) -> list:
+        """
+        Full-text search across all SEC filings.
+        Useful for finding specific events, companies, or topics.
+        """
+        try:
+            params = {
+                "q": query,
+                "dateRange": date_range or "custom",
+                "startdt": (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d"),
+                "enddt": datetime.now().strftime("%Y-%m-%d"),
+            }
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{self.BASE_URL}/search-index?q={query}&dateRange=custom"
+                    f"&startdt={params['startdt']}&enddt={params['enddt']}",
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+
+            if resp.status_code != 200:
+                return []
+
+            data = resp.json()
+            hits = data.get("hits", {}).get("hits", [])
+
+            results = []
+            for hit in hits[:10]:
+                source = hit.get("_source", {})
+                results.append({
+                    "company": source.get("display_names", ["Unknown"])[0]
+                    if source.get("display_names")
+                    else "Unknown",
+                    "ticker": source.get("tickers", [""])[0]
+                    if source.get("tickers")
+                    else "",
+                    "form_type": source.get("form_type", ""),
+                    "filing_date": source.get("file_date", ""),
+                    "description": source.get("display_description", ""),
+                })
+            return results
+        except Exception as e:
+            print(f"EDGAR search error: {e}")
+            return []
+2. In data/market_data_service.py, make these changes:
+
+Add this import after the existing imports at the top:
+
+pythonfrom data.edgar_provider import EdgarProvider
+
+In the __init__ method, add this line after the other self. assignments:
+
+python        self.edgar = EdgarProvider()
+
+Replace the research_ticker method with this:
+
+python    async def research_ticker(self, ticker: str) -> dict:
+        """
+        Get everything about a single stock.
+        Used when someone asks "analyze NVDA" or "what's happening with AAPL".
+        """
+        ticker = ticker.upper()
+        return {
+            "snapshot": self.polygon.get_snapshot(ticker),
+            "technicals": self.polygon.get_technicals(ticker),
+            "details": self.polygon.get_ticker_details(ticker),
+            "news": self.polygon.get_news(ticker, limit=10),
+            "sentiment": await self.stocktwits.get_sentiment(ticker),
+            "fundamentals": await self.stockanalysis.get_overview(ticker),
+            "financials": await self.stockanalysis.get_financials(ticker),
+            "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
+            "options_put_call": await self.options.get_put_call_ratio(ticker),
+            "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
+            "insider_transactions": self.finnhub.get_insider_transactions(ticker),
+            "earnings_history": self.finnhub.get_earnings_surprises(ticker),
+            "earnings_upcoming": self.finnhub.get_earnings_calendar(ticker),
+            "recommendation_trends": self.finnhub.get_recommendation_trends(ticker),
+            "social_sentiment": self.finnhub.get_social_sentiment(ticker),
+            "peer_companies": self.finnhub.get_company_peers(ticker),
+            "news_sentiment_ai": await self.alphavantage.get_news_sentiment(ticker),
+            "sec_filings": await self.edgar.get_company_summary(ticker),
+        }
+
+In the scan_market method, find the catalyst_data block inside the for ticker in top_gainer_tickers: loop. Replace it with:
+
+python            catalyst_data[ticker] = {
+                "details": self.polygon.get_ticker_details(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+                "news": self.polygon.get_ticker_events(ticker)["news"],
+                "sentiment": await self.stocktwits.get_sentiment(ticker),
+                "fundamentals": await self.stockanalysis.get_overview(ticker),
+                "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
+                "insider_sentiment": self.finnhub.get_insider_sentiment(ticker),
+                "earnings_upcoming": self.finnhub.get_earnings_calendar(ticker),
+                "recent_sec_filings": await self.edgar.get_8k_filings(ticker),
+            }
+
+Add a new method to the class:
+
+python    async def get_sec_filings(self, ticker: str) -> dict:
+        """
+        Dedicated SEC filings lookup.
+        Used for "show me SEC filings for AAPL" type queries.
+        """
+        return {
+            "company_summary": await self.edgar.get_company_summary(ticker),
+            "all_recent_filings": await self.edgar.get_recent_filings(ticker),
+            "insider_filings": await self.edgar.get_insider_filings(ticker),
+        }
+3. In agent/claude_agent.py, add SEC filings routing.
+Find the _gather_data method. Find the line that says:
+python        elif category == "macro":
+            return await self.data.get_macro_overview()
+Add this block right AFTER it:
+python        elif category == "sec_filings":
+            tickers = query_info.get("tickers", [])
+            if tickers:
+                return await self.data.get_sec_filings(tickers[0])
+            return {"error": "No ticker specified for SEC filings lookup"}
+```
+
+**4. In `agent/prompts.py`, make two changes:**
+
+First, in the `QUERY_CLASSIFIER_PROMPT`, find the list of categories and add this line after the `"macro"` line:
+```
+- "sec_filings": User asks about SEC filings, 8-K filings, insider transactions from SEC, institutional ownership, Form 4, 10-K, 10-Q, or any regulatory filings for a specific stock. Extract the ticker(s).
+```
+
+Also update the reply format section to include:
+```
+{"category": "sec_filings", "tickers": ["AAPL"]}
+```
+
+Second, in the `SYSTEM_PROMPT`, add these lines after the existing FRED-related instructions:
+```
+- SEC EDGAR Filings (use SEC data to identify material events and verify financial data from the most authoritative source)
+- 8-K filings are MATERIAL EVENTS — when a stock moves unexpectedly, check the 8-K filings first. These reveal acquisitions, executive changes, earnings pre-releases, bankruptcy filings, and other critical events
+- When analyzing why a stock is moving, always reference any recent 8-K filings as potential catalysts
+- Recent SEC filings can explain price action that news articles haven't covered yet — SEC filings are often the PRIMARY source that news articles are written from
+- Use SEC financial data (revenue, net income, cash, debt) to verify and supplement StockAnalysis fundamentals
+- When a company has recently filed an S-1, flag that it may be doing a secondary offering which could dilute shares
+- If Form 4 insider filings show clustered buying by multiple executives, this is a very strong bullish signal
+- If Form 4 filings show large insider sales, cross-reference with the insider's total holdings — small percentage sales are often routine (10b5-1 plans), while large percentage sales are more concerning
+- Provide links to relevant SEC filings when they're important to the analysis so the user can read the full document
+5. Re-publish/deploy the project when done.

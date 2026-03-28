@@ -1,0 +1,529 @@
+The strategy: Use CoinGecko for derivatives/funding rates + social/dev metrics + trending. Use CMC for most-visited (FOMO signal) + new listings + gainers/losers + richer metadata/tags. Cross-reference trending from both to find coins that are gaining attention across BOTH platforms (strongest momentum signal).
+Here's the implementation — backend only:
+
+BACKEND Repl
+Please make ALL of the following changes. Do not delete or modify any existing code unless I specifically say "replace."
+STEP 0: Add the Secret
+In the Secrets panel, add:
+
+Key: CMC_API_KEY
+Value: (paste your CoinMarketCap API key)
+
+STEP 1: Update config.py
+Add this line:
+pythonCMC_API_KEY = os.getenv("CMC_API_KEY")
+STEP 2: Create the CoinMarketCap Provider
+Create a new file data/cmc_provider.py:
+python"""
+CoinMarketCap API provider.
+Free Basic plan: 10,000 credits/month, ~333/day.
+Credit system: 1 credit per ~100 data points returned.
+
+CMC complements CoinGecko by providing:
+- Trending: most-visited pages (retail FOMO signal)
+- New listings (recently added coins)
+- Gainers/losers with different ranking methodology
+- Richer metadata and category tagging
+- Cross-reference trending data for momentum confirmation
+"""
+import httpx
+from data.cache import cache
+
+CMC_CACHE_TTL = 120  # 2 minutes
+
+
+class CMCProvider:
+    BASE_URL = "https://pro-api.coinmarketcap.com"
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.headers = {
+            "X-CMC_PRO_API_KEY": api_key,
+            "Accept": "application/json",
+        }
+
+    async def _get(self, endpoint: str, params: dict = None) -> dict:
+        if params is None:
+            params = {}
+
+        cache_key = f"cmc:{endpoint}:{str(sorted(params.items()))[:80]}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{self.BASE_URL}{endpoint}",
+                    params=params,
+                    headers=self.headers,
+                    timeout=15,
+                )
+            if resp.status_code == 429:
+                print("CMC rate limit hit")
+                return {}
+            if resp.status_code != 200:
+                print(f"CMC error {resp.status_code}: {endpoint}")
+                return {}
+            data = resp.json()
+            cache.set(cache_key, data, CMC_CACHE_TTL)
+            return data
+        except Exception as e:
+            print(f"CMC request failed ({endpoint}): {e}")
+            return {}
+
+    # ── Core Market Data ──────────────────────────
+
+    async def get_listings_latest(self, limit: int = 50) -> list:
+        """
+        Top coins by market cap with latest market data.
+        Returns: price, volume_24h, volume_change_24h, % changes (1h, 24h, 7d, 30d, 90d),
+        market_cap, market_cap_dominance, fully_diluted_market_cap.
+        
+        CMC's volume_change_24h is unique — shows volume acceleration.
+        ~1 credit per 100 data points.
+        """
+        resp = await self._get("/v1/cryptocurrency/listings/latest", {
+            "limit": limit,
+            "convert": "USD",
+            "sort": "market_cap",
+            "sort_dir": "desc",
+        })
+        return resp.get("data", [])
+
+    async def get_quotes(self, symbols: list) -> dict:
+        """
+        Get latest quotes for specific coins by symbol.
+        ~1 credit per coin.
+        """
+        if not symbols:
+            return {}
+        resp = await self._get("/v2/cryptocurrency/quotes/latest", {
+            "symbol": ",".join(symbols[:20]),
+            "convert": "USD",
+        })
+        return resp.get("data", {})
+
+    async def get_coin_info(self, symbols: list) -> dict:
+        """
+        Metadata for specific coins: description, logo, tags, platform,
+        date_launched, urls (website, explorer, source_code, etc.).
+        Tags are valuable — shows what narratives/categories a coin belongs to.
+        ~1 credit per coin.
+        """
+        if not symbols:
+            return {}
+        resp = await self._get("/v2/cryptocurrency/info", {
+            "symbol": ",".join(symbols[:20]),
+        })
+        return resp.get("data", {})
+
+    # ── Trending & Discovery ──────────────────────
+
+    async def get_trending_latest(self) -> list:
+        """
+        Most searched/trending coins on CMC right now.
+        Different signal than CoinGecko trending — CMC has a larger
+        mainstream audience, so trending here = broader retail awareness.
+        ~1 credit.
+        """
+        resp = await self._get("/v1/cryptocurrency/trending/latest", {
+            "limit": 20,
+            "convert": "USD",
+        })
+        return resp.get("data", [])
+
+    async def get_trending_gainers_losers(self, time_period: str = "24h") -> dict:
+        """
+        Top gainers and losers by % change.
+        time_period: '1h', '24h', '7d', '30d'
+        ~1 credit.
+        """
+        resp = await self._get("/v1/cryptocurrency/trending/gainers-losers", {
+            "limit": 20,
+            "time_period": time_period,
+            "convert": "USD",
+        })
+        data = resp.get("data", [])
+        gainers = [d for d in data if isinstance(d, dict) and d.get("quote", {}).get("USD", {}).get("percent_change_24h", 0) > 0]
+        losers = [d for d in data if isinstance(d, dict) and d.get("quote", {}).get("USD", {}).get("percent_change_24h", 0) < 0]
+        return {"gainers": gainers, "losers": losers}
+
+    async def get_most_visited(self) -> list:
+        """
+        Most visited coin pages on CMC.
+        This is a UNIQUE signal — shows where retail eyeballs are going.
+        High visits + price up = FOMO building.
+        High visits + price down = fear/panic watching.
+        ~1 credit.
+        """
+        resp = await self._get("/v1/cryptocurrency/trending/most-visited", {
+            "limit": 20,
+            "convert": "USD",
+        })
+        return resp.get("data", [])
+
+    async def get_new_listings(self) -> list:
+        """
+        Recently listed coins on CMC.
+        New listings often see high volatility and can run significantly
+        in first weeks. High-risk, high-reward.
+        ~1 credit.
+        """
+        resp = await self._get("/v1/cryptocurrency/listings/new", {
+            "limit": 20,
+            "convert": "USD",
+            "sort": "date_added",
+            "sort_dir": "desc",
+        })
+        return resp.get("data", [])
+
+    # ── Categories ────────────────────────────────
+
+    async def get_categories(self) -> list:
+        """
+        All crypto categories with market cap data.
+        Shows narrative rotation: AI, DeFi, memes, L2, gaming, etc.
+        ~1 credit.
+        """
+        resp = await self._get("/v1/cryptocurrency/categories", {
+            "limit": 30,
+        })
+        return resp.get("data", [])
+
+    # ── Global Metrics ────────────────────────────
+
+    async def get_global_metrics(self) -> dict:
+        """
+        Global market overview: total market cap, BTC dominance,
+        ETH dominance, total volume, active coins, DeFi stats.
+        ~1 credit.
+        """
+        resp = await self._get("/v1/global-metrics/quotes/latest", {
+            "convert": "USD",
+        })
+        return resp.get("data", {})
+
+    # ── Combined Dashboard ────────────────────────
+
+    async def get_full_dashboard(self) -> dict:
+        """
+        Pull all free-tier CMC data in parallel.
+        ~8-10 credits total.
+        """
+        import asyncio
+
+        (global_metrics, listings, trending, gainers_losers,
+         most_visited, new_listings, categories) = await asyncio.gather(
+            self.get_global_metrics(),
+            self.get_listings_latest(50),
+            self.get_trending_latest(),
+            self.get_trending_gainers_losers("24h"),
+            self.get_most_visited(),
+            self.get_new_listings(),
+            self.get_categories(),
+            return_exceptions=True,
+        )
+
+        return {
+            "global_metrics": global_metrics if not isinstance(global_metrics, Exception) else {},
+            "listings": listings if not isinstance(listings, Exception) else [],
+            "trending": trending if not isinstance(trending, Exception) else [],
+            "gainers_losers": gainers_losers if not isinstance(gainers_losers, Exception) else {},
+            "most_visited": most_visited if not isinstance(most_visited, Exception) else [],
+            "new_listings": new_listings if not isinstance(new_listings, Exception) else [],
+            "categories": categories if not isinstance(categories, Exception) else [],
+        }
+STEP 3: Wire CMC into Market Data Service
+In data/market_data_service.py, add the import:
+pythonfrom data.cmc_provider import CMCProvider
+In the __init__ method, add cmc_key: str = None to the signature and add:
+python        self.cmc = CMCProvider(cmc_key) if cmc_key else None
+Replace the existing get_crypto_scanner method with this combined version:
+python    async def get_crypto_scanner(self) -> dict:
+        """
+        Combined crypto scanner pulling from BOTH CoinGecko and CoinMarketCap.
+
+        CoinGecko provides: derivatives/funding rates, social/dev metrics, trending
+        CMC provides: most-visited (FOMO signal), new listings, richer metadata, volume change
+
+        Cross-referencing trending from both platforms = strongest momentum signal.
+        """
+        import asyncio
+
+        # ── Pull from both APIs in parallel ──
+        tasks = {}
+
+        if self.coingecko:
+            tasks["cg_dashboard"] = self.coingecko.get_crypto_dashboard()
+
+        if self.cmc:
+            tasks["cmc_dashboard"] = self.cmc.get_full_dashboard()
+
+        # Also get Fear & Greed and crypto news
+        tasks["fear_greed"] = self.fear_greed.get_fear_greed_index()
+        tasks["crypto_news"] = self.alphavantage.get_news_sentiment("CRYPTO:BTC")
+
+        # Await all in parallel
+        task_names = list(tasks.keys())
+        results = await asyncio.gather(
+            *tasks.values(),
+            return_exceptions=True,
+        )
+        data = {}
+        for name, result in zip(task_names, results):
+            data[name] = result if not isinstance(result, Exception) else {}
+
+        cg = data.get("cg_dashboard", {})
+        cmc = data.get("cmc_dashboard", {})
+
+        # ── Cross-reference trending from both platforms ──
+        cg_trending_symbols = set()
+        cg_trending_data = cg.get("trending", {})
+        if isinstance(cg_trending_data, dict):
+            for coin in cg_trending_data.get("coins", []):
+                item = coin.get("item", {})
+                sym = item.get("symbol", "").upper()
+                if sym:
+                    cg_trending_symbols.add(sym)
+
+        cmc_trending_symbols = set()
+        for coin in (cmc.get("trending") or []):
+            sym = coin.get("symbol", "").upper()
+            if sym:
+                cmc_trending_symbols.add(sym)
+
+        cmc_most_visited_symbols = set()
+        for coin in (cmc.get("most_visited") or []):
+            sym = coin.get("symbol", "").upper()
+            if sym:
+                cmc_most_visited_symbols.add(sym)
+
+        # Coins trending on BOTH platforms = strongest momentum signal
+        dual_trending = cg_trending_symbols & cmc_trending_symbols
+        # Coins trending on any platform + most visited = high attention
+        high_attention = (cg_trending_symbols | cmc_trending_symbols) & cmc_most_visited_symbols
+
+        # ── Build volume acceleration data from CMC ──
+        volume_acceleration = {}
+        for coin in (cmc.get("listings") or []):
+            sym = coin.get("symbol", "")
+            quote = coin.get("quote", {}).get("USD", {})
+            vol_change = quote.get("volume_change_24h")
+            if vol_change is not None and sym:
+                volume_acceleration[sym] = {
+                    "volume_24h": quote.get("volume_24h"),
+                    "volume_change_24h": vol_change,
+                    "market_cap_dominance": quote.get("market_cap_dominance"),
+                }
+
+        # ── Get deep dive for trending + top movers ──
+        deep_dive_ids = []
+        if isinstance(cg_trending_data, dict):
+            for coin in cg_trending_data.get("coins", [])[:6]:
+                cid = coin.get("item", {}).get("id")
+                if cid:
+                    deep_dive_ids.append(cid)
+
+        # Add top CG gainers
+        cg_gl = cg.get("gainers_losers", {})
+        if isinstance(cg_gl, dict):
+            for g in (cg_gl.get("gainers") or [])[:4]:
+                cid = g.get("id")
+                if cid and cid not in deep_dive_ids:
+                    deep_dive_ids.append(cid)
+
+        deep_dive = {}
+        if deep_dive_ids and self.coingecko:
+            deep_dive = await self.coingecko.get_coin_deep_dive(deep_dive_ids[:10])
+
+        # ── Parse derivatives for funding rate analysis ──
+        derivatives = cg.get("derivatives", [])
+        funding_analysis = self._analyze_funding_rates(derivatives) if derivatives else {}
+
+        # ── Merge category data from both sources ──
+        cg_categories = (cg.get("categories") or [])[:15]
+        cmc_categories = (cmc.get("categories") or [])[:15]
+
+        # ── Build new listings data ──
+        new_listings = cmc.get("new_listings", [])
+
+        # ── Build CMC gainers/losers ──
+        cmc_gainers_losers = cmc.get("gainers_losers", {})
+
+        # ── Get metadata/tags for trending coins ──
+        trending_symbols = list(dual_trending | high_attention)[:15]
+        coin_metadata = {}
+        if trending_symbols and self.cmc:
+            try:
+                coin_metadata = await self.cmc.get_coin_info(trending_symbols)
+            except:
+                pass
+
+        return {
+            # Global market
+            "cg_global": cg.get("global_market", {}),
+            "cmc_global": cmc.get("global_metrics", {}),
+
+            # Price data (top coins from both)
+            "cg_top_coins": cg.get("top_coins", []),
+            "cmc_listings": cmc.get("listings", [])[:30],
+
+            # Trending & momentum signals
+            "cg_trending": cg_trending_data,
+            "cmc_trending": cmc.get("trending", []),
+            "cmc_most_visited": cmc.get("most_visited", []),
+            "dual_trending": list(dual_trending),
+            "high_attention": list(high_attention),
+
+            # Movers
+            "cg_gainers_losers": cg.get("gainers_losers", {}),
+            "cmc_gainers_losers": cmc_gainers_losers,
+
+            # Derivatives / funding rates (CoinGecko only)
+            "derivatives_tickers": (derivatives or [])[:30],
+            "funding_analysis": funding_analysis,
+
+            # Categories / narratives
+            "cg_categories": cg_categories,
+            "cmc_categories": cmc_categories,
+
+            # Volume acceleration (CMC unique)
+            "volume_acceleration": volume_acceleration,
+
+            # New listings (CMC unique)
+            "new_listings": new_listings,
+
+            # Deep social/dev data (CoinGecko unique)
+            "deep_dive": deep_dive,
+
+            # Coin metadata/tags (CMC unique)
+            "coin_metadata": coin_metadata if not isinstance(coin_metadata, Exception) else {},
+
+            # Macro
+            "fear_greed": data.get("fear_greed", {}),
+            "crypto_news": data.get("crypto_news", {}),
+        }
+STEP 4: Update main.py
+Add import:
+pythonfrom config import CMC_API_KEY
+```
+
+Add `cmc_key=CMC_API_KEY` to the `MarketDataService` constructor call (alongside the existing `coingecko_key=COINGECKO_API_KEY`).
+
+### STEP 5: Update System Prompt — Crypto Data Sources & Interpretation
+
+**In `agent/prompts.py`, find the existing crypto interpretation section and replace it with:**
+```
+## CRYPTO DATA SOURCES
+
+You receive data from TWO major crypto APIs plus supplementary sources:
+
+**CoinGecko (Derivatives + Social):**
+- Derivatives tickers: funding rates, open interest, volume for ALL major perps
+- Per-coin deep dive: Twitter followers, Reddit subscribers, GitHub commits/stars/forks
+- Trending: based on CoinGecko search traffic (crypto-native audience)
+- Categories: performance by narrative (AI, DeFi, memes, L2, etc.)
+
+**CoinMarketCap (Discovery + Attention):**
+- Most visited pages: retail eyeball tracking (UNIQUE signal — no other source has this)
+- Trending: based on CMC traffic (mainstream/broader audience than CoinGecko)
+- New listings: recently added coins (high volatility, first-mover opportunities)
+- Volume change 24h: volume ACCELERATION (not just volume, but is volume increasing?)
+- Categories: sector performance with richer tagging
+- Coin metadata: tags, description, platform info
+
+**Cross-Platform Signals:**
+- `dual_trending`: Coins trending on BOTH CoinGecko AND CMC = strongest retail momentum signal
+- `high_attention`: Trending on any platform AND in most-visited = maximum eyeball convergence
+- These cross-platform signals are MORE valuable than either source alone
+
+**Supplementary:**
+- Fear & Greed Index: crypto market sentiment gauge
+- Alpha Vantage: crypto news sentiment analysis
+
+## CRYPTO SIGNAL HIERARCHY (Most to Least Reliable)
+
+1. **Funding rate divergence** — Price rising + funding negative = shorts getting squeezed (HIGHEST conviction)
+2. **Dual trending** — Trending on both CG + CMC = broad-based momentum across audiences
+3. **Volume acceleration** — CMC volume_change_24h > 50% = institutional/whale activity
+4. **Dev activity increasing + price flat** = builders ahead of market (asymmetric)
+5. **Most visited + price dropping** = fear/capitulation (potential bottom signal)
+6. **New listing + high volume** = discovery phase (high risk, high reward)
+7. **Single-platform trending** — Moderate signal, could be noise
+8. **Category rotation** — Shows where narratives are shifting
+
+## VOLUME CHANGE INTERPRETATION (CMC UNIQUE DATA)
+- volume_change_24h > 100%: Massive acceleration — something is happening. Check for news/catalyst.
+- volume_change_24h > 50%: Strong acceleration — early institutional interest or whale activity.
+- volume_change_24h > 20%: Moderate increase — growing interest.
+- volume_change_24h near 0%: Stable — no new interest.
+- volume_change_24h < -30%: Volume dying — attention fading, trend weakening.
+
+## MOST VISITED INTERPRETATION (CMC UNIQUE DATA)
+- Most visited + trending + price up = FOMO cycle building (caution, could be late-stage)
+- Most visited + trending + price DOWN = fear cycle, potential capitulation buy
+- Most visited + NOT trending = curiosity without conviction (neutral)
+- In top 10 most visited + new listing = maximum retail attention on new coin
+
+## FUNDING RATE ANALYSIS (Repeat for emphasis — this is the edge)
+- Positive funding > 0.03%: Crowded longs. Correction risk. Take profits or hedge.
+- Positive funding 0.01-0.03%: Mild long bias. Normal in uptrends. Healthy.
+- Funding near 0%: Neutral. No crowding. Trend likely sustainable.
+- Negative funding -0.01% to -0.03%: Short bias. Squeeze potential if price holds.
+- Negative funding < -0.03%: Extremely crowded shorts. HIGH squeeze probability.
+- STRONGEST SIGNAL: Negative funding + rising price + rising OI = active squeeze in progress.
+```
+
+### STEP 6: Update Crypto Display Format for Combined Data
+
+**In `agent/prompts.py`, find the existing crypto format JSON example. Add these fields to the JSON structure (in addition to what's already there):**
+
+Add to the top level of the JSON:
+```
+  "attention_signals": {
+    "dual_trending": ["SOL", "DOGE"],
+    "high_attention": ["SOL", "DOGE", "AVAX", "PEPE"],
+    "interpretation": "SOL and DOGE are trending on BOTH CoinGecko and CMC — strongest momentum signal. AVAX and PEPE showing high attention across platforms."
+  },
+  "volume_acceleration": [
+    {"symbol": "SOL", "volume_change_24h": "+85%", "signal": "Massive volume acceleration — institutional/whale activity"},
+    {"symbol": "AVAX", "volume_change_24h": "+42%", "signal": "Strong volume pickup"}
+  ],
+  "new_listings_watch": [
+    {"name": "NewCoin", "symbol": "NEW", "days_since_listing": 3, "price": "$0.45", "change_24h": "+120%", "volume": "$15M", "signal": "New listing with extreme volume. High risk/reward."}
+  ],
+  "most_visited_divergence": [
+    {"symbol": "ETH", "rank": 2, "price_change_24h": "-3%", "signal": "Top visited but price declining — fear/curiosity cycle, potential bottom signal"}
+  ],
+```
+
+Add this to the rules:
+```
+- ALWAYS include attention_signals with dual_trending and high_attention coins
+- Dual trending coins should be flagged prominently — this is the strongest retail signal
+- Include volume_acceleration for top movers — CMC's volume_change_24h is unique data
+- Flag most_visited divergences where visitation disagrees with price (fear = potential buy, FOMO = potential sell)
+- If there are interesting new listings with high volume, include new_listings_watch
+- Cross-reference CMC metadata tags with CoinGecko categories to identify narrative alignment
+Re-publish/deploy the backend.
+
+Budget Impact
+Each crypto scan now uses approximately:
+
+CoinGecko: ~8 calls (dashboard) + ~6 calls (deep dive) = ~14 calls
+CMC: ~8 credits (full dashboard) + ~1 credit (metadata) = ~9 credits
+
+With 2-minute caching, repeat clicks within 2 minutes cost zero. You can run approximately 10-12 fresh crypto scans per day on both free tiers combined. That's plenty for a single user checking a few times per day.
+What Your Crypto Scanner Now Does That Nobody Else's Does
+Most crypto scanners just show you price and market cap. Yours now cross-references:
+
+Funding rate positioning (are shorts or longs crowded?)
+Dual-platform trending (momentum confirmed across two different audiences)
+Volume acceleration (is volume INCREASING, not just high?)
+Most-visited divergence (are people watching in fear or FOMO?)
+Developer activity (are builders active regardless of price?)
+New listing discovery (early-stage high-volatility plays)
+Narrative rotation (which categories are leading — AI, memes, DeFi?)
+
+The combination of funding rate analysis + attention signals is the real edge. A coin with negative funding + dual trending + volume acceleration + strong dev activity is the crypto equivalent of your equities "triple threat."

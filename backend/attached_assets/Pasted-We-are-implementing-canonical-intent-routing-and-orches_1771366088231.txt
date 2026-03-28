@@ -1,0 +1,94 @@
+We are implementing canonical intent routing and orchestration profiles server-side.
+
+Do NOT modify:
+
+Claude system prompt
+
+Scoring logic
+
+Module logic
+
+Data providers
+
+Existing pipeline structure
+
+Only add deterministic preset routing.
+
+1️⃣ Create Canonical Intent Profiles
+
+Add a central dictionary:
+
+INTENT_PROFILES = {
+    "daily_briefing": {
+        "asset_classes": ["equities", "crypto", "commodities"],
+        "modules": {
+            "x_sentiment": True,
+            "stocktwits": True,
+            "technical": True,
+            "fundamental": True,
+            "macro": True,
+            "liquidity_filter": True
+        },
+        "scoring_bias": "balanced",
+        "response_style": "institutional_brief"
+    },
+    "cross_asset_trending": {
+        "asset_classes": ["equities", "crypto", "commodities"],
+        "modules": {
+            "x_sentiment": True,
+            "technical": True,
+            "fundamental": True
+        },
+        "scoring_bias": "momentum_weighted",
+        "response_style": "high_conviction_ranked"
+    },
+    "microcap_asymmetry": {
+        "asset_classes": ["equities", "crypto"],
+        "market_cap_filter": "micro_small",
+        "modules": {
+            "x_sentiment": True,
+            "catalyst_validation": True,
+            "technical": True,
+            "fundamental_relative_to_mc": True
+        },
+        "scoring_bias": "asymmetry",
+        "response_style": "deep_thesis"
+    },
+    ...
+}
+
+
+Repeat for all intents.
+
+2️⃣ Modify Orchestrator
+
+In your main analyze route:
+
+if request.preset_intent:
+    profile = INTENT_PROFILES.get(request.preset_intent)
+
+    orchestration_plan = build_plan_from_profile(profile)
+
+else:
+    orchestration_plan = classify_with_openai(request.query)
+
+
+Preset intents bypass OpenAI classification entirely.
+
+Natural user queries still use GPT classification.
+
+3️⃣ Preserve All Existing Intelligence
+
+Do NOT:
+
+Change Claude prompt
+
+Change scoring math
+
+Change compression
+
+Change sentiment fetch
+
+Change waterfall architecture
+
+This is routing only.

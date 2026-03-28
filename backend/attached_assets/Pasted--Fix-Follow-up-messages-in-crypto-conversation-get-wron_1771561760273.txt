@@ -1,0 +1,120 @@
+## Fix: Follow-up messages in crypto conversation get wrong context — Claude thinks it's about stocks
+
+### Root Cause
+When the user sends a follow-up after a crypto scan, the agent sets `category = "followup"` and `market_data = None` (line 309-311 in claude_agent.py). Then in `_ask_claude()`, since market_data is None, no data is sent to Claude. Claude only sees:
+
+1. History user message: "Full crypto market scan" (bare text, no market data)
+2. History assistant message: the crypto JSON response
+3. New user message: "What about gaming tokens?"
+
+Claude doesn't have the crypto data context and may hallucinate it's about stocks (NVDA, AMD, AVGO) based on its training data or some other stale context.
+
+### Fix: Pass the conversation's original category to follow-ups
+
+**Step A: Save the category alongside messages in history**
+
+In `main.py`, where messages are saved to conversation history (around line 698-703), also save the category:
+```python
+        if conv_id:
+            try:
+                updated_messages = list(history)
+                updated_messages.append({"role": "user", "content": user_query})
+                updated_messages.append({"role": "assistant", "content": _json.dumps(result, default=str)})
+                _save_msgs(conv_id, updated_messages)
+                
+                # Also save the scan category for follow-up context
+                from data.chat_history import update_conversation_metadata
+                if hasattr(result, 'get') or isinstance(result, dict):
+                    scan_category = result.get("display_type") or category
+                    try:
+                        update_conversation_metadata(conv_id, {"last_category": scan_category})
+                    except:
+                        pass
+```
+
+If `update_conversation_metadata` doesn't exist, that's fine — we can use a simpler approach below.
+
+**Step B: Better approach — inject category context into follow-up messages**
+
+In `handle_query()`, when `is_followup` is True, detect the category from conversation history and include it in the follow-up context. Find the followup handling (around line 309-314):
+```python
+        if is_followup and not self._needs_fresh_data(user_prompt):
+            category = "followup"
+            market_data = None
+            routing_source = "followup"
+            routing_confidence = "high"
+            
+            # Detect the original scan category from history
+            original_category = None
+            for msg in reversed(history):
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    try:
+                        parsed = json.loads(content) if isinstance(content, str) else content
+                        if isinstance(parsed, dict):
+                            original_category = parsed.get("display_type") or parsed.get("category")
+                            break
+                    except:
+                        pass
+            
+            if original_category:
+                print(f"[AGENT] Follow-up detected, original category: {original_category}")
+            
+            print(f"[AGENT] Follow-up detected, skipping data gathering ({time.time() - start_time:.1f}s)")
+```
+
+**Step C: Pass original category to Claude's follow-up prompt**
+
+In `_ask_claude()`, update the follow-up system prompt (around line 2827-2838) to include the original category context:
+```python
+        if is_followup:
+            # Detect original category from history
+            original_category = None
+            for msg in reversed(messages):
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    try:
+                        parsed = json.loads(content) if isinstance(content, str) else content
+                        if isinstance(parsed, dict):
+                            original_category = parsed.get("display_type") or parsed.get("structured", {}).get("display_type")
+                            break
+                    except:
+                        pass
+            
+            category_context = ""
+            if original_category == "crypto":
+                category_context = """
+IMPORTANT: This conversation started with a CRYPTO scan. The user is asking follow-up questions about CRYPTOCURRENCY.
+Do NOT reference stocks (NVDA, AMD, AVGO, etc.) unless the user explicitly asks about stocks.
+Stay in crypto context — reference the crypto data from your previous response (BTC, ETH, altcoins, funding rates, squeeze candidates, etc.).
+If the user asks about a specific crypto category (like gaming tokens), use your knowledge of crypto gaming tokens (AXS, GALA, SAND, IMX, etc.), NOT stock tickers."""
+            elif original_category == "cross_market":
+                category_context = "This conversation started with a cross-market scan covering stocks, crypto, and commodities."
+            elif original_category in ("trending", "best_trades", "trades"):
+                category_context = "This conversation started with a stock/equity focused scan."
+            
+            system_blocks.append({
+                "type": "text",
+                "text": f"""
+FOLLOW-UP MODE: The user is continuing a conversation. You have the full conversation history above.
+{category_context}
+- If the user asks about a specific ticker or pick from your previous response, go deeper on that specific item.
+- If the user asks a general question, answer it using your trading expertise and any data from the conversation.
+- You can respond conversationally — you don't need to use a structured JSON display_type for follow-ups.
+- For follow-up responses, use display_type "chat" with a "message" field containing your analysis.
+- BUT if the user asks you to analyze a new ticker or run a new type of scan, use the appropriate display_type.
+- Keep your trader personality — be direct, opinionated, and cut through noise.
+- You still have access to all the data from the original scan in the conversation history. Reference specific data points when relevant.""",
+            })
+```
+
+Replace the existing followup system block (lines 2827-2838) with this updated version.
+
+### Testing
+1. Click "Crypto" → wait for full response
+2. Ask follow-up: "Tell me more about the AXS squeeze" → should respond about AXS crypto, NOT stocks
+3. Ask follow-up: "What other gaming tokens should I look at?" → should list crypto gaming tokens (AXS, GALA, SAND, IMX), NOT NVDA/AMD
+4. Ask follow-up: "What about BTC?" → should talk about Bitcoin, not stocks
+5. Start a new Trending Now scan → ask follow-up about a stock → should stay in stock context
+6. All presets still work
+7. `python -m pytest` passes

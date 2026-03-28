@@ -1,0 +1,264 @@
+## URGENT: Crypto scan returns no data — "this scan is essentially broken"
+
+### Problem
+When user clicks "Crypto" in the sidebar, the response shows:
+- "Data quality failure — all trending candidates missing essential price/volume/catalyst data"
+- "this scan is essentially broken. Every single ticker is missing critical data"
+- BTC and ETH show "N/A" for price in the popup chatbot
+
+The crypto scanner calls CoinGecko, CMC, HyperLiquid, altFINS, AlphaVantage news, and Grok. Something is failing silently.
+
+### Step 1: Diagnose — test each crypto data source individually
+
+Run these tests in the shell to see which APIs actually work:
+```bash
+python3 -c "
+import asyncio, os, sys
+sys.path.insert(0, '.')
+
+async def test():
+    # Test CoinGecko
+    try:
+        from data.coingecko_provider import CoinGeckoProvider
+        cg = CoinGeckoProvider()
+        dashboard = await cg.get_crypto_dashboard()
+        print(f'CoinGecko: {list(dashboard.keys()) if dashboard else \"EMPTY\"}')
+        if dashboard.get('top_coins'):
+            print(f'  top_coins: {len(dashboard[\"top_coins\"])} coins')
+            if dashboard['top_coins']:
+                print(f'  sample: {dashboard[\"top_coins\"][0].get(\"symbol\")} price={dashboard[\"top_coins\"][0].get(\"current_price\")}')
+        if dashboard.get('trending'):
+            t = dashboard['trending']
+            print(f'  trending: {type(t).__name__}, coins={len(t.get(\"coins\", [])) if isinstance(t, dict) else \"N/A\"}')
+    except Exception as e:
+        print(f'CoinGecko FAILED: {e}')
+    
+    # Test CMC
+    try:
+        from data.cmc_provider import CMCProvider
+        cmc_key = os.environ.get('CMC_API_KEY', '')
+        if cmc_key:
+            cmc = CMCProvider(cmc_key)
+            dashboard = await cmc.get_full_dashboard()
+            print(f'CMC: {list(dashboard.keys()) if dashboard else \"EMPTY\"}')
+            listings = dashboard.get('listings', [])
+            print(f'  listings: {len(listings)}')
+            if listings:
+                print(f'  sample: {listings[0].get(\"symbol\")} mcap={listings[0].get(\"quote\", {}).get(\"USD\", {}).get(\"market_cap\")}')
+        else:
+            print('CMC: NO API KEY')
+    except Exception as e:
+        print(f'CMC FAILED: {e}')
+    
+    # Test HyperLiquid
+    try:
+        from data.hyperliquid_provider import HyperliquidProvider
+        hl = HyperliquidProvider()
+        dashboard = await hl.get_crypto_dashboard()
+        print(f'HyperLiquid: {list(dashboard.keys()) if dashboard else \"EMPTY\"}')
+    except Exception as e:
+        print(f'HyperLiquid FAILED: {e}')
+    
+    # Test altFINS
+    try:
+        from data.altfins_provider import AltfinsProvider
+        af_key = os.environ.get('ALTFINS_API_KEY', '')
+        if af_key:
+            af = AltfinsProvider(af_key)
+            data = await af.get_crypto_scanner_data()
+            print(f'altFINS: {type(data).__name__}, keys={list(data.keys()) if isinstance(data, dict) else len(data) if isinstance(data, list) else \"?\"}')
+        else:
+            print('altFINS: NO API KEY')
+    except Exception as e:
+        print(f'altFINS FAILED: {e}')
+    
+    # Test Fear & Greed
+    try:
+        from data.fear_greed_provider import FearGreedProvider
+        fg = FearGreedProvider()
+        data = await fg.get_fear_greed_index()
+        print(f'Fear&Greed: score={data.get(\"current_score\")} rating={data.get(\"current_rating\")}')
+    except Exception as e:
+        print(f'Fear&Greed FAILED: {e}')
+
+asyncio.run(test())
+"
+```
+
+### Step 2: Check the data size
+
+After identifying which sources work, check the total data size being sent to Claude:
+
+Add temporary logging to `get_crypto_scanner()` in `market_data_service.py` — right before the return statement (around line 3603):
+```python
+        # TEMP DEBUG: log data sizes
+        result = { ... }  # existing return dict
+        import json
+        total_size = len(json.dumps(result, default=str))
+        print(f"[CRYPTO_SCANNER] Total data size: {total_size:,} chars")
+        for k, v in result.items():
+            size = len(json.dumps(v, default=str))
+            if size > 1000:
+                print(f"[CRYPTO_SCANNER]   {k}: {size:,} chars")
+        return result
+```
+
+### Step 3: Fix based on diagnosis
+
+**If APIs are returning empty/error:**
+- Check API keys are set in .env (CMC_API_KEY, ALTFINS_API_KEY)
+- Check rate limits — CoinGecko free tier is 10-30 calls/minute
+- Add better error logging for each failed source
+
+**If APIs return data but compression destroys it:**
+- The crypto scanner returns a MASSIVE amount of data (CoinGecko dashboard + CMC dashboard + deep dives + derivatives + altFINS)
+- The generic `compress_data()` with MAX_TOTAL_CHARS=80000 may be truncating critical price data
+- Add a crypto-specific compressor to `data_compressor.py`:
+```python
+def _compress_crypto_scanner(data: dict) -> dict:
+    """Compress crypto scanner data while preserving critical fields."""
+    compressed = {}
+    
+    # Preserve global market stats (small)
+    compressed["cg_global"] = data.get("cg_global", {})
+    compressed["cmc_global"] = data.get("cmc_global", {})
+    
+    # Top coins — keep only essential fields
+    top_coins = data.get("cg_top_coins", [])
+    compressed["top_coins"] = [
+        {
+            "symbol": c.get("symbol", "").upper(),
+            "name": c.get("name"),
+            "price": c.get("current_price"),
+            "change_24h": c.get("price_change_percentage_24h"),
+            "change_7d": c.get("price_change_percentage_7d_in_currency"),
+            "market_cap": c.get("market_cap"),
+            "volume_24h": c.get("total_volume"),
+            "mcap_rank": c.get("market_cap_rank"),
+        }
+        for c in (top_coins or [])[:15]
+    ]
+    
+    # CMC listings — keep essential
+    cmc_listings = data.get("cmc_listings", [])
+    compressed["cmc_top"] = [
+        {
+            "symbol": c.get("symbol"),
+            "name": c.get("name"),
+            "price": c.get("quote", {}).get("USD", {}).get("price"),
+            "change_24h": c.get("quote", {}).get("USD", {}).get("percent_change_24h"),
+            "change_7d": c.get("quote", {}).get("USD", {}).get("percent_change_7d"),
+            "volume_24h": c.get("quote", {}).get("USD", {}).get("volume_24h"),
+            "volume_change_24h": c.get("quote", {}).get("USD", {}).get("volume_change_24h"),
+            "market_cap": c.get("quote", {}).get("USD", {}).get("market_cap"),
+        }
+        for c in (cmc_listings or [])[:15]
+    ]
+    
+    # Trending signals — these are small and critical
+    compressed["dual_trending"] = data.get("dual_trending", [])
+    compressed["high_attention"] = data.get("high_attention", [])
+    compressed["cg_trending"] = data.get("cg_trending", {})
+    compressed["cmc_trending"] = data.get("cmc_trending", [])[:10]
+    
+    # Gainers/losers — keep top 5 each
+    cg_gl = data.get("cg_gainers_losers", {})
+    if isinstance(cg_gl, dict):
+        compressed["gainers"] = [
+            {"symbol": g.get("symbol", "").upper(), "change_24h": g.get("price_change_percentage_24h")}
+            for g in (cg_gl.get("gainers") or [])[:5]
+        ]
+        compressed["losers"] = [
+            {"symbol": g.get("symbol", "").upper(), "change_24h": g.get("price_change_percentage_24h")}
+            for g in (cg_gl.get("losers") or [])[:5]
+        ]
+    
+    # Funding rates — keep summary
+    compressed["funding_analysis"] = data.get("funding_analysis", {})
+    
+    # HyperLiquid — keep if present
+    hl = data.get("hyperliquid", {})
+    if isinstance(hl, dict) and not hl.get("error"):
+        compressed["hyperliquid"] = {
+            k: v for k, v in hl.items() 
+            if k in ("top_funding", "open_interest_leaders", "volume_leaders", "market_summary")
+        }
+    
+    # Volume acceleration — keep top 10
+    compressed["volume_acceleration"] = dict(list(data.get("volume_acceleration", {}).items())[:10])
+    
+    # Categories — keep top 5
+    compressed["hot_categories"] = (data.get("cg_categories") or data.get("cmc_categories") or [])[:5]
+    
+    # Deep dive — compress each coin to essentials
+    deep = data.get("deep_dive", {})
+    if isinstance(deep, dict):
+        compressed["deep_dive"] = {}
+        for coin_id, coin_data in list(deep.items())[:3]:
+            if isinstance(coin_data, dict):
+                md = coin_data.get("market_data", {})
+                compressed["deep_dive"][coin_id] = {
+                    "price": md.get("current_price", {}).get("usd") if isinstance(md.get("current_price"), dict) else md.get("current_price"),
+                    "change_24h": md.get("price_change_percentage_24h"),
+                    "change_7d": md.get("price_change_percentage_7d"),
+                    "market_cap": md.get("market_cap", {}).get("usd") if isinstance(md.get("market_cap"), dict) else md.get("market_cap"),
+                    "volume": md.get("total_volume", {}).get("usd") if isinstance(md.get("total_volume"), dict) else md.get("total_volume"),
+                    "ath": md.get("ath", {}).get("usd") if isinstance(md.get("ath"), dict) else md.get("ath"),
+                    "ath_change_pct": md.get("ath_change_percentage", {}).get("usd") if isinstance(md.get("ath_change_percentage"), dict) else md.get("ath_change_percentage"),
+                }
+    
+    # altFINS — keep if available
+    altfins = data.get("altfins", {})
+    if isinstance(altfins, dict) and not altfins.get("error"):
+        # Keep top signals only
+        compressed["altfins"] = {
+            k: v[:5] if isinstance(v, list) else v
+            for k, v in altfins.items()
+            if k in ("bullish_signals", "bearish_signals", "breakouts", "summary", "top_picks")
+        }
+    
+    # Fear & Greed
+    compressed["fear_greed"] = data.get("fear_greed", {})
+    
+    # News — keep headlines only
+    news = data.get("crypto_news", {})
+    if isinstance(news, dict):
+        articles = news.get("feed", news.get("articles", []))
+        if isinstance(articles, list):
+            compressed["news"] = [
+                {"title": a.get("title"), "sentiment": a.get("overall_sentiment_label")}
+                for a in articles[:5]
+            ]
+    
+    # X/Twitter sentiment
+    compressed["x_sentiment"] = data.get("x_twitter_crypto", {})
+    
+    return compressed
+```
+
+Then in `compress_for_claude()` (the Phase 2 compressor in `claude_agent.py`), add crypto-specific handling:
+
+Find where compression is applied for crypto category. Before the generic `compress_data()` call, add:
+```python
+if category == "crypto" and isinstance(raw_data, dict):
+    from data_compressor import _compress_crypto_scanner
+    compressed = _compress_crypto_scanner(raw_data)
+    compressed["_compression"] = "crypto_specific"
+    return compressed
+```
+
+### Step 4: Verify the pipeline end-to-end
+
+After fixing, test by clicking "Crypto" in the sidebar. Check logs for:
+1. `[CRYPTO_SCANNER] Total data size: XXX chars` — should be reasonable after compression
+2. No empty/error results from CoinGecko or CMC
+3. Claude receives data with actual prices, volumes, and trends
+4. Response includes specific crypto picks with prices, not "N/A"
+
+### Testing
+1. Click "Crypto" in sidebar → should show crypto market overview with specific coins, prices, trends
+2. Click "Crypto" in popup chatbot → same quality response
+3. Top coins (BTC, ETH, SOL) should show actual prices, not N/A
+4. altFINS signals should appear if API key is configured
+5. Other presets (Daily Briefing, Trending Now, Best Trades) still work
+6. `python -m pytest` passes

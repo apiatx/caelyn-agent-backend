@@ -1,0 +1,201 @@
+# BACKEND FIX: Portfolio Quotes — Correct Ticker Routing by Asset Type
+
+## The Problem
+The /api/portfolio/quotes endpoint sends ALL tickers to FMP first. FMP returns wrong matches — "BTC" matches Grayscale Bitcoin Mini Trust ETF ($30 instead of $97,000), "ETH" matches Grayscale Ethereum Mini ETF, "HYPE" matches iShares EUR High Yield ETF. The code thinks these are found and never tries CoinGecko.
+
+## The Fix
+In main.py, rewrite the /api/portfolio/quotes endpoint to route tickers by asset_type BEFORE any API calls.
+
+### Step 1: Parse asset_types from request body
+
+Find the beginning of the /api/portfolio/quotes endpoint where the request body is parsed. Currently it reads:
+```python
+body = await request.json()
+tickers = [t.upper() for t in body.get("tickers", []) if t][:25]
+```
+
+Replace with:
+```python
+body = await request.json()
+tickers = [t.upper() for t in body.get("tickers", []) if t][:25]
+asset_types = body.get("asset_types", {})
+# Normalize keys to uppercase to match tickers
+asset_types = {k.upper(): v for k, v in asset_types.items()}
+print(f"[PORTFOLIO] Quotes requested for: {tickers}")
+print(f"[PORTFOLIO] Asset types: {asset_types}")
+
+# Separate tickers by asset type BEFORE any lookups
+stock_tickers = [t for t in tickers if asset_types.get(t, "stock") in ("stock", "etf", "index")]
+crypto_tickers = [t for t in tickers if asset_types.get(t) == "crypto"]
+commodity_tickers = [t for t in tickers if asset_types.get(t) == "commodity"]
+
+print(f"[PORTFOLIO] Routing: stocks={stock_tickers}, crypto={crypto_tickers}, commodities={commodity_tickers}")
+```
+
+### Step 2: Only send stock tickers to FMP
+
+Find the FMP batch quote lookup section. Change it so it only sends stock_tickers, not all tickers. Replace:
+```python
+ticker_str = ",".join(tickers)
+```
+With:
+```python
+ticker_str = ",".join(stock_tickers) if stock_tickers else ""
+```
+
+Wrap the entire FMP lookup block in:
+```python
+if stock_tickers:
+```
+So it only runs when there are actual stock tickers to look up.
+
+### Step 3: Send crypto tickers directly to CoinGecko (skip FMP entirely)
+
+After the FMP block, BEFORE the existing "missing tickers" crypto fallback logic, add a NEW section that handles crypto_tickers directly:
+
+```python
+    # ---- Crypto: go straight to CoinGecko, skip FMP ----
+    if crypto_tickers:
+        symbol_map = await get_coingecko_symbol_map()
+
+        PRIORITY_OVERRIDES = {
+            "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
+            "DOGE": "dogecoin", "ADA": "cardano", "XRP": "ripple",
+            "DOT": "polkadot", "LINK": "chainlink", "AVAX": "avalanche-2",
+            "MATIC": "matic-network", "UNI": "uniswap", "AAVE": "aave",
+            "ATOM": "cosmos", "LTC": "litecoin", "BCH": "bitcoin-cash",
+            "SHIB": "shiba-inu", "NEAR": "near", "SUI": "sui",
+            "APT": "aptos", "ARB": "arbitrum", "OP": "optimism",
+            "INJ": "injective-protocol", "TIA": "celestia", "SEI": "sei-network",
+            "PEPE": "pepe", "WIF": "dogwifcoin", "RENDER": "render-token",
+            "FET": "fetch-ai", "TAO": "bittensor", "FIL": "filecoin",
+            "HYPE": "hyperliquid",
+        }
+
+        crypto_ids_to_fetch = {}
+        for ticker in crypto_tickers:
+            cg_id = PRIORITY_OVERRIDES.get(ticker) or symbol_map.get(ticker)
+            if cg_id:
+                crypto_ids_to_fetch[cg_id] = ticker
+            else:
+                print(f"[PORTFOLIO] No CoinGecko ID found for crypto ticker: {ticker}")
+
+        if crypto_ids_to_fetch:
+            ids_list = list(crypto_ids_to_fetch.keys())
+            print(f"[PORTFOLIO] CoinGecko direct lookup for {len(ids_list)} crypto tickers")
+
+            for i in range(0, len(ids_list), 50):
+                batch = ids_list[i:i+50]
+                ids_str = ",".join(batch)
+                try:
+                    resp = await client.get(
+                        "https://api.coingecko.com/api/v3/simple/price",
+                        params={
+                            "ids": ids_str,
+                            "vs_currencies": "usd",
+                            "include_24hr_change": "true",
+                            "include_24hr_vol": "true",
+                            "include_market_cap": "true",
+                        },
+                    )
+                    if resp.status_code == 200:
+                        cg_data = resp.json()
+                        for cg_id, price_data in cg_data.items():
+                            original_ticker = crypto_ids_to_fetch.get(cg_id, cg_id.upper())
+                            price = price_data.get("usd", 0)
+                            change_pct = price_data.get("usd_24h_change", 0)
+                            quotes[original_ticker] = {
+                                "price": price,
+                                "change": round(price * (change_pct / 100), 4) if change_pct else 0,
+                                "change_pct": round(change_pct, 2) if change_pct else 0,
+                                "market_cap": price_data.get("usd_market_cap", 0),
+                                "volume": price_data.get("usd_24h_vol", 0),
+                                "source": "coingecko",
+                                "asset_type": "crypto",
+                                "sector": "Crypto",
+                            }
+                            print(f"[PORTFOLIO] CoinGecko: {original_ticker} = ${price}")
+                    else:
+                        print(f"[PORTFOLIO] CoinGecko batch error: {resp.status_code}")
+                except Exception as e:
+                    print(f"[PORTFOLIO] CoinGecko batch error: {e}")
+                if i + 50 < len(ids_list):
+                    await asyncio.sleep(1.0)
+```
+
+### Step 4: Send commodity tickers directly to FMP commodity symbols (skip stock lookup)
+
+After the crypto section, add:
+
+```python
+    # ---- Commodities: use COMMODITY_SYMBOLS mapping ----
+    if commodity_tickers:
+        for ticker in commodity_tickers:
+            fmp_symbol = COMMODITY_SYMBOLS.get(ticker)
+            if fmp_symbol:
+                try:
+                    resp = await client.get(
+                        "https://financialmodelingprep.com/stable/quote-short",
+                        params={"symbol": fmp_symbol, "apikey": FMP_API_KEY},
+                    )
+                    if resp.status_code == 200:
+                        items = resp.json()
+                        if items:
+                            item = items[0]
+                            quotes[ticker] = {
+                                "price": item.get("price"),
+                                "change": item.get("change"),
+                                "change_pct": item.get("changesPercentage"),
+                                "volume": item.get("volume"),
+                                "source": "fmp_commodity",
+                                "asset_type": "commodity",
+                                "sector": "Commodities",
+                            }
+                            print(f"[PORTFOLIO] Commodity: {ticker} = ${item.get('price')}")
+                except Exception as e:
+                    print(f"[PORTFOLIO] Commodity {ticker} error: {e}")
+            else:
+                print(f"[PORTFOLIO] No commodity symbol mapping for: {ticker}")
+```
+
+### Step 5: Remove or simplify the old fallback logic
+
+The existing code has a "missing_tickers" section that tries commodities, then CoinGecko for anything FMP didn't find. This was the old fallback approach. Since we now route explicitly by asset_type, you can simplify this to only handle tickers where asset_type was not specified (legacy holdings without asset_type):
+
+Find the section that starts with:
+```python
+missing_tickers = [t for t in tickers if t not in quotes]
+```
+
+Change it to only process tickers that weren't in any of our explicit groups:
+```python
+        # Fallback for any tickers not yet resolved (legacy holdings without asset_type)
+        missing_tickers = [t for t in tickers if t not in quotes]
+        if missing_tickers:
+            print(f"[PORTFOLIO] Fallback for unresolved tickers: {missing_tickers}")
+```
+
+Keep the existing commodity fallback and CoinGecko fallback logic after this for backward compatibility, but it should rarely be needed now.
+
+### Step 6: Ensure sector is always set
+
+Right before the final return statement, add:
+```python
+    # Ensure every quote has a sector field
+    for ticker, quote in quotes.items():
+        if not quote.get("sector"):
+            if quote.get("asset_type") == "crypto" or quote.get("source") == "coingecko":
+                quote["sector"] = "Crypto"
+            elif quote.get("asset_type") == "commodity" or quote.get("source") == "fmp_commodity":
+                quote["sector"] = "Commodities"
+            elif not quote.get("sector"):
+                quote["sector"] = "Other"
+```
+
+## Summary
+After this fix:
+- BTC with asset_type "crypto" → goes straight to CoinGecko → returns $97,000 (actual Bitcoin price)
+- HYPE with asset_type "crypto" → goes straight to CoinGecko → returns Hyperliquid price
+- SILVER with asset_type "commodity" → goes to COMMODITY_SYMBOLS → SIUSD → returns silver futures price
+- IREN with asset_type "stock" → goes to FMP → returns stock price
+- All quotes include a "sector" field for the Sector Allocation chart

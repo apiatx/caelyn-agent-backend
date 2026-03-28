@@ -1,0 +1,196 @@
+The Watchlist Review feature is broken. When a user enters tickers like "NVDA, AMD, PLTR" and clicks Review, it either returns nothing or a broken response. Please fix it end to end.
+STEP 1: Find and fix the portfolio/watchlist route
+Find where the watchlist review query gets handled. It should:
+
+Parse the tickers from the user's input
+Fetch data for each ticker
+Send to Claude for analysis
+
+The problem is likely that either the ticker parsing fails, the data fetching times out, or the category classifier doesn't recognize it as a portfolio/watchlist query.
+STEP 2: Add a dedicated watchlist endpoint that bypasses the classifier
+In main.py, add a specific route for watchlist review so it doesn't depend on the classifier:
+pythonclass WatchlistRequest(BaseModel):
+    tickers: list[str]
+    conversation_id: str = None
+
+@app.post("/api/watchlist")
+async def review_watchlist(request: WatchlistRequest):
+    try:
+        result = await asyncio.wait_for(
+            agent.review_watchlist(request.tickers),
+            timeout=90.0,
+        )
+        
+        # Save to conversation if conv_id provided
+        if request.conversation_id:
+            save_messages(request.conversation_id, [
+                {"role": "user", "content": f"Review my watchlist: {', '.join(request.tickers)}"},
+                {"role": "assistant", "content": json.dumps(result)},
+            ])
+        
+        return result
+    except asyncio.TimeoutError:
+        return {"display_type": "chat", "message": "Watchlist review timed out. Try fewer tickers."}
+    except Exception as e:
+        return {"display_type": "chat", "message": f"Error: {str(e)}"}
+STEP 3: Add the review_watchlist method to the agent
+In agent/claude_agent.py, add this method:
+pythonasync def review_watchlist(self, tickers: list[str]) -> dict:
+    import asyncio
+    import time
+    
+    start = time.time()
+    tickers = [t.strip().upper() for t in tickers if t.strip()][:25]
+    print(f"[WATCHLIST] Reviewing {len(tickers)} tickers: {tickers}")
+    
+    # Fetch data for each ticker in parallel with individual timeouts
+    async def fetch_ticker_data(ticker):
+        data = {"ticker": ticker}
+        
+        # StockAnalysis overview (fundamentals)
+        try:
+            overview = await asyncio.wait_for(
+                self.data.stockanalysis.get_overview(ticker),
+                timeout=8.0,
+            )
+            if overview:
+                data.update(overview)
+        except Exception as e:
+            print(f"[WATCHLIST] {ticker} overview failed: {e}")
+        
+        # StockAnalysis analyst ratings
+        try:
+            ratings = await asyncio.wait_for(
+                self.data.stockanalysis.get_analyst_ratings(ticker),
+                timeout=8.0,
+            )
+            if ratings:
+                data["analyst_ratings"] = ratings
+        except Exception as e:
+            print(f"[WATCHLIST] {ticker} ratings failed: {e}")
+        
+        # Polygon technicals (RSI, SMA, MACD)
+        try:
+            technicals = await asyncio.wait_for(
+                self.data.polygon.get_computed_technicals(ticker),
+                timeout=8.0,
+            )
+            if technicals:
+                data["technicals"] = technicals
+        except Exception as e:
+            print(f"[WATCHLIST] {ticker} technicals failed: {e}")
+        
+        # Polygon previous day price
+        try:
+            prev = await asyncio.wait_for(
+                self.data.polygon.get_previous_close(ticker),
+                timeout=6.0,
+            )
+            if prev:
+                data["price_data"] = prev
+        except Exception as e:
+            print(f"[WATCHLIST] {ticker} price failed: {e}")
+        
+        # StockTwits sentiment
+        try:
+            sentiment = await asyncio.wait_for(
+                self.data.stocktwits.get_sentiment(ticker),
+                timeout=6.0,
+            )
+            if sentiment:
+                data["social_sentiment"] = sentiment
+        except Exception as e:
+            print(f"[WATCHLIST] {ticker} sentiment failed: {e}")
+        
+        return data
+    
+    # Fetch all tickers in parallel, but limit concurrency to avoid rate limits
+    # Process in batches of 5
+    all_ticker_data = []
+    for i in range(0, len(tickers), 5):
+        batch = tickers[i:i+5]
+        batch_results = await asyncio.gather(
+            *[fetch_ticker_data(t) for t in batch],
+            return_exceptions=True,
+        )
+        for result in batch_results:
+            if isinstance(result, Exception):
+                print(f"[WATCHLIST] Batch item failed: {result}")
+            else:
+                all_ticker_data.append(result)
+        
+        # Small delay between batches to respect rate limits
+        if i + 5 < len(tickers):
+            await asyncio.sleep(0.5)
+    
+    print(f"[WATCHLIST] Data fetched for {len(all_ticker_data)} tickers ({time.time()-start:.1f}s)")
+    
+    # Compress the data
+    from agent.data_compressor import compress_data
+    compressed = compress_data({"watchlist": all_ticker_data})
+    data_str = json.dumps(compressed, default=str)
+    print(f"[WATCHLIST] Compressed data: {len(data_str)} chars")
+    
+    # Build the Claude prompt
+    messages = [{
+        "role": "user",
+        "content": f"""[WATCHLIST DATA]
+{data_str}
+
+[USER REQUEST]
+Review my watchlist: {', '.join(tickers)}
+
+For EACH ticker, give me:
+1. TECHNICAL ANALYSIS: Current stage (Weinstein), trend direction, RSI reading, key support/resistance levels, SMA positioning, MACD signal. Is this in a buyable position right now?
+2. FUNDAMENTAL ANALYSIS: Revenue growth, margins, valuation (P/E, P/S), debt levels, earnings trajectory. Is the business improving or deteriorating?
+3. CATALYSTS & THESIS: What's the bull case? Any upcoming earnings, product launches, regulatory events, or sector tailwinds? What could move this stock in the next 1-3 months?
+4. YOUR VERDICT: Buy, hold, trim, or sell — and why. Be specific about entry points if it's a buy, or exit points if it's a sell.
+5. POSITION SIZING: Given the risk/reward, what conviction level (high/medium/low) and how would you size this?
+
+After analyzing each ticker individually, give me an OVERALL PORTFOLIO ASSESSMENT:
+- What's the portfolio's biggest strength and biggest weakness?
+- Any concentration risk (too many correlated positions)?
+- What would you add or remove to improve the portfolio?
+- What's your #1 action item for me right now?
+
+Be direct and opinionated. Tell me what you actually think."""
+    }]
+    
+    # Call Claude
+    try:
+        response = await asyncio.wait_for(
+            self.client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=self.system_prompt,
+                messages=messages,
+            ),
+            timeout=60.0,
+        )
+        
+        response_text = response.content[0].text
+        
+        # Try to parse as JSON
+        try:
+            parsed = json.loads(response_text)
+            return parsed
+        except json.JSONDecodeError:
+            # Claude returned prose instead of JSON — wrap it
+            return {
+                "display_type": "portfolio",
+                "message": response_text,
+                "tickers_reviewed": tickers,
+            }
+    
+    except asyncio.TimeoutError:
+        return {"display_type": "chat", "message": "Claude timed out analyzing your watchlist. Try fewer tickers."}
+    except Exception as e:
+        print(f"[WATCHLIST] Claude error: {e}")
+        return {"display_type": "chat", "message": f"Error: {str(e)}"}
+STEP 4: Make sure the compressor doesn't strip watchlist fields
+In agent/data_compressor.py, verify that STRIP_FIELDS does NOT contain any of these field names that the watchlist needs:
+
+ticker, price, change, market_cap, pe_ratio, ps_ratio, revenue, revenue_growth, net_income, eps, profit_margin, operating_margin, debt_to_equity, current_ratio, free_cash_flow, analyst_rating, price_target, technicals, rsi, sma_20, sma_50, sma_200, macd, social_sentiment, beta, short_float, earnings_date
+
+If any of these are in STRIP_FIELDS, remove them.
+Re-deploy backend.

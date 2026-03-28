@@ -1,0 +1,126 @@
+Please tighten the Finviz screener filters for each scan category so they return a smaller, more focused pool of stocks. This will reduce query time and improve result quality. Find the _gather_data method (or wherever each category builds its Finviz filter strings) and update the filters for each category as follows:
+For every category, make sure the Finviz screen includes sh_avgvol_o200 (average volume over 200K) as a baseline filter — this eliminates illiquid junk that wastes enrichment calls.
+Category-specific filters:
+pythonCATEGORY_FILTERS = {
+    "trades": {
+        # Short-term swing trades: liquid, trending, momentum
+        "filters": "sh_avgvol_o300,ta_sma200_pa,ta_rsi_nos,sh_price_o5",
+        # Above SMA200, RSI not overbought, price > $5, vol > 300K
+        "limit": 40,
+        "enrich_top": 12,
+    },
+    "investments": {
+        # Long-term quality: profitable, growing, reasonable valuation
+        "filters": "sh_avgvol_o300,fa_salesqoq_o10,fa_epsqoq_o10,ta_sma200_pa,sh_price_o10",
+        # Revenue growth >10%, EPS growth >10%, above SMA200, price > $10
+        "limit": 40,
+        "enrich_top": 12,
+    },
+    "fundamentals": {
+        # Improving fundamentals specifically
+        "filters": "sh_avgvol_o300,fa_salesqoq_o20,fa_opermargin_pos,sh_price_o5",
+        # Revenue growth >20%, positive operating margin, price > $5
+        "limit": 40,
+        "enrich_top": 12,
+    },
+    "squeeze": {
+        # Short squeeze setups
+        "filters": "sh_avgvol_o200,sh_short_o15,ta_sma20_pa,sh_price_o2",
+        # Short float >15%, above SMA20, price > $2
+        "limit": 30,
+        "enrich_top": 10,
+    },
+    "asymmetric": {
+        # Oversold with potential: beaten down but quality
+        "filters": "sh_avgvol_o200,ta_rsi_ob30,ta_sma200_pa,sh_price_o5",
+        # RSI oversold (<30), but still above SMA200, price > $5
+        "limit": 30,
+        "enrich_top": 10,
+    },
+    "social_momentum": {
+        # High social buzz: just need liquid stocks, social data comes from StockTwits
+        "filters": "sh_avgvol_o500,sh_relvol_o1.5,sh_price_o3",
+        # High avg volume, relative volume > 1.5x, price > $3
+        "limit": 30,
+        "enrich_top": 10,
+    },
+    "volume": {
+        # Unusual volume spikes
+        "filters": "sh_avgvol_o200,sh_relvol_o2,sh_price_o2",
+        # Relative volume > 2x normal, price > $2
+        "limit": 30,
+        "enrich_top": 10,
+    },
+    "bearish": {
+        # Bearish/short setups: breaking down
+        "filters": "sh_avgvol_o300,ta_sma200_pb,ta_sma50_pb,sh_price_o5",
+        # Below SMA200, below SMA50, liquid, price > $5
+        "limit": 30,
+        "enrich_top": 10,
+    },
+    "small_cap_spec": {
+        # Small/micro cap speculative: the specific universe matters most here
+        "filters": "sh_avgvol_o200,cap_microover,cap_smallunder,ta_sma50_pa,sh_price_o1,sh_relvol_o1",
+        # Market cap $50M-$2B, above SMA50, price > $1, some relative volume
+        "limit": 40,
+        "enrich_top": 10,
+    },
+    "ai_compute": {
+        # AI/semiconductor/compute sector
+        "filters": "sh_avgvol_o300,sec_technology,ta_sma200_pa,sh_price_o10",
+        # Tech sector, above SMA200, liquid, price > $10
+        "limit": 30,
+        "enrich_top": 10,
+    },
+    "uranium": {
+        # Uranium/nuclear — small universe, broader filters OK
+        "filters": "sh_avgvol_o100,ind_uraniummining",
+        # Uranium mining industry (if Finviz supports this filter)
+        # If not, use: "sh_avgvol_o100" and filter by keyword in company name
+        "limit": 20,
+        "enrich_top": 10,
+    },
+    "earnings": {
+        # Earnings watch: reporting soon
+        "filters": "sh_avgvol_o500,earningsdate_thisweek,sh_price_o10",
+        # Earnings this week, liquid, price > $10
+        "limit": 30,
+        "enrich_top": 12,
+    },
+    "market_scan": {
+        # Default broad scan — still tighten it
+        "filters": "sh_avgvol_o300,sh_price_o5,ta_sma200_pa",
+        # Liquid, above SMA200, price > $5
+        "limit": 50,
+        "enrich_top": 15,
+    },
+}
+How to apply these:
+
+In _gather_data (or the wide_scan_and_rank method), look up the category in CATEGORY_FILTERS to get the appropriate filter string and limits
+Pass the filters string to the Finviz screener
+Use limit to cap how many tickers come back from Finviz
+Use enrich_top to cap how many tickers get the slow StockAnalysis enrichment
+If a category isn't in the dict, fall back to the market_scan defaults
+
+Also add these limits to the enrichment step:
+python# After getting Finviz results, BEFORE enrichment:
+max_enrich = CATEGORY_FILTERS.get(category, {}).get("enrich_top", 12)
+
+# Only enrich the top N tickers (sorted by whatever pre-score you have)
+tickers_to_enrich = finviz_results[:max_enrich]
+
+# Add a per-ticker timeout on enrichment so one slow call doesn't block everything:
+for ticker in tickers_to_enrich:
+    try:
+        overview = await asyncio.wait_for(
+            self.stockanalysis.get_overview(ticker["ticker"]),
+            timeout=6.0,  # 6 seconds max per ticker
+        )
+        ticker.update(overview or {})
+    except asyncio.TimeoutError:
+        print(f"[ENRICH] {ticker['ticker']} timed out, skipping")
+    except Exception as e:
+        print(f"[ENRICH] {ticker['ticker']} failed: {e}")
+This should cut response times roughly in half for most scans since you're enriching 10-12 tickers instead of 30, and the Finviz screen returns a tighter pool to begin with.
+Re-deploy after changes.

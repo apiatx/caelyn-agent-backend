@@ -1,0 +1,85 @@
+BACKEND: Fix “blank response” for Trending Now. This is a reliability patch, not a logic change.
+
+Goal: A request must always return a valid JSON envelope, even on partial failure or Claude parse errors. No empty bodies, no silent failures.
+
+A) Add a hard “never-empty response” guarantee
+
+In the /api/query handler, wrap the entire request in a top-level try/except.
+
+Always return a JSON object with this shape:
+
+{
+  "type": "error|ok",
+  "analysis": "",
+  "structured": {},
+  "meta": {
+    "request_id": "<uuid>",
+    "preset_intent": "<string or null>",
+    "conversation_id": "<string or null>",
+    "routing": {
+      "source": "<preset|classifier|heuristic>",
+      "confidence": "<high|medium|low>",
+      "category": "<category>"
+    },
+    "timing_ms": {
+      "total": 0,
+      "grok": 0,
+      "data": 0,
+      "claude": 0
+    }
+  },
+  "error": {
+    "code": "<string>",
+    "message": "<string>",
+    "details": {}
+  }
+}
+
+
+Rules:
+
+On success: type="ok", error=null.
+
+On any failure: type="error", include error.message, and still return meta.
+
+B) Log the raw Claude output and parse failures safely
+
+If Claude output fails JSON parsing:
+
+Log: [CLAUDE_RAW] request_id=... len=... first_500=...
+
+Log: [PARSE_FAIL] request_id=... error=...
+
+Return a JSON error envelope with error.code="CLAUDE_JSON_PARSE_FAIL" and include the first 500 chars in error.details.preview.
+
+C) Add an overall timeout and partial fallback for cross_asset_trending
+
+For preset_intent=cross_asset_trending:
+
+Set a hard wall clock timeout, for example 45 seconds.
+
+If exceeded, skip remaining broadening and call Claude with what you have.
+
+If Claude times out, return type="error" but include any gathered candidates in structured.partial_candidates.
+
+D) Confirm FastAPI always returns application/json
+
+Make sure all return paths are JSONResponse or return dicts that FastAPI serializes.
+Never return "", None, or a bare string.
+
+E) Add one log line for response size
+
+Before returning, log:
+[RESP] request_id=... status=200 type=... bytes=...
+
+F) Tests to run in logs
+
+Run these 3 and paste the log excerpt:
+
+Preset Trending Now (empty query + preset_intent)
+
+Freeform “what’s trending across markets”
+
+Force a Claude parse fail by temporarily simulating invalid JSON and confirm we return error envelope not blank
+
+Do not change scoring, Grok logic, or prompts in this patch. Only reliability and observability.

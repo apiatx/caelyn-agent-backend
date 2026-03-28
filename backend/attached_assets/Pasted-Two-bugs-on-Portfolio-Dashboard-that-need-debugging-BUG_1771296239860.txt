@@ -1,0 +1,45 @@
+Two bugs on Portfolio Dashboard that need debugging:
+
+=== BUG 1: CRYPTO TICKERS NOT RESOLVING (e.g., HYPE) ===
+
+The problem: When a user adds a crypto holding like HYPE with asset_type "crypto", the /api/portfolio/quotes endpoint still tries FMP first (which fails), then commodities (which fails), and only then tries CoinGecko. But it may not be reaching CoinGecko, or the frontend may not be passing asset_type to the quotes endpoint.
+
+FRONTEND FIX: When calling POST /api/portfolio/quotes, the request body currently sends {"tickers": ["HYPE", "IREN", ...]}. Update it to also send the asset_type for each ticker. Change the request body to: {"tickers": [{"ticker": "HYPE", "asset_type": "crypto"}, {"ticker": "IREN", "asset_type": "stock"}, ...]} OR keep the tickers array as strings but add a separate asset_types map: {"tickers": ["HYPE", "IREN"], "asset_types": {"HYPE": "crypto", "IREN": "stock"}}. Pick whichever is cleaner.
+
+BACKEND FIX: In main.py in the /api/portfolio/quotes endpoint, update the logic to use asset_type when available:
+
+1. Parse the asset_types from the request body (however the frontend sends it)
+2. BEFORE the FMP batch lookup, separate tickers by asset type:
+   - stock/etf/index tickers → send to FMP as currently done
+   - crypto tickers → skip FMP entirely, go straight to CoinGecko
+   - commodity tickers → skip FMP stock lookup, go straight to COMMODITY_SYMBOLS mapping
+3. This avoids wasting FMP free-tier calls on tickers it will never find, AND ensures crypto/commodity tickers always resolve correctly
+
+Also, make sure HYPE maps to Hyperliquid on CoinGecko. The PRIORITY_OVERRIDES dict in main.py should already have "HYPE": "hyperliquid". Verify this exists. If not, add it.
+
+Additionally: the "Add Holding" form labels say "Shares" which doesn't make sense for crypto or commodities. Change the label dynamically based on asset_type:
+- Stock/ETF/Index → "Shares"  
+- Crypto → "Amount"
+- Commodity → "Units"
+
+=== BUG 2: SECTOR ALLOCATION CHART STILL EMPTY ===
+
+Debug this step by step:
+
+1. In the backend /api/portfolio/quotes endpoint, add a console log BEFORE returning: print the full quotes dict and verify every quote has a "sector" field. If any quote is missing "sector", that's the backend bug. Make sure:
+   - Every FMP stock quote copies sector from the FMP response
+   - Every CoinGecko crypto quote has sector set to "Crypto"  
+   - Every commodity quote has sector set to "Commodities"
+   - No quote returns without a sector field
+
+2. In the frontend, add a console.log after receiving the quotes response. Log the full response and check if sector fields are present. If they ARE present in the API response but the chart is still empty, the bug is in how the frontend passes data to the donut chart component.
+
+3. The donut chart needs data in a format like: [{name: "Technology", value: 4222}, {name: "Crypto", value: 30.43}, ...] where value is price * shares for each sector group. Make sure the frontend is:
+   - Reading sector from each quote
+   - Multiplying price * shares to get position value
+   - Grouping by sector and summing values
+   - Passing the grouped array to the chart component
+
+4. If the chart library needs specific props or data format, check what the donut chart component expects and make sure the data matches.
+
+Add a print/console.log at each step so we can trace where the data breaks.

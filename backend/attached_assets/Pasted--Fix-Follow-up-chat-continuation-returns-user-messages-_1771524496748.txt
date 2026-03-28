@@ -1,0 +1,233 @@
+## Fix: Follow-up chat continuation returns "user messages must have non-empty content" error
+
+### Problem
+When a user clicks a preset (e.g., "Best Trades"), gets a response, then types a follow-up question in the continuation chat bar, the backend returns:
+Error reaching AI: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'messages.0: user messages must have non-empty content'}}
+
+This means the conversation history being sent to the Claude API contains a message with empty or null content.
+
+### Root Cause
+The frontend sends the follow-up to `/api/query` with a `history` array containing the previous exchange. The previous assistant response is a structured JSON object (the full scan result), not a plain text string. When this gets serialized into the history array, the content field is either:
+1. An empty string because the frontend couldn't extract text from the structured response
+2. A serialized `[object Object]` that gets converted to empty
+3. Null/undefined because the frontend is reading the wrong field from the response
+
+The error occurs in `claude_agent.py` in `_ask_claude()` (around line 2780-2790) where history messages are added to the Claude API call. If any message has empty content, Claude's API rejects it.
+
+### Fix: Three layers of defense
+
+#### Layer 1: Backend — Sanitize history in `_ask_claude()` in `claude_agent.py`
+
+Find the history processing section in `_ask_claude()` (around line 2782-2788):
+```python
+        if history:
+            recent_history = history[-10:]
+            for msg in recent_history:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"],
+                })
+```
+
+Replace with:
+```python
+        if history:
+            recent_history = history[-10:]
+            for msg in recent_history:
+                content = msg.get("content", "")
+                # Handle structured responses — extract readable text
+                if isinstance(content, dict):
+                    # Try to extract analysis text from structured response
+                    text_parts = []
+                    if content.get("analysis"):
+                        text_parts.append(str(content["analysis"]))
+                    if content.get("structured", {}).get("message"):
+                        text_parts.append(str(content["structured"]["message"]))
+                    if content.get("structured", {}).get("market_pulse", {}).get("summary"):
+                        text_parts.append(str(content["structured"]["market_pulse"]["summary"]))
+                    # For trades, summarize the top picks
+                    for trade in content.get("structured", {}).get("top_trades", [])[:5]:
+                        if isinstance(trade, dict):
+                            ticker = trade.get("ticker", "?")
+                            thesis = trade.get("thesis", trade.get("pattern", ""))
+                            entry = trade.get("entry", "")
+                            text_parts.append(f"{ticker}: {thesis} (Entry: {entry})")
+                    # For trending, summarize picks
+                    for pick in content.get("structured", {}).get("trending_tickers", [])[:5]:
+                        if isinstance(pick, dict):
+                            ticker = pick.get("ticker", "?")
+                            why = pick.get("why_trending", pick.get("thesis", ""))
+                            text_parts.append(f"{ticker}: {why}")
+                    # For screener rows
+                    for row in content.get("structured", {}).get("rows", [])[:5]:
+                        if isinstance(row, dict):
+                            ticker = row.get("ticker", "?")
+                            signals = ", ".join(row.get("signals", [])[:3])
+                            text_parts.append(f"{ticker}: {signals}")
+                    content = "\n".join(text_parts) if text_parts else json.dumps(content, default=str)[:5000]
+                elif isinstance(content, (list, tuple)):
+                    content = json.dumps(content, default=str)[:5000]
+                else:
+                    content = str(content) if content else ""
+                
+                # CRITICAL: Never send empty content to Claude API
+                if not content or not content.strip():
+                    if msg.get("role") == "assistant":
+                        content = "[Previous analysis response — structured data]"
+                    else:
+                        content = "[Empty message]"
+                
+                messages.append({
+                    "role": msg["role"],
+                    "content": content,
+                })
+```
+
+#### Layer 2: Backend — Fix history saving in `main.py`
+
+Find where conversation history is saved after a response (search for `_save_msgs` or `updated_messages`). The assistant message content being saved should be a string, not a raw dict. Find the section that does:
+```python
+updated_messages.append({"role": "assistant", "content": _json.dumps(result, default=str)})
+```
+
+Make sure this is actually serializing to a string. If it's saving the raw dict object, the follow-up will receive a dict as content. Fix:
+```python
+# Ensure assistant content is always a string
+assistant_content = result.get("analysis", "")
+if not assistant_content:
+    assistant_content = _json.dumps(result, default=str)[:8000]
+updated_messages.append({"role": "assistant", "content": assistant_content})
+```
+
+#### Layer 3: Backend — Improve follow-up data gathering in `claude_agent.py`
+
+The follow-up path currently skips data gathering if `_needs_fresh_data` returns False. But the user asked "which of these trades has the most social momentum?" — this needs fresh social data for the specific tickers from the previous response.
+
+Find `_needs_fresh_data()` (around line 561) and add social/sentiment keywords as triggers:
+
+Find the `new_scan_triggers` list and make sure it includes:
+```python
+            "social momentum", "sentiment", "which has", "most momentum",
+            "most bullish", "compare", "social", "x sentiment", "grok",
+            "what does x say", "what does twitter say", "reddit",
+```
+
+These should already partially be there, but "which has" and "most momentum" and "compare" may be missing.
+
+Also, in the follow-up handling path in `handle_query()`, when `is_followup` is True and `_needs_fresh_data` returns True, the system should extract tickers from the conversation history and fetch social data for them. Find the section where follow-ups that need fresh data are handled. After the category is determined, add ticker extraction from history:
+```python
+        # For follow-ups that need fresh data, extract tickers from prior conversation
+        if is_followup and market_data is not None:
+            # Try to extract tickers from history for targeted enrichment
+            prior_tickers = []
+            for msg in history:
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    import re
+                    # Find tickers in prior responses
+                    found = re.findall(r'\b([A-Z]{1,5})\b', content)
+                    common_words = {"I", "A", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
+                                   "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON", "OR",
+                                   "SO", "TO", "UP", "US", "WE", "THE", "AND", "FOR", "ARE",
+                                   "BUT", "NOT", "YOU", "ALL", "CAN", "HAD", "HER", "WAS",
+                                   "BUY", "SELL", "HOLD", "LONG", "SHORT", "PUT", "CALL",
+                                   "ETF", "IPO", "CEO", "RSI", "SMA", "MACD", "NOW", "OUT",
+                                   "TOP", "NEW", "HAS", "MOST", "BEST", "HIGH", "LOW", "RISK",
+                                   "STOP", "ENTRY", "WHICH", "THESE", "THOSE", "WHAT", "THAT"}
+                    prior_tickers.extend([t for t in found if t not in common_words])
+            
+            # Deduplicate, take top 10
+            seen = set()
+            unique_tickers = []
+            for t in prior_tickers:
+                if t not in seen:
+                    seen.add(t)
+                    unique_tickers.append(t)
+            prior_tickers = unique_tickers[:10]
+            
+            if prior_tickers and isinstance(market_data, dict):
+                # Check if follow-up needs social data
+                q_lower = user_prompt.lower()
+                needs_social = any(w in q_lower for w in ["social", "momentum", "sentiment", "x say", "twitter", "reddit", "stocktwits", "buzz", "hype"])
+                
+                if needs_social and self.data.xai:
+                    print(f"[FOLLOWUP] Fetching social data for {prior_tickers[:5]} based on follow-up query")
+                    try:
+                        social_data = await asyncio.wait_for(
+                            self.data.xai.get_batch_sentiment(prior_tickers[:5]),
+                            timeout=20.0,
+                        )
+                        if social_data:
+                            market_data["followup_social_enrichment"] = social_data
+                            print(f"[FOLLOWUP] Social enrichment: {len(social_data)} tickers")
+                    except Exception as e:
+                        print(f"[FOLLOWUP] Social enrichment failed: {e}")
+```
+
+Place this code in `handle_query()` after the follow-up data gathering is complete but before the Claude call. It should run when `is_followup` is True AND `market_data` exists (meaning `_needs_fresh_data` returned True and fresh data was gathered, OR the original data is being reused).
+
+Actually, for the case where `_needs_fresh_data` returns False (pure follow-up using conversation history only), the social enrichment should still work. Modify the follow-up path (around line 309-314) to also support targeted enrichment:
+```python
+        if is_followup and not self._needs_fresh_data(user_prompt):
+            category = "followup"
+            market_data = None
+            routing_source = "followup"
+            routing_confidence = "high"
+            
+            # Even for pure follow-ups, fetch targeted data if the question requires it
+            q_lower = user_prompt.lower()
+            needs_social = any(w in q_lower for w in ["social", "momentum", "sentiment", "buzz", "hype", "x say", "twitter", "reddit"])
+            needs_price = any(w in q_lower for w in ["price", "entry", "stop", "target", "chart", "technical"])
+            
+            if needs_social or needs_price:
+                # Extract tickers from history
+                prior_tickers = []
+                for msg in history:
+                    content = str(msg.get("content", ""))
+                    import re
+                    found = re.findall(r'\b([A-Z]{1,5})\b', content)
+                    common_words = {"I", "A", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
+                                   "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON", "OR",
+                                   "SO", "TO", "UP", "US", "WE", "THE", "AND", "FOR", "ARE",
+                                   "BUT", "NOT", "YOU", "ALL", "BUY", "SELL", "HOLD", "LONG",
+                                   "SHORT", "PUT", "CALL", "ETF", "IPO", "NOW", "OUT", "TOP",
+                                   "NEW", "HAS", "MOST", "BEST", "HIGH", "LOW", "RISK", "STOP",
+                                   "ENTRY", "WHICH", "THESE", "THOSE", "WHAT", "THAT", "FEAR"}
+                    prior_tickers.extend([t for t in found if t not in common_words])
+                
+                seen = set()
+                unique_tickers = []
+                for t in prior_tickers:
+                    if t not in seen:
+                        seen.add(t)
+                        unique_tickers.append(t)
+                prior_tickers = unique_tickers[:10]
+                
+                if prior_tickers:
+                    market_data = {}
+                    if needs_social and self.data.xai:
+                        try:
+                            social = await asyncio.wait_for(
+                                self.data.xai.get_batch_sentiment(prior_tickers[:5]),
+                                timeout=20.0,
+                            )
+                            if social:
+                                market_data["social_sentiment_comparison"] = social
+                                print(f"[FOLLOWUP] Social comparison: {list(social.keys())}")
+                        except Exception as e:
+                            print(f"[FOLLOWUP] Social fetch failed: {e}")
+                    
+                    if needs_price:
+                        try:
+                            quotes = await asyncio.wait_for(
+                                self.data.get_quotes_batch(prior_tickers[:10]),
+                                timeout=8.0,
+                            )
+                            if quotes:
+                                market_data["current_quotes"] = quotes
+                                print(f"[FOLLOWUP] Price fetch: {len(quotes)} quotes")
+                        except Exception as e:
+                            print(f"[FOLLOWUP] Price fetch failed: {e}")
+            
+            print(f"[AGENT] Follow-up detected, {'with targeted enrichment' if market_data else 'using history only'} ({time.time() - start_time:.1f}s)")
+```

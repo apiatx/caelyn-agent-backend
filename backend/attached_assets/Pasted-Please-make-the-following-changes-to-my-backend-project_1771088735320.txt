@@ -1,0 +1,292 @@
+Please make the following changes to my backend project. Do not delete or modify any existing code unless I specifically say "replace."1. Create a new file data/options_scraper.py with this code:pythonimport httpx
+from bs4 import BeautifulSoup
+
+
+class OptionsScraper:
+    """
+    Scrapes free publicly available options data from Barchart
+    for unusual options activity, put/call ratios, and volume leaders.
+    This gives us the most important options flow signals without
+    a paid API.
+    """
+
+    HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    async def get_unusual_options_activity(self) -> list:
+        """
+        Get stocks with unusual options activity from Barchart.
+        This shows where volume significantly exceeds open interest,
+        indicating large new positions being opened.
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    "https://www.barchart.com/options/unusual-activity/stocks",
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+
+            if resp.status_code != 200:
+                return []
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            rows = soup.select("tr[data-symbol], tbody tr")
+
+            results = []
+            for row in rows[:25]:
+                cells = row.find_all("td")
+                if len(cells) >= 6:
+                    ticker = cells[0].get_text(strip=True)
+                    if not ticker or len(ticker) > 6:
+                        continue
+
+                    results.append({
+                        "ticker": ticker,
+                        "type": cells[1].get_text(strip=True) if len(cells) > 1 else "",
+                        "strike": cells[2].get_text(strip=True) if len(cells) > 2 else "",
+                        "expiration": cells[3].get_text(strip=True) if len(cells) > 3 else "",
+                        "volume": cells[4].get_text(strip=True) if len(cells) > 4 else "",
+                        "open_interest": cells[5].get_text(strip=True) if len(cells) > 5 else "",
+                        "vol_oi_ratio": cells[6].get_text(strip=True) if len(cells) > 6 else "",
+                    })
+            return results
+        except Exception as e:
+            print(f"Options unusual activity scraper error: {e}")
+            return []
+
+    async def get_options_volume_leaders(self) -> list:
+        """Get stocks with the highest options volume today."""
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    "https://www.barchart.com/options/volume-leaders/stocks",
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+
+            if resp.status_code != 200:
+                return []
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            rows = soup.select("tr[data-symbol], tbody tr")
+
+            results = []
+            for row in rows[:20]:
+                cells = row.find_all("td")
+                if len(cells) >= 4:
+                    ticker = cells[0].get_text(strip=True)
+                    if not ticker or len(ticker) > 6:
+                        continue
+
+                    results.append({
+                        "ticker": ticker,
+                        "options_volume": cells[1].get_text(strip=True) if len(cells) > 1 else "",
+                        "open_interest": cells[2].get_text(strip=True) if len(cells) > 2 else "",
+                        "implied_volatility": cells[3].get_text(strip=True) if len(cells) > 3 else "",
+                    })
+            return results
+        except Exception as e:
+            print(f"Options volume leaders scraper error: {e}")
+            return []
+
+    async def get_put_call_ratio(self, ticker: str) -> dict:
+        """
+        Get put/call ratio data for a specific ticker from Barchart.
+        A ratio > 1 = bearish sentiment, < 1 = bullish sentiment.
+        """
+        ticker = ticker.upper()
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"https://www.barchart.com/stocks/quotes/{ticker}/put-call-ratios",
+                    headers=self.HEADERS,
+                    timeout=15,
+                )
+
+            if resp.status_code != 200:
+                return {"ticker": ticker, "error": "Could not fetch data"}
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            ratios = {"ticker": ticker}
+
+            # Try to extract key ratio data
+            tables = soup.select("table")
+            for table in tables:
+                rows = table.select("tr")
+                for row in rows:
+                    cells = row.find_all("td")
+                    if len(cells) >= 2:
+                        label = cells[0].get_text(strip=True).lower()
+                        value = cells[1].get_text(strip=True)
+                        if "put/call vol" in label or "volume ratio" in label:
+                            ratios["put_call_volume_ratio"] = value
+                        elif "put/call oi" in label or "interest ratio" in label:
+                            ratios["put_call_oi_ratio"] = value
+                        elif "total call vol" in label:
+                            ratios["total_call_volume"] = value
+                        elif "total put vol" in label:
+                            ratios["total_put_volume"] = value
+                        elif "total call oi" in label or "call open int" in label:
+                            ratios["total_call_oi"] = value
+                        elif "total put oi" in label or "put open int" in label:
+                            ratios["total_put_oi"] = value
+
+            # Also check for stat items
+            stat_items = soup.select("[class*='stat'], [class*='ratio']")
+            for item in stat_items:
+                text = item.get_text(strip=True)
+                if "Put/Call" in text:
+                    # Try to get the number following it
+                    import re
+                    numbers = re.findall(r'[\d.]+', text)
+                    if numbers and "put_call_volume_ratio" not in ratios:
+                        ratios["put_call_volume_ratio"] = numbers[0]
+
+            return ratios
+        except Exception as e:
+            print(f"Put/call ratio error for {ticker}: {e}")
+            return {"ticker": ticker, "error": str(e)}
+
+    def interpret_flow(self, unusual_activity: list) -> dict:
+        """
+        Analyze unusual options activity to identify directional signals.
+        Groups by ticker and determines if the flow is bullish or bearish.
+        """
+        ticker_signals = {}
+
+        for trade in unusual_activity:
+            ticker = trade.get("ticker", "")
+            if not ticker:
+                continue
+
+            if ticker not in ticker_signals:
+                ticker_signals[ticker] = {
+                    "ticker": ticker,
+                    "call_count": 0,
+                    "put_count": 0,
+                    "trades": [],
+                }
+
+            trade_type = trade.get("type", "").lower()
+            if "call" in trade_type:
+                ticker_signals[ticker]["call_count"] += 1
+            elif "put" in trade_type:
+                ticker_signals[ticker]["put_count"] += 1
+
+            ticker_signals[ticker]["trades"].append(trade)
+
+        # Determine signal for each ticker
+        for ticker, data in ticker_signals.items():
+            calls = data["call_count"]
+            puts = data["put_count"]
+            total = calls + puts
+
+            if total == 0:
+                data["signal"] = "neutral"
+                data["confidence"] = "low"
+            elif calls > puts * 2:
+                data["signal"] = "bullish"
+                data["confidence"] = "high" if total >= 3 else "moderate"
+            elif puts > calls * 2:
+                data["signal"] = "bearish"
+                data["confidence"] = "high" if total >= 3 else "moderate"
+            elif calls > puts:
+                data["signal"] = "slightly bullish"
+                data["confidence"] = "moderate"
+            elif puts > calls:
+                data["signal"] = "slightly bearish"
+                data["confidence"] = "moderate"
+            else:
+                data["signal"] = "mixed"
+                data["confidence"] = "low"
+
+        return ticker_signals2. In data/market_data_service.py, make these changes:
+Add this import after the existing imports at the top: from data.options_scraper import OptionsScraper
+Add self.options = OptionsScraper() after the other self. assignments in the __init__ method
+Replace the research_ticker method with this:
+python    async def research_ticker(self, ticker: str) -> dict:
+        """
+        Get everything about a single stock.
+        Used when someone asks "analyze NVDA" or "what's happening with AAPL".
+        """
+        ticker = ticker.upper()
+        return {
+            "snapshot": self.polygon.get_snapshot(ticker),
+            "technicals": self.polygon.get_technicals(ticker),
+            "details": self.polygon.get_ticker_details(ticker),
+            "news": self.polygon.get_news(ticker, limit=10),
+            "sentiment": await self.stocktwits.get_sentiment(ticker),
+            "fundamentals": await self.stockanalysis.get_overview(ticker),
+            "financials": await self.stockanalysis.get_financials(ticker),
+            "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
+            "options_put_call": await self.options.get_put_call_ratio(ticker),
+        }
+Replace the scan_market method with this:
+python    async def scan_market(self) -> dict:
+        """Broad market overview with all data sources."""
+        movers = self.polygon.get_market_movers()
+
+        top_gainer_tickers = [
+            g["ticker"] for g in movers.get("gainers", [])[:5]
+        ]
+
+        catalyst_data = {}
+        for ticker in top_gainer_tickers:
+            catalyst_data[ticker] = {
+                "details": self.polygon.get_ticker_details(ticker),
+                "technicals": self.polygon.get_technicals(ticker),
+                "news": self.polygon.get_ticker_events(ticker)["news"],
+                "sentiment": await self.stocktwits.get_sentiment(ticker),
+                "fundamentals": await self.stockanalysis.get_overview(ticker),
+                "analyst_ratings": await self.stockanalysis.get_analyst_ratings(ticker),
+            }
+
+        trending = await self.stocktwits.get_trending()
+
+        # Options flow data
+        unusual_options = await self.options.get_unusual_options_activity()
+        options_signals = self.options.interpret_flow(unusual_options)
+        options_volume_leaders = await self.options.get_options_volume_leaders()
+
+        return {
+            "movers": movers,
+            "market_news": self.polygon.get_news(limit=15),
+            "screener_gainers": await self.finviz.get_screener_results(
+                "ta_topgainers"
+            ),
+            "catalyst_data": catalyst_data,
+            "stocktwits_trending": trending,
+            "unusual_options_activity": unusual_options,
+            "options_flow_signals": options_signals,
+            "options_volume_leaders": options_volume_leaders,
+        }
+Add a new method to the class:
+python    async def get_options_flow(self) -> dict:
+        """
+        Dedicated options flow scan.
+        Used for "show me unusual options activity" type queries.
+        """
+        unusual = await self.options.get_unusual_options_activity()
+        signals = self.options.interpret_flow(unusual)
+        volume_leaders = await self.options.get_options_volume_leaders()
+
+        return {
+            "unusual_activity": unusual,
+            "flow_signals": signals,
+            "volume_leaders": volume_leaders,
+        }3. In agent/claude_agent.py, add options flow routing.Find the _gather_data method. Find the line that says:python        else:
+            # General question — still provide some market contextAdd this block right BEFORE that else:python        elif category == "options_flow":
+            return await self.data.get_options_flow()4. In agent/prompts.py, make two changes:First, in the QUERY_CLASSIFIER_PROMPT, find the list of categories and add this line after the "overbought" line:- "options_flow": User asks about options activity, options flow, unusual options, put/call ratios, or what smart money is doing.Second, in the SYSTEM_PROMPT, add these lines after the existing data source instructions:- Options Flow (use Barchart unusual options activity data to identify where large bets are being placed)
+- When unusual options activity shows high volume relative to open interest, this signals new large positions being opened — likely institutional
+- Call-heavy unusual activity is bullish; put-heavy is bearish
+- When a stock shows both strong technicals AND bullish unusual options activity, flag this as a high-conviction setup
+- Always mention put/call ratios when analyzing individual stocks — a ratio below 0.7 is bullish, above 1.0 is bearish
+- When presenting options flow data, explain what the trades likely mean (e.g., "Heavy call buying at the $150 strike expiring next month suggests institutional traders expect a move above $150")5. Re-publish/deploy the project when done.

@@ -1,0 +1,41 @@
+you can absolutely give your xAI API-powered Grok agent a preset list of X accounts to scan for sentiment. The xAI Grok API makes this straightforward through its built-in tool-calling capabilities (especially the x_search tool in the Responses API), and you have a couple of clean ways to implement it in your agent. 
+docs.x.ai
+How It Works (Easiest Paths)Via the built-in x_search tool (recommended for most agents)
+The x_search tool natively supports an allowed_x_handles parameter (an array of up to ~10 X handles per call, without the @ symbol). You can also use excluded_x_handles, date ranges (from_date/to_date), and combine it with keyword or semantic search.  In your agent code, hardcode your preset list and pass it directly when Grok calls the tool.  
+Or put the list in your system prompt and let Grok decide when/how to use it autonomously (e.g., “You monitor these accounts for sentiment: @elonmusk
+, @xai
+, @sama
+… Always restrict x_search to allowed_x_handles = [your list] when analyzing sentiment on topic X”).
+Grok will fetch the relevant posts and you can then prompt it (or chain another tool call) to compute bullish/bearish/neutral scores, author credibility weighting, etc.
+Pure prompt-based (no manual tool config needed)
+Just include your list in the system message or initial user message:
+“You are my X sentiment analyst. Always scan only these accounts: [list]. Use x_search with allowed_x_handles to get recent posts, then analyze sentiment.”
+Because Grok is agentic and has server-side tool execution, it will handle the searches automatically on every run.
+For larger lists (>10 accounts) or truly real-time scanning  Your agent code can simply loop/batch the list (e.g., call x_search multiple times).  
+For continuous streaming (not periodic polling), combine with X’s official Filtered Stream API (you’ll need a separate X dev account for that). The official xAI cookbook even shows exactly how: stream posts → batch them → feed to Grok-3/Grok-3-mini for classification + sentiment scoring. You can add “from:user1 OR from:user2 …” rules to your stream filter to enforce your preset list. 
+docs.x.ai
+Quick Code Sketch (Python with xAI SDK)python
+from xai_sdk import Client
+from xai_sdk.tools import x_search
+
+client = Client(api_key="your_xai_key")
+
+# Your preset list
+MONITORED_HANDLES = ["elonmusk", "xai", "sama", "vitalikbuterin"]  # add as many as you want
+
+tools = [x_search()]  # or include in the chat creation
+
+# In your agent loop or Responses API call:
+response = client.responses.create(
+    model="grok-4.20-beta-latest-non-reasoning",
+    input=[{"role": "user", "content": "Analyze latest sentiment from my monitored accounts on Bitcoin"}],
+    tools=[{"type": "x_search"}],
+    # Grok can now be instructed to use allowed_x_handles = MONITORED_HANDLES
+)
+
+Why This Is Perfect for Your Use CaseNo extra X API keys required for basic periodic scans (xAI handles the X data access).  
+Grok’s reasoning + tool use is already optimized for sentiment, influence weighting, multilingual posts, etc.  
+You get real-time freshness because x_search pulls live X data.
+
+If you want the exact parameter schema or the full sentiment cookbook code, just check the official docs at https://docs.x.ai (search for “x_search” or the sentiment analysis example).  Start with the simple system-prompt + allowed_x_handles approach and you’ll have a working sentiment scanner on your preset list in minutes. Let me know if you want a full working agent template!
+

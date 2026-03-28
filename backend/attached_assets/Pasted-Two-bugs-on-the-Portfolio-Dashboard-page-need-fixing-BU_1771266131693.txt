@@ -1,0 +1,239 @@
+Two bugs on the Portfolio Dashboard page need fixing:
+BUG 1: Price, Daily P&L, Total P&L, Weight% are all blank
+The /api/portfolio/quotes endpoint is not returning price data. Please diagnose and fix:
+
+Add logging to the quotes endpoint:
+
+python@app.post("/api/portfolio/quotes")
+async def get_portfolio_quotes(request: dict):
+    tickers = request.get("tickers", [])
+    print(f"[PORTFOLIO] Quotes requested for: {tickers}")
+    
+    if not tickers:
+        print("[PORTFOLIO] No tickers provided")
+        return {"quotes": {}}
+    
+    ticker_str = ",".join(tickers[:25])
+    url = f"https://financialmodelingprep.com/api/v3/quote/{ticker_str}"
+    print(f"[PORTFOLIO] Fetching: {url}")
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, params={"apikey": FMP_API_KEY})
+        
+        print(f"[PORTFOLIO] FMP response status: {resp.status_code}")
+        print(f"[PORTFOLIO] FMP response body (first 500 chars): {resp.text[:500]}")
+        
+        if resp.status_code != 200:
+            return {"quotes": {}, "error": f"FMP returned {resp.status_code}"}
+        
+        data = resp.json()
+        print(f"[PORTFOLIO] Got {len(data)} quotes")
+        
+        quotes = {}
+        for item in data:
+            symbol = item.get("symbol", "")
+            quotes[symbol] = {
+                "price": item.get("price"),
+                "change": item.get("change"),
+                "change_pct": item.get("changesPercentage"),
+                "day_high": item.get("dayHigh"),
+                "day_low": item.get("dayLow"),
+                "year_high": item.get("yearHigh"),
+                "year_low": item.get("yearLow"),
+                "market_cap": item.get("marketCap"),
+                "volume": item.get("volume"),
+                "avg_volume": item.get("avgVolume"),
+                "pe": item.get("pe"),
+                "eps": item.get("eps"),
+                "earnings_date": item.get("earningsAnnouncement"),
+                "sector": item.get("sector", ""),
+            }
+        
+        print(f"[PORTFOLIO] Returning quotes for: {list(quotes.keys())}")
+        return {"quotes": quotes}
+    
+    except Exception as e:
+        print(f"[PORTFOLIO] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"quotes": {}, "error": str(e)}
+
+Make sure FMP_API_KEY is accessible in the file where this route is defined. Check that it's imported from config or loaded from environment:
+
+pythonimport os
+FMP_API_KEY = os.getenv("FMP_API_KEY")
+If FMP_API_KEY is None or empty, that's your problem. Check the Secrets panel.
+
+Verify the FMP batch quote endpoint works by testing manually. Add a test route:
+
+python@app.get("/api/test/fmp")
+async def test_fmp():
+    """Quick test to verify FMP API key and quote endpoint work."""
+    import os
+    key = os.getenv("FMP_API_KEY")
+    if not key:
+        return {"error": "FMP_API_KEY not found in environment"}
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"https://financialmodelingprep.com/api/v3/quote/AAPL",
+                params={"apikey": key},
+            )
+        return {
+            "status": resp.status_code,
+            "data": resp.json() if resp.status_code == 200 else resp.text[:500],
+            "key_present": True,
+            "key_preview": key[:4] + "..." if key else "MISSING",
+        }
+    except Exception as e:
+        return {"error": str(e)}
+Deploy, then open /api/test/fmp in the browser. This tells us immediately if FMP is working.
+BUG 2: AI Portfolio Review returns "No Analysis Returned"
+The AI Portfolio Review button needs to send the user's holdings to the agent and get back a clear Buy/Hold/Sell analysis. Find where the AI Portfolio Review button triggers its request and update both the request and the response handling.
+Update the /api/watchlist endpoint (or create a /api/portfolio/review endpoint) to handle portfolio review with a specific prompt:
+python@app.post("/api/portfolio/review")
+async def review_portfolio(request: dict):
+    """
+    AI Portfolio Review — takes holdings with cost basis and returns 
+    Buy/Hold/Sell for each position with reasoning.
+    """
+    holdings = request.get("holdings", [])
+    
+    if not holdings:
+        return {
+            "display_type": "chat",
+            "message": "No holdings to review. Add some positions to your portfolio first."
+        }
+    
+    print(f"[PORTFOLIO_REVIEW] Reviewing {len(holdings)} holdings")
+    
+    # Build a clean summary of holdings for Claude
+    holdings_text = ""
+    for h in holdings:
+        ticker = h.get("ticker", "")
+        shares = h.get("shares", 0)
+        avg_cost = h.get("avg_cost", 0) or h.get("avgCost", 0)
+        holdings_text += f"- {ticker}: {shares} shares @ ${avg_cost} avg cost\n"
+    
+    # Gather data for all tickers
+    tickers = [h.get("ticker", "").upper() for h in holdings if h.get("ticker")]
+    
+    import asyncio
+    
+    # Fetch quotes, news, and sentiment for all holdings
+    ticker_data = {}
+    
+    for ticker in tickers[:25]:
+        data = {"ticker": ticker}
+        
+        # StockAnalysis overview (fundamentals)
+        try:
+            overview = await asyncio.wait_for(
+                agent.data.stockanalysis.get_overview(ticker),
+                timeout=6.0,
+            )
+            if overview:
+                data.update(overview)
+        except Exception as e:
+            print(f"[PORTFOLIO_REVIEW] {ticker} overview failed: {e}")
+        
+        # StockTwits sentiment
+        try:
+            sentiment = await asyncio.wait_for(
+                agent.data.stocktwits.get_sentiment(ticker),
+                timeout=5.0,
+            )
+            if sentiment:
+                data["social_sentiment"] = sentiment
+        except:
+            pass
+        
+        # FMP news
+        try:
+            if agent.data.fmp:
+                news = await asyncio.wait_for(
+                    agent.data.fmp.get_stock_news(ticker, limit=3),
+                    timeout=5.0,
+                )
+                if news:
+                    data["recent_news"] = news
+        except:
+            pass
+        
+        ticker_data[ticker] = data
+        await asyncio.sleep(0.5)  # Rate limit courtesy
+    
+    print(f"[PORTFOLIO_REVIEW] Data gathered for {len(ticker_data)} tickers")
+    
+    # Compress data
+    from agent.data_compressor import compress_data
+    compressed = compress_data({"portfolio_data": ticker_data})
+    data_str = json.dumps(compressed, default=str)
+    
+    # Build Claude prompt
+    messages = [{
+        "role": "user",
+        "content": f"""[PORTFOLIO HOLDINGS]
+{holdings_text}
+
+[MARKET DATA FOR HOLDINGS]
+{data_str}
+
+[REQUEST]
+Review my portfolio and give me a clear VERDICT for each position. For EACH holding provide:
+
+1. **VERDICT**: BUY MORE / HOLD / TRIM / SELL — be decisive, pick one
+2. **REASONING** (2-3 sentences max): Why this verdict? Reference specific data — recent news, sentiment shift, fundamental trend, technical setup, or valuation concern
+3. **KEY RISK**: The single biggest risk to this position right now
+4. **CATALYST**: The next potential catalyst (earnings date, product launch, sector trend, macro event)
+
+Then provide an OVERALL PORTFOLIO ASSESSMENT:
+- Portfolio grade (A through F)
+- Biggest strength
+- Biggest weakness  
+- Concentration risk (are positions too correlated?)
+- Top 1-2 action items I should take this week
+- If you had to add ONE new position to improve this portfolio, what would it be and why?
+
+Be direct. Be opinionated. No hedge-everything disclaimers in the body — just one disclaimer at the very bottom.
+
+IMPORTANT: Respond with display_type "chat" and put your full analysis in the "message" field as formatted text."""
+    }]
+    
+    try:
+        response = await asyncio.wait_for(
+            agent.client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=agent.system_prompt,
+                messages=messages,
+            ),
+            timeout=60.0,
+        )
+        
+        response_text = response.content[0].text.strip()
+        print(f"[PORTFOLIO_REVIEW] Claude responded: {len(response_text)} chars")
+        
+        # Try to parse as JSON first
+        try:
+            if response_text.startswith("```"):
+                response_text = response_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(response_text)
+            return parsed
+        except json.JSONDecodeError:
+            # Claude returned prose — wrap as chat
+            return {
+                "display_type": "chat",
+                "message": response_text,
+            }
+    
+    except asyncio.TimeoutError:
+        return {"display_type": "chat", "message": "Portfolio review timed out. Try with fewer holdings."}
+    except Exception as e:
+        print(f"[PORTFOLIO_REVIEW] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"display_type": "chat", "message": f"Error reviewing portfolio: {str(e)}"}
+Re-deploy backend.

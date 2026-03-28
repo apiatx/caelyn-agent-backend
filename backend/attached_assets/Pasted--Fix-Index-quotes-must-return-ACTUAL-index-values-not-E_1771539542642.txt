@@ -1,0 +1,107 @@
+## Fix: Index quotes must return ACTUAL index values, not ETF proxy prices
+
+### Problem
+The current fix returns VIXY price ($28) as a proxy for VIX (~$19). But VIXY and VIX have completely different prices — this is misleading. Same issue: SPY ($684) is 1/10th of SPX (~$6,000). Showing proxy ETF prices in a portfolio where the user entered the actual index value as their avg cost makes the P&L calculation completely wrong.
+
+### Solution: Use FRED for VIX, and Finnhub proxy with a multiplier for market indices
+
+#### Step 1: Fix VIX to use FRED (actual VIX value)
+
+FRED's `get_vix()` returns `current_vix` which IS the actual VIX value. Use this instead of VIXY.
+
+In `main.py`, find the index quote section and replace the VIX handling:
+
+For VIX specifically:
+```python
+if ticker == "VIX":
+    try:
+        vix_data = await asyncio.to_thread(data_service.fred.get_vix)
+        if isinstance(vix_data, dict) and vix_data.get("current_vix"):
+            vix_price = vix_data["current_vix"]
+            trend = vix_data.get("trend", [])
+            prev_vix = trend[-2]["vix"] if len(trend) >= 2 else vix_price
+            change = round(vix_price - prev_vix, 2)
+            change_pct = round((change / prev_vix) * 100, 2) if prev_vix else 0
+            quotes[ticker] = {
+                "price": vix_price,
+                "change": change,
+                "change_pct": change_pct,
+                "source": "fred",
+                "asset_type": "index",
+                "sector": "Indices",
+                "company_name": "CBOE Volatility Index",
+            }
+            print(f"[PORTFOLIO] VIX from FRED: {vix_price}")
+            continue
+    except Exception as e:
+        print(f"[PORTFOLIO] FRED VIX failed: {e}")
+```
+
+#### Step 2: For SPX, DJI, NDX — use Finnhub proxy with price scaling
+
+SPY tracks SPX at roughly 1/10 the value. DIA tracks DJI at roughly 1/100. We can fetch the proxy and scale:
+```python
+INDEX_PROXY_CONFIG = {
+    "SPX": {"proxy": "SPY", "multiplier": 10.0, "name": "S&P 500 Index"},
+    "DJI": {"proxy": "DIA", "multiplier": 100.0, "name": "Dow Jones Industrial Average"},
+    "IXIC": {"proxy": "QQQ", "multiplier": 38.0, "name": "NASDAQ Composite"},
+    "NDX": {"proxy": "QQQ", "multiplier": 38.0, "name": "NASDAQ 100"},
+    "RUT": {"proxy": "IWM", "multiplier": 10.0, "name": "Russell 2000"},
+}
+```
+
+Actually, the multiplier approach is imprecise and will drift. A better approach:
+
+#### Step 3: Better approach — use the Twelve Data or Alpha Vantage provider for actual index quotes
+
+Check if you have a Twelve Data or Alpha Vantage provider configured:
+```bash
+grep -n "class.*TwelveData\|class.*AlphaVantage\|TWELVE_DATA\|ALPHA_VANTAGE" *.py
+grep -n "twelvedata\|alphavantage\|TWELVE\|ALPHA" .env
+```
+
+If either is configured, they likely support actual index quotes. Twelve Data free tier supports real-time index quotes for SPX, DJI, etc.
+
+If neither is available, the simplest reliable approach for SPX/DJI is actually to just NOT use a proxy — tell the user honestly that index tracking is limited to VIX (via FRED) and suggest they add SPY/QQQ/DIA instead of SPX/NDX/DJI, since those are the actual tradeable instruments.
+
+#### Step 4: Add a note for unsupported indices
+
+For indices where we can't get the actual value, return a clear message instead of wrong data:
+```python
+quotes[ticker] = {
+    "price": None,
+    "change": None,
+    "change_pct": None,
+    "source": "unavailable",
+    "asset_type": "index",
+    "sector": "Indices",
+    "company_name": INDEX_PROXY_CONFIG.get(ticker, {}).get("name", ticker),
+    "note": f"Live {ticker} index data unavailable on free tier. Consider using {INDEX_PROXY_CONFIG.get(ticker, {}).get('proxy', 'the ETF equivalent')} instead for accurate tracking.",
+}
+```
+
+This is better than showing a wrong price.
+
+#### Step 5: Debug why VIX/SPX rows show dashes even when backend returns data
+
+The backend agent said quotes ARE returning data, but the frontend still shows dashes. This means there's a disconnect. Add extra logging to confirm the quotes response:
+
+At the end of the `/api/portfolio/quotes` endpoint, right before returning, add:
+```python
+    print(f"[PORTFOLIO] Final quotes response: {list(quotes.keys())}")
+    for t, q in quotes.items():
+        print(f"[PORTFOLIO]   {t}: price={q.get('price')} change={q.get('change_pct')} source={q.get('source')}")
+```
+
+### Testing
+1. curl the quotes endpoint directly with VIX as an index:
+```bash
+curl -X POST http://localhost:PORT/api/portfolio/quotes \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: KEY" \
+  -d '{"tickers": ["VIX", "SPX", "NVDA"], "asset_types": {"VIX": "index", "SPX": "index", "NVDA": "stock"}}'
+```
+
+2. VIX should return actual VIX value (~19-20) from FRED, NOT VIXY ($28)
+3. SPX should either return actual SPX value OR return null with a helpful note
+4. NVDA should return normal stock quote

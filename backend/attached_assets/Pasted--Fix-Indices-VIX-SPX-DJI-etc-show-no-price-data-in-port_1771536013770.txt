@@ -1,0 +1,111 @@
+## Fix: Indices (VIX, SPX, DJI, etc.) show no price data in portfolio
+
+### Problem
+When a user adds an index like VIX to their portfolio, the quote endpoint returns no price data because indices aren't stocks — Finnhub/Finviz don't return quotes for index symbols. The portfolio shows dashes for Price, Daily P&L, Total P&L, and Weight%.
+
+### Solution
+Add index-aware quote resolution to the portfolio quotes endpoint. Indices need to be fetched differently — either via FRED, Yahoo Finance scraping, or by mapping to their tradeable ETF proxies.
+
+### Implementation
+
+#### 1. Add an index symbol mapping
+
+In `market_data_service.py` (or create a small utility), add a mapping of common indices to both their data source and TradingView symbol:
+```python
+INDEX_MAP = {
+    # Index ticker → { "quote_proxy": tradeable ETF/futures for price, "tv_symbol": TradingView symbol }
+    "VIX": {"quote_proxy": "VIXY", "tv_symbol": "TVC:VIX", "name": "CBOE Volatility Index"},
+    "SPX": {"quote_proxy": "SPY", "tv_symbol": "SP:SPX", "name": "S&P 500"},
+    "SPY": {"quote_proxy": "SPY", "tv_symbol": "AMEX:SPY", "name": "SPDR S&P 500 ETF"},
+    "DJI": {"quote_proxy": "DIA", "tv_symbol": "TVC:DJI", "name": "Dow Jones Industrial Average"},
+    "IXIC": {"quote_proxy": "QQQ", "tv_symbol": "NASDAQ:IXIC", "name": "NASDAQ Composite"},
+    "NDX": {"quote_proxy": "QQQ", "tv_symbol": "NASDAQ:NDX", "name": "NASDAQ 100"},
+    "RUT": {"quote_proxy": "IWM", "tv_symbol": "TVC:RUT", "name": "Russell 2000"},
+    "DXY": {"quote_proxy": "UUP", "tv_symbol": "TVC:DXY", "name": "US Dollar Index"},
+    "TNX": {"quote_proxy": "TLT", "tv_symbol": "TVC:TNX", "name": "10-Year Treasury Yield"},
+}
+
+def get_index_info(ticker: str) -> dict | None:
+    """Returns index info if ticker is a known index, else None."""
+    return INDEX_MAP.get(ticker.upper().strip())
+```
+
+#### 2. Update the portfolio quotes endpoint to handle indices
+
+Find the `/api/portfolio/quotes` endpoint in `main.py` (around line 1046). When fetching quotes for portfolio holdings, check if a ticker is an index and use the proxy:
+
+In the quote fetching logic, add:
+```python
+from market_data_service import get_index_info  # or wherever you put it
+
+# When fetching a quote for a ticker:
+index_info = get_index_info(ticker)
+if index_info:
+    # Fetch the proxy ETF quote instead
+    proxy_ticker = index_info["quote_proxy"]
+    quote = await fetch_quote(proxy_ticker)  # use existing quote logic
+    if quote:
+        quote["is_index"] = True
+        quote["index_name"] = index_info["name"]
+        quote["tradingview_symbol"] = index_info["tv_symbol"]
+        quote["display_ticker"] = ticker  # show original ticker to user
+        # Note: price of proxy ETF won't match index value exactly
+        # For VIX specifically, try FRED or hardcode a note
+```
+
+For VIX specifically, the VIXY proxy doesn't track VIX price directly. A better approach for VIX: check if the FRED provider has VIX data, or use the Finnhub index quote endpoint if available.
+
+Actually, the simplest reliable approach: **Finnhub has index quotes** via a different endpoint. Check if `finnhub.get_quote("^VIX")` or `finnhub.get_quote("^GSPC")` works (Finnhub uses `^` prefix for indices). Try:
+```python
+# Try Finnhub with ^ prefix for indices
+if index_info:
+    finnhub_index_symbols = {
+        "VIX": "^VIX",
+        "SPX": "^GSPC", 
+        "DJI": "^DJI",
+        "IXIC": "^IXIC",
+        "NDX": "^NDX",
+        "RUT": "^RUT",
+    }
+    finnhub_sym = finnhub_index_symbols.get(ticker.upper())
+    if finnhub_sym:
+        try:
+            quote = await asyncio.to_thread(agent.data.finnhub.get_quote, finnhub_sym)
+        except Exception:
+            # Fallback to proxy ETF
+            quote = await fetch_quote(index_info["quote_proxy"])
+```
+
+If Finnhub doesn't support `^VIX`, fall back to the proxy ETF approach and add a note that the price shown is the proxy, not the actual index value.
+
+#### 3. Add tradingview_symbol to portfolio review data
+
+In the portfolio review endpoint (`/api/portfolio/review`), when building the `fetch_ticker_data` function, also check for indices and add the TradingView symbol:
+```python
+async def fetch_ticker_data(ticker, asset_type="stock"):
+    result = {"ticker": ticker, "asset_type": asset_type}
+    
+    # Check if this is an index
+    index_info = get_index_info(ticker)
+    if index_info:
+        result["is_index"] = True
+        result["tradingview_symbol"] = index_info["tv_symbol"]
+        result["index_name"] = index_info["name"]
+        # Use proxy for quote
+        ticker_for_quote = index_info["quote_proxy"]
+    else:
+        ticker_for_quote = ticker
+    
+    # ... rest of data fetching uses ticker_for_quote for quotes
+```
+
+#### 4. Return tradingview_symbol in portfolio quotes response
+
+Make sure the `/api/portfolio/quotes` response includes `tradingview_symbol` for each holding so the frontend can use it for the chart embed. For indices, use the `tv_symbol` from INDEX_MAP. For crypto, use the CRYPTO_TV_SYMBOLS mapping we already built. For stocks, just return the ticker as-is.
+
+### Testing
+1. Add VIX to portfolio — should show current price, Daily P&L, Total P&L, Weight%
+2. The VIX TradingView chart should show the actual VIX chart (not an error)
+3. Add SPX or DJI — should also show data
+4. Regular stocks (NVDA, ATOM) should be unaffected
+5. Run `python -m pytest` — all tests pass

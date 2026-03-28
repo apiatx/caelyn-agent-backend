@@ -1,0 +1,245 @@
+CRITICAL: The agent's analysis pipeline needs to be restructured. It currently starts with quantitative screens (Finviz FA/TA filters) and adds sentiment as an afterthought. This caused it to recommend VITL — a stock with strong financials but an active fraud scandal — because it never checked the news first.
+The new priority order for analysis should be:
+
+NEWS & CATALYSTS first — What's actually happening? What stories are driving moves?
+SOCIAL SENTIMENT — What are traders saying? Bullish or bearish shift? Message volume spikes?
+Form an opinion on the narrative — Is this real or baseless hype?
+THEN check FA & TA — Do the numbers confirm or contradict the narrative?
+Final filter — Only recommend stocks where catalyst + fundamentals + technical setup all align
+
+STEP 1: Add news fetching to every scan pipeline
+Every scan (not just macro/briefing) should pull recent market news BEFORE analyzing individual tickers. In data/market_data_service.py, create a method that pulls news for the scan's universe:
+pythonasync def get_market_news_context(self, tickers: list = None) -> dict:
+    """
+    Pull recent news and sentiment data.
+    Called BEFORE individual ticker analysis.
+    Returns news headlines, sentiment scores, and event flags.
+    """
+    import asyncio
+    
+    news_data = {}
+    
+    # 1. Get broad market news from FMP or Alpha Vantage
+    try:
+        if self.fmp:
+            general_news = await asyncio.wait_for(
+                self.fmp.get_market_news(limit=20),
+                timeout=8.0,
+            )
+            news_data["market_news"] = general_news if not isinstance(general_news, Exception) else []
+    except:
+        news_data["market_news"] = []
+    
+    # 2. If we have specific tickers, get news for each
+    if tickers:
+        ticker_news = {}
+        for ticker in tickers[:15]:  # Limit to 15 tickers
+            try:
+                if self.fmp:
+                    tn = await asyncio.wait_for(
+                        self.fmp.get_stock_news(ticker, limit=5),
+                        timeout=6.0,
+                    )
+                    if tn:
+                        ticker_news[ticker] = tn
+            except:
+                pass
+            await asyncio.sleep(0.3)  # Rate limit courtesy
+        news_data["ticker_news"] = ticker_news
+    
+    # 3. Get StockTwits trending + sentiment for context
+    try:
+        st_trending = await asyncio.wait_for(
+            self.stocktwits.get_trending(),
+            timeout=6.0,
+        )
+        news_data["stocktwits_trending"] = st_trending if not isinstance(st_trending, Exception) else []
+    except:
+        news_data["stocktwits_trending"] = []
+    
+    return news_data
+STEP 2: Update the enrichment pipeline to check sentiment BEFORE recommending
+In the enrichment step (wherever tickers get scored/enriched after the Finviz screen), add a sentiment check that can DISQUALIFY tickers before they reach Claude:
+pythonasync def enrich_with_sentiment_filter(self, tickers: list) -> list:
+    """
+    Enrich tickers with sentiment data and FLAG or REMOVE tickers 
+    with extreme negative sentiment or negative news catalysts.
+    """
+    import asyncio
+    
+    enriched = []
+    
+    for ticker_data in tickers:
+        ticker = ticker_data.get("ticker", "")
+        
+        # Get StockTwits sentiment
+        try:
+            sentiment = await asyncio.wait_for(
+                self.stocktwits.get_sentiment(ticker),
+                timeout=5.0,
+            )
+            if sentiment:
+                ticker_data["social_sentiment"] = sentiment
+                
+                # FLAG: If bearish sentiment > 70%, mark as high risk
+                bearish_pct = sentiment.get("bearish_pct", 0)
+                if bearish_pct > 70:
+                    ticker_data["sentiment_flag"] = "EXTREME_BEARISH"
+                    ticker_data["sentiment_warning"] = f"{bearish_pct}% bearish on StockTwits — check for negative catalyst before considering"
+                elif bearish_pct > 50:
+                    ticker_data["sentiment_flag"] = "BEARISH"
+                    ticker_data["sentiment_warning"] = f"{bearish_pct}% bearish — sentiment headwind"
+                else:
+                    ticker_data["sentiment_flag"] = "OK"
+        except:
+            ticker_data["sentiment_flag"] = "NO_DATA"
+        
+        # Get recent news for this ticker
+        try:
+            if self.fmp:
+                news = await asyncio.wait_for(
+                    self.fmp.get_stock_news(ticker, limit=3),
+                    timeout=5.0,
+                )
+                if news:
+                    ticker_data["recent_news"] = news
+                    
+                    # Check for negative news keywords
+                    news_text = " ".join([
+                        (n.get("title", "") + " " + n.get("text", "")).lower() 
+                        for n in news
+                    ])
+                    negative_keywords = [
+                        "fraud", "lawsuit", "sued", "investigation", "sec probe",
+                        "recall", "scandal", "exposed", "fake", "misleading",
+                        "class action", "downgrade", "bankruptcy", "default",
+                        "fda reject", "failed trial", "data breach", "ceo resign",
+                        "accounting", "restatement", "delisted",
+                    ]
+                    found_negatives = [kw for kw in negative_keywords if kw in news_text]
+                    if found_negatives:
+                        ticker_data["news_flag"] = "NEGATIVE_CATALYST"
+                        ticker_data["news_warning"] = f"Negative news detected: {', '.join(found_negatives)}"
+        except:
+            pass
+        
+        enriched.append(ticker_data)
+        await asyncio.sleep(0.5)  # Rate limit
+    
+    return enriched
+STEP 3: Update the main scan methods to use this new pipeline
+For every scan category (trades, investments, fundamentals, etc.), restructure the flow:
+pythonasync def _gather_data(self, category, query):
+    # STEP 1: Get broad market news context
+    news_context = await self.data.get_market_news_context()
+    
+    # STEP 2: Run the category-specific Finviz screen
+    raw_tickers = await self._run_finviz_screen(category)
+    
+    # STEP 3: Enrich with sentiment and news (this filters/flags bad tickers)
+    enriched_tickers = await self.data.enrich_with_sentiment_filter(raw_tickers[:12])
+    
+    # STEP 4: Enrich survivors with StockAnalysis fundamentals
+    for ticker_data in enriched_tickers[:8]:
+        ticker = ticker_data.get("ticker", "")
+        try:
+            overview = await asyncio.wait_for(
+                self.data.stockanalysis.get_overview(ticker),
+                timeout=6.0,
+            )
+            if overview:
+                ticker_data.update(overview)
+        except:
+            pass
+        await asyncio.sleep(0.8)
+    
+    return {
+        "news_context": news_context,
+        "tickers": enriched_tickers,
+        "category": category,
+    }
+```
+
+### STEP 4: Update the system prompt to enforce the new analysis order
+
+**In `agent/prompts.py`, add this to the system prompt BEFORE the existing analysis instructions:**
+```
+ANALYSIS ORDER — FOLLOW THIS EXACTLY:
+
+When analyzing any set of tickers, you MUST follow this order:
+
+1. READ THE NEWS FIRST. Check the news_context and each ticker's recent_news. What's actually happening? Are there scandals, lawsuits, FDA decisions, earnings surprises, analyst upgrades, product launches, or macro catalysts? News overrides everything.
+
+2. CHECK SOCIAL SENTIMENT. Look at each ticker's social_sentiment data. If StockTwits is 70%+ bearish, that's a red flag — find out WHY before recommending. If sentiment just flipped from bullish to bearish in the last 48 hours, something happened. Dig into it.
+
+3. If a ticker has a sentiment_flag of "EXTREME_BEARISH" or a news_flag of "NEGATIVE_CATALYST", do NOT recommend it as a buy under any circumstances. You can mention it as a WARNING ("avoid this despite good financials because...") but never as a pick.
+
+4. FORM YOUR NARRATIVE. Based on news + sentiment, what's the STORY for each ticker? Is this a momentum play driven by real catalysts? Is it a value trap with deteriorating fundamentals masked by backward-looking metrics? Is it a panic sell that creates opportunity?
+
+5. NOW check the FA and TA data. Do the numbers CONFIRM or CONTRADICT your narrative? Strong financials + positive catalyst + clean chart = high conviction. Strong financials + negative catalyst + crashing chart = TRAP (like VITL).
+
+6. FINAL FILTER. Only recommend tickers where ALL THREE align:
+   - Catalyst/narrative is POSITIVE (news + sentiment confirm)
+   - Fundamentals support the thesis (revenue growing, margins healthy, reasonable valuation)
+   - Technical setup is favorable (above key SMAs, RSI not extreme, volume confirming)
+   
+   If any ONE of these three is red, either skip the ticker or flag it as high risk.
+
+REMEMBER: A stock with perfect financials and a fraud scandal is NOT a buy. A stock with mediocre financials but a massive positive catalyst and clean breakout chart MIGHT be a buy. Context > numbers. Always.
+STEP 5: Add FMP news endpoints if missing
+Check if data/fmp_provider.py has these methods. If not, add them:
+pythonasync def get_market_news(self, limit: int = 20) -> list:
+    """Get general market news."""
+    resp = await self._get(f"/api/v3/stock_news", {"limit": limit})
+    return resp if isinstance(resp, list) else []
+
+async def get_stock_news(self, ticker: str, limit: int = 5) -> list:
+    """Get news for a specific stock."""
+    resp = await self._get(f"/api/v3/stock_news", {"tickers": ticker, "limit": limit})
+    return resp if isinstance(resp, list) else []
+```
+
+**Make sure FMP API key is configured. FMP free tier gives 250 calls/day — enough for about 20-30 scans with news context.**
+
+### STEP 6: Include a TradingView chart link in responses
+
+**Add this to the system prompt so Claude includes chart links:**
+```
+For every ticker you recommend or analyze, include a TradingView chart link in the trade_plan or analysis section:
+
+"chart": "https://www.tradingview.com/chart/?symbol=TICKER"
+
+Replace TICKER with the actual ticker symbol. The frontend will render this as a clickable chart button or embedded widget.
+```
+
+**Re-deploy after all changes.**
+
+---
+
+Now give this to your **frontend Replit Agent:**
+
+---
+
+**When the agent response includes a `chart` field with a TradingView URL for any ticker, render it as a clickable button or embedded mini chart. For each ticker card in the response:**
+
+1. **If `trade_plan.chart` or `chart` exists in the ticker data**, show a "View Chart" button that opens the TradingView URL in a new tab.
+
+2. **Style it as a small button** inside the ticker card, near the trade plan section:
+```
+[📈 View Chart on TradingView]
+Styled with a subtle border, the purple accent color, and target="_blank" on the link.
+
+Alternatively, if you want to embed the chart inline, use a TradingView widget iframe:
+
+html<iframe 
+  src="https://s.tradingview.com/widgetembed/?symbol=TICKER&interval=D&theme=dark&style=1&timezone=America/New_York&width=100%&height=300"
+  width="100%" 
+  height="300" 
+  frameBorder="0"
+  style="border-radius: 8px; margin-top: 8px;"
+/>
+Replace TICKER with the actual symbol. Show this in the expanded view of each ticker card.
+
+Let the user choose — show the "View Chart" button always, and if the card is expanded, also show the embedded chart below the trade plan.
+
+Re-deploy after changes.

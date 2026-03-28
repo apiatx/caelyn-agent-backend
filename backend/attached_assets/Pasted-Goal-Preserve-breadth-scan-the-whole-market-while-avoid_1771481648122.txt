@@ -1,0 +1,218 @@
+Goal: Preserve breadth (scan the whole market) while avoiding rate limits. Implement a 3-phase pipeline: Discovery (wide, cheap) → Shortlist (rank) → Deep TA + Enrichment (narrow, expensive). Do not change any existing response schemas or frontend contracts. Keep the current UI rendering intact.
+
+0) Non-negotiables
+
+Do not modify any existing response JSON schema keys used by the frontend.
+
+Do not change display_type names already used by Daily Briefing / Trending Now / Best Trades / Screener.
+
+Add only optional fields under existing meta / scan_stats / data_health if needed.
+
+Maintain current caching + circuit breaker behavior.
+
+All new work must degrade gracefully: return best-effort results even if some providers fail.
+
+1) Implement “Wide Discovery” candidate generation everywhere it matters
+A) Best Trades: expand discovery pool
+
+In MarketDataService.get_best_trades_scan() (or wherever Best Trades pipeline lives):
+
+Increase discovery phase output to at least 200 candidates (or “as many as found”).
+
+Sources for discovery should remain your current low-cost sources:
+
+Finviz discovery screens (scrape URLs you already use)
+
+Any existing “gainers/volume” sources you already have
+
+Optional: StockTwits trending tickers list if already implemented
+
+No candles and no FMP fundamentals in discovery.
+
+Output: candidates_discovered[] with minimal fields: {ticker, source_tags, discovery_signals}
+
+B) Screeners: same pattern
+
+For run_deterministic_screener():
+
+Discovery pool should be 100–300 tickers (depending on preset), using Finviz filters and your existing screen logic.
+
+No candles at discovery time.
+
+2) Add deterministic pre-ranking (cheap) to create a shortlist
+
+Create a small deterministic scoring function (no AI needed) to shortlist candidates before candles.
+
+A) Pre-rank scoring signals (cheap)
+
+Use only what’s already available from discovery:
+
+source_overlap_count (how many discovery sources mention it)
+
+“volume/gap/momentum flags” if you scrape them
+
+social velocity score if already present
+
+penalty for OTC / pink sheets unless user explicitly asks microcaps
+
+Make a pre_rank_score 0–100.
+
+B) Shortlist composition rules (prevents missing runners)
+
+For Best Trades:
+
+Select SHORTLIST_SIZE = 40 candidates total.
+
+Build shortlist as a union of “buckets” so you don’t miss edge cases:
+
+top 10 by social_velocity (if available)
+
+top 10 by volume / rel_volume (if available)
+
+top 10 by gap% (if available)
+
+top 10 by pre_rank_score
+
+De-dupe tickers, then if < 40 fill by descending pre_rank_score.
+
+For Screeners:
+
+SHORTLIST_SIZE = 30
+
+Use preset-specific weights but same idea: rank first, then candle fetch only for the top 30.
+
+3) Deep TA fetch phase: increase TA breadth safely without rate limits
+
+This is where your current system fails because it fetches too few candles.
+
+A) Candle budget strategy
+
+You already have a centralized get_candles() with caching and a provider chain (TwelveData → Finnhub → Polygon).
+Keep that.
+
+Change budgets per request:
+
+Best Trades candle budget: CandleBudget(max_calls=15) for TwelveData (primary) but still enforce per-provider.
+
+If TwelveData rate-limits, fall through to Finnhub/Polygon (existing).
+
+Maintain existing circuit breakers.
+
+Important: The budget is calls, not tickers. Because caching will turn repeats into 0 calls.
+
+B) Concurrency and pacing
+
+To avoid burst rate limits:
+
+Use asyncio.Semaphore(3) for candle fetch concurrency
+
+Add a tiny jitter sleep between batches when using TwelveData (ex: 150–250ms) only if twelvedata_used approaches the per-minute limit.
+
+C) TA computation must be deterministic (not Claude)
+
+After candles are retrieved, compute indicators in backend (using your existing ta_utils):
+
+RSI(14)
+
+MACD (12,26,9)
+
+SMA20 / SMA50 / SMA200
+
+EMA20 (optional)
+
+Volume surge: compare last bar volume vs 20-day average
+
+Breakout detection: close above 20-day high AND above SMA50/200 (basic stage-2 proxy)
+
+Store these in candidate objects that already exist in pipeline.
+
+4) Best Trades must be TA-first, not social commentary
+
+Right now Claude is free-styling. Fix by forcing structured TA inputs and enforcing output contract.
+
+A) Backend must pass a “TA summary payload” to Claude
+
+For each shortlisted ticker that has candles:
+
+include current price (from quote provider)
+
+include indicators and a simple boolean “signal stack”
+Example fields:
+
+ta.indicators.rsi, ta.indicators.macd, ta.indicators.sma50, ta.indicators.sma200
+
+ta.signals.sma50_cross_up, ta.signals.macd_bull_cross, ta.signals.breakout_20d, ta.signals.volume_surge
+
+ta.signal_strength 0–100 computed deterministically
+
+B) Enforce “always pick next best”
+
+If no ticker hits “perfect criteria”, Best Trades must still return:
+
+top 5 bullish setups by ta.signal_strength
+
+plus up to 2 bearish setups only if signal_strength >= 80 and clear breakdown criteria met
+
+No “X is buzzing…” narrative allowed as the main output.
+
+C) Output contract enforcement (server-side)
+
+If Claude returns narrative:
+
+backend must fall back to a deterministic renderer that creates the same structured response shape used by Best Trades UI (the one that shows TradingView links, entry/stop/target).
+
+This ensures “Best Trades” always looks like “Best Trades”.
+
+5) Quotes reliability for screener tables (fix N/A)
+
+Your screenshot is “N/A everywhere”. That’s quote fetch failing or not being called.
+
+A) Add a quote batcher
+
+In MarketDataService, implement:
+
+get_quotes_batch(symbols: list[str]) -> dict[ticker]
+Try providers in order:
+
+Finnhub quote endpoint (you already have, high rate limit)
+
+FMP quote endpoint as fallback but respect the 250/day limit (only use for final top N)
+
+If both fail, return nulls (no crash)
+
+B) When to call it
+
+For screeners:
+
+Fetch quotes for SHORTLIST_SIZE only (30)
+
+For the final “Top Picks” + table rows, ensure price and chg% are sourced from quotes, not fundamentals.
+
+6) Add lightweight “API usage stats” for debugging (optional)
+
+Do not show it in UI.
+Add under existing meta:
+
+meta.api_usage = { finnhub_quote_used, twelvedata_candles_used, polygon_candles_used, fmp_used, cache_hits, rate_limited }
+
+This helps you verify you’re not rate-limited.
+
+7) Tests
+
+Update / add tests to ensure:
+
+Best Trades returns at least 5 setups even when no perfect match
+
+Quote batcher populates price/chg% for screener shortlist
+
+Budget prevents more than allowed candle calls
+
+No schema changes
+
+Done definition
+
+Best Trades returns a structured, TA-driven output every time (no generic social commentary).
+
+Screener tables show price and chg% for shortlist tickers (no wall of N/A unless provider down).
+
+Calls remain within TwelveData 8/min and do not hammer Polygon.

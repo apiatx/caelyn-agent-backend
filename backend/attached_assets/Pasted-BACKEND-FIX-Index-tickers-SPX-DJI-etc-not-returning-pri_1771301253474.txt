@@ -1,0 +1,54 @@
+BACKEND FIX: Index tickers (SPX, DJI, etc.) not returning price data
+
+Index tickers like SPX, DJI, IXIC, NDX, RUT, VIX, DXY are not returning prices because they aren't stocks — Yahoo Finance and FMP don't return quotes for raw index symbols.
+
+In the /api/portfolio/quotes endpoint, add index ticker handling. When asset_type is "index", route these tickers to Yahoo Finance using the correct Yahoo index symbols:
+
+Add an INDEX_YAHOO_SYMBOLS mapping:
+
+INDEX_YAHOO_SYMBOLS = {
+    "SPX": "^GSPC",
+    "SPY": "SPY",
+    "DJI": "^DJI",
+    "IXIC": "^IXIC",
+    "NDX": "^NDX",
+    "QQQ": "QQQ",
+    "RUT": "^RUT",
+    "VIX": "^VIX",
+    "DXY": "DX-Y.NYB",
+}
+
+When processing tickers, separate index tickers just like crypto and commodity tickers are separated. For each index ticker:
+
+1. Look up the Yahoo symbol from INDEX_YAHOO_SYMBOLS
+2. Fetch the quote from Yahoo using the mapped symbol (e.g., fetch "^GSPC" instead of "SPX")
+3. Store the result in quotes under the ORIGINAL ticker (e.g., quotes["SPX"] not quotes["^GSPC"])
+4. Set sector to "Index" and asset_type to "index"
+
+Add index_tickers to the routing logic alongside stock_tickers, crypto_tickers, and commodity_tickers:
+
+index_tickers = [t for t in tickers if asset_types.get(t) == "index"]
+stock_tickers = [t for t in tickers if asset_types.get(t, "stock") in ("stock", "etf") and t not in index_tickers]
+
+Then after the commodity section, add:
+
+# ---- Indices: use Yahoo index symbols ----
+if index_tickers:
+    for ticker in index_tickers:
+        yahoo_symbol = INDEX_YAHOO_SYMBOLS.get(ticker)
+        if yahoo_symbol:
+            try:
+                # Use whatever Yahoo fetch method the rest of the code uses
+                # This should match how stock_tickers are fetched via Yahoo
+                # but using the mapped symbol (e.g., "^GSPC" instead of "SPX")
+                # Store result under the original ticker name
+                # After fetching, set:
+                # quotes[ticker]["sector"] = "Index"
+                # quotes[ticker]["asset_type"] = "index"
+                pass  # Replace this with the actual Yahoo fetch call matching your existing pattern
+            except Exception as e:
+                print(f"[PORTFOLIO] Index {ticker} ({yahoo_symbol}) error: {e}")
+        else:
+            print(f"[PORTFOLIO] No Yahoo symbol mapping for index: {ticker}")
+
+IMPORTANT: Look at how stock_tickers are currently fetched via Yahoo in this endpoint and use the exact same method/function for index tickers — just pass the mapped Yahoo symbol instead of the raw ticker. The fetch pattern should be identical, only the symbol changes.

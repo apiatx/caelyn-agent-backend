@@ -1,0 +1,300 @@
+Please make ALL of the following changes. Do not delete or modify any existing code unless I specifically say "replace."
+Add Weinstein Stage Analysis to Sector Rotation
+STEP 1: Add Sector Stage Analysis Method
+In data/market_data_service.py, add this method to the MarketDataService class:
+python    async def get_sector_rotation_with_stages(self) -> dict:
+        """
+        Sector rotation analysis using Weinstein Stage Analysis.
+        
+        For each sector, determines what % of stocks are in Stage 2 (advancing).
+        Sectors with the highest % of Stage 2 stocks are the "hot" sectors
+        where money is flowing — these are where you want to fish for trades.
+        
+        Weinstein Stage Classification:
+        - Stage 1 (Basing): Price near flattening 150-day SMA
+        - Stage 2 (Advancing): Price ABOVE rising 150-day SMA (BUY zone)
+        - Stage 3 (Topping): Price near 150-day SMA after advance, flattening
+        - Stage 4 (Declining): Price BELOW falling 150-day SMA (AVOID)
+        
+        We approximate using Finviz filters:
+        - Above SMA200 + Above SMA50 + SMA50 above SMA200 = Stage 2
+        - Above SMA200 + Below SMA50 = Stage 3 (potential topping)
+        - Below SMA200 + Below SMA50 = Stage 4 (declining)
+        - Below SMA200 + Above SMA50 = Stage 1 (potential basing/recovery)
+        """
+        import asyncio
+
+        # The 11 GICS sectors with their Finviz sector filter codes
+        sectors = {
+            "Technology": "sec_technology",
+            "Healthcare": "sec_healthcare",
+            "Financial": "sec_financial",
+            "Consumer Cyclical": "sec_consumercyclical",
+            "Consumer Defensive": "sec_consumerdefensive",
+            "Industrials": "sec_industrials",
+            "Energy": "sec_energy",
+            "Basic Materials": "sec_basicmaterials",
+            "Real Estate": "sec_realestate",
+            "Utilities": "sec_utilities",
+            "Communication Services": "sec_communicationservices",
+        }
+
+        # Sector ETF tickers for price/performance data
+        sector_etfs = {
+            "Technology": "XLK",
+            "Healthcare": "XLV",
+            "Financial": "XLF",
+            "Consumer Cyclical": "XLY",
+            "Consumer Defensive": "XLP",
+            "Industrials": "XLI",
+            "Energy": "XLE",
+            "Basic Materials": "XLB",
+            "Real Estate": "XLRE",
+            "Utilities": "XLU",
+            "Communication Services": "XLC",
+        }
+
+        async def analyze_sector(sector_name, finviz_code):
+            """
+            For each sector, run 4 Finviz screens to count stocks in each stage.
+            """
+            try:
+                # Stage 2: Above SMA200 AND above SMA50 AND SMA200 trending up
+                # Finviz: ta_sma200_pa (price above SMA200) + ta_sma50_pa (price above SMA50)
+                stage2_screen = f"v=111&f=sec_{finviz_code.replace('sec_', '')},ta_sma200_pa,ta_sma50_pa,sh_avgvol_o200&ft=4"
+                
+                # Stage 4: Below SMA200 AND below SMA50
+                stage4_screen = f"v=111&f=sec_{finviz_code.replace('sec_', '')},ta_sma200_pb,ta_sma50_pb,sh_avgvol_o200&ft=4"
+                
+                # Total stocks in sector (above min volume)
+                total_screen = f"v=111&f=sec_{finviz_code.replace('sec_', '')},sh_avgvol_o200&ft=4"
+
+                stage2_results, stage4_results, total_results = await asyncio.gather(
+                    self.finviz._custom_screen(stage2_screen),
+                    self.finviz._custom_screen(stage4_screen),
+                    self.finviz._custom_screen(total_screen),
+                    return_exceptions=True,
+                )
+
+                stage2_count = len(stage2_results) if not isinstance(stage2_results, Exception) and stage2_results else 0
+                stage4_count = len(stage4_results) if not isinstance(stage4_results, Exception) and stage4_results else 0
+                total_count = len(total_results) if not isinstance(total_results, Exception) and total_results else 1
+
+                # Stage 1 + Stage 3 are the remainder
+                stage1_3_count = max(0, total_count - stage2_count - stage4_count)
+
+                stage2_pct = round((stage2_count / max(total_count, 1)) * 100, 1)
+                stage4_pct = round((stage4_count / max(total_count, 1)) * 100, 1)
+
+                # Determine sector's overall Weinstein stage
+                if stage2_pct >= 60:
+                    sector_stage = "Stage 2 - Advancing"
+                    signal = "STRONG BUY ZONE — Majority of stocks in uptrends. Fish here for trades."
+                elif stage2_pct >= 40:
+                    sector_stage = "Early Stage 2 / Late Stage 1"
+                    signal = "EMERGING — Sector transitioning to uptrend. Watch for breakouts."
+                elif stage4_pct >= 50:
+                    sector_stage = "Stage 4 - Declining"
+                    signal = "AVOID — Majority of stocks in downtrends. Don't fight the trend."
+                elif stage4_pct >= 30:
+                    sector_stage = "Stage 3 - Topping / Early Stage 4"
+                    signal = "CAUTION — Distribution in progress. Take profits, tighten stops."
+                else:
+                    sector_stage = "Stage 1 - Basing"
+                    signal = "WATCH — Sector consolidating. Not ready yet but building a base."
+
+                return {
+                    "sector": sector_name,
+                    "etf": sector_etfs.get(sector_name, ""),
+                    "total_stocks": total_count,
+                    "stage2_count": stage2_count,
+                    "stage2_pct": stage2_pct,
+                    "stage4_count": stage4_count,
+                    "stage4_pct": stage4_pct,
+                    "stage1_3_count": stage1_3_count,
+                    "sector_stage": sector_stage,
+                    "signal": signal,
+                }
+            except Exception as e:
+                print(f"Sector analysis error for {sector_name}: {e}")
+                return {
+                    "sector": sector_name,
+                    "etf": sector_etfs.get(sector_name, ""),
+                    "error": str(e),
+                }
+
+        # Run all sectors in parallel
+        sector_results = await asyncio.gather(
+            *[analyze_sector(name, code) for name, code in sectors.items()],
+            return_exceptions=True,
+        )
+
+        # Clean up results
+        sector_data = []
+        for result in sector_results:
+            if isinstance(result, Exception):
+                continue
+            if isinstance(result, dict):
+                sector_data.append(result)
+
+        # Sort by Stage 2 percentage (hottest sectors first)
+        sector_data.sort(key=lambda x: x.get("stage2_pct", 0), reverse=True)
+
+        # Get sector ETF performance data from StockAnalysis
+        top_sector_etfs = [s["etf"] for s in sector_data[:6] if s.get("etf")]
+        etf_data = {}
+        for etf in top_sector_etfs:
+            try:
+                overview = await self.stockanalysis.get_overview(etf)
+                if overview and not isinstance(overview, Exception):
+                    etf_data[etf] = overview
+            except:
+                pass
+
+        # Also get top Stage 2 breakout candidates from the top 3 sectors
+        top_sectors = [s["sector"] for s in sector_data[:3] if s.get("stage2_pct", 0) >= 40]
+        breakout_candidates = []
+        for sector_name in top_sectors:
+            try:
+                finviz_code = sectors[sector_name].replace("sec_", "")
+                # Stage 2 stocks with unusual volume (breakout signal)
+                breakout_screen = f"v=111&f=sec_{finviz_code},ta_sma200_pa,ta_sma50_pa,sh_relvol_o1.5,sh_avgvol_o300&ft=4&o=-sh_relvol"
+                results = await self.finviz._custom_screen(breakout_screen)
+                if results and not isinstance(results, Exception):
+                    for r in results[:5]:
+                        r["from_sector"] = sector_name
+                        breakout_candidates.append(r)
+            except:
+                pass
+
+        # Enrich breakout candidates with StockAnalysis
+        enriched_breakouts = {}
+        for candidate in breakout_candidates[:15]:
+            ticker = candidate.get("ticker", "")
+            if not ticker:
+                continue
+            try:
+                overview = await self.stockanalysis.get_overview(ticker)
+                analyst = await self.stockanalysis.get_analyst_ratings(ticker)
+                enriched_breakouts[ticker] = {
+                    "finviz": candidate,
+                    "overview": overview if not isinstance(overview, Exception) else {},
+                    "analyst_ratings": analyst if not isinstance(analyst, Exception) else {},
+                }
+            except:
+                enriched_breakouts[ticker] = {"finviz": candidate}
+
+        # Get macro context
+        fear_greed = {}
+        try:
+            fear_greed = await self.fear_greed.get_fear_greed_index()
+        except:
+            pass
+
+        # FMP sector performance
+        fmp_sectors = {}
+        try:
+            fmp_sectors = await self.fmp.get_sector_performance()
+        except:
+            pass
+
+        return {
+            "sector_stages": sector_data,
+            "etf_data": etf_data,
+            "breakout_candidates": enriched_breakouts,
+            "fear_greed": fear_greed if not isinstance(fear_greed, Exception) else {},
+            "fmp_sector_performance": fmp_sectors if not isinstance(fmp_sectors, Exception) else {},
+        }
+STEP 2: Update Sector Rotation Route in Agent
+In agent/claude_agent.py, find where category sector_rotation is handled in _gather_data. Replace the return line with:
+python        elif category == "sector_rotation":
+            return await self.data.get_sector_rotation_with_stages()
+```
+
+### STEP 3: Update Sector Rotation Display Format in System Prompt
+
+**In `agent/prompts.py`, find the existing sector rotation format and replace it with:**
+```
+### FORMAT: "sector_rotation" — Weinstein Stage-Based Sector Rotation
+Use when: user asks about sector rotation, which sectors to focus on, where money is flowing.
+
+You receive Weinstein Stage Analysis data for all 11 GICS sectors. Each sector shows:
+- stage2_pct: What percentage of stocks in the sector are in Stage 2 (above both SMA50 and SMA200 = uptrend)
+- stage4_pct: What percentage are in Stage 4 (below both = downtrend)
+- sector_stage: Overall classification (Stage 1 through Stage 4)
+- breakout_candidates: Individual stocks from the top sectors showing unusual volume
+
+THE KEY INSIGHT: Sectors with the highest stage2_pct are where money is flowing.
+Per Weinstein's "Forest to Trees" approach:
+1. First identify which SECTORS are in Stage 2 (the forest)
+2. Then find individual STOCKS within those sectors breaking out (the trees)
+3. NEVER buy stocks in Stage 4 sectors — even good stocks get dragged down
+```json
+{
+  "display_type": "sector_rotation",
+  "market_regime": "Risk-On. 7 of 11 sectors in Stage 2. Broad-based advance — healthy market.",
+  "sector_rankings": [
+    {
+      "rank": 1,
+      "sector": "Technology",
+      "etf": "XLK",
+      "stage2_pct": 72,
+      "stage4_pct": 8,
+      "total_stocks": 245,
+      "sector_stage": "Stage 2 - Advancing",
+      "signal": "STRONG BUY ZONE",
+      "performance_1m": "+5.2%",
+      "interpretation": "72% of tech stocks above both SMAs — strongest sector. AI/semiconductor sub-theme driving leadership. This is where the biggest winners will come from.",
+      "top_breakouts": [
+        {
+          "ticker": "NVDA",
+          "price": "$875",
+          "change": "+3.2%",
+          "rel_volume": "2.8x",
+          "revenue_growth": "+94% YoY",
+          "analyst_consensus": "Strong Buy",
+          "setup": "Stage 2 breakout on massive volume. Revenue accelerating."
+        }
+      ]
+    },
+    {
+      "rank": 11,
+      "sector": "Utilities",
+      "etf": "XLU",
+      "stage2_pct": 18,
+      "stage4_pct": 52,
+      "total_stocks": 78,
+      "sector_stage": "Stage 4 - Declining",
+      "signal": "AVOID",
+      "performance_1m": "-3.1%",
+      "interpretation": "52% of utility stocks in downtrends. Rising rates crushing this sector. Do NOT buy stocks here regardless of how cheap they look."
+    }
+  ],
+  "regime_summary": {
+    "stage2_sectors": ["Technology", "Healthcare", "Industrials", "Consumer Cyclical", "Communication Services"],
+    "stage4_sectors": ["Utilities", "Real Estate"],
+    "transitioning": ["Energy", "Basic Materials"],
+    "market_breadth": "Healthy — 64% of all sectors advancing"
+  },
+  "weinstein_playbook": "With 7/11 sectors in Stage 2, this is a broad Stage 2 advance. Focus positions in Technology (72% Stage 2) and Healthcare (65% Stage 2). The breakout candidates from these sectors have the highest probability of big moves. Avoid Utilities and Real Estate — capital is rotating OUT. Energy is transitioning — watch for Stage 2 confirmation before committing.",
+  "action_plan": [
+    "Concentrate new positions in top 3 Stage 2 sectors (Tech, Healthcare, Industrials)",
+    "The breakout candidates listed have unusual volume + strong sectors = highest probability setups",
+    "Avoid ALL positions in Stage 4 sectors (Utilities, Real Estate) regardless of valuation",
+    "Watch transitioning sectors (Energy, Materials) for Stage 2 breakout confirmation"
+  ]
+}
+```
+
+RULES FOR SECTOR ROTATION FORMAT:
+- ALWAYS rank sectors by stage2_pct descending — the hottest sectors go first
+- Use Weinstein's language: Stage 1 (Basing), Stage 2 (Advancing), Stage 3 (Topping), Stage 4 (Declining)
+- stage2_pct >= 60% = STRONG BUY ZONE. These are the sectors to concentrate positions in.
+- stage2_pct 40-60% = Emerging/Early Stage 2. Worth watching for confirmation.
+- stage4_pct >= 50% = AVOID. Capital is leaving. Don't fight it.
+- For top Stage 2 sectors, show the breakout candidates with StockAnalysis fundamentals
+- Include weinstein_playbook section that gives a clear, actionable summary
+- Flag regime changes: If most sectors are Stage 2, it's a bull market. If most are Stage 4, it's a bear market. Mixed = rotation/selective market.
+- Include FMP sector performance data for 1d/1w/1m returns where available
+- If a sector is transitioning FROM Stage 4 TO Stage 1 or Stage 2 (stage4 declining, stage2 rising), flag it as "Early Rotation Signal"
+Re-publish/deploy the backend.

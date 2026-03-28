@@ -1,0 +1,48 @@
+## CRITICAL Fix: "Crypto" sidebar button sends preset_intent "crypto_focus" which doesn't resolve
+
+### Root Cause (CONFIRMED)
+The frontend sends `preset_intent: "crypto_focus"` when the user clicks "Crypto" in the sidebar. But the backend's PRESET_ALIASES map only has `"crypto": "crypto_scanner"`. The preset `"crypto_focus"` is not in the map, so `_resolve_preset()` returns None, the preset routing fails, and the query falls through to the OpenAI classifier which incorrectly routes it to the trending/cross_market pipeline. That's why the response shows stocks (KNRX, KLAR, AGAE) instead of crypto.
+
+### Fix: Add "crypto_focus" to PRESET_ALIASES
+
+In `claude_agent.py`, find PRESET_ALIASES (around line 30-70). Add this line:
+```python
+    "crypto_focus": "crypto_scanner",
+```
+
+That's it. One line. This maps the frontend's preset name to the correct backend pipeline.
+
+### But also: Check for other missing preset aliases
+
+The frontend might send other preset names that don't resolve. Check all the sidebar items and their preset_intent values. Common patterns that might be missing:
+```python
+    # Add these if they don't already exist:
+    "crypto_focus": "crypto_scanner",
+    "crypto_scan": "crypto_scanner", 
+    "commodity_focus": "commodity_scan",
+    "commodity_scan": "commodity_scan",
+    "energy_focus": "thematic_scan",
+    "ai_compute": "thematic_scan",
+    "quantum_focus": "thematic_scan",
+    "materials_focus": "thematic_scan",
+    "aerospace_focus": "thematic_scan",
+    "tech_focus": "thematic_scan",
+    "finance_focus": "thematic_scan",
+    "healthcare_focus": "thematic_scan",
+    "real_estate_focus": "thematic_scan",
+```
+
+Check the server logs for any "[ROUTING] Unknown preset_intent" messages — those reveal which frontend presets don't have backend mappings.
+
+Also run this to find ALL preset values the frontend might send:
+```bash
+grep -rn "preset_intent\|preset.*focus\|preset.*scan" --include="*.tsx" --include="*.ts" --include="*.jsx" --include="*.js" frontend/ src/ client/ 2>/dev/null | grep -v node_modules | head -30
+```
+
+### Testing
+1. Click "Crypto" in sidebar
+2. Check logs: should show `[ROUTING] Resolved preset alias 'crypto_focus' → 'crypto_scanner'`
+3. Response should show crypto data (BTC, ETH, altcoins) — NOT stocks
+4. Click other sidebar items (Energy, AI/Compute, etc.) and verify they don't return "Unknown preset_intent" errors
+5. All other presets (Daily Briefing, Trending Now, Best Trades) still work
+6. `python -m pytest` passes

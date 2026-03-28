@@ -1,0 +1,125 @@
+## Two Bugs: "Trending Now" Error + "Best Investments" Weak Data
+
+### Bug 1: "Trending Now" returns "Error: [object Object]" again
+
+This is the same class of error as before. Something in the cross_asset_trending pipeline is returning an error dict the frontend can't render. 
+
+**Diagnostic steps:**
+1. Check the server logs for the most recent "Trending Now" request
+2. Look for any Python traceback, especially in the compression layer or Grok schema validation
+3. The Grok prompt change we made (reducing large_caps to 0-2) may cause Grok to return `"large_caps": []` (empty array). Check if the schema validator `_validate_cross_asset_schema` rejects empty arrays. If the large_caps array being empty causes a validation failure, fix the validator to accept empty arrays.
+4. Check if the `_compress_cross_asset_trending` compressor is throwing an error on the new Grok output shape
+5. Check the `_ask_claude` double-compression skip — make sure the `_compression` key check works for cross_asset_trending category
+
+**Most likely cause:** The Grok prompt change caused Grok to return 0 large caps, and either the schema validator or some downstream code expects at least 1 large cap and throws when it gets an empty list. Fix: make all large_cap handling tolerant of empty arrays.
+
+Also check the cross_asset_ranker.py — the `_extract_stock_candidates` function may expect at least 1 item in `large_caps`. With `COVERAGE_QUOTAS["equities_large"] = 0`, the quota backfill logic might behave differently. Make sure it handles 0 gracefully.
+
+### Bug 2: "Best Investments" returns weak results with missing price/volume data
+
+#### Root Cause
+The `wide_scan_and_rank("investments")` pipeline does:
+1. Finviz screen → gets tickers with stale Finviz data (15-20 min delay, often missing price)
+2. Light enrichment → only reads Finviz fields, never fetches live quotes
+3. Score + rank → scores on incomplete data  
+4. Sentiment filter → ok
+5. Deep enrichment → StockAnalysis overview + Finnhub analyst/insider/earnings (good fundamentals, but STILL no live price or TA)
+6. Claude → sees 93 tickers with no current prices, no volume data, no TA indicators → correctly says "data quality issue"
+
+The problem: **`wide_scan_and_rank` never fetches quotes or candles for the top candidates**. Best Trades works because `get_best_trades_scan` has an explicit Phase 2 that fetches OHLCV candles and runs TA analysis. The investments pipeline skips this entirely.
+
+#### Fix: Add quote + candle fetching to the investments deep enrichment phase
+
+In `market_data_service.py`, in the `wide_scan_and_rank()` method, after the deep enrichment loop (around line 1022, after the `deep_results` loop completes), add a quote + candle enrichment phase for the top candidates:
+```python
+        # Phase 2.5: Fetch quotes and candles for top candidates (investments needs price/TA data)
+        if category in ("investments", "fundamentals_scan", "asymmetric"):
+            quote_tickers = [t for t in deep_tickers[:12]]
+            if quote_tickers:
+                print(f"[Wide Scan] Fetching quotes for {len(quote_tickers)} top {category} candidates")
+                try:
+                    batch_quotes = await asyncio.wait_for(
+                        self.get_quotes_batch(quote_tickers),
+                        timeout=8.0,
+                    )
+                    for ticker in quote_tickers:
+                        if ticker in batch_quotes and ticker in candidates:
+                            q = batch_quotes[ticker]
+                            if not candidates[ticker].get("snapshot"):
+                                candidates[ticker]["snapshot"] = {}
+                            candidates[ticker]["snapshot"]["price"] = q.get("price")
+                            candidates[ticker]["snapshot"]["change_pct"] = q.get("change_pct")
+                            candidates[ticker]["snapshot"]["prev_close"] = q.get("prev_close")
+                    print(f"[Wide Scan] Quote backfill: {len(batch_quotes)}/{len(quote_tickers)} filled")
+                except Exception as e:
+                    print(f"[Wide Scan] Quote backfill failed: {e}")
+
+                # Fetch candles for top 8 to get TA indicators
+                candle_budget_inv = CandleBudget(max_calls=8)
+                ta_results = {}
+                from core.ta_signal_engine import analyze_bars
+                
+                candle_tickers = quote_tickers[:8]
+                candle_semaphore = asyncio.Semaphore(3)
+                
+                async def _fetch_candle(t):
+                    async with candle_semaphore:
+                        bars = await self.get_candles(t, days=120, budget=candle_budget_inv)
+                        if bars and len(bars) >= 20:
+                            return t, bars
+                        return t, None
+                
+                candle_results = await asyncio.gather(
+                    *[_fetch_candle(t) for t in candle_tickers],
+                    return_exceptions=True,
+                )
+                
+                from data.ta_utils import compute_technicals_from_bars
+                for result in candle_results:
+                    if isinstance(result, Exception):
+                        continue
+                    ticker, bars = result
+                    if bars and ticker in candidates:
+                        ta_data = compute_technicals_from_bars(bars)
+                        if not candidates[ticker].get("technicals"):
+                            candidates[ticker]["technicals"] = {}
+                        candidates[ticker]["technicals"].update(ta_data)
+                        # Also compute the latest price from candles as backup
+                        last_close = bars[-1].get("c")
+                        if last_close and not candidates[ticker].get("snapshot", {}).get("price"):
+                            candidates[ticker].setdefault("snapshot", {})["price"] = last_close
+                
+                ta_filled = sum(1 for r in candle_results if not isinstance(r, Exception) and r[1] is not None)
+                print(f"[Wide Scan] TA enrichment: {ta_filled}/{len(candle_tickers)} candles fetched ({candle_budget_inv.summary()})")
+```
+
+Place this code AFTER the deep enrichment loop (after `deep_results` is populated, around line 1022) but BEFORE the xAI batch sentiment call (around line 1025). This way the top candidates have prices and TA data before Claude sees them.
+
+#### Also: Make sure the Finviz-first price extraction applies here too
+
+In the `light_enrich()` inner function (around line 894), the Finviz data is already being read for price:
+```python
+"price": _parse_num(finviz_data.get("price")),
+```
+
+This should work but the Finviz price field on free tier is often stale or None. The quote backfill phase above will fix missing prices. No change needed here.
+
+### Testing Checklist
+
+1. **"Trending Now"** — Must render, not error. Check logs for Grok response shape.
+2. **"Best Investments"** — Must return real recommendations with:
+   - Actual current prices (not None)
+   - TA indicators (RSI, SMA50, MACD)
+   - Fundamental data (revenue growth, PE, analyst ratings)
+   - Claude should give specific investment theses, not "data quality issue"
+   - Check logs for `[Wide Scan] Quote backfill` and `[Wide Scan] TA enrichment` lines
+3. **"Best Trades"** — Must still work unchanged
+4. **"Daily Briefing"** — Must still work unchanged
+5. **All 6 screener presets** — Must still work
+6. **`python -m pytest`** — All tests pass
+
+### Success Criteria
+- Zero `Error: [object Object]` on any preset
+- "Best Investments" returns 5-15 tickers with full price + TA + fundamental data
+- Claude gives specific investment theses with entry levels, not "data quality issue"
+- All presets functional

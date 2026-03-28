@@ -1,0 +1,134 @@
+Fix Best Trades to be a TA-first scanner with structured trade output (no social narration). Do not change Daily Briefing or Trending Now. Do not change frontend payload contract other than ensuring Best Trades uses an existing structured shape.
+
+Goal
+
+When preset_intent is best_trades, the response must look and behave like a technical trading scan:
+
+Find tickers because of technical setups
+
+Compute indicators from candles (not vibes)
+
+Return actionable levels (entry, stop, target, R:R)
+
+Provide a TradingView link per ticker
+
+Claude must not mention X/social unless user explicitly asked
+
+Required behavior changes (Best Trades only)
+
+Routing and modules
+
+Ensure preset best_trades routes to category best_trades
+
+Modules for best_trades must be TA-first:
+
+technical_scan (candles + indicator engine)
+
+volume_scan (relative volume percent increase)
+
+pattern_scan (breakout, pullback, reversal)
+
+Optional: news_catalyst as a secondary confirm
+
+Disable or do not run: x_sentiment, x_social_scan, “social_momentum” style overlays for Best Trades unless the user prompt explicitly requests social confirmation.
+
+Candidate discovery should be TA screens, not social
+During discovery, use Finviz style screens that are directly TA-driven:
+
+New highs / breakouts / strong uptrend
+
+High relative volume / unusual volume
+
+Oversold bounce setups
+
+Squeeze candidates (only if TA confirms)
+
+Gap continuation ONLY if volume confirmation exists
+This produces a broad candidate pool WITHOUT candles.
+
+Candle + indicator computation must drive ranking
+Use TwelveData as primary candle provider (already integrated), then compute indicators locally from OHLCV so you get multiple signals per 1 candle call:
+Compute at minimum:
+
+SMA20, SMA50, SMA200 and crossovers
+
+RSI14 (overbought/oversold + turn)
+
+MACD (signal cross + histogram direction)
+
+Volume surge: today volume vs 20D average (this must be “biggest volume % increase”)
+
+ATR14 for stop sizing
+
+Optional: Bollinger Bands squeeze + expansion
+
+Budgeting without rate limits
+
+Shortlist 25 candidates first
+
+Fetch candles for top 12 using CandleBudget(max_calls=8) (TwelveData is 8/min, match it)
+
+Use cache aggressively: if candle cache hit, it does not count toward budget
+
+Concurrency limit: 2 to 3 max for candle calls
+
+If fewer than 6 tickers have candles, broaden the shortlist and retry once with only 6 additional candles, respecting budget.
+
+Hard output contract
+For Best Trades, Claude must receive a structured list of trade candidates and MUST output structured trades.
+Set response display_type to exactly: trades (or whatever your frontend already recognizes for trades cards, but it must not be “chat”)
+Return structured payload:
+
+summary (1 short paragraph)
+
+scan_stats (candidates_total, candles_ok, candles_blocked, cache_hits)
+
+top_trades: array of 6 to 10 items, each item includes:
+
+ticker, name (if available)
+
+action: Strong Buy / Buy / Hold / Sell (bias bullish but include bearish only if score >= threshold)
+
+confidence_score 0-100
+
+setup_type (breakout, pullback, reversal, squeeze)
+
+indicator_signals: list of strings (ex “SMA50>200”, “MACD bull cross”, “RSI rebound”, “RelVol +180%”)
+
+entry, stop, target, risk_reward, timeframe
+
+tradingview_url
+
+catalyst_check (optional)
+
+risk (full text, no truncation)
+
+Claude prompt change for Best Trades only
+Update the Claude system or response_style for Best Trades:
+
+You are a technical analyst. Write trade plans, not market commentary.
+
+Do not use words like “buzzing”, “ape”, “hero moments”, “regime” repeatedly.
+
+Never return a narrative-only answer. Always output the top_trades list with levels.
+
+If TA data missing, say so in 1 sentence and still output whatever trades have complete candles.
+
+Logging and tests
+Add one log line:
+[BEST_TRADES] candidates=<n> shortlist=<n> candles_ok=<n> blocked=<n> cache_hits=<n> top=<tickers>
+Test:
+
+Preset best_trades returns display_type=trades and top_trades length >= 6 when candles available
+
+If candles fail, returns display_type=trades with whatever is available, or a structured error with a clear message (no blank, no plain text dump)
+
+Do not change
+
+daily_briefing
+
+cross_asset_trending
+
+frontend contract for those
+
+After implementing: run tests, run one preset call, confirm response includes top_trades with entry/stop/target and tradingview_url, then tell me to republish.

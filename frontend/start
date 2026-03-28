@@ -1,4 +1,0 @@
-#!/bin/bash
-# CryptoHippo Production Deployment
-export NODE_ENV=production
-exec node dist/index.js
