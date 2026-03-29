@@ -5890,6 +5890,21 @@ async def macro_risk(
 _trading_dashboard_cache: dict = {}
 _TRADING_DASHBOARD_TTL = 720  # 12 min — aligned with macro precompute loop interval
 
+# Sector ETF mapping (FMP sector name → ticker + display name)
+_SECTOR_ETF_MAP = {
+    "Technology": ("XLK", "Technology"),
+    "Healthcare": ("XLV", "Health Care"),
+    "Financial Services": ("XLF", "Financials"),
+    "Energy": ("XLE", "Energy"),
+    "Industrials": ("XLI", "Industrials"),
+    "Consumer Defensive": ("XLP", "Cons Staples"),
+    "Consumer Cyclical": ("XLY", "Cons Disc"),
+    "Basic Materials": ("XLB", "Materials"),
+    "Utilities": ("XLU", "Utilities"),
+    "Real Estate": ("XLRE", "Real Estate"),
+    "Communication Services": ("XLC", "Comm Svcs"),
+}
+
 
 @app.get("/should-i-be-trading")
 async def should_i_be_trading_page():
@@ -5999,8 +6014,16 @@ def _change_pct_score(chg: float | None) -> float:
     return 12.0
 
 
-def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_data: dict) -> dict:
-    from datetime import datetime as _dt2, timezone as _tz2
+def _compute_dashboard(
+    mode: str,
+    risk_data: dict,
+    macro_data: dict,
+    calendar_data: dict,
+    sector_perf_raw: list | None = None,
+    spy_qqq_extended: dict | None = None,
+    vix_history: dict | None = None,
+) -> dict:
+    from datetime import datetime as _dt2, timezone as _tz2, timedelta as _td
 
     def _s(d, *keys, default=None):
         for k in keys:
@@ -6011,39 +6034,152 @@ def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_da
                 return default
         return d
 
-    # ── Pull raw values ────────────────────────────────────────────────────────
+    # ── Raw value helpers ─────────────────────────────────────────────────────
+    def _fg_comp(key):
+        comps = _s(risk_data, "fear_greed", "components") or {}
+        v = comps.get(key)
+        if isinstance(v, dict):
+            return v.get("score", 50)
+        return 50
+
+    def _fmt(v, suffix="", precision=2, signed=False):
+        if v is None:
+            return "N/A"
+        fmt = f"{v:+.{precision}f}" if signed else f"{v:.{precision}f}"
+        return f"{fmt}{suffix}"
+
+    def _ma_signal(price, sma, threshold_pct=1.0):
+        if price is None or sma is None or sma == 0:
+            return None, "N/A"
+        diff = ((price - sma) / sma) * 100
+        if abs(diff) <= threshold_pct:
+            return 0, f"At MA ({diff:+.1f}%)"
+        elif diff > 0:
+            return 1, f"Above ({diff:+.1f}%)"
+        else:
+            return -1, f"Below ({diff:+.1f}%)"
+
+    def _next_event_label(ev_types: list[str], events: list) -> str:
+        today = _dt2.utcnow().date()
+        for ev in events:
+            ev_name = (ev.get("event", "") or ev.get("name", "") or "").lower()
+            if any(k in ev_name for k in ev_types):
+                ev_date_str = ev.get("date", "")
+                if not ev_date_str:
+                    continue
+                try:
+                    ev_date = _dt2.strptime(ev_date_str[:10], "%Y-%m-%d").date()
+                except Exception:
+                    continue
+                if ev_date < today:
+                    continue
+                delta = (ev_date - today).days
+                if delta == 0:
+                    return "TODAY"
+                elif delta == 1:
+                    return "Tomorrow"
+                else:
+                    return ev_date.strftime("%b %-d")
+        return "N/A"
+
+    # ── Core risk data ────────────────────────────────────────────────────────
     vix = _s(risk_data, "volatility", "vix")
     vix_change = _s(risk_data, "volatility", "vix_change")
     vix_signal = _s(risk_data, "volatility", "signal", default="normal")
-
     fg_score_raw = _s(risk_data, "fear_greed", "score")
     fg_rating = _s(risk_data, "fear_greed", "rating", default="Neutral")
-    fg_components = _s(risk_data, "fear_greed", "components") or {}
-
     hy_oas = _s(risk_data, "credit_spreads", "hy_oas")
     bbb_oas = _s(risk_data, "credit_spreads", "bbb_oas")
     hy_signal = _s(risk_data, "credit_spreads", "hy_signal", default="normal")
-
     spread_2s10s = _s(risk_data, "yield_curve_risk", "spread_2s10s")
     curve_inverted = _s(risk_data, "yield_curve_risk", "inverted", default=False)
-
     dxy = _s(risk_data, "dollar", "dxy")
     dxy_chg = _s(risk_data, "dollar", "dxy_change_pct")
 
     benchmark_etfs = macro_data.get("benchmark_etfs", []) if isinstance(macro_data, dict) else []
     etf_map = {e.get("ticker"): e for e in benchmark_etfs if isinstance(e, dict)}
-
-    spy = etf_map.get("SPY", {})
-    qqq = etf_map.get("QQQ", {})
-
-    spy_chg = spy.get("change_pct") or spy.get("change") or 0.0
-    qqq_chg = qqq.get("change_pct") or qqq.get("change") or 0.0
-    spy_from_high = spy.get("pct_from_52w_high")
-    qqq_from_high = qqq.get("pct_from_52w_high")
-
+    spy_bench = etf_map.get("SPY", {})
+    qqq_bench = etf_map.get("QQQ", {})
+    spy_chg = spy_bench.get("change_pct") or spy_bench.get("change") or 0.0
+    qqq_chg = qqq_bench.get("change_pct") or qqq_bench.get("change") or 0.0
+    spy_from_high = spy_bench.get("pct_from_52w_high")
+    qqq_from_high = qqq_bench.get("pct_from_52w_high")
     us10y = _s(macro_data, "rates_and_yields", "us_10y")
 
-    # ── Compute Pillar Scores ─────────────────────────────────────────────────
+    # ── VIX enrichment ────────────────────────────────────────────────────────
+    if vix_change is not None:
+        vix_trend = "Rising" if vix_change > 0.3 else ("Falling" if vix_change < -0.3 else "Stable")
+    else:
+        vix_trend = "Stable"
+
+    vix_pctile_str = "N/A"
+    if vix_history and vix:
+        try:
+            hist_vals = [d.get("value") for d in (vix_history.get("data") or []) if d.get("value") is not None]
+            if hist_vals:
+                rank = sum(1 for v in hist_vals if v < vix) / len(hist_vals) * 100
+                ordinal = "st" if int(rank) % 10 == 1 and int(rank) != 11 else \
+                          "nd" if int(rank) % 10 == 2 and int(rank) != 12 else \
+                          "rd" if int(rank) % 10 == 3 and int(rank) != 13 else "th"
+                vix_pctile_str = f"{round(rank)}{ordinal} %ile"
+        except Exception:
+            pass
+
+    # ── Put/Call ratio (approximated from Fear & Greed component) ─────────────
+    pc_comp = _fg_comp("put_call_options")
+    pc_ratio = round(max(0.5, min(2.0, 1.5 - (pc_comp / 100))), 2)
+    pc_status = "Elevated" if pc_ratio > 1.15 else ("Low" if pc_ratio < 0.8 else "Neutral")
+
+    # ── SPY/QQQ vs Moving Averages ────────────────────────────────────────────
+    ext = spy_qqq_extended or {}
+    spy_ext = ext.get("SPY", {})
+    qqq_ext = ext.get("QQQ", {})
+
+    spy_price = spy_bench.get("price") or spy_ext.get("price")
+    spy_sma50 = spy_ext.get("priceAvg50")
+    spy_sma200 = spy_ext.get("priceAvg200")
+    qqq_price = qqq_bench.get("price") or qqq_ext.get("price")
+    qqq_sma50 = qqq_ext.get("priceAvg50")
+    qqq_sma200 = qqq_ext.get("priceAvg200")
+
+    spy_vs50_dir, spy_vs50_str = _ma_signal(spy_price, spy_sma50)
+    spy_vs200_dir, spy_vs200_str = _ma_signal(spy_price, spy_sma200)
+    qqq_vs50_dir, qqq_vs50_str = _ma_signal(qqq_price, qqq_sma50)
+    qqq_vs200_dir, qqq_vs200_str = _ma_signal(qqq_price, qqq_sma200)
+
+    spx_regime = "Uptrend" if (spy_vs200_dir or 0) > 0 and (spy_vs50_dir or 0) > 0 else \
+                 "Downtrend" if (spy_vs200_dir or 0) < 0 else "Mixed"
+
+    # ── Sector performance ────────────────────────────────────────────────────
+    sector_list = []
+    for item in (sector_perf_raw or []):
+        sector_name = item.get("sector", "")
+        if sector_name in _SECTOR_ETF_MAP:
+            ticker, display_name = _SECTOR_ETF_MAP[sector_name]
+            chg = item.get("changesPercentage", 0)
+            if isinstance(chg, str):
+                try:
+                    chg = float(chg.strip("%").strip())
+                except Exception:
+                    chg = 0.0
+            sector_list.append({
+                "ticker": ticker,
+                "name": display_name,
+                "change_pct": round(float(chg), 2),
+            })
+    sector_list.sort(key=lambda x: x["change_pct"], reverse=True)
+    sectors_positive = sum(1 for s in sector_list if s["change_pct"] > 0)
+    sectors_total = len(sector_list)
+    sector_leader = sector_list[0] if sector_list else None
+    sector_laggard = sector_list[-1] if sector_list else None
+    participation_pct = round(sectors_positive / sectors_total * 100) if sectors_total else 0
+
+    # ── Calendar: FOMC + CPI next dates ──────────────────────────────────────
+    upcoming_events = calendar_data.get("events", []) if isinstance(calendar_data, dict) else []
+    fomc_next = _next_event_label(["fomc", "federal funds", "interest rate decision"], upcoming_events)
+    cpi_next = _next_event_label(["cpi", "consumer price"], upcoming_events)
+
+    # ── Pillar score computation ───────────────────────────────────────────────
     vix_s = _vix_score(vix)
     hy_s = _hy_oas_score(hy_oas)
     fg_vol_s = _fg_score(fg_score_raw)
@@ -6053,19 +6189,16 @@ def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_da
     spy_high_s = _pct_from_high_score(spy_from_high)
     qqq_high_s = _pct_from_high_score(qqq_from_high)
     spy_chg_s = _change_pct_score(spy_chg)
-    p2_score = round(spy_high_s * 0.4 + qqq_high_s * 0.35 + spy_chg_s * 0.25, 1)
+    ma_bonus = 10.0 if (spy_vs50_dir or 0) > 0 and (spy_vs200_dir or 0) > 0 else \
+               -10.0 if (spy_vs200_dir or 0) < 0 else 0.0
+    p2_score = round(min(100.0, max(0.0, spy_high_s * 0.35 + qqq_high_s * 0.30 + spy_chg_s * 0.20 + 50.0 * 0.15 + ma_bonus)), 1)
     p2_dir = "up" if spy_chg > 0.2 else ("down" if spy_chg < -0.2 else "sideways")
-
-    def _fg_comp(key):
-        v = fg_components.get(key)
-        if isinstance(v, dict):
-            return v.get("score", 50)
-        return 50
 
     breadth_fg = _fg_comp("stock_price_breadth")
     strength_fg = _fg_comp("stock_price_strength")
     safe_haven = _fg_comp("safe_haven_demand")
-    p3_score = round(breadth_fg * 0.4 + strength_fg * 0.4 + (100 - safe_haven) * 0.2, 1)
+    participation_bonus = ((sectors_positive - sectors_total / 2) / max(sectors_total, 1)) * 20 if sectors_total else 0
+    p3_score = round(min(100.0, max(0.0, breadth_fg * 0.35 + strength_fg * 0.35 + (100 - safe_haven) * 0.20 + 50 * 0.10 + participation_bonus)), 1)
     p3_dir = "up" if p3_score >= 60 else ("down" if p3_score < 40 else "sideways")
 
     spread_s = _spread_score(spread_2s10s)
@@ -6084,10 +6217,10 @@ def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_da
     pillar_scores = [p1_score, p2_score, p3_score, p4_score, p5_score]
     mqs = round(sum(s * w for s, w in zip(pillar_scores, weights)), 1)
 
+    # ── EWS + calendar penalties ──────────────────────────────────────────────
     ews_penalty = 0
     alert_events = []
-    upcoming = calendar_data.get("events", []) if isinstance(calendar_data, dict) else []
-    for ev in upcoming[:20]:
+    for ev in upcoming_events[:20]:
         days_out = ev.get("days_out", 99)
         ev_type = (ev.get("event", "") or ev.get("name", "") or "").lower()
         if days_out is not None and days_out <= 1:
@@ -6102,25 +6235,17 @@ def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_da
                 alert_events.append(f"Jobs Report in {days_out}d — directional risk elevated")
 
     ews = max(0.0, round(mqs - ews_penalty, 1))
+    decision = "YES" if ews >= 70 else ("CAUTION" if ews >= 40 else "NO")
 
-    if ews >= 70:
-        decision = "YES"
-    elif ews >= 40:
-        decision = "CAUTION"
-    else:
-        decision = "NO"
-
-    vix_str = f"{vix:.1f}" if vix else "N/A"
-    vix_chg_str = f"{vix_change:+.2f}" if vix_change else "N/A"
+    # ── Pillar metric blocks ──────────────────────────────────────────────────
+    vix_str = _fmt(vix, precision=1)
     fg_str = f"{fg_score_raw:.0f} ({fg_rating})" if fg_score_raw else "N/A"
-    hy_str = f"{hy_oas:.2f}%" if hy_oas else "N/A"
-    spread_str = f"{spread_2s10s:+.2f}%" if spread_2s10s else "N/A"
-    spy_str = f"{spy_chg:+.2f}%" if spy_chg is not None else "N/A"
-    spy_high_str = f"{spy_from_high:+.1f}%" if spy_from_high else "N/A"
-    qqq_str = f"{qqq_chg:+.2f}%" if qqq_chg is not None else "N/A"
-    qqq_high_str = f"{qqq_from_high:+.1f}%" if qqq_from_high else "N/A"
-    dxy_str = f"{dxy:.2f}" if dxy else "N/A"
-    dxy_chg_str = f"{dxy_chg:+.2f}%" if dxy_chg else "N/A"
+    hy_str = _fmt(hy_oas, suffix="%")
+    spread_str = _fmt(spread_2s10s, suffix="%", signed=True)
+    spy_str = _fmt(spy_chg, suffix="%", signed=True)
+    qqq_str = _fmt(qqq_chg, suffix="%", signed=True)
+    dxy_str = _fmt(dxy, precision=2)
+    dxy_chg_str = _fmt(dxy_chg, suffix="%", signed=True)
 
     pillars = [
         {
@@ -6129,10 +6254,22 @@ def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_da
             "weight": int(weights[0] * 100),
             "direction": p1_dir,
             "metrics": [
-                {"label": "VIX", "value": f"{vix_str} ({vix_chg_str})", "ok": (vix or 99) < 20},
-                {"label": "HY OAS", "value": hy_str, "ok": hy_s >= 60},
-                {"label": "Fear/Greed", "value": fg_str, "ok": 30 <= (fg_score_raw or 50) <= 70},
-                {"label": "VIX Signal", "value": vix_signal.upper(), "ok": vix_signal in ("low_vol", "normal", "complacency")},
+                {"label": "VIX Level", "value": vix_str, "status": vix_signal.replace("_", " ").title(),
+                 "ok": (vix or 99) < 20},
+                {"label": "VIX Trend", "value": vix_trend,
+                 "status": "Improving" if vix_trend == "Falling" else ("Worsening" if vix_trend == "Rising" else "Neutral"),
+                 "ok": vix_trend == "Falling"},
+                {"label": "VIX 1Y %ile", "value": vix_pctile_str,
+                 "status": "Elevated" if "7" in vix_pctile_str or "8" in vix_pctile_str or "9" in vix_pctile_str else "Normal",
+                 "ok": vix_pctile_str not in ("N/A",) and not vix_pctile_str.startswith(("7", "8", "9"))},
+                {"label": "Put/Call Ratio", "value": f"{pc_ratio:.2f}", "status": pc_status,
+                 "ok": pc_ratio <= 1.0},
+                {"label": "HY OAS", "value": hy_str,
+                 "status": hy_signal.upper(),
+                 "ok": hy_s >= 60},
+                {"label": "Fear & Greed", "value": fg_str,
+                 "status": fg_rating,
+                 "ok": 30 <= (fg_score_raw or 50) <= 70},
             ],
         },
         {
@@ -6141,10 +6278,24 @@ def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_da
             "weight": int(weights[1] * 100),
             "direction": p2_dir,
             "metrics": [
-                {"label": "SPY Chg", "value": spy_str, "ok": spy_chg > 0},
-                {"label": "SPY vs 52w", "value": spy_high_str, "ok": (spy_from_high or -100) >= -5},
-                {"label": "QQQ Chg", "value": qqq_str, "ok": qqq_chg > 0},
-                {"label": "QQQ vs 52w", "value": qqq_high_str, "ok": (qqq_from_high or -100) >= -5},
+                {"label": "SPX vs 50d MA", "value": spy_vs50_str,
+                 "status": "N/A" if spy_vs50_dir is None else ("Above" if spy_vs50_dir > 0 else ("At" if spy_vs50_dir == 0 else "Below")),
+                 "ok": spy_vs50_dir is None or spy_vs50_dir >= 0},
+                {"label": "SPX vs 200d MA", "value": spy_vs200_str,
+                 "status": "N/A" if spy_vs200_dir is None else ("Above" if spy_vs200_dir > 0 else ("At" if spy_vs200_dir == 0 else "Below")),
+                 "ok": spy_vs200_dir is None or spy_vs200_dir >= 0},
+                {"label": "Market Regime", "value": spx_regime,
+                 "status": spx_regime,
+                 "ok": spx_regime == "Uptrend"},
+                {"label": "QQQ vs 50d MA", "value": qqq_vs50_str,
+                 "status": "N/A" if qqq_vs50_dir is None else ("Above" if qqq_vs50_dir > 0 else ("At" if qqq_vs50_dir == 0 else "Below")),
+                 "ok": qqq_vs50_dir is None or qqq_vs50_dir >= 0},
+                {"label": "QQQ vs 200d MA", "value": qqq_vs200_str,
+                 "status": "N/A" if qqq_vs200_dir is None else ("Above" if qqq_vs200_dir > 0 else ("At" if qqq_vs200_dir == 0 else "Below")),
+                 "ok": qqq_vs200_dir is None or qqq_vs200_dir >= 0},
+                {"label": "SPY vs 52w High", "value": _fmt(spy_from_high, suffix="%", signed=True),
+                 "status": "Healthy" if (spy_from_high or -100) >= -5 else "Extended",
+                 "ok": (spy_from_high or -100) >= -5},
             ],
         },
         {
@@ -6153,10 +6304,24 @@ def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_da
             "weight": int(weights[2] * 100),
             "direction": p3_dir,
             "metrics": [
-                {"label": "Price Breadth", "value": f"{breadth_fg:.0f}/100", "ok": breadth_fg >= 50},
-                {"label": "Price Strength", "value": f"{strength_fg:.0f}/100", "ok": strength_fg >= 50},
-                {"label": "Safe Haven Dem", "value": f"{safe_haven:.0f}/100", "ok": safe_haven < 50},
-                {"label": "HYG Signal", "value": hy_signal.upper(), "ok": hy_signal == "normal"},
+                {"label": "Price Breadth", "value": f"{breadth_fg:.0f}/100",
+                 "status": "Positive" if breadth_fg >= 60 else ("Neutral" if breadth_fg >= 40 else "Weak"),
+                 "ok": breadth_fg >= 50},
+                {"label": "Price Strength", "value": f"{strength_fg:.0f}/100",
+                 "status": "Strong" if strength_fg >= 60 else ("Neutral" if strength_fg >= 40 else "Weak"),
+                 "ok": strength_fg >= 50},
+                {"label": "Sectors Positive", "value": f"{sectors_positive}/{sectors_total}",
+                 "status": f"{participation_pct}% Participation",
+                 "ok": participation_pct >= 55},
+                {"label": "Participation", "value": f"{participation_pct}%",
+                 "status": "Broad" if participation_pct >= 70 else ("Mixed" if participation_pct >= 40 else "Narrow"),
+                 "ok": participation_pct >= 55},
+                {"label": "Safe Haven Dem", "value": f"{safe_haven:.0f}/100",
+                 "status": "Elevated" if safe_haven >= 60 else ("Low" if safe_haven < 40 else "Normal"),
+                 "ok": safe_haven < 50},
+                {"label": "HYG Signal", "value": hy_signal.upper(),
+                 "status": hy_signal.title(),
+                 "ok": hy_signal == "normal"},
             ],
         },
         {
@@ -6165,10 +6330,24 @@ def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_da
             "weight": int(weights[3] * 100),
             "direction": p4_dir,
             "metrics": [
-                {"label": "2s10s Spread", "value": spread_str, "ok": (spread_2s10s or -1) > -0.5},
-                {"label": "Yield Curve", "value": "INVERTED" if curve_inverted else "NORMAL", "ok": not curve_inverted},
-                {"label": "DXY", "value": f"{dxy_str} ({dxy_chg_str})", "ok": (dxy_chg or 0) < 0.3},
-                {"label": "10Y Yield", "value": f"{us10y:.2f}%" if us10y else "N/A", "ok": bool(us10y and us10y < 4.8)},
+                {"label": "10Y Yield", "value": _fmt(us10y, suffix="%") if us10y else "N/A",
+                 "status": "Elevated" if (us10y or 0) >= 4.8 else ("Rising" if (us10y or 0) >= 4.5 else "Moderate"),
+                 "ok": bool(us10y and us10y < 4.8)},
+                {"label": "DXY", "value": f"{dxy_str} ({dxy_chg_str})",
+                 "status": "Falling" if (dxy_chg or 0) < -0.1 else ("Rising" if (dxy_chg or 0) > 0.1 else "Stable"),
+                 "ok": (dxy_chg or 0) < 0.3},
+                {"label": "2s10s Spread", "value": spread_str,
+                 "status": "INVERTED" if curve_inverted else "NORMAL",
+                 "ok": (spread_2s10s or -1) > -0.5},
+                {"label": "Next FOMC", "value": fomc_next,
+                 "status": "Today" if fomc_next == "TODAY" else ("Soon" if fomc_next not in ("N/A",) else "Distant"),
+                 "ok": fomc_next not in ("TODAY", "Tomorrow")},
+                {"label": "Fed Stance", "value": "Easing" if (us10y or 5) < 4.5 else "Restrictive",
+                 "status": "Easing" if (us10y or 5) < 4.5 else "Restrictive",
+                 "ok": bool(us10y and us10y < 4.8)},
+                {"label": "Next CPI", "value": cpi_next,
+                 "status": "Today" if cpi_next == "TODAY" else "Upcoming",
+                 "ok": cpi_next not in ("TODAY", "Tomorrow")},
             ],
         },
         {
@@ -6177,19 +6356,33 @@ def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_da
             "weight": int(weights[4] * 100),
             "direction": p5_dir,
             "metrics": [
-                {"label": "Mkt Momentum", "value": f"{momentum_fg:.0f}/100", "ok": momentum_fg >= 50},
-                {"label": "Put/Call", "value": f"{put_call_fg:.0f}/100", "ok": put_call_fg >= 45},
-                {"label": "Junk Bond Dem", "value": f"{junk_bond:.0f}/100", "ok": junk_bond >= 50},
-                {"label": "DXY Trend", "value": "FALLING" if (dxy_chg or 0) < 0 else "RISING", "ok": (dxy_chg or 0) < 0},
+                {"label": "Mkt Momentum", "value": f"{momentum_fg:.0f}/100",
+                 "status": "Positive" if momentum_fg >= 55 else ("Neutral" if momentum_fg >= 45 else "Negative"),
+                 "ok": momentum_fg >= 50},
+                {"label": "Put/Call Ratio", "value": f"{pc_ratio:.2f}",
+                 "status": pc_status,
+                 "ok": pc_ratio <= 1.05},
+                {"label": "Junk Bond Dem", "value": f"{junk_bond:.0f}/100",
+                 "status": "High" if junk_bond >= 60 else ("Low" if junk_bond < 40 else "Normal"),
+                 "ok": junk_bond >= 50},
+                {"label": "Sector Leader", "value": sector_leader["ticker"] if sector_leader else "N/A",
+                 "status": f"{sector_leader['change_pct']:+.2f}%" if sector_leader else "N/A",
+                 "ok": bool(sector_leader and sector_leader["change_pct"] > 0)},
+                {"label": "Sector Laggard", "value": sector_laggard["ticker"] if sector_laggard else "N/A",
+                 "status": f"{sector_laggard['change_pct']:+.2f}%" if sector_laggard else "N/A",
+                 "ok": bool(sector_laggard and sector_laggard["change_pct"] > -1.5)},
+                {"label": "DXY Trend", "value": "FALLING" if (dxy_chg or 0) < 0 else "RISING",
+                 "status": "Bullish" if (dxy_chg or 0) < 0 else "Headwind",
+                 "ok": (dxy_chg or 0) < 0},
             ],
         },
     ]
 
     exec_conditions = [
-        {"label": "Volatility acceptable (VIX < 25)", "ok": (vix or 99) < 25},
-        {"label": "Trend aligned (Pillar 2 >= 55)", "ok": p2_score >= 55},
-        {"label": "Breadth supporting (Pillar 3 >= 50)", "ok": p3_score >= 50},
-        {"label": "No major macro event today", "ok": ews_penalty == 0},
+        {"label": "VIX below 25 (volatility acceptable)", "value": vix_str, "ok": (vix or 99) < 25},
+        {"label": "Market above 200d MA (trend intact)", "value": spy_vs200_str, "ok": (spy_vs200_dir or 0) >= 0},
+        {"label": "Breadth supporting (>50% sectors positive)", "value": f"{participation_pct}%", "ok": participation_pct >= 50},
+        {"label": "No major macro event today/tomorrow", "value": "Clear" if ews_penalty == 0 else f"ALERT ({ews_penalty}pt penalty)", "ok": ews_penalty == 0},
     ]
 
     decision_text = {
@@ -6205,11 +6398,11 @@ def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_da
          "text": f"DECISION: {decision}"},
         {"type": "dim", "text": decision_text},
         {"type": "dim", "text": ""},
-        {"type": "blue", "text": f"[VOLATILITY/RISK]    {p1_score:.0f}/100 | VIX: {vix_str} | HY OAS: {hy_str} | F&G: {fg_str}"},
-        {"type": "blue", "text": f"[TREND/STRUCTURE]    {p2_score:.0f}/100 | SPY: {spy_str} | vs 52w: {spy_high_str}"},
-        {"type": "blue", "text": f"[MARKET BREADTH]     {p3_score:.0f}/100 | Breadth: {breadth_fg:.0f} | Strength: {strength_fg:.0f}"},
-        {"type": "blue", "text": f"[MACRO/LIQUIDITY]    {p4_score:.0f}/100 | 2s10s: {spread_str} | DXY: {dxy_str}"},
-        {"type": "blue", "text": f"[MOMENTUM/SENT]      {p5_score:.0f}/100 | Momentum: {momentum_fg:.0f} | Put/Call: {put_call_fg:.0f}"},
+        {"type": "blue", "text": f"[VOLATILITY/RISK]    {p1_score:.0f}/100 | VIX: {vix_str} ({vix_trend}) | 1Y%ile: {vix_pctile_str} | P/C: {pc_ratio:.2f} | HY OAS: {hy_str}"},
+        {"type": "blue", "text": f"[TREND/STRUCTURE]    {p2_score:.0f}/100 | SPX vs 50d: {spy_vs50_str} | vs 200d: {spy_vs200_str} | Regime: {spx_regime}"},
+        {"type": "blue", "text": f"[MARKET BREADTH]     {p3_score:.0f}/100 | {sectors_positive}/{sectors_total} sectors positive | Breadth: {breadth_fg:.0f} | Strength: {strength_fg:.0f}"},
+        {"type": "blue", "text": f"[MACRO/LIQUIDITY]    {p4_score:.0f}/100 | 10Y: {_fmt(us10y, suffix='%') if us10y else 'N/A'} | DXY: {dxy_str} | 2s10s: {spread_str} | FOMC: {fomc_next}"},
+        {"type": "blue", "text": f"[MOMENTUM/SENT]      {p5_score:.0f}/100 | Momentum: {momentum_fg:.0f} | Leader: {sector_leader['ticker'] if sector_leader else 'N/A'} ({sector_leader['change_pct']:+.2f}% if sector_leader else 'N/A')" if sector_leader else f"[MOMENTUM/SENT]      {p5_score:.0f}/100 | Momentum: {momentum_fg:.0f}"},
         {"type": "dim", "text": ""},
         {"type": "green" if mqs >= 70 else ("yellow" if mqs >= 40 else "red"),
          "text": f"Market Quality Score (MQS): {mqs:.0f}/100"},
@@ -6232,6 +6425,7 @@ def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_da
             "show": bool(alert_events),
             "text": alert_events[0] if alert_events else "",
         },
+        "sector_performance": sector_list,
         "as_of": _dt2.now(_tz2.utc).isoformat(),
         "from_cache": False,
     }
@@ -6267,11 +6461,78 @@ async def trading_dashboard(
             content={"error": "Macro provider not initialized. Ensure FRED_API_KEY is set."},
         )
 
+    async def _fetch_spy_qqq_extended():
+        if not mp.tradier:
+            return {}
+        try:
+            from datetime import date, timedelta
+            start = (date.today() - timedelta(days=320)).isoformat()
+            end = date.today().isoformat()
+            spy_hist, qqq_hist = await asyncio.gather(
+                mp.tradier.get_history("SPY", interval="daily", start=start, end=end),
+                mp.tradier.get_history("QQQ", interval="daily", start=start, end=end),
+                return_exceptions=True,
+            )
+            result_ext = {}
+            for sym, hist in [("SPY", spy_hist), ("QQQ", qqq_hist)]:
+                if isinstance(hist, Exception) or not hist:
+                    continue
+                closes = [d["close"] for d in hist if d.get("close")]
+                if len(closes) >= 50:
+                    sma50 = round(sum(closes[-50:]) / 50, 2)
+                    sma200 = round(sum(closes[-200:]) / 200, 2) if len(closes) >= 200 else None
+                    result_ext[sym] = {
+                        "price": closes[-1] if closes else None,
+                        "priceAvg50": sma50,
+                        "priceAvg200": sma200,
+                    }
+            return result_ext
+        except Exception:
+            return {}
+
+    async def _fetch_sector_perf():
+        _SECTOR_ETFS = ["XLK", "XLV", "XLF", "XLE", "XLI", "XLP", "XLY", "XLB", "XLU", "XLRE", "XLC"]
+        if mp.tradier:
+            try:
+                quotes = await mp.tradier.get_quotes(_SECTOR_ETFS)
+                result = []
+                ETF_TO_SECTOR = {
+                    "XLK": "Technology", "XLV": "Healthcare", "XLF": "Financial Services",
+                    "XLE": "Energy", "XLI": "Industrials", "XLP": "Consumer Defensive",
+                    "XLY": "Consumer Cyclical", "XLB": "Basic Materials", "XLU": "Utilities",
+                    "XLRE": "Real Estate", "XLC": "Communication Services",
+                }
+                for q in quotes:
+                    sym = q.get("symbol", "")
+                    if sym in ETF_TO_SECTOR:
+                        result.append({
+                            "sector": ETF_TO_SECTOR[sym],
+                            "changesPercentage": q.get("change_percentage", 0) or 0,
+                        })
+                return result
+            except Exception:
+                pass
+        if mp.fmp:
+            try:
+                return await mp.fmp.get_sector_performance() or []
+            except Exception:
+                pass
+        return []
+
+    def _fetch_vix_history():
+        try:
+            return mp.get_history("vix", 12)
+        except Exception:
+            return {}
+
     try:
-        risk_data, macro_data, calendar_data = await asyncio.gather(
+        risk_data, macro_data, calendar_data, sector_perf_raw, spy_qqq_extended, vix_history = await asyncio.gather(
             mp.get_risk(),
             mp.get_dashboard(),
-            mp.get_calendar(days_ahead=3),
+            mp.get_calendar(days_ahead=14),
+            _fetch_sector_perf(),
+            _fetch_spy_qqq_extended(),
+            asyncio.to_thread(_fetch_vix_history),
             return_exceptions=True,
         )
         if isinstance(risk_data, Exception):
@@ -6280,8 +6541,19 @@ async def trading_dashboard(
             macro_data = {}
         if isinstance(calendar_data, Exception):
             calendar_data = {}
+        if isinstance(sector_perf_raw, Exception):
+            sector_perf_raw = []
+        if isinstance(spy_qqq_extended, Exception):
+            spy_qqq_extended = {}
+        if isinstance(vix_history, Exception):
+            vix_history = {}
 
-        result = _compute_dashboard(mode, risk_data, macro_data, calendar_data)
+        result = _compute_dashboard(
+            mode, risk_data, macro_data, calendar_data,
+            sector_perf_raw=sector_perf_raw,
+            spy_qqq_extended=spy_qqq_extended,
+            vix_history=vix_history,
+        )
         _trading_dashboard_cache[cache_key] = {**result, "_ts": _t.time()}
         return JSONResponse(content=result)
 

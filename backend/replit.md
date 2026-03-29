@@ -20,11 +20,16 @@ This project is a Python FastAPI backend for a trading analysis platform designe
 - **API**: `GET /api/trading-dashboard?mode=swing|day` — 5-pillar market scoring
 - **API**: `POST /api/trading-dashboard/refresh` — force-clear the 90s cache
 - **Pillars** (30/25/20/15/10% weight for swing; 25/20/20/15/20% for day):
-  1. Volatility/Risk — VIX + HY OAS + Fear & Greed
-  2. Trend & Structure — SPY/QQQ vs 52w high + daily change
-  3. Market Breadth — F&G breadth/strength/safe-haven components
-  4. Macro/Liquidity — 2s10s spread + DXY + credit spreads
-  5. Momentum/Sentiment — F&G momentum + put/call + junk bond demand
+  1. Volatility/Risk — VIX level + percentile + trend, put/call ratio, HY OAS, F&G
+  2. Trend & Structure — SPY/QQQ vs SMA50/SMA200 (computed from Tradier 320d history), market regime
+  3. Market Breadth — F&G breadth/strength/safe-haven, sector ETF participation count
+  4. Macro/Liquidity — 2s10s spread + DXY + FOMC/CPI calendar
+  5. Momentum/Sentiment — F&G momentum + put/call + sector leader/laggard
+- **Data sources for enrichment** (fetched fresh per request, then cached):
+  - SPY/QQQ SMA50/SMA200: Tradier `get_history` (320 calendar days → ~220 trading days), cache 1h
+  - Sector ETF performance: Tradier `get_quotes` for 11 sector ETFs (XLK, XLV, XLF, XLE, XLI, XLP, XLY, XLB, XLU, XLRE, XLC), cache 30s
+  - VIX history: FRED via MacroProvider, 12-month window
+  - NOTE: FMP `v3/quote` endpoint is "Legacy" (blocked for new API keys) — all quote/MA data now uses Tradier
 - **Scoring**: MQS (Market Quality Score 0-100) → EWS (penalized for FOMC/CPI/Jobs)
 - **Decision**: YES ≥ 70, CAUTION 40-69, NO < 40
 - Static files served from `backend/static/` via `/static` mount

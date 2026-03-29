@@ -127,26 +127,43 @@
   .pillar-score-big { font-size: 38px; font-weight: 900; line-height: 1; }
   .pillar-score-label { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; }
   .pillar-divider { height: 1px; background: var(--border); }
-  .pillar-metrics { display: flex; flex-direction: column; gap: 5px; }
-  .pillar-metric { display: flex; justify-content: space-between; align-items: center; }
-  .pillar-metric-label { font-size: 10px; color: var(--text-dim); }
-  .pillar-metric-value { font-size: 11px; font-weight: 600; }
+  .pillar-metrics { display: flex; flex-direction: column; gap: 4px; }
+  .pillar-metric { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
+  .pillar-metric-label { font-size: 10px; color: var(--text-dim); flex: 1; min-width: 0; }
+  .pillar-metric-right { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+  .pillar-metric-value { font-size: 11px; font-weight: 600; text-align: right; }
+  .pillar-metric-status { font-size: 9px; color: var(--text-dimmer); text-align: right; letter-spacing: 0.3px; }
   
   /* ── BOTTOM ROW ─────────────────────────────── */
-  .bottom-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .bottom-row { display: grid; grid-template-columns: 1fr 220px 1fr; gap: 12px; }
   
   .exec-panel {
     background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 14px;
   }
   .exec-panel-title { font-size: 10px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-  .exec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .exec-grid { display: flex; flex-direction: column; gap: 6px; }
   .exec-cell {
     background: var(--bg3); border: 1px solid var(--border); border-radius: 3px;
-    padding: 10px 12px; display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; display: flex; align-items: center; gap: 8px;
   }
-  .exec-cell-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .exec-cell-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   .exec-cell-label { font-size: 10px; color: var(--text-dim); flex: 1; }
-  .exec-cell-status { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; }
+  .exec-cell-value { font-size: 10px; font-weight: 600; }
+  .exec-cell-status { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; width: 36px; text-align: right; flex-shrink: 0; }
+
+  /* ── SECTOR PANEL ────────────────────────────── */
+  .sector-panel {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 14px;
+    display: flex; flex-direction: column;
+  }
+  .sector-panel-title { font-size: 10px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .sector-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; border-bottom: 1px solid #1a1a1a; }
+  .sector-row:last-child { border-bottom: none; }
+  .sector-ticker { font-size: 10px; font-weight: 700; width: 38px; flex-shrink: 0; color: var(--text); }
+  .sector-name { font-size: 9px; color: var(--text-dim); flex: 1; }
+  .sector-bar-wrap { width: 50px; height: 6px; background: var(--bg4); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
+  .sector-bar { height: 100%; border-radius: 2px; }
+  .sector-chg { font-size: 10px; font-weight: 700; width: 44px; text-align: right; flex-shrink: 0; }
   
   .terminal-panel {
     background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 14px;
@@ -199,8 +216,12 @@
   /* ── TIMESTAMP ───────────────────────────── */
   .as-of { font-size: 10px; color: var(--text-dimmer); }
   
+  @media (max-width: 1400px) {
+    .bottom-row { grid-template-columns: 1fr 200px 1fr; }
+  }
   @media (max-width: 1200px) {
     .pillars-grid { grid-template-columns: repeat(3, 1fr); }
+    .bottom-row { grid-template-columns: 1fr 1fr; }
   }
   @media (max-width: 900px) {
     .hero-row { grid-template-columns: 1fr; }
@@ -317,6 +338,14 @@
       </div>
     </div>
     
+    <!-- Sector Performance -->
+    <div class="sector-panel">
+      <div class="sector-panel-title">▶ SECTORS</div>
+      <div id="sectorList">
+        <div style="color:var(--text-dimmer);font-size:10px;">Loading...</div>
+      </div>
+    </div>
+    
     <!-- Terminal Analysis -->
     <div class="terminal-panel">
       <div class="terminal-panel-title">▶ SHORT EXPLANATION</div>
@@ -418,16 +447,22 @@ function renderPillars(pillars) {
     const card = document.createElement('div');
     card.className = 'pillar-card';
     
-    const metricsHtml = (p.metrics || []).map(m => `
-      <div class="pillar-metric">
-        <span class="pillar-metric-label">${m.label}</span>
-        <span class="pillar-metric-value" style="color:${scoreColor(m.ok ? 75 : 35)}">${m.value}</span>
-      </div>
-    `).join('');
+    const metricsHtml = (p.metrics || []).map(m => {
+      const col = m.ok ? 'var(--green)' : 'var(--red)';
+      const statusHtml = m.status ? `<div class="pillar-metric-status">${escHtml(m.status)}</div>` : '';
+      return `
+        <div class="pillar-metric">
+          <span class="pillar-metric-label">${escHtml(m.label)}</span>
+          <div class="pillar-metric-right">
+            <span class="pillar-metric-value" style="color:${col}">${escHtml(m.value)}</span>
+            ${statusHtml}
+          </div>
+        </div>`;
+    }).join('');
     
     card.innerHTML = `
       <div class="pillar-card-header">
-        <span class="pillar-card-title">${p.title}</span>
+        <span class="pillar-card-title">${escHtml(p.title)}</span>
         <span class="pillar-direction">${dirArrow(p.direction)}</span>
       </div>
       <div class="pillar-score-big ${scoreClass(p.score)}">${Math.round(p.score)}</div>
@@ -453,18 +488,50 @@ function renderPillarBars(pillars) {
   `).join('');
 }
 
+// ─── HTML Escape ──────────────────────────────────────────────────
+function escHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 // ─── Render Exec Panel ────────────────────────────────────────────
 function renderExec(conditions) {
   const grid = document.getElementById('execGrid');
-  grid.innerHTML = conditions.map(c => `
-    <div class="exec-cell">
-      <div class="exec-cell-dot" style="background:${c.ok ? 'var(--green)' : 'var(--red)'}"></div>
-      <span class="exec-cell-label">${c.label}</span>
-      <span class="exec-cell-status" style="color:${c.ok ? 'var(--green)' : 'var(--red)'}">
-        ${c.ok ? 'PASS' : 'FAIL'}
-      </span>
-    </div>
-  `).join('');
+  grid.innerHTML = conditions.map(c => {
+    const col = c.ok ? 'var(--green)' : 'var(--red)';
+    const valHtml = c.value ? `<span class="exec-cell-value" style="color:${col}">${escHtml(c.value)}</span>` : '';
+    return `
+      <div class="exec-cell">
+        <div class="exec-cell-dot" style="background:${col}"></div>
+        <span class="exec-cell-label">${escHtml(c.label)}</span>
+        ${valHtml}
+        <span class="exec-cell-status" style="color:${col}">${c.ok ? 'PASS' : 'FAIL'}</span>
+      </div>`;
+  }).join('');
+}
+
+// ─── Render Sector Performance ────────────────────────────────────
+function renderSectors(sectors) {
+  const el = document.getElementById('sectorList');
+  if (!sectors || !sectors.length) {
+    el.innerHTML = '<div style="color:var(--text-dimmer);font-size:10px;">No data</div>';
+    return;
+  }
+  const maxAbs = Math.max(...sectors.map(s => Math.abs(s.change_pct || 0)), 0.01);
+  el.innerHTML = sectors.map(s => {
+    const chg = s.change_pct || 0;
+    const pos = chg >= 0;
+    const col = pos ? 'var(--green)' : 'var(--red)';
+    const barW = Math.round(Math.abs(chg) / maxAbs * 100);
+    const sign = pos ? '+' : '';
+    return `
+      <div class="sector-row">
+        <span class="sector-ticker">${escHtml(s.ticker)}</span>
+        <span class="sector-name">${escHtml(s.name)}</span>
+        <div class="sector-bar-wrap"><div class="sector-bar" style="width:${barW}%;background:${col}"></div></div>
+        <span class="sector-chg" style="color:${col}">${sign}${chg.toFixed(2)}%</span>
+      </div>`;
+  }).join('');
 }
 
 // ─── Render Terminal Text ─────────────────────────────────────────
@@ -526,6 +593,9 @@ function render(data) {
   if (data.terminal_analysis) {
     renderTerminal(data.terminal_analysis);
   }
+  
+  // Sector performance
+  renderSectors(data.sector_performance || []);
   
   // Timestamp
   const ts = data.as_of ? new Date(data.as_of).toLocaleTimeString() : '—';

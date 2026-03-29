@@ -1,0 +1,30 @@
+It looks great! but there are a few differentces that I want to address (comparison dashboard shown attached). to start, there are things I like about both. #1) I'd like to the split the width of the "Market Metrics" section so I can fit both "Market Metrics" and "Sector Performance" side by side within the same space that just "Market Metrics" is taking up now. #2) there is richer data that gives better signal in the screenshot attached in these sections "VOLATILITY", "TREND & STRUCTURE", "BREADTH", "MACRO", "MOMENTUM", "EXECUTION WINDOW". How can I get those same data points to display?(before you change either, it might make sense to give me the exact prompt for my backend/fast api agent to answer first to confirm it can return data for both fix #1 and #2
+
+Smart to confirm with the backend first. Let me analyze the reference image carefully to identify exactly what richer data fields are needed, then give you the precise prompt.
+
+Looking at the reference vs current:
+
+Current backend metrics per pillar = {label, value, ok} — just 3 fields, value is a single string.
+
+Reference image shows 3-column metric rows = label | main value | status label (color-coded separately). Plus entirely new data points that the current backend doesn't return.
+
+Here is the exact prompt to send your FastAPI backend agent:
+
+The /api/trading-dashboard endpoint currently returns pillars[] where each metric is {label, value, ok}. I need two enhancements:
+
+1. Add a status field to each metric so the format becomes {label, value, status, ok}. The status is a short descriptive word or phrase (e.g. "High", "Spiking", "Neutral", "Correcting", "Very weak", "Lows dominate", "Event risk!") that appears as a separate colored column to the right of the value. Currently the status is sometimes buried inside the value string in parentheses — please split it out.
+
+2. Richer data per pillar. Replace or augment the current generic score-based metrics with these specific data points:
+
+VOLATILITY pillar should include: VIX Level (numeric, e.g. "25.09"), VIX Trend (e.g. "Rising"), VIX 1Y %ile (e.g. "25th"), Put/Call Ratio (e.g. "0.95")
+TREND pillar should include: SPX vs 20d MA (e.g. "At MA"), SPX vs 50d MA (e.g. "Below"), SPX vs 200d MA (e.g. "Above"), QQQ Trend (e.g. "Below 50d"), Regime (e.g. "Correcting")
+BREADTH pillar should include: % > 50d MA (e.g. "29%"), % > 200d MA (e.g. "38%"), % > 20d MA (e.g. "21%"), NYSE A/D ratio (e.g. "0.5:1"), NAS Highs/Lows (e.g. "30/180")
+MOMENTUM pillar should include: Sectors positive count (e.g. "0/11"), Leader sector name + its change (e.g. label: "Leader", value: "Energy", status: "-0.14%"), Laggard sector name + its change, Participation level (e.g. "Low")
+MACRO pillar should include: FOMC next event status (e.g. "TODAY" or "Apr 29"), 10Y Yield (numeric), DXY (numeric), Fed Stance (e.g. "Hold"), Geopolitical flag (e.g. "Iran war" or "None")
+3. Execution conditions richer format. Change execution_conditions[] from {label, ok} to {label, value, status, ok} where value is "Yes"/"No"/"Weak" and status is a short descriptor like "Failing", "Fading", "Support", "Low conviction".
+
+4. Add a new top-level field sector_performance — an array of all 11 S&P sector ETFs: [{ticker: "XLE", name: "Energy", change_pct: -0.14}, ...] sorted from best to worst performer. This powers a new "Sector Performance" bar chart panel on the frontend.
+
+Please confirm whether you can return all of these, and show me a sample JSON response.
+
+Once your backend agent confirms and returns a sample JSON, share it here and I'll update both the frontend layout (#1 — split Market Metrics + Sector Performance side by side) and the pillar cards (#2 — richer 3-column metric rows) to match exactly.
