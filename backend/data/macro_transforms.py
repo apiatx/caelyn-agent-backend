@@ -601,109 +601,33 @@ def transform_labor(raw: dict) -> dict:
 def transform_risk(raw: dict) -> dict:
     """
     Input:  MacroProvider.get_risk() result
-    Output: { risk_framework, vix_history, confidence, indicators }
+    Output: { risk_framework, vix_history, confidence, indicators, ... }
     """
     vol = raw.get("volatility", {})
     credit = raw.get("credit_spreads", {})
     fg = raw.get("fear_greed", {})
     dollar = raw.get("dollar", {})
     yc = raw.get("yield_curve_risk", {})
+    gold = raw.get("gold", {})
+    umich = raw.get("umich_sentiment", {})
+    rec = raw.get("recession_probability", {})
 
-    # risk_framework — synthesize from all risk dimensions
-    risk_framework = []
+    # risk_framework — already built in provider (Druckenmiller 8-dim), just forward
+    risk_framework = raw.get("risk_framework", [])
 
-    # RATES risk
-    curve_inverted = yc.get("inverted", False)
-    risk_framework.append({
-        "label": "RATES",
-        "level": "ELEVATED" if curve_inverted else "NORMAL",
-        "color": "amber" if curve_inverted else "green",
-        "detail": f"2s10s {'inverted' if curve_inverted else 'normal'} ({_r(yc.get('spread_2s10s'))}%)",
-    })
-
-    # VOLATILITY risk
-    vix_val = vol.get("vix") or 0
-    if vix_val > 30:
-        vix_level, vix_color = "HIGH", "red"
-    elif vix_val > 20:
-        vix_level, vix_color = "ELEVATED", "amber"
-    else:
-        vix_level, vix_color = "LOW", "green"
-    risk_framework.append({
-        "label": "VOLATILITY",
-        "level": vix_level,
-        "color": vix_color,
-        "detail": f"VIX at {_r(vix_val)}",
-    })
-
-    # CREDIT risk
-    hy = credit.get("hy_oas") or 0
-    if hy > 500:
-        cr_level, cr_color = "HIGH", "red"
-    elif hy > 400:
-        cr_level, cr_color = "ELEVATED", "amber"
-    else:
-        cr_level, cr_color = "NORMAL", "green"
-    risk_framework.append({
-        "label": "CREDIT",
-        "level": cr_level,
-        "color": cr_color,
-        "detail": f"HY OAS {_r(hy)}bps",
-    })
-
-    # SENTIMENT risk
-    fg_score = fg.get("score") or 50
-    if fg_score > 75 or fg_score < 25:
-        sent_level, sent_color = "EXTREME", "red"
-    elif fg_score > 60 or fg_score < 40:
-        sent_level, sent_color = "ELEVATED", "amber"
-    else:
-        sent_level, sent_color = "NEUTRAL", "green"
-    risk_framework.append({
-        "label": "SENTIMENT",
-        "level": sent_level,
-        "color": sent_color,
-        "detail": f"Fear & Greed {fg_score} ({fg.get('rating', 'N/A')})",
-    })
-
-    # DOLLAR risk
-    dxy_val = dollar.get("dxy") or 0
-    if dxy_val > 108:
-        dxy_level, dxy_color = "STRONG", "amber"
-    elif dxy_val < 95:
-        dxy_level, dxy_color = "WEAK", "amber"
-    else:
-        dxy_level, dxy_color = "NORMAL", "green"
-    risk_framework.append({
-        "label": "DOLLAR",
-        "level": dxy_level,
-        "color": dxy_color,
-        "detail": f"DXY at {_r(dxy_val)}",
-    })
-
-    # vix_history — from raw history
+    # vix_history — daily data from FRED (raw.history.vix is already a list of {date, value})
     vix_hist_raw = raw.get("history", {}).get("vix", [])
     vix_history = []
-    for pt in vix_hist_raw[-12:]:
+    for pt in vix_hist_raw:
         vix_history.append({
-            "month": _month_label(pt.get("date")),
-            "vix": _r(pt.get("value"), 1),
+            "date": pt.get("date"),
+            "value": _r(pt.get("value"), 2),
         })
 
-    # confidence — we don't have a dedicated confidence series in risk,
-    # but fear_greed provides sentiment tracking
-    confidence = []
-    # Use Fear & Greed components if available, otherwise empty
-    fg_components = fg.get("components") or {}
-    if fg_components:
-        # Build a single-point confidence entry from current data
-        confidence.append({
-            "month": "Current",
-            "conf": _r(fg_score, 1),
-            "umich": None,  # Consumer sentiment is in growth tab
-        })
+    # confidence — monthly UMich + CB (CB will be null since not on free FRED)
+    confidence = raw.get("confidence", [])
 
-    # indicators
+    # indicators — extended set for 6 metric cards
     indicators = []
     if vol.get("vix") is not None:
         indicators.append({
@@ -740,6 +664,30 @@ def transform_risk(raw: dict) -> dict:
             "name": "2s10s Spread",
             "value": f"{yc['spread_2s10s']}%",
             "status": "inverted" if yc.get("inverted") else "neutral",
+        })
+    if umich.get("score") is not None:
+        indicators.append({
+            "name": "UMich Sentiment",
+            "value": f"{umich['score']}",
+            "status": _status(umich.get("status")),
+        })
+    if gold.get("gld_price") is not None:
+        indicators.append({
+            "name": "Gold (GLD)",
+            "value": f"${gold['gld_price']}",
+            "status": "bullish" if (gold.get("gld_from_low_pct") or 0) > 20 else "neutral",
+        })
+    if credit.get("hyg_price") is not None:
+        indicators.append({
+            "name": "HYG",
+            "value": f"${credit['hyg_price']}",
+            "status": "neutral" if (credit.get("hyg_from_high_pct") or 0) > -5 else "elevated",
+        })
+    if rec.get("pct") is not None:
+        indicators.append({
+            "name": "Recession Prob",
+            "value": f"{rec['pct']}%",
+            "status": "bearish" if (rec["pct"] or 0) > 30 else "neutral" if (rec["pct"] or 0) > 15 else "bullish",
         })
 
     return {

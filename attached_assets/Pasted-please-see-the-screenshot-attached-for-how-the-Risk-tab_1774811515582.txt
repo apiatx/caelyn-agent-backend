@@ -1,0 +1,48 @@
+please see the screenshot attached for how the Risk tab on the Macro Terminal page should look. Ours should look like the attached exactly. Make sure it does. Using the same backend fast api service data that is being returned, no frontend logic here(you are design only - make sure the fields are displaying all of the data returned by the fast API backend service), only what the backend is returning. You aren't doing any calculations or fetching your own data.
+
+Now I have everything. Let me write the complete Risk tab rebuild:
+
+TypeScript clean. Let me take a screenshot to verify:
+
+The app is behind authentication so the screenshot tool can't navigate to the terminal directly, but TypeScript is clean and the app is running. Here's exactly what I built for the Risk tab:
+
+Layout matches the screenshot — every section, every field:
+
+1. Alert Banner (red border, shown when fear_greed.rating === "extreme fear" OR any risk_framework[].color === "red")
+
+Title: SENTIMENT: EXTREME or the label/level from the red framework item → risk_framework[].label + .level
+Body: fear_greed.signal (the full text from backend)
+Sub-line: risk_framework[].detail (e.g. "Fear & Greed 10.2 (extreme fear)")
+2. Left chart — CBOE VOLATILITY INDEX (VIX)
+
+Full 261-day time series → history.vix[].value + history.vix[].date
+Current VIX headline → volatility.vix
+Status label → volatility.signal
+Reference line F at 28 (fear threshold), N at 20 (normal threshold)
+3. Right panel — FEAR & GREED INDEX
+
+Score + rating → fear_greed.score, fear_greed.rating
+Component bars (7 sub-components) → fear_greed.components.*{score, rating}
+Momentum shift footer → fear_greed.momentum_shift
+4. Risk Heat Map — Druckenmiller Framework (4-column grid)
+
+risk_framework[] → .label, .level, .detail, .color (drives red/amber/green card backgrounds)
+5. 6 Metric Cards (2×3)
+
+Card	Value	Backend field
+VIX	27.44	volatility.vix
+FEAR & GREED INDEX	10.2 / "EXTREME FEAR"	fear_greed.score + fear_greed.rating
+HY OAS SPREAD	3.21%	credit_spreads.hy_oas + credit_spreads.hy_signal
+BBB OAS SPREAD	1.11%	credit_spreads.bbb_oas
+2s10s YIELD SPREAD	+0.56%	yield_curve_risk.spread_2s10s + .inverted
+VIX SIGNAL	ELEVATED	volatility.signal + fearGreed.momentum_shift
+6. Commentary footer → commentary
+
+Backend gaps vs. screenshot (fields the screenshot shows but the backend doesn't currently return):
+
+Consumer Board / UMich sentiment series — backend only has confidence[0]: {conf:10.2, umich:null} (single F&G point, no time series). Add confidence[] as a monthly array {month, cb, umich} to power the two-line chart.
+VIX 52W High/Low — add volatility.vix_52w_high and volatility.vix_52w_low
+VIX change — add volatility.vix_change (currently null)
+GOLD price — add gold: {price, change_pct, yl_low} for the GOLD card
+HYG price — add credit_spreads.hyg_price and credit_spreads.hyg_52w_high for the HY spreads card
+Recession probability — add recession_probability: {pct, change_pp, date} for the recession card

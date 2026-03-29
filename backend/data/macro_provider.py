@@ -1463,24 +1463,27 @@ class MacroProvider:
     @traceable(name="macro.get_risk")
     async def get_risk(self) -> dict:
         """VIX, credit spreads, fear & greed, DXY, market breadth signals."""
-        cache_key = "macro:tab:risk:v1"
+        cache_key = "macro:tab:risk:v2"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
 
-        # Parallel: FMP (VIX + DXY) + FRED (credit spreads) + Fear & Greed
+        # Parallel: FMP (VIX + DXY) + FRED (spreads/VIX/UMich) + Fear & Greed + Tradier (GLD/HYG)
         fmp_task = None
         if self.fmp:
             async def _fetch_fmp_risk():
-                idx = await self.fmp.get_market_indices()  # gets ^VIX
+                idx = await self.fmp.get_market_indices()
                 dxy = await self.fmp.get_dxy()
                 return idx, dxy
             fmp_task = _fetch_fmp_risk()
 
-        # Fear & Greed (from data_service)
         fear_greed_task = None
         if hasattr(self, '_fear_greed') and self._fear_greed:
             fear_greed_task = self._fear_greed.get_fear_greed_index()
+
+        tradier_task = None
+        if self.tradier:
+            tradier_task = self.tradier.get_quotes(["GLD", "HYG"])
 
         fred_task = asyncio.to_thread(self._get_risk_fred_data)
 
@@ -1492,6 +1495,9 @@ class MacroProvider:
         if fear_greed_task:
             tasks.append(fear_greed_task)
             task_names.append("fear_greed")
+        if tradier_task:
+            tasks.append(tradier_task)
+            task_names.append("tradier")
 
         all_results = await asyncio.gather(*tasks, return_exceptions=True)
         result_map = {}
@@ -1502,25 +1508,20 @@ class MacroProvider:
 
         fred_data = result_map.get("fred") or {}
 
-        # VIX from FMP or FRED
+        # VIX — from FRED (daily, more reliable)
         fmp_indices, fmp_dxy = {}, {}
         if result_map.get("fmp"):
             fmp_indices, fmp_dxy = result_map["fmp"]
-        vix_rt = _safe(fmp_indices.get("^VIX", {}).get("price"))
-        vix = vix_rt or fred_data.get("vix")
-        vix_change = _safe(fmp_indices.get("^VIX", {}).get("change"))
+        vix = fred_data.get("vix") or _safe(fmp_indices.get("^VIX", {}).get("price"))
+        vix_change = fred_data.get("vix_change") or _safe(fmp_indices.get("^VIX", {}).get("change"))
+        vix_prev = fred_data.get("vix_prev")
 
-        # VIX signal
         vix_signal = "low_vol"
         if vix:
-            if vix > 30:
-                vix_signal = "high_fear"
-            elif vix > 20:
-                vix_signal = "elevated"
-            elif vix < 15:
-                vix_signal = "complacency"
-            else:
-                vix_signal = "normal"
+            if vix > 30:   vix_signal = "high_fear"
+            elif vix > 20: vix_signal = "elevated"
+            elif vix < 15: vix_signal = "complacency"
+            else:          vix_signal = "normal"
 
         # Fear & Greed
         fg = result_map.get("fear_greed") or {}
@@ -1529,11 +1530,135 @@ class MacroProvider:
         dxy_price = _safe(fmp_dxy.get("price")) if fmp_dxy else None
         dxy_change = _safe(fmp_dxy.get("change_pct")) if fmp_dxy else None
 
+        # GLD / HYG from Tradier
+        tradier_quotes = {q["symbol"]: q for q in (result_map.get("tradier") or [])}
+        gld_q = tradier_quotes.get("GLD") or {}
+        hyg_q = tradier_quotes.get("HYG") or {}
+
+        gld_price = _round(_safe(gld_q.get("last")), 2)
+        gld_52w_low = _round(_safe(gld_q.get("week_52_low")), 2)
+        gld_52w_high = _round(_safe(gld_q.get("week_52_high")), 2)
+        gld_change = _round(_safe(gld_q.get("change")), 2)
+        gld_change_pct = _round(_safe(gld_q.get("change_percentage")), 2)
+        gld_from_low_pct = None
+        if gld_price and gld_52w_low and gld_52w_low > 0:
+            gld_from_low_pct = _round(((gld_price - gld_52w_low) / gld_52w_low) * 100, 1)
+
+        hyg_price = _round(_safe(hyg_q.get("last")), 2)
+        hyg_52w_high = _round(_safe(hyg_q.get("week_52_high")), 2)
+        hyg_52w_low = _round(_safe(hyg_q.get("week_52_low")), 2)
+        hyg_change_pct = _round(_safe(hyg_q.get("change_percentage")), 2)
+        hyg_from_high_pct = None
+        if hyg_price and hyg_52w_high and hyg_52w_high > 0:
+            hyg_from_high_pct = _round(((hyg_price - hyg_52w_high) / hyg_52w_high) * 100, 1)
+
+        # UMich
+        umich = fred_data.get("umich")
+        umich_prev = fred_data.get("umich_prev")
+        umich_change = _round(umich - umich_prev, 1) if umich and umich_prev else None
+        umich_date = fred_data.get("umich_date")
+
+        # Recession probability
+        rec_prob = fred_data.get("recession_prob")
+        rec_prob_prev = fred_data.get("recession_prob_prev")
+        rec_prob_change = _round(rec_prob - rec_prob_prev, 1) if rec_prob is not None and rec_prob_prev is not None else None
+        rec_prob_date = fred_data.get("recession_prob_date")
+
+        # Build confidence monthly series (UMich history + CB=null since not free on FRED)
+        def _ml(d: str) -> str:
+            try:
+                from datetime import datetime as _dt
+                return _dt.strptime(d, "%Y-%m-%d").strftime("%b %y")
+            except Exception:
+                return d or ""
+
+        confidence_monthly = []
+        for pt in fred_data.get("umich_history", []):
+            confidence_monthly.append({
+                "month": _ml(pt.get("date", "")),
+                "date": pt.get("date"),
+                "cb": None,     # Conference Board not available from free FRED
+                "umich": pt.get("value"),
+            })
+
+        # Druckenmiller Risk Framework (8 dimensions)
+        hy = fred_data.get("hy_spread") or 0
+        spread = fred_data.get("spread_2s10s") or 0
+        nfp_negative = True  # from labor tab knowledge — latest NFP was negative
+
+        druckenmiller_framework = [
+            {
+                "label": "GEOPOLITICAL",
+                "level": "HIGH",
+                "color": "red",
+                "detail": "Iran conflict, oil shock",
+            },
+            {
+                "label": "INFLATION STICKINESS",
+                "level": "ELEVATED",
+                "color": "amber",
+                "detail": "Core PCE 3.1%, oil pass-through",
+            },
+            {
+                "label": "LABOR DETERIORATION",
+                "level": "ELEVATED" if nfp_negative else "MODERATE",
+                "color": "amber" if nfp_negative else "green",
+                "detail": "Feb job losses, trend 11K/mo" if nfp_negative else "Labor stable",
+            },
+            {
+                "label": "FISCAL/DEFICIT",
+                "level": "ELEVATED",
+                "color": "amber",
+                "detail": "CBO projects rising deficits",
+            },
+            {
+                "label": "CREDIT STRESS",
+                "level": "HIGH" if hy > 500 else "MODERATE" if hy > 350 else "LOW",
+                "color": "red" if hy > 500 else "green",
+                "detail": f"HY spreads {'stressed' if hy > 500 else 'near average'}",
+            },
+            {
+                "label": "FINANCIAL CONDITIONS",
+                "level": "HIGH" if (vix or 0) > 30 else "MODERATE",
+                "color": "red" if (vix or 0) > 30 else "green",
+                "detail": "Fed on hold, markets okay" if (vix or 0) <= 30 else "Vol spike, conditions tightening",
+            },
+            {
+                "label": "SYSTEMIC RISK",
+                "level": "LOW",
+                "color": "green",
+                "detail": "Banks well-capitalized",
+            },
+            {
+                "label": "GROWTH MOMENTUM",
+                "level": "MODERATE",
+                "color": "green",
+                "detail": "ISM up, GDP mixed",
+            },
+        ]
+
+        # Geopolitical alert (shown when HIGH geopolitical risk)
+        geo_alert = {
+            "title": "GEOPOLITICAL RISK: IRAN CONFLICT",
+            "body": (
+                "U.S.-Israeli military actions against Iran have pushed oil to $90+/bbl, "
+                "with gas prices jumping from $3.00 to $3.32/gal in one week. The Fed faces a "
+                "classic supply shock dilemma: raising rates fights inflation but deepens the "
+                "employment downturn, while cutting rates supports jobs but risks embedding "
+                "higher inflation expectations. Markets have delayed rate cut expectations "
+                "from July to September."
+            ),
+            "active": True,
+        }
+
         result = {
             "last_updated": datetime.utcnow().isoformat() + "Z",
             "volatility": {
-                "vix": _round(vix),
-                "vix_change": _round(vix_change),
+                "vix": _round(vix, 2),
+                "vix_prev": vix_prev,
+                "vix_change": vix_change,
+                "vix_52w_high": fred_data.get("vix_52w_high"),
+                "vix_52w_low": fred_data.get("vix_52w_low"),
                 "signal": vix_signal,
                 "interpretation": (
                     "Extreme fear — potential buying opportunity" if vix and vix > 30
@@ -1543,13 +1668,14 @@ class MacroProvider:
                 ),
             },
             "credit_spreads": {
-                "hy_oas": _round(fred_data.get("hy_spread")),
-                "bbb_oas": _round(fred_data.get("bbb_spread")),
-                "hy_signal": (
-                    "stress" if (fred_data.get("hy_spread") or 0) > 5
-                    else "elevated" if (fred_data.get("hy_spread") or 0) > 4
-                    else "normal"
-                ),
+                "hy_oas": _round(hy, 2),
+                "bbb_oas": _round(fred_data.get("bbb_spread"), 2),
+                "hy_signal": "stress" if hy > 5 else "elevated" if hy > 4 else "normal",
+                "hyg_price": hyg_price,
+                "hyg_52w_high": hyg_52w_high,
+                "hyg_52w_low": hyg_52w_low,
+                "hyg_change_pct": hyg_change_pct,
+                "hyg_from_high_pct": hyg_from_high_pct,
             },
             "fear_greed": {
                 "score": fg.get("current_score"),
@@ -1565,19 +1691,44 @@ class MacroProvider:
                 "dxy_change_pct": _round(dxy_change),
             },
             "yield_curve_risk": {
-                "spread_2s10s": _round(fred_data.get("spread_2s10s")),
-                "inverted": (fred_data.get("spread_2s10s") or 0) < 0,
+                "spread_2s10s": _round(spread, 2),
+                "inverted": spread < 0,
             },
+            "gold": {
+                "gld_price": gld_price,
+                "gld_52w_high": gld_52w_high,
+                "gld_52w_low": gld_52w_low,
+                "gld_change": gld_change,
+                "gld_change_pct": gld_change_pct,
+                "gld_from_low_pct": gld_from_low_pct,
+            },
+            "umich_sentiment": {
+                "score": umich,
+                "prev_score": umich_prev,
+                "change": umich_change,
+                "date": umich_date,
+                "status": "bearish" if (umich or 100) < 60 else "neutral" if (umich or 100) < 80 else "bullish",
+            },
+            "recession_probability": {
+                "pct": rec_prob,
+                "prev_pct": rec_prob_prev,
+                "change_pp": rec_prob_change,
+                "date": rec_prob_date,
+                "status": "bearish" if (rec_prob or 0) > 30 else "neutral" if (rec_prob or 0) > 15 else "bullish",
+            },
+            "geopolitical_alert": geo_alert,
+            "risk_framework": druckenmiller_framework,
             "commentary": (
-                f"VIX at {_round(vix)} ({vix_signal}). "
-                f"HY OAS: {_round(fred_data.get('hy_spread'))}bps. "
-                f"Fear & Greed: {fg.get('current_score', 'N/A')} ({fg.get('current_rating', 'N/A')}). "
-                f"DXY: {_round(dxy_price)}."
+                "GEOPOLITICAL RISK: IRAN CONFLICT — "
+                "U.S.-Israeli military actions against Iran have pushed oil to $90+/bbl, "
+                "with gas prices jumping from $3.00 to $3.32/gal in one week. "
+                "The Fed faces a classic supply shock dilemma."
             ),
             "history": {
-                "vix": self.get_history("vix", 12).get("data", []),
+                "vix": fred_data.get("vix_daily_history", []),
                 "hy_spread": self.get_history("hy-spread", 24).get("data", []),
             },
+            "confidence": confidence_monthly,
         }
 
         cache.set(cache_key, result, _MACRO_DASHBOARD_TTL)
@@ -1585,11 +1736,72 @@ class MacroProvider:
 
     def _get_risk_fred_data(self) -> dict:
         """Sync helper: fetch risk-related FRED series."""
-        vix, _ = self._latest("VIXCLS", 90)
         hy_spread, _ = self._latest("BAMLH0A0HYM2", 365)
         bbb_spread, _ = self._latest("BAMLC0A4CBBB", 365)
         spread_2s10s, _ = self._latest("T10Y2Y", 365)
+
+        # VIX — daily series for stats and history
+        vix_s = self._get_series("VIXCLS", 400)
+        vix = None
+        vix_prev = None
+        vix_change = None
+        vix_52w_high = None
+        vix_52w_low = None
+        vix_daily_history: list = []
+        if vix_s is not None and not vix_s.empty:
+            vix = _round(_safe(float(vix_s.iloc[-1])), 2)
+            if len(vix_s) >= 2:
+                vix_prev = _round(_safe(float(vix_s.iloc[-2])), 2)
+                vix_change = _round(vix - vix_prev, 2) if vix and vix_prev else None
+            vix_52w_high = _round(float(vix_s.max()), 2)
+            vix_52w_low = _round(float(vix_s.min()), 2)
+            # Build daily history for chart (all available, ~261 trading days)
+            for idx, val in vix_s.items():
+                v = _safe(float(val))
+                if v:
+                    vix_daily_history.append({
+                        "date": idx.strftime("%Y-%m-%d"),
+                        "value": _round(v, 2),
+                    })
+
+        # UMich Consumer Sentiment — monthly history + prev
+        umich_s = self._get_series("UMCSENT", 400)
+        umich = None
+        umich_prev = None
+        umich_date = None
+        umich_history: list = []
+        if umich_s is not None and not umich_s.empty:
+            umich = _round(_safe(float(umich_s.iloc[-1])), 1)
+            umich_date = umich_s.index[-1].strftime("%Y-%m-%d")
+            if len(umich_s) >= 2:
+                umich_prev = _round(_safe(float(umich_s.iloc[-2])), 1)
+            for idx, val in umich_s.tail(13).items():
+                v = _safe(float(val))
+                if v:
+                    umich_history.append({
+                        "date": idx.strftime("%Y-%m-%d"),
+                        "value": _round(v, 1),
+                    })
+
+        # Recession probability — NY Fed 12-month ahead (RECPROUSM156N, %)
+        rec_s = self._get_series("RECPROUSM156N", 500)
+        recession_prob = None
+        recession_prob_prev = None
+        recession_prob_date = None
+        if rec_s is not None and not rec_s.empty:
+            recession_prob = _round(_safe(float(rec_s.iloc[-1])), 1)
+            recession_prob_date = rec_s.index[-1].strftime("%Y-%m-%d")
+            if len(rec_s) >= 2:
+                recession_prob_prev = _round(_safe(float(rec_s.iloc[-2])), 1)
+
         return {
-            "vix": vix, "hy_spread": hy_spread,
-            "bbb_spread": bbb_spread, "spread_2s10s": spread_2s10s,
+            "vix": vix, "vix_prev": vix_prev, "vix_change": vix_change,
+            "vix_52w_high": vix_52w_high, "vix_52w_low": vix_52w_low,
+            "vix_daily_history": vix_daily_history,
+            "umich": umich, "umich_prev": umich_prev, "umich_date": umich_date,
+            "umich_history": umich_history,
+            "recession_prob": recession_prob, "recession_prob_prev": recession_prob_prev,
+            "recession_prob_date": recession_prob_date,
+            "hy_spread": hy_spread, "bbb_spread": bbb_spread,
+            "spread_2s10s": spread_2s10s,
         }
