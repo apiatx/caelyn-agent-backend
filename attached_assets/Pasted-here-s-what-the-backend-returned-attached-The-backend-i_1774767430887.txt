@@ -1,0 +1,29 @@
+here's what the backend returned (attached)
+
+The backend is confirmed working with all the richer data. Let me check the exact new response format first, then update the frontend:
+
+The backend's remote server is still returning the old format — the changes were made in development but haven't propagated to the deployed URL our proxy is calling. Let me check what URL we're actually targeting:
+
+The backend agent made those changes to their development server, but the URL our proxy calls (fast-api-server-trading-agent-aidanpilon.replit.app) is their published/deployed version — which still has the old format. The richer data hasn't been deployed yet.
+
+What you need to do: Ask your backend agent to publish/redeploy their FastAPI server so the changes go live on the .replit.app URL.
+
+In the meantime, I can do fix #1 right now (split the bottom panel into Market Metrics + Sector Performance side-by-side), built to automatically work as soon as the backend deploys. I'll also wire the frontend to handle the richer status field and sector_performance array the moment the backend is live. Let me do that now:
+
+Now I have the full picture. I'll update the component to:
+
+Support both the current format AND the incoming richer format (with status field, richer exec conditions, sector_performance)
+Split the middle panel into Market Metrics + Sector Performance side-by-side (4-column bottom row)
+Now update the pillar card metric rows to use the richer 3-column format when status is present:
+
+Now replace the entire bottom row section with the 4-column layout and enhanced execution conditions:
+
+Clean HMR — no errors, four successive hot reloads confirms everything compiled fine.
+
+Here's the current state:
+
+Done now (fix #1 — layout): The bottom row is now 4 columns — Execution Window | Market Metrics | Sector Performance | Scoring Weights. The Sector Performance panel exists and is wired up. Right now it shows dimmed placeholder bars because sector_performance isn't in the backend response yet. The moment it is, the real ETF bars will appear automatically.
+
+Also ready (fix #2 — richer metrics): The pillar cards and execution window are already coded to handle the richer status field and value/status fields on conditions. As soon as the backend ships those fields, the 3-column layout (label | value | status-badge) will appear automatically — nothing more to change on the frontend.
+
+What you still need: Ask your backend agent to publish/deploy their FastAPI server so the updated code goes live at fast-api-server-trading-agent-aidanpilon.replit.app. Once they do that, both fixes will be fully live with zero additional frontend changes needed.
