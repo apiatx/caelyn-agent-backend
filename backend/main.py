@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Header, HTTPException, Body
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -113,6 +114,9 @@ _AUTH_PUBLIC_PATHS = {
     "/docs",
     "/openapi.json",
     "/redoc",
+    "/should-i-be-trading",
+    "/api/trading-dashboard",
+    "/api/trading-dashboard/refresh",
 }
 
 
@@ -158,6 +162,11 @@ app = FastAPI(title="Trading Agent API", lifespan=lifespan)
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ── Static file serving ───────────────────────────────────────────────────────
+_STATIC_DIR = Path(__file__).parent / "static"
+if _STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
 @app.exception_handler(RequestValidationError)
@@ -5872,3 +5881,427 @@ async def macro_risk(
         import traceback
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── SHOULD I BE TRADING? DASHBOARD ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_trading_dashboard_cache: dict = {}
+_TRADING_DASHBOARD_TTL = 90  # seconds
+
+
+@app.get("/should-i-be-trading")
+async def should_i_be_trading_page():
+    """Serve the Bloomberg Terminal-style trading dashboard HTML."""
+    html_path = Path(__file__).parent / "static" / "should-i-be-trading" / "index.html"
+    if html_path.exists():
+        return FileResponse(str(html_path), media_type="text/html")
+    return HTMLResponse("<h1>Dashboard not found</h1>", status_code=404)
+
+
+def _vix_score(vix: float | None) -> float:
+    if vix is None:
+        return 50.0
+    if vix <= 13:
+        return 95.0
+    if vix <= 15:
+        return 85.0
+    if vix <= 18:
+        return 72.0
+    if vix <= 20:
+        return 58.0
+    if vix <= 25:
+        return 40.0
+    if vix <= 30:
+        return 22.0
+    return 8.0
+
+
+def _fg_score(fg: float | None) -> float:
+    """Fear & Greed (0-100) -> pillar score. Contrarian: greed = risky."""
+    if fg is None:
+        return 50.0
+    if fg >= 75:
+        return 35.0
+    if fg >= 60:
+        return 65.0
+    if fg >= 45:
+        return 75.0
+    if fg >= 30:
+        return 65.0
+    if fg >= 20:
+        return 40.0
+    return 20.0
+
+
+def _spread_score(spread: float | None) -> float:
+    """2s10s yield spread -> score. Negative = inverted = bad."""
+    if spread is None:
+        return 50.0
+    if spread > 0.5:
+        return 85.0
+    if spread > 0:
+        return 70.0
+    if spread > -0.5:
+        return 55.0
+    if spread > -1.0:
+        return 38.0
+    return 20.0
+
+
+def _hy_oas_score(hy_oas: float | None) -> float:
+    """HY credit spread (OAS in %). Lower = healthier."""
+    if hy_oas is None:
+        return 60.0
+    if hy_oas < 2.5:
+        return 90.0
+    if hy_oas < 3.5:
+        return 75.0
+    if hy_oas < 4.5:
+        return 55.0
+    if hy_oas < 6.0:
+        return 35.0
+    return 15.0
+
+
+def _pct_from_high_score(pct: float | None) -> float:
+    """% from 52-week high (negative = below high)."""
+    if pct is None:
+        return 60.0
+    if pct >= -2:
+        return 90.0
+    if pct >= -5:
+        return 78.0
+    if pct >= -10:
+        return 60.0
+    if pct >= -15:
+        return 42.0
+    if pct >= -20:
+        return 25.0
+    return 10.0
+
+
+def _change_pct_score(chg: float | None) -> float:
+    """Daily change % -> momentum component."""
+    if chg is None:
+        return 50.0
+    if chg > 1.5:
+        return 85.0
+    if chg > 0.5:
+        return 75.0
+    if chg > 0:
+        return 62.0
+    if chg > -0.5:
+        return 48.0
+    if chg > -1.5:
+        return 30.0
+    return 12.0
+
+
+def _compute_dashboard(mode: str, risk_data: dict, macro_data: dict, calendar_data: dict) -> dict:
+    from datetime import datetime as _dt2, timezone as _tz2
+
+    def _s(d, *keys, default=None):
+        for k in keys:
+            if not isinstance(d, dict):
+                return default
+            d = d.get(k, None)
+            if d is None:
+                return default
+        return d
+
+    # ── Pull raw values ────────────────────────────────────────────────────────
+    vix = _s(risk_data, "volatility", "vix")
+    vix_change = _s(risk_data, "volatility", "vix_change")
+    vix_signal = _s(risk_data, "volatility", "signal", default="normal")
+
+    fg_score_raw = _s(risk_data, "fear_greed", "score")
+    fg_rating = _s(risk_data, "fear_greed", "rating", default="Neutral")
+    fg_components = _s(risk_data, "fear_greed", "components") or {}
+
+    hy_oas = _s(risk_data, "credit_spreads", "hy_oas")
+    bbb_oas = _s(risk_data, "credit_spreads", "bbb_oas")
+    hy_signal = _s(risk_data, "credit_spreads", "hy_signal", default="normal")
+
+    spread_2s10s = _s(risk_data, "yield_curve_risk", "spread_2s10s")
+    curve_inverted = _s(risk_data, "yield_curve_risk", "inverted", default=False)
+
+    dxy = _s(risk_data, "dollar", "dxy")
+    dxy_chg = _s(risk_data, "dollar", "dxy_change_pct")
+
+    benchmark_etfs = macro_data.get("benchmark_etfs", []) if isinstance(macro_data, dict) else []
+    etf_map = {e.get("ticker"): e for e in benchmark_etfs if isinstance(e, dict)}
+
+    spy = etf_map.get("SPY", {})
+    qqq = etf_map.get("QQQ", {})
+
+    spy_chg = spy.get("change_pct") or spy.get("change") or 0.0
+    qqq_chg = qqq.get("change_pct") or qqq.get("change") or 0.0
+    spy_from_high = spy.get("pct_from_52w_high")
+    qqq_from_high = qqq.get("pct_from_52w_high")
+
+    us10y = _s(macro_data, "rates_and_yields", "us_10y")
+
+    # ── Compute Pillar Scores ─────────────────────────────────────────────────
+    vix_s = _vix_score(vix)
+    hy_s = _hy_oas_score(hy_oas)
+    fg_vol_s = _fg_score(fg_score_raw)
+    p1_score = round(vix_s * 0.5 + hy_s * 0.3 + fg_vol_s * 0.2, 1)
+    p1_dir = "up" if vix_s >= 70 else ("down" if vix_s < 40 else "sideways")
+
+    spy_high_s = _pct_from_high_score(spy_from_high)
+    qqq_high_s = _pct_from_high_score(qqq_from_high)
+    spy_chg_s = _change_pct_score(spy_chg)
+    p2_score = round(spy_high_s * 0.4 + qqq_high_s * 0.35 + spy_chg_s * 0.25, 1)
+    p2_dir = "up" if spy_chg > 0.2 else ("down" if spy_chg < -0.2 else "sideways")
+
+    def _fg_comp(key):
+        v = fg_components.get(key)
+        if isinstance(v, dict):
+            return v.get("score", 50)
+        return 50
+
+    breadth_fg = _fg_comp("stock_price_breadth")
+    strength_fg = _fg_comp("stock_price_strength")
+    safe_haven = _fg_comp("safe_haven_demand")
+    p3_score = round(breadth_fg * 0.4 + strength_fg * 0.4 + (100 - safe_haven) * 0.2, 1)
+    p3_dir = "up" if p3_score >= 60 else ("down" if p3_score < 40 else "sideways")
+
+    spread_s = _spread_score(spread_2s10s)
+    dxy_s = 70.0 if (dxy_chg or 0) < 0 else (55.0 if abs(dxy_chg or 0) < 0.3 else 40.0)
+    bbb_s = _hy_oas_score((bbb_oas or 0) * 2 if bbb_oas else None)
+    p4_score = round(spread_s * 0.4 + bbb_s * 0.3 + dxy_s * 0.3, 1)
+    p4_dir = "up" if p4_score >= 60 else ("down" if p4_score < 40 else "sideways")
+
+    momentum_fg = _fg_comp("market_momentum_sp500")
+    junk_bond = _fg_comp("junk_bond_demand")
+    put_call_fg = _fg_comp("put_call_options")
+    p5_score = round(momentum_fg * 0.4 + junk_bond * 0.3 + put_call_fg * 0.3, 1)
+    p5_dir = "up" if p5_score >= 60 else ("down" if p5_score < 40 else "sideways")
+
+    weights = [0.30, 0.25, 0.20, 0.15, 0.10] if mode == "swing" else [0.25, 0.20, 0.20, 0.15, 0.20]
+    pillar_scores = [p1_score, p2_score, p3_score, p4_score, p5_score]
+    mqs = round(sum(s * w for s, w in zip(pillar_scores, weights)), 1)
+
+    ews_penalty = 0
+    alert_events = []
+    upcoming = calendar_data.get("events", []) if isinstance(calendar_data, dict) else []
+    for ev in upcoming[:20]:
+        days_out = ev.get("days_out", 99)
+        ev_type = (ev.get("event", "") or ev.get("name", "") or "").lower()
+        if days_out is not None and days_out <= 1:
+            if any(k in ev_type for k in ["fomc", "fed", "interest rate"]):
+                ews_penalty += 15
+                alert_events.append(f"FOMC/Fed Decision in {days_out}d — elevated volatility expected")
+            elif "cpi" in ev_type or "inflation" in ev_type:
+                ews_penalty += 10
+                alert_events.append(f"CPI Release in {days_out}d — price action may spike")
+            elif any(k in ev_type for k in ["nfp", "payroll", "jobs"]):
+                ews_penalty += 10
+                alert_events.append(f"Jobs Report in {days_out}d — directional risk elevated")
+
+    ews = max(0.0, round(mqs - ews_penalty, 1))
+
+    if ews >= 70:
+        decision = "YES"
+    elif ews >= 40:
+        decision = "CAUTION"
+    else:
+        decision = "NO"
+
+    vix_str = f"{vix:.1f}" if vix else "N/A"
+    vix_chg_str = f"{vix_change:+.2f}" if vix_change else "N/A"
+    fg_str = f"{fg_score_raw:.0f} ({fg_rating})" if fg_score_raw else "N/A"
+    hy_str = f"{hy_oas:.2f}%" if hy_oas else "N/A"
+    spread_str = f"{spread_2s10s:+.2f}%" if spread_2s10s else "N/A"
+    spy_str = f"{spy_chg:+.2f}%" if spy_chg is not None else "N/A"
+    spy_high_str = f"{spy_from_high:+.1f}%" if spy_from_high else "N/A"
+    qqq_str = f"{qqq_chg:+.2f}%" if qqq_chg is not None else "N/A"
+    qqq_high_str = f"{qqq_from_high:+.1f}%" if qqq_from_high else "N/A"
+    dxy_str = f"{dxy:.2f}" if dxy else "N/A"
+    dxy_chg_str = f"{dxy_chg:+.2f}%" if dxy_chg else "N/A"
+
+    pillars = [
+        {
+            "title": "VOLATILITY / RISK",
+            "score": p1_score,
+            "weight": int(weights[0] * 100),
+            "direction": p1_dir,
+            "metrics": [
+                {"label": "VIX", "value": f"{vix_str} ({vix_chg_str})", "ok": (vix or 99) < 20},
+                {"label": "HY OAS", "value": hy_str, "ok": hy_s >= 60},
+                {"label": "Fear/Greed", "value": fg_str, "ok": 30 <= (fg_score_raw or 50) <= 70},
+                {"label": "VIX Signal", "value": vix_signal.upper(), "ok": vix_signal in ("low_vol", "normal", "complacency")},
+            ],
+        },
+        {
+            "title": "TREND & STRUCTURE",
+            "score": p2_score,
+            "weight": int(weights[1] * 100),
+            "direction": p2_dir,
+            "metrics": [
+                {"label": "SPY Chg", "value": spy_str, "ok": spy_chg > 0},
+                {"label": "SPY vs 52w", "value": spy_high_str, "ok": (spy_from_high or -100) >= -5},
+                {"label": "QQQ Chg", "value": qqq_str, "ok": qqq_chg > 0},
+                {"label": "QQQ vs 52w", "value": qqq_high_str, "ok": (qqq_from_high or -100) >= -5},
+            ],
+        },
+        {
+            "title": "MARKET BREADTH",
+            "score": p3_score,
+            "weight": int(weights[2] * 100),
+            "direction": p3_dir,
+            "metrics": [
+                {"label": "Price Breadth", "value": f"{breadth_fg:.0f}/100", "ok": breadth_fg >= 50},
+                {"label": "Price Strength", "value": f"{strength_fg:.0f}/100", "ok": strength_fg >= 50},
+                {"label": "Safe Haven Dem", "value": f"{safe_haven:.0f}/100", "ok": safe_haven < 50},
+                {"label": "HYG Signal", "value": hy_signal.upper(), "ok": hy_signal == "normal"},
+            ],
+        },
+        {
+            "title": "MACRO / LIQUIDITY",
+            "score": p4_score,
+            "weight": int(weights[3] * 100),
+            "direction": p4_dir,
+            "metrics": [
+                {"label": "2s10s Spread", "value": spread_str, "ok": (spread_2s10s or -1) > -0.5},
+                {"label": "Yield Curve", "value": "INVERTED" if curve_inverted else "NORMAL", "ok": not curve_inverted},
+                {"label": "DXY", "value": f"{dxy_str} ({dxy_chg_str})", "ok": (dxy_chg or 0) < 0.3},
+                {"label": "10Y Yield", "value": f"{us10y:.2f}%" if us10y else "N/A", "ok": bool(us10y and us10y < 4.8)},
+            ],
+        },
+        {
+            "title": "MOMENTUM / SENTIMENT",
+            "score": p5_score,
+            "weight": int(weights[4] * 100),
+            "direction": p5_dir,
+            "metrics": [
+                {"label": "Mkt Momentum", "value": f"{momentum_fg:.0f}/100", "ok": momentum_fg >= 50},
+                {"label": "Put/Call", "value": f"{put_call_fg:.0f}/100", "ok": put_call_fg >= 45},
+                {"label": "Junk Bond Dem", "value": f"{junk_bond:.0f}/100", "ok": junk_bond >= 50},
+                {"label": "DXY Trend", "value": "FALLING" if (dxy_chg or 0) < 0 else "RISING", "ok": (dxy_chg or 0) < 0},
+            ],
+        },
+    ]
+
+    exec_conditions = [
+        {"label": "Volatility acceptable (VIX < 25)", "ok": (vix or 99) < 25},
+        {"label": "Trend aligned (Pillar 2 >= 55)", "ok": p2_score >= 55},
+        {"label": "Breadth supporting (Pillar 3 >= 50)", "ok": p3_score >= 50},
+        {"label": "No major macro event today", "ok": ews_penalty == 0},
+    ]
+
+    decision_text = {
+        "YES": "Market conditions are favorable. Volatility is controlled, trend is intact, and breadth supports participation. Trade your plan with normal position sizing.",
+        "CAUTION": "Mixed signals across pillars. Consider reducing position size by 30-50%, tightening stops, and avoiding aggressive new entries until conditions clarify.",
+        "NO": "Risk environment is elevated. High VIX, poor breadth, or a major macro event is pending. Stay flat or reduce/hedge existing positions.",
+    }[decision]
+
+    terminal = [
+        {"type": "dim", "text": f"$ caelyn --mode={mode} --analyze --pillars=5"},
+        {"type": "dim", "text": ""},
+        {"type": "green" if decision == "YES" else ("yellow" if decision == "CAUTION" else "red"),
+         "text": f"DECISION: {decision}"},
+        {"type": "dim", "text": decision_text},
+        {"type": "dim", "text": ""},
+        {"type": "blue", "text": f"[VOLATILITY/RISK]    {p1_score:.0f}/100 | VIX: {vix_str} | HY OAS: {hy_str} | F&G: {fg_str}"},
+        {"type": "blue", "text": f"[TREND/STRUCTURE]    {p2_score:.0f}/100 | SPY: {spy_str} | vs 52w: {spy_high_str}"},
+        {"type": "blue", "text": f"[MARKET BREADTH]     {p3_score:.0f}/100 | Breadth: {breadth_fg:.0f} | Strength: {strength_fg:.0f}"},
+        {"type": "blue", "text": f"[MACRO/LIQUIDITY]    {p4_score:.0f}/100 | 2s10s: {spread_str} | DXY: {dxy_str}"},
+        {"type": "blue", "text": f"[MOMENTUM/SENT]      {p5_score:.0f}/100 | Momentum: {momentum_fg:.0f} | Put/Call: {put_call_fg:.0f}"},
+        {"type": "dim", "text": ""},
+        {"type": "green" if mqs >= 70 else ("yellow" if mqs >= 40 else "red"),
+         "text": f"Market Quality Score (MQS): {mqs:.0f}/100"},
+        {"type": "green" if ews >= 70 else ("yellow" if ews >= 40 else "red"),
+         "text": f"Execution Window Score (EWS): {ews:.0f}/100" + (f"  [event penalty: -{ews_penalty}]" if ews_penalty else "")},
+    ]
+    if alert_events:
+        terminal.append({"type": "yellow", "text": f"ALERT: {alert_events[0]}"})
+
+    return {
+        "decision": decision,
+        "market_quality_score": mqs,
+        "execution_window_score": ews,
+        "mode": mode,
+        "pillars": pillars,
+        "summary": decision_text,
+        "execution_conditions": exec_conditions,
+        "terminal_analysis": terminal,
+        "alert": {
+            "show": bool(alert_events),
+            "text": alert_events[0] if alert_events else "",
+        },
+        "as_of": _dt2.now(_tz2.utc).isoformat(),
+        "from_cache": False,
+    }
+
+
+@app.get("/api/trading-dashboard")
+@limiter.limit("30/minute")
+async def trading_dashboard(
+    request: Request,
+    mode: str = "swing",
+    force: bool = False,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Should I Be Trading? — 5-pillar market scoring dashboard."""
+    await _wait_for_init()
+
+    import time as _t
+
+    mode = mode.lower() if mode.lower() in ("swing", "day") else "swing"
+    cache_key = f"trading_dashboard_{mode}"
+
+    if not force:
+        cached = _trading_dashboard_cache.get(cache_key)
+        if cached and (_t.time() - cached.get("_ts", 0)) < _TRADING_DASHBOARD_TTL:
+            result = {**cached, "from_cache": True}
+            result.pop("_ts", None)
+            return JSONResponse(content=result)
+
+    mp = _get_macro_provider()
+    if not mp:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Macro provider not initialized. Ensure FRED_API_KEY is set."},
+        )
+
+    try:
+        risk_data, macro_data, calendar_data = await asyncio.gather(
+            mp.get_risk(),
+            mp.get_dashboard(),
+            mp.get_calendar(days_ahead=3),
+            return_exceptions=True,
+        )
+        if isinstance(risk_data, Exception):
+            risk_data = {}
+        if isinstance(macro_data, Exception):
+            macro_data = {}
+        if isinstance(calendar_data, Exception):
+            calendar_data = {}
+
+        result = _compute_dashboard(mode, risk_data, macro_data, calendar_data)
+        _trading_dashboard_cache[cache_key] = {**result, "_ts": _t.time()}
+        return JSONResponse(content=result)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Trading dashboard error: {str(e)}"},
+        )
+
+
+@app.post("/api/trading-dashboard/refresh")
+@limiter.limit("10/minute")
+async def trading_dashboard_refresh(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Force-clear the trading dashboard cache."""
+    cleared = [k for k in list(_trading_dashboard_cache.keys()) if k.startswith("trading_dashboard_")]
+    for k in cleared:
+        del _trading_dashboard_cache[k]
+    return JSONResponse(content={"status": "ok", "cleared": cleared, "message": "Cache cleared — next request fetches fresh data"})

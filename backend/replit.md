@@ -15,6 +15,20 @@ This project is a Python FastAPI backend for a trading analysis platform designe
 - INVESTMENTS forbidden sectors (never recommend for Best Investments): consumer debt collection, payday lending, commodity retail, generic healthcare administration, non-critical specialty finance. These pass Finviz filters but have no place in a 6-20 year hold portfolio.
 - INVESTMENTS ideal candidates: AI infrastructure bottlenecks, defense/aerospace primes and disruptors, energy grid buildout, critical materials monopolies, cybersecurity platform leaders, late-stage biotech with breakthrough potential, quantum computing leaders, companies with visionary respected leadership building category-defining businesses.
 
+## Should I Be Trading? Dashboard
+- **URL**: `/should-i-be-trading` (Bloomberg Terminal-style HTML dashboard)
+- **API**: `GET /api/trading-dashboard?mode=swing|day` — 5-pillar market scoring
+- **API**: `POST /api/trading-dashboard/refresh` — force-clear the 90s cache
+- **Pillars** (30/25/20/15/10% weight for swing; 25/20/20/15/20% for day):
+  1. Volatility/Risk — VIX + HY OAS + Fear & Greed
+  2. Trend & Structure — SPY/QQQ vs 52w high + daily change
+  3. Market Breadth — F&G breadth/strength/safe-haven components
+  4. Macro/Liquidity — 2s10s spread + DXY + credit spreads
+  5. Momentum/Sentiment — F&G momentum + put/call + junk bond demand
+- **Scoring**: MQS (Market Quality Score 0-100) → EWS (penalized for FOMC/CPI/Jobs)
+- **Decision**: YES ≥ 70, CAUTION 40-69, NO < 40
+- Static files served from `backend/static/` via `/static` mount
+
 ## System Architecture
 The platform's backend is built on FastAPI, designed for robustness and scalability.
 - **Core Functionality**: Orchestrates market scanning, data enrichment, quantitative pre-scoring, and integrates Claude AI for analysis.

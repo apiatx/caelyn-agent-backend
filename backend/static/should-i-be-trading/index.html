@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Should I Be Trading? — Caelyn AI</title>
+<style>
+  :root {
+    --bg: #090909;
+    --bg2: #0f0f0f;
+    --bg3: #161616;
+    --bg4: #1c1c1c;
+    --border: #2a2a2a;
+    --border2: #333;
+    --green: #00e676;
+    --green-dim: #1b5e20;
+    --yellow: #ffd600;
+    --yellow-dim: #3e2c00;
+    --red: #ff1744;
+    --red-dim: #4a0010;
+    --blue: #2979ff;
+    --text: #e0e0e0;
+    --text-dim: #888;
+    --text-dimmer: #555;
+    --mono: 'Courier New', 'Consolas', monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; min-height: 100vh; }
+  
+  /* ── TOP BAR ─────────────────────────────── */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px; background: #0a0a0a; border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .topbar-left { display: flex; align-items: center; gap: 12px; }
+  .topbar-logo { font-size: 11px; color: var(--text-dim); letter-spacing: 2px; text-transform: uppercase; }
+  .topbar-title { font-size: 14px; font-weight: bold; color: var(--text); letter-spacing: 1px; }
+  .topbar-right { display: flex; align-items: center; gap: 10px; }
+  
+  .mode-toggle { display: flex; border: 1px solid var(--border2); border-radius: 4px; overflow: hidden; }
+  .mode-btn {
+    padding: 4px 14px; cursor: pointer; font-family: var(--mono); font-size: 11px;
+    letter-spacing: 1px; background: var(--bg3); color: var(--text-dim); border: none;
+    transition: all 0.15s;
+  }
+  .mode-btn.active { background: var(--blue); color: #fff; }
+  
+  .refresh-info { font-size: 11px; color: var(--text-dim); }
+  .refresh-btn {
+    padding: 4px 12px; background: var(--bg3); border: 1px solid var(--border2);
+    color: var(--text); font-family: var(--mono); font-size: 11px; cursor: pointer;
+    border-radius: 3px; letter-spacing: 0.5px; transition: background 0.15s;
+  }
+  .refresh-btn:hover { background: var(--bg4); }
+  .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  
+  /* ── ALERT BANNER ─────────────────────────── */
+  .alert-banner {
+    display: none; align-items: center; gap: 10px;
+    padding: 7px 16px; background: #1a1400; border-bottom: 1px solid #4a3800;
+    font-size: 12px; color: var(--yellow);
+  }
+  .alert-banner.show { display: flex; }
+  .alert-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--yellow); animation: blink 1.2s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+  
+  /* ── MAIN LAYOUT ─────────────────────────── */
+  .main { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+  
+  /* ── HERO ROW ─────────────────────────────── */
+  .hero-row { display: grid; grid-template-columns: 280px 1fr; gap: 12px; }
+  
+  .hero-panel {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
+    padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 12px;
+  }
+  .hero-label { font-size: 10px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; }
+  
+  .decision-badge {
+    font-size: 36px; font-weight: 900; letter-spacing: 4px; padding: 12px 32px;
+    border-radius: 4px; text-align: center; transition: all 0.4s;
+  }
+  .decision-badge.yes { background: var(--green-dim); color: var(--green); border: 2px solid var(--green); }
+  .decision-badge.caution { background: var(--yellow-dim); color: var(--yellow); border: 2px solid var(--yellow); }
+  .decision-badge.no { background: var(--red-dim); color: var(--red); border: 2px solid var(--red); }
+  
+  .gauge-wrap { position: relative; width: 140px; height: 80px; }
+  .gauge-svg { width: 140px; height: 80px; }
+  .gauge-score {
+    position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+    font-size: 26px; font-weight: 900; text-align: center; line-height: 1;
+  }
+  .gauge-score-label { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; }
+  
+  .scores-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+  .score-cell { background: var(--bg3); border: 1px solid var(--border); border-radius: 3px; padding: 8px; text-align: center; }
+  .score-cell-label { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; margin-bottom: 4px; }
+  .score-cell-value { font-size: 22px; font-weight: 900; }
+  .score-cell-sub { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+  
+  .hero-summary {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 14px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .hero-summary-header { font-size: 10px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .hero-summary-text { font-size: 12px; color: var(--text); line-height: 1.7; }
+  
+  .pillar-bar-chart { margin-top: auto; }
+  .pillar-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .pillar-bar-name { font-size: 10px; color: var(--text-dim); width: 120px; text-align: right; flex-shrink: 0; letter-spacing: 0.5px; }
+  .pillar-bar-track { flex: 1; height: 10px; background: var(--bg4); border-radius: 2px; overflow: hidden; }
+  .pillar-bar-fill { height: 100%; border-radius: 2px; transition: width 0.6s ease; }
+  .pillar-bar-score { font-size: 11px; font-weight: 700; width: 30px; text-align: right; }
+  
+  /* ── PILLARS GRID ─────────────────────────── */
+  .pillars-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  
+  .pillar-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 12px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .pillar-card-header { display: flex; align-items: center; justify-content: space-between; }
+  .pillar-card-title { font-size: 9px; letter-spacing: 1.5px; color: var(--text-dim); text-transform: uppercase; }
+  .pillar-direction { font-size: 18px; line-height: 1; }
+  .pillar-score-big { font-size: 38px; font-weight: 900; line-height: 1; }
+  .pillar-score-label { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; }
+  .pillar-divider { height: 1px; background: var(--border); }
+  .pillar-metrics { display: flex; flex-direction: column; gap: 5px; }
+  .pillar-metric { display: flex; justify-content: space-between; align-items: center; }
+  .pillar-metric-label { font-size: 10px; color: var(--text-dim); }
+  .pillar-metric-value { font-size: 11px; font-weight: 600; }
+  
+  /* ── BOTTOM ROW ─────────────────────────────── */
+  .bottom-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  
+  .exec-panel {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 14px;
+  }
+  .exec-panel-title { font-size: 10px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .exec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .exec-cell {
+    background: var(--bg3); border: 1px solid var(--border); border-radius: 3px;
+    padding: 10px 12px; display: flex; align-items: center; gap: 8px;
+  }
+  .exec-cell-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .exec-cell-label { font-size: 10px; color: var(--text-dim); flex: 1; }
+  .exec-cell-status { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; }
+  
+  .terminal-panel {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 14px;
+  }
+  .terminal-panel-title { font-size: 10px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .terminal-text { font-size: 11px; color: #aaa; line-height: 1.8; }
+  .terminal-text .t-green { color: var(--green); }
+  .terminal-text .t-yellow { color: var(--yellow); }
+  .terminal-text .t-red { color: var(--red); }
+  .terminal-text .t-blue { color: #82b1ff; }
+  .terminal-text .t-dim { color: var(--text-dimmer); }
+  
+  /* ── LEGEND ───────────────────────────────── */
+  .legend-row {
+    display: flex; gap: 16px; padding: 8px 0;
+    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    align-items: center;
+  }
+  .legend-label { font-size: 10px; color: var(--text-dim); letter-spacing: 1px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .legend-text { font-size: 10px; color: var(--text-dim); }
+  
+  /* ── STATUS BAR ─────────────────────────────── */
+  .statusbar {
+    font-size: 10px; color: var(--text-dimmer); padding: 6px 16px;
+    border-top: 1px solid var(--border); display: flex; align-items: center;
+    justify-content: space-between; background: var(--bg);
+  }
+  
+  /* ── LOADING OVERLAY ─────────────────────── */
+  .loading-overlay {
+    position: fixed; inset: 0; background: rgba(9,9,9,0.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 999; flex-direction: column; gap: 12px;
+  }
+  .loading-overlay.hidden { display: none; }
+  .loading-spinner { font-size: 13px; color: var(--green); letter-spacing: 2px; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  
+  /* ── SCORE COLORS ────────────────────────── */
+  .score-yes { color: var(--green); }
+  .score-caution { color: var(--yellow); }
+  .score-no { color: var(--red); }
+  
+  .bar-yes { background: var(--green); }
+  .bar-caution { background: var(--yellow); }
+  .bar-no { background: var(--red); }
+
+  /* ── TIMESTAMP ───────────────────────────── */
+  .as-of { font-size: 10px; color: var(--text-dimmer); }
+  
+  @media (max-width: 1200px) {
+    .pillars-grid { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 900px) {
+    .hero-row { grid-template-columns: 1fr; }
+    .pillars-grid { grid-template-columns: repeat(2, 1fr); }
+    .bottom-row { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 600px) {
+    .pillars-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-spinner">▶ LOADING MARKET INTELLIGENCE...</div>
+  <div style="font-size:11px;color:#555;">Aggregating 5-pillar analysis</div>
+</div>
+
+<!-- Top Bar -->
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="topbar-logo">CAELYN AI</span>
+    <span style="color:#333">|</span>
+    <span class="topbar-title">SHOULD I BE TRADING?</span>
+  </div>
+  <div class="topbar-right">
+    <div class="mode-toggle">
+      <button class="mode-btn active" id="btnSwing" onclick="setMode('swing')">SWING</button>
+      <button class="mode-btn" id="btnDay" onclick="setMode('day')">DAY</button>
+    </div>
+    <span class="refresh-info">Next refresh: <span id="countdown">45</span>s</span>
+    <button class="refresh-btn" id="refreshBtn" onclick="manualRefresh()">⟳ REFRESH</button>
+    <span class="as-of" id="asOf">—</span>
+  </div>
+</div>
+
+<!-- Alert Banner -->
+<div class="alert-banner" id="alertBanner">
+  <div class="alert-dot"></div>
+  <span id="alertText">FOMC Decision Today — Elevated volatility expected</span>
+</div>
+
+<!-- Main Content -->
+<div class="main">
+
+  <!-- Legend -->
+  <div class="legend-row">
+    <span class="legend-label">SCORE LEGEND:</span>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div><span class="legend-text">70–100 &nbsp;YES — Trade</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--yellow)"></div><span class="legend-text">40–69 &nbsp;CAUTION — Reduce size</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--red)"></div><span class="legend-text">0–39 &nbsp;NO — Stay flat</span></div>
+  </div>
+
+  <!-- Hero Row -->
+  <div class="hero-row">
+    <!-- Decision Panel -->
+    <div class="hero-panel">
+      <div class="hero-label">TRADING DECISION</div>
+      <div class="decision-badge yes" id="decisionBadge">YES</div>
+      
+      <!-- Gauge -->
+      <div class="gauge-wrap">
+        <svg class="gauge-svg" viewBox="0 0 140 80" id="gaugeSvg">
+          <path d="M 15 75 A 55 55 0 0 1 125 75" fill="none" stroke="#222" stroke-width="10" stroke-linecap="round"/>
+          <path id="gaugeArc" d="M 15 75 A 55 55 0 0 1 125 75" fill="none" stroke="#00e676" stroke-width="10" stroke-linecap="round" stroke-dasharray="173" stroke-dashoffset="50"/>
+        </svg>
+        <div class="gauge-score score-yes" id="gaugeScore">
+          <div id="gaugeScoreNum">—</div>
+          <div class="gauge-score-label">MQS</div>
+        </div>
+      </div>
+      
+      <!-- Scores Grid -->
+      <div class="scores-grid">
+        <div class="score-cell">
+          <div class="score-cell-label">MKT QUALITY</div>
+          <div class="score-cell-value score-yes" id="mqsValue">—</div>
+          <div class="score-cell-sub">/100</div>
+        </div>
+        <div class="score-cell">
+          <div class="score-cell-label">EXEC WINDOW</div>
+          <div class="score-cell-value score-yes" id="ewsValue">—</div>
+          <div class="score-cell-sub">/100</div>
+        </div>
+      </div>
+      
+      <!-- Pillar Bar Chart -->
+      <div style="width:100%">
+        <div style="font-size:9px;color:var(--text-dimmer);letter-spacing:1px;margin-bottom:8px;text-align:center">PILLAR BREAKDOWN</div>
+        <div id="pillarBars"></div>
+      </div>
+    </div>
+    
+    <!-- Summary Panel -->
+    <div class="hero-summary">
+      <div class="hero-summary-header">▶ TERMINAL ANALYSIS &nbsp;—&nbsp; <span id="modeLabel">SWING TRADING</span></div>
+      <div class="hero-summary-text" id="summaryText">Loading market analysis...</div>
+    </div>
+  </div>
+
+  <!-- 5 Pillar Cards -->
+  <div class="pillars-grid" id="pillarsGrid">
+    <!-- Dynamically generated -->
+  </div>
+
+  <!-- Bottom Row -->
+  <div class="bottom-row">
+    <!-- Execution Panel -->
+    <div class="exec-panel">
+      <div class="exec-panel-title">▶ EXECUTION CONDITIONS</div>
+      <div class="exec-grid" id="execGrid">
+        <!-- Dynamically generated -->
+      </div>
+    </div>
+    
+    <!-- Terminal Analysis -->
+    <div class="terminal-panel">
+      <div class="terminal-panel-title">▶ SHORT EXPLANATION</div>
+      <div class="terminal-text" id="terminalText">
+        <span class="t-dim">$ Loading analysis...</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Status Bar -->
+<div class="statusbar">
+  <span>CAELYN AI — TRADING INTELLIGENCE SYSTEM v2.0</span>
+  <span id="statusMsg">Initializing...</span>
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────
+let currentMode = 'swing';
+let countdownTimer = null;
+let refreshInterval = null;
+let countdownSecs = 45;
+let isLoading = false;
+let lastData = null;
+
+// ─── Mode Toggle ──────────────────────────────────────────────────
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('btnSwing').classList.toggle('active', mode === 'swing');
+  document.getElementById('btnDay').classList.toggle('active', mode === 'day');
+  document.getElementById('modeLabel').textContent = mode === 'swing' ? 'SWING TRADING' : 'DAY TRADING';
+  loadData();
+}
+
+// ─── Manual Refresh ───────────────────────────────────────────────
+function manualRefresh() {
+  resetCountdown();
+  loadData();
+}
+
+// ─── Countdown ────────────────────────────────────────────────────
+function resetCountdown() {
+  countdownSecs = 45;
+  clearInterval(countdownTimer);
+  countdownTimer = setInterval(() => {
+    countdownSecs--;
+    document.getElementById('countdown').textContent = countdownSecs;
+    if (countdownSecs <= 0) {
+      resetCountdown();
+      loadData();
+    }
+  }, 1000);
+}
+
+// ─── Score Color ─────────────────────────────────────────────────
+function scoreClass(score) {
+  if (score >= 70) return 'score-yes';
+  if (score >= 40) return 'score-caution';
+  return 'score-no';
+}
+function barClass(score) {
+  if (score >= 70) return 'bar-yes';
+  if (score >= 40) return 'bar-caution';
+  return 'bar-no';
+}
+function scoreColor(score) {
+  if (score >= 70) return 'var(--green)';
+  if (score >= 40) return 'var(--yellow)';
+  return 'var(--red)';
+}
+
+// ─── Gauge Arc ────────────────────────────────────────────────────
+function updateGauge(score) {
+  const totalLength = 173;
+  const offset = totalLength - (score / 100) * totalLength;
+  const arc = document.getElementById('gaugeArc');
+  arc.style.strokeDashoffset = offset;
+  arc.style.stroke = scoreColor(score);
+  document.getElementById('gaugeScore').className = 'gauge-score ' + scoreClass(score);
+  document.getElementById('gaugeScoreNum').textContent = Math.round(score);
+}
+
+// ─── Direction Arrow ──────────────────────────────────────────────
+function dirArrow(dir) {
+  if (!dir) return '→';
+  const d = dir.toLowerCase();
+  if (d === 'up' || d === 'bullish') return '↑';
+  if (d === 'down' || d === 'bearish') return '↓';
+  return '→';
+}
+
+// ─── Render Pillars ───────────────────────────────────────────────
+function renderPillars(pillars) {
+  const grid = document.getElementById('pillarsGrid');
+  grid.innerHTML = '';
+  
+  pillars.forEach(p => {
+    const card = document.createElement('div');
+    card.className = 'pillar-card';
+    
+    const metricsHtml = (p.metrics || []).map(m => `
+      <div class="pillar-metric">
+        <span class="pillar-metric-label">${m.label}</span>
+        <span class="pillar-metric-value" style="color:${scoreColor(m.ok ? 75 : 35)}">${m.value}</span>
+      </div>
+    `).join('');
+    
+    card.innerHTML = `
+      <div class="pillar-card-header">
+        <span class="pillar-card-title">${p.title}</span>
+        <span class="pillar-direction">${dirArrow(p.direction)}</span>
+      </div>
+      <div class="pillar-score-big ${scoreClass(p.score)}">${Math.round(p.score)}</div>
+      <div class="pillar-score-label">WEIGHT ${p.weight}%</div>
+      <div class="pillar-divider"></div>
+      <div class="pillar-metrics">${metricsHtml}</div>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+// ─── Render Pillar Bars ───────────────────────────────────────────
+function renderPillarBars(pillars) {
+  const container = document.getElementById('pillarBars');
+  container.innerHTML = pillars.map(p => `
+    <div class="pillar-bar-row">
+      <span class="pillar-bar-name">${p.title}</span>
+      <div class="pillar-bar-track">
+        <div class="pillar-bar-fill ${barClass(p.score)}" style="width:${p.score}%"></div>
+      </div>
+      <span class="pillar-bar-score ${scoreClass(p.score)}">${Math.round(p.score)}</span>
+    </div>
+  `).join('');
+}
+
+// ─── Render Exec Panel ────────────────────────────────────────────
+function renderExec(conditions) {
+  const grid = document.getElementById('execGrid');
+  grid.innerHTML = conditions.map(c => `
+    <div class="exec-cell">
+      <div class="exec-cell-dot" style="background:${c.ok ? 'var(--green)' : 'var(--red)'}"></div>
+      <span class="exec-cell-label">${c.label}</span>
+      <span class="exec-cell-status" style="color:${c.ok ? 'var(--green)' : 'var(--red)'}">
+        ${c.ok ? 'PASS' : 'FAIL'}
+      </span>
+    </div>
+  `).join('');
+}
+
+// ─── Render Terminal Text ─────────────────────────────────────────
+function renderTerminal(analysis) {
+  const el = document.getElementById('terminalText');
+  const lines = analysis || [];
+  el.innerHTML = lines.map(l => {
+    const cls = l.type === 'green' ? 't-green' : l.type === 'yellow' ? 't-yellow' : l.type === 'red' ? 't-red' : l.type === 'blue' ? 't-blue' : 't-dim';
+    return `<span class="${cls}">${l.text}</span>`;
+  }).join('<br>');
+}
+
+// ─── Main Render ──────────────────────────────────────────────────
+function render(data) {
+  lastData = data;
+  
+  const mqs = data.market_quality_score || 0;
+  const ews = data.execution_window_score || 0;
+  const decision = data.decision || 'CAUTION';
+  
+  // Decision badge
+  const badge = document.getElementById('decisionBadge');
+  badge.className = 'decision-badge ' + decision.toLowerCase();
+  badge.textContent = decision;
+  
+  // Scores
+  document.getElementById('mqsValue').textContent = Math.round(mqs);
+  document.getElementById('mqsValue').className = 'score-cell-value ' + scoreClass(mqs);
+  document.getElementById('ewsValue').textContent = Math.round(ews);
+  document.getElementById('ewsValue').className = 'score-cell-value ' + scoreClass(ews);
+  
+  // Gauge
+  updateGauge(mqs);
+  
+  // Alert banner
+  const alertBanner = document.getElementById('alertBanner');
+  if (data.alert && data.alert.show) {
+    alertBanner.classList.add('show');
+    document.getElementById('alertText').textContent = data.alert.text;
+  } else {
+    alertBanner.classList.remove('show');
+  }
+  
+  // Pillars
+  if (data.pillars) {
+    renderPillars(data.pillars);
+    renderPillarBars(data.pillars);
+  }
+  
+  // Summary
+  document.getElementById('summaryText').textContent = data.summary || '';
+  
+  // Exec conditions
+  if (data.execution_conditions) {
+    renderExec(data.execution_conditions);
+  }
+  
+  // Terminal analysis
+  if (data.terminal_analysis) {
+    renderTerminal(data.terminal_analysis);
+  }
+  
+  // Timestamp
+  const ts = data.as_of ? new Date(data.as_of).toLocaleTimeString() : '—';
+  document.getElementById('asOf').textContent = `AS OF ${ts}`;
+  document.getElementById('statusMsg').textContent = `Last updated: ${ts} | Mode: ${currentMode.toUpperCase()} | Cache: ${data.from_cache ? 'HIT' : 'MISS'}`;
+}
+
+// ─── Fetch Data ───────────────────────────────────────────────────
+async function loadData(forceRefresh = false) {
+  if (isLoading) return;
+  isLoading = true;
+  
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.textContent = '⟳ LOADING...';
+  
+  if (!lastData) {
+    document.getElementById('loadingOverlay').classList.remove('hidden');
+  }
+  
+  try {
+    const url = `/api/trading-dashboard?mode=${currentMode}${forceRefresh ? '&force=true' : ''}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    render(data);
+    document.getElementById('statusMsg').textContent = `Loaded OK — ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    console.error('Dashboard load error:', err);
+    document.getElementById('statusMsg').textContent = `Error: ${err.message} — retrying...`;
+    // If we have stale data, keep showing it
+    if (!lastData) {
+      document.getElementById('summaryText').textContent = 'Unable to load data. Check backend connection.';
+    }
+  } finally {
+    isLoading = false;
+    btn.disabled = false;
+    btn.textContent = '⟳ REFRESH';
+    document.getElementById('loadingOverlay').classList.add('hidden');
+  }
+}
+
+// ─── Init ─────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadData();
+  resetCountdown();
+});
+</script>
+</body>
+</html>
