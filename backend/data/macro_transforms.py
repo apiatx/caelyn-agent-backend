@@ -200,7 +200,7 @@ def transform_dashboard(raw: dict) -> dict:
 def transform_rates(raw: dict) -> dict:
     """
     Input:  MacroProvider.get_rates() result
-    Output: { yield_curve, spreads, indicators }
+    Output: { yield_curve, yield_curve_snapshot, key_rates, spreads, history, indicators, ... }
     """
     # yield_curve — remap tenor→maturity, yield_pct→yield, add change/previousClose
     yield_curve = []
@@ -209,20 +209,45 @@ def transform_rates(raw: dict) -> dict:
         yield_curve.append({
             "maturity": pt.get("tenor"),
             "yield": y,
-            "change": 0.0,          # FRED doesn't give intraday change; FMP may
-            "previousClose": y,      # same as yield when we lack prior close
+            "change": 0.0,
+            "previousClose": y,
         })
 
-    # spreads
+    # spreads — preserve all new fields (bps changes, dates) while keeping legacy keys
     spreads_raw = raw.get("spreads", {})
     spreads = {
-        "2s10s": _r(spreads_raw.get("spread_2s10s"), 4),
-        "10y3m": _r(spreads_raw.get("spread_10y3m"), 4),
+        "2s10s":  _r(spreads_raw.get("spread_2s10s") or spreads_raw.get("2s10s"), 4),
+        "10y3m":  _r(spreads_raw.get("spread_10y3m") or spreads_raw.get("10y3m"), 4),
+        "spread_2s10s": _r(spreads_raw.get("spread_2s10s"), 4),
+        "spread_10y3m": _r(spreads_raw.get("spread_10y3m"), 4),
+        "curve_status":          spreads_raw.get("curve_status", "normal"),
+        "inversion_signal":      spreads_raw.get("inversion_signal", False),
+        "change_2s10s_1w_bps":   spreads_raw.get("change_2s10s_1w_bps"),
+        "change_10y3m_1w_bps":   spreads_raw.get("change_10y3m_1w_bps"),
+        "spread_10y3m_date":     spreads_raw.get("spread_10y3m_date"),
+    }
+
+    # key_rates — handle both new enriched format {value, date, change_1w_bps} and legacy flat
+    raw_kr = raw.get("key_rates", {})
+    def _kr_val(k):
+        v = raw_kr.get(k)
+        return v.get("value") if isinstance(v, dict) else v
+    def _kr_date(k):
+        v = raw_kr.get(k)
+        return v.get("date") if isinstance(v, dict) else None
+    def _kr_bps(k):
+        v = raw_kr.get(k)
+        return v.get("change_1w_bps") if isinstance(v, dict) else None
+
+    key_rates = {
+        "us_2y":  {"value": _kr_val("us_2y"),  "date": _kr_date("us_2y"),  "change_1w_bps": _kr_bps("us_2y")},
+        "us_5y":  {"value": _kr_val("us_5y"),  "date": _kr_date("us_5y"),  "change_1w_bps": _kr_bps("us_5y")},
+        "us_10y": {"value": _kr_val("us_10y"), "date": _kr_date("us_10y"), "change_1w_bps": _kr_bps("us_10y")},
+        "us_30y": {"value": _kr_val("us_30y"), "date": _kr_date("us_30y"), "change_1w_bps": _kr_bps("us_30y")},
     }
 
     # indicators
     indicators = []
-    key = raw.get("key_rates", {})
     fed = raw.get("fed_policy", {})
 
     if fed.get("funds_rate") is not None:
@@ -232,17 +257,19 @@ def transform_rates(raw: dict) -> dict:
             "status": "elevated" if (fed["funds_rate"] or 0) > 4 else "neutral",
         })
 
-    if key.get("us_10y") is not None:
+    us10y_val = _kr_val("us_10y")
+    if us10y_val is not None:
         indicators.append({
             "name": "10Y Yield",
-            "value": f"{key['us_10y']}%",
+            "value": f"{us10y_val}%",
             "status": "neutral",
         })
 
-    if key.get("us_2y") is not None:
+    us2y_val = _kr_val("us_2y")
+    if us2y_val is not None:
         indicators.append({
             "name": "2Y Yield",
-            "value": f"{key['us_2y']}%",
+            "value": f"{us2y_val}%",
             "status": "neutral",
         })
 
@@ -272,6 +299,8 @@ def transform_rates(raw: dict) -> dict:
     return {
         **raw,
         "yield_curve": yield_curve,
+        "yield_curve_snapshot": raw.get("yield_curve_snapshot", {}),
+        "key_rates": key_rates,
         "spreads": spreads,
         "indicators": indicators,
     }

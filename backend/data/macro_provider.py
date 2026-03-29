@@ -77,6 +77,10 @@ _FRED_SERIES = {
     "bbb-spread":       "BAMLC0A4CBBB",       # ICE BofA BBB OAS
     "move-index":       "N/A",                 # placeholder — not on FRED
     "dxy":              "DTWEXBGS",            # Trade-Weighted USD Index (Broad)
+    "20y-yield":        "DGS20",               # 20-Year Treasury
+    "30y-yield":        "DGS30",               # 30-Year Treasury
+    "fed-target-lower": "DFEDTARL",            # FOMC target rate lower bound
+    "fed-target-upper": "DFEDTARU",            # FOMC target rate upper bound
 }
 
 
@@ -618,12 +622,12 @@ class MacroProvider:
     @traceable(name="macro.get_rates")
     async def get_rates(self) -> dict:
         """Full yield curve, Fed policy, and credit conditions."""
-        cache_key = "macro:tab:rates:v1"
+        cache_key = "macro:tab:rates:v2"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
 
-        # FMP real-time treasury yields (full curve)
+        # FMP real-time treasury yields + FRED data + yield snapshot in parallel
         fmp_treasury = {}
         if self.fmp:
             try:
@@ -631,8 +635,10 @@ class MacroProvider:
             except Exception as e:
                 print(f"[MACRO:RATES] FMP treasury error: {e}")
 
-        # FRED fallback + additional rates (sync in thread)
-        fred_data = await asyncio.to_thread(self._get_rates_fred_data)
+        fred_data, snap = await asyncio.gather(
+            asyncio.to_thread(self._get_rates_fred_data),
+            asyncio.to_thread(self._get_yield_curve_snapshot),
+        )
 
         # Build yield curve — prefer FMP real-time, fall back to FRED
         yield_curve = []
@@ -646,8 +652,8 @@ class MacroProvider:
             ("5Y",  "year_5",   "DGS5"),
             ("7Y",  "year_7",   "DGS7"),
             ("10Y", "year_10",  "DGS10"),
-            ("20Y", "year_20",  None),
-            ("30Y", "year_30",  None),
+            ("20Y", "year_20",  "DGS20"),
+            ("30Y", "year_30",  "DGS30"),
         ]
         for label, fmp_key, fred_series in tenors:
             val = _safe(fmp_treasury.get(fmp_key))
@@ -656,8 +662,11 @@ class MacroProvider:
             yield_curve.append({"tenor": label, "yield_pct": _round(val, 3)})
 
         us10y = _safe(fmp_treasury.get("year_10")) or fred_data.get("us10y")
-        us2y = _safe(fmp_treasury.get("year_2")) or fred_data.get("us2y")
+        us2y  = _safe(fmp_treasury.get("year_2"))  or fred_data.get("us2y")
         us30y = _safe(fmp_treasury.get("year_30"))
+        us10y_date = fred_data.get("us10y_date")
+        us2y_date  = fred_data.get("us2y_date")
+        us5y_date  = fred_data.get("us5y_date")
 
         spread_2s10s = round(us10y - us2y, 2) if us10y and us2y else fred_data.get("spread_2s10s")
         spread_10y3m = fred_data.get("spread_10y3m")
@@ -670,37 +679,77 @@ class MacroProvider:
             elif spread_2s10s < 0.2:
                 curve_status = "flat"
 
+        # Fed target range — prefer FOMC target bounds; fall back to effective ±0.25
+        fed_target_lower = fred_data.get("fed_target_lower")
+        fed_target_upper = fred_data.get("fed_target_upper")
+        if fed_target_lower is not None and fed_target_upper is not None:
+            funds_rate_range = f"{fed_target_lower:.2f}-{fed_target_upper:.2f}"
+            funds_rate_range_date = fred_data.get("fed_target_lower_date")
+        else:
+            eff = fred_data.get("fed_rate")
+            funds_rate_range = f"{_round(eff)}-{_round((eff or 0) + 0.25)}" if eff else None
+            funds_rate_range_date = None
+
+        # BPS changes for key rates (current vs 1W-ago snapshot)
+        def _bps_chg(current, week_ago_val):
+            if current is None or week_ago_val is None:
+                return None
+            return round((current - week_ago_val) * 100)
+
+        snap_w = snap.get("week_ago", {})
+        snap_m = snap.get("month_ago", {})
+
         result = {
             "last_updated": datetime.utcnow().isoformat() + "Z",
             "data_source": "FMP (real-time)" if fmp_treasury else "FRED (1-2 day lag)",
             "yield_curve": yield_curve,
+            "yield_curve_snapshot": {
+                "week_ago": snap_w,
+                "month_ago": snap_m,
+            },
             "key_rates": {
-                "us_2y": _round(us2y, 3),
-                "us_5y": _round(_safe(fmp_treasury.get("year_5")) or fred_data.get("us5y"), 3),
-                "us_10y": _round(us10y, 3),
-                "us_30y": _round(us30y, 3),
+                "us_2y":  {"value": _round(us2y, 3),  "date": us2y_date,  "change_1w_bps": _bps_chg(us2y,  snap_w.get("2Y"))},
+                "us_5y":  {"value": _round(_safe(fmp_treasury.get("year_5")) or fred_data.get("us5y"), 3), "date": us5y_date, "change_1w_bps": _bps_chg(_safe(fmp_treasury.get("year_5")) or fred_data.get("us5y"), snap_w.get("5Y"))},
+                "us_10y": {"value": _round(us10y, 3), "date": us10y_date, "change_1w_bps": _bps_chg(us10y, snap_w.get("10Y"))},
+                "us_30y": {"value": _round(us30y, 3), "date": None,       "change_1w_bps": _bps_chg(us30y, snap_w.get("30Y"))},
             },
             "fed_policy": {
                 "funds_rate": _round(fred_data.get("fed_rate")),
-                "funds_rate_range": f"{_round(fred_data.get('fed_rate'))}-{_round((_safe(fred_data.get('fed_rate')) or 0) + 0.25)}" if fred_data.get("fed_rate") else None,
+                "funds_rate_range": funds_rate_range,
+                "funds_rate_range_date": funds_rate_range_date,
             },
             "spreads": {
+                "2s10s":  _round(spread_2s10s, 4),
+                "10y3m":  _round(spread_10y3m, 4),
                 "spread_2s10s": _round(spread_2s10s),
                 "spread_10y3m": _round(spread_10y3m),
                 "curve_status": curve_status,
                 "inversion_signal": spread_2s10s is not None and spread_2s10s < 0,
+                "change_2s10s_1w_bps": _bps_chg(
+                    spread_2s10s,
+                    _round(snap_w["10Y"] - snap_w["2Y"], 4)
+                    if snap_w.get("10Y") is not None and snap_w.get("2Y") is not None else None,
+                ),
+                "change_10y3m_1w_bps": _bps_chg(spread_10y3m, fred_data.get("spread_10y3m_1w_ago")),
+                "spread_10y3m_date": fred_data.get("spread_10y3m_date"),
             },
             "mortgage": {
                 "rate_30y": _round(fred_data.get("mortgage")),
+                "rate_30y_date": fred_data.get("mortgage_date"),
+                "change_1w_bps": _bps_chg(fred_data.get("mortgage"), fred_data.get("mortgage_1w_ago")),
             },
             "credit_spreads": {
                 "hy_oas": _round(fred_data.get("hy_spread")),
                 "bbb_oas": _round(fred_data.get("bbb_spread")),
             },
             "history": {
-                "us_10y": self.get_history("10y-yield", 24).get("data", []),
-                "us_2y": self.get_history("2y-yield", 24).get("data", []),
-                "spread_2s10s": self.get_history("2s10s-spread", 24).get("data", []),
+                "us_10y":         self.get_history("10y-yield",   24).get("data", []),
+                "us_2y":          self.get_history("2y-yield",    24).get("data", []),
+                "us_5y":          self.get_history("5y-yield",    24).get("data", []),
+                "us_30y":         self.get_history("30y-yield",   24).get("data", []),
+                "spread_2s10s":   self.get_history("2s10s-spread",24).get("data", []),
+                "spread_10y3m":   self.get_history("10y3m-spread",24).get("data", []),
+                "mortgage_30y":   self.get_history("mortgage-30y",24).get("data", []),
             },
         }
 
@@ -710,19 +759,61 @@ class MacroProvider:
     def _get_rates_fred_data(self) -> dict:
         """Sync helper: fetch FRED rates data."""
         fed_rate, _ = self._latest("FEDFUNDS", 365)
-        us10y, _ = self._latest("DGS10", 90)
-        us2y, _ = self._latest("DGS2", 90)
-        us5y, _ = self._latest("DGS5", 90)
+        fed_target_lower, fed_target_lower_date = self._latest("DFEDTARL", 365)
+        fed_target_upper, fed_target_upper_date = self._latest("DFEDTARU", 365)
+        us10y, us10y_date = self._latest("DGS10", 90)
+        us2y, us2y_date = self._latest("DGS2", 90)
+        us5y, us5y_date = self._latest("DGS5", 90)
         spread_2s10s, _ = self._latest("T10Y2Y", 365)
-        spread_10y3m, _ = self._latest("T10Y3M", 365)
-        mortgage, _ = self._latest("MORTGAGE30US", 365)
+        spread_10y3m, spread_10y3m_date = self._latest("T10Y3M", 365)
+        mortgage, mortgage_date = self._latest("MORTGAGE30US", 365)
         hy_spread, _ = self._latest("BAMLH0A0HYM2", 365)
         bbb_spread, _ = self._latest("BAMLC0A4CBBB", 365)
+
+        # Week-ago values for spread and mortgage (for bps change cards)
+        spread_10y3m_1w_ago = None
+        s = self._get_series("T10Y3M", 45)
+        if s is not None and len(s) >= 6:
+            spread_10y3m_1w_ago = _round(_safe(float(s.iloc[max(0, len(s) - 6)])), 4)
+
+        mortgage_1w_ago = None
+        m = self._get_series("MORTGAGE30US", 45)
+        if m is not None and len(m) >= 2:
+            mortgage_1w_ago = _round(_safe(float(m.iloc[max(0, len(m) - 2)])), 3)
+
         return {
-            "fed_rate": fed_rate, "us10y": us10y, "us2y": us2y, "us5y": us5y,
+            "fed_rate": fed_rate,
+            "fed_target_lower": fed_target_lower, "fed_target_lower_date": fed_target_lower_date,
+            "fed_target_upper": fed_target_upper, "fed_target_upper_date": fed_target_upper_date,
+            "us10y": us10y, "us10y_date": us10y_date,
+            "us2y": us2y, "us2y_date": us2y_date,
+            "us5y": us5y, "us5y_date": us5y_date,
             "spread_2s10s": spread_2s10s, "spread_10y3m": spread_10y3m,
-            "mortgage": mortgage, "hy_spread": hy_spread, "bbb_spread": bbb_spread,
+            "spread_10y3m_date": spread_10y3m_date, "spread_10y3m_1w_ago": spread_10y3m_1w_ago,
+            "mortgage": mortgage, "mortgage_date": mortgage_date, "mortgage_1w_ago": mortgage_1w_ago,
+            "hy_spread": hy_spread, "bbb_spread": bbb_spread,
         }
+
+    def _get_yield_curve_snapshot(self) -> dict:
+        """Sync helper: 1W-ago and 1M-ago snapshots for all yield curve maturities."""
+        tenor_series = [
+            ("1M", "DGS1MO"), ("3M", "DGS3MO"), ("6M", "DGS6MO"), ("1Y", "DGS1"),
+            ("2Y", "DGS2"), ("5Y", "DGS5"), ("7Y", "DGS7"), ("10Y", "DGS10"),
+            ("20Y", "DGS20"), ("30Y", "DGS30"),
+        ]
+        week_ago: dict[str, float | None] = {}
+        month_ago: dict[str, float | None] = {}
+        for tenor, series_id in tenor_series:
+            data = self._get_series(series_id, 45)  # 45 cal days ≈ 30 trading days
+            if data is None or len(data) < 2:
+                week_ago[tenor] = None
+                month_ago[tenor] = None
+                continue
+            idx_w = max(0, len(data) - 6)   # ~5 trading days back
+            idx_m = max(0, len(data) - 22)  # ~21 trading days back
+            week_ago[tenor] = _round(_safe(float(data.iloc[idx_w])), 3)
+            month_ago[tenor] = _round(_safe(float(data.iloc[idx_m])), 3)
+        return {"week_ago": week_ago, "month_ago": month_ago}
 
     # ── INFLATION tab ─────────────────────────────────────────────────
 

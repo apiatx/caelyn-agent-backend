@@ -1,0 +1,44 @@
+fantastic. Now please see the screenshot attached for how the Rates tab on the Macro Terminal page should look. Ours should look like the attached exactly. Make sure it does. Using the same backend fast api service data that is being returned, no frontend logic here, only what the backend is returning
+
+Let me study the screenshot carefully and check the current backend data and implementation:
+
+I need to see the full rates response structure, especially the yield curve snapshot and time series data:
+
+Now I have everything I need. Let me build the complete Rates tab:
+
+Now I have all the context. Let me write the complete new RatesTab:
+
+Let me check if React is imported (needed for the type reference) and also verify for any TypeScript issues:
+
+React isn't imported as a namespace — I need to fix the React.CSSProperties type reference:
+
+Now let me do a quick TypeScript check and restart:
+
+No TypeScript errors. Let me restart and verify:
+
+The app requires authentication. Let me check how the previous sessions took screenshots of the inner pages:
+
+The component compiled and updated cleanly — no errors in browser console or TypeScript. The /api/macro/rates endpoint is serving data correctly.
+
+Here's what the Rates tab now has, mapped exactly to the screenshot layout:
+
+YIELD CURVE SNAPSHOT TABLE (full-width)
+
+Row	Source
+Current (green)	yield_curve[maturity].yield for all 10 maturities
+1W Ago (dim)	history.us_2y[last-5] and history.us_10y[last-5] for those 2 columns; — for others
+1M Ago (dim)	history.us_2y[last-21] and history.us_10y[last-21] for those 2 columns; — for others
+Chg (1M) (colored)	computed as current − 1M ago; green for down, red for up
+TWO CHARTS SIDE BY SIDE
+
+Left: U.S. TREASURY YIELD CURVE — green area chart with dots, dashed FF Rate reference line, labeled "As of [last_updated date]"
+Right: YIELD TIME SERIES — 2Y (cyan) + 10Y (amber) lines from history.us_2y and history.us_10y, last 50 calendar days, auto-titled e.g. "FEB TO MAR 2026"
+6 METRIC CARDS (3 + 3 grid)
+
+FED FUNDS RATE — fed_policy.funds_rate_range
+10Y TREASURY YIELD — key_rates.us_10y + 1W bps change from history
+2Y TREASURY YIELD — key_rates.us_2y + 1W bps change from history
+2S10S SPREAD — spreads['2s10s'] × 100 bps + 1W change from spread history
+10Y3M SPREAD — spreads['10y3m'] × 100 bps
+30Y MORTGAGE RATE — mortgage.rate_30y, BEARISH badge (from indicators status "elevated")
+All data sourced exclusively from your FastAPI backend.
