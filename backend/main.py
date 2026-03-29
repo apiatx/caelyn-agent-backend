@@ -5888,7 +5888,7 @@ async def macro_risk(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _trading_dashboard_cache: dict = {}
-_TRADING_DASHBOARD_TTL = 90  # seconds
+_TRADING_DASHBOARD_TTL = 720  # 12 min — aligned with macro precompute loop interval
 
 
 @app.get("/should-i-be-trading")
