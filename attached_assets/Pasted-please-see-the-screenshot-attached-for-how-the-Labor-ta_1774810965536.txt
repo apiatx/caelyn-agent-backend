@@ -1,0 +1,42 @@
+please see the screenshot attached for how the Labor tab on the Macro Terminal page should look. Ours should look like the attached exactly. Make sure it does. Using the same backend fast api service data that is being returned, no frontend logic here(you are design only - make sure the fields are displaying all of the data returned by the fast API backend service), only what the backend is returning. You aren't doing any calculations or fetching your own data.
+
+Now I have everything. Let me write the complete Labor tab rebuild:
+
+TypeScript clean, app running. Let me quickly check the logs:
+
+I see an old prev1w reference error. Let me check if that's still present:
+
+No stale references — that was from an earlier state. The code is clean. Here's the complete breakdown:
+
+Every field — exactly which backend property it reads:
+
+Section	What's displayed	Backend field
+Alert banner	"LABOR MARKET DETERIORATION — ..." (shown when NFP < 0)	employment.nfp_mom_change, commentary
+Unemployment chart	Monthly unemployment rate, Apr 25 – Feb 26	unemployment[].rate
+Unemployment month labels	"Apr 25", "May 25"…	unemployment[].month (year context inferred)
+Unemployment reference line	Dashed line at 4.5%, labeled "C"	Threshold constant
+Unemployment headline	4.4% big number	employment.unemployment_rate
+NFP chart	Monthly payrolls (area), Mar 25 – Feb 26	nfp[].nfp
+NFP month labels	"Mar 25", "Apr 25"…	nfp[].month
+NFP reference line	Dashed line at 70K, labeled "B"	Threshold constant
+NFP Y-axis	Shows in K (67K, -92K)	nfp[].nfp / 1000 (display only)
+NFP headline	"-92K / First negative since COVID"	employment.nfp_mom_change
+Commentary	> Unemployment at 4.4%...	commentary
+Metrics strip	NFP 3M avg, U-6 rate, participation, claims	employment.nfp_3m_avg, employment.u6_rate, employment.participation_rate, claims.initial_claims, claims.continued_claims
+Card: UNEMPLOYMENT RATE	4.4%, U-6 supplement	employment.unemployment_rate, employment.u6_rate, indicators["Unemployment"].status
+Card: NONFARM PAYROLLS	"Negative" (when < 0), 3M avg	employment.nfp_mom_change, employment.nfp_3m_avg, indicators["NFP Last Month"].status
+Card: WAGE GROWTH	3.8%	wages.avg_hourly_earnings_yoy, indicators["Wage Growth"].status
+Card: INITIAL CLAIMS	210K, continued claims	claims.initial_claims, claims.continued_claims, indicators["Initial Claims"].status
+Card: JOLTS OPENINGS	6.9M	job_openings.jolts_millions, indicators["JOLTS"].status
+Card: PARTICIPATION RATE	62.0%	employment.participation_rate
+Backend instructions for what the screenshot shows but the backend doesn't provide yet:
+
+Wage Growth prior period: Add wages: { avg_hourly_earnings_yoy: 3.8, peak_pct: 5.5, change_from_peak_pp: -2.0 } so the card can show "▼ -2.0 pp from ~5.5% peak".
+
+AI Labor Displacement indicator: Add ai_displacement: { status: "rising_risk", trend: "accelerating", prior: "emerging" } to expose this thematic card.
+
+Breakeven Rate: Add breakeven_rate: { monthly_jobs_needed: 70000, prior_estimate: 150000, date: "2026" } for the "<70K/mo" card.
+
+Druckenmiller View commentary: The current commentary is one short sentence. The screenshot shows 3 detailed analyst bullet points. Add analysis_bullets: ["The labor market is...", "GS sees a 'jobless growth'...", "The silver lining: wage growth..."] for richer display.
+
+Per-metric change from prior period: Add employment.unemployment_prev: 4.3 so the card can show "▲ +0.1 pp from 4.3%".

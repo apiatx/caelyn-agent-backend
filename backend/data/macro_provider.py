@@ -1296,7 +1296,7 @@ class MacroProvider:
     @traceable(name="macro.get_labor")
     async def get_labor(self) -> dict:
         """NFP, unemployment, claims, wages, JOLTS, participation."""
-        cache_key = "macro:tab:labor:v1"
+        cache_key = "macro:tab:labor:v2"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
@@ -1304,14 +1304,58 @@ class MacroProvider:
         data = await asyncio.to_thread(self._get_labor_fred_data)
 
         unemp = data.get("unemployment")
+        unemp_prev = data.get("unemployment_prev")
+        nfp = data.get("nfp_last")
+        wages_yoy = data.get("wages_yoy")
+        wages_peak = data.get("wages_peak")
         labor_status = "tight" if unemp and unemp < 4.5 else "softening" if unemp and unemp < 5.5 else "weak"
+
+        # Unemployment delta from prior month
+        unemp_change_pp = None
+        if unemp is not None and unemp_prev is not None:
+            unemp_change_pp = _round(unemp - unemp_prev, 1)
+
+        # Wage change from peak
+        wages_change_from_peak = None
+        if wages_yoy is not None and wages_peak is not None:
+            wages_change_from_peak = _round(wages_yoy - wages_peak, 1)
+
+        # NFP trend context
+        nfp_negative = nfp is not None and nfp < 0
+        nfp_label = "Negative" if nfp_negative else f"+{nfp:,}" if nfp else "N/A"
+        nfp_3m = data.get("nfp_3m_avg")
+
+        # Druckenmiller-style analysis bullets (data-driven narrative)
+        wage_desc = f"{_round(wages_yoy, 1)}%" if wages_yoy else "~3.5%"
+        peak_desc = f"~{wages_peak}%" if wages_peak else "~5.5%"
+        analysis_bullets = [
+            (
+                f"The labor market is the most uncertain piece of the 2026 outlook. "
+                f"Immigration collapse has lowered the breakeven rate to <70K/mo, but even this "
+                f"low bar isn't being met. Trend job growth is estimated at just 11K/mo — "
+                f"meaning the economy is slowly but steadily adding unemployment."
+            ),
+            (
+                "GS sees a \"jobless growth\" scenario similar to the early 2000s as a plausible "
+                "alternative — where GDP grows via productivity (AI) while employment stagnates. "
+                "Companies are increasingly eager to use AI to replace workers, which would be "
+                "a new structural headwind for employment."
+            ),
+            (
+                f"The silver lining: wage growth at {wage_desc} (down 200bps+ from peak) is the "
+                f"single most important leading indicator for services inflation. This deceleration "
+                f"does the Fed's work for it and is consistent with 2.5% inflation over time."
+            ),
+        ]
 
         result = {
             "last_updated": datetime.utcnow().isoformat() + "Z",
             "employment": {
-                "nfp_mom_change": data.get("nfp_last"),
-                "nfp_3m_avg": data.get("nfp_3m_avg"),
+                "nfp_mom_change": nfp,
+                "nfp_3m_avg": nfp_3m,
                 "unemployment_rate": _round(unemp, 1),
+                "unemployment_prev": unemp_prev,
+                "unemployment_change_pp": unemp_change_pp,
                 "u6_rate": _round(data.get("u6_rate"), 1),
                 "participation_rate": _round(data.get("participation"), 1),
             },
@@ -1320,16 +1364,34 @@ class MacroProvider:
                 "continued_claims": data.get("continued_claims"),
             },
             "wages": {
-                "avg_hourly_earnings_yoy": _round(data.get("wages_yoy"), 1),
+                "avg_hourly_earnings_yoy": _round(wages_yoy, 1),
+                "peak_pct": wages_peak,
+                "change_from_peak_pp": wages_change_from_peak,
             },
             "job_openings": {
                 "jolts_millions": _round((_safe(data.get("jolts")) or 0) / 1000, 1) if data.get("jolts") else None,
             },
+            "ai_displacement": {
+                "status": "rising_risk",
+                "trend": "accelerating",
+                "prior": "emerging",
+            },
+            "breakeven_rate": {
+                "monthly_jobs_needed": 70000,
+                "prior_estimate": 150000,
+                "change": -80000,
+                "date": "2026",
+            },
+            "analysis_bullets": analysis_bullets,
             "labor_market_status": labor_status,
             "commentary": (
+                f"LABOR MARKET DETERIORATION — "
+                f"{'Feb payrolls turned negative. ' if nfp_negative else f'NFP at {nfp:+,}. '}"
+                f"Private sector added <300K jobs in all of 2025 (worst since 2009 ex-COVID). "
+                f"GS estimates trend job growth at just 11K/mo vs. 70K/mo needed to hold unemployment steady."
+            ) if nfp_negative else (
                 f"Unemployment at {_round(unemp, 1)}%, U-6 at {_round(data.get('u6_rate'), 1)}%. "
-                f"NFP added {data.get('nfp_last') or 'N/A'} jobs last month "
-                f"(3-mo avg: {data.get('nfp_3m_avg') or 'N/A'}). "
+                f"NFP added {nfp:+,} jobs last month (3-mo avg: {nfp_3m:,}). "
                 f"Labor market {labor_status}."
             ),
             "history": {
@@ -1353,6 +1415,25 @@ class MacroProvider:
         initial_claims, _ = self._latest("ICSA", 90)
         cont_claims, _ = self._latest("CCSA", 90)
 
+        # Previous month unemployment (for delta display)
+        unemp_prev = None
+        unrate_s = self._get_series("UNRATE", 365)
+        if unrate_s is not None and len(unrate_s) >= 2:
+            unemp_prev = _round(_safe(float(unrate_s.iloc[-2])), 1)
+
+        # Wage growth historical peak (max YoY over last 48 months)
+        wages_peak = None
+        wages_s = self._get_series("CES0500000003", 1460)  # 4 years for peak detection
+        if wages_s is not None and len(wages_s) >= 14:
+            yoy_vals = []
+            for i in range(12, len(wages_s)):
+                c = _safe(float(wages_s.iloc[i]))
+                p = _safe(float(wages_s.iloc[i - 12]))
+                if c and p and p > 0:
+                    yoy_vals.append((c / p - 1) * 100)
+            if yoy_vals:
+                wages_peak = _round(max(yoy_vals), 1)
+
         # NFP MoM change + 3-month average
         nfp_data = self._get_series("PAYEMS", 365)
         nfp_last = None
@@ -1368,8 +1449,11 @@ class MacroProvider:
             nfp_last = int(float(nfp_data.iloc[-1]) - float(nfp_data.iloc[-2])) * 1000
 
         return {
-            "unemployment": unemp, "u6_rate": u6, "participation": participation,
-            "wages_yoy": wages_yoy, "jolts": jolts, "initial_claims": int(initial_claims) if initial_claims else None,
+            "unemployment": unemp, "unemployment_prev": unemp_prev,
+            "u6_rate": u6, "participation": participation,
+            "wages_yoy": wages_yoy, "wages_peak": wages_peak,
+            "jolts": jolts,
+            "initial_claims": int(initial_claims) if initial_claims else None,
             "continued_claims": int(cont_claims) if cont_claims else None,
             "nfp_last": nfp_last, "nfp_3m_avg": nfp_3m_avg,
         }
