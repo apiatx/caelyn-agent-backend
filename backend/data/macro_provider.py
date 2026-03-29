@@ -112,11 +112,13 @@ def _round(v: Any, n: int = 2) -> float | None:
 class MacroProvider:
     """Aggregates FRED + FMP data for the Macro Terminal."""
 
-    def __init__(self, fred_provider, fmp_provider=None, tradier_provider=None, fear_greed_provider=None):
+    def __init__(self, fred_provider, fmp_provider=None, tradier_provider=None,
+                 fear_greed_provider=None, yahoo_provider=None):
         self.fred = fred_provider          # FredProvider instance
         self.fmp = fmp_provider            # FMPProvider instance (optional)
         self.tradier = tradier_provider    # TradierProvider instance (optional)
         self._fear_greed = fear_greed_provider  # FearGreedProvider instance (optional)
+        self.yahoo = yahoo_provider        # YahooFinanceProvider instance (DXY)
         self._fred_api = fred_provider.fred if fred_provider else None  # raw fredapi.Fred
 
     # ── Helpers to fetch raw FRED series ─────────────────────────────
@@ -174,27 +176,31 @@ class MacroProvider:
           - Fed funds rate, CPI, PCE, PPI, unemployment, GDP, NFP,
             wages, JOLTS, M2, ISM, mortgage rates, yield spreads
         """
-        cache_key = "macro:dashboard:v2"
+        cache_key = "macro:dashboard:v3"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
 
         # ── Build async tasks ─────────────────────────────────────────
-        # FMP real-time market data
+        # FMP real-time market data (indices, treasuries, commodities — NOT DXY)
         fmp_task = None
         if self.fmp:
             async def _fetch_fmp():
                 idx = await self.fmp.get_market_indices()
                 treas = await self.fmp.get_treasury_rates()
                 comm = await self.fmp.get_key_commodities()
-                dxy = await self.fmp.get_dxy()
-                return idx, treas, comm, dxy
+                return idx, treas, comm
             fmp_task = _fetch_fmp()
 
         # Fear & Greed index
         fg_task = None
         if self._fear_greed:
             fg_task = self._fear_greed.get_fear_greed_index()
+
+        # Yahoo Finance — DXY real-time quote (FMP DX-Y.NYB returns no data)
+        yahoo_dxy_task = None
+        if self.yahoo:
+            yahoo_dxy_task = self.yahoo.get_dxy()
 
         # Tradier benchmark ETF quotes (SPY, QQQ, TLT, GLD, USO, HYG, VIX)
         _BENCHMARK_ETFS = ["SPY", "QQQ", "TLT", "GLD", "USO", "HYG"]
@@ -217,6 +223,9 @@ class MacroProvider:
         if fg_task:
             tasks.append(fg_task)
             task_names.append("fear_greed")
+        if yahoo_dxy_task:
+            tasks.append(yahoo_dxy_task)
+            task_names.append("yahoo_dxy")
         tasks.append(fred_task)
         task_names.append("fred")
 
@@ -230,9 +239,12 @@ class MacroProvider:
                 print(f"[MACRO] {name} fetch error: {res}")
 
         # ── FMP results ───────────────────────────────────────────────
-        fmp_indices, fmp_treasury, fmp_commodities, fmp_dxy = {}, {}, {}, {}
+        fmp_indices, fmp_treasury, fmp_commodities = {}, {}, {}
         if result_map.get("fmp"):
-            fmp_indices, fmp_treasury, fmp_commodities, fmp_dxy = result_map["fmp"]
+            fmp_indices, fmp_treasury, fmp_commodities = result_map["fmp"]
+
+        # ── Yahoo Finance DXY ─────────────────────────────────────────
+        yahoo_dxy = result_map.get("yahoo_dxy") or {}
 
         # ── Fear & Greed ─────────────────────────────────────────────
         fg_data = result_map.get("fear_greed") or {}
@@ -414,8 +426,10 @@ class MacroProvider:
                 "signal": fg_data.get("signal"),
             },
             "dollar": {
-                "dxy": _round(_safe(fmp_dxy.get("price"))) if fmp_dxy else None,
-                "dxy_change_pct": _round(_safe(fmp_dxy.get("change_pct"))) if fmp_dxy else None,
+                "dxy": _round(_safe(yahoo_dxy.get("price")), 3) if yahoo_dxy else None,
+                "dxy_change_pct": _round(_safe(yahoo_dxy.get("change_pct")), 3) if yahoo_dxy else None,
+                "dxy_year_high": _round(_safe(yahoo_dxy.get("year_high")), 3) if yahoo_dxy else None,
+                "dxy_year_low": _round(_safe(yahoo_dxy.get("year_low")), 3) if yahoo_dxy else None,
             },
         }
 
@@ -632,23 +646,37 @@ class MacroProvider:
     @traceable(name="macro.get_rates")
     async def get_rates(self) -> dict:
         """Full yield curve, Fed policy, and credit conditions."""
-        cache_key = "macro:tab:rates:v2"
+        cache_key = "macro:tab:rates:v3"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
 
-        # FMP real-time treasury yields + FRED data + yield snapshot in parallel
+        # FMP real-time treasury yields + FRED data + yield snapshot + Yahoo DXY in parallel
         fmp_treasury = {}
-        if self.fmp:
-            try:
-                fmp_treasury = await self.fmp.get_treasury_rates()
-            except Exception as e:
-                print(f"[MACRO:RATES] FMP treasury error: {e}")
-
-        fred_data, snap = await asyncio.gather(
+        yahoo_dxy = {}
+        tasks_r = [
             asyncio.to_thread(self._get_rates_fred_data),
             asyncio.to_thread(self._get_yield_curve_snapshot),
-        )
+        ]
+        names_r = ["fred", "snap"]
+        if self.fmp:
+            tasks_r.append(self.fmp.get_treasury_rates())
+            names_r.append("fmp_treasury")
+        if self.yahoo:
+            tasks_r.append(self.yahoo.get_dxy())
+            names_r.append("yahoo_dxy")
+
+        rates_results = await asyncio.gather(*tasks_r, return_exceptions=True)
+        rates_map = {}
+        for name, res in zip(names_r, rates_results):
+            rates_map[name] = res if not isinstance(res, Exception) else {}
+            if isinstance(res, Exception):
+                print(f"[MACRO:RATES] {name} error: {res}")
+
+        fred_data = rates_map.get("fred") or {}
+        snap = rates_map.get("snap") or {}
+        fmp_treasury = rates_map.get("fmp_treasury") or {}
+        yahoo_dxy = rates_map.get("yahoo_dxy") or {}
 
         # Build yield curve — prefer FMP real-time, fall back to FRED
         yield_curve = []
@@ -751,6 +779,13 @@ class MacroProvider:
             "credit_spreads": {
                 "hy_oas": _round(fred_data.get("hy_spread")),
                 "bbb_oas": _round(fred_data.get("bbb_spread")),
+            },
+            "dollar": {
+                "dxy": _round(_safe(yahoo_dxy.get("price")), 3),
+                "dxy_change_pct": _round(_safe(yahoo_dxy.get("change_pct")), 3),
+                "dxy_year_high": _round(_safe(yahoo_dxy.get("year_high")), 3),
+                "dxy_year_low": _round(_safe(yahoo_dxy.get("year_low")), 3),
+                "dxy_prev_close": _round(_safe(yahoo_dxy.get("prev_close")), 3),
             },
             "history": {
                 "us_10y":         self.get_history("10y-yield",   24).get("data", []),
@@ -1468,13 +1503,12 @@ class MacroProvider:
         if cached is not None:
             return cached
 
-        # Parallel: FMP (VIX + DXY) + FRED (spreads/VIX/UMich) + Fear & Greed + Tradier (GLD/HYG)
+        # Parallel: FMP (VIX indices) + FRED (spreads/VIX/UMich) + Fear & Greed + Tradier (GLD/HYG) + Yahoo (DXY)
         fmp_task = None
         if self.fmp:
             async def _fetch_fmp_risk():
                 idx = await self.fmp.get_market_indices()
-                dxy = await self.fmp.get_dxy()
-                return idx, dxy
+                return idx
             fmp_task = _fetch_fmp_risk()
 
         fear_greed_task = None
@@ -1484,6 +1518,11 @@ class MacroProvider:
         tradier_task = None
         if self.tradier:
             tradier_task = self.tradier.get_quotes(["GLD", "HYG"])
+
+        # Yahoo Finance DXY (replaces FMP DX-Y.NYB which returns no data)
+        yahoo_dxy_task = None
+        if self.yahoo:
+            yahoo_dxy_task = self.yahoo.get_dxy()
 
         fred_task = asyncio.to_thread(self._get_risk_fred_data)
 
@@ -1498,6 +1537,9 @@ class MacroProvider:
         if tradier_task:
             tasks.append(tradier_task)
             task_names.append("tradier")
+        if yahoo_dxy_task:
+            tasks.append(yahoo_dxy_task)
+            task_names.append("yahoo_dxy")
 
         all_results = await asyncio.gather(*tasks, return_exceptions=True)
         result_map = {}
@@ -1508,12 +1550,10 @@ class MacroProvider:
 
         fred_data = result_map.get("fred") or {}
 
-        # VIX — from FRED (daily, more reliable)
-        fmp_indices, fmp_dxy = {}, {}
-        if result_map.get("fmp"):
-            fmp_indices, fmp_dxy = result_map["fmp"]
-        vix = fred_data.get("vix") or _safe(fmp_indices.get("^VIX", {}).get("price"))
-        vix_change = fred_data.get("vix_change") or _safe(fmp_indices.get("^VIX", {}).get("change"))
+        # VIX — from FRED (daily, more reliable); FMP indices as fallback
+        fmp_indices = result_map.get("fmp") or {}
+        vix = fred_data.get("vix") or _safe((fmp_indices or {}).get("^VIX", {}).get("price"))
+        vix_change = fred_data.get("vix_change") or _safe((fmp_indices or {}).get("^VIX", {}).get("change"))
         vix_prev = fred_data.get("vix_prev")
 
         vix_signal = "low_vol"
@@ -1526,9 +1566,10 @@ class MacroProvider:
         # Fear & Greed
         fg = result_map.get("fear_greed") or {}
 
-        # DXY
-        dxy_price = _safe(fmp_dxy.get("price")) if fmp_dxy else None
-        dxy_change = _safe(fmp_dxy.get("change_pct")) if fmp_dxy else None
+        # DXY — Yahoo Finance (real-time, no API key)
+        yahoo_dxy = result_map.get("yahoo_dxy") or {}
+        dxy_price = _safe(yahoo_dxy.get("price"))
+        dxy_change = _safe(yahoo_dxy.get("change_pct"))
 
         # GLD / HYG from Tradier
         tradier_quotes = {q["symbol"]: q for q in (result_map.get("tradier") or [])}
@@ -1687,8 +1728,11 @@ class MacroProvider:
                 "momentum_shift": fg.get("momentum_shift"),
             },
             "dollar": {
-                "dxy": _round(dxy_price),
-                "dxy_change_pct": _round(dxy_change),
+                "dxy": _round(dxy_price, 3),
+                "dxy_change_pct": _round(dxy_change, 3),
+                "dxy_year_high": _round(_safe(yahoo_dxy.get("year_high")), 3),
+                "dxy_year_low": _round(_safe(yahoo_dxy.get("year_low")), 3),
+                "dxy_prev_close": _round(_safe(yahoo_dxy.get("prev_close")), 3),
             },
             "yield_curve_risk": {
                 "spread_2s10s": _round(spread, 2),

@@ -23,7 +23,7 @@ This project is a Python FastAPI backend for a trading analysis platform designe
   1. Volatility/Risk — VIX level + percentile + trend, put/call ratio, HY OAS, F&G
   2. Trend & Structure — SPY/QQQ vs SMA50/SMA200 (computed from Tradier 320d history), market regime
   3. Market Breadth — F&G breadth/strength/safe-haven, sector ETF participation count
-  4. Macro/Liquidity — 2s10s spread + DXY + FOMC/CPI calendar
+  4. Macro/Liquidity — 2s10s spread + DXY (Yahoo Finance) + FOMC/CPI calendar
   5. Momentum/Sentiment — F&G momentum + put/call + sector leader/laggard
 - **Data sources for enrichment** (fetched fresh per request, then cached):
   - SPY/QQQ SMA50/SMA200: Tradier `get_history` (320 calendar days → ~220 trading days), cache 1h

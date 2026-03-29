@@ -37,6 +37,7 @@ from data.reddit_provider import RedditSentimentProvider
 from data.altfins_provider import AltFINSProvider
 from data.xai_sentiment_provider import XAISentimentProvider
 from data.polymarket_provider import PolymarketProvider
+from data.yahoo_finance_provider import YahooFinanceProvider
 from data.cache import cache, MACRO_TTL, SECTOR_ETF_TTL, CANDLE_TTL, REGIME_CANDLE_TTL
 from api_budget import daily_budget
 
@@ -394,6 +395,8 @@ class MarketDataService:
         self.sec_edgar = SecEdgarProvider()
         print("[INIT] SEC EDGAR provider initialized (rate-limited, cached)")
         self.fear_greed = FearGreedProvider()
+        self.yahoo = YahooFinanceProvider()
+        print("[INIT] Yahoo Finance provider initialized (DXY, no API key required)")
         self.fmp = FMPProvider(fmp_key) if fmp_key else None
         self.coingecko = CoinGeckoProvider(
             coingecko_key) if coingecko_key else None
@@ -1045,22 +1048,25 @@ class MarketDataService:
         fmp_dxy = {}
         fmp_econ = {}
         fmp_treasuries = {}
+        _comm_tasks = []
+        _comm_names = []
         if self.fmp:
-            comm_result, dxy_result, econ_result, treasury_result = await asyncio.gather(
+            _comm_tasks += [
                 self.fmp.get_full_commodity_dashboard(),
-                self.fmp.get_dxy(),
                 self.fmp.get_upcoming_economic_events(),
                 self.fmp.get_treasury_rates(),
-                return_exceptions=True,
-            )
-            fmp_commodities = comm_result if not isinstance(
-                comm_result, Exception) else {}
-            fmp_dxy = dxy_result if not isinstance(dxy_result,
-                                                   Exception) else {}
-            fmp_econ = econ_result if not isinstance(econ_result,
-                                                     Exception) else {}
-            fmp_treasuries = treasury_result if not isinstance(
-                treasury_result, Exception) else {}
+            ]
+            _comm_names += ["commodities", "econ", "treasury"]
+        if self.yahoo:
+            _comm_tasks.append(self.yahoo.get_dxy())
+            _comm_names.append("dxy")
+        if _comm_tasks:
+            _comm_results = await asyncio.gather(*_comm_tasks, return_exceptions=True)
+            _comm_map = {n: r if not isinstance(r, Exception) else {} for n, r in zip(_comm_names, _comm_results)}
+            fmp_commodities = _comm_map.get("commodities", {})
+            fmp_dxy = _comm_map.get("dxy", {})
+            fmp_econ = _comm_map.get("econ", {})
+            fmp_treasuries = _comm_map.get("treasury", {})
 
         fred_macro = self.fred.get_quick_macro()
 
@@ -2570,15 +2576,19 @@ class MarketDataService:
 
             dxy = {}
             commodities = {}
+            _sec_tasks = []
+            _sec_names = []
             if self.fmp:
-                dxy_result, comm_result = await asyncio.gather(
-                    self.fmp.get_dxy(),
-                    self.fmp.get_key_commodities(),
-                    return_exceptions=True,
-                )
-                dxy = dxy_result if not isinstance(dxy_result, Exception) else {}
-                commodities = comm_result if not isinstance(
-                    comm_result, Exception) else {}
+                _sec_tasks.append(self.fmp.get_key_commodities())
+                _sec_names.append("commodities")
+            if self.yahoo:
+                _sec_tasks.append(self.yahoo.get_dxy())
+                _sec_names.append("dxy")
+            if _sec_tasks:
+                _sec_results = await asyncio.gather(*_sec_tasks, return_exceptions=True)
+                _sec_map = {n: r if not isinstance(r, Exception) else {} for n, r in zip(_sec_names, _sec_results)}
+                dxy = _sec_map.get("dxy", {})
+                commodities = _sec_map.get("commodities", {})
 
             return {
                 "fmp_sector_data": fmp_sectors,
@@ -3391,9 +3401,9 @@ class MarketDataService:
 
         async def _fmp_dxy() -> dict:
             try:
-                if self.fmp:
-                    dxy = await asyncio.wait_for(self.fmp.get_dxy(),
-                                                 timeout=8.0)
+                provider = self.yahoo if self.yahoo else None
+                if provider:
+                    dxy = await asyncio.wait_for(provider.get_dxy(), timeout=8.0)
                     if isinstance(dxy, dict) and dxy.get("price"):
                         chg = dxy.get("change")
                         if chg is not None and chg > 0:
@@ -3404,12 +3414,11 @@ class MarketDataService:
                             trend = "→"
                         return {
                             "price": round(dxy["price"], 2),
-                            "change":
-                            f"{chg:+.2f}" if chg is not None else "N/A",
+                            "change": f"{chg:+.2f}" if chg is not None else "N/A",
                             "trend": trend,
                         }
             except Exception as e:
-                print(f"[MACRO_SNAPSHOT] FMP DXY error: {e}")
+                print(f"[MACRO_SNAPSHOT] Yahoo DXY error: {e}")
             try:
                 sym, q = await _finnhub_quote("UUP")
                 if q:
@@ -3803,33 +3812,32 @@ class MarketDataService:
         upcoming_earnings = safe(upcoming_earnings)
 
         fmp_data = {}
-        if self.fmp:
-            try:
-                dxy, commodities, treasuries, sector_perf, indices = await asyncio.gather(
-                    self.fmp.get_dxy(),
+        try:
+            _bt_tasks = []
+            _bt_names = []
+            if self.fmp:
+                _bt_tasks += [
                     self.fmp.get_key_commodities(),
                     self.fmp.get_treasury_rates(),
                     self.fmp.get_sector_performance(),
                     self.fmp.get_market_indices(),
-                    return_exceptions=True,
-                )
+                ]
+                _bt_names += ["commodities", "treasury_yields", "sector_performance", "indices"]
+            if self.yahoo:
+                _bt_tasks.append(self.yahoo.get_dxy())
+                _bt_names.append("dxy")
+            if _bt_tasks:
+                _bt_results = await asyncio.gather(*_bt_tasks, return_exceptions=True)
+                _bt_map = {n: r if not isinstance(r, Exception) else {} for n, r in zip(_bt_names, _bt_results)}
                 fmp_data = {
-                    "dxy":
-                    dxy if not isinstance(dxy, Exception) else {},
-                    "commodities":
-                    commodities
-                    if not isinstance(commodities, Exception) else {},
-                    "treasury_yields":
-                    treasuries
-                    if not isinstance(treasuries, Exception) else {},
-                    "sector_performance":
-                    sector_perf
-                    if not isinstance(sector_perf, Exception) else [],
-                    "indices":
-                    indices if not isinstance(indices, Exception) else {},
+                    "dxy": _bt_map.get("dxy", {}),
+                    "commodities": _bt_map.get("commodities", {}),
+                    "treasury_yields": _bt_map.get("treasury_yields", {}),
+                    "sector_performance": _bt_map.get("sector_performance", []),
+                    "indices": _bt_map.get("indices", {}),
                 }
-            except Exception as e:
-                print(f"[BEST_TRADES] Macro data gathering failed: {type(e).__name__}: {e}")
+        except Exception as e:
+            print(f"[BEST_TRADES] Macro data gathering failed: {type(e).__name__}: {e}")
 
         all_tickers = set()
         screener_sources = {}

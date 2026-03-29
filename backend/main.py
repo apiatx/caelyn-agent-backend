@@ -404,27 +404,38 @@ async def _briefing_precompute_loop():
             trending = safe(trending)
             upcoming_earnings = safe(upcoming_earnings)
 
-            # FMP macro data
+            # FMP macro data + Yahoo Finance DXY
             fmp_data = {}
-            if data_service.fmp:
-                try:
-                    dxy, commodities, treasuries, sector_perf, indices = await asyncio.gather(
-                        data_service.fmp.get_dxy(),
+            try:
+                _fmp_tasks = []
+                _fmp_names = []
+                if data_service.fmp:
+                    _fmp_tasks += [
                         data_service.fmp.get_key_commodities(),
                         data_service.fmp.get_treasury_rates(),
                         data_service.fmp.get_sector_performance(),
                         data_service.fmp.get_market_indices(),
-                        return_exceptions=True,
-                    )
-                    fmp_data = {
-                        "dxy": dxy if not isinstance(dxy, Exception) else {},
-                        "commodities": commodities if not isinstance(commodities, Exception) else {},
-                        "treasury_yields": treasuries if not isinstance(treasuries, Exception) else {},
-                        "sector_performance": sector_perf if not isinstance(sector_perf, Exception) else [],
-                        "indices": indices if not isinstance(indices, Exception) else {},
+                    ]
+                    _fmp_names += ["commodities", "treasury_yields", "sector_performance", "indices"]
+                if hasattr(data_service, "yahoo") and data_service.yahoo:
+                    _fmp_tasks.append(data_service.yahoo.get_dxy())
+                    _fmp_names.append("dxy")
+
+                if _fmp_tasks:
+                    _fmp_results = await asyncio.gather(*_fmp_tasks, return_exceptions=True)
+                    _fmp_map = {
+                        n: r if not isinstance(r, Exception) else {}
+                        for n, r in zip(_fmp_names, _fmp_results)
                     }
-                except Exception:
-                    pass
+                    fmp_data = {
+                        "dxy": _fmp_map.get("dxy", {}),
+                        "commodities": _fmp_map.get("commodities", {}),
+                        "treasury_yields": _fmp_map.get("treasury_yields", {}),
+                        "sector_performance": _fmp_map.get("sector_performance", []),
+                        "indices": _fmp_map.get("indices", {}),
+                    }
+            except Exception:
+                pass
 
             # Macro snapshot
             try:
@@ -5547,6 +5558,7 @@ def _get_macro_provider():
                 fmp_provider=data_service.fmp if hasattr(data_service, "fmp") else None,
                 tradier_provider=data_service.tradier if hasattr(data_service, "tradier") else None,
                 fear_greed_provider=data_service.fear_greed if hasattr(data_service, "fear_greed") else None,
+                yahoo_provider=data_service.yahoo if hasattr(data_service, "yahoo") else None,
             )
     return _macro_provider
 
