@@ -1,0 +1,91 @@
+Now I understand exactly what's needed. The reference shows 4 qualitative behavior assessments with a clean 3-column row: question label | value | colored status badge. Let me update the frontend rendering to nail that layout, then give you the exact backend spec:
+
+Good. The frontend now uses a proper 3-column grid (1fr auto auto) for label | value | status, with a colored score bar underneath the header and the ◈ icon in red. Let me take a screenshot to confirm the render, then I'll write up the backend instructions:
+
+The page requires auth. The HMR updates confirmed the component compiled clean — let me verify the exec window code is correct, then give you the full backend spec:
+
+The frontend is ready. Here's everything your backend needs to fully power the Execution Window with its own assessment logic:
+
+Execution Window: Backend Wiring Instructions
+Target JSON shape for execution_conditions
+Replace your current threshold-based conditions with these 4 qualitative behavior assessments:
+
+"execution_conditions": [
+  {
+    "label": "Breakouts working?",
+    "value": "No",
+    "status": "Failing",
+    "ok": false
+  },
+  {
+    "label": "Leaders holding?",
+    "value": "No",
+    "status": "Fading",
+    "ok": false
+  },
+  {
+    "label": "Pullbacks bought?",
+    "value": "Yes",
+    "status": "Support",
+    "ok": true
+  },
+  {
+    "label": "Follow-through?",
+    "value": "Weak",
+    "status": "Low conviction",
+    "ok": false
+  }
+]
+The frontend automatically renders label | value | status in a 3-column grid using these exact fields — no frontend changes needed once the backend sends this shape.
+
+Logic for each condition
+1. Breakouts working?
+Are stocks breaking to new highs and holding them?
+
+Fetch today's new 52-week high count vs 52-week low count for NYSE (or use yfinance breadth data)
+ratio = new_highs / (new_highs + new_lows)
+ratio > 0.55 → value="Yes", status="Working", ok=True
+ratio 0.35–0.55 → value="Mixed", status="Inconsistent", ok=False
+ratio < 0.35 → value="No", status="Failing", ok=False
+Fallback: use your existing breadth_score — if > 55: Working, 35–55: Inconsistent, < 35: Failing
+2. Leaders holding?
+Are the market's relative-strength leaders outperforming the index over the past week?
+
+Fetch 5-day returns for XLK, XLY, XLC (growth/leadership sectors) and SPY
+leaders_vs_spy = avg(xlk_5d, xly_5d, xlc_5d) − spy_5d
+> +0.5% → value="Yes", status="Holding", ok=True
+-1.5% to +0.5% → value="Mixed", status="Fading", ok=False
+< -1.5% → value="No", status="Breaking down", ok=False
+3. Pullbacks bought?
+Over the last 5 sessions, are intraday dips getting recovered before close?
+
+For each of the last 5 trading days on SPY, compute: recovery = (close − low) / (high − low)
+Count days where recovery > 0.50 (closed in upper half of range)
+bought_count ≥ 3 → value="Yes", status="Support", ok=True
+bought_count == 2 → value="Mixed", status="Inconsistent", ok=False
+bought_count ≤ 1 → value="No", status="Selling into rallies", ok=False
+4. Follow-through?
+After a green day, does the next session confirm the move with a higher close and volume?
+
+Pull last 10 sessions of SPY OHLCV
+Find all green days (close > prior close), then check if the day after also closed higher
+followthrough_rate = follow_up_days / total_green_days
+Also check: up_volume_ratio = avg_volume_on_up_days / avg_volume_on_down_days
+followthrough_rate > 0.5 AND up_volume_ratio > 1.2 → value="Strong", status="Confirming", ok=True
+followthrough_rate > 0.5 but volume not confirming → value="Weak", status="Low conviction", ok=False
+followthrough_rate < 0.4 → value="No", status="Reversing", ok=False
+Execution Window Score (execution_window_score)
+Replace the current EWS with a simple sum based on these 4 outcomes:
+
+ews = (
+  25 if breakouts_ok else 0
+) + (
+  25 if leaders_ok else 0
+) + (
+  25 if pullbacks_ok else 0
+) + (
+  25 if followthrough_ok else 0
+)
+Score range: 0 (all failing) → 100 (all passing). The frontend already colors it — red below 30, orange 30–50, yellow 50–70, green 70+.
+
+The frontend is already wired to display this the moment the backend sends label, value, status, and ok in that exact shape for execution_conditions. No further frontend changes needed.

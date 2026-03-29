@@ -6234,8 +6234,8 @@ def _compute_dashboard(
                 ews_penalty += 10
                 alert_events.append(f"Jobs Report in {days_out}d — directional risk elevated")
 
-    ews = max(0.0, round(mqs - ews_penalty, 1))
-    decision = "YES" if ews >= 70 else ("CAUTION" if ews >= 40 else "NO")
+    _mqs_adj = max(0.0, round(mqs - ews_penalty, 1))
+    decision = "YES" if _mqs_adj >= 70 else ("CAUTION" if _mqs_adj >= 40 else "NO")
 
     # ── Pillar metric blocks ──────────────────────────────────────────────────
     vix_str = _fmt(vix, precision=1)
@@ -6378,12 +6378,98 @@ def _compute_dashboard(
         },
     ]
 
+    # ── Execution condition 1: Breakouts working? (price breadth proxy) ──────
+    _breakout_ok = breadth_fg > 55
+    _breakout_val = "Yes" if breadth_fg > 55 else ("Mixed" if breadth_fg >= 35 else "No")
+    _breakout_status = "Working" if breadth_fg > 55 else ("Inconsistent" if breadth_fg >= 35 else "Failing")
+
+    # ── Execution condition 2: Leaders holding? (XLK/XLY/XLC vs SPY today) ──
+    _leader_tickers = {"XLK", "XLY", "XLC"}
+    _leader_chgs = [s["change_pct"] for s in sector_list if s["ticker"] in _leader_tickers]
+    _spy_chg_today = spy_bench.get("change_pct") or 0.0
+    if _leader_chgs:
+        _leaders_vs_spy = (sum(_leader_chgs) / len(_leader_chgs)) - _spy_chg_today
+    else:
+        _leaders_vs_spy = None
+    if _leaders_vs_spy is None:
+        _leaders_ok = False
+        _leaders_val = "N/A"
+        _leaders_status = "No data"
+    elif _leaders_vs_spy > 0.5:
+        _leaders_ok = True
+        _leaders_val = "Yes"
+        _leaders_status = "Holding"
+    elif _leaders_vs_spy >= -1.5:
+        _leaders_ok = False
+        _leaders_val = "Mixed"
+        _leaders_status = "Fading"
+    else:
+        _leaders_ok = False
+        _leaders_val = "No"
+        _leaders_status = "Breaking down"
+
+    # ── Execution condition 3: Pullbacks bought? (SPY intraday recovery) ─────
+    _spy_bars = (spy_ext.get("recent_bars") or [])[-5:]
+    _recovered_days = 0
+    for _b in _spy_bars:
+        _h, _l, _c = _b.get("high"), _b.get("low"), _b.get("close")
+        if _h and _l and _c and (_h - _l) > 0:
+            _rec = (_c - _l) / (_h - _l)
+            if _rec > 0.50:
+                _recovered_days += 1
+    if _spy_bars:
+        _pullback_ok = _recovered_days >= 3
+        _pullback_val = "Yes" if _recovered_days >= 3 else ("Mixed" if _recovered_days == 2 else "No")
+        _pullback_status = "Support" if _recovered_days >= 3 else ("Inconsistent" if _recovered_days == 2 else "Selling into rallies")
+    else:
+        _pullback_ok = False
+        _pullback_val = "N/A"
+        _pullback_status = "No data"
+
+    # ── Execution condition 4: Follow-through? (green day confirmation) ───────
+    _spy_bars10 = (spy_ext.get("recent_bars") or [])[-10:]
+    _ft_ok = False
+    _ft_val = "N/A"
+    _ft_status = "No data"
+    if len(_spy_bars10) >= 4:
+        _closes10 = [_b["close"] for _b in _spy_bars10 if _b.get("close")]
+        _vols10 = [_b.get("volume") or 0 for _b in _spy_bars10]
+        _green_days, _ft_days = [], []
+        _up_vols, _dn_vols = [], []
+        for _i in range(1, len(_closes10)):
+            _is_green = _closes10[_i] > _closes10[_i - 1]
+            if _is_green:
+                _green_days.append(_i)
+                _up_vols.append(_vols10[_i])
+                if _i + 1 < len(_closes10) and _closes10[_i + 1] > _closes10[_i]:
+                    _ft_days.append(_i)
+            else:
+                _dn_vols.append(_vols10[_i])
+        _ft_rate = len(_ft_days) / len(_green_days) if _green_days else 0
+        _avg_up_vol = sum(_up_vols) / len(_up_vols) if _up_vols else 0
+        _avg_dn_vol = sum(_dn_vols) / len(_dn_vols) if _dn_vols else 1
+        _vol_ratio = _avg_up_vol / _avg_dn_vol if _avg_dn_vol else 1
+        if _ft_rate > 0.5 and _vol_ratio > 1.2:
+            _ft_ok = True
+            _ft_val = "Strong"
+            _ft_status = "Confirming"
+        elif _ft_rate > 0.5:
+            _ft_ok = False
+            _ft_val = "Weak"
+            _ft_status = "Low conviction"
+        else:
+            _ft_ok = False
+            _ft_val = "No"
+            _ft_status = "Reversing"
+
     exec_conditions = [
-        {"label": "VIX below 25 (volatility acceptable)", "value": vix_str, "ok": (vix or 99) < 25},
-        {"label": "Market above 200d MA (trend intact)", "value": spy_vs200_str, "ok": (spy_vs200_dir or 0) >= 0},
-        {"label": "Breadth supporting (>50% sectors positive)", "value": f"{participation_pct}%", "ok": participation_pct >= 50},
-        {"label": "No major macro event today/tomorrow", "value": "Clear" if ews_penalty == 0 else f"ALERT ({ews_penalty}pt penalty)", "ok": ews_penalty == 0},
+        {"label": "Breakouts working?", "value": _breakout_val, "status": _breakout_status, "ok": _breakout_ok},
+        {"label": "Leaders holding?", "value": _leaders_val, "status": _leaders_status, "ok": _leaders_ok},
+        {"label": "Pullbacks bought?", "value": _pullback_val, "status": _pullback_status, "ok": _pullback_ok},
+        {"label": "Follow-through?", "value": _ft_val, "status": _ft_status, "ok": _ft_ok},
     ]
+
+    ews = float(sum(25 for c in exec_conditions if c["ok"]))
 
     decision_text = {
         "YES": "Market conditions are favorable. Volatility is controlled, trend is intact, and breadth supports participation. Trade your plan with normal position sizing.",
@@ -6477,7 +6563,8 @@ async def trading_dashboard(
             for sym, hist in [("SPY", spy_hist), ("QQQ", qqq_hist)]:
                 if isinstance(hist, Exception) or not hist:
                     continue
-                closes = [d["close"] for d in hist if d.get("close")]
+                bars = [d for d in hist if d.get("close")]
+                closes = [d["close"] for d in bars]
                 if len(closes) >= 50:
                     sma50 = round(sum(closes[-50:]) / 50, 2)
                     sma200 = round(sum(closes[-200:]) / 200, 2) if len(closes) >= 200 else None
@@ -6485,6 +6572,7 @@ async def trading_dashboard(
                         "price": closes[-1] if closes else None,
                         "priceAvg50": sma50,
                         "priceAvg200": sma200,
+                        "recent_bars": bars[-10:],
                     }
             return result_ext
         except Exception:
