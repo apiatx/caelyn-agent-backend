@@ -1,0 +1,43 @@
+Now please see the screenshot attached for how the Inflation tab on the Macro Terminal page should look. Ours should look like the attached exactly. Make sure it does. Using the same backend fast api service data that is being returned, no frontend logic here(you are design only - make sure the fields are displaying all of the data returned by the fast API backend service), only what the backend is returning. You are doing any calculations or fetching your own data.
+
+Let me study the screenshot and check what the backend provides for inflation:
+
+Now I have everything I need. Let me check the helper functions available in the file:
+
+Now I have a complete picture of all backend fields. Let me build the complete InflationTab to match the screenshot:
+
+Now I'll replace the entire InflationTab function with a Bloomberg-style layout matching the screenshot exactly:
+
+TypeScript clean. Let me verify what it looks like:
+
+The app requires login. The TypeScript compiled clean, so let me verify the data mapping looks correct with one more code check:
+
+Everything is clean and running. Here is a complete breakdown of the Inflation tab:
+
+What's built and where each value comes from:
+
+Section	What's displayed	Backend field
+Trend chart title	"CPI TREND — HEADLINE VS CORE"	—
+Shutdown note	Shown when Oct is absent but Nov is present	Inferred from history[] month gaps
+Chart bars (Headline)	Each month's CPI headline index	history[].headline
+Chart bars (Core)	Each month's CPI core index	history[].core
+Commentary	> CPI 2.7% YoY, Core PCE 3.1%...	commentary
+Alt measures bars	Sticky CPI, Trimmed Mean PCE, 5Y/10Y Breakeven	cpi_components[].name/value/hot
+Footer strip	5Y Breakeven, 10Y Breakeven, Sticky CPI, Trimmed Mean, Fed Target	market_expectations.*, alternative_measures.*, fed_preferred.target
+Card: CPI (HEADLINE YOY)	2.7% — BEARISH	headline.cpi_yoy, indicators["CPI YoY"].status
+Card: CORE CPI (YOY)	2.7% — BEARISH	headline.core_cpi_yoy
+Card: CORE PCE (YOY)	~3.1% — BEARISH	headline.core_pce_yoy, fed_preferred.target_status
+Card: PPI (YOY)	3.4% — BEARISH	headline.ppi_yoy, indicators["PPI YoY"].status
+Card: CPI MOM	+0.3% — BEARISH	headline.cpi_mom
+Card: OIL (WTI VIA USD)	—	Not in backend
+Backend instructions for missing data — pass these to your backend developer:
+
+CPI trend chart: The history[] array currently returns CPI index levels (e.g. 319.7, 327.5). The chart in the screenshot shows YoY percentages (0–3.5%). Please change history[] to return { month: "Mar 25", headline_yoy: 2.6, core_yoy: 2.8 } format.
+
+Detailed component breakdown (Shelter, Energy, Food, Medical Care, Personal Care, Apparel, Eggs, etc.): Add a field like cpi_components_detail: [{ name: "Shelter", value: 3.0 }, ...] with YoY % for each BLS sub-category. The current cpi_components only has the 4 alternative measures.
+
+Per-metric change from prior period (the "+0.0 pp from 2.4%" lines in the cards): Add headline_changes: { cpi_yoy_prev: 2.4, core_cpi_yoy_prev: 2.5, core_pce_yoy_prev: 3.0, ppi_yoy_prev: 3.0, cpi_mom_prev: 0.2 }.
+
+Per-metric dates ("Feb 2026", "Jan 2026 (est)"): Add headline_dates: { cpi_yoy: "2026-02-01", core_pce_yoy: "2026-01-01", ppi_yoy: "2026-01-01", cpi_mom: "2026-02-01" }.
+
+Oil WTI price: Add oil: { wti_price: 108.05, change_pct_from_preconflict: 20, preconflict_price: 90, date: "2026-03-11" } to the inflation response.

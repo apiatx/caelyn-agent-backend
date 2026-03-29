@@ -310,114 +310,86 @@ def transform_rates(raw: dict) -> dict:
 
 def transform_inflation(raw: dict) -> dict:
     """
-    Input:  MacroProvider.get_inflation() result
-    Output: { headline, history, cpi_components, indicators }
+    Input:  MacroProvider.get_inflation() result (v2)
+    Output: { headline, headline_changes, headline_dates, history, cpi_components,
+              cpi_components_detail, oil, indicators }
     """
-    h = raw.get("headline", {})
+    h   = raw.get("headline", {})
     fed = raw.get("fed_preferred", {})
 
     headline = {
-        "cpi_yoy": _r(h.get("cpi_yoy"), 1),
+        "cpi_yoy":      _r(h.get("cpi_yoy"), 1),
         "core_cpi_yoy": _r(h.get("core_cpi_yoy"), 1),
-        "core_pce_yoy": _r(fed.get("core_pce_yoy"), 1),
-        "ppi_yoy": _r(h.get("ppi_yoy"), 1),
-        "cpi_mom": _r(h.get("cpi_mom"), 2),
-        "target": fed.get("target", 2.0),
+        "core_pce_yoy": _r(h.get("core_pce_yoy") or fed.get("core_pce_yoy"), 1),
+        "ppi_yoy":      _r(h.get("ppi_yoy"), 1),
+        "cpi_mom":      _r(h.get("cpi_mom"), 2),
+        "target":       h.get("target") or fed.get("target", 2.0),
     }
 
-    # history — transform from {date, value} to {month, headline, core}
-    cpi_hist = raw.get("history", {}).get("cpi", [])
-    pce_hist = raw.get("history", {}).get("core_pce", [])
+    # history — v2 already gives [{month, date, headline_yoy, core_yoy}]
+    # Fall back to building from raw index levels if old format
+    raw_hist = raw.get("history", [])
+    if isinstance(raw_hist, list) and raw_hist and "headline_yoy" in raw_hist[0]:
+        history = raw_hist   # new YoY format
+    else:
+        # Legacy: build from raw index levels in history_raw
+        cpi_hist = raw.get("history_raw", {}).get("cpi", [])
+        pce_hist = raw.get("history_raw", {}).get("core_pce", [])
+        pce_by_month = {}
+        for pt in pce_hist:
+            ml = _month_label(pt.get("date"))
+            if ml:
+                pce_by_month[ml] = pt.get("value")
+        history = []
+        for pt in cpi_hist[-12:]:
+            ml = _month_label(pt.get("date"))
+            history.append({
+                "month": ml,
+                "headline": _r(pt.get("value"), 1),
+                "core":     _r(pce_by_month.get(ml), 1),
+            })
 
-    # Build a month→values map
-    pce_by_month = {}
-    for pt in pce_hist:
-        ml = _month_label(pt.get("date"))
-        if ml:
-            pce_by_month[ml] = pt.get("value")
-
-    history = []
-    # Use last 12 CPI data points
-    for pt in cpi_hist[-12:]:
-        ml = _month_label(pt.get("date"))
-        history.append({
-            "month": ml,
-            "headline": _r(pt.get("value"), 1),
-            "core": _r(pce_by_month.get(ml), 1),
-        })
-
-    # cpi_components — synthesize from available data
-    # We have headline CPI and core CPI; we can infer some components
+    # cpi_components — legacy 4-item list (alternative measures + breakevens)
     cpi_components = []
     alt = raw.get("alternative_measures", {})
     mkt = raw.get("market_expectations", {})
-
-    # Shelter is typically the largest CPI component and driver of stickiness
     if alt.get("sticky_cpi") is not None:
-        cpi_components.append({
-            "name": "Sticky CPI",
-            "value": _r(alt["sticky_cpi"], 1),
-            "hot": (alt["sticky_cpi"] or 0) > 4.0,
-        })
+        cpi_components.append({"name": "Sticky CPI",       "value": _r(alt["sticky_cpi"], 1),    "hot": (alt["sticky_cpi"] or 0) > 4.0})
     if alt.get("trimmed_mean_pce") is not None:
-        cpi_components.append({
-            "name": "Trimmed Mean PCE",
-            "value": _r(alt["trimmed_mean_pce"], 1),
-            "hot": (alt["trimmed_mean_pce"] or 0) > 3.0,
-        })
+        cpi_components.append({"name": "Trimmed Mean PCE", "value": _r(alt["trimmed_mean_pce"], 1), "hot": (alt["trimmed_mean_pce"] or 0) > 3.0})
     if mkt.get("breakeven_5y") is not None:
-        cpi_components.append({
-            "name": "5Y Breakeven",
-            "value": _r(mkt["breakeven_5y"], 2),
-            "hot": (mkt["breakeven_5y"] or 0) > 2.5,
-        })
+        cpi_components.append({"name": "5Y Breakeven",     "value": _r(mkt["breakeven_5y"], 2),  "hot": (mkt["breakeven_5y"] or 0) > 2.5})
     if mkt.get("breakeven_10y") is not None:
-        cpi_components.append({
-            "name": "10Y Breakeven",
-            "value": _r(mkt["breakeven_10y"], 2),
-            "hot": (mkt["breakeven_10y"] or 0) > 2.5,
-        })
+        cpi_components.append({"name": "10Y Breakeven",    "value": _r(mkt["breakeven_10y"], 2), "hot": (mkt["breakeven_10y"] or 0) > 2.5})
 
     # indicators
     indicators = []
-    trend = raw.get("trend", "sticky")
+    trend        = raw.get("trend", "sticky")
     target_status = fed.get("target_status", "unknown")
 
     if headline["cpi_yoy"] is not None:
-        indicators.append({
-            "name": "CPI YoY",
-            "value": f"{headline['cpi_yoy']}%",
-            "status": "elevated" if (headline["cpi_yoy"] or 0) > 3.5 else _status(trend),
-        })
+        indicators.append({"name": "CPI YoY",  "value": f"{headline['cpi_yoy']}%",
+                           "status": "elevated" if (headline["cpi_yoy"] or 0) > 3.5 else _status(trend)})
     if headline["core_pce_yoy"] is not None:
-        indicators.append({
-            "name": "Core PCE",
-            "value": f"{headline['core_pce_yoy']}%",
-            "status": "elevated" if target_status == "well_above_target" else "neutral" if target_status == "at_target" else "elevated",
-        })
+        indicators.append({"name": "Core PCE", "value": f"{headline['core_pce_yoy']}%",
+                           "status": "elevated" if target_status == "well_above_target" else "neutral" if target_status == "at_target" else "elevated"})
     if headline["ppi_yoy"] is not None:
-        indicators.append({
-            "name": "PPI YoY",
-            "value": f"{headline['ppi_yoy']}%",
-            "status": "elevated" if (headline["ppi_yoy"] or 0) > 3 else "neutral",
-        })
-    indicators.append({
-        "name": "Trend",
-        "value": trend.title(),
-        "status": _status(trend),
-    })
-    indicators.append({
-        "name": "Fed Target",
-        "value": f"{headline.get('target', 2.0)}%",
-        "status": "neutral" if target_status == "at_target" else "elevated",
-    })
+        indicators.append({"name": "PPI YoY",  "value": f"{headline['ppi_yoy']}%",
+                           "status": "elevated" if (headline["ppi_yoy"] or 0) > 3 else "neutral"})
+    indicators.append({"name": "Trend",      "value": trend.title(),       "status": _status(trend)})
+    indicators.append({"name": "Fed Target", "value": f"{headline.get('target', 2.0)}%",
+                       "status": "neutral" if target_status == "at_target" else "elevated"})
 
     return {
         **raw,
-        "headline": headline,
-        "history": history,
-        "cpi_components": cpi_components,
-        "indicators": indicators,
+        "headline":             headline,
+        "headline_changes":     raw.get("headline_changes", {}),
+        "headline_dates":       raw.get("headline_dates", {}),
+        "history":              history,
+        "cpi_components":       cpi_components,
+        "cpi_components_detail":raw.get("cpi_components_detail", []),
+        "oil":                  raw.get("oil", {}),
+        "indicators":           indicators,
     }
 
 

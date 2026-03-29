@@ -81,6 +81,14 @@ _FRED_SERIES = {
     "30y-yield":        "DGS30",               # 30-Year Treasury
     "fed-target-lower": "DFEDTARL",            # FOMC target rate lower bound
     "fed-target-upper": "DFEDTARU",            # FOMC target rate upper bound
+    # CPI sub-components
+    "cpi-shelter":      "CUSR0000SAH1",        # CPI Shelter
+    "cpi-food":         "CPIUFDSL",            # CPI Food
+    "cpi-energy":       "CPIENGSL",            # CPI Energy
+    "cpi-medical":      "CPIMEDSL",            # CPI Medical Care
+    "cpi-transport":    "CPITRNSL",            # CPI Transportation
+    "cpi-apparel":      "CPIAPPSL",            # CPI Apparel
+    "wti-oil":          "DCOILWTICO",          # WTI Crude Oil (daily)
 }
 
 
@@ -815,17 +823,92 @@ class MacroProvider:
             month_ago[tenor] = _round(_safe(float(data.iloc[idx_m])), 3)
         return {"week_ago": week_ago, "month_ago": month_ago}
 
+    def _get_cpi_yoy_history(self) -> list:
+        """Sync: last 15 months of CPI headline and Core CPI as YoY %."""
+        cpi  = self._get_series("CPIAUCSL", 800)   # ~26 months of monthly data
+        core = self._get_series("CPILFESL", 800)
+        if cpi is None or len(cpi) < 14:
+            return []
+        result = []
+        n = len(cpi)
+        start_idx = max(12, n - 15)
+        for i in range(start_idx, n):
+            year_ago_i = i - 12
+            if year_ago_i < 0:
+                continue
+            curr_val = float(cpi.iloc[i])
+            prev_val = float(cpi.iloc[year_ago_i])
+            if prev_val <= 0:
+                continue
+            headline_yoy = round(((curr_val - prev_val) / prev_val) * 100, 2)
+            core_yoy = None
+            if core is not None and i < len(core) and year_ago_i < len(core):
+                c_curr = float(core.iloc[i])
+                c_prev = float(core.iloc[year_ago_i])
+                if c_prev > 0:
+                    core_yoy = round(((c_curr - c_prev) / c_prev) * 100, 2)
+            date = cpi.index[i]
+            result.append({
+                "month": date.strftime("%b '%y"),
+                "date":  str(date.date()),
+                "headline_yoy": headline_yoy,
+                "core_yoy":     core_yoy,
+            })
+        return result
+
+    def _get_inflation_components(self) -> dict:
+        """Sync: CPI sub-component YoY + WTI oil price."""
+        components = {}
+        for slug, label in [
+            ("cpi-shelter",  "Shelter"),
+            ("cpi-food",     "Food"),
+            ("cpi-energy",   "Energy"),
+            ("cpi-medical",  "Medical Care"),
+            ("cpi-transport","Transportation"),
+            ("cpi-apparel",  "Apparel"),
+        ]:
+            try:
+                components[slug] = {"label": label, "yoy": self._yoy_pct(_FRED_SERIES[slug])}
+            except Exception:
+                components[slug] = {"label": label, "yoy": None}
+
+        # WTI oil price
+        oil_price = oil_date = oil_prev_month = None
+        try:
+            oil_s = self._get_series("DCOILWTICO", 90)
+            if oil_s is not None and len(oil_s) >= 2:
+                oil_s = oil_s.dropna()
+                if len(oil_s) >= 2:
+                    oil_price = _round(_safe(float(oil_s.iloc[-1])), 2)
+                    oil_date  = str(oil_s.index[-1].date())
+                    idx_m = max(0, len(oil_s) - 22)
+                    oil_prev_month = _round(_safe(float(oil_s.iloc[idx_m])), 2)
+        except Exception:
+            pass
+
+        return {
+            "components": components,
+            "oil_price": oil_price,
+            "oil_date":  oil_date,
+            "oil_prev_month": oil_prev_month,
+        }
+
     # ── INFLATION tab ─────────────────────────────────────────────────
 
     @traceable(name="macro.get_inflation")
     async def get_inflation(self) -> dict:
-        """CPI, Core CPI, PCE, PPI, breakevens, sticky/trimmed measures."""
-        cache_key = "macro:tab:inflation:v1"
+        """CPI, Core CPI, PCE, PPI, breakevens, sticky/trimmed measures — with components and oil."""
+        cache_key = "macro:tab:inflation:v2"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
 
-        data = await asyncio.to_thread(self._get_inflation_fred_data)
+        # Fetch all data concurrently
+        data, yoy_hist, comp_data = await asyncio.gather(
+            asyncio.to_thread(self._get_inflation_fred_data),
+            asyncio.to_thread(self._get_cpi_yoy_history),
+            asyncio.to_thread(self._get_inflation_components),
+        )
 
         # Trend logic
         cpi_yoy = data.get("cpi_yoy")
@@ -847,25 +930,60 @@ class MacroProvider:
             else:
                 target_status = "well_above_target"
 
+        # Build cpi_components_detail from sub-components
+        _comps = comp_data.get("components", {})
+        cpi_components_detail = []
+        for slug in ["cpi-shelter", "cpi-food", "cpi-energy", "cpi-medical", "cpi-transport", "cpi-apparel"]:
+            c = _comps.get(slug, {})
+            yoy_val = _round(c.get("yoy"), 1)
+            cpi_components_detail.append({
+                "name": c.get("label", slug),
+                "value": yoy_val,
+                "hot": (yoy_val or 0) > 3.0,
+            })
+
+        # WTI oil object
+        oil_price = comp_data.get("oil_price")
+        oil_prev  = comp_data.get("oil_prev_month")
+        oil_chg_pct = None
+        if oil_price is not None and oil_prev and oil_prev > 0:
+            oil_chg_pct = _round(((oil_price - oil_prev) / oil_prev) * 100, 1)
+        oil = {
+            "wti_price": oil_price,
+            "prev_month_price": oil_prev,
+            "change_pct_1m": oil_chg_pct,
+            "date": comp_data.get("oil_date"),
+        }
+
         result = {
             "last_updated": datetime.utcnow().isoformat() + "Z",
             "headline": {
-                "cpi_yoy": _round(cpi_yoy, 1),
-                "cpi_mom": _round(data.get("cpi_mom"), 2),
+                "cpi_yoy":      _round(cpi_yoy, 1),
+                "cpi_mom":      _round(data.get("cpi_mom"), 2),
                 "core_cpi_yoy": _round(data.get("core_cpi_yoy"), 1),
-                "ppi_yoy": _round(data.get("ppi_yoy"), 1),
-            },
-            "fed_preferred": {
                 "core_pce_yoy": _round(core_pce, 1),
-                "target": 2.0,
+                "ppi_yoy":      _round(data.get("ppi_yoy"), 1),
+                "target":       2.0,
+            },
+            "headline_changes": {
+                "cpi_yoy_prev":      _round(data.get("cpi_yoy_prev"), 1),
+                "core_cpi_yoy_prev": _round(data.get("core_cpi_yoy_prev"), 1),
+                "core_pce_yoy_prev": _round(data.get("core_pce_yoy_prev"), 1),
+                "ppi_yoy_prev":      _round(data.get("ppi_yoy_prev"), 1),
+                "cpi_mom_prev":      _round(data.get("cpi_mom_prev"), 2),
+            },
+            "headline_dates": data.get("headline_dates", {}),
+            "fed_preferred": {
+                "core_pce_yoy":  _round(core_pce, 1),
+                "target":        2.0,
                 "target_status": target_status,
             },
             "alternative_measures": {
                 "trimmed_mean_pce": _round(data.get("trimmed_pce"), 1),
-                "sticky_cpi": _round(data.get("sticky_cpi"), 1),
+                "sticky_cpi":       _round(data.get("sticky_cpi"), 1),
             },
             "market_expectations": {
-                "breakeven_5y": _round(data.get("breakeven_5y"), 2),
+                "breakeven_5y":  _round(data.get("breakeven_5y"), 2),
                 "breakeven_10y": _round(data.get("breakeven_10y"), 2),
             },
             "trend": trend,
@@ -874,43 +992,86 @@ class MacroProvider:
                 f"(Fed target 2%). Inflation {trend}. "
                 f"5Y breakeven: {_round(data.get('breakeven_5y'), 2)}%."
             ),
-            "history": {
-                "cpi": self.get_history("cpi", 36).get("data", []),
-                "core_pce": self.get_history("core-pce", 36).get("data", []),
-                "breakeven_5y": self.get_history("breakeven-5y", 36).get("data", []),
+            # YoY history — used by trend chart ({month, headline_yoy, core_yoy})
+            "history": yoy_hist,
+            # Raw index history kept for backward compatibility
+            "history_raw": {
+                "cpi":         self.get_history("cpi", 36).get("data", []),
+                "core_pce":    self.get_history("core-pce", 36).get("data", []),
+                "breakeven_5y":self.get_history("breakeven-5y", 36).get("data", []),
             },
+            "cpi_components_detail": cpi_components_detail,
+            "oil": oil,
         }
 
         cache.set(cache_key, result, _MACRO_DASHBOARD_TTL)
         return result
 
     def _get_inflation_fred_data(self) -> dict:
-        """Sync helper: fetch all inflation FRED series."""
+        """Sync helper: fetch all inflation FRED series including dates and prior-period values."""
+        # Current YoY values
         cpi_yoy = self._yoy_pct("CPIAUCSL")
         core_cpi_yoy = self._yoy_pct("CPILFESL")
         core_pce_yoy = self._yoy_pct("PCEPILFE")
         ppi_yoy = self._yoy_pct("PPIFIS")
 
-        # CPI month-over-month
-        cpi_data = self._get_series("CPIAUCSL", 365)
-        cpi_mom = None
-        if cpi_data is not None and len(cpi_data) >= 2:
-            prev = float(cpi_data.iloc[-2])
-            curr = float(cpi_data.iloc[-1])
-            if prev > 0:
-                cpi_mom = round(((curr - prev) / prev) * 100, 2)
+        # Dates for each series
+        _, cpi_date       = self._latest("CPIAUCSL", 365)
+        _, core_cpi_date  = self._latest("CPILFESL", 365)
+        _, core_pce_date  = self._latest("PCEPILFE", 365)
+        _, ppi_date       = self._latest("PPIFIS", 365)
 
-        breakeven_5y, _ = self._latest("T5YIE", 365)
+        # CPI month-over-month (current and prior)
+        cpi_data = self._get_series("CPIAUCSL", 800)
+        cpi_mom = cpi_mom_prev = None
+        if cpi_data is not None and len(cpi_data) >= 3:
+            p0 = float(cpi_data.iloc[-3])
+            p1 = float(cpi_data.iloc[-2])
+            p2 = float(cpi_data.iloc[-1])
+            if p1 > 0:
+                cpi_mom = round(((p2 - p1) / p1) * 100, 2)
+            if p0 > 0:
+                cpi_mom_prev = round(((p1 - p0) / p0) * 100, 2)
+
+        # Previous-period YoY values (second-to-last available month)
+        def _prev_yoy(series_id: str) -> float | None:
+            data = self._get_series(series_id, 800)
+            if data is None or len(data) < 14:
+                return None
+            n = len(data)
+            i = n - 2   # second-to-last
+            ya = i - 12
+            if ya < 0:
+                return None
+            curr = float(data.iloc[i])
+            prev = float(data.iloc[ya])
+            return round(((curr - prev) / prev) * 100, 2) if prev > 0 else None
+
+        cpi_yoy_prev      = _prev_yoy("CPIAUCSL")
+        core_cpi_yoy_prev = _prev_yoy("CPILFESL")
+        core_pce_yoy_prev = _prev_yoy("PCEPILFE")
+        ppi_yoy_prev      = _prev_yoy("PPIFIS")
+
+        breakeven_5y,  _ = self._latest("T5YIE", 365)
         breakeven_10y, _ = self._latest("T10YIE", 365)
-        trimmed_pce, _ = self._latest("PCETRIM12M159SFRBDAL", 365)
-        sticky_cpi, _ = self._latest("CORESTICKM159SFRBATL", 365)
+        trimmed_pce,   _ = self._latest("PCETRIM12M159SFRBDAL", 365)
+        sticky_cpi,    _ = self._latest("CORESTICKM159SFRBATL", 365)
 
         return {
-            "cpi_yoy": cpi_yoy, "cpi_mom": cpi_mom,
-            "core_cpi_yoy": core_cpi_yoy, "core_pce_yoy": core_pce_yoy,
-            "ppi_yoy": ppi_yoy, "breakeven_5y": breakeven_5y,
-            "breakeven_10y": breakeven_10y, "trimmed_pce": trimmed_pce,
-            "sticky_cpi": sticky_cpi,
+            "cpi_yoy": cpi_yoy, "cpi_mom": cpi_mom, "cpi_mom_prev": cpi_mom_prev,
+            "cpi_yoy_prev": cpi_yoy_prev,
+            "core_cpi_yoy": core_cpi_yoy, "core_cpi_yoy_prev": core_cpi_yoy_prev,
+            "core_pce_yoy": core_pce_yoy, "core_pce_yoy_prev": core_pce_yoy_prev,
+            "ppi_yoy": ppi_yoy, "ppi_yoy_prev": ppi_yoy_prev,
+            "headline_dates": {
+                "cpi_yoy":      cpi_date,
+                "core_cpi_yoy": core_cpi_date,
+                "core_pce_yoy": core_pce_date,
+                "ppi_yoy":      ppi_date,
+                "cpi_mom":      cpi_date,
+            },
+            "breakeven_5y": breakeven_5y, "breakeven_10y": breakeven_10y,
+            "trimmed_pce": trimmed_pce, "sticky_cpi": sticky_cpi,
         }
 
     # ── GROWTH tab ────────────────────────────────────────────────────
