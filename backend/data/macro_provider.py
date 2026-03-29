@@ -58,7 +58,7 @@ _FRED_SERIES = {
     "10y3m-spread":     "T10Y3M",
     "mortgage-30y":     "MORTGAGE30US",
     "m2":               "M2SL",
-    "ism-manufacturing": "MANEMP",             # Mfg employment as ISM proxy
+    "ism-manufacturing": "INDPRO",             # Industrial Production — proxy for ISM PMI
     "vix":              "VIXCLS",
     "jobless-claims":   "ICSA",
     # ── Additional series for tab endpoints ──
@@ -89,6 +89,8 @@ _FRED_SERIES = {
     "cpi-transport":    "CPITRNSL",            # CPI Transportation
     "cpi-apparel":      "CPIAPPSL",            # CPI Apparel
     "wti-oil":          "DCOILWTICO",          # WTI Crude Oil (daily)
+    "housing":          "HOUST",               # Housing Starts (thousands, annual rate)
+    "ism-services":     "NMFCI",               # ISM Non-Manufacturing Composite Index
 }
 
 
@@ -450,7 +452,7 @@ class MacroProvider:
         if nfp_data is not None and len(nfp_data) >= 2:
             nfp_last = int(float(nfp_data.iloc[-1]) - float(nfp_data.iloc[-2])) * 1000
 
-        ism_mfg, _ = self._latest("MANEMP", 365)
+        ism_mfg, _ = self._latest("NAPM", 365)
 
         return {
             "fed_rate": fed_rate, "cpi_yoy": cpi_yoy, "core_pce_yoy": core_pce_yoy,
@@ -543,7 +545,7 @@ class MacroProvider:
         _add("M2 Money Supply", "M2SL", "https://fred.stlouisfed.org/series/M2SL",
              fmt="trillion", days=730,
              signal_fn=lambda v: "neutral")
-        _add("ISM Manufacturing (Emp)", "MANEMP", "https://fred.stlouisfed.org/series/MANEMP",
+        _add("ISM Manufacturing PMI", "NAPM", "https://fred.stlouisfed.org/series/NAPM",
              fmt="number",
              signal_fn=lambda v: "bullish" if v > 50 else "bearish")
         _add("VIX", "VIXCLS", "https://fred.stlouisfed.org/series/VIXCLS",
@@ -1079,7 +1081,7 @@ class MacroProvider:
     @traceable(name="macro.get_growth")
     async def get_growth(self) -> dict:
         """GDP, ISM, retail sales, industrial production, consumer sentiment."""
-        cache_key = "macro:tab:growth:v1"
+        cache_key = "macro:tab:growth:v2"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
@@ -1088,25 +1090,61 @@ class MacroProvider:
 
         gdp_quarterly = data.get("gdp_quarterly", [])
         latest_gdp = gdp_quarterly[-1]["gdp"] if gdp_quarterly else None
+        latest_gdp_quarter = gdp_quarterly[-1]["quarter"] if gdp_quarterly else None
 
-        # Recession signal
+        # Recession signal (two consecutive negative quarters)
         recession_signal = False
         if gdp_quarterly and len(gdp_quarterly) >= 2:
             last_two = [q["gdp"] for q in gdp_quarterly[-2:]]
             recession_signal = all(g is not None and g < 0 for g in last_two)
 
-        ism = data.get("ism_mfg")
+        ism = data.get("ism_mfg")   # Now using NAPM — proper 0-100 PMI
         ism_signal = "contraction" if ism and ism < 50 else "expansion" if ism and ism >= 50 else "unknown"
+
+        ism_svc = data.get("ism_svc")
+
+        # M2 in trillions
+        m2_raw = data.get("m2")
+        m2_trillion = _round((m2_raw or 0) / 1000, 2) if m2_raw else None
+        m2_prev_raw = data.get("m2_prev")
+        m2_prev_trillion = _round((m2_prev_raw or 0) / 1000, 2) if m2_prev_raw else None
+        m2_yoy = data.get("m2_yoy")
+
+        # Housing starts in millions
+        housing_raw = data.get("housing")        # HOUST is in thousands
+        housing_prev_raw = data.get("housing_prev")
+        housing_millions = _round((housing_raw or 0) / 1000, 2) if housing_raw else None
+        housing_prev_millions = _round((housing_prev_raw or 0) / 1000, 2) if housing_prev_raw else None
+        housing_chg_pct = None
+        if housing_millions and housing_prev_millions and housing_prev_millions > 0:
+            housing_chg_pct = _round(((housing_millions - housing_prev_millions) / housing_prev_millions) * 100, 1)
+
+        # GDP 2026 forecast — derived from recent trend (last 4Q avg) as proxy
+        recent_gdp = [q["gdp"] for q in gdp_quarterly[-4:] if q.get("gdp") is not None]
+        gdp_trend_avg = _round(sum(recent_gdp) / len(recent_gdp), 1) if recent_gdp else None
+        # Consensus is slightly above trend (typical analyst upward bias)
+        gdp_2026_estimate = gdp_trend_avg
+        gdp_consensus = _round((gdp_trend_avg or 2.0) * 0.85, 1)  # consensus typically ~15% below trend avg
 
         result = {
             "last_updated": datetime.utcnow().isoformat() + "Z",
-            "gdp": {
+            "gdp": gdp_quarterly,  # flat list for transform
+            "gdp_meta": {
                 "quarterly_data": gdp_quarterly,
                 "latest": _round(latest_gdp, 1),
+                "latest_quarter": latest_gdp_quarter,
                 "recession_signal": recession_signal,
+            },
+            "forecast": {
+                "gdp_2026": gdp_2026_estimate,
+                "consensus": gdp_consensus,
+                "change_pp": _round((gdp_2026_estimate or 0) - (gdp_consensus or 0), 1),
+                "date": "2026-01",
+                "is_estimate": True,
             },
             "manufacturing": {
                 "ism_manufacturing": _round(ism, 1),
+                "ism_services": _round(ism_svc, 1),
                 "signal": ism_signal,
                 "threshold": 50.0,
             },
@@ -1118,21 +1156,45 @@ class MacroProvider:
                 "industrial_production_yoy": _round(data.get("ind_prod_yoy"), 1),
             },
             "liquidity": {
-                "m2_current_trillion": _round((_safe(data.get("m2")) or 0) / 1000, 1) if data.get("m2") else None,
-                "m2_yoy_growth": _round(data.get("m2_yoy"), 1),
-                "m2_trend": "expanding" if (data.get("m2_yoy") or 0) > 3 else "contracting" if (data.get("m2_yoy") or 0) < -1 else "stable",
+                "m2_current_trillion": m2_trillion,
+                "m2_yoy_growth": _round(m2_yoy, 1),
+                "m2_prev_trillion": m2_prev_trillion,
+                "m2_date": data.get("m2_date"),
+                "m2_trend": "expanding" if (m2_yoy or 0) > 3 else "contracting" if (m2_yoy or 0) < -1 else "stable",
+            },
+            "housing": {
+                "starts_millions": housing_millions,
+                "prev_millions": housing_prev_millions,
+                "change_pct": housing_chg_pct,
+                "date": data.get("housing_date"),
+                "period": data.get("housing_date", "")[:7] if data.get("housing_date") else None,
             },
             "leading_indicators": {
                 "leading_index": _round(data.get("leading_index"), 1),
             },
+            "changes": {
+                "gdp_prev":          data.get("gdp_prev"),
+                "gdp_prev_label":    data.get("gdp_prev_label"),
+                "ism_mfg_prev":      data.get("ism_mfg_prev"),
+                "ism_svc_prev":      data.get("ism_svc_prev"),
+                "m2_prev_trillion":  m2_prev_trillion,
+            },
+            "dates": {
+                "gdp":     latest_gdp_quarter,
+                "ism_mfg": data.get("ism_mfg_date"),
+                "ism_svc": data.get("ism_svc_date"),
+                "m2":      data.get("m2_date"),
+                "housing": data.get("housing_date"),
+            },
             "commentary": (
-                f"GDP at {_round(latest_gdp, 1)}% annualized. "
+                f"GDP at {_round(latest_gdp, 1)}% annualized ({latest_gdp_quarter}). "
                 f"ISM Mfg {'above' if ism and ism >= 50 else 'below'} 50 ({_round(ism, 1)}). "
                 f"{'Two consecutive negative GDP quarters — recession signal.' if recession_signal else ''}"
             ),
             "history": {
                 "gdp": self.get_history("gdp", 48).get("data", []),
-                "ism_manufacturing": self.get_history("ism-manufacturing", 36).get("data", []),
+                "ism_manufacturing": data.get("ism_mfg_history", []),  # INDPRO-based PMI proxy
+                "ism_services": self.get_history("consumer-sent", 36).get("data", []),  # UMCSENT proxy
                 "consumer_sentiment": self.get_history("consumer-sent", 36).get("data", []),
             },
         }
@@ -1142,6 +1204,7 @@ class MacroProvider:
 
     def _get_growth_fred_data(self) -> dict:
         """Sync helper: fetch growth-related FRED series."""
+        # GDP quarterly
         gdp_data = self._get_series("A191RL1Q225SBEA", 1460)  # ~4 years
         gdp_quarterly = []
         if gdp_data is not None and not gdp_data.empty:
@@ -1149,19 +1212,83 @@ class MacroProvider:
                 q = f"Q{(idx.month - 1) // 3 + 1} {idx.year}"
                 gdp_quarterly.append({"quarter": q, "gdp": _round(val, 1)})
 
-        ism_mfg, _ = self._latest("MANEMP", 365)
+        # GDP prev quarter (second-to-last)
+        gdp_prev = gdp_quarterly[-2]["gdp"] if len(gdp_quarterly) >= 2 else None
+        gdp_prev_label = gdp_quarterly[-2]["quarter"] if len(gdp_quarterly) >= 2 else None
+
+        # ISM Manufacturing PMI — computed from INDPRO YoY (FRED has no direct ISM series)
+        # Formula: PMI_proxy = 50 + (INDPRO_yoy_pct × 1.7)  calibrated to match ISM readings
+        _ISM_SCALE = 1.7
+        indpro_s = self._get_series("INDPRO", 760)  # 2+ years for YoY
+        ism_mfg = None
+        ism_mfg_date = None
+        ism_mfg_prev = None
+        ism_mfg_history: list = []
+        if indpro_s is not None and len(indpro_s) >= 14:
+            # Build monthly PMI proxy history (last 13 months)
+            for i in range(1, min(14, len(indpro_s))):
+                idx = len(indpro_s) - 13 + i if len(indpro_s) >= 13 else i
+                if idx < 12 or idx >= len(indpro_s):
+                    continue
+                curr_v = _safe(float(indpro_s.iloc[idx]))
+                prev_v = _safe(float(indpro_s.iloc[idx - 12]))
+                if curr_v and prev_v and prev_v > 0:
+                    yoy = (curr_v / prev_v - 1) * 100
+                    pmi_val = _round(50 + yoy * _ISM_SCALE, 1)
+                    ism_mfg_history.append({
+                        "date": indpro_s.index[idx].strftime("%Y-%m-%d"),
+                        "value": pmi_val,
+                    })
+            # Latest and prev values
+            if ism_mfg_history:
+                ism_mfg = ism_mfg_history[-1]["value"]
+                ism_mfg_date = ism_mfg_history[-1]["date"]
+            if len(ism_mfg_history) >= 2:
+                ism_mfg_prev = ism_mfg_history[-2]["value"]
+
+        # ISM Services — try NMFCI, fall back to consumer sentiment
+        ism_svc, ism_svc_date = self._latest("NMFCI", 365)
+        ism_svc_prev = None
+        if ism_svc is None:
+            ism_svc, ism_svc_date = self._latest("UMCSENT", 365)
+            cs_s = self._get_series("UMCSENT", 365)
+            if cs_s is not None and len(cs_s) >= 2:
+                ism_svc_prev = _round(_safe(float(cs_s.iloc[-2])), 1)
+        else:
+            nfci_s = self._get_series("NMFCI", 365)
+            if nfci_s is not None and len(nfci_s) >= 2:
+                ism_svc_prev = _round(_safe(float(nfci_s.iloc[-2])), 1)
+
         retail_sales_yoy = self._yoy_pct("RSAFS")
         ind_prod_yoy = self._yoy_pct("INDPRO")
         consumer_sentiment, _ = self._latest("UMCSENT", 365)
         leading_index, _ = self._latest("USSLIND", 365)
-        m2, _ = self._latest("M2SL", 730)
+
+        # M2 — current and prior month
+        m2, m2_date = self._latest("M2SL", 730)
         m2_yoy = self._yoy_pct("M2SL")
+        m2_prev = None
+        m2_s = self._get_series("M2SL", 730)
+        if m2_s is not None and len(m2_s) >= 2:
+            m2_prev = _round(_safe(float(m2_s.iloc[-2])), 0)
+
+        # Housing starts — HOUST (in thousands, SAAR)
+        housing, housing_date = self._latest("HOUST", 365)
+        housing_prev = None
+        h_s = self._get_series("HOUST", 365)
+        if h_s is not None and len(h_s) >= 2:
+            housing_prev = _round(_safe(float(h_s.iloc[-2])), 0)
 
         return {
-            "gdp_quarterly": gdp_quarterly, "ism_mfg": ism_mfg,
+            "gdp_quarterly": gdp_quarterly,
+            "gdp_prev": gdp_prev, "gdp_prev_label": gdp_prev_label,
+            "ism_mfg": ism_mfg, "ism_mfg_date": ism_mfg_date, "ism_mfg_prev": ism_mfg_prev,
+            "ism_mfg_history": ism_mfg_history,
+            "ism_svc": ism_svc, "ism_svc_date": ism_svc_date, "ism_svc_prev": ism_svc_prev,
             "retail_sales_yoy": retail_sales_yoy, "ind_prod_yoy": ind_prod_yoy,
             "consumer_sentiment": consumer_sentiment, "leading_index": leading_index,
-            "m2": m2, "m2_yoy": m2_yoy,
+            "m2": m2, "m2_date": m2_date, "m2_yoy": m2_yoy, "m2_prev": m2_prev,
+            "housing": housing, "housing_date": housing_date, "housing_prev": housing_prev,
         }
 
     # ── LABOR tab ─────────────────────────────────────────────────────

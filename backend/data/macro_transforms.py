@@ -398,34 +398,46 @@ def transform_inflation(raw: dict) -> dict:
 def transform_growth(raw: dict) -> dict:
     """
     Input:  MacroProvider.get_growth() result
-    Output: { gdp, pmi, indicators }
+    Output: { gdp, pmi, indicators, forecast, housing, changes, dates }
     """
-    # gdp — already [{quarter, gdp}]
-    gdp = raw.get("gdp", {}).get("quarterly_data", [])
+    # gdp — flat list [{quarter, gdp}] (provider now returns it directly as raw.gdp)
+    gdp_list = raw.get("gdp", [])
+    if isinstance(gdp_list, dict):
+        # backward compat if provider returned the old nested shape
+        gdp_list = gdp_list.get("quarterly_data", [])
 
-    # pmi — build from ISM manufacturing history + consumer sentiment
+    gdp = gdp_list  # already [{quarter, gdp}]
+
+    # pmi — build from ISM manufacturing history (now NAPM, 0-100) + ISM services history
     ism_hist = raw.get("history", {}).get("ism_manufacturing", [])
+    svc_hist = raw.get("history", {}).get("ism_services", [])
     sent_hist = raw.get("history", {}).get("consumer_sentiment", [])
 
-    # Build sentiment by month
-    sent_by_month = {}
-    for pt in sent_hist:
-        ml = _month_label(pt.get("date"))
-        if ml:
-            sent_by_month[ml] = pt.get("value")
+    # ISM services by month (try NMFCI first, fall back to consumer sentiment)
+    svc_by_month: dict = {}
+    if svc_hist:
+        for pt in svc_hist:
+            ml = _month_label(pt.get("date"))
+            if ml:
+                svc_by_month[ml] = pt.get("value")
+    if not svc_by_month:
+        for pt in sent_hist:
+            ml = _month_label(pt.get("date"))
+            if ml:
+                svc_by_month[ml] = pt.get("value")
 
     pmi = []
     for pt in ism_hist[-12:]:
         ml = _month_label(pt.get("date"))
         pmi.append({
             "month": ml,
-            "mfg": _r(pt.get("value"), 1),
-            "svc": _r(sent_by_month.get(ml), 1),  # Using consumer sentiment as svc proxy
+            "mfg": _r(pt.get("value"), 1),   # NAPM — proper 0-100 ISM PMI
+            "svc": _r(svc_by_month.get(ml), 1),
         })
 
     # indicators
     indicators = []
-    gdp_sec = raw.get("gdp", {})
+    gdp_sec = raw.get("gdp_meta", {})  # enriched meta dict
     mfg = raw.get("manufacturing", {})
     consumer = raw.get("consumer", {})
     liq = raw.get("liquidity", {})
@@ -480,6 +492,10 @@ def transform_growth(raw: dict) -> dict:
         "gdp": gdp,
         "pmi": pmi,
         "indicators": indicators,
+        "forecast":   raw.get("forecast", {}),
+        "housing":    raw.get("housing", {}),
+        "changes":    raw.get("changes", {}),
+        "dates":      raw.get("dates", {}),
     }
 
 

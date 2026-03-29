@@ -1,0 +1,35 @@
+Now please see the screenshot attached for how the Growth tab on the Macro Terminal page should look. Ours should look like the attached exactly. Make sure it does. Using the same backend fast api service data that is being returned, no frontend logic here(you are design only - make sure the fields are displaying all of the data returned by the fast API backend service), only what the backend is returning. You aren't doing any calculations or fetching your own data.
+
+Let me fetch the Growth tab backend data and check the current implementation simultaneously:
+
+Now I have the full picture. Let me write the complete Growth tab rebuild:
+
+TypeScript clean. Here's the complete breakdown:
+
+Every field — exactly which backend property it reads:
+
+Section	What's displayed	Backend field
+GDP chart bars	Q1 2024 – Q4 2025, color-coded (green ≥ 3.5%, amber ≥ 1.5%, red < 1.5%)	gdp[].gdp
+GDP chart labels	"Q1 24", "Q2 24"… (abbreviated from backend)	gdp[].quarter
+GDP reference line	Dashed line at 2%	Hardcoded threshold
+GDP commentary	▶ GDP at 0.7% annualized. ISM Mfg above 50...	commentary
+PMI chart bars	Monthly ISM Services (Mar 25 – Feb 26)	pmi[].svc
+PMI month labels	"Mar 25", "Apr 25"…	pmi[].month
+PMI reference line	Dashed line at 50 (expansion threshold)	Hardcoded threshold
+Card: REAL GDP	+0.7% — NEUTRAL	gdp[last].gdp, indicators["GDP Growth"].status
+Card: GDP 2026 FORECAST	—	Not yet in backend
+Card: ISM MANUFACTURING	raw backend value — BULLISH	manufacturing.ism_manufacturing, indicators["ISM Manufacturing"].status
+Card: ISM SERVICES	56.6 — BULLISH	pmi[last].svc
+Card: M2 MONEY SUPPLY	$22.7T + ▲ +4.9% YoY — NEUTRAL	liquidity.m2_current_trillion, liquidity.m2_yoy_growth, indicators["M2 Growth"].status
+Card: HOUSING STARTS	—	Not yet in backend
+Backend instructions for missing / incorrect data:
+
+ISM Manufacturing PMI: manufacturing.ism_manufacturing returns 12573 — this appears to be an index level, not a PMI reading. ISM Manufacturing PMI should be in the 0–100 range (currently ~52–53). Please correct this field to return the actual PMI reading (e.g. 52.4). Same issue applies to pmi[].mfg values (~12,666) — these should be ~47–53.
+
+GDP 2026 Forecast: Add forecast: { gdp_2026: 2.5, consensus: 2.1, change_pp: 0.4, date: "2026-01" } to the response.
+
+Housing Starts: Add housing: { starts_millions: 1.36, prev_millions: 1.37, change_pct: -0.6, period: "2025 Full Year" } to the response.
+
+Per-metric change from prior period (for GDP, ISM, etc.): Add changes: { gdp_q3: 4.4, ism_mfg_prev: 52.6, ism_svc_prev: 54.5, m2_prev_trillion: 22.37 } so the cards can show "▼ -3.0 pp from +4.4% (Q3)" style change lines.
+
+Dates per metric: Add dates: { gdp: "Q4 2025 (Adv)", ism_mfg: "Feb 2026", ism_svc: "Feb 2026", m2: "Jan 2026" }.
