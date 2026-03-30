@@ -61,6 +61,14 @@ class HyperliquidState:
         # Stored at ~60s intervals; 130 entries ≈ 2h+ of history
         self.oi_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=130))
 
+        # Score history for score_change computation: coin → deque[(ts_unix, composite_score)]
+        # 60 entries ≈ 1h of snapshots
+        self.score_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=60))
+
+        # Volume impulse history from 5m candles: coin → deque[(ts_unix, volume_5m_bar)]
+        # Used to compute volume_impulse_5m and volume_impulse_15m
+        self.volume_5m_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=30))
+
         # Timing
         self.boot_ts: Optional[float] = None
         self.last_mids_ts: Optional[float] = None

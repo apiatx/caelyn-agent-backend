@@ -346,6 +346,7 @@ async def _periodic_feature_recompute(state: HyperliquidState):
             _save_oi_snapshots(state)
             _compute_oi_changes(state)
             run_full_feature_pass(state)
+            _save_score_snapshots(state)
         except Exception as e:
             print(f"[HL][feature_recompute] Error: {e}")
 
@@ -359,7 +360,7 @@ def _save_oi_snapshots(state: HyperliquidState):
 
 
 def _compute_oi_changes(state: HyperliquidState):
-    """Compute 5m and 1h OI changes from stored history and patch assets."""
+    """Compute 5m, 15m, and 1h OI changes from stored history and patch assets."""
     now = time.time()
     for coin, history in state.oi_history.items():
         asset = state.get_asset(coin)
@@ -372,25 +373,43 @@ def _compute_oi_changes(state: HyperliquidState):
         if not current_oi:
             continue
 
-        # Find snapshot closest to 5 min ago (270–360 s)
-        snap_5m = next(
-            (s for s in reversed(snaps) if 270 <= (now - s[0]) <= 600),
-            None
-        )
-        # Find snapshot closest to 1 hour ago (3300–4500 s)
-        snap_1h = next(
-            (s for s in snaps if 3300 <= (now - s[0]) <= 4500),
-            None
-        )
+        def _find(lo, hi):
+            return next((s for s in reversed(snaps) if lo <= (now - s[0]) <= hi), None)
+
+        snap_5m  = _find(270,  450)    # ~5 min ago
+        snap_15m = _find(810, 1200)    # ~15 min ago
+        snap_1h  = _find(3300, 4500)   # ~1 hour ago
 
         def pct(new, old):
             return round((new - old) / old, 6) if old and old != 0 else None
 
-        oi_5m = pct(current_oi, snap_5m[1]) if snap_5m else None
-        oi_1h = pct(current_oi, snap_1h[1]) if snap_1h else None
+        patch = {}
+        if (v := pct(current_oi, snap_5m[1]  if snap_5m  else None)) is not None: patch["oi_change_5m"]  = v
+        if (v := pct(current_oi, snap_15m[1] if snap_15m else None)) is not None: patch["oi_change_15m"] = v
+        if (v := pct(current_oi, snap_1h[1]  if snap_1h  else None)) is not None: patch["oi_change_1h"]  = v
 
-        if oi_5m is not None or oi_1h is not None:
-            state.assets[coin] = asset.model_copy(update={
-                "oi_change_5m": oi_5m,
-                "oi_change_1h": oi_1h,
-            })
+        if patch:
+            state.assets[coin] = asset.model_copy(update=patch)
+
+
+def _save_score_snapshots(state: HyperliquidState):
+    """Record current composite score for all assets and compute score_change."""
+    now = time.time()
+    for coin, asset in state.assets.items():
+        score = asset.composite_signal_score
+        if score is None:
+            continue
+        hist = state.score_history[coin]
+        # Compute score_change vs prior snapshot
+        score_change = None
+        if hist:
+            last_ts, last_score = hist[-1]
+            if now - last_ts >= 50:  # at least 50s between snapshots
+                score_change = round(score - last_score, 2)
+                hist.append((now, score))
+        else:
+            hist.append((now, score))
+            score_change = None
+
+        if score_change is not None:
+            state.assets[coin] = asset.model_copy(update={"score_change": score_change})

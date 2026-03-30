@@ -20,8 +20,9 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .models import ScreenerAsset
+from .models import HeroSignal, ScreenerAsset
 from .ranking_engine import generate_rationale, rank_assets
+from .signals import build_signal_sections, build_summary_cards, generate_hero_signals
 from .state import HyperliquidState
 
 router = APIRouter(prefix="/api/hyperliquid/screener", tags=["hyperliquid"])
@@ -131,12 +132,15 @@ def _asset_to_row(asset: ScreenerAsset, rank: int) -> dict:
         "openInterest":  asset.open_interest_usd,
         "oiChangePct":   asset.open_interest_change_pct,  # 1h change (decimal)
         "oiChange5m":    asset.oi_change_5m,
+        "oiChange15m":   asset.oi_change_15m,
         "oiChange1h":    asset.oi_change_1h,
 
         # ── Volume ────────────────────────────────────────────────────────
-        "volume24h":      asset.day_ntl_vlm,
-        "volume24hBase":  asset.day_base_vlm,
-        "volumeImpulse":  asset.volume_impulse,
+        "volume24h":        asset.day_ntl_vlm,
+        "volume24hBase":    asset.day_base_vlm,
+        "volumeImpulse":    asset.volume_impulse,
+        "volumeImpulse5m":  asset.volume_impulse_5m,
+        "volumeImpulse15m": asset.volume_impulse_15m,
 
         # ── Trade flow ────────────────────────────────────────────────────
         "tradeCount":      asset.recent_trade_count if asset.recent_trade_count > 0 else None,
@@ -154,14 +158,29 @@ def _asset_to_row(asset: ScreenerAsset, rank: int) -> dict:
         "distMarkMid":     _p(asset.distance_mark_mid_pct),
         "distMarkPrevDay": _p(asset.distance_mark_prev_day_pct),
 
-        # ── Scores 0-1 ────────────────────────────────────────────────────
-        "volatility":         _s01(asset.volatility_score),
-        "momentum":           _s01(asset.momentum_score),
-        "breakoutScore":      _s01(asset.breakout_score),
-        "meanReversionScore": _s01(asset.mean_reversion_score),
-        "liquidityScore":     _s01(asset.liquidity_score),
-        "flowScore":          _s01(asset.flow_score),
-        "compositeSignal":    _s01(asset.composite_signal_score),
+        # ── Scores 0-1 (component scores) ─────────────────────────────────
+        "volatility":               _s01(asset.volatility_score),
+        "momentum":                 _s01(asset.momentum_score),
+        "flow":                     _s01(asset.flow_score),
+        "trend":                    _s01(asset.trend_score),
+        "bookPressure":             _s01(asset.book_pressure_score),
+        "crowding":                 _s01(asset.crowding_score),
+        "dislocation":              _s01(asset.dislocation_score),
+        "liquidityScore":           _s01(asset.liquidity_score),
+        "tradabilityPenalty":       _s01(asset.tradability_penalty),
+
+        # ── Setup-specific scores 0-1 ──────────────────────────────────────
+        "breakoutScore":            _s01(asset.breakout_score),
+        "meanReversionScore":       _s01(asset.mean_reversion_score),
+        "trendContinuationScore":   _s01(asset.trend_continuation_score),
+        "crowdingUnwindScore":      _s01(asset.crowding_unwind_score),
+        "avoidScore":               _s01(asset.avoid_score),
+
+        # ── Overall ────────────────────────────────────────────────────────
+        "overallScore":             _s01(asset.overall_score),
+        "setupType":                asset.setup_type,
+        "compositeSignal":          _s01(asset.composite_signal_score),
+        "scoreChange":              asset.score_change,
 
         # ── Signal ────────────────────────────────────────────────────────
         "signalDirection":  _dir(asset.signal_direction),
@@ -297,6 +316,77 @@ async def get_filters():
         "totalAssets":    len(rows),
         "perpCount":      sum(1 for r in rows if r.market_type == "perp"),
         "spotCount":      sum(1 for r in rows if r.market_type == "spot"),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/hyperliquid/screener/hero
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/hero")
+async def get_hero_signals(top_n: int = 5, min_volume_usd: float = 10_000_000):
+    """
+    Hero Agent Signals — top N highest-conviction trade ideas.
+
+    Returns fully-formed signal objects with:
+    - thesis_title, thesis_summary
+    - reasons[], risk_flags[], invalidation_notes[]
+    - all score components
+    - full market metrics
+
+    Scores are deterministic; no LLM calls.
+    """
+    state = _get_state()
+    if not state.is_ready:
+        raise HTTPException(503, "Screener is still initializing")
+
+    signals = generate_hero_signals(state, top_n=top_n, min_volume_usd=min_volume_usd)
+    return {
+        "heroAgentSignals": [s.model_dump() for s in signals],
+        "count":            len(signals),
+        "generatedAt":      _iso_now(),
+        "scoreVersion":     "2.0",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/hyperliquid/screener/sections
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/sections")
+async def get_sections(rows_per_section: int = 6):
+    """
+    Section-oriented market data payload.
+
+    Returns a structured dict of signal sections for the frontend terminal.
+    Always-available sections are populated immediately.
+    Conditional sections (OI expansion/unwind, volume impulse) show
+    `available: false` until enough history has accumulated.
+    """
+    state = _get_state()
+    if not state.is_ready:
+        raise HTTPException(503, "Screener is still initializing")
+
+    sections     = build_signal_sections(state, rows_per_section=rows_per_section)
+    summary_cards = build_summary_cards(state)
+    hero_signals  = generate_hero_signals(state, top_n=5)
+
+    perps = [a for a in state.perp_assets() if a.market_status == "active"]
+    has_oi_history = sum(1 for c in state.oi_history if len(state.oi_history[c]) >= 5) >= 10
+
+    return {
+        "heroAgentSignals": [s.model_dump() for s in hero_signals],
+        "summaryCards":     summary_cards,
+        "signalSections":   sections,
+        "meta": {
+            "totalPerps":         len(perps),
+            "totalSpots":         len(state.spot_assets()),
+            "oiHistoryAvailable": has_oi_history,
+            "volImpulseAvailable": sum(1 for a in perps if a.volume_impulse_5m is not None) >= 10,
+            "scoreHistoryAvailable": sum(1 for c in state.score_history if len(state.score_history[c]) >= 2) >= 10,
+            "generatedAt":        _iso_now(),
+            "scoreVersion":       "2.0",
+        },
     }
 
 

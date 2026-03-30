@@ -46,10 +46,14 @@ class ScreenerAsset(BaseModel):
     open_interest_usd: Optional[float] = None
     open_interest_change_pct: Optional[float] = None   # 1h OI % change
     oi_change_5m: Optional[float] = None               # 5-min OI % change (decimal)
+    oi_change_15m: Optional[float] = None              # 15-min OI % change (decimal)
     oi_change_1h: Optional[float] = None               # 1-hour OI % change (decimal)
     day_ntl_vlm: Optional[float] = None         # 24h notional USD
     day_base_vlm: Optional[float] = None        # 24h base volume
-    volume_impulse: Optional[float] = None      # recent vol relative to avg (1.0 = normal)
+    volume_impulse: Optional[float] = None      # recent 1h vol vs rolling avg
+    volume_impulse_5m: Optional[float] = None   # recent 5m vol vs rolling avg
+    volume_impulse_15m: Optional[float] = None  # 15m window vol impulse
+    score_change: Optional[float] = None        # composite score delta vs prior cycle
 
     # ── Microstructure / book ─────────────────────────────────────────────
     impact_bid_px: Optional[float] = None       # fill price for $5k notional short
@@ -80,13 +84,28 @@ class ScreenerAsset(BaseModel):
     distance_mark_prev_day_pct: Optional[float] = None
 
     # ── Component scores (0..100) ─────────────────────────────────────────
+    # Base components
     liquidity_score: Optional[float] = None
     volatility_score: Optional[float] = None
     momentum_score: Optional[float] = None
     flow_score: Optional[float] = None
+    trend_score: Optional[float] = None          # multi-TF alignment
+    book_pressure_score: Optional[float] = None  # bid vs ask depth skew
+    crowding_score: Optional[float] = None       # extreme funding + OI concentration
+    dislocation_score: Optional[float] = None    # mark vs oracle/mid deviation
+    tradability_penalty: Optional[float] = None  # wide spread/thin book penalty
+
+    # Setup-specific scores
     mean_reversion_score: Optional[float] = None
     breakout_score: Optional[float] = None
+    trend_continuation_score: Optional[float] = None
+    crowding_unwind_score: Optional[float] = None
+    avoid_score: Optional[float] = None
+
+    # Overall derived fields
     composite_signal_score: Optional[float] = None
+    overall_score: Optional[float] = None        # best non-avoid setup score
+    setup_type: Optional[str] = None             # breakout|mean_reversion|trend_continuation|crowding_unwind|avoid
 
     # ── Signal summary ────────────────────────────────────────────────────
     signal_direction: Optional[str] = None      # "long" | "short" | "neutral"
@@ -174,6 +193,46 @@ class AgentRankResponse(BaseModel):
     summary: dict[str, Any] = Field(default_factory=dict)
     score_version: str = "1.0"
     schema_version: str = "1.0"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hero signal — a fully-formed trade idea
+# ─────────────────────────────────────────────────────────────────────────────
+
+class HeroSignalMetrics(BaseModel):
+    mark_px: Optional[float] = None
+    pct_change_24h: Optional[float] = None
+    funding: Optional[float] = None
+    funding_ann_pct: Optional[float] = None        # annualized %
+    open_interest: Optional[float] = None
+    day_ntl_vlm: Optional[float] = None
+    premium: Optional[float] = None
+    mark_oracle_gap_pct: Optional[float] = None    # % (positive = mark > oracle)
+    mark_mid_gap_pct: Optional[float] = None
+    trade_flow_bias: Optional[float] = None        # -1..+1
+    book_imbalance: Optional[float] = None         # -1..+1
+    volatility_score: Optional[float] = None
+    liquidity_score: Optional[float] = None
+    oi_change_5m: Optional[float] = None
+    oi_change_15m: Optional[float] = None
+    oi_change_1h: Optional[float] = None
+    volume_impulse: Optional[float] = None
+
+
+class HeroSignal(BaseModel):
+    coin: str
+    side: str                    # "long" | "short" | "neutral_watch"
+    overall_score: float         # 0-100
+    setup_type: str              # "breakout" | "mean_reversion" | "trend_continuation" | "crowding_unwind" | "avoid"
+    confidence: float            # 0-1
+    thesis_title: str
+    thesis_summary: str
+    reasons: list[str]
+    risk_flags: list[str]
+    invalidation_notes: list[str]
+    metrics: HeroSignalMetrics
+    score_components: dict[str, float] = Field(default_factory=dict)
+    generated_at: float = Field(default_factory=time.time)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

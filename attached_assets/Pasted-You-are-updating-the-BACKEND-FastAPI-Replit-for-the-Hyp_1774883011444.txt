@@ -1,0 +1,176 @@
+You are updating the BACKEND FastAPI Replit for the Hyperliquid Screener.
+
+Goal:
+Turn the backend into a real signal engine for the frontend terminal. The frontend should no longer rely on generic ranked rows or empty placeholder sections. It needs a dominant hero payload called Agent Top Signals that contains the best current trade ideas derived from Hyperliquid market data.
+
+Important:
+Do not build this as a vague LLM-only ranking layer. The ranking must be deterministic and based on actual Hyperliquid fields plus backend-computed features. An LLM may optionally summarize the top few ideas after scoring, but must not be the primary ranking engine.
+
+Hyperliquid data available:
+Use actual available public market data, including:
+- metaAndAssetCtxs for universe + asset contexts
+- allMids
+- funding
+- openInterest
+- prevDayPx
+- dayNtlVlm
+- premium
+- oraclePx
+- markPx
+- midPx
+- impactPxs
+- dayBaseVlm
+- websocket subscriptions for:
+  - allMids
+  - activeAssetCtx
+  - bbo
+  - l2Book
+  - trades
+  - candle
+
+Do not depend on user-specific activeAssetData or wallet/account state for the main market screener.
+
+Core backend requirement:
+Create a new hero payload:
+heroAgentSignals = top 3-5 highest-signal current trade ideas
+
+For each hero idea return:
+- coin
+- side: long | short | neutral_watch
+- overall_score
+- setup_type: breakout | mean_reversion | trend_continuation | crowding_unwind | avoid
+- confidence
+- thesis_title
+- thesis_summary
+- reasons[]
+- risk_flags[]
+- invalidation_notes[]
+- metrics:
+  - mark_px
+  - pct_change_24h
+  - funding
+  - open_interest
+  - day_ntl_vlm
+  - premium
+  - mark_oracle_gap_pct
+  - mark_mid_gap_pct
+  - trade_flow_bias
+  - book_imbalance
+  - volatility_score
+  - liquidity_score
+- score_components
+
+Scoring engine:
+Build deterministic feature scores for each asset:
+1. trend_score
+2. momentum_score
+3. crowding_score
+4. dislocation_score
+5. flow_score
+6. book_pressure_score
+7. volatility_score
+8. liquidity_score
+9. tradability_penalty
+
+Then derive setup-specific scores:
+- breakout_score
+- mean_reversion_score
+- trend_continuation_score
+- crowding_unwind_score
+- avoid_score
+
+Then derive:
+- overall_score
+- setup_type
+- side
+- confidence
+
+Suggested logic:
+- breakout favors positive price action, supportive candles, positive trade flow, positive book imbalance, acceptable liquidity
+- mean reversion favors stretched mark/oracle or premium dislocation, extreme funding, stretched move
+- trend continuation favors sustained move + healthy liquidity + supportive flow
+- crowding unwind favors extreme funding + elevated OI + adverse dislocation
+- avoid favors wide spreads, weak liquidity, unstable prints, thin books
+
+Important:
+If a section requires historical delta and you do not yet persist rolling snapshots, do not fake it.
+Specifically:
+- OI Expansion / OI Unwind require historical openInterest snapshots
+- Volume Impulse requires historical volume rate calculations
+- Rank movement requires prior ranking state
+- Squeeze / flush regimes are much stronger if backed by time-window changes
+
+Implementation requirement:
+Add a rolling in-memory history/cache per asset so the backend can compute:
+- oi_change_5m
+- oi_change_15m
+- oi_change_1h
+- volume_impulse_5m
+- volume_impulse_15m
+- score_change
+- rank_change
+
+Only expose those sections if there is enough history to compute them.
+
+API output redesign:
+The frontend should consume section-oriented data, not just a flat table.
+Return payloads like:
+- heroAgentSignals
+- summaryCards
+- signalSections
+- marketRows
+- selectedAssetDetail
+
+signalSections should only include sections that are actually supported by current data/history.
+
+Good default signalSections:
+- top_gainers
+- top_losers
+- high_funding
+- negative_funding
+- mark_oracle_gap
+- premium_discount
+- volume_leaders
+- trade_flow
+- book_imbalance
+- volatility_leaders
+
+Conditional signalSections only if backed by rolling history:
+- oi_expansion
+- oi_unwind
+- volume_impulse
+- short_squeeze
+- long_flush_watch
+- crowded_longs
+- crowded_shorts
+
+selectedAssetDetail should include:
+- the normalized row
+- full score components
+- setup-specific scores
+- reasons
+- risks
+- invalidation notes
+- recent history if available
+- latest rank/score changes if available
+
+Agent behavior:
+When frontend triggers Agent:
+- recompute scores using the freshest market state
+- return heroAgentSignals first-class
+- rerank marketRows
+- return setup buckets:
+  - top_longs
+  - top_shorts
+  - top_breakouts
+  - top_mean_reversions
+  - avoid
+
+Do not return empty fake sections.
+
+At the end provide:
+1. files changed
+2. endpoints added/updated
+3. scoring methodology summary
+4. which sections are fully supported now
+5. which sections are disabled until rolling history is available
