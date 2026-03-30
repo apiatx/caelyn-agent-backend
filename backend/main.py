@@ -36,6 +36,15 @@ traceable = _ls_traceable
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
+# ── Hyperliquid Screener service ──────────────────────────────────────────────
+from services.hyperliquid.state import HyperliquidState as _HLState
+from services.hyperliquid.router import router as _hl_router, set_state as _hl_set_state
+from services.hyperliquid.websocket_manager import boot_and_run as _hl_boot_and_run
+
+_hl_state = _HLState()
+_hl_set_state(_hl_state)
+# ─────────────────────────────────────────────────────────────────────────────
+
 AGENT_API_KEY = os.getenv("AGENT_API_KEY")
 _pg_startup_checked = False
 _pg_startup_attempts = 0
@@ -155,6 +164,7 @@ async def lifespan(app):
     # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
     asyncio.create_task(_polygon_options_ingestion_loop())
     asyncio.create_task(_macro_precompute_loop())
+    asyncio.create_task(_hl_boot_and_run(_hl_state))
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)
@@ -162,6 +172,10 @@ app = FastAPI(title="Trading Agent API", lifespan=lifespan)
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ── Hyperliquid Screener router ───────────────────────────────────────────────
+app.include_router(_hl_router)
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────
 _STATIC_DIR = Path(__file__).parent / "static"

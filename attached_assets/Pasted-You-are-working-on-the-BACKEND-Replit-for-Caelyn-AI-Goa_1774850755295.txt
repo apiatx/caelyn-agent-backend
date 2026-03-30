@@ -1,0 +1,305 @@
+You are working on the BACKEND Replit for Caelyn AI.
+
+Goal:
+Build the backend for a comprehensive real-time Hyperliquid Screener page that feeds my separate frontend Replit. This backend must ingest Hyperliquid market data, normalize it, compute market-wide signal features, expose REST snapshot endpoints, stream realtime updates over websocket, and power an Agent ranking endpoint that reorders assets from highest signal to lowest signal.
+
+Context:
+- Backend is FastAPI.
+- Frontend is separate and will consume this backend.
+- The frontend page pre-displays the full screener immediately.
+- When the user clicks the Agent button, the agent uses all current Hyperliquid screener data and returns a reranked list in real time.
+- Build this robustly. Do not hack together a fragile polling-only prototype.
+
+Product requirements:
+1. Add a new Hyperliquid screener module/service to the FastAPI backend.
+2. Use Hyperliquid official market data surfaces relevant to a comprehensive screener.
+3. Prefer websocket-driven realtime updates where appropriate, with REST snapshot bootstrapping.
+4. Normalize all data into a stable internal schema that is frontend-friendly.
+
+Use Hyperliquid data categories that are useful for a market screener:
+A. Market metadata / universe
+B. Market-wide mids
+C. Per-asset contexts
+D. L2 / BBO / trade flow
+E. Candle/history-derived features
+F. Derived microstructure + momentum + liquidity + dislocation signals
+G. Optional user-specific data only if safely gated and explicitly needed later
+
+Important:
+Do NOT make the page depend on private trading credentials or user account state for the base screener.
+This first version should be a market-wide public screener.
+User-specific data should be a separate extension, not required for the main screener.
+
+Backend architecture requirements:
+1. Create a dedicated Hyperliquid service layer, for example:
+   - services/hyperliquid/
+     - client.py
+     - websocket_manager.py
+     - models.py
+     - normalizer.py
+     - feature_engine.py
+     - ranking_engine.py
+     - cache.py
+     - router.py
+   Adapt to the existing project structure if needed.
+
+2. Hyperliquid connectivity strategy:
+   - Use REST/info endpoints for initial snapshot bootstrapping
+   - Use Hyperliquid websocket subscriptions for realtime updates
+   - Reconnect cleanly on disconnect
+   - Maintain in-memory latest market state
+   - Expose a backend websocket to the frontend for pushing normalized updates
+
+3. Use current Hyperliquid market data surfaces for the screener, including as applicable:
+   - perpetual metadata / universe
+   - spot metadata if including spot in this page
+   - metaAndAssetCtxs / asset contexts
+   - allMids
+   - l2Book
+   - candle snapshots
+   - websocket subscriptions such as:
+     - allMids
+     - activeAssetCtx
+     - bbo
+     - l2Book
+     - trades
+     - candle
+     - allDexsAssetCtxs if useful
+   Use the official docs and fit to the actual supported response structures.
+
+4. Build stable internal schemas:
+   Create a normalized ScreenerAsset model that can represent one market row.
+   It should include at least:
+   - coin
+   - display_name
+   - market_type
+   - dex
+   - category/tags
+   - mark_px
+   - mid_px
+   - oracle_px
+   - bid_px
+   - ask_px
+   - spread_abs
+   - spread_bps
+   - prev_day_px
+   - pct_change_24h
+   - premium
+   - funding
+   - predicted_funding (nullable)
+   - open_interest
+   - open_interest_change_pct (nullable if no history yet)
+   - day_ntl_vlm
+   - day_base_vlm
+   - impact_bid_px
+   - impact_ask_px
+   - orderbook_bid_depth
+   - orderbook_ask_depth
+   - orderbook_imbalance
+   - recent_trade_count
+   - recent_trade_buy_volume
+   - recent_trade_sell_volume
+   - recent_trade_imbalance
+   - realized_volatility_short
+   - realized_volatility_medium
+   - momentum_5m
+   - momentum_1h
+   - momentum_4h
+   - momentum_24h
+   - distance_mark_oracle_pct
+   - distance_mark_mid_pct
+   - distance_mark_prev_day_pct
+   - liquidity_score
+   - volatility_score
+   - momentum_score
+   - flow_score
+   - mean_reversion_score
+   - breakout_score
+   - composite_signal_score
+   - signal_direction
+   - signal_confidence
+   - market_status
+   - max_leverage
+   - only_isolated
+   - margin_mode
+   - margin_table_id
+   - sz_decimals
+   - growth_mode
+   - open_interest_cap_flag
+   - last_updated_ts
+   - score_components
+   - agent_rationale (nullable unless ranking run completed)
+
+5. Data ingestion / normalization:
+   Build a boot sequence that:
+   - fetches metadata/universe
+   - fetches current asset contexts
+   - fetches current mids
+   - initializes the market map
+   - subscribes to realtime websocket feeds
+   - hydrates L2 / BBO / trade / candle rolling state
+   - keeps the in-memory screener snapshot current
+
+6. Derived feature engineering:
+   Compute as much useful market signal as possible from Hyperliquid data itself.
+   At minimum implement:
+   - 24h % change from prevDayPx
+   - spread absolute and bps
+   - mark vs oracle dislocation
+   - mark vs mid dislocation
+   - book depth totals from top N levels
+   - book imbalance
+   - trade flow imbalance from recent trades rolling window
+   - realized volatility from candles
+   - short-term and medium-term momentum from candles
+   - volume z-score or percentile rank vs current universe
+   - open interest percentile rank vs current universe
+   - funding extremity score
+   - premium extremity score
+   - liquidity score
+   - volatility score
+   - momentum score
+   - flow score
+   - mean reversion score
+   - breakout score
+   - composite signal score
+
+   Also derive interpretable flags such as:
+   - crowded_long
+   - crowded_short
+   - squeeze_candidate
+   - trend_continuation_candidate
+   - mean_reversion_candidate
+   - illiquid_high_volatility
+   - avoid_due_to_spread
+   - dislocated_vs_oracle
+
+7. Ranking engine:
+   Build an agent-ranking engine that takes the latest normalized market state and returns:
+   - all rows reranked highest signal to lowest signal
+   - top long candidates
+   - top short candidates
+   - top dislocations
+   - avoid list
+   - rationale per top asset
+   - score component breakdown per asset
+   - rank movement vs previous ordering
+
+   The ranking engine should be deterministic and fast.
+   Do NOT call a paid LLM for every row.
+   The base ranking should be feature-driven and computed locally.
+   If you want an LLM layer, use it only to summarize the top few names after the deterministic ranking is complete.
+
+8. Agent button behavior:
+   Implement POST /api/hyperliquid/screener/agent-rank
+   Request can include:
+   - current filters
+   - ranking mode (momentum / reversal / breakout / balanced)
+   - top_n
+   - include_rationales
+   - include_score_components
+
+   Response should include:
+   - request timestamp
+   - ranking mode used
+   - ranked rows
+   - summary buckets
+   - explanations
+   - score version / schema version
+
+9. API surface:
+   Implement endpoints similar to:
+   - GET /api/hyperliquid/screener/snapshot
+   - GET /api/hyperliquid/screener/filters
+   - GET /api/hyperliquid/screener/asset/{coin}
+   - POST /api/hyperliquid/screener/agent-rank
+   - WS /api/hyperliquid/screener/ws
+
+   Snapshot response should include:
+   - summary stats
+   - rows
+   - available filters
+   - server timestamp
+   - data freshness metadata
+
+   Asset detail response should include:
+   - the row
+   - richer book/trade/candle derived metrics
+   - score components
+   - recent score history if available
+   - latest rationale if available
+
+   Backend websocket should stream normalized events like:
+   - snapshot_ready
+   - asset_update
+   - rank_update
+   - connection_status
+   - error
+
+10. Realtime backend behavior:
+   - Maintain a background Hyperliquid websocket consumer
+   - Update in-memory state incrementally
+   - Recompute affected derived features only for impacted assets when possible
+   - Push frontend updates in normalized compact events
+   - Do not spam the frontend with full-table payloads on every tick
+   - Batch or debounce updates appropriately
+
+11. Performance and reliability:
+   - Respect Hyperliquid rate limits
+   - Prefer websockets for lowest latency
+   - Reconnect automatically with backoff
+   - Backfill missed data on reconnect if necessary
+   - Use caching/in-memory stores cleanly
+   - Log failures clearly
+   - Keep initial page load fast
+   - Guard against one broken coin poisoning the whole screener
+
+12. Spot vs perps:
+   - Structure the code so perps are first-class
+   - Spot support can be included if practical using spot metadata/contexts
+   - If spot support is partial, keep the schema flexible and clearly mark unsupported fields nullable
+
+13. Ranking modes:
+   Implement at least:
+   - balanced
+   - momentum
+   - breakout
+   - mean_reversion
+   - crowding_dislocation
+
+   Each mode should adjust weightings of score components, for example:
+   - momentum: heavier on momentum, flow, volume, breakout
+   - mean_reversion: heavier on premium/funding extremes and dislocation
+   - breakout: heavier on volatility expansion, price trend, trade imbalance, depth support
+   - crowding_dislocation: heavier on funding, premium, OI, dislocation, squeeze setup
+
+14. Suggested score methodology:
+   Build normalized component scores, for example on -100 to +100 or 0 to 100 scales, then combine using mode-specific weights.
+   Keep the score explainable.
+   Store score_components in the response so frontend can show “why”.
+
+15. Security / implementation constraints:
+   - Do not require private wallet keys
+   - Do not place trades
+   - This is read-only market intelligence
+   - Keep secrets in env if any are needed
+   - If Hyperliquid has no direct field for a requested metric, compute it from available data instead of inventing data
+
+16. Frontend contract:
+   Make sure the payloads are clean and stable for a data-rich terminal UI.
+   Include typed Pydantic models and response schemas.
+
+17. Deliverables:
+   - Implement the service, endpoints, and background tasks
+   - Add clear models/schemas
+   - Add comments/docstrings explaining each signal family
+   - Add any config/env variables needed
+   - Do not break existing backend routes
+   - At the end, give me:
+     1. files added/changed
+     2. endpoint list
+     3. schema summary
+     4. any assumptions or nullable fields due to Hyperliquid limitations
+
+Important final instruction:
+This should be a serious, comprehensive Hyperliquid screener + live ranking engine for Caelyn AI, not a toy example. Build the market-state engine first, then the feature engine, then the ranking engine, then the API layer.

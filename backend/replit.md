@@ -64,6 +64,21 @@ The platform's backend is built on FastAPI, designed for robustness and scalabil
 - **Data Architecture & Performance**: Utilizes local TA computation, tiered data sources with fallbacks, and scan budgeting. Enforces "Social→FA Discipline."
 - **Options Flow Screener**: Background precompute loop (`_options_precompute_loop`) fires every 90 seconds, scanning 17 tickers (7 ETFs: SPY/QQQ/IWM/GLD/TLT/XLF/XLK + 10 Stocks: AAPL/NVDA/TSLA/AMZN/META/MSFT/AMD/GOOGL/NFLX/COIN) via Public.com using `scan_full_screener()`. No Claude in the screener — pure data pipeline. Cache key `options_screener_v2` (TTL 120s). `POST /api/options/dashboard` returns in <100ms. Response: `{ tickers:[...], all_contracts:[...500], market_summary:{...} }`. Per-ticker: call_volume, put_volume, pc_ratio, call_oi, put_oi, avg_call_iv (volume-weighted), avg_put_iv, iv_skew, max_pain, top_calls[:10], top_puts[:10]. Flat all_contracts: every active contract with underlying, category (stock/etf), side (call/put), strike, bid/ask/last, volume, openInterest, vol_oi_ratio, delta, gamma, theta, vega, iv — frontend can sort by any field. Claude is only for the conversational chat bar below the screener. Cold-start fallback for first request before loop runs.
 
+## Hyperliquid Screener Service
+- **Module**: `backend/services/hyperliquid/` (dedicated service layer)
+- **Boot sequence**: On startup — fetches `metaAndAssetCtxs` (229 perps) + `spotMetaAndAssetCtxs` (286 spot), `allMids` (534 coins), 1h candles for top-40 by volume, 5m candles for top-20, L2 books for top-20 → full feature pass → WS connect
+- **WebSocket**: Connects to `wss://api.hyperliquid.xyz/ws` — subscribes to `allMids` (1 sub) + `activeAssetCtx` for top-50 by OI + `bbo` top-30 + `trades` top-30. Auto-reconnects with exponential backoff.
+- **Periodic tasks**: Candle refresh every 5 min; full feature recompute every 60s
+- **Endpoints**:
+  - `GET  /api/hyperliquid/screener/snapshot` — full universe, sort/filter by query params
+  - `GET  /api/hyperliquid/screener/filters` — available filter options for UI
+  - `GET  /api/hyperliquid/screener/asset/{coin}` — single asset detail with candles/trades/book
+  - `POST /api/hyperliquid/screener/agent-rank` — deterministic ranking (modes: balanced/momentum/breakout/mean_reversion/crowding_dislocation)
+  - `WS   /api/hyperliquid/screener/ws` — live push to frontend (snapshot_ready / asset_update events)
+- **Scores computed**: liquidity, volatility, momentum, flow, mean_reversion, breakout, composite_signal_score
+- **Flags**: crowded_long, crowded_short, squeeze_candidate, dislocated_vs_oracle, trend_continuation_candidate, avoid_due_to_spread, illiquid_high_volatility
+- **No auth / no private keys required** — 100% public Hyperliquid market data
+
 ## External Dependencies
 - **AI**: OpenAI (GPT-4o for orchestration/classification), Anthropic (Claude Sonnet for reasoning/analysis), xAI Grok.
 - **Market Data & Screening**: Finviz, TwelveData, Polygon.io, Finnhub, Financial Modeling Prep (FMP), Alpha Vantage, Nasdaq.
