@@ -364,22 +364,63 @@ def compute_scores(asset: ScreenerAsset) -> dict:
     )
     updates["avoid_score"] = round(_clip(avoid_score, 0, 100), 1)
 
+    # ── Exhaustion score ──────────────────────────────────────────────────
+    # Signals a market that has run hard and may be topping:
+    # strong multi-TF run + crowding + fading flow
+    ex = 0.0
+    if ann_fund > 0.30:    ex += 25    # longs paying huge carry
+    elif ann_fund > 0.15:  ex += 12
+    if m24h > 8:           ex += 25    # sharp 24h run-up
+    elif m24h > 4:         ex += 12
+    elif m24h > 2:         ex += 6
+    if m24h > 3 and m1h < 0:  ex += 20  # extended but 1h now negative → topping
+    elif m24h > 2 and m1h < -0.2: ex += 10
+    if flow_score < 40:    ex += 15    # flow fading
+    elif flow_score < 47:  ex += 7
+    ex += crowding_score * 0.20        # crowding component
+    exhaustion_score = _clip(ex, 0, 100)
+    updates["exhaustion_score"] = round(exhaustion_score, 1)
+
+    # ── Collapse risk score ───────────────────────────────────────────────
+    # Signals imminent breakdown: exhaustion + deteriorating internals
+    cr = 0.0
+    if exhaustion_score > 55:   cr += 30
+    elif exhaustion_score > 40: cr += 15
+    oi_5m = asset.oi_change_5m or 0
+    if oi_5m < -0.02:    cr += 25      # OI actively collapsing
+    elif oi_5m < -0.01:  cr += 12
+    if bp_score < 35:    cr += 20      # ask-heavy book (sellers in control)
+    elif bp_score < 42:  cr += 10
+    if flow_score < 35:  cr += 15      # hard sell flow
+    elif flow_score < 42: cr += 7
+    if m24h > 2 and m1h < -0.5: cr += 10  # extended + now turning over
+    collapse_risk_score = _clip(cr, 0, 100)
+    updates["collapse_risk_score"] = round(collapse_risk_score, 1)
+
     # ── Derive overall_score and setup_type ───────────────────────────────
     setup_candidates = {
         "breakout":           updates["breakout_score"],
         "mean_reversion":     updates["mean_reversion_score"],
         "trend_continuation": updates["trend_continuation_score"],
         "crowding_unwind":    updates["crowding_unwind_score"],
+        "exhaustion":         exhaustion_score,
+        "collapse_risk":      collapse_risk_score,
     }
     best_setup  = max(setup_candidates, key=lambda k: setup_candidates[k])
     best_score  = setup_candidates[best_setup]
 
-    # If avoid_score is dominant and tradability penalty is high → override
+    # Hard overrides (priority order: avoid > collapse_risk > exhaustion > best)
     if updates["avoid_score"] > 65 and tradability_penalty > 50:
-        setup_type   = "avoid"
+        setup_type    = "avoid"
         overall_score = updates["avoid_score"]
+    elif collapse_risk_score > 65:
+        setup_type    = "collapse_risk"
+        overall_score = collapse_risk_score
+    elif exhaustion_score > 65 and best_setup not in ("breakout", "trend_continuation"):
+        setup_type    = "exhaustion"
+        overall_score = exhaustion_score
     else:
-        setup_type   = best_setup
+        setup_type    = best_setup
         overall_score = best_score
     updates["setup_type"]    = setup_type
     updates["overall_score"] = round(overall_score, 1)

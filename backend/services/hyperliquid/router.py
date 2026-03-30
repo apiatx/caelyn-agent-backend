@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from .models import HeroSignal, ScreenerAsset
 from .ranking_engine import generate_rationale, rank_assets
-from .signals import build_signal_sections, build_summary_cards, generate_hero_signals
+from .signals import build_signal_sections, build_summary_cards, generate_agent_briefing, generate_hero_signals
 from .state import HyperliquidState
 
 router = APIRouter(prefix="/api/hyperliquid/screener", tags=["hyperliquid"])
@@ -174,6 +174,8 @@ def _asset_to_row(asset: ScreenerAsset, rank: int) -> dict:
         "meanReversionScore":       _s01(asset.mean_reversion_score),
         "trendContinuationScore":   _s01(asset.trend_continuation_score),
         "crowdingUnwindScore":      _s01(asset.crowding_unwind_score),
+        "exhaustionScore":          _s01(asset.exhaustion_score),
+        "collapseRiskScore":        _s01(asset.collapse_risk_score),
         "avoidScore":               _s01(asset.avoid_score),
 
         # ── Overall ────────────────────────────────────────────────────────
@@ -324,29 +326,27 @@ async def get_filters():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/hero")
-async def get_hero_signals(top_n: int = 5, min_volume_usd: float = 10_000_000):
+async def get_hero_signals(max_ideas: int = 20, min_volume_usd: float = 5_000_000):
     """
-    Hero Agent Signals — top N highest-conviction trade ideas.
+    Agent Market Brief — full deterministic briefing payload.
 
-    Returns fully-formed signal objects with:
-    - thesis_title, thesis_summary
-    - reasons[], risk_flags[], invalidation_notes[]
-    - all score components
-    - full market metrics
+    Returns:
+      market_regime, regime_description, best_long, best_short,
+      best_breakout_watch, best_exhaustion_watch, actionable_ideas[],
+      guidance{ trade_now[], watch_breakout[], watch_collapse[], avoid[] },
+      selected_thesis
 
-    Scores are deterministic; no LLM calls.
+    Each idea includes: coin, side, setup_type, score, confidence,
+    thesis_title, thesis_summary, reasons[], what_to_watch[],
+    invalidation_notes[], risk_flags[], metrics, scores (all components).
+
+    No LLM calls — 100% deterministic scoring.
     """
     state = _get_state()
     if not state.is_ready:
         raise HTTPException(503, "Screener is still initializing")
 
-    signals = generate_hero_signals(state, top_n=top_n, min_volume_usd=min_volume_usd)
-    return {
-        "heroAgentSignals": [s.model_dump() for s in signals],
-        "count":            len(signals),
-        "generatedAt":      _iso_now(),
-        "scoreVersion":     "2.0",
-    }
+    return generate_agent_briefing(state, max_ideas=max_ideas, min_volume_usd=min_volume_usd)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

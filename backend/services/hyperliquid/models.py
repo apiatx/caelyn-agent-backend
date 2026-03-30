@@ -100,12 +100,14 @@ class ScreenerAsset(BaseModel):
     breakout_score: Optional[float] = None
     trend_continuation_score: Optional[float] = None
     crowding_unwind_score: Optional[float] = None
+    exhaustion_score: Optional[float] = None     # strong run-up + crowding + fading flow
+    collapse_risk_score: Optional[float] = None  # exhaustion + OI dropping + book fading
     avoid_score: Optional[float] = None
 
     # Overall derived fields
     composite_signal_score: Optional[float] = None
     overall_score: Optional[float] = None        # best non-avoid setup score
-    setup_type: Optional[str] = None             # breakout|mean_reversion|trend_continuation|crowding_unwind|avoid
+    setup_type: Optional[str] = None             # breakout|mean_reversion|trend_continuation|crowding_unwind|exhaustion|collapse_risk|avoid
 
     # ── Signal summary ────────────────────────────────────────────────────
     signal_direction: Optional[str] = None      # "long" | "short" | "neutral"

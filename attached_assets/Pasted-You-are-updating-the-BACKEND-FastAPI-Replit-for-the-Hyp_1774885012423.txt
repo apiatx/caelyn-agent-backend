@@ -1,0 +1,181 @@
+You are updating the BACKEND FastAPI Replit for the Hyperliquid Screener.
+
+Goal:
+The frontend dashboard now needs a true agent briefing, not a shallow list of ticker arrows.
+The backend must produce high-quality actionable signal output that tells the user:
+- what to trade now
+- what to watch for a bigger breakout
+- what to watch for collapse after a run-up
+- what to avoid
+
+Current problem:
+The backend agent output is too weak and low-context.
+It returns a tiny meaningless list like:
+- DOOD
+- GOAT
+- ENA
+- MEGA
+That is not useful.
+The frontend needs a proper "Agent Market Brief" payload.
+
+Important constraints:
+- Keep the ranking deterministic and grounded in Hyperliquid data
+- Do not rely on an LLM as the core ranking engine
+- Optional LLM summarization is fine only after deterministic scoring
+- The agent must explain and guide, not just rank
+
+Required backend behavior:
+
+1. Build a richer hero agent payload
+Return a first-class hero object with:
+- market_regime
+- updated_at
+- best_long
+- best_short
+- best_breakout_watch
+- best_exhaustion_watch
+- actionable_ideas[]
+- guidance:
+  - trade_now[]
+  - watch_breakout[]
+  - watch_collapse[]
+  - avoid[]
+- selected_thesis (optional default = best_long)
+
+2. Each idea object must include:
+- coin
+- side: long | short | watch
+- setup_type: breakout | trend_continuation | mean_reversion | exhaustion | collapse_risk | crowded_unwind | avoid
+- score
+- confidence
+- thesis_title
+- thesis_summary
+- reasons[]
+- what_to_watch[]
+- invalidation_notes[]
+- risk_flags[]
+- metrics:
+  - mark_px
+  - pct_change_24h
+  - funding
+  - open_interest
+  - day_ntl_vlm
+  - premium
+  - mark_oracle_gap_pct
+  - trade_flow_bias
+  - book_imbalance
+  - volatility_score
+  - liquidity_score
+
+3. Agent must classify ideas into useful buckets
+The output should explicitly categorize names into:
+A. trade_now
+- highest quality current actionable longs/shorts
+
+B. watch_breakout
+- names with improving structure and signal stack that could break bigger
+- not already overly exhausted
+
+C. watch_collapse
+- names at risk of failing after a run-up
+- stretched, crowded, weakening, or poorly supported
+
+D. avoid
+- illiquid, noisy, conflicting, or low-quality setups
+
+4. Improve scoring logic
+Do not just rank on a simple composite number.
+Build setup-aware logic.
+
+Recommended feature families:
+- price/trend
+- funding/crowding
+- OI level and OI change if rolling history exists
+- premium/dislocation
+- mark/oracle gap
+- trade flow
+- book imbalance
+- volatility
+- liquidity/tradability
+
+Recommended setup scores:
+- breakout_score
+- continuation_score
+- mean_reversion_score
+- exhaustion_score
+- collapse_risk_score
+- avoid_score
+
+Then map each asset to:
+- best setup type
+- directional bias
+- confidence
+- rationale
+
+5. Explain the trade idea
+For top ideas, generate high-quality structured reasoning.
+Examples of the style needed:
+- "X has positive price leadership, supportive flow, and healthy liquidity without yet showing extreme crowding."
+- "Y is extended after a sharp run, but current book support and flow are fading, making it a collapse-risk watch rather than a fresh long."
+- "Z shows negative funding and dislocation that could mean-revert, but low liquidity reduces tradability."
+
+6. Market regime
+Return a simple market regime summary, for example:
+- risk-on momentum
+- mixed / rotational
+- overcrowded upside
+- fragile / reversal-prone
+- weak breadth / defensive
+
+Compute this from breadth + signal distribution, not vibes.
+
+7. Selected thesis endpoint support
+Provide enough data so that when frontend clicks a ticker, the backend can return or already include a deeper thesis object:
+- why this ranked here
+- which metrics matter most
+- what confirms the idea
+- what invalidates it
+- whether it is actionable now vs watch-only
+
+8. Do not fake unsupported signals
+If rolling historical memory is not sufficient, do not overstate:
+- OI expansion
+- volume impulse
+- squeeze logic
+- collapse logic
+
+Only include those if backed by actual calculated changes.
+
+9. API contract
+The frontend needs a richer hero response shape like:
+
+{
+  "market_regime": "risk-on momentum",
+  "updated_at": "...",
+  "best_long": {...},
+  "best_short": {...},
+  "best_breakout_watch": {...},
+  "best_exhaustion_watch": {...},
+  "actionable_ideas": [...],
+  "guidance": {
+    "trade_now": [...],
+    "watch_breakout": [...],
+    "watch_collapse": [...],
+    "avoid": [...]
+  },
+  "selected_thesis": {...}
+}
+
+10. Deliverables
+- upgrade the agent endpoint to produce a real briefing payload
+- improve setup-aware scoring
+- produce structured explanations
+- support frontend hero briefing and ticker drill-in
+- keep other dashboard data intact
+
+At the end provide:
+1. files changed
+2. endpoints changed
+3. hero payload schema
+4. scoring logic summary
+5. which classifications depend on rolling history vs current snapshot
