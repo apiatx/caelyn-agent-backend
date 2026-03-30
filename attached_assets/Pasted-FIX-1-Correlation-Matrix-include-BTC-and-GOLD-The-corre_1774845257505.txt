@@ -1,0 +1,61 @@
+FIX #1 — Correlation Matrix: include BTC and GOLD
+The correlation matrix currently only includes NVDA, OSS, BUZZ. It must include all 5 holdings: NVDA, OSS, BUZZ, BTC, GOLD.
+
+For BTC: fetch 400 days of daily closing prices from CoinGecko (/coins/bitcoin/market_chart?vs_currency=usd&days=400&interval=daily) and compute daily % returns
+For GOLD: use Tradier history for ticker GC or GLD (ETF proxy for gold), or use a commodity price API you already have wired up. Compute daily % returns the same way as equities
+Align all 5 return series to the same calendar dates (inner join — only days all 5 have data), then compute the full 5×5 Pearson correlation matrix
+Return: correlation_matrix: { "tickers": ["NVDA","OSS","BUZZ","BTC","GOLD"], "values": [[...], [...], [...], [...], [...]] }
+FIX #2 — Earnings Calendar: return real data for equity/ETF holdings
+The earnings calendar is coming back empty. Fix:
+
+NVDA and OSS (stocks): use Finnhub GET /stock/earnings?symbol=NVDA and ?symbol=OSS to get last reported EPS and next earnings date. Also fetch the weekly price performance (wtd = % change from last Monday's close to today). Return est_eps from the consensus estimate if available.
+BUZZ (ETF): ETFs do not have their own earnings, but you can return an entry with wtd set to the ETF's week-to-date % return, last_eps: null, next_date: "N/A", est_eps: null — this lets the frontend show the WTD column which is useful for ETFs.
+GOLD and BTC: skip entirely — do not include in earnings_calendar.
+Also include the next 5 upcoming S&P 500 earnings from Finnhub's market-wide calendar (/calendar/earnings) sorted by date, for market context. Filter to well-known companies (market cap > $100B).
+Field mapping: wtd = formatted as "+1.24%" or "-0.55%", last_eps = last reported EPS as float, next_date = formatted as "May 28", est_eps = analyst consensus EPS estimate as float
+FIX #3 — Performance Chart: return all 5 periods, not just one
+Change the response shape — instead of performance_chart: [...] (one array), return:
+
+"performance_charts": {
+  "1D": [ {"date":"10:00","portfolio":0.0,"sp500":0.0}, {"date":"10:30","portfolio":-0.3,"sp500":-0.1}, ... ],
+  "5D": [ {"date":"Mon","portfolio":0.0,"sp500":0.0}, {"date":"Tue","portfolio":-0.5,"sp500":0.2}, ... ],
+  "1M": [ {"date":"Mar 3","portfolio":0.0,"sp500":0.0}, ... ],
+  "6M": [ {"date":"Oct","portfolio":0.0,"sp500":0.0}, ... ],
+  "1Y": [ {"date":"Apr '24","portfolio":0.0,"sp500":0.0}, ... ]
+}
+Rules for each period:
+
+1D: intraday data at 30-min intervals using Tradier's intraday history for equity holdings. For BTC/GOLD use CoinGecko hourly. First point always portfolio: 0.0, sp500: 0.0. Compare to SPY intraday as the S&P benchmark. Date label = "HH:MM".
+5D: one data point per trading day over the past 5 days. First point = 0.0. Date label = "Mon", "Tue", etc.
+1M: daily data points sampled every 3 trading days (~10 points). First point = 0.0.
+6M: weekly data points (~26 points). First point = 0.0.
+1Y: monthly sampled (~12-13 points). First point = 0.0.
+Portfolio value at each point = sum over all holdings of (shares × price_at_that_point). Normalize: subtract the first point's value from all subsequent points and divide by first point's value to get % relative return. Do the same normalization for SPY. Return the old performance_chart field too (set it to the 1Y array) for backward compatibility.
+
+FIX #4 — Risk Metrics and Volatility: use actual price history APIs
+Currently returning zeros or null. Fix each metric:
+
+weighted_volatility: for each holding, compute annualized volatility from 252 days of daily % returns. Weight by position value allocation. Sum = portfolio-level volatility. Sources: Tradier history for NVDA/OSS/BUZZ, CoinGecko for BTC, GLD history (Tradier) for GOLD.
+max_drawdown: using the same daily portfolio value series you build for the performance chart, compute the maximum peak-to-trough % decline over the trailing 1 year.
+top_concentration: the largest single holding's allocation_pct as an integer (e.g., 52). top_concentration_label = that ticker's name.
+portfolio_beta: regress the portfolio's daily returns against SPY's daily returns over 252 days. Beta = covariance(portfolio, SPY) / variance(SPY).
+sharpe_ratio: (annualized_return - risk_free_rate) / annualized_vol. Use 5.25% as risk-free rate. Annualized return = compound annual return from the 1Y performance chart.
+sortino_ratio: same as Sharpe but denominator = annualized downside deviation (only negative daily returns).
+For volatility array: compute per-holding annualized vol and sort descending. Include all 5 holdings. BTC will naturally have the highest (~60-80%), NVDA likely second (~40-55%), OSS third, BUZZ lower, GOLD lowest (~12-18%).
+
+FIX #5 — Risk Suggestions: generate portfolio-specific intelligent suggestions
+Do NOT use generic/hardcoded suggestions. Compute them dynamically based on the actual portfolio:
+
+Generate 2-4 suggestions by evaluating these rules in order (output the ones that trigger):
+
+Concentration risk: if any single ticker > 40% allocation → level: "RISK", title: "High Single-Stock Concentration", body mentioning the ticker name, its exact %, and a specific action (trim to below X%, consider covered calls, etc.)
+
+Tech/AI concentration: if NVDA + BUZZ combined > 60% → level: "RISK", title: "AI Sector Overexposure", body: explain that BUZZ holds AI-heavy stocks overlapping with NVDA's sector, doubling the concentration risk.
+
+No income/bonds: if no fixed income holdings at all → level: "WARN", title: "No Defensive Allocation", body: portfolio is 100% risk-on with no bonds/income buffer. Mention the user's risk-on style is evident in their holdings (NVDA, BTC) so suggest a small allocation (5-10%) to TLT or short-duration bonds as a hedge, NOT as a core holding.
+
+Crypto volatility: if BTC allocation > 3% → level: "WARN", title: "Crypto Tail Risk", body: BTC adds meaningful vol (exact annualized vol %), at X% allocation it contributes Y% to portfolio vol. Consider sizing down if macro enters risk-off regime (rising VIX, falling DXY).
+
+Small cap liquidity: if OSS allocation > 2% → level: "INFO", title: "Small Cap Liquidity Risk", body: OSS is a micro-cap with thin volume — exits can be costly in volatile markets. Use limit orders and size accordingly.
+
+Only include suggestions that trigger based on actual current allocation data. Do not include suggestions about adding fixed income as a core strategy recommendation if portfolio is clearly growth/tech-oriented — frame it as a hedge only.

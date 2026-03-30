@@ -330,7 +330,7 @@ class CaelynTerminalProvider:
 
     @traceable(name="caelyn_terminal.get")
     async def get(self, portfolio_file: Path) -> dict:
-        cache_key = "caelyn:terminal:v5"
+        cache_key = "caelyn:terminal:v6"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
@@ -467,13 +467,12 @@ class CaelynTerminalProvider:
         # Merge all per-ticker histories into one dict
         all_history: dict[str, list[dict]] = {**tradier_history, **crypto_history, **commodity_history}
 
-        # 5 (deferred). Performance chart ────────────────────────────────
-        perf_chart = self._build_perf_chart(positions, all_history, spy_bars)
+        # 5 (deferred). Performance charts (multi-period) ────────────────
+        perf_charts = self._build_perf_charts(positions, all_history, spy_bars)
+        perf_chart  = perf_charts.get("1Y", [])   # backward-compat field
 
-        # 7. Correlation matrix (equity-only, top 5) ──────────────────────
-        eq_positions = [p for p in positions if p["_atype"] not in ("crypto", "commodity")]
-        top_eq = [p["ticker"] for p in eq_positions[:5]]
-        corr = self._build_correlation(top_eq, tradier_history)
+        # 7. Correlation matrix — ALL holdings (inner-join on date) ───────
+        corr = self._build_correlation(tickers, all_history)
 
         # 8. Risk metrics ─────────────────────────────────────────────────
         risk = self._build_risk(positions, all_history, spy_bars)
@@ -521,19 +520,20 @@ class CaelynTerminalProvider:
                 "sentiment":        sentiment,
                 "market_status":    _market_status_et(),
             },
-            "positions_count":   len(positions),
-            "holdings":          self._format_holdings(positions),
-            "performance_chart": perf_chart,
-            "asset_allocation":  alloc,
+            "positions_count":    len(positions),
+            "holdings":           self._format_holdings(positions),
+            "performance_chart":  perf_chart,
+            "performance_charts": perf_charts,
+            "asset_allocation":   alloc,
             "correlation_matrix": corr,
-            "risk_metrics":      risk,
-            "volatility":        vol_list,
-            "risk_suggestions":  suggestions,
-            "top_movers":        top_movers,
-            "earnings_calendar": earnings_cal,
-            "ticker_tape":       ticker_tape,
-            "news_ticker":       news_ticker,
-            "as_of":             datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "risk_metrics":       risk,
+            "volatility":         vol_list,
+            "risk_suggestions":   suggestions,
+            "top_movers":         top_movers,
+            "earnings_calendar":  earnings_cal,
+            "ticker_tape":        ticker_tape,
+            "news_ticker":        news_ticker,
+            "as_of":              datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
     # ── Data fetchers ─────────────────────────────────────────────────────
@@ -629,22 +629,82 @@ class CaelynTerminalProvider:
         }
 
     async def _fetch_earnings_calendar(self, holding_tickers: list[str]) -> list[dict]:
-        """Finnhub earnings filtered to holdings + S&P 500 context tickers."""
+        """
+        Fetch per-ticker earnings (surprises + next date) for each equity holding,
+        plus a market-wide calendar scan for S&P 500 context.
+        """
         if not self.finnhub:
             return []
+
         all_tickers = list(dict.fromkeys(
             holding_tickers + [t for t in SP500_EARNINGS_CONTEXT if t not in holding_tickers]
         ))
+
+        results: list[dict] = []
+
+        # Fetch per-ticker: last EPS (surprises) + next date (per-ticker calendar)
+        async def _fetch_one(ticker: str):
+            try:
+                surprises = await asyncio.wait_for(
+                    asyncio.to_thread(self.finnhub.get_earnings_surprises, ticker),
+                    timeout=8.0,
+                )
+                last_eps = None
+                if surprises and isinstance(surprises, list):
+                    last_eps = surprises[0].get("actual_eps") if surprises[0] else None
+
+                cal = await asyncio.wait_for(
+                    asyncio.to_thread(self.finnhub.get_earnings_calendar, ticker),
+                    timeout=8.0,
+                )
+                next_date = None
+                est_eps   = None
+                if cal and isinstance(cal, list):
+                    for e in cal:
+                        if e.get("date"):
+                            next_date = e.get("date")
+                            est_eps   = e.get("eps_estimate")
+                            break
+
+                return {
+                    "ticker":   ticker,
+                    "last_eps": last_eps,
+                    "next_date": next_date,
+                    "est_eps":  est_eps,
+                }
+            except Exception as e:
+                print(f"[CAELYN] earnings fetch {ticker}: {e}")
+                return {"ticker": ticker, "last_eps": None, "next_date": None, "est_eps": None}
+
+        tasks = [_fetch_one(t) for t in all_tickers]
+        fetched = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for item in fetched:
+            if isinstance(item, dict):
+                results.append(item)
+
+        # Also scan market-wide calendar for any matches not covered above
         try:
-            data = await asyncio.wait_for(
+            market_cal = await asyncio.wait_for(
                 asyncio.to_thread(self.finnhub.get_earnings_calendar),
                 timeout=10.0,
             )
             ticker_set = set(t.upper() for t in all_tickers)
-            return [e for e in data if (e.get("ticker") or "").upper() in ticker_set]
-        except Exception as e:
-            print(f"[CAELYN] Earnings calendar error: {e}")
-            return []
+            seen = {r["ticker"] for r in results}
+            for e in market_cal:
+                t = (e.get("ticker") or "").upper()
+                if t in ticker_set and t not in seen:
+                    results.append({
+                        "ticker":    t,
+                        "last_eps":  None,
+                        "next_date": e.get("date"),
+                        "est_eps":   e.get("eps_estimate"),
+                    })
+                    seen.add(t)
+        except Exception:
+            pass
+
+        return results
 
     async def _fetch_news(self, tickers: list[str]) -> list[dict]:
         if not self.finnhub or not tickers:
@@ -728,67 +788,218 @@ class CaelynTerminalProvider:
         bars = all_history.get(sym, [])
         return [b["close"] for b in bars if b.get("close")]
 
-    def _build_perf_chart(
-        self, positions, all_history: dict, spy_bars: list
-    ) -> list[dict]:
-        if not spy_bars:
-            return []
+    def _build_perf_charts(
+        self, positions: list[dict], all_history: dict, spy_bars: list
+    ) -> dict[str, list[dict]]:
+        """
+        Build performance charts for five periods: 1D, 5D, 1M, 6M, 1Y.
+        Each array is normalized to 0.0% at the first point.
+        """
+        spy_daily = {b["date"]: b["close"] for b in spy_bars if b.get("close")}
+        all_spy_dates = sorted(spy_daily.keys())
 
-        spy_map = {b["date"]: b["close"] for b in spy_bars if b.get("close")}
-        all_dates = sorted(spy_map.keys())
-        if not all_dates:
-            return []
-
-        # Build date→price maps for each holding
+        # Per-holding daily price maps
         price_maps: dict[str, dict[str, float]] = {}
         for p in positions:
             sym  = p["_sym"]
             bars = all_history.get(sym, [])
             price_maps[sym] = {b["date"]: b["close"] for b in bars if b.get("close")}
 
-        series_dates: list[str] = []
-        port_vals:    list[float] = []
-        spy_vals:     list[float] = []
-
-        for dt in all_dates:
+        def _port_at(dt_str: str) -> float:
+            """Portfolio value at a given date using last-available close."""
             total = 0.0
             for p in positions:
                 pm = price_maps.get(p["_sym"], {})
-                px = pm.get(dt)
+                px = pm.get(dt_str)
                 if px is None:
-                    closest = max((d for d in pm if d <= dt), default=None)
-                    px = pm.get(closest, p["price"] or 0)
+                    cands = [d for d in pm if d <= dt_str]
+                    px = pm[max(cands)] if cands else (p["price"] or 0)
                 total += p["_shares"] * (px or 0)
-            if total > 0:
-                series_dates.append(dt)
-                port_vals.append(total)
-                spy_vals.append(spy_map[dt])
+            return total
 
-        if not port_vals or port_vals[0] == 0:
+        def _spy_at(dt_str: str) -> float:
+            v = spy_daily.get(dt_str)
+            if v:
+                return v
+            cands = [d for d in all_spy_dates if d <= dt_str]
+            return spy_daily[max(cands)] if cands else 0.0
+
+        def _normalize(pairs: list[tuple[str, float, float]]) -> list[dict]:
+            """pairs = [(label, port_val, spy_val), ...]"""
+            if not pairs or pairs[0][1] == 0:
+                return []
+            p0, s0 = pairs[0][1], pairs[0][2]
+            result = []
+            for label, pv, sv in pairs:
+                result.append({
+                    "date":      label,
+                    "portfolio": round((pv - p0) / p0 * 100, 2) if p0 else 0.0,
+                    "sp500":     round((sv - s0) / s0 * 100, 2) if s0 else 0.0,
+                })
+            return result
+
+        today = date.today()
+        today_str = today.isoformat()
+
+        # ── 1D: intraday using Yahoo Finance 5-min data ─────────────────
+        chart_1d = self._build_1d_chart(positions, price_maps, spy_daily)
+
+        # ── 5D: one point per trading day, past 5 trading days ──────────
+        trading_days = [d for d in all_spy_dates if d <= today_str][-6:]
+        pairs_5d = []
+        for d in trading_days:
+            dt_obj = datetime.strptime(d, "%Y-%m-%d").date()
+            label = dt_obj.strftime("%a")
+            pairs_5d.append((label, _port_at(d), _spy_at(d)))
+        chart_5d = _normalize(pairs_5d)
+
+        # ── 1M: daily, sample every 3rd trading day (~10 pts) ───────────
+        days_1m = [d for d in all_spy_dates if d >= (today - timedelta(days=35)).isoformat() and d <= today_str]
+        if days_1m:
+            step = max(1, len(days_1m) // 10)
+            idxs = list(range(0, len(days_1m), step)) + ([len(days_1m) - 1] if (len(days_1m) - 1) % step != 0 else [])
+            idxs = sorted(set(idxs))
+            pairs_1m = []
+            for i in idxs:
+                d = days_1m[i]
+                dt_obj = datetime.strptime(d, "%Y-%m-%d").date()
+                label = dt_obj.strftime("%b %-d")
+                pairs_1m.append((label, _port_at(d), _spy_at(d)))
+            chart_1m = _normalize(pairs_1m)
+        else:
+            chart_1m = []
+
+        # ── 6M: weekly data points (~26 pts) ───────────────────────────
+        days_6m = [d for d in all_spy_dates if d >= (today - timedelta(days=186)).isoformat() and d <= today_str]
+        if days_6m:
+            # Sample every 5 trading days ≈ weekly
+            step = max(1, len(days_6m) // 26)
+            idxs = list(range(0, len(days_6m), step)) + ([len(days_6m) - 1] if (len(days_6m) - 1) % step != 0 else [])
+            idxs = sorted(set(idxs))
+            pairs_6m = []
+            for i in idxs:
+                d = days_6m[i]
+                dt_obj = datetime.strptime(d, "%Y-%m-%d").date()
+                label = dt_obj.strftime("%b %-d")
+                pairs_6m.append((label, _port_at(d), _spy_at(d)))
+            chart_6m = _normalize(pairs_6m)
+        else:
+            chart_6m = []
+
+        # ── 1Y: monthly sampled (~13 pts) ──────────────────────────────
+        days_1y = [d for d in all_spy_dates if d >= (today - timedelta(days=375)).isoformat() and d <= today_str]
+        if days_1y:
+            step = max(1, len(days_1y) // 13)
+            idxs = list(range(0, len(days_1y), step)) + ([len(days_1y) - 1] if (len(days_1y) - 1) % step != 0 else [])
+            idxs = sorted(set(idxs))
+            pairs_1y = []
+            for i in idxs:
+                d = days_1y[i]
+                dt_obj = datetime.strptime(d, "%Y-%m-%d").date()
+                label = _month_label(dt_obj)
+                pairs_1y.append((label, _port_at(d), _spy_at(d)))
+            chart_1y = _normalize(pairs_1y)
+        else:
+            chart_1y = []
+
+        return {"1D": chart_1d, "5D": chart_5d, "1M": chart_1m, "6M": chart_6m, "1Y": chart_1y}
+
+    def _build_1d_chart(
+        self, positions: list[dict], price_maps: dict, spy_daily: dict
+    ) -> list[dict]:
+        """
+        1D intraday chart using Yahoo Finance 5-min data.
+        Falls back to empty list if market is closed / data unavailable.
+        """
+        import zoneinfo
+        et = datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+        today_str = et.strftime("%Y-%m-%d")
+
+        # Collect all yahoo symbols for holdings
+        yahoo_syms: dict[str, str] = {}  # display_sym → yahoo_sym
+        for p in positions:
+            sym   = p["_sym"]
+            atype = p.get("_atype", "stock")
+            if atype == "crypto":
+                yahoo_syms[sym] = YAHOO_SYMBOL_MAP.get(sym, f"{sym}-USD")
+            elif atype == "commodity":
+                yahoo_syms[sym] = COMMODITY_YAHOO_MAP.get(sym, sym)
+            else:
+                yahoo_syms[sym] = sym
+        yahoo_syms["SPY"] = "SPY"
+
+        # Fetch intraday data synchronously (we're inside a to_thread already? No — we're async)
+        # We do a quick sync fetch via urllib for each ticker
+        intraday_map: dict[str, list[tuple[str, float]]] = {}
+        for sym, ysym in yahoo_syms.items():
+            try:
+                raw = _yf_fetch_sync(ysym, "1d")
+                res = raw.get("chart", {}).get("result", [{}])[0]
+                meta = res.get("meta", {})
+                ts   = res.get("timestamp", [])
+                closes = res.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+                bars = []
+                for i in range(min(len(ts), len(closes))):
+                    c = closes[i]
+                    if c is not None:
+                        t_et = datetime.fromtimestamp(ts[i], tz=zoneinfo.ZoneInfo("America/New_York"))
+                        if t_et.strftime("%Y-%m-%d") == today_str:
+                            bars.append((t_et.strftime("%H:%M"), c))
+                intraday_map[sym] = bars
+            except Exception:
+                intraday_map[sym] = []
+
+        spy_bars_1d = intraday_map.get("SPY", [])
+        if not spy_bars_1d:
             return []
 
-        p0 = port_vals[0]
-        s0 = spy_vals[0]
+        # Common timestamps: intersection of all holding timestamps and SPY
+        spy_times = [t for t, _ in spy_bars_1d]
+        holding_time_sets = []
+        for p in positions:
+            b = intraday_map.get(p["_sym"], [])
+            if b:
+                holding_time_sets.append(set(t for t, _ in b))
 
-        def norm_p(v): return round((v - p0) / p0 * 100, 2) if p0 else 0.0
-        def norm_s(v): return round((v - s0) / s0 * 100, 2) if s0 else 0.0
+        if not holding_time_sets:
+            return []
 
-        n = len(series_dates)
-        if n <= 8:
-            idxs = list(range(n))
-        else:
-            step = n // 7
-            idxs = sorted(set([0] + [step * i for i in range(1, 7)] + [n - 1]))
+        common_times = sorted(
+            set(spy_times).intersection(*holding_time_sets) if holding_time_sets else set(spy_times)
+        )
+        if not common_times:
+            common_times = spy_times
 
-        result = []
-        for i in idxs:
-            dt_obj = datetime.strptime(series_dates[i], "%Y-%m-%d").date()
-            result.append({
-                "date":      _month_label(dt_obj),
-                "portfolio": norm_p(port_vals[i]),
-                "sp500":     norm_s(spy_vals[i]),
-            })
-        return result
+        spy_time_map = {t: v for t, v in spy_bars_1d}
+        holding_time_maps: dict[str, dict[str, float]] = {}
+        for p in positions:
+            bars_1d = intraday_map.get(p["_sym"], [])
+            holding_time_maps[p["_sym"]] = {t: v for t, v in bars_1d}
+
+        result_pairs = []
+        for t_label in common_times:
+            spy_v = spy_time_map.get(t_label)
+            if not spy_v:
+                continue
+            port_v = 0.0
+            for p in positions:
+                hm = holding_time_maps.get(p["_sym"], {})
+                px = hm.get(t_label, p.get("price") or 0)
+                port_v += p["_shares"] * px
+            result_pairs.append((t_label, port_v, spy_v))
+
+        if not result_pairs or result_pairs[0][1] == 0:
+            return []
+
+        p0, s0 = result_pairs[0][1], result_pairs[0][2]
+        return [
+            {
+                "date":      t,
+                "portfolio": round((pv - p0) / p0 * 100, 3) if p0 else 0.0,
+                "sp500":     round((sv - s0) / s0 * 100, 3) if s0 else 0.0,
+            }
+            for t, pv, sv in result_pairs
+        ]
 
     def _build_allocation(self, positions, total_value) -> list[dict]:
         class_totals: dict[str, float] = {}
@@ -806,32 +1017,40 @@ class CaelynTerminalProvider:
             })
         return result
 
-    def _build_correlation(self, equity_tickers, tradier_history) -> dict:
+    def _build_correlation(self, all_tickers: list[str], all_history: dict) -> dict:
+        """
+        Compute NxN Pearson correlation matrix for ALL holdings.
+        Uses an inner-join on calendar dates so crypto/commodity/equity
+        date mismatches are handled correctly.
+        """
         returns_map: dict[str, dict[str, float]] = {}
-        for t in equity_tickers:
-            bars = tradier_history.get(t, [])
+        for t in all_tickers:
+            bars = all_history.get(t, [])
             closes = [(b["date"], b["close"]) for b in bars if b.get("close")]
-            if len(closes) < 10:
+            if len(closes) < 15:
                 continue
-            rets = {}
+            rets: dict[str, float] = {}
             for i in range(1, len(closes)):
                 d, c = closes[i]
                 prev = closes[i - 1][1]
                 if prev and prev != 0:
                     rets[d] = (c - prev) / prev
-            returns_map[t] = rets
+            if len(rets) >= 15:
+                returns_map[t] = rets
 
-        valid = [t for t in equity_tickers if t in returns_map]
+        valid = [t for t in all_tickers if t in returns_map]
         n = len(valid)
         if n == 0:
             return {"tickers": [], "values": []}
 
-        common_dates = sorted(
-            set.intersection(*[set(returns_map[t].keys()) for t in valid])
-        ) if valid else []
+        # Inner-join: only dates where ALL tickers have data
+        date_sets = [set(returns_map[t].keys()) for t in valid]
+        common_dates = sorted(set.intersection(*date_sets)) if len(date_sets) > 1 else sorted(date_sets[0])
 
         if len(common_dates) < 10:
-            return {"tickers": valid, "values": [[1.0] * n for _ in range(n)]}
+            # Fallback: use the most recent 60 days from each ticker independently
+            return {"tickers": valid, "values": [[1.0 if i == j else 0.0
+                    for j in range(n)] for i in range(n)]}
 
         vecs = {t: [returns_map[t][d] for d in common_dates] for t in valid}
 
@@ -901,7 +1120,7 @@ class CaelynTerminalProvider:
         port_vol = _std(port_rets_list) * math.sqrt(252) * 100 if port_rets_list else weighted_vol
         ann_ret  = (sum(all_port_rets.values()) / len(all_port_rets) * 252) if all_port_rets else 0.0
 
-        rf = 0.043
+        rf = 0.0525  # 5.25% risk-free rate
         sharpe  = round((ann_ret - rf) / (port_vol / 100), 2) if port_vol else None
         neg_ret = [r for r in port_rets_list if r < 0]
         down_std = _std(neg_ret) * math.sqrt(252) * 100 if neg_ret else port_vol
@@ -939,56 +1158,92 @@ class CaelynTerminalProvider:
         return sorted(vols, key=lambda x: -x["vol"])
 
     def _build_suggestions(self, positions, alloc, risk) -> list[dict]:
-        suggestions = []
+        """
+        Generate 2-4 portfolio-specific risk suggestions based on actual allocation.
+        Rules applied in priority order; only triggered rules are returned.
+        """
+        suggestions: list[dict] = []
         alloc_map = {a["label"]: a["pct"] for a in alloc}
+        ticker_alloc = {p["ticker"]: p["allocation_pct"] for p in positions}
+        vol_map = {p["ticker"]: None for p in positions}
 
+        # ── Rule 1: Single-position concentration risk (>40%) ───────────
         for p in positions:
-            if p["allocation_pct"] >= 40:
+            pct = p["allocation_pct"]
+            if pct >= 40:
+                dd_impact = round(pct * 0.2)
                 suggestions.append({
                     "level": "RISK",
                     "title": f"High Concentration in {p['ticker']}",
-                    "body":  (
-                        f"{p['ticker']} ({p['allocation_pct']}%) dominates the portfolio. "
-                        f"A 20% decline would reduce total portfolio value by ~{round(p['allocation_pct']*0.2)}%. "
-                        "Consider trimming to below 30%."
+                    "body": (
+                        f"{p['ticker']} represents {pct:.0f}% of total portfolio value. "
+                        f"A 20% drawdown in {p['ticker']} alone would reduce your total portfolio "
+                        f"by ~{dd_impact}%. Consider trimming to below 30%, or hedging with a "
+                        f"covered call on the position."
                     ),
                 })
+                break   # Only flag the top one to avoid repetition
 
-        fi_pct = alloc_map.get(_FIXED, 0)
-        if fi_pct < 8:
-            suggestions.append({
-                "level": "WARNING",
-                "title": "Minimal Fixed Income Exposure",
-                "body":  f"Fixed income is {fi_pct}% of your portfolio. Adding AGG or TLT can reduce drawdowns during equity sell-offs.",
-            })
-
-        crypto_pct = alloc_map.get(_CRYPTO, 0)
-        if crypto_pct > 10:
+        # ── Rule 2: Tech/AI sector overexposure ─────────────────────────
+        nvda_pct  = ticker_alloc.get("NVDA", 0)
+        buzz_pct  = ticker_alloc.get("BUZZ", 0)
+        ai_combined = nvda_pct + buzz_pct
+        if ai_combined > 60:
             suggestions.append({
                 "level": "RISK",
-                "title": "Elevated Crypto Volatility Exposure",
-                "body":  f"Crypto is {crypto_pct:.1f}% of the portfolio. Crypto positions can draw down 50%+ in bear markets.",
-            })
-        elif crypto_pct > 0:
-            suggestions.append({
-                "level": "INFO",
-                "title": "Crypto Volatility Exposure",
-                "body":  f"BTC/crypto positions (~{crypto_pct:.1f}%) carry 50%+ annualized volatility. Monitor during risk-off episodes.",
-            })
-
-        beta = risk.get("portfolio_beta")
-        if beta and beta > 1.15:
-            suggestions.append({
-                "level": "INFO",
-                "title": "Portfolio Beta Above 1.0",
-                "body":  f"Weighted portfolio beta is {beta:.2f} vs SPY. The portfolio will amplify both market gains and drawdowns.",
+                "title": "AI Sector Overexposure",
+                "body": (
+                    f"NVDA ({nvda_pct:.0f}%) and BUZZ ({buzz_pct:.0f}%) together represent "
+                    f"{ai_combined:.0f}% of the portfolio. BUZZ holds AI-heavy equities that "
+                    f"significantly overlap with NVDA's sector, doubling your concentration "
+                    f"in semiconductors/AI during a sell-off. Consider diversifying into "
+                    f"non-correlated sectors."
+                ),
             })
 
-        if len(positions) < 5:
+        # ── Rule 3: No defensive allocation (0% fixed income) ───────────
+        fi_pct = alloc_map.get(_FIXED, 0)
+        if fi_pct == 0 and len(suggestions) < 4:
             suggestions.append({
-                "level": "WARNING",
-                "title": "Limited Diversification",
-                "body":  "Fewer than 5 holdings. Consider broadening to reduce idiosyncratic risk.",
+                "level": "WARN",
+                "title": "No Defensive Allocation",
+                "body": (
+                    "The portfolio is 100% risk-on with no fixed income buffer. "
+                    "Given the growth/AI tilt (NVDA, BUZZ) and crypto exposure (BTC), "
+                    "a 5-10% allocation to TLT (long-duration Treasuries) can act as a "
+                    "flight-to-quality hedge during equity drawdowns — not as a core holding, "
+                    "but as a volatility dampener."
+                ),
+            })
+
+        # ── Rule 4: Crypto tail risk (BTC > 3%) ─────────────────────────
+        btc_pct = ticker_alloc.get("BTC", 0)
+        btc_vol = risk.get("weighted_volatility")
+        if btc_pct > 3 and len(suggestions) < 4:
+            wv = btc_vol or 0
+            contrib_est = round(btc_pct / 100 * wv, 1)
+            suggestions.append({
+                "level": "WARN",
+                "title": "Crypto Tail Risk",
+                "body": (
+                    f"BTC (~{btc_pct:.0f}% allocation) has historically drawn down 50%+ in "
+                    f"risk-off regimes. At current sizing it contributes an estimated "
+                    f"~{contrib_est:.1f}% to portfolio volatility. Consider sizing down if VIX "
+                    f"spikes above 25 or DXY strengthens — both signal crypto headwinds."
+                ),
+            })
+
+        # ── Rule 5: Small-cap liquidity risk (OSS > 2%) ─────────────────
+        oss_pct = ticker_alloc.get("OSS", 0)
+        if oss_pct > 2 and len(suggestions) < 4:
+            suggestions.append({
+                "level": "INFO",
+                "title": "Small Cap Liquidity Risk",
+                "body": (
+                    f"OSS is a micro-cap with thin daily volume (~{oss_pct:.0f}% of portfolio). "
+                    f"In volatile markets, exits can move the stock against you significantly. "
+                    f"Use limit orders and plan position sizing accordingly. Avoid market orders."
+                ),
             })
 
         return suggestions[:5]
@@ -1059,44 +1314,97 @@ class CaelynTerminalProvider:
         return {"gainers": gainers, "losers": losers}
 
     def _build_earnings(self, raw: list, holding_tickers: list, positions: list) -> list[dict]:
+        """
+        Build earnings calendar entries.
+        - Equity holdings (stock/etf asset_type): show EPS, next date, WTD change
+        - ETFs: show WTD change only, last_eps/est_eps = null, next_date = "N/A"
+        - Crypto/commodity (BTC, GOLD): skip entirely
+        - S&P 500 context companies: include if present in raw
+        """
         holding_set = set(t.upper() for t in holding_tickers)
-        context_set = set(SP500_EARNINGS_CONTEXT)
+        # Skip non-equity holdings from earnings (crypto and commodity)
+        skip_types = {"crypto", "commodity"}
+        skip_tickers = set()
+        for p in positions:
+            if p.get("_atype", "stock") in skip_types:
+                skip_tickers.add(p["ticker"].upper())
+
+        # Map ticker → position for WTD calculation
+        pos_map = {p["ticker"].upper(): p for p in positions}
+
+        def _fmt_date(dt_str: str) -> str:
+            if not dt_str:
+                return "N/A"
+            try:
+                dt = datetime.strptime(dt_str, "%Y-%m-%d")
+                return dt.strftime("%b %-d")
+            except Exception:
+                return dt_str or "N/A"
+
+        def _wtd(ticker: str) -> str | None:
+            p = pos_map.get(ticker)
+            if not p:
+                return None
+            chg = p.get("change_pct")
+            return f"{chg:+.2f}%" if chg is not None else None
 
         results = []
         seen: set[str] = set()
 
-        for e in raw:
-            ticker = (e.get("ticker") or "").upper()
-            if not ticker or ticker in seen:
+        # Holdings first (in portfolio order)
+        for ticker in holding_tickers:
+            t = ticker.upper()
+            if t in skip_tickers or t in seen:
                 continue
-            seen.add(ticker)
-            dt_str = e.get("date", "")
-            display_date = ""
-            if dt_str:
-                try:
-                    dt = datetime.strptime(dt_str, "%Y-%m-%d")
-                    display_date = dt.strftime("%b %-d")
-                except Exception:
-                    display_date = dt_str
+            seen.add(t)
 
-            # Find week-to-date change for holdings
-            wtd = None
-            for p in positions:
-                if p["ticker"] == ticker:
-                    wtd = f"{p['change_pct']:+.2f}%" if p.get("change_pct") is not None else None
+            pos = pos_map.get(t)
+            is_etf = pos and pos.get("_atype") == "etf"
 
-            results.append({
-                "ticker":    ticker,
-                "company":   ticker,
-                "in_portfolio": ticker in holding_set,
-                "next_date": display_date,
-                "est_eps":   e.get("eps_estimate"),
-                "last_eps":  None,
-                "wtd":       wtd,
-            })
+            # Find this ticker in raw data
+            raw_entry = next((e for e in raw if (e.get("ticker") or "").upper() == t), {})
 
-        # Sort: portfolio holdings first, then context
-        results.sort(key=lambda x: (0 if x["in_portfolio"] else 1, x["next_date"]))
+            if is_etf:
+                results.append({
+                    "ticker":       t,
+                    "company":      t,
+                    "in_portfolio": True,
+                    "next_date":    "N/A",
+                    "est_eps":      None,
+                    "last_eps":     None,
+                    "wtd":          _wtd(t),
+                })
+            else:
+                next_dt = raw_entry.get("next_date")
+                results.append({
+                    "ticker":       t,
+                    "company":      t,
+                    "in_portfolio": True,
+                    "next_date":    _fmt_date(next_dt),
+                    "est_eps":      raw_entry.get("est_eps"),
+                    "last_eps":     raw_entry.get("last_eps"),
+                    "wtd":          _wtd(t),
+                })
+
+        # Then S&P 500 context (not already in results)
+        context_tickers = [t for t in SP500_EARNINGS_CONTEXT if t not in seen and t not in skip_tickers]
+        for ticker in context_tickers:
+            t = ticker.upper()
+            if t in seen:
+                continue
+            raw_entry = next((e for e in raw if (e.get("ticker") or "").upper() == t), None)
+            if raw_entry:
+                seen.add(t)
+                results.append({
+                    "ticker":       t,
+                    "company":      t,
+                    "in_portfolio": False,
+                    "next_date":    _fmt_date(raw_entry.get("next_date")),
+                    "est_eps":      raw_entry.get("est_eps"),
+                    "last_eps":     raw_entry.get("last_eps"),
+                    "wtd":          None,
+                })
+
         return results[:10]
 
     def _build_news(self, raw: list, positions: list) -> list[dict]:
