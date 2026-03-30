@@ -3958,6 +3958,7 @@ async def caelyn_terminal(
         finnhub=data_service.finnhub if data_service else None,
         fmp=data_service.fmp if data_service else None,
         yahoo=data_service.yahoo if data_service else None,
+        coingecko=data_service.coingecko if data_service else None,
     )
     return await provider.get(portfolio_file)
 

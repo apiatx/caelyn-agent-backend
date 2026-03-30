@@ -2,8 +2,13 @@
 Caelyn Terminal — portfolio analytics provider.
 
 Produces the full JSON payload for GET /api/caelyn-terminal.
-Data sources: Tradier (quotes + history + clock), Finnhub (earnings — sync),
-              FMP (news — async), Yahoo (DXY ticker tape).
+
+Supports mixed asset types in a single portfolio:
+  - stocks / ETFs  → Tradier (quotes + history)
+  - crypto (BTC, ETH …) → CoinGecko API (quotes) + Yahoo Finance (history)
+  - commodity (GOLD, etc.) → Tradier (GOLD is a listed equity/ETF)
+                             Yahoo Finance fallback
+  - Ticker tape extras (VIX, TLT, DXY) → Yahoo Finance
 """
 from __future__ import annotations
 
@@ -11,9 +16,12 @@ import asyncio
 import json
 import math
 import os
+import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from data.cache import cache
 
@@ -24,16 +32,18 @@ except ImportError:
         def _d(fn): return fn
         return _d if not (a and callable(a[0])) else a[0]
 
-# ─── Asset-class taxonomy ────────────────────────────────────────────────────
+# ─── Asset-class taxonomy ─────────────────────────────────────────────────────
 
-_US_EQUITY = "US Equity"
-_INTL_DEV  = "Intl Developed"
-_EM        = "Emerging Markets"
-_FIXED     = "Fixed Income"
-_STOCK     = "Individual Stocks"
-_REAL      = "Real Estate"
-_COMM      = "Commodities"
-_OTHER     = "Other"
+_US_EQUITY  = "US Equity"
+_INTL_DEV   = "Intl Developed"
+_EM         = "Emerging Markets"
+_FIXED      = "Fixed Income"
+_STOCK      = "Individual Stocks"
+_REAL       = "Real Estate"
+_COMM       = "Commodities"
+_CRYPTO     = "Crypto"
+_THEMATIC   = "Thematic ETF"
+_OTHER      = "Other"
 
 ASSET_CLASS_MAP: dict[str, str] = {
     # Broad US equity
@@ -42,7 +52,7 @@ ASSET_CLASS_MAP: dict[str, str] = {
     "QQQ": _US_EQUITY, "QQQM": _US_EQUITY, "IWM": _US_EQUITY,
     "MDY": _US_EQUITY, "IJH": _US_EQUITY, "SCHA": _US_EQUITY,
     "DIA": _US_EQUITY, "RSP": _US_EQUITY,
-    # Sector / dividend / factor
+    # Sector / dividend / factor / thematic
     "DGRO": _US_EQUITY, "VYM": _US_EQUITY, "SCHD": _US_EQUITY,
     "VIG": _US_EQUITY, "SDY": _US_EQUITY, "HDV": _US_EQUITY,
     "NOBL": _US_EQUITY, "DGRW": _US_EQUITY,
@@ -50,6 +60,8 @@ ASSET_CLASS_MAP: dict[str, str] = {
     "XLE": _US_EQUITY, "XLI": _US_EQUITY, "XLP": _US_EQUITY,
     "XLY": _US_EQUITY, "XLB": _US_EQUITY, "XLU": _US_EQUITY,
     "XLRE": _REAL,     "XLC": _US_EQUITY,
+    "BUZZ": _THEMATIC, "ARKK": _THEMATIC, "ARKG": _THEMATIC,
+    "ARKF": _THEMATIC, "ARKW": _THEMATIC, "BOTZ": _THEMATIC,
     # International developed
     "SCHF": _INTL_DEV, "VEA": _INTL_DEV, "EFA": _INTL_DEV,
     "IEFA": _INTL_DEV, "SPDW": _INTL_DEV, "VGK": _INTL_DEV,
@@ -65,9 +77,10 @@ ASSET_CLASS_MAP: dict[str, str] = {
     "SCHZ": _FIXED, "SCHI": _FIXED, "SCHS": _FIXED,
     # Real estate
     "VNQ": _REAL, "IYR": _REAL,
-    # Commodities
+    # Commodities / hard assets
     "GLD": _COMM, "IAU": _COMM, "SLV": _COMM,
     "USO": _COMM, "DJP": _COMM, "PDBC": _COMM,
+    "GOLD": _COMM,   # Barrick Gold — treat as commodity-adjacent
 }
 
 ASSET_CLASS_COLORS: dict[str, str] = {
@@ -78,10 +91,61 @@ ASSET_CLASS_COLORS: dict[str, str] = {
     _STOCK:     "#a78bfa",
     _REAL:      "#f43f5e",
     _COMM:      "#fb923c",
+    _CRYPTO:    "#e879f9",
+    _THEMATIC:  "#fbbf24",
     _OTHER:     "#94a3b8",
 }
 
-TICKER_TAPE_SYMS = ["SPY", "QQQ", "IWM", "GLD", "DIA"]
+# CoinGecko coin-id map for common crypto tickers
+COINGECKO_IDS: dict[str, str] = {
+    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
+    "BNB": "binancecoin", "XRP": "ripple", "ADA": "cardano",
+    "AVAX": "avalanche-2", "DOGE": "dogecoin", "MATIC": "matic-network",
+    "DOT": "polkadot", "LINK": "chainlink", "UNI": "uniswap",
+    "AAVE": "aave", "LTC": "litecoin", "BCH": "bitcoin-cash",
+    "SHIB": "shiba-inu", "ATOM": "cosmos", "SUI": "sui",
+    "APT": "aptos", "ARB": "arbitrum", "NEAR": "near",
+    "FIL": "filecoin", "TAO": "bittensor", "RENDER": "render-token",
+    "HYPE": "hyperliquid",
+}
+
+# Yahoo Finance symbol overrides for non-standard tickers
+YAHOO_SYMBOL_MAP: dict[str, str] = {
+    "BTC":    "BTC-USD",
+    "ETH":    "ETH-USD",
+    "VIX":    "^VIX",
+    "DXY":    "DX-Y.NYB",
+    "GLD":    "GLD",
+}
+
+# Commodity tickers → Yahoo Finance futures symbol
+COMMODITY_YAHOO_MAP: dict[str, str] = {
+    "GOLD":     "GC=F",    # COMEX Gold Futures
+    "SILVER":   "SI=F",    # COMEX Silver Futures
+    "OIL":      "CL=F",    # WTI Crude Oil Futures
+    "CRUDE":    "CL=F",
+    "NATGAS":   "NG=F",    # Natural Gas Futures
+    "COPPER":   "HG=F",    # Copper Futures
+    "WHEAT":    "ZW=F",    # Wheat Futures
+    "CORN":     "ZC=F",    # Corn Futures
+    "PLATINUM": "PL=F",    # Platinum Futures
+}
+
+# Fixed expanded ticker tape symbols and their Yahoo symbols
+TAPE_SYMBOLS: list[tuple[str, str]] = [
+    ("SPY",  "SPY"),
+    ("QQQ",  "QQQ"),
+    ("IWM",  "IWM"),
+    ("GLD",  "GLD"),
+    ("TLT",  "TLT"),
+    ("BTC",  "BTC-USD"),
+    ("ETH",  "ETH-USD"),
+    ("VIX",  "^VIX"),
+    ("DXY",  "DX-Y.NYB"),
+]
+
+# Top S&P500 companies to add earnings calendar context for
+SP500_EARNINGS_CONTEXT = ["MSFT", "AAPL", "GOOGL", "META", "AMZN", "NVDA", "JPM", "V"]
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -91,19 +155,15 @@ def _sf(v: Any) -> float | None:
     except Exception:
         return None
 
-
-def _safe_round(v: float | None, n: int = 2) -> float | None:
+def _sr(v: float | None, n: int = 2) -> float | None:
     return round(v, n) if v is not None else None
 
-
 def _returns(closes: list[float]) -> list[float]:
-    """Compute daily percentage returns from a list of closing prices."""
     r = []
     for i in range(1, len(closes)):
         if closes[i - 1] and closes[i - 1] != 0:
             r.append((closes[i] - closes[i - 1]) / closes[i - 1])
     return r
-
 
 def _annualized_vol(closes: list[float]) -> float | None:
     rets = _returns(closes)
@@ -114,31 +174,26 @@ def _annualized_vol(closes: list[float]) -> float | None:
     variance = sum((r - mean) ** 2 for r in rets) / (n - 1)
     return round(math.sqrt(variance * 252) * 100, 2)
 
-
-def _annualized_return(closes: list[float]) -> float | None:
-    if len(closes) < 2 or not closes[0] or closes[0] == 0:
+def _max_drawdown(vals: list[float]) -> float | None:
+    if len(vals) < 2:
         return None
-    total = (closes[-1] - closes[0]) / closes[0]
-    years = len(closes) / 252
-    if years <= 0:
-        return None
-    return (1 + total) ** (1 / years) - 1
-
-
-def _max_drawdown(closes: list[float]) -> float | None:
-    if len(closes) < 2:
-        return None
-    peak = closes[0]
+    peak = vals[0]
     max_dd = 0.0
-    for c in closes:
-        if c > peak:
-            peak = c
+    for v in vals:
+        if v > peak:
+            peak = v
         if peak > 0:
-            dd = (peak - c) / peak
+            dd = (peak - v) / peak
             if dd > max_dd:
                 max_dd = dd
     return round(max_dd * 100, 2)
 
+def _std(vals: list[float]) -> float:
+    if not vals:
+        return 0.0
+    n = len(vals)
+    mean = sum(vals) / n
+    return math.sqrt(sum((v - mean) ** 2 for v in vals) / max(n - 1, 1))
 
 def _correlation(a: list[float], b: list[float]) -> float | None:
     n = min(len(a), len(b))
@@ -154,204 +209,320 @@ def _correlation(a: list[float], b: list[float]) -> float | None:
         return None
     return round(cov / math.sqrt(va * vb), 4)
 
-
-def _std(vals: list[float]) -> float:
-    if not vals:
-        return 0.0
-    n = len(vals)
-    mean = sum(vals) / n
-    return math.sqrt(sum((v - mean) ** 2 for v in vals) / max(n - 1, 1))
-
-
 def _market_status_et() -> str:
-    """Return market status based on Eastern time, no API call needed."""
     import zoneinfo
     et = datetime.now(zoneinfo.ZoneInfo("America/New_York"))
-    wd = et.weekday()   # 0=Mon 6=Sun
+    wd = et.weekday()
     h, m = et.hour, et.minute
     mins = h * 60 + m
     if wd >= 5:
         return "CLOSED"
-    if 0 <= mins < 240:        # 00:00-04:00 ET
+    if mins < 240:
         return "CLOSED"
-    if 240 <= mins < 570:      # 04:00-09:30 ET
+    if 240 <= mins < 570:
         return "PRE-MARKET"
-    if 570 <= mins < 960:      # 09:30-16:00 ET
+    if 570 <= mins < 960:
         return "OPEN"
-    if 960 <= mins < 1200:     # 16:00-20:00 ET
+    if 960 <= mins < 1200:
         return "AFTER-HOURS"
     return "CLOSED"
-
 
 def _month_label(dt: date) -> str:
     return dt.strftime("%b '%y")
 
+def _asset_class(ticker: str, asset_type: str = "stock") -> str:
+    t = ticker.upper()
+    if asset_type == "crypto":
+        return _CRYPTO
+    if asset_type == "commodity":
+        return _COMM
+    return ASSET_CLASS_MAP.get(t, _STOCK)
 
-def _asset_class(ticker: str) -> str:
-    return ASSET_CLASS_MAP.get(ticker.upper(), _STOCK)
+# ─── CoinGecko simple price fetch ────────────────────────────────────────────
 
+async def _cg_prices(coin_ids: list[str]) -> dict[str, dict]:
+    """Fetch {coin_id: {usd, usd_24h_change}} from CoinGecko. Returns {}  on error."""
+    if not coin_ids:
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://api.coingecko.com/api/v3/simple/price",
+                params={
+                    "ids":                 ",".join(coin_ids),
+                    "vs_currencies":       "usd",
+                    "include_24hr_change": "true",
+                },
+            )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        print(f"[CAELYN] CoinGecko error: {e}")
+    return {}
+
+# ─── Yahoo Finance generic fetch ─────────────────────────────────────────────
+
+_YF_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+_YF_HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+def _yf_fetch_sync(symbol: str, range_: str = "5d") -> dict:
+    url = f"{_YF_CHART.format(symbol=symbol)}?interval=1d&range={range_}"
+    req = urllib.request.Request(url, headers=_YF_HEADERS)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        print(f"[CAELYN/YF] fetch error {symbol}: {e}")
+        return {}
+
+def _yf_parse_quote(raw: dict, sym: str) -> dict | None:
+    try:
+        res  = raw["chart"]["result"][0]
+        meta = res["meta"]
+        closes = res["indicators"]["quote"][0].get("close", [])
+        timestamps = res.get("timestamp", [])
+        valid = [(timestamps[i], closes[i]) for i in range(min(len(timestamps), len(closes))) if closes[i]]
+        price = _sf(meta.get("regularMarketPrice"))
+        prev_close = valid[-2][1] if len(valid) >= 2 else _sf(meta.get("previousClose"))
+        chg = round(price - prev_close, 4) if price and prev_close else None
+        chgpct = round((price - prev_close) / prev_close * 100, 3) if chg and prev_close else None
+        w52h = _sf(meta.get("fiftyTwoWeekHigh"))
+        w52l = _sf(meta.get("fiftyTwoWeekLow"))
+        return {
+            "symbol": sym, "price": price, "change": chg, "change_pct": chgpct,
+            "prev_close": prev_close, "week_52_high": w52h, "week_52_low": w52l,
+        }
+    except Exception:
+        return None
+
+def _yf_parse_history(raw: dict) -> list[dict]:
+    try:
+        res = raw["chart"]["result"][0]
+        closes = res["indicators"]["quote"][0].get("close", [])
+        ts = res.get("timestamp", [])
+        bars = []
+        for i in range(min(len(ts), len(closes))):
+            c = closes[i]
+            if c is not None:
+                bars.append({"date": datetime.fromtimestamp(ts[i]).strftime("%Y-%m-%d"), "close": c})
+        return bars
+    except Exception:
+        return []
+
+async def _yf_quote(yahoo_sym: str, display_sym: str) -> dict | None:
+    raw = await asyncio.to_thread(_yf_fetch_sync, yahoo_sym, "5d")
+    return _yf_parse_quote(raw, display_sym)
+
+async def _yf_history(yahoo_sym: str, range_: str = "1y") -> list[dict]:
+    raw = await asyncio.to_thread(_yf_fetch_sync, yahoo_sym, range_)
+    return _yf_parse_history(raw)
 
 # ─── Core provider ───────────────────────────────────────────────────────────
 
 class CaelynTerminalProvider:
-    """Assembles the full /api/caelyn-terminal payload."""
 
-    def __init__(self, tradier, finnhub, fmp, yahoo):
-        self.tradier = tradier
-        self.finnhub = finnhub
-        self.fmp = fmp
-        self.yahoo = yahoo
+    def __init__(self, tradier, finnhub, fmp, yahoo, coingecko=None):
+        self.tradier    = tradier
+        self.finnhub    = finnhub
+        self.fmp        = fmp
+        self.yahoo      = yahoo
+        self.coingecko  = coingecko
 
     @traceable(name="caelyn_terminal.get")
     async def get(self, portfolio_file: Path) -> dict:
-        cache_key = "caelyn:terminal:v3"
+        cache_key = "caelyn:terminal:v5"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
-
         result = await self._build(portfolio_file)
-        cache.set(cache_key, result, 90)   # 90-second cache
+        cache.set(cache_key, result, 90)
         return result
 
     async def _build(self, portfolio_file: Path) -> dict:
-        # ── 1. Load holdings ────────────────────────────────────────────
+        # 1. Load holdings ────────────────────────────────────────────────
         holdings_raw = self._load_holdings(portfolio_file)
         if not holdings_raw:
             return self._empty()
 
-        tickers = [h["ticker"].upper() for h in holdings_raw]
+        tickers   = [h["ticker"].upper() for h in holdings_raw]
+        asset_map = {h["ticker"].upper(): (h.get("asset_type") or "stock").lower()
+                     for h in holdings_raw}
 
-        # ── 2. Parallel data fetches ─────────────────────────────────────
-        tape_extras = [t for t in TICKER_TAPE_SYMS if t not in tickers]
-        quote_syms  = list(dict.fromkeys(tickers + tape_extras))  # deduplicated
+        # Classify tickers by type
+        equity_tickers  = [t for t in tickers if asset_map[t] in ("stock","etf","")]
+        crypto_tickers  = [t for t in tickers if asset_map[t] == "crypto"]
+        all_commodity   = [t for t in tickers if asset_map[t] == "commodity"]
+        # Commodities with a futures yahoo symbol → Yahoo Finance
+        # Commodities without one (unknown) → Tradier as equity fallback
+        yf_commodity    = [t for t in all_commodity if t in COMMODITY_YAHOO_MAP]
+        tradier_commodity = [t for t in all_commodity if t not in COMMODITY_YAHOO_MAP]
+        tradier_tickers = equity_tickers + tradier_commodity
 
-        hist_start = (date.today() - timedelta(days=400)).isoformat()
+        # 2. Fetch live quotes (parallel) ─────────────────────────────────
+        hist_start = (date.today() - timedelta(days=420)).isoformat()
 
-        tasks = [
-            self._fetch_quotes(quote_syms),
-            self._fetch_histories(tickers + ["SPY"], hist_start),
-            self._fetch_earnings_calendar(tickers),
-            self._fetch_news(tickers[:4]),
-        ]
-        quotes_list, histories, earnings_raw, news_raw = await asyncio.gather(
-            *tasks, return_exceptions=True
-        )
+        tasks = {
+            "tradier_quotes":    self._fetch_tradier_quotes(tradier_tickers),
+            "crypto_quotes":     self._fetch_crypto_quotes(crypto_tickers),
+            "commodity_quotes":  self._fetch_commodity_quotes(yf_commodity),
+            "tradier_history":   self._fetch_tradier_histories(tradier_tickers, hist_start),
+            "crypto_history":    self._fetch_crypto_histories(crypto_tickers),
+            "commodity_history": self._fetch_commodity_histories(yf_commodity),
+            "spy_history":       _yf_history("SPY", "2y"),
+            "earnings":          self._fetch_earnings_calendar(tickers),
+            "news":              self._fetch_news(equity_tickers[:4] or tickers[:4]),
+            "tape":              self._fetch_tape(equity_tickers),
+        }
 
-        quotes_list  = quotes_list  if not isinstance(quotes_list, Exception)  else []
-        histories    = histories    if not isinstance(histories, Exception)     else {}
-        earnings_raw = earnings_raw if not isinstance(earnings_raw, Exception)  else []
-        news_raw     = news_raw     if not isinstance(news_raw, Exception)      else []
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        R: dict[str, Any] = {
+            k: (v if not isinstance(v, Exception) else None)
+            for k, v in zip(tasks.keys(), results)
+        }
 
-        # index quotes by symbol
-        quotes: dict[str, dict] = {q["symbol"]: q for q in quotes_list if q.get("symbol")}
+        tradier_quotes     = {q["symbol"]: q for q in (R["tradier_quotes"] or []) if q.get("symbol")}
+        crypto_quotes      = R["crypto_quotes"] or {}
+        commodity_quotes   = R["commodity_quotes"] or {}
+        tradier_history    = R["tradier_history"] or {}
+        crypto_history     = R["crypto_history"] or {}
+        commodity_history  = R["commodity_history"] or {}
+        spy_bars           = R["spy_history"] or []
 
-        # ── 3. Portfolio value + allocations ────────────────────────────
+        # Merge all quotes and history
+        def _q(sym: str) -> dict:
+            if sym in tradier_quotes:
+                q = tradier_quotes[sym]
+                return {
+                    "price":      _sf(q.get("last")),
+                    "change":     _sf(q.get("change")),
+                    "change_pct": _sf(q.get("change_percentage")),
+                    "w52_high":   _sf(q.get("week_52_high")),
+                    "w52_low":    _sf(q.get("week_52_low")),
+                }
+            if sym in crypto_quotes:
+                return crypto_quotes[sym]
+            if sym in commodity_quotes:
+                return commodity_quotes[sym]
+            return {}
+
+        def _hist(sym: str) -> list[dict]:
+            if sym in tradier_history:
+                return tradier_history[sym]
+            if sym in crypto_history:
+                return crypto_history[sym]
+            if sym in commodity_history:
+                return commodity_history[sym]
+            return []
+
+        # 3. Build positions ──────────────────────────────────────────────
         positions: list[dict] = []
         total_value = 0.0
         total_cost  = 0.0
 
         for h in holdings_raw:
             sym    = h["ticker"].upper()
-            shares = float(h.get("shares", 0) or 0)
-            cost   = float(h.get("avg_cost", 0) or 0)
-            q      = quotes.get(sym, {})
-            price  = _sf(q.get("last")) or 0.0
-            chg    = _sf(q.get("change")) or 0.0
-            chgpct = _sf(q.get("change_percentage")) or 0.0
-            market_val = shares * price
+            shares = float(h.get("shares") or 0)
+            cost   = float(h.get("avg_cost") or 0)
+            q      = _q(sym)
+            price  = q.get("price") or 0.0
+            chg    = q.get("change") or 0.0
+            chgpct = q.get("change_pct") or 0.0
+            mval   = shares * price
 
-            total_value += market_val
+            total_value += mval
             total_cost  += shares * cost
 
             positions.append({
                 "_sym":       sym,
                 "_shares":    shares,
                 "_cost":      cost,
+                "_atype":     asset_map.get(sym, "stock"),
                 "ticker":     sym,
-                "price":      _safe_round(price),
-                "change":     _safe_round(chg),
-                "change_pct": _safe_round(chgpct, 3),
-                "market_val": market_val,
-                "w52_high":   _safe_round(_sf(q.get("week_52_high"))),
-                "w52_low":    _safe_round(_sf(q.get("week_52_low"))),
+                "price":      _sr(price),
+                "change":     _sr(chg),
+                "change_pct": _sr(chgpct, 3),
+                "market_val": mval,
+                "w52_high":   _sr(q.get("w52_high")),
+                "w52_low":    _sr(q.get("w52_low")),
             })
 
-        # Set allocations
         for p in positions:
             p["allocation_pct"] = round(
                 p["market_val"] / total_value * 100, 1
             ) if total_value else 0.0
 
-        # Sort by allocation descending
         positions.sort(key=lambda x: x["allocation_pct"], reverse=True)
 
-        # ── 4. Portfolio-level change today ──────────────────────────────
-        change_today = sum(
-            p["_shares"] * (p["change"] or 0) for p in positions
-        )
-        prev_total = total_value - change_today
-        change_pct_today = (
-            round(change_today / prev_total * 100, 2) if prev_total else 0.0
-        )
+        # 4. Change today ─────────────────────────────────────────────────
+        change_today = sum(p["_shares"] * (p["change"] or 0) for p in positions)
+        prev_total   = total_value - change_today
+        change_pct_today = round(change_today / prev_total * 100, 2) if prev_total else 0.0
 
-        # ── 5. Performance chart ─────────────────────────────────────────
-        perf_chart = self._build_perf_chart(positions, histories)
+        # 5. Performance chart (built after merge — uses all_history below)
+        _perf_chart_deferred = True   # built after all_history is assembled
 
-        # ── 6. Asset allocation ──────────────────────────────────────────
+        # 6. Asset allocation ─────────────────────────────────────────────
         alloc = self._build_allocation(positions, total_value)
 
-        # ── 7. Correlation matrix (top 5) ────────────────────────────────
-        top5 = [p["ticker"] for p in positions[:5]]
-        corr = self._build_correlation(top5, histories)
+        # Merge all per-ticker histories into one dict
+        all_history: dict[str, list[dict]] = {**tradier_history, **crypto_history, **commodity_history}
 
-        # ── 8. Risk metrics ──────────────────────────────────────────────
-        risk = self._build_risk(positions, histories, total_value)
+        # 5 (deferred). Performance chart ────────────────────────────────
+        perf_chart = self._build_perf_chart(positions, all_history, spy_bars)
 
-        # ── 9. Volatility per holding ────────────────────────────────────
-        vol_list = self._build_volatility(positions, histories)
+        # 7. Correlation matrix (equity-only, top 5) ──────────────────────
+        eq_positions = [p for p in positions if p["_atype"] not in ("crypto", "commodity")]
+        top_eq = [p["ticker"] for p in eq_positions[:5]]
+        corr = self._build_correlation(top_eq, tradier_history)
 
-        # ── 10. Risk suggestions ─────────────────────────────────────────
+        # 8. Risk metrics ─────────────────────────────────────────────────
+        risk = self._build_risk(positions, all_history, spy_bars)
+
+        # 9. Volatility (all holdings) ────────────────────────────────────
+        vol_list = self._build_volatility(positions, all_history)
+
+        # 10. Risk suggestions ────────────────────────────────────────────
         suggestions = self._build_suggestions(positions, alloc, risk)
 
-        # ── 11. Performance periods (1d/5d/1m/6m/1y) ────────────────────
-        periods = self._build_periods(positions, histories, change_pct_today)
+        # 11. Period performance ──────────────────────────────────────────
+        periods = self._build_periods(positions, all_history, change_pct_today)
 
-        # ── 12. Sentiment ────────────────────────────────────────────────
-        sentiment = self._sentiment(change_pct_today, risk)
+        # 12. Sentiment ───────────────────────────────────────────────────
+        sentiment = self._sentiment(change_pct_today)
 
-        # ── 13. Top movers ───────────────────────────────────────────────
+        # 13. Top movers ──────────────────────────────────────────────────
         top_movers = self._top_movers(positions)
 
-        # ── 14. Earnings calendar ────────────────────────────────────────
-        earnings_cal = self._build_earnings(earnings_raw)
+        # 14. Earnings calendar ───────────────────────────────────────────
+        earnings_cal = self._build_earnings(R["earnings"] or [], tickers, positions)
 
-        # ── 15. Ticker tape ──────────────────────────────────────────────
-        ticker_tape = self._build_tape(quotes)
+        # 15. Ticker tape ─────────────────────────────────────────────────
+        ticker_tape = R["tape"] or []
 
-        # ── 16. News ticker ──────────────────────────────────────────────
-        news_ticker = self._build_news(news_raw, positions)
+        # 16. News ticker ─────────────────────────────────────────────────
+        news_ticker = self._build_news(R["news"] or [], positions)
 
-        # ── 17. Total return ─────────────────────────────────────────────
+        # 17. Total return ────────────────────────────────────────────────
         total_return_val = total_value - total_cost
         total_return_pct = round(total_return_val / total_cost * 100, 1) if total_cost else 0.0
 
         return {
             "portfolio": {
-                "value":           round(total_value, 2),
-                "change_today":    round(change_today, 2),
+                "value":            round(total_value, 2),
+                "change_today":     round(change_today, 2),
                 "change_pct_today": change_pct_today,
-                "perf_1d":         periods["perf_1d"],
-                "perf_5d":         periods["perf_5d"],
-                "perf_1m":         periods["perf_1m"],
-                "perf_6m":         periods["perf_6m"],
-                "perf_1y":         periods["perf_1y"],
+                "perf_1d":          periods["perf_1d"],
+                "perf_5d":          periods["perf_5d"],
+                "perf_1m":          periods["perf_1m"],
+                "perf_6m":          periods["perf_6m"],
+                "perf_1y":          periods["perf_1y"],
                 "total_return_pct": total_return_pct,
                 "total_return_value": round(total_return_val, 2),
-                "sentiment":       sentiment,
-                "market_status":   _market_status_et(),
+                "sentiment":        sentiment,
+                "market_status":    _market_status_et(),
             },
-            "positions_count":  len(positions),
-            "holdings":         self._format_holdings(positions),
+            "positions_count":   len(positions),
+            "holdings":          self._format_holdings(positions),
             "performance_chart": perf_chart,
             "asset_allocation":  alloc,
             "correlation_matrix": corr,
@@ -367,8 +538,8 @@ class CaelynTerminalProvider:
 
     # ── Data fetchers ─────────────────────────────────────────────────────
 
-    async def _fetch_quotes(self, syms: list[str]) -> list[dict]:
-        if not self.tradier:
+    async def _fetch_tradier_quotes(self, syms: list[str]) -> list[dict]:
+        if not syms or not self.tradier:
             return []
         try:
             return await asyncio.wait_for(self.tradier.get_quotes(syms), timeout=12.0)
@@ -376,46 +547,110 @@ class CaelynTerminalProvider:
             print(f"[CAELYN] Tradier quotes error: {e}")
             return []
 
-    async def _fetch_histories(
+    async def _fetch_crypto_quotes(self, tickers: list[str]) -> dict[str, dict]:
+        """Returns {TICKER: {price, change, change_pct, w52_high, w52_low}}."""
+        if not tickers:
+            return {}
+        id_map = {COINGECKO_IDS[t]: t for t in tickers if t in COINGECKO_IDS}
+        if not id_map:
+            return {}
+        cg = await _cg_prices(list(id_map.keys()))
+        result = {}
+        for cg_id, sym in id_map.items():
+            d = cg.get(cg_id, {})
+            price    = _sf(d.get("usd"))
+            chgpct   = _sf(d.get("usd_24h_change"))
+            chg      = round(price * chgpct / 100, 4) if price and chgpct else None
+            result[sym] = {
+                "price":      price,
+                "change":     chg,
+                "change_pct": _sr(chgpct, 3),
+                "w52_high":   None,
+                "w52_low":    None,
+            }
+            # Fetch 52W range via Yahoo for display
+        return result
+
+    async def _fetch_tradier_histories(
         self, syms: list[str], start: str
     ) -> dict[str, list[dict]]:
-        """Fetch 1Y+ daily bars for each symbol. Returns {sym: [bars]}."""
-        if not self.tradier:
+        if not syms or not self.tradier:
             return {}
-        tasks = [
-            self.tradier.get_history(sym, "daily", start)
-            for sym in syms
-        ]
+        tasks = [self.tradier.get_history(sym, "daily", start) for sym in syms]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         return {
             sym: (res if not isinstance(res, Exception) else [])
             for sym, res in zip(syms, results)
         }
 
-    async def _fetch_earnings_calendar(self, tickers: list[str]) -> list[dict]:
-        """Market-wide Finnhub earnings calendar filtered to our holdings."""
+    async def _fetch_crypto_histories(self, tickers: list[str]) -> dict[str, list[dict]]:
+        """Fetch 1Y+ history for crypto via Yahoo Finance (BTC-USD, ETH-USD …)."""
+        if not tickers:
+            return {}
+        tasks = [
+            _yf_history(YAHOO_SYMBOL_MAP.get(t, f"{t}-USD"), "2y")
+            for t in tickers
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return {
+            sym: (res if not isinstance(res, Exception) else [])
+            for sym, res in zip(tickers, results)
+        }
+
+    async def _fetch_commodity_quotes(self, tickers: list[str]) -> dict[str, dict]:
+        """Fetch quotes for commodity tickers via Yahoo Finance futures symbols."""
+        if not tickers:
+            return {}
+        tasks = [_yf_quote(COMMODITY_YAHOO_MAP[t], t) for t in tickers if t in COMMODITY_YAHOO_MAP]
+        syms  = [t for t in tickers if t in COMMODITY_YAHOO_MAP]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        out: dict[str, dict] = {}
+        for sym, res in zip(syms, results):
+            if isinstance(res, dict) and res and res.get("price"):
+                out[sym] = {
+                    "price":      res.get("price"),
+                    "change":     res.get("change"),
+                    "change_pct": res.get("change_pct"),
+                    "w52_high":   res.get("week_52_high"),
+                    "w52_low":    res.get("week_52_low"),
+                }
+        return out
+
+    async def _fetch_commodity_histories(self, tickers: list[str]) -> dict[str, list[dict]]:
+        """Fetch 2Y daily history for commodity tickers via Yahoo Finance futures."""
+        if not tickers:
+            return {}
+        syms  = [t for t in tickers if t in COMMODITY_YAHOO_MAP]
+        tasks = [_yf_history(COMMODITY_YAHOO_MAP[t], "2y") for t in syms]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return {
+            sym: (res if not isinstance(res, Exception) else [])
+            for sym, res in zip(syms, results)
+        }
+
+    async def _fetch_earnings_calendar(self, holding_tickers: list[str]) -> list[dict]:
+        """Finnhub earnings filtered to holdings + S&P 500 context tickers."""
         if not self.finnhub:
             return []
+        all_tickers = list(dict.fromkeys(
+            holding_tickers + [t for t in SP500_EARNINGS_CONTEXT if t not in holding_tickers]
+        ))
         try:
             data = await asyncio.wait_for(
                 asyncio.to_thread(self.finnhub.get_earnings_calendar),
                 timeout=10.0,
             )
-            holding_set = set(t.upper() for t in tickers)
-            return [e for e in data if (e.get("ticker") or "").upper() in holding_set]
+            ticker_set = set(t.upper() for t in all_tickers)
+            return [e for e in data if (e.get("ticker") or "").upper() in ticker_set]
         except Exception as e:
             print(f"[CAELYN] Earnings calendar error: {e}")
             return []
 
     async def _fetch_news(self, tickers: list[str]) -> list[dict]:
-        """Finnhub company news for top holdings (synchronous SDK — run via thread)."""
         if not self.finnhub or not tickers:
             return []
         try:
-            tasks = [
-                asyncio.to_thread(self.finnhub.get_company_news, t, 7)
-                for t in tickers[:4]
-            ]
+            tasks = [asyncio.to_thread(self.finnhub.get_company_news, t, 7) for t in tickers[:4]]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             combined = []
             for sym, res in zip(tickers[:4], results):
@@ -428,47 +663,89 @@ class CaelynTerminalProvider:
             print(f"[CAELYN] News fetch error: {e}")
             return []
 
+    async def _fetch_tape(self, holding_tickers: list[str]) -> list[dict]:
+        """
+        Build the 10-symbol ticker tape: fixed symbols + any holding tickers
+        not already in the tape (first 2 extras injected after QQQ).
+        """
+        # Build base tape from the fixed TAPE_SYMBOLS
+        tasks = [_yf_quote(yf_sym, disp) for disp, yf_sym in TAPE_SYMBOLS]
+        # Also inject holding tickers that are equities (via Tradier already fetched)
+        # — those are added at _build() time if in holdings
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        tape = []
+        for (disp, _), q in zip(TAPE_SYMBOLS, results):
+            if isinstance(q, dict) and q and q.get("price"):
+                tape.append({
+                    "symbol":     disp,
+                    "price":      _sr(q.get("price")),
+                    "change_pct": _sr(q.get("change_pct"), 3),
+                })
+
+        # Inject equity holdings not already in tape (e.g. NVDA, OSS)
+        tape_syms = {t["symbol"] for t in tape}
+        eq_extras = [t for t in holding_tickers
+                     if t not in tape_syms
+                     and t not in COINGECKO_IDS][:2]
+
+        if eq_extras and self.tradier:
+            try:
+                extra_quotes = await asyncio.wait_for(
+                    self.tradier.get_quotes(eq_extras), timeout=8.0
+                )
+                for q in extra_quotes:
+                    sym = q.get("symbol", "")
+                    price = _sf(q.get("last"))
+                    chgpct = _sf(q.get("change_percentage"))
+                    if sym and price:
+                        tape.insert(2, {   # inject after QQQ
+                            "symbol":     sym,
+                            "price":      _sr(price),
+                            "change_pct": _sr(chgpct, 3),
+                        })
+            except Exception as e:
+                print(f"[CAELYN] tape extras error: {e}")
+
+        return tape
+
     # ── Builders ──────────────────────────────────────────────────────────
 
     def _format_holdings(self, positions: list[dict]) -> list[dict]:
         return [
             {
-                "ticker":       p["ticker"],
-                "price":        p["price"],
-                "change":       p["change"],
-                "change_pct":   p["change_pct"],
+                "ticker":        p["ticker"],
+                "price":         p["price"],
+                "change":        p["change"],
+                "change_pct":    p["change_pct"],
                 "allocation_pct": p["allocation_pct"],
             }
             for p in positions
         ]
 
+    def _get_closes(self, sym: str, all_history: dict) -> list[float]:
+        bars = all_history.get(sym, [])
+        return [b["close"] for b in bars if b.get("close")]
+
     def _build_perf_chart(
-        self,
-        positions: list[dict],
-        histories: dict[str, list[dict]],
+        self, positions, all_history: dict, spy_bars: list
     ) -> list[dict]:
-        """
-        Compute portfolio value at each common trading date, normalized to 0%.
-        SPY is normalized in parallel as benchmark.
-        Sample ~8 points: start + 6 quarterly-ish + end.
-        """
-        spy_bars = histories.get("SPY", [])
         if not spy_bars:
             return []
-
-        # Build a date → price map for each holding
-        price_maps: dict[str, dict[str, float]] = {}
-        for p in positions:
-            sym = p["_sym"]
-            bars = histories.get(sym, [])
-            price_maps[sym] = {b["date"]: b["close"] for b in bars if b.get("close")}
 
         spy_map = {b["date"]: b["close"] for b in spy_bars if b.get("close")}
         all_dates = sorted(spy_map.keys())
         if not all_dates:
             return []
 
-        # Compute portfolio value on each SPY trading date
+        # Build date→price maps for each holding
+        price_maps: dict[str, dict[str, float]] = {}
+        for p in positions:
+            sym  = p["_sym"]
+            bars = all_history.get(sym, [])
+            price_maps[sym] = {b["date"]: b["close"] for b in bars if b.get("close")}
+
         series_dates: list[str] = []
         port_vals:    list[float] = []
         spy_vals:     list[float] = []
@@ -479,32 +756,29 @@ class CaelynTerminalProvider:
                 pm = price_maps.get(p["_sym"], {})
                 px = pm.get(dt)
                 if px is None:
-                    # use closest previous price
                     closest = max((d for d in pm if d <= dt), default=None)
                     px = pm.get(closest, p["price"] or 0)
                 total += p["_shares"] * (px or 0)
-            series_dates.append(dt)
-            port_vals.append(total)
-            spy_vals.append(spy_map[dt])
+            if total > 0:
+                series_dates.append(dt)
+                port_vals.append(total)
+                spy_vals.append(spy_map[dt])
 
         if not port_vals or port_vals[0] == 0:
             return []
 
-        # Normalize to 0% at start
         p0 = port_vals[0]
         s0 = spy_vals[0]
 
         def norm_p(v): return round((v - p0) / p0 * 100, 2) if p0 else 0.0
         def norm_s(v): return round((v - s0) / s0 * 100, 2) if s0 else 0.0
 
-        # Sample: first, then ~6 evenly-spaced interior + last
         n = len(series_dates)
         if n <= 8:
             idxs = list(range(n))
         else:
             step = n // 7
-            idxs = [0] + [step * i for i in range(1, 7)] + [n - 1]
-            idxs = sorted(set(idxs))
+            idxs = sorted(set([0] + [step * i for i in range(1, 7)] + [n - 1]))
 
         result = []
         for i in idxs:
@@ -516,12 +790,10 @@ class CaelynTerminalProvider:
             })
         return result
 
-    def _build_allocation(
-        self, positions: list[dict], total_value: float
-    ) -> list[dict]:
+    def _build_allocation(self, positions, total_value) -> list[dict]:
         class_totals: dict[str, float] = {}
         for p in positions:
-            ac = _asset_class(p["ticker"])
+            ac = _asset_class(p["ticker"], p["_atype"])
             class_totals[ac] = class_totals.get(ac, 0) + p["market_val"]
 
         result = []
@@ -534,13 +806,10 @@ class CaelynTerminalProvider:
             })
         return result
 
-    def _build_correlation(
-        self, tickers: list[str], histories: dict[str, list[dict]]
-    ) -> dict:
-        # Build aligned returns for each ticker
+    def _build_correlation(self, equity_tickers, tradier_history) -> dict:
         returns_map: dict[str, dict[str, float]] = {}
-        for t in tickers:
-            bars = histories.get(t, [])
+        for t in equity_tickers:
+            bars = tradier_history.get(t, [])
             closes = [(b["date"], b["close"]) for b in bars if b.get("close")]
             if len(closes) < 10:
                 continue
@@ -552,21 +821,19 @@ class CaelynTerminalProvider:
                     rets[d] = (c - prev) / prev
             returns_map[t] = rets
 
-        valid = [t for t in tickers if t in returns_map]
+        valid = [t for t in equity_tickers if t in returns_map]
         n = len(valid)
         if n == 0:
             return {"tickers": [], "values": []}
 
-        # Common dates
         common_dates = sorted(
             set.intersection(*[set(returns_map[t].keys()) for t in valid])
-        )
+        ) if valid else []
+
         if len(common_dates) < 10:
             return {"tickers": valid, "values": [[1.0] * n for _ in range(n)]}
 
-        vecs: dict[str, list[float]] = {
-            t: [returns_map[t][d] for d in common_dates] for t in valid
-        }
+        vecs = {t: [returns_map[t][d] for d in common_dates] for t in valid}
 
         mat = []
         for i, ti in enumerate(valid):
@@ -575,7 +842,7 @@ class CaelynTerminalProvider:
                 if i == j:
                     row.append(1.0)
                 elif j < i:
-                    row.append(mat[j][i])   # symmetric
+                    row.append(mat[j][i])
                 else:
                     c = _correlation(vecs[ti], vecs[tj])
                     row.append(c if c is not None else 0.0)
@@ -583,208 +850,168 @@ class CaelynTerminalProvider:
 
         return {"tickers": valid, "values": mat}
 
-    def _build_risk(
-        self,
-        positions: list[dict],
-        histories: dict[str, list[dict]],
-        total_value: float,
-    ) -> dict:
-        spy_bars = histories.get("SPY", [])
+    def _build_risk(self, positions, all_history: dict, spy_bars: list) -> dict:
         spy_closes = [b["close"] for b in spy_bars if b.get("close")]
-        spy_rets = _returns(spy_closes)
-        spy_std = _std(spy_rets)
+        spy_rets   = _returns(spy_closes)
+        spy_std    = _std(spy_rets)
+        spy_date_idx = {b["date"]: i for i, b in enumerate(spy_bars)}
 
-        weighted_vol = 0.0
+        weighted_vol  = 0.0
         weighted_beta = 0.0
         all_port_rets: dict[str, float] = {}
 
         for p in positions:
-            sym = p["_sym"]
-            bars = histories.get(sym, [])
-            closes = [b["close"] for b in bars if b.get("close")]
+            sym   = p["_sym"]
+            w     = p["allocation_pct"] / 100
+            closes = self._get_closes(sym, all_history)
             if len(closes) < 20:
                 continue
-            w = p["allocation_pct"] / 100
+
             vol = _annualized_vol(closes) or 0.0
             weighted_vol += w * vol
 
-            rets_map = {}
+            bars = all_history.get(sym, [])
+            rets_map: dict[str, float] = {}
             for i in range(1, len(bars)):
-                if bars[i].get("close") and bars[i - 1].get("close") and bars[i - 1]["close"] != 0:
-                    rets_map[bars[i]["date"]] = (bars[i]["close"] - bars[i - 1]["close"]) / bars[i - 1]["close"]
+                if bars[i].get("close") and bars[i-1].get("close") and bars[i-1]["close"]:
+                    rets_map[bars[i]["date"]] = (bars[i]["close"] - bars[i-1]["close"]) / bars[i-1]["close"]
 
-            # Portfolio return contribution
             for d, r in rets_map.items():
                 all_port_rets[d] = all_port_rets.get(d, 0) + w * r
 
-            # Beta
-            if spy_std and spy_std > 0:
-                spy_dates = {b["date"]: i for i, b in enumerate(spy_bars)}
-                common_rets = []
-                common_spy  = []
+            # Beta computation (equity/ETF tickers whose dates align with SPY)
+            if spy_std and spy_std > 0 and sym in all_history:
+                common_r, common_spy = [], []
                 for d, r in rets_map.items():
-                    si = spy_dates.get(d)
-                    if si is not None and si > 0:
-                        spy_prev = spy_bars[si - 1].get("close")
-                        spy_cur  = spy_bars[si].get("close")
-                        if spy_prev and spy_cur and spy_prev != 0:
-                            common_rets.append(r)
-                            common_spy.append((spy_cur - spy_prev) / spy_prev)
-                if len(common_rets) >= 20:
-                    c = _correlation(common_rets, common_spy)
-                    sr = _std(common_rets)
+                    si = spy_date_idx.get(d)
+                    if si and si > 0:
+                        sc = spy_bars[si].get("close")
+                        sp = spy_bars[si - 1].get("close")
+                        if sc and sp and sp:
+                            common_r.append(r)
+                            common_spy.append((sc - sp) / sp)
+                if len(common_r) >= 20:
+                    c = _correlation(common_r, common_spy)
+                    sr = _std(common_r)
                     ss = _std(common_spy)
-                    beta_i = c * (sr / ss) if (c and ss and ss > 0) else 1.0
-                    weighted_beta += w * beta_i
+                    if c and ss > 0:
+                        weighted_beta += w * (c * sr / ss)
 
-        # Portfolio-level stats
         port_rets_list = [all_port_rets[d] for d in sorted(all_port_rets)]
         port_vol = _std(port_rets_list) * math.sqrt(252) * 100 if port_rets_list else weighted_vol
-        ann_ret = (
-            (sum(all_port_rets.values()) / len(all_port_rets) * 252)
-            if all_port_rets else 0.0
-        )
+        ann_ret  = (sum(all_port_rets.values()) / len(all_port_rets) * 252) if all_port_rets else 0.0
 
-        rf = 0.043   # risk-free rate proxy (10Y treasury %)
-        sharpe = round((ann_ret - rf) / (port_vol / 100), 2) if port_vol else None
-
-        neg_rets = [r for r in port_rets_list if r < 0]
-        down_std = _std(neg_rets) * math.sqrt(252) * 100 if neg_rets else port_vol
+        rf = 0.043
+        sharpe  = round((ann_ret - rf) / (port_vol / 100), 2) if port_vol else None
+        neg_ret = [r for r in port_rets_list if r < 0]
+        down_std = _std(neg_ret) * math.sqrt(252) * 100 if neg_ret else port_vol
         sortino = round((ann_ret - rf) / (down_std / 100), 2) if down_std else None
 
-        # Max drawdown: reconstruct from portfolio daily returns
         sorted_dates = sorted(all_port_rets.keys())
-        port_val = 100.0
-        port_val_series = [port_val]
+        port_val_series = [100.0]
+        v = 100.0
         for d in sorted_dates:
-            port_val *= (1 + all_port_rets[d])
-            port_val_series.append(port_val)
+            v *= (1 + all_port_rets[d])
+            port_val_series.append(v)
         max_dd = _max_drawdown(port_val_series)
 
-        # Top concentration
         top_pos = max(positions, key=lambda x: x["allocation_pct"], default=None)
         top_conc = int(round(top_pos["allocation_pct"])) if top_pos else 0
-        top_conc_label = _asset_class(top_pos["ticker"]) if top_pos else ""
+        top_conc_label = top_pos["ticker"] if top_pos else ""
 
         return {
-            "weighted_volatility": round(weighted_vol, 1),
-            "max_drawdown":        max_dd,
-            "top_concentration":   top_conc,
+            "weighted_volatility":  round(weighted_vol, 1),
+            "max_drawdown":         max_dd,
+            "top_concentration":    top_conc,
             "top_concentration_label": top_conc_label,
-            "portfolio_beta":      round(weighted_beta, 2) if weighted_beta else None,
-            "sharpe_ratio":        sharpe,
-            "sortino_ratio":       sortino,
+            "portfolio_beta":       round(weighted_beta, 2) if weighted_beta else None,
+            "sharpe_ratio":         sharpe,
+            "sortino_ratio":        sortino,
         }
 
-    def _build_volatility(
-        self, positions: list[dict], histories: dict[str, list[dict]]
-    ) -> list[dict]:
+    def _build_volatility(self, positions, all_history: dict) -> list[dict]:
         vols = []
         for p in positions:
-            bars = histories.get(p["_sym"], [])
-            closes = [b["close"] for b in bars if b.get("close")]
+            closes = self._get_closes(p["_sym"], all_history)
             v = _annualized_vol(closes)
             if v is not None:
                 vols.append({"ticker": p["ticker"], "vol": v})
         return sorted(vols, key=lambda x: -x["vol"])
 
-    def _build_suggestions(
-        self,
-        positions: list[dict],
-        alloc: list[dict],
-        risk: dict,
-    ) -> list[dict]:
+    def _build_suggestions(self, positions, alloc, risk) -> list[dict]:
         suggestions = []
-
         alloc_map = {a["label"]: a["pct"] for a in alloc}
 
-        # High single-holding concentration
         for p in positions:
             if p["allocation_pct"] >= 40:
                 suggestions.append({
                     "level": "RISK",
                     "title": f"High Concentration in {p['ticker']}",
-                    "body": (
-                        f"{p['ticker']} ({p['allocation_pct']}%) represents nearly half your portfolio. "
-                        "Consider trimming 5–10% and redeploying into other asset classes."
+                    "body":  (
+                        f"{p['ticker']} ({p['allocation_pct']}%) dominates the portfolio. "
+                        f"A 20% decline would reduce total portfolio value by ~{round(p['allocation_pct']*0.2)}%. "
+                        "Consider trimming to below 30%."
                     ),
                 })
 
-        # No fixed income
         fi_pct = alloc_map.get(_FIXED, 0)
         if fi_pct < 8:
             suggestions.append({
                 "level": "WARNING",
                 "title": "Minimal Fixed Income Exposure",
-                "body": (
-                    f"Fixed income is {fi_pct}% of your portfolio. "
-                    "Adding AGG or BND can reduce drawdowns during equity sell-offs."
-                ),
+                "body":  f"Fixed income is {fi_pct}% of your portfolio. Adding AGG or TLT can reduce drawdowns during equity sell-offs.",
             })
 
-        # Overweight EM
-        em_pct = alloc_map.get(_EM, 0)
-        if em_pct > 28:
+        crypto_pct = alloc_map.get(_CRYPTO, 0)
+        if crypto_pct > 10:
             suggestions.append({
-                "level": "WARNING",
-                "title": "Elevated Emerging Market Allocation",
-                "body": (
-                    f"Emerging markets are {em_pct}% of your portfolio. "
-                    "EM equities carry currency and political risk beyond standard equity vol."
-                ),
+                "level": "RISK",
+                "title": "Elevated Crypto Volatility Exposure",
+                "body":  f"Crypto is {crypto_pct:.1f}% of the portfolio. Crypto positions can draw down 50%+ in bear markets.",
+            })
+        elif crypto_pct > 0:
+            suggestions.append({
+                "level": "INFO",
+                "title": "Crypto Volatility Exposure",
+                "body":  f"BTC/crypto positions (~{crypto_pct:.1f}%) carry 50%+ annualized volatility. Monitor during risk-off episodes.",
             })
 
-        # High beta
         beta = risk.get("portfolio_beta")
         if beta and beta > 1.15:
             suggestions.append({
                 "level": "INFO",
                 "title": "Portfolio Beta Above 1.0",
-                "body": (
-                    f"Your weighted portfolio beta is {beta:.2f}. "
-                    "The portfolio will amplify both market gains and drawdowns relative to SPY."
-                ),
+                "body":  f"Weighted portfolio beta is {beta:.2f} vs SPY. The portfolio will amplify both market gains and drawdowns.",
             })
 
-        # Low diversification
         if len(positions) < 5:
             suggestions.append({
                 "level": "WARNING",
-                "title": "Limited Position Diversification",
-                "body": "Fewer than 5 holdings — consider broadening to reduce idiosyncratic risk.",
+                "title": "Limited Diversification",
+                "body":  "Fewer than 5 holdings. Consider broadening to reduce idiosyncratic risk.",
             })
 
-        return suggestions[:5]   # cap at 5
+        return suggestions[:5]
 
-    def _build_periods(
-        self,
-        positions: list[dict],
-        histories: dict[str, list[dict]],
-        change_pct_1d: float,
-    ) -> dict:
-        """Compute portfolio % return for 5d, 1m, 6m, 1y lookback."""
+    def _build_periods(self, positions, all_history: dict, change_pct_1d) -> dict:
         today = date.today().isoformat()
 
-        def _days_ago(n: int) -> str:
-            return (date.today() - timedelta(days=n)).isoformat()
+        def _days_ago(n): return (date.today() - timedelta(days=n)).isoformat()
 
         def _port_value_at(target: str) -> float:
             total = 0.0
             for p in positions:
-                bars = histories.get(p["_sym"], [])
-                # find closest bar on or before target
+                bars = all_history.get(p["_sym"], [])
                 eligible = [b for b in bars if b.get("date", "") <= target and b.get("close")]
                 px = eligible[-1]["close"] if eligible else (p["price"] or 0)
                 total += p["_shares"] * px
             return total
 
-        current_val = _port_value_at(today)
+        cur = _port_value_at(today)
 
-        def _perf(days: int) -> float | None:
-            past_val = _port_value_at(_days_ago(days))
-            if not past_val:
-                return None
-            return round((current_val - past_val) / past_val * 100, 1)
+        def _perf(days):
+            past = _port_value_at(_days_ago(days))
+            return round((cur - past) / past * 100, 1) if past else None
 
         return {
             "perf_1d": round(change_pct_1d, 1),
@@ -794,8 +1021,7 @@ class CaelynTerminalProvider:
             "perf_1y": _perf(365),
         }
 
-    def _sentiment(self, change_pct: float, risk: dict) -> str:
-        beta = risk.get("portfolio_beta") or 1.0
+    def _sentiment(self, change_pct: float) -> str:
         if change_pct > 0.4:
             return "BULLISH"
         if change_pct < -0.4:
@@ -804,15 +1030,13 @@ class CaelynTerminalProvider:
             return "NEUTRAL"
         return "UNCERTAIN"
 
-    def _top_movers(self, positions: list[dict]) -> dict:
+    def _top_movers(self, positions) -> dict:
         sorted_pos = sorted(
             [p for p in positions if p.get("change_pct") is not None],
             key=lambda x: x["change_pct"],
         )
-        losers  = sorted_pos[:2]
-        gainers = sorted_pos[-2:][::-1]
 
-        def _fmt(p: dict) -> dict:
+        def _fmt(p):
             return {
                 "ticker":     p["ticker"],
                 "change_pct": p["change_pct"],
@@ -821,14 +1045,26 @@ class CaelynTerminalProvider:
                 "w52_high":   p.get("w52_high"),
             }
 
-        return {
-            "gainers": [_fmt(p) for p in gainers],
-            "losers":  [_fmt(p) for p in losers],
-        }
+        all_gainers = [p for p in sorted_pos if (p.get("change_pct") or 0) > 0]
+        all_losers  = [p for p in sorted_pos if (p.get("change_pct") or 0) < 0]
+        gainers = [_fmt(p) for p in sorted(all_gainers, key=lambda x: -x["change_pct"])[:2]]
+        losers  = [_fmt(p) for p in sorted(all_losers,  key=lambda x: x["change_pct"])[:2]]
 
-    def _build_earnings(self, raw: list[dict]) -> list[dict]:
+        # Fall back to best/worst if no strict gainers/losers
+        if not gainers and sorted_pos:
+            gainers = [_fmt(sorted_pos[-1])]
+        if not losers and sorted_pos:
+            losers = [_fmt(sorted_pos[0])]
+
+        return {"gainers": gainers, "losers": losers}
+
+    def _build_earnings(self, raw: list, holding_tickers: list, positions: list) -> list[dict]:
+        holding_set = set(t.upper() for t in holding_tickers)
+        context_set = set(SP500_EARNINGS_CONTEXT)
+
         results = []
-        seen = set()
+        seen: set[str] = set()
+
         for e in raw:
             ticker = (e.get("ticker") or "").upper()
             if not ticker or ticker in seen:
@@ -842,36 +1078,31 @@ class CaelynTerminalProvider:
                     display_date = dt.strftime("%b %-d")
                 except Exception:
                     display_date = dt_str
+
+            # Find week-to-date change for holdings
+            wtd = None
+            for p in positions:
+                if p["ticker"] == ticker:
+                    wtd = f"{p['change_pct']:+.2f}%" if p.get("change_pct") is not None else None
+
             results.append({
                 "ticker":    ticker,
-                "company":   ticker,      # simplified; no profile fetch here
+                "company":   ticker,
+                "in_portfolio": ticker in holding_set,
                 "next_date": display_date,
                 "est_eps":   e.get("eps_estimate"),
                 "last_eps":  None,
-                "wtd":       None,
+                "wtd":       wtd,
             })
-        return results[:8]
 
-    def _build_tape(self, quotes: dict[str, dict]) -> list[dict]:
-        tape = []
-        for sym in TICKER_TAPE_SYMS:
-            q = quotes.get(sym, {})
-            price  = _sf(q.get("last"))
-            chgpct = _sf(q.get("change_percentage"))
-            if price is not None:
-                tape.append({
-                    "symbol":     sym,
-                    "price":      _safe_round(price),
-                    "change_pct": _safe_round(chgpct, 3),
-                })
-        return tape
+        # Sort: portfolio holdings first, then context
+        results.sort(key=lambda x: (0 if x["in_portfolio"] else 1, x["next_date"]))
+        return results[:10]
 
-    def _build_news(self, raw: list[dict], positions: list[dict]) -> list[dict]:
-        """Build news ticker from Finnhub company_news items."""
+    def _build_news(self, raw: list, positions: list) -> list[dict]:
         news = []
-        seen_headlines: set[str] = set()
+        seen: set[str] = set()
 
-        # Sort by datetime descending (Finnhub uses Unix timestamps)
         def _ts(item):
             try: return int(item.get("datetime") or 0)
             except Exception: return 0
@@ -880,9 +1111,9 @@ class CaelynTerminalProvider:
             sym   = (item.get("_sym") or "").upper()
             title = item.get("title", "")
             ts    = item.get("datetime")
-            if not title or title in seen_headlines:
+            if not title or title in seen:
                 continue
-            seen_headlines.add(title)
+            seen.add(title)
 
             time_ago = ""
             if ts:
@@ -897,21 +1128,16 @@ class CaelynTerminalProvider:
                     else:
                         time_ago = f"{mins // 1440}d ago"
                 except Exception:
-                    time_ago = ""
+                    pass
 
-            news.append({
-                "symbol":   sym,
-                "headline": title,
-                "time_ago": time_ago,
-            })
+            news.append({"symbol": sym, "headline": title, "time_ago": time_ago})
             if len(news) >= 8:
                 break
         return news
 
-    # ── Helpers ───────────────────────────────────────────────────────────
+    # ── Holdings loader ───────────────────────────────────────────────────
 
     def _load_holdings(self, portfolio_file: Path) -> list[dict]:
-        # Try user-specific file first, then fall back to legacy file
         candidates = [portfolio_file, Path("data/portfolio_holdings.json")]
         for path in candidates:
             try:
@@ -924,7 +1150,7 @@ class CaelynTerminalProvider:
                     h for h in holdings
                     if isinstance(h, dict)
                     and h.get("ticker")
-                    and float(h.get("shares", 0) or 0) > 0
+                    and float(h.get("shares") or 0) > 0
                 ]
                 if result:
                     return result
@@ -941,8 +1167,8 @@ class CaelynTerminalProvider:
                 "total_return_pct": 0, "total_return_value": 0,
                 "sentiment": "NEUTRAL", "market_status": _market_status_et(),
             },
-            "positions_count": 0,
-            "holdings": [], "performance_chart": [], "asset_allocation": [],
+            "positions_count": 0, "holdings": [],
+            "performance_chart": [], "asset_allocation": [],
             "correlation_matrix": {"tickers": [], "values": []},
             "risk_metrics": {
                 "weighted_volatility": None, "max_drawdown": None,

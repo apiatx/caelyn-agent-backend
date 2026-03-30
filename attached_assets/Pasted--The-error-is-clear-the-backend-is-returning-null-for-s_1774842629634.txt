@@ -1,0 +1,205 @@
+
+The error is clear — the backend is returning null for some fields (portfolio perf values, correlation matrix values) and fmtN(null) crashes on null.toFixed(). This is a frontend robustness fix — I need to make all formatters null-safe.
+
+Now I'll make all formatters and type fields null-safe in one targeted edit:
+
+Now update the interfaces for sub-types and make all formatters null-safe:
+
+I need to move the type N declaration before the interfaces that use it:
+
+Now remove the duplicate type N from later in the file:
+
+Now make all format helpers null-safe:
+
+Now update the D-helpers and corrBg/corrTxt to handle nulls:
+
+Now fix corrBg/corrTxt to handle null values from the correlation matrix:
+
+TypeScript clean. Let me restart the workflow:
+
+The crash is fixed. Here's what was happening and what I did:
+
+Root cause: The backend was successfully returning data (you can see the 200 responses in the logs), but some fields like perf_1d, perf_5d, perf_1m and some correlation matrix values came back as null — which is valid when there's not enough price history yet. The frontend's fmtN(null) then crashed on null.toFixed().
+
+Fixes applied:
+
+Added a type N = number | null | undefined alias and updated every interface to accept null values
+Added a coerce(n) helper that safely converts null/undefined → 0
+Made all base formatters (fmtN, fmt$, sign, pctClr) null-safe via coerce()
+Updated D$, DN, DPct to also show '—' for null values even when live data is connected (not just in placeholder mode)
+Made corrBg/corrTxt null-safe for correlation matrix cells
+No backend changes needed — the backend is working correctly. Returning null for fields that can't be computed (e.g. not enough history for 1-year performance) is perfectly valid behavior. The frontend now handles it gracefully by displaying '—' instead of crashing.
+
+OK but now there are missing fields, the terminal needs to be displayed exactly the screenshot attached. You deleted some fo the datafields and sections with that last change and we need them back. what does the backend need to return that it is not returning currently to get those sections back and working? give me the prompt for the backend to return the full data needed to be displayed to make our terminal look like the one attached with every datafield shown attached being fetched and returned by our backend fast api service
+
+Let me check the current browser logs and see what the backend is actually returning:
+
+Now I have full clarity. The actual holdings are NVDA, OSS, BUZZ, GOLD, BTC — not the SCHB/SCHF ETF portfolio in the placeholder. Let me update the frontend placeholder to match reality, then give you the backend prompt:
+
+Now update the placeholder to reflect the actual portfolio (NVDA, OSS, BUZZ, GOLD, BTC):
+
+Frontend is updated with the correct portfolio structure. Now here is the exact prompt to give your backend FastAPI agent:
+
+Prompt for FastAPI backend agent:
+
+The /api/caelyn-terminal endpoint exists but is returning value: 0 and null fields because it is not reading the correct holdings file. Fix this and ensure the full response is populated correctly. Here is everything the backend needs to know:
+
+Current actual portfolio (read from the holdings file at the path your backend uses — the same source as the existing /api/stock-holdings or /api/portfolio endpoints):
+
+ticker	shares	avgCost	assetType
+NVDA	10	300.00	stock
+OSS	60	9.60	stock
+BUZZ	100	30.00	etf
+GOLD	1	4000.00	commodity
+BTC	0.1	60000.00	crypto
+The endpoint must return this exact JSON shape with real computed values (no zeros, no nulls except where data is genuinely unavailable):
+
+{
+  "portfolio": {
+    "value": <sum of all positions at current market prices>,
+    "change_today": <dollar P&L today across all positions>,
+    "change_pct_today": <% change today weighted by position value>,
+    "perf_1d": <portfolio % return over 1 trading day>,
+    "perf_5d": <portfolio % return over 5 trading days>,
+    "perf_1m": <portfolio % return over 1 month>,
+    "perf_6m": <portfolio % return over 6 months>,
+    "perf_1y": <portfolio % return over 1 year>,
+    "total_return_pct": <(current value - total cost basis) / cost basis * 100>,
+    "total_return_value": <current value - total cost basis>,
+    "sentiment": "BULLISH|BEARISH|UNCERTAIN|NEUTRAL",
+    "market_status": "OPEN|CLOSED|PRE-MARKET|AFTER-HOURS"
+  },
+  "positions_count": 5,
+  "holdings": [
+    {
+      "ticker": "NVDA",
+      "price": <current price>,
+      "change": <dollar change today>,
+      "change_pct": <% change today>,
+      "allocation_pct": <this position value / total portfolio value * 100>
+    }
+    // ... repeat for OSS, BUZZ, GOLD, BTC
+  ],
+  "performance_chart": [
+    // 8 data points sampled monthly going back ~7 months
+    // portfolio = cumulative % return from day 0 (first point is always 0.0)
+    // sp500 = SPY cumulative % return from same start date (also 0.0 at first point)
+    { "date": "Aug '24", "portfolio": 0.0, "sp500": 0.0 },
+    { "date": "Sep '24", "portfolio": -3.2, "sp500": 1.1 },
+    // ...
+    { "date": "Mar '25", "portfolio": 12.4, "sp500": 8.1 }
+  ],
+  "asset_allocation": [
+    // group holdings by asset class, compute total allocation % per class
+    { "label": "Tech Equity", "pct": 52.3, "color": "#38bdf8" },
+    { "label": "Thematic ETF", "pct": 26.1, "color": "#f59e0b" },
+    { "label": "Commodities", "pct": 12.4, "color": "#22c55e" },
+    { "label": "Crypto", "pct": 5.2, "color": "#a78bfa" },
+    { "label": "Small Cap", "pct": 4.0, "color": "#6366f1" }
+  ],
+  "correlation_matrix": {
+    // only include equity/ETF tickers that have daily OHLC history available
+    // skip GOLD and BTC from the matrix (different data sources)
+    "tickers": ["NVDA", "OSS", "BUZZ"],
+    "values": [
+      [1.0, 0.42, 0.71],
+      [0.42, 1.0, 0.38],
+      [0.71, 0.38, 1.0]
+    ]
+  },
+  "risk_metrics": {
+    "weighted_volatility": <annualized portfolio volatility %>,
+    "max_drawdown": <max peak-to-trough % drawdown over past year>,
+    "top_concentration": <largest single position allocation % as integer>,
+    "top_concentration_label": "NVDA",
+    "portfolio_beta": <portfolio beta vs SPY>,
+    "sharpe_ratio": <annualized Sharpe ratio>,
+    "sortino_ratio": <annualized Sortino ratio>
+  },
+  "volatility": [
+    // all 5 holdings sorted by annualized vol descending
+    // GOLD and BTC: use their respective historical price data to compute vol
+    { "ticker": "BTC", "vol": 58.2 },
+    { "ticker": "NVDA", "vol": 44.1 },
+    { "ticker": "OSS", "vol": 38.6 },
+    { "ticker": "BUZZ", "vol": 22.3 },
+    { "ticker": "GOLD", "vol": 14.2 }
+  ],
+  "risk_suggestions": [
+    // 2-4 rule-based suggestions based on actual portfolio composition
+    {
+      "level": "RISK",
+      "title": "High Single-Stock Concentration",
+      "body": "NVDA represents ~52% of total portfolio value. A 20% drawdown in NVDA alone would reduce total portfolio value by ~10%. Consider trimming to below 30%."
+    },
+    {
+      "level": "RISK",
+      "title": "Crypto Volatility Exposure",
+      "body": "BTC has annualized volatility >50%. At 5% allocation this is manageable, but monitor closely during risk-off episodes."
+    }
+  ],
+  "top_movers": {
+    "gainers": [
+      // up to 2 holdings with highest positive % change today
+      { "ticker": "NVDA", "change_pct": 1.24, "price": 875.50, "w52_low": 400.0, "w52_high": 975.0 },
+      { "ticker": "BTC",  "change_pct": 0.88, "price": 67200.0, "w52_low": 25000.0, "w52_high": 73800.0 }
+    ],
+    "losers": [
+      // up to 2 holdings with largest negative % change today
+      { "ticker": "OSS",  "change_pct": -1.10, "price": 8.75,   "w52_low": 5.50,   "w52_high": 14.20 },
+      { "ticker": "BUZZ", "change_pct": -0.55, "price": 28.40,  "w52_low": 18.00,  "w52_high": 38.50 }
+    ]
+  },
+  "earnings_calendar": [
+    // upcoming earnings for the equity/ETF holdings PLUS top 5 S&P 500 companies by market cap
+    // for tickers with no upcoming earnings, either omit them or use next known date
+    {
+      "ticker": "NVDA",
+      "company": "NVIDIA",
+      "wtd": "+1.24%",
+      "last_eps": 0.89,
+      "next_date": "May 28",
+      "est_eps": 0.94
+    }
+    // ... include MSFT, AAPL, GOOGL, META, AMZN as context even if not in portfolio
+  ],
+  "ticker_tape": [
+    // real-time prices for these 10 symbols in this order:
+    // SPY, QQQ, NVDA, GLD, BTC-USD (or BTCUSD), ETH-USD, IWM, VIX, TLT, DXY
+    { "symbol": "SPY",     "price": 512.34, "change_pct": -0.42 },
+    { "symbol": "QQQ",     "price": 438.12, "change_pct": -0.61 },
+    { "symbol": "NVDA",    "price": 875.50, "change_pct": 1.24  },
+    { "symbol": "GLD",     "price": 226.80, "change_pct": 0.31  },
+    { "symbol": "BTC",     "price": 67200,  "change_pct": 0.88  },
+    { "symbol": "ETH",     "price": 3540,   "change_pct": -0.22 },
+    { "symbol": "IWM",     "price": 198.40, "change_pct": -0.85 },
+    { "symbol": "VIX",     "price": 18.40,  "change_pct": 4.20  },
+    { "symbol": "TLT",     "price": 91.20,  "change_pct": 0.15  },
+    { "symbol": "DXY",     "price": 104.30, "change_pct": -0.08 }
+  ],
+  "news_ticker": [
+    // 3-6 recent news items for NVDA, OSS, BUZZ fetched from Finnhub
+    {
+      "symbol": "NVDA",
+      "headline": "Jensen Huang says AI infrastructure spending will double in 2025",
+      "time_ago": "2h ago"
+    }
+  ],
+  "as_of": "2025-03-30T15:30:00Z"
+}
+Critical fixes needed:
+
+_load_holdings path: The endpoint is returning value: 0, which means it's reading an empty holdings file. The correct holdings file is the same one that powers /api/stock-holdings — check that path and update _load_holdings to read from it. The file contains: NVDA (10 shares), OSS (60 shares), BUZZ (100 shares), GOLD (1 share, commodity), BTC (0.1, crypto).
+
+Mixed asset type handling: GOLD and BTC are not equity tickers and won't have Tradier quote data. Use your existing commodity price fetching for GOLD and CoinGecko/crypto provider for BTC. OSS and BUZZ may have thin liquidity — use Tradier with a fallback to Yahoo Finance or FMP.
+
+Correlation matrix: Only include NVDA, OSS, BUZZ (the equity/ETF tickers). Skip GOLD and BTC — their price series are on different scales and will produce meaningless correlations vs. equities.
+
+Volatility for GOLD/BTC: Use their respective historical price APIs (CoinGecko for BTC, commodity price API for GOLD) to compute annualized vol the same way you do for equities.
+
+Performance chart: Use the portfolio's actual cost-basis-weighted return for the portfolio series. For sp500, use SPY's price history over the same period. Normalize both to 0.0% at the first data point.
+
+Null safety: Return null for any metric you genuinely cannot compute (e.g., Sharpe ratio if history is unavailable). Do NOT return 0 for a metric that should have a real value — 0 makes the frontend think the data is real.
+
+Update terminal display to show accurate financial data
+10:48 pm, Mar 29, 2026
