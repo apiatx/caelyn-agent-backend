@@ -1,0 +1,170 @@
+Hyperliquid Backend Data Contract
+Base URL your FastAPI must expose:
+
+GET  /api/hyperliquid/screener/snapshot?market_type=all&limit=200
+POST /api/hyperliquid/screener/agent-rank
+GET  /api/hyperliquid/screener/asset/{coin}
+(These are the paths your frontend's Node proxy forwards to)
+
+Endpoint 1 — GET /api/hyperliquid/screener/snapshot
+Returns:
+
+{
+  "rows": [ <ScreenerRow>, ... ],
+  "meta": <ScreenerMeta>
+}
+ScreenerRow — exact field names, types, units, sources
+Frontend field	JSON key	Type	Units / notes	Hyperliquid source
+rank	rank	int	1-based position (your default sort)	Computed
+coin	coin	str	e.g. "BTC", "ETH", "@12" for spot	meta.universe[i].name
+displayName	displayName	str	Human-readable name	meta.universe[i].name or enriched
+marketType	marketType	"perp" or "spot"	Market type	Derived from endpoint used
+category	category	str	e.g. "L1", "DeFi", "Meme"	Your classification or null
+tags	tags	str[]	Array of tag strings	Your classification or []
+markPrice	markPrice	float | null	USD, raw price	assetCtxs[i].markPx
+midPrice	midPrice	float | null	USD, (bid+ask)/2	From L2 book
+oraclePrice	oraclePrice	float | null	USD	assetCtxs[i].oraclePx
+bboBid	bboBid	float | null	USD, best bid	l2Book.levels[0][0].px (bids)
+bboAsk	bboAsk	float | null	USD, best ask	l2Book.levels[1][0].px (asks)
+spread	spread	float | null	USD absolute: ask - bid	Computed
+spreadPct	spreadPct	float | null	Decimal: spread / midPrice	Computed
+spreadBps	spreadBps	float | null	Basis points: spreadPct * 10000	Computed
+change24hPct	change24hPct	float | null	Decimal: (mark - prevDay) / prevDay → e.g. 0.053 = +5.3%	Computed from assetCtxs[i].prevDayPx
+premium	premium	float | null	Decimal: (mark - oracle) / oracle	Computed
+funding	funding	float | null	Hourly rate as decimal e.g. 0.0001 = 0.01%/hr	assetCtxs[i].funding
+predictedFunding	predictedFunding	float | null	Hourly rate as decimal	assetCtxs[i].premium (HL uses this field for predicted)
+openInterest	openInterest	float | null	USD notional	assetCtxs[i].openInterest * markPrice
+oiChangePct	oiChangePct	float | null	Decimal vs prior snapshot	Computed from your OI cache
+oiChange5m	oiChange5m	float | null	Decimal, 5-min OI delta	Computed from your OI cache
+oiChange1h	oiChange1h	float | null	Decimal, 1-hour OI delta	Computed from your OI cache
+volume24h	volume24h	float | null	USD notional	assetCtxs[i].dayNtlVlm
+volume24hBase	volume24hBase	float | null	Base coin volume	assetCtxs[i].dayNtlVlm / markPrice
+volumeImpulse	volumeImpulse	float | null	Score 0–1, recent vol spike vs rolling avg	Your computed feature
+tradeCount	tradeCount	int | null	24h trade count	From recent trades snapshot
+tradeImbalance	tradeImbalance	float | null	(buyVol - sellVol) / (buyVol + sellVol), range -1 to +1	From trades
+bidDepth	bidDepth	float | null	USD, top-N bid depth	sum(level.px * level.sz for top 10 bids)
+askDepth	askDepth	float | null	USD, top-N ask depth	sum(level.px * level.sz for top 10 asks)
+bidAskImbalance	bidAskImbalance	float | null	(bid - ask) / (bid + ask), range -1 to +1	Computed
+impactBidPx	impactBidPx	float | null	USD	assetCtxs[i].impactPxs[0]
+impactAskPx	impactAskPx	float | null	USD	assetCtxs[i].impactPxs[1]
+distMarkOracle	distMarkOracle	float | null	Decimal: (mark - oracle) / oracle	Computed
+distMarkMid	distMarkMid	float | null	Decimal: (mark - mid) / mid	Computed
+distMarkPrevDay	distMarkPrevDay	float | null	Decimal: (mark - prevDay) / prevDay	Computed
+volatility	volatility	float | null	Score 0–1 (normalized realized vol from candles)	Your computed feature
+momentum	momentum	float | null	Score 0–1 (short-window return momentum)	Your computed feature
+breakoutScore	breakoutScore	float | null	Score 0–1	Your computed feature
+meanReversionScore	meanReversionScore	float | null	Score 0–1	Your computed feature
+liquidityScore	liquidityScore	float | null	Score 0–1 (high = liquid)	Your computed feature
+flowScore	flowScore	float | null	Score 0–1 (trade flow pressure)	Your computed feature
+compositeSignal	compositeSignal	float | null	Score 0–1 (your weighted signal)	Your computed feature
+signalDirection	signalDirection	"bullish" | "bearish" | "neutral" | null	Based on compositeSignal threshold	Your computed feature
+signalConfidence	signalConfidence	float | null	Score 0–1	Your computed feature
+maxLeverage	maxLeverage	int | null	e.g. 50	meta.universe[i].maxLeverage
+szDecimals	szDecimals	int | null	e.g. 3	meta.universe[i].szDecimals
+marketStatus	marketStatus	str | null	e.g. "trading", "delisted"	Derived
+updatedAt	updatedAt	str | null	ISO 8601 timestamp	datetime.utcnow().isoformat() + "Z"
+agentRank	agentRank	int | null	Return null here (set by agent endpoint)	—
+agentScore	agentScore	float | null	Return null here	—
+agentRationale	agentRationale	str | null	Return null here	—
+rankDelta	rankDelta	int | null	Return null here	—
+ScreenerMeta — exact field names
+{
+  "totalAssets":        200,            # int — count of rows returned
+  "gainers":            123,            # int — count with change24hPct > 0
+  "losers":             77,             # int — count with change24hPct < 0
+  "topMover":           "BTC",          # str | null — coin with largest |change24hPct|
+  "topMoverPct":        0.053,          # float | null — decimal (0.053 = +5.3%)
+  "largestVolumeCoin":  "BTC",          # str | null
+  "largestVolume":      4200000000.0,   # float | null — USD
+  "largestOICoin":      "BTC",          # str | null
+  "largestOI":          8300000000.0,   # float | null — USD
+  "highestFunding":     0.0003,         # float | null — hourly rate decimal
+  "highestFundingCoin": "DOGE",         # str | null
+  "lowestFunding":      -0.0002,        # float | null — hourly rate decimal
+  "lowestFundingCoin":  "XRP",          # str | null
+  "lastUpdated":        "2025-01-01T12:00:00Z",  # str | null — ISO 8601
+  "serverTs":           "2025-01-01T12:00:00Z"   # str | null — ISO 8601
+}
+Endpoint 2 — POST /api/hyperliquid/screener/agent-rank
+Receives:
+
+{
+  "rows": [
+    { "coin": "BTC", "markPrice": 95000, "change24hPct": 0.03, "funding": 0.0001,
+      "openInterest": 5000000000, "volume24h": 4000000000, "compositeSignal": 0.72,
+      "signalDirection": "bullish", "momentum": 0.65, "breakoutScore": 0.71, ... }
+  ]
+}
+Returns — exact shape:
+
+{
+  "rankedCoins": [          # ALL coins re-ranked by agent score, best first
+    {
+      "coin":         "BTC",
+      "agentRank":    1,            # int, 1-based
+      "agentScore":   0.87,         # float 0–1
+      "direction":    "long",       # "long" | "short" | "avoid" | "neutral"
+      "confidence":   0.82,         # float 0–1
+      "rationale":    "Strong OI expansion with positive funding...",  # str
+      "rankMovement": 3,            # int | null — how many ranks gained vs prior (pos=up)
+      "featureContributions": {     # dict | null
+        "momentum": 0.25,
+        "funding": 0.18,
+        "oi_change": 0.15
+      }
+    }
+  ],
+  "longs":          [ ... ],   # top long candidates — same AgentRankedItem shape
+  "shorts":         [ ... ],   # top short candidates
+  "breakouts":      [ ... ],   # breakout setups
+  "meanReversions": [ ... ],   # mean reversion setups
+  "avoid":          [ ... ],   # illiquid or dangerous
+  "summary":        "Markets showing strong long bias in large caps...",  # str
+  "generatedAt":    "2025-01-01T12:00:05Z"  # ISO 8601 str
+}
+Endpoint 3 — GET /api/hyperliquid/screener/asset/{coin}
+Returns:
+
+{
+  "coin": "BTC",
+  "priceHistory": [          # Recent candles as simple time/price pairs
+    { "t": 1700000000000, "p": 94800.0 },   # t = Unix ms, p = price
+    ...
+  ],
+  "orderBook": {
+    "bids": [[94900.0, 2.5], [94850.0, 8.1], ...],   # [price, size] top 10
+    "asks": [[94950.0, 1.8], [95000.0, 5.2], ...]    # [price, size] top 10
+  },
+  "recentTrades": [
+    { "t": 1700000000000, "p": 94920.0, "sz": 0.5, "side": "B" },  # B=buy, S=sell
+    ...
+  ],
+  "momentumSummary":  "Price breaking above 1h VWAP with accelerating volume.",  # str | null
+  "liquiditySummary": "Bid depth 3.2× ask depth. Spread 0.8 bps.",               # str | null
+  "marketStructure":  "Higher highs over 4h. OI expanding. Longs in control.",    # str | null
+  "agentRationale":   "Strong momentum with healthy OI build. Long bias.",        # str | null
+  "scoreHistory": [   # recent composite signal history
+    { "t": 1700000000000, "score": 0.71 },
+    ...
+  ]
+}
+Critical rules
+Never return 0 for a metric that is genuinely unavailable — always return null. The frontend displays — for null and treats 0 as a real value.
+
+All percentage/rate fields are raw decimals — 0.053 means 5.3%, 0.0001 means 0.01%/hr. The frontend multiplies by 100 for display.
+
+All USD amounts are full dollar values — 4200000000.0 not 4200 or 4.2B.
+
+Score fields (volatility, momentum, breakoutScore, etc.) must be 0–1 normalized — the frontend colors them: ≥0.6 green, ≤0.35 red, otherwise amber.
+
+signalDirection must be exactly "bullish", "bearish", or "neutral" — no other strings.
+
+updatedAt must be ISO 8601 with a Z suffix: "2025-01-01T12:00:00Z".
+
+Hyperliquid main info call to get all market data in one shot:
+
+import httpx
+resp = httpx.post("https://api.hyperliquid.xyz/info",
+    json={"type": "metaAndAssetCtxs"})
+meta, asset_ctxs = resp.json()  # meta is universe info, asset_ctxs is per-asset context
+Each asset_ctxs[i] maps to meta["universe"][i] by index. Fields you'll use: markPx, oraclePx, funding, openInterest, dayNtlVlm, prevDayPx, impactPxs, premium.

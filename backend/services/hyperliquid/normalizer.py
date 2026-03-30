@@ -296,22 +296,24 @@ def patch_from_bbo(state: HyperliquidState, coin: str, bbo_data: dict):
 
 def patch_from_l2(state: HyperliquidState, coin: str, levels: list):
     """
-    L2 update → update book depth and imbalance.
+    L2 update → update book depth, imbalance, and best bid/ask.
     levels = [[bid_level, ...], [ask_level, ...]]
     Each level = {px: str, sz: str, n: int} or [px, sz, n].
     """
     if not levels or len(levels) < 2:
         return
 
+    def _level_px_sz(lvl):
+        if isinstance(lvl, dict):
+            return _f(lvl.get("px")), _f(lvl.get("sz"))
+        elif isinstance(lvl, (list, tuple)) and len(lvl) >= 2:
+            return _f(lvl[0]), _f(lvl[1])
+        return None, None
+
     def _sum_depth(level_list, top_n=10) -> float:
         total = 0.0
         for lvl in level_list[:top_n]:
-            if isinstance(lvl, dict):
-                px, sz = _f(lvl.get("px")), _f(lvl.get("sz"))
-            elif isinstance(lvl, (list, tuple)) and len(lvl) >= 2:
-                px, sz = _f(lvl[0]), _f(lvl[1])
-            else:
-                continue
+            px, sz = _level_px_sz(lvl)
             if px and sz:
                 total += px * sz
         return total
@@ -321,6 +323,13 @@ def patch_from_l2(state: HyperliquidState, coin: str, levels: list):
     total = bid_depth + ask_depth
     imbalance = (bid_depth - ask_depth) / total if total > 0 else 0.0
 
+    # Extract best bid/ask from top level
+    best_bid = _level_px_sz(levels[0][0])[0] if levels[0] else None
+    best_ask = _level_px_sz(levels[1][0])[0] if levels[1] else None
+    spread_abs = (best_ask - best_bid) if (best_bid and best_ask) else None
+    mid = (best_bid + best_ask) / 2 if (best_bid and best_ask) else None
+    spread_bps = spread_abs / mid * 10_000 if (spread_abs and mid and mid != 0) else None
+
     asset = state.get_asset(coin)
     if asset is None:
         return
@@ -329,6 +338,11 @@ def patch_from_l2(state: HyperliquidState, coin: str, levels: list):
         "orderbook_bid_depth": round(bid_depth, 2),
         "orderbook_ask_depth": round(ask_depth, 2),
         "orderbook_imbalance": round(imbalance, 4),
+        # Populate BBO from L2 if not already set via BBO subscription
+        "bid_px": best_bid if (asset.bid_px is None and best_bid) else asset.bid_px,
+        "ask_px": best_ask if (asset.ask_px is None and best_ask) else asset.ask_px,
+        "spread_abs": round(spread_abs, 6) if (asset.spread_abs is None and spread_abs is not None) else asset.spread_abs,
+        "spread_bps": round(spread_bps, 2) if (asset.spread_bps is None and spread_bps is not None) else asset.spread_bps,
         "last_updated_ts": time.time(),
     })
 
