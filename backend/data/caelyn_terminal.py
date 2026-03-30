@@ -330,7 +330,7 @@ class CaelynTerminalProvider:
 
     @traceable(name="caelyn_terminal.get")
     async def get(self, portfolio_file: Path) -> dict:
-        cache_key = "caelyn:terminal:v6"
+        cache_key = "caelyn:terminal:v7"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
@@ -636,9 +636,8 @@ class CaelynTerminalProvider:
         if not self.finnhub:
             return []
 
-        all_tickers = list(dict.fromkeys(
-            holding_tickers + [t for t in SP500_EARNINGS_CONTEXT if t not in holding_tickers]
-        ))
+        # Only fetch for portfolio holdings — context tickers no longer displayed
+        all_tickers = list(dict.fromkeys(holding_tickers))
 
         results: list[dict] = []
 
@@ -682,27 +681,6 @@ class CaelynTerminalProvider:
         for item in fetched:
             if isinstance(item, dict):
                 results.append(item)
-
-        # Also scan market-wide calendar for any matches not covered above
-        try:
-            market_cal = await asyncio.wait_for(
-                asyncio.to_thread(self.finnhub.get_earnings_calendar),
-                timeout=10.0,
-            )
-            ticker_set = set(t.upper() for t in all_tickers)
-            seen = {r["ticker"] for r in results}
-            for e in market_cal:
-                t = (e.get("ticker") or "").upper()
-                if t in ticker_set and t not in seen:
-                    results.append({
-                        "ticker":    t,
-                        "last_eps":  None,
-                        "next_date": e.get("date"),
-                        "est_eps":   e.get("eps_estimate"),
-                    })
-                    seen.add(t)
-        except Exception:
-            pass
 
         return results
 
@@ -1386,26 +1364,7 @@ class CaelynTerminalProvider:
                     "wtd":          _wtd(t),
                 })
 
-        # Then S&P 500 context (not already in results)
-        context_tickers = [t for t in SP500_EARNINGS_CONTEXT if t not in seen and t not in skip_tickers]
-        for ticker in context_tickers:
-            t = ticker.upper()
-            if t in seen:
-                continue
-            raw_entry = next((e for e in raw if (e.get("ticker") or "").upper() == t), None)
-            if raw_entry:
-                seen.add(t)
-                results.append({
-                    "ticker":       t,
-                    "company":      t,
-                    "in_portfolio": False,
-                    "next_date":    _fmt_date(raw_entry.get("next_date")),
-                    "est_eps":      raw_entry.get("est_eps"),
-                    "last_eps":     raw_entry.get("last_eps"),
-                    "wtd":          None,
-                })
-
-        return results[:10]
+        return results
 
     def _build_news(self, raw: list, positions: list) -> list[dict]:
         news = []

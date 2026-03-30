@@ -154,10 +154,13 @@ class FinnhubProvider:
         """
         try:
             today = datetime.now()
-            next_month = today + timedelta(days=30)
+            # Use 90-day window for specific tickers (earnings may be 2+ months out)
+            # Use 30-day window for market-wide calendar scan
+            lookahead_days = 90 if ticker else 30
+            lookahead = today + timedelta(days=lookahead_days)
             data = self.client.earnings_calendar(
                 _from=today.strftime("%Y-%m-%d"),
-                to=next_month.strftime("%Y-%m-%d"),
+                to=lookahead.strftime("%Y-%m-%d"),
                 symbol=ticker.upper() if ticker else None,
             )
             earnings = data.get("earningsCalendar", [])
