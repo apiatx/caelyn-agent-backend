@@ -57,6 +57,10 @@ class HyperliquidState:
         # Previous ranking order {coin: rank_int}
         self.prev_ranks: dict[str, int] = {}
 
+        # OI history for change computation: coin → deque[(ts_unix, oi_usd)]
+        # Stored at ~60s intervals; 130 entries ≈ 2h+ of history
+        self.oi_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=130))
+
         # Timing
         self.boot_ts: Optional[float] = None
         self.last_mids_ts: Optional[float] = None

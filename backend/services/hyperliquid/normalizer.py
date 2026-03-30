@@ -143,6 +143,9 @@ def build_spot_universe(spot_meta_and_ctxs: list) -> dict[str, ScreenerAsset]:
     """
     Convert spotMetaAndAssetCtxs into ScreenerAsset objects.
     Spot markets have fewer fields (no funding, no OI, no impact prices).
+
+    The `coin` key matches allMids (e.g. "PURR/USDC" or "@1").
+    The `display_name` is always the human-readable base token name (e.g. "PURR", "HFUN").
     """
     if not spot_meta_and_ctxs or len(spot_meta_and_ctxs) < 2:
         return {}
@@ -151,29 +154,64 @@ def build_spot_universe(spot_meta_and_ctxs: list) -> dict[str, ScreenerAsset]:
     ctx_list   = spot_meta_and_ctxs[1]
     universe   = meta_block.get("universe", [])
 
+    # Build token index → name lookup from the "tokens" array in metadata
+    # tokens[i] = {"name": "PURR", "index": 1, ...}
+    raw_tokens = meta_block.get("tokens", [])
+    token_names: dict[int, str] = {}
+    for i, tok in enumerate(raw_tokens):
+        idx_key = tok.get("index", i)
+        tok_name = tok.get("name")
+        if tok_name:
+            token_names[idx_key] = tok_name
+
     assets: dict[str, ScreenerAsset] = {}
-    for idx, market in enumerate(universe):
-        coin = market.get("name", "")
+    for i, market in enumerate(universe):
+        # Use ctx.coin as the canonical key — this matches allMids updates
+        ctx = ctx_list[i] if i < len(ctx_list) else {}
+        coin = ctx.get("coin") or market.get("name") or f"@{i}"
         if not coin:
             continue
-        ctx = ctx_list[idx] if idx < len(ctx_list) else {}
-        mark  = _f(ctx.get("markPx"))
-        prev  = _f(ctx.get("prevDayPx"))
+
+        # Resolve human-readable display name from the base token in the pair
+        market_token_indices = market.get("tokens", [])
+        display_name = coin  # fallback
+        if market_token_indices:
+            base_idx = market_token_indices[0]
+            display_name = token_names.get(base_idx, coin)
+            # For canonical names like "PURR/USDC", also strip the /USDC suffix
+            if "/" in display_name:
+                display_name = display_name.split("/")[0]
+        elif "/" in coin:
+            # e.g. "PURR/USDC" → "PURR"
+            display_name = coin.split("/")[0]
+
+        mark   = _f(ctx.get("markPx"))
+        mid    = _f(ctx.get("midPx"))
+        prev   = _f(ctx.get("prevDayPx"))
         ntlvlm = _f(ctx.get("dayNtlVlm"))
+        basevlm = _f(ctx.get("dayBaseVlm"))
         pct_24h = None
         if mark and prev and prev != 0:
             pct_24h = (mark - prev) / prev * 100
 
+        # Derive tags from canonical status
+        tags = ["spot"]
+        is_canonical = market.get("isCanonical", False)
+        if is_canonical:
+            tags.append("canonical")
+
         assets[coin] = ScreenerAsset(
             coin=coin,
-            display_name=coin,
+            display_name=display_name,
             market_type="spot",
             dex="hyperliquid",
-            tags=["spot"],
+            tags=tags,
             mark_px=mark,
+            mid_px=mid,
             prev_day_px=prev,
             pct_change_24h=round(pct_24h, 4) if pct_24h is not None else None,
             day_ntl_vlm=ntlvlm,
+            day_base_vlm=basevlm,
             momentum_24h=round(pct_24h, 4) if pct_24h is not None else None,
             last_updated_ts=time.time(),
         )

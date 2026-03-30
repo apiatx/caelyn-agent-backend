@@ -44,9 +44,12 @@ class ScreenerAsset(BaseModel):
     # ── Market size ───────────────────────────────────────────────────────
     open_interest: Optional[float] = None       # base asset
     open_interest_usd: Optional[float] = None
-    open_interest_change_pct: Optional[float] = None
+    open_interest_change_pct: Optional[float] = None   # 1h OI % change
+    oi_change_5m: Optional[float] = None               # 5-min OI % change (decimal)
+    oi_change_1h: Optional[float] = None               # 1-hour OI % change (decimal)
     day_ntl_vlm: Optional[float] = None         # 24h notional USD
     day_base_vlm: Optional[float] = None        # 24h base volume
+    volume_impulse: Optional[float] = None      # recent vol relative to avg (1.0 = normal)
 
     # ── Microstructure / book ─────────────────────────────────────────────
     impact_bid_px: Optional[float] = None       # fill price for $5k notional short

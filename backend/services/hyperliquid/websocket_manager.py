@@ -334,7 +334,7 @@ async def _periodic_candle_refresh(state: HyperliquidState, client: HyperliquidR
 
 async def _periodic_feature_recompute(state: HyperliquidState):
     """
-    Every 60 seconds: recompute all features and scores.
+    Every 60 seconds: save OI snapshots, compute OI changes, recompute all features.
     This ensures composite scores, percentile ranks, and flags stay current
     even for assets that haven't received a live WS update recently.
     """
@@ -343,6 +343,54 @@ async def _periodic_feature_recompute(state: HyperliquidState):
         if not state.is_ready:
             continue
         try:
+            _save_oi_snapshots(state)
+            _compute_oi_changes(state)
             run_full_feature_pass(state)
         except Exception as e:
             print(f"[HL][feature_recompute] Error: {e}")
+
+
+def _save_oi_snapshots(state: HyperliquidState):
+    """Record current OI for all perp assets for change computation."""
+    now = time.time()
+    for asset in state.perp_assets():
+        if asset.open_interest_usd:
+            state.oi_history[asset.coin].append((now, asset.open_interest_usd))
+
+
+def _compute_oi_changes(state: HyperliquidState):
+    """Compute 5m and 1h OI changes from stored history and patch assets."""
+    now = time.time()
+    for coin, history in state.oi_history.items():
+        asset = state.get_asset(coin)
+        if asset is None:
+            continue
+        snaps = list(history)
+        if not snaps:
+            continue
+        current_oi = asset.open_interest_usd
+        if not current_oi:
+            continue
+
+        # Find snapshot closest to 5 min ago (270–360 s)
+        snap_5m = next(
+            (s for s in reversed(snaps) if 270 <= (now - s[0]) <= 600),
+            None
+        )
+        # Find snapshot closest to 1 hour ago (3300–4500 s)
+        snap_1h = next(
+            (s for s in snaps if 3300 <= (now - s[0]) <= 4500),
+            None
+        )
+
+        def pct(new, old):
+            return round((new - old) / old, 6) if old and old != 0 else None
+
+        oi_5m = pct(current_oi, snap_5m[1]) if snap_5m else None
+        oi_1h = pct(current_oi, snap_1h[1]) if snap_1h else None
+
+        if oi_5m is not None or oi_1h is not None:
+            state.assets[coin] = asset.model_copy(update={
+                "oi_change_5m": oi_5m,
+                "oi_change_1h": oi_1h,
+            })

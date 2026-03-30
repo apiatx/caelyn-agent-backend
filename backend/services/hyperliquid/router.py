@@ -95,10 +95,14 @@ def _asset_to_row(asset: ScreenerAsset, rank: int) -> dict:
     spread_pct = (spread_abs / mid) if (spread_abs and mid and mid != 0) else None
     spread_bps = spread_pct * 10_000 if spread_pct is not None else asset.spread_bps
 
+    # For all spot assets, output the human-readable base token name as `coin`
+    # (display_name = "PURR", "HFUN" etc., not "@14" or "PURR/USDC")
+    coin_out = asset.display_name if asset.market_type == "spot" else asset.coin
+
     return {
         # ── Identity ──────────────────────────────────────────────────────
         "rank":         rank,
-        "coin":         asset.coin,
+        "coin":         coin_out,
         "displayName":  asset.display_name,
         "marketType":   asset.market_type,
         "category":     _category(asset.tags),
@@ -125,14 +129,14 @@ def _asset_to_row(asset: ScreenerAsset, rank: int) -> dict:
 
         # ── Open interest ─────────────────────────────────────────────────
         "openInterest":  asset.open_interest_usd,
-        "oiChangePct":   None,   # requires OI history cache — future
-        "oiChange5m":    None,
-        "oiChange1h":    None,
+        "oiChangePct":   asset.open_interest_change_pct,  # 1h change (decimal)
+        "oiChange5m":    asset.oi_change_5m,
+        "oiChange1h":    asset.oi_change_1h,
 
         # ── Volume ────────────────────────────────────────────────────────
         "volume24h":      asset.day_ntl_vlm,
         "volume24hBase":  asset.day_base_vlm,
-        "volumeImpulse":  None,   # future: rolling vol-z-score
+        "volumeImpulse":  asset.volume_impulse,
 
         # ── Trade flow ────────────────────────────────────────────────────
         "tradeCount":      asset.recent_trade_count if asset.recent_trade_count > 0 else None,

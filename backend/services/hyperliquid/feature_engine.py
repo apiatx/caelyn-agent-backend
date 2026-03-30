@@ -118,6 +118,16 @@ def compute_candle_features(
         if c_4ago > 0:
             updates["momentum_4h"] = round((c_now - c_4ago) / c_4ago * 100, 4)
 
+    # ── Volume impulse ────────────────────────────────────────────────────
+    # Compare last 1h candle volume vs rolling average of prior N candles.
+    # impulse > 1.0 = elevated volume, < 1.0 = quiet
+    if len(candles_1h) >= 6:
+        vol_series = [float(c.get("v", 0) or 0) for c in candles_1h if c.get("v")]
+        if vol_series and vol_series[-1] > 0:
+            prior_avg = sum(vol_series[-7:-1]) / max(len(vol_series[-7:-1]), 1)
+            if prior_avg > 0:
+                updates["volume_impulse"] = round(vol_series[-1] / prior_avg, 3)
+
     return updates
 
 
