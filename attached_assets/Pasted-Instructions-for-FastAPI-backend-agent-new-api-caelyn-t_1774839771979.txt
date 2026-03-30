@@ -1,0 +1,93 @@
+Instructions for FastAPI backend agent — new /api/caelyn-terminal endpoint:
+
+Add a new GET /api/caelyn-terminal endpoint that returns the following JSON shape (all fields required, all computed server-side from your holdings data + live market data):
+
+{
+  "portfolio": {
+    "value": 61853.98,
+    "change_today": -21.06,
+    "change_pct_today": -0.03,
+    "perf_1d": -0.1,
+    "perf_5d": -0.2,
+    "perf_1m": -2.6,
+    "perf_6m": 5.6,
+    "perf_1y": 12.4,
+    "total_return_pct": 55.0,
+    "total_return_value": 21642.97,
+    "sentiment": "UNCERTAIN",
+    "market_status": "CLOSED"
+  },
+  "positions_count": 13,
+  "holdings": [
+    { "ticker": "SCHB", "price": 26.89, "change": -0.06, "change_pct": -0.21, "allocation_pct": 43.0 }
+  ],
+  "performance_chart": [
+    { "date": "Mar '25", "portfolio": 0.0, "sp500": 0.0 },
+    { "date": "Jun '25", "portfolio": 8.2, "sp500": 5.1 }
+  ],
+  "asset_allocation": [
+    { "label": "US Equity", "pct": 52.2, "color": "#38bdf8" },
+    { "label": "Intl Developed", "pct": 19.7, "color": "#6366f1" },
+    { "label": "Emerging Markets", "pct": 17.8, "color": "#f59e0b" },
+    { "label": "Fixed Income", "pct": 10.2, "color": "#22c55e" },
+    { "label": "Individual Stocks", "pct": 0.1, "color": "#a78bfa" }
+  ],
+  "correlation_matrix": {
+    "tickers": ["SCHB", "SCHF", "VWO", "IEMG", "DGRO"],
+    "values": [
+      [1.0, 0.78, 0.57, 0.60, 0.88],
+      [0.78, 1.0, 0.75, 0.72, 0.41],
+      [0.57, 0.75, 1.0, 0.69, 0.43],
+      [0.60, 0.72, 0.69, 1.0, 0.39],
+      [0.88, 0.41, 0.43, 0.39, 1.0]
+    ]
+  },
+  "risk_metrics": {
+    "weighted_volatility": 8.8,
+    "max_drawdown": 3.1,
+    "top_concentration": 52,
+    "top_concentration_label": "US Equities",
+    "portfolio_beta": 0.78,
+    "sharpe_ratio": 1.42,
+    "sortino_ratio": 1.68
+  },
+  "volatility": [
+    { "ticker": "TSLA", "vol": 48.6 },
+    { "ticker": "NVDA", "vol": 35.2 }
+  ],
+  "risk_suggestions": [
+    {
+      "level": "RISK",
+      "title": "High U.S. Equity Concentration",
+      "body": "SCHB (43%) exposes nearly half the portfolio to U.S. market downturns. Rebalance 5-10% into SCHF or VWO to reduce single-market dependency."
+    }
+  ],
+  "top_movers": {
+    "gainers": [
+      { "ticker": "NVDA", "change_pct": 1.16, "price": 875.0, "w52_low": 400, "w52_high": 975 }
+    ],
+    "losers": [
+      { "ticker": "DGRО", "change_pct": -0.49, "price": 71.50, "w52_low": 54, "w52_high": 115 }
+    ]
+  },
+  "earnings_calendar": [
+    { "ticker": "JPM", "company": "JPMorgan", "wtd": "4.34%", "last_eps": 5.28, "next_date": "Apr 14", "est_eps": 5.42 }
+  ],
+  "ticker_tape": [
+    { "symbol": "SPY", "price": 512.34, "change_pct": -0.42 }
+  ],
+  "news_ticker": [
+    { "symbol": "AAPL", "headline": "Wedbush's Dan Ives calls Apple's new product strategy 'a smart one'; maintains Outperform", "time_ago": "2h ago" }
+  ],
+  "as_of": "2026-03-29T20:41:00Z"
+}
+Notes:
+
+performance_chart — percentage change from start of period, not absolute values. portfolio and sp500 are both normalized to 0% at the first data point
+correlation_matrix.values — NxN symmetric matrix, diagonal is always 1.0; tickers are the top holdings by allocation
+volatility — annualized volatility %, sorted descending; include all holdings
+top_movers — 2 gainers and 2 losers from the actual holdings for today, with their 52-week high/low for the range bar
+market_status — one of "OPEN", "CLOSED", "PRE-MARKET", "AFTER-HOURS"
+sentiment — your engine's signal: "BULLISH", "BEARISH", "UNCERTAIN", or "NEUTRAL"
+Holdings data should be read from the same source as the existing /api/stock-holdings endpoint; combine with live quotes to compute allocations, changes, and all derived metrics
+Use the same X-API-Key authentication as existing endpoints

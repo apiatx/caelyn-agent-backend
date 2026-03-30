@@ -3938,6 +3938,30 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
 # Portfolio Events (earnings + dividends for holdings)
 # ============================================================
 
+@app.get("/api/caelyn-terminal")
+@traceable(name="main.caelyn_terminal")
+async def caelyn_terminal(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Full portfolio analytics payload for the Caelyn Terminal dashboard."""
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    from data.caelyn_terminal import CaelynTerminalProvider
+
+    user_id = getattr(request.state, "user_id", "default")
+    portfolio_file = _portfolio_file(user_id)
+
+    provider = CaelynTerminalProvider(
+        tradier=data_service.tradier if data_service else None,
+        finnhub=data_service.finnhub if data_service else None,
+        fmp=data_service.fmp if data_service else None,
+        yahoo=data_service.yahoo if data_service else None,
+    )
+    return await provider.get(portfolio_file)
+
+
 @app.get("/api/portfolio/events")
 @traceable(name="main.get_portfolio_events")
 async def get_portfolio_events(request: Request, api_key: str = Header(None, alias="X-API-Key")):

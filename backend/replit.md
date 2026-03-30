@@ -73,3 +73,17 @@ The platform's backend is built on FastAPI, designed for robustness and scalabil
 - **Economic Data**: FRED (Federal Reserve Economic Data), CNN (Fear & Greed Index).
 - **Cryptocurrency Data**: CoinGecko, CoinMarketCap, Hyperliquid, altFINS.
 - **Options Data**: Public.com.
+
+## Caelyn Terminal API
+- **URL**: `GET /api/caelyn-terminal`
+- **Auth**: X-API-Key header (auth currently disabled — all requests pass)
+- **Data source**: Reads holdings from `data/portfolio_holdings_{user_id}.json` (falls back to legacy `data/portfolio_holdings.json`)
+- **Provider**: `backend/data/caelyn_terminal.py` (CaelynTerminalProvider)
+- **Cache**: 90-second in-memory cache (key: `caelyn:terminal:v3`)
+- **Data flows**:
+  - Quotes: Tradier batch `get_quotes` for all holdings + SPY/QQQ/IWM/GLD/DIA (ticker tape)
+  - History: Tradier `get_history` daily 400 days, parallel per holding + SPY (cached 1h)
+  - Earnings calendar: Finnhub market-wide calendar filtered to holdings (sync via thread)
+  - News ticker: Finnhub `get_company_news` for top 4 holdings by allocation (sync via thread)
+  - Market status: Eastern time computation (no API call)
+- **Computed fields**: portfolio value/change/perf periods, asset allocation, correlation matrix (NxN top-5), risk metrics (vol, max drawdown, beta, sharpe, sortino), per-holding volatility, rule-based risk suggestions, top movers (2 gainers + 2 losers), earnings calendar, ticker tape, news ticker
