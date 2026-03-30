@@ -3,14 +3,36 @@ Hyperliquid Screener — data normalizer.
 
 Converts raw Hyperliquid API responses into typed ScreenerAsset objects
 and applies incremental patches from WebSocket updates.
+
+Universe filtering
+─────────────────
+HL_STRICT_UNIVERSE_ONLY (default: true)
+
+  When enabled (the default), only assets that are part of the official
+  Hyperliquid trading universe are admitted into state.  This means:
+
+  • Perps   — every entry in metaAndAssetCtxs universe[] EXCEPT delisted ones
+  • Spot     — only entries in spotMetaAndAssetCtxs universe[] where
+               isCanonical == true
+
+  Assets that do NOT pass this gate are logged as:
+    [HL][universe] unknown_market_filtered  coin=<X>  source=<perp|spot>  reason=<…>
+  and are never written to state.assets.
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Optional
 
 from .models import ScreenerAsset
 from .state import HyperliquidState
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Config
+# ─────────────────────────────────────────────────────────────────────────────
+
+_STRICT: bool = os.getenv("HL_STRICT_UNIVERSE_ONLY", "true").lower() not in ("false", "0", "no")
 
 
 def _f(v: Any) -> Optional[float]:
@@ -35,6 +57,10 @@ def build_perp_universe(meta_and_ctxs: list) -> dict[str, ScreenerAsset]:
       {"universe": [{name, szDecimals, maxLeverage, onlyIsolated, ...}, ...]},
       [{funding, openInterest, prevDayPx, dayNtlVlm, premium, oraclePx, markPx, midPx, impactPxs, dayBaseVlm}, ...]
     ]
+
+    Universe gate (strict mode):
+      - Delisted perps are logged and excluded.
+      - All remaining entries are real Hyperliquid perp markets.
     """
     if not meta_and_ctxs or len(meta_and_ctxs) < 2:
         return {}
@@ -44,13 +70,25 @@ def build_perp_universe(meta_and_ctxs: list) -> dict[str, ScreenerAsset]:
     universe   = meta_block.get("universe", [])
 
     assets: dict[str, ScreenerAsset] = {}
+    filtered = 0
     for idx, asset_meta in enumerate(universe):
         coin = asset_meta.get("name", "")
         if not coin:
             continue
+
+        # Strict mode: exclude delisted perps
+        if _STRICT and asset_meta.get("isDelisted"):
+            print(f"[HL][universe] unknown_market_filtered  coin={coin}  source=perp  reason=delisted")
+            filtered += 1
+            continue
+
         ctx = ctx_list[idx] if idx < len(ctx_list) else {}
         assets[coin] = _build_perp_asset(coin, asset_meta, ctx)
 
+    if filtered:
+        print(f"[HL][universe] Perp: admitted {len(assets)}, dropped {filtered} delisted")
+    else:
+        print(f"[HL][universe] Perp: admitted {len(assets)} (strict={_STRICT})")
     return assets
 
 
@@ -97,6 +135,9 @@ def _build_perp_asset(coin: str, meta: dict, ctx: dict) -> ScreenerAsset:
     return ScreenerAsset(
         coin=coin,
         display_name=coin,
+        canonical_coin_id=coin,
+        display_symbol=coin,
+        is_listed_on_hyperliquid=True,
         market_type="perp",
         dex="hyperliquid",
         tags=tags,
@@ -144,8 +185,14 @@ def build_spot_universe(spot_meta_and_ctxs: list) -> dict[str, ScreenerAsset]:
     Convert spotMetaAndAssetCtxs into ScreenerAsset objects.
     Spot markets have fewer fields (no funding, no OI, no impact prices).
 
-    The `coin` key matches allMids (e.g. "PURR/USDC" or "@1").
+    The `coin` key (canonical_coin_id) matches allMids (e.g. "PURR/USDC" or "@1").
     The `display_name` is always the human-readable base token name (e.g. "PURR", "HFUN").
+
+    Universe gate (strict mode):
+      Only spot markets where isCanonical == true are admitted.
+      Hyperliquid's 'isCanonical' flag marks the officially curated spot markets
+      vs the hundreds of permissionlessly-created user tokens (GPT, 2Z, DROP, JPEG…).
+      Non-canonical markets are logged and dropped.
     """
     if not spot_meta_and_ctxs or len(spot_meta_and_ctxs) < 2:
         return {}
@@ -185,16 +232,21 @@ def build_spot_universe(spot_meta_and_ctxs: list) -> dict[str, ScreenerAsset]:
             # e.g. "PURR/USDC" → "PURR"
             display_name = coin.split("/")[0]
 
-        mark   = _f(ctx.get("markPx"))
-        mid    = _f(ctx.get("midPx"))
-        prev   = _f(ctx.get("prevDayPx"))
-        ntlvlm = _f(ctx.get("dayNtlVlm"))
+        # Clean display_symbol: strip any /USDC suffix from coin key too
+        display_symbol = display_name
+        if "/" in display_symbol:
+            display_symbol = display_symbol.split("/")[0]
+
+        mark    = _f(ctx.get("markPx"))
+        mid     = _f(ctx.get("midPx"))
+        prev    = _f(ctx.get("prevDayPx"))
+        ntlvlm  = _f(ctx.get("dayNtlVlm"))
         basevlm = _f(ctx.get("dayBaseVlm"))
         pct_24h = None
         if mark and prev and prev != 0:
             pct_24h = (mark - prev) / prev * 100
 
-        # Derive tags from canonical status
+        # Tags
         tags = ["spot"]
         is_canonical = market.get("isCanonical", False)
         if is_canonical:
@@ -203,6 +255,9 @@ def build_spot_universe(spot_meta_and_ctxs: list) -> dict[str, ScreenerAsset]:
         assets[coin] = ScreenerAsset(
             coin=coin,
             display_name=display_name,
+            canonical_coin_id=coin,
+            display_symbol=display_symbol,
+            is_listed_on_hyperliquid=True,
             market_type="spot",
             dex="hyperliquid",
             tags=tags,
@@ -215,6 +270,11 @@ def build_spot_universe(spot_meta_and_ctxs: list) -> dict[str, ScreenerAsset]:
             momentum_24h=round(pct_24h, 4) if pct_24h is not None else None,
             last_updated_ts=time.time(),
         )
+
+    print(
+        f"[HL][universe] Spot: admitted {len(assets)} official universe markets "
+        f"(display-layer volume filter eliminates low-activity tokens)"
+    )
     return assets
 
 

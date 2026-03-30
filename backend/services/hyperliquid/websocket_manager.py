@@ -94,7 +94,10 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
         for coin, asset in perp_assets.items():
             state.assets[coin] = asset
             state.meta[coin] = {}
-        print(f"[HL][boot] Loaded {len(perp_assets)} perp assets")
+        # Build perp allowlist from admitted assets
+        state.perp_allowlist = set(perp_assets.keys())
+        state.universe_allowlist.update(state.perp_allowlist)
+        print(f"[HL][boot] Loaded {len(perp_assets)} perp assets | allowlist size={len(state.perp_allowlist)}")
     except Exception as e:
         print(f"[HL][boot] Perp universe error: {e}")
 
@@ -106,7 +109,10 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
         for coin, asset in spot_assets.items():
             if coin not in state.assets:   # don't overwrite a perp with same name
                 state.assets[coin] = asset
-        print(f"[HL][boot] Loaded {len(spot_assets)} spot assets")
+        # Build spot allowlist from canonical admitted assets only
+        state.spot_allowlist = set(spot_assets.keys())
+        state.universe_allowlist.update(state.spot_allowlist)
+        print(f"[HL][boot] Loaded {len(spot_assets)} spot assets | universe total={len(state.universe_allowlist)}")
     except Exception as e:
         print(f"[HL][boot] Spot universe error: {e}")
 

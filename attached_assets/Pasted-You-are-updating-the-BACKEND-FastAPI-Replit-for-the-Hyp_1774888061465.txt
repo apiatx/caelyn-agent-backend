@@ -1,0 +1,67 @@
+You are updating the BACKEND FastAPI Replit for the Hyperliquid Screener.
+
+Problem:
+The screener is displaying random assets/coins that should not be shown as tradable Hyperliquid markets. Examples include symbols like GPT, 2Z, DROP, JPEG, etc. The dashboard must only show assets that are actually listed in the official Hyperliquid tradable market universe.
+
+Goal:
+Implement strict market-universe filtering and canonical symbol normalization so only real Hyperliquid-listed markets are allowed into:
+- hero agent output
+- signal sections
+- market rows
+- selected asset detail
+- ranking engine inputs
+
+Requirements:
+
+1. Build a strict allowlist from official Hyperliquid metadata
+Use:
+- perp meta -> universe[].name for perpetual markets
+- spotMeta -> universe[] for spot markets
+Do NOT use token metadata alone as the source of tradable markets.
+
+2. Maintain canonical identifiers separately from display labels
+For each market store:
+- canonical_coin_id: exact Hyperliquid market identifier
+- display_symbol: frontend-safe display label
+- market_type: perp or spot
+- is_listed_on_hyperliquid: true
+
+3. Filtering rule
+Before any asset is scored or returned:
+- if canonical_coin_id is not in the official allowlist, drop it completely
+- do not allow unknown, synthetic, stale, or mismapped symbols through
+
+4. Spot normalization
+Spot markets must be built from spotMeta.universe, not just tokens.
+Handle Hyperliquid spot naming correctly:
+- keep canonical internal market id from universe
+- derive a clean display symbol for frontend
+- support cases where UI-visible names differ from raw internal identifiers
+
+5. Add validation logs
+If an asset is dropped because it is not in the allowlist, log it as:
+- unknown_market_filtered
+with the raw symbol/id and source
+
+6. Add optional strict mode
+Create a config flag like:
+HL_STRICT_UNIVERSE_ONLY=true
+When enabled, only official universe assets may pass through.
+
+7. API payloads
+Ensure every returned market row includes:
+- canonical_coin_id
+- display_symbol
+- market_type
+- is_listed_on_hyperliquid
+
+8. Agent/ranking protection
+The ranking engine and agent briefing must only score assets that pass universe validation.
+Do not let non-listed assets become top signals.
+
+9. Deliverables
+At the end provide:
+1. files changed
+2. where universe filtering is enforced
+3. how spot vs perp normalization is handled
+4. any assets that were previously leaking through and why

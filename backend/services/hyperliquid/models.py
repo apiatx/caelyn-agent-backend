@@ -24,6 +24,11 @@ class ScreenerAsset(BaseModel):
     dex: str = "hyperliquid"
     tags: list[str] = Field(default_factory=list)
 
+    # ── Universe membership ───────────────────────────────────────────────
+    canonical_coin_id: str = ""         # exact Hyperliquid market identifier (key in state.assets)
+    display_symbol: str = ""            # frontend-safe display label
+    is_listed_on_hyperliquid: bool = True  # always True — non-universe assets never enter state
+
     # ── Price surface ─────────────────────────────────────────────────────
     mark_px: Optional[float] = None
     mid_px: Optional[float] = None

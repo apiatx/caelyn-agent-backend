@@ -74,6 +74,11 @@ class HyperliquidState:
         self.last_mids_ts: Optional[float] = None
         self.last_ctx_ts: Optional[float] = None
 
+        # Universe allowlists (populated during boot from official Hyperliquid metadata)
+        self.perp_allowlist: set[str] = set()    # perp canonical coin IDs
+        self.spot_allowlist: set[str] = set()    # spot canonical coin IDs
+        self.universe_allowlist: set[str] = set()  # combined — gate for all scoring
+
         # Connectivity
         self.ws_connected: bool = False
         self.is_ready: bool = False     # True after boot sequence completes
@@ -95,6 +100,10 @@ class HyperliquidState:
 
     def get_asset(self, coin: str) -> Optional[ScreenerAsset]:
         return self.assets.get(coin)
+
+    def in_universe(self, coin: str) -> bool:
+        """True if coin is in the official Hyperliquid trading universe."""
+        return coin in self.universe_allowlist
 
     def all_assets(self) -> list[ScreenerAsset]:
         """Return a stable snapshot of all current assets."""

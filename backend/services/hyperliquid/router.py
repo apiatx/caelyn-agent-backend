@@ -102,12 +102,15 @@ def _asset_to_row(asset: ScreenerAsset, rank: int) -> dict:
 
     return {
         # ── Identity ──────────────────────────────────────────────────────
-        "rank":         rank,
-        "coin":         coin_out,
-        "displayName":  asset.display_name,
-        "marketType":   asset.market_type,
-        "category":     _category(asset.tags),
-        "tags":         asset.tags,
+        "rank":                   rank,
+        "coin":                   coin_out,
+        "displayName":            asset.display_name,
+        "canonicalCoinId":        asset.canonical_coin_id or asset.coin,
+        "displaySymbol":          asset.display_symbol or coin_out,
+        "isListedOnHyperliquid":  asset.is_listed_on_hyperliquid,
+        "marketType":             asset.market_type,
+        "category":               _category(asset.tags),
+        "tags":                   asset.tags,
 
         # ── Price surface ─────────────────────────────────────────────────
         "markPrice":    asset.mark_px,
@@ -261,8 +264,22 @@ async def get_snapshot(
     if market_type in ("perp", "spot"):
         assets = [a for a in assets if a.market_type == market_type]
     assets = [a for a in assets if a.market_status == "active"]
-    if min_volume_usd:
+
+    # Universe gate (defensive — state should only contain universe assets after boot)
+    if state.universe_allowlist:
+        assets = [a for a in assets if state.in_universe(a.coin)]
+
+    # Volume gate: explicit parameter overrides; default minimum keeps junk tokens off the board.
+    # Spot markets have a lower default since many legit spots are smaller than major perps.
+    _default_spot_min   = 50_000     # $50K/day — eliminates user-created junk spot tokens
+    _default_perp_min   = 0          # no default perp floor (perp universe is already clean)
+    if min_volume_usd is not None:
         assets = [a for a in assets if (a.day_ntl_vlm or 0) >= min_volume_usd]
+    else:
+        assets = [
+            a for a in assets
+            if a.market_type != "spot" or (a.day_ntl_vlm or 0) >= _default_spot_min
+        ]
     if max_spread_bps is not None:
         assets = [a for a in assets if (a.spread_bps or 0) <= max_spread_bps]
 

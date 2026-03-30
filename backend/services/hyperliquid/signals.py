@@ -675,6 +675,7 @@ def generate_agent_briefing(
         if a.market_status == "active"
         and (a.day_ntl_vlm or 0) >= min_volume_usd
         and a.overall_score is not None
+        and (not state.universe_allowlist or state.in_universe(a.coin))
     ]
 
     # Sort by overall_score descending, take top N for processing
@@ -775,6 +776,7 @@ def generate_hero_signals(
         and (a.day_ntl_vlm or 0) >= min_volume_usd
         and a.overall_score is not None
         and a.setup_type not in ("avoid", "exhaustion", "collapse_risk")
+        and (not state.universe_allowlist or state.in_universe(a.coin))
     ]
     assets.sort(key=lambda a: -(a.overall_score or 0))
     top = assets[:top_n]
@@ -849,8 +851,16 @@ def build_signal_sections(
     state: HyperliquidState,
     rows_per_section: int = 6,
 ) -> dict:
-    perps = [a for a in state.perp_assets() if a.market_status == "active"]
-    spots = [a for a in state.spot_assets()  if a.market_status == "active"]
+    perps = [
+        a for a in state.perp_assets()
+        if a.market_status == "active"
+        and (not state.universe_allowlist or state.in_universe(a.coin))
+    ]
+    spots = [
+        a for a in state.spot_assets()
+        if a.market_status == "active"
+        and (not state.universe_allowlist or state.in_universe(a.coin))
+    ]
     all_active = perps + spots
 
     def _row(a: ScreenerAsset) -> dict:
@@ -973,7 +983,12 @@ def build_signal_sections(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_summary_cards(state: HyperliquidState) -> list[dict]:
-    perps = [a for a in state.perp_assets() if a.market_status == "active" and a.pct_change_24h is not None]
+    perps = [
+        a for a in state.perp_assets()
+        if a.market_status == "active"
+        and a.pct_change_24h is not None
+        and (not state.universe_allowlist or state.in_universe(a.coin))
+    ]
     if not perps: return []
 
     top_gainer = max(perps, key=lambda a: a.pct_change_24h or 0)

@@ -557,10 +557,19 @@ def run_full_feature_pass(state: HyperliquidState):
     Should be called:
       - after boot candle/book data is loaded
       - periodically (every ~60s) to refresh scores
+
+    Universe gate: only assets in state.universe_allowlist are scored.
+    Any asset not in the allowlist (should not exist post-boot, but guarded
+    defensively) is skipped and not included in percentile calculations.
     """
     updated: list[ScreenerAsset] = []
+    skipped_non_universe = 0
 
     for coin, asset in list(state.assets.items()):
+        # ── Universe gate ────────────────────────────────────────────────
+        if state.universe_allowlist and coin not in state.universe_allowlist:
+            skipped_non_universe += 1
+            continue
         candles_1h = state.get_candles(coin, "1h", n=50)
         candles_5m = state.get_candles(coin, "5m", n=50)
 
@@ -584,5 +593,8 @@ def run_full_feature_pass(state: HyperliquidState):
     ranked = compute_universe_ranks(updated)
     for asset in ranked:
         state.assets[asset.coin] = asset
+
+    if skipped_non_universe:
+        print(f"[HL][feature] Skipped {skipped_non_universe} non-universe assets during feature pass")
 
     return len(updated)
