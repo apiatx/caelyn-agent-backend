@@ -55,6 +55,29 @@ def _sigmoid(x: float, k: float = 1.0) -> float:
     """Maps any real to (0, 1)."""
     return 1 / (1 + math.exp(-k * x))
 
+def _linear_slope(values: list[float]) -> float:
+    """
+    OLS slope normalized as fractional change per bar relative to the series mean.
+    Positive = uptrend, negative = downtrend.
+    Returns 0.0 when fewer than 2 values or degenerate input.
+    """
+    n = len(values)
+    if n < 2:
+        return 0.0
+    base = abs(sum(values) / n)
+    if base == 0:
+        return 0.0
+    ys = [(v - values[0]) / base for v in values]
+    xs = list(range(n))
+    sx = sum(xs); sy = sum(ys)
+    sxy = sum(x * y for x, y in zip(xs, ys))
+    sx2 = sum(x * x for x in xs)
+    denom = n * sx2 - sx * sx
+    if denom == 0:
+        return 0.0
+    return (n * sxy - sx * sy) / denom
+
+
 def _percentile_rank(value: float, population: list[float]) -> float:
     """Percentile rank of value in population (0..1)."""
     if not population:
@@ -473,6 +496,172 @@ def compute_scores(asset: ScreenerAsset) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Structural quality + regime classification
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_structural_quality(asset: ScreenerAsset, candles_1h: list[dict]) -> dict:
+    """
+    Compute structural quality score and asset regime from 1h candle history.
+
+    With up to 200 1h bars (~8 days) we approximate multi-day structure:
+      - Long-window OLS slope (last 100 bars ≈ 4 days) → trend direction & strength
+      - Short-window OLS slope (last 24 bars ≈ 1 day)  → recent momentum vs HT trend
+      - Pct of bars above rolling median               → proxy for "above trend"
+      - Higher-high / higher-low in synthetic 4h bars  → HH/HL persistence
+      - Range tightening                               → base/consolidation quality
+      - Momentum persistence (green bars ratio)        → sustained vs spike
+
+    Returns a dict of new fields for model_copy(update=...).
+    """
+    ex   = asset.exhaustion_score    or 0
+    cr   = asset.collapse_risk_score or 0
+    liq  = asset.liquidity_score     or 50
+    tp   = asset.tradability_penalty or 30
+    flow = asset.flow_score          or 50
+    mom  = asset.momentum_score      or 50
+    vlm  = asset.day_ntl_vlm        or 0
+
+    liq_quality = _clip(
+        liq * 0.60 + (100 - tp) * 0.30 +
+        (_clip(math.log10(vlm + 1) / math.log10(1e9) * 100, 0, 100)) * 0.10,
+        0, 100
+    )
+
+    slope_long_norm  = 0.0
+    slope_short_norm = 0.0
+    range_tightening = 0.5
+    hh_hl_score      = 0.5
+    sq_score         = 50.0
+
+    if len(candles_1h) >= 20:
+        closes = [float(c["c"]) for c in candles_1h if c.get("c")]
+        highs  = [float(c["h"]) for c in candles_1h if c.get("h")]
+        lows   = [float(c["l"]) for c in candles_1h if c.get("l")]
+        opens  = [float(c["o"]) for c in candles_1h if c.get("o")]
+        n = len(closes)
+
+        if n >= 20:
+            # Factor 1: Long-window slope (last ≤100 bars ≈ 4 days)
+            win_long = min(n, 100)
+            slope_long = _linear_slope(closes[-win_long:])
+            # Normalize: 0.0005/bar × 100 bars = 5% total move → norm=1
+            slope_long_norm = _clip(slope_long / 0.0005, -1.0, 1.0)
+            slope_factor = _clip(50 + slope_long_norm * 50, 0, 100)
+
+            # Factor 2: Short-window slope (last ≤24 bars = 1 day)
+            win_short = min(n, 24)
+            slope_short = _linear_slope(closes[-win_short:])
+            slope_short_norm = _clip(slope_short / 0.0005, -1.0, 1.0)
+
+            # Factor 3: Pct above rolling median (proxy for "above trend")
+            long_arr = closes[-win_long:]
+            long_median = sorted(long_arr)[len(long_arr) // 2]
+            pct_above = sum(1 for c in long_arr if c > long_median) / len(long_arr)
+            above_factor = _clip((pct_above - 0.30) / 0.40 * 100, 0, 100)
+
+            # Factor 4: Range tightening — recent vs broader range as % of price
+            r_n = max(min(12, n // 4), 2)
+            o_n = min(48, n)
+            midpt = (max(closes[-o_n:]) + min(closes[-o_n:])) / 2 if closes else 1.0
+            if midpt > 0:
+                rng_recent = (max(closes[-r_n:]) - min(closes[-r_n:])) / midpt * 100
+                rng_older  = (max(closes[-o_n:]) - min(closes[-o_n:])) / midpt * 100
+                range_tightening = 1.0 - min(rng_recent / max(rng_older, 0.01), 1.0)
+            range_factor = range_tightening * 100
+
+            # Factor 5: Momentum persistence — fraction of last 12 bars that are green
+            n_bars = min(12, n)
+            pairs = list(zip(opens[-n_bars:], closes[-n_bars:])) if len(opens) >= n_bars and len(closes) >= n_bars else []
+            pos_bars = sum(1 for o, c in pairs if c > o)
+            mom_persistence = pos_bars / len(pairs) if pairs else 0.5
+            persist_factor = _clip((mom_persistence - 0.30) / 0.40 * 100, 0, 100)
+
+            # Factor 6: Higher-high / higher-low in synthetic 4h bars
+            if len(highs) >= 20 and len(lows) >= 20:
+                syn_h = [max(highs[i:i+4]) for i in range(0, len(highs) - 3, 4)]
+                syn_l = [min(lows[i:i+4])  for i in range(0, len(lows)  - 3, 4)]
+                if len(syn_h) >= 4:
+                    k = min(7, len(syn_h) - 1)
+                    hh = sum(1 for i in range(1, k + 1) if len(syn_h) > i and syn_h[-i] > syn_h[-i-1])
+                    hl = sum(1 for i in range(1, k + 1) if len(syn_l) > i and syn_l[-i] > syn_l[-i-1])
+                    hh_hl_score = (hh + hl) / (k * 2) if k > 0 else 0.5
+
+            sq_raw = _weighted_avg([
+                ("slope_long",   slope_factor,        0.30),
+                ("above_median", above_factor,         0.20),
+                ("hh_hl",        hh_hl_score * 100,   0.20),
+                ("range_tight",  range_factor,         0.15),
+                ("mom_persist",  persist_factor,       0.15),
+            ], default=50.0)
+            sq_score = _clip(sq_raw, 0, 100)
+
+    # ── Asset regime classification ────────────────────────────────────────
+    # Thresholds tuned so the regime is meaningful with 1h-bar proxies
+    long_uptrend   = slope_long_norm  >  0.15   # clear multi-day uptrend
+    long_downtrend = slope_long_norm  < -0.15   # clear multi-day downtrend
+    short_spike    = slope_short_norm >  0.50   # sharp recent move on a downtrend = dead-cat
+
+    if cr > 55:
+        regime = "collapse_risk"
+    elif ex > 60 and long_uptrend:
+        regime = "late_extension_exhaustion"
+    elif long_downtrend and short_spike:
+        regime = "downtrend_dead_cat"
+    elif sq_score >= 52 and not long_downtrend:
+        if range_tightening > 0.55 and abs(slope_short_norm) < 0.30:
+            regime = "structural_uptrend_breakout_watch"
+        else:
+            regime = "structural_uptrend_pullback"
+    elif sq_score < 42 and (mom > 65 or flow > 65):
+        regime = "speculative_reversal"
+    else:
+        regime = "chop_low_quality"
+
+    # ── Score families ─────────────────────────────────────────────────────
+    pq = 0.0
+    if regime in ("structural_uptrend_pullback", "structural_uptrend_breakout_watch"):
+        pq = sq_score * 0.50 + (100 - mom) * 0.30 + flow * 0.20
+    pullback_quality = _clip(pq, 0, 100)
+
+    vol_imp = asset.volume_impulse or 1.0
+    bo_ready = _clip(
+        range_tightening * 100 * 0.40 +
+        sq_score              * 0.30 +
+        _clip(100 - (vol_imp - 1.0) * 30, 0, 100) * 0.20 +
+        (asset.breakout_score or 50) * 0.10,
+        0, 100
+    )
+
+    cont = _clip(
+        sq_score                                     * 0.35 +
+        (asset.trend_continuation_score or 50)       * 0.25 +
+        flow                                         * 0.20 +
+        liq                                          * 0.10 +
+        hh_hl_score * 100                            * 0.10,
+        0, 100
+    )
+
+    spec = _clip(
+        mom                                  * 0.30 +
+        flow                                 * 0.25 +
+        (asset.mean_reversion_score or 50)   * 0.25 +
+        liq                                  * 0.10 +
+        (100 - sq_score)                     * 0.10,
+        0, 100
+    )
+
+    return {
+        "structural_quality_score":   round(sq_score, 1),
+        "asset_regime":               regime,
+        "liquidity_quality_score":    round(liq_quality, 1),
+        "pullback_quality_score":     round(pullback_quality, 1),
+        "breakout_readiness_score":   round(bo_ready, 1),
+        "continuation_score":         round(cont, 1),
+        "speculative_reversal_score": round(spec, 1),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Universe-wide computations (percentile ranks + composite score)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -570,7 +759,8 @@ def run_full_feature_pass(state: HyperliquidState):
         if state.universe_allowlist and coin not in state.universe_allowlist:
             skipped_non_universe += 1
             continue
-        candles_1h = state.get_candles(coin, "1h", n=50)
+        # Fetch more 1h candles for structural quality analysis (≤120 bars ≈ 5 days)
+        candles_1h = state.get_candles(coin, "1h", n=120)
         candles_5m = state.get_candles(coin, "5m", n=50)
 
         candle_feats = compute_candle_features(asset, candles_1h, candles_5m)
@@ -585,6 +775,11 @@ def run_full_feature_pass(state: HyperliquidState):
         score_feats = compute_scores(asset)
         if score_feats:
             asset = asset.model_copy(update=score_feats)
+
+        # Structural quality + regime (uses existing scores + candle history)
+        struct_feats = compute_structural_quality(asset, candles_1h)
+        if struct_feats:
+            asset = asset.model_copy(update=struct_feats)
 
         state.assets[coin] = asset
         updated.append(asset)

@@ -114,6 +114,21 @@ class ScreenerAsset(BaseModel):
     overall_score: Optional[float] = None        # best non-avoid setup score
     setup_type: Optional[str] = None             # breakout|mean_reversion|trend_continuation|crowding_unwind|exhaustion|collapse_risk|avoid
 
+    # ── Structural quality (computed from candle history) ─────────────────
+    # structural_quality_score: higher = better multi-day structure (not a meme bounce)
+    structural_quality_score: Optional[float] = None
+    # asset_regime: 7-way classification of the asset's structural state
+    # values: structural_uptrend_pullback | structural_uptrend_breakout_watch |
+    #         late_extension_exhaustion | speculative_reversal |
+    #         downtrend_dead_cat | chop_low_quality | collapse_risk
+    asset_regime: Optional[str] = None
+    # Score families derived from structural + short-term signals
+    liquidity_quality_score: Optional[float] = None     # comprehensive liq + tradability
+    pullback_quality_score: Optional[float] = None      # quality of pullback in uptrend
+    breakout_readiness_score: Optional[float] = None    # coiling + base + vol dry-up
+    continuation_score: Optional[float] = None          # likelihood trend continues
+    speculative_reversal_score: Optional[float] = None  # quality as speculative bounce
+
     # ── Signal summary ────────────────────────────────────────────────────
     signal_direction: Optional[str] = None      # "long" | "short" | "neutral"
     signal_confidence: Optional[float] = None   # 0..1

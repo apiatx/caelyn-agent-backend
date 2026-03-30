@@ -181,6 +181,15 @@ def _asset_to_row(asset: ScreenerAsset, rank: int) -> dict:
         "collapseRiskScore":        _s01(asset.collapse_risk_score),
         "avoidScore":               _s01(asset.avoid_score),
 
+        # ── Structural quality scores (v3 hierarchical pipeline) ──────────
+        "structuralQualityScore":   _s01(asset.structural_quality_score),
+        "assetRegime":              asset.asset_regime,
+        "liquidityQualityScore":    _s01(asset.liquidity_quality_score),
+        "pullbackQualityScore":     _s01(asset.pullback_quality_score),
+        "breakoutReadinessScore":   _s01(asset.breakout_readiness_score),
+        "continuationScore":        _s01(asset.continuation_score),
+        "speculativeReversalScore": _s01(asset.speculative_reversal_score),
+
         # ── Overall ────────────────────────────────────────────────────────
         "overallScore":             _s01(asset.overall_score),
         "setupType":                asset.setup_type,

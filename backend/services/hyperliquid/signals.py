@@ -126,41 +126,69 @@ def _compute_market_regime(perps: list[ScreenerAsset]) -> dict:
 
 def _classify_bucket(asset: ScreenerAsset, side: str) -> str:
     """
-    Assign asset to one of four guidance buckets.
+    Assign asset to one of five guidance buckets using the hierarchical pipeline.
 
-    Priority: avoid > watch_collapse > trade_now > watch_breakout
+    Priority: avoid > collapse_watch > speculative_reversals > buy_now > high_quality_watchlist
+
+    New bucket names (with legacy aliases kept in generate_agent_briefing):
+      buy_now              ← replaces trade_now
+      high_quality_watchlist ← replaces watch_breakout
+      speculative_reversals  ← new
+      collapse_watch       ← replaces watch_collapse
+      avoid                ← same
     """
-    tp   = asset.tradability_penalty or 30
-    av   = asset.avoid_score         or 0
-    ex   = asset.exhaustion_score    or 0
-    cr   = asset.collapse_risk_score or 0
-    liq  = asset.liquidity_score     or 50
-    ov   = asset.overall_score       or 0
-    bo   = asset.breakout_score      or 0
-    st   = asset.setup_type          or ""
+    tp     = asset.tradability_penalty      or 30
+    av     = asset.avoid_score              or 0
+    ex     = asset.exhaustion_score         or 0
+    cr     = asset.collapse_risk_score      or 0
+    liq    = asset.liquidity_score          or 50
+    ov     = asset.overall_score            or 0
+    bo     = asset.breakout_score           or 0
+    flow   = asset.flow_score               or 50
+    regime = asset.asset_regime             or "chop_low_quality"
+    sq     = asset.structural_quality_score or 50
+    liq_q  = asset.liquidity_quality_score  or liq
 
-    # Avoid: illiquid, noisy, conflicting
+    # ── 1. Avoid: untradeable / illiquid ──────────────────────────────────
     if tp > 55 or av > 68 or liq < 22:
         return "avoid"
 
-    # Watch collapse: exhausted or actively deteriorating
-    if st in ("collapse_risk", "exhaustion") or cr > 55 or ex > 62:
-        return "watch_collapse"
+    # ── 2. Collapse watch: active deterioration ────────────────────────────
+    if regime in ("collapse_risk", "late_extension_exhaustion") or cr > 55 or ex > 62:
+        return "collapse_watch"
 
-    # Trade now: directional, good quality, tradeable
+    # ── 3. Speculative reversals: low structural quality, short-term bounce ─
+    # These must NEVER appear as top longs — separated into their own bucket
+    if regime in ("speculative_reversal", "downtrend_dead_cat"):
+        return "speculative_reversals"
+    if sq < 38 and side == "long":
+        return "speculative_reversals"
+
+    # ── 4. Buy now: highest quality, structurally sound, actionable ────────
     if (
-        ov >= 57
-        and tp <= 42
-        and side not in ("neutral_watch",)
-        and st not in ("avoid", "exhaustion", "collapse_risk")
+        regime in ("structural_uptrend_pullback",)
+        and sq >= 52
+        and liq_q >= 38
+        and ov >= 54
+        and tp <= 45
+        and flow >= 46
+        and side in ("long",)
     ):
-        return "trade_now"
+        return "buy_now"
 
-    # Watch breakout: improving structure, not yet overdone
-    if bo >= 55 and ex < 45 and tp <= 50:
-        return "watch_breakout"
+    # Shorts with good flow signal as buy_now (action on the short side)
+    if side == "short" and ov >= 56 and tp <= 42:
+        return "buy_now"
 
-    return "watch_breakout"
+    # ── 5. High-quality watchlist: good structure, not yet triggered ────────
+    if sq >= 45 and regime in ("structural_uptrend_pullback", "structural_uptrend_breakout_watch"):
+        return "high_quality_watchlist"
+    if bo >= 52 and ex < 48 and tp <= 52:
+        return "high_quality_watchlist"
+    if ov >= 54 and tp <= 45 and side not in ("neutral_watch",):
+        return "buy_now"
+
+    return "high_quality_watchlist"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -327,7 +355,32 @@ def _build_reasons(asset: ScreenerAsset, setup: str) -> list[str]:
     if asset.pct_change_24h is not None:
         reasons.append(f"24h change: {asset.pct_change_24h:+.2f}%")
 
-    return reasons[:6]
+    # Prepend structural quality context as the first reason for long setups
+    regime = asset.asset_regime or "chop_low_quality"
+    sq     = asset.structural_quality_score or 50
+    structural_leads = []
+    if regime == "structural_uptrend_pullback":
+        structural_leads.append(
+            f"Multi-day uptrend intact (structural quality {sq:.0f}/100) — "
+            f"pullback offers better risk/reward than a bounce from downtrend"
+        )
+    elif regime == "structural_uptrend_breakout_watch":
+        structural_leads.append(
+            f"Tightening base on top of an uptrend (structural quality {sq:.0f}/100) — "
+            f"coil before expansion rather than exhaustion top"
+        )
+    elif regime in ("downtrend_dead_cat", "speculative_reversal"):
+        structural_leads.append(
+            f"⚠ Structural quality low ({sq:.0f}/100) — "
+            f"regime={regime.replace('_', ' ')}; short-term bounce only"
+        )
+    elif regime == "chop_low_quality":
+        structural_leads.append(
+            f"Choppy structure (structural quality {sq:.0f}/100) — "
+            f"no clear trend bias; sizing down recommended"
+        )
+
+    return (structural_leads + reasons)[:6]
 
 
 def _build_what_to_watch(asset: ScreenerAsset, setup: str, side: str) -> list[str]:
@@ -467,6 +520,61 @@ def _build_invalidation(asset: ScreenerAsset, setup: str, side: str) -> list[str
     return notes[:4]
 
 
+def _build_structural_context(asset: ScreenerAsset) -> str:
+    """
+    One-sentence higher-timeframe structural summary explaining WHY this is
+    a better pick than a weak bounce candidate.  Used in every idea object.
+    """
+    regime = asset.asset_regime or "chop_low_quality"
+    sq     = asset.structural_quality_score or 50
+    coin   = asset.coin
+    m24h   = asset.momentum_24h or 0
+    cont   = asset.continuation_score or 50
+    br     = asset.breakout_readiness_score or 50
+
+    if regime == "structural_uptrend_pullback":
+        q = "strong" if sq >= 65 else "healthy"
+        return (
+            f"{coin} is in a {q} multi-day uptrend (structural quality {sq:.0f}/100) "
+            f"with a constructive pullback — the trend structure is intact and this is a "
+            f"buyable dip rather than a dead-cat bounce from a long-term downtrend."
+        )
+    elif regime == "structural_uptrend_breakout_watch":
+        return (
+            f"{coin} has been consolidating in a tightening base (breakout readiness "
+            f"{br:.0f}/100) on top of a multi-day uptrend — a breakout from this coil "
+            f"has directional follow-through potential vs random meme bounces."
+        )
+    elif regime == "late_extension_exhaustion":
+        return (
+            f"{coin} is extended after a strong run — the uptrend structure is aging and "
+            f"momentum internals are fading; risk/reward favors watching for a reversal "
+            f"rather than chasing continuation."
+        )
+    elif regime == "downtrend_dead_cat":
+        return (
+            f"{coin} is bouncing sharply inside a confirmed multi-day downtrend — this is "
+            f"a classic dead-cat bounce pattern with no structural base; structural quality "
+            f"score {sq:.0f}/100 makes it unsuitable as a top long."
+        )
+    elif regime == "speculative_reversal":
+        return (
+            f"{coin} shows short-term reversal signals but lacks structural quality "
+            f"({sq:.0f}/100) for a sustained trend — suitable only as a speculative "
+            f"bounce trade with tight risk, not a core long."
+        )
+    elif regime == "collapse_risk":
+        return (
+            f"{coin} is in active deterioration: collapse risk is elevated and the trend "
+            f"structure is breaking down — not a buy candidate."
+        )
+    else:
+        return (
+            f"{coin} is in a choppy / low-quality structural state ({sq:.0f}/100) — "
+            f"no clear trend bias; wait for a better setup before committing."
+        )
+
+
 def _build_thesis(asset: ScreenerAsset, setup: str, side: str) -> tuple[str, str]:
     coin     = asset.coin
     ann_fund = (asset.funding or 0) * 8760
@@ -598,57 +706,70 @@ def _build_idea(asset: ScreenerAsset) -> dict:
     risk_flags = _build_risk_flags(asset)
     inval      = _build_invalidation(asset, setup, side)
     title, summary = _build_thesis(asset, setup, side)
+    struct_ctx = _build_structural_context(asset)
 
     ann_fund = (asset.funding or 0) * 8760
+    bucket   = _classify_bucket(asset, side)
 
     return {
         "coin":               asset.coin,
         "displayName":        asset.display_name,
         "side":               side,
         "setup_type":         setup,
+        "asset_regime":       asset.asset_regime or "chop_low_quality",
         "score":              round(asset.overall_score or 0, 1),
         "confidence":         round(confidence, 2),
         "thesis_title":       title,
         "thesis_summary":     summary,
+        "structural_context": struct_ctx,
         "reasons":            reasons,
         "what_to_watch":      what_watch,
         "invalidation_notes": inval,
         "risk_flags":         risk_flags,
         "metrics": {
-            "mark_px":             asset.mark_px,
-            "pct_change_24h":      round(asset.pct_change_24h / 100, 6) if asset.pct_change_24h is not None else None,
-            "funding":             asset.funding,
-            "funding_ann_pct":     round(ann_fund * 100, 3),
-            "open_interest":       asset.open_interest_usd,
-            "day_ntl_vlm":         asset.day_ntl_vlm,
-            "premium":             asset.premium,
-            "mark_oracle_gap_pct": asset.distance_mark_oracle_pct,
-            "trade_flow_bias":     asset.recent_trade_imbalance,
-            "book_imbalance":      asset.orderbook_imbalance,
-            "volatility_score":    round((asset.volatility_score or 50) / 100, 3),
-            "liquidity_score":     round((asset.liquidity_score  or 50) / 100, 3),
-            "oi_change_5m":        asset.oi_change_5m,
-            "oi_change_15m":       asset.oi_change_15m,
-            "oi_change_1h":        asset.oi_change_1h,
-            "volume_impulse":      asset.volume_impulse,
+            "mark_px":                   asset.mark_px,
+            "pct_change_24h":            round(asset.pct_change_24h / 100, 6) if asset.pct_change_24h is not None else None,
+            "funding":                   asset.funding,
+            "funding_ann_pct":           round(ann_fund * 100, 3),
+            "open_interest":             asset.open_interest_usd,
+            "day_ntl_vlm":               asset.day_ntl_vlm,
+            "premium":                   asset.premium,
+            "mark_oracle_gap_pct":       asset.distance_mark_oracle_pct,
+            "trade_flow_bias":           asset.recent_trade_imbalance,
+            "book_imbalance":            asset.orderbook_imbalance,
+            "volatility_score":          round((asset.volatility_score or 50) / 100, 3),
+            "liquidity_score":           round((asset.liquidity_score  or 50) / 100, 3),
+            "structural_quality_score":  round((asset.structural_quality_score or 50) / 100, 3),
+            "liquidity_quality_score":   round((asset.liquidity_quality_score  or 50) / 100, 3),
+            "continuation_score":        round((asset.continuation_score or 50) / 100, 3),
+            "oi_change_5m":              asset.oi_change_5m,
+            "oi_change_15m":             asset.oi_change_15m,
+            "oi_change_1h":              asset.oi_change_1h,
+            "volume_impulse":            asset.volume_impulse,
         },
         "scores": {
-            "overall":             round((asset.overall_score or 0) / 100, 3),
-            "breakout":            round((asset.breakout_score or 0) / 100, 3),
-            "mean_reversion":      round((asset.mean_reversion_score or 0) / 100, 3),
-            "trend_continuation":  round((asset.trend_continuation_score or 0) / 100, 3),
-            "crowding_unwind":     round((asset.crowding_unwind_score or 0) / 100, 3),
-            "exhaustion":          round((asset.exhaustion_score or 0) / 100, 3),
-            "collapse_risk":       round((asset.collapse_risk_score or 0) / 100, 3),
-            "avoid":               round((asset.avoid_score or 0) / 100, 3),
-            "momentum":            round((asset.momentum_score or 50) / 100, 3),
-            "flow":                round((asset.flow_score or 50) / 100, 3),
-            "trend":               round((asset.trend_score or 50) / 100, 3),
-            "liquidity":           round((asset.liquidity_score or 50) / 100, 3),
-            "crowding":            round((asset.crowding_score or 0) / 100, 3),
-            "dislocation":         round((asset.dislocation_score or 0) / 100, 3),
+            "overall":                  round((asset.overall_score or 0) / 100, 3),
+            "structural_quality":       round((asset.structural_quality_score or 50) / 100, 3),
+            "continuation":             round((asset.continuation_score or 50) / 100, 3),
+            "pullback_quality":         round((asset.pullback_quality_score or 0) / 100, 3),
+            "breakout_readiness":       round((asset.breakout_readiness_score or 0) / 100, 3),
+            "speculative_reversal":     round((asset.speculative_reversal_score or 0) / 100, 3),
+            "liquidity_quality":        round((asset.liquidity_quality_score or 50) / 100, 3),
+            "breakout":                 round((asset.breakout_score or 0) / 100, 3),
+            "mean_reversion":           round((asset.mean_reversion_score or 0) / 100, 3),
+            "trend_continuation":       round((asset.trend_continuation_score or 0) / 100, 3),
+            "crowding_unwind":          round((asset.crowding_unwind_score or 0) / 100, 3),
+            "exhaustion":               round((asset.exhaustion_score or 0) / 100, 3),
+            "collapse_risk":            round((asset.collapse_risk_score or 0) / 100, 3),
+            "avoid":                    round((asset.avoid_score or 0) / 100, 3),
+            "momentum":                 round((asset.momentum_score or 50) / 100, 3),
+            "flow":                     round((asset.flow_score or 50) / 100, 3),
+            "trend":                    round((asset.trend_score or 50) / 100, 3),
+            "liquidity":                round((asset.liquidity_score or 50) / 100, 3),
+            "crowding":                 round((asset.crowding_score or 0) / 100, 3),
+            "dislocation":              round((asset.dislocation_score or 0) / 100, 3),
         },
-        "bucket": _classify_bucket(asset, side),
+        "bucket": bucket,
     }
 
 
@@ -662,12 +783,20 @@ def generate_agent_briefing(
     min_volume_usd: float = 5_000_000,
 ) -> dict:
     """
-    Generate the full Agent Market Brief payload.
+    Generate the full Agent Market Brief payload (scoring pipeline v3).
+
+    Hierarchical pipeline:
+      1. structural_quality_score + asset_regime computed per asset
+      2. Bucket classification: buy_now > high_quality_watchlist >
+         speculative_reversals > collapse_watch > avoid
+      3. Guardrails: best_long must be from buy_now/high_quality_watchlist
+         with structural_quality_score >= 42 and not dead_cat/speculative_reversal
 
     Shape:
       market_regime, updated_at, best_long, best_short,
       best_breakout_watch, best_exhaustion_watch,
-      actionable_ideas[], guidance{trade_now, watch_breakout, watch_collapse, avoid},
+      actionable_ideas[], guidance{buy_now, high_quality_watchlist,
+        speculative_reversals, collapse_watch, avoid},
       selected_thesis
     """
     perps = [
@@ -678,71 +807,113 @@ def generate_agent_briefing(
         and (not state.universe_allowlist or state.in_universe(a.coin))
     ]
 
-    # Sort by overall_score descending, take top N for processing
-    perps.sort(key=lambda a: -(a.overall_score or 0))
-    candidates = perps[:max_ideas * 2]   # wider pool to fill all buckets
+    # Sort first by structural_quality_score (hierarchical), then overall_score
+    # This ensures we evaluate structurally sound assets before weak bounces
+    perps.sort(key=lambda a: (
+        -(a.structural_quality_score or 50),
+        -(a.overall_score or 0)
+    ))
+    candidates = perps[:max_ideas * 3]   # wider pool to fill all 5 buckets
 
     # ── Build all ideas ───────────────────────────────────────────────────
     ideas = [_build_idea(a) for a in candidates]
 
-    # ── Split into guidance buckets ───────────────────────────────────────
-    trade_now      = [i for i in ideas if i["bucket"] == "trade_now"]
-    watch_breakout = [i for i in ideas if i["bucket"] == "watch_breakout"]
-    watch_collapse = [i for i in ideas if i["bucket"] == "watch_collapse"]
-    avoid          = [i for i in ideas if i["bucket"] == "avoid"]
+    # ── Split into new 5-bucket guidance structure ─────────────────────────
+    buy_now               = [i for i in ideas if i["bucket"] == "buy_now"]
+    high_quality_watchlist = [i for i in ideas if i["bucket"] == "high_quality_watchlist"]
+    speculative_reversals  = [i for i in ideas if i["bucket"] == "speculative_reversals"]
+    collapse_watch         = [i for i in ideas if i["bucket"] == "collapse_watch"]
+    avoid                  = [i for i in ideas if i["bucket"] == "avoid"]
 
-    # Each bucket sorted by score descending
-    for lst in (trade_now, watch_breakout, watch_collapse, avoid):
-        lst.sort(key=lambda i: -i["score"])
+    # Each bucket sorted: buy_now/HQW by structural_quality first, then score
+    def _quality_sort(idea_list: list) -> list:
+        return sorted(idea_list, key=lambda i: (
+            -i["scores"].get("structural_quality", 0.5),
+            -i["score"]
+        ))
 
-    # If trade_now is empty, promote top watch_breakout items
-    if not trade_now and watch_breakout:
-        trade_now   = watch_breakout[:3]
-        watch_breakout = watch_breakout[3:]
+    buy_now               = _quality_sort(buy_now)
+    high_quality_watchlist = _quality_sort(high_quality_watchlist)
+    speculative_reversals  = sorted(speculative_reversals, key=lambda i: -i["score"])
+    collapse_watch         = sorted(collapse_watch,         key=lambda i: -(
+        max(i["scores"].get("exhaustion", 0), i["scores"].get("collapse_risk", 0))
+    ))
+    avoid                  = sorted(avoid,  key=lambda i: -i["score"])
+
+    # If buy_now is empty, promote top high_quality_watchlist items
+    if not buy_now and high_quality_watchlist:
+        buy_now                = high_quality_watchlist[:3]
+        high_quality_watchlist = high_quality_watchlist[3:]
 
     # ── Regime ───────────────────────────────────────────────────────────
     regime_info = _compute_market_regime(perps)
 
     # ── Select top ideas for hero positions ───────────────────────────────
-    longs  = [i for i in trade_now if i["side"] == "long"]
-    shorts = [i for i in trade_now if i["side"] == "short"]
+    # GUARDRAIL: best_long must come from buy_now or high_quality_watchlist only
+    # It must NOT be from speculative_reversals — those are clearly separated
+    LONG_QUAL_THRESHOLD = 42   # structural_quality_score minimum for hero long
+    DEAD_CAT_REGIMES = {"downtrend_dead_cat", "speculative_reversal"}
 
-    best_long  = longs[0]  if longs  else (trade_now[0] if trade_now else None)
-    best_short = shorts[0] if shorts else None
+    def _is_quality_long(idea: dict) -> bool:
+        return (
+            idea["side"] == "long"
+            and idea["asset_regime"] not in DEAD_CAT_REGIMES
+            and idea["scores"].get("structural_quality", 0.5) >= LONG_QUAL_THRESHOLD / 100
+        )
 
-    # best_breakout_watch: highest breakout_score in watch_breakout
-    wb_sorted_bo = sorted(watch_breakout, key=lambda i: -i["scores"]["breakout"])
-    best_breakout_watch = wb_sorted_bo[0] if wb_sorted_bo else None
+    qualified_pool = buy_now + high_quality_watchlist
+    quality_longs  = [i for i in qualified_pool if _is_quality_long(i)]
+    quality_shorts = [i for i in qualified_pool if i["side"] == "short"]
 
-    # best_exhaustion_watch: highest exhaustion or collapse_risk score
-    wc_sorted = sorted(
-        watch_collapse,
-        key=lambda i: -(max(i["scores"].get("exhaustion", 0), i["scores"].get("collapse_risk", 0)))
+    best_long  = quality_longs[0]  if quality_longs  else (
+        # Final fallback: any long not in dead-cat (still not speculative_reversals)
+        next((i for i in ideas
+              if i["side"] == "long" and i["asset_regime"] not in DEAD_CAT_REGIMES), None)
     )
-    best_exhaustion_watch = wc_sorted[0] if wc_sorted else None
+    best_short = quality_shorts[0] if quality_shorts else next(
+        (i for i in ideas if i["side"] == "short"), None
+    )
 
-    # selected_thesis: best_long by default, then best_short, then top trade_now
-    selected_thesis = best_long or best_short or (trade_now[0] if trade_now else None)
+    # best_breakout_watch: highest breakout_readiness in high_quality_watchlist
+    hqw_breakout = sorted(
+        high_quality_watchlist,
+        key=lambda i: -i["scores"].get("breakout_readiness", 0)
+    )
+    best_breakout_watch = hqw_breakout[0] if hqw_breakout else None
 
-    # ── Top actionable ideas (cross-bucket, capped) ───────────────────────
-    actionable_ideas = ideas[:max_ideas]
+    # best_exhaustion_watch: highest exhaustion/collapse from collapse_watch
+    best_exhaustion_watch = collapse_watch[0] if collapse_watch else None
+
+    # selected_thesis: best_long from quality pool first
+    selected_thesis = best_long or best_short or (buy_now[0] if buy_now else None)
+
+    # ── Top actionable ideas (quality-first ordering, capped) ─────────────
+    # Show buy_now + high_quality_watchlist first, then speculative_reversals
+    quality_first = buy_now + high_quality_watchlist
+    actionable_ideas = (quality_first + speculative_reversals)[:max_ideas]
 
     return {
         "market_regime":        regime_info["regime"],
         "regime_description":   regime_info["description"],
         "regime_metrics":       regime_info["metrics"],
         "updated_at":           _iso_now(),
-        "score_version":        "2.1",
+        "score_version":        "3.0",
         "best_long":            best_long,
         "best_short":           best_short,
         "best_breakout_watch":  best_breakout_watch,
         "best_exhaustion_watch": best_exhaustion_watch,
         "actionable_ideas":     actionable_ideas,
         "guidance": {
-            "trade_now":      trade_now[:8],
-            "watch_breakout": watch_breakout[:8],
-            "watch_collapse": watch_collapse[:8],
-            "avoid":          avoid[:6],
+            # New bucket names (v3)
+            "buy_now":                buy_now[:8],
+            "high_quality_watchlist": high_quality_watchlist[:8],
+            "speculative_reversals":  speculative_reversals[:6],
+            "collapse_watch":         collapse_watch[:8],
+            "avoid":                  avoid[:6],
+            # Legacy aliases for backward compat
+            "trade_now":      buy_now[:8],
+            "watch_breakout": high_quality_watchlist[:8],
+            "watch_collapse": collapse_watch[:8],
         },
         "selected_thesis":      selected_thesis,
         # backward compat for frontend code expecting heroAgentSignals

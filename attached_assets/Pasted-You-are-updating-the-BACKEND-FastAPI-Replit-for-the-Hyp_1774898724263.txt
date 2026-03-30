@@ -1,0 +1,115 @@
+You are updating the BACKEND FastAPI Replit for the Hyperliquid Screener agent.
+
+Problem:
+The agent is over-recommending weak low-quality meme assets because it is rewarding small short-term reversal signals without enough higher-timeframe structural context. This causes bad top picks like weak dead-cat bounce candidates to outrank genuinely strong assets in constructive multi-week or multi-month accumulation/uptrend structures.
+
+Goal:
+Make the agent rank assets holistically so that the best recommendations are assets I would actually want to buy or watch, not weak downtrend bounces.
+
+Core change:
+Move from a single flat composite score to a hierarchical scoring pipeline:
+
+1. Structural quality filter
+2. Regime classification
+3. Setup scoring within regime
+4. Final recommendation buckets
+
+Requirements:
+
+1. Add structural quality scoring
+Create a structural_quality_score using higher-timeframe candles and market quality.
+Use factors like:
+- 20d / 50d / 90d trend slope
+- percent of time above 50d trend
+- higher-high / higher-low persistence
+- drawdown recovery quality
+- base/consolidation tightness
+- multi-week accumulation behavior
+- liquidity / depth / tradability quality
+
+Important:
+Assets with poor structural quality should NOT be eligible for top long recommendations, even if they have short-term reversal signals.
+
+2. Add regime classification
+Classify each asset into one of these regimes:
+- structural_uptrend_pullback
+- structural_uptrend_breakout_watch
+- late_extension_exhaustion
+- speculative_reversal
+- downtrend_dead_cat
+- chop_low_quality
+- collapse_risk
+
+This classification must happen before final ranking.
+
+3. Recommendation buckets
+Return separate ranked buckets:
+- buy_now
+- high_quality_watchlist
+- speculative_reversals
+- collapse_watch
+- avoid
+
+Top picks shown to the user should come primarily from:
+- buy_now
+- high_quality_watchlist
+
+Speculative reversals must be clearly separated and should never dominate the main recommendations.
+
+4. Long ranking guardrails
+To qualify as a top long:
+- asset must pass structural_quality_score threshold
+- asset must meet minimum liquidity/tradability threshold
+- asset must not be classified as downtrend_dead_cat
+- asset must not rely only on tiny short-term price upticks
+
+5. Score families
+Keep current short-term signal families, but rebalance them under a hierarchy:
+
+A. structural_quality_score
+B. liquidity_quality_score
+C. pullback_quality_score
+D. breakout_readiness_score
+E. continuation_score
+F. exhaustion_score
+G. collapse_risk_score
+H. speculative_reversal_score
+
+6. Recommendation logic
+Examples:
+- structural_uptrend_pullback + good liquidity + improving short-term flow = buy_now or high_quality_watchlist
+- structural_uptrend_breakout_watch + strong base + improving flow = watchlist
+- late_extension_exhaustion + weakening flow = collapse_watch
+- speculative_reversal on a long-term downtrend = speculative_reversals only
+- downtrend_dead_cat = avoid unless explicitly shown in speculative section
+
+7. Hero output changes
+The main Agent Market Brief should prioritize:
+- best high-quality long
+- best breakout watch
+- best collapse-risk after run-up
+- best avoid / weak trap
+Do NOT let speculative reversal names dominate the hero.
+
+8. Explanations
+For every top idea, explain:
+- higher-timeframe structure
+- why this is buyable/watchable now
+- why it is better than weaker bounce candidates
+- what would confirm continuation
+- what would invalidate the idea
+
+9. If enough history is available
+Use rolling candle history to detect:
+- accumulation/base quality
+- tightening range before expansion
+- sustained uptrend vs repeated failed bounce behavior
+- momentum persistence instead of one-candle spikes
+
+10. Deliverables
+At the end provide:
+1. files changed
+2. scoring hierarchy summary
+3. exact structural quality factors added
+4. new recommendation buckets
+5. how speculative reversals are prevented from outranking high-quality trend assets

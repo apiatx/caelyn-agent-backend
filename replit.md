@@ -48,13 +48,60 @@ Default: enabled (`true`).
 | `GET /api/hyperliquid/screener/agent-rank` | POST-style ranking with rationale |
 | `GET /api/hyperliquid/screener/asset/{coin}` | Single asset detail with candles, trades, L2, score history |
 
-## Scoring Engine (version 2.1)
+## Scoring Engine (version 3.0 — Hierarchical Pipeline)
 
-7 setup types: `breakout`, `mean_reversion`, `trend_continuation`, `crowding_unwind`, `exhaustion`, `collapse_risk`, `avoid`
+### Pipeline stages
+1. **Candle features** — momentum, volatility (5m + 1h candles, up to 120 bars)
+2. **Short-term scores** — 14 signal components (unchanged from v2)
+3. **Structural quality + regime** — `compute_structural_quality()` uses 1h candle history
+4. **Bucket classification** — 5 buckets based on regime + structural quality
+5. **Hero selection** — guardrails prevent dead-cat bounces from appearing as top longs
 
-Override priority: `avoid > collapse_risk (>65) > exhaustion (>65) > best_setup`
+### 7 Asset Regimes (new in v3)
+| Regime | Meaning |
+|---|---|
+| `structural_uptrend_pullback` | Multi-day uptrend intact, buyable pullback |
+| `structural_uptrend_breakout_watch` | Coiling/tightening base on top of uptrend |
+| `late_extension_exhaustion` | Good uptrend but aging + momentum fading |
+| `speculative_reversal` | Weak structure, short-term reversal signals only |
+| `downtrend_dead_cat` | Long downtrend + sharp short-term spike = dead cat |
+| `chop_low_quality` | No clear trend, mixed signals |
+| `collapse_risk` | Active breakdown, OI dropping, book deteriorating |
 
-14 score components: liquidity, volatility, momentum, flow, trend, book_pressure, crowding, dislocation, tradability_penalty, mean_reversion, breakout, trend_continuation, crowding_unwind, exhaustion, collapse_risk, avoid
+### 8 Score Families (new in v3)
+| Score | Description |
+|---|---|
+| `structural_quality_score` | 0-100: overall multi-day structural quality (primary filter) |
+| `liquidity_quality_score` | Comprehensive liq + tradability quality |
+| `pullback_quality_score` | Quality of pullback within an uptrend |
+| `breakout_readiness_score` | Range tightening + volume dry-up + base quality |
+| `continuation_score` | Likelihood trend continues |
+| `speculative_reversal_score` | Quality as a speculative short-term bounce |
+| + all 8 v2 setup scores | unchanged |
+
+### structural_quality_score factors (from 1h candles)
+- Long-window OLS slope (100 bars ≈ 4 days) → 30%
+- Pct of bars above rolling median → 20%
+- Higher-high / higher-low persistence in synthetic 4h bars → 20%
+- Range tightening (base/consolidation quality) → 15%
+- Momentum persistence (green bar ratio) → 15%
+
+### 5 Guidance Buckets (new in v3)
+| Bucket | Criteria | Legacy alias |
+|---|---|---|
+| `buy_now` | regime=uptrend_pullback, SQ≥52, liq≥38, flow≥46 | `trade_now` |
+| `high_quality_watchlist` | SQ≥45, uptrend regime, setup not yet triggered | `watch_breakout` |
+| `speculative_reversals` | regime=speculative_reversal or dead_cat | (new) |
+| `collapse_watch` | regime=collapse_risk or late_extension_exhaustion | `watch_collapse` |
+| `avoid` | high tradability_penalty or illiquid | unchanged |
+
+### Guardrails for top longs (hero)
+- Must NOT be in `downtrend_dead_cat` or `speculative_reversal` regime
+- Must have `structural_quality_score ≥ 42`
+- Must come from `buy_now` or `high_quality_watchlist` bucket (never from speculative_reversals)
+
+### 7 Setup types (unchanged from v2)
+`breakout`, `mean_reversion`, `trend_continuation`, `crowding_unwind`, `exhaustion`, `collapse_risk`, `avoid`
 
 ## Rolling History
 
