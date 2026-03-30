@@ -650,6 +650,36 @@ def compute_structural_quality(asset: ScreenerAsset, candles_1h: list[dict]) -> 
         0, 100
     )
 
+    # ── Quality-adjusted overall_score ────────────────────────────────────
+    # Penalize overall_score based on regime and structural quality so that
+    # ALL downstream sorts (snapshot, auto-rank, hero) naturally rank
+    # structurally sound assets above dead-cat bounces and meme spikes.
+    #
+    # Regime multipliers:
+    #   structural_uptrend_pullback    → 1.00  (full credit)
+    #   structural_uptrend_breakout_watch → 0.95
+    #   chop_low_quality               → 0.68  (moderate penalty)
+    #   late_extension_exhaustion      → 0.60
+    #   collapse_risk                  → 0.50
+    #   speculative_reversal           → 0.45
+    #   downtrend_dead_cat             → 0.35  (severe — dead cats must not rank)
+    #
+    # SQ factor: 0.55 + (sq/100)*0.45 → ranges 0.55 (SQ=0) to 1.00 (SQ=100)
+    _REGIME_MULT = {
+        "structural_uptrend_pullback":       1.00,
+        "structural_uptrend_breakout_watch": 0.95,
+        "chop_low_quality":                  0.68,
+        "late_extension_exhaustion":         0.60,
+        "collapse_risk":                     0.50,
+        "speculative_reversal":              0.45,
+        "downtrend_dead_cat":                0.35,
+    }
+    raw_ov   = asset.overall_score or 50
+    r_mult   = _REGIME_MULT.get(regime, 0.68)
+    sq_norm  = sq_score / 100
+    sq_factor = 0.55 + sq_norm * 0.45
+    qa_score  = _clip(raw_ov * r_mult * sq_factor, 0, 100)
+
     return {
         "structural_quality_score":   round(sq_score, 1),
         "asset_regime":               regime,
@@ -658,6 +688,7 @@ def compute_structural_quality(asset: ScreenerAsset, candles_1h: list[dict]) -> 
         "breakout_readiness_score":   round(bo_ready, 1),
         "continuation_score":         round(cont, 1),
         "speculative_reversal_score": round(spec, 1),
+        "overall_score":              round(qa_score, 1),   # quality-adjusted
     }
 
 

@@ -256,7 +256,7 @@ def _build_meta(rows: list[dict], state: HyperliquidState) -> dict:
 async def get_snapshot(
     market_type: str = "all",
     limit: int = 200,
-    sort_by: str = "compositeSignal",
+    sort_by: str = "overallScore",
     sort_dir: str = "desc",
     min_volume_usd: Optional[float] = None,
     max_spread_bps: Optional[float] = None,
@@ -294,6 +294,7 @@ async def get_snapshot(
 
     # Sort by internal field, then convert to rows
     _SORT_MAP = {
+        "overallScore":       "overall_score",
         "compositeSignal":    "composite_signal_score",
         "volume24h":          "day_ntl_vlm",
         "openInterest":       "open_interest_usd",
@@ -303,8 +304,9 @@ async def get_snapshot(
         "momentum":           "momentum_score",
         "breakoutScore":      "breakout_score",
         "liquidityScore":     "liquidity_score",
+        "structuralQuality":  "structural_quality_score",
     }
-    sort_field = _SORT_MAP.get(sort_by, "composite_signal_score")
+    sort_field = _SORT_MAP.get(sort_by, "overall_score")
     reverse = sort_dir.lower() != "asc"
     try:
         assets.sort(
@@ -312,7 +314,7 @@ async def get_snapshot(
             reverse=reverse,
         )
     except AttributeError:
-        assets.sort(key=lambda a: a.composite_signal_score or 0, reverse=True)
+        assets.sort(key=lambda a: a.overall_score or 0, reverse=True)
 
     assets = assets[:limit]
 
@@ -692,7 +694,7 @@ async def screener_ws(websocket: WebSocket):
 
 def _build_ws_snapshot(state: HyperliquidState) -> dict:
     assets = [a for a in state.all_assets() if a.market_status == "active"]
-    assets.sort(key=lambda a: a.composite_signal_score or 0, reverse=True)
+    assets.sort(key=lambda a: a.overall_score or 0, reverse=True)
     rows = [_asset_to_row(a, rank=i + 1) for i, a in enumerate(assets[:300])]
     meta = _build_meta(rows, state)
     return {
@@ -710,7 +712,7 @@ async def broadcast_asset_update(coin: str, state: HyperliquidState):
     if asset is None:
         return
     # Find approximate rank
-    all_sorted = sorted(state.all_assets(), key=lambda a: a.composite_signal_score or 0, reverse=True)
+    all_sorted = sorted(state.all_assets(), key=lambda a: a.overall_score or 0, reverse=True)
     rank = next((i + 1 for i, a in enumerate(all_sorted) if a.coin == coin), 0)
     row = _asset_to_row(asset, rank=rank)
     payload = {"event": "asset_update", "data": row, "ts": time.time()}
