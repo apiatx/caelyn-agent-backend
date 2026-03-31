@@ -1494,6 +1494,182 @@ async def get_insider_by_ticker(ticker: str):
     }
 
 
+def _sync_backfill_scores() -> dict:
+    """
+    Backfill existing rows with cluster detection + recalculated conviction scores.
+    - Detects multi-insider clusters (CSTL=7, AIR=6, SE=6, etc.) and sets cluster_id/type
+    - Recalculates conviction_score using current weights + cluster bonus
+    - Updates context_tags with cluster-aware labels
+    Returns {"updated": N, "clusters_found": M, "errors": K}
+    """
+    conn = _get_conn()
+    if not conn:
+        return {"updated": 0, "clusters_found": 0, "errors": 1, "message": "No DB connection"}
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, accession_number, ticker, transaction_code, transaction_date,
+                   total_value, shares, shares_owned_after, insider_title, insider_name,
+                   score_breakdown, price_context
+            FROM insider_transactions
+            ORDER BY ticker, transaction_date
+        """)
+        rows = cur.fetchall()
+        cur.close()
+    except Exception as e:
+        logger.error("[INSIDER_BACKFILL] Fetch error: %s", e)
+        return {"updated": 0, "clusters_found": 0, "errors": 1, "message": str(e)}
+    finally:
+        _put_conn(conn)
+
+    updates = []
+    errors = 0
+    clusters_found = 0
+
+    for row in rows:
+        (row_id, accession, ticker, code, tx_date, total_value, shares, shares_after,
+         title, insider_name, score_bd, price_ctx) = row
+
+        try:
+            # Detect cluster for this row (queries other rows for same ticker ±14 days)
+            acc_prefix = (accession or "").split(":")[0]
+            cluster_info = _detect_cluster_type(ticker or "", tx_date, acc_prefix)
+            cluster_count = cluster_info["count"]
+            cluster_type = cluster_info["type"]
+            cluster_metadata = cluster_info["metadata"] if cluster_info.get("metadata") else None
+
+            # Get or assign cluster_id
+            cluster_id = None
+            if cluster_count >= 2:
+                cluster_id = _get_or_assign_cluster_id(ticker or "", tx_date)
+                clusters_found += 1
+
+            # Get filing count for this insider
+            filing_count = _count_insider_filings(insider_name or "")
+
+            # Extract stored component scores (for non-changing factors)
+            bd = score_bd or {}
+            s_role = bd.get("role", {}).get("score", 0)
+            s_type = bd.get("type", {}).get("score", 0)
+            s_ctx = bd.get("context", {}).get("score", 0)
+            s_pos = bd.get("position_impact", {}).get("score", 0)
+            s_event = bd.get("event_proximity", {}).get("score", 0)
+
+            # Recalculate size with current thresholds (max=15 instead of old 20)
+            tv = float(total_value or 0)
+            new_size, d_size = _score_size(tv)
+
+            # Recalculate track_record with current filing count
+            new_track, d_track = _score_track_record(filing_count)
+
+            # Recalculate cluster score with detected cluster info
+            new_cluster, d_cluster = _score_cluster(cluster_count, cluster_type)
+
+            # New conviction score (cap at 100)
+            new_total = min(s_role + s_type + s_ctx + s_pos + s_event + new_size + new_track + new_cluster, 100)
+
+            # Build updated score_breakdown (preserving stored detail strings for unchanged components)
+            new_bd = {
+                "size":            {"score": new_size,    "max": _W_SIZE,    "detail": d_size},
+                "role":            {"score": s_role,      "max": _W_ROLE,    "detail": bd.get("role", {}).get("detail", "")},
+                "type":            {"score": s_type,      "max": _W_TYPE,    "detail": bd.get("type", {}).get("detail", "")},
+                "context":         {"score": s_ctx,       "max": _W_CONTEXT, "detail": bd.get("context", {}).get("detail", "")},
+                "cluster":         {"score": new_cluster, "max": _W_CLUSTER, "detail": d_cluster,
+                                    "cluster_type": cluster_type, "cluster_size": cluster_count},
+                "position_impact": {"score": s_pos,       "max": _W_POSITION,"detail": bd.get("position_impact", {}).get("detail", "")},
+                "track_record":    {"score": new_track,   "max": _W_TRACK,   "detail": d_track},
+                "event_proximity": {"score": s_event,     "max": _W_EVENT,   "detail": bd.get("event_proximity", {}).get("detail", "")},
+            }
+
+            # Regenerate context_tags with cluster awareness
+            role_score = s_role
+            is_ten_pct = role_score == 15
+            is_director = (role_score == 8) and not any(
+                k in (title or "").upper() for k in ["CEO", "CFO", "CTO", "CMO", "PRESIDENT", "COO", "CHAIRMAN", "SVP", "EVP", "VP"]
+            )
+            date_spread = (cluster_metadata or {}).get("date_spread_days", 0)
+            distinct_roles = (cluster_metadata or {}).get("distinct_role_count", 1)
+            new_tags = generate_context_tags(
+                code=code or "S",
+                title=title or "",
+                is_director=is_director,
+                is_ten_pct=is_ten_pct,
+                total_value=tv,
+                cluster_count=cluster_count,
+                shares=int(shares or 0),
+                shares_after=int(shares_after or 0),
+                cluster_type=cluster_type,
+                date_spread_days=date_spread,
+                distinct_role_count=distinct_roles,
+            )
+
+            updates.append({
+                "id": row_id,
+                "conviction_score": new_total,
+                "score_breakdown": json.dumps(new_bd),
+                "cluster_id": cluster_id,
+                "cluster_type": cluster_type,
+                "cluster_metadata": json.dumps(cluster_metadata) if cluster_metadata else None,
+                "context_tags": new_tags,
+            })
+
+        except Exception as e:
+            logger.warning("[INSIDER_BACKFILL] Row %s error: %s", row_id, e)
+            errors += 1
+
+    if not updates:
+        return {"updated": 0, "clusters_found": clusters_found, "errors": errors,
+                "message": "No rows to update"}
+
+    # Apply batch updates
+    conn2 = _get_conn()
+    if not conn2:
+        return {"updated": 0, "clusters_found": clusters_found, "errors": errors + 1,
+                "message": "DB connection lost before update"}
+    try:
+        cur2 = conn2.cursor()
+        execute_batch(cur2, """
+            UPDATE insider_transactions SET
+                conviction_score = %(conviction_score)s,
+                score_breakdown  = %(score_breakdown)s::jsonb,
+                cluster_id       = %(cluster_id)s,
+                cluster_type     = %(cluster_type)s,
+                cluster_metadata = CASE WHEN %(cluster_metadata)s IS NULL THEN NULL
+                                        ELSE %(cluster_metadata)s::jsonb END,
+                context_tags     = %(context_tags)s
+            WHERE id = %(id)s
+        """, updates, page_size=50)
+        conn2.commit()
+        cur2.close()
+        logger.info("[INSIDER_BACKFILL] Updated %d rows, clusters_found=%d, errors=%d",
+                    len(updates), clusters_found, errors)
+        return {"updated": len(updates), "clusters_found": clusters_found,
+                "errors": errors, "message": "Backfill complete"}
+    except Exception as e:
+        logger.error("[INSIDER_BACKFILL] Update error: %s", e)
+        try:
+            conn2.rollback()
+        except Exception:
+            pass
+        return {"updated": 0, "clusters_found": clusters_found, "errors": errors + 1,
+                "message": str(e)}
+    finally:
+        _put_conn(conn2)
+
+
+@router.post("/insider-activity/backfill-scores")
+async def backfill_conviction_scores():
+    """
+    Re-detect clusters and recalculate conviction scores for all existing rows.
+    Fixes: (1) cluster_id=NULL for rows inserted before cluster detection was added,
+           (2) conviction scores calculated with old weight system.
+    This is idempotent — safe to run multiple times.
+    """
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(_executor, _sync_backfill_scores)
+    return result
+
+
 @router.post("/insider-activity/refresh")
 async def trigger_refresh(background_tasks: BackgroundTasks):
     if _refresh_in_progress:
