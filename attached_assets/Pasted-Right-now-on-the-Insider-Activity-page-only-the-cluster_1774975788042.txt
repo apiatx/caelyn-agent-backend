@@ -1,0 +1,40 @@
+Right now, on the Insider Activity page, only the "clustered" and "large trades" tabs are working. The "High-Conviction Buys" and "High-Conviction Sells" tabs are not working. Saying "No insider transactions found
+
+Try adjusting your filters". Please let me know if this is a YOU fix or if it's a backend fastapi server fix. If it's backend, give me the exact instructions for my backend agent
+
+Let me check exactly what query params get sent to the backend for each filter:
+
+Let me look at the build spec for the backend endpoint parameters to compare:
+
+Let me look at what the type dropdown filter sends to understand exactly what values the backend expects:
+
+I have a clear diagnosis. Here's exactly what's happening:
+
+This is a backend fix.
+
+Here's the evidence:
+
+"Clustered" works → backend supports min_cluster=2
+"Large Trades" works → backend supports min_value=1000000
+"High-Conviction Buys" fails → sends type=P&min_score=70
+"High-Conviction Sells" fails → sends type=S&min_score=70
+The two broken tabs are the only ones that use both a type filter and a min_score filter. The backend either doesn't support min_score filtering, doesn't recognize type=P/type=S as valid values, or both.
+
+Exact instructions for your backend agent:
+
+The GET /api/insider-activity endpoint needs two filter parameters to work correctly:
+
+1. type parameter — Filter transactions by type. The frontend sends single-letter SEC Form 4 codes:
+
+type=P → Purchase/Buy transactions
+type=S → Sale transactions
+type=M → Option exercises
+type=G → Gift transactions
+The endpoint must filter transaction_type (or whatever your field is named) against these values. If your database stores the full word (e.g. "Purchase" or "Buy"), you need to map P→Purchase, S→Sale etc. before querying, OR store and match on the single-letter codes.
+
+2. min_score parameter — Filter transactions where score >= min_score. The frontend sends a number as a string (e.g. min_score=70). The endpoint must parse it as an integer and apply WHERE score >= 70 (or equivalent) to the results.
+
+These two parameters are used together. Example call that must return results:
+
+GET /api/insider-activity?type=P&min_score=70&sort=score&order=desc&limit=50
+This should return buy transactions with a conviction score of 70 or higher, sorted best-first.

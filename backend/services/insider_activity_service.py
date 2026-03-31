@@ -1012,8 +1012,12 @@ def _query_transactions(
                     "top_sell_ticker": None, "last_refresh": None}
 
     timeframe_days = {"1w": 7, "1m": 30, "3m": 90, "6m": 180}.get(timeframe, 30)
-    code_filter = {"buys": ("P",), "sales": ("S",), "exercises": ("M",),
-                   "gifts": ("G",)}.get(tx_type_filter)
+    _code_map = {
+        "buys": ("P",), "sales": ("S",), "exercises": ("M",), "gifts": ("G",),
+        "P": ("P",), "S": ("S",), "M": ("M",), "A": ("A",), "D": ("D",), "G": ("G",),
+        "all": None,
+    }
+    code_filter = _code_map.get(tx_type_filter) if tx_type_filter not in ("all", "") else None
 
     sort_col = {"score": "conviction_score", "date": "transaction_date",
                 "value": "total_value", "ticker": "ticker"}.get(sort, "conviction_score")
@@ -1088,7 +1092,7 @@ def _query_transactions(
 
 @router.get("/insider-activity")
 async def get_insider_activity(
-    type: str = Query("all", description="all|buys|sales|exercises|gifts"),
+    type: str = Query("all", description="all|buys|sales|exercises|gifts|P|S|M|A|D|G"),
     timeframe: str = Query("1m", description="1w|1m|3m|6m"),
     min_score: Optional[int] = Query(None),
     sort: str = Query("score", description="score|date|value|ticker"),
