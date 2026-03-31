@@ -1,0 +1,28 @@
+The Gemini 3.1 API, especially the gemini-3.1-pro-preview model, offers advanced search grounding and agentic capabilities. This enables real-time retrieval of factually consistent information. It can handle complex tasks requiring precise reasoning across various data types. 
+Google AI for Developers
+Google AI for Developers
+ +4
+Key Search and Research Features (Gemini 3.1)
+Grounding with Google Search: Gemini 3.1 models can use the internet to verify information. This reduces the possibility of inaccurate results.
+Deep Research Agent: This agent, powered by Gemini 3.1 Pro, autonomously plans and executes multi-step research tasks. It uses web search to create detailed, cited reports.
+Improved Search Utility: The 3.1 Pro model enhances the capabilities of previous versions. It provides improved reasoning and more accurate tool usage.
+Cost & Performance: Gemini 3.1 Flash-Lite is a cost-effective choice for high-volume tasks.
+File Search Tool: This tool uses Retrieval Augmented Generation (RAG). It indexes and searches user data, which is integrated with the model's knowledge. 
+Google AI for Developers
+Google AI for Developers
+ +5
+Key Models in the 3.1 Series
+Gemini 3.1 Pro Preview: Optimized for complex agentic workflows, software engineering, and high-stakes reasoning.
+Gemini 3.1 Flash-Lite Preview: Designed for high-frequency, low-latency, and cost-sensitive applications.
+Gemini 3.1 Flash Live Preview: A stateful WebSocket-based API for real-time conversations with search capabilities. 
+Google AI for Developers
+Google AI for Developers
+ +4
+Key Capabilities & Updates
+1M Context Window: Available in 3.1 Pro, allowing for processing large amounts of information.
+Tool Combination: The Gemini 3 series supports combining grounding with Search, Code Execution, and URL Context.
+New Image Generation: Includes Nano Banana Pro (highest quality) and Nano Banana 2 (high efficiency) for native image creation.
+Asynchronous Tools: Functions can be run asynchronously (non-blocking) in 3.1 Flash Live. 
+Google AI for Developers
+Google AI for Developers
+ +3

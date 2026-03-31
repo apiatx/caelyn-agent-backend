@@ -674,11 +674,16 @@ def compute_structural_quality(asset: ScreenerAsset, candles_1h: list[dict]) -> 
         "speculative_reversal":              0.45,
         "downtrend_dead_cat":                0.35,
     }
-    raw_ov   = asset.overall_score or 50
-    r_mult   = _REGIME_MULT.get(regime, 0.68)
-    sq_norm  = sq_score / 100
+    raw_ov    = asset.overall_score or 50
+    raw_comp  = asset.composite_signal_score or 50
+    r_mult    = _REGIME_MULT.get(regime, 0.68)
+    sq_norm   = sq_score / 100
     sq_factor = 0.55 + sq_norm * 0.45
-    qa_score  = _clip(raw_ov * r_mult * sq_factor, 0, 100)
+
+    # Apply the same multiplier to BOTH scores so every sort/display path
+    # (overallScore AND compositeSignal) reflects structural quality.
+    qa_score  = _clip(raw_ov   * r_mult * sq_factor, 0, 100)
+    qa_comp   = _clip(raw_comp * r_mult * sq_factor, 0, 100)
 
     return {
         "structural_quality_score":   round(sq_score, 1),
@@ -689,6 +694,7 @@ def compute_structural_quality(asset: ScreenerAsset, candles_1h: list[dict]) -> 
         "continuation_score":         round(cont, 1),
         "speculative_reversal_score": round(spec, 1),
         "overall_score":              round(qa_score, 1),   # quality-adjusted
+        "composite_signal_score":     round(qa_comp, 1),   # quality-adjusted
     }
 
 
