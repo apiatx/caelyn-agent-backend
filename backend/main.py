@@ -41,6 +41,10 @@ from services.hyperliquid.state import HyperliquidState as _HLState
 from services.hyperliquid.router import router as _hl_router, set_state as _hl_set_state
 from services.hyperliquid.websocket_manager import boot_and_run as _hl_boot_and_run
 from services.sector_rotation.router import router as _sr_router
+from services.insider_activity_service import (
+    router as _insider_router,
+    insider_activity_background_loop as _insider_bg_loop,
+)
 
 _hl_state = _HLState()
 _hl_set_state(_hl_state)
@@ -166,6 +170,7 @@ async def lifespan(app):
     asyncio.create_task(_polygon_options_ingestion_loop())
     asyncio.create_task(_macro_precompute_loop())
     asyncio.create_task(_sector_rotation_precompute_loop())
+    asyncio.create_task(_insider_bg_loop())
     asyncio.create_task(_hl_boot_and_run(_hl_state))
     yield
 
@@ -181,6 +186,10 @@ app.include_router(_hl_router)
 
 # ── Sector Rotation router ────────────────────────────────────────────────────
 app.include_router(_sr_router)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Insider Activity router ───────────────────────────────────────────────────
+app.include_router(_insider_router, prefix="/api")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────

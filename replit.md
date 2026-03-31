@@ -139,6 +139,38 @@ Regime tags: Leading≥70, Improving≥50, Weakening≥30, Lagging<30
 ### AI Analysis Schema
 Fields: `market_regime`, `macro_regime`, `leadership_style`, `summary`, `current_leadership` (leaders/laggards/explanation), `scenarios` (name/probability/sector_winners/sector_losers), `watch_items`, `sources`, `generated_at`
 
+## Insider Activity Dashboard (`/api/insider-activity`)
+
+Fetches SEC Form 4 filings via edgartools, scores each transaction 0-100, stores in Neon PostgreSQL with 30-day retention.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/insider-activity` | Paginated feed with filters: `type` (buys/sells/all), `timeframe` (1w/1m/3m), `min_score`, `sort`, `order`, `search`, `limit`, `offset` |
+| `GET /api/insider-activity/stats` | Aggregate stats: total_transactions, buys, sales, avg_buy_score, top_buy, top_sell, last_refresh, refresh_in_progress |
+| `GET /api/insider-activity/{ticker}` | All transactions for a specific ticker |
+| `GET /api/insider-activity/detail/{accession_number}` | Full detail including score_breakdown, price_context |
+| `POST /api/insider-activity/refresh` | Manual refresh trigger |
+
+### 8-Factor Conviction Scoring (0-100)
+
+| Factor | Weight |
+|---|---|
+| Transaction size ($) | 20 |
+| Insider role (CEO/Director/10%) | 20 |
+| Transaction type (buy vs grant vs sale) | 10 |
+| Price context (near 52w low, vs MA) | 15 |
+| Cluster buying (multiple insiders same window) | 10 |
+| Position change % | 10 |
+| Track record (filing frequency) | 10 |
+| Earnings proximity | 5 |
+
+### Data Pipeline
+- **Source**: edgartools `get_filings(form="4")` → `filing.obj().market_trades` DataFrame
+- **Price enrichment**: Tradier batch (50/call) → Finnhub quote+metric → yfinance fallback
+- **DB**: Neon PostgreSQL `insider_transactions` table; `expires_at = NOW() + 30 days`
+- **Background loop**: Creates table → cleans expired rows → initial load (300 filings) → refreshes every 2 hours
+- **Dedup key**: `{accession_number}:{row_idx}` (max 29 chars) — handles multiple transactions per filing
+
 ## Real Portfolio (caelyn-terminal)
 
 - SQGLP framework for investments, Weinstein Stage 2 for trades
