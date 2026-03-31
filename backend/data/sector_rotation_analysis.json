@@ -1,0 +1,84 @@
+{
+  "summary": "Energy (XLE) is the dominant leader as a severe geopolitical supply shock in the Middle East drives oil toward $120, while the broader market rotates into defensives (XLU, XLP) and out of high-duration Tech (XLK) as the 10Y yield hits 4.44%. The market is grappling with a 'bear steepener' yield curve that reflects persistent inflation fears and a hawkish Fed pause.",
+  "market_regime": "Transitioning",
+  "macro_regime": "Inflationary",
+  "leadership_style": "Value",
+  "current_leadership": {
+    "leaders": [
+      "XLE",
+      "XLU",
+      "XLB"
+    ],
+    "laggards": [
+      "XLK",
+      "XLY",
+      "XLF"
+    ],
+    "explanation": "XLE is riding a massive geopolitical risk premium due to the closure of the Strait of Hormuz. XLK and XLY are lagging as the 10Y Treasury yield (4.44%) forces a valuation reset on growth stocks, while XLF is underperforming despite a steepening curve due to rising credit risks and a slowing labor market (4.4% unemployment)."
+  },
+  "outlook_1_4_weeks": "Expect continued momentum in Energy and Materials as long as Middle East tensions remain at a boiling point. Tactical interest in Utilities (XLU) and Staples (XLP) will likely increase as investors hedge against a potential 'hard landing' triggered by the energy price spike. Watch for Q1 earnings previews where Tech guidance will be scrutinized for AI-driven margin resilience.",
+  "outlook_1_3_months": "The medium-term pivot depends on the 10Y yield; if it stabilizes above 4.5%, the rotation out of Tech will deepen. However, if diplomatic de-escalation occurs, a sharp mean-reversion trade could favor oversold XLK and XLY. Monitor the Fed's June meeting for any shift in the 'one cut only' 2026 projection.",
+  "scenarios": [
+    {
+      "name": "Energy Supercycle / Conflict Escalation",
+      "timeframe": "1-8 weeks",
+      "probability": "high",
+      "sector_winners": [
+        "XLE",
+        "XLB",
+        "XLU"
+      ],
+      "sector_losers": [
+        "XLY",
+        "XLI",
+        "XLK"
+      ],
+      "analysis": "Continued disruption in the Strait of Hormuz keeps oil above $110, driving headline inflation toward 4%. This 'tax on the consumer' crushes Discretionary and Industrials, while Energy and inflation-hedged Materials outperform."
+    },
+    {
+      "name": "Diplomatic De-escalation / Yield Stabilization",
+      "timeframe": "4-12 weeks",
+      "probability": "medium",
+      "sector_winners": [
+        "XLK",
+        "XLY",
+        "XLF"
+      ],
+      "sector_losers": [
+        "XLE",
+        "XLU"
+      ],
+      "analysis": "A breakthrough in US-Iran negotiations leads to a rapid $20-30 drop in crude. This allows the 10Y yield to retreat toward 4.0%, triggering a massive 'relief rally' in high-duration growth and financials."
+    }
+  ],
+  "watch_items": [
+    "Strait of Hormuz shipping status and insurance premiums",
+    "OPEC+ emergency production meeting",
+    "April 28-29 FOMC meeting rhetoric on 'transitory' energy shocks",
+    "Q1 Earnings reports from JPMorgan (May 14) and NVIDIA"
+  ],
+  "sources": [
+    {
+      "title": "Oil Prices Surge Amid Middle East Conflict",
+      "url": "https://heygotrade.com",
+      "publisher": "Gotrade News"
+    },
+    {
+      "title": "Fed Interest Rate Decision March 2026: Impact on Stock Market",
+      "url": "https://intellectia.ai",
+      "publisher": "Intellectia AI"
+    },
+    {
+      "title": "U.S. Treasury Yield Curve - March 27, 2026",
+      "url": "https://streetstats.finance",
+      "publisher": "StreetStats Research"
+    },
+    {
+      "title": "Economic Outlook U.S. Q2 2026: Curb Your Enthusiasm",
+      "url": "https://spglobal.com",
+      "publisher": "S&P Global Ratings"
+    }
+  ],
+  "generated_at": "March 31, 2026",
+  "_saved_at": 1774934864.1984932
+}

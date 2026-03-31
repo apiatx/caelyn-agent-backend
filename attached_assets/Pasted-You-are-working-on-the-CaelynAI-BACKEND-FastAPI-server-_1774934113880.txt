@@ -1,0 +1,268 @@
+You are working on the CaelynAI BACKEND FastAPI server only.
+
+Goal:
+Build a smart sector rotation backend for the existing frontend Sector Rotation page.
+
+This backend should:
+1. Fetch and normalize sector ETF data
+2. Compute return windows and ranking
+3. Derive a simple market/macro regime signal
+4. Generate a weekly grounded AI sector outlook using Gemini with native web search grounding
+5. Expose clean API endpoints for the frontend
+
+Important constraints:
+- Do NOT break existing backend routes or shared services
+- Add this as a new isolated module/feature
+- Keep implementation clean, modular, typed, and production-friendly
+- Prefer additive changes over risky refactors
+
+Universe:
+Use these sector ETFs as the default universe:
+- XLC: Communication Services
+- XLY: Consumer Discretionary
+- XLP: Consumer Staples
+- XLE: Energy
+- XLF: Financials
+- XLV: Health Care
+- XLI: Industrials
+- XLB: Materials
+- XLRE: Real Estate
+- XLK: Technology
+- XLU: Utilities
+
+Primary objectives:
+A) Real-time-ish dashboard data
+B) Weekly AI-generated forward-looking sector rotation analysis
+
+Recommended data sources:
+- Primary market data: FMP and/or Finnhub
+- Macro context: FRED
+- Optional enrichment: SEC EDGAR for policy/regulatory context only if useful
+- Do not depend on Tradier or Public.com for core sector dashboard calculations unless already required elsewhere
+
+Implementation requirements:
+
+1. Create a new feature module, for example:
+- services/sector_rotation/
+- routers/sector_rotation.py
+- schemas/sector_rotation.py
+- jobs/sector_rotation_analysis.py (or similar)
+- cache support if project already has redis/db/cache helpers
+
+2. Build data ingestion logic for all sector ETFs
+For each ETF:
+- current/last price
+- historical price series sufficient to compute:
+  - 1D change
+  - 7D change
+  - 30D change
+  - YTD change
+  - 1Y change
+- optional intraday or daily series for frontend charting
+
+3. Normalize all sector ETF data into a common schema:
+{
+  "ticker": "XLK",
+  "name": "Technology",
+  "price": 0.0,
+  "change_1d": 0.0,
+  "change_7d": 0.0,
+  "change_30d": 0.0,
+  "change_ytd": 0.0,
+  "change_1y": 0.0,
+  "momentum_score": 0.0,
+  "volatility_score": 0.0,
+  "relative_strength_rank": 1,
+  "regime_tag": "Leading",
+  "series": {
+    "1d": [],
+    "7d": [],
+    "30d": [],
+    "ytd": [],
+    "1y": []
+  }
+}
+
+4. Compute derived analytics
+At minimum:
+- rank sectors by momentum using weighted lookbacks
+- identify top 3 leaders and bottom 3 laggards
+- classify sectors into:
+  - Leading
+  - Improving
+  - Weakening
+  - Lagging
+- derive a simple regime layer using market and macro inputs
+
+Suggested regime inputs:
+- sector leadership breadth
+- cyclicals vs defensives performance
+- XLK/XLI/XLY/XLE leadership vs XLU/XLP/XLV/XLRE
+- FRED macro series if available (example inflation/growth/rates signals)
+- optional trend context from SPY and QQQ if useful
+
+5. Add weekly AI analysis generation using Gemini with Google Search grounding
+Use Gemini with native Google Search grounding / web search grounding.
+The analysis should be generated no more than once per week by default, then cached/stored.
+
+The AI output should be structured JSON, not freeform prose only.
+
+Target output schema:
+{
+  "summary": "...",
+  "market_regime": "Risk-On",
+  "macro_regime": "Disinflationary",
+  "leadership_style": "Cyclicals",
+  "current_leadership": {
+    "leaders": ["XLK", "XLI", "XLE"],
+    "laggards": ["XLU", "XLP", "XLRE"],
+    "explanation": "..."
+  },
+  "outlook_1_4_weeks": "...",
+  "outlook_1_3_months": "...",
+  "scenarios": [
+    {
+      "name": "Tariff escalation",
+      "timeframe": "1-8 weeks",
+      "probability": "medium",
+      "sector_winners": ["XLE"],
+      "sector_losers": ["XLY", "XLI"],
+      "analysis": "..."
+    },
+    {
+      "name": "Tariff de-escalation / growth relief",
+      "timeframe": "1-3 months",
+      "probability": "medium",
+      "sector_winners": ["XLI", "XLF", "XLY"],
+      "sector_losers": ["XLU", "XLP"],
+      "analysis": "..."
+    }
+  ],
+  "watch_items": [
+    "Fed policy",
+    "Treasury yields",
+    "Energy supply shocks",
+    "Trade/tariff headlines"
+  ],
+  "sources": [
+    {
+      "title": "...",
+      "url": "...",
+      "publisher": "..."
+    }
+  ],
+  "generated_at": "..."
+}
+
+6. The Gemini prompt should instruct the model to:
+- use real current events and grounded search
+- explain what is happening now
+- explain what sectors are likely leading because of that regime
+- explain possible rotations over specific timeframes
+- analyze multiple geopolitical/policy scenarios
+- avoid generic financial commentary
+- tie claims back to current macro, policy, and news developments
+- output valid JSON matching the target schema
+- avoid making portfolio advice claims
+- express uncertainty honestly
+
+7. Create an internal service function like:
+- get_sector_rotation_dashboard()
+This should return:
+{
+  "updated_at": "...",
+  "analysis_updated_at": "...",
+  "regime": {...},
+  "leaders": [...],
+  "laggards": [...],
+  "sectors": [...],
+  "analysis": {...}
+}
+
+8. Expose endpoints such as:
+- GET /api/sector-rotation/dashboard
+- GET /api/sector-rotation/analysis
+- GET /api/sector-rotation/history?range=1d|7d|30d|ytd|1y
+- POST /api/sector-rotation/refresh-analysis   (optional/admin/internal use only)
+
+9. Caching and scheduling
+- Cache market data for a short TTL (for example 1–5 minutes)
+- Cache/store AI analysis for 7 days
+- If analysis is stale, regenerate asynchronously if your app pattern supports it, or regenerate on demand with protection against repeated calls
+- Persist the last good AI analysis so frontend always has something to render
+
+10. Error handling / resilience
+- If Gemini grounding fails, continue returning sector market data
+- If one market data provider fails, fall back to the other
+- Add logging around provider failures, stale cache use, and analysis generation
+- Never let malformed AI output crash the route
+- Validate AI JSON against Pydantic schema
+
+11. Environment / config
+Use env vars for:
+- GEMINI_API_KEY
+- FMP_API_KEY
+- FINNHUB_API_KEY
+- FRED_API_KEY
+- optional SEC/EDGAR settings if needed
+
+12. Keep frontend contract clean
+The frontend should not need to know which provider supplied which field unless useful for debugging.
+Return a stable normalized schema.
+
+Suggested implementation details:
+- Prefer FMP/Finnhub for ETF quotes and history
+- Use daily candles as the canonical source for 7D / 30D / YTD / 1Y performance
+- Compute percentage changes server-side
+- Return compact chart series for frontend use
+- Add typed Pydantic response models
+
+Now implement:
+- the router
+- schemas
+- service logic
+- provider abstraction
+- Gemini analysis service
+- cache/staleness logic
+- endpoint wiring
+
+Also include:
+- a concise summary of files added/modified
+- sample JSON responses
+- any required env vars
+- notes on fallback behavior
+My opinion on your API stack for this page
+
+Use this order:
+
+Best core market data
+
+FMP
+Finnhub
+FRED for macro overlay
+
+Use sparingly
+
+SEC EDGAR: useful for broad policy/regulatory context, not for your main sector table
+Tradier/Public.com: not the best backbone for a sector-rotation intelligence page unless you’re tying into user brokerage functionality
+
+That’s because your page needs broad ETF history + simple reliable quotes + macro context, not order-routing swagger.
+
+One smart addition you should absolutely include
+
+Tell your backend agent to compute a simple Rotation Score per sector, something like:
+
+25% = 1M return rank
+25% = YTD return rank
+20% = distance vs 50D MA
+15% = distance vs 200D MA
+15% = relative performance vs SPY over 30D
+
+Then tag sectors:
+
+Leading
+Improving
+Weakening
+Lagging
+
+That makes the page feel like an actual regime dashboard instead of a glorified ETF screener.

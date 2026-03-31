@@ -116,6 +116,29 @@ Default: enabled (`true`).
 5 regimes from breadth (long_pct/short_pct), avg funding, composite score, exhaustion_pct:
 `risk_on_bull`, `risk_off_bear`, `crowded_leveraged_bull`, `exhausted_distribution`, `mixed / rotational`
 
+## Sector Rotation Dashboard (`/api/sector-rotation/`)
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/sector-rotation/dashboard` | 11 SPDR sector ETFs with rotation scores, YTD, 1M, MA %, rel-SPY, regime tags; macro overlay (FRED); market breadth; cyclical-vs-defensive spread. 300s in-memory cache. |
+| `GET /api/sector-rotation/history?range=1y` | 1Y daily price series for all 11 ETFs (yfinance); supports 1m/3m/6m/1y |
+| `GET /api/sector-rotation/analysis` | Cached Gemini AI analysis (7-day disk cache at `backend/data/sector_rotation_analysis.json`) |
+| `POST /api/sector-rotation/refresh-analysis` | Force-regenerate Gemini AI analysis with Google Search grounding |
+
+### Data Sources
+- **Quotes**: Finnhub real-time (1m cache)
+- **History**: yfinance daily bars
+- **Macro**: FRED (Fed Funds, CPI, 10Y, 2Y; YC spread computed)
+- **AI Analysis**: `gemini-3-flash-preview` + `google_search` tool grounding
+
+### Rotation Scoring Formula
+`rotation_score (0-100)` = 25% 1M rank + 25% YTD rank + 20% pct-above-50MA + 15% pct-above-200MA + 15% rel-vs-SPY-30D
+
+Regime tags: Leading≥70, Improving≥50, Weakening≥30, Lagging<30
+
+### AI Analysis Schema
+Fields: `market_regime`, `macro_regime`, `leadership_style`, `summary`, `current_leadership` (leaders/laggards/explanation), `scenarios` (name/probability/sector_winners/sector_losers), `watch_items`, `sources`, `generated_at`
+
 ## Real Portfolio (caelyn-terminal)
 
 - SQGLP framework for investments, Weinstein Stage 2 for trades

@@ -40,6 +40,7 @@ from urllib.parse import urlparse, unquote
 from services.hyperliquid.state import HyperliquidState as _HLState
 from services.hyperliquid.router import router as _hl_router, set_state as _hl_set_state
 from services.hyperliquid.websocket_manager import boot_and_run as _hl_boot_and_run
+from services.sector_rotation.router import router as _sr_router
 
 _hl_state = _HLState()
 _hl_set_state(_hl_state)
@@ -175,6 +176,10 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ── Hyperliquid Screener router ───────────────────────────────────────────────
 app.include_router(_hl_router)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Sector Rotation router ────────────────────────────────────────────────────
+app.include_router(_sr_router)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────
