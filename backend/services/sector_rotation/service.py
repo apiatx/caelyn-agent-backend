@@ -38,33 +38,81 @@ _GENERATING_KEY = "sr:generating"
 
 def _fetch_macro_overlay() -> dict:
     """
-    Pull key macro signals from FRED for the regime layer.
+    Pull key macro signals for the regime layer.
+    Priority order:
+    1. Reuse existing fred:quick_macro or macro:dashboard:v3 caches (already fetched by macro precompute loop)
+    2. Fall back to direct FRED calls only if nothing cached
     Returns a compact dict with numeric values.
     """
+    macro: dict = {}
+
+    # ── 1. Try to reuse the already-cached quick_macro from the macro precompute loop ──
     try:
-        fred_key = os.getenv("FRED_API_KEY", "")
-        if not fred_key:
-            return {}
-        from data.fred_provider import FredProvider
-        fred = FredProvider(api_key=fred_key)
-        macro: dict = {}
+        quick = cache.get("fred:quick_macro")
+        if quick and isinstance(quick, dict):
+            fed_data = quick.get("fed_funds_rate", {})
+            cpi_data = quick.get("inflation_cpi", {})
+            if isinstance(fed_data, dict) and "current_rate" in fed_data:
+                macro["fed_rate"] = fed_data["current_rate"]
+            if isinstance(cpi_data, dict) and "yoy_inflation_pct" in cpi_data:
+                macro["cpi_yoy"] = cpi_data["yoy_inflation_pct"]
+            # yield curve from fred:quick_macro
+            yc = quick.get("yield_curve_10y_2y", {})
+            if isinstance(yc, dict):
+                if "current_spread" in yc:
+                    spread = yc["current_spread"]
+                    # Try to extract 10Y and 2Y from the spread data
+                    macro["yield_curve_spread"] = round(spread, 3)
+    except Exception:
+        pass
 
-        rates = fred.get_fed_funds_rate()
-        if "current_rate" in rates:
-            macro["fed_rate"] = rates["current_rate"]
+    # ── 2. Try macro:dashboard:v3 for yields if still missing ──
+    if "yield_10y" not in macro:
+        try:
+            dash = cache.get("macro:dashboard:v3")
+            if dash and isinstance(dash, dict):
+                rates = dash.get("rates", {})
+                if isinstance(rates, dict):
+                    y10 = rates.get("10y_treasury") or rates.get("yield_10y")
+                    y2  = rates.get("2y_treasury")  or rates.get("yield_2y")
+                    if y10 is not None:
+                        macro["yield_10y"] = round(float(y10), 2)
+                    if y2 is not None:
+                        macro["yield_2y"] = round(float(y2), 2)
+                    if y10 is not None and y2 is not None:
+                        macro["yield_curve_spread"] = round(float(y10) - float(y2), 3)
+        except Exception:
+            pass
 
-        cpi = fred.get_inflation_cpi()
-        if "yoy_inflation_pct" in cpi:
-            macro["cpi_yoy"] = cpi["yoy_inflation_pct"]
+    # ── 3. Fall back to direct FRED calls only if still incomplete ──
+    if not macro.get("fed_rate") or not macro.get("cpi_yoy"):
+        try:
+            fred_key = os.getenv("FRED_API_KEY", "")
+            if fred_key:
+                from data.fred_provider import FredProvider
+                fred = FredProvider(api_key=fred_key)
 
-        return macro
-    except Exception as e:
-        print(f"[SR] FRED overlay error: {e}")
-        return {}
+                if not macro.get("fed_rate"):
+                    rates_data = fred.get_fed_funds_rate()
+                    if "current_rate" in rates_data:
+                        macro["fed_rate"] = rates_data["current_rate"]
+
+                if not macro.get("cpi_yoy"):
+                    cpi_data = fred.get_inflation_cpi()
+                    if "yoy_inflation_pct" in cpi_data:
+                        macro["cpi_yoy"] = cpi_data["yoy_inflation_pct"]
+        except Exception as e:
+            print(f"[SR] FRED fallback error: {e}")
+
+    return macro
 
 
 async def _enrich_macro_with_treasuries(macro: dict) -> dict:
-    """Add treasury yield data from FRED to macro overlay."""
+    """Add treasury yield data — reuses existing FRED cache, falls back to direct fetch."""
+    # Skip if already populated from cache in _fetch_macro_overlay
+    if macro.get("yield_10y") and macro.get("yield_2y"):
+        return macro
+
     try:
         fred_key = os.getenv("FRED_API_KEY", "")
         if not fred_key:

@@ -20,9 +20,9 @@ SECTOR_TICKERS = list(SECTOR_ETF_MAP.keys())
 BENCH_TICKERS  = ["SPY", "QQQ"]
 ALL_TICKERS    = SECTOR_TICKERS + BENCH_TICKERS
 
-_HIST_TTL = 1800
+_HIST_TTL = 3600   # 1h — history doesn't change intraday
 _QUOTE_TTL = 120
-_executor  = ThreadPoolExecutor(max_workers=4)
+_executor  = ThreadPoolExecutor(max_workers=13)  # one worker per ticker for max parallelism
 
 
 def _finnhub_key() -> str:

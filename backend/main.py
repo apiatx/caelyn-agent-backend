@@ -165,6 +165,7 @@ async def lifespan(app):
     # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
     asyncio.create_task(_polygon_options_ingestion_loop())
     asyncio.create_task(_macro_precompute_loop())
+    asyncio.create_task(_sector_rotation_precompute_loop())
     asyncio.create_task(_hl_boot_and_run(_hl_state))
     yield
 
@@ -5656,6 +5657,35 @@ async def _macro_precompute_loop():
             print(f"[MACRO_PRECOMPUTE] Error: {e}")
 
         await asyncio.sleep(_MACRO_PRECOMPUTE_INTERVAL)
+
+
+# ── Sector Rotation precompute loop ──────────────────────────────────
+
+_SR_PRECOMPUTE_INTERVAL = 900  # 15 minutes
+
+
+async def _sector_rotation_precompute_loop():
+    """
+    Pre-warm the sector rotation dashboard cache on startup and every 15 minutes.
+    Runs immediately — no wait for _init_event because it has no dependency on data_service.
+    """
+    import time as _time
+
+    first_run = True
+    while True:
+        try:
+            t0 = _time.time()
+            from services.sector_rotation.service import get_dashboard as _sr_get_dashboard
+            await _sr_get_dashboard(include_analysis=False)
+            elapsed = _time.time() - t0
+            print(f"[SR_PRECOMPUTE] {'Startup warm' if first_run else 'Refreshed'} sector rotation dashboard in {elapsed:.1f}s")
+            first_run = False
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[SR_PRECOMPUTE] Error: {e}")
+
+        await asyncio.sleep(_SR_PRECOMPUTE_INTERVAL)
 
 
 # ── GET /api/macro/dashboard ─────────────────────────────────────────
