@@ -385,7 +385,7 @@ def _score_size(total_value: float) -> tuple[int, str]:
 def _score_role(title: str, is_director: bool, is_officer: bool, is_ten_pct: bool) -> tuple[int, str]:
     t = (title or "").upper()
     if is_ten_pct:
-        return 15, "10% Owner"
+        return 18, "10% Owner"
     for kw, score, label in [
         (["CEO", "CHIEF EXECUTIVE", "CHAIRMAN", "EXEC CHAIR"], 20, title or "CEO/Chairman"),
         (["PRESIDENT", "COO", "CHIEF OPERATING"], 18, title or "President/COO"),
@@ -453,9 +453,9 @@ def _score_cluster(cluster_count: int, cluster_type: str | None = None) -> tuple
     elif cluster_count >= 5:
         raw = 12
     elif cluster_count >= 3:
-        raw = 9
+        raw = 12
     else:
-        raw = 5
+        raw = 8
     multipliers = {
         "coordinated_buy": 1.0,
         "coordinated_sell": 0.9,
@@ -1549,7 +1549,23 @@ def _sync_backfill_scores() -> dict:
 
             # Extract stored component scores (for non-changing factors)
             bd = score_bd or {}
-            s_role = bd.get("role", {}).get("score", 0)
+            role_detail = bd.get("role", {}).get("detail", "")
+            # Re-derive role score using current weights (handles 10% Owner 15→18, etc.)
+            if "10%" in role_detail or "10 %" in role_detail:
+                s_role, _ = _score_role("", False, False, True)
+            elif any(k in (title or "").upper() for k in ["CEO", "CHIEF EXECUTIVE", "CHAIRMAN", "EXEC CHAIR"]):
+                s_role = 20
+            elif any(k in (title or "").upper() for k in ["PRESIDENT", "COO", "CHIEF OPERATING"]):
+                s_role = 18
+            elif any(k in (title or "").upper() for k in ["CFO", "CTO", "CMO", "CHIEF FINANCIAL", "CHIEF TECH", "CHIEF MARKET"]):
+                s_role = 16
+            elif any(k in (title or "").upper() for k in ["SVP", "EVP", "SENIOR VP", "EXECUTIVE VP"]):
+                s_role = 12
+            elif any(k in (title or "").upper() for k in ["VP ", "VICE PRESIDENT"]):
+                s_role = 10
+            else:
+                # Fall back to stored score (Director, Officer, other)
+                s_role = bd.get("role", {}).get("score", 0)
             s_type = bd.get("type", {}).get("score", 0)
             s_ctx = bd.get("context", {}).get("score", 0)
             s_pos = bd.get("position_impact", {}).get("score", 0)
@@ -1583,7 +1599,7 @@ def _sync_backfill_scores() -> dict:
 
             # Regenerate context_tags with cluster awareness
             role_score = s_role
-            is_ten_pct = role_score == 15
+            is_ten_pct = "10%" in role_detail or role_score >= 18
             is_director = (role_score == 8) and not any(
                 k in (title or "").upper() for k in ["CEO", "CFO", "CTO", "CMO", "PRESIDENT", "COO", "CHAIRMAN", "SVP", "EVP", "VP"]
             )
