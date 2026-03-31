@@ -145,24 +145,32 @@ Fetches SEC Form 4 filings via edgartools, scores each transaction 0-100, stores
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/insider-activity` | Paginated feed with filters: `type` (buys/sells/all), `timeframe` (1w/1m/3m), `min_score`, `sort`, `order`, `search`, `limit`, `offset` |
+| `GET /api/insider-activity` | Paginated feed with filters: `type`, `timeframe`, `min_score`, `sort`, `order`, `search`, `limit`, `offset`, `cluster_type` (coordinated_buy/coordinated_sell/lockup_expiry/mixed), `clustered_only` (bool), `sector` |
 | `GET /api/insider-activity/stats` | Aggregate stats: total_transactions, buys, sales, avg_buy_score, top_buy, top_sell, last_refresh, refresh_in_progress |
-| `GET /api/insider-activity/{ticker}` | All transactions for a specific ticker |
-| `GET /api/insider-activity/detail/{accession_number}` | Full detail including score_breakdown, price_context |
+| `GET /api/insider-activity/{ticker}` | All transactions for ticker + insider_summary (net_direction, buy/sell 30d values) |
+| `GET /api/insider-activity/detail/{accession_number}` | Full detail including score_breakdown, price_context, cluster_type, cluster_metadata |
 | `POST /api/insider-activity/refresh` | Manual refresh trigger |
 
 ### 8-Factor Conviction Scoring (0-100)
 
 | Factor | Weight |
 |---|---|
-| Transaction size ($) | 20 |
+| Transaction size ($) | 15 |
 | Insider role (CEO/Director/10%) | 20 |
 | Transaction type (buy vs grant vs sale) | 10 |
 | Price context (near 52w low, vs MA) | 15 |
-| Cluster buying (multiple insiders same window) | 10 |
+| Cluster activity (type-multiplied: coordinated_buy×1.0, coordinated_sell×0.9, mixed×0.5, lockup_expiry×0.2) | 15 |
 | Position change % | 10 |
 | Track record (filing frequency) | 10 |
 | Earnings proximity | 5 |
+
+### Cluster Classification (`cluster_type`)
+`_detect_cluster_type()` queries DB for same-ticker transactions within ±14-day window and classifies:
+- `coordinated_buy`: >70% buys → multiplier 1.0
+- `coordinated_sell`: >70% sells, diverse stagger → multiplier 0.9
+- `lockup_expiry`: >70% sells, tight date-spread (≤2 days) or low position-impact stdev → multiplier 0.2
+- `mixed`: else → multiplier 0.5
+Metadata: cluster_size, date_spread_days, insiders_in_cluster, distinct_role_count, total_cluster_value, avg/stdev position impact
 
 ### Data Pipeline
 - **Source**: edgartools `get_filings(form="4")` → `filing.obj().market_trades` DataFrame

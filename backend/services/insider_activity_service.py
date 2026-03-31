@@ -45,11 +45,11 @@ _BATCH_SIZE = 50           # filings processed per batch
 _KEEP_CODES = {"P", "S", "M", "A", "D", "G"}  # transaction codes to keep
 
 # Scoring weights (adjustable)
-_W_SIZE = 20
+_W_SIZE = 15
 _W_ROLE = 20
 _W_TYPE = 10
 _W_CONTEXT = 15
-_W_CLUSTER = 10
+_W_CLUSTER = 15
 _W_POSITION = 10
 _W_TRACK = 10
 _W_EVENT = 5
@@ -142,6 +142,8 @@ def _create_table():
                 price_context      JSONB,
                 cluster_id         INTEGER,
                 context_tags       TEXT[],
+                cluster_type       VARCHAR(30),
+                cluster_metadata   JSONB,
                 sector             VARCHAR(100),
                 created_at         TIMESTAMP DEFAULT NOW(),
                 expires_at         TIMESTAMP
@@ -159,6 +161,17 @@ def _create_table():
             CREATE INDEX IF NOT EXISTS idx_it_expires
             ON insider_transactions (expires_at)
         """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_it_cluster
+            ON insider_transactions (cluster_id)
+        """)
+        for col, defn in [
+            ("cluster_type", "VARCHAR(30)"),
+            ("cluster_metadata", "JSONB"),
+        ]:
+            cur.execute(
+                f"ALTER TABLE insider_transactions ADD COLUMN IF NOT EXISTS {col} {defn}"
+            )
         conn.commit()
         cur.close()
         logger.info("[INSIDER_DB] Table ready")
@@ -306,10 +319,11 @@ def _insert_transactions(records: list[dict]) -> int:
                         transaction_date, filing_date, shares, price_per_share,
                         total_value, shares_owned_after, ownership_type,
                         conviction_score, score_breakdown, price_context,
-                        cluster_id, context_tags, sector, expires_at
+                        cluster_id, context_tags, cluster_type, cluster_metadata,
+                        sector, expires_at
                     ) VALUES (
                         %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                        %s,%s,%s,%s,%s,%s,%s
+                        %s,%s,%s,%s,%s,%s,%s,%s,%s
                     ) ON CONFLICT (accession_number) DO NOTHING
                 """, (
                     r["accession_number"],
@@ -331,6 +345,8 @@ def _insert_transactions(records: list[dict]) -> int:
                     Json(r["price_context"]) if r.get("price_context") else None,
                     r.get("cluster_id"),
                     r.get("context_tags"),
+                    r.get("cluster_type"),
+                    Json(r["cluster_metadata"]) if r.get("cluster_metadata") else None,
                     r.get("sector"),
                     expires_at,
                 ))
@@ -355,13 +371,13 @@ def _insert_transactions(records: list[dict]) -> int:
 
 def _score_size(total_value: float) -> tuple[int, str]:
     if total_value >= 5_000_000:
-        return 20, f"${total_value/1e6:.1f}M total value"
-    elif total_value >= 1_000_000:
         return 15, f"${total_value/1e6:.1f}M total value"
+    elif total_value >= 1_000_000:
+        return 12, f"${total_value/1e6:.1f}M total value"
     elif total_value >= 250_000:
-        return 10, f"${total_value/1e3:.0f}K total value"
+        return 8, f"${total_value/1e3:.0f}K total value"
     elif total_value >= 50_000:
-        return 6, f"${total_value/1e3:.0f}K total value"
+        return 5, f"${total_value/1e3:.0f}K total value"
     else:
         return 2, f"${total_value:.0f} total value"
 
@@ -429,14 +445,27 @@ def _score_context(code: str, price_context: dict | None) -> tuple[int, str]:
     return 3, f"{abs(pct_from_high):.0f}% from 52w high"
 
 
-def _score_cluster(cluster_count: int) -> tuple[int, str]:
-    if cluster_count >= 5:
-        return 10, f"{cluster_count} insiders in 14-day window"
+def _score_cluster(cluster_count: int, cluster_type: str | None = None) -> tuple[int, str]:
+    if cluster_count <= 1:
+        return 0, "Single insider transaction"
+    if cluster_count >= 8:
+        raw = 15
+    elif cluster_count >= 5:
+        raw = 12
     elif cluster_count >= 3:
-        return 7, f"{cluster_count} insiders in 14-day window"
-    elif cluster_count >= 2:
-        return 4, f"{cluster_count} insiders in 14-day window"
-    return 0, "Single insider transaction"
+        raw = 9
+    else:
+        raw = 5
+    multipliers = {
+        "coordinated_buy": 1.0,
+        "coordinated_sell": 0.9,
+        "mixed": 0.5,
+        "lockup_expiry": 0.2,
+    }
+    mult = multipliers.get(cluster_type or "", 1.0)
+    score = min(int(round(raw * mult)), 15)
+    label = (cluster_type or "cluster").replace("_", " ")
+    return score, f"{cluster_count} insiders ({label})"
 
 
 def _score_position(code: str, shares: int, shares_after: int) -> tuple[int, str]:
@@ -482,12 +511,13 @@ def calculate_conviction_score(
     filing_count: int,
     has_earnings_nearby: bool,
     price_context: dict | None,
+    cluster_type: str | None = None,
 ) -> tuple[int, dict]:
     s_size, d_size = _score_size(total_value)
     s_role, d_role = _score_role(title, is_director, is_officer, is_ten_pct)
     s_type, d_type = _score_type(code)
     s_ctx, d_ctx = _score_context(code, price_context)
-    s_cluster, d_cluster = _score_cluster(cluster_count)
+    s_cluster, d_cluster = _score_cluster(cluster_count, cluster_type)
     s_pos, d_pos = _score_position(code, shares, shares_after)
     s_track, d_track = _score_track_record(filing_count)
     s_event, d_event = _score_event_proximity(code, has_earnings_nearby)
@@ -498,7 +528,8 @@ def calculate_conviction_score(
         "role":           {"score": s_role,    "max": _W_ROLE,    "detail": d_role},
         "type":           {"score": s_type,    "max": _W_TYPE,    "detail": d_type},
         "context":        {"score": s_ctx,     "max": _W_CONTEXT, "detail": d_ctx},
-        "cluster":        {"score": s_cluster, "max": _W_CLUSTER, "detail": d_cluster},
+        "cluster":        {"score": s_cluster, "max": _W_CLUSTER, "detail": d_cluster,
+                           "cluster_type": cluster_type, "cluster_size": cluster_count},
         "position_impact":{"score": s_pos,     "max": _W_POSITION,"detail": d_pos},
         "track_record":   {"score": s_track,   "max": _W_TRACK,   "detail": d_track},
         "event_proximity":{"score": s_event,   "max": _W_EVENT,   "detail": d_event},
@@ -517,6 +548,9 @@ def generate_context_tags(
     cluster_count: int,
     shares: int,
     shares_after: int,
+    cluster_type: str | None = None,
+    date_spread_days: int = 0,
+    distinct_role_count: int = 1,
 ) -> list[str]:
     tags = []
     code_map = {"P": "open-market buy", "S": "open-market sell", "M": "option exercise",
@@ -536,6 +570,18 @@ def generate_context_tags(
         tags.append("large trade")
     if cluster_count >= 2:
         tags.append(f"{cluster_count} insiders")
+        if cluster_type == "coordinated_buy":
+            tags.append("coordinated buying")
+        elif cluster_type == "coordinated_sell":
+            tags.append("coordinated selling")
+            if date_spread_days > 5:
+                tags.append("staggered sells")
+            if distinct_role_count >= 3:
+                tags.append("cross-level selling")
+        elif cluster_type == "lockup_expiry":
+            tags.append("lockup expiry")
+        elif cluster_type == "mixed":
+            tags.append("mixed insider activity")
     if shares_after > 0 and abs(shares) / max(abs(shares_after), 1) > 0.5:
         tags.append("major stake change")
     return tags
@@ -682,6 +728,131 @@ async def _check_earnings_nearby(ticker: str, tx_date: date) -> bool:
     except Exception:
         pass
     return False
+
+
+# ── Cluster Type Detection ────────────────────────────────────────────────────
+
+def _detect_cluster_type(ticker: str, tx_date: date, filing_acc_prefix: str) -> dict:
+    """
+    Query existing DB rows for same ticker within 14-day rolling window and
+    classify the cluster as coordinated_buy / coordinated_sell / lockup_expiry / mixed.
+    Returns {"type": str|None, "count": int, "metadata": dict}.
+    """
+    conn = _get_conn()
+    if not conn:
+        return {"type": None, "count": 1, "metadata": {}}
+    try:
+        cur = conn.cursor()
+        window_start = tx_date - timedelta(days=14)
+        window_end = tx_date + timedelta(days=14)
+        cur.execute("""
+            SELECT insider_name, transaction_code, transaction_date,
+                   total_value, shares, shares_owned_after, insider_title
+            FROM insider_transactions
+            WHERE ticker = %s
+              AND transaction_date BETWEEN %s AND %s
+              AND accession_number NOT LIKE %s
+        """, (ticker, window_start, window_end, f"{filing_acc_prefix}%"))
+        rows = cur.fetchall()
+        cur.close()
+    except Exception:
+        return {"type": None, "count": 1, "metadata": {}}
+    finally:
+        _put_conn(conn)
+
+    if not rows:
+        return {"type": None, "count": 1, "metadata": {}}
+
+    cluster_insiders = list({r[0] for r in rows if r[0]})
+    cluster_count = len(cluster_insiders) + 1  # +1 for current transaction
+
+    codes = [r[1] for r in rows]
+    buy_count = sum(1 for c in codes if c == "P")
+    sell_count = sum(1 for c in codes if c == "S")
+
+    dates = [r[2] for r in rows if r[2]]
+    if dates:
+        date_min = min(dates) if not isinstance(min(dates), datetime) else min(dates).date()
+        date_max = max(dates) if not isinstance(max(dates), datetime) else max(dates).date()
+        if isinstance(date_min, date) and isinstance(date_max, date):
+            date_spread = (date_max - date_min).days
+        else:
+            date_spread = 0
+    else:
+        date_spread = 0
+
+    total_cluster_val = sum(float(r[3] or 0) for r in rows)
+
+    roles = [r[6] or "" for r in rows]
+    role_categories: set[str] = set()
+    for role in roles:
+        r_up = role.upper()
+        if any(k in r_up for k in ["CEO", "CHAIRMAN", "PRESIDENT"]):
+            role_categories.add("CEO/Chair")
+        elif any(k in r_up for k in ["CFO", "CTO", "CMO"]):
+            role_categories.add("C-Suite")
+        elif "DIRECTOR" in r_up:
+            role_categories.add("Director")
+        elif any(k in r_up for k in ["SVP", "EVP", "VP"]):
+            role_categories.add("VP/SVP")
+        else:
+            role_categories.add("Other")
+
+    impacts = []
+    for r in rows:
+        shares_t = abs(int(r[4] or 0))
+        shares_after = abs(int(r[5] or 0))
+        if shares_after > 0:
+            impacts.append(shares_t / shares_after * 100)
+
+    impact_stdev = 0.0
+    if len(impacts) >= 2:
+        mean = sum(impacts) / len(impacts)
+        impact_stdev = (sum((x - mean) ** 2 for x in impacts) / len(impacts)) ** 0.5
+
+    total_txns = max(len(rows), 1)
+    buy_ratio = buy_count / total_txns
+    sell_ratio = sell_count / total_txns
+
+    is_lockup = False
+    if sell_ratio > 0.7:
+        if date_spread <= 2 or impact_stdev < 15:
+            is_lockup = True
+
+    if buy_ratio > 0.7:
+        cluster_type = "coordinated_buy"
+    elif sell_ratio > 0.7 and not is_lockup:
+        cluster_type = "coordinated_sell"
+    elif sell_ratio > 0.7 and is_lockup:
+        cluster_type = "lockup_expiry"
+    else:
+        cluster_type = "mixed"
+
+    _type_multipliers = {
+        "coordinated_buy": 1.0, "coordinated_sell": 0.9,
+        "mixed": 0.5, "lockup_expiry": 0.2,
+    }
+    avg_impact = round(sum(impacts) / max(len(impacts), 1), 2) if impacts else None
+    metadata = {
+        "cluster_size": cluster_count,
+        "cluster_type": cluster_type,
+        "cluster_date_range": {
+            "start": str(dates[0]) if dates else None,
+            "end": str(dates[-1]) if dates else None,
+        },
+        "date_spread_days": date_spread,
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "insiders_in_cluster": cluster_insiders,
+        "roles_in_cluster": roles,
+        "total_cluster_value": total_cluster_val,
+        "avg_position_impact_pct": avg_impact,
+        "position_impact_stdev": round(impact_stdev, 2),
+        "is_lockup_likely": is_lockup,
+        "type_multiplier": _type_multipliers.get(cluster_type, 1.0),
+        "distinct_role_count": len(role_categories),
+    }
+    return {"type": cluster_type, "count": cluster_count, "metadata": metadata}
 
 
 # ── SEC EDGAR Fetch ───────────────────────────────────────────────────────────
@@ -866,9 +1037,15 @@ async def fetch_recent_form4_filings(max_filings: int = 200) -> int:
             shares = int(r.get("shares") or 0)
             shares_after = int(r.get("shares_owned_after") or 0)
 
-            cluster_count = await loop.run_in_executor(
-                _executor, _count_cluster, ticker, r["transaction_date"]
+            # Cluster detection (queries DB for nearby same-ticker transactions)
+            acc_prefix = r["accession_number"].split(":")[0]
+            cluster_info = await loop.run_in_executor(
+                _executor, _detect_cluster_type, ticker, r["transaction_date"], acc_prefix
             )
+            cluster_count = cluster_info["count"]
+            cluster_type = cluster_info["type"]
+            cluster_metadata = cluster_info["metadata"] if cluster_info["metadata"] else None
+
             filing_count = await loop.run_in_executor(
                 _executor, _count_insider_filings, r.get("insider_name") or ""
             )
@@ -887,8 +1064,11 @@ async def fetch_recent_form4_filings(max_filings: int = 200) -> int:
                 filing_count=filing_count,
                 has_earnings_nearby=has_earnings,
                 price_context=price_ctx,
+                cluster_type=cluster_type,
             )
 
+            date_spread = (cluster_metadata or {}).get("date_spread_days", 0)
+            distinct_roles = (cluster_metadata or {}).get("distinct_role_count", 1)
             tags = generate_context_tags(
                 code=code,
                 title=r.get("insider_title") or "",
@@ -898,6 +1078,9 @@ async def fetch_recent_form4_filings(max_filings: int = 200) -> int:
                 cluster_count=cluster_count,
                 shares=shares,
                 shares_after=shares_after,
+                cluster_type=cluster_type,
+                date_spread_days=date_spread,
+                distinct_role_count=distinct_roles,
             )
 
             cluster_id = None
@@ -909,7 +1092,8 @@ async def fetch_recent_form4_filings(max_filings: int = 200) -> int:
             sector = (price_ctx or {}).get("sector")
             record = {**r, "conviction_score": score, "score_breakdown": breakdown,
                       "price_context": price_ctx, "cluster_id": cluster_id,
-                      "context_tags": tags, "sector": sector}
+                      "context_tags": tags, "cluster_type": cluster_type,
+                      "cluster_metadata": cluster_metadata, "sector": sector}
             record.pop("is_director", None)
             record.pop("is_officer", None)
             record.pop("is_ten_pct", None)
@@ -977,7 +1161,7 @@ router = APIRouter(tags=["insider-activity"])
 
 def _row_to_dict(row, cols: list[str]) -> dict:
     d = dict(zip(cols, row))
-    for k in ("score_breakdown", "price_context"):
+    for k in ("score_breakdown", "price_context", "cluster_metadata"):
         if isinstance(d.get(k), str):
             try:
                 d[k] = json.loads(d[k])
@@ -1004,6 +1188,9 @@ def _query_transactions(
     search: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    cluster_type_filter: str | None = None,
+    clustered_only: bool = False,
+    sector_filter: str | None = None,
 ) -> tuple[list[dict], dict]:
     conn = _get_conn()
     if not conn:
@@ -1035,6 +1222,14 @@ def _query_transactions(
         conditions.append("(ticker ILIKE %s OR company_name ILIKE %s OR insider_name ILIKE %s)")
         like = f"%{search}%"
         params.extend([like, like, like])
+    if cluster_type_filter:
+        conditions.append("cluster_type = %s")
+        params.append(cluster_type_filter)
+    if clustered_only:
+        conditions.append("cluster_id IS NOT NULL")
+    if sector_filter:
+        conditions.append("sector ILIKE %s")
+        params.append(f"%{sector_filter}%")
 
     where = " AND ".join(conditions)
 
@@ -1042,7 +1237,8 @@ def _query_transactions(
             "insider_title", "transaction_type", "transaction_code", "transaction_date",
             "filing_date", "shares", "price_per_share", "total_value", "shares_owned_after",
             "ownership_type", "conviction_score", "score_breakdown", "price_context",
-            "cluster_id", "context_tags", "sector", "created_at"]
+            "cluster_id", "context_tags", "cluster_type", "cluster_metadata",
+            "sector", "created_at"]
     cols_str = ", ".join(cols)
 
     results = []
@@ -1100,21 +1296,31 @@ async def get_insider_activity(
     search: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    cluster_type: Optional[str] = Query(None, description="coordinated_buy|coordinated_sell|lockup_expiry|mixed"),
+    clustered_only: bool = Query(False, description="Only return transactions that belong to a cluster"),
+    sector: Optional[str] = Query(None, description="Filter by sector (partial match)"),
 ):
     loop = asyncio.get_event_loop()
     transactions, summary = await loop.run_in_executor(
         _executor,
-        lambda: _query_transactions(type, timeframe, min_score, sort, order, search, limit, offset),
+        lambda: _query_transactions(
+            type, timeframe, min_score, sort, order, search, limit, offset,
+            cluster_type, clustered_only, sector,
+        ),
     )
     # Build response with pct_change_since and cluster_size
     enriched = []
     for t in transactions:
         pc = t.get("price_context") or {}
         t["pct_change_since"] = pc.get("change_since_filing_pct")
-        # Count cluster
-        tags = t.get("context_tags") or []
-        cluster_tag = next((tg for tg in tags if "insiders" in tg), None)
-        t["cluster_size"] = int(cluster_tag.split()[0]) if cluster_tag else 1
+        # Derive cluster_size from cluster_metadata if available, else fallback to tags
+        cm = t.get("cluster_metadata") or {}
+        if cm.get("cluster_size"):
+            t["cluster_size"] = cm["cluster_size"]
+        else:
+            tags = t.get("context_tags") or []
+            cluster_tag = next((tg for tg in tags if "insiders" in tg), None)
+            t["cluster_size"] = int(cluster_tag.split()[0]) if cluster_tag else 1
         enriched.append(t)
 
     return {
@@ -1234,7 +1440,8 @@ async def get_insider_by_ticker(ticker: str):
                     "insider_title", "transaction_type", "transaction_code", "transaction_date",
                     "filing_date", "shares", "price_per_share", "total_value", "shares_owned_after",
                     "ownership_type", "conviction_score", "score_breakdown", "price_context",
-                    "cluster_id", "context_tags", "sector", "created_at"]
+                    "cluster_id", "context_tags", "cluster_type", "cluster_metadata",
+                    "sector", "created_at"]
             cur = conn.cursor()
             cur.execute(
                 f"SELECT {', '.join(cols)} FROM insider_transactions WHERE ticker = %s "
