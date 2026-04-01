@@ -26,14 +26,14 @@ logger = logging.getLogger("congressional_trading")
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-_FMP_KEY = os.getenv("FMP_API_KEY", "")
+_FMP_KEY = os.getenv("FMP_API_KEY_CONGRESS", "")
 _FMP_BASE = "https://financialmodelingprep.com/stable"
 _TRADIER_KEY = os.getenv("TRADIER_API_KEY", "")
 _FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
 
 _FETCH_INTERVAL = 14400   # 4 hours
 _RETENTION_DAYS = 30
-_REFRESH_LIMIT = 100      # records per FMP endpoint per call
+_REFRESH_LIMIT = 25       # free tier max per call
 
 _last_refresh: datetime | None = None
 _refresh_in_progress = False
@@ -395,40 +395,29 @@ def _build_unique_id(name: str, ticker: str, tx_date: str, tx_type: str) -> str:
 
 
 async def _fetch_from_fmp(endpoint: str, source_label: str) -> list[dict]:
-    """Fetch records from one FMP endpoint with retry on 402/429."""
+    """Fetch records from one FMP endpoint using the dedicated congress API key."""
     if not _FMP_KEY:
-        logger.warning("[CONG_TRADE] FMP_API_KEY not set")
+        logger.warning("[CONG_TRADE] FMP_API_KEY_CONGRESS not set")
         return []
-    retries = 3
-    delays = [45, 90, 180]
-    for attempt in range(retries):
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.get(
-                    f"{_FMP_BASE}/{endpoint}",
-                    params={"apikey": _FMP_KEY, "limit": _REFRESH_LIMIT},
-                )
-            if resp.status_code in (402, 429):
-                wait = delays[attempt]
-                logger.warning("[CONG_TRADE] FMP %s returned %d (rate limited), retry %d/%d in %ds",
-                               endpoint, resp.status_code, attempt + 1, retries, wait)
-                await asyncio.sleep(wait)
-                continue
-            if resp.status_code != 200:
-                logger.warning("[CONG_TRADE] FMP %s returned %d", endpoint, resp.status_code)
-                return []
-            data = resp.json()
-            if not isinstance(data, list):
-                logger.warning("[CONG_TRADE] FMP %s unexpected response type: %s", endpoint, type(data))
-                return []
-            logger.info("[CONG_TRADE] FMP %s: %d records (attempt %d)", endpoint, len(data), attempt + 1)
-            return data
-        except Exception as e:
-            logger.error("[CONG_TRADE] FMP fetch error (%s) attempt %d: %s", endpoint, attempt + 1, e)
-            if attempt < retries - 1:
-                await asyncio.sleep(delays[attempt])
-    logger.warning("[CONG_TRADE] FMP %s could not fetch (rate limited) — will retry at next scheduled interval", endpoint)
-    return []
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(
+                f"{_FMP_BASE}/{endpoint}",
+                params={"apikey": _FMP_KEY, "limit": _REFRESH_LIMIT},
+            )
+        if resp.status_code != 200:
+            logger.warning("[CONG_TRADE] FMP %s returned %d: %s",
+                           endpoint, resp.status_code, resp.text[:200])
+            return []
+        data = resp.json()
+        if not isinstance(data, list):
+            logger.warning("[CONG_TRADE] FMP %s unexpected response type: %s", endpoint, type(data))
+            return []
+        logger.info("[CONG_TRADE] FMP %s: %d records", endpoint, len(data))
+        return data
+    except Exception as e:
+        logger.error("[CONG_TRADE] FMP fetch error (%s): %s", endpoint, e)
+        return []
 
 
 async def fetch_congressional_trades() -> dict:
@@ -794,10 +783,6 @@ async def congressional_trading_background_loop():
     await loop.run_in_executor(_executor, _create_table)
     await loop.run_in_executor(_executor, _cleanup_expired)
 
-    # Delay initial fetch to avoid FMP rate-limit collision with other services at startup
-    logger.info("[CONG_TRADE] Waiting 120s before initial fetch to avoid startup rate limits")
-    await asyncio.sleep(120)
-
     # Initial fetch on startup
     try:
         await fetch_congressional_trades()
@@ -805,10 +790,7 @@ async def congressional_trading_background_loop():
         logger.error("[CONG_TRADE] Initial fetch error: %s", e)
 
     while True:
-        # If last refresh failed (no data yet), retry sooner (1 hour), else full interval
-        wait = 3600 if _last_refresh is None else _FETCH_INTERVAL
-        logger.info("[CONG_TRADE] Next fetch in %ds (last_refresh=%s)", wait, _last_refresh)
-        await asyncio.sleep(wait)
+        await asyncio.sleep(_FETCH_INTERVAL)
         try:
             await loop.run_in_executor(_executor, _cleanup_expired)
             await fetch_congressional_trades()
