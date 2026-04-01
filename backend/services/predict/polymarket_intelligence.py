@@ -75,7 +75,15 @@ class PolymarketIntelligence:
 
         raw = await self._fetch_markets(limit=min(limit * 2, 200), tag=tag)
         enriched = [self._enrich_market(m) for m in raw]
-        enriched = [m for m in enriched if m["volume_24h"] >= min_volume_24h]
+        # Drop expired / resolving markets — their volume is settlement noise,
+        # not active trading interest. Also apply the accepting_orders guard.
+        enriched = [
+            m for m in enriched
+            if not m.get("is_expired")
+            and not m.get("is_resolving")
+            and m.get("accepting_orders", True)
+            and m["volume_24h"] >= min_volume_24h
+        ]
         enriched.sort(key=lambda m: m["volume_24h"], reverse=True)
         result = enriched[:limit]
         cache.set(key, result, _MARKET_CACHE_TTL)
@@ -314,12 +322,20 @@ class PolymarketIntelligence:
 
         vol_liq_ratio = volume_24h / max(liquidity, 1)
 
-        # Expiry — compute before momentum/whale so we can suppress stale signals
+        # Expiry — compute before momentum/whale so we can suppress stale signals.
+        # Gamma is inconsistent: some markets have endDate=None but closed=True,
+        # others have endDate in the past with closed=False (resolution lag).
+        # We combine all three signals to reliably detect non-active markets.
         end_date = raw.get("endDate") or raw.get("endDateIso")
         days_to_expiry = None
         hours_to_expiry = None
         is_expired = False
         is_resolving = False
+
+        # Signal 1: closed=True or acceptingOrders=False with no future endDate
+        _closed = raw.get("closed") is True
+        _not_accepting = not bool(raw.get("acceptingOrders") or raw.get("accepting_orders"))
+
         if end_date:
             try:
                 exp = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
@@ -331,6 +347,10 @@ class PolymarketIntelligence:
                 is_resolving = 0 <= total_seconds < 72 * 3600
             except Exception:
                 pass
+
+        # Signal 2: no endDate but Gamma says closed or not accepting orders
+        if not is_expired and not is_resolving and (_closed or _not_accepting):
+            is_expired = True
 
         # Suppress momentum/whale signals for expired or near-expiry markets:
         # High volume on a market about to close (or already closed) is settlement
