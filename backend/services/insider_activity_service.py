@@ -791,7 +791,143 @@ async def _get_price_context_batch(tickers: list[str]) -> dict[str, dict]:
         yf_results = await loop.run_in_executor(_executor, _yf_fetch, remaining)
         results.update(yf_results)
 
+    # ── yfinance historical 30D/90D returns ───────────────────────────────────
+    if results:
+        def _yf_hist(syms: list[str]) -> dict[str, tuple]:
+            out = {}
+            try:
+                import yfinance as yf
+                for s in syms:
+                    try:
+                        hist = yf.Ticker(s).history(period="3mo", interval="1d")
+                        if hist.empty or len(hist) < 5:
+                            continue
+                        cur = float(hist["Close"].iloc[-1])
+                        p30 = float(hist["Close"].iloc[-30]) if len(hist) >= 30 else float(hist["Close"].iloc[0])
+                        p90 = float(hist["Close"].iloc[0])
+                        r30 = round((cur - p30) / p30 * 100, 2) if p30 else None
+                        r90 = round((cur - p90) / p90 * 100, 2) if p90 else None
+                        out[s] = (r30, r90)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            return out
+
+        loop = asyncio.get_event_loop()
+        try:
+            hist_map = await loop.run_in_executor(_executor, _yf_hist, list(results.keys()))
+            for sym, (r30, r90) in hist_map.items():
+                if sym in results:
+                    results[sym]["return_30d"] = r30
+                    results[sym]["return_90d"] = r90
+        except Exception as e:
+            logger.warning("[INSIDER_PRICE] yfinance history batch failed: %s", e)
+
     return results
+
+
+# ── Price Returns Backfill ─────────────────────────────────────────────────────
+
+def _sync_backfill_price_returns() -> dict:
+    """Update return_30d / return_90d for transactions where they are still null."""
+    conn = _get_conn()
+    if not conn:
+        return {"updated": 0, "error": "no db connection"}
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT ticker
+            FROM insider_transactions
+            WHERE ticker IS NOT NULL AND ticker NOT IN ('NONE','')
+              AND (
+                price_context IS NULL
+                OR price_context->>'return_30d' IS NULL
+                OR price_context->>'return_90d' IS NULL
+              )
+        """)
+        tickers = [r[0] for r in cur.fetchall()]
+        cur.close()
+    except Exception as e:
+        logger.error("[INSIDER_BACKFILL_PRICE] DB read error: %s", e)
+        _put_conn(conn)
+        return {"updated": 0, "error": str(e)}
+
+    if not tickers:
+        _put_conn(conn)
+        return {"updated": 0, "message": "all price_context already populated"}
+
+    logger.info("[INSIDER_BACKFILL_PRICE] Backfilling 30D/90D returns for %d tickers", len(tickers))
+
+    # Use yfinance to get 30D/90D returns for each unique ticker
+    price_map: dict[str, dict] = {}
+    try:
+        import yfinance as yf
+        for sym in tickers:
+            try:
+                hist = yf.Ticker(sym).history(period="3mo", interval="1d")
+                if hist.empty or len(hist) < 5:
+                    continue
+                cur = float(hist["Close"].iloc[-1])
+                p30 = float(hist["Close"].iloc[-30]) if len(hist) >= 30 else float(hist["Close"].iloc[0])
+                p90 = float(hist["Close"].iloc[0])
+                price_map[sym] = {
+                    "return_30d": round((cur - p30) / p30 * 100, 2) if p30 else None,
+                    "return_90d": round((cur - p90) / p90 * 100, 2) if p90 else None,
+                    "current_price": cur,
+                }
+            except Exception as e:
+                logger.debug("[INSIDER_BACKFILL_PRICE] yfinance failed for %s: %s", sym, e)
+    except Exception as e:
+        _put_conn(conn)
+        logger.error("[INSIDER_BACKFILL_PRICE] yfinance import error: %s", e)
+        return {"updated": 0, "error": str(e)}
+
+    def _safe_float(v):
+        """Return None instead of NaN/Inf for JSON safety."""
+        import math
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else f
+        except (TypeError, ValueError):
+            return None
+
+    updated = 0
+    try:
+        cur2 = conn.cursor()
+        for sym, pc in price_map.items():
+            r30 = _safe_float(pc.get("return_30d"))
+            r90 = _safe_float(pc.get("return_90d"))
+            cur_p = _safe_float(pc.get("current_price"))
+            if r30 is None and r90 is None:
+                continue
+            patch = json.dumps({k: v for k, v in {
+                "return_30d": r30,
+                "return_90d": r90,
+                "current_price": cur_p,
+            }.items() if v is not None})
+            cur2.execute("""
+                UPDATE insider_transactions
+                SET price_context = COALESCE(price_context, '{}'::jsonb) || %s::jsonb
+                WHERE ticker = %s
+                  AND (price_context->>'return_30d' IS NULL OR price_context->>'return_90d' IS NULL)
+            """, (patch, sym,))
+            updated += cur2.rowcount
+        conn.commit()
+        cur2.close()
+        logger.info("[INSIDER_BACKFILL_PRICE] Updated price_context for %d rows", updated)
+    except Exception as e:
+        logger.error("[INSIDER_BACKFILL_PRICE] Update error: %s", e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        _put_conn(conn)
+
+    return {"updated": updated, "tickers_processed": len(price_map)}
 
 
 # ── Earnings Proximity ────────────────────────────────────────────────────────
@@ -1457,8 +1593,8 @@ For each transaction, research the company, the insider's history, recent news, 
     }}
   ],
   "market_summary": "2-3 sentence overall assessment of insider sentiment across these transactions",
-  "standout_buy": "ticker of most compelling buy with one sentence reason",
-  "standout_sell": "ticker of most concerning sell with one sentence reason",
+  "standout_buy": {{"ticker": "XXXX", "summary": "One sentence reason this is the most compelling buy"}},
+  "standout_sell": {{"ticker": "XXXX", "summary": "One sentence reason this is the most concerning sell"}},
   "data_date": "YYYY-MM-DD"
 }}
 
@@ -1573,10 +1709,22 @@ async def get_ai_analysis_cached() -> dict:
 
 async def _ai_daily_loop():
     """Runs Perplexity analysis once per day. Waits for initial data to exist first."""
+    global _ai_cache, _last_ai_run
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(_executor, _create_ai_cache_table)
 
-    # Short initial delay to let EDGAR data load first
+    # Load existing cached analysis from DB immediately on startup
+    try:
+        cached = await loop.run_in_executor(_executor, _load_ai_cache_from_db)
+        if cached:
+            _ai_cache = cached
+            _last_ai_run = datetime.utcnow()
+            logger.info("[INSIDER_AI] Loaded AI cache from DB on startup (%d buys, %d sells)",
+                        len(cached.get("top_buys", [])), len(cached.get("top_sells", [])))
+    except Exception as e:
+        logger.warning("[INSIDER_AI] Startup cache load failed: %s", e)
+
+    # Short initial delay before running a fresh analysis
     await asyncio.sleep(300)
 
     while True:
@@ -1602,6 +1750,16 @@ async def insider_activity_background_loop():
 
     # Start daily AI analysis as a concurrent background task
     asyncio.ensure_future(_ai_daily_loop())
+
+    # Backfill any null price returns for existing transactions (runs once on startup)
+    async def _startup_price_backfill():
+        await asyncio.sleep(60)  # short delay to let connections settle
+        try:
+            result = await loop.run_in_executor(_executor, _sync_backfill_price_returns)
+            logger.info("[INSIDER] Startup price backfill: %s", result)
+        except Exception as e:
+            logger.warning("[INSIDER] Startup price backfill error: %s", e)
+    asyncio.ensure_future(_startup_price_backfill())
 
     while True:
         await asyncio.sleep(_FETCH_INTERVAL)
@@ -1771,19 +1929,69 @@ async def get_insider_activity(
             cluster_type, clustered_only, sector,
         ),
     )
-    # Build response with pct_change_since and cluster_size
+    # Load AI analysis cache to merge ai_score into transactions
+    ai_ticker_map: dict[str, int] = {}
+    try:
+        cached_ai = _ai_cache or {}
+        for item in cached_ai.get("top_buys", []):
+            tk = item.get("ticker", "")
+            sc = item.get("ai_score")
+            if tk and sc is not None:
+                ai_ticker_map[tk] = int(sc)
+        for item in cached_ai.get("top_sells", []):
+            tk = item.get("ticker", "")
+            sc = item.get("ai_score")
+            if tk and sc is not None and tk not in ai_ticker_map:
+                ai_ticker_map[tk] = int(sc)
+    except Exception:
+        pass
+
+    # Build enriched response with all aliases the frontend needs
     enriched = []
     for t in transactions:
         pc = t.get("price_context") or {}
-        t["pct_change_since"] = pc.get("change_since_filing_pct")
-        # Derive cluster_size from cluster_metadata if available, else fallback to tags
         cm = t.get("cluster_metadata") or {}
+
+        t["pct_change_since"] = pc.get("change_since_filing_pct")
+
+        # cluster_size
         if cm.get("cluster_size"):
             t["cluster_size"] = cm["cluster_size"]
         else:
             tags = t.get("context_tags") or []
             cluster_tag = next((tg for tg in tags if "insiders" in tg), None)
             t["cluster_size"] = int(cluster_tag.split()[0]) if cluster_tag else 1
+
+        # Merge Perplexity ai_score
+        ticker = t.get("ticker", "")
+        ai_sc = ai_ticker_map.get(ticker)
+        t["ai_score"] = ai_sc
+
+        # score = Perplexity ai_score when available, fallback to rule-based conviction_score
+        t["score"] = ai_sc if ai_sc is not None else t.get("conviction_score")
+
+        # Price aliases
+        raw_price = t.get("price_per_share")
+        t["price"] = float(raw_price) if raw_price is not None else pc.get("current_price")
+
+        # Holdings aliases
+        shares_after = t.get("shares_owned_after")
+        t["post_tx_holdings"] = shares_after
+
+        # % of holdings = shares traded / (shares traded + shares held after) * 100
+        shares_traded = t.get("shares") or 0
+        if shares_after and shares_after > 0 and shares_traded:
+            total_before = shares_traded + shares_after
+            t["pct_of_holdings"] = round(shares_traded / total_before * 100, 1)
+        else:
+            t["pct_of_holdings"] = None
+
+        # Price context aliases for frontend
+        t["return_30d"] = pc.get("return_30d")
+        t["return_90d"] = pc.get("return_90d")
+        t["vs_52w_high"] = pc.get("vs_52w_high")
+        t["current_price"] = pc.get("current_price")
+
         enriched.append(t)
 
     return {
@@ -1855,6 +2063,20 @@ async def get_insider_stats():
     return await loop.run_in_executor(_executor, _stats)
 
 
+def _normalize_standout(val: Any, label: str) -> dict | None:
+    """Convert old plain-string standout to {ticker, summary} object."""
+    if val is None:
+        return None
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str) and val.strip():
+        s = val.strip()
+        ticker = s.split(" ")[0].split("-")[0].strip().upper()
+        summary = s[len(ticker):].lstrip(" -–:").strip() or s
+        return {"ticker": ticker, "summary": summary}
+    return None
+
+
 @router.get("/insider-activity/ai-analysis")
 async def get_ai_analysis():
     """
@@ -1867,6 +2089,10 @@ async def get_ai_analysis():
     result = await get_ai_analysis_cached()
     if "error" in result and len(result) == 1:
         raise HTTPException(status_code=502, detail=result["error"])
+
+    result = dict(result)
+    result["standout_buy"] = _normalize_standout(result.get("standout_buy"), "buy")
+    result["standout_sell"] = _normalize_standout(result.get("standout_sell"), "sell")
     return result
 
 
@@ -2162,6 +2388,23 @@ async def backfill_conviction_scores():
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(_executor, _sync_backfill_scores)
     return result
+
+
+@router.post("/insider-activity/backfill-prices")
+async def backfill_price_returns(background_tasks: BackgroundTasks):
+    """
+    Fetch Tradier historical prices to populate return_30d / return_90d for
+    all transactions where those fields are currently null.
+    Runs in the background — typically completes in 30-60s.
+    """
+    loop = asyncio.get_event_loop()
+
+    async def _run():
+        result = await loop.run_in_executor(_executor, _sync_backfill_price_returns)
+        logger.info("[INSIDER] Manual price backfill result: %s", result)
+
+    background_tasks.add_task(_run)
+    return {"status": "started", "message": "Price return backfill running in background. Poll /api/insider-activity/stats for progress."}
 
 
 @router.post("/insider-activity/fetch-historical")
