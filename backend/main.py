@@ -49,6 +49,7 @@ from services.congressional_trading_service import (
     router as _cong_router,
     congressional_trading_background_loop as _cong_bg_loop,
 )
+from services.predict.router import router as _predict_router
 
 _hl_state = _HLState()
 _hl_set_state(_hl_state)
@@ -199,6 +200,10 @@ app.include_router(_insider_router, prefix="/api")
 
 # ── Congressional Trading router ──────────────────────────────────────────────
 app.include_router(_cong_router, prefix="/api")
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Predict / Polymarket Intelligence router ──────────────────────────────────
+app.include_router(_predict_router)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────

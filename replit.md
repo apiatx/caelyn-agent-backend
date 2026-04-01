@@ -179,6 +179,77 @@ Metadata: cluster_size, date_spread_days, insiders_in_cluster, distinct_role_cou
 - **Background loop**: Creates table → cleans expired rows → initial load (300 filings) → refreshes every 2 hours
 - **Dedup key**: `{accession_number}:{row_idx}` (max 29 chars) — handles multiple transactions per filing
 
+## Predict Page — Polymarket Intelligence + TradingAgents (`/api/predict/`)
+
+Integrates Jon-Becker/prediction-market-analysis methodology and TauricResearch/TradingAgents architecture.
+
+### New Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/predict/markets?limit=50&tag=&min_volume=0` | Enhanced market list: edge detection, momentum, whale signals, Kelly fraction, efficiency score |
+| `GET /api/predict/signals` | Dashboard intelligence: top edges, mispricings, surging markets, whale watch, top by volume |
+| `GET /api/predict/whale-watch?limit=20` | Markets with vol/liquidity ratio > 5x — large coordinated position signals |
+| `GET /api/predict/categories` | Volume + count breakdown by tag (uses Gamma events API for real tag data) |
+| `GET /api/predict/market/{condition_id}` | Deep single-market analysis with order book depth, Kelly fraction, book imbalance |
+| `GET /api/predict/context?question=...` | Pre-analyze: finds relevant Polymarket markets for a given question |
+| `POST /api/predict/analyze` body: `{"question":"..."}` | Full 6-agent TradingAgents pipeline → final recommendation |
+| `GET /api/polymarket/intelligence` | Alias for `/api/predict/signals` |
+
+### Per-Market Analytics Fields (Jon-Becker methodology)
+
+| Field | Description |
+|---|---|
+| `yes_price` / `no_price` | Current market prices (0–1) |
+| `yes_pct` / `no_pct` | As percentage (0–100) |
+| `spread_pct` | Bid-ask spread as % |
+| `volume_24h` / `volume_1wk` / `volume_1mo` | Volume at different timeframes |
+| `volume_momentum` | `surging` / `accelerating` / `stable` / `fading` (24h vs 7d avg) |
+| `whale_activity` | true if vol/liquidity > 5x (large coordinated positions) |
+| `vol_liq_ratio` | Raw volume/liquidity ratio |
+| `edge_detected` / `edge_pct` | Whether implied probs ≠ 100% (mispricing signal) |
+| `mispricing_score` | Distance between displayed price and best bid/ask mid |
+| `market_efficiency_score` | 0-100 score (tight spread + high liquidity + competitive flag) |
+| `kelly_fraction_pct` | Kelly Criterion position size recommendation (%) |
+| `is_competitive` | Polymarket competitive market flag (sharp money marker) |
+| `days_to_expiry` | Calendar days to market close |
+| `price_momentum_pct` | Last trade vs displayed price % delta |
+
+### TradingAgents Pipeline (`POST /api/predict/analyze`)
+
+Phase 1 (parallel): `FundamentalsAgent` + `SentimentAgent` + `TechnicalAgent`
+Phase 2 (parallel): `BullAgent` + `BearAgent` (receive Phase 1 outputs)
+Phase 3 (sequential): `RiskManagerAgent` → final decision
+
+All agents use `gemini-3-flash-preview` with Google Search grounding.
+
+Response includes `agents.{fundamentals,sentiment,technical,bull,bear,risk_manager}` and a top-level `final` object with:
+- `recommendation`: `LONG_YES | LONG_NO | PASS`
+- `final_yes_probability_pct`: synthesized fair value
+- `consensus_probability_pct`: simple average of 5 agent estimates
+- `market_price_pct`: current Polymarket price
+- `edge_pct`: edge vs market price
+- `conviction`: `low | medium | high | very_high`
+- `debate_winner`: `bull | bear | draw`
+- `thesis`, `key_risk`, `position_sizing`, `entry_note`, `exit_note`
+
+### Caelyn AI Enhancement
+
+When the prediction_markets category fires, the agent now receives `intelligence_signals` in its context:
+- `summary`: market-wide stats
+- `top_edges` / `top_mispricings`: actionable mispricing signals
+- `surging_markets`: smart money accumulation signals
+- `whale_markets`: large coordinated positioning
+
+The `PREDICTION_MARKETS_CONTRACT` in prompts.py instructs Caelyn to reference these signals explicitly.
+
+### Key Files
+| File | Role |
+|---|---|
+| `backend/services/predict/polymarket_intelligence.py` | Jon-Becker analytics engine (edge detection, whale watch, Kelly, efficiency scoring) |
+| `backend/services/predict/trading_agents.py` | TauricResearch multi-agent pipeline (6 Gemini agents) |
+| `backend/services/predict/router.py` | FastAPI router for all `/api/predict/*` and `/api/polymarket/intelligence` |
+
 ## Real Portfolio (caelyn-terminal)
 
 - SQGLP framework for investments, Weinstein Stage 2 for trades

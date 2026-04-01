@@ -4391,6 +4391,29 @@ class TradingAgent:
                     except Exception as e:
                         print(f"[POLYMARKET_GATHER] Web search enrichment failed: {e}")
 
+        # 4. Jon-Becker intelligence signals — edge detection, whale watch, momentum
+        try:
+            from services.predict.polymarket_intelligence import polymarket_intel
+            signals = await asyncio.wait_for(
+                polymarket_intel.get_market_signals(),
+                timeout=12.0,
+            )
+            if signals:
+                context["intelligence_signals"] = {
+                    "summary": signals.get("summary", {}),
+                    "top_edges": signals.get("top_edges", [])[:5],
+                    "top_mispricings": signals.get("top_mispricings", [])[:4],
+                    "surging_markets": signals.get("surging_markets", [])[:4],
+                    "whale_markets": signals.get("whale_markets", [])[:4],
+                    "top_by_volume": signals.get("top_by_volume", [])[:8],
+                }
+                print(f"[POLYMARKET_GATHER] Intelligence signals: "
+                      f"{signals.get('market_count',0)} markets, "
+                      f"{signals.get('summary',{}).get('edge_count',0)} edges, "
+                      f"{signals.get('summary',{}).get('surging_count',0)} surging")
+        except Exception as e:
+            print(f"[POLYMARKET_GATHER] Intelligence signals fetch failed: {e}")
+
         return context
 
     @traceable(name="gather_data")
