@@ -630,6 +630,20 @@ def _row_to_dict(row, cols: list[str]) -> dict:
             d[k] = d[k].isoformat()
     if d.get("created_at") and hasattr(d["created_at"], "isoformat"):
         d["created_at"] = d["created_at"].isoformat()
+    # Frontend-compatibility aliases
+    d["trade_date"] = d.get("transaction_date")
+    d["days_to_file"] = d.get("days_to_disclose")
+    d["amount"] = d.get("amount_range")
+    d["return_pct"] = d.get("return_since_trade_pct")
+    d["return"] = d.get("return_since_trade_pct")
+    d["current_price"] = d.get("price_current")
+    d["asset"] = d.get("asset_description")
+    d["type"] = d.get("transaction_type")
+    d["politician"] = d.get("politician_name")
+    d["party"] = d.get("politician_party")
+    d["chamber"] = d.get("politician_chamber")
+    d["state"] = d.get("politician_state")
+    d["filing_link"] = d.get("filing_url")
     return d
 
 
@@ -914,19 +928,31 @@ async def get_congressional_stats():
             chamber_breakdown = {r[0]: {"total": r[1]} for r in cur.fetchall()}
 
             cur.close()
+            vol_lo_int = int(vol_lo or 0)
+            vol_hi_int = int(vol_hi or 0)
+            late_int = int(late or 0)
+            top_active = most_active[0] if most_active else None
             return {
                 "total_trades": int(total or 0),
                 "purchases": int(purchases or 0),
                 "sales": int(sales or 0),
-                "volume_estimate_low": int(vol_lo or 0),
-                "volume_estimate_high": int(vol_hi or 0),
+                "volume_estimate_low": vol_lo_int,
+                "volume_estimate_high": vol_hi_int,
+                # Frontend aliases for header stats
+                "est_volume": f"${vol_lo_int:,} – ${vol_hi_int:,}" if vol_lo_int else "N/A",
+                "est_volume_low": vol_lo_int,
+                "est_volume_high": vol_hi_int,
                 "most_active": most_active,
+                "most_active_politician": top_active,
+                "late_filings_count": late_int,
+                "late_filings": late_int,
+                "avg_days_to_disclose": round(float(avg_disc or 0), 1),
                 "most_traded_tickers": most_traded,
                 "party_breakdown": party_breakdown,
                 "chamber_breakdown": chamber_breakdown,
                 "filing_compliance": {
-                    "on_time": int(total or 0) - int(late or 0),
-                    "late": int(late or 0),
+                    "on_time": int(total or 0) - late_int,
+                    "late": late_int,
                     "avg_days_to_disclose": round(float(avg_disc or 0), 1),
                 },
                 "last_refresh": _last_refresh.isoformat() if _last_refresh else None,
