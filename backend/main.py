@@ -45,6 +45,10 @@ from services.insider_activity_service import (
     router as _insider_router,
     insider_activity_background_loop as _insider_bg_loop,
 )
+from services.congressional_trading_service import (
+    router as _cong_router,
+    congressional_trading_background_loop as _cong_bg_loop,
+)
 
 _hl_state = _HLState()
 _hl_set_state(_hl_state)
@@ -171,6 +175,7 @@ async def lifespan(app):
     asyncio.create_task(_macro_precompute_loop())
     asyncio.create_task(_sector_rotation_precompute_loop())
     asyncio.create_task(_insider_bg_loop())
+    asyncio.create_task(_cong_bg_loop())
     asyncio.create_task(_hl_boot_and_run(_hl_state))
     yield
 
@@ -190,6 +195,10 @@ app.include_router(_sr_router)
 
 # ── Insider Activity router ───────────────────────────────────────────────────
 app.include_router(_insider_router, prefix="/api")
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Congressional Trading router ──────────────────────────────────────────────
+app.include_router(_cong_router, prefix="/api")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────

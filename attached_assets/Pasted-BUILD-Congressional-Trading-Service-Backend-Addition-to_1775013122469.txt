@@ -1,0 +1,253 @@
+BUILD: Congressional Trading Service — Backend Addition to Insider Activity Dashboard
+
+Add a congressional stock trading data service to the existing insider activity backend. This service fetches STOCK Act disclosures (congressional trades) from the FMP API, stores them in the Neon PostgreSQL database with 30-day retention, and exposes REST API endpoints for the frontend.
+
+=== STEP 1: Create the database table ===
+
+Create a new PostgreSQL table called "congressional_trades" with these columns:
+- id: SERIAL PRIMARY KEY
+- politician_name: VARCHAR(255)
+- politician_party: VARCHAR(20) (Democrat, Republican, Independent)
+- politician_chamber: VARCHAR(10) (Senate, House)
+- politician_state: VARCHAR(5) (state abbreviation, e.g., "CA", "TX")
+- ticker: VARCHAR(10)
+- asset_description: VARCHAR(500) (full description from the filing, e.g., "Apple Inc. - Common Stock")
+- asset_type: VARCHAR(50) (Stock, Bond, Option, etc.)
+- transaction_type: VARCHAR(20) (Purchase, Sale, Exchange, etc.)
+- transaction_date: DATE
+- disclosure_date: DATE (when they filed the disclosure — compare to transaction_date to see if they were late)
+- amount_range: VARCHAR(50) (congressional disclosures report ranges, e.g., "$1,001 - $15,000", "$50,001 - $100,000")
+- amount_low: INTEGER (parsed lower bound of the range in dollars)
+- amount_high: INTEGER (parsed upper bound of the range in dollars)
+- amount_midpoint: INTEGER (calculated: (amount_low + amount_high) / 2 — used for sorting and display)
+- owner: VARCHAR(50) (Self, Spouse, Joint, Child, etc.)
+- comment: TEXT (any notes from the filing)
+- filing_url: TEXT (link to original filing document if available)
+- price_at_trade: DECIMAL(12,4) (stock price on transaction_date — enriched from Tradier/yfinance)
+- price_current: DECIMAL(12,4) (current stock price — updated on each refresh)
+- return_since_trade_pct: DECIMAL(8,4) (calculated: (price_current - price_at_trade) / price_at_trade * 100)
+- days_to_disclose: INTEGER (calculated: disclosure_date - transaction_date — STOCK Act requires <=45 days)
+- is_late_filing: BOOLEAN (true if days_to_disclose > 45)
+- source: VARCHAR(20) (which FMP endpoint this came from: "senate_trading", "house_trading", "senate_disclosure", "house_disclosure")
+- fmp_unique_id: VARCHAR(100) UNIQUE (construct from: politician_name + ticker + transaction_date + transaction_type — for deduplication)
+- created_at: TIMESTAMP DEFAULT NOW()
+- expires_at: TIMESTAMP (set to 30 days from created_at for auto-cleanup)
+
+Add indexes on (ticker), (politician_name), (transaction_date DESC), (disclosure_date DESC).
+
+Run a cleanup query on startup that deletes rows where expires_at < NOW().
+
+=== STEP 2: Fetch congressional trades from FMP ===
+
+Create a new file: services/congressional_trading_service.py
+
+Create a function called fetch_congressional_trades() that:
+
+1. Calls all 4 FMP endpoints to get comprehensive data:
+
+ENDPOINT 1 — Senate Trading Activity:
+GET https://financialmodelingprep.com/stable/senate-trading?apikey={FMP_API_KEY}
+Returns JSON array of senate trades with fields like: firstName, lastName, ticker/asset, transactionDate, transactionType, amount, owner, comment, link
+
+ENDPOINT 2 — House Trading Activity:
+GET https://financialmodelingprep.com/stable/house-trades?apikey={FMP_API_KEY}
+Returns JSON array of house trades with similar fields
+
+ENDPOINT 3 — Latest Senate Disclosures:
+GET https://financialmodelingprep.com/stable/senate-latest?apikey={FMP_API_KEY}
+Returns the most recent Senate filings
+
+ENDPOINT 4 — Latest House Disclosures:
+GET https://financialmodelingprep.com/stable/house-latest?apikey={FMP_API_KEY}
+Returns the most recent House filings
+
+2. For each trade returned from FMP, parse and normalize the data:
+- Combine firstName + lastName into politician_name
+- Parse the amount string into amount_low and amount_high integers:
+  "$1,001 - $15,000" → amount_low=1001, amount_high=15000
+  "$15,001 - $50,000" → amount_low=15001, amount_high=50000
+  "$50,001 - $100,000" → amount_low=50001, amount_high=100000
+  "$100,001 - $250,000" → amount_low=100001, amount_high=250000
+  "$250,001 - $500,000" → amount_low=250001, amount_high=500000
+  "$500,001 - $1,000,000" → amount_low=500001, amount_high=1000000
+  "$1,000,001 - $5,000,000" → amount_low=1000001, amount_high=5000000
+  "$5,000,001 - $25,000,000" → amount_low=5000001, amount_high=25000000
+  "$25,000,001 - $50,000,000" → amount_low=25000001, amount_high=50000000
+  "Over $50,000,000" → amount_low=50000001, amount_high=100000000
+  Calculate amount_midpoint = (amount_low + amount_high) / 2
+
+- Calculate days_to_disclose = disclosure_date - transaction_date (in days)
+- Set is_late_filing = true if days_to_disclose > 45
+
+- Determine politician_party from the FMP data (may be in the response, or may need a lookup table). If FMP doesn't include party, maintain a simple lookup dict of known politicians to their party. Include at least the top 50 most active congressional traders (Pelosi, Tuberville, Ossoff, etc.) with their party and state.
+
+3. Generate a unique ID for deduplication:
+fmp_unique_id = f"{politician_name}_{ticker}_{transaction_date}_{transaction_type}".lower().replace(" ", "_")
+Before inserting, check if fmp_unique_id already exists. Skip duplicates.
+
+4. Rate limit: FMP free tier allows ~250 calls/day. These 4 endpoints cost 4 calls per refresh. You can safely refresh every 4 hours (6 refreshes/day = 24 calls, well within limit).
+
+=== STEP 3: Enrich with price data ===
+
+After fetching trades, enrich each one with stock price context using the SAME fallback chain as the insider activity service:
+
+PRIMARY — Tradier (batch quotes, 120 req/min):
+Collect all unique tickers from the congressional trades batch.
+GET https://sandbox.tradier.com/v1/markets/quotes?symbols={ticker1},{ticker2},{ticker3},...
+Headers: Authorization: Bearer {TRADIER_API_KEY}, Accept: application/json
+Extract: last (current price), week_52_high, week_52_low
+
+FALLBACK 1 — Finnhub (60 req/min)
+FALLBACK 2 — yfinance (no limits)
+
+For the historical price on transaction_date (to calculate return_since_trade):
+Use yfinance which is best for historical data:
+import yfinance as yf
+ticker_data = yf.Ticker("AAPL")
+hist = ticker_data.history(start="2026-01-15", end="2026-01-16")  # transaction_date to next day
+price_at_trade = hist['Close'].iloc[0] if not hist.empty else None
+
+Then calculate: return_since_trade_pct = (price_current - price_at_trade) / price_at_trade * 100
+
+Handle errors gracefully — if price data fails, set price fields to null.
+
+=== STEP 4: REST API Endpoints ===
+
+Create these FastAPI endpoints:
+
+GET /api/congressional-trades
+Query params:
+- chamber: "all" | "senate" | "house" (default: "all")
+- party: "all" | "democrat" | "republican" | "independent" (default: "all")
+- type: "all" | "purchase" | "sale" | "exchange" (default: "all")
+- ticker: string (optional, filter by specific ticker symbol)
+- politician: string (optional, search politician name)
+- timeframe: "1w" | "1m" | "3m" | "6m" (default: "3m")
+- min_amount: integer (optional, filter by amount_midpoint >= this value)
+- sort: "date" | "amount" | "politician" | "ticker" | "return" (default: "date")
+- order: "desc" | "asc" (default: "desc")
+- limit: integer (default: 50, max: 200)
+- offset: integer (default: 0)
+
+Response format:
+{
+  "summary": {
+    "total_trades": 847,
+    "total_purchases": 412,
+    "total_sales": 435,
+    "total_volume_estimate": "$125M - $340M",
+    "most_active_politician": {"name": "Tommy Tuberville", "party": "Republican", "chamber": "Senate", "trade_count": 42},
+    "most_traded_ticker": {"ticker": "NVDA", "trade_count": 28},
+    "avg_days_to_disclose": 22,
+    "late_filings_count": 37,
+    "last_refresh": "2026-03-31T10:00:00Z"
+  },
+  "trades": [
+    {
+      "id": 1,
+      "politician_name": "Nancy Pelosi",
+      "politician_party": "Democrat",
+      "politician_chamber": "House",
+      "politician_state": "CA",
+      "ticker": "NVDA",
+      "asset_description": "NVIDIA Corporation - Common Stock",
+      "transaction_type": "Purchase",
+      "transaction_date": "2026-02-15",
+      "disclosure_date": "2026-03-10",
+      "amount_range": "$1,000,001 - $5,000,000",
+      "amount_midpoint": 3000000,
+      "owner": "Spouse",
+      "price_at_trade": 142.50,
+      "price_current": 155.20,
+      "return_since_trade_pct": 8.91,
+      "days_to_disclose": 23,
+      "is_late_filing": false,
+      "filing_url": "https://..."
+    }
+  ],
+  "pagination": {
+    "total": 847,
+    "limit": 50,
+    "offset": 0,
+    "has_more": true
+  }
+}
+
+GET /api/congressional-trades/stats
+Returns aggregate statistics:
+{
+  "total_trades": 847,
+  "purchases": 412,
+  "sales": 435,
+  "volume_estimate_low": 125000000,
+  "volume_estimate_high": 340000000,
+  "most_active": [
+    {"name": "Tommy Tuberville", "party": "R", "chamber": "Senate", "count": 42},
+    {"name": "Nancy Pelosi", "party": "D", "chamber": "House", "count": 18},
+    ...top 10
+  ],
+  "most_traded_tickers": [
+    {"ticker": "NVDA", "count": 28, "net_direction": "buy"},
+    {"ticker": "MSFT", "count": 22, "net_direction": "sell"},
+    ...top 10
+  ],
+  "party_breakdown": {
+    "democrat": {"purchases": 180, "sales": 200},
+    "republican": {"purchases": 220, "sales": 230},
+    "independent": {"purchases": 12, "sales": 5}
+  },
+  "chamber_breakdown": {
+    "senate": {"total": 320},
+    "house": {"total": 527}
+  },
+  "filing_compliance": {
+    "on_time": 810,
+    "late": 37,
+    "avg_days_to_disclose": 22
+  },
+  "last_refresh": "2026-03-31T10:00:00Z"
+}
+
+GET /api/congressional-trades/politician/{name}
+Returns all trades for a specific politician with their summary stats:
+{
+  "politician": {
+    "name": "Nancy Pelosi",
+    "party": "Democrat",
+    "chamber": "House",
+    "state": "CA",
+    "total_trades": 18,
+    "total_purchases": 12,
+    "total_sales": 6,
+    "estimated_volume_range": "$5M - $15M",
+    "avg_return_pct": 12.4,
+    "avg_days_to_disclose": 28,
+    "late_filings": 2
+  },
+  "trades": [ ...all their trades... ]
+}
+
+POST /api/congressional-trades/refresh
+Manually triggers a new fetch from FMP. Returns {"status": "refresh_started"}.
+
+=== STEP 5: Register Routes ===
+
+In main.py, import and include the new router:
+from services.congressional_trading_service import router as congressional_router
+app.include_router(congressional_router, prefix="/api")
+
+=== STEP 6: Background Scheduler ===
+
+Set up a background task that runs every 4 hours to:
+1. Fetch new congressional trades from all 4 FMP endpoints
+2. Enrich with price data (batch via Tradier)
+3. Calculate returns
+4. Insert into database (skip duplicates)
+5. Clean up expired rows
+
+=== ENVIRONMENT VARIABLES NEEDED ===
+No new keys! You already have:
+- FMP_API_KEY (your existing Financial Modeling Prep key)
+- TRADIER_API_KEY (for price enrichment)
+- FINNHUB_API_KEY (fallback)
+- DATABASE_URL (Neon PostgreSQL)
