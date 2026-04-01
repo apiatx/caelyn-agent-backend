@@ -103,8 +103,8 @@ class PolymarketIntelligence:
 
         edges = [m for m in active_markets if m.get("edge_detected")]
         mispricings = [m for m in active_markets if m.get("mispricing_score", 0) > 0.03]
+        movers = [m for m in active_markets if abs(m.get("price_change_1d", 0)) > 1.0]
         momentum_up = [m for m in active_markets if m.get("volume_momentum") == "surging"]
-        momentum_up_accel = [m for m in active_markets if m.get("volume_momentum") in ("surging", "accelerating")]
         momentum_down = [m for m in active_markets if m.get("volume_momentum") == "fading"]
         whale_markets = [m for m in active_markets if m.get("whale_activity")]
         competitive = [m for m in active_markets if m.get("is_competitive")]
@@ -133,8 +133,9 @@ class PolymarketIntelligence:
                 "fading_count": len(momentum_down),
                 "whale_active_count": len(whale_markets),
             },
-            "top_edges": _slim(sorted(edges, key=lambda m: abs(m.get("edge_pct", 0)), reverse=True)[:8]),
+            "top_edges": _slim(sorted(edges, key=lambda m: m.get("edge_pct", 0), reverse=True)[:8]),
             "top_mispricings": _slim(sorted(mispricings, key=lambda m: m.get("mispricing_score", 0), reverse=True)[:8]),
+            "top_movers": _slim(sorted(movers, key=lambda m: abs(m.get("price_change_1d", 0)), reverse=True)[:8]),
             "surging_markets": _slim(momentum_up[:6]),
             "whale_markets": _slim(whale_markets[:6]),
             # top_by_volume only shows active markets so expired markets don't pollute the feed
@@ -275,10 +276,22 @@ class PolymarketIntelligence:
         is_competitive = bool(raw.get("competitive"))
         neg_risk = bool(raw.get("negRisk"))
 
-        implied_sum = yes_price + no_price
-        edge_pct = 1.0 - implied_sum if implied_sum > 0 else 0
-        edge_detected = abs(edge_pct) > 0.01
+        # Price changes from Gamma (reliable, returned for all active markets)
+        price_change_1d = float(raw.get("oneDayPriceChange") or 0)
+        price_change_1h = float(raw.get("oneHourPriceChange") or 0)
+        price_change_1wk = float(raw.get("oneWeekPriceChange") or 0)
 
+        implied_sum = yes_price + no_price
+
+        # Edge = spread as a fraction of the YES price.
+        # A $0.01 spread on a $0.20 market is a 5% edge for anyone transacting —
+        # meaningful for market-making or for estimating transaction cost impact.
+        # Threshold: > 3% spread-to-price ratio = real edge signal.
+        spread_pct_of_price = (spread / yes_price * 100) if yes_price > 0.01 else 0
+        edge_pct = round(spread_pct_of_price, 2)
+        edge_detected = spread_pct_of_price > 3.0 or abs(price_change_1d) > 5.0
+
+        # Mispricing: difference between order book mid and displayed price
         mispricing_score = 0.0
         if best_bid > 0 and best_ask > 0:
             mid_price = (best_bid + best_ask) / 2
@@ -335,8 +348,6 @@ class PolymarketIntelligence:
 
         market_efficiency = self._score_efficiency(spread, liquidity, is_competitive, volume_24h)
 
-        kelly_fraction = self._kelly_fraction(yes_price, no_price, edge_pct) if not is_expired else None
-
         price_momentum = 0.0
         if last_trade > 0 and yes_price > 0:
             price_momentum = round((last_trade - yes_price) / yes_price * 100, 2)
@@ -366,7 +377,7 @@ class PolymarketIntelligence:
             "volume_1mo": round(volume_1mo, 2),
             "liquidity": round(liquidity, 2),
             "implied_sum": round(implied_sum, 4),
-            "edge_pct": round(edge_pct * 100, 3),
+            "edge_pct": round(edge_pct, 2),
             "edge_detected": edge_detected,
             "mispricing_score": round(mispricing_score, 4),
             "volume_momentum": volume_momentum,
@@ -375,7 +386,10 @@ class PolymarketIntelligence:
             "is_competitive": is_competitive,
             "neg_risk": neg_risk,
             "market_efficiency_score": market_efficiency,
-            "kelly_fraction_pct": round(kelly_fraction * 100, 2) if kelly_fraction else 0,
+            "spread_pct_of_price": round(spread_pct_of_price, 2),
+            "price_change_1h": round(price_change_1h * 100, 2),
+            "price_change_1d": round(price_change_1d * 100, 2),
+            "price_change_1wk": round(price_change_1wk * 100, 2),
             "price_momentum_pct": price_momentum,
             "days_to_expiry": days_to_expiry,
             "is_expired": is_expired,
@@ -545,7 +559,8 @@ def _slim(markets: list[dict]) -> list[dict]:
         "condition_id", "question", "yes_pct", "no_pct", "yes_price", "no_price",
         "volume_24h", "liquidity", "spread_pct", "edge_pct", "edge_detected",
         "mispricing_score", "volume_momentum", "whale_activity", "is_competitive",
-        "market_efficiency_score", "kelly_fraction_pct", "price_momentum_pct",
+        "market_efficiency_score", "spread_pct_of_price",
+        "price_change_1h", "price_change_1d", "price_change_1wk", "price_momentum_pct",
         "days_to_expiry", "is_expired", "is_resolving", "end_date", "tags", "image", "vol_liq_ratio",
     ]
     return [{k: m[k] for k in keep if k in m} for m in markets]
