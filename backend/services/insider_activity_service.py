@@ -1112,10 +1112,181 @@ async def fetch_recent_form4_filings(max_filings: int = 200) -> int:
     return inserted
 
 
+# ── Historical 30-Day Backfill ────────────────────────────────────────────────
+
+async def fetch_historical_30d(days_back: int = 30, filings_per_week: int = 60) -> dict:
+    """
+    Sweeps through the past `days_back` days in 7-day windows, fetching up to
+    `filings_per_week` Form 4 filings per window. Deduplication is handled by
+    accession number so this is safe to call repeatedly.
+    Returns {"inserted": N, "windows": W, "errors": E}
+    """
+    global _refresh_in_progress
+
+    if _refresh_in_progress:
+        logger.info("[INSIDER_HIST] Fetch in progress — skipping historical load")
+        return {"inserted": 0, "windows": 0, "errors": 0, "message": "Fetch already in progress"}
+
+    if not _EDGAR_AVAILABLE:
+        return {"inserted": 0, "windows": 0, "errors": 0, "message": "edgartools not available"}
+
+    _refresh_in_progress = True
+    total_inserted = 0
+    total_errors = 0
+    windows_done = 0
+
+    try:
+        loop = asyncio.get_event_loop()
+        today = date.today()
+
+        # Build weekly windows from oldest → newest
+        windows: list[tuple[date, date]] = []
+        cursor = today - timedelta(days=days_back)
+        while cursor < today:
+            end = min(cursor + timedelta(days=6), today)
+            windows.append((cursor, end))
+            cursor = end + timedelta(days=1)
+
+        logger.info("[INSIDER_HIST] Fetching %d weekly windows over past %d days", len(windows), days_back)
+
+        for win_start, win_end in windows:
+            date_range_str = f"{win_start.strftime('%Y-%m-%d')}:{win_end.strftime('%Y-%m-%d')}"
+            logger.info("[INSIDER_HIST] Window %s", date_range_str)
+
+            try:
+                def _get_window_filings(dr=date_range_str):
+                    return get_filings(form="4", filing_date=dr)
+
+                filings = await loop.run_in_executor(_executor, _get_window_filings)
+                if not filings:
+                    windows_done += 1
+                    continue
+
+                raw_records: list[dict] = []
+                count = 0
+                for filing in filings:
+                    if count >= filings_per_week:
+                        break
+                    count += 1
+                    try:
+                        recs = await loop.run_in_executor(_executor, _parse_filing_sync, filing)
+                        raw_records.extend(recs)
+                    except Exception as pe:
+                        logger.debug("[INSIDER_HIST] Parse error: %s", pe)
+                    await asyncio.sleep(_SEC_DELAY)
+
+                if not raw_records:
+                    windows_done += 1
+                    continue
+
+                # Dedup
+                all_acc = [r["accession_number"] for r in raw_records]
+                existing = _get_existing_accessions(all_acc)
+                new_records = [r for r in raw_records if r["accession_number"] not in existing]
+                logger.info("[INSIDER_HIST] Window %s: %d new / %d total", date_range_str, len(new_records), len(raw_records))
+
+                if not new_records:
+                    windows_done += 1
+                    continue
+
+                # Price enrichment
+                tickers = list({r["ticker"] for r in new_records if r.get("ticker")})
+                price_map: dict[str, dict] = {}
+                if tickers:
+                    price_map = await _get_price_context_batch(tickers)
+
+                # Score and tag
+                final_records = []
+                for r in new_records:
+                    ticker = r.get("ticker") or ""
+                    code = r.get("transaction_code") or "S"
+                    price_ctx = price_map.get(ticker)
+                    total_value = float(r.get("total_value") or 0)
+                    shares = int(r.get("shares") or 0)
+                    shares_after = int(r.get("shares_owned_after") or 0)
+
+                    acc_prefix = r["accession_number"].split(":")[0]
+                    cluster_info = await loop.run_in_executor(
+                        _executor, _detect_cluster_type, ticker, r["transaction_date"], acc_prefix
+                    )
+                    filing_count = await loop.run_in_executor(
+                        _executor, _count_insider_filings, r.get("insider_name") or ""
+                    )
+                    has_earnings = await _check_earnings_nearby(ticker, r["transaction_date"])
+                    is_director = r.get("is_director", False)
+                    is_officer = r.get("is_officer", False)
+                    is_ten_pct = r.get("is_ten_pct_owner", False)
+
+                    cluster_count = cluster_info["count"]
+                    cluster_type = cluster_info["type"]
+                    cluster_metadata = cluster_info["metadata"] if cluster_info["metadata"] else None
+                    cluster_id = None
+                    if cluster_count >= 2:
+                        cluster_id = _get_or_assign_cluster_id(ticker, r["transaction_date"])
+
+                    s_size, d_size = _score_size(total_value)
+                    s_role, d_role = _score_role(r.get("insider_title") or "", is_director, is_officer, is_ten_pct)
+                    s_type, d_type = _score_type(code)
+                    s_ctx, d_ctx = _score_context(code, price_ctx)
+                    s_cluster, d_cluster = _score_cluster(cluster_count, cluster_type)
+                    s_pos, d_pos = _score_position(code, shares, shares_after)
+                    s_track, d_track = _score_track_record(filing_count)
+                    s_event, d_event = _score_event_proximity(has_earnings, code)
+
+                    conviction_score = min(
+                        s_size + s_role + s_type + s_ctx + s_cluster + s_pos + s_track + s_event, 100
+                    )
+                    score_breakdown = {
+                        "size":            {"score": s_size,    "max": _W_SIZE,    "detail": d_size},
+                        "role":            {"score": s_role,    "max": _W_ROLE,    "detail": d_role},
+                        "type":            {"score": s_type,    "max": _W_TYPE,    "detail": d_type},
+                        "context":         {"score": s_ctx,     "max": _W_CONTEXT, "detail": d_ctx},
+                        "cluster":         {"score": s_cluster, "max": _W_CLUSTER, "detail": d_cluster,
+                                            "cluster_type": cluster_type, "cluster_size": cluster_count},
+                        "position_impact": {"score": s_pos,     "max": _W_POSITION,"detail": d_pos},
+                        "track_record":    {"score": s_track,   "max": _W_TRACK,   "detail": d_track},
+                        "event_proximity": {"score": s_event,   "max": _W_EVENT,   "detail": d_event},
+                    }
+                    context_tags = generate_context_tags(
+                        code=code, title=r.get("insider_title") or "",
+                        is_director=is_director, is_ten_pct=is_ten_pct,
+                        total_value=total_value, cluster_count=cluster_count,
+                        shares=shares, shares_after=shares_after,
+                        cluster_type=cluster_type, date_spread_days=0, distinct_role_count=1,
+                    )
+                    record = {**r, "conviction_score": conviction_score, "score_breakdown": score_breakdown,
+                              "context_tags": context_tags, "price_context": price_ctx,
+                              "cluster_id": cluster_id, "cluster_type": cluster_type,
+                              "cluster_metadata": cluster_metadata}
+                    final_records.append(record)
+
+                win_inserted = await loop.run_in_executor(_executor, _insert_transactions, final_records)
+                total_inserted += win_inserted
+                windows_done += 1
+                logger.info("[INSIDER_HIST] Window %s → %d inserted", date_range_str, win_inserted)
+
+            except Exception as we:
+                logger.error("[INSIDER_HIST] Window %s error: %s", date_range_str, we)
+                total_errors += 1
+                windows_done += 1
+
+        logger.info("[INSIDER_HIST] Done: %d inserted across %d windows, %d errors",
+                    total_inserted, windows_done, total_errors)
+
+    except Exception as e:
+        logger.error("[INSIDER_HIST] Fatal error: %s", e, exc_info=True)
+        total_errors += 1
+    finally:
+        _refresh_in_progress = False
+
+    return {"inserted": total_inserted, "windows": windows_done, "errors": total_errors,
+            "message": f"Historical fetch complete: {total_inserted} new transactions across {windows_done} weekly windows"}
+
+
 # ── Initial Load ──────────────────────────────────────────────────────────────
 
 async def maybe_initial_load():
-    """On cold start, if table is empty, do a bulk historical load."""
+    """On cold start, if table is sparse (<200 rows), run 30-day historical load."""
     conn = _get_conn()
     if not conn:
         return
@@ -1129,9 +1300,9 @@ async def maybe_initial_load():
     finally:
         _put_conn(conn)
 
-    if count == 0:
-        logger.info("[INSIDER] Table empty — running initial load (max 300 filings)")
-        await fetch_recent_form4_filings(max_filings=300)
+    if count < 200:
+        logger.info("[INSIDER] Table has %d rows — running 30-day historical load", count)
+        await fetch_historical_30d(days_back=30, filings_per_week=60)
     else:
         logger.info("[INSIDER] Table has %d rows — skipping initial load", count)
 
@@ -1210,7 +1381,12 @@ def _query_transactions(
                 "value": "total_value", "ticker": "ticker"}.get(sort, "conviction_score")
     order_dir = "DESC" if order.lower() == "desc" else "ASC"
 
-    conditions = [f"transaction_date >= NOW() - INTERVAL '{timeframe_days} days'"]
+    conditions = [
+        f"transaction_date >= NOW() - INTERVAL '{timeframe_days} days'",
+        "ticker IS NOT NULL",
+        "ticker != 'NONE'",
+        "ticker != ''",
+    ]
     params: list = []
     if code_filter:
         conditions.append(f"transaction_code = ANY(%s)")
@@ -1684,6 +1860,41 @@ async def backfill_conviction_scores():
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(_executor, _sync_backfill_scores)
     return result
+
+
+@router.post("/insider-activity/fetch-historical")
+async def trigger_historical_fetch(
+    background_tasks: BackgroundTasks,
+    days_back: int = Query(30, ge=7, le=90, description="Days of history to fetch (7-90)"),
+    filings_per_week: int = Query(60, ge=10, le=150, description="Max filings per weekly window"),
+):
+    """
+    Kicks off a background job that sweeps the past `days_back` days in 7-day
+    windows, fetching up to `filings_per_week` Form 4 filings per window.
+    Safe to call repeatedly — duplicates are skipped by accession number.
+    Automatically runs a backfill after insertion to recalculate cluster scores.
+    """
+    if _refresh_in_progress:
+        return {"status": "already_running", "message": "A fetch is already in progress"}
+
+    async def _run():
+        result = await fetch_historical_30d(days_back=days_back, filings_per_week=filings_per_week)
+        if result.get("inserted", 0) > 0:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(_executor, _sync_backfill_scores)
+            logger.info("[INSIDER_HIST] Post-insert backfill complete")
+
+    background_tasks.add_task(_run)
+    windows = (days_back // 7) + (1 if days_back % 7 else 0)
+    est_secs = windows * filings_per_week * 0.6
+    return {
+        "status": "started",
+        "days_back": days_back,
+        "weekly_windows": windows,
+        "filings_per_week": filings_per_week,
+        "estimated_seconds": int(est_secs),
+        "message": f"Fetching {days_back} days of Form 4 history across {windows} weekly windows (~{int(est_secs)}s). Poll /api/insider-activity/stats to track progress.",
+    }
 
 
 @router.post("/insider-activity/refresh")
