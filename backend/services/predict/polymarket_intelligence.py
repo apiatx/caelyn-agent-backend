@@ -95,28 +95,38 @@ class PolymarketIntelligence:
         if not markets:
             return {}
 
-        edges = [m for m in markets if m.get("edge_detected")]
-        mispricings = [m for m in markets if m.get("mispricing_score", 0) > 0.03]
-        momentum_up = [m for m in markets if m.get("volume_momentum") == "surging"]
-        momentum_down = [m for m in markets if m.get("volume_momentum") == "fading"]
-        whale_markets = [m for m in markets if m.get("whale_activity")]
-        competitive = [m for m in markets if m.get("is_competitive")]
+        # Separate active from expired/resolving for signal purposes:
+        # expired/resolving volume is settlement activity, not smart money.
+        active_markets = [m for m in markets if not m.get("is_expired") and not m.get("is_resolving")]
+        expired_count = sum(1 for m in markets if m.get("is_expired"))
+        resolving_count = sum(1 for m in markets if m.get("is_resolving"))
+
+        edges = [m for m in active_markets if m.get("edge_detected")]
+        mispricings = [m for m in active_markets if m.get("mispricing_score", 0) > 0.03]
+        momentum_up = [m for m in active_markets if m.get("volume_momentum") == "surging"]
+        momentum_up_accel = [m for m in active_markets if m.get("volume_momentum") in ("surging", "accelerating")]
+        momentum_down = [m for m in active_markets if m.get("volume_momentum") == "fading"]
+        whale_markets = [m for m in active_markets if m.get("whale_activity")]
+        competitive = [m for m in active_markets if m.get("is_competitive")]
 
         total_vol_24h = sum(m.get("volume_24h", 0) for m in markets)
-        total_liquidity = sum(m.get("liquidity", 0) for m in markets)
+        total_liquidity = sum(m.get("liquidity", 0) for m in active_markets)
         avg_spread = (
-            sum(m.get("spread", 0) for m in markets if m.get("spread") is not None)
-            / max(1, sum(1 for m in markets if m.get("spread") is not None))
+            sum(m.get("spread", 0) for m in active_markets if m.get("spread") is not None)
+            / max(1, sum(1 for m in active_markets if m.get("spread") is not None))
         )
 
         result = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "market_count": len(markets),
+            "active_market_count": len(active_markets),
+            "expired_count": expired_count,
+            "resolving_count": resolving_count,
             "summary": {
                 "total_volume_24h": round(total_vol_24h, 2),
                 "total_liquidity": round(total_liquidity, 2),
                 "avg_spread_pct": round(avg_spread * 100, 3),
-                "competitive_market_pct": round(len(competitive) / max(1, len(markets)) * 100, 1),
+                "competitive_market_pct": round(len(competitive) / max(1, len(active_markets)) * 100, 1),
                 "edge_count": len(edges),
                 "mispricing_count": len(mispricings),
                 "surging_count": len(momentum_up),
@@ -127,8 +137,9 @@ class PolymarketIntelligence:
             "top_mispricings": _slim(sorted(mispricings, key=lambda m: m.get("mispricing_score", 0), reverse=True)[:8]),
             "surging_markets": _slim(momentum_up[:6]),
             "whale_markets": _slim(whale_markets[:6]),
-            "top_by_volume": _slim(markets[:10]),
-            "top_by_liquidity": _slim(sorted(markets, key=lambda m: m.get("liquidity", 0), reverse=True)[:8]),
+            # top_by_volume only shows active markets so expired markets don't pollute the feed
+            "top_by_volume": _slim(sorted(active_markets, key=lambda m: m.get("volume_24h", 0), reverse=True)[:10]),
+            "top_by_liquidity": _slim(sorted(active_markets, key=lambda m: m.get("liquidity", 0), reverse=True)[:8]),
         }
         cache.set(key, result, _SIGNALS_CACHE_TTL)
         return result
@@ -289,24 +300,46 @@ class PolymarketIntelligence:
             volume_momentum = "insufficient_history"
 
         vol_liq_ratio = volume_24h / max(liquidity, 1)
-        whale_activity = vol_liq_ratio > 5.0 and volume_24h > 10_000
+
+        # Expiry — compute before momentum/whale so we can suppress stale signals
+        end_date = raw.get("endDate") or raw.get("endDateIso")
+        days_to_expiry = None
+        hours_to_expiry = None
+        is_expired = False
+        is_resolving = False
+        if end_date:
+            try:
+                exp = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+                delta = exp - datetime.now(timezone.utc)
+                total_seconds = delta.total_seconds()
+                hours_to_expiry = total_seconds / 3600
+                days_to_expiry = max(0, int(delta.days))
+                is_expired = total_seconds < 0
+                is_resolving = 0 <= total_seconds < 72 * 3600
+            except Exception:
+                pass
+
+        # Suppress momentum/whale signals for expired or near-expiry markets:
+        # High volume on a market about to close (or already closed) is settlement
+        # activity, NOT a smart-money signal. Label it "resolving" to prevent
+        # misleading "SURGING" badges from showing up on dead markets.
+        if is_expired:
+            volume_momentum = "expired"
+            whale_activity = False
+            edge_detected = False
+        elif is_resolving:
+            volume_momentum = "resolving"
+            whale_activity = False
+        else:
+            whale_activity = vol_liq_ratio > 5.0 and volume_24h > 10_000
 
         market_efficiency = self._score_efficiency(spread, liquidity, is_competitive, volume_24h)
 
-        kelly_fraction = self._kelly_fraction(yes_price, no_price, edge_pct)
+        kelly_fraction = self._kelly_fraction(yes_price, no_price, edge_pct) if not is_expired else None
 
         price_momentum = 0.0
         if last_trade > 0 and yes_price > 0:
             price_momentum = round((last_trade - yes_price) / yes_price * 100, 2)
-
-        end_date = raw.get("endDate") or raw.get("endDateIso")
-        days_to_expiry = None
-        if end_date:
-            try:
-                exp = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-                days_to_expiry = max(0, (exp - datetime.now(timezone.utc)).days)
-            except Exception:
-                pass
 
         tokens = raw.get("clobTokenIds", [])
         if isinstance(tokens, str):
@@ -345,6 +378,8 @@ class PolymarketIntelligence:
             "kelly_fraction_pct": round(kelly_fraction * 100, 2) if kelly_fraction else 0,
             "price_momentum_pct": price_momentum,
             "days_to_expiry": days_to_expiry,
+            "is_expired": is_expired,
+            "is_resolving": is_resolving,
             "end_date": end_date,
             "tags": [t.get("label", t) if isinstance(t, dict) else t for t in (raw.get("tags") or [])],
             "clob_token_ids": tokens,
@@ -511,7 +546,7 @@ def _slim(markets: list[dict]) -> list[dict]:
         "volume_24h", "liquidity", "spread_pct", "edge_pct", "edge_detected",
         "mispricing_score", "volume_momentum", "whale_activity", "is_competitive",
         "market_efficiency_score", "kelly_fraction_pct", "price_momentum_pct",
-        "days_to_expiry", "end_date", "tags", "image", "vol_liq_ratio",
+        "days_to_expiry", "is_expired", "is_resolving", "end_date", "tags", "image", "vol_liq_ratio",
     ]
     return [{k: m[k] for k in keep if k in m} for m in markets]
 
