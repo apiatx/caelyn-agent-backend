@@ -38,8 +38,12 @@ logger = logging.getLogger("insider_activity")
 
 _TRADIER_KEY = os.getenv("TRADIER_API_KEY", "")
 _FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
+_PPLX_KEY = os.getenv("PERPLEXITY_API_KEY", "")
+_PPLX_MODEL = "sonar-pro"
+_PPLX_BASE_URL = "https://api.perplexity.ai"
 _SEC_DELAY = 0.15          # seconds between SEC requests (max 10 req/s)
 _FETCH_INTERVAL = 7200     # 2 hours in seconds
+_AI_INTERVAL = 86400       # 24 hours — Perplexity daily analysis
 _RETENTION_DAYS = 30
 _BATCH_SIZE = 50           # filings processed per batch
 _KEEP_CODES = {"P", "S", "M", "A", "D", "G"}  # transaction codes to keep
@@ -199,6 +203,88 @@ def _cleanup_expired():
             logger.info("[INSIDER_DB] Cleaned up %d expired rows", deleted)
     except Exception as e:
         logger.error("[INSIDER_DB] Cleanup error: %s", e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        _put_conn(conn)
+
+
+def _create_ai_cache_table():
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS insider_ai_cache (
+                id           SERIAL PRIMARY KEY,
+                cache_date   DATE NOT NULL UNIQUE,
+                result       JSONB NOT NULL,
+                model        VARCHAR(50) DEFAULT 'sonar-pro',
+                created_at   TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_aic_date ON insider_ai_cache (cache_date DESC)
+        """)
+        cur.execute("""
+            DELETE FROM insider_ai_cache WHERE cache_date < NOW() - INTERVAL '7 days'
+        """)
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        logger.error("[INSIDER_AI] Cache table error: %s", e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        _put_conn(conn)
+
+
+def _load_ai_cache_from_db() -> dict | None:
+    conn = _get_conn()
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT result, created_at FROM insider_ai_cache
+            WHERE cache_date = CURRENT_DATE
+            ORDER BY created_at DESC LIMIT 1
+        """)
+        row = cur.fetchone()
+        cur.close()
+        if row:
+            result = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+            result["cached_at"] = row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1])
+            return result
+        return None
+    except Exception as e:
+        logger.debug("[INSIDER_AI] Cache load error: %s", e)
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def _save_ai_cache_to_db(result: dict):
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO insider_ai_cache (cache_date, result, model)
+            VALUES (CURRENT_DATE, %s, %s)
+            ON CONFLICT (cache_date) DO UPDATE SET result = EXCLUDED.result, created_at = NOW()
+        """, (Json(result), _PPLX_MODEL))
+        conn.commit()
+        cur.close()
+        logger.info("[INSIDER_AI] Saved analysis to DB cache for today")
+    except Exception as e:
+        logger.error("[INSIDER_AI] Cache save error: %s", e)
         try:
             conn.rollback()
         except Exception:
@@ -862,6 +948,10 @@ _last_refresh: datetime | None = None
 _refresh_in_progress = False
 _total_inserted = 0
 
+# Perplexity AI daily analysis cache
+_last_ai_run: datetime | None = None
+_ai_cache: dict | None = None
+
 
 def _parse_filing_sync(filing) -> list[dict]:
     import pandas as pd
@@ -983,11 +1073,14 @@ async def fetch_recent_form4_filings(max_filings: int = 200) -> int:
     _refresh_in_progress = True
     inserted = 0
     try:
-        logger.info("[INSIDER] Fetching Form 4 filings from SEC EDGAR...")
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+        date_range = f"{yesterday}:{today}"
+        logger.info("[INSIDER] Fetching Form 4 filings from SEC EDGAR for %s ...", date_range)
         loop = asyncio.get_event_loop()
 
         def _get_filings_sync():
-            return get_filings(form="4")
+            return get_filings(form="4", filing_date=date_range)
 
         filings = await loop.run_in_executor(_executor, _get_filings_sync)
 
@@ -1307,14 +1400,208 @@ async def maybe_initial_load():
         logger.info("[INSIDER] Table has %d rows — skipping initial load", count)
 
 
+# ── Perplexity AI Daily Analysis ─────────────────────────────────────────────
+
+def _build_perplexity_prompt(top_buys: list[dict], top_sells: list[dict]) -> str:
+    def fmt_tx(t: dict) -> str:
+        return (
+            f"  • {t.get('ticker','?')} | {t.get('company_name','?')} | "
+            f"{t.get('insider_name','?')} ({t.get('insider_title','?')}) | "
+            f"Code: {t.get('transaction_code','?')} | "
+            f"Shares: {t.get('shares',0):,} | "
+            f"Value: ${float(t.get('total_value') or 0):,.0f} | "
+            f"Date: {t.get('transaction_date','?')} | "
+            f"Rule-based score: {t.get('conviction_score',0)}"
+        )
+
+    buys_block = "\n".join(fmt_tx(t) for t in top_buys[:15]) or "  (none)"
+    sells_block = "\n".join(fmt_tx(t) for t in top_sells[:15]) or "  (none)"
+
+    return f"""You are an expert SEC Form 4 insider trading analyst. I will give you a list of recent insider purchases and sales from our database. Your job is to research these on SEC EDGAR and other sources, then produce a structured JSON analysis.
+
+TOP INSIDER PURCHASES (last 30 days, rule-based scores):
+{buys_block}
+
+TOP INSIDER SALES (last 30 days, rule-based scores):
+{sells_block}
+
+For each transaction, research the company, the insider's history, recent news, and any SEC filings context. Then return ONLY valid JSON in this exact structure (no markdown, no extra text):
+
+{{
+  "generated_at": "ISO timestamp",
+  "top_buys": [
+    {{
+      "ticker": "XXXX",
+      "company_name": "Full Company Name",
+      "insider_name": "Name",
+      "insider_title": "Title",
+      "ai_score": 0-100,
+      "conviction": "high|medium|low",
+      "rationale": "2-3 sentence analysis of why this buy is significant",
+      "risk_factors": "Key risks to watch",
+      "catalysts": "Upcoming events or catalysts",
+      "verified_on_sec": true/false
+    }}
+  ],
+  "top_sells": [
+    {{
+      "ticker": "XXXX",
+      "company_name": "Full Company Name",
+      "insider_name": "Name",
+      "insider_title": "Title",
+      "ai_score": 0-100,
+      "sell_signal": "bearish|neutral|routine",
+      "rationale": "2-3 sentence analysis of why this sell matters",
+      "context": "Is this a planned 10b5-1 sale, tax-related, or discretionary?",
+      "verified_on_sec": true/false
+    }}
+  ],
+  "market_summary": "2-3 sentence overall assessment of insider sentiment across these transactions",
+  "standout_buy": "ticker of most compelling buy with one sentence reason",
+  "standout_sell": "ticker of most concerning sell with one sentence reason",
+  "data_date": "YYYY-MM-DD"
+}}
+
+Include the 5 most significant buys and 5 most significant sells. Prioritize cluster buys (multiple insiders), large 10% owner purchases, and C-suite activity over routine VP awards."""
+
+
+async def run_perplexity_analysis() -> dict:
+    """Call Perplexity Sonar Pro to analyze top insider transactions. Runs once per day."""
+    global _last_ai_run, _ai_cache
+
+    if not _PPLX_KEY:
+        logger.warning("[INSIDER_AI] No PERPLEXITY_API_KEY set — skipping AI analysis")
+        return {"error": "Perplexity API key not configured"}
+
+    loop = asyncio.get_event_loop()
+
+    # Pull top candidates from DB
+    top_buys, _ = await loop.run_in_executor(
+        _executor, lambda: _query_transactions(tx_type_filter="P", min_score=50, limit=20, timeframe="1m")
+    )
+    top_sells, _ = await loop.run_in_executor(
+        _executor, lambda: _query_transactions(tx_type_filter="S", min_score=55, limit=20, timeframe="1m")
+    )
+
+    prompt = _build_perplexity_prompt(top_buys, top_sells)
+
+    logger.info("[INSIDER_AI] Calling Perplexity %s for daily analysis (%d buys, %d sells)...",
+                _PPLX_MODEL, len(top_buys), len(top_sells))
+
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            resp = await client.post(
+                f"{_PPLX_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {_PPLX_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": _PPLX_MODEL,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are an expert SEC insider trading analyst. "
+                                "You have access to SEC EDGAR via search. "
+                                "Always verify transactions on EDGAR before scoring. "
+                                "Return only valid JSON, no markdown code blocks."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 3000,
+                    "return_citations": True,
+                },
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        raw_content = data["choices"][0]["message"]["content"].strip()
+
+        # Strip markdown code fences if Perplexity adds them
+        if raw_content.startswith("```"):
+            raw_content = raw_content.split("```")[1]
+            if raw_content.startswith("json"):
+                raw_content = raw_content[4:]
+            raw_content = raw_content.strip()
+
+        result = json.loads(raw_content)
+        result["model"] = _PPLX_MODEL
+        result["generated_at"] = datetime.utcnow().isoformat()
+
+        # Persist to DB + in-memory cache
+        await loop.run_in_executor(_executor, _save_ai_cache_to_db, result)
+        _ai_cache = result
+        _last_ai_run = datetime.utcnow()
+        logger.info("[INSIDER_AI] Analysis complete — %d top buys, %d top sells",
+                    len(result.get("top_buys", [])), len(result.get("top_sells", [])))
+        return result
+
+    except json.JSONDecodeError as e:
+        logger.error("[INSIDER_AI] JSON parse error: %s | raw: %.500s", e, raw_content)
+        return {"error": f"JSON parse error: {e}", "raw": raw_content[:500]}
+    except Exception as e:
+        logger.error("[INSIDER_AI] Perplexity error: %s", e, exc_info=True)
+        return {"error": str(e)}
+
+
+async def get_ai_analysis_cached() -> dict:
+    """Return cached AI analysis (in-memory → DB → fresh call)."""
+    global _ai_cache, _last_ai_run
+    loop = asyncio.get_event_loop()
+
+    # In-memory cache valid for today
+    if _ai_cache and _last_ai_run and _last_ai_run.date() == datetime.utcnow().date():
+        logger.debug("[INSIDER_AI] Serving in-memory AI cache")
+        return _ai_cache
+
+    # Try DB cache for today
+    cached = await loop.run_in_executor(_executor, _load_ai_cache_from_db)
+    if cached:
+        _ai_cache = cached
+        _last_ai_run = datetime.utcnow()
+        logger.info("[INSIDER_AI] Loaded today's analysis from DB cache")
+        return cached
+
+    # Nothing cached — run fresh
+    logger.info("[INSIDER_AI] No cache found — running fresh Perplexity analysis")
+    return await run_perplexity_analysis()
+
+
 # ── Background Loop ───────────────────────────────────────────────────────────
 
+async def _ai_daily_loop():
+    """Runs Perplexity analysis once per day. Waits for initial data to exist first."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(_executor, _create_ai_cache_table)
+
+    # Short initial delay to let EDGAR data load first
+    await asyncio.sleep(300)
+
+    while True:
+        try:
+            await run_perplexity_analysis()
+        except Exception as e:
+            logger.error("[INSIDER_AI] Daily loop error: %s", e)
+        await asyncio.sleep(_AI_INTERVAL)
+
+
 async def insider_activity_background_loop():
-    """Runs every 2 hours. Creates table, cleans up, fetches new filings."""
+    """
+    Two concurrent tasks:
+      1. SEC EDGAR fetch every 2 hours (today/yesterday filings only, dedup by accession)
+      2. Perplexity AI analysis once per day (stored in DB cache)
+    30-day retention: rows expire via expires_at column, cleaned on each cycle.
+    """
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(_executor, _create_table)
+    await loop.run_in_executor(_executor, _create_ai_cache_table)
     await loop.run_in_executor(_executor, _cleanup_expired)
     await maybe_initial_load()
+
+    # Start daily AI analysis as a concurrent background task
+    asyncio.ensure_future(_ai_daily_loop())
 
     while True:
         await asyncio.sleep(_FETCH_INTERVAL)
@@ -1566,6 +1853,21 @@ async def get_insider_stats():
             _put_conn(conn)
 
     return await loop.run_in_executor(_executor, _stats)
+
+
+@router.get("/insider-activity/ai-analysis")
+async def get_ai_analysis():
+    """
+    Returns today's Perplexity Sonar Pro analysis of insider transactions.
+    Checks in-memory cache → DB cache → fresh API call.
+    Refreshes automatically once per day via the background loop.
+    """
+    if not _PPLX_KEY:
+        raise HTTPException(status_code=503, detail="Perplexity API key not configured")
+    result = await get_ai_analysis_cached()
+    if "error" in result and len(result) == 1:
+        raise HTTPException(status_code=502, detail=result["error"])
+    return result
 
 
 @router.get("/insider-activity/detail/{accession_number}")
@@ -1903,3 +2205,27 @@ async def trigger_refresh(background_tasks: BackgroundTasks):
         return {"status": "already_running", "message": "Refresh already in progress"}
     background_tasks.add_task(fetch_recent_form4_filings, 200)
     return {"status": "refresh_started", "estimated_time_seconds": 120}
+
+
+@router.post("/insider-activity/refresh-ai")
+async def trigger_ai_refresh(background_tasks: BackgroundTasks):
+    """
+    Manually trigger a fresh Perplexity AI analysis (bypasses the 24-hour cache).
+    Runs in the background — poll GET /ai-analysis to see when results appear.
+    """
+    if not _PPLX_KEY:
+        raise HTTPException(status_code=503, detail="Perplexity API key not configured")
+
+    async def _run():
+        global _ai_cache, _last_ai_run
+        _ai_cache = None
+        _last_ai_run = None
+        await run_perplexity_analysis()
+
+    background_tasks.add_task(_run)
+    return {
+        "status": "started",
+        "model": _PPLX_MODEL,
+        "message": "Perplexity AI analysis running in background (~30-60s). "
+                   "Poll GET /api/insider-activity/ai-analysis to see results.",
+    }
