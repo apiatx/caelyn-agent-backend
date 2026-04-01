@@ -1024,10 +1024,16 @@ async def get_collab_options(request: Request):
 @limiter.limit("30/minute")
 @traceable(name="main.polymarket_events_proxy")
 async def polymarket_events_proxy(request: Request):
-    """Proxy for Polymarket Gamma API — avoids CORS issues on the frontend."""
+    """
+    Proxy for Polymarket Gamma API — avoids CORS issues on the frontend.
+    Post-processes data to strip expired markets/events so the dashboard
+    always shows live, actionable markets only.
+    """
     import httpx
+    from datetime import datetime, timezone
+
     params = dict(request.query_params)
-    params.setdefault("limit", "50")
+    params.setdefault("limit", "75")
     params.setdefault("active", "true")
     params.setdefault("closed", "false")
     params.setdefault("order", "volume24hr")
@@ -1037,6 +1043,43 @@ async def polymarket_events_proxy(request: Request):
         "Accept": "application/json",
     }
     url = "https://gamma-api.polymarket.com/events"
+    now = datetime.now(timezone.utc)
+
+    def _market_is_active(market: dict) -> bool:
+        """
+        Return True only if the market is still open for trading.
+        Gamma marks closed markets inconsistently — some have closed=True
+        with endDate=None, others have endDate in the past with closed=False
+        (resolution lag). We reject on either signal.
+        """
+        if market.get("closed") is True:
+            return False
+        if not market.get("acceptingOrders", True):
+            return False
+        end_date = market.get("endDate") or market.get("endDateIso")
+        if end_date:
+            try:
+                exp = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+                if exp <= now:
+                    return False
+            except Exception:
+                pass
+        return True
+
+    def _event_is_active(event: dict) -> bool:
+        """Return True only if the event itself has not closed."""
+        if event.get("closed") is True:
+            return False
+        end_date = event.get("endDate") or event.get("endDateIso")
+        if end_date:
+            try:
+                exp = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+                if exp <= now:
+                    return False
+            except Exception:
+                pass
+        return True
+
     print(f"[POLYMARKET_PROXY] Fetching {url} params={params}")
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
@@ -1044,8 +1087,29 @@ async def polymarket_events_proxy(request: Request):
             print(f"[POLYMARKET_PROXY] Response status={resp.status_code} len={len(resp.content)}")
             resp.raise_for_status()
             data = resp.json()
-            # Polymarket returns a JSON array — pass it through directly
-            return JSONResponse(content=data)
+
+            if isinstance(data, list):
+                filtered = []
+                for event in data:
+                    if not _event_is_active(event):
+                        continue
+                    # Strip expired markets within each event
+                    markets = event.get("markets", [])
+                    if markets:
+                        event = dict(event)
+                        event["markets"] = [m for m in markets if _market_is_active(m)]
+                        if not event["markets"]:
+                            continue
+                    filtered.append(event)
+
+                requested_limit = int(params.get("limit", 75))
+                filtered = filtered[:requested_limit]
+                print(f"[POLYMARKET_PROXY] Filtered {len(data)} → {len(filtered)} active events")
+                data = filtered
+
+            response = JSONResponse(content=data)
+            response.headers["Cache-Control"] = "no-store"
+            return response
     except httpx.HTTPStatusError as e:
         print(f"[POLYMARKET_PROXY] HTTP error: {e.response.status_code} {e.response.text[:300]}")
         return JSONResponse(status_code=502, content={"error": f"Polymarket returned {e.response.status_code}", "detail": e.response.text[:200]})
