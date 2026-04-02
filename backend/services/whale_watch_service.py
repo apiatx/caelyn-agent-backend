@@ -275,35 +275,71 @@ async def _cusips_to_tickers(cusips: list[str]) -> dict[str, str]:
     """
     Map CUSIPs to tickers using the free OpenFIGI batch API.
     Processes in chunks of 25 (free-tier limit per request).
+    Waits 15 s between chunks to respect the 5-req/min rate limit.
+    Falls back to yfinance search for unmapped CUSIPs (using company name cache).
     """
     if not cusips:
         return {}
     mapping: dict[str, str] = {}
     chunk_size = 25
+
+    # ── Pass 1: OpenFIGI (no exchCode — letting FIGI pick the primary listing) ─
     for i in range(0, len(cusips), chunk_size):
         chunk = cusips[i:i + chunk_size]
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.post(
-                    "https://api.openfigi.com/v3/mapping",
-                    json=[{"idType": "ID_CUSIP", "idValue": c, "exchCode": "US"} for c in chunk],
-                    headers={"Content-Type": "application/json"},
-                )
-            if resp.status_code == 200:
-                results = resp.json()
-                for cusip, item in zip(chunk, results):
-                    data = item.get("data") or []
-                    for d in data:
-                        ticker = d.get("ticker")
-                        security_type = d.get("securityType", "")
-                        # Prefer common shares over options/warrants
-                        if ticker and "Option" not in security_type and "Warrant" not in security_type:
-                            mapping[cusip] = ticker
-                            break
-            await asyncio.sleep(0.5)
-        except Exception as e:
-            logger.warning("[WHALE] OpenFIGI chunk error: %s", e)
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=25) as client:
+                    resp = await client.post(
+                        "https://api.openfigi.com/v3/mapping",
+                        json=[{"idType": "ID_CUSIP", "idValue": c} for c in chunk],
+                        headers={"Content-Type": "application/json"},
+                    )
+                if resp.status_code == 429:
+                    logger.info("[WHALE_FIGI] Rate-limited, waiting 20s…")
+                    await asyncio.sleep(20)
+                    continue
+                if resp.status_code == 200:
+                    results = resp.json()
+                    for cusip, item in zip(chunk, results):
+                        figi_data = item.get("data") or []
+                        for d in figi_data:
+                            ticker        = d.get("ticker", "")
+                            security_type = d.get("securityType", "")
+                            market_sector = d.get("marketSector", "")
+                            # Accept equities; skip options, warrants, preferreds
+                            if (ticker and market_sector == "Equity"
+                                    and "Option" not in security_type
+                                    and "Warrant" not in security_type
+                                    and "Preferred" not in security_type):
+                                mapping[cusip] = ticker
+                                break
+                break
+            except Exception as e:
+                logger.warning("[WHALE_FIGI] chunk attempt %d error: %s", attempt + 1, e)
+                await asyncio.sleep(5)
+
+        # 15-second gap between batches — free tier allows 5 req/min
+        if i + chunk_size < len(cusips):
+            await asyncio.sleep(15)
+
+    logger.info("[WHALE_FIGI] Mapped %d/%d CUSIPs via OpenFIGI", len(mapping), len(cusips))
     return mapping
+
+
+def _yf_search_ticker(company_name: str) -> str:
+    """Search yfinance for a ticker by company name. Returns '' on failure."""
+    try:
+        import yfinance as yf
+        results = yf.Search(company_name, max_results=3).quotes
+        for q in results:
+            sym   = q.get("symbol", "")
+            qtype = q.get("quoteType", "")
+            # Only accept plain equities listed on major US exchanges
+            if sym and qtype == "EQUITY" and "." not in sym and len(sym) <= 5:
+                return sym
+    except Exception:
+        pass
+    return ""
 
 
 # ── SEC EDGAR 13F fetcher ─────────────────────────────────────────────────────
@@ -412,9 +448,54 @@ async def fetch_13f_filings(cik: str, whale_name: str) -> list[dict]:
         logger.warning("[WHALE] No holdings parsed for %s", whale_name)
         return []
 
+    # Sort by value descending so we map the highest-value positions first
+    holdings_raw.sort(key=lambda h: h.get("value_usd", 0), reverse=True)
+
     # Step 5: Map CUSIPs → tickers via OpenFIGI
-    cusips = [h["cusip"] for h in holdings_raw if h.get("cusip")]
-    cusip_map = await _cusips_to_tickers(list(set(cusips)))
+    # Cap at 500 unique CUSIPs by value to avoid hour-long waits for mega-filers (e.g. RenTech)
+    # The top 500 positions typically represent 95%+ of portfolio weight.
+    _MAX_CUSIPS = 500
+    seen_cusips: set[str] = set()
+    cusips_to_map: list[str] = []
+    for h in holdings_raw:
+        c = h.get("cusip", "")
+        if c and c not in seen_cusips:
+            seen_cusips.add(c)
+            cusips_to_map.append(c)
+        if len(cusips_to_map) >= _MAX_CUSIPS:
+            break
+    if len(cusips_to_map) < len({h.get("cusip","") for h in holdings_raw if h.get("cusip")}):
+        logger.info("[WHALE] Capping %s CUSIP lookups at top %d (total raw: %d)",
+                    whale_name, len(cusips_to_map), len(holdings_raw))
+    cusip_map = await _cusips_to_tickers(cusips_to_map)
+
+    # Step 5b: yfinance Search fallback for any CUSIPs OpenFIGI missed
+    # Only try fallback for CUSIPs we actually attempted to map (respects the cap)
+    unmapped = [h for h in holdings_raw
+                if h.get("cusip") in seen_cusips and not cusip_map.get(h["cusip"])]
+    if unmapped:
+        logger.info("[WHALE] OpenFIGI missed %d CUSIPs for %s — trying yfinance search",
+                    len(unmapped), whale_name)
+        # Build (cusip → company_name) map for unmapped entries (deduplicated)
+        cusip_to_name: dict[str, str] = {}
+        for h in unmapped:
+            if h["cusip"] not in cusip_to_name:
+                cusip_to_name[h["cusip"]] = h.get("company_name", "")
+
+        def _batch_yf_search():
+            results = {}
+            for cusip, name in cusip_to_name.items():
+                if name:
+                    ticker = _yf_search_ticker(name)
+                    if ticker:
+                        results[cusip] = ticker
+            return results
+
+        loop = asyncio.get_event_loop()
+        yf_fallback = await loop.run_in_executor(_executor, _batch_yf_search)
+        cusip_map.update(yf_fallback)
+        logger.info("[WHALE] yfinance search recovered %d more tickers for %s",
+                    len(yf_fallback), whale_name)
 
     # Step 6: Calculate weight percentages
     total_value = sum(h["value_usd"] for h in holdings_raw)
@@ -424,11 +505,8 @@ async def fetch_13f_filings(cik: str, whale_name: str) -> list[dict]:
     final_holdings: list[dict] = []
     for h in holdings_raw:
         ticker = cusip_map.get(h.get("cusip", ""), "")
-        # Fallback: try to derive ticker from company name (basic sanitize)
         if not ticker:
-            ticker = _guess_ticker_from_name(h.get("company_name", ""))
-        if not ticker:
-            continue
+            continue  # skip positions we could not resolve to a real ticker
 
         weight_pct = h["value_usd"] / total_value * 100
         final_holdings.append({
@@ -440,6 +518,24 @@ async def fetch_13f_filings(cik: str, whale_name: str) -> list[dict]:
             "quarter":      quarter,
             "filed_date":   filed_date,
         })
+
+    # Deduplicate by ticker: some filers (e.g. Berkshire) report the same stock
+    # across multiple subsidiary accounts; merge shares + value, keep best name
+    ticker_agg: dict[str, dict] = {}
+    for h in final_holdings:
+        t = h["ticker"]
+        if t in ticker_agg:
+            ticker_agg[t]["shares"]    += h["shares"]
+            ticker_agg[t]["value_usd"] += h["value_usd"]
+        else:
+            ticker_agg[t] = dict(h)
+
+    # Recalculate weight_pct on merged totals
+    merged_total = sum(h["value_usd"] for h in ticker_agg.values()) or 1
+    final_holdings = []
+    for h in ticker_agg.values():
+        h["weight_pct"] = round(h["value_usd"] / merged_total * 100, 4)
+        final_holdings.append(h)
 
     # Sort by weight descending
     final_holdings.sort(key=lambda x: x["value_usd"], reverse=True)
@@ -455,10 +551,14 @@ def _parse_infotable_xml(xml_text: str) -> list[dict]:
     """Parse 13F infotable XML; handles both old and new EDGAR namespace variants."""
     records = []
     try:
-        # Strip namespace for simpler parsing
-        clean = re.sub(r' xmlns[^=]*="[^"]*"', "", xml_text)
-        clean = re.sub(r'</?[a-zA-Z]+:', "<", clean).replace("</", "</")
-        # Some filings use camelCase tags
+        # Strip namespaces for simpler parsing
+        # Step 1: Remove all xmlns declarations (xmlns="..." and xmlns:prefix="...")
+        clean = re.sub(r'\s+xmlns(?::[a-zA-Z0-9_-]+)?="[^"]*"', '', xml_text)
+        # Step 2: Remove namespace prefixes from element names, preserving < vs </
+        #         e.g. <ns1:infoTable> → <infoTable>, </ns1:infoTable> → </infoTable>
+        clean = re.sub(r'(</?)[a-zA-Z_][\w]*:', r'\1', clean)
+        # Step 3: Remove namespace-prefixed attributes (e.g. xsi:type="...")
+        clean = re.sub(r'\s+[a-zA-Z_][\w]*:[a-zA-Z_][\w]*="[^"]*"', '', clean)
         root = ET.fromstring(clean)
     except Exception as e:
         logger.warning("[WHALE] XML parse error: %s", e)
@@ -521,6 +621,10 @@ def _guess_ticker_from_name(name: str) -> str:
 
 
 def _save_holdings_to_db(whale_name: str, quarter: str, holdings: list[dict]) -> None:
+    if not holdings:
+        # Don't wipe existing data if we failed to resolve any tickers
+        logger.warning("[WHALE_DB] Skipping save for %s (%s): 0 holdings resolved", whale_name, quarter)
+        return
     conn = _get_conn()
     if not conn:
         return

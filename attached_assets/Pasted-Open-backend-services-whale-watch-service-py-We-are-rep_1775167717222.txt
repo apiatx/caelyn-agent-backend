@@ -1,0 +1,48 @@
+Open backend/services/whale_watch_service.py. We are replacing the hardcoded get_default_whales() and seed_whales() functions entirely with a smarter AI-powered discovery system. Here is exactly what to build:
+CHANGE 1 — Add a Perplexity whale discovery function
+Add this new async function called discover_top_whales_via_perplexity():
+
+Get the Perplexity API key from environment variable PERPLEXITY_API_KEY
+Call the Perplexity API at https://api.perplexity.ai/chat/completions using model sonar with this exact system prompt:
+"You are a financial research assistant. Return only valid JSON, no markdown, no explanation, no code blocks."
+And this user prompt:
+"Search the web right now for the top 15 best performing hedge funds, institutional investors, and individual investors over the past 1-3 years. Include funds that have had exceptional returns like 50%, 100%, 500% or more. Include their SEC CIK number if you can find it. Return a JSON array where each object has these exact fields: name (string), cik (string or null if unknown), category (one of: institution, individual, congress), description (one sentence about who they are and their strategy), estimated_return_pct (float, their approximate best return over any recent period), return_period (string, e.g. '1 year' or '3 months'). Return only the JSON array, nothing else."
+Parse the JSON response
+For any whale where cik is null or unknown, call a new helper function lookup_cik_on_edgar(name) that:
+
+Calls https://efts.sec.gov/LATEST/search-index?q="{name}"&dateRange=custom&startdt=2020-01-01&forms=13F-HR with User-Agent header "CaelynAI contact@caelyn.ai"
+Extracts the CIK from the first result if found
+Returns the CIK as a zero-padded 10 digit string, or None if not found
+
+
+Filter the list to only keep whales where we successfully found a CIK (they must be an actual 13F filer to be trackable)
+Return the final list
+
+CHANGE 2 — Replace seed_whales()
+Replace the existing seed_whales() function with a new version that:
+
+Calls discover_top_whales_via_perplexity() to get the dynamic list
+Upserts each result into the whales table (insert if name doesn't exist, update if it does)
+Logs each whale discovered with their name and estimated return
+Falls back to the old hardcoded list of 10 whales ONLY if the Perplexity call fails entirely, so the app never breaks
+
+CHANGE 3 — Update refresh_all_whales()
+At the top of refresh_all_whales(), add a call to seed_whales() so every refresh cycle re-discovers the top performers. This means if a new fund blows up in performance next month, it automatically gets added on the next refresh cycle.
+CHANGE 4 — Add a new API endpoint
+Add this endpoint to the FastAPI router:
+POST /whales/discover — manually triggers discover_top_whales_via_perplexity() then seed_whales() then returns the list of whales that were found with their names and estimated returns. This lets us trigger a fresh discovery from the frontend without waiting for the 24 hour background loop.
+CHANGE 5 — Add a "Rediscover Top Whales" button to the frontend
+Find the Whale Watch frontend page (WhalePage.jsx or similar). Next to the existing "Refresh Data" button in the top right, add a second button called "Rediscover Top Whales" that:
+
+Calls POST /api/whales/discover when clicked
+Shows a loading spinner with the text "Searching for top performers..." while it runs (this may take 10-15 seconds)
+When complete, automatically refreshes the leaderboard
+Shows a toast or small notification saying how many whales were discovered
+
+CHANGE 6 — Verify
+After all changes:
+
+Restart the app
+Trigger POST /api/whales/discover manually and paste the raw JSON response so we can see what Perplexity found
+Confirm the app starts without errors
+Do not change anything else in the codebase

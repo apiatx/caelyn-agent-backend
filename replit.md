@@ -211,12 +211,15 @@ Tracks the top 10 institutional investors via SEC EDGAR 13F-HR filings. Fetches 
 ### Data Pipeline
 
 - **Source**: SEC EDGAR `data.sec.gov/submissions/CIK{cik}.json` → find 13F-HR accession → parse infotable XML
-- **CUSIP → Ticker**: OpenFIGI batch API (25/request, free tier, US equities preferred)
+- **CUSIP → Ticker**: OpenFIGI batch API (25/request, free tier, US equities preferred); capped at top 500 positions by value per whale (covers 95%+ of portfolio weight; prevents 30+ min waits for mega-filers like RenTech's 3000+ positions)
+- **yfinance Fallback**: For CUSIPs OpenFIGI misses, searches by company name — limited to the capped set
 - **Returns**: yfinance batch download (2y) → weighted portfolio 1m/3m/6m/1y returns; SPY as benchmark
 - **AI Themes**: Claude claude-haiku-4-5 summarizes top-15 holdings into 2-3 sentence investment thesis
 - **Background loop**: Runs on startup if stale (> 24h); refreshes all whales every 24h
 - **DB Tables**: `whales`, `whale_holdings`, `whale_portfolio_returns` (Neon PostgreSQL)
 - **Key file**: `backend/services/whale_watch_service.py`
+- **Safety guard**: `_save_holdings_to_db` skips overwrite when 0 holdings resolved (prevents wiping DB on failed refreshes)
+- **No concurrent refreshes**: `_cusips_to_tickers` has no semaphore — never trigger multiple whale refreshes simultaneously (OpenFIGI free tier: 5 req/min)
 
 ## Predict Page — Polymarket Intelligence + TradingAgents (`/api/predict/`)
 
