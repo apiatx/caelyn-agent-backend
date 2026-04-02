@@ -49,6 +49,12 @@ from services.congressional_trading_service import (
     router as _cong_router,
     congressional_trading_background_loop as _cong_bg_loop,
 )
+from services.whale_watch_service import (
+    router as _whale_router,
+    whale_watch_background_loop as _whale_bg_loop,
+    _create_tables as _whale_create_tables,
+    seed_whales as _seed_whales,
+)
 from services.predict.router import router as _predict_router
 
 _hl_state = _HLState()
@@ -178,6 +184,12 @@ async def lifespan(app):
     asyncio.create_task(_insider_bg_loop())
     asyncio.create_task(_cong_bg_loop())
     asyncio.create_task(_hl_boot_and_run(_hl_state))
+    try:
+        _whale_create_tables()
+        _seed_whales()
+    except Exception as _e:
+        print(f"[STARTUP] Whale Watch DB init error: {_e}")
+    asyncio.create_task(_whale_bg_loop())
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)
@@ -200,6 +212,10 @@ app.include_router(_insider_router, prefix="/api")
 
 # ── Congressional Trading router ──────────────────────────────────────────────
 app.include_router(_cong_router, prefix="/api")
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Whale Watch router ────────────────────────────────────────────────────────
+app.include_router(_whale_router, prefix="/api")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Predict / Polymarket Intelligence router ──────────────────────────────────

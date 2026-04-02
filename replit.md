@@ -179,6 +179,45 @@ Metadata: cluster_size, date_spread_days, insiders_in_cluster, distinct_role_cou
 - **Background loop**: Creates table → cleans expired rows → initial load (300 filings) → refreshes every 2 hours
 - **Dedup key**: `{accession_number}:{row_idx}` (max 29 chars) — handles multiple transactions per filing
 
+## Whale Watch — Institutional 13F Tracker (`/api/whales`)
+
+Tracks the top 10 institutional investors via SEC EDGAR 13F-HR filings. Fetches quarterly holdings, maps CUSIPs to tickers via OpenFIGI, calculates weighted portfolio returns (1m/3m/6m/1y vs SPY), and generates AI theme summaries via Anthropic.
+
+### Tracked Institutions
+
+| Name | CIK | Manager |
+|---|---|---|
+| Berkshire Hathaway | 1067983 | Warren Buffett |
+| Pershing Square Capital Management | 1336528 | Bill Ackman |
+| Duquesne Family Office | 1536411 | Stanley Druckenmiller |
+| Elliott Investment Management | 1791786 | Paul Singer |
+| Appaloosa Management | 1006438 | David Tepper |
+| Baupost Group | 1061768 | Seth Klarman |
+| Third Point | 1040273 | Dan Loeb |
+| Soros Fund Management | 1029160 | George Soros |
+| Renaissance Technologies | 1037389 | Jim Simons |
+| Bridgewater Associates | 1350694 | Ray Dalio |
+
+### Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/whales?category=institution` | All whales sorted by 3m return (best first) |
+| `GET /api/whales/{whale_name}/holdings` | Latest quarter holdings sorted by weight_pct |
+| `GET /api/whales/{whale_name}/returns` | All quarterly return records vs SPY benchmark |
+| `POST /api/whales/refresh` | Trigger background refresh of all 10 whales |
+| `POST /api/whales/{whale_name}/refresh` | Trigger refresh for a single whale |
+
+### Data Pipeline
+
+- **Source**: SEC EDGAR `data.sec.gov/submissions/CIK{cik}.json` → find 13F-HR accession → parse infotable XML
+- **CUSIP → Ticker**: OpenFIGI batch API (25/request, free tier, US equities preferred)
+- **Returns**: yfinance batch download (2y) → weighted portfolio 1m/3m/6m/1y returns; SPY as benchmark
+- **AI Themes**: Claude claude-haiku-4-5 summarizes top-15 holdings into 2-3 sentence investment thesis
+- **Background loop**: Runs on startup if stale (> 24h); refreshes all whales every 24h
+- **DB Tables**: `whales`, `whale_holdings`, `whale_portfolio_returns` (Neon PostgreSQL)
+- **Key file**: `backend/services/whale_watch_service.py`
+
 ## Predict Page — Polymarket Intelligence + TradingAgents (`/api/predict/`)
 
 Integrates Jon-Becker/prediction-market-analysis methodology and TauricResearch/TradingAgents architecture.

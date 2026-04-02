@@ -1,0 +1,102 @@
+I need you to build a complete new Whale Watch feature for my FastAPI + React app. This is a brand new page at /whales. Here is exactly what to build, step by step. Do not skip any step.
+STEP 1 — Create the new service file
+Create a new file at backend/services/whale_watch_service.py. Model its overall structure after backend/services/insider_activity_service.py and backend/services/congressional_trading_service.py — use the same patterns for DB connection pooling, background loops, and FastAPI router setup that already exist in those files. Reuse the same price enrichment approach (Tradier → yfinance fallback) that already exists in those files for fetching historical prices.
+This new service file must contain all of the following:
+1a — DB table creation (raw SQL, matching style of existing services)
+Create these 3 tables if they don't exist:
+Table whales: id serial primary key, name text unique not null, category text not null (values: "institution", "individual", "congress"), cik text, description text, ai_theme text, return_1m float, return_3m float, return_6m float, return_1y float, return_3y float, last_updated timestamp default now(), created_at timestamp default now()
+Table whale_holdings: id serial primary key, whale_name text not null, ticker text not null, company_name text, shares bigint, value_usd bigint, weight_pct float, quarter text, filed_date timestamp, created_at timestamp default now()
+Table whale_portfolio_returns: id serial primary key, whale_name text not null, quarter text not null, portfolio_value_usd bigint, calculated_return_pct float, benchmark_spy_return_pct float, created_at timestamp default now()
+1b — SEC EDGAR 13F fetcher
+Write an async function fetch_13f_filings(cik: str, whale_name: str) that:
+
+Hits the SEC EDGAR API at https://data.sec.gov/submissions/CIK{cik}.json (zero-pad CIK to 10 digits) with a proper User-Agent header (use "CaelynAI contact@caelyn.ai")
+Finds the most recent 13F-HR filing from the filings list
+Fetches the actual holdings from the filing index at https://data.sec.gov/Archives/edgar/full-index/
+Parses the holdings: ticker, company name, shares, value (in thousands), and calculates weight_pct for each position as (value / total_portfolio_value * 100)
+Saves all holdings to the whale_holdings table with the correct quarter (e.g. "2024Q4") and filed_date
+Returns the list of holdings
+
+1c — Portfolio return calculator
+Write an async function calculate_whale_returns(whale_name: str) that:
+
+Loads that whale's holdings from the whale_holdings table for the most recent quarter
+For each holding, fetches historical price data using the same Tradier → yfinance fallback pattern already used in the existing services
+Calculates weighted portfolio returns for 1 month, 3 month, 6 month, 1 year periods using each position's weight_pct
+Also fetches SPY returns for the same periods as a benchmark
+Saves results to whale_portfolio_returns table
+Updates the return_1m, return_3m, return_6m, return_1y columns in the whales table for that whale
+
+1d — AI theme generator
+Write an async function generate_whale_theme(whale_name: str) that:
+
+Loads the top 15 holdings for that whale from the whale_holdings table
+Calls the Anthropic API using the key from environment variable ANTHROPIC_API_KEY
+Sends a prompt like: "Based on these top holdings: {holdings list with weights}, describe this investor's strategy and themes in 2-3 sentences. Be specific about sectors, styles, and macro themes. Be concise."
+Saves the response to the ai_theme column in the whales table
+
+1e — Seed the top institutional whales
+Write a function get_default_whales() that returns a hardcoded list of the following whales with their SEC CIK numbers. Look up the correct CIK for each one from SEC EDGAR:
+
+Berkshire Hathaway (Warren Buffett)
+Pershing Square (Bill Ackman)
+Duquesne Family Office (Stanley Druckenmiller)
+Elliott Investment Management (Paul Singer)
+Appaloosa Management (David Tepper)
+Baupost Group (Seth Klarman)
+Third Point (Dan Loeb)
+Soros Fund Management
+Renaissance Technologies
+Bridgewater Associates
+
+Each entry should have: name, category ("institution"), cik, description (one sentence about who they are)
+Write a function seed_whales() that inserts these into the whales table if they don't already exist (upsert on name).
+1f — Master refresh function
+Write an async function refresh_all_whales() that:
+
+Calls seed_whales() first
+Loops through every whale in the whales table
+For each whale calls fetch_13f_filings(), then calculate_whale_returns(), then generate_whale_theme()
+Updates last_updated timestamp in the whales table after each whale completes
+Handles errors per whale gracefully — if one whale fails, log the error and continue to the next one
+
+1g — Background loop
+Write an async function whale_watch_background_loop() that:
+
+On cold start, checks if the whales table is empty or if last_updated is older than 24 hours for any whale
+If so, calls refresh_all_whales()
+Then sleeps for 24 hours and repeats
+This matches the exact same background loop pattern used in insider_activity_service.py
+
+1h — FastAPI router
+Create a FastAPI router with these endpoints:
+GET /whales — returns all whales from DB ordered by return_3m descending (best performers first). Each whale object includes: name, category, cik, description, ai_theme, return_1m, return_3m, return_6m, return_1y, return_3y, last_updated
+GET /whales/{whale_name}/holdings — returns all holdings for that whale from the most recent quarter, ordered by weight_pct descending
+GET /whales/{whale_name}/returns — returns all quarterly return records for that whale from whale_portfolio_returns
+POST /whales/refresh — triggers refresh_all_whales() manually, returns {"status": "started"}
+POST /whales/{whale_name}/refresh — triggers refresh for a single whale only
+STEP 2 — Register the new service in main.py
+Open backend/main.py. Find where the other routers are imported and registered — specifically these lines:
+from services.insider_activity_service import (
+    router as _insider_router,
+    insider_activity_background_loop as _insider_bg_loop,
+)
+from services.congressional_trading_service import (
+    router as _cong_router,
+    congressional_trading_background_loop as _cong_bg_loop,
+)
+Add this import directly after those lines:
+from services.whale_watch_service import (
+    router as _whale_router,
+    whale_watch_background_loop as _whale_bg_loop,
+)
+Then find where _insider_router and _cong_router are registered with app.include_router() and add:
+app.include_router(_whale_router)
+Then find where _insider_bg_loop and _cong_bg_loop are started in the app lifespan or startup event and add _whale_bg_loop in the same way.
+STEP 3 — Verify
+After making all changes, confirm:
+
+backend/services/whale_watch_service.py exists and has no syntax errors
+backend/main.py correctly imports and registers the whale router and background loop
+All 3 new DB tables are created on startup
+Do not modify any other existing files
