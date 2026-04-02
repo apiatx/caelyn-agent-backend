@@ -30,8 +30,9 @@ logger = logging.getLogger("whale_watch")
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-_ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-_TRADIER_KEY   = os.getenv("TRADIER_API_KEY", "")
+_ANTHROPIC_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
+_TRADIER_KEY    = os.getenv("TRADIER_API_KEY", "")
+_PERPLEXITY_KEY = os.getenv("PERPLEXITY_API_KEY", "")
 _SEC_HEADERS   = {
     "User-Agent": "CaelynAI contact@caelyn.ai",
     "Accept-Encoding": "gzip, deflate",
@@ -239,15 +240,162 @@ def _create_tables() -> None:
         _put_conn(conn)
 
 
+# ── Perplexity whale discovery ────────────────────────────────────────────────
+
+async def lookup_cik_on_edgar(name: str) -> str | None:
+    """
+    Query SEC EDGAR full-text search to find the CIK of a fund by name,
+    restricting to 13F-HR filings filed since 2020.
+    Returns a zero-padded 10-digit CIK string, or None if not found.
+    """
+    try:
+        url = (
+            f'https://efts.sec.gov/LATEST/search-index?q="{name}"'
+            "&dateRange=custom&startdt=2020-01-01&forms=13F-HR"
+        )
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, headers=_SEC_HEADERS)
+            resp.raise_for_status()
+            data = resp.json()
+        hits = data.get("hits", {}).get("hits", [])
+        if hits:
+            cik = str(hits[0].get("_source", {}).get("entity_id", "")).strip()
+            if cik and cik.isdigit():
+                return cik.zfill(10)
+    except Exception as e:
+        logger.warning("[WHALE_CIK] EDGAR lookup failed for '%s': %s", name, e)
+    return None
+
+
+async def discover_top_whales_via_perplexity() -> list[dict]:
+    """
+    Call Perplexity sonar to discover the top-performing hedge funds/investors
+    right now, verify each has a CIK (must be a 13F filer), and return the list.
+    Returns [] if Perplexity fails so callers can fall back gracefully.
+    """
+    if not _PERPLEXITY_KEY:
+        logger.warning("[WHALE_DISCOVER] PERPLEXITY_API_KEY not set — skipping discovery")
+        return []
+
+    system_prompt = (
+        "You are a financial research assistant. "
+        "Return only valid JSON, no markdown, no explanation, no code blocks."
+    )
+    user_prompt = (
+        "Search the web right now for the top 15 best performing hedge funds, institutional investors, "
+        "and individual investors over the past 1-3 years. Include funds that have had exceptional returns "
+        "like 50%, 100%, 500% or more. Include their SEC CIK number if you can find it. "
+        "Return a JSON array where each object has these exact fields: "
+        "name (string), cik (string or null if unknown), "
+        "category (one of: institution, individual, congress), "
+        "description (one sentence about who they are and their strategy), "
+        "estimated_return_pct (number, their approximate % return over the past 1-3 years). "
+        "Focus on funds with the highest recent returns. "
+        "Include a mix of well-known legends and newer breakout performers."
+    )
+
+    logger.info("[WHALE_DISCOVER] Querying Perplexity for top-performing funds…")
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://api.perplexity.ai/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {_PERPLEXITY_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "sonar",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_prompt},
+                    ],
+                    "temperature": 0.2,
+                },
+            )
+            resp.raise_for_status()
+            raw_content = resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        logger.error("[WHALE_DISCOVER] Perplexity API error: %s", e)
+        return []
+
+    # Strip any markdown code fences Perplexity may wrap around the JSON
+    content = raw_content.strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```[a-z]*\n?", "", content)
+        content = re.sub(r"\n?```$", "", content)
+    content = content.strip()
+
+    try:
+        candidates = json.loads(content)
+        if not isinstance(candidates, list):
+            raise ValueError("Expected a JSON array")
+    except Exception as e:
+        logger.error("[WHALE_DISCOVER] JSON parse error: %s | raw: %s", e, content[:500])
+        return []
+
+    logger.info("[WHALE_DISCOVER] Perplexity returned %d candidates", len(candidates))
+
+    verified: list[dict] = []
+    for c in candidates:
+        name = (c.get("name") or "").strip()
+        if not name:
+            continue
+
+        # Normalise CIK: strip non-digits; treat 'null'/'unknown' as missing
+        raw_cik = str(c.get("cik") or "").strip()
+        cik = re.sub(r"[^0-9]", "", raw_cik) if raw_cik.lower() not in ("null", "unknown", "none", "") else ""
+
+        if not cik:
+            logger.info("[WHALE_DISCOVER] No CIK for '%s' — querying EDGAR…", name)
+            cik = await lookup_cik_on_edgar(name) or ""
+            await asyncio.sleep(0.3)   # be polite to EDGAR
+
+        if not cik:
+            logger.info("[WHALE_DISCOVER] Skipping '%s' — could not find SEC CIK", name)
+            continue
+
+        est_return = c.get("estimated_return_pct", 0)
+        verified.append({
+            "name":                 name,
+            "cik":                  cik.zfill(10),
+            "category":             c.get("category", "institution"),
+            "description":          c.get("description", ""),
+            "estimated_return_pct": est_return,
+        })
+        logger.info("[WHALE_DISCOVER] ✓ %s | CIK %s | est. return ~%.0f%%",
+                    name, cik, est_return)
+
+    logger.info("[WHALE_DISCOVER] %d/%d candidates verified with SEC CIKs",
+                len(verified), len(candidates))
+    return verified
+
+
 # ── Seed whales ───────────────────────────────────────────────────────────────
 
-def seed_whales() -> None:
+async def seed_whales() -> None:
+    """
+    Upsert whales into DB.
+    Attempts Perplexity discovery first; falls back to DEFAULT_WHALES if discovery
+    fails or returns an empty list so the app never breaks.
+    """
+    whales_to_seed: list[dict] = []
+    try:
+        discovered = await discover_top_whales_via_perplexity()
+        if discovered:
+            whales_to_seed = discovered
+        else:
+            logger.info("[WHALE] Discovery returned nothing — using default whale list")
+            whales_to_seed = DEFAULT_WHALES
+    except Exception as e:
+        logger.error("[WHALE] Discovery error (%s) — falling back to default list", e)
+        whales_to_seed = DEFAULT_WHALES
+
     conn = _get_conn()
     if not conn:
         return
     try:
         cur = conn.cursor()
-        for w in DEFAULT_WHALES:
+        for w in whales_to_seed:
             cur.execute("""
                 INSERT INTO whales (name, category, cik, description)
                 VALUES (%s, %s, %s, %s)
@@ -255,12 +403,12 @@ def seed_whales() -> None:
                     cik         = EXCLUDED.cik,
                     description = EXCLUDED.description,
                     category    = EXCLUDED.category
-            """, (w["name"], w["category"], w["cik"], w["description"]))
+            """, (w["name"], w["category"], w["cik"], w.get("description", "")))
         conn.commit()
         cur.close()
-        logger.info("[WHALE] Seeded %d whales", len(DEFAULT_WHALES))
+        logger.info("[WHALE] Seeded %d whales into DB", len(whales_to_seed))
     except Exception as e:
-        logger.error("[WHALE] Seed error: %s", e)
+        logger.error("[WHALE] Seed DB error: %s", e)
         try:
             conn.rollback()
         except Exception:
@@ -1091,9 +1239,8 @@ async def refresh_all_whales() -> dict:
     _refresh_in_progress = True
 
     results = []
-    loop = asyncio.get_event_loop()
     try:
-        await loop.run_in_executor(_executor, seed_whales)
+        await seed_whales()
         whales = _load_all_whales()
 
         for w in whales:
@@ -1318,6 +1465,60 @@ async def get_whale_returns(whale_name: str):
 
     records = await loop.run_in_executor(_executor, _fetch)
     return {"whale_name": whale_name, "quarterly_returns": records}
+
+
+@router.post("/whales/discover")
+async def trigger_discover_whales():
+    """
+    Immediately run Perplexity discovery, upsert the results into the DB,
+    and return the list of whales found with their names and estimated returns.
+    Falls back to DEFAULT_WHALES if discovery fails.
+    This lets the frontend trigger a fresh discovery without waiting 24 hours.
+    """
+    discovered = await discover_top_whales_via_perplexity()
+    whales_to_seed = discovered if discovered else DEFAULT_WHALES
+    source = "perplexity" if discovered else "default_fallback"
+
+    conn = _get_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            for w in whales_to_seed:
+                cur.execute("""
+                    INSERT INTO whales (name, category, cik, description)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (name) DO UPDATE SET
+                        cik         = EXCLUDED.cik,
+                        description = EXCLUDED.description,
+                        category    = EXCLUDED.category
+                """, (w["name"], w["category"], w["cik"], w.get("description", "")))
+            conn.commit()
+            cur.close()
+            logger.info("[WHALE] /discover upserted %d whales (%s)", len(whales_to_seed), source)
+        except Exception as e:
+            logger.error("[WHALE] /discover DB upsert error: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            _put_conn(conn)
+
+    return {
+        "status": "ok",
+        "source": source,
+        "discovered_count": len(whales_to_seed),
+        "whales": [
+            {
+                "name":                 w["name"],
+                "cik":                  w.get("cik", ""),
+                "category":             w.get("category", "institution"),
+                "estimated_return_pct": w.get("estimated_return_pct"),
+                "description":          w.get("description", ""),
+            }
+            for w in whales_to_seed
+        ],
+    }
 
 
 @router.post("/whales/refresh")
