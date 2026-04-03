@@ -501,22 +501,53 @@ FAMOUS_INVESTORS_SEED = [
 ]
 
 
+import re as _re_name
+
+_VALID_PERSON_RE = _re_name.compile(r"^[A-Za-z][A-Za-z\-\'. ]{2,49}$")
+
+def _is_valid_investor_name(name: str) -> bool:
+    """Return True only if name looks like a real person/firm name (2+ words, alpha only)."""
+    if not name or len(name) < 5 or len(name) > 60:
+        return False
+    words = name.strip().split()
+    if len(words) < 2:
+        return False
+    if not _VALID_PERSON_RE.match(name):
+        return False
+    if any(c.isdigit() for c in name):
+        return False
+    return True
+
+
 async def seed_famous_investors() -> None:
     """
     Upserts FAMOUS_INVESTORS_SEED into the DB.
-    Only overwrites return_1y and positions if the seed has non-null values,
-    so live Perplexity updates are not erased.
+    Seed returns always overwrite DB values so Perplexity cannot corrupt canonical data.
+    Also purges junk/invalid names that may have been inserted by Perplexity.
     """
     from datetime import date as _date
     today = _date.today()
     q = (today.month - 1) // 3 + 1
     current_quarter = f"{today.year}Q{q}"
 
+    seed_names = {p["name"] for p in FAMOUS_INVESTORS_SEED}
+
     conn = _get_conn()
     if not conn:
         return
     try:
         cur = conn.cursor()
+
+        # Purge junk entries: famous_investor rows whose names look invalid
+        cur.execute("SELECT name FROM whales WHERE category = 'famous_investor'")
+        all_names = [row[0] for row in cur.fetchall()]
+        junk = [n for n in all_names if not _is_valid_investor_name(n)]
+        if junk:
+            for jname in junk:
+                cur.execute("DELETE FROM whale_holdings WHERE whale_name = %s", (jname,))
+                cur.execute("DELETE FROM whales WHERE name = %s AND category = 'famous_investor'", (jname,))
+            logger.info("[FAMOUS] Purged %d junk entries: %s", len(junk), junk)
+
         for person in FAMOUS_INVESTORS_SEED:
             name = person["name"]
             description = person["description"]
@@ -533,8 +564,9 @@ async def seed_famous_investors() -> None:
             """, (name, description))
 
             if est_return is not None:
+                # Always force seed return — seed data is canonical, never let Perplexity overwrite it
                 cur.execute(
-                    "UPDATE whales SET return_1y = %s WHERE name = %s AND (return_1y IS NULL OR return_1y = 0)",
+                    "UPDATE whales SET return_1y = %s WHERE name = %s",
                     (float(est_return), name),
                 )
 
@@ -648,6 +680,9 @@ async def discover_famous_investors_via_perplexity() -> list[dict]:
     if not conn:
         return []
 
+    # Names that seed_famous_investors() manages — Perplexity must NOT overwrite their returns
+    _seed_names = {p["name"] for p in FAMOUS_INVESTORS_SEED if p.get("estimated_return_1y_pct") is not None}
+
     saved = []
     try:
         cur = conn.cursor()
@@ -655,9 +690,17 @@ async def discover_famous_investors_via_perplexity() -> list[dict]:
             name = (person.get("name") or "").strip()
             if not name:
                 continue
+
+            # Reject junk names (single words, usernames, non-name patterns)
+            if not _is_valid_investor_name(name):
+                logger.warning("[FAMOUS] Skipping invalid name: %r", name)
+                continue
+
             description = (person.get("description") or "").strip()
-            est_return = person.get("estimated_return_1y_pct")
+            # Support both old and new field names from Perplexity
+            est_return = person.get("estimated_return_pct") or person.get("estimated_return_1y_pct")
             positions = person.get("known_positions") or []
+            investing_themes = (person.get("investing_themes") or "").strip()
 
             cur.execute("""
                 INSERT INTO whales (name, category, cik, description)
@@ -668,11 +711,22 @@ async def discover_famous_investors_via_perplexity() -> list[dict]:
                     cik         = NULL
             """, (name, description))
 
-            if est_return is not None:
+            # Never let Perplexity overwrite canonical seed returns
+            if est_return is not None and name not in _seed_names:
                 try:
                     cur.execute(
                         "UPDATE whales SET return_1y = %s WHERE name = %s",
                         (float(est_return), name),
+                    )
+                except Exception:
+                    pass
+
+            # Save investing_themes into ai_theme column
+            if investing_themes:
+                try:
+                    cur.execute(
+                        "UPDATE whales SET ai_theme = %s WHERE name = %s",
+                        (investing_themes, name),
                     )
                 except Exception:
                     pass
@@ -699,11 +753,12 @@ async def discover_famous_investors_via_perplexity() -> list[dict]:
             saved.append({
                 "name": name,
                 "description": description,
-                "estimated_return_1y_pct": est_return,
+                "estimated_return_pct": est_return,
+                "investing_themes": investing_themes,
                 "positions": positions,
             })
-            logger.info("[FAMOUS] Upserted %s | return_1y=%s | %d positions",
-                        name, est_return, len(positions))
+            logger.info("[FAMOUS] Upserted %s | return_1y=%s | themes=%s | %d positions",
+                        name, est_return, investing_themes[:40] if investing_themes else None, len(positions))
 
         conn.commit()
         cur.close()
@@ -2194,11 +2249,44 @@ async def get_whale_new_buys(whale_name: str):
     return {"whale_name": whale_name, "transactions": transactions, "count": len(transactions)}
 
 
+@router.get("/whales/stats")
+async def get_whale_stats():
+    """
+    Returns counts of whales by category for dashboard summary cards.
+    """
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        conn = _get_conn()
+        if not conn:
+            return {"institutions": 0, "individuals": 0, "congress": 0, "notable_investors": 0}
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT category, COUNT(*) FROM whales GROUP BY category
+            """)
+            counts = {row[0]: row[1] for row in cur.fetchall()}
+            cur.close()
+            return {
+                "institutions": counts.get("institution", 0),
+                "individuals": counts.get("individual", 0),
+                "congress": counts.get("congress", 0),
+                "notable_investors": counts.get("famous_investor", 0),
+            }
+        except Exception as e:
+            logger.error("[STATS_API] Error: %s", e)
+            return {"institutions": 0, "individuals": 0, "congress": 0, "notable_investors": 0}
+        finally:
+            _put_conn(conn)
+
+    return await loop.run_in_executor(_executor, _fetch)
+
+
 @router.get("/whales/famous")
 async def get_famous_whales():
     """
     Returns all whales with category='famous_investor', including their known positions
-    from whale_holdings. These are sourced from AI/public disclosures, not SEC 13F filings.
+    from whale_holdings. Sorted by return_1y descending (nulls last).
     """
     loop = asyncio.get_event_loop()
 
@@ -2212,7 +2300,7 @@ async def get_famous_whales():
                 SELECT name, cik, description, ai_theme, return_1y, last_updated
                 FROM whales
                 WHERE category = 'famous_investor'
-                ORDER BY name
+                ORDER BY return_1y DESC NULLS LAST, name
             """)
             cols = ["name", "cik", "description", "ai_theme", "return_1y", "last_updated"]
             result = []
@@ -2220,6 +2308,8 @@ async def get_famous_whales():
                 w = dict(zip(cols, row))
                 if w.get("last_updated"):
                     w["last_updated"] = w["last_updated"].isoformat()
+                # investing_themes is stored in ai_theme column
+                w["investing_themes"] = w.get("ai_theme") or ""
                 # Fetch known positions from holdings
                 cur2 = conn.cursor()
                 cur2.execute("""
