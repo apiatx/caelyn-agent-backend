@@ -1011,69 +1011,142 @@ async def _get_current_prices(tickers: list[str]) -> dict[str, float]:
 def _get_historical_returns_sync(tickers: list[str]) -> dict[str, dict]:
     """
     For each ticker return a dict with keys: ret_1m, ret_3m, ret_6m, ret_1y
-    Values are percentage returns (float). Uses yfinance download.
+    Values are percentage returns (float).
+    Primary source: Tradier history API.
+    Fallback: yfinance (per-ticker, only when Tradier fails or returns empty data).
     """
+    import time
+    import requests
     import yfinance as yf
     import pandas as pd
+    from datetime import date, timedelta
 
     result: dict[str, dict] = {}
     if not tickers:
         return result
 
-    try:
-        all_tickers = list(set(tickers + ["SPY"]))
-        data = yf.download(
-            all_tickers,
-            period="2y",
-            interval="1d",
-            progress=False,
-            auto_adjust=True,
-        )
+    all_tickers = list(set(tickers + ["SPY"]))
+    tradier_key = os.environ.get("TRADIER_API_KEY", "")
 
-        # yfinance returns multi-level columns when >1 ticker
-        if isinstance(data.columns, pd.MultiIndex):
-            close = data["Close"] if "Close" in data.columns.get_level_values(0) else data.xs("Close", axis=1, level=0)
-        else:
-            close = data[["Close"]] if "Close" in data.columns else data
+    today = date.today()
+    start = today - timedelta(days=730)
+    today_str = today.strftime("%Y-%m-%d")
+    start_str = start.strftime("%Y-%m-%d")
 
-        today = pd.Timestamp.now(tz="UTC").normalize()
+    def _period_return_from_days(day_list: list[dict], days: int) -> float | None:
+        """
+        day_list: list of {"date": "YYYY-MM-DD", "close": float} sorted ascending.
+        Returns (latest_close / close_N_days_ago - 1) * 100 or None.
+        """
+        if not day_list:
+            return None
+        target = today - timedelta(days=days)
+        target_str = target.strftime("%Y-%m-%d")
+        past_candidates = [d for d in day_list if d["date"] <= target_str]
+        if not past_candidates:
+            return None
+        past_price = float(past_candidates[-1]["close"])
+        current_price = float(day_list[-1]["close"])
+        if past_price == 0:
+            return None
+        return round((current_price / past_price - 1) * 100, 2)
 
-        def _period_return(series: pd.Series, days: int) -> float | None:
-            target = today - pd.Timedelta(days=days)
-            past = series[series.index <= target]
-            if past.empty or pd.isna(past.iloc[-1]):
+    def _yf_fallback(ticker: str) -> dict | None:
+        """yfinance fallback for a single ticker."""
+        try:
+            data = yf.download(
+                [ticker],
+                period="2y",
+                interval="1d",
+                progress=False,
+                auto_adjust=True,
+            )
+            if data.empty:
                 return None
-            curr = series.dropna()
-            if curr.empty:
+            if isinstance(data.columns, pd.MultiIndex):
+                series = data["Close"][ticker].dropna()
+            else:
+                series = data["Close"].dropna() if "Close" in data.columns else data.iloc[:, 0].dropna()
+            if series.empty:
                 return None
-            current_price = float(curr.iloc[-1])
-            past_price    = float(past.iloc[-1])
-            if past_price == 0:
-                return None
-            return round((current_price / past_price - 1) * 100, 2)
+            ts_today = pd.Timestamp.now(tz="UTC").normalize()
+            if series.index.tz is None:
+                series.index = series.index.tz_localize("UTC")
 
-        for ticker in all_tickers:
+            def _pr(days: int) -> float | None:
+                target = ts_today - pd.Timedelta(days=days)
+                past = series[series.index <= target]
+                if past.empty or pd.isna(past.iloc[-1]):
+                    return None
+                curr_price = float(series.dropna().iloc[-1])
+                past_price = float(past.iloc[-1])
+                if past_price == 0:
+                    return None
+                return round((curr_price / past_price - 1) * 100, 2)
+
+            return {
+                "ret_1m": _pr(30),
+                "ret_3m": _pr(90),
+                "ret_6m": _pr(180),
+                "ret_1y": _pr(365),
+            }
+        except Exception as e:
+            logger.debug("[WHALE_PRICE] yf fallback error for %s: %s", ticker, e)
+            return None
+
+    tickers_needing_fallback: list[str] = []
+
+    for i, ticker in enumerate(all_tickers):
+        if i > 0:
+            time.sleep(0.2)
+
+        fetched = False
+        if tradier_key:
             try:
-                if ticker in close.columns:
-                    series = close[ticker].dropna()
-                elif len(close.columns) == 1:
-                    series = close.iloc[:, 0].dropna()
+                resp = requests.get(
+                    "https://api.tradier.com/v1/markets/history",
+                    headers={
+                        "Authorization": f"Bearer {tradier_key}",
+                        "Accept": "application/json",
+                    },
+                    params={
+                        "symbol":   ticker,
+                        "interval": "daily",
+                        "start":    start_str,
+                        "end":      today_str,
+                    },
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    history = (payload.get("history") or {})
+                    day_list = history.get("day") if history else None
+                    if day_list:
+                        if isinstance(day_list, dict):
+                            day_list = [day_list]
+                        day_list = sorted(day_list, key=lambda d: d["date"])
+                        result[ticker] = {
+                            "ret_1m": _period_return_from_days(day_list, 30),
+                            "ret_3m": _period_return_from_days(day_list, 90),
+                            "ret_6m": _period_return_from_days(day_list, 180),
+                            "ret_1y": _period_return_from_days(day_list, 365),
+                        }
+                        fetched = True
+                    else:
+                        logger.debug("[WHALE_PRICE] Tradier empty data for %s", ticker)
                 else:
-                    continue
-                # Normalize index to UTC if tz-aware
-                if series.index.tz is None:
-                    series.index = series.index.tz_localize("UTC")
-                result[ticker] = {
-                    "ret_1m":  _period_return(series, 30),
-                    "ret_3m":  _period_return(series, 90),
-                    "ret_6m":  _period_return(series, 180),
-                    "ret_1y":  _period_return(series, 365),
-                }
+                    logger.debug("[WHALE_PRICE] Tradier %s status %s", ticker, resp.status_code)
             except Exception as e:
-                logger.debug("[WHALE_PRICE] yf history error for %s: %s", ticker, e)
+                logger.debug("[WHALE_PRICE] Tradier error for %s: %s", ticker, e)
 
-    except Exception as e:
-        logger.warning("[WHALE_PRICE] yf batch download error: %s", e)
+        if not fetched:
+            tickers_needing_fallback.append(ticker)
+
+    for ticker in tickers_needing_fallback:
+        logger.debug("[WHALE_PRICE] yfinance fallback for %s", ticker)
+        ret = _yf_fallback(ticker)
+        if ret:
+            result[ticker] = ret
 
     return result
 
