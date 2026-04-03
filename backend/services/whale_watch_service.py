@@ -301,20 +301,14 @@ async def discover_top_whales_via_perplexity() -> list[dict]:
         "Return only valid JSON, no markdown, no explanation, no code blocks."
     )
     user_prompt = (
-        "Search the web right now for hedge funds and institutional investors that have achieved "
-        "the highest returns in the past 1-3 years. Focus SPECIFICALLY on funds with 100%, 200%, "
-        "500% or greater returns — NOT on famous long-term names like Berkshire Hathaway, Bridgewater, "
-        "or Renaissance. Look for breakout performers, concentrated bets that paid off, sector-specific "
-        "funds (AI, biotech, energy, crypto), activist investors, and smaller funds with outsized gains. "
-        "Examples of what to look for: funds that bet big on Nvidia, AI infrastructure, GLP-1 drugs, "
-        "energy transitions, or distressed opportunities in 2022-2024. "
-        "Return a JSON array of exactly 15 funds where each object has these exact fields: "
-        "name (string — the full legal fund name), cik (string or null if unknown), "
-        "category (one of: institution, individual, congress), "
-        "description (one sentence about their strategy and what drove their outperformance), "
-        "estimated_return_pct (number — their approximate total % return over the past 1-3 years, "
-        "e.g. 250 for a 250% return). Only include funds that file 13F with the SEC. "
-        "Sort the array from highest to lowest estimated_return_pct."
+        "Search the web right now for institutional investors and hedge funds that have had the highest "
+        "verified returns in the past 1-3 years. I want breakout performers — funds that went concentrated "
+        "into AI, Nvidia, GLP-1 drugs, uranium, biotech, or energy and returned 100% to 1000%. Include "
+        "funds like Duquesne Family Office, Whale Rock Capital, Coatue Management, Tiger Global, "
+        "Andreessen Horowitz public equities, Senvest Management, Voss Capital, Greenlight Capital, "
+        "Kerrisdale Capital, and any other fund with verified 100%+ returns. For each fund return: name, "
+        "SEC CIK number, approximate return percentage, time period, and one sentence description. "
+        "Return only a valid JSON array, no markdown, no explanation."
     )
 
     logger.info("[WHALE_DISCOVER] Querying Perplexity for top-performing funds…")
@@ -1438,7 +1432,8 @@ async def generate_whale_theme(whale_name: str) -> str | None:
     prompt = (
         f"Based on these top holdings for {whale_name}:\n{holdings_text}\n\n"
         "Describe this investor's strategy and themes in 2-3 sentences. "
-        "Be specific about sectors, investment styles, and macro themes. Be concise."
+        "Be specific about sectors, investment styles, and macro themes. Be concise. "
+        "Respond in plain text only. No markdown, no headers, no bullet points, no bold text."
     )
 
     try:
@@ -1462,6 +1457,10 @@ async def generate_whale_theme(whale_name: str) -> str | None:
     except Exception as e:
         logger.error("[WHALE_AI] Anthropic error for %s: %s", whale_name, e)
         return None
+
+    import re
+    theme = re.sub(r'[#*`]+', '', theme).strip()
+    theme = re.sub(r'\s+', ' ', theme).strip()
 
     # Persist to DB
     conn = _get_conn()
@@ -1658,6 +1657,7 @@ def _whales_need_refresh() -> bool:
             SELECT COUNT(*) FROM whales
             WHERE last_updated IS NULL
                OR last_updated < NOW() - INTERVAL '24 hours'
+               OR (return_1m IS NULL AND return_3m IS NULL)
         """)
         stale = cur.fetchone()[0]
         cur.close()
