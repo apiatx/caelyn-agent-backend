@@ -1,0 +1,22 @@
+Open backend/services/whale_watch_service.py and frontend Whale Watch page. Make these changes:
+BACKEND CHANGE 1 — Add a category value for famous investors
+The whales table already has a category column. We will now use three categories: "institution" (13F filers), "famous_investor" (AI-sourced public disclosures), and "congress" (politicians).
+BACKEND CHANGE 2 — Add a new function discover_famous_investors_via_perplexity()
+This is separate from the existing discover_top_whales_via_perplexity() function. It calls the Perplexity API with this exact prompt:
+"Search the web right now for these specific investors and their known public stock positions, recent portfolio disclosures, and verified returns over the past 12 months: Stanley Druckenmiller, Eric Sprott, Robert Friedland, Mike Novogratz, Chamath Palihapitiya, Peter Thiel, Christian Arquette, Eric Jackson, Mike Alfred, Matthew Augustin. For each person find: their known public stock positions disclosed in interviews, filings, or news, their approximate 1 year return if mentioned anywhere, and a one sentence bio. Return a JSON array where each object has: name (string), category (use 'famous_investor'), cik (null for all of these), description (string), known_positions (array of objects with ticker and company_name), estimated_return_pct (float or null), return_period (string or null). Return only valid JSON, no markdown."
+After getting the response, upsert each person into the whales table with category "famous_investor" and cik as null. For each known position, save it to whale_holdings with weight_pct set to null (we don't know weights), value_usd as null, and quarter as the current quarter string (e.g. "2025Q1"). Use the source label "AI/Public Disclosure" in a new column or in the description.
+BACKEND CHANGE 3 — Update refresh_all_whales()
+After the existing seed_whales() call, also call discover_famous_investors_via_perplexity(). For whales with category "famous_investor", skip the fetch_13f_filings() step entirely since they have no CIK. Still call generate_whale_theme() for them so they get an AI theme. Skip calculate_whale_returns() for them since we don't have full portfolio weights — instead just store the estimated_return_pct from Perplexity directly into return_1y in the whales table.
+BACKEND CHANGE 4 — Add a new endpoint
+Add GET /whales/famous that returns only whales with category "famous_investor", including their known positions from whale_holdings.
+FRONTEND CHANGE — Add a second section to the Whale Watch page
+Below the existing "Whale Leaderboard" section, add a new section called "Famous Investor Radar". It should:
+
+Fetch from GET /api/whales/famous
+Display as a card grid (not a table) — one card per person
+Each card shows: their name, estimated return if available (big green number), their known public positions as ticker chips/badges, their AI theme, and a "Source: Public Disclosures" label so users know this is AI-sourced not verified portfolio data
+Add a small disclaimer at the top of this section: "Positions sourced from public interviews, filings, and news. Not a complete portfolio."
+Cards should match the existing dark theme
+This section has its own "Refresh" button that calls POST /api/whales/discover filtered to famous investors only
+
+Restart the server when done.

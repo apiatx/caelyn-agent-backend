@@ -434,6 +434,154 @@ async def seed_whales() -> None:
         _put_conn(conn)
 
 
+# ── Famous Investor Discovery ─────────────────────────────────────────────────
+
+async def discover_famous_investors_via_perplexity() -> list[dict]:
+    """
+    Call Perplexity to find known public stock positions for a fixed list of famous investors.
+    Upserts each person into whales with category='famous_investor' and cik=NULL.
+    Saves their known positions into whale_holdings with null weights/values.
+    Stores estimated 1-year return directly into return_1y on the whales table.
+    """
+    if not _PERPLEXITY_KEY:
+        logger.warning("[FAMOUS] PERPLEXITY_API_KEY not set — skipping famous investor discovery")
+        return []
+
+    from datetime import date as _date
+    import json as _json, re as _re
+
+    today = _date.today()
+    q = (today.month - 1) // 3 + 1
+    current_quarter = f"{today.year}Q{q}"
+
+    system_prompt = (
+        "You are a financial research assistant. "
+        "Return only valid JSON, no markdown, no explanation, no code blocks."
+    )
+    user_prompt = (
+        "Search the web right now for these specific investors and their known public stock positions, "
+        "recent portfolio disclosures, and verified returns over the past 12 months: "
+        "Stanley Druckenmiller, Eric Sprott, Robert Friedland, Mike Novogratz, "
+        "Chamath Palihapitiya, Peter Thiel, Christian Arquette, Eric Jackson, "
+        "Mike Alfred, Matthew Augustin. "
+        "For each person find: their known public stock positions disclosed in interviews, filings, or news, "
+        "their approximate 1-year return if mentioned anywhere. "
+        "Return a JSON array where each object has: "
+        "name (string), description (one sentence about their strategy), "
+        "estimated_return_1y_pct (number or null), "
+        "known_positions (array of ticker strings, e.g. [\"NVDA\", \"GOLD\"]). "
+        "Return only a valid JSON array, no markdown, no explanation."
+    )
+
+    logger.info("[FAMOUS] Querying Perplexity for famous investors…")
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://api.perplexity.ai/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {_PERPLEXITY_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "sonar",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_prompt},
+                    ],
+                },
+            )
+            resp.raise_for_status()
+            raw = resp.json()
+    except Exception as e:
+        logger.error("[FAMOUS] Perplexity request failed: %s", e)
+        return []
+
+    content = raw.get("choices", [{}])[0].get("message", {}).get("content", "")
+    try:
+        cleaned = _re.sub(r"```(?:json)?", "", content).strip().rstrip("`").strip()
+        investors = _json.loads(cleaned)
+        if not isinstance(investors, list):
+            raise ValueError("Expected a JSON array")
+    except Exception as e:
+        logger.error("[FAMOUS] Failed to parse Perplexity response: %s | raw: %s", e, content[:300])
+        return []
+
+    conn = _get_conn()
+    if not conn:
+        return []
+
+    saved = []
+    try:
+        cur = conn.cursor()
+        for person in investors:
+            name = (person.get("name") or "").strip()
+            if not name:
+                continue
+            description = (person.get("description") or "").strip()
+            est_return = person.get("estimated_return_1y_pct")
+            positions = person.get("known_positions") or []
+
+            cur.execute("""
+                INSERT INTO whales (name, category, cik, description)
+                VALUES (%s, 'famous_investor', NULL, %s)
+                ON CONFLICT (name) DO UPDATE SET
+                    description = EXCLUDED.description,
+                    category    = 'famous_investor',
+                    cik         = NULL
+            """, (name, description))
+
+            if est_return is not None:
+                try:
+                    cur.execute(
+                        "UPDATE whales SET return_1y = %s WHERE name = %s",
+                        (float(est_return), name),
+                    )
+                except Exception:
+                    pass
+
+            if positions:
+                cur.execute(
+                    "DELETE FROM whale_holdings WHERE whale_name = %s AND quarter = %s",
+                    (name, current_quarter),
+                )
+                for ticker in positions:
+                    ticker = str(ticker).strip().upper()
+                    if not ticker or "." in ticker or len(ticker) > 6:
+                        continue
+                    try:
+                        cur.execute("""
+                            INSERT INTO whale_holdings
+                                (whale_name, ticker, company_name, shares, value_usd, weight_pct, quarter)
+                            VALUES (%s, %s, %s, NULL, NULL, NULL, %s)
+                            ON CONFLICT DO NOTHING
+                        """, (name, ticker, ticker, current_quarter))
+                    except Exception:
+                        pass
+
+            saved.append({
+                "name": name,
+                "description": description,
+                "estimated_return_1y_pct": est_return,
+                "positions": positions,
+            })
+            logger.info("[FAMOUS] Upserted %s | return_1y=%s | %d positions",
+                        name, est_return, len(positions))
+
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        logger.error("[FAMOUS] DB upsert error: %s", e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        _put_conn(conn)
+
+    logger.info("[FAMOUS] Saved %d famous investors", len(saved))
+    return saved
+
+
 # ── CUSIP → Ticker mapping via FMP + SEC EDGAR ───────────────────────────────
 
 def _is_valid_us_ticker(ticker: str) -> bool:
@@ -1489,13 +1637,33 @@ async def generate_whale_theme(whale_name: str) -> str | None:
 
 async def refresh_whale(whale_name: str) -> dict:
     """Refresh a single whale: fetch 13F → calculate returns → generate theme."""
-    # Look up CIK from DB
-    cik = _get_whale_cik(whale_name)
+    whale_info = _get_whale_info(whale_name)
+    if not whale_info:
+        return {"error": f"Unknown whale: {whale_name}"}
+
+    category = whale_info.get("category", "institution")
+    cik = whale_info.get("cik")
+
+    # Famous investors: no 13F, no returns calculation — just (re)generate theme
+    if category == "famous_investor":
+        logger.info("[WHALE] Refreshing famous investor %s (no CIK)", whale_name)
+        result: dict[str, Any] = {"whale": whale_name, "status": "ok", "category": "famous_investor"}
+        holdings = _load_latest_holdings(whale_name)
+        if holdings:
+            try:
+                theme = await generate_whale_theme(whale_name)
+                result["theme_generated"] = theme is not None
+            except Exception as e:
+                logger.error("[WHALE] Theme error for %s: %s", whale_name, e)
+                result["theme_error"] = str(e)
+        _touch_whale_timestamp(whale_name)
+        return result
+
     if not cik:
         return {"error": f"Unknown whale: {whale_name}"}
 
     logger.info("[WHALE] Refreshing %s (CIK %s)", whale_name, cik)
-    result: dict[str, Any] = {"whale": whale_name, "status": "ok"}
+    result = {"whale": whale_name, "status": "ok"}
 
     try:
         holdings = await fetch_13f_filings(cik, whale_name)
@@ -1552,6 +1720,25 @@ def _get_whale_cik(whale_name: str) -> str | None:
         _put_conn(conn)
 
 
+def _get_whale_info(whale_name: str) -> dict:
+    """Returns {'cik': ..., 'category': ...} or {} if not found."""
+    conn = _get_conn()
+    if not conn:
+        return {}
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT cik, category FROM whales WHERE name = %s", (whale_name,))
+        row = cur.fetchone()
+        cur.close()
+        if row:
+            return {"cik": row[0], "category": row[1] or "institution"}
+        return {}
+    except Exception:
+        return {}
+    finally:
+        _put_conn(conn)
+
+
 def _touch_whale_timestamp(whale_name: str) -> None:
     conn = _get_conn()
     if not conn:
@@ -1576,7 +1763,7 @@ _refresh_in_progress = False
 
 
 async def refresh_all_whales() -> dict:
-    """Seed → loop through every whale → fetch 13F → returns → theme."""
+    """Seed → discover famous investors → loop through every whale → fetch 13F → returns → theme."""
     global _refresh_in_progress
     if _refresh_in_progress:
         return {"status": "already_running"}
@@ -1585,6 +1772,10 @@ async def refresh_all_whales() -> dict:
     results = []
     try:
         await seed_whales()
+        try:
+            await discover_famous_investors_via_perplexity()
+        except Exception as e:
+            logger.error("[WHALE] Famous investor discovery error: %s", e)
         whales = _load_all_whales()
 
         for w in whales:
