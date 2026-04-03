@@ -2048,6 +2048,54 @@ async def get_whale_new_buys(whale_name: str):
     return {"whale_name": whale_name, "transactions": transactions, "count": len(transactions)}
 
 
+@router.get("/whales/famous")
+async def get_famous_whales():
+    """
+    Returns all whales with category='famous_investor', including their known positions
+    from whale_holdings. These are sourced from AI/public disclosures, not SEC 13F filings.
+    """
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        conn = _get_conn()
+        if not conn:
+            return []
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT name, cik, description, ai_theme, return_1y, last_updated
+                FROM whales
+                WHERE category = 'famous_investor'
+                ORDER BY name
+            """)
+            cols = ["name", "cik", "description", "ai_theme", "return_1y", "last_updated"]
+            result = []
+            for row in cur.fetchall():
+                w = dict(zip(cols, row))
+                if w.get("last_updated"):
+                    w["last_updated"] = w["last_updated"].isoformat()
+                # Fetch known positions from holdings
+                cur2 = conn.cursor()
+                cur2.execute("""
+                    SELECT DISTINCT ticker FROM whale_holdings
+                    WHERE whale_name = %s
+                    ORDER BY ticker
+                """, (w["name"],))
+                w["known_positions"] = [r[0] for r in cur2.fetchall()]
+                cur2.close()
+                result.append(w)
+            cur.close()
+            return result
+        except Exception as e:
+            logger.error("[FAMOUS_API] Error loading famous whales: %s", e)
+            return []
+        finally:
+            _put_conn(conn)
+
+    data = await loop.run_in_executor(_executor, _fetch)
+    return data
+
+
 @router.post("/whales/discover")
 async def trigger_discover_whales():
     """

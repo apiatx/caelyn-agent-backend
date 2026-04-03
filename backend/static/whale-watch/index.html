@@ -205,6 +205,52 @@
 
   /* FOOTER */
   .footer { padding: 10px 16px; border-top: 1px solid var(--border); font-size: 10px; color: var(--text-dimmer); text-align: center; }
+
+  /* FAMOUS INVESTOR RADAR */
+  .section-divider {
+    margin: 8px 0 0 0; padding: 12px 0 8px 0;
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .section-title { font-size: 11px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; }
+  .section-disclaimer {
+    font-size: 10px; color: var(--text-dimmer); background: var(--bg3);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 5px 10px; margin-bottom: 10px; line-height: 1.5;
+  }
+  .famous-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  .famous-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 5px;
+    padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+    transition: border-color 0.15s;
+  }
+  .famous-card:hover { border-color: var(--border2); }
+  .famous-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .famous-card-name { font-size: 13px; font-weight: bold; color: var(--text); line-height: 1.3; }
+  .famous-card-return {
+    font-size: 20px; font-weight: bold; white-space: nowrap; flex-shrink: 0;
+  }
+  .famous-card-return.pos { color: var(--green); }
+  .famous-card-return.neg { color: var(--red); }
+  .famous-card-return.neutral { color: var(--text-dim); }
+  .famous-card-desc { font-size: 11px; color: var(--text-dim); line-height: 1.5; font-family: var(--sans); }
+  .famous-card-theme { font-size: 11px; color: var(--text-dim); font-style: italic; line-height: 1.5; font-family: var(--sans); }
+  .ticker-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .ticker-chip {
+    background: var(--bg4); border: 1px solid var(--border2);
+    color: var(--blue); font-size: 10px; font-weight: bold;
+    padding: 2px 7px; border-radius: 10px; letter-spacing: 0.5px;
+  }
+  .famous-source {
+    font-size: 9px; color: var(--text-dimmer); letter-spacing: 1px;
+    text-transform: uppercase; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 2px;
+  }
+  .famous-loading { padding: 30px; text-align: center; color: var(--text-dim); font-size: 12px; }
+  .famous-section-actions { display: flex; align-items: center; gap: 8px; }
 </style>
 </head>
 <body>
@@ -230,6 +276,22 @@
 
   <div class="leaderboard" id="leaderboard">
     <div class="loading-state"><span class="spinner"></span>Loading whale data…</div>
+  </div>
+
+  <!-- FAMOUS INVESTOR RADAR -->
+  <div class="section-divider">
+    <span class="section-title">Famous Investor Radar</span>
+    <div class="famous-section-actions">
+      <span class="last-updated" id="famousLastUpdated" style="font-size:10px;color:var(--text-dimmer)"></span>
+      <button class="refresh-btn" id="famousRefreshBtn" onclick="triggerFamousRefresh()">↺ Refresh Radar</button>
+    </div>
+  </div>
+  <div class="section-disclaimer">
+    Positions sourced from public interviews, filings, and news. Not a complete portfolio.
+    Data is AI-sourced and may not reflect current holdings.
+  </div>
+  <div id="famousGrid" class="famous-grid">
+    <div class="famous-loading"><span class="spinner"></span>Loading famous investors…</div>
   </div>
 </div>
 
@@ -561,7 +623,80 @@ async function triggerRefresh() {
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
+// ── Famous Investor Radar ─────────────────────────────────────────────────────
+
+async function loadFamousInvestors() {
+  const grid = document.getElementById('famousGrid');
+  grid.innerHTML = '<div class="famous-loading"><span class="spinner"></span>Loading famous investors…</div>';
+  try {
+    const res = await fetch(`${API}/whales/famous`);
+    const data = await res.json();
+    renderFamousGrid(data);
+    const latest = data.map(w => w.last_updated).filter(Boolean).sort().reverse()[0];
+    const el = document.getElementById('famousLastUpdated');
+    if (el) el.textContent = latest ? `Updated ${new Date(latest).toLocaleString()}` : '';
+  } catch(e) {
+    grid.innerHTML = `<div class="famous-loading" style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+}
+
+function renderFamousGrid(investors) {
+  const grid = document.getElementById('famousGrid');
+  if (!investors.length) {
+    grid.innerHTML = '<div class="famous-loading">No famous investors found. Click "Refresh Radar" to discover them.</div>';
+    return;
+  }
+  grid.innerHTML = investors.map(p => {
+    const ret1y = p.return_1y;
+    let retText = '—', retCls = 'neutral';
+    if (ret1y != null) {
+      const sign = ret1y >= 0 ? '+' : '';
+      retText = `${sign}${ret1y.toFixed(0)}%`;
+      retCls = ret1y > 0 ? 'pos' : ret1y < 0 ? 'neg' : 'neutral';
+    }
+    const chips = (p.known_positions || []).slice(0, 12).map(t =>
+      `<span class="ticker-chip">${t}</span>`
+    ).join('');
+    const theme = p.ai_theme
+      ? `<div class="famous-card-theme">${p.ai_theme}</div>`
+      : '';
+    const desc = p.description
+      ? `<div class="famous-card-desc">${p.description}</div>`
+      : '';
+    return `<div class="famous-card">
+      <div class="famous-card-header">
+        <div class="famous-card-name">${p.name}</div>
+        <div class="famous-card-return ${retCls}">${retText}</div>
+      </div>
+      ${desc}
+      ${chips ? `<div class="ticker-chips">${chips}</div>` : ''}
+      ${theme}
+      <div class="famous-source">Source: Public Disclosures / AI Research</div>
+    </div>`;
+  }).join('');
+}
+
+async function triggerFamousRefresh() {
+  const btn = document.getElementById('famousRefreshBtn');
+  btn.disabled = true;
+  btn.textContent = '↺ Discovering…';
+  const grid = document.getElementById('famousGrid');
+  grid.innerHTML = '<div class="famous-loading"><span class="spinner"></span>Querying Perplexity for famous investors…</div>';
+  try {
+    await fetch(`${API}/whales/discover`, { method: 'POST' });
+    btn.textContent = '↺ Loading…';
+    await loadFamousInvestors();
+    btn.textContent = '↺ Refresh Radar';
+  } catch(e) {
+    grid.innerHTML = `<div class="famous-loading" style="color:var(--red)">Error: ${e.message}</div>`;
+    btn.textContent = '↺ Refresh Radar';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 loadWhales();
+loadFamousInvestors();
 </script>
 </body>
 </html>
