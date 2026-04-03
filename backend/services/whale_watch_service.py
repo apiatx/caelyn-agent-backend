@@ -595,18 +595,20 @@ async def discover_famous_investors_via_perplexity() -> list[dict]:
         "Return only valid JSON, no markdown, no explanation, no code blocks."
     )
     user_prompt = (
-        "Search the web right now for these specific investors and their known public stock positions, "
-        "recent portfolio disclosures, and verified returns over the past 12 months: "
-        "Stanley Druckenmiller, Eric Sprott, Robert Friedland, Mike Novogratz, "
-        "Chamath Palihapitiya, Peter Thiel, Christian Arquette, Eric Jackson, "
-        "Mike Alfred, Matthew Augustin. "
-        "For each person find: their known public stock positions disclosed in interviews, filings, or news, "
-        "their approximate 1-year return if mentioned anywhere. "
-        "Return a JSON array where each object has: "
-        "name (string), description (one sentence about their strategy), "
-        "estimated_return_1y_pct (number or null), "
-        "known_positions (array of ticker strings, e.g. [\"NVDA\", \"GOLD\"]). "
-        "Return only a valid JSON array, no markdown, no explanation."
+        "Search the web right now for the top individual investors and fund managers who have had the most "
+        "notable performance and public attention over the past 1-3 years. Examples of the type of person I "
+        "want — not a fixed list — include people like Robert Friedland, Stanley Druckenmiller, Eric Sprott, "
+        "Mike Novogratz, Chamath Palihapitiya, Peter Thiel, Eric Jackson, Mike Alfred, Matthew Augustin, "
+        "Cathie Wood, David Einhorn, Bill Ackman, and others who have been widely covered in financial media "
+        "for exceptional returns or high-profile calls. Find the top 15 most notable investors right now based "
+        "on recent performance and coverage. For each person find: their actual verified return percentage over "
+        "the past 12 months from news articles, interviews, fund reports, or financial media — if you cannot "
+        "find a verified number leave estimated_return_pct as null, do not guess. Also find their top known "
+        "publicly disclosed stock positions, their investing themes or style, and a one sentence bio. Return a "
+        "JSON array where each object has exactly these fields: name (string), estimated_return_pct (float or "
+        "null), return_period (string or null), known_positions (array of strings — ticker symbols only), "
+        "investing_themes (string), description (string). Return only valid JSON, no markdown, no explanation, "
+        "no code blocks."
     )
 
     logger.info("[FAMOUS] Querying Perplexity for famous investors…")
