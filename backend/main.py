@@ -6104,6 +6104,15 @@ async def should_i_be_trading_page():
     return HTMLResponse("<h1>Dashboard not found</h1>", status_code=404)
 
 
+@app.get("/whale-watch")
+async def whale_watch_page():
+    """Serve the Whale Watch institutional 13F tracker page."""
+    html_path = Path(__file__).parent / "static" / "whale-watch" / "index.html"
+    if html_path.exists():
+        return FileResponse(str(html_path), media_type="text/html")
+    return HTMLResponse("<h1>Whale Watch not found</h1>", status_code=404)
+
+
 def _vix_score(vix: float | None) -> float:
     if vix is None:
         return 50.0

@@ -228,6 +228,24 @@ def _create_tables() -> None:
             CREATE INDEX IF NOT EXISTS idx_wpr_whale
             ON whale_portfolio_returns (whale_name, quarter)
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS whale_transactions (
+                id               SERIAL PRIMARY KEY,
+                whale_name       TEXT NOT NULL,
+                ticker           TEXT NOT NULL,
+                company_name     TEXT,
+                transaction_type TEXT NOT NULL,
+                shares           BIGINT,
+                value_usd        BIGINT,
+                quarter          TEXT,
+                filed_date       TIMESTAMP,
+                created_at       TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_wt_whale_quarter
+            ON whale_transactions (whale_name, quarter)
+        """)
         conn.commit()
         cur.close()
         logger.info("[WHALE_DB] Tables ready")
@@ -283,16 +301,20 @@ async def discover_top_whales_via_perplexity() -> list[dict]:
         "Return only valid JSON, no markdown, no explanation, no code blocks."
     )
     user_prompt = (
-        "Search the web right now for the top 15 best performing hedge funds, institutional investors, "
-        "and individual investors over the past 1-3 years. Include funds that have had exceptional returns "
-        "like 50%, 100%, 500% or more. Include their SEC CIK number if you can find it. "
-        "Return a JSON array where each object has these exact fields: "
-        "name (string), cik (string or null if unknown), "
+        "Search the web right now for hedge funds and institutional investors that have achieved "
+        "the highest returns in the past 1-3 years. Focus SPECIFICALLY on funds with 100%, 200%, "
+        "500% or greater returns — NOT on famous long-term names like Berkshire Hathaway, Bridgewater, "
+        "or Renaissance. Look for breakout performers, concentrated bets that paid off, sector-specific "
+        "funds (AI, biotech, energy, crypto), activist investors, and smaller funds with outsized gains. "
+        "Examples of what to look for: funds that bet big on Nvidia, AI infrastructure, GLP-1 drugs, "
+        "energy transitions, or distressed opportunities in 2022-2024. "
+        "Return a JSON array of exactly 15 funds where each object has these exact fields: "
+        "name (string — the full legal fund name), cik (string or null if unknown), "
         "category (one of: institution, individual, congress), "
-        "description (one sentence about who they are and their strategy), "
-        "estimated_return_pct (number, their approximate % return over the past 1-3 years). "
-        "Focus on funds with the highest recent returns. "
-        "Include a mix of well-known legends and newer breakout performers."
+        "description (one sentence about their strategy and what drove their outperformance), "
+        "estimated_return_pct (number — their approximate total % return over the past 1-3 years, "
+        "e.g. 250 for a 250% return). Only include funds that file 13F with the SEC. "
+        "Sort the array from highest to lowest estimated_return_pct."
     )
 
     logger.info("[WHALE_DISCOVER] Querying Perplexity for top-performing funds…")
@@ -833,6 +855,10 @@ async def fetch_13f_filings(cik: str, whale_name: str) -> list[dict]:
     # Step 7: Delete old holdings for this whale+quarter and insert new
     _save_holdings_to_db(whale_name, quarter, final_holdings)
 
+    # Step 8: Detect new buys vs previous quarter and save to whale_transactions
+    if quarter and final_holdings:
+        _detect_and_save_new_buys(whale_name, quarter, final_holdings, filed_date)
+
     logger.info("[WHALE] Saved %d holdings for %s (%s)", len(final_holdings), whale_name, quarter)
     return final_holdings
 
@@ -948,6 +974,99 @@ def _save_holdings_to_db(whale_name: str, quarter: str, holdings: list[dict]) ->
             conn.rollback()
         except Exception:
             pass
+    finally:
+        _put_conn(conn)
+
+
+# ── New buys detection ────────────────────────────────────────────────────────
+
+def _detect_and_save_new_buys(
+    whale_name: str,
+    current_quarter: str,
+    current_holdings: list[dict],
+    filed_date,
+) -> int:
+    """
+    Compare current quarter's holdings against the previous quarter.
+    - Tickers present now but not before → transaction_type = 'NEW'
+    - Tickers where shares grew by >20% → transaction_type = 'ADDED'
+    Saves results to whale_transactions and returns the count of transactions saved.
+    """
+    conn = _get_conn()
+    if not conn:
+        return 0
+    try:
+        cur = conn.cursor()
+
+        # Load previous quarter holdings for this whale (any quarter != current, most recent)
+        cur.execute("""
+            SELECT ticker, shares
+            FROM whale_holdings
+            WHERE whale_name = %s
+              AND quarter != %s
+              AND quarter = (
+                  SELECT quarter FROM whale_holdings
+                  WHERE whale_name = %s AND quarter != %s
+                  ORDER BY quarter DESC LIMIT 1
+              )
+        """, (whale_name, current_quarter, whale_name, current_quarter))
+        prev_rows = cur.fetchall()
+        prev_holdings: dict[str, int] = {row[0]: (row[1] or 0) for row in prev_rows}
+
+        if not prev_holdings:
+            logger.info("[WHALE_NB] No previous quarter to compare for %s — skipping new buys", whale_name)
+            cur.close()
+            return 0
+
+        # Delete any existing transactions for this whale + quarter so we can reinsert fresh
+        cur.execute(
+            "DELETE FROM whale_transactions WHERE whale_name = %s AND quarter = %s",
+            (whale_name, current_quarter),
+        )
+
+        count = 0
+        for h in current_holdings:
+            ticker = h.get("ticker", "")
+            if not ticker:
+                continue
+            curr_shares = h.get("shares") or 0
+
+            if ticker not in prev_holdings:
+                tx_type = "NEW"
+            else:
+                prev_shares = prev_holdings[ticker]
+                if prev_shares > 0 and curr_shares > prev_shares * 1.20:
+                    tx_type = "ADDED"
+                else:
+                    continue
+
+            cur.execute("""
+                INSERT INTO whale_transactions
+                    (whale_name, ticker, company_name, transaction_type, shares, value_usd, quarter, filed_date)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                whale_name,
+                ticker,
+                h.get("company_name"),
+                tx_type,
+                curr_shares,
+                h.get("value_usd"),
+                current_quarter,
+                filed_date,
+            ))
+            count += 1
+
+        conn.commit()
+        cur.close()
+        logger.info("[WHALE_NB] Saved %d new-buy transactions for %s (%s)", count, whale_name, current_quarter)
+        return count
+    except Exception as e:
+        logger.error("[WHALE_NB] New buys detection error for %s: %s", whale_name, e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
     finally:
         _put_conn(conn)
 
@@ -1387,14 +1506,25 @@ async def refresh_whale(whale_name: str) -> dict:
         result["holdings_error"] = str(e)
         holdings = []
 
-    if holdings:
-        try:
-            returns = await calculate_whale_returns(whale_name)
-            result["returns"] = returns
-        except Exception as e:
-            logger.error("[WHALE] Returns error for %s: %s", whale_name, e)
-            result["returns_error"] = str(e)
+    # Always calculate returns (even if holdings came from DB cache, not fresh fetch)
+    try:
+        returns = await calculate_whale_returns(whale_name)
+        result["returns"] = returns
+        if returns:
+            logger.info(
+                "[WHALE_RET] %s — 1m=%+.1f%% 3m=%+.1f%% 6m=%+.1f%% 1y=%+.1f%% (SPY 3m=%+.1f%%)",
+                whale_name,
+                returns.get("ret_1m") or 0,
+                returns.get("ret_3m") or 0,
+                returns.get("ret_6m") or 0,
+                returns.get("ret_1y") or 0,
+                returns.get("spy_3m") or 0,
+            )
+    except Exception as e:
+        logger.error("[WHALE] Returns error for %s: %s", whale_name, e)
+        result["returns_error"] = str(e)
 
+    if holdings:
         try:
             theme = await generate_whale_theme(whale_name)
             result["theme_generated"] = theme is not None
@@ -1680,6 +1810,51 @@ async def get_whale_returns(whale_name: str):
 
     records = await loop.run_in_executor(_executor, _fetch)
     return {"whale_name": whale_name, "quarterly_returns": records}
+
+
+@router.get("/whales/{whale_name}/new-buys")
+async def get_whale_new_buys(whale_name: str):
+    """
+    Returns all NEW and ADDED transactions for the whale from its most recent quarter,
+    ordered by value_usd descending. Useful for highlighting fresh positions.
+    """
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        conn = _get_conn()
+        if not conn:
+            return []
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT ticker, company_name, transaction_type, shares, value_usd, quarter, filed_date
+                FROM whale_transactions
+                WHERE whale_name = %s
+                  AND transaction_type IN ('NEW', 'ADDED')
+                  AND quarter = (
+                      SELECT quarter FROM whale_transactions WHERE whale_name = %s
+                      ORDER BY quarter DESC LIMIT 1
+                  )
+                ORDER BY value_usd DESC NULLS LAST
+            """, (whale_name, whale_name))
+            cols = ["ticker", "company_name", "transaction_type", "shares", "value_usd", "quarter", "filed_date"]
+            rows = cur.fetchall()
+            cur.close()
+            result = []
+            for row in rows:
+                d = dict(zip(cols, row))
+                if d.get("filed_date"):
+                    d["filed_date"] = d["filed_date"].isoformat()
+                result.append(d)
+            return result
+        except Exception as e:
+            logger.error("[WHALE_API] GET new-buys error for %s: %s", whale_name, e)
+            return []
+        finally:
+            _put_conn(conn)
+
+    transactions = await loop.run_in_executor(_executor, _fetch)
+    return {"whale_name": whale_name, "transactions": transactions, "count": len(transactions)}
 
 
 @router.post("/whales/discover")

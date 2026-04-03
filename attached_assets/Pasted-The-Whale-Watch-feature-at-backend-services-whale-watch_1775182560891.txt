@@ -1,0 +1,17 @@
+The Whale Watch feature at backend/services/whale_watch_service.py needs to be completely overhauled. The goal is simple: find the highest performing institutional investors in the world (200%+ returns), show their full portfolio holdings, and highlight their recent new buys. Here is everything that needs to change:
+1 — Better whale discovery
+The current seed list is mostly famous-name funds that return 10-15% annually. That's useless. Update discover_top_whales_via_perplexity() to specifically search for funds with exceptional recent performance — 100%, 200%, 500%+ returns. Use this prompt to Perplexity: "Search the web for hedge funds and institutional investors that have had the highest returns in the past 1-3 years. Focus on funds with 100% or greater returns, not just well-known names like Berkshire or Bridgewater. Include smaller concentrated funds, sector-specific funds, and any institutional investor with verified exceptional performance. Return their name, approximate return, time period, and SEC CIK number if findable. Return as JSON array."
+2 — Add new buys detection
+When fetching 13F filings, compare the most recent quarter's holdings against the previous quarter's holdings. Any position that exists in the new quarter but not the previous quarter is a "new buy". Any position where shares increased by more than 20% is an "added to". Save these to the whale_transactions table with transaction_type of "NEW" or "ADDED". This table already exists in the database.
+3 — Fix the returns display
+The return calculation already uses Tradier → yfinance fallback which is correct. Make sure refresh_all_whales() always calls calculate_whale_returns() for every whale after fetching holdings, and that the results are actually saved to the whales table. Add logging so we can see the actual return numbers being calculated for each whale.
+4 — Expose new buys in the API
+Add a new endpoint GET /whales/{whale_name}/new-buys that returns all transactions for that whale with transaction_type "NEW" or "ADDED" from the most recent quarter, ordered by value descending.
+5 — Frontend updates
+Find the Whale Watch frontend page. Make these changes:
+
+In the whale detail modal, add a fourth tab called "New Buys" that calls the new /api/whales/{whale_name}/new-buys endpoint and displays the results as a table with columns: Ticker, Company, Shares, Value, Type (NEW or ADDED)
+On the main leaderboard, add a small "🔥 N new buys" badge next to each whale's name if they have any new buys this quarter
+Make sure the leaderboard sorts by 3 month return by default so the best performers appear first
+
+Do all of this now. Restart the server when done and confirm everything is running.
