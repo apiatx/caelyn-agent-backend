@@ -434,6 +434,142 @@ async def seed_whales() -> None:
         _put_conn(conn)
 
 
+# ── Famous Investor Seed Data ─────────────────────────────────────────────────
+# Hardcoded baseline — Perplexity updates on top of this each refresh cycle.
+
+FAMOUS_INVESTORS_SEED = [
+    {
+        "name": "Stanley Druckenmiller",
+        "description": "Legendary macro investor and founder of Duquesne Family Office, known for concentrated tech and AI bets with 200%+ annual returns.",
+        "estimated_return_1y_pct": 223.0,
+        "known_positions": ["NVDA", "AMZN", "GOOGL", "TSM", "CPNG", "INSM", "NTRA", "TEVA", "XLF", "EWZ"],
+    },
+    {
+        "name": "Robert Friedland",
+        "description": "Billionaire mining mogul and founder of Ivanhoe Mines, known for massive multi-hundred-percent wins in copper, cobalt, and platinum group metals.",
+        "estimated_return_1y_pct": 700.0,
+        "known_positions": ["IVPAF", "NEXT", "BHP", "FCX", "COPX"],
+    },
+    {
+        "name": "Eric Sprott",
+        "description": "Canadian billionaire precious metals specialist and founder of Sprott Inc., known for concentrated gold, silver, and junior mining stock positions.",
+        "estimated_return_1y_pct": 215.0,
+        "known_positions": ["GLD", "SLV", "WPM", "AEM", "AG", "KGC", "BTG", "MAG", "GDXJ"],
+    },
+    {
+        "name": "Mike Novogratz",
+        "description": "Crypto billionaire and CEO of Galaxy Digital, known for concentrated positions in Bitcoin, Ethereum, and digital asset infrastructure.",
+        "estimated_return_1y_pct": None,
+        "known_positions": ["GLXY", "COIN", "MSTR", "RIOT"],
+    },
+    {
+        "name": "Chamath Palihapitiya",
+        "description": "SPAC pioneer and Social Capital founder, known for contrarian bets on disruptive fintech and housing companies.",
+        "estimated_return_1y_pct": None,
+        "known_positions": ["CVNA", "SOFI", "SFM", "OPEN"],
+    },
+    {
+        "name": "Peter Thiel",
+        "description": "PayPal co-founder and Founders Fund partner, known for early-stage tech, Palantir, and contrarian macro bets on gold and crypto.",
+        "estimated_return_1y_pct": None,
+        "known_positions": ["PLTR", "GOLD", "FB"],
+    },
+    {
+        "name": "Christian Arquette",
+        "description": "Hedge fund manager known for concentrated equity positions and deep-value investing in overlooked market segments.",
+        "estimated_return_1y_pct": None,
+        "known_positions": [],
+    },
+    {
+        "name": "Eric Jackson",
+        "description": "Activist investor and founder of EMJ Capital, known for concentrated bets on tech turnarounds and publicly pushing for corporate changes.",
+        "estimated_return_1y_pct": None,
+        "known_positions": ["META", "GOOGL", "NFLX"],
+    },
+    {
+        "name": "Mike Alfred",
+        "description": "Digital asset entrepreneur and co-founder of Digital Assets Data, known for crypto market intelligence and Bitcoin investment thesis.",
+        "estimated_return_1y_pct": None,
+        "known_positions": ["MSTR", "COIN", "CLSK"],
+    },
+    {
+        "name": "Matthew Augustin",
+        "description": "Investor and financial analyst known for equity research and concentrated portfolio strategies in technology and growth sectors.",
+        "estimated_return_1y_pct": None,
+        "known_positions": ["NVDA", "META", "AMZN"],
+    },
+]
+
+
+async def seed_famous_investors() -> None:
+    """
+    Upserts FAMOUS_INVESTORS_SEED into the DB.
+    Only overwrites return_1y and positions if the seed has non-null values,
+    so live Perplexity updates are not erased.
+    """
+    from datetime import date as _date
+    today = _date.today()
+    q = (today.month - 1) // 3 + 1
+    current_quarter = f"{today.year}Q{q}"
+
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        for person in FAMOUS_INVESTORS_SEED:
+            name = person["name"]
+            description = person["description"]
+            est_return = person.get("estimated_return_1y_pct")
+            positions = person.get("known_positions") or []
+
+            cur.execute("""
+                INSERT INTO whales (name, category, cik, description)
+                VALUES (%s, 'famous_investor', NULL, %s)
+                ON CONFLICT (name) DO UPDATE SET
+                    description = EXCLUDED.description,
+                    category    = 'famous_investor',
+                    cik         = NULL
+            """, (name, description))
+
+            if est_return is not None:
+                cur.execute(
+                    "UPDATE whales SET return_1y = %s WHERE name = %s AND (return_1y IS NULL OR return_1y = 0)",
+                    (float(est_return), name),
+                )
+
+            if positions:
+                cur.execute(
+                    "DELETE FROM whale_holdings WHERE whale_name = %s AND quarter = %s",
+                    (name, current_quarter),
+                )
+                for ticker in positions:
+                    ticker = str(ticker).strip().upper()
+                    if not ticker:
+                        continue
+                    try:
+                        cur.execute("""
+                            INSERT INTO whale_holdings
+                                (whale_name, ticker, company_name, shares, value_usd, weight_pct, quarter)
+                            VALUES (%s, %s, %s, NULL, NULL, NULL, %s)
+                            ON CONFLICT DO NOTHING
+                        """, (name, ticker, ticker, current_quarter))
+                    except Exception:
+                        pass
+
+        conn.commit()
+        cur.close()
+        logger.info("[FAMOUS] Seeded %d famous investors into DB", len(FAMOUS_INVESTORS_SEED))
+    except Exception as e:
+        logger.error("[FAMOUS] Seed error: %s", e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        _put_conn(conn)
+
+
 # ── Famous Investor Discovery ─────────────────────────────────────────────────
 
 async def discover_famous_investors_via_perplexity() -> list[dict]:
@@ -1773,6 +1909,10 @@ async def refresh_all_whales() -> dict:
     try:
         await seed_whales()
         try:
+            await seed_famous_investors()
+        except Exception as e:
+            logger.error("[WHALE] Famous investor seed error: %s", e)
+        try:
             await discover_famous_investors_via_perplexity()
         except Exception as e:
             logger.error("[WHALE] Famous investor discovery error: %s", e)
@@ -1848,7 +1988,7 @@ def _whales_need_refresh() -> bool:
             SELECT COUNT(*) FROM whales
             WHERE last_updated IS NULL
                OR last_updated < NOW() - INTERVAL '24 hours'
-               OR (return_1m IS NULL AND return_3m IS NULL)
+               OR (return_1m IS NULL AND return_3m IS NULL AND category != 'famous_investor')
         """)
         stale = cur.fetchone()[0]
         cur.close()
@@ -1883,8 +2023,12 @@ async def get_whales(
                 return []
             try:
                 cur = _conn.cursor()
-                where = "WHERE category = %s" if category else ""
-                params = (category,) if category else ()
+                if category:
+                    where = "WHERE category = %s"
+                    params = (category,)
+                else:
+                    where = "WHERE category != 'famous_investor'"
+                    params = ()
                 cur.execute(f"""
                     SELECT name, category, cik, description, ai_theme,
                            return_1m, return_3m, return_6m, return_1y, return_3y,
@@ -2094,6 +2238,56 @@ async def get_famous_whales():
 
     data = await loop.run_in_executor(_executor, _fetch)
     return data
+
+
+@router.post("/whales/discover-famous")
+async def trigger_discover_famous():
+    """
+    Seed famous investors from the hardcoded list then run Perplexity live discovery.
+    Returns the current list of all famous investors from the DB.
+    """
+    await seed_famous_investors()
+    try:
+        await discover_famous_investors_via_perplexity()
+    except Exception as e:
+        logger.error("[FAMOUS_API] Perplexity discovery error: %s", e)
+
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        conn = _get_conn()
+        if not conn:
+            return []
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT name, cik, description, ai_theme, return_1y, last_updated
+                FROM whales WHERE category = 'famous_investor' ORDER BY name
+            """)
+            cols = ["name", "cik", "description", "ai_theme", "return_1y", "last_updated"]
+            result = []
+            for row in cur.fetchall():
+                w = dict(zip(cols, row))
+                if w.get("last_updated"):
+                    w["last_updated"] = w["last_updated"].isoformat()
+                cur2 = conn.cursor()
+                cur2.execute(
+                    "SELECT DISTINCT ticker FROM whale_holdings WHERE whale_name = %s ORDER BY ticker",
+                    (w["name"],),
+                )
+                w["known_positions"] = [r[0] for r in cur2.fetchall()]
+                cur2.close()
+                result.append(w)
+            cur.close()
+            return result
+        except Exception as e:
+            logger.error("[FAMOUS_API] Fetch error: %s", e)
+            return []
+        finally:
+            _put_conn(conn)
+
+    data = await loop.run_in_executor(_executor, _fetch)
+    return {"status": "ok", "count": len(data), "investors": data}
 
 
 @router.post("/whales/discover")

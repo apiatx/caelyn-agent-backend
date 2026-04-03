@@ -631,10 +631,21 @@ async function loadFamousInvestors() {
   try {
     const res = await fetch(`${API}/whales/famous`);
     const data = await res.json();
-    renderFamousGrid(data);
-    const latest = data.map(w => w.last_updated).filter(Boolean).sort().reverse()[0];
-    const el = document.getElementById('famousLastUpdated');
-    if (el) el.textContent = latest ? `Updated ${new Date(latest).toLocaleString()}` : '';
+    if (!data.length) {
+      grid.innerHTML = '<div class="famous-loading"><span class="spinner"></span>First-time setup — seeding famous investor data…</div>';
+      const r2 = await fetch(`${API}/whales/discover-famous`, { method: 'POST' });
+      const d2 = await r2.json();
+      const investors = d2.investors || [];
+      renderFamousGrid(investors);
+      const el = document.getElementById('famousLastUpdated');
+      if (el) el.textContent = investors.length ? 'Just seeded' : '';
+    } else {
+      const sorted = [...data].sort((a, b) => (b.return_1y ?? -9999) - (a.return_1y ?? -9999));
+      renderFamousGrid(sorted);
+      const latest = data.map(w => w.last_updated).filter(Boolean).sort().reverse()[0];
+      const el = document.getElementById('famousLastUpdated');
+      if (el) el.textContent = latest ? `Updated ${new Date(latest).toLocaleString()}` : '';
+    }
   } catch(e) {
     grid.innerHTML = `<div class="famous-loading" style="color:var(--red)">Error: ${e.message}</div>`;
   }
@@ -681,11 +692,16 @@ async function triggerFamousRefresh() {
   btn.disabled = true;
   btn.textContent = '↺ Discovering…';
   const grid = document.getElementById('famousGrid');
-  grid.innerHTML = '<div class="famous-loading"><span class="spinner"></span>Querying Perplexity for famous investors…</div>';
+  grid.innerHTML = '<div class="famous-loading"><span class="spinner"></span>Seeding and querying Perplexity for famous investors…</div>';
   try {
-    await fetch(`${API}/whales/discover`, { method: 'POST' });
-    btn.textContent = '↺ Loading…';
-    await loadFamousInvestors();
+    const res = await fetch(`${API}/whales/discover-famous`, { method: 'POST' });
+    const d = await res.json();
+    if (d.investors && d.investors.length) {
+      const sorted = [...d.investors].sort((a, b) => (b.return_1y ?? -9999) - (a.return_1y ?? -9999));
+      renderFamousGrid(sorted);
+    } else {
+      await loadFamousInvestors();
+    }
     btn.textContent = '↺ Refresh Radar';
   } catch(e) {
     grid.innerHTML = `<div class="famous-loading" style="color:var(--red)">Error: ${e.message}</div>`;
