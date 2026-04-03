@@ -33,6 +33,7 @@ logger = logging.getLogger("whale_watch")
 _ANTHROPIC_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
 _TRADIER_KEY    = os.getenv("TRADIER_API_KEY", "")
 _PERPLEXITY_KEY = os.getenv("PERPLEXITY_API_KEY", "")
+_FMP_KEY        = os.getenv("FMP_API_KEY", "")
 _SEC_HEADERS   = {
     "User-Agent": "CaelynAI contact@caelyn.ai",
     "Accept-Encoding": "gzip, deflate",
@@ -417,77 +418,242 @@ async def seed_whales() -> None:
         _put_conn(conn)
 
 
-# ── CUSIP → Ticker mapping via OpenFIGI ──────────────────────────────────────
+# ── CUSIP → Ticker mapping via FMP + SEC EDGAR ───────────────────────────────
 
-async def _cusips_to_tickers(cusips: list[str]) -> dict[str, str]:
+def _is_valid_us_ticker(ticker: str) -> bool:
     """
-    Map CUSIPs to tickers using the free OpenFIGI batch API.
-    Processes in chunks of 25 (free-tier limit per request).
-    Waits 15 s between chunks to respect the 5-req/min rate limit.
-    Falls back to yfinance search for unmapped CUSIPs (using company name cache).
+    Accept US equity tickers: 1-5 uppercase letters, optional hyphen+1-2 chars (e.g. BRK-A).
+    Reject dot-separated ADR/preferred formats (e.g. BRK.B, PRF.PRA).
+    """
+    if not ticker or "." in ticker:
+        return False
+    # Standard plain ticker
+    if re.match(r"^[A-Z]{1,5}$", ticker):
+        return True
+    # Hyphenated class (BRK-A, BRK-B, BF-B) — max 7 chars total
+    if re.match(r"^[A-Z]{1,5}-[A-Z]{1,2}$", ticker) and len(ticker) <= 7:
+        return True
+    return False
+
+
+# ── EDGAR company tickers index (loaded once, cached in memory) ───────────────
+
+_ticker_name_index: dict[str, str] | None = None   # normalised_name → ticker
+_EDGAR_TICKERS_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
+
+_NAME_SUFFIXES = (
+    " INC", " CORP", " CORPORATION", " LTD", " LIMITED", " CO", " COMPANY",
+    " LLC", " LP", " PLC", " NV", " N V", " SA", " AG", " SE", " BV",
+    " GROUP", " HOLDINGS", " HOLDING", " INTERNATIONAL", " INTL",
+    " FUND", " ETF", " TRUST", " REIT",
+    " CLASS A", " CLASS B", " CLASS C", " CL A", " CL B", " CL C",
+    " SHS", " SHARE", " SHARES", " COMMON", " COM", " ADR", " ADS",
+    " NEW", " THE",
+)
+
+
+def _normalize_company_name(name: str) -> str:
+    """
+    Normalise a company name for fuzzy matching.
+    Order matters: strip punctuation FIRST (so "Apple Inc." → "APPLE INC"),
+    then iteratively strip trailing legal/share-class suffixes.
+    """
+    name = name.upper().strip()
+    # 0. Remove jurisdictional designators like "/CA", "/DE", "/NV" before anything else
+    name = re.sub(r"/[A-Z]{2,3}$", "", name).strip()
+    # 1. Strip all punctuation first so suffix patterns match cleanly
+    name = re.sub(r"[^A-Z0-9 ]", " ", name)
+    name = " ".join(name.split())
+    # 2. Iteratively strip trailing suffixes (handles stacked ones like "INC CL A")
+    changed = True
+    while changed:
+        changed = False
+        for sfx in _NAME_SUFFIXES:
+            if name.endswith(sfx):
+                name = name[: -len(sfx)].strip()
+                changed = True
+    return name
+
+
+async def _load_edgar_tickers_index() -> dict[str, str]:
+    """
+    Download SEC EDGAR's company_tickers_exchange.json (all listed US companies)
+    and build a normalised-name → ticker lookup index.
+    Result is cached in _ticker_name_index for the lifetime of the process.
+    """
+    global _ticker_name_index
+    if _ticker_name_index is not None:
+        return _ticker_name_index
+
+    logger.info("[WHALE_EDGAR] Downloading company tickers index from SEC…")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(_EDGAR_TICKERS_URL, headers=_SEC_HEADERS)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.error("[WHALE_EDGAR] Failed to download tickers index: %s", e)
+        _ticker_name_index = {}
+        return {}
+
+    # JSON is column-oriented: {"fields": ["cik","name","ticker","exchange"], "data": [[...],...]}
+    fields = data.get("fields", [])
+    rows   = data.get("data", [])
+    try:
+        i_name = fields.index("name")
+        i_tick = fields.index("ticker")
+        i_exch = fields.index("exchange")
+    except ValueError as e:
+        logger.error("[WHALE_EDGAR] Unexpected tickers JSON schema: %s | fields=%s", e, fields)
+        _ticker_name_index = {}
+        return {}
+
+    # Prefer primary US exchanges; allow OTC as last resort
+    PREF_EXCHANGES = {"Nasdaq", "NYSE", "NYSE ARCA", "NYSE MKT", "AMEX"}
+    index: dict[str, str] = {}
+    index_ot: dict[str, str] = {}  # OTC-only bucket (lower priority)
+
+    for row in rows:
+        try:
+            ticker = str(row[i_tick]).strip()
+            name   = str(row[i_name]).strip()
+            exch   = str(row[i_exch])
+        except (IndexError, TypeError):
+            continue
+        if not (ticker and name and _is_valid_us_ticker(ticker)):
+            continue
+        key = _normalize_company_name(name)
+        if not key:
+            continue
+        if exch in PREF_EXCHANGES:
+            index[key] = ticker.upper()
+        else:
+            if key not in index_ot:
+                index_ot[key] = ticker.upper()
+
+    # Merge OTC into index only for keys not already covered by a primary exchange
+    for k, v in index_ot.items():
+        if k not in index:
+            index[k] = v
+
+    _ticker_name_index = index
+    logger.info("[WHALE_EDGAR] Ticker index loaded: %d companies", len(index))
+    return index
+
+
+async def _edgar_name_to_ticker(company_name: str, client: httpx.AsyncClient) -> str:
+    """
+    EDGAR full-text search fallback: search the EDGAR search API for the company
+    name and extract the ticker from the first 10-K hit.
+    Returns ticker string or '' on failure.
+    """
+    if not company_name:
+        return ""
+    try:
+        resp = await client.get(
+            "https://efts.sec.gov/LATEST/search-index",
+            params={
+                "q":         f'"{company_name}"',
+                "forms":     "10-K",
+                "dateRange": "custom",
+                "startdt":   "2018-01-01",
+            },
+            headers=_SEC_HEADERS,
+            timeout=12,
+        )
+        if resp.status_code == 200:
+            hits = resp.json().get("hits", {}).get("hits", [])
+            for hit in hits:
+                ticker = hit.get("_source", {}).get("ticker", "")
+                if _is_valid_us_ticker(ticker):
+                    return ticker.upper()
+    except Exception as e:
+        logger.debug("[WHALE_EDGAR] Name FTS lookup error for '%s': %s", company_name, e)
+    return ""
+
+
+async def _cusips_to_tickers(
+    cusips: list[str],
+    names: Optional[dict[str, str]] = None,
+) -> dict[str, str]:
+    """
+    Map CUSIPs → tickers using SEC EDGAR data only. No OpenFIGI, no FMP.
+
+    Pipeline:
+      1. EDGAR company_tickers_exchange.json — in-memory normalised-name lookup
+         (one HTTP download per process lifetime; thereafter pure dict lookups)
+      2. EDGAR full-text search by nameOfIssuer — for names that didn't match
+         the index (concurrent, semaphore-limited to respect the 10 req/s guideline)
+
+    Args:
+        cusips: list of CUSIP strings to resolve
+        names:  dict mapping cusip → nameOfIssuer from the 13F XML
+                (used for both name-index lookup and FTS fallback)
     """
     if not cusips:
         return {}
-    mapping: dict[str, str] = {}
-    chunk_size = 25
 
-    # ── Pass 1: OpenFIGI (no exchCode — letting FIGI pick the primary listing) ─
-    for i in range(0, len(cusips), chunk_size):
-        chunk = cusips[i:i + chunk_size]
-        for attempt in range(3):
-            try:
-                async with httpx.AsyncClient(timeout=25) as client:
-                    resp = await client.post(
-                        "https://api.openfigi.com/v3/mapping",
-                        json=[{"idType": "ID_CUSIP", "idValue": c} for c in chunk],
-                        headers={"Content-Type": "application/json"},
-                    )
-                if resp.status_code == 429:
-                    logger.info("[WHALE_FIGI] Rate-limited, waiting 20s…")
-                    await asyncio.sleep(20)
-                    continue
-                if resp.status_code == 200:
-                    results = resp.json()
-                    for cusip, item in zip(chunk, results):
-                        figi_data = item.get("data") or []
-                        for d in figi_data:
-                            ticker        = d.get("ticker", "")
-                            security_type = d.get("securityType", "")
-                            market_sector = d.get("marketSector", "")
-                            # Accept equities; skip options, warrants, preferreds
-                            if (ticker and market_sector == "Equity"
-                                    and "Option" not in security_type
-                                    and "Warrant" not in security_type
-                                    and "Preferred" not in security_type):
-                                mapping[cusip] = ticker
-                                break
+    names = names or {}
+
+    # ── Pass 1: EDGAR tickers index (fast in-memory lookup) ─────────────────
+    ticker_index = await _load_edgar_tickers_index()
+    mapping:  dict[str, str] = {}
+    need_fts: list[str]      = []
+
+    for cusip in cusips:
+        raw_name = names.get(cusip, "")
+        if not raw_name:
+            need_fts.append(cusip)   # no name → try FTS anyway
+            continue
+
+        norm = _normalize_company_name(raw_name)
+        if norm in ticker_index:
+            mapping[cusip] = ticker_index[norm]
+            continue
+
+        # Try progressively shorter prefixes (handles " INC A" suffix noise)
+        parts = norm.split()
+        matched = False
+        for length in range(len(parts) - 1, max(1, len(parts) - 3), -1):
+            shorter = " ".join(parts[:length])
+            if shorter in ticker_index:
+                mapping[cusip] = ticker_index[shorter]
+                matched = True
                 break
-            except Exception as e:
-                logger.warning("[WHALE_FIGI] chunk attempt %d error: %s", attempt + 1, e)
-                await asyncio.sleep(5)
+        if not matched:
+            need_fts.append(cusip)
 
-        # 15-second gap between batches — free tier allows 5 req/min
-        if i + chunk_size < len(cusips):
-            await asyncio.sleep(15)
+    logger.info("[WHALE_EDGAR] Index match: %d/%d CUSIPs; %d need FTS fallback",
+                len(mapping), len(cusips), len(need_fts))
 
-    logger.info("[WHALE_FIGI] Mapped %d/%d CUSIPs via OpenFIGI", len(mapping), len(cusips))
+    # ── Pass 2: EDGAR full-text search for names that didn't match ───────────
+    if need_fts:
+        sem = asyncio.Semaphore(5)   # respect EDGAR's ~10 req/s guideline
+
+        async def _fts_one(cusip: str) -> tuple[str, str]:
+            async with sem:
+                company_name = names.get(cusip, "")
+                async with httpx.AsyncClient(timeout=12) as client:
+                    ticker = await _edgar_name_to_ticker(company_name, client)
+                await asyncio.sleep(0.1)
+            return cusip, ticker
+
+        fts_results = await asyncio.gather(
+            *[_fts_one(c) for c in need_fts],
+            return_exceptions=True,
+        )
+        fts_hits = 0
+        for r in fts_results:
+            if isinstance(r, tuple):
+                cusip, ticker = r
+                if ticker:
+                    mapping[cusip] = ticker
+                    fts_hits += 1
+
+        logger.info("[WHALE_EDGAR] FTS recovered %d more tickers (%d total mapped / %d)",
+                    fts_hits, len(mapping), len(cusips))
+
     return mapping
-
-
-def _yf_search_ticker(company_name: str) -> str:
-    """Search yfinance for a ticker by company name. Returns '' on failure."""
-    try:
-        import yfinance as yf
-        results = yf.Search(company_name, max_results=3).quotes
-        for q in results:
-            sym   = q.get("symbol", "")
-            qtype = q.get("quoteType", "")
-            # Only accept plain equities listed on major US exchanges
-            if sym and qtype == "EQUITY" and "." not in sym and len(sym) <= 5:
-                return sym
-    except Exception:
-        pass
-    return ""
 
 
 # ── SEC EDGAR 13F fetcher ─────────────────────────────────────────────────────
@@ -599,51 +765,27 @@ async def fetch_13f_filings(cik: str, whale_name: str) -> list[dict]:
     # Sort by value descending so we map the highest-value positions first
     holdings_raw.sort(key=lambda h: h.get("value_usd", 0), reverse=True)
 
-    # Step 5: Map CUSIPs → tickers via OpenFIGI
-    # Cap at 500 unique CUSIPs by value to avoid hour-long waits for mega-filers (e.g. RenTech)
-    # The top 500 positions typically represent 95%+ of portfolio weight.
+    # Step 5: Map CUSIPs → tickers via FMP + EDGAR
+    # Cap at 500 unique CUSIPs by value — top positions = 95%+ of portfolio weight.
+    # Collect company names (nameOfIssuer from 13F XML) alongside CUSIPs so the
+    # EDGAR name-search fallback inside _cusips_to_tickers can use them.
     _MAX_CUSIPS = 500
-    seen_cusips: set[str] = set()
-    cusips_to_map: list[str] = []
+    seen_cusips:  set[str]        = set()
+    cusips_to_map: list[str]      = []
+    cusip_to_name: dict[str, str] = {}
     for h in holdings_raw:
         c = h.get("cusip", "")
         if c and c not in seen_cusips:
             seen_cusips.add(c)
             cusips_to_map.append(c)
+            cusip_to_name[c] = h.get("company_name", "")
         if len(cusips_to_map) >= _MAX_CUSIPS:
             break
-    if len(cusips_to_map) < len({h.get("cusip","") for h in holdings_raw if h.get("cusip")}):
+    total_unique = len({h.get("cusip", "") for h in holdings_raw if h.get("cusip")})
+    if len(cusips_to_map) < total_unique:
         logger.info("[WHALE] Capping %s CUSIP lookups at top %d (total raw: %d)",
                     whale_name, len(cusips_to_map), len(holdings_raw))
-    cusip_map = await _cusips_to_tickers(cusips_to_map)
-
-    # Step 5b: yfinance Search fallback for any CUSIPs OpenFIGI missed
-    # Only try fallback for CUSIPs we actually attempted to map (respects the cap)
-    unmapped = [h for h in holdings_raw
-                if h.get("cusip") in seen_cusips and not cusip_map.get(h["cusip"])]
-    if unmapped:
-        logger.info("[WHALE] OpenFIGI missed %d CUSIPs for %s — trying yfinance search",
-                    len(unmapped), whale_name)
-        # Build (cusip → company_name) map for unmapped entries (deduplicated)
-        cusip_to_name: dict[str, str] = {}
-        for h in unmapped:
-            if h["cusip"] not in cusip_to_name:
-                cusip_to_name[h["cusip"]] = h.get("company_name", "")
-
-        def _batch_yf_search():
-            results = {}
-            for cusip, name in cusip_to_name.items():
-                if name:
-                    ticker = _yf_search_ticker(name)
-                    if ticker:
-                        results[cusip] = ticker
-            return results
-
-        loop = asyncio.get_event_loop()
-        yf_fallback = await loop.run_in_executor(_executor, _batch_yf_search)
-        cusip_map.update(yf_fallback)
-        logger.info("[WHALE] yfinance search recovered %d more tickers for %s",
-                    len(yf_fallback), whale_name)
+    cusip_map = await _cusips_to_tickers(cusips_to_map, names=cusip_to_name)
 
     # Step 6: Calculate weight percentages
     total_value = sum(h["value_usd"] for h in holdings_raw)

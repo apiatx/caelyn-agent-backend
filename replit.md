@@ -181,7 +181,7 @@ Metadata: cluster_size, date_spread_days, insiders_in_cluster, distinct_role_cou
 
 ## Whale Watch — Institutional 13F Tracker (`/api/whales`)
 
-Tracks the top 10 institutional investors via SEC EDGAR 13F-HR filings. Fetches quarterly holdings, maps CUSIPs to tickers via OpenFIGI, calculates weighted portfolio returns (1m/3m/6m/1y vs SPY), and generates AI theme summaries via Anthropic.
+Tracks top institutional investors via SEC EDGAR 13F-HR filings. Fetches quarterly holdings, maps CUSIPs to tickers via EDGAR's own ticker index (no external APIs), calculates weighted portfolio returns (1m/3m/6m/1y vs SPY), and generates AI theme summaries via Anthropic.
 
 ### Tracked Institutions
 
@@ -205,21 +205,24 @@ Tracks the top 10 institutional investors via SEC EDGAR 13F-HR filings. Fetches 
 | `GET /api/whales?category=institution` | All whales sorted by 3m return (best first) |
 | `GET /api/whales/{whale_name}/holdings` | Latest quarter holdings sorted by weight_pct |
 | `GET /api/whales/{whale_name}/returns` | All quarterly return records vs SPY benchmark |
-| `POST /api/whales/refresh` | Trigger background refresh of all 10 whales |
-| `POST /api/whales/{whale_name}/refresh` | Trigger refresh for a single whale |
+| `POST /api/whales/refresh` | Trigger background refresh of all whales |
+| `POST /api/whales/{whale_name}/refresh` | Trigger refresh for a single whale (whale_name = exact DB name) |
+| `POST /api/whales/discover` | Re-discover top whales via Perplexity AI |
 
-### Data Pipeline
+### Data Pipeline (EDGAR-Only, No External APIs)
 
 - **Source**: SEC EDGAR `data.sec.gov/submissions/CIK{cik}.json` → find 13F-HR accession → parse infotable XML
-- **CUSIP → Ticker**: OpenFIGI batch API (25/request, free tier, US equities preferred); capped at top 500 positions by value per whale (covers 95%+ of portfolio weight; prevents 30+ min waits for mega-filers like RenTech's 3000+ positions)
-- **yfinance Fallback**: For CUSIPs OpenFIGI misses, searches by company name — limited to the capped set
+- **CUSIP → Ticker — Pass 1 (In-Memory)**: Downloads `company_tickers_exchange.json` from EDGAR on startup (~8 000 companies); column-oriented format `{"fields":[...], "data":[[...],...]}`. Normalized-name → ticker dict built at boot. Normalization order: (1) strip `/XX` jurisdiction suffixes, (2) uppercase + strip punctuation, (3) strip legal suffixes (INC/CORP/LLC/LP/etc.) iteratively, (4) collapse spaces.
+- **CUSIP → Ticker — Pass 2 (FTS Fallback)**: Hits `efts.sec.gov/hits.json` full-text search for any company name that missed Pass 1. Semaphore(5) limits concurrency. Ticker validated as `^[A-Z]{1,5}$` or `^[A-Z]{1,5}-[A-Z]{1,2}$`; dots (ADRs/preferreds) blocked.
+- **Cap**: Top 500 positions by value per whale (covers 95%+ of portfolio weight; prevents long waits for RenTech with 3000+ positions)
 - **Returns**: yfinance batch download (2y) → weighted portfolio 1m/3m/6m/1y returns; SPY as benchmark
 - **AI Themes**: Claude claude-haiku-4-5 summarizes top-15 holdings into 2-3 sentence investment thesis
 - **Background loop**: Runs on startup if stale (> 24h); refreshes all whales every 24h
 - **DB Tables**: `whales`, `whale_holdings`, `whale_portfolio_returns` (Neon PostgreSQL)
 - **Key file**: `backend/services/whale_watch_service.py`
 - **Safety guard**: `_save_holdings_to_db` skips overwrite when 0 holdings resolved (prevents wiping DB on failed refreshes)
-- **No concurrent refreshes**: `_cusips_to_tickers` has no semaphore — never trigger multiple whale refreshes simultaneously (OpenFIGI free tier: 5 req/min)
+- **No FMP / OpenFIGI dependency**: Both removed; EDGAR index is the sole source of truth for CUSIP resolution
+- **No concurrent refreshes**: `_refresh_in_progress` flag prevents overlapping refreshes. Pass 2 FTS uses `asyncio.Semaphore(5)` to keep EDGAR requests polite.
 
 ## Predict Page — Polymarket Intelligence + TradingAgents (`/api/predict/`)
 

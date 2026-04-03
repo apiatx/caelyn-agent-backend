@@ -186,7 +186,7 @@ async def lifespan(app):
     asyncio.create_task(_hl_boot_and_run(_hl_state))
     try:
         _whale_create_tables()
-        _seed_whales()
+        asyncio.create_task(_seed_whales())
     except Exception as _e:
         print(f"[STARTUP] Whale Watch DB init error: {_e}")
     asyncio.create_task(_whale_bg_loop())
