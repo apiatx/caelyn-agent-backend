@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Subscribe · Caelyn AI</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #080c10;
+      --surface: #0d1117;
+      --card: #111820;
+      --border: #1e2d3d;
+      --gold: #d4a843;
+      --gold-dim: #a07830;
+      --green: #00d4aa;
+      --text: #c9d1d9;
+      --muted: #6b7280;
+      --white: #f0f6fc;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+
+    .logo-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .logo-icon {
+      font-size: 1.6rem;
+    }
+
+    .logo-text {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--white);
+      letter-spacing: 0.04em;
+    }
+
+    .logo-text span { color: var(--gold); }
+
+    .paywall-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2.5rem 2.8rem;
+      max-width: 540px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+
+    .lock-icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      display: block;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--white);
+      margin-bottom: 0.5rem;
+      letter-spacing: 0.02em;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 0.85rem;
+      line-height: 1.6;
+      margin-bottom: 2rem;
+    }
+
+    .features {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.2rem 1.5rem;
+      margin-bottom: 2rem;
+      text-align: left;
+    }
+
+    .features-title {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--gold);
+      margin-bottom: 0.9rem;
+      font-weight: 600;
+    }
+
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.82rem;
+      color: var(--text);
+      padding: 0.3rem 0;
+    }
+
+    .feature-item::before {
+      content: '⚡';
+      font-size: 0.75rem;
+      flex-shrink: 0;
+    }
+
+    .price-row {
+      margin-bottom: 1.5rem;
+    }
+
+    .price {
+      font-size: 2.4rem;
+      font-weight: 700;
+      color: var(--white);
+    }
+
+    .price-period {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-left: 0.2rem;
+    }
+
+    .coming-soon-badge {
+      display: inline-block;
+      background: linear-gradient(135deg, #1a2030, #1e2d3d);
+      border: 1px solid var(--gold-dim);
+      color: var(--gold);
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 0.25rem 0.7rem;
+      border-radius: 20px;
+      margin-bottom: 1rem;
+      font-weight: 600;
+    }
+
+    .cta-button {
+      display: block;
+      width: 100%;
+      padding: 0.9rem 1.5rem;
+      background: linear-gradient(135deg, var(--gold-dim), var(--gold));
+      color: #0d1117;
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      margin-bottom: 1rem;
+    }
+
+    .cta-button:hover { opacity: 0.9; transform: translateY(-1px); }
+    .cta-button:active { transform: translateY(0); }
+
+    .back-link {
+      font-size: 0.78rem;
+      color: var(--muted);
+      cursor: pointer;
+      text-decoration: underline;
+      background: none;
+      border: none;
+      font-family: inherit;
+    }
+
+    .back-link:hover { color: var(--text); }
+
+    .notify-form {
+      display: none;
+      margin-top: 1.2rem;
+      gap: 0.5rem;
+      flex-direction: column;
+    }
+
+    .notify-form.visible { display: flex; }
+
+    .notify-input {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.6rem 0.9rem;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.82rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .notify-input:focus { border-color: var(--gold-dim); }
+
+    .notify-submit {
+      padding: 0.6rem;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .notify-submit:hover { background: #1e2d3d; }
+
+    .notify-success {
+      display: none;
+      font-size: 0.8rem;
+      color: var(--green);
+      margin-top: 0.6rem;
+    }
+
+    footer {
+      margin-top: 3rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="logo-row">
+    <span class="logo-icon">⚡</span>
+    <div class="logo-text">Caelyn<span>AI</span></div>
+  </div>
+
+  <div class="paywall-card">
+    <span class="lock-icon">🔐</span>
+    <span class="coming-soon-badge">Coming Soon</span>
+    <h1>Premium Feature</h1>
+    <p class="subtitle">
+      This AI-powered feature is reserved for subscribers.<br />
+      Payments are launching soon — join the waitlist to get early access.
+    </p>
+
+    <div class="features">
+      <div class="features-title">What's included</div>
+      <div class="feature-item">Caelyn AI — full market analysis &amp; strategy chat</div>
+      <div class="feature-item">Whale Watch — institutional &amp; notable investor radar</div>
+      <div class="feature-item">Predict — multi-agent Polymarket intelligence</div>
+      <div class="feature-item">Sector Rotation — AI regime analysis</div>
+      <div class="feature-item">Options Flow — AI-scored unusual activity</div>
+      <div class="feature-item">Insider Activity — conviction scoring &amp; AI summaries</div>
+    </div>
+
+    <div class="price-row">
+      <span class="price">$29</span>
+      <span class="price-period">/ month</span>
+    </div>
+
+    <button class="cta-button" onclick="showNotify()">Join the Waitlist</button>
+    <button class="back-link" onclick="history.back()">← Go back</button>
+
+    <div class="notify-form" id="notifyForm">
+      <input class="notify-input" type="email" id="notifyEmail" placeholder="your@email.com" />
+      <button class="notify-submit" onclick="submitNotify()">Notify me when payments launch</button>
+      <div class="notify-success" id="notifySuccess">✓ You're on the list. We'll email you when we launch.</div>
+    </div>
+  </div>
+
+  <footer>
+    CaelynAI &copy; 2025 · Powered by real market data &amp; institutional-grade AI
+  </footer>
+
+  <script>
+    function showNotify() {
+      const form = document.getElementById('notifyForm');
+      form.classList.add('visible');
+      document.getElementById('notifyEmail').focus();
+    }
+
+    function submitNotify() {
+      const email = document.getElementById('notifyEmail').value.trim();
+      if (!email || !email.includes('@')) return;
+      document.getElementById('notifySuccess').style.display = 'block';
+      document.getElementById('notifyEmail').disabled = true;
+      document.querySelector('.notify-submit').disabled = true;
+      // In the future: POST to /api/waitlist
+    }
+
+    // If arrived here because of a 402, check URL params for the feature name
+    const params = new URLSearchParams(location.search);
+    const feature = params.get('feature');
+    if (feature) {
+      document.querySelector('h1').textContent = feature + ' — Premium Feature';
+    }
+  </script>
+
+</body>
+</html>

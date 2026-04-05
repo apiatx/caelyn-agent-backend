@@ -11,8 +11,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request, Depends
 from fastapi.responses import JSONResponse
+
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+from subscription import require_subscription
 
 from services.sector_rotation.providers import fetch_etf_quotes, fetch_all_histories
 from services.sector_rotation.schemas import (
@@ -95,7 +99,7 @@ async def history_endpoint(
 
 
 @router.post("/refresh-analysis")
-async def refresh_analysis_endpoint():
+async def refresh_analysis_endpoint(request: Request, _sub: None = Depends(require_subscription)):
     """
     Force-regenerate the AI analysis regardless of cache age.
     Intended for admin / scheduled use — Gemini call may take 15–30 seconds.

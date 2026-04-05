@@ -17,11 +17,15 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request, Depends
 from fastapi.responses import JSONResponse
 
 from services.predict.polymarket_intelligence import polymarket_intel
 from services.predict.trading_agents import run_predict_analysis
+
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+from subscription import require_subscription
 
 router = APIRouter(tags=["predict"])
 
@@ -128,7 +132,7 @@ async def predict_market_context(
 
 
 @router.post("/api/predict/analyze")
-async def predict_analyze(body: dict):
+async def predict_analyze(request: Request, body: dict, _sub: None = Depends(require_subscription)):
     """
     Full 6-agent TradingAgents analysis for a Polymarket question.
 

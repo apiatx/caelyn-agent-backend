@@ -1,9 +1,10 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Header, HTTPException, Body
+from fastapi import FastAPI, Request, Header, HTTPException, Body, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from subscription import require_subscription
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -2082,6 +2083,7 @@ async def social_grok_query(
     request: Request,
     body: dict = Body(...),
     api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
 ):
     """Direct Grok/X query for the Social page — real-time X search via xAI."""
     query = body.get("query", "")
@@ -2241,6 +2243,7 @@ async def query_agent(
     request: Request,
     body: QueryRequest,
     api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
 ):
     import asyncio
     import time as _time
@@ -3186,7 +3189,7 @@ class BacktestRequest(BaseModel):
 @app.post("/api/backtest")
 @limiter.limit("20/minute")
 @traceable(name="main.backtest_recommendations")
-async def backtest_recommendations(request: Request, body: BacktestRequest):
+async def backtest_recommendations(request: Request, body: BacktestRequest, _sub: None = Depends(require_subscription)):
     """
     Backtest historical recommendations: fetch current price via Finnhub,
     calculate % gain/loss, and return a Haiku-generated summary row per ticker.
@@ -4066,6 +4069,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
 async def caelyn_terminal(
     request: Request,
     api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
 ):
     """Full portfolio analytics payload for the Caelyn Terminal dashboard."""
     if not _jwt_or_key(request, api_key):
@@ -4168,7 +4172,7 @@ async def get_portfolio_events(request: Request, api_key: str = Header(None, ali
 @app.post("/api/portfolio/review")
 @limiter.limit("5/minute")
 @traceable(name="main.review_portfolio")
-async def review_portfolio(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+async def review_portfolio(request: Request, api_key: str = Header(None, alias="X-API-Key"), _sub: None = Depends(require_subscription)):
     """AI Portfolio Review — comprehensive analysis with Buy/Hold/Sell verdicts."""
     import asyncio
     import sys
@@ -4948,6 +4952,7 @@ async def options_flow_query(
     request: Request,
     body: dict = Body(...),
     api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
 ):
     """
     Agent-powered chat for the Options Flow page.
@@ -6111,6 +6116,15 @@ async def whale_watch_page():
     if html_path.exists():
         return FileResponse(str(html_path), media_type="text/html")
     return HTMLResponse("<h1>Whale Watch not found</h1>", status_code=404)
+
+
+@app.get("/subscribe")
+async def subscribe_page():
+    """Serve the subscription / paywall page."""
+    html_path = Path(__file__).parent / "static" / "subscribe" / "index.html"
+    if html_path.exists():
+        return FileResponse(str(html_path), media_type="text/html")
+    return HTMLResponse("<h1>Coming Soon</h1>", status_code=404)
 
 
 def _vix_score(vix: float | None) -> float:

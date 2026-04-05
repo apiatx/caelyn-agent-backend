@@ -21,7 +21,10 @@ import httpx
 import psycopg2
 from psycopg2 import pool as _pg_pool
 from psycopg2.extras import Json, execute_batch
-from fastapi import APIRouter, Query, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Query, HTTPException, BackgroundTasks, Request, Depends
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
+from subscription import require_subscription
 from pydantic import BaseModel
 
 try:
@@ -2078,7 +2081,7 @@ def _normalize_standout(val: Any, label: str) -> dict | None:
 
 
 @router.get("/insider-activity/ai-analysis")
-async def get_ai_analysis():
+async def get_ai_analysis(request: Request, _sub: None = Depends(require_subscription)):
     """
     Returns today's Perplexity Sonar Pro analysis of insider transactions.
     Checks in-memory cache → DB cache → fresh API call.
@@ -2451,7 +2454,7 @@ async def trigger_refresh(background_tasks: BackgroundTasks):
 
 
 @router.post("/insider-activity/refresh-ai")
-async def trigger_ai_refresh(background_tasks: BackgroundTasks):
+async def trigger_ai_refresh(request: Request, background_tasks: BackgroundTasks, _sub: None = Depends(require_subscription)):
     """
     Manually trigger a fresh Perplexity AI analysis (bypasses the 24-hour cache).
     Runs in the background — poll GET /ai-analysis to see when results appear.

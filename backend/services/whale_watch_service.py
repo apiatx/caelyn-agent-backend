@@ -24,7 +24,10 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import httpx
 import psycopg2
 from psycopg2 import pool as _pg_pool
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Depends
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
+from subscription import require_subscription
 
 logger = logging.getLogger("whale_watch")
 
@@ -2383,7 +2386,7 @@ async def trigger_discover_famous():
 
 
 @router.post("/whales/discover")
-async def trigger_discover_whales():
+async def trigger_discover_whales(request: Request, _sub: None = Depends(require_subscription)):
     """
     Immediately run Perplexity discovery, upsert the results into the DB,
     and return the list of whales found with their names and estimated returns.
