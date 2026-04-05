@@ -4795,6 +4795,7 @@ _EDITABLE_SCAN_KEYS = {
 async def options_dashboard(
     request: Request,
     api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
 ):
     """
     Options flow screener — pure data endpoint, no Claude involved.

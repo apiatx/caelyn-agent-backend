@@ -2336,7 +2336,7 @@ async def get_famous_whales():
 
 
 @router.post("/whales/discover-famous")
-async def trigger_discover_famous():
+async def trigger_discover_famous(request: Request, _sub: None = Depends(require_subscription)):
     """
     Seed famous investors from the hardcoded list then run Perplexity live discovery.
     Returns the current list of all famous investors from the DB.
