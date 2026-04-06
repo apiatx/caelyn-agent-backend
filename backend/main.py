@@ -4742,19 +4742,26 @@ async def _options_precompute_loop():
                 for other_tab, other_seeds in _all_seed_sets.items():
                     if other_tab != tab:
                         exclude |= other_seeds
-                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Building prefilter + full scan for {len(seeds)} seed tickers...")
+
+                pf_key = _options_prefilter_cache_key(tab)
+                prefilter_data = cache.get(pf_key)
+                engine = TradierFlowEngine(data_service)
                 t0 = _time.time()
 
-                engine = TradierFlowEngine(data_service)
-                prefilter_data = await engine.build_prefilter_snapshot(
-                    seeds, tab=tab, exclude_tickers=exclude,
-                )
-                cache.set(_options_prefilter_cache_key(tab), prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
-                pf_elapsed = _time.time() - t0
-                n_candidates = len(prefilter_data.get("candidates", []))
-                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter: {n_candidates} candidates in {pf_elapsed:.1f}s. Running Tradier scan...")
+                if prefilter_data:
+                    n_candidates = len(prefilter_data.get("candidates", []))
+                    print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter cache hit ({n_candidates} candidates) — skipping Finnhub/FMP, running Tradier scan only...")
+                else:
+                    print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter cache cold — rebuilding from Finviz/Finnhub/FMP...")
+                    prefilter_data = await engine.build_prefilter_snapshot(
+                        seeds, tab=tab, exclude_tickers=exclude,
+                    )
+                    cache.set(pf_key, prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
+                    n_candidates = len(prefilter_data.get("candidates", []))
+                    pf_elapsed = _time.time() - t0
+                    print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter built: {n_candidates} candidates in {pf_elapsed:.1f}s.")
 
-                # Build full scan results so dashboard serves from cache immediately
+                # Tradier-only live scan — no paid API calls
                 screener_data = await engine.run_live_scan(
                     seeds, prefilter_snapshot=prefilter_data, tab=tab,
                 )
@@ -4767,11 +4774,10 @@ async def _options_precompute_loop():
                     **screener_data,
                 }
                 cache.set(_options_cache_key(tab), full_result, _OPTIONS_PRECOMPUTE_CACHE_TTL)
-                # Always keep a long-lived last-known-good copy so users never see blank on cold cache
                 cache.set(_options_lkg_cache_key(tab), full_result, _OPTIONS_LKG_CACHE_TTL)
                 elapsed = _time.time() - t0
                 n_tickers = len(screener_data.get("tickers", []))
-                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Full scan: {n_tickers} tickers, {len(screener_data.get('all_contracts', []))} contracts in {elapsed:.1f}s.")
+                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Tradier scan done: {n_tickers} tickers, {len(screener_data.get('all_contracts', []))} contracts in {elapsed:.1f}s.")
 
             except Exception as e:
                 import traceback
