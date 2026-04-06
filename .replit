@@ -48,4 +48,3 @@ run = ["sh", "-c", "cd /home/runner/workspace/backend && python3.11 -m uvicorn m
 [userenv]
 
 [userenv.shared]
-OWNER_USERNAME = "apilon32"

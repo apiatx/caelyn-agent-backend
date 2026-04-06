@@ -15,7 +15,8 @@ import os
 from fastapi import Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-OWNER_USERNAME: str = os.getenv("OWNER_USERNAME", "apilon32")
+# Fall back to AUTH_USERNAME so the login user is always the owner.
+OWNER_USERNAME: str = os.getenv("OWNER_USERNAME") or os.getenv("AUTH_USERNAME", "admin")
 
 def _get_user_id(request: Request) -> str | None:
     """Extract user_id from the Bearer JWT if present."""
