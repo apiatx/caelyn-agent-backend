@@ -1316,6 +1316,125 @@ class TradingAgent:
 
         return False
 
+    def _build_thematic_watchlist_prerank(self, market_data: dict) -> str:
+        """Build a deterministic pre-ranked watchlist JSON string for the thematic system prompt."""
+        import json, re as _re
+
+        ranked_tickers = market_data.get("ranked_tickers", [])
+        enriched_data = market_data.get("enriched_data", {})
+        if not ranked_tickers:
+            return ""
+
+        def _parse_mcap_b(cap_str) -> float:
+            if not cap_str or not isinstance(cap_str, str):
+                return 0.0
+            s = cap_str.upper().strip()
+            m = _re.search(r'([\d,.]+)\s*([BM]?)', s)
+            if not m:
+                return 0.0
+            num = float(m.group(1).replace(',', ''))
+            suffix = m.group(2)
+            return num if suffix == 'B' else (num / 1000.0 if suffix == 'M' else num)
+
+        large_cap, mid_cap, low_cap = [], [], []
+        for item in ranked_tickers:
+            ticker = item.get("ticker", "")
+            score = item.get("score", 0)
+            edata = enriched_data.get(ticker, {})
+            overview = edata.get("overview", {}) if isinstance(edata, dict) else {}
+            cap_b = _parse_mcap_b(overview.get("market_cap", ""))
+            entry = {"ticker": ticker, "quant_score": round(float(score), 3)}
+            if cap_b >= 10.0:
+                large_cap.append(entry)
+            elif cap_b >= 2.0:
+                mid_cap.append(entry)
+            else:
+                low_cap.append(entry)
+
+        large_cap = sorted(large_cap, key=lambda x: x["quant_score"], reverse=True)[:3]
+        mid_cap   = sorted(mid_cap,   key=lambda x: x["quant_score"], reverse=True)[:3]
+        low_cap   = sorted(low_cap,   key=lambda x: x["quant_score"], reverse=True)[:3]
+
+        all_ranked = large_cap + mid_cap + low_cap
+        buy_right_now = all_ranked[0] if all_ranked else ({"ticker": ranked_tickers[0].get("ticker", ""), "quant_score": 0} if ranked_tickers else {})
+
+        prerank = {
+            "large_cap":     [{"rank": i+1, "ticker": e["ticker"], "quant_score": e["quant_score"]} for i, e in enumerate(large_cap)],
+            "mid_cap":       [{"rank": i+1, "ticker": e["ticker"], "quant_score": e["quant_score"]} for i, e in enumerate(mid_cap)],
+            "low_cap":       [{"rank": i+1, "ticker": e["ticker"], "quant_score": e["quant_score"]} for i, e in enumerate(low_cap)],
+            "buy_right_now": {"ticker": buy_right_now.get("ticker", ""), "quant_score": buy_right_now.get("quant_score", 0)},
+        }
+        return json.dumps(prerank, indent=2)
+
+    def _enforce_thematic_watchlist(self, result: dict, market_data: dict) -> None:
+        """Backfill watchlist_today in thematic structured response from market_data if Claude left it empty."""
+        import re as _re
+
+        structured = result.get("structured")
+        if not isinstance(structured, dict):
+            return
+
+        wt = structured.get("watchlist_today")
+        if isinstance(wt, dict) and any(wt.get(k) for k in ("large_cap", "mid_cap", "low_cap", "buy_right_now")):
+            return
+
+        ranked_tickers = market_data.get("ranked_tickers", [])
+        enriched_data  = market_data.get("enriched_data", {})
+        if not ranked_tickers:
+            return
+
+        def _parse_mcap_b(cap_str) -> float:
+            if not cap_str or not isinstance(cap_str, str):
+                return 0.0
+            s = cap_str.upper().strip()
+            m = _re.search(r'([\d,.]+)\s*([BM]?)', s)
+            if not m:
+                return 0.0
+            num = float(m.group(1).replace(',', ''))
+            suffix = m.group(2)
+            return num if suffix == 'B' else (num / 1000.0 if suffix == 'M' else num)
+
+        large_cap, mid_cap, low_cap = [], [], []
+        ticker_rank = {item.get("ticker"): idx+1 for idx, item in enumerate(ranked_tickers)}
+
+        for item in ranked_tickers:
+            ticker = item.get("ticker", "")
+            score  = item.get("score", 0)
+            edata  = enriched_data.get(ticker, {})
+            overview = edata.get("overview", {}) if isinstance(edata, dict) else {}
+            cap_b  = _parse_mcap_b(overview.get("market_cap", ""))
+            tier   = "large" if cap_b >= 10.0 else ("mid" if cap_b >= 2.0 else "low")
+            entry  = {
+                "ticker":        ticker,
+                "company":       overview.get("company_name", ticker),
+                "market_cap_tier": tier,
+                "conviction":    "High" if score > 70 else ("Medium" if score > 40 else "Low"),
+                "conviction_score": round(float(score)),
+                "why_now":       f"Backend-ranked #{ticker_rank.get(ticker, '?')} in sector (composite score {round(float(score))})",
+                "catalyst":      "",
+            }
+            if tier == "large":
+                large_cap.append(entry)
+            elif tier == "mid":
+                mid_cap.append(entry)
+            else:
+                low_cap.append(entry)
+
+        large_cap = large_cap[:3]
+        mid_cap   = mid_cap[:3]
+        low_cap   = low_cap[:3]
+
+        all_ranked    = large_cap + mid_cap + low_cap
+        buy_right_now = dict(all_ranked[0]) if all_ranked else {}
+
+        structured["watchlist_today"] = {
+            "large_cap":     [dict(e, rank=i+1) for i, e in enumerate(large_cap)],
+            "mid_cap":       [dict(e, rank=i+1) for i, e in enumerate(mid_cap)],
+            "low_cap":       [dict(e, rank=i+1) for i, e in enumerate(low_cap)],
+            "buy_right_now": buy_right_now,
+        }
+        print(f"[THEMATIC] Backfilled watchlist_today: {len(large_cap)} large, {len(mid_cap)} mid, {len(low_cap)} low")
+
     @traceable(name="classify_with_timeout")
     async def _classify_with_timeout(self, prompt: str) -> dict:
         try:
