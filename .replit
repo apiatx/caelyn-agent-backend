@@ -47,7 +47,7 @@ outputType = "webview"
 
 [deployment]
 deploymentTarget = "vm"
-run = ["bash", "-c", "cd /home/runner/workspace/backend && python3.11 -m gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:5000 --timeout 120 main:app"]
+run = ["bash", "-c", "cd /home/runner/workspace/backend && python3.11 -m gunicorn -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:5000 --timeout 120 main:app"]
 
 [userenv]
 

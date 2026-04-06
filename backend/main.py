@@ -4697,9 +4697,10 @@ from data.options_ingestion import OPTIONS_WATCHLIST as _OPTIONS_FULL_WATCHLIST
 from data.tradier_flow_engine import TradierFlowEngine
 
 _OPTIONS_PRECOMPUTE_INTERVAL = 1800   # 30 minutes — full scan cycle
-_OPTIONS_CACHE_TTL = 120              # page response cache (2 min)
+_OPTIONS_CACHE_TTL = 600              # page response cache (10 min, up from 2)
 _OPTIONS_PREFILTER_CACHE_TTL = 3600   # 1 hour — proprietary stock-side data only
-_OPTIONS_PRECOMPUTE_CACHE_TTL = 600   # 10 min — full results from precompute loop
+_OPTIONS_PRECOMPUTE_CACHE_TTL = 2100  # 35 min — must exceed interval so cache never expires mid-cycle
+_OPTIONS_LKG_CACHE_TTL = 14400        # 4 hours — last-known-good fallback
 
 
 def _options_cache_key(tab: str) -> str:
@@ -4708,6 +4709,11 @@ def _options_cache_key(tab: str) -> str:
 
 def _options_prefilter_cache_key(tab: str) -> str:
     return f"options_screener_prefilter_v8:{tab}"
+
+
+def _options_lkg_cache_key(tab: str) -> str:
+    """Last-known-good fallback — survives cache expiry, used when live scan is cold."""
+    return f"options_screener_lkg_v1:{tab}"
 
 
 async def _options_precompute_loop():
@@ -4761,6 +4767,8 @@ async def _options_precompute_loop():
                     **screener_data,
                 }
                 cache.set(_options_cache_key(tab), full_result, _OPTIONS_PRECOMPUTE_CACHE_TTL)
+                # Always keep a long-lived last-known-good copy so users never see blank on cold cache
+                cache.set(_options_lkg_cache_key(tab), full_result, _OPTIONS_LKG_CACHE_TTL)
                 elapsed = _time.time() - t0
                 n_tickers = len(screener_data.get("tickers", []))
                 print(f"[OPTIONS_PRECOMPUTE] [{tab}] Full scan: {n_tickers} tickers, {len(screener_data.get('all_contracts', []))} contracts in {elapsed:.1f}s.")
@@ -4849,14 +4857,65 @@ async def options_dashboard(
             "cache_age_seconds": age,
         }
 
-    # ── Live page visit path: use cached prefilter, then call Public.com now ─
+    # ── Stale-while-revalidate: serve last-known-good immediately, refresh in background ─
+    lkg_key = _options_lkg_cache_key(tab)
+    lkg = cache.get(lkg_key)
+
     prefilter_key = _options_prefilter_cache_key(tab)
     prefilter_snapshot = cache.get(prefilter_key)
+
+    async def _full_scan_and_cache():
+        """Run a full scan and write results to both hot cache and LKG cache."""
+        pf_snapshot = cache.get(prefilter_key)
+        try:
+            overrides = _SCAN_USER_OVERRIDES.get(tab) or None
+            engine = TradierFlowEngine(data_service, overrides=overrides)
+            exclude = set()
+            for other_tab, other_seeds in _OPTIONS_TAB_SEEDS.items():
+                if other_tab != tab:
+                    exclude |= set(other_seeds)
+            if not pf_snapshot:
+                pf_snapshot = await engine.build_prefilter_snapshot(seed_tickers, tab=tab, exclude_tickers=exclude)
+                cache.set(prefilter_key, pf_snapshot, _OPTIONS_PREFILTER_CACHE_TTL)
+            screener_data = await engine.run_live_scan(
+                seed_tickers, prefilter_snapshot=pf_snapshot, tab=tab,
+            )
+            result = {
+                "display_type": "options_screener",
+                "scan_type": "options_flow",
+                "tab": tab,
+                "cached_at": _time.time(),
+                "tickers_scanned": seed_tickers,
+                **screener_data,
+            }
+            cache.set(cache_key, result, _OPTIONS_CACHE_TTL)
+            cache.set(lkg_key, result, _OPTIONS_LKG_CACHE_TTL)
+            print(f"[OPTIONS_DASH] [{tab}] Background refresh done — {len(screener_data.get('tickers', []))} tickers")
+        except Exception as _bg_err:
+            print(f"[OPTIONS_DASH] [{tab}] Background refresh error: {_bg_err}")
+
+    if lkg:
+        # Serve stale data immediately, kick off a background refresh so next visit is hot
+        lkg_age = int(_time.time() - lkg.get("cached_at", _time.time()))
+        print(f"[OPTIONS_DASH] [{tab}] Cache cold — serving LKG (age={lkg_age}s), refreshing in background")
+        asyncio.create_task(_full_scan_and_cache())
+        return {
+            "response": lkg,
+            "structured": True,
+            "preset": "options_screener",
+            "tab": tab,
+            "available_tabs": sorted(_OPTIONS_VALID_TABS),
+            "from_cache": True,
+            "stale": True,
+            "cache_age_seconds": lkg_age,
+        }
+
+    # No LKG at all (first run after deploy) — do a blocking scan with timeout
     if prefilter_snapshot:
         pre_age = int(_time.time() - _dt.fromisoformat(prefilter_snapshot.get("generated_at")).timestamp()) if prefilter_snapshot.get("generated_at") else None
-        print(f"[OPTIONS_DASH] [{tab}] Using prefilter cache (age={pre_age}s)")
+        print(f"[OPTIONS_DASH] [{tab}] No LKG, using prefilter cache (age={pre_age}s) for first live scan")
     else:
-        print(f"[OPTIONS_DASH] [{tab}] Prefilter cache cold — building stock-side shortlist now...")
+        print(f"[OPTIONS_DASH] [{tab}] No LKG, no prefilter — cold first-time scan")
     t0 = _time.time()
 
     async def _full_scan():
@@ -4870,14 +4929,9 @@ async def options_dashboard(
         if not prefilter_snapshot:
             prefilter_snapshot = await engine.build_prefilter_snapshot(seed_tickers, tab=tab, exclude_tickers=exclude)
             cache.set(prefilter_key, prefilter_snapshot, _OPTIONS_PREFILTER_CACHE_TTL)
-
         screener_data = await engine.run_live_scan(
-            seed_tickers,
-            prefilter_snapshot=prefilter_snapshot,
-            tab=tab,
+            seed_tickers, prefilter_snapshot=prefilter_snapshot, tab=tab,
         )
-        # TradierFlowEngine already handles Polygon enrichment (technicals +
-        # historic_volume) inside _inspect_one_ticker, so no extra enrichment needed.
         return screener_data
 
     try:
@@ -4893,7 +4947,8 @@ async def options_dashboard(
             **screener_data,
         }
         cache.set(cache_key, result, _OPTIONS_CACHE_TTL)
-        print(f"[OPTIONS_DASH] [{tab}] Live scan completed in {elapsed:.1f}s — {len(screener_data.get('tickers', []))} tickers")
+        cache.set(lkg_key, result, _OPTIONS_LKG_CACHE_TTL)
+        print(f"[OPTIONS_DASH] [{tab}] First live scan completed in {elapsed:.1f}s — {len(screener_data.get('tickers', []))} tickers")
 
         return {
             "response": result,
