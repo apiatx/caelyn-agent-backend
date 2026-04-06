@@ -63,10 +63,20 @@ def verify_token(token: str) -> dict:
 
 @traceable(name="auth.validate_credentials")
 def validate_credentials(username: str, password: str) -> bool:
-    """Validate username and password against environment-stored credentials."""
+    """Validate username and password against environment-stored credentials.
+
+    Priority:
+    1. If ADMIN_PASSWORD secret is set, accept that plaintext password directly
+       (bootstrap / password-reset mode — no need to pre-hash).
+    2. Otherwise fall back to bcrypt verification against AUTH_PASSWORD_HASH.
+    """
     if username != AUTH_USERNAME:
         return False
+    # ── Bootstrap path: ADMIN_PASSWORD overrides the hash ──────────────────
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    if admin_password:
+        return password == admin_password
+    # ── Normal path: bcrypt hash ────────────────────────────────────────────
     if not AUTH_PASSWORD_HASH:
-        # No hash configured — deny all logins
         return False
     return verify_password(password, AUTH_PASSWORD_HASH)
