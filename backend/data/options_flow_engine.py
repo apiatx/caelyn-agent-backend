@@ -39,8 +39,8 @@ def _env_float(name: str, default: float) -> float:
 
 
 OPTIONS_FLOW_DEFAULTS = {
-    "prefilter_target": _env_int("OPTIONS_FLOW_PREFILTER_TARGET", 24),
-    "options_inspection_limit": _env_int("OPTIONS_FLOW_INSPECTION_LIMIT", 15),
+    "prefilter_target": _env_int("OPTIONS_FLOW_PREFILTER_TARGET", 12),
+    "options_inspection_limit": _env_int("OPTIONS_FLOW_INSPECTION_LIMIT", 8),
     "min_stock_price": _env_float("OPTIONS_FLOW_MIN_STOCK_PRICE", 8.0),
     "min_stock_liquidity": _env_float("OPTIONS_FLOW_MIN_STOCK_LIQUIDITY", 15_000_000.0),
     # Market-cap ranges are hardcoded per tier — NOT user-editable.
@@ -576,10 +576,17 @@ class OptionsFlowEngine:
 
         print(f"[OPTIONS_FLOW] [{tab}] Prefilter: {total_raw} raw candidates → {len(preliminary)} preliminary (sources degraded: {degraded_sources})")
 
-        quote_tasks = []
-        for row in preliminary:
-            quote_tasks.append(self._enrich_stock_candidate(row, earnings_by_symbol.get(row["ticker"]), macro))
-        enriched_rows = await asyncio.gather(*quote_tasks, return_exceptions=True)
+        # Throttle Finnhub enrichment: 1 candidate at a time with 3s spacing.
+        # Each candidate fires 3 simultaneous Finnhub calls → 3 calls per ~4s ≈ 45/min (under 60/min limit).
+        enrich_sem = asyncio.Semaphore(1)
+
+        async def _throttled_enrich(row):
+            async with enrich_sem:
+                result = await self._enrich_stock_candidate(row, earnings_by_symbol.get(row["ticker"]), macro)
+                await asyncio.sleep(3)
+                return result
+
+        enriched_rows = await asyncio.gather(*[_throttled_enrich(row) for row in preliminary], return_exceptions=True)
 
         final_rows = []
         for base, enriched in zip(preliminary, enriched_rows):
@@ -742,14 +749,19 @@ class OptionsFlowEngine:
         return _clip(score)
 
     async def _inspect_shortlist(self, candidates: list[dict], macro: dict, *, tab: str = "megacap") -> list[dict | None]:
-        sem = asyncio.Semaphore(6)
+        # Semaphore(1) = fully sequential ticker processing.
+        # Each ticker makes ~3 Tradier calls; 3s pad keeps us safely under 60 req/min.
+        sem = asyncio.Semaphore(1)
 
         async def _bounded(candidate: dict):
             async with sem:
                 try:
-                    return await self._inspect_one_ticker(candidate, macro, tab=tab)
+                    result = await self._inspect_one_ticker(candidate, macro, tab=tab)
+                    await asyncio.sleep(3)  # ~3 Tradier calls per ticker → 60/min cap with margin
+                    return result
                 except Exception as exc:
                     print(f"[OPTIONS_FLOW] ticker inspect failed for {candidate.get('ticker')}: {exc}")
+                    await asyncio.sleep(1)  # backoff on error too
                     return None
 
         return await asyncio.gather(*[_bounded(c) for c in candidates])
