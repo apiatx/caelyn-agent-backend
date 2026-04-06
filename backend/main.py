@@ -4696,10 +4696,10 @@ _OPTIONS_TAB_SEEDS = {
 from data.options_ingestion import OPTIONS_WATCHLIST as _OPTIONS_FULL_WATCHLIST
 from data.tradier_flow_engine import TradierFlowEngine
 
-_OPTIONS_PRECOMPUTE_INTERVAL = 1800   # 30 minutes — full scan cycle
-_OPTIONS_CACHE_TTL = 600              # page response cache (10 min, up from 2)
-_OPTIONS_PREFILTER_CACHE_TTL = 3600   # 1 hour — proprietary stock-side data only
-_OPTIONS_PRECOMPUTE_CACHE_TTL = 2100  # 35 min — must exceed interval so cache never expires mid-cycle
+_OPTIONS_PRECOMPUTE_INTERVAL = 60     # 60s sleep between cycles; scan ~2min → effective refresh ~3-4min
+_OPTIONS_CACHE_TTL = 300              # 5 min hot cache — safely exceeds one full scan cycle
+_OPTIONS_PREFILTER_CACHE_TTL = 3600   # 1 hour — stock-side prefilter (Finnhub/FMP called only once/hr)
+_OPTIONS_PRECOMPUTE_CACHE_TTL = 300   # 5 min — matches hot cache TTL
 _OPTIONS_LKG_CACHE_TTL = 14400        # 4 hours — last-known-good fallback
 
 
