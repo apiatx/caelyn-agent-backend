@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Options Flow — Caelyn AI</title>
+<style>
+  :root {
+    --bg: #090909; --bg2: #0f0f0f; --bg3: #161616; --bg4: #1c1c1c;
+    --border: #2a2a2a; --border2: #333;
+    --green: #00e676; --green-dim: #1b3a25;
+    --yellow: #ffd600; --yellow-dim: #3e2c00;
+    --red: #ff1744; --red-dim: #4a0010;
+    --blue: #2979ff; --blue-dim: #0d2a6e;
+    --purple: #aa00ff; --purple-dim: #2a0045;
+    --orange: #ff6d00;
+    --text: #e0e0e0; --text-dim: #888; --text-dimmer: #555;
+    --mono: 'Courier New','Consolas',monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; min-height: 100vh; }
+
+  /* LOGIN SCREEN */
+  .login-screen {
+    display: none; position: fixed; inset: 0; background: var(--bg);
+    align-items: center; justify-content: center; z-index: 9999;
+    flex-direction: column; gap: 24px;
+  }
+  .login-screen.show { display: flex; }
+  .login-box {
+    background: var(--bg2); border: 1px solid var(--border2);
+    border-radius: 4px; padding: 32px 36px; width: 320px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .login-title { font-size: 14px; letter-spacing: 2px; color: var(--text); font-weight: bold; }
+  .login-sub   { font-size: 10px; color: var(--text-dimmer); letter-spacing: 1px; }
+  .login-field { display: flex; flex-direction: column; gap: 5px; }
+  .login-field label { font-size: 10px; color: var(--text-dimmer); letter-spacing: 1px; }
+  .login-field input {
+    background: var(--bg3); border: 1px solid var(--border2); color: var(--text);
+    font-family: var(--mono); font-size: 13px; padding: 8px 10px; border-radius: 3px;
+    outline: none;
+  }
+  .login-field input:focus { border-color: var(--green); }
+  .login-btn {
+    padding: 10px; background: var(--green-dim); border: 1px solid var(--green);
+    color: var(--green); font-family: var(--mono); font-size: 12px; cursor: pointer;
+    border-radius: 3px; letter-spacing: 1px; font-weight: bold; transition: background 0.15s;
+  }
+  .login-btn:hover { background: #234d30; }
+  .login-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .login-error { font-size: 11px; color: var(--red); display: none; }
+  .login-error.show { display: block; }
+
+  /* TOP BAR */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px; background: #0a0a0a; border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 100;
+    flex-wrap: wrap; gap: 8px;
+  }
+  .topbar-left { display: flex; align-items: center; gap: 12px; }
+  .topbar-logo { font-size: 11px; color: var(--text-dim); letter-spacing: 2px; }
+  .topbar-title { font-size: 14px; font-weight: bold; color: var(--text); letter-spacing: 1px; }
+  .topbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+  /* STATUS ROW */
+  .status-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: var(--text-dim);
+  }
+  .status-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+    animation: blink 2s infinite; flex-shrink: 0;
+  }
+  .status-dot.stale { background: var(--yellow); }
+  .status-dot.cold  { background: var(--red); animation: none; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .status-sep { color: var(--text-dimmer); }
+  #statusRefreshingNow { color: var(--yellow); display: none; }
+
+  .refresh-btn {
+    padding: 4px 12px; background: var(--bg3); border: 1px solid var(--border2);
+    color: var(--text); font-family: var(--mono); font-size: 11px; cursor: pointer;
+    border-radius: 3px; letter-spacing: 0.5px; transition: background 0.15s;
+  }
+  .refresh-btn:hover { background: var(--bg4); }
+  .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* TAB BAR */
+  .tab-bar {
+    display: flex; gap: 2px; padding: 10px 16px 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+  }
+  .tab-btn {
+    padding: 6px 16px; background: none; border: 1px solid transparent;
+    border-bottom: none; color: var(--text-dim); font-family: var(--mono); font-size: 11px;
+    cursor: pointer; letter-spacing: 1px; text-transform: uppercase;
+    border-radius: 3px 3px 0 0; transition: all 0.15s;
+  }
+  .tab-btn:hover { color: var(--text); background: var(--bg3); }
+  .tab-btn.active {
+    color: var(--green); border-color: var(--border2); background: var(--bg);
+    border-bottom-color: var(--bg);
+  }
+
+  /* MAIN */
+  .main { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+
+  /* MARKET SUMMARY STRIP */
+  .market-strip {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
+    padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+  }
+  .mkt-item { display: flex; flex-direction: column; gap: 2px; }
+  .mkt-label { font-size: 9px; color: var(--text-dimmer); letter-spacing: 1px; text-transform: uppercase; }
+  .mkt-val { font-size: 13px; font-weight: bold; }
+  .mkt-val.pos { color: var(--green); }
+  .mkt-val.neg { color: var(--red); }
+  .mkt-val.neutral { color: var(--text-dim); }
+
+  /* PIPELINE STATS */
+  .pipeline-strip {
+    font-size: 10px; color: var(--text-dimmer); display: flex; gap: 16px; flex-wrap: wrap;
+    padding: 0 2px;
+  }
+  .pipeline-strip span { color: var(--text-dim); }
+
+  /* TICKER GRID */
+  .ticker-grid { display: flex; flex-direction: column; gap: 10px; }
+
+  /* TICKER CARD */
+  .ticker-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
+    overflow: hidden;
+  }
+  .ticker-card.signal-bullish { border-left: 3px solid var(--green); }
+  .ticker-card.signal-bearish { border-left: 3px solid var(--red); }
+  .ticker-card.signal-neutral { border-left: 3px solid var(--text-dimmer); }
+  .ticker-card.signal-mixed   { border-left: 3px solid var(--yellow); }
+
+  .card-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; background: var(--bg3); cursor: pointer;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-header:hover { background: var(--bg4); }
+  .card-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .card-ticker { font-size: 15px; font-weight: bold; color: var(--text); min-width: 56px; }
+  .card-signal {
+    font-size: 10px; padding: 2px 8px; border-radius: 2px; letter-spacing: 1px; font-weight: bold;
+  }
+  .card-signal.bullish { background: var(--green-dim); color: var(--green); }
+  .card-signal.bearish { background: var(--red-dim); color: var(--red); }
+  .card-signal.neutral { background: var(--bg4); color: var(--text-dim); }
+  .card-signal.mixed   { background: var(--yellow-dim); color: var(--yellow); }
+  .card-price { font-size: 13px; color: var(--text); }
+  .card-change { font-size: 12px; }
+  .card-change.pos { color: var(--green); }
+  .card-change.neg { color: var(--red); }
+  .card-right { display: flex; align-items: center; gap: 16px; }
+  .card-scores { display: flex; gap: 10px; align-items: center; }
+  .score-item { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+  .score-label { font-size: 8px; color: var(--text-dimmer); letter-spacing: 0.5px; }
+  .score-value { font-size: 13px; font-weight: bold; }
+  .score-value.high { color: var(--green); }
+  .score-value.mid  { color: var(--yellow); }
+  .score-value.low  { color: var(--red); }
+  .score-value.na   { color: var(--text-dimmer); }
+  .card-confidence { font-size: 10px; color: var(--text-dim); text-align: right; }
+  .card-expand { font-size: 12px; color: var(--text-dimmer); margin-left: 8px; flex-shrink: 0; }
+
+  .card-body { padding: 10px 12px; display: none; }
+  .card-body.open { display: block; }
+
+  .thesis-text {
+    font-size: 11px; color: var(--text-dim); line-height: 1.6;
+    padding: 6px 0 10px; border-bottom: 1px solid var(--border); margin-bottom: 10px;
+  }
+
+  .score-bars { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; margin-bottom: 10px; }
+  .score-bar-row { display: flex; flex-direction: column; gap: 3px; }
+  .sbar-label { font-size: 9px; color: var(--text-dimmer); letter-spacing: 0.5px; }
+  .sbar-track { height: 4px; background: var(--bg4); border-radius: 2px; overflow: hidden; }
+  .sbar-fill { height: 100%; border-radius: 2px; background: var(--green); }
+  .sbar-fill.mid { background: var(--yellow); }
+  .sbar-fill.low { background: var(--red); }
+
+  .contracts-section { margin-top: 8px; }
+  .contracts-title { font-size: 9px; color: var(--text-dimmer); letter-spacing: 1px; margin-bottom: 6px; }
+  .contracts-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .contracts-table th {
+    text-align: left; color: var(--text-dimmer); font-size: 9px; letter-spacing: 0.5px;
+    padding: 3px 6px; border-bottom: 1px solid var(--border); font-weight: normal;
+  }
+  .contracts-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); color: var(--text); }
+  .contracts-table tr:last-child td { border-bottom: none; }
+  .contracts-table tr:hover td { background: var(--bg3); }
+  .type-call { color: var(--green); font-weight: bold; }
+  .type-put  { color: var(--red); font-weight: bold; }
+  .td-right { text-align: right; }
+
+  .ctx-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .ctx-chip {
+    font-size: 9px; padding: 2px 8px; border-radius: 10px;
+    background: var(--bg4); color: var(--text-dim); border: 1px solid var(--border2);
+  }
+
+  .empty-state {
+    text-align: center; color: var(--text-dimmer); font-size: 12px; padding: 48px;
+  }
+
+  .risks-text { font-size: 11px; color: var(--red); margin-top: 6px; line-height: 1.5; }
+
+  @media (max-width: 600px) {
+    .card-right { flex-direction: column; align-items: flex-end; gap: 4px; }
+    .score-bars { grid-template-columns: 1fr 1fr; }
+    .contracts-table { font-size: 10px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-box">
+    <div class="login-title">CAELYN AI</div>
+    <div class="login-sub">OPTIONS FLOW — SIGN IN TO CONTINUE</div>
+    <form onsubmit="event.preventDefault(); doLogin();" autocomplete="on">
+      <div class="login-field" style="margin-bottom:12px">
+        <label>USERNAME</label>
+        <input type="text" id="loginUser" name="username" autocomplete="username" placeholder="username">
+      </div>
+      <div class="login-field" style="margin-bottom:12px">
+        <label>PASSWORD</label>
+        <input type="password" id="loginPass" name="password" autocomplete="current-password" placeholder="••••••••">
+      </div>
+      <div class="login-error" id="loginError">Invalid username or password.</div>
+      <button type="submit" class="login-btn" id="loginBtn">▶ SIGN IN</button>
+    </form>
+  </div>
+</div>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="topbar-logo">CAELYN AI</span>
+    <span style="color:#333">|</span>
+    <span class="topbar-title">OPTIONS FLOW</span>
+  </div>
+  <div class="topbar-right">
+    <div class="status-row">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusLastRefresh">—</span>
+      <span class="status-sep">·</span>
+      <span id="statusNextRefresh">—</span>
+      <span id="statusRefreshingNow">↻ refreshing...</span>
+    </div>
+    <button class="refresh-btn" id="refreshBtn" onclick="manualRefresh()">⟳ REFRESH</button>
+  </div>
+</div>
+
+<!-- TAB BAR -->
+<div class="tab-bar">
+  <button class="tab-btn active" id="tab-megacap"   onclick="switchTab('megacap')">MEGA-CAP</button>
+  <button class="tab-btn"        id="tab-large_cap" onclick="switchTab('large_cap')">LARGE-CAP</button>
+  <button class="tab-btn"        id="tab-small_cap" onclick="switchTab('small_cap')">SMALL-CAP</button>
+  <button class="tab-btn"        id="tab-etf"       onclick="switchTab('etf')">ETF</button>
+</div>
+
+<!-- MAIN CONTENT -->
+<div class="main" id="mainContent">
+  <div class="empty-state">Loading...</div>
+</div>
+
+<script>
+// ── Auth ──────────────────────────────────────────────────────────────────
+const TOKEN_KEY = 'caelyn_jwt';
+let authToken = localStorage.getItem(TOKEN_KEY) || '';
+
+async function doLogin() {
+  const user = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  const btn  = document.getElementById('loginBtn');
+  const err  = document.getElementById('loginError');
+  if (!user || !pass) return;
+  btn.disabled = true; btn.textContent = '▶ SIGNING IN...';
+  err.classList.remove('show');
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: user, password: pass, remember_me: true }),
+    });
+    if (!res.ok) throw new Error('bad credentials');
+    const data = await res.json();
+    authToken = data.token;
+    localStorage.setItem(TOKEN_KEY, authToken);
+    document.getElementById('loginScreen').classList.remove('show');
+    loadDashboard(currentTab);
+  } catch {
+    err.classList.add('show');
+  } finally {
+    btn.disabled = false; btn.textContent = '▶ SIGN IN';
+  }
+}
+
+function showLogin() {
+  document.getElementById('loginScreen').classList.add('show');
+}
+
+function authHeaders() {
+  return authToken
+    ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` }
+    : { 'Content-Type': 'application/json' };
+}
+
+// Allow Enter key to submit login form
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.getElementById('loginScreen').classList.contains('show')) doLogin();
+});
+
+// ── State ─────────────────────────────────────────────────────────────────
+let currentTab = 'megacap';
+let autoRefreshTimer = null;
+let countdownTimer   = null;
+let nextRefreshAt    = null;
+let isRefreshing     = false;
+let _lastServerCacheAge = 0;
+let _dataGeneratedAt    = null;
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById(`tab-${tab}`);
+  if (btn) btn.classList.add('active');
+  loadDashboard(tab);
+}
+
+function manualRefresh() {
+  loadDashboard(currentTab, true);
+}
+
+// ── Load dashboard from API ────────────────────────────────────────────────
+async function loadDashboard(tab, manual = false) {
+  if (isRefreshing && !manual) return;
+  isRefreshing = true;
+
+  const refreshBtn = document.getElementById('refreshBtn');
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = '↻ LOADING...';
+
+  try {
+    const res = await fetch('/api/options/dashboard', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ tab }),
+    });
+
+    if (res.status === 401 || res.status === 402) {
+      showLogin();
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const data = await res.json();
+
+    _lastServerCacheAge = data.cache_age_seconds || 0;
+    const serverRefreshIn = data.next_refresh_in_seconds;
+    const isStale = !!data.stale;
+
+    _dataGeneratedAt = Date.now() - (_lastServerCacheAge * 1000);
+
+    if (serverRefreshIn != null) {
+      nextRefreshAt = Date.now() + (serverRefreshIn * 1000);
+    } else {
+      nextRefreshAt = Date.now() + 300000;
+    }
+
+    updateStatus(isStale);
+    scheduleCountdown();
+    scheduleAutoRefresh(serverRefreshIn != null ? serverRefreshIn : 300);
+
+    renderDashboard(data.response || {}, data);
+
+  } catch (err) {
+    document.getElementById('mainContent').innerHTML =
+      `<div class="empty-state" style="color:var(--red)">Error: ${err.message}</div>`;
+    setStatusCold();
+  } finally {
+    isRefreshing = false;
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = '⟳ REFRESH';
+  }
+}
+
+// ── Status text ───────────────────────────────────────────────────────────
+function updateStatus(isStale) {
+  document.getElementById('statusDot').className = 'status-dot' + (isStale ? ' stale' : '');
+  document.getElementById('statusRefreshingNow').style.display = isStale ? 'inline' : 'none';
+  _tickStatus();
+}
+
+function setStatusCold() {
+  document.getElementById('statusDot').className = 'status-dot cold';
+  document.getElementById('statusLastRefresh').textContent = 'Last refresh: —';
+  document.getElementById('statusNextRefresh').textContent = 'Refresh failed';
+  document.getElementById('statusRefreshingNow').style.display = 'none';
+}
+
+function _tickStatus() {
+  if (_dataGeneratedAt) {
+    const ageMs = Date.now() - _dataGeneratedAt;
+    document.getElementById('statusLastRefresh').textContent = `Last refresh: ${fmtAge(ageMs)}`;
+  }
+  if (nextRefreshAt) {
+    const remainMs = nextRefreshAt - Date.now();
+    document.getElementById('statusNextRefresh').textContent =
+      remainMs > 0 ? `Refresh in ${fmtAge(remainMs, true)}` : 'Refresh in ~4-5 min';
+  }
+}
+
+function fmtAge(ms, countdown = false) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return countdown ? `${s}s` : `${s}s ago`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (countdown) return r === 0 ? `${m}m` : `${m}m ${r}s`;
+  return `${m}m ${r}s ago`;
+}
+
+function scheduleCountdown() {
+  if (countdownTimer) clearInterval(countdownTimer);
+  countdownTimer = setInterval(_tickStatus, 1000);
+}
+
+function scheduleAutoRefresh(nextInSeconds) {
+  if (autoRefreshTimer) clearTimeout(autoRefreshTimer);
+  const delayMs = Math.max(10000, (nextInSeconds + 8) * 1000);
+  autoRefreshTimer = setTimeout(() => loadDashboard(currentTab), delayMs);
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
+function renderDashboard(response, meta) {
+  const main    = document.getElementById('mainContent');
+  const tickers = response.tickers || [];
+  const ms      = response.market_summary || {};
+  const ps      = response.pipeline_stats || {};
+
+  let html = renderMarketStrip(ms) + renderPipelineStrip(ps, meta);
+
+  if (!tickers.length) {
+    html += `<div class="empty-state">
+      No options flow signals for this tab right now.<br>
+      <span style="font-size:11px;color:var(--text-dimmer)">Background scan may still be running — check back in a few minutes.</span>
+    </div>`;
+  } else {
+    html += `<div class="ticker-grid">` + tickers.map(renderTickerCard).join('') + `</div>`;
+  }
+
+  main.innerHTML = html;
+
+  document.querySelectorAll('.card-header').forEach(h => {
+    h.addEventListener('click', () => {
+      const body = h.nextElementSibling;
+      const exp  = h.querySelector('.card-expand');
+      body.classList.toggle('open');
+      if (exp) exp.textContent = body.classList.contains('open') ? '▲' : '▼';
+    });
+  });
+}
+
+function renderMarketStrip(ms) {
+  if (!ms || ms.error) {
+    return ms && ms.error
+      ? `<div class="market-strip"><span style="color:var(--yellow);font-size:11px">${ms.error}</span></div>`
+      : '';
+  }
+  const items = [];
+  if (ms.spy_price  != null) items.push(['SPY', fmt$(ms.spy_price),  clsChg(ms.spy_change_pct)]);
+  if (ms.qqq_price  != null) items.push(['QQQ', fmt$(ms.qqq_price),  clsChg(ms.qqq_change_pct)]);
+  if (ms.vix        != null) items.push(['VIX', ms.vix.toFixed(2),   ms.vix > 25 ? 'neg' : ms.vix > 18 ? 'neutral' : 'pos']);
+  if (ms.market_bias)        items.push(['BIAS', ms.market_bias.toUpperCase(), ms.market_bias === 'bullish' ? 'pos' : ms.market_bias === 'bearish' ? 'neg' : 'neutral']);
+  if (ms.regime)             items.push(['REGIME', ms.regime, 'neutral']);
+  if (ms.fear_greed != null) items.push(['FEAR/GREED', ms.fear_greed, ms.fear_greed > 60 ? 'pos' : ms.fear_greed < 40 ? 'neg' : 'neutral']);
+  if (!items.length) return '';
+  return `<div class="market-strip">${items.map(([l, v, c]) =>
+    `<div class="mkt-item"><div class="mkt-label">${l}</div><div class="mkt-val ${c||''}">${v}</div></div>`
+  ).join('')}</div>`;
+}
+
+function renderPipelineStrip(ps, meta) {
+  const parts = [];
+  if (ps.prefilter_candidate_count != null) parts.push(`Candidates: <span>${ps.prefilter_candidate_count}</span>`);
+  if (ps.options_inspection_count  != null) parts.push(`Inspected: <span>${ps.options_inspection_count}</span>`);
+  if (ps.ranked_result_count       != null) parts.push(`Results: <span>${ps.ranked_result_count}</span>`);
+  if (meta.stale) parts.push(`<span style="color:var(--yellow)">⚠ Serving cached data — fresh scan in progress</span>`);
+  if (!parts.length) return '';
+  return `<div class="pipeline-strip">${parts.join('&ensp;·&ensp;')}</div>`;
+}
+
+function renderTickerCard(t) {
+  const sig    = (t.primary_signal || 'neutral').toLowerCase();
+  const sigCls = sig.includes('bull') ? 'bullish' : sig.includes('bear') ? 'bearish' : sig.includes('mix') ? 'mixed' : 'neutral';
+  const score  = t.composite_score != null ? Math.round(t.composite_score) : null;
+  const sCls   = score == null ? 'na' : score >= 70 ? 'high' : score >= 45 ? 'mid' : 'low';
+  const price  = t.underlying_price;
+  const chgPct = t.price_change_pct;
+  const chgStr = chgPct != null ? `${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%` : '';
+  const chgCls = chgPct != null ? (chgPct >= 0 ? 'pos' : 'neg') : '';
+  const ms     = t.modular_scores || {};
+
+  return `<div class="ticker-card signal-${sigCls}">
+    <div class="card-header">
+      <div class="card-left">
+        <span class="card-ticker">${t.ticker}</span>
+        <span class="card-signal ${sigCls}">${sig.replace(/_/g,' ').toUpperCase()}</span>
+        ${price  != null ? `<span class="card-price">${fmt$(price)}</span>` : ''}
+        ${chgStr ? `<span class="card-change ${chgCls}">${chgStr}</span>` : ''}
+      </div>
+      <div class="card-right">
+        <div class="card-scores">
+          ${chip('COMPOSITE', score, sCls)}
+          ${chip('FLOW',  ms.flow_score  != null ? Math.round(ms.flow_score)  : null)}
+          ${chip('GAMMA', ms.gamma_score != null ? Math.round(ms.gamma_score) : null)}
+          ${chip('VOL',   ms.volatility_score != null ? Math.round(ms.volatility_score) : null)}
+        </div>
+        <div class="card-confidence">${t.confidence || '—'}</div>
+        <div class="card-expand">▼</div>
+      </div>
+    </div>
+    <div class="card-body">${renderCardBody(t)}</div>
+  </div>`;
+}
+
+function chip(label, val, forceClass) {
+  const c = forceClass || (val == null ? 'na' : val >= 70 ? 'high' : val >= 45 ? 'mid' : 'low');
+  return `<div class="score-item">
+    <span class="score-label">${label}</span>
+    <span class="score-value ${c}">${val != null ? val : '—'}</span>
+  </div>`;
+}
+
+function renderCardBody(t) {
+  let html = '';
+
+  const thesis = t.thesis;
+  if (thesis) {
+    const s = typeof thesis === 'string' ? thesis : (thesis.summary || '');
+    if (s) html += `<div class="thesis-text">${s}</div>`;
+  }
+
+  const ctx = t.stock_context || {};
+  const chips = [ctx.breakout_context, ctx.compression_context, ctx.reversal_context,
+    ctx.catalyst_context, ctx.liquidity_context, ctx.short_squeeze_context, ctx.macro_context].filter(Boolean);
+  if (chips.length) html += `<div class="ctx-row">${chips.map(c => `<span class="ctx-chip">${c}</span>`).join('')}</div>`;
+
+  const ms   = t.modular_scores || {};
+  const bars = [
+    ['FLOW', ms.flow_score], ['GAMMA', ms.gamma_score], ['ASYMMETRY', ms.asymmetry_score],
+    ['VOLATILITY', ms.volatility_score], ['SENTIMENT', ms.sentiment_score], ['STOCK CTX', ms.stock_context_score],
+  ].filter(([,v]) => v != null);
+  if (bars.length) {
+    html += `<div class="score-bars">${bars.map(([l, v]) => {
+      const pct = Math.min(100, Math.max(0, v));
+      const c   = pct >= 70 ? '' : pct >= 45 ? 'mid' : 'low';
+      return `<div class="score-bar-row">
+        <div class="sbar-label">${l}: ${Math.round(v)}</div>
+        <div class="sbar-track"><div class="sbar-fill ${c}" style="width:${pct}%"></div></div>
+      </div>`;
+    }).join('')}</div>`;
+  }
+
+  const oSum = t.options_context_summary;
+  if (typeof oSum === 'string' && oSum) {
+    html += `<div class="thesis-text" style="border-top:1px solid var(--border);padding-top:8px;margin-top:8px">${oSum}</div>`;
+  }
+
+  const contracts = t.top_contracts || [];
+  if (contracts.length) {
+    html += `<div class="contracts-section">
+      <div class="contracts-title">▶ TOP CONTRACTS</div>
+      <table class="contracts-table">
+        <thead><tr>
+          <th>TYPE</th><th>STRIKE</th><th>EXP</th><th>DTE</th>
+          <th class="td-right">BID</th><th class="td-right">ASK</th>
+          <th class="td-right">IV</th><th class="td-right">Δ</th>
+          <th class="td-right">VOL</th><th class="td-right">OI</th>
+          <th class="td-right">PREM EST</th>
+        </tr></thead><tbody>`;
+    contracts.slice(0, 6).forEach(c => {
+      const typeCls = c.type === 'call' ? 'type-call' : 'type-put';
+      const iv  = c.implied_volatility != null ? (c.implied_volatility * 100).toFixed(1) + '%' : '—';
+      const dlt = c.delta != null ? c.delta.toFixed(2) : '—';
+      const prem = c.premium_traded_estimate != null
+        ? fmt$(c.premium_traded_estimate / 1000, 1) + 'K' : '—';
+      html += `<tr>
+        <td class="${typeCls}">${(c.type || '').toUpperCase()}</td>
+        <td>${c.strike != null ? fmt$(c.strike) : '—'}</td>
+        <td style="font-size:10px;color:var(--text-dim)">${c.expiration || '—'}</td>
+        <td class="td-right">${c.dte != null ? c.dte + 'd' : '—'}</td>
+        <td class="td-right">${c.bid != null ? fmt$(c.bid) : '—'}</td>
+        <td class="td-right">${c.ask != null ? fmt$(c.ask) : '—'}</td>
+        <td class="td-right">${iv}</td>
+        <td class="td-right">${dlt}</td>
+        <td class="td-right">${c.volume != null ? c.volume.toLocaleString() : '—'}</td>
+        <td class="td-right">${c.open_interest != null ? c.open_interest.toLocaleString() : '—'}</td>
+        <td class="td-right">${prem}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>`;
+  }
+
+  const risks = t.risks;
+  if (risks) {
+    const rt = typeof risks === 'string' ? risks : (risks.summary || '');
+    if (rt) html += `<div class="risks-text">⚠ ${rt}</div>`;
+  }
+
+  return html;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function fmt$(n, dp = 2) {
+  if (n == null) return '—';
+  return '$' + Number(n).toFixed(dp).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+function clsChg(v) {
+  return v == null ? 'neutral' : v >= 0 ? 'pos' : 'neg';
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+if (!authToken) {
+  showLogin();
+} else {
+  loadDashboard(currentTab);
+}
+</script>
+</body>
+</html>

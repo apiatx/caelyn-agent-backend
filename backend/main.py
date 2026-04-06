@@ -4861,6 +4861,7 @@ async def options_dashboard(
             "available_tabs": sorted(_OPTIONS_VALID_TABS),
             "from_cache": True,
             "cache_age_seconds": age,
+            "next_refresh_in_seconds": max(0, _OPTIONS_CACHE_TTL - age),
         }
 
     # ── Stale-while-revalidate: serve last-known-good immediately, refresh in background ─
@@ -4914,6 +4915,7 @@ async def options_dashboard(
             "from_cache": True,
             "stale": True,
             "cache_age_seconds": lkg_age,
+            "next_refresh_in_seconds": 240,
         }
 
     # No LKG at all (first run after deploy) — do a blocking scan with timeout
@@ -4963,6 +4965,7 @@ async def options_dashboard(
             "tab": tab,
             "available_tabs": sorted(_OPTIONS_VALID_TABS),
             "from_cache": False,
+            "next_refresh_in_seconds": _OPTIONS_CACHE_TTL,
             "timing": {"total_seconds": round(elapsed, 1)},
         }
 
@@ -4995,6 +4998,7 @@ async def options_dashboard(
             "tab": tab,
             "available_tabs": sorted(_OPTIONS_VALID_TABS),
             "from_cache": False,
+            "next_refresh_in_seconds": _OPTIONS_CACHE_TTL,
             "timing": {"total_seconds": round(elapsed, 1), "timed_out": True},
         }
 
@@ -6178,6 +6182,15 @@ async def whale_watch_page():
     if html_path.exists():
         return FileResponse(str(html_path), media_type="text/html")
     return HTMLResponse("<h1>Whale Watch not found</h1>", status_code=404)
+
+
+@app.get("/options-flow")
+async def options_flow_page():
+    """Serve the Options Flow dashboard page."""
+    html_path = Path(__file__).parent / "static" / "options-flow" / "index.html"
+    if html_path.exists():
+        return FileResponse(str(html_path), media_type="text/html")
+    return HTMLResponse("<h1>Options Flow not found</h1>", status_code=404)
 
 
 @app.get("/subscribe")
