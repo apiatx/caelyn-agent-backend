@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reset Password — Caelyn AI</title>
+<style>
+  :root {
+    --bg: #090909; --bg2: #0f0f0f; --bg3: #161616;
+    --border: #2a2a2a; --border2: #333;
+    --green: #00e676; --green-dim: #1b3a25;
+    --yellow: #ffd600; --red: #ff1744;
+    --text: #e0e0e0; --text-dim: #888; --text-dimmer: #555;
+    --mono: 'Courier New','Consolas',monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--mono);
+    font-size: 13px; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card {
+    background: var(--bg2); border: 1px solid var(--border2);
+    border-radius: 4px; padding: 36px 40px; width: 360px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .logo  { font-size: 11px; letter-spacing: 2px; color: var(--text-dim); }
+  .title { font-size: 15px; font-weight: bold; color: var(--text); letter-spacing: 1px; }
+  .sub   { font-size: 11px; color: var(--text-dimmer); line-height: 1.5; }
+
+  /* steps */
+  #stepRequest, #stepReset, #stepDone { display: none; }
+  #stepRequest.active, #stepReset.active, #stepDone.active { display: flex; flex-direction: column; gap: 14px; }
+
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 10px; color: var(--text-dimmer); letter-spacing: 1px; }
+  .field input {
+    background: var(--bg3); border: 1px solid var(--border2); color: var(--text);
+    font-family: var(--mono); font-size: 13px; padding: 9px 10px; border-radius: 3px;
+    outline: none; width: 100%;
+  }
+  .field input:focus { border-color: var(--green); }
+  .field input.error { border-color: var(--red); }
+
+  .btn {
+    padding: 10px; border: 1px solid var(--green); background: var(--green-dim);
+    color: var(--green); font-family: var(--mono); font-size: 12px; letter-spacing: 1px;
+    font-weight: bold; cursor: pointer; border-radius: 3px; transition: background 0.15s;
+    width: 100%;
+  }
+  .btn:hover { background: #234d30; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-ghost {
+    padding: 8px; border: 1px solid var(--border2); background: none;
+    color: var(--text-dim); font-family: var(--mono); font-size: 11px;
+    cursor: pointer; border-radius: 3px; text-align: center; text-decoration: none;
+    display: block; transition: background 0.15s;
+  }
+  .btn-ghost:hover { background: var(--bg3); }
+
+  .msg { font-size: 11px; line-height: 1.5; display: none; border-radius: 3px; padding: 8px 10px; }
+  .msg.error   { display: block; color: var(--red);    background: rgba(255,23,68,.08);  border: 1px solid rgba(255,23,68,.2); }
+  .msg.success { display: block; color: var(--green);  background: rgba(0,230,118,.08);  border: 1px solid rgba(0,230,118,.2); }
+  .msg.info    { display: block; color: var(--yellow); background: rgba(255,214,0,.08);  border: 1px solid rgba(255,214,0,.2); }
+
+  .hash-box {
+    background: var(--bg3); border: 1px solid var(--border2); border-radius: 3px;
+    padding: 10px; font-size: 10px; color: var(--text-dim); word-break: break-all;
+    line-height: 1.6;
+  }
+  .copy-btn {
+    background: none; border: 1px solid var(--border2); color: var(--text-dim);
+    font-family: var(--mono); font-size: 10px; cursor: pointer; border-radius: 3px;
+    padding: 4px 10px; transition: all 0.15s; margin-top: 6px;
+  }
+  .copy-btn:hover { background: var(--bg3); color: var(--text); }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">CAELYN AI</div>
+  <div class="title">PASSWORD RESET</div>
+
+  <!-- Step 1: request email -->
+  <div id="stepRequest" class="active">
+    <div class="sub">Enter your username to receive a reset link at your registered email address.</div>
+    <div class="field">
+      <label>USERNAME</label>
+      <input type="text" id="reqUser" name="username" autocomplete="username" placeholder="username">
+    </div>
+    <div class="msg" id="reqMsg"></div>
+    <button class="btn" id="reqBtn" onclick="sendRequest()">▶ SEND RESET LINK</button>
+    <a href="/options-flow" class="btn-ghost">← Back to login</a>
+  </div>
+
+  <!-- Step 2: enter new password (arrived via reset link) -->
+  <div id="stepReset">
+    <div class="sub">Choose a new password. Must be at least 8 characters.</div>
+    <div class="field">
+      <label>NEW PASSWORD</label>
+      <input type="password" id="newPass" name="new-password" autocomplete="new-password" placeholder="••••••••">
+    </div>
+    <div class="field">
+      <label>CONFIRM PASSWORD</label>
+      <input type="password" id="confPass" name="confirm-password" autocomplete="new-password" placeholder="••••••••">
+    </div>
+    <div class="msg" id="resetMsg"></div>
+    <button class="btn" id="resetBtn" onclick="doReset()">▶ SET NEW PASSWORD</button>
+  </div>
+
+  <!-- Step 3: done -->
+  <div id="stepDone">
+    <div class="msg success" style="display:block" id="doneMsg">Your password has been updated successfully.</div>
+    <div id="hashSection" style="display:none">
+      <div class="sub" style="color:var(--yellow)">⚠ Paste this hash into your <strong>AUTH_PASSWORD_HASH</strong> secret to persist across server restarts:</div>
+      <div class="hash-box" id="hashBox"></div>
+      <button class="copy-btn" onclick="copyHash()">⎘ COPY HASH</button>
+    </div>
+    <a href="/options-flow" class="btn" style="text-decoration:none;text-align:center;margin-top:4px">▶ GO TO LOGIN</a>
+  </div>
+</div>
+
+<script>
+let resetToken = null;
+
+// ── On load: check for ?token= in URL ─────────────────────────────────────
+(async function init() {
+  const params = new URLSearchParams(location.search);
+  const token  = params.get('token');
+  if (!token) {
+    showStep('request');
+    return;
+  }
+  // Verify the token is still valid
+  try {
+    const res = await fetch(`/api/auth/verify-reset-token?token=${encodeURIComponent(token)}`);
+    const data = await res.json();
+    if (data.valid) {
+      resetToken = token;
+      showStep('reset');
+    } else {
+      showStep('request');
+      showMsg('reqMsg', 'error', 'This reset link has expired or already been used. Request a new one.');
+    }
+  } catch {
+    showStep('request');
+  }
+})();
+
+function showStep(step) {
+  ['request', 'reset', 'done'].forEach(s => {
+    document.getElementById(`step${cap(s)}`).classList.toggle('active', s === step);
+  });
+}
+function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+function showMsg(id, type, text) {
+  const el = document.getElementById(id);
+  el.className = `msg ${type}`;
+  el.textContent = text;
+}
+function clearMsg(id) {
+  const el = document.getElementById(id);
+  el.className = 'msg';
+  el.textContent = '';
+}
+
+// ── Step 1: request reset email ───────────────────────────────────────────
+async function sendRequest() {
+  clearMsg('reqMsg');
+  const btn = document.getElementById('reqBtn');
+  btn.disabled = true; btn.textContent = '↻ SENDING...';
+  try {
+    const res = await fetch('/api/auth/request-reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showMsg('reqMsg', 'error', data.error || 'Failed to send reset email.');
+    } else {
+      showMsg('reqMsg', 'success', 'Reset link sent! Check your registered email address. The link expires in 30 minutes.');
+      btn.textContent = '✓ SENT';
+    }
+  } catch (err) {
+    showMsg('reqMsg', 'error', `Network error: ${err.message}`);
+    btn.disabled = false; btn.textContent = '▶ SEND RESET LINK';
+  }
+}
+
+// ── Step 2: set new password ──────────────────────────────────────────────
+async function doReset() {
+  clearMsg('resetMsg');
+  const np  = document.getElementById('newPass').value;
+  const cp  = document.getElementById('confPass').value;
+  if (!np) { showMsg('resetMsg', 'error', 'Please enter a new password.'); return; }
+  if (np.length < 8) { showMsg('resetMsg', 'error', 'Password must be at least 8 characters.'); return; }
+  if (np !== cp) { showMsg('resetMsg', 'error', 'Passwords do not match.'); return; }
+
+  const btn = document.getElementById('resetBtn');
+  btn.disabled = true; btn.textContent = '↻ UPDATING...';
+
+  try {
+    const res = await fetch('/api/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: resetToken, new_password: np }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showMsg('resetMsg', 'error', data.detail || 'Reset failed.');
+      btn.disabled = false; btn.textContent = '▶ SET NEW PASSWORD';
+    } else {
+      // Show the hash so user can update their secret
+      document.getElementById('hashBox').textContent = data.new_hash || '';
+      document.getElementById('hashSection').style.display = data.new_hash ? 'block' : 'none';
+      document.getElementById('doneMsg').textContent = data.message || 'Password updated successfully.';
+      showStep('done');
+    }
+  } catch (err) {
+    showMsg('resetMsg', 'error', `Network error: ${err.message}`);
+    btn.disabled = false; btn.textContent = '▶ SET NEW PASSWORD';
+  }
+}
+
+function copyHash() {
+  const hash = document.getElementById('hashBox').textContent;
+  navigator.clipboard.writeText(hash).then(() => {
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = '✓ COPIED';
+    setTimeout(() => { btn.textContent = '⎘ COPY HASH'; }, 2000);
+  });
+}
+
+// Allow Enter to submit
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  if (document.getElementById('stepRequest').classList.contains('active')) sendRequest();
+  if (document.getElementById('stepReset').classList.contains('active')) doReset();
+});
+</script>
+</body>
+</html>

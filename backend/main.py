@@ -351,6 +351,87 @@ async def auth_logout(request: Request):
     """Logout — client should delete the token. Server-side is stateless."""
     return {"success": True, "message": "Logged out. Delete the token client-side."}
 
+
+@app.post("/api/auth/request-reset")
+@traceable(name="main.auth_request_reset")
+async def auth_request_reset(request: Request):
+    """Generate a password-reset token and email it to the owner address."""
+    from password_reset import generate_reset_token, send_reset_email, get_app_base_url
+    token = generate_reset_token()
+    base  = get_app_base_url(request)
+    reset_url = f"{base}/reset-password?token={token}"
+    sent = send_reset_email(reset_url)
+    if not sent:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to send reset email. Check RESEND_API_KEY and RESET_EMAIL_TO secrets."},
+        )
+    return {"success": True, "message": "Reset link sent to your registered email address."}
+
+
+@app.get("/api/auth/verify-reset-token")
+@traceable(name="main.auth_verify_reset_token")
+async def auth_verify_reset_token(token: str = ""):
+    """Check if a reset token is still valid (without consuming it)."""
+    from password_reset import _reset_tokens
+    import time as _time2
+    if not token:
+        return {"valid": False}
+    exp = _reset_tokens.get(token)
+    valid = exp is not None and _time2.time() <= exp
+    return {"valid": valid}
+
+
+@app.post("/api/auth/reset-password")
+@traceable(name="main.auth_reset_password")
+async def auth_reset_password(request: Request):
+    """Validate reset token and update AUTH_PASSWORD_HASH."""
+    from password_reset import validate_and_consume_token, hash_password
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    token    = (body.get("token") or "").strip()
+    new_pass = (body.get("new_password") or "").strip()
+
+    if not token or not new_pass:
+        raise HTTPException(status_code=400, detail="token and new_password are required.")
+    if len(new_pass) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    if not validate_and_consume_token(token):
+        raise HTTPException(status_code=400, detail="Reset token is invalid or has expired.")
+
+    new_hash = hash_password(new_pass)
+
+    # Update in-process so the new password works immediately (until next cold restart)
+    os.environ["AUTH_PASSWORD_HASH"] = new_hash
+    try:
+        import auth as _auth_mod
+        _auth_mod.AUTH_PASSWORD_HASH = new_hash
+    except Exception:
+        pass
+
+    print(f"[RESET] Password updated. Paste this hash into AUTH_PASSWORD_HASH secret to persist:")
+    print(f"[RESET] {new_hash}")
+
+    return {
+        "success": True,
+        "message": "Password updated. You can now log in with your new password.",
+        "new_hash": new_hash,
+        "_note": "Paste this hash into your AUTH_PASSWORD_HASH secret to persist across server restarts.",
+    }
+
+
+@app.get("/reset-password")
+async def reset_password_page():
+    """Serve the password-reset form."""
+    html_path = Path(__file__).parent / "static" / "reset-password" / "index.html"
+    if html_path.exists():
+        return FileResponse(str(html_path), media_type="text/html")
+    return HTMLResponse("<h1>Reset page not found</h1>", status_code=404)
+
+
 data_service = None
 agent = None
 _init_done = False
