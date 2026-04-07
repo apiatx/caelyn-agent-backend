@@ -1418,7 +1418,11 @@ async def notifai_weekly_summary(request: Request, force: bool = False):
                 timeout=40.0,
             )
             raw_json = resp.content[0].text.strip() if resp.content else "{}"
-            import json as _json
+            # Strip markdown code fences if Claude wrapped the JSON
+            import re as _re, json as _json
+            raw_json = _re.sub(r'^```(?:json)?\s*', '', raw_json, flags=_re.MULTILINE)
+            raw_json = _re.sub(r'\s*```$', '', raw_json, flags=_re.MULTILINE)
+            raw_json = raw_json.strip()
             parsed = _json.loads(raw_json)
             summary_text   = parsed.get("opening", "")
             summary_days   = parsed.get("days", [])
