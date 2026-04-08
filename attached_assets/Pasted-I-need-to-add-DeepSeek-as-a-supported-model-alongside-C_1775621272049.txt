@@ -1,0 +1,29 @@
+I need to add DeepSeek as a supported model alongside Claude, ChatGPT, Grok, Gemini, and Perplexity. The frontend already sends reasoning_model: "deepseek" and can include "deepseek" in the collab_agents array. Please do the following:
+
+1. Load the DeepSeek API key
+I have my DeepSeek API key stored in the backend secrets. Find it (likely named something like DEEPSEEK_API_KEY) and load it the same way you load the other API keys (Anthropic, OpenAI, etc.).
+
+2. Create a DeepSeek client
+DeepSeek uses an OpenAI-compatible API. Set it up like this:
+
+from openai import AsyncOpenAI
+deepseek_client = AsyncOpenAI(
+    api_key=os.environ["DEEPSEEK_API_KEY"],
+    base_url="https://api.deepseek.com"
+)
+
+Use the model "deepseek-chat" for general queries and optionally "deepseek-reasoner" for reasoning-heavy requests.
+
+3. Wire it into the query handler
+In whichever function/file handles reasoning_model routing (where you check for "claude", "gpt-4o", "grok", "gemini", "perplexity" and dispatch to the right API), add a matching branch for "deepseek" that calls the DeepSeek client above. Pass the same system prompt and user message as the other models receive. Return the response in the same format the others use.
+
+4. Wire it into the multi-agent collaboration flow
+In the collab/multi-agent pipeline (where collab_agents are iterated and each agent's API is called to gather perspectives), add "deepseek" as a recognized agent ID that calls the DeepSeek client. Give it a label like "DeepSeek" in any response metadata.
+
+5. Update collab_options (if you return this to the frontend)
+If you have a /api/collab-options or similar endpoint that returns the list of available models to the frontend, add { "id": "deepseek", "label": "Deepseek", "icon": "🔷" } to both reasoning_models and collab_agents arrays.
+
+6. Ensure meta includes the model name
+Make sure the response's meta.reasoning_model field is set to "deepseek" when DeepSeek was used, so the frontend can display it correctly in the conversation history.
+
+Please verify by sending a test query with reasoning_model: "deepseek" and confirming a valid response comes back.

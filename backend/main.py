@@ -1029,6 +1029,7 @@ async def get_collab_options(request: Request):
             {"id": "gemini", "name": "Gemini", "description": "Google Gemini — Google Search grounding & reasoning", "mode": "solo"},
             {"id": "grok", "name": "Grok", "description": "xAI Grok — X/Twitter native search & reasoning", "mode": "solo"},
             {"id": "perplexity", "name": "Perplexity", "description": "Perplexity Sonar — citation-heavy web research", "mode": "solo"},
+            {"id": "deepseek", "name": "DeepSeek", "description": "DeepSeek — cost-efficient reasoning & analysis", "mode": "solo"},
         ],
         # Collab agents — full list available for multi-agent collaboration.
         # Frontend sends based on preset:
@@ -1043,6 +1044,7 @@ async def get_collab_options(request: Request):
             {"id": "gpt-4o", "name": "ChatGPT/OpenAI", "description": "Web search, orchestration & reasoning", "icon": "openai"},
             {"id": "gemini", "name": "Gemini", "description": "Google Search grounding & reasoning", "icon": "gemini"},
             {"id": "perplexity", "name": "Perplexity", "description": "Deep web research with citations", "icon": "perplexity"},
+            {"id": "deepseek", "name": "DeepSeek", "description": "Cost-efficient reasoning & analysis", "icon": "🔷"},
         ],
         # Collab presets — pre-configured multi-agent collaboration setups.
         # lock_agents: if true, the collaborator checkboxes are locked (user cannot change them)
@@ -1999,6 +2001,7 @@ def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, tim
         "timing_ms": timing_ms or {"total": 0, "grok": 0, "data": 0, "claude": 0},
         "mode_concept": mode_concept(rm),
         "mode_label": mode_display_label(rm),
+        "reasoning_model": rm,
     }
 
 

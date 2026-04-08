@@ -2608,6 +2608,19 @@ class TradingAgent:
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"] or ""
 
+        if reasoning_model == "deepseek":
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            if not api_key:
+                raise ValueError("No DEEPSEEK_API_KEY")
+            from openai import OpenAI
+            ds_client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+            resp = ds_client.chat.completions.create(
+                model="deepseek-chat",
+                max_tokens=max_tokens,
+                messages=oai_msgs,
+            )
+            return resp.choices[0].message.content or ""
+
         raise ValueError(f"Unknown model: {reasoning_model}")
 
     @traceable(name="call_orchestrator_model")
@@ -2696,6 +2709,19 @@ class TradingAgent:
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"].strip()
 
+        if reasoning_model == "deepseek":
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            if not api_key:
+                raise ValueError("No DEEPSEEK_API_KEY set")
+            from openai import OpenAI
+            ds_client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+            resp = ds_client.chat.completions.create(
+                model="deepseek-chat",
+                max_tokens=500,
+                messages=oai_msgs,
+            )
+            return resp.choices[0].message.content.strip()
+
         raise ValueError(f"Unknown reasoning model: {reasoning_model}")
 
     @traceable(name="call_watchlist_model")
@@ -2782,6 +2808,19 @@ class TradingAgent:
             )
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
+
+        if reasoning_model == "deepseek":
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            if not api_key:
+                raise ValueError("No DEEPSEEK_API_KEY set")
+            from openai import OpenAI
+            ds_client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+            resp = ds_client.chat.completions.create(
+                model="deepseek-chat",
+                max_tokens=max_tokens,
+                messages=oai_msgs,
+            )
+            return resp.choices[0].message.content
 
         raise ValueError(f"Unknown reasoning model: {reasoning_model}")
 
@@ -3454,8 +3493,8 @@ class TradingAgent:
                 return True
         return False
 
-    VALID_REASONING_MODELS = {"claude", "gpt-4o", "grok", "gemini", "perplexity", "agent_collab", "all_agents"}
-    VALID_COLLAB_AGENTS = {"grok", "gpt-4o", "gemini", "perplexity"}
+    VALID_REASONING_MODELS = {"claude", "gpt-4o", "grok", "gemini", "perplexity", "deepseek", "agent_collab", "all_agents"}
+    VALID_COLLAB_AGENTS = {"grok", "gpt-4o", "gemini", "perplexity", "deepseek"}
 
     WEB_SEARCH_CATEGORIES = {"cross_asset_trending", "daily_briefing", "best_trades", "earnings_catalyst"}
 
@@ -4345,6 +4384,28 @@ class TradingAgent:
                     return text
             except Exception as e:
                 print(f"[ALT_MODEL] perplexity error: {e}")
+                return ""
+
+        if reasoning_model == "deepseek":
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            if not api_key:
+                print("[ALT_MODEL] No DEEPSEEK_API_KEY set")
+                return ""
+            try:
+                from openai import AsyncOpenAI
+                ds_client = AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+                resp = await ds_client.chat.completions.create(
+                    model="deepseek-chat",
+                    max_tokens=token_limit,
+                    messages=oai_messages,
+                )
+                text = resp.choices[0].message.content or ""
+                print(f"[ALT_MODEL] deepseek-chat responded: {len(text):,} chars")
+                return text
+            except Exception as e:
+                import traceback
+                print(f"[ALT_MODEL] deepseek error: {e}")
+                traceback.print_exc()
                 return ""
 
         return ""

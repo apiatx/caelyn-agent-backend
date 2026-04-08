@@ -29,7 +29,7 @@ CONCEPT_SOLO      = "solo"
 # ── Internal reasoning_model identifiers ─────────────────────
 MODEL_AGENT_COLLAB = "agent_collab"
 MODEL_ALL_AGENTS   = "all_agents"
-_SOLO_MODELS       = {"claude", "gpt-4o", "grok", "gemini", "perplexity"}
+_SOLO_MODELS       = {"claude", "gpt-4o", "grok", "gemini", "perplexity", "deepseek"}
 _ALL_VALID_MODELS  = {MODEL_AGENT_COLLAB, MODEL_ALL_AGENTS} | _SOLO_MODELS
 
 # ── Inbound normalization map ─────────────────────────────────
@@ -115,5 +115,6 @@ def mode_display_label(reasoning_model: str | None) -> str:
         "grok":             "Grok",
         "gemini":           "Gemini",
         "perplexity":       "Perplexity",
+        "deepseek":         "DeepSeek",
     }
     return _LABELS.get(rm, "Caelyn")
