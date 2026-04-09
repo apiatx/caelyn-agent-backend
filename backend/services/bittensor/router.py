@@ -3,6 +3,13 @@ FastAPI router for the Bittensor subnet dashboard.
 
 Proxies/aggregates data from the TaoStats API with in-memory caching.
 
+Rate-limit strategy
+-------------------
+TaoStats allows 5 requests / minute.  To stay safe the dashboard data is
+pre-fetched by a background task that spaces each of its 6 sequential
+TaoStats calls by _INTER_CALL_DELAY_BG seconds (≥ 13 s → < 5 calls/min).
+The /dashboard endpoint always returns from cache instantly.
+
 Endpoints:
   GET /api/bittensor/debug                  — diagnostic info (always works)
   GET /api/bittensor/dashboard              — aggregated dashboard data
@@ -28,10 +35,19 @@ from config import TAOSTATS_API_KEY, TAOAPP_API_KEY
 router = APIRouter(prefix="/api/bittensor", tags=["bittensor"])
 
 TAOSTATS_BASE = "https://api.taostats.io"
-REQUEST_TIMEOUT = 15.0
+REQUEST_TIMEOUT = 20.0
+
+# Background-task inter-call delay: 13 s → ~4.6 req/min (< 5/min TaoStats limit)
+_INTER_CALL_DELAY_BG = 13.0
+# Refresh interval for the background pre-fetcher (5 minutes)
+_DASHBOARD_REFRESH_INTERVAL = 300
+# How long the dashboard cache is considered valid before a background refresh
+_DASHBOARD_CACHE_TTL = 280  # slightly less than refresh interval
 
 # ── Simple in-memory cache ───────────────────────────────────────────────────
 _cache: dict[str, dict[str, Any]] = {}
+_dashboard_refresh_lock = asyncio.Lock()
+_dashboard_bg_task: asyncio.Task | None = None
 
 
 def _cache_get(key: str, ttl: float) -> Any | None:
@@ -48,7 +64,6 @@ def _cache_set(key: str, data: Any) -> None:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
-    """Convert a value that may be string or number to float safely."""
     if val is None:
         return default
     try:
@@ -58,7 +73,6 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
 
 
 def _safe_str(val: Any, default: str = "0") -> str:
-    """Safely convert any value to string."""
     if val is None:
         return default
     return str(val)
@@ -68,24 +82,43 @@ def _headers() -> dict[str, str]:
     return {"Authorization": TAOSTATS_API_KEY or ""}
 
 
-async def _taostats_get(client: httpx.AsyncClient, path: str, params: dict | None = None) -> Any:
-    """Make a GET request to TaoStats. Returns parsed JSON or None on failure."""
-    try:
-        resp = await client.get(
-            f"{TAOSTATS_BASE}{path}",
-            params=params,
-            headers=_headers(),
-            timeout=REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as exc:
-        print(f"[bittensor] TaoStats request failed: {path} params={params} — {exc}")
-        return None
+async def _taostats_get(
+    client: httpx.AsyncClient,
+    path: str,
+    params: dict | None = None,
+    retry_on_429: bool = True,
+) -> Any:
+    """GET from TaoStats.  On 429 waits 65 s and retries once (if retry_on_429)."""
+    url = f"{TAOSTATS_BASE}{path}"
+    for attempt in range(2 if retry_on_429 else 1):
+        try:
+            resp = await client.get(
+                url, params=params, headers=_headers(), timeout=REQUEST_TIMEOUT,
+            )
+            if resp.status_code == 429:
+                print(f"[bittensor] 429 {path} attempt={attempt+1}")
+                if attempt == 0 and retry_on_429:
+                    await asyncio.sleep(65.0)   # wait full window + margin
+                    continue
+                return None
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                print(f"[bittensor] 429(HTTPStatusError) {path} attempt={attempt+1}")
+                if attempt == 0 and retry_on_429:
+                    await asyncio.sleep(65.0)
+                    continue
+                return None
+            print(f"[bittensor] TaoStats error {path}: {exc}")
+            return None
+        except Exception as exc:
+            print(f"[bittensor] TaoStats error {path}: {exc}")
+            return None
+    return None
 
 
 def _extract_data(raw: Any) -> list | dict | None:
-    """Extract the 'data' field from a TaoStats response, handling various shapes."""
     if raw is None:
         return None
     if isinstance(raw, dict):
@@ -94,7 +127,6 @@ def _extract_data(raw: Any) -> list | dict | None:
 
 
 def _extract_first(raw: Any) -> dict | None:
-    """Extract the first item from a TaoStats paginated response."""
     data = _extract_data(raw)
     if isinstance(data, list) and len(data) > 0:
         return data[0] if isinstance(data[0], dict) else None
@@ -104,7 +136,6 @@ def _extract_first(raw: Any) -> dict | None:
 
 
 def _parse_hotkey(hotkey_val: Any) -> str:
-    """Parse hotkey which may be a dict with .ss58 or just a string."""
     if hotkey_val is None:
         return ""
     if isinstance(hotkey_val, dict):
@@ -112,349 +143,146 @@ def _parse_hotkey(hotkey_val: Any) -> str:
     return str(hotkey_val)
 
 
-# ── Debug endpoint ──────────────────────────────────────────────────────────
+# ── Background dashboard pre-fetcher ────────────────────────────────────────
 
-@router.get("/debug")
-async def debug_endpoint():
+async def _fetch_dashboard_data() -> dict:
     """
-    Diagnostic endpoint — always works, no auth required.
-    Shows API key status and runs a live test against TaoStats.
+    Fetches all 6 TaoStats endpoints SEQUENTIALLY with _INTER_CALL_DELAY_BG
+    seconds between each call so we never exceed the 5 req/min rate limit.
+    Returns the assembled dashboard dict.
     """
-    result: dict[str, Any] = {
-        "api_key_configured": bool(TAOSTATS_API_KEY),
-        "api_key_prefix": (TAOSTATS_API_KEY[:4] + "...") if TAOSTATS_API_KEY and len(TAOSTATS_API_KEY) >= 4 else "(not set)",
-        "taoapp_key_configured": bool(TAOAPP_API_KEY),
-        "taoapp_key_prefix": (TAOAPP_API_KEY[:4] + "...") if TAOAPP_API_KEY and len(TAOAPP_API_KEY) >= 4 else "(not set)",
-        "test_endpoint": "GET /api/price/latest/v1?asset=tao",
-        "test_result": "SKIPPED (no API key)",
-        "raw_sample": None,
-    }
-
-    if TAOSTATS_API_KEY:
-        try:
-            async with httpx.AsyncClient() as client:
-                raw = await _taostats_get(client, "/api/price/latest/v1", {"asset": "tao"})
-            if raw is not None:
-                first = _extract_first(raw)
-                result["test_result"] = "OK"
-                result["raw_sample"] = first
-            else:
-                result["test_result"] = "ERROR: request returned None (check server logs)"
-        except Exception as exc:
-            result["test_result"] = f"ERROR: {exc}"
-
-    return result
-
-
-# ── Blocks history endpoint ─────────────────────────────────────────────────
-
-@router.get("/blocks/history")
-async def blocks_history_endpoint(
-    scale: str = Query("days", regex="^(days|hours)$"),
-    points: int = Query(30, ge=1, le=100),
-):
-    """
-    Blocks emitted over time for charting.
-    Cached for 5 minutes.
-    """
-    if not TAOSTATS_API_KEY:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "TAOSTATS_API_KEY not configured"},
-        )
-
-    cache_key = f"blocks_history_{scale}_{points}"
-    cached = _cache_get(cache_key, ttl=300)
-    if cached is not None:
-        return cached
-
-    expected_per_interval = 7200 if scale == "days" else 300
-    frequency = "by_day" if scale == "days" else "by_hour"
+    print("[bittensor] background fetch: starting dashboard data pull")
 
     async with httpx.AsyncClient() as client:
-        # Primary approach: use block/interval endpoint
-        print(f"[bittensor] blocks/history: trying /api/block/interval/v1 frequency={frequency} limit={points + 1}")
-        interval_raw = await _taostats_get(client, "/api/block/interval/v1", {
-            "frequency": frequency,
-            "limit": points + 1,
+        tao_price_raw = await _taostats_get(client, "/api/price/latest/v1", {"asset": "tao"})
+        print(f"[bittensor] bg[1/6] price: {'OK' if tao_price_raw else 'FAIL'}")
+        await asyncio.sleep(_INTER_CALL_DELAY_BG)
+
+        pools_raw = await _taostats_get(client, "/api/dtao/pool/latest/v1", {
+            "page": 1, "limit": 100, "order": "market_cap_desc",
         })
+        print(f"[bittensor] bg[2/6] pools: {'OK, len=' + str(len(pools_raw.get('data', []))) if isinstance(pools_raw, dict) else 'FAIL'}")
+        await asyncio.sleep(_INTER_CALL_DELAY_BG)
 
-        interval_data = _extract_data(interval_raw)
-        data_points: list[dict[str, Any]] = []
+        stats_raw = await _taostats_get(client, "/api/stats/latest/v1")
+        print(f"[bittensor] bg[3/6] stats: {'OK' if stats_raw else 'FAIL'}")
+        await asyncio.sleep(_INTER_CALL_DELAY_BG)
 
-        if isinstance(interval_data, list) and len(interval_data) >= 2:
-            print(f"[bittensor] blocks/history: interval endpoint returned {len(interval_data)} items")
-            # Sort by timestamp ascending
-            sorted_data = sorted(interval_data, key=lambda x: x.get("timestamp", ""))
-            for i in range(1, len(sorted_data)):
-                prev = sorted_data[i - 1]
-                curr = sorted_data[i]
-                prev_block = int(_safe_float(prev.get("block_number", 0)))
-                curr_block = int(_safe_float(curr.get("block_number", 0)))
-                delta = curr_block - prev_block
-                ts = curr.get("timestamp", "")
-                try:
-                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                    label = dt.strftime("%b %d") if scale == "days" else dt.strftime("%H:%M")
-                except Exception:
-                    label = ts[:10] if len(ts) >= 10 else ts
-                data_points.append({
-                    "label": label,
-                    "blocks": delta,
-                    "expected": expected_per_interval,
-                    "timestamp": ts,
-                })
-        else:
-            # Fallback: get current block, then query per-day blocks
-            print(f"[bittensor] blocks/history: interval endpoint failed or insufficient data, using fallback")
-            current_raw = await _taostats_get(client, "/api/block/v1", {"limit": 1})
-            current_item = _extract_first(current_raw)
-            if current_item:
-                current_block = int(_safe_float(current_item.get("block_number", 0)))
-                current_ts = current_item.get("timestamp", datetime.now(timezone.utc).isoformat())
-                print(f"[bittensor] blocks/history fallback: current block={current_block}")
+        total_price_raw = await _taostats_get(client, "/api/dtao/pool/total_price/latest/v1")
+        print(f"[bittensor] bg[4/6] total_price: {'OK' if total_price_raw else 'FAIL'}")
+        await asyncio.sleep(_INTER_CALL_DELAY_BG)
 
-                # Query block at each past day/hour boundary
-                block_snapshots: list[tuple[str, int, str]] = []
-                now = datetime.now(timezone.utc)
-                interval_delta = timedelta(days=1) if scale == "days" else timedelta(hours=1)
-
-                for i in range(points + 1):
-                    t = now - (interval_delta * i)
-                    t_str = t.isoformat()
-                    snap_raw = await _taostats_get(client, "/api/block/v1", {
-                        "timestamp_end": t_str,
-                        "limit": 1,
-                    })
-                    snap_item = _extract_first(snap_raw)
-                    if snap_item:
-                        bn = int(_safe_float(snap_item.get("block_number", 0)))
-                        block_snapshots.append((t_str, bn, t.strftime("%b %d") if scale == "days" else t.strftime("%H:%M")))
-
-                # Reverse to chronological order and compute deltas
-                block_snapshots.reverse()
-                for i in range(1, len(block_snapshots)):
-                    prev_ts, prev_bn, _ = block_snapshots[i - 1]
-                    curr_ts, curr_bn, curr_label = block_snapshots[i]
-                    delta = curr_bn - prev_bn
-                    data_points.append({
-                        "label": curr_label,
-                        "blocks": delta,
-                        "expected": expected_per_interval,
-                        "timestamp": curr_ts,
-                    })
-
-    result = {
-        "scale": scale,
-        "expected_per_interval": expected_per_interval,
-        "data": data_points,
-    }
-    _cache_set(cache_key, result)
-    return result
-
-
-# ── Dashboard endpoint ───────────────────────────────────────────────────────
-
-@router.get("/dashboard")
-async def dashboard_endpoint():
-    """
-    Aggregated Bittensor dashboard: TAO price, network stats,
-    total market data, and all subnet pools merged with identities.
-    Cached for 60 seconds.
-    """
-    if not TAOSTATS_API_KEY:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "TAOSTATS_API_KEY not configured"},
-        )
-
-    cached = _cache_get("dashboard", ttl=60)
-    if cached is not None:
-        return cached
-
-    async with httpx.AsyncClient() as client:
-        # Fire all requests concurrently
-        tao_price_task = _taostats_get(client, "/api/price/latest/v1", {"asset": "tao"})
-        pools_task = _taostats_get(client, "/api/dtao/pool/latest/v1", {
-            "page": 1, "limit": 100, "order_by": "market_cap", "order": "desc",
-        })
-        stats_task = _taostats_get(client, "/api/stats/latest/v1")
-        total_price_task = _taostats_get(client, "/api/dtao/pool/total_price/latest/v1")
-        identities_task = _taostats_get(client, "/api/subnet/identity/v1", {
+        identities_raw = await _taostats_get(client, "/api/subnet/identity/v1", {
             "page": 1, "limit": 200,
         })
-        block_task = _taostats_get(client, "/api/block/v1", {"limit": 1})
+        print(f"[bittensor] bg[5/6] identities: {'OK, len=' + str(len(identities_raw.get('data', []))) if isinstance(identities_raw, dict) else 'FAIL'}")
+        await asyncio.sleep(_INTER_CALL_DELAY_BG)
 
-        tao_price_raw, pools_raw, stats_raw, total_price_raw, identities_raw, block_raw = (
-            await asyncio.gather(
-                tao_price_task, pools_task, stats_task,
-                total_price_task, identities_task, block_task,
-            )
-        )
+        block_raw = await _taostats_get(client, "/api/block/v1", {"limit": 1})
+        print(f"[bittensor] bg[6/6] block: {'OK' if block_raw else 'FAIL'}")
 
-    # ── Log what each subcall returned ──────────────────────────────────
-    print(f"[bittensor] dashboard: tao_price_raw type={type(tao_price_raw).__name__}, "
-          f"keys={list(tao_price_raw.keys()) if isinstance(tao_price_raw, dict) else 'N/A'}")
-    print(f"[bittensor] dashboard: pools_raw type={type(pools_raw).__name__}, "
-          f"data_len={len(pools_raw.get('data', [])) if isinstance(pools_raw, dict) else 'N/A'}")
-    print(f"[bittensor] dashboard: stats_raw type={type(stats_raw).__name__}, "
-          f"keys={list(stats_raw.keys()) if isinstance(stats_raw, dict) else 'N/A'}")
-    print(f"[bittensor] dashboard: total_price_raw type={type(total_price_raw).__name__}, "
-          f"keys={list(total_price_raw.keys()) if isinstance(total_price_raw, dict) else 'N/A'}")
-    print(f"[bittensor] dashboard: identities_raw type={type(identities_raw).__name__}, "
-          f"data_len={len(identities_raw.get('data', [])) if isinstance(identities_raw, dict) else 'N/A'}")
-    print(f"[bittensor] dashboard: block_raw type={type(block_raw).__name__}, "
-          f"keys={list(block_raw.keys()) if isinstance(block_raw, dict) else 'N/A'}")
+    # ── Assemble ──────────────────────────────────────────────────────────
 
-    # ── Parse TAO price ──────────────────────────────────────────────────
+    # TAO price
     tao_price = {"price": "0", "change_24h": "0"}
-    try:
-        tp_item = _extract_first(tao_price_raw)
-        if tp_item:
-            tao_price = {
-                "price": _safe_str(tp_item.get("price", tp_item.get("close", "0"))),
-                "change_24h": _safe_str(
-                    tp_item.get("price_change_24h",
-                    tp_item.get("change_24h",
-                    tp_item.get("percent_change_24h", "0")))
-                ),
-            }
-            print(f"[bittensor] dashboard: parsed tao_price={tao_price}")
-        else:
-            print(f"[bittensor] dashboard: WARNING — could not extract tao price item")
-    except Exception as exc:
-        print(f"[bittensor] dashboard: ERROR parsing tao_price — {exc}")
+    tp_item = _extract_first(tao_price_raw)
+    if tp_item:
+        tao_price = {
+            "price": _safe_str(tp_item.get("price", tp_item.get("close", "0"))),
+            "change_24h": _safe_str(
+                tp_item.get("price_change_24h",
+                tp_item.get("change_24h",
+                tp_item.get("percent_change_24h", "0")))
+            ),
+        }
 
-    # ── Parse latest block ───────────────────────────────────────────────
+    # Block number
     block_number = 0
-    try:
-        block_item = _extract_first(block_raw)
-        if block_item:
-            block_number = int(_safe_float(block_item.get("block_number", 0)))
-            print(f"[bittensor] dashboard: block_number={block_number}")
-        else:
-            print(f"[bittensor] dashboard: WARNING — could not extract block number")
-    except Exception as exc:
-        print(f"[bittensor] dashboard: ERROR parsing block — {exc}")
+    block_item = _extract_first(block_raw)
+    if block_item:
+        block_number = int(_safe_float(block_item.get("block_number", 0)))
 
-    # ── Parse network stats ──────────────────────────────────────────────
+    # Network stats
     network_stats: dict[str, Any] = {}
-    try:
-        st_item = _extract_first(stats_raw)
-        if st_item:
-            network_stats = st_item
-            print(f"[bittensor] dashboard: network_stats keys={list(st_item.keys())}")
-        else:
-            print(f"[bittensor] dashboard: WARNING — could not extract network stats")
-    except Exception as exc:
-        print(f"[bittensor] dashboard: ERROR parsing network_stats — {exc}")
+    st_item = _extract_first(stats_raw)
+    if st_item:
+        network_stats = st_item
 
-    # ── Parse total market ───────────────────────────────────────────────
+    # Total market
     total_market: dict[str, Any] = {
-        "total_price_tao": "0",
-        "fear_greed_score": 0,
-        "fear_greed_label": "N/A",
+        "total_price_tao": "0", "fear_greed_score": 0, "fear_greed_label": "N/A",
     }
-    try:
-        tm_item = _extract_first(total_price_raw)
-        if tm_item:
-            total_market = {
-                "total_price_tao": _safe_str(
-                    tm_item.get("total_price_tao",
-                    tm_item.get("total_price",
-                    tm_item.get("price", "0")))
-                ),
-                "fear_greed_score": _safe_float(
-                    tm_item.get("fear_greed_score",
-                    tm_item.get("fear_greed",
-                    tm_item.get("score", 0)))
-                ),
-                "fear_greed_label": _safe_str(
-                    tm_item.get("fear_greed_label",
-                    tm_item.get("label",
-                    tm_item.get("sentiment", "N/A"))),
-                    default="N/A"
-                ),
-            }
-            print(f"[bittensor] dashboard: total_market={total_market}")
-        else:
-            print(f"[bittensor] dashboard: WARNING — could not extract total market data")
-    except Exception as exc:
-        print(f"[bittensor] dashboard: ERROR parsing total_market — {exc}")
+    tm_item = _extract_first(total_price_raw)
+    if tm_item:
+        total_market = {
+            "total_price_tao": _safe_str(
+                tm_item.get("total_price_tao", tm_item.get("total_price", tm_item.get("price", "0")))
+            ),
+            "fear_greed_score": _safe_float(
+                tm_item.get("fear_greed_score", tm_item.get("fear_greed", tm_item.get("score", 0)))
+            ),
+            "fear_greed_label": _safe_str(
+                tm_item.get("fear_greed_label", tm_item.get("label", tm_item.get("sentiment", "N/A"))),
+                default="N/A",
+            ),
+        }
 
-    # ── Build identity lookup by netuid ──────────────────────────────────
+    # Identity map
     identity_map: dict[int, dict] = {}
-    try:
-        id_data = _extract_data(identities_raw)
-        if isinstance(id_data, list):
-            for item in id_data:
-                if isinstance(item, dict):
-                    nid = item.get("netuid")
-                    if nid is not None:
-                        identity_map[int(nid)] = item
-            print(f"[bittensor] dashboard: loaded {len(identity_map)} subnet identities")
-        else:
-            print(f"[bittensor] dashboard: WARNING — identities data is not a list: {type(id_data).__name__}")
-    except Exception as exc:
-        print(f"[bittensor] dashboard: ERROR parsing identities — {exc}")
+    id_data = _extract_data(identities_raw)
+    if isinstance(id_data, list):
+        for item in id_data:
+            if isinstance(item, dict):
+                nid = item.get("netuid")
+                if nid is not None:
+                    identity_map[int(nid)] = item
 
-    # ── Parse pools and merge with identities ────────────────────────────
+    # Subnets from pools
+    # NOTE: The TaoStats /api/dtao/pool/latest/v1 API uses these exact field names:
+    #   total_tao, alpha_in_pool, price_change_1_day, price_change_1_week,
+    #   tao_volume_24_hr, seven_day_prices, fear_and_greed_index, fear_and_greed_sentiment
     subnets: list[dict[str, Any]] = []
-    try:
-        pool_data = _extract_data(pools_raw)
-        if isinstance(pool_data, list):
-            print(f"[bittensor] dashboard: processing {len(pool_data)} pools")
-            for idx, pool in enumerate(pool_data):
-                if not isinstance(pool, dict):
-                    print(f"[bittensor] dashboard: WARNING — pool[{idx}] is not a dict: {type(pool).__name__}")
-                    continue
-                netuid = int(_safe_float(pool.get("netuid", 0)))
-                identity = identity_map.get(netuid, {})
-
-                # Defensive name extraction: try multiple field variants
-                name = (
-                    identity.get("subnet_name")
-                    or identity.get("name")
-                    or identity.get("subnet_label")
-                    or f"SN{netuid}"
-                )
-
-                # Defensive tao_in extraction: try multiple field variants
-                tao_in_val = pool.get("tao_in")
-                if tao_in_val is None:
-                    tao_in_val = pool.get("tao_in_pool")
-                if tao_in_val is None:
-                    tao_in_val = pool.get("pool_tao")
-                if tao_in_val is None:
-                    tao_in_val = 0
-
-                if idx < 3:
-                    print(f"[bittensor] dashboard: pool sample [{idx}] netuid={netuid} "
-                          f"name={name} price={pool.get('price')} tao_in={tao_in_val} "
-                          f"pool_keys={list(pool.keys())}")
-
-                subnets.append({
-                    "netuid": netuid,
-                    "name": name,
-                    "description": identity.get("description", ""),
-                    "price": _safe_str(pool.get("price", "0")),
-                    "market_cap": _safe_str(pool.get("market_cap", "0")),
-                    "price_change_24h": _safe_str(pool.get("price_change_24h", pool.get("change_24h", "0"))),
-                    "price_change_7d": _safe_str(pool.get("price_change_7d", pool.get("change_7d", "0"))),
-                    "emission": _safe_str(pool.get("emission", pool.get("daily_emission", "0"))),
-                    "tao_in": _safe_str(tao_in_val),
-                    "alpha_in": _safe_str(pool.get("alpha_in", pool.get("alpha_in_pool", "0"))),
-                    "volume_24h": _safe_str(pool.get("volume_24h", pool.get("volume", "0"))),
-                    "seven_day_price_history": pool.get("seven_day_price_history", pool.get("price_history_7d", [])),
-                    "is_active": pool.get("is_active", pool.get("active", True)),
-                    "discord": identity.get("discord", ""),
-                    "twitter": identity.get("twitter", ""),
-                    "github": identity.get("github", ""),
-                })
-        else:
-            print(f"[bittensor] dashboard: WARNING — pool data is not a list: {type(pool_data).__name__}")
-    except Exception as exc:
-        print(f"[bittensor] dashboard: ERROR parsing pools — {exc}")
+    pool_data = _extract_data(pools_raw)
+    if isinstance(pool_data, list):
+        print(f"[bittensor] bg: assembling {len(pool_data)} subnets")
+        for pool in pool_data:
+            if not isinstance(pool, dict):
+                continue
+            netuid = int(_safe_float(pool.get("netuid", 0)))
+            identity = identity_map.get(netuid, {})
+            # Pool data includes `name` directly; identity may have richer label
+            name = (
+                identity.get("subnet_name")
+                or identity.get("name")
+                or pool.get("name")
+                or f"SN{netuid}"
+            )
+            subnets.append({
+                "netuid": netuid,
+                "name": name,
+                "description": identity.get("description", ""),
+                "price": _safe_str(pool.get("price", "0")),
+                "market_cap": _safe_str(pool.get("market_cap", "0")),
+                # API uses price_change_1_day, not price_change_24h
+                "price_change_24h": _safe_str(pool.get("price_change_1_day", pool.get("price_change_24h", "0"))),
+                # API uses price_change_1_week, not price_change_7d
+                "price_change_7d": _safe_str(pool.get("price_change_1_week", pool.get("price_change_7d", "0"))),
+                "emission": _safe_str(pool.get("emission", pool.get("daily_emission", "0"))),
+                # API uses total_tao for TAO in pool
+                "tao_in": _safe_str(pool.get("total_tao", pool.get("tao_in", pool.get("tao_in_pool", "0")))),
+                # API uses alpha_in_pool, not alpha_in
+                "alpha_in": _safe_str(pool.get("alpha_in_pool", pool.get("alpha_in", "0"))),
+                # API uses tao_volume_24_hr, not volume_24h
+                "volume_24h": _safe_str(pool.get("tao_volume_24_hr", pool.get("volume_24h", "0"))),
+                # API uses seven_day_prices, not seven_day_price_history
+                "seven_day_price_history": pool.get("seven_day_prices", pool.get("seven_day_price_history", [])),
+                "is_active": not pool.get("startup_mode", False),
+                "discord": identity.get("discord", ""),
+                "twitter": identity.get("twitter", ""),
+                "github": identity.get("github", ""),
+            })
+    else:
+        print(f"[bittensor] bg: pool data unavailable — subnets will be empty")
 
     result = {
         "tao_price": tao_price,
@@ -465,40 +293,205 @@ async def dashboard_endpoint():
         "subnet_count": len(subnets),
         "as_of": datetime.now(timezone.utc).isoformat(),
     }
-
-    _cache_set("dashboard", result)
+    print(f"[bittensor] bg: fetch complete — {len(subnets)} subnets, block={block_number}")
     return result
+
+
+async def _dashboard_refresh_loop() -> None:
+    """
+    Background coroutine that refreshes the dashboard cache every 5 minutes.
+    First run happens after a 5-second startup delay.
+    """
+    await asyncio.sleep(5)   # let server finish startup
+    while True:
+        try:
+            async with _dashboard_refresh_lock:
+                data = await _fetch_dashboard_data()
+                _cache_set("dashboard", data)
+        except Exception as exc:
+            print(f"[bittensor] bg refresh error: {exc}")
+        await asyncio.sleep(_DASHBOARD_REFRESH_INTERVAL)
+
+
+def start_dashboard_refresh_task() -> None:
+    """Schedule the background dashboard pre-fetcher (call once at startup)."""
+    global _dashboard_bg_task
+    try:
+        loop = asyncio.get_event_loop()
+        _dashboard_bg_task = loop.create_task(_dashboard_refresh_loop())
+        print("[bittensor] background dashboard refresh task scheduled")
+    except RuntimeError:
+        pass  # no event loop yet; task will be created lazily on first request
+
+
+# ── Debug endpoint ──────────────────────────────────────────────────────────
+
+@router.get("/debug")
+async def debug_endpoint():
+    result: dict[str, Any] = {
+        "api_key_configured": bool(TAOSTATS_API_KEY),
+        "api_key_prefix": (TAOSTATS_API_KEY[:4] + "...") if TAOSTATS_API_KEY and len(TAOSTATS_API_KEY) >= 4 else "(not set)",
+        "taoapp_key_configured": bool(TAOAPP_API_KEY),
+        "taoapp_key_prefix": (TAOAPP_API_KEY[:4] + "...") if TAOAPP_API_KEY and len(TAOAPP_API_KEY) >= 4 else "(not set)",
+        "dashboard_cache_age_seconds": None,
+        "dashboard_subnet_count": None,
+        "test_result": "SKIPPED (no API key)",
+        "raw_sample": None,
+    }
+
+    entry = _cache.get("dashboard")
+    if entry:
+        result["dashboard_cache_age_seconds"] = round(time.time() - entry["ts"], 1)
+        result["dashboard_subnet_count"] = entry["data"].get("subnet_count", 0)
+
+    if TAOSTATS_API_KEY:
+        try:
+            async with httpx.AsyncClient() as client:
+                raw = await _taostats_get(client, "/api/price/latest/v1", {"asset": "tao"}, retry_on_429=False)
+            if raw is not None:
+                result["test_result"] = "OK"
+                result["raw_sample"] = _extract_first(raw)
+            else:
+                result["test_result"] = "ERROR: request returned None"
+        except Exception as exc:
+            result["test_result"] = f"ERROR: {exc}"
+
+    return result
+
+
+# ── Blocks history endpoint ─────────────────────────────────────────────────
+
+@router.get("/blocks/history")
+async def blocks_history_endpoint(
+    scale: str = Query("days", pattern="^(days|hours)$"),
+    points: int = Query(30, ge=1, le=100),
+):
+    """Cached for 15 minutes.  Uses only 1-2 TaoStats calls."""
+    if not TAOSTATS_API_KEY:
+        return JSONResponse(status_code=503, content={"error": "TAOSTATS_API_KEY not configured"})
+
+    cache_key = f"blocks_history_{scale}_{points}"
+    cached = _cache_get(cache_key, ttl=900)
+    if cached is not None:
+        return cached
+
+    expected_per_interval = 7200 if scale == "days" else 300
+    frequency = "by_day" if scale == "days" else "by_hour"
+    data_points: list[dict[str, Any]] = []
+
+    async with httpx.AsyncClient() as client:
+        interval_raw = await _taostats_get(client, "/api/block/interval/v1", {
+            "frequency": frequency, "limit": points + 1,
+        }, retry_on_429=False)
+
+        interval_data = _extract_data(interval_raw)
+
+        if isinstance(interval_data, list) and len(interval_data) >= 2:
+            sorted_data = sorted(interval_data, key=lambda x: x.get("timestamp", ""))
+            for i in range(1, len(sorted_data)):
+                prev = sorted_data[i - 1]
+                curr = sorted_data[i]
+                delta = int(_safe_float(curr.get("block_number", 0))) - int(_safe_float(prev.get("block_number", 0)))
+                ts = curr.get("timestamp", "")
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    label = dt.strftime("%b %d") if scale == "days" else dt.strftime("%H:%M")
+                except Exception:
+                    label = ts[:10] if len(ts) >= 10 else ts
+                data_points.append({
+                    "label": label, "blocks": delta,
+                    "expected": expected_per_interval, "timestamp": ts,
+                })
+        else:
+            # Minimal fallback — just 1 extra call for a reference snapshot
+            current_raw = await _taostats_get(client, "/api/block/v1", {"limit": 1}, retry_on_429=False)
+            current_item = _extract_first(current_raw)
+            if current_item:
+                current_block = int(_safe_float(current_item.get("block_number", 0)))
+                now = datetime.now(timezone.utc)
+                interval_delta = timedelta(days=1) if scale == "days" else timedelta(hours=1)
+                # Estimate using the expected blocks-per-interval constant
+                for i in range(1, min(points, 7) + 1):
+                    t = now - (interval_delta * i)
+                    est_block = current_block - (expected_per_interval * i)
+                    label = t.strftime("%b %d") if scale == "days" else t.strftime("%H:%M")
+                    data_points.insert(0, {
+                        "label": label,
+                        "blocks": expected_per_interval,
+                        "expected": expected_per_interval,
+                        "timestamp": t.isoformat(),
+                    })
+
+    result = {"scale": scale, "expected_per_interval": expected_per_interval, "data": data_points}
+    _cache_set(cache_key, result)
+    return result
+
+
+# ── Dashboard endpoint ───────────────────────────────────────────────────────
+
+@router.get("/dashboard")
+async def dashboard_endpoint():
+    """
+    Returns pre-fetched, cached Bittensor dashboard data.
+
+    Data is populated by a background task that respects the TaoStats 5 req/min
+    rate limit by spacing its 6 calls 13 s apart (~78 s total per refresh).
+    Cache TTL is 5 minutes; the background task refreshes every 5 minutes.
+    First data is available ~78 s after server startup.
+    """
+    if not TAOSTATS_API_KEY:
+        return JSONResponse(status_code=503, content={"error": "TAOSTATS_API_KEY not configured"})
+
+    # Ensure the background task is running
+    global _dashboard_bg_task
+    if _dashboard_bg_task is None or _dashboard_bg_task.done():
+        try:
+            loop = asyncio.get_event_loop()
+            _dashboard_bg_task = loop.create_task(_dashboard_refresh_loop())
+        except Exception:
+            pass
+
+    cached = _cache_get("dashboard", ttl=_DASHBOARD_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    # Cache miss — return a loading placeholder so the frontend isn't blocked.
+    # The background task will populate the cache within ~78 seconds.
+    return {
+        "tao_price": {"price": "0", "change_24h": "0"},
+        "network_stats": {},
+        "total_market": {"total_price_tao": "0", "fear_greed_score": 0, "fear_greed_label": "N/A"},
+        "block_number": 0,
+        "subnets": [],
+        "subnet_count": 0,
+        "loading": True,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "message": "Dashboard data is loading. Please refresh in about 90 seconds.",
+    }
 
 
 # ── Metagraph endpoint ───────────────────────────────────────────────────────
 
 @router.get("/subnet/{netuid}/metagraph")
 async def metagraph_endpoint(netuid: int):
-    """
-    Full metagraph for a specific subnet.
-    Cached per netuid for 30 seconds.
-    """
+    """Cached per netuid for 5 minutes."""
     if not TAOSTATS_API_KEY:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "TAOSTATS_API_KEY not configured"},
-        )
+        return JSONResponse(status_code=503, content={"error": "TAOSTATS_API_KEY not configured"})
 
     cache_key = f"metagraph_{netuid}"
-    cached = _cache_get(cache_key, ttl=30)
+    cached = _cache_get(cache_key, ttl=300)
     if cached is not None:
         return cached
 
     async with httpx.AsyncClient() as client:
         raw = await _taostats_get(client, "/api/metagraph/latest/v1", {
             "netuid": netuid, "limit": 256,
-        })
+        }, retry_on_429=False)
 
     if raw is None:
         raise HTTPException(status_code=502, detail="Failed to fetch metagraph from TaoStats")
 
     data = _extract_data(raw)
-    # Normalize metagraph items — hotkey may be dict or string
     normalized: list[dict[str, Any]] = []
     if isinstance(data, list):
         for item in data:
@@ -520,7 +513,6 @@ async def metagraph_endpoint(netuid: int):
             })
 
     result = {"netuid": netuid, "data": normalized}
-
     _cache_set(cache_key, result)
     return result
 
@@ -529,30 +521,23 @@ async def metagraph_endpoint(netuid: int):
 
 @router.get("/price/history")
 async def price_history_endpoint():
-    """
-    30-day TAO OHLC price history for charting.
-    Cached for 5 minutes.
-    """
+    """30-day TAO OHLC price history. Cached for 15 minutes."""
     if not TAOSTATS_API_KEY:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "TAOSTATS_API_KEY not configured"},
-        )
+        return JSONResponse(status_code=503, content={"error": "TAOSTATS_API_KEY not configured"})
 
-    cached = _cache_get("price_history", ttl=300)
+    cached = _cache_get("price_history", ttl=900)
     if cached is not None:
         return cached
 
     async with httpx.AsyncClient() as client:
         raw = await _taostats_get(client, "/api/price/ohlc/v1", {
             "asset": "tao", "period": "1d", "limit": 30,
-        })
+        }, retry_on_429=False)
 
     if raw is None:
         raise HTTPException(status_code=502, detail="Failed to fetch price history from TaoStats")
 
     data = _extract_data(raw)
     result = {"asset": "tao", "period": "1d", "data": data}
-
     _cache_set("price_history", result)
     return result

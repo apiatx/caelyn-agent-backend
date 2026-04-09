@@ -192,6 +192,11 @@ async def lifespan(app):
     except Exception as _e:
         print(f"[STARTUP] Whale Watch DB init error: {_e}")
     asyncio.create_task(_whale_bg_loop())
+    try:
+        from services.bittensor.router import _dashboard_refresh_loop as _bittensor_refresh_loop
+        asyncio.create_task(_bittensor_refresh_loop())
+    except Exception as _e:
+        print(f"[STARTUP] Bittensor refresh task error: {_e}")
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)
