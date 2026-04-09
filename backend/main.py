@@ -57,6 +57,7 @@ from services.whale_watch_service import (
     seed_whales as _seed_whales,
 )
 from services.predict.router import router as _predict_router
+from services.bittensor.router import router as _bittensor_router
 
 _hl_state = _HLState()
 _hl_set_state(_hl_state)
@@ -221,6 +222,10 @@ app.include_router(_whale_router, prefix="/api")
 
 # ── Predict / Polymarket Intelligence router ──────────────────────────────────
 app.include_router(_predict_router)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Bittensor Dashboard router ───────────────────────────────────────────────
+app.include_router(_bittensor_router)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────
