@@ -83,7 +83,11 @@ async def _call_gemini(
             resp.raise_for_status()
             data = resp.json()
 
-        parts = data["candidates"][0]["content"]["parts"]
+        candidates = data.get("candidates", [])
+        if not candidates:
+            print("[TRADING_AGENTS] Gemini returned no candidates")
+            return ""
+        parts = candidates[0].get("content", {}).get("parts", [])
         return "".join(p.get("text", "") for p in parts if "text" in p)
     except Exception as e:
         print(f"[TRADING_AGENTS] Gemini call error: {type(e).__name__}: {e}")

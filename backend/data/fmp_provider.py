@@ -67,6 +67,19 @@ class FMPProvider:
             }
         return {}
 
+    @traceable(name="get_gainers_losers")
+    async def get_gainers_losers(self) -> dict:
+        """Get top gaining and losing stocks today (combined)."""
+        gainers, losers = await asyncio.gather(
+            self.get_stock_market_gainers(),
+            self.get_stock_market_losers(),
+            return_exceptions=True,
+        )
+        return {
+            "gainers": gainers if not isinstance(gainers, Exception) else [],
+            "losers": losers if not isinstance(losers, Exception) else [],
+        }
+
     @traceable(name="get_stock_market_gainers")
     async def get_stock_market_gainers(self) -> list:
         """Get top gaining stocks today."""
@@ -428,8 +441,8 @@ class FMPProvider:
             "agriculture_etfs": agri_etfs if not isinstance(agri_etfs, Exception) else {},
         }
 
-    @traceable(name="get_economic_calendar")
-    async def get_economic_calendar(self, days_ahead: int = 7) -> list:
+    @traceable(name="get_economic_calendar_nasdaq")
+    async def get_economic_calendar_nasdaq(self, days_ahead: int = 7) -> list:
         """
         Get upcoming US economic events for the next N days.
         Uses Nasdaq free calendar API as primary source.
@@ -448,6 +461,13 @@ class FMPProvider:
             "ism", "manufacturing", "housing", "home sales",
             "trade balance", "treasury", "powell",
         ]
+
+        @traceable(name="clean")
+        def clean(v):
+            if not v:
+                return None
+            s = str(v).replace("&nbsp;", "").strip()
+            return s if s else None
 
         high_impact = []
         try:
@@ -469,12 +489,6 @@ class FMPProvider:
                             continue
                         is_important = any(kw in name for kw in important_keywords)
                         if is_important:
-                            @traceable(name="clean")
-                            def clean(v):
-                                if not v:
-                                    return None
-                                s = str(v).replace("&nbsp;", "").strip()
-                                return s if s else None
                             high_impact.append({
                                 "event": event.get("eventName", ""),
                                 "date": date_str,

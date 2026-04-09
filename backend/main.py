@@ -1248,7 +1248,7 @@ def _notifai_weekly_cache_ttl() -> int:
     from datetime import datetime, timedelta
     now = datetime.now()
     days_until_sat = (5 - now.weekday()) % 7  # Saturday = weekday 5
-    if days_until_sat == 0 and (now.hour > 7 or (now.hour == 7 and now.minute >= 0)):
+    if days_until_sat == 0 and (now.hour > 7 or (now.hour == 7 and now.minute > 0)):
         days_until_sat = 7  # already past 7 am Saturday → next Saturday
     next_sat = now.replace(hour=7, minute=0, second=0, microsecond=0) + timedelta(days=days_until_sat)
     ttl = int((next_sat - now).total_seconds())
@@ -1306,9 +1306,9 @@ async def notifai_weekly_summary(request: Request, force: bool = False):
 
     # --- Fetch earnings calendar for the week ---
     earnings_by_day: dict = {}
+    monday = week_start.strftime("%Y-%m-%d")
+    friday = (week_start + timedelta(days=4)).strftime("%Y-%m-%d")
     try:
-        monday = week_start.strftime("%Y-%m-%d")
-        friday = (week_start + timedelta(days=4)).strftime("%Y-%m-%d")
         raw = await asyncio.wait_for(
             asyncio.to_thread(
                 agent.data.finnhub.client.earnings_calendar,
@@ -2361,8 +2361,8 @@ def _render_screener_analysis(s: dict) -> str:
             parts.append(line)
     scan_stats = s.get("scan_stats", {})
     if scan_stats:
-        parts.append(f"Scanned {scan_stats.get(chr(39)+'candidates_total'+chr(39), chr(39)+'?'+chr(39))} candidates")
-    return chr(10).join(parts).strip()
+        parts.append(f"Scanned {scan_stats.get('candidates_total', '?')} candidates")
+    return "\n".join(parts).strip()
 
 
 _RENDERERS = {
@@ -3941,7 +3941,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
 
             finnhub_quotes = {}
             finnhub_profiles = {}
-            for i in range(0, len(results), 2):
+            for i in range(0, len(results) - 1, 2):
                 sym, quote_data = results[i]
                 _, profile_data = results[i + 1]
                 if quote_data:
@@ -7148,7 +7148,7 @@ def _compute_dashboard(
         {"type": "blue", "text": f"[TREND/STRUCTURE]    {p2_score:.0f}/100 | SPX vs 50d: {spy_vs50_str} | vs 200d: {spy_vs200_str} | Regime: {spx_regime}"},
         {"type": "blue", "text": f"[MARKET BREADTH]     {p3_score:.0f}/100 | {sectors_positive}/{sectors_total} sectors positive | Breadth: {breadth_fg:.0f} | Strength: {strength_fg:.0f}"},
         {"type": "blue", "text": f"[MACRO/LIQUIDITY]    {p4_score:.0f}/100 | 10Y: {_fmt(us10y, suffix='%') if us10y else 'N/A'} | DXY: {dxy_str} | 2s10s: {spread_str} | FOMC: {fomc_next}"},
-        {"type": "blue", "text": f"[MOMENTUM/SENT]      {p5_score:.0f}/100 | Momentum: {momentum_fg:.0f} | Leader: {sector_leader['ticker'] if sector_leader else 'N/A'} ({sector_leader['change_pct']:+.2f}% if sector_leader else 'N/A')" if sector_leader else f"[MOMENTUM/SENT]      {p5_score:.0f}/100 | Momentum: {momentum_fg:.0f}"},
+        {"type": "blue", "text": f"[MOMENTUM/SENT]      {p5_score:.0f}/100 | Momentum: {momentum_fg:.0f} | Leader: {sector_leader['ticker']} ({sector_leader['change_pct']:+.2f}%)" if sector_leader else f"[MOMENTUM/SENT]      {p5_score:.0f}/100 | Momentum: {momentum_fg:.0f}"},
         {"type": "dim", "text": ""},
         {"type": "green" if mqs >= 70 else ("yellow" if mqs >= 40 else "red"),
          "text": f"Market Quality Score (MQS): {mqs:.0f}/100"},

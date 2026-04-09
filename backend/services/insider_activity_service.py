@@ -1656,7 +1656,11 @@ async def run_perplexity_analysis() -> dict:
             )
         resp.raise_for_status()
         data = resp.json()
-        raw_content = data["choices"][0]["message"]["content"].strip()
+        choices = data.get("choices", [])
+        if not choices:
+            logger.error("[INSIDER] Perplexity returned no choices")
+            return {}
+        raw_content = choices[0].get("message", {}).get("content", "").strip()
 
         # Strip markdown code fences if Perplexity adds them
         if raw_content.startswith("```"):

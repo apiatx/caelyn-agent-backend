@@ -1563,7 +1563,7 @@ class TradingAgent:
         if any(w in q for w in ["portfolio", "watchlist", "review my"]):
             return {"category": "portfolio_review"}
         # Detect TradingView export format (NYSE:TICKER, NASDAQ:TICKER, etc.)
-        if re.search(r"(NYSE|NASDAQ|AMEX|ASX|CRYPTO|MEXC|BINANCE):[A-Z]", q.upper()):
+        if re.search(r"(NYSE|NASDAQ|AMEX|ASX|CRYPTO|MEXC|BINANCE):[A-Z0-9]{1,5}", q.upper()):
             return {"category": "portfolio_review"}
         # Detect plain comma-separated ticker lists (e.g. LAC,ASTI,ATOM or LAC, ASTI, ATOM)
         comma_tickers = [t.strip() for t in q.upper().split(",") if t.strip()]
@@ -2576,7 +2576,8 @@ class TradingAgent:
                 timeout=60.0,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"] or ""
+            choices = resp.json().get("choices", [])
+            return choices[0]["message"]["content"] if choices else ""
 
         if reasoning_model == "gemini":
             api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -2592,7 +2593,8 @@ class TradingAgent:
                 timeout=60.0,
             )
             resp.raise_for_status()
-            parts = resp.json()["candidates"][0]["content"]["parts"]
+            candidates = resp.json().get("candidates", [])
+            parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
             return "".join(p.get("text", "") for p in parts if "text" in p) or ""
 
         if reasoning_model == "perplexity":
@@ -2606,7 +2608,8 @@ class TradingAgent:
                 timeout=60.0,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"] or ""
+            choices = resp.json().get("choices", [])
+            return choices[0]["message"]["content"] if choices else ""
 
         if reasoning_model == "deepseek":
             api_key = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -2634,7 +2637,7 @@ class TradingAgent:
                 system=system_prompt,
                 messages=messages,
             )
-            return response.content[0].text.strip()
+            return response.content[0].text.strip() if response.content else ""
 
         # Build OpenAI-compatible messages
         oai_msgs = [{"role": "system", "content": system_prompt}]
@@ -2666,7 +2669,8 @@ class TradingAgent:
                 timeout=15.0,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            choices = resp.json().get("choices", [])
+            return (choices[0]["message"]["content"].strip()) if choices else ""
 
         if reasoning_model == "gemini":
             api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -2692,7 +2696,8 @@ class TradingAgent:
             )
             resp.raise_for_status()
             data = resp.json()
-            parts = data["candidates"][0]["content"]["parts"]
+            candidates = data.get("candidates", [])
+            parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
             return "".join(p.get("text", "") for p in parts if "text" in p).strip()
 
         if reasoning_model == "perplexity":
@@ -2707,7 +2712,8 @@ class TradingAgent:
                 timeout=15.0,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            choices = resp.json().get("choices", [])
+            return (choices[0]["message"]["content"].strip()) if choices else ""
 
         if reasoning_model == "deepseek":
             api_key = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -2737,7 +2743,7 @@ class TradingAgent:
                 ],
                 messages=messages,
             )
-            return response.content[0].text
+            return response.content[0].text if response.content else ""
 
         # Build OpenAI-compatible messages
         oai_msgs = [{"role": "system", "content": system_text}]
@@ -2769,7 +2775,11 @@ class TradingAgent:
                 timeout=90.0,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
+            data = resp.json()
+            choices = data.get("choices", [])
+            if not choices:
+                raise ValueError("Grok returned no choices")
+            return choices[0].get("message", {}).get("content", "")
 
         if reasoning_model == "gemini":
             api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -2792,7 +2802,10 @@ class TradingAgent:
             )
             resp.raise_for_status()
             data = resp.json()
-            parts = data["candidates"][0]["content"]["parts"]
+            candidates = data.get("candidates", [])
+            if not candidates:
+                raise ValueError("Gemini returned no candidates")
+            parts = candidates[0].get("content", {}).get("parts", [])
             return "".join(p.get("text", "") for p in parts if "text" in p)
 
         if reasoning_model == "perplexity":
@@ -2807,7 +2820,8 @@ class TradingAgent:
                 timeout=90.0,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
+            choices = resp.json().get("choices", [])
+            return choices[0]["message"]["content"] if choices else ""
 
         if reasoning_model == "deepseek":
             api_key = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -4298,7 +4312,8 @@ class TradingAgent:
                     )
                     resp.raise_for_status()
                     data = resp.json()
-                    text = data["choices"][0]["message"]["content"] or ""
+                    choices = data.get("choices", [])
+                    text = (choices[0]["message"]["content"] or "") if choices else ""
                     print(f"[ALT_MODEL] {grok_model} (chat fallback) responded: {len(text):,} chars")
                     return text
             except Exception as e2:
@@ -4337,10 +4352,11 @@ class TradingAgent:
                     resp.raise_for_status()
                     data = resp.json()
                     # Gemini may return multiple parts — concatenate text parts
-                    parts = data["candidates"][0]["content"]["parts"]
+                    candidates = data.get("candidates", [])
+                    parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
                     text = "".join(p.get("text", "") for p in parts if "text" in p) or ""
                     search_tag = "+google_search" if use_web_search else ""
-                    grounding = data.get("candidates", [{}])[0].get("groundingMetadata")
+                    grounding = candidates[0].get("groundingMetadata") if candidates else None
                     if grounding:
                         queries = grounding.get("webSearchQueries", [])
                         print(f"[ALT_MODEL] gemini-3-flash-preview{search_tag} grounded with {len(queries)} searches")
@@ -4377,7 +4393,8 @@ class TradingAgent:
                     )
                     resp.raise_for_status()
                     data = resp.json()
-                    text = data["choices"][0]["message"]["content"] or ""
+                    choices = data.get("choices", [])
+                    text = (choices[0]["message"]["content"] or "") if choices else ""
                     citations = data.get("citations", [])
                     recency_tag = " (recency=day)" if use_web_search else ""
                     print(f"[ALT_MODEL] perplexity sonar-pro{recency_tag} responded: {len(text):,} chars, {len(citations)} citations")

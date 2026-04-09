@@ -333,7 +333,12 @@ async def discover_top_whales_via_perplexity() -> list[dict]:
                 },
             )
             resp.raise_for_status()
-            raw_content = resp.json()["choices"][0]["message"]["content"]
+            resp_data = resp.json()
+            choices = resp_data.get("choices", [])
+            if not choices:
+                logger.error("[WHALE_DISCOVER] Perplexity returned no choices")
+                return []
+            raw_content = choices[0].get("message", {}).get("content", "")
     except Exception as e:
         logger.error("[WHALE_DISCOVER] Perplexity API error: %s", e)
         return []
@@ -669,7 +674,8 @@ async def discover_famous_investors_via_perplexity() -> list[dict]:
         logger.error("[FAMOUS] Perplexity request failed: %s", e)
         return []
 
-    content = raw.get("choices", [{}])[0].get("message", {}).get("content", "")
+    choices = raw.get("choices") or []
+    content = choices[0].get("message", {}).get("content", "") if choices else ""
     try:
         cleaned = _re.sub(r"```(?:json)?", "", content).strip().rstrip("`").strip()
         investors = _json.loads(cleaned)

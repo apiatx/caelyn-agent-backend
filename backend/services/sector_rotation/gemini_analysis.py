@@ -255,10 +255,14 @@ async def get_or_generate_analysis(
                 resp.raise_for_status()
                 data = resp.json()
 
-            parts = data["candidates"][0]["content"]["parts"]
+            candidates = data.get("candidates", [])
+            if not candidates:
+                logger.error("[SR][Gemini] No candidates in response")
+                return None
+            parts = candidates[0].get("content", {}).get("parts", [])
             raw_text = "".join(p.get("text", "") for p in parts if "text" in p)
 
-            grounding = data.get("candidates", [{}])[0].get("groundingMetadata", {})
+            grounding = candidates[0].get("groundingMetadata", {})
             queries = grounding.get("webSearchQueries", [])
             print(f"[SR][Gemini] Analysis generated — {len(raw_text):,} chars, {len(queries)} search queries")
 

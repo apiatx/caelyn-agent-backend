@@ -613,7 +613,7 @@ class MarketDataService:
             if want_macro:
                 tasks.append(
                     asyncio.wait_for(
-                        self.fmp.get_economic_calendar(days_ahead=3),
+                        self.fmp.get_economic_calendar_nasdaq(days_ahead=3),
                         timeout=6.0))
                 task_keys.append("economic_calendar")
 

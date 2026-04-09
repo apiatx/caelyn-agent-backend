@@ -585,7 +585,7 @@ class MacroProvider:
         # Use Nasdaq free calendar (the get_economic_calendar method with days_ahead param)
         if self.fmp:
             try:
-                nasdaq_events = await self.fmp.get_economic_calendar(days_ahead=days_ahead)
+                nasdaq_events = await self.fmp.get_economic_calendar_nasdaq(days_ahead=days_ahead)
                 for evt in (nasdaq_events or []):
                     events.append({
                         "date": evt.get("date"),

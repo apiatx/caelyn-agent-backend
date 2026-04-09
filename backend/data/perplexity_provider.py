@@ -379,7 +379,8 @@ class PerplexityProvider:
                 )
             resp.raise_for_status()
             data = resp.json()
-            text = data["choices"][0]["message"]["content"] or ""
+            choices = data.get("choices", [])
+            text = (choices[0]["message"]["content"] or "") if choices else ""
             citations = data.get("citations", [])
             print(
                 f"[Perplexity][collab] sonar-reasoning-pro responded: "
