@@ -62,6 +62,22 @@ class HyperliquidRestClient:
         """
         return await self._post({"type": "metaAndAssetCtxs"})
 
+    async def get_all_perp_metas(self) -> list:
+        """
+        Returns array of all perp DEX meta objects.
+        Index 0 = main crypto DEX, indices 1+ = HIP-3 DEXes.
+        Each element: {universe: [{name, szDecimals, maxLeverage, ...}], marginTables, collateralToken}
+        """
+        return await self._post({"type": "allPerpMetas"})
+
+    async def get_dex_meta_and_asset_ctxs(self, dex: str) -> list:
+        """
+        Returns [meta, list[AssetCtx]] for a specific HIP-3 DEX by name.
+        Same structure as get_meta_and_asset_ctxs() but for a named DEX.
+        dex examples: 'xyz', 'vntl', 'km', 'flx', 'cash'
+        """
+        return await self._post({"type": "metaAndAssetCtxs", "dex": dex})
+
     async def get_all_mids(self) -> dict[str, str]:
         """All current mid prices keyed by coin name."""
         return await self._post({"type": "allMids"})
