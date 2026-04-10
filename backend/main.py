@@ -2656,7 +2656,7 @@ async def query_agent(
 
     # If CSV data present but no query, provide a default analysis prompt
     if body.csv_data and not user_query.strip():
-        user_query = "Analyze every ticker in this uploaded CSV. Give a BUY, HOLD, or SELL rating for each, plus identify the top 2-3 best investments."
+        user_query = "Analyze every ticker in this uploaded CSV watchlist. For each stock, provide deep analysis including investment thesis, valuation vs peers, upcoming catalysts, competitive moat, and sentiment. Categorize into: top buys now, most undervalued, best catalysts, hidden gems, most revolutionary, and right sector right time. Include an avoid list for overvalued or deteriorating names."
 
     # ── Phase 0: normalize inbound mode/reasoning_model string ──────────────
     # Accepts "caelyn", "customize", legacy aliases, and existing identifiers.

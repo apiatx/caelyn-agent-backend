@@ -476,36 +476,70 @@ class TradingAgent:
             except Exception as e:
                 print(f"[CSV] Parse error: {e}")
 
-        # --- CSV FAST PATH: lightweight direct Claude call, no heavy system prompt ---
+        # --- CSV FAST PATH: rich watchlist analysis via direct Claude call ---
         if csv_parsed:
-            print(f"[CSV] Fast-path: {csv_parsed['total_count']} tickers, calling Claude directly (no APIs, no heavy prompt)")
+            print(f"[CSV] Fast-path: {csv_parsed['total_count']} tickers, calling Claude for deep watchlist analysis")
 
             csv_rows = csv_parsed["rows"]
             csv_cols = csv_parsed["columns"]
             csv_table = "\n".join([", ".join(f"{k}: {v}" for k, v in row.items() if v) for row in csv_rows[:200]])
+            ticker_list = ", ".join(csv_parsed.get("tickers", [])[:200])
+
             csv_prompt = (
-                f"Analyze this spreadsheet. Respond with ONLY a valid JSON object, no markdown, no explanation outside the JSON.\n\n"
+                "You are a world-class equity analyst and portfolio strategist. "
+                "A user has uploaded their stock watchlist. Your job is to produce actionable intelligence on every stock in this list.\n\n"
+                "CRITICAL: Go BEYOND the data in the CSV. Use your training knowledge of each company's recent news, "
+                "competitive position, upcoming catalysts, valuation vs peers, and sector dynamics. "
+                "Do NOT just summarize the spreadsheet — that is useless. The user already has the spreadsheet. "
+                "Add value by providing insights they cannot get from the raw data alone.\n\n"
+                "Do NOT just rank by market cap or revenue size. Focus on asymmetric opportunity, undervaluation, and timing.\n\n"
                 f"SPREADSHEET ({len(csv_rows)} stocks):\n"
-                f"Columns: {', '.join(csv_cols)}\n\n"
+                f"Columns: {', '.join(csv_cols)}\n"
+                f"Tickers: {ticker_list}\n\n"
                 f"{csv_table}\n\n"
-                f"Return this exact JSON structure:\n"
-                f'{{"display_type":"csv_watchlist","summary":"1-2 sentence overview of the watchlist",'
-                f'"strong_buy":[{{"ticker":"SYM","market_cap":"e.g. 488M or 7.4B from spreadsheet","reason":"one-line reason from data"}}],'
-                f'"buy":[{{"ticker":"SYM","market_cap":"...","reason":"one-line reason from data"}}],'
-                f'"hold":[{{"ticker":"SYM","market_cap":"...","reason":"one-line reason from data"}}],'
-                f'"sell":[{{"ticker":"SYM","market_cap":"...","reason":"one-line reason from data"}}],'
-                f'"top_picks":[{{"ticker":"SYM","thesis":"2-3 sentence thesis using data from spreadsheet"}}]'
-                f'}}\n\n'
-                f"Rules:\n"
-                f"- Classify EVERY ticker into exactly one of: strong_buy, buy, hold, sell\n"
-                f"- strong_buy = great growth + reasonable valuation + positive FCF\n"
-                f"- buy = solid fundamentals, decent valuation\n"
-                f"- hold = mixed signals or fair value\n"
-                f"- sell = overvalued, negative FCF, or deteriorating fundamentals\n"
-                f"- top_picks = your TOP 2-3 best investments with a detailed thesis\n"
-                f"- market_cap: format the Market Cap value from the spreadsheet as human-readable (e.g. 488M, 7.4B, 1.2T)\n"
-                f"- Use ONLY data from the spreadsheet. Do NOT make up numbers.\n"
-                f"- Be concise. One-line reasons only (except top_picks thesis).\n\n"
+                "INSTRUCTIONS:\n"
+                "Analyze every stock and place each into one or more of these categories (a stock CAN appear in multiple categories):\n\n"
+                "1. top_buys_now — Best risk/reward RIGHT NOW based on news momentum + social sentiment + fundamentals alignment\n"
+                "2. most_undervalued — Trading at significant discount to growth rate or peer group. Use P/S, P/E, P/FCF, EV/Revenue, PEG ratios\n"
+                "3. best_catalysts — Stocks with specific upcoming events: earnings, FDA approvals, product launches, contract announcements, index inclusion, etc.\n"
+                "4. hidden_gems — Companies closing massive contracts or signing enterprise deals that haven't yet shown up in reported revenue/earnings\n"
+                "5. most_revolutionary — Category-defining companies with true competitive moats, no direct substitutes, genuine bottleneck technology\n"
+                "6. right_sector_right_time — Stocks in sectors with strong macro/political tailwinds right now (AI infrastructure, defense, energy, etc.)\n\n"
+                "FOR EACH STOCK you place in a category, provide ALL of these fields:\n"
+                '- "ticker": the stock symbol\n'
+                '- "name": full company name\n'
+                '- "signal": one of "STRONG BUY", "BUY", "HOLD", or "AVOID"\n'
+                '- "score": numeric 1-10 (10 = highest conviction)\n'
+                '- "thesis": 2-3 sentence investment thesis — be specific and opinionated\n'
+                '- "sentiment": one of "bullish", "neutral", "bearish"\n'
+                '- "sentiment_reason": why sentiment is what it is right now (specific news, social chatter, institutional flows)\n'
+                '- "catalysts": array of 2-3 specific upcoming catalysts with approximate timing\n'
+                '- "valuation": object with "ps_ratio", "pe_ratio" (null if negative earnings), "pfcf", "ev_revenue", "peg" — use your best knowledge of current valuations. Include "vs_peers": a comparison string like "30% discount to semiconductor peer group"\n'
+                '- "moat": description of competitive advantage (or lack thereof)\n'
+                '- "why_now": 1-2 sentences on why timing is right (or wrong) for this stock\n\n'
+                "ALSO produce an avoid_list for stocks that look overvalued, have deteriorating fundamentals, or face significant near-term headwinds. "
+                "Each entry needs: ticker, name, reason (be specific about why to avoid).\n\n"
+                "Not every stock needs to be in a category — only include stocks where you have genuine conviction or insight. "
+                "But EVERY stock must appear in at least one category OR in the avoid_list. Do not silently skip any ticker.\n\n"
+                "Respond ONLY with valid JSON. No markdown, no explanation, no code blocks. Just the raw JSON object.\n\n"
+                "Required JSON structure:\n"
+                "{\n"
+                '  "display_type": "csv_watchlist_analysis",\n'
+                '  "summary": "One paragraph summary of what this watchlist represents and current market context",\n'
+                '  "analysis_date": "ISO date string",\n'
+                '  "market_context": "2-3 sentences on the macro environment relevant to these stocks",\n'
+                '  "categories": {\n'
+                '    "top_buys_now": [ { stock objects as described above } ],\n'
+                '    "most_undervalued": [ { stock objects } ],\n'
+                '    "best_catalysts": [ { stock objects } ],\n'
+                '    "hidden_gems": [ { stock objects } ],\n'
+                '    "most_revolutionary": [ { stock objects } ],\n'
+                '    "right_sector_right_time": [ { stock objects } ]\n'
+                "  },\n"
+                '  "avoid_list": [\n'
+                '    { "ticker": "XYZ", "name": "Company Name", "reason": "Specific reason to avoid" }\n'
+                "  ]\n"
+                "}\n\n"
                 f"User request: {user_prompt}"
             )
             print(f"[CSV] Prompt size: {len(csv_prompt)} chars")
@@ -514,12 +548,12 @@ class TradingAgent:
             try:
                 raw_text = await asyncio.wait_for(
                     asyncio.to_thread(
-                        self._call_simple_model, reasoning_model, csv_prompt, 4096
+                        self._call_simple_model, reasoning_model, csv_prompt, 16384
                     ),
-                    timeout=60.0,
+                    timeout=120.0,
                 )
             except asyncio.TimeoutError:
-                raw_text = '{"display_type":"chat","message":"CSV analysis timed out after 60s. Try a smaller file."}'
+                raw_text = '{"display_type":"chat","message":"CSV analysis timed out after 120s. Try a smaller file or fewer tickers."}'
             except Exception as e:
                 raw_text = f'{{"display_type":"chat","message":"CSV analysis error: {str(e)}"}}'
 
@@ -559,15 +593,35 @@ class TradingAgent:
 
             # Build a rich text summary for conversation history / follow-ups
             summary = parsed.get("summary", "")
-            analysis_parts = [summary] if summary else []
-            for bucket in ("strong_buy", "buy", "hold", "sell"):
-                items = parsed.get(bucket, [])
+            market_ctx = parsed.get("market_context", "")
+            analysis_parts = []
+            if summary:
+                analysis_parts.append(summary)
+            if market_ctx:
+                analysis_parts.append(f"MARKET CONTEXT: {market_ctx}")
+
+            categories = parsed.get("categories", {})
+            category_labels = {
+                "top_buys_now": "TOP BUYS NOW",
+                "most_undervalued": "MOST UNDERVALUED",
+                "best_catalysts": "BEST CATALYSTS",
+                "hidden_gems": "HIDDEN GEMS",
+                "most_revolutionary": "MOST REVOLUTIONARY",
+                "right_sector_right_time": "RIGHT SECTOR RIGHT TIME",
+            }
+            for cat_key, cat_label in category_labels.items():
+                items = categories.get(cat_key, [])
                 if items:
-                    tickers_str = ", ".join(it.get("ticker", "?") for it in items)
-                    analysis_parts.append(f"{bucket.upper().replace('_', ' ')}: {tickers_str}")
-            top = parsed.get("top_picks", [])
-            if top:
-                analysis_parts.append("TOP PICKS: " + ", ".join(t.get("ticker", "?") for t in top))
+                    tickers_str = ", ".join(
+                        f"{it.get('ticker', '?')} ({it.get('signal', '?')})" for it in items
+                    )
+                    analysis_parts.append(f"{cat_label}: {tickers_str}")
+
+            avoid = parsed.get("avoid_list", [])
+            if avoid:
+                avoid_str = ", ".join(it.get("ticker", "?") for it in avoid)
+                analysis_parts.append(f"AVOID: {avoid_str}")
+
             analysis_text = "\n".join(analysis_parts)
 
             csv_result = {
@@ -600,7 +654,14 @@ class TradingAgent:
             for msg in history:
                 if msg.get("role") == "assistant":
                     asst_text = str(msg.get("content", ""))
-                    if any(marker in asst_text for marker in ["STRONG BUY:", "BUY:", "HOLD:", "SELL:", "TOP PICKS:", "STRONG BUY(", "BUY(", "HOLD(", "SELL("]):
+                    if any(marker in asst_text for marker in [
+                        "TOP BUYS NOW:", "MOST UNDERVALUED:", "BEST CATALYSTS:",
+                        "HIDDEN GEMS:", "MOST REVOLUTIONARY:", "RIGHT SECTOR RIGHT TIME:",
+                        "AVOID:", "csv_watchlist_analysis",
+                        # Legacy markers for backward compat with older analyses
+                        "STRONG BUY:", "BUY:", "HOLD:", "SELL:", "TOP PICKS:",
+                        "STRONG BUY(", "BUY(", "HOLD(", "SELL(",
+                    ]):
                         csv_followup = True
                         print(f"[AGENT] CSV follow-up detected — found CSV markers in conversation history")
                         break
@@ -6722,7 +6783,14 @@ Be direct and opinionated. Tell me what you actually think."""
                 if msg.get("role") == "assistant":
                     content = msg.get("content", "")
                     # Check for CSV analysis markers in plain text history
-                    if isinstance(content, str) and any(m in content for m in ["STRONG BUY:", "BUY:", "HOLD:", "SELL:", "TOP PICKS:", "STRONG BUY(", "BUY(", "HOLD(", "SELL("]):
+                    if isinstance(content, str) and any(m in content for m in [
+                        "TOP BUYS NOW:", "MOST UNDERVALUED:", "BEST CATALYSTS:",
+                        "HIDDEN GEMS:", "MOST REVOLUTIONARY:", "RIGHT SECTOR RIGHT TIME:",
+                        "AVOID:", "csv_watchlist_analysis",
+                        # Legacy markers
+                        "STRONG BUY:", "BUY:", "HOLD:", "SELL:", "TOP PICKS:",
+                        "STRONG BUY(", "BUY(", "HOLD(", "SELL(",
+                    ]):
                         original_category = "csv_watchlist"
                         break
             # If no CSV found, check the last assistant message for other categories
