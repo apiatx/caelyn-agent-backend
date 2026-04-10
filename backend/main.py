@@ -58,6 +58,7 @@ from services.whale_watch_service import (
 )
 from services.predict.router import router as _predict_router
 from services.bittensor.router import router as _bittensor_router
+from services.watchlist_router import router as _watchlist_router
 
 _hl_state = _HLState()
 _hl_set_state(_hl_state)
@@ -231,6 +232,10 @@ app.include_router(_predict_router)
 
 # ── Bittensor Dashboard router ───────────────────────────────────────────────
 app.include_router(_bittensor_router)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Watchlist router ─────────────────────────────────────────────────────────
+app.include_router(_watchlist_router)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────
@@ -2656,7 +2661,7 @@ async def query_agent(
 
     # If CSV data present but no query, provide a default analysis prompt
     if body.csv_data and not user_query.strip():
-        user_query = "Analyze every ticker in this uploaded CSV. Give a BUY, HOLD, or SELL rating for each, plus identify the top 2-3 best investments."
+        user_query = "Analyze every ticker in this uploaded CSV watchlist. For each stock, provide deep analysis including investment thesis, valuation vs peers, upcoming catalysts, competitive moat, and sentiment. Categorize into: top buys now, most undervalued, best catalysts, hidden gems, most revolutionary, and right sector right time. Include an avoid list for overvalued or deteriorating names."
 
     # ── Phase 0: normalize inbound mode/reasoning_model string ──────────────
     # Accepts "caelyn", "customize", legacy aliases, and existing identifiers.
