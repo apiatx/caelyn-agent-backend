@@ -212,8 +212,8 @@ def _compute_signal_scores(subnets: list[dict[str, Any]]) -> None:
         # Emission
         emissions.append(_safe_float(s.get("emission_pct", 0)))
 
-        # Social score
-        socials.append(_safe_float(s.get("social_score", 0)))
+        # Social score (derived from latest_total_messages)
+        socials.append(_safe_float(s.get("latest_total_messages", 0)))
 
         # Health: 1 - gini (lower gini = healthier)
         gini = _safe_float(s.get("gini_coeff_top_100", 0.5))
@@ -399,12 +399,18 @@ async def _fetch_dashboard_data() -> dict:
                 social_map[nid] = item
 
     # Sustainability map: netuid → sustain dict
+    # sustain_raw is {"data": [...]} or possibly a flat list
     sustain_map: dict[int, dict] = {}
-    if isinstance(sustain_raw, list):
-        for item in sustain_raw:
-            if isinstance(item, dict) and item.get("netuid") is not None:
-                nid = int(_safe_float(item["netuid"]))
-                sustain_map[nid] = item
+    sustain_list: list = []
+    if isinstance(sustain_raw, dict):
+        sustain_list = sustain_raw.get("data", [])
+    elif isinstance(sustain_raw, list):
+        sustain_list = sustain_raw  # fallback
+    for item in sustain_list:
+        if isinstance(item, dict):
+            nid = item.get("netuid")
+            if nid is not None:
+                sustain_map[int(nid)] = item
 
     # Tags map: netuid → tags list
     tags_map: dict[int, list] = {}
@@ -474,14 +480,14 @@ async def _fetch_dashboard_data() -> dict:
                 # Sparklines
                 "seven_day_price_history": sparkline_map.get(netuid, []),
                 # Social enrichment
-                "social_score": _safe_float(soc.get("social_score", 0)),
-                "twitter_mentions_24h": int(_safe_float(soc.get("twitter_mentions_24h", 0))),
-                "discord_members": int(_safe_float(soc.get("discord_members", 0))),
-                "discord_active_24h": int(_safe_float(soc.get("discord_active_24h", 0))),
-                "sentiment_score": _safe_float(soc.get("sentiment_score", 0)),
-                "twitter_followers": int(_safe_float(soc.get("twitter_followers", 0))),
+                "latest_unique_authors": int(_safe_float(soc.get("latest_unique_authors", 0))),
+                "latest_total_messages": int(_safe_float(soc.get("latest_total_messages", 0))),
+                "total_analyses_24h": int(_safe_float(soc.get("total_analyses_24h", 0))),
+                "last_analysis_timestamp": soc.get("last_analysis_timestamp", None),
+                # Keep social_score as a derived value for signal scoring
+                "social_score": _safe_float(soc.get("latest_total_messages", 0)),
                 # Sustainability
-                "tao_needed_to_sustain": _safe_float(sus.get("tao_needed_to_sustain", 0)),
+                "tao_needed_to_sustain": _safe_float(sus.get("tao_needed", 0)),
                 # Tags
                 "tags": tags_map.get(netuid, []),
             })
