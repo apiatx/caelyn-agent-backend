@@ -35,10 +35,9 @@ from config import TAOSTATS_API_KEY, TAOAPP_API_KEY
 router = APIRouter(prefix="/api/bittensor", tags=["bittensor"])
 
 TAOSTATS_BASE = "https://api.taostats.io"
+TAOAPP_BASE = "https://api.tao.app"
 REQUEST_TIMEOUT = 20.0
 
-# Background-task inter-call delay: 13 s → ~4.6 req/min (< 5/min TaoStats limit)
-_INTER_CALL_DELAY_BG = 13.0
 # Refresh interval for the background pre-fetcher (5 minutes)
 _DASHBOARD_REFRESH_INTERVAL = 300
 # How long the dashboard cache is considered valid before a background refresh
@@ -78,8 +77,12 @@ def _safe_str(val: Any, default: str = "0") -> str:
     return str(val)
 
 
-def _headers() -> dict[str, str]:
+def _taostats_headers() -> dict[str, str]:
     return {"Authorization": TAOSTATS_API_KEY or ""}
+
+
+def _taoapp_headers() -> dict[str, str]:
+    return {"X-API-Key": TAOAPP_API_KEY or ""}
 
 
 async def _taostats_get(
@@ -93,19 +96,19 @@ async def _taostats_get(
     for attempt in range(2 if retry_on_429 else 1):
         try:
             resp = await client.get(
-                url, params=params, headers=_headers(), timeout=REQUEST_TIMEOUT,
+                url, params=params, headers=_taostats_headers(), timeout=REQUEST_TIMEOUT,
             )
             if resp.status_code == 429:
-                print(f"[bittensor] 429 {path} attempt={attempt+1}")
+                print(f"[bittensor] TaoStats 429 {path} attempt={attempt+1}")
                 if attempt == 0 and retry_on_429:
-                    await asyncio.sleep(65.0)   # wait full window + margin
+                    await asyncio.sleep(65.0)
                     continue
                 return None
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
-                print(f"[bittensor] 429(HTTPStatusError) {path} attempt={attempt+1}")
+                print(f"[bittensor] TaoStats 429(HTTPStatusError) {path} attempt={attempt+1}")
                 if attempt == 0 and retry_on_429:
                     await asyncio.sleep(65.0)
                     continue
@@ -116,6 +119,27 @@ async def _taostats_get(
             print(f"[bittensor] TaoStats error {path}: {exc}")
             return None
     return None
+
+
+async def _taoapp_get(
+    client: httpx.AsyncClient,
+    path: str,
+    params: dict | None = None,
+) -> Any:
+    """GET from TaoApp API (10 req/min limit, X-API-Key auth)."""
+    url = f"{TAOAPP_BASE}{path}"
+    try:
+        resp = await client.get(
+            url, params=params, headers=_taoapp_headers(), timeout=REQUEST_TIMEOUT,
+        )
+        if resp.status_code == 429:
+            print(f"[bittensor] TaoApp 429 {path}")
+            return None
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        print(f"[bittensor] TaoApp error {path}: {exc}")
+        return None
 
 
 def _extract_data(raw: Any) -> list | dict | None:
@@ -147,142 +171,134 @@ def _parse_hotkey(hotkey_val: Any) -> str:
 
 async def _fetch_dashboard_data() -> dict:
     """
-    Fetches all 6 TaoStats endpoints SEQUENTIALLY with _INTER_CALL_DELAY_BG
-    seconds between each call so we never exceed the 5 req/min rate limit.
-    Returns the assembled dashboard dict.
+    Fetches dashboard data using TaoApp as the primary source (10 req/min)
+    and TaoStats for network stats (5 req/min).
+
+    TaoApp calls (4, run in parallel):
+      - /api/beta/current          → TAO price, block_number, market_cap
+      - /api/beta/subnet_screener  → all 128 subnets with price/volume/social
+      - /api/beta/analytics/macro/fear_greed/current → fear/greed index
+      - /api/beta/subnets/about/summaries → subnet descriptions
+
+    TaoStats calls (1, sequential to stay under 5 req/min):
+      - /api/stats/latest/v1       → network staking/issuance stats
     """
-    print("[bittensor] background fetch: starting dashboard data pull")
+    print("[bittensor] background fetch: starting dashboard data pull (TaoApp primary)")
 
     async with httpx.AsyncClient() as client:
-        tao_price_raw = await _taostats_get(client, "/api/price/latest/v1", {"asset": "tao"})
-        print(f"[bittensor] bg[1/6] price: {'OK' if tao_price_raw else 'FAIL'}")
-        await asyncio.sleep(_INTER_CALL_DELAY_BG)
+        # Fire all TaoApp calls in parallel — 10 req/min limit is comfortable
+        (
+            current_raw,
+            screener_raw,
+            fear_greed_raw,
+            summaries_raw,
+            stats_raw,
+        ) = await asyncio.gather(
+            _taoapp_get(client, "/api/beta/current"),
+            _taoapp_get(client, "/api/beta/subnet_screener"),
+            _taoapp_get(client, "/api/beta/analytics/macro/fear_greed/current"),
+            _taoapp_get(client, "/api/beta/subnets/about/summaries"),
+            _taostats_get(client, "/api/stats/latest/v1", retry_on_429=False),
+        )
 
-        pools_raw = await _taostats_get(client, "/api/dtao/pool/latest/v1", {
-            "page": 1, "limit": 100, "order": "market_cap_desc",
-        })
-        print(f"[bittensor] bg[2/6] pools: {'OK, len=' + str(len(pools_raw.get('data', []))) if isinstance(pools_raw, dict) else 'FAIL'}")
-        await asyncio.sleep(_INTER_CALL_DELAY_BG)
+    print(f"[bittensor] bg: current={'OK' if current_raw else 'FAIL'} "
+          f"screener={'OK,' + str(len(screener_raw)) + ' subnets' if isinstance(screener_raw, list) else 'FAIL'} "
+          f"fear_greed={'OK' if fear_greed_raw else 'FAIL'} "
+          f"summaries={'OK,' + str(len(summaries_raw)) + ' items' if isinstance(summaries_raw, list) else 'FAIL'} "
+          f"stats={'OK' if stats_raw else 'FAIL (non-fatal)'}")
 
-        stats_raw = await _taostats_get(client, "/api/stats/latest/v1")
-        print(f"[bittensor] bg[3/6] stats: {'OK' if stats_raw else 'FAIL'}")
-        await asyncio.sleep(_INTER_CALL_DELAY_BG)
-
-        total_price_raw = await _taostats_get(client, "/api/dtao/pool/total_price/latest/v1")
-        print(f"[bittensor] bg[4/6] total_price: {'OK' if total_price_raw else 'FAIL'}")
-        await asyncio.sleep(_INTER_CALL_DELAY_BG)
-
-        identities_raw = await _taostats_get(client, "/api/subnet/identity/v1", {
-            "page": 1, "limit": 200,
-        })
-        print(f"[bittensor] bg[5/6] identities: {'OK, len=' + str(len(identities_raw.get('data', []))) if isinstance(identities_raw, dict) else 'FAIL'}")
-        await asyncio.sleep(_INTER_CALL_DELAY_BG)
-
-        block_raw = await _taostats_get(client, "/api/block/v1", {"limit": 1})
-        print(f"[bittensor] bg[6/6] block: {'OK' if block_raw else 'FAIL'}")
-
-    # ── Assemble ──────────────────────────────────────────────────────────
-
-    # TAO price
+    # ── TAO price & block (from TaoApp /current) ──────────────────────────
     tao_price = {"price": "0", "change_24h": "0"}
-    tp_item = _extract_first(tao_price_raw)
-    if tp_item:
+    block_number = 0
+    if isinstance(current_raw, dict):
         tao_price = {
-            "price": _safe_str(tp_item.get("price", tp_item.get("close", "0"))),
-            "change_24h": _safe_str(
-                tp_item.get("price_change_24h",
-                tp_item.get("change_24h",
-                tp_item.get("percent_change_24h", "0")))
-            ),
+            "price": _safe_str(current_raw.get("price", "0")),
+            "change_24h": _safe_str(current_raw.get("percent_change_24h", "0")),
+        }
+        block_number = int(_safe_float(current_raw.get("max_block_number", 0)))
+
+    # ── Fear/greed (from TaoApp) ───────────────────────────────────────────
+    total_market: dict[str, Any] = {
+        "total_price_tao": "0", "fear_greed_score": 0, "fear_greed_label": "N/A",
+    }
+    if isinstance(fear_greed_raw, dict):
+        total_market = {
+            "total_price_tao": _safe_str(current_raw.get("market_cap", "0") if isinstance(current_raw, dict) else "0"),
+            "fear_greed_score": _safe_float(fear_greed_raw.get("fear_greed_index", 0)),
+            "fear_greed_label": _safe_str(fear_greed_raw.get("sentiment", "N/A"), default="N/A"),
         }
 
-    # Block number
-    block_number = 0
-    block_item = _extract_first(block_raw)
-    if block_item:
-        block_number = int(_safe_float(block_item.get("block_number", 0)))
-
-    # Network stats
+    # ── Network stats (from TaoStats, best-effort) ─────────────────────────
     network_stats: dict[str, Any] = {}
     st_item = _extract_first(stats_raw)
     if st_item:
         network_stats = st_item
 
-    # Total market
-    total_market: dict[str, Any] = {
-        "total_price_tao": "0", "fear_greed_score": 0, "fear_greed_label": "N/A",
-    }
-    tm_item = _extract_first(total_price_raw)
-    if tm_item:
-        total_market = {
-            "total_price_tao": _safe_str(
-                tm_item.get("total_price_tao", tm_item.get("total_price", tm_item.get("price", "0")))
-            ),
-            "fear_greed_score": _safe_float(
-                tm_item.get("fear_greed_score", tm_item.get("fear_greed", tm_item.get("score", 0)))
-            ),
-            "fear_greed_label": _safe_str(
-                tm_item.get("fear_greed_label", tm_item.get("label", tm_item.get("sentiment", "N/A"))),
-                default="N/A",
-            ),
-        }
+    # ── Descriptions map (from TaoApp /subnets/about/summaries) ───────────
+    desc_map: dict[int, str] = {}
+    if isinstance(summaries_raw, list):
+        for item in summaries_raw:
+            if isinstance(item, dict) and item.get("netuid") is not None:
+                nid = int(_safe_float(item["netuid"]))
+                title = item.get("title", "")
+                subtitle = item.get("subtitle", "")
+                desc_map[nid] = f"{title} — {subtitle}" if subtitle else title
 
-    # Identity map
-    identity_map: dict[int, dict] = {}
-    id_data = _extract_data(identities_raw)
-    if isinstance(id_data, list):
-        for item in id_data:
-            if isinstance(item, dict):
-                nid = item.get("netuid")
-                if nid is not None:
-                    identity_map[int(nid)] = item
-
-    # Subnets from pools
-    # NOTE: The TaoStats /api/dtao/pool/latest/v1 API uses these exact field names:
-    #   total_tao, alpha_in_pool, price_change_1_day, price_change_1_week,
-    #   tao_volume_24_hr, seven_day_prices, fear_and_greed_index, fear_and_greed_sentiment
+    # ── Subnets (from TaoApp /subnet_screener) ────────────────────────────
+    # Field reference for TaoApp subnet_screener:
+    #   netuid, subnet_name, price, tao_in, alpha_in, alpha_out, alpha_circ,
+    #   market_cap_tao, fdv_tao, emission_pct, alpha_emitted_pct,
+    #   buy_volume_tao_1d, sell_volume_tao_1d, total_volume_tao_1d,
+    #   price_1h_pct_change, price_1d_pct_change, price_7d_pct_change, price_1m_pct_change,
+    #   buy_volume_pct_change, sell_volume_pct_change, total_volume_pct_change,
+    #   root_prop, alpha_prop, net_volume_tao_1h, net_volume_tao_24h, net_volume_tao_7d,
+    #   realized_pnl_tao, unrealized_pnl_tao, ath_60d, atl_60d,
+    #   gini_coeff_top_100, hhi, github_repo, subnet_contact, subnet_url,
+    #   subnet_website, discord, additional, owner_coldkey, owner_hotkey, symbol
     subnets: list[dict[str, Any]] = []
-    pool_data = _extract_data(pools_raw)
-    if isinstance(pool_data, list):
-        print(f"[bittensor] bg: assembling {len(pool_data)} subnets")
-        for pool in pool_data:
-            if not isinstance(pool, dict):
+    if isinstance(screener_raw, list):
+        # Sort by market_cap_tao descending (same order as TaoStats pools used)
+        screener_sorted = sorted(
+            screener_raw,
+            key=lambda s: _safe_float(s.get("market_cap_tao", 0)),
+            reverse=True,
+        )
+        print(f"[bittensor] bg: assembling {len(screener_sorted)} subnets from TaoApp screener")
+        for subnet in screener_sorted:
+            if not isinstance(subnet, dict):
                 continue
-            netuid = int(_safe_float(pool.get("netuid", 0)))
-            identity = identity_map.get(netuid, {})
-            # Pool data includes `name` directly; identity may have richer label
-            name = (
-                identity.get("subnet_name")
-                or identity.get("name")
-                or pool.get("name")
-                or f"SN{netuid}"
-            )
+            netuid = int(_safe_float(subnet.get("netuid", 0)))
             subnets.append({
                 "netuid": netuid,
-                "name": name,
-                "description": identity.get("description", ""),
-                "price": _safe_str(pool.get("price", "0")),
-                "market_cap": _safe_str(pool.get("market_cap", "0")),
-                # API uses price_change_1_day, not price_change_24h
-                "price_change_24h": _safe_str(pool.get("price_change_1_day", pool.get("price_change_24h", "0"))),
-                # API uses price_change_1_week, not price_change_7d
-                "price_change_7d": _safe_str(pool.get("price_change_1_week", pool.get("price_change_7d", "0"))),
-                "emission": _safe_str(pool.get("emission", pool.get("daily_emission", "0"))),
-                # API uses total_tao for TAO in pool
-                "tao_in": _safe_str(pool.get("total_tao", pool.get("tao_in", pool.get("tao_in_pool", "0")))),
-                # API uses alpha_in_pool, not alpha_in
-                "alpha_in": _safe_str(pool.get("alpha_in_pool", pool.get("alpha_in", "0"))),
-                # API uses tao_volume_24_hr, not volume_24h
-                "volume_24h": _safe_str(pool.get("tao_volume_24_hr", pool.get("volume_24h", "0"))),
-                # API uses seven_day_prices, not seven_day_price_history
-                "seven_day_price_history": pool.get("seven_day_prices", pool.get("seven_day_price_history", [])),
-                "is_active": not pool.get("startup_mode", False),
-                "discord": identity.get("discord", ""),
-                "twitter": identity.get("twitter", ""),
-                "github": identity.get("github", ""),
+                "name": subnet.get("subnet_name") or f"SN{netuid}",
+                "symbol": subnet.get("symbol", ""),
+                "description": desc_map.get(netuid, ""),
+                "price": _safe_str(subnet.get("price", "0")),
+                "market_cap": _safe_str(subnet.get("market_cap_tao", "0")),
+                "fdv": _safe_str(subnet.get("fdv_tao", "0")),
+                "price_change_1h": _safe_str(subnet.get("price_1h_pct_change", "0")),
+                "price_change_24h": _safe_str(subnet.get("price_1d_pct_change", "0")),
+                "price_change_7d": _safe_str(subnet.get("price_7d_pct_change", "0")),
+                "price_change_30d": _safe_str(subnet.get("price_1m_pct_change", "0")),
+                "emission_pct": _safe_str(subnet.get("emission_pct", "0")),
+                "tao_in": _safe_str(subnet.get("tao_in", "0")),
+                "alpha_in": _safe_str(subnet.get("alpha_in", "0")),
+                "alpha_circ": _safe_str(subnet.get("alpha_circ", "0")),
+                "volume_24h": _safe_str(subnet.get("total_volume_tao_1d", "0")),
+                "buy_volume_24h": _safe_str(subnet.get("buy_volume_tao_1d", "0")),
+                "sell_volume_24h": _safe_str(subnet.get("sell_volume_tao_1d", "0")),
+                "net_volume_24h": _safe_str(subnet.get("net_volume_tao_24h", "0")),
+                "ath_60d": _safe_str(subnet.get("ath_60d", "0")),
+                "atl_60d": _safe_str(subnet.get("atl_60d", "0")),
+                "root_prop": _safe_str(subnet.get("root_prop", "0")),
+                "discord": subnet.get("discord", "") or "",
+                "github": subnet.get("github_repo", "") or "",
+                "website": subnet.get("subnet_website", subnet.get("subnet_url", "")) or "",
+                "twitter": "",
+                "seven_day_price_history": [],
             })
     else:
-        print(f"[bittensor] bg: pool data unavailable — subnets will be empty")
+        print(f"[bittensor] bg: TaoApp screener unavailable — subnets will be empty")
 
     result = {
         "tao_price": tao_price,
@@ -293,7 +309,8 @@ async def _fetch_dashboard_data() -> dict:
         "subnet_count": len(subnets),
         "as_of": datetime.now(timezone.utc).isoformat(),
     }
-    print(f"[bittensor] bg: fetch complete — {len(subnets)} subnets, block={block_number}")
+    print(f"[bittensor] bg: fetch complete — {len(subnets)} subnets, block={block_number}, "
+          f"price={tao_price['price']}, fear_greed={total_market['fear_greed_score']}")
     return result
 
 
@@ -343,6 +360,19 @@ async def debug_endpoint():
     if entry:
         result["dashboard_cache_age_seconds"] = round(time.time() - entry["ts"], 1)
         result["dashboard_subnet_count"] = entry["data"].get("subnet_count", 0)
+
+    if TAOAPP_API_KEY:
+        try:
+            async with httpx.AsyncClient() as client:
+                taoapp_raw = await _taoapp_get(client, "/api/beta/current")
+            if taoapp_raw is not None:
+                result["taoapp_test_result"] = "OK"
+                result["taoapp_price"] = taoapp_raw.get("price")
+                result["taoapp_block"] = taoapp_raw.get("max_block_number")
+            else:
+                result["taoapp_test_result"] = "ERROR: request returned None"
+        except Exception as exc:
+            result["taoapp_test_result"] = f"ERROR: {exc}"
 
     if TAOSTATS_API_KEY:
         try:
