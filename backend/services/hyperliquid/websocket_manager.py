@@ -1,18 +1,25 @@
 """
 Hyperliquid Screener — WebSocket consumer + boot sequence.
 
-Boot sequence:
-  1. REST: fetch metaAndAssetCtxs → initialize all perp assets
+Boot sequence (fast path — sets is_ready in ~30-60s):
+  1. REST: fetch metaAndAssetCtxs → initialize crypto perp assets
   2. REST: fetch spotMetaAndAssetCtxs → extend with spot assets
   3. REST: fetch allMids → patch mid prices
   4. REST: fetch 1h candles for top-40 assets → volatility/momentum
   5. REST: fetch 5m candles for top-20 assets → short-term vol/momentum
   6. REST: fetch L2 books for top-20 assets → book depth features
   7. Run full feature pass → compute all signals
-  8. Mark state.is_ready = True
+  8. Mark state.is_ready = True  ← fast: crypto perps only
   9. Connect WebSocket → subscribe to allMids + activeAssetCtx + bbo + trades
- 10. Background: periodic candle refresh (every 5 min)
- 11. Background: periodic feature recompute (every 60s)
+
+Post-boot enrichment (background, non-blocking):
+ 10. Load HIP-3 DEX universes (equity/commodity/index/pre-IPO perps)
+ 11. Load 1d candles for top-50 crypto perps (TSMOM signals)
+ 12. Run feature pass to include new HIP-3 assets
+
+Background tasks (continuous):
+ 13. Periodic candle refresh (every 5 min) — refreshes 1h, 5m, 1d
+ 14. Periodic feature recompute (every 60s)
 """
 from __future__ import annotations
 
@@ -70,10 +77,13 @@ async def boot_and_run(state: HyperliquidState):
         state.boot_ts = time.time()
 
         # Run all long-lived tasks concurrently
+        # Launch post-boot enrichment as a concurrent task alongside the infinite loops.
+        # It loads HIP-3 DEX assets and 1d candles without blocking is_ready.
         await asyncio.gather(
             _ws_consumer(state),
             _periodic_candle_refresh(state, client),
             _periodic_feature_recompute(state),
+            _post_boot_enrich(state, client),
             return_exceptions=True,
         )
     except Exception as e:
@@ -101,49 +111,6 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
         print(f"[HL][boot] Loaded {len(perp_assets)} perp assets | allowlist size={len(state.perp_allowlist)}")
     except Exception as e:
         print(f"[HL][boot] Perp universe error: {e}")
-
-    # 1b. HIP-3 DEXes — equity, commodity, index, pre-IPO perps
-    print("[HL][boot] Fetching HIP-3 DEX universes...")
-    try:
-        # Discover all DEX prefixes from allPerpMetas
-        all_metas = await client.get_all_perp_metas()
-        hip3_prefixes: list[str] = []
-        for dex_meta in all_metas[1:]:  # skip index 0 (main crypto)
-            universe = dex_meta.get("universe", [])
-            if universe:
-                first_name = universe[0].get("name", "")
-                if ":" in first_name:
-                    prefix = first_name.split(":")[0]
-                    if prefix not in hip3_prefixes:
-                        hip3_prefixes.append(prefix)
-
-        # Fetch all HIP-3 DEX contexts concurrently
-        import asyncio as _asyncio
-        hip3_ctxs_list = await _asyncio.gather(
-            *[client.get_dex_meta_and_asset_ctxs(p) for p in hip3_prefixes],
-            return_exceptions=True,
-        )
-
-        hip3_total = 0
-        # Track display names seen to de-duplicate (keep first/highest-volume)
-        seen_display: set[str] = set()
-        for prefix, result in zip(hip3_prefixes, hip3_ctxs_list):
-            if isinstance(result, Exception):
-                print(f"[HL][boot] HIP-3 DEX '{prefix}' error: {result}")
-                continue
-            hip3_assets = build_hip3_universe(prefix, result)
-            for coin, asset in hip3_assets.items():
-                if coin not in state.assets:
-                    # De-duplicate: skip if we already have an asset with same display name
-                    if asset.display_name in seen_display:
-                        continue
-                    seen_display.add(asset.display_name)
-                    state.assets[coin] = asset
-                    state.universe_allowlist.add(coin)
-                    hip3_total += 1
-        print(f"[HL][boot] HIP-3 DEXes: admitted {hip3_total} unique assets across {len(hip3_prefixes)} DEXes")
-    except Exception as e:
-        print(f"[HL][boot] HIP-3 DEX universe error: {e}")
 
     # 2. Spot universe
     print("[HL][boot] Fetching spot universe...")
@@ -180,24 +147,6 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
     except Exception as e:
         print(f"[HL][boot] 1h candle error: {e}")
 
-    # 4b. 1d candles (120 bars) for TSMOM signal computation
-    #     Use top-50 crypto perps (no HIP-3 prefix) by volume
-    tsmom_coins = [
-        c for c in state.top_coins_by_volume(60)
-        if ":" not in c  # crypto perps only (have longer price history)
-    ][:50]
-    print(f"[HL][boot] Fetching 1d candles for {len(tsmom_coins)} TSMOM assets...")
-    try:
-        candles_1d = await client.get_candles_multi(tsmom_coins, "1d", n_bars=120)
-        loaded_1d = 0
-        for coin, bars in candles_1d.items():
-            if bars:
-                state.add_candles(coin, "1d", bars)
-                loaded_1d += 1
-        print(f"[HL][boot] 1d candles loaded for {loaded_1d} coins")
-    except Exception as e:
-        print(f"[HL][boot] 1d candle error: {e}")
-
     # 5. 5m candles for top-20
     top20 = top40[:20]
     print(f"[HL][boot] Fetching 5m candles for {len(top20)} assets...")
@@ -230,6 +179,87 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
 # ─────────────────────────────────────────────────────────────────────────────
 # WebSocket consumer
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Post-boot enrichment (runs once, non-blocking)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _post_boot_enrich(state: HyperliquidState, client: HyperliquidRestClient):
+    """
+    Non-blocking post-boot enrichment. Runs once after is_ready=True.
+    Loads HIP-3 DEX assets (equity/commodity/index/pre-IPO) and 1d candles
+    for TSMOM signals without delaying the core boot sequence.
+    """
+    await asyncio.sleep(3)  # let WS subscribe first
+    print("[HL][enrich] Starting post-boot enrichment...")
+
+    # ─ 1. HIP-3 DEX universes ───────────────────────────────────────────────
+    try:
+        all_metas = await client.get_all_perp_metas()
+        hip3_prefixes: list[str] = []
+        for dex_meta in all_metas[1:]:  # skip index 0 (main crypto)
+            universe = dex_meta.get("universe", [])
+            if universe:
+                first_name = universe[0].get("name", "")
+                if ":" in first_name:
+                    prefix = first_name.split(":")[0]
+                    if prefix not in hip3_prefixes:
+                        hip3_prefixes.append(prefix)
+
+        hip3_ctxs_list = await asyncio.gather(
+            *[client.get_dex_meta_and_asset_ctxs(p) for p in hip3_prefixes],
+            return_exceptions=True,
+        )
+
+        hip3_total = 0
+        seen_display: set[str] = set()
+        for prefix, result in zip(hip3_prefixes, hip3_ctxs_list):
+            if isinstance(result, Exception):
+                print(f"[HL][enrich] HIP-3 DEX '{prefix}' error: {result}")
+                continue
+            hip3_assets = build_hip3_universe(prefix, result)
+            for coin, asset in hip3_assets.items():
+                if coin not in state.assets:
+                    if asset.display_name in seen_display:
+                        continue
+                    seen_display.add(asset.display_name)
+                    state.assets[coin] = asset
+                    state.universe_allowlist.add(coin)
+                    hip3_total += 1
+        print(f"[HL][enrich] HIP-3: admitted {hip3_total} assets across {len(hip3_prefixes)} DEXes")
+
+        # Refresh mids so new HIP-3 assets get prices
+        try:
+            mids = await client.get_all_mids()
+            patch_from_all_mids(state, mids)
+        except Exception as e:
+            print(f"[HL][enrich] allMids refresh error: {e}")
+
+        # Feature pass to score the new HIP-3 assets
+        run_full_feature_pass(state)
+        print("[HL][enrich] Feature pass complete after HIP-3 load")
+    except Exception as e:
+        print(f"[HL][enrich] HIP-3 error: {e}")
+
+    # ─ 2. 1d candles for TSMOM ──────────────────────────────────────────────
+    tsmom_coins = [
+        c for c in state.top_coins_by_volume(60)
+        if ":" not in c  # crypto perps only (have richer price history)
+    ][:50]
+    print(f"[HL][enrich] Fetching 1d candles for {len(tsmom_coins)} TSMOM assets...")
+    try:
+        candles_1d = await client.get_candles_multi(tsmom_coins, "1d", n_bars=120)
+        loaded_1d = sum(1 for bars in candles_1d.values() if bars)
+        for coin, bars in candles_1d.items():
+            if bars:
+                state.add_candles(coin, "1d", bars)
+        print(f"[HL][enrich] 1d candles loaded for {loaded_1d} / {len(tsmom_coins)} coins")
+    except Exception as e:
+        print(f"[HL][enrich] 1d candle error: {e}")
+
+    print("[HL][enrich] Post-boot enrichment complete.")
+
+
 
 async def _ws_consumer(state: HyperliquidState):
     """
