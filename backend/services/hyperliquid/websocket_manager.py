@@ -27,6 +27,7 @@ import websockets.exceptions
 from .client import HyperliquidRestClient
 from .feature_engine import run_full_feature_pass
 from .normalizer import (
+    build_hip3_universe,
     build_perp_universe,
     build_spot_universe,
     patch_from_active_asset_ctx,
@@ -101,6 +102,49 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
     except Exception as e:
         print(f"[HL][boot] Perp universe error: {e}")
 
+    # 1b. HIP-3 DEXes — equity, commodity, index, pre-IPO perps
+    print("[HL][boot] Fetching HIP-3 DEX universes...")
+    try:
+        # Discover all DEX prefixes from allPerpMetas
+        all_metas = await client.get_all_perp_metas()
+        hip3_prefixes: list[str] = []
+        for dex_meta in all_metas[1:]:  # skip index 0 (main crypto)
+            universe = dex_meta.get("universe", [])
+            if universe:
+                first_name = universe[0].get("name", "")
+                if ":" in first_name:
+                    prefix = first_name.split(":")[0]
+                    if prefix not in hip3_prefixes:
+                        hip3_prefixes.append(prefix)
+
+        # Fetch all HIP-3 DEX contexts concurrently
+        import asyncio as _asyncio
+        hip3_ctxs_list = await _asyncio.gather(
+            *[client.get_dex_meta_and_asset_ctxs(p) for p in hip3_prefixes],
+            return_exceptions=True,
+        )
+
+        hip3_total = 0
+        # Track display names seen to de-duplicate (keep first/highest-volume)
+        seen_display: set[str] = set()
+        for prefix, result in zip(hip3_prefixes, hip3_ctxs_list):
+            if isinstance(result, Exception):
+                print(f"[HL][boot] HIP-3 DEX '{prefix}' error: {result}")
+                continue
+            hip3_assets = build_hip3_universe(prefix, result)
+            for coin, asset in hip3_assets.items():
+                if coin not in state.assets:
+                    # De-duplicate: skip if we already have an asset with same display name
+                    if asset.display_name in seen_display:
+                        continue
+                    seen_display.add(asset.display_name)
+                    state.assets[coin] = asset
+                    state.universe_allowlist.add(coin)
+                    hip3_total += 1
+        print(f"[HL][boot] HIP-3 DEXes: admitted {hip3_total} unique assets across {len(hip3_prefixes)} DEXes")
+    except Exception as e:
+        print(f"[HL][boot] HIP-3 DEX universe error: {e}")
+
     # 2. Spot universe
     print("[HL][boot] Fetching spot universe...")
     try:
@@ -135,6 +179,24 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
         print(f"[HL][boot] 1h candles loaded for {sum(1 for b in candles_1h.values() if b)} coins")
     except Exception as e:
         print(f"[HL][boot] 1h candle error: {e}")
+
+    # 4b. 1d candles (120 bars) for TSMOM signal computation
+    #     Use top-50 crypto perps (no HIP-3 prefix) by volume
+    tsmom_coins = [
+        c for c in state.top_coins_by_volume(60)
+        if ":" not in c  # crypto perps only (have longer price history)
+    ][:50]
+    print(f"[HL][boot] Fetching 1d candles for {len(tsmom_coins)} TSMOM assets...")
+    try:
+        candles_1d = await client.get_candles_multi(tsmom_coins, "1d", n_bars=120)
+        loaded_1d = 0
+        for coin, bars in candles_1d.items():
+            if bars:
+                state.add_candles(coin, "1d", bars)
+                loaded_1d += 1
+        print(f"[HL][boot] 1d candles loaded for {loaded_1d} coins")
+    except Exception as e:
+        print(f"[HL][boot] 1d candle error: {e}")
 
     # 5. 5m candles for top-20
     top20 = top40[:20]
@@ -334,6 +396,13 @@ async def _periodic_candle_refresh(state: HyperliquidState, client: HyperliquidR
             for coin, bars in candles5.items():
                 if bars:
                     state.add_candles(coin, "5m", bars)
+
+            # Refresh 1d candles for TSMOM
+            tsmom_coins = [c for c in top40 if ":" not in c][:50]
+            candles1d = await client.get_candles_multi(tsmom_coins, "1d", n_bars=120)
+            for coin, bars in candles1d.items():
+                if bars:
+                    state.add_candles(coin, "1d", bars)
         except Exception as e:
             print(f"[HL][candle_refresh] Error: {e}")
 

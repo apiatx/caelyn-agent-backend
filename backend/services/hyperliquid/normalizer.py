@@ -484,6 +484,28 @@ _MEME   = {"DOGE", "SHIB", "PEPE", "WIF", "BONK", "FLOKI", "MOG", "BRETT", "TURB
 _GAMING = {"AXS", "SAND", "MANA", "GALA", "IMX", "BEAM", "RON"}
 _RWA    = {"ONDO", "CANTO", "CFG", "TRU", "MPL"}
 
+# HIP-3 DEX category classification
+_HIP3_EQUITY     = {"TSLA", "NVDA", "AAPL", "MSFT", "META", "AMZN", "GOOGL", "HOOD", "COIN",
+                    "INTC", "PLTR", "CRCL", "AMD", "NFLX", "UBER", "LYFT", "BABA", "TSM"}
+_HIP3_COMMODITY  = {"GOLD", "SILVER", "OIL", "GAS", "USOIL", "USENERGY"}
+_HIP3_INDEX      = {"US500", "USA500", "USTECH", "SMALL2000", "USBOND", "SPX", "NDX",
+                    "MAG7", "SEMIS", "INFOTECH", "NUCLEAR", "DEFENSE", "ENERGY", "ROBOT"}
+_HIP3_PREIPO     = {"SPACEX", "OPENAI", "ANTHROPIC"}
+_HIP3_MACRO      = {"EUR", "USBOND", "TOTAL2", "OTHERS", "BTCD"}
+
+# DEX prefix → primary category label for tagging
+_DEX_CATEGORY: dict[str, str] = {
+    "xyz":  "equity",
+    "flx":  "equity",
+    "vntl": "pre-IPO",
+    "km":   "macro",
+    "cash": "equity",
+    "hyna": "crypto",
+    "abcd": "index",
+    "para": "crypto",
+}
+
+
 def _perp_tags(coin: str, meta: dict) -> list[str]:
     tags = ["perp"]
     c = coin.upper()
@@ -498,3 +520,132 @@ def _perp_tags(coin: str, meta: dict) -> list[str]:
     if c in _GAMING:  tags.append("gaming")
     if c in _RWA:     tags.append("RWA")
     return tags
+
+
+def _hip3_tags(dex_prefix: str, stripped_name: str) -> list[str]:
+    """Generate tags for a HIP-3 DEX asset."""
+    tags = ["perp"]
+    n = stripped_name.upper()
+    # DEX-level category
+    dex_cat = _DEX_CATEGORY.get(dex_prefix, "hip3")
+    tags.append(dex_cat)
+    # Asset-level refinement
+    if n in _HIP3_EQUITY:    tags.append("equity")
+    elif n in _HIP3_COMMODITY: tags.append("commodity")
+    elif n in _HIP3_INDEX:   tags.append("index")
+    elif n in _HIP3_PREIPO:  tags.append("pre-IPO")
+    elif n in _HIP3_MACRO:   tags.append("macro")
+    return tags
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HIP-3 DEX Universe builder
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_hip3_universe(dex_name: str, meta_and_ctxs: list) -> dict[str, ScreenerAsset]:
+    """
+    Convert a HIP-3 DEX metaAndAssetCtxs response into ScreenerAsset objects.
+
+    Coin names have a DEX prefix (e.g. 'xyz:TSLA'). The display_name is the
+    stripped name ('TSLA') for clean UI rendering.
+
+    Assets where prevDayPx is 0 or markPx is None are skipped (unlaunched).
+    """
+    if not meta_and_ctxs or len(meta_and_ctxs) < 2:
+        return {}
+
+    meta_block = meta_and_ctxs[0]
+    ctx_list   = meta_and_ctxs[1]
+    universe   = meta_block.get("universe", [])
+
+    assets: dict[str, ScreenerAsset] = {}
+    skipped = 0
+
+    for idx, asset_meta in enumerate(universe):
+        coin = asset_meta.get("name", "")
+        if not coin:
+            continue
+
+        # Skip delisted
+        if asset_meta.get("isDelisted"):
+            skipped += 1
+            continue
+
+        ctx = ctx_list[idx] if idx < len(ctx_list) else {}
+
+        mark  = _f(ctx.get("markPx"))
+        prev  = _f(ctx.get("prevDayPx"))
+
+        # Skip unlaunched assets (no price data)
+        if mark is None or mark == 0 or prev is None or prev == 0:
+            skipped += 1
+            continue
+
+        # Strip DEX prefix for display (e.g. 'xyz:TSLA' → 'TSLA')
+        dex_prefix = coin.split(":")[0] if ":" in coin else dex_name
+        stripped   = coin.split(":")[1] if ":" in coin else coin
+
+        oracle = _f(ctx.get("oraclePx"))
+        mid    = _f(ctx.get("midPx"))
+        fund   = _f(ctx.get("funding"))
+        prem   = _f(ctx.get("premium"))
+        oi     = _f(ctx.get("openInterest"))
+        ntlvlm = _f(ctx.get("dayNtlVlm"))
+        basevlm= _f(ctx.get("dayBaseVlm"))
+
+        impact = ctx.get("impactPxs") or []
+        impact_bid = _f(impact[0]) if len(impact) > 0 else None
+        impact_ask = _f(impact[1]) if len(impact) > 1 else None
+
+        pct_24h = (mark - prev) / prev * 100 if (mark and prev and prev != 0) else None
+        oi_usd  = oi * mark if (oi and mark) else None
+        dist_mo = (mark - oracle) / oracle * 100 if (mark and oracle and oracle != 0) else None
+        dist_mm = (mark - mid) / mid * 100 if (mark and mid and mid != 0) else None
+        dist_mp = (mark - prev) / prev * 100 if (mark and prev and prev != 0) else None
+
+        tags = _hip3_tags(dex_prefix, stripped)
+
+        assets[coin] = ScreenerAsset(
+            coin=coin,
+            display_name=stripped,
+            canonical_coin_id=coin,
+            display_symbol=stripped,
+            is_listed_on_hyperliquid=True,
+            market_type="perp",
+            dex=f"hl-{dex_prefix}",
+            tags=tags,
+
+            mark_px=mark,
+            mid_px=mid,
+            oracle_px=oracle,
+            prev_day_px=prev,
+            pct_change_24h=round(pct_24h, 4) if pct_24h is not None else None,
+
+            funding=fund,
+            premium=prem,
+
+            open_interest=oi,
+            open_interest_usd=round(oi_usd, 2) if oi_usd is not None else None,
+            day_ntl_vlm=ntlvlm,
+            day_base_vlm=basevlm,
+
+            impact_bid_px=impact_bid,
+            impact_ask_px=impact_ask,
+
+            distance_mark_oracle_pct=round(dist_mo, 4) if dist_mo is not None else None,
+            distance_mark_mid_pct=round(dist_mm, 4) if dist_mm is not None else None,
+            distance_mark_prev_day_pct=round(dist_mp, 4) if dist_mp is not None else None,
+
+            bid_px=None, ask_px=None, spread_abs=None, spread_bps=None,
+
+            max_leverage=asset_meta.get("maxLeverage"),
+            only_isolated=asset_meta.get("onlyIsolated", False),
+            sz_decimals=asset_meta.get("szDecimals", 0),
+            market_status="active",
+
+            momentum_24h=round(pct_24h, 4) if pct_24h is not None else None,
+            last_updated_ts=time.time(),
+        )
+
+    print(f"[HL][universe] HIP-3 DEX '{dex_name}': admitted {len(assets)}, skipped {skipped}")
+    return assets

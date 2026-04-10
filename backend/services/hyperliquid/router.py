@@ -24,6 +24,7 @@ from .models import HeroSignal, ScreenerAsset
 from .ranking_engine import generate_rationale, rank_assets
 from .signals import build_signal_sections, build_summary_cards, generate_agent_briefing, generate_hero_signals
 from .state import HyperliquidState
+from .tsmom import compute_tsmom_signals
 
 router = APIRouter(prefix="/api/hyperliquid/screener", tags=["hyperliquid"])
 
@@ -70,7 +71,7 @@ def _dir(d: Optional[str]) -> str:
 
 def _category(tags: list[str]) -> Optional[str]:
     """Extract primary category from tags."""
-    priority = ["L1", "DeFi", "AI", "meme", "gaming", "RWA"]
+    priority = ["equity", "pre-IPO", "commodity", "index", "macro", "L1", "DeFi", "AI", "meme", "gaming", "RWA"]
     for cat in priority:
         if cat in tags:
             return cat
@@ -96,9 +97,11 @@ def _asset_to_row(asset: ScreenerAsset, rank: int) -> dict:
     spread_pct = (spread_abs / mid) if (spread_abs and mid and mid != 0) else None
     spread_bps = spread_pct * 10_000 if spread_pct is not None else asset.spread_bps
 
-    # For all spot assets, output the human-readable base token name as `coin`
-    # (display_name = "PURR", "HFUN" etc., not "@14" or "PURR/USDC")
-    coin_out = asset.display_name if asset.market_type == "spot" else asset.coin
+    # For spot assets and HIP-3 perps (prefixed), output the human-readable display_name as `coin`
+    # Spot: display_name = "PURR", not "@14" or "PURR/USDC"
+    # HIP-3: display_name = "TSLA", not "xyz:TSLA"
+    is_hip3 = asset.market_type == "perp" and ":" in asset.coin
+    coin_out = asset.display_name if (asset.market_type == "spot" or is_hip3) else asset.coin
 
     return {
         # ── Identity ──────────────────────────────────────────────────────
@@ -702,6 +705,25 @@ def _build_ws_snapshot(state: HyperliquidState) -> dict:
         "data": {"rows": rows, "meta": meta},
         "ts": time.time(),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/hyperliquid/screener/tsmom-signals
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/tsmom-signals")
+async def get_tsmom_signals(top_n: int = 60):
+    """
+    Time-Series Momentum (TSMOM) signals for top perps.
+
+    Returns multi-lookback z-score signals, funding-adjusted and vol-targeted.
+    Requires 1d candle data in state (populated after first periodic candle refresh).
+    """
+    state = _get_state()
+    if not state.is_ready:
+        raise HTTPException(503, "Screener is still initializing")
+
+    return compute_tsmom_signals(state, top_n=top_n)
 
 
 async def broadcast_asset_update(coin: str, state: HyperliquidState):
