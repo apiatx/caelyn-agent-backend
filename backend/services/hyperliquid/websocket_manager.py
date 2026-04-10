@@ -158,6 +158,20 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
     except Exception as e:
         print(f"[HL][boot] 5m candle error: {e}")
 
+    # 5b. 1d candles for top-15 crypto perps — loaded at boot so TSMOM is
+    #     ready immediately when is_ready flips True (no waiting for post-boot).
+    top15_crypto = [c for c in top20 if ":" not in c][:15]
+    print(f"[HL][boot] Fetching 1d candles for {len(top15_crypto)} TSMOM assets...")
+    try:
+        candles_1d_boot = await client.get_candles_multi(top15_crypto, "1d", n_bars=120)
+        loaded_1d = sum(1 for bars in candles_1d_boot.values() if bars)
+        for coin, bars in candles_1d_boot.items():
+            if bars:
+                state.add_candles(coin, "1d", bars)
+        print(f"[HL][boot] 1d candles loaded for {loaded_1d} / {len(top15_crypto)} coins")
+    except Exception as e:
+        print(f"[HL][boot] 1d candle error: {e}")
+
     # 6. L2 books for top-20
     print(f"[HL][boot] Fetching L2 books for {len(top20)} assets...")
     try:
@@ -187,13 +201,21 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
 async def _post_boot_enrich(state: HyperliquidState, client: HyperliquidRestClient):
     """
     Non-blocking post-boot enrichment. Runs once after is_ready=True.
-    Loads HIP-3 DEX assets (equity/commodity/index/pre-IPO) and 1d candles
-    for TSMOM signals without delaying the core boot sequence.
+    HIP-3 DEX loading and extended 1d candle fetching run concurrently so
+    TSMOM signals are not blocked waiting for HIP-3 DEX calls to finish.
     """
     await asyncio.sleep(3)  # let WS subscribe first
-    print("[HL][enrich] Starting post-boot enrichment...")
+    print("[HL][enrich] Starting post-boot enrichment (HIP-3 + 1d candles in parallel)...")
+    await asyncio.gather(
+        _enrich_hip3(state, client),
+        _enrich_1d_candles(state, client),
+        return_exceptions=True,
+    )
+    print("[HL][enrich] Post-boot enrichment complete.")
 
-    # ─ 1. HIP-3 DEX universes ───────────────────────────────────────────────
+
+async def _enrich_hip3(state: HyperliquidState, client: HyperliquidRestClient):
+    """Load HIP-3 DEX assets (equity/commodity/index/pre-IPO perps)."""
     try:
         all_metas = await client.get_all_perp_metas()
         hip3_prefixes: list[str] = []
@@ -228,36 +250,31 @@ async def _post_boot_enrich(state: HyperliquidState, client: HyperliquidRestClie
                     hip3_total += 1
         print(f"[HL][enrich] HIP-3: admitted {hip3_total} assets across {len(hip3_prefixes)} DEXes")
 
-        # Refresh mids so new HIP-3 assets get prices
-        try:
-            mids = await client.get_all_mids()
-            patch_from_all_mids(state, mids)
-        except Exception as e:
-            print(f"[HL][enrich] allMids refresh error: {e}")
-
-        # Feature pass to score the new HIP-3 assets
+        mids = await client.get_all_mids()
+        patch_from_all_mids(state, mids)
         run_full_feature_pass(state)
         print("[HL][enrich] Feature pass complete after HIP-3 load")
     except Exception as e:
         print(f"[HL][enrich] HIP-3 error: {e}")
 
-    # ─ 2. 1d candles for TSMOM ──────────────────────────────────────────────
-    tsmom_coins = [
-        c for c in state.top_coins_by_volume(60)
-        if ":" not in c  # crypto perps only (have richer price history)
-    ][:50]
-    print(f"[HL][enrich] Fetching 1d candles for {len(tsmom_coins)} TSMOM assets...")
+
+async def _enrich_1d_candles(state: HyperliquidState, client: HyperliquidRestClient):
+    """Load extended 1d candles for top-50 crypto perps (TSMOM breadth)."""
+    await asyncio.sleep(2)  # let boot mids settle
     try:
+        tsmom_coins = [
+            c for c in state.top_coins_by_volume(60)
+            if ":" not in c
+        ][:50]
+        print(f"[HL][enrich] Fetching extended 1d candles for {len(tsmom_coins)} coins...")
         candles_1d = await client.get_candles_multi(tsmom_coins, "1d", n_bars=120)
-        loaded_1d = sum(1 for bars in candles_1d.values() if bars)
+        loaded = sum(1 for bars in candles_1d.values() if bars)
         for coin, bars in candles_1d.items():
             if bars:
                 state.add_candles(coin, "1d", bars)
-        print(f"[HL][enrich] 1d candles loaded for {loaded_1d} / {len(tsmom_coins)} coins")
+        print(f"[HL][enrich] Extended 1d candles: {loaded} / {len(tsmom_coins)} coins")
     except Exception as e:
         print(f"[HL][enrich] 1d candle error: {e}")
-
-    print("[HL][enrich] Post-boot enrichment complete.")
 
 
 
