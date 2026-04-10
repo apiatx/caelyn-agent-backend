@@ -43,6 +43,11 @@ _DASHBOARD_REFRESH_INTERVAL = 300
 # How long the dashboard cache is considered valid before a background refresh
 _DASHBOARD_CACHE_TTL = 280  # slightly less than refresh interval
 
+STAGE_LABELS = {
+    1: "Accumulating", 2: "Early Breakout", 3: "Momentum",
+    4: "Distributing", 5: "Declining", 6: "Recovery",
+}
+
 # ── Simple in-memory cache ───────────────────────────────────────────────────
 _cache: dict[str, dict[str, Any]] = {}
 _dashboard_refresh_lock = asyncio.Lock()
@@ -159,6 +164,164 @@ def _extract_first(raw: Any) -> dict | None:
     return None
 
 
+def _compute_rsi_from_sparkline(prices: list, period: int = 14) -> float:
+    if len(prices) < period + 1:
+        return 50.0
+    gains, losses = [], []
+    for i in range(1, len(prices)):
+        d = float(prices[i]) - float(prices[i-1])
+        gains.append(max(d, 0)); losses.append(max(-d, 0))
+    recent_gains = gains[-period:]
+    recent_losses = losses[-period:]
+    avg_gain = sum(recent_gains) / period
+    avg_loss = sum(recent_losses) / period
+    if avg_loss < 1e-12:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 1)
+
+
+def _compute_sparkline_slope(prices: list) -> float:
+    """Returns the normalized slope of the price series as % change per point."""
+    pts = [float(p) for p in prices if p is not None]
+    n = len(pts)
+    if n < 3:
+        return 0.0
+    xs = list(range(n))
+    mean_x = sum(xs) / n
+    mean_y = sum(pts) / n
+    num = sum((xs[i] - mean_x) * (pts[i] - mean_y) for i in range(n))
+    den = sum((xs[i] - mean_x) ** 2 for i in range(n))
+    if den < 1e-12 or mean_y < 1e-12:
+        return 0.0
+    return round((num / den) / mean_y * 100, 3)
+
+
+def _detect_rotation_stage(subnet: dict) -> tuple[int, str, float]:
+    price_1h   = _safe_float(subnet.get("price_change_1h", 0))
+    price_24h  = _safe_float(subnet.get("price_change_24h", 0))
+    price_7d   = _safe_float(subnet.get("price_change_7d", 0))
+    price_30d  = _safe_float(subnet.get("price_change_30d", 0))
+    price_pos  = _safe_float(subnet.get("price_vs_ath_60d_pct", 50))
+    rsi        = _safe_float(subnet.get("rsi_7d", 50))
+    slope      = _safe_float(subnet.get("sparkline_slope", 0))
+    buy_ratio  = _safe_float(subnet.get("_buy_ratio", 0.5))
+    net_vol    = _safe_float(subnet.get("net_volume_24h", 0))
+    realized   = _safe_float(subnet.get("realized_pnl_tao", 0))
+    unrealized = _safe_float(subnet.get("unrealized_pnl_tao", 0))
+
+    scores: dict[int, float] = {}
+
+    # Stage 1 — Accumulation
+    s1 = 0.0
+    if buy_ratio > 0.57: s1 += 30
+    elif buy_ratio > 0.52: s1 += 15
+    if -6 <= price_24h <= 6: s1 += 25
+    if price_pos < 45: s1 += 20
+    if net_vol > 0: s1 += 15
+    if abs(price_7d) < 12: s1 += 10
+    scores[1] = s1
+
+    # Stage 2 — Early Breakout
+    s2 = 0.0
+    if 4 <= price_24h <= 30: s2 += 35
+    if buy_ratio > 0.60: s2 += 25
+    if 3 <= price_7d <= 35: s2 += 20
+    if price_pos < 68: s2 += 10
+    if rsi < 65: s2 += 10
+    scores[2] = s2
+
+    # Stage 3 — Markup / Momentum
+    s3 = 0.0
+    if price_7d > 20: s3 += 30
+    if price_24h > 5: s3 += 20
+    if buy_ratio > 0.62: s3 += 20
+    if rsi > 55: s3 += 15
+    if slope > 0.1: s3 += 10
+    if price_pos > 45: s3 += 5
+    scores[3] = s3
+
+    # Stage 4 — Distribution
+    s4 = 0.0
+    if price_pos > 70: s4 += 35
+    if buy_ratio < 0.50: s4 += 25
+    if realized > 30: s4 += 20
+    if -5 <= price_24h <= 12: s4 += 10
+    if price_7d > 0: s4 += 10
+    scores[4] = s4
+
+    # Stage 5 — Decline
+    s5 = 0.0
+    if price_24h < -5: s5 += 30
+    if price_7d < -10: s5 += 25
+    if buy_ratio < 0.47: s5 += 20
+    if net_vol < 0: s5 += 15
+    if slope < -0.1: s5 += 10
+    scores[5] = s5
+
+    # Stage 6 — Capitulation / Recovery
+    s6 = 0.0
+    if price_pos < 20: s6 += 30
+    if rsi < 35: s6 += 25
+    if price_30d < -20: s6 += 20
+    if buy_ratio > 0.50: s6 += 15
+    if -5 <= price_24h <= 5: s6 += 10
+    scores[6] = s6
+
+    best = max(scores, key=lambda k: scores[k])
+    confidence = min(scores[best], 100.0)
+    return best, STAGE_LABELS[best], round(confidence, 1)
+
+
+def _compute_accumulation_score(subnet: dict) -> float:
+    price_24h = _safe_float(subnet.get("price_change_24h", 0))
+    buy_ratio = _safe_float(subnet.get("_buy_ratio", 0.5))
+    price_pos = _safe_float(subnet.get("price_vs_ath_60d_pct", 50))
+    net_vol   = _safe_float(subnet.get("net_volume_24h", 0))
+    realized  = _safe_float(subnet.get("realized_pnl_tao", 0))
+    rsi       = _safe_float(subnet.get("rsi_7d", 50))
+    vol_24h   = _safe_float(subnet.get("volume_24h", 0))
+    mcap      = _safe_float(subnet.get("market_cap", 1))
+
+    score = 0.0
+    if buy_ratio > 0.63: score += 30
+    elif buy_ratio > 0.57: score += 18
+    elif buy_ratio > 0.52: score += 8
+    if abs(price_24h) < 3: score += 25
+    elif abs(price_24h) < 7: score += 14
+    if price_pos < 30: score += 20
+    elif price_pos < 48: score += 11
+    if net_vol > 0: score += 12
+    if realized < 15: score += 8
+    if rsi < 48: score += 5
+    return min(round(score, 1), 100.0)
+
+
+def _compute_network_level_metrics(subnets: list[dict]) -> None:
+    """Compute cross-subnet relative value metrics. Mutates subnets in place."""
+    emissions = [_safe_float(s.get("emission_pct", 0)) for s in subnets]
+    mcaps     = [_safe_float(s.get("market_cap", 0)) for s in subnets]
+    tao_ins   = [_safe_float(s.get("tao_in", 0)) for s in subnets]
+
+    avg_em   = (sum(emissions) / len(emissions)) if emissions else 1
+    avg_mcap = (sum(m for m in mcaps if m > 0) / max(1, sum(1 for m in mcaps if m > 0)))
+
+    for s, em, mc, ti in zip(subnets, emissions, mcaps, tao_ins):
+        if avg_em > 0 and avg_mcap > 0 and mc > 0 and em > 0:
+            em_rel = em / avg_em
+            mc_rel = mc / avg_mcap
+            opportunity = em_rel / mc_rel
+        else:
+            opportunity = 1.0
+        s["emission_opportunity"] = round(opportunity, 3)
+
+        s["pool_depth_ratio"] = round((ti / mc) if mc > 1e-9 else 0, 4)
+
+        alpha_circ = _safe_float(s.get("alpha_circ", 0))
+        alpha_in   = _safe_float(s.get("alpha_in", 0))
+        s["alpha_circulation_ratio"] = round((alpha_circ / alpha_in) if alpha_in > 0 else 0, 3)
+
+
 def _parse_hotkey(hotkey_val: Any) -> str:
     if hotkey_val is None:
         return ""
@@ -202,11 +365,8 @@ def _compute_signal_scores(subnets: list[dict[str, Any]]) -> None:
             raw_mom *= 1.5
         momentums.append(raw_mom)
 
-        # Flow: buy / (buy + sell)
-        buy = _safe_float(s.get("buy_volume_24h", 0))
-        sell = _safe_float(s.get("sell_volume_24h", 0))
-        total = buy + sell
-        flow = (buy / total * 100) if total > 0 else 50.0
+        # Flow: use pre-computed buy_pct (or recompute if not available)
+        flow = _safe_float(s.get("buy_pct", 50))
         flows.append(flow)
 
         # Emission
@@ -497,6 +657,31 @@ async def _fetch_dashboard_data() -> dict:
             print(f"[bittensor] bg: TaoApp screener unavailable — using {len(prev_subnets)} stale subnets from cache")
         else:
             print(f"[bittensor] bg: TaoApp screener unavailable — subnets will be empty")
+
+    # ── Pre-compute rotation intelligence fields ─────────────────────────
+    for s in subnets:
+        buy = _safe_float(s.get("buy_volume_24h", 0))
+        sell = _safe_float(s.get("sell_volume_24h", 0))
+        total = buy + sell
+        s["_buy_ratio"] = (buy / total) if total > 0 else 0.5
+        s["buy_pct"] = round(s["_buy_ratio"] * 100, 1)
+        sparkline = s.get("seven_day_price_history", [])
+        s["rsi_7d"] = _compute_rsi_from_sparkline(sparkline)
+        s["sparkline_slope"] = _compute_sparkline_slope(sparkline)
+
+    _compute_network_level_metrics(subnets)
+
+    for s in subnets:
+        stage, label, conf = _detect_rotation_stage(s)
+        s["rotation_stage"] = stage
+        s["rotation_stage_label"] = label
+        s["rotation_stage_confidence"] = conf
+
+    for s in subnets:
+        s["accumulation_score"] = _compute_accumulation_score(s)
+
+    for s in subnets:
+        s.pop("_buy_ratio", None)
 
     # ── Compute signal scores ─────────────────────────────────────────────
     _compute_signal_scores(subnets)
@@ -848,4 +1033,83 @@ async def sparklines_endpoint():
 
     result = {"data": raw}
     _cache_set("sparklines_all", result)
+    return result
+
+
+@router.get("/rotation/intel")
+async def rotation_intel_endpoint():
+    cached = _cache_get("dashboard", ttl=_DASHBOARD_CACHE_TTL)
+    if not cached:
+        raise HTTPException(status_code=503, detail="Data loading, try again shortly")
+
+    subnets = cached.get("subnets", [])
+
+    by_stage: dict[int, list] = {1: [], 2: [], 3: [], 4: [], 5: [], 6: []}
+    for s in subnets:
+        stage = s.get("rotation_stage", 0)
+        if stage in by_stage:
+            by_stage[stage].append(s)
+
+    for stage_list in by_stage.values():
+        stage_list.sort(key=lambda x: x.get("rotation_stage_confidence", 0), reverse=True)
+
+    opportunities = [
+        s for s in subnets
+        if s.get("rotation_stage", 0) in (1, 2)
+    ]
+    opportunities.sort(key=lambda x: x.get("accumulation_score", 0), reverse=True)
+
+    emission_plays = sorted(subnets, key=lambda x: x.get("emission_opportunity", 1.0), reverse=True)[:20]
+
+    oversold  = sorted([s for s in subnets if s.get("rsi_7d", 50) < 35], key=lambda x: x.get("rsi_7d", 50))[:10]
+    overbought = sorted([s for s in subnets if s.get("rsi_7d", 50) > 70], key=lambda x: x.get("rsi_7d", 50), reverse=True)[:10]
+
+    stage_summary = {
+        stage: {
+            "count": len(lst),
+            "label": STAGE_LABELS.get(stage, "Unknown"),
+            "avg_signal": round(sum(s.get("signal_score", 0) for s in lst) / max(len(lst), 1), 1)
+        }
+        for stage, lst in by_stage.items()
+    }
+
+    return {
+        "by_stage": by_stage,
+        "opportunities": opportunities,
+        "emission_plays": emission_plays,
+        "oversold": oversold,
+        "overbought": overbought,
+        "stage_summary": stage_summary,
+        "as_of": cached.get("as_of"),
+    }
+
+
+@router.get("/subnets/dynamic-history")
+async def dynamic_history_endpoint(netuids: str = Query("1,2,3,5,9,18,19,64")):
+    """
+    Returns 24h of hourly dynamic info for requested subnets.
+    Uses free TaoApp /api/beta/analytics/dynamic-info/aggregated endpoint.
+    Cached 15 minutes.
+    """
+    cache_key = f"dynamic_history_{netuids}"
+    cached = _cache_get(cache_key, ttl=900)
+    if cached is not None:
+        return cached
+
+    from datetime import datetime, timedelta, timezone
+    end_dt = datetime.now(timezone.utc)
+    start_dt = end_dt - timedelta(hours=24)
+
+    async with httpx.AsyncClient() as client:
+        raw = await _taoapp_get(client, "/api/beta/analytics/dynamic-info/aggregated", {
+            "interval": "1hour",
+            "netuid": netuids,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "page_size": 500,
+        })
+
+    data = raw.get("data", []) if isinstance(raw, dict) else (raw or [])
+    result = {"data": data, "netuids": netuids, "as_of": end_dt.isoformat()}
+    _cache_set(cache_key, result)
     return result
