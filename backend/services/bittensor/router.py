@@ -455,19 +455,28 @@ async def dashboard_endpoint():
     if cached is not None:
         return cached
 
-    # Cache miss — return a loading placeholder so the frontend isn't blocked.
-    # The background task will populate the cache within ~78 seconds.
-    return {
-        "tao_price": {"price": "0", "change_24h": "0"},
-        "network_stats": {},
-        "total_market": {"total_price_tao": "0", "fear_greed_score": 0, "fear_greed_label": "N/A"},
-        "block_number": 0,
+    # Cache miss — background task is still populating data (takes ~90s on cold start).
+    # Block and poll rather than returning a useless loading placeholder, so the
+    # frontend works without any special retry logic.
+    poll_deadline = time.time() + 120  # wait up to 2 minutes
+    while time.time() < poll_deadline:
+        await asyncio.sleep(5)
+        cached = _cache_get("dashboard", ttl=_DASHBOARD_CACHE_TTL)
+        if cached is not None:
+            return cached
+
+    # Still no data after 2 minutes — return a graceful error so the frontend
+    # can show something meaningful.
+    return JSONResponse(status_code=503, content={
+        "error": "Dashboard data unavailable",
+        "loading": True,
+        "message": "Dashboard data could not be loaded. The server may be rate-limited. Please try again in a minute.",
         "subnets": [],
         "subnet_count": 0,
-        "loading": True,
-        "as_of": datetime.now(timezone.utc).isoformat(),
-        "message": "Dashboard data is loading. Please refresh in about 90 seconds.",
-    }
+        "tao_price": {"price": "0", "change_24h": "0"},
+        "network_stats": {},
+        "block_number": 0,
+    })
 
 
 # ── Metagraph endpoint ───────────────────────────────────────────────────────
