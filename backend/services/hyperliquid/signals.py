@@ -1080,10 +1080,11 @@ def build_signal_sections(
     oi_history_ready = sum(1 for c in state.oi_history if len(state.oi_history[c]) >= 5) >= 10
     sections: dict = {}
 
-    sections["top_gainers"]   = _sec("Top Gainers", "Strongest 24h price movers",
-        sorted(all_active, key=lambda a: -(a.pct_change_24h or 0)))
-    sections["top_losers"]    = _sec("Top Losers", "Sharpest 24h declines",
-        sorted(all_active, key=lambda a: (a.pct_change_24h or 0)))
+    # Perps-only for gainers/losers — removes spot noise from signal board
+    sections["top_gainers"]   = _sec("Top Gainers", "Strongest 24h perp price movers",
+        sorted(perps, key=lambda a: -(a.pct_change_24h or 0)))
+    sections["top_losers"]    = _sec("Top Losers", "Sharpest 24h perp declines",
+        sorted(perps, key=lambda a: (a.pct_change_24h or 0)))
     sections["high_funding"]  = _sec("High Funding", "Longs paying — squeeze watch",
         sorted(perps, key=lambda a: -((a.funding or 0))))
     sections["negative_funding"] = _sec("Negative Funding", "Shorts paying — flush watch",
@@ -1092,8 +1093,8 @@ def build_signal_sections(
         sorted(perps, key=lambda a: -abs(a.distance_mark_oracle_pct or 0)))
     sections["premium_discount"] = _sec("Premium/Discount", "Mark vs mid price dislocation",
         sorted(perps, key=lambda a: -abs(a.distance_mark_mid_pct or 0)))
-    sections["volume_leaders"] = _sec("Volume Leaders", "Largest 24h notional volume",
-        sorted(all_active, key=lambda a: -(a.day_ntl_vlm or 0)))
+    sections["volume_leaders"] = _sec("Volume Leaders", "Largest 24h notional volume (perps)",
+        sorted(perps, key=lambda a: -(a.day_ntl_vlm or 0)))
     sections["trade_flow"]    = _sec("Trade Flow", "Buy vs sell trade pressure",
         sorted([a for a in perps if a.recent_trade_imbalance is not None],
                key=lambda a: -abs(a.recent_trade_imbalance or 0)))
@@ -1102,6 +1103,8 @@ def build_signal_sections(
                key=lambda a: -abs(a.orderbook_imbalance or 0)))
     sections["volatility_leaders"] = _sec("Volatility Leaders", "Highest realized vol",
         sorted(perps, key=lambda a: -(a.volatility_score or 0)))
+    sections["oi_leaders"] = _sec("OI Leaders", "Largest open interest by USD",
+        sorted(perps, key=lambda a: -(a.open_interest_usd or 0)))
     sections["breakout_watch"] = _sec("Breakout Watch", "High breakout probability",
         sorted(perps, key=lambda a: -(a.breakout_score or 0)))
     sections["mean_reversion"] = _sec("Mean Reversion", "Stretched vs mean — reversal",
@@ -1121,6 +1124,10 @@ def build_signal_sections(
     sections["long_flush_watch"] = _sec("Long Flush Watch", "Crowded longs + momentum fading",
         sorted([a for a in perps if a.crowded_long and (a.momentum_1h or 0) < 0],
                key=lambda a: -((a.crowding_unwind_score or 0))))
+    # Funding carry extremes: annualized rate > 20%
+    sections["funding_extremes"] = _sec("Funding Extremes", "Annualized funding carry > 20%",
+        sorted([a for a in perps if abs((a.funding or 0) * 8760) > 0.20],
+               key=lambda a: -abs(a.funding or 0)))
     sections["illiquid_zone"]  = _sec("Illiquid Zone", "Low liquidity — dangerous OI",
         sorted([a for a in perps if a.illiquid_high_volatility or a.avoid_due_to_spread],
                key=lambda a: -(a.avoid_score or 0)))
