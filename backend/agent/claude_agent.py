@@ -631,6 +631,14 @@ class TradingAgent:
                 "_routing": {"source": "csv_upload", "confidence": "high", "category": "csv_analysis"},
             }
 
+            # Auto-save to watchlist store so the Watchlist page is always current
+            try:
+                from services.watchlist_service import save_watchlist
+                save_watchlist(csv_rows, parsed)
+                print(f"[CSV] Auto-saved watchlist ({len(csv_rows)} rows)")
+            except Exception as e:
+                print(f"[CSV] Watchlist auto-save failed (non-fatal): {e}")
+
             # Generate follow-up suggestions for CSV analysis
             try:
                 if analysis_text and len(analysis_text) > 50:

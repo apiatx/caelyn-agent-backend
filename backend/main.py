@@ -58,6 +58,7 @@ from services.whale_watch_service import (
 )
 from services.predict.router import router as _predict_router
 from services.bittensor.router import router as _bittensor_router
+from services.watchlist_router import router as _watchlist_router
 
 _hl_state = _HLState()
 _hl_set_state(_hl_state)
@@ -231,6 +232,10 @@ app.include_router(_predict_router)
 
 # ── Bittensor Dashboard router ───────────────────────────────────────────────
 app.include_router(_bittensor_router)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Watchlist router ─────────────────────────────────────────────────────────
+app.include_router(_watchlist_router)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────
