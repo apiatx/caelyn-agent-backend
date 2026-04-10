@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -555,6 +556,89 @@ def _structure_summary(a: ScreenerAsset) -> Optional[str]:
 # POST /api/hyperliquid/screener/agent-rank
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def _fetch_fear_greed() -> dict:
+    """Fetch Crypto Fear & Greed Index from alternative.me (free, no auth)."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=4.0) as http:
+            r = await http.get("https://api.alternative.me/fng/?limit=1")
+            data = r.json()
+            items = data.get("data", [])
+            return items[0] if items else {}
+    except Exception as e:
+        print(f"[HL][agent] Fear & Greed fetch error: {e}")
+        return {}
+
+
+async def _generate_llm_analysis(ranked: list, fear_greed: dict) -> str:
+    """
+    Call Claude Haiku for a concise market analysis from screener data.
+    Returns empty string if ANTHROPIC_API_KEY not set or on error.
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key or not ranked:
+        return ""
+    try:
+        import anthropic as _anthropic
+        aclient = _anthropic.AsyncAnthropic(api_key=api_key)
+
+        fg_val = fear_greed.get("value", "N/A")
+        fg_cls = fear_greed.get("value_classification", "Unknown")
+
+        def _fmt(a: ScreenerAsset) -> str:
+            fund_ann = (a.funding or 0.0) * 8760 * 100
+            chg = a.pct_change_24h or 0.0
+            oi  = (a.open_interest_usd or 0.0) / 1_000_000
+            return (
+                f"  {a.coin}: mark=${a.mark_px:.4g}, 24h={chg:+.1f}%, "
+                f"funding={fund_ann:+.1f}%/yr, OI=${oi:.0f}M"
+            )
+
+        top_longs  = [a for a in ranked if a.signal_direction == "long"][:5]
+        top_shorts = [a for a in ranked if a.signal_direction == "short"][:5]
+        long_count  = sum(1 for a in ranked if a.signal_direction == "long")
+        short_count = sum(1 for a in ranked if a.signal_direction == "short")
+
+        btc = next((a for a in ranked if a.coin == "BTC"), None)
+        btc_line = (
+            f"BTC ${btc.mark_px:,.0f} | 24h: {btc.pct_change_24h or 0:+.1f}% | "
+            f"funding: {(btc.funding or 0)*8760*100:+.1f}%/yr"
+        ) if btc else "BTC: not in universe"
+
+        avg_funding = (
+            sum((a.funding or 0) for a in ranked[:50]) / max(len(ranked[:50]), 1) * 8760 * 100
+        )
+
+        longs_text  = "\n".join(_fmt(a) for a in top_longs)  or "  (none)"
+        shorts_text = "\n".join(_fmt(a) for a in top_shorts) or "  (none)"
+
+        prompt = (
+            "You're a professional crypto derivatives trader analyzing Hyperliquid perps.\n\n"
+            f"Fear & Greed Index: {fg_val}/100 ({fg_cls})\n"
+            f"{btc_line}\n"
+            f"Signal split: {long_count} bullish / {short_count} bearish / "
+            f"{len(ranked) - long_count - short_count} neutral out of {len(ranked)} perps\n"
+            f"Avg annualized funding (top 50): {avg_funding:+.1f}% "
+            f"(positive = longs paying shorts, bearish skew)\n\n"
+            f"TOP LONG SETUPS:\n{longs_text}\n\n"
+            f"TOP SHORT SETUPS:\n{shorts_text}\n\n"
+            "Write 2 punchy paragraphs (total ≤160 words):\n"
+            "1. Current regime and positioning bias\n"
+            "2. 2-3 specific assets to focus on right now and the exact setup thesis\n\n"
+            "No disclaimers. Trader to trader."
+        )
+
+        msg = await aclient.messages.create(
+            model="claude-3-5-haiku-20241022",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text.strip()
+    except Exception as e:
+        print(f"[HL][agent] LLM analysis error: {e}")
+        return ""
+
+
 class AgentRankIn(BaseModel):
     """
     Frontend sends the current screener rows for re-ranking.
@@ -569,14 +653,17 @@ class AgentRankIn(BaseModel):
 @router.post("/agent-rank")
 async def agent_rank(req: AgentRankIn):
     """
-    Deterministic agent ranking pass.
-    Returns ranked coins in the frontend contract shape.
+    Agent ranking + LLM market analysis.
+    Returns deterministic ranked coins + Claude Haiku analysis of the current regime.
     """
     state = _get_state()
     if not state.is_ready:
         raise HTTPException(503, "Screener is still initializing. Please retry in a moment.")
 
     mode = req.rankingMode if req.rankingMode in ("balanced", "momentum", "breakout", "mean_reversion", "crowding_dislocation") else "balanced"
+
+    # Start Fear & Greed fetch concurrently while ranking runs (synchronous CPU work)
+    fg_task = asyncio.create_task(_fetch_fear_greed())
 
     # Rank using our internal state (real-time, richer than frontend rows)
     all_assets = [a for a in state.all_assets() if a.market_status == "active" and a.market_type == "perp"]
@@ -632,6 +719,10 @@ async def agent_rank(req: AgentRankIn):
         f"Most extreme funding: {extreme_fund[0]} ({extreme_fund[1]:+.0%} ann.)."
     )
 
+    # Await Fear & Greed (should already be done by now) then call LLM
+    fear_greed = await fg_task
+    llm_analysis = await _generate_llm_analysis(ranked, fear_greed)
+
     return {
         "rankedCoins":   ranked_coins,
         "longs":         longs,
@@ -640,6 +731,8 @@ async def agent_rank(req: AgentRankIn):
         "meanReversions": mean_revs,
         "avoid":         avoid,
         "summary":       summary,
+        "llmAnalysis":   llm_analysis,
+        "fearGreed":     fear_greed,
         "generatedAt":   _iso_now(),
     }
 
@@ -717,11 +810,24 @@ async def get_tsmom_signals(top_n: int = 60):
     Time-Series Momentum (TSMOM) signals for top perps.
 
     Returns multi-lookback z-score signals, funding-adjusted and vol-targeted.
-    Requires 1d candle data in state (populated after first periodic candle refresh).
+    1d candle data is loaded in the post-boot enrichment task (~30-60s after boot).
+    Returns empty signals (not 503) while data is loading to avoid frontend error state.
     """
     state = _get_state()
+    # Return empty response during boot rather than 503 — frontend shows
+    # a friendly "loading" message and auto-refreshes every 60s.
     if not state.is_ready:
-        raise HTTPException(503, "Screener is still initializing")
+        return {
+            "signals": [],
+            "meta": {
+                "total_signals": 0,
+                "long_count": 0,
+                "short_count": 0,
+                "flat_count": 0,
+                "generated_at": _iso_now(),
+                "status": "initializing",
+            },
+        }
 
     return compute_tsmom_signals(state, top_n=top_n)
 
