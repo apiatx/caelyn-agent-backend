@@ -182,8 +182,15 @@ async def _fetch_dashboard_data() -> dict:
 
     TaoStats calls (1, sequential to stay under 5 req/min):
       - /api/stats/latest/v1       → network staking/issuance stats
+
+    Stale-on-error: if individual endpoints fail, the previous cached values
+    are preserved rather than being overwritten with zeros.
     """
     print("[bittensor] background fetch: starting dashboard data pull (TaoApp primary)")
+
+    # Load previous cached data for stale-on-error fallback
+    prev_entry = _cache.get("dashboard")
+    prev: dict[str, Any] = prev_entry["data"] if prev_entry else {}
 
     async with httpx.AsyncClient() as client:
         # Fire all TaoApp calls in parallel — 10 req/min limit is comfortable
@@ -208,28 +215,36 @@ async def _fetch_dashboard_data() -> dict:
           f"stats={'OK' if stats_raw else 'FAIL (non-fatal)'}")
 
     # ── TAO price & block (from TaoApp /current) ──────────────────────────
-    tao_price = {"price": "0", "change_24h": "0"}
-    block_number = 0
+    # On failure: preserve previous cached values (stale-on-error)
+    prev_tao_price = prev.get("tao_price", {"price": "0", "change_24h": "0"})
+    prev_block = prev.get("block_number", 0)
     if isinstance(current_raw, dict):
         tao_price = {
             "price": _safe_str(current_raw.get("price", "0")),
             "change_24h": _safe_str(current_raw.get("percent_change_24h", "0")),
         }
         block_number = int(_safe_float(current_raw.get("max_block_number", 0)))
+    else:
+        tao_price = prev_tao_price
+        block_number = prev_block
 
     # ── Fear/greed (from TaoApp) ───────────────────────────────────────────
-    total_market: dict[str, Any] = {
+    # On failure: preserve previous cached values (stale-on-error)
+    prev_total_market = prev.get("total_market", {
         "total_price_tao": "0", "fear_greed_score": 0, "fear_greed_label": "N/A",
-    }
+    })
     if isinstance(fear_greed_raw, dict):
-        total_market = {
-            "total_price_tao": _safe_str(current_raw.get("market_cap", "0") if isinstance(current_raw, dict) else "0"),
+        total_market: dict[str, Any] = {
+            "total_price_tao": _safe_str(current_raw.get("market_cap", "0") if isinstance(current_raw, dict) else prev_total_market.get("total_price_tao", "0")),
             "fear_greed_score": _safe_float(fear_greed_raw.get("fear_greed_index", 0)),
             "fear_greed_label": _safe_str(fear_greed_raw.get("sentiment", "N/A"), default="N/A"),
         }
+    else:
+        total_market = prev_total_market
 
     # ── Network stats (from TaoStats, best-effort) ─────────────────────────
-    network_stats: dict[str, Any] = {}
+    # On failure: preserve previous cached values (stale-on-error)
+    network_stats: dict[str, Any] = prev.get("network_stats", {})
     st_item = _extract_first(stats_raw)
     if st_item:
         network_stats = st_item
@@ -255,6 +270,8 @@ async def _fetch_dashboard_data() -> dict:
     #   realized_pnl_tao, unrealized_pnl_tao, ath_60d, atl_60d,
     #   gini_coeff_top_100, hhi, github_repo, subnet_contact, subnet_url,
     #   subnet_website, discord, additional, owner_coldkey, owner_hotkey, symbol
+    # On failure: preserve previous cached subnets (stale-on-error)
+    prev_subnets: list[dict[str, Any]] = prev.get("subnets", [])
     subnets: list[dict[str, Any]] = []
     if isinstance(screener_raw, list):
         # Sort by market_cap_tao descending (same order as TaoStats pools used)
@@ -298,7 +315,11 @@ async def _fetch_dashboard_data() -> dict:
                 "seven_day_price_history": [],
             })
     else:
-        print(f"[bittensor] bg: TaoApp screener unavailable — subnets will be empty")
+        subnets = prev_subnets
+        if prev_subnets:
+            print(f"[bittensor] bg: TaoApp screener unavailable — using {len(prev_subnets)} stale subnets from cache")
+        else:
+            print(f"[bittensor] bg: TaoApp screener unavailable — subnets will be empty")
 
     result = {
         "tao_price": tao_price,
