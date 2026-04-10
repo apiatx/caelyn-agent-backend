@@ -169,18 +169,120 @@ def _parse_hotkey(hotkey_val: Any) -> str:
 
 # ── Background dashboard pre-fetcher ────────────────────────────────────────
 
+def _compute_signal_scores(subnets: list[dict[str, Any]]) -> None:
+    """
+    Compute composite signal_score (0-100) for each subnet using min-max
+    normalization across all subnets. Mutates each subnet dict in place.
+
+    Components (weights):
+      - momentum_score (30%): weighted price changes across timeframes
+      - flow_score (25%): buy/(buy+sell) ratio
+      - emission_score (20%): emission_pct normalized
+      - social_score_component (15%): social_score from TaoApp
+      - health_score (10%): 1 - gini_coeff_top_100
+    """
+    if not subnets:
+        return
+
+    # ── Collect raw values ────────────────────────────────────────────────
+    momentums: list[float] = []
+    flows: list[float] = []
+    emissions: list[float] = []
+    socials: list[float] = []
+    healths: list[float] = []
+
+    for s in subnets:
+        # Momentum: weighted combo, positive momentum weighted higher
+        ch1h = _safe_float(s.get("price_change_1h", 0))
+        ch24h = _safe_float(s.get("price_change_24h", 0))
+        ch7d = _safe_float(s.get("price_change_7d", 0))
+        raw_mom = 0.1 * ch1h + 0.4 * ch24h + 0.5 * ch7d
+        # Weight positive momentum 1.5x
+        if raw_mom > 0:
+            raw_mom *= 1.5
+        momentums.append(raw_mom)
+
+        # Flow: buy / (buy + sell)
+        buy = _safe_float(s.get("buy_volume_24h", 0))
+        sell = _safe_float(s.get("sell_volume_24h", 0))
+        total = buy + sell
+        flow = (buy / total * 100) if total > 0 else 50.0
+        flows.append(flow)
+
+        # Emission
+        emissions.append(_safe_float(s.get("emission_pct", 0)))
+
+        # Social score
+        socials.append(_safe_float(s.get("social_score", 0)))
+
+        # Health: 1 - gini (lower gini = healthier)
+        gini = _safe_float(s.get("gini_coeff_top_100", 0.5))
+        healths.append((1.0 - min(gini, 1.0)) * 100)
+
+    # ── Min-max normalization helper ──────────────────────────────────────
+    def _minmax(vals: list[float]) -> list[float]:
+        lo, hi = min(vals), max(vals)
+        rng = hi - lo
+        if rng < 1e-9:
+            return [50.0] * len(vals)
+        return [max(0.0, min(100.0, (v - lo) / rng * 100)) for v in vals]
+
+    norm_mom = _minmax(momentums)
+    # flows are already 0-100 range (buy percentage)
+    norm_flow = flows
+    norm_em = _minmax(emissions)
+    norm_soc = _minmax(socials)
+    norm_health = healths  # already 0-100
+
+    # ── Assign scores ─────────────────────────────────────────────────────
+    for i, s in enumerate(subnets):
+        m = norm_mom[i]
+        f = norm_flow[i]
+        e = norm_em[i]
+        sc = norm_soc[i]
+        h = norm_health[i]
+
+        signal = 0.30 * m + 0.25 * f + 0.20 * e + 0.15 * sc + 0.10 * h
+        signal = max(0.0, min(100.0, signal))
+
+        s["signal_score"] = round(signal, 1)
+        s["signal_breakdown"] = {
+            "momentum_score": round(m, 1),
+            "flow_score": round(f, 1),
+            "emission_score": round(e, 1),
+            "social_score": round(sc, 1),
+            "health_score": round(h, 1),
+        }
+
+        # ── price_vs_ath_60d_pct ──────────────────────────────────────────
+        price = _safe_float(s.get("price", 0))
+        ath = _safe_float(s.get("ath_60d", 0))
+        atl = _safe_float(s.get("atl_60d", 0))
+        rng = ath - atl
+        if rng > 0.000001:
+            pct = (price - atl) / rng * 100
+        else:
+            pct = 50.0
+        s["price_vs_ath_60d_pct"] = round(max(0.0, min(100.0, pct)), 1)
+
+
 async def _fetch_dashboard_data() -> dict:
     """
     Fetches dashboard data using TaoApp as the primary source (10 req/min)
     and TaoStats for network stats (5 req/min).
 
-    TaoApp calls (4, run in parallel):
+    TaoApp calls (9, run in parallel):
       - /api/beta/current          → TAO price, block_number, market_cap
-      - /api/beta/subnet_screener  → all 128 subnets with price/volume/social
+      - /api/beta/subnet_screener  → all subnets with price/volume/social
       - /api/beta/analytics/macro/fear_greed/current → fear/greed index
       - /api/beta/subnets/about/summaries → subnet descriptions
+      - /api/beta/subnets/sparklines?hours=168&points=24 → 7d sparklines
+      - /api/beta/analytics/subnets/social/summary → social analytics
+      - /api/beta/price-sustainability → tao_needed_to_sustain
+      - /api/beta/subnet_tags → tags per subnet
+      - /api/beta/analytics/macro/root_claim_stats/current → root claim stats
 
-    TaoStats calls (1, sequential to stay under 5 req/min):
+    TaoStats calls (1, in parallel):
       - /api/stats/latest/v1       → network staking/issuance stats
 
     Stale-on-error: if individual endpoints fail, the previous cached values
@@ -193,18 +295,28 @@ async def _fetch_dashboard_data() -> dict:
     prev: dict[str, Any] = prev_entry["data"] if prev_entry else {}
 
     async with httpx.AsyncClient() as client:
-        # Fire all TaoApp calls in parallel — 10 req/min limit is comfortable
+        # Fire all calls in parallel — TaoApp 10 req/min limit is comfortable
         (
             current_raw,
             screener_raw,
             fear_greed_raw,
             summaries_raw,
+            sparklines_raw,
+            social_raw,
+            sustain_raw,
+            tags_raw,
+            root_claim_raw,
             stats_raw,
         ) = await asyncio.gather(
             _taoapp_get(client, "/api/beta/current"),
             _taoapp_get(client, "/api/beta/subnet_screener"),
             _taoapp_get(client, "/api/beta/analytics/macro/fear_greed/current"),
             _taoapp_get(client, "/api/beta/subnets/about/summaries"),
+            _taoapp_get(client, "/api/beta/subnets/sparklines", {"hours": 168, "points": 24}),
+            _taoapp_get(client, "/api/beta/analytics/subnets/social/summary"),
+            _taoapp_get(client, "/api/beta/price-sustainability"),
+            _taoapp_get(client, "/api/beta/subnet_tags"),
+            _taoapp_get(client, "/api/beta/analytics/macro/root_claim_stats/current"),
             _taostats_get(client, "/api/stats/latest/v1", retry_on_429=False),
         )
 
@@ -212,10 +324,14 @@ async def _fetch_dashboard_data() -> dict:
           f"screener={'OK,' + str(len(screener_raw)) + ' subnets' if isinstance(screener_raw, list) else 'FAIL'} "
           f"fear_greed={'OK' if fear_greed_raw else 'FAIL'} "
           f"summaries={'OK,' + str(len(summaries_raw)) + ' items' if isinstance(summaries_raw, list) else 'FAIL'} "
+          f"sparklines={'OK' if sparklines_raw else 'FAIL'} "
+          f"social={'OK' if social_raw else 'FAIL'} "
+          f"sustain={'OK' if sustain_raw else 'FAIL'} "
+          f"tags={'OK' if tags_raw else 'FAIL'} "
+          f"root_claim={'OK' if root_claim_raw else 'FAIL'} "
           f"stats={'OK' if stats_raw else 'FAIL (non-fatal)'}")
 
     # ── TAO price & block (from TaoApp /current) ──────────────────────────
-    # On failure: preserve previous cached values (stale-on-error)
     prev_tao_price = prev.get("tao_price", {"price": "0", "change_24h": "0"})
     prev_block = prev.get("block_number", 0)
     if isinstance(current_raw, dict):
@@ -229,7 +345,6 @@ async def _fetch_dashboard_data() -> dict:
         block_number = prev_block
 
     # ── Fear/greed (from TaoApp) ───────────────────────────────────────────
-    # On failure: preserve previous cached values (stale-on-error)
     prev_total_market = prev.get("total_market", {
         "total_price_tao": "0", "fear_greed_score": 0, "fear_greed_label": "N/A",
     })
@@ -243,13 +358,21 @@ async def _fetch_dashboard_data() -> dict:
         total_market = prev_total_market
 
     # ── Network stats (from TaoStats, best-effort) ─────────────────────────
-    # On failure: preserve previous cached values (stale-on-error)
     network_stats: dict[str, Any] = prev.get("network_stats", {})
     st_item = _extract_first(stats_raw)
     if st_item:
         network_stats = st_item
 
-    # ── Descriptions map (from TaoApp /subnets/about/summaries) ───────────
+    # ── Root claim stats ──────────────────────────────────────────────────
+    root_claim_stats: dict[str, Any] = prev.get("root_claim_stats", {})
+    if isinstance(root_claim_raw, dict):
+        root_claim_stats = root_claim_raw
+    elif isinstance(root_claim_raw, list) and root_claim_raw:
+        root_claim_stats = root_claim_raw[0] if isinstance(root_claim_raw[0], dict) else {}
+
+    # ── Build lookup maps for enrichment ──────────────────────────────────
+
+    # Descriptions
     desc_map: dict[int, str] = {}
     if isinstance(summaries_raw, list):
         for item in summaries_raw:
@@ -259,22 +382,46 @@ async def _fetch_dashboard_data() -> dict:
                 subtitle = item.get("subtitle", "")
                 desc_map[nid] = f"{title} — {subtitle}" if subtitle else title
 
+    # Sparklines map: netuid → sparkline array
+    sparkline_map: dict[int, list] = {}
+    if isinstance(sparklines_raw, list):
+        for item in sparklines_raw:
+            if isinstance(item, dict) and item.get("netuid") is not None:
+                nid = int(_safe_float(item["netuid"]))
+                sparkline_map[nid] = item.get("sparkline", [])
+
+    # Social summary map: netuid → social dict
+    social_map: dict[int, dict] = {}
+    if isinstance(social_raw, list):
+        for item in social_raw:
+            if isinstance(item, dict) and item.get("netuid") is not None:
+                nid = int(_safe_float(item["netuid"]))
+                social_map[nid] = item
+
+    # Sustainability map: netuid → sustain dict
+    sustain_map: dict[int, dict] = {}
+    if isinstance(sustain_raw, list):
+        for item in sustain_raw:
+            if isinstance(item, dict) and item.get("netuid") is not None:
+                nid = int(_safe_float(item["netuid"]))
+                sustain_map[nid] = item
+
+    # Tags map: netuid → tags list
+    tags_map: dict[int, list] = {}
+    if isinstance(tags_raw, list):
+        for item in tags_raw:
+            if isinstance(item, dict) and item.get("netuid") is not None:
+                nid = int(_safe_float(item["netuid"]))
+                raw_tags = item.get("tags", [])
+                if isinstance(raw_tags, list):
+                    tags_map[nid] = raw_tags
+                elif isinstance(raw_tags, str):
+                    tags_map[nid] = [t.strip() for t in raw_tags.split(",") if t.strip()]
+
     # ── Subnets (from TaoApp /subnet_screener) ────────────────────────────
-    # Field reference for TaoApp subnet_screener:
-    #   netuid, subnet_name, price, tao_in, alpha_in, alpha_out, alpha_circ,
-    #   market_cap_tao, fdv_tao, emission_pct, alpha_emitted_pct,
-    #   buy_volume_tao_1d, sell_volume_tao_1d, total_volume_tao_1d,
-    #   price_1h_pct_change, price_1d_pct_change, price_7d_pct_change, price_1m_pct_change,
-    #   buy_volume_pct_change, sell_volume_pct_change, total_volume_pct_change,
-    #   root_prop, alpha_prop, net_volume_tao_1h, net_volume_tao_24h, net_volume_tao_7d,
-    #   realized_pnl_tao, unrealized_pnl_tao, ath_60d, atl_60d,
-    #   gini_coeff_top_100, hhi, github_repo, subnet_contact, subnet_url,
-    #   subnet_website, discord, additional, owner_coldkey, owner_hotkey, symbol
-    # On failure: preserve previous cached subnets (stale-on-error)
     prev_subnets: list[dict[str, Any]] = prev.get("subnets", [])
     subnets: list[dict[str, Any]] = []
     if isinstance(screener_raw, list):
-        # Sort by market_cap_tao descending (same order as TaoStats pools used)
         screener_sorted = sorted(
             screener_raw,
             key=lambda s: _safe_float(s.get("market_cap_tao", 0)),
@@ -285,6 +432,12 @@ async def _fetch_dashboard_data() -> dict:
             if not isinstance(subnet, dict):
                 continue
             netuid = int(_safe_float(subnet.get("netuid", 0)))
+
+            # Social enrichment
+            soc = social_map.get(netuid, {})
+            # Sustainability enrichment
+            sus = sustain_map.get(netuid, {})
+
             subnets.append({
                 "netuid": netuid,
                 "name": subnet.get("subnet_name") or f"SN{netuid}",
@@ -308,11 +461,29 @@ async def _fetch_dashboard_data() -> dict:
                 "ath_60d": _safe_str(subnet.get("ath_60d", "0")),
                 "atl_60d": _safe_str(subnet.get("atl_60d", "0")),
                 "root_prop": _safe_str(subnet.get("root_prop", "0")),
+                # Pass-through fields from screener
+                "gini_coeff_top_100": _safe_float(subnet.get("gini_coeff_top_100", 0)),
+                "hhi": _safe_float(subnet.get("hhi", 0)),
+                "realized_pnl_tao": _safe_str(subnet.get("realized_pnl_tao", "0")),
+                "unrealized_pnl_tao": _safe_str(subnet.get("unrealized_pnl_tao", "0")),
+                # Links
                 "discord": subnet.get("discord", "") or "",
                 "github": subnet.get("github_repo", "") or "",
                 "website": subnet.get("subnet_website", subnet.get("subnet_url", "")) or "",
                 "twitter": "",
-                "seven_day_price_history": [],
+                # Sparklines
+                "seven_day_price_history": sparkline_map.get(netuid, []),
+                # Social enrichment
+                "social_score": _safe_float(soc.get("social_score", 0)),
+                "twitter_mentions_24h": int(_safe_float(soc.get("twitter_mentions_24h", 0))),
+                "discord_members": int(_safe_float(soc.get("discord_members", 0))),
+                "discord_active_24h": int(_safe_float(soc.get("discord_active_24h", 0))),
+                "sentiment_score": _safe_float(soc.get("sentiment_score", 0)),
+                "twitter_followers": int(_safe_float(soc.get("twitter_followers", 0))),
+                # Sustainability
+                "tao_needed_to_sustain": _safe_float(sus.get("tao_needed_to_sustain", 0)),
+                # Tags
+                "tags": tags_map.get(netuid, []),
             })
     else:
         subnets = prev_subnets
@@ -321,11 +492,18 @@ async def _fetch_dashboard_data() -> dict:
         else:
             print(f"[bittensor] bg: TaoApp screener unavailable — subnets will be empty")
 
+    # ── Compute signal scores ─────────────────────────────────────────────
+    _compute_signal_scores(subnets)
+
+    # Sort by signal_score descending
+    subnets.sort(key=lambda s: s.get("signal_score", 0), reverse=True)
+
     result = {
         "tao_price": tao_price,
         "network_stats": network_stats,
         "total_market": total_market,
         "block_number": block_number,
+        "root_claim_stats": root_claim_stats,
         "subnets": subnets,
         "subnet_count": len(subnets),
         "as_of": datetime.now(timezone.utc).isoformat(),
@@ -600,4 +778,68 @@ async def price_history_endpoint():
     data = _extract_data(raw)
     result = {"asset": "tao", "period": "1d", "data": data}
     _cache_set("price_history", result)
+    return result
+
+
+# ── Signal endpoint ─────────────────────────────────────────────────────────
+
+@router.get("/subnets/signal")
+async def signal_endpoint(limit: int = Query(30, ge=5, le=100)):
+    """Top N subnets by signal_score from dashboard cache."""
+    cached = _cache_get("dashboard", ttl=_DASHBOARD_CACHE_TTL)
+    if cached is None:
+        raise HTTPException(status_code=503, detail="Data loading")
+    subnets = sorted(
+        cached.get("subnets", []),
+        key=lambda s: s.get("signal_score", 0),
+        reverse=True,
+    )
+    return {"subnets": subnets[:limit], "as_of": cached.get("as_of")}
+
+
+# ── Per-subnet social endpoint ──────────────────────────────────────────────
+
+@router.get("/subnet/{netuid}/social")
+async def subnet_social_endpoint(netuid: int):
+    """Fresh social analytics for a specific subnet. Cached 10 min per netuid."""
+    cache_key = f"social_{netuid}"
+    cached = _cache_get(cache_key, ttl=600)
+    if cached is not None:
+        return cached
+
+    async with httpx.AsyncClient() as client:
+        raw = await _taoapp_get(
+            client,
+            f"/api/beta/analytics/subnets/social/{netuid}/latest",
+        )
+
+    if raw is None:
+        raise HTTPException(status_code=502, detail="Failed to fetch social data")
+
+    result = raw if isinstance(raw, dict) else {"data": raw}
+    _cache_set(cache_key, result)
+    return result
+
+
+# ── Sparklines endpoint ─────────────────────────────────────────────────────
+
+@router.get("/subnets/sparklines")
+async def sparklines_endpoint():
+    """7-day price sparklines for all subnets. Cached 15 min."""
+    cached = _cache_get("sparklines_all", ttl=900)
+    if cached is not None:
+        return cached
+
+    async with httpx.AsyncClient() as client:
+        raw = await _taoapp_get(
+            client,
+            "/api/beta/subnets/sparklines",
+            {"hours": 168, "points": 24},
+        )
+
+    if raw is None:
+        raise HTTPException(status_code=502, detail="Failed to fetch sparklines")
+
+    result = {"data": raw}
+    _cache_set("sparklines_all", result)
     return result
