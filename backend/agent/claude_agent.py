@@ -499,12 +499,12 @@ class TradingAgent:
                 f"{csv_table}\n\n"
                 "INSTRUCTIONS:\n"
                 "Analyze every stock and place each into one or more of these categories (a stock CAN appear in multiple categories):\n\n"
-                "1. top_buys_now — Best risk/reward RIGHT NOW based on news momentum + social sentiment + fundamentals alignment\n"
+                "1. top_buys — Best risk/reward RIGHT NOW based on news momentum + social sentiment + fundamentals alignment\n"
                 "2. most_undervalued — Trading at significant discount to growth rate or peer group. Use P/S, P/E, P/FCF, EV/Revenue, PEG ratios\n"
                 "3. best_catalysts — Stocks with specific upcoming events: earnings, FDA approvals, product launches, contract announcements, index inclusion, etc.\n"
                 "4. hidden_gems — Companies closing massive contracts or signing enterprise deals that haven't yet shown up in reported revenue/earnings\n"
                 "5. most_revolutionary — Category-defining companies with true competitive moats, no direct substitutes, genuine bottleneck technology\n"
-                "6. right_sector_right_time — Stocks in sectors with strong macro/political tailwinds right now (AI infrastructure, defense, energy, etc.)\n\n"
+                "6. right_sector — Stocks in sectors with strong macro/political tailwinds right now (AI infrastructure, defense, energy, etc.)\n\n"
                 "FOR EACH STOCK you place in a category, provide ALL of these fields:\n"
                 '- "ticker": the stock symbol\n'
                 '- "name": full company name\n'
@@ -528,14 +528,12 @@ class TradingAgent:
                 '  "summary": "One paragraph summary of what this watchlist represents and current market context",\n'
                 '  "analysis_date": "ISO date string",\n'
                 '  "market_context": "2-3 sentences on the macro environment relevant to these stocks",\n'
-                '  "categories": {\n'
-                '    "top_buys_now": [ { stock objects as described above } ],\n'
-                '    "most_undervalued": [ { stock objects } ],\n'
-                '    "best_catalysts": [ { stock objects } ],\n'
-                '    "hidden_gems": [ { stock objects } ],\n'
-                '    "most_revolutionary": [ { stock objects } ],\n'
-                '    "right_sector_right_time": [ { stock objects } ]\n'
-                "  },\n"
+                '  "top_buys": [ { stock objects as described above } ],\n'
+                '  "most_undervalued": [ { stock objects } ],\n'
+                '  "best_catalysts": [ { stock objects } ],\n'
+                '  "hidden_gems": [ { stock objects } ],\n'
+                '  "most_revolutionary": [ { stock objects } ],\n'
+                '  "right_sector": [ { stock objects } ],\n'
                 '  "avoid_list": [\n'
                 '    { "ticker": "XYZ", "name": "Company Name", "reason": "Specific reason to avoid" }\n'
                 "  ]\n"
@@ -600,17 +598,16 @@ class TradingAgent:
             if market_ctx:
                 analysis_parts.append(f"MARKET CONTEXT: {market_ctx}")
 
-            categories = parsed.get("categories", {})
             category_labels = {
-                "top_buys_now": "TOP BUYS NOW",
+                "top_buys": "TOP BUYS NOW",
                 "most_undervalued": "MOST UNDERVALUED",
                 "best_catalysts": "BEST CATALYSTS",
                 "hidden_gems": "HIDDEN GEMS",
                 "most_revolutionary": "MOST REVOLUTIONARY",
-                "right_sector_right_time": "RIGHT SECTOR RIGHT TIME",
+                "right_sector": "RIGHT SECTOR RIGHT TIME",
             }
             for cat_key, cat_label in category_labels.items():
-                items = categories.get(cat_key, [])
+                items = parsed.get(cat_key, [])
                 if items:
                     tickers_str = ", ".join(
                         f"{it.get('ticker', '?')} ({it.get('signal', '?')})" for it in items
@@ -631,11 +628,20 @@ class TradingAgent:
                 "_routing": {"source": "csv_upload", "confidence": "high", "category": "csv_analysis"},
             }
 
-            # Auto-save to watchlist store so the Watchlist page is always current
+            # Auto-save to watchlist store — only if we got a real analysis
             try:
                 from services.watchlist_service import save_watchlist
-                save_watchlist(csv_rows, parsed)
-                print(f"[CSV] Auto-saved watchlist ({len(csv_rows)} rows)")
+                # Only save if this is a real watchlist analysis, not an error fallback
+                if (
+                    isinstance(parsed, dict)
+                    and parsed.get("display_type") == "csv_watchlist_analysis"
+                    and isinstance(csv_rows, list)
+                    and len(csv_rows) > 0
+                ):
+                    save_watchlist(csv_rows, parsed)
+                    print(f"[CSV] Auto-saved watchlist ({len(csv_rows)} rows)")
+                else:
+                    print(f"[CSV] Skipping watchlist save — analysis did not parse correctly (display_type={parsed.get('display_type') if isinstance(parsed, dict) else 'N/A'})")
             except Exception as e:
                 print(f"[CSV] Watchlist auto-save failed (non-fatal): {e}")
 
