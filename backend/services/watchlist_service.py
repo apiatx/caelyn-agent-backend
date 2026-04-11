@@ -86,39 +86,57 @@ def extract_tickers(csv_data: List[Dict[str, str]], analysis: Optional[Dict] = N
     return sorted(tickers)
 
 
-def save_watchlist(csv_data: List[Dict[str, str]], analysis: Dict[str, Any]) -> Dict[str, Any]:
+def save_watchlist(csv_data: List[Dict[str, str]], analysis: Dict[str, Any], watchlist_id: str = None, name: str = None) -> Dict[str, Any]:
     """Save CSV data + AI analysis. PostgreSQL first (survives deploys), JSON file fallback."""
+    import uuid
+    if not watchlist_id:
+        watchlist_id = str(uuid.uuid4())[:8]
     tickers = extract_tickers(csv_data, analysis)
+    if not name:
+        # Auto-name from tickers: "AAPL, NVDA, CRDO +5"
+        if len(tickers) <= 3:
+            name = ", ".join(tickers[:3]) if tickers else "Watchlist"
+        else:
+            name = ", ".join(tickers[:3]) + f" +{len(tickers)-3}"
     saved_at = datetime.now(timezone.utc).isoformat()
 
     # Try PostgreSQL first (survives deploys)
     try:
         from data.pg_storage import watchlist_write, is_available as pg_available
         if pg_available():
-            ok = watchlist_write(csv_data, analysis, tickers)
+            ok = watchlist_write(watchlist_id, name, csv_data, analysis, tickers)
             if ok:
-                print(f"[WATCHLIST] Saved to PostgreSQL ({len(tickers)} tickers)")
-                return {"success": True, "saved_at": saved_at, "ticker_count": len(tickers)}
+                print(f"[WATCHLIST] Saved to PostgreSQL id={watchlist_id} name={name} ({len(tickers)} tickers)")
+                return {"success": True, "watchlist_id": watchlist_id, "name": name, "saved_at": saved_at, "ticker_count": len(tickers)}
     except Exception as e:
         print(f"[WATCHLIST] PostgreSQL save failed ({e}), falling back to JSON file")
 
     # Fallback: JSON file
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    store = {"csv_data": csv_data, "analysis": analysis, "tickers": tickers, "saved_at": saved_at}
+    store = {"id": watchlist_id, "name": name, "csv_data": csv_data, "analysis": analysis, "tickers": tickers, "saved_at": saved_at}
     _WATCHLIST_FILE.write_text(json.dumps(store, default=str))
-    print(f"[WATCHLIST] Saved to JSON file ({len(tickers)} tickers)")
-    return {"success": True, "saved_at": saved_at, "ticker_count": len(tickers)}
+    print(f"[WATCHLIST] Saved to JSON file id={watchlist_id} ({len(tickers)} tickers)")
+    return {"success": True, "watchlist_id": watchlist_id, "name": name, "saved_at": saved_at, "ticker_count": len(tickers)}
 
 
-def load_watchlist() -> Optional[Dict[str, Any]]:
-    """Load the saved watchlist. PostgreSQL first, JSON file fallback."""
+def load_watchlist(watchlist_id: str = None) -> Optional[Dict[str, Any]]:
+    """Load a saved watchlist by id. If no id given, returns the most recently updated one.
+    PostgreSQL first, JSON file fallback."""
     # Try PostgreSQL first
     try:
-        from data.pg_storage import watchlist_read, is_available as pg_available
+        from data.pg_storage import watchlist_read, watchlist_list as pg_watchlist_list, is_available as pg_available
         if pg_available():
-            data = watchlist_read()
+            if watchlist_id:
+                data = watchlist_read(watchlist_id)
+            else:
+                # No id specified — return the most recently updated watchlist
+                all_wl = pg_watchlist_list()
+                if all_wl:
+                    data = watchlist_read(all_wl[0]["id"])
+                else:
+                    data = None
             if data is not None:
-                print(f"[WATCHLIST] Loaded from PostgreSQL ({len(data.get('tickers', []))} tickers)")
+                print(f"[WATCHLIST] Loaded from PostgreSQL id={data.get('id')} ({len(data.get('tickers', []))} tickers)")
                 return data
     except Exception as e:
         print(f"[WATCHLIST] PostgreSQL load failed ({e}), falling back to JSON file")
@@ -130,20 +148,47 @@ def load_watchlist() -> Optional[Dict[str, Any]]:
     return store
 
 
-def clear_watchlist() -> Dict[str, Any]:
-    """Clear the saved watchlist from PostgreSQL and JSON file."""
+def list_watchlists() -> List[Dict[str, Any]]:
+    """List all saved watchlists (metadata only)."""
+    # Try PostgreSQL
+    try:
+        from data.pg_storage import watchlist_list as pg_watchlist_list, is_available as pg_available
+        if pg_available():
+            return pg_watchlist_list()
+    except Exception as e:
+        print(f"[WATCHLIST] PostgreSQL list failed: {e}")
+
+    # Fallback: scan JSON file
+    results = []
+    if _WATCHLIST_FILE.exists():
+        try:
+            store = json.loads(_WATCHLIST_FILE.read_text())
+            results.append({
+                "id": store.get("id", "default"),
+                "name": store.get("name", "Watchlist"),
+                "ticker_count": len(store.get("tickers", [])),
+                "saved_at": store.get("saved_at", ""),
+                "updated_at": store.get("saved_at", ""),
+            })
+        except Exception:
+            pass
+    return results
+
+
+def clear_watchlist(watchlist_id: str = 'default') -> Dict[str, Any]:
+    """Delete a specific watchlist by id."""
     cleared = False
     # Try PostgreSQL
     try:
         from data.pg_storage import watchlist_delete, is_available as pg_available
         if pg_available():
-            watchlist_delete()
+            watchlist_delete(watchlist_id)
             cleared = True
     except Exception as e:
         print(f"[WATCHLIST] PostgreSQL clear failed: {e}")
 
-    # Also clear JSON file if it exists
-    if _WATCHLIST_FILE.exists():
+    # Also clear JSON file if it matches
+    if watchlist_id == 'default' and _WATCHLIST_FILE.exists():
         _WATCHLIST_FILE.unlink()
         cleared = True
 
@@ -568,12 +613,14 @@ async def run_ai_analysis(prompt: str, agent: Any) -> Dict[str, Any]:
         return {"error": f"AI analysis failed: {str(e)}"}
 
 
-async def refresh_watchlist_analysis(agent: Any) -> Dict[str, Any]:
+async def refresh_watchlist_analysis(agent: Any, watchlist_id: str = None) -> Dict[str, Any]:
     """Reload saved CSV, fetch news, re-run AI with news context, save results."""
-    store = load_watchlist()
+    store = load_watchlist(watchlist_id)
     if not store:
         return {"error": "No watchlist saved. Upload a CSV first."}
 
+    wl_id = store.get("id", watchlist_id or "default")
+    wl_name = store.get("name", "Watchlist")
     csv_data = store["csv_data"]
     tickers = store["tickers"]
 
@@ -590,14 +637,14 @@ async def refresh_watchlist_analysis(agent: Any) -> Dict[str, Any]:
     if analysis.get("error"):
         return analysis
 
-    # Save updated analysis
-    save_watchlist(csv_data, analysis)
+    # Save updated analysis back to the same watchlist
+    save_watchlist(csv_data, analysis, watchlist_id=wl_id, name=wl_name)
     return analysis
 
 
-async def get_stock_detail(ticker: str, agent: Any) -> Dict[str, Any]:
+async def get_stock_detail(ticker: str, agent: Any, watchlist_id: str = None) -> Dict[str, Any]:
     """Get enriched detail for a single stock: CSV data + news + AI deep dive."""
-    store = load_watchlist()
+    store = load_watchlist(watchlist_id)
     if not store:
         return {"error": "No watchlist saved."}
 
