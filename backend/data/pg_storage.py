@@ -391,6 +391,22 @@ def init_tables():
             ON public.options_flow_snapshots (underlying, captured_at DESC)
         """)
 
+        # ── Watchlist (multi-watchlist) ──
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.watchlist (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT 'Watchlist',
+                csv_data JSONB,
+                analysis JSONB,
+                tickers JSONB,
+                saved_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            ALTER TABLE public.watchlist ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'Watchlist'
+        """)
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
@@ -398,6 +414,118 @@ def init_tables():
     except Exception as e:
         print(f"[PG_STORAGE] Table creation error: {e}")
         conn.rollback()
+        return False
+    finally:
+        _put_conn(conn)
+
+
+# ── Watchlist CRUD ───────────────────────────────────────────
+
+def watchlist_list() -> list:
+    """List all saved watchlists (metadata only)."""
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, name,
+                       jsonb_array_length(COALESCE(tickers, '[]'::jsonb)) as ticker_count,
+                       saved_at, updated_at
+                FROM public.watchlist ORDER BY updated_at DESC
+            """)
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": r[0], "name": r[1], "ticker_count": r[2],
+                    "saved_at": r[3].isoformat() if hasattr(r[3], 'isoformat') else str(r[3]),
+                    "updated_at": r[4].isoformat() if hasattr(r[4], 'isoformat') else str(r[4]),
+                }
+                for r in rows
+            ]
+    except Exception as e:
+        print(f"[PG_STORAGE] watchlist_list error: {e}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def watchlist_read(watchlist_id: str) -> dict | None:
+    """Read a specific watchlist by ID."""
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, csv_data, analysis, tickers, saved_at FROM public.watchlist WHERE id = %s",
+                (watchlist_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "id": row[0],
+                "name": row[1],
+                "csv_data": row[2] or [],
+                "analysis": row[3] or {},
+                "tickers": row[4] or [],
+                "saved_at": row[5].isoformat() if hasattr(row[5], 'isoformat') else str(row[5]),
+            }
+    except Exception as e:
+        print(f"[PG_STORAGE] watchlist_read error: {e}")
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def watchlist_write(watchlist_id: str, name: str, csv_data: list, analysis: dict, tickers: list) -> bool:
+    """Upsert a watchlist into PostgreSQL."""
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        from psycopg2.extras import Json
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.watchlist (id, name, csv_data, analysis, tickers, saved_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name, csv_data = EXCLUDED.csv_data,
+                    analysis = EXCLUDED.analysis, tickers = EXCLUDED.tickers, updated_at = NOW()
+                """,
+                (watchlist_id, name, Json(csv_data), Json(analysis), Json(tickers)),
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"[PG_STORAGE] watchlist_write error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def watchlist_delete(watchlist_id: str) -> bool:
+    """Delete a specific watchlist by ID."""
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM public.watchlist WHERE id = %s", (watchlist_id,))
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"[PG_STORAGE] watchlist_delete error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return False
     finally:
         _put_conn(conn)
