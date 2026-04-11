@@ -8,11 +8,10 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from typing import Any, Dict, List, Optional
 
-from subscription import require_subscription
 from services.watchlist_service import (
     save_watchlist,
     load_watchlist,
@@ -53,10 +52,7 @@ def _get_agent():
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 @router.post("/save")
-async def save_endpoint(
-    body: WatchlistSaveRequest,
-    _sub: None = Depends(require_subscription),
-):
+async def save_endpoint(body: WatchlistSaveRequest):
     """Save CSV data + AI analysis to the watchlist store."""
     result = save_watchlist(body.csv_data, body.analysis)
     return result
@@ -73,7 +69,7 @@ async def debug_endpoint():
         try:
             content = _WATCHLIST_FILE.read_text()
             info["file_size_bytes"] = len(content)
-            info["preview"] = content[:200]
+            info["preview"] = content[:500]
         except Exception as e:
             info["read_error"] = str(e)
     else:
@@ -83,9 +79,7 @@ async def debug_endpoint():
 
 
 @router.get("")
-async def get_endpoint(
-    _sub: None = Depends(require_subscription),
-):
+async def get_endpoint():
     """Return saved watchlist or empty indicator."""
     store = load_watchlist()
     if store is None:
@@ -94,9 +88,7 @@ async def get_endpoint(
 
 
 @router.post("/refresh")
-async def refresh_endpoint(
-    _sub: None = Depends(require_subscription),
-):
+async def refresh_endpoint():
     """Re-run AI analysis with latest news. Returns new analysis JSON."""
     agent = _get_agent()
     result = await refresh_watchlist_analysis(agent)
@@ -106,9 +98,7 @@ async def refresh_endpoint(
 
 
 @router.get("/news")
-async def news_endpoint(
-    _sub: None = Depends(require_subscription),
-):
+async def news_endpoint():
     """Fetch fresh news for all tickers in the saved watchlist."""
     store = load_watchlist()
     if store is None:
@@ -121,10 +111,7 @@ async def news_endpoint(
 
 
 @router.get("/stock/{ticker}")
-async def stock_detail_endpoint(
-    ticker: str,
-    _sub: None = Depends(require_subscription),
-):
+async def stock_detail_endpoint(ticker: str):
     """Return enriched data for a single ticker: CSV row + news + AI deep dive."""
     agent = _get_agent()
     result = await get_stock_detail(ticker, agent)
@@ -134,8 +121,6 @@ async def stock_detail_endpoint(
 
 
 @router.delete("")
-async def delete_endpoint(
-    _sub: None = Depends(require_subscription),
-):
+async def delete_endpoint():
     """Clear the saved watchlist store."""
     return clear_watchlist()
