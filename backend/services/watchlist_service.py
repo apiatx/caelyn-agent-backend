@@ -87,23 +87,43 @@ def extract_tickers(csv_data: List[Dict[str, str]], analysis: Optional[Dict] = N
 
 
 def save_watchlist(csv_data: List[Dict[str, str]], analysis: Dict[str, Any]) -> Dict[str, Any]:
-    """Save CSV data + AI analysis to the watchlist store."""
+    """Save CSV data + AI analysis. PostgreSQL first (survives deploys), JSON file fallback."""
     tickers = extract_tickers(csv_data, analysis)
     saved_at = datetime.now(timezone.utc).isoformat()
-    store = {
-        "tickers": tickers,
-        "csv_data": csv_data,
-        "analysis": analysis,
-        "saved_at": saved_at,
-    }
-    print(f"[Watchlist] Saving {len(tickers)} tickers, {len(csv_data)} rows to {_WATCHLIST_FILE}")
-    _write_store(store)
-    print(f"[Watchlist] Saved successfully at {saved_at}")
+
+    # Try PostgreSQL first (survives deploys)
+    try:
+        from data.pg_storage import watchlist_write, is_available as pg_available
+        if pg_available():
+            ok = watchlist_write(csv_data, analysis, tickers)
+            if ok:
+                print(f"[WATCHLIST] Saved to PostgreSQL ({len(tickers)} tickers)")
+                return {"success": True, "saved_at": saved_at, "ticker_count": len(tickers)}
+    except Exception as e:
+        print(f"[WATCHLIST] PostgreSQL save failed ({e}), falling back to JSON file")
+
+    # Fallback: JSON file
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    store = {"csv_data": csv_data, "analysis": analysis, "tickers": tickers, "saved_at": saved_at}
+    _WATCHLIST_FILE.write_text(json.dumps(store, default=str))
+    print(f"[WATCHLIST] Saved to JSON file ({len(tickers)} tickers)")
     return {"success": True, "saved_at": saved_at, "ticker_count": len(tickers)}
 
 
 def load_watchlist() -> Optional[Dict[str, Any]]:
-    """Load the saved watchlist. Returns None if nothing saved."""
+    """Load the saved watchlist. PostgreSQL first, JSON file fallback."""
+    # Try PostgreSQL first
+    try:
+        from data.pg_storage import watchlist_read, is_available as pg_available
+        if pg_available():
+            data = watchlist_read()
+            if data is not None:
+                print(f"[WATCHLIST] Loaded from PostgreSQL ({len(data.get('tickers', []))} tickers)")
+                return data
+    except Exception as e:
+        print(f"[WATCHLIST] PostgreSQL load failed ({e}), falling back to JSON file")
+
+    # Fallback: JSON file
     store = _read_store()
     if not store or not store.get("tickers"):
         return None
@@ -111,10 +131,23 @@ def load_watchlist() -> Optional[Dict[str, Any]]:
 
 
 def clear_watchlist() -> Dict[str, Any]:
-    """Clear the saved watchlist."""
+    """Clear the saved watchlist from PostgreSQL and JSON file."""
+    cleared = False
+    # Try PostgreSQL
+    try:
+        from data.pg_storage import watchlist_delete, is_available as pg_available
+        if pg_available():
+            watchlist_delete()
+            cleared = True
+    except Exception as e:
+        print(f"[WATCHLIST] PostgreSQL clear failed: {e}")
+
+    # Also clear JSON file if it exists
     if _WATCHLIST_FILE.exists():
         _WATCHLIST_FILE.unlink()
-    return {"success": True}
+        cleared = True
+
+    return {"success": cleared}
 
 
 # ── News Aggregation via RSS ─────────────────────────────────────────────────

@@ -338,6 +338,18 @@ def init_tables():
             )
         """)
 
+        # ── Watchlist persistence (survives deploys) ──────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.watchlist (
+                id TEXT PRIMARY KEY DEFAULT 'default',
+                csv_data JSONB,
+                analysis JSONB,
+                tickers JSONB,
+                saved_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+
         # ── Live options flow snapshots for intraday signal history ───────
         cur.execute("""
             CREATE TABLE IF NOT EXISTS public.options_flow_snapshots (
@@ -934,5 +946,89 @@ def storage_info() -> dict:
         }
     except Exception as e:
         return {"available": False, "reason": str(e)}
+    finally:
+        _put_conn(conn)
+
+
+# ── Watchlist Persistence ──────────────────────────────────────────
+
+def watchlist_read() -> dict | None:
+    """Read the saved watchlist from PostgreSQL. Returns None if not found."""
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT csv_data, analysis, tickers, saved_at FROM public.watchlist WHERE id = 'default'")
+        row = cur.fetchone()
+        cur.close()
+        if row is None:
+            return None
+        csv_data, analysis, tickers, saved_at = row
+        return {
+            "csv_data": csv_data or [],
+            "analysis": analysis or {},
+            "tickers": tickers or [],
+            "saved_at": saved_at.isoformat() if hasattr(saved_at, 'isoformat') else str(saved_at),
+        }
+    except Exception as e:
+        print(f"[PG_STORAGE] watchlist_read error: {e}")
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def watchlist_write(csv_data: list, analysis: dict, tickers: list) -> bool:
+    """Upsert the watchlist into PostgreSQL. Returns True on success."""
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        from psycopg2.extras import Json
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO public.watchlist (id, csv_data, analysis, tickers, saved_at, updated_at)
+            VALUES ('default', %s, %s, %s, NOW(), NOW())
+            ON CONFLICT (id) DO UPDATE SET
+                csv_data = EXCLUDED.csv_data,
+                analysis = EXCLUDED.analysis,
+                tickers = EXCLUDED.tickers,
+                updated_at = NOW()
+            """,
+            (Json(csv_data), Json(analysis), Json(tickers))
+        )
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"[PG_STORAGE] watchlist_write error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def watchlist_delete() -> bool:
+    """Delete the saved watchlist from PostgreSQL."""
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM public.watchlist WHERE id = 'default'")
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"[PG_STORAGE] watchlist_delete error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
     finally:
         _put_conn(conn)
