@@ -99,15 +99,17 @@ async def refresh_endpoint():
 
 @router.get("/news")
 async def news_endpoint():
-    """Fetch fresh news for all tickers in the saved watchlist."""
+    """Fetch fresh news for all tickers in the saved watchlist.
+    Returns a flat { TICKER: [articles] } map — NOT wrapped in a 'news' key.
+    """
     store = load_watchlist()
     if store is None:
-        return {"empty": True, "news": {}}
+        return {}
     tickers = store.get("tickers", [])
     if not tickers:
-        return {"news": {}}
+        return {}
     news_map = await fetch_news_for_tickers(tickers)
-    return {"news": news_map}
+    return news_map
 
 
 @router.get("/stock/{ticker}")
