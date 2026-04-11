@@ -150,6 +150,61 @@ def _parse_rss_xml(xml_text: str, source_label: str) -> List[Dict[str, Any]]:
     return articles
 
 
+async def _fetch_news_perplexity(ticker: str) -> List[Dict[str, Any]]:
+    """Use Perplexity Sonar API (fast web search) to get latest news for a ticker."""
+    api_key = os.environ.get("PERPLEXITY_API_KEY", "")
+    if not api_key:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                "https://api.perplexity.ai/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "sonar",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Give me the 8 most recent and important news headlines about {ticker} stock. "
+                                "For each, provide: title, a 1-2 sentence summary, the source name, and the publication date. "
+                                "Focus on: earnings, contracts, partnerships, product launches, analyst upgrades/downgrades, "
+                                "regulatory news, and significant price movements. "
+                                "Respond ONLY with a JSON array: "
+                                '[{"title": "...", "summary": "...", "source": "...", "published_at": "YYYY-MM-DD", "url": ""}]'
+                            ),
+                        }
+                    ],
+                    "search_recency_filter": "week",
+                    "return_citations": True,
+                },
+            )
+        if resp.status_code != 200:
+            print(f"[WATCHLIST-NEWS] Perplexity API error {resp.status_code} for {ticker}")
+            return []
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"].strip()
+        # Strip markdown code fences if present
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        citations = data.get("citations", [])
+        articles = json.loads(content)
+        # Inject real URLs from citations where possible
+        for i, art in enumerate(articles):
+            if not art.get("url") and i < len(citations):
+                art["url"] = citations[i]
+        print(f"[WATCHLIST-NEWS] Perplexity returned {len(articles)} articles for {ticker}")
+        return articles[:10]
+    except Exception as e:
+        print(f"[WATCHLIST-NEWS] Perplexity news fetch failed for {ticker}: {e}")
+        return []
+
+
 async def fetch_news_for_ticker(ticker: str, client: httpx.AsyncClient) -> List[Dict[str, Any]]:
     """Fetch news for a single ticker via Yahoo Finance RSS, with Google News fallback."""
     # Check cache
@@ -177,6 +232,11 @@ async def fetch_news_for_ticker(ticker: str, client: httpx.AsyncClient) -> List[
                 articles = _parse_rss_xml(resp.text, "Google News")
         except Exception as e:
             print(f"[WATCHLIST-NEWS] Google News RSS failed for {ticker}: {e}")
+
+    # Final fallback: Perplexity Sonar (fast web search)
+    if not articles:
+        print(f"[WATCHLIST-NEWS] RSS feeds empty for {ticker}, falling back to Perplexity")
+        articles = await _fetch_news_perplexity(ticker)
 
     # Cache results
     _news_cache[ticker] = {"fetched_at": time.time(), "articles": articles[:15]}
