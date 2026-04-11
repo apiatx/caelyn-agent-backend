@@ -262,6 +262,60 @@ async def fetch_news_for_tickers(tickers: List[str]) -> Dict[str, List[Dict[str,
     return news_map
 
 
+# ── Perplexity Sonar (real-time web search context) ────────────────────────
+
+
+async def _fetch_sonar_context_for_tickers(tickers: List[str]) -> str:
+    """
+    Use Perplexity Sonar to get real-time web search context for all tickers at once.
+    Returns a formatted string ready to inject into the Claude analysis prompt.
+    """
+    api_key = os.environ.get("PERPLEXITY_API_KEY", "")
+    if not api_key:
+        print("[WATCHLIST-REFRESH] No PERPLEXITY_API_KEY — skipping live news context")
+        return ""
+
+    ticker_list = ", ".join(tickers)
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://api.perplexity.ai/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "sonar",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                f"For each of the following stocks: {ticker_list}\n\n"
+                                "Search the web and provide the most important CURRENT developments from the past 2 weeks for each ticker. "
+                                "Focus on: earnings surprises, contract wins, product launches, analyst upgrades/downgrades, "
+                                "regulatory decisions, CEO changes, partnerships, short squeeze activity, institutional buying/selling, "
+                                "and any other market-moving events. "
+                                "Format your response EXACTLY like this for each ticker:\n"
+                                "TICKER: [headline 1] | [headline 2] | [headline 3]\n"
+                                "One line per ticker. Be specific and factual. Only include things that actually happened recently."
+                            ),
+                        }
+                    ],
+                    "search_recency_filter": "month",
+                    "return_citations": False,
+                },
+            )
+        if resp.status_code != 200:
+            print(f"[WATCHLIST-REFRESH] Perplexity sonar error: {resp.status_code}")
+            return ""
+        content = resp.json()["choices"][0]["message"]["content"].strip()
+        print(f"[WATCHLIST-REFRESH] Perplexity sonar returned {len(content)} chars of news context")
+        return content
+    except Exception as e:
+        print(f"[WATCHLIST-REFRESH] Perplexity sonar failed: {e}")
+        return ""
+
+
 # ── AI Analysis (uses the existing TradingAgent) ────────────────────────────
 
 def _build_csv_table(csv_data: List[Dict[str, str]]) -> str:
@@ -355,6 +409,54 @@ def _build_refresh_prompt(
     return prompt
 
 
+def _build_refresh_prompt_with_context(
+    csv_data: List[Dict[str, str]],
+    tickers: List[str],
+    news_context: str,
+) -> str:
+    """Build refresh prompt using raw Perplexity sonar context instead of RSS news map."""
+    csv_table = _build_csv_table(csv_data)
+
+    news_section = (
+        f"=== CURRENT MARKET INTELLIGENCE (live web search) ===\n{news_context}\n"
+        if news_context
+        else "=== CURRENT MARKET INTELLIGENCE ===\nNo live news context available — rely on fundamental analysis.\n"
+    )
+
+    return (
+        "You are a world-class equity analyst with access to real-time market intelligence. "
+        "CRITICAL: Go BEYOND the data in the CSV. Use both the CSV fundamentals AND the live news context below "
+        "to produce a high-signal analysis. The news context is from a live web search — treat it as current fact.\n\n"
+        f"=== WATCHLIST DATA ===\n{csv_table}\n\n"
+        f"{news_section}\n"
+        "Factor in ALL of the above when assessing sentiment, catalysts, timing, and conviction for each stock.\n\n"
+        "Produce a JSON response with this EXACT flat structure (no nested 'categories' object):\n"
+        "{\n"
+        '  "display_type": "csv_watchlist_analysis",\n'
+        '  "summary": "One paragraph summary of what this watchlist represents and current market context",\n'
+        '  "analysis_date": "<today ISO date>",\n'
+        '  "market_context": "2-3 sentences on macro environment relevant to these stocks",\n'
+        '  "top_buys": [ <stock objects> ],\n'
+        '  "most_undervalued": [ <stock objects> ],\n'
+        '  "best_catalysts": [ <stock objects> ],\n'
+        '  "hidden_gems": [ <stock objects> ],\n'
+        '  "most_revolutionary": [ <stock objects> ],\n'
+        '  "right_sector": [ <stock objects> ],\n'
+        '  "avoid_list": [ {"ticker": "...", "name": "...", "reason": "..."} ]\n'
+        "}\n\n"
+        "Each stock object must have: ticker, name, signal (STRONG BUY/BUY/HOLD/AVOID), score (1-10), "
+        "thesis (2-3 sentences), sentiment, sentiment_reason, catalysts (array), "
+        "valuation ({ps_ratio, pe_ratio, pfcf, ev_revenue, vs_peers}), moat, why_now.\n\n"
+        "CRITICAL RULES:\n"
+        "- Do NOT rank by market cap or revenue size\n"
+        "- Focus on asymmetric opportunity, undervaluation relative to growth, and timing\n"
+        "- Use the live news context to identify stocks with recent catalysts not visible in the CSV numbers\n"
+        "- A stock can appear in multiple categories if it qualifies\n"
+        "- Respond ONLY with valid JSON. No markdown, no explanation, no code blocks.\n\n"
+        f"User request: Refresh analysis for my watchlist: {', '.join(tickers)}"
+    )
+
+
 def _build_stock_deep_dive_prompt(
     ticker: str,
     csv_row: Dict[str, str],
@@ -442,12 +544,12 @@ async def refresh_watchlist_analysis(agent: Any) -> Dict[str, Any]:
     csv_data = store["csv_data"]
     tickers = store["tickers"]
 
-    # Fetch news concurrently for all tickers
-    print(f"[WATCHLIST-REFRESH] Fetching news for {len(tickers)} tickers...")
-    news_map = await fetch_news_for_tickers(tickers)
+    # Fetch live news context via Perplexity sonar
+    print(f"[WATCHLIST-REFRESH] Fetching sonar context for {len(tickers)} tickers...")
+    news_context = await _fetch_sonar_context_for_tickers(tickers)
 
-    # Build enhanced prompt with news
-    prompt = _build_refresh_prompt(csv_data, tickers, news_map)
+    # Build enhanced prompt with live news context
+    prompt = _build_refresh_prompt_with_context(csv_data, tickers, news_context)
     print(f"[WATCHLIST-REFRESH] Running AI analysis ({len(prompt)} chars)...")
 
     # Run AI
