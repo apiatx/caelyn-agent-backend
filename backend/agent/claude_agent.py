@@ -485,6 +485,26 @@ class TradingAgent:
             csv_table = "\n".join([", ".join(f"{k}: {v}" for k, v in row.items() if v) for row in csv_rows[:200]])
             ticker_list = ", ".join(csv_parsed.get("tickers", [])[:200])
 
+            # Fetch live news context via Perplexity sonar
+            tickers_for_news = []
+            for row in csv_rows:
+                for key in ['ticker', 'Ticker', 'TICKER', 'symbol', 'Symbol']:
+                    if key in row and row[key]:
+                        tickers_for_news.append(str(row[key]).strip().upper())
+                        break
+
+            news_context = ""
+            if tickers_for_news:
+                from services.watchlist_service import _fetch_sonar_context_for_tickers
+                news_context = await _fetch_sonar_context_for_tickers(tickers_for_news)
+
+            news_prompt_section = ""
+            if news_context:
+                news_prompt_section = (
+                    f"=== CURRENT MARKET INTELLIGENCE (live web search) ===\n{news_context}\n\n"
+                    "Factor in the above live news when assessing sentiment, catalysts, and timing for each stock.\n\n"
+                )
+
             csv_prompt = (
                 "You are a world-class equity analyst and portfolio strategist. "
                 "A user has uploaded their stock watchlist. Your job is to produce actionable intelligence on every stock in this list.\n\n"
@@ -497,6 +517,7 @@ class TradingAgent:
                 f"Columns: {', '.join(csv_cols)}\n"
                 f"Tickers: {ticker_list}\n\n"
                 f"{csv_table}\n\n"
+                f"{news_prompt_section}"
                 "INSTRUCTIONS:\n"
                 "Analyze every stock and place each into one or more of these categories (a stock CAN appear in multiple categories):\n\n"
                 "1. top_buys — Best risk/reward RIGHT NOW based on news momentum + social sentiment + fundamentals alignment\n"
