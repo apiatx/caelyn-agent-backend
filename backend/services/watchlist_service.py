@@ -38,6 +38,8 @@ def _read_store() -> Dict[str, Any]:
 
 def _write_store(data: Dict[str, Any]) -> None:
     """Write data to the watchlist JSON store."""
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[Watchlist] Writing to {_WATCHLIST_FILE}")
     _WATCHLIST_FILE.write_text(json.dumps(data, default=str, indent=2))
 
 
@@ -56,6 +58,7 @@ def extract_tickers(csv_data: List[Dict[str, str]], analysis: Optional[Dict] = N
 
     # Also pull from analysis categories if available
     if analysis and isinstance(analysis, dict):
+        # Check nested "categories" key (legacy format)
         categories = analysis.get("categories", {})
         for cat_stocks in categories.values():
             if isinstance(cat_stocks, list):
@@ -63,10 +66,22 @@ def extract_tickers(csv_data: List[Dict[str, str]], analysis: Optional[Dict] = N
                     t = stock.get("ticker", "").strip().upper()
                     if t:
                         tickers.add(t)
+        # Check top-level category keys (current flat format from AI)
+        _CATEGORY_KEYS = ("top_buys", "most_undervalued", "best_catalysts",
+                          "hidden_gems", "most_revolutionary", "right_sector")
+        for key in _CATEGORY_KEYS:
+            cat_list = analysis.get(key, [])
+            if isinstance(cat_list, list):
+                for stock in cat_list:
+                    if isinstance(stock, dict):
+                        t = stock.get("ticker", "").strip().upper()
+                        if t:
+                            tickers.add(t)
         for item in analysis.get("avoid_list", []):
-            t = item.get("ticker", "").strip().upper()
-            if t:
-                tickers.add(t)
+            if isinstance(item, dict):
+                t = item.get("ticker", "").strip().upper()
+                if t:
+                    tickers.add(t)
 
     return sorted(tickers)
 
@@ -81,8 +96,9 @@ def save_watchlist(csv_data: List[Dict[str, str]], analysis: Dict[str, Any]) -> 
         "analysis": analysis,
         "saved_at": saved_at,
     }
+    print(f"[Watchlist] Saving {len(tickers)} tickers, {len(csv_data)} rows to {_WATCHLIST_FILE}")
     _write_store(store)
-    print(f"[WATCHLIST] Saved {len(tickers)} tickers at {saved_at}")
+    print(f"[Watchlist] Saved successfully at {saved_at}")
     return {"success": True, "saved_at": saved_at, "ticker_count": len(tickers)}
 
 

@@ -20,6 +20,7 @@ from services.watchlist_service import (
     fetch_news_for_tickers,
     refresh_watchlist_analysis,
     get_stock_detail,
+    _WATCHLIST_FILE,
 )
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
@@ -59,6 +60,26 @@ async def save_endpoint(
     """Save CSV data + AI analysis to the watchlist store."""
     result = save_watchlist(body.csv_data, body.analysis)
     return result
+
+
+@router.get("/debug")
+async def debug_endpoint():
+    """Debug endpoint — returns file path, existence, size, and preview."""
+    info: Dict[str, Any] = {
+        "resolved_path": str(_WATCHLIST_FILE),
+        "exists": _WATCHLIST_FILE.exists(),
+    }
+    if _WATCHLIST_FILE.exists():
+        try:
+            content = _WATCHLIST_FILE.read_text()
+            info["file_size_bytes"] = len(content)
+            info["preview"] = content[:200]
+        except Exception as e:
+            info["read_error"] = str(e)
+    else:
+        info["parent_exists"] = _WATCHLIST_FILE.parent.exists()
+        info["parent_path"] = str(_WATCHLIST_FILE.parent)
+    return info
 
 
 @router.get("")

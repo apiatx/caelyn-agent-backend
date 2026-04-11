@@ -631,7 +631,7 @@ class TradingAgent:
             # Auto-save to watchlist store — only if we got a real analysis
             try:
                 from services.watchlist_service import save_watchlist
-                # Only save if this is a real watchlist analysis, not an error fallback
+                print(f"[CSV auto-save] display_type={parsed.get('display_type') if isinstance(parsed, dict) else type(parsed)}, csv_rows={len(csv_rows) if isinstance(csv_rows, list) else 'N/A'}")
                 if (
                     isinstance(parsed, dict)
                     and parsed.get("display_type") == "csv_watchlist_analysis"
@@ -639,11 +639,13 @@ class TradingAgent:
                     and len(csv_rows) > 0
                 ):
                     save_watchlist(csv_rows, parsed)
-                    print(f"[CSV] Auto-saved watchlist ({len(csv_rows)} rows)")
+                    print(f"[Watchlist] Auto-saved {len(csv_rows)} rows to watchlist store")
                 else:
-                    print(f"[CSV] Skipping watchlist save — analysis did not parse correctly (display_type={parsed.get('display_type') if isinstance(parsed, dict) else 'N/A'})")
+                    print(f"[Watchlist] Skipped save — display_type={parsed.get('display_type') if isinstance(parsed, dict) else type(parsed)}, csv_rows type={type(csv_rows)}, len={len(csv_rows) if isinstance(csv_rows, list) else 'N/A'}")
             except Exception as e:
-                print(f"[CSV] Watchlist auto-save failed (non-fatal): {e}")
+                import traceback
+                print(f"[Watchlist] Auto-save error: {e}")
+                traceback.print_exc()
 
             # Generate follow-up suggestions for CSV analysis
             try:
