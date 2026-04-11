@@ -86,60 +86,63 @@ def extract_tickers(csv_data: List[Dict[str, str]], analysis: Optional[Dict] = N
     return sorted(tickers)
 
 
-def save_watchlist(csv_data: List[Dict[str, str]], analysis: Dict[str, Any], watchlist_id: str = None, name: str = None) -> Dict[str, Any]:
-    """Save CSV data + AI analysis. PostgreSQL first (survives deploys), JSON file fallback."""
-    import uuid
-    if not watchlist_id:
-        watchlist_id = str(uuid.uuid4())[:8]
+def save_watchlist(
+    csv_data: List[Dict[str, str]],
+    analysis: Dict[str, Any],
+    watchlist_id: Optional[str] = None,
+    name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Save CSV data + AI analysis. Tries Postgres first, JSON file fallback."""
+    import uuid as _uuid
     tickers = extract_tickers(csv_data, analysis)
+    if not watchlist_id:
+        watchlist_id = str(_uuid.uuid4())[:8]
     if not name:
-        # Auto-name from tickers: "AAPL, NVDA, CRDO +5"
         if len(tickers) <= 3:
-            name = ", ".join(tickers[:3]) if tickers else "Watchlist"
+            name = ", ".join(tickers) if tickers else "Watchlist"
         else:
-            name = ", ".join(tickers[:3]) + f" +{len(tickers)-3}"
+            name = ", ".join(tickers[:3]) + f" +{len(tickers) - 3}"
     saved_at = datetime.now(timezone.utc).isoformat()
 
-    # Try PostgreSQL first (survives deploys)
+    # Try PostgreSQL first (survives redeploys)
     try:
-        from data.pg_storage import watchlist_write, is_available as pg_available
-        if pg_available():
+        from data.pg_storage import watchlist_write, is_available
+        if is_available():
             ok = watchlist_write(watchlist_id, name, csv_data, analysis, tickers)
             if ok:
-                print(f"[WATCHLIST] Saved to PostgreSQL id={watchlist_id} name={name} ({len(tickers)} tickers)")
-                return {"success": True, "watchlist_id": watchlist_id, "name": name, "saved_at": saved_at, "ticker_count": len(tickers)}
+                print(f"[Watchlist] \u2705 Saved '{name}' (id={watchlist_id}, {len(tickers)} tickers) to PostgreSQL")
+                return {"success": True, "saved_at": saved_at, "ticker_count": len(tickers), "watchlist_id": watchlist_id, "name": name}
     except Exception as e:
-        print(f"[WATCHLIST] PostgreSQL save failed ({e}), falling back to JSON file")
+        print(f"[Watchlist] PostgreSQL save failed ({e}), falling back to JSON")
 
-    # Fallback: JSON file
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    store = {"id": watchlist_id, "name": name, "csv_data": csv_data, "analysis": analysis, "tickers": tickers, "saved_at": saved_at}
-    _WATCHLIST_FILE.write_text(json.dumps(store, default=str))
-    print(f"[WATCHLIST] Saved to JSON file id={watchlist_id} ({len(tickers)} tickers)")
-    return {"success": True, "watchlist_id": watchlist_id, "name": name, "saved_at": saved_at, "ticker_count": len(tickers)}
+    # Fallback: JSON file (single store, overwrites)
+    store = {"id": watchlist_id, "name": name, "tickers": tickers, "csv_data": csv_data, "analysis": analysis, "saved_at": saved_at}
+    _write_store(store)
+    print(f"[Watchlist] Saved '{name}' (id={watchlist_id}) to JSON file")
+    return {"success": True, "saved_at": saved_at, "ticker_count": len(tickers), "watchlist_id": watchlist_id, "name": name}
 
 
-def load_watchlist(watchlist_id: str = None) -> Optional[Dict[str, Any]]:
-    """Load a saved watchlist by id. If no id given, returns the most recently updated one.
-    PostgreSQL first, JSON file fallback."""
+def load_watchlist(watchlist_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Load a specific watchlist by ID, or the most recent one if no ID given."""
     # Try PostgreSQL first
     try:
-        from data.pg_storage import watchlist_read, watchlist_list as pg_watchlist_list, is_available as pg_available
-        if pg_available():
+        from data.pg_storage import watchlist_read, watchlist_list as pg_wl_list, is_available
+        if is_available():
             if watchlist_id:
                 data = watchlist_read(watchlist_id)
+                if data:
+                    print(f"[Watchlist] Loaded '{data.get('name')}' from PostgreSQL")
+                    return data
             else:
-                # No id specified — return the most recently updated watchlist
-                all_wl = pg_watchlist_list()
-                if all_wl:
-                    data = watchlist_read(all_wl[0]["id"])
-                else:
-                    data = None
-            if data is not None:
-                print(f"[WATCHLIST] Loaded from PostgreSQL id={data.get('id')} ({len(data.get('tickers', []))} tickers)")
-                return data
+                entries = pg_wl_list()
+                if entries:
+                    data = watchlist_read(entries[0]["id"])
+                    if data:
+                        print(f"[Watchlist] Loaded most recent '{data.get('name')}' from PostgreSQL")
+                        return data
+            return None
     except Exception as e:
-        print(f"[WATCHLIST] PostgreSQL load failed ({e}), falling back to JSON file")
+        print(f"[Watchlist] PostgreSQL load failed ({e}), falling back to JSON")
 
     # Fallback: JSON file
     store = _read_store()
@@ -150,48 +153,38 @@ def load_watchlist(watchlist_id: str = None) -> Optional[Dict[str, Any]]:
 
 def list_watchlists() -> List[Dict[str, Any]]:
     """List all saved watchlists (metadata only)."""
-    # Try PostgreSQL
     try:
-        from data.pg_storage import watchlist_list as pg_watchlist_list, is_available as pg_available
-        if pg_available():
-            return pg_watchlist_list()
+        from data.pg_storage import watchlist_list as pg_wl_list, is_available
+        if is_available():
+            return pg_wl_list()
     except Exception as e:
-        print(f"[WATCHLIST] PostgreSQL list failed: {e}")
-
-    # Fallback: scan JSON file
-    results = []
-    if _WATCHLIST_FILE.exists():
-        try:
-            store = json.loads(_WATCHLIST_FILE.read_text())
-            results.append({
-                "id": store.get("id", "default"),
-                "name": store.get("name", "Watchlist"),
-                "ticker_count": len(store.get("tickers", [])),
-                "saved_at": store.get("saved_at", ""),
-                "updated_at": store.get("saved_at", ""),
-            })
-        except Exception:
-            pass
-    return results
+        print(f"[Watchlist] PostgreSQL list failed: {e}")
+    # Fallback: single JSON file
+    store = _read_store()
+    if store and store.get("tickers"):
+        return [{
+            "id": store.get("id", "default"),
+            "name": store.get("name", "Watchlist"),
+            "ticker_count": len(store.get("tickers", [])),
+            "saved_at": store.get("saved_at", ""),
+        }]
+    return []
 
 
-def clear_watchlist(watchlist_id: str = 'default') -> Dict[str, Any]:
-    """Delete a specific watchlist by id."""
+def clear_watchlist(watchlist_id: Optional[str] = None) -> Dict[str, Any]:
+    """Delete a specific watchlist, or all if no ID given."""
     cleared = False
-    # Try PostgreSQL
     try:
-        from data.pg_storage import watchlist_delete, is_available as pg_available
-        if pg_available():
+        from data.pg_storage import watchlist_delete, is_available
+        if is_available() and watchlist_id:
             watchlist_delete(watchlist_id)
             cleared = True
+            print(f"[Watchlist] Deleted {watchlist_id} from PostgreSQL")
     except Exception as e:
-        print(f"[WATCHLIST] PostgreSQL clear failed: {e}")
-
-    # Also clear JSON file if it matches
-    if watchlist_id == 'default' and _WATCHLIST_FILE.exists():
+        print(f"[Watchlist] PostgreSQL delete failed: {e}")
+    if _WATCHLIST_FILE.exists():
         _WATCHLIST_FILE.unlink()
         cleared = True
-
     return {"success": cleared}
 
 
@@ -284,7 +277,7 @@ async def _fetch_news_perplexity(ticker: str) -> List[Dict[str, Any]]:
 
 
 async def fetch_news_for_ticker(ticker: str, client: httpx.AsyncClient) -> List[Dict[str, Any]]:
-    """Fetch news for a single ticker via Yahoo Finance RSS, with Google News fallback."""
+    """Fetch news for a single ticker. Tries RSS feeds first, falls back to Perplexity."""
     # Check cache
     cached = _news_cache.get(ticker)
     if cached and (time.time() - cached["fetched_at"]) < _NEWS_CACHE_TTL:
@@ -295,19 +288,23 @@ async def fetch_news_for_ticker(ticker: str, client: httpx.AsyncClient) -> List[
     # Try Yahoo Finance RSS
     yahoo_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
     try:
-        resp = await client.get(yahoo_url, timeout=10.0)
+        resp = await client.get(yahoo_url, timeout=8.0)
         if resp.status_code == 200:
             articles = _parse_rss_xml(resp.text, "Yahoo Finance")
+            if articles:
+                print(f"[WATCHLIST-NEWS] Yahoo RSS: {len(articles)} articles for {ticker}")
     except Exception as e:
         print(f"[WATCHLIST-NEWS] Yahoo RSS failed for {ticker}: {e}")
 
-    # Fallback to Google News if Yahoo returned nothing
+    # Try Google News RSS if Yahoo returned nothing
     if not articles:
-        google_url = f"https://news.google.com/rss/search?q={ticker}+stock&hl=en-US&gl=US&ceid=US:en"
+        google_url = f"https://news.google.com/rss/search?q={ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"
         try:
-            resp = await client.get(google_url, timeout=10.0)
+            resp = await client.get(google_url, timeout=8.0)
             if resp.status_code == 200:
                 articles = _parse_rss_xml(resp.text, "Google News")
+                if articles:
+                    print(f"[WATCHLIST-NEWS] Google News RSS: {len(articles)} articles for {ticker}")
         except Exception as e:
             print(f"[WATCHLIST-NEWS] Google News RSS failed for {ticker}: {e}")
 
@@ -338,60 +335,6 @@ async def fetch_news_for_tickers(tickers: List[str]) -> Dict[str, List[Dict[str,
         else:
             news_map[ticker] = result
     return news_map
-
-
-# ── Perplexity Sonar (real-time web search context) ────────────────────────
-
-
-async def _fetch_sonar_context_for_tickers(tickers: List[str]) -> str:
-    """
-    Use Perplexity Sonar to get real-time web search context for all tickers at once.
-    Returns a formatted string ready to inject into the Claude analysis prompt.
-    """
-    api_key = os.environ.get("PERPLEXITY_API_KEY", "")
-    if not api_key:
-        print("[WATCHLIST-REFRESH] No PERPLEXITY_API_KEY — skipping live news context")
-        return ""
-
-    ticker_list = ", ".join(tickers)
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                "https://api.perplexity.ai/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "sonar",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": (
-                                f"For each of the following stocks: {ticker_list}\n\n"
-                                "Search the web and provide the most important CURRENT developments from the past 2 weeks for each ticker. "
-                                "Focus on: earnings surprises, contract wins, product launches, analyst upgrades/downgrades, "
-                                "regulatory decisions, CEO changes, partnerships, short squeeze activity, institutional buying/selling, "
-                                "and any other market-moving events. "
-                                "Format your response EXACTLY like this for each ticker:\n"
-                                "TICKER: [headline 1] | [headline 2] | [headline 3]\n"
-                                "One line per ticker. Be specific and factual. Only include things that actually happened recently."
-                            ),
-                        }
-                    ],
-                    "search_recency_filter": "month",
-                    "return_citations": False,
-                },
-            )
-        if resp.status_code != 200:
-            print(f"[WATCHLIST-REFRESH] Perplexity sonar error: {resp.status_code}")
-            return ""
-        content = resp.json()["choices"][0]["message"]["content"].strip()
-        print(f"[WATCHLIST-REFRESH] Perplexity sonar returned {len(content)} chars of news context")
-        return content
-    except Exception as e:
-        print(f"[WATCHLIST-REFRESH] Perplexity sonar failed: {e}")
-        return ""
 
 
 # ── AI Analysis (uses the existing TradingAgent) ────────────────────────────
@@ -487,54 +430,6 @@ def _build_refresh_prompt(
     return prompt
 
 
-def _build_refresh_prompt_with_context(
-    csv_data: List[Dict[str, str]],
-    tickers: List[str],
-    news_context: str,
-) -> str:
-    """Build refresh prompt using raw Perplexity sonar context instead of RSS news map."""
-    csv_table = _build_csv_table(csv_data)
-
-    news_section = (
-        f"=== CURRENT MARKET INTELLIGENCE (live web search) ===\n{news_context}\n"
-        if news_context
-        else "=== CURRENT MARKET INTELLIGENCE ===\nNo live news context available — rely on fundamental analysis.\n"
-    )
-
-    return (
-        "You are a world-class equity analyst with access to real-time market intelligence. "
-        "CRITICAL: Go BEYOND the data in the CSV. Use both the CSV fundamentals AND the live news context below "
-        "to produce a high-signal analysis. The news context is from a live web search — treat it as current fact.\n\n"
-        f"=== WATCHLIST DATA ===\n{csv_table}\n\n"
-        f"{news_section}\n"
-        "Factor in ALL of the above when assessing sentiment, catalysts, timing, and conviction for each stock.\n\n"
-        "Produce a JSON response with this EXACT flat structure (no nested 'categories' object):\n"
-        "{\n"
-        '  "display_type": "csv_watchlist_analysis",\n'
-        '  "summary": "One paragraph summary of what this watchlist represents and current market context",\n'
-        '  "analysis_date": "<today ISO date>",\n'
-        '  "market_context": "2-3 sentences on macro environment relevant to these stocks",\n'
-        '  "top_buys": [ <stock objects> ],\n'
-        '  "most_undervalued": [ <stock objects> ],\n'
-        '  "best_catalysts": [ <stock objects> ],\n'
-        '  "hidden_gems": [ <stock objects> ],\n'
-        '  "most_revolutionary": [ <stock objects> ],\n'
-        '  "right_sector": [ <stock objects> ],\n'
-        '  "avoid_list": [ {"ticker": "...", "name": "...", "reason": "..."} ]\n'
-        "}\n\n"
-        "Each stock object must have: ticker, name, signal (STRONG BUY/BUY/HOLD/AVOID), score (1-10), "
-        "thesis (2-3 sentences), sentiment, sentiment_reason, catalysts (array), "
-        "valuation ({ps_ratio, pe_ratio, pfcf, ev_revenue, vs_peers}), moat, why_now.\n\n"
-        "CRITICAL RULES:\n"
-        "- Do NOT rank by market cap or revenue size\n"
-        "- Focus on asymmetric opportunity, undervaluation relative to growth, and timing\n"
-        "- Use the live news context to identify stocks with recent catalysts not visible in the CSV numbers\n"
-        "- A stock can appear in multiple categories if it qualifies\n"
-        "- Respond ONLY with valid JSON. No markdown, no explanation, no code blocks.\n\n"
-        f"User request: Refresh analysis for my watchlist: {', '.join(tickers)}"
-    )
-
-
 def _build_stock_deep_dive_prompt(
     ticker: str,
     csv_row: Dict[str, str],
@@ -613,23 +508,23 @@ async def run_ai_analysis(prompt: str, agent: Any) -> Dict[str, Any]:
         return {"error": f"AI analysis failed: {str(e)}"}
 
 
-async def refresh_watchlist_analysis(agent: Any, watchlist_id: str = None) -> Dict[str, Any]:
+async def refresh_watchlist_analysis(agent: Any, watchlist_id: Optional[str] = None) -> Dict[str, Any]:
     """Reload saved CSV, fetch news, re-run AI with news context, save results."""
     store = load_watchlist(watchlist_id)
     if not store:
         return {"error": "No watchlist saved. Upload a CSV first."}
 
-    wl_id = store.get("id", watchlist_id or "default")
-    wl_name = store.get("name", "Watchlist")
     csv_data = store["csv_data"]
     tickers = store["tickers"]
+    store_id = store.get("id", watchlist_id or "default")
+    store_name = store.get("name", "Watchlist")
 
-    # Fetch live news context via Perplexity sonar
-    print(f"[WATCHLIST-REFRESH] Fetching sonar context for {len(tickers)} tickers...")
-    news_context = await _fetch_sonar_context_for_tickers(tickers)
+    # Fetch news concurrently for all tickers
+    print(f"[WATCHLIST-REFRESH] Fetching news for {len(tickers)} tickers...")
+    news_map = await fetch_news_for_tickers(tickers)
 
-    # Build enhanced prompt with live news context
-    prompt = _build_refresh_prompt_with_context(csv_data, tickers, news_context)
+    # Build enhanced prompt with news
+    prompt = _build_refresh_prompt(csv_data, tickers, news_map)
     print(f"[WATCHLIST-REFRESH] Running AI analysis ({len(prompt)} chars)...")
 
     # Run AI
@@ -638,11 +533,11 @@ async def refresh_watchlist_analysis(agent: Any, watchlist_id: str = None) -> Di
         return analysis
 
     # Save updated analysis back to the same watchlist
-    save_watchlist(csv_data, analysis, watchlist_id=wl_id, name=wl_name)
+    save_watchlist(csv_data, analysis, watchlist_id=store_id, name=store_name)
     return analysis
 
 
-async def get_stock_detail(ticker: str, agent: Any, watchlist_id: str = None) -> Dict[str, Any]:
+async def get_stock_detail(ticker: str, agent: Any, watchlist_id: Optional[str] = None) -> Dict[str, Any]:
     """Get enriched detail for a single stock: CSV data + news + AI deep dive."""
     store = load_watchlist(watchlist_id)
     if not store:
