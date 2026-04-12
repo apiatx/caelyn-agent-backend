@@ -145,7 +145,17 @@ def _safe_str(val: Any, default: str = "0") -> str:
 
 
 def _taostats_headers() -> dict[str, str]:
-    return {"Authorization": TAOSTATS_API_KEY or ""}
+    return {
+        "Authorization": TAOSTATS_API_KEY or "",
+        "accept": "application/json",
+        # Browser-like User-Agent required — Cloudflare blocks default Python/httpx agents
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
 
 
 def _taoapp_headers() -> dict[str, str]:
@@ -867,8 +877,16 @@ async def blocks_history_endpoint(
     data_points: list[dict[str, Any]] = []
 
     async with httpx.AsyncClient() as client:
+        import time as _time
+        now_ts = int(_time.time())
+        # TaoStats block/interval/v1 requires unix timestamp_start + timestamp_end
+        interval_seconds = 86400 if scale == "days" else 3600
+        start_ts = now_ts - (interval_seconds * (points + 1))
         interval_raw = await _taostats_get(client, "/api/block/interval/v1", {
-            "frequency": frequency, "limit": points + 1,
+            "frequency": frequency,
+            "limit": points + 1,
+            "timestamp_start": str(start_ts),
+            "timestamp_end": str(now_ts),
         }, retry_on_429=False)
 
         interval_data = _extract_data(interval_raw)
@@ -991,19 +1009,30 @@ async def metagraph_endpoint(netuid: int):
         for item in data:
             if not isinstance(item, dict):
                 continue
+            # TaoStats uses "validator_trust" for vtrust; fallback to "vtrust" for compatibility
+            vtrust = _safe_float(item.get("validator_trust") or item.get("vtrust", 0))
+            # Alpha stake (in rao) is the primary stake metric; fall back to "stake"
+            alpha_stake_rao = _safe_float(item.get("alpha_stake") or item.get("total_alpha_stake") or item.get("stake", 0))
             normalized.append({
                 "uid": item.get("uid", 0),
                 "hotkey": _parse_hotkey(item.get("hotkey")),
                 "coldkey": _parse_hotkey(item.get("coldkey")),
-                "vtrust": _safe_float(item.get("vtrust", 0)),
-                "stake": _safe_float(item.get("stake", 0)),
+                "vtrust": vtrust,
+                "validator_trust": vtrust,
+                "stake": alpha_stake_rao / 1e9,  # convert rao → TAO
+                "stake_tao": round(alpha_stake_rao / 1e9, 4),
                 "emission": _safe_float(item.get("emission", 0)),
-                "stake_weight": _safe_float(item.get("stake_weight", 0)),
-                "active": item.get("active", item.get("is_active", True)),
+                "daily_reward_tao": round(_safe_float(item.get("daily_reward", 0)) / 1e9, 4),
+                "stake_weight": _safe_float(item.get("root_weight") or item.get("stake_weight", 0)),
+                "active": bool(item.get("active", item.get("is_active", True))),
+                "validator_permit": bool(item.get("validator_permit", False)),
                 "trust": _safe_float(item.get("trust", 0)),
                 "incentive": _safe_float(item.get("incentive", 0)),
                 "dividends": _safe_float(item.get("dividends", 0)),
                 "consensus": _safe_float(item.get("consensus", 0)),
+                "rank": item.get("rank"),
+                "registered_at_block": item.get("registered_at_block"),
+                "is_immunity_period": bool(item.get("is_immunity_period", False)),
             })
 
     result = {"netuid": netuid, "data": normalized}
