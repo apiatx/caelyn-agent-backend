@@ -23,6 +23,7 @@ from services.watchlist_service import (
     get_stock_detail,
     _WATCHLIST_FILE,
 )
+from services.watchlist_analysis import run_analysis_pipeline
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
@@ -37,6 +38,13 @@ class WatchlistSaveRequest(BaseModel):
     name: Optional[str] = None
 
 
+class WatchlistAnalyzeRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    tickers: Optional[List[str]] = None
+    csv_data: Optional[List[Dict[str, Any]]] = None
+    watchlist_id: Optional[str] = None
+
+
 # ── Helper ──────────────────────────────────────────────────────────────────
 
 def _get_agent():
@@ -44,6 +52,13 @@ def _get_agent():
     if main.agent is None:
         raise HTTPException(status_code=503, detail="Server is still starting up.")
     return main.agent
+
+
+def _get_data_service():
+    import main
+    if main.data_service is None:
+        raise HTTPException(status_code=503, detail="Server is still starting up.")
+    return main.data_service
 
 
 # ── Endpoints — STATIC paths first, then parameterized ──────────────────────
@@ -109,6 +124,52 @@ async def refresh_endpoint():
     return result
 
 
+@router.post("/analyze")
+async def analyze_endpoint(body: WatchlistAnalyzeRequest):
+    """
+    Run multi-source parallel analysis pipeline on a watchlist.
+
+    Accepts either:
+    - tickers + csv_data directly in the request body
+    - watchlist_id to load from Postgres
+
+    Fires all 5 data sources in parallel (Grok, Gemini, Claude, SEC Edgar, TA),
+    then synthesizes through Claude with intelligence rules.
+    Returns 6 sections × 4 tickers structured JSON.
+    """
+    agent = _get_agent()
+    data_service = _get_data_service()
+
+    tickers = body.tickers or []
+    csv_data = body.csv_data or []
+
+    # If watchlist_id provided, load tickers and CSV from stored watchlist
+    if body.watchlist_id:
+        store = load_watchlist(body.watchlist_id)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Watchlist not found")
+        if not tickers:
+            tickers = store.get("tickers", [])
+        if not csv_data:
+            csv_data = store.get("csv_data", [])
+    elif not tickers and csv_data:
+        # Extract tickers from CSV data
+        tickers = extract_tickers(csv_data)
+
+    if not tickers:
+        raise HTTPException(
+            status_code=400,
+            detail="No tickers provided. Send tickers, csv_data, or watchlist_id.",
+        )
+
+    result = await run_analysis_pipeline(tickers, csv_data, agent, data_service)
+
+    if isinstance(result, dict) and result.get("error") and "sections" not in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return result
+
+
 @router.get("")
 async def get_endpoint():
     """Return the most recent saved watchlist, or {empty: true}."""
@@ -150,6 +211,30 @@ async def get_by_id_endpoint(watchlist_id: str):
     if store is None:
         return {"empty": True}
     return store
+
+
+@router.post("/{watchlist_id}/analyze")
+async def analyze_by_id_endpoint(watchlist_id: str):
+    """Run multi-source parallel analysis pipeline for a specific watchlist."""
+    agent = _get_agent()
+    data_service = _get_data_service()
+
+    store = load_watchlist(watchlist_id)
+    if store is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    tickers = store.get("tickers", [])
+    csv_data = store.get("csv_data", [])
+
+    if not tickers:
+        raise HTTPException(status_code=400, detail="Watchlist has no tickers")
+
+    result = await run_analysis_pipeline(tickers, csv_data, agent, data_service)
+
+    if isinstance(result, dict) and result.get("error") and "sections" not in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return result
 
 
 @router.post("/{watchlist_id}/refresh")
