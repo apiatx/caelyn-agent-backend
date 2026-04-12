@@ -133,6 +133,9 @@ def _asset_to_row(asset: ScreenerAsset, rank: int) -> dict:
         "premium":          asset.premium,   # already decimal from Hyperliquid
         # funding: hourly rate decimal (0.0001 = 0.01%/hr)
         "funding":          asset.funding,
+        # funding8hPct: 8-hour funding rate as a percentage (what Hyperliquid displays)
+        # e.g. raw=0.000935/hr → funding8hPct=0.748 (meaning 0.748% per 8h)
+        "funding8hPct":     round((asset.funding or 0) * 8 * 100, 4),
         "predictedFunding": None,            # not available in public API
 
         # ── Open interest ─────────────────────────────────────────────────

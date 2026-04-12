@@ -1043,6 +1043,7 @@ def build_signal_sections(
             "markPrice":       a.mark_px,
             "change24hPct":    round(a.pct_change_24h / 100, 6) if a.pct_change_24h is not None else None,
             "funding":         a.funding,
+            "funding8hPct":    round((a.funding or 0) * 8 * 100, 4),
             "fundingAnnPct":   round(ann_fund * 100, 3),
             "openInterest":    a.open_interest_usd,
             "volume24h":       a.day_ntl_vlm,
