@@ -1,0 +1,40 @@
+Add a new endpoint: POST /api/watchlist/stock/{ticker}/deep-dive
+
+Request body:
+
+{
+  "models": ["grok", "gemini", "claude"],
+  "report_model": "claude"
+}
+
+models is a list containing any combination of "grok", "gemini", "claude_gpt". report_model is either "claude" or "gpt" — it specifies which reasoning model to use for the final synthesis.
+
+What each model should do:
+
+Grok (xAI): Query Grok API for real-time X/Twitter sentiment, trending mentions, and breaking news about the ticker. Return a 2–4 paragraph summary of what the X/Twitter crowd is saying.
+Gemini: Use Gemini's web search / Google Lens capabilities to pull recent analyst upgrades, Google News headlines, and web intelligence about the ticker. Return 2–4 paragraphs of what the web is saying.
+Claude or GPT (whichever report_model specifies): Given the Grok and Gemini outputs plus your own knowledge, write a structured deep analysis. This should include a bull case, bear case, key risk factors (3–5 bullet points), technical outlook, and analyst sentiment summary.
+Response format:
+
+{
+  "grok": "string — Grok's X/Twitter sentiment analysis",
+  "gemini": "string — Gemini's Google/web intelligence",
+  "claude": "string — Claude deep analysis (or null if GPT used)",
+  "gpt": "string — GPT deep analysis (or null if Claude used)",
+  "summary": "string — 2-3 sentence combined summary",
+  "bull_case": "string — bull case paragraph",
+  "bear_case": "string — bear case paragraph",
+  "risk_factors": ["string", "string", "string"],
+  "technical_outlook": "string",
+  "analyst_sentiment": "string"
+}
+
+Notes:
+
+Run the selected models in parallel (asyncio.gather) to keep latency down
+If a model isn't in the models list, skip it and omit its key from the response (or set to null)
+Use the ticker symbol to anchor all queries — e.g. "WDC stock analysis", "WDC $WDC Twitter sentiment"
+If a model call fails, catch the exception and return a short error string for that model's key rather than crashing the whole endpoint
+Timeout per model: 60 seconds
+The frontend proxy allows up to 120 seconds total
+Also confirm: GET /api/watchlist/{id} returns tickers as a list of strings (needed for the news fetch). Example: {"id": "f715866e", "tickers": ["WDC", "AAPL", ...], "analysis": {...}}
