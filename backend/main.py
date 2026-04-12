@@ -3154,6 +3154,15 @@ async def create_watchlist_endpoint(
     if not csv_rows:
         csv_rows = [{"Symbol": t} for t in tickers]
 
+    # Enrich with fundamentals from FMP + SEC EDGAR when CSV data is missing them
+    # (manual ticker-entry uploads have only a Symbol column — no market data)
+    try:
+        from services.fundamentals_enricher import enrich_if_needed
+        from config import FMP_API_KEY as _fmp_key
+        csv_rows = await enrich_if_needed(tickers, csv_rows, fmp_api_key=_fmp_key)
+    except Exception as _enrich_err:
+        print(f"[API] Fundamentals enrichment skipped: {_enrich_err}")
+
     print(f"[API] Creating watchlist '{name}' id={watchlist_id} tickers={tickers}")
 
     try:
