@@ -4,28 +4,31 @@ Hyperliquid Screener — WebSocket consumer + boot sequence.
 Boot sequence (fast path — sets is_ready in ~30-60s):
   1. REST: fetch metaAndAssetCtxs → initialize crypto perp assets
   2. REST: fetch spotMetaAndAssetCtxs → extend with spot assets
+  2b. Disk: preload HIP-3 cache → stocks/commodities/pre-IPO available instantly
   3. REST: fetch allMids → patch mid prices
   4. REST: fetch 1h candles for top-40 assets → volatility/momentum
   5. REST: fetch 5m candles for top-20 assets → short-term vol/momentum
   6. REST: fetch L2 books for top-20 assets → book depth features
   7. Run full feature pass → compute all signals
-  8. Mark state.is_ready = True  ← fast: crypto perps only
+  8. Mark state.is_ready = True  ← fast: crypto perps + HIP-3 from cache
   9. Connect WebSocket → subscribe to allMids + activeAssetCtx + bbo + trades
 
 Post-boot enrichment (background, non-blocking):
- 10. Load HIP-3 DEX universes (equity/commodity/index/pre-IPO perps)
+ 10. Load HIP-3 DEX universes fresh from API + save to disk cache
  11. Load 1d candles for top-50 crypto perps (TSMOM signals)
- 12. Run feature pass to include new HIP-3 assets
+ 12. Run feature pass to include refreshed HIP-3 assets
 
 Background tasks (continuous):
  13. Periodic candle refresh (every 5 min) — refreshes 1h, 5m, 1d
  14. Periodic feature recompute (every 60s)
+ 15. Periodic HIP-3 refresh (every 5 min) — refreshes prices, saves disk cache
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import time
+from pathlib import Path
 from typing import Optional
 
 import websockets
@@ -33,6 +36,7 @@ import websockets.exceptions
 
 from .client import HyperliquidRestClient
 from .feature_engine import run_full_feature_pass
+from .models import ScreenerAsset
 from .normalizer import (
     build_hip3_universe,
     build_perp_universe,
@@ -46,6 +50,71 @@ from .normalizer import (
 from .state import HyperliquidState
 
 _WS_URL = "wss://api.hyperliquid.xyz/ws"
+
+# ── Disk cache for HIP-3 assets ───────────────────────────────────────────────
+_HIP3_CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "hyperliquid_hip3_cache.json"
+_HIP3_CACHE_MAX_AGE_S = 86400   # 24 hours — still useful even if stale; API refresh overwrites
+
+
+def _save_hip3_cache(state: HyperliquidState) -> None:
+    """Persist all HIP-3 assets (coin contains ':') to disk after each enrich cycle."""
+    try:
+        hip3_assets = {
+            coin: asset.model_dump()
+            for coin, asset in state.assets.items()
+            if ":" in coin
+        }
+        if not hip3_assets:
+            return
+        _HIP3_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "saved_at": time.time(),
+            "asset_count": len(hip3_assets),
+            "assets": hip3_assets,
+        }
+        tmp = _HIP3_CACHE_PATH.with_suffix(".tmp")
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        tmp.replace(_HIP3_CACHE_PATH)
+        print(f"[HL][hip3_cache] Saved {len(hip3_assets)} HIP-3 assets to disk")
+    except Exception as exc:
+        print(f"[HL][hip3_cache] Save error: {exc}")
+
+
+def _preload_hip3_cache(state: HyperliquidState) -> int:
+    """
+    Load HIP-3 assets from disk if the cache exists and is < 24 h old.
+    Returns the number of assets loaded (0 if cache missing/stale/error).
+    Must be called after perp + spot universe is built so we don't overwrite crypto.
+    """
+    try:
+        if not _HIP3_CACHE_PATH.exists():
+            print("[HL][hip3_cache] No disk cache found — HIP-3 will load from API after boot")
+            return 0
+        with open(_HIP3_CACHE_PATH) as f:
+            payload = json.load(f)
+        age_s = time.time() - payload.get("saved_at", 0)
+        if age_s > _HIP3_CACHE_MAX_AGE_S:
+            print(f"[HL][hip3_cache] Cache too old ({age_s / 3600:.1f}h) — will refresh from API")
+            return 0
+        assets_raw = payload.get("assets", {})
+        count = 0
+        for coin, data in assets_raw.items():
+            if ":" not in coin:
+                continue   # safety: only accept HIP-3 prefixed coins
+            if coin in state.assets:
+                continue   # never overwrite a crypto perp
+            try:
+                state.assets[coin] = ScreenerAsset(**data)
+                state.universe_allowlist.add(coin)
+                count += 1
+            except Exception:
+                pass
+        print(f"[HL][hip3_cache] Preloaded {count} HIP-3 assets from disk (age={age_s / 60:.1f} min)")
+        return count
+    except Exception as exc:
+        print(f"[HL][hip3_cache] Load error: {exc}")
+        return 0
 
 # Subscription thresholds
 _CTX_SUBS   = 50   # activeAssetCtx subscriptions (top N by OI)
@@ -76,14 +145,15 @@ async def boot_and_run(state: HyperliquidState):
         state.is_ready = True
         state.boot_ts = time.time()
 
-        # Run all long-lived tasks concurrently
-        # Launch post-boot enrichment as a concurrent task alongside the infinite loops.
-        # It loads HIP-3 DEX assets and 1d candles without blocking is_ready.
+        # Run all long-lived tasks concurrently.
+        # _post_boot_enrich loads fresh HIP-3 data from API + saves disk cache.
+        # _periodic_hip3_refresh then keeps HIP-3 prices live every 5 min.
         await asyncio.gather(
             _ws_consumer(state),
             _periodic_candle_refresh(state, client),
             _periodic_feature_recompute(state),
             _post_boot_enrich(state, client),
+            _periodic_hip3_refresh(state, client),
             return_exceptions=True,
         )
     except Exception as e:
@@ -126,6 +196,12 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
         print(f"[HL][boot] Loaded {len(spot_assets)} spot assets | universe total={len(state.universe_allowlist)}")
     except Exception as e:
         print(f"[HL][boot] Spot universe error: {e}")
+
+    # 2b. Preload HIP-3 from disk cache — stocks/commodities/pre-IPO available before WS connects
+    print("[HL][boot] Preloading HIP-3 disk cache...")
+    hip3_cached = _preload_hip3_cache(state)
+    if hip3_cached > 0:
+        print(f"[HL][boot] HIP-3 disk cache: {hip3_cached} assets preloaded (full API refresh in background)")
 
     # 3. All mids
     try:
@@ -233,7 +309,8 @@ async def _enrich_hip3(state: HyperliquidState, client: HyperliquidRestClient):
             return_exceptions=True,
         )
 
-        hip3_total = 0
+        hip3_new = 0
+        hip3_updated = 0
         seen_display: set[str] = set()
         for prefix, result in zip(hip3_prefixes, hip3_ctxs_list):
             if isinstance(result, Exception):
@@ -241,19 +318,40 @@ async def _enrich_hip3(state: HyperliquidState, client: HyperliquidRestClient):
                 continue
             hip3_assets = build_hip3_universe(prefix, result)
             for coin, asset in hip3_assets.items():
-                if coin not in state.assets:
+                if coin in state.assets:
+                    # Refresh price fields on already-known HIP-3 assets (periodic refresh path)
+                    existing = state.assets[coin]
+                    if ":" in coin:   # only update HIP-3, never crypto perps
+                        state.assets[coin] = existing.model_copy(update={
+                            "mark_px": asset.mark_px if asset.mark_px is not None else existing.mark_px,
+                            "mid_px": asset.mid_px if asset.mid_px is not None else existing.mid_px,
+                            "oracle_px": asset.oracle_px if asset.oracle_px is not None else existing.oracle_px,
+                            "prev_day_px": asset.prev_day_px if asset.prev_day_px is not None else existing.prev_day_px,
+                            "pct_change_24h": asset.pct_change_24h if asset.pct_change_24h is not None else existing.pct_change_24h,
+                            "funding": asset.funding if asset.funding is not None else existing.funding,
+                            "open_interest": asset.open_interest if asset.open_interest is not None else existing.open_interest,
+                            "open_interest_usd": asset.open_interest_usd if asset.open_interest_usd is not None else existing.open_interest_usd,
+                            "day_ntl_vlm": asset.day_ntl_vlm if asset.day_ntl_vlm is not None else existing.day_ntl_vlm,
+                            "momentum_24h": asset.momentum_24h if asset.momentum_24h is not None else existing.momentum_24h,
+                            "last_updated_ts": time.time(),
+                        })
+                        hip3_updated += 1
+                else:
                     if asset.display_name in seen_display:
                         continue
                     seen_display.add(asset.display_name)
                     state.assets[coin] = asset
                     state.universe_allowlist.add(coin)
-                    hip3_total += 1
-        print(f"[HL][enrich] HIP-3: admitted {hip3_total} assets across {len(hip3_prefixes)} DEXes")
+                    hip3_new += 1
+        print(f"[HL][enrich] HIP-3: {hip3_new} new + {hip3_updated} refreshed across {len(hip3_prefixes)} DEXes")
 
         mids = await client.get_all_mids()
         patch_from_all_mids(state, mids)
         run_full_feature_pass(state)
         print("[HL][enrich] Feature pass complete after HIP-3 load")
+
+        # Persist to disk so next boot has HIP-3 immediately (no API wait)
+        _save_hip3_cache(state)
     except Exception as e:
         print(f"[HL][enrich] HIP-3 error: {e}")
 
@@ -471,6 +569,23 @@ async def _periodic_feature_recompute(state: HyperliquidState):
             _save_score_snapshots(state)
         except Exception as e:
             print(f"[HL][feature_recompute] Error: {e}")
+
+
+async def _periodic_hip3_refresh(state: HyperliquidState, client: HyperliquidRestClient):
+    """
+    Every 5 minutes: refresh HIP-3 asset prices from the API and update the disk cache.
+    This keeps stocks/commodities/pre-IPO/indices live and ensures the cache is warm
+    for instant availability on the next server restart.
+    Waits 8 minutes initially to avoid overlapping with _post_boot_enrich.
+    """
+    await asyncio.sleep(480)   # 8 min head-start for post_boot_enrich to finish first
+    while not _shutdown:
+        if state.is_ready:
+            try:
+                await _enrich_hip3(state, client)
+            except Exception as exc:
+                print(f"[HL][hip3_periodic] Error: {exc}")
+        await asyncio.sleep(300)   # 5 minutes
 
 
 def _save_oi_snapshots(state: HyperliquidState):

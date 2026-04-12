@@ -20,6 +20,20 @@ FastAPI Python backend (port 5000) with two main tracks:
 | `backend/services/hyperliquid/state.py` | In-memory state (assets, candles, trades, books, OI history) |
 | `backend/services/hyperliquid/models.py` | ScreenerAsset Pydantic model |
 
+## HIP-3 Disk-Persistent Cache
+
+Stocks, commodities, pre-IPO, and indices (HIP-3 DEX assets) are now loaded instantly on every server restart from a disk cache at `backend/data/hyperliquid_hip3_cache.json`. This eliminates the previous 5-minute wait.
+
+**Boot flow:**
+1. Crypto perps + spot load from Hyperliquid REST API (~10s)
+2. HIP-3 assets load from disk cache (`<25ms`) — stocks/equities/commodities immediately visible
+3. Background task (`_post_boot_enrich`) refreshes HIP-3 from the live API and overwrites the cache
+4. `_periodic_hip3_refresh` runs every 5 minutes to keep prices live and cache warm
+
+**Cache file:** `backend/data/hyperliquid_hip3_cache.json` (~100+ assets, 24h TTL)  
+**First-boot behavior:** No cache → HIP-3 loads from API (3-5 min), cache written afterward  
+**All subsequent boots:** 103+ HIP-3 assets available at `is_ready=True` before any API call
+
 ## Universe Filtering (HL_STRICT_UNIVERSE_ONLY)
 
 Default: enabled (`true`).
