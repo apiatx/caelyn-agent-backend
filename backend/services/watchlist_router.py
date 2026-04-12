@@ -126,6 +126,23 @@ async def delete_endpoint():
 
 # ── Parameterized endpoints (MUST be after static paths) ────────────────────
 
+@router.patch("/{watchlist_id}/rename")
+async def rename_endpoint(watchlist_id: str, body: dict):
+    """Rename a specific watchlist."""
+    new_name = body.get("name", "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    try:
+        from data.pg_storage import watchlist_rename, is_available
+        if is_available():
+            ok = watchlist_rename(watchlist_id, new_name)
+            if ok:
+                return {"success": True, "name": new_name}
+        return {"error": "Postgres unavailable"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{watchlist_id}")
 async def get_by_id_endpoint(watchlist_id: str):
     """Return a specific watchlist by ID."""
