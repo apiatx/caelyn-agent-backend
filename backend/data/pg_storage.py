@@ -531,6 +531,30 @@ def watchlist_delete(watchlist_id: str) -> bool:
         _put_conn(conn)
 
 
+def watchlist_rename(watchlist_id: str, new_name: str) -> bool:
+    """Rename a specific watchlist."""
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE public.watchlist SET name = %s, updated_at = NOW() WHERE id = %s",
+                (new_name, watchlist_id),
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"[PG_STORAGE] watchlist_rename error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
 # ── Prompt History ───────────────────────────────────────────
 
 @traceable(name="pg_storage.ph_read")
