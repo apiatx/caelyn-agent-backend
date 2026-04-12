@@ -211,235 +211,308 @@ async def delete_endpoint():
 
 class StockDeepDiveRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    models: List[str] = ["grok", "gemini", "claude_gpt"]
+    models: List[str] = ["grok", "gemini", "claude"]
     report_model: str = "claude"
 
 
 @router.post("/stock/{ticker}/deep-dive")
 async def stock_deep_dive_endpoint(ticker: str, body: StockDeepDiveRequest):
     """
-    Multi-model parallel deep-dive for a single stock ticker.
+    Three-model concurrent deep-dive for a single stock ticker.
 
-    Phase 1 (parallel): Grok X/Twitter sentiment + Gemini Google/web intelligence
-    Phase 2 (sequential): Claude or GPT synthesis using Phase 1 outputs as context
+    Phase 1 (all parallel): Grok X/Twitter sentiment + Gemini Google News +
+                            Claude/GPT deep fundamental analysis
+    Phase 2: short final synthesis call → structured JSON output
     """
-    ticker = ticker.strip().upper()
-    models = [m.strip().lower() for m in (body.models or ["grok", "gemini", "claude_gpt"])]
-    report_model = (body.report_model or "claude").strip().lower()
+    import traceback as _tb
 
-    # ── Grok: X/Twitter real-time sentiment ──────────────────────────────────
-    async def call_grok() -> str:
-        xai_key = os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY", "")
-        if not xai_key:
-            return "[No XAI_API_KEY configured]"
-        prompt = (
-            f"Search X (formerly Twitter) for real-time sentiment, trending mentions, and breaking "
-            f"news about ${ticker} stock. Look for posts mentioning ${ticker}, #{ticker}, "
-            f"and '{ticker} stock'. Summarize what the X/Twitter crowd is saying in 2-4 paragraphs. "
-            f"Include notable bull and bear signals, key influencers or analysts mentioned, "
-            f"and any breaking news or catalysts driving discussion."
-        )
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(
-                    "https://api.x.ai/v1/responses",
-                    headers={
-                        "Authorization": f"Bearer {xai_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": "grok-4-1-fast-non-reasoning",
-                        "tools": [{"type": "x_search", "x_search": {}}],
-                        "input": [{"role": "user", "content": prompt}],
-                    },
-                )
-            if resp.status_code != 200:
-                return f"[Grok API error {resp.status_code}: {resp.text[:200]}]"
-            data = resp.json()
-            for block in data.get("output", []):
-                if block.get("type") == "message":
-                    for c in block.get("content", []):
-                        if c.get("type") == "output_text":
-                            return c.get("text", "") or "[Grok: empty output_text]"
-            return "[Grok: no text found in response]"
-        except asyncio.TimeoutError:
-            return "[Grok: timed out after 60s]"
-        except Exception as e:
-            return f"[Grok error: {type(e).__name__}: {e}]"
+    try:
+        ticker = ticker.strip().upper()
+        models = [m.strip().lower() for m in (body.models or ["grok", "gemini", "claude"])]
+        report_model = (body.report_model or "claude").strip().lower()
 
-    # ── Gemini: Google/web analyst intelligence ───────────────────────────────
-    async def call_gemini() -> str:
-        gemini_key = os.getenv("GEMINI_API_KEY", "")
-        if not gemini_key:
-            return "[No GEMINI_API_KEY configured]"
-        prompt = (
-            f"Use Google Search to find the latest news, analyst upgrades/downgrades, price targets, "
-            f"and web intelligence about {ticker} stock. Search for '{ticker} stock analysis', "
-            f"'{ticker} analyst upgrade', '{ticker} earnings', and '{ticker} Google News'. "
-            f"Return 2-4 paragraphs summarizing what analysts and the web are saying about {ticker}. "
-            f"Include recent price targets, analyst ratings, news headlines, and any notable catalysts."
-        )
-        try:
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-3-flash-preview:generateContent?key={gemini_key}"
-            )
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(
-                    url,
-                    headers={"Content-Type": "application/json"},
-                    json={
-                        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                        "tools": [{"google_search": {}}],
-                        "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.3},
-                    },
-                )
-            resp.raise_for_status()
-            data = resp.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                return "[Gemini: no candidates in response]"
-            parts = candidates[0].get("content", {}).get("parts", [])
-            text = "".join(p.get("text", "") for p in parts if "text" in p)
-            return text or "[Gemini: empty response]"
-        except asyncio.TimeoutError:
-            return "[Gemini: timed out after 60s]"
-        except Exception as e:
-            return f"[Gemini error: {type(e).__name__}: {e}]"
-
-    # ── Synthesis prompt builder ──────────────────────────────────────────────
-    def _build_synthesis_prompt(grok_text: str, gemini_text: str) -> str:
-        context = ""
-        if grok_text and not grok_text.startswith("["):
-            context += f"\n\n=== X/Twitter Sentiment (Grok) ===\n{grok_text}"
-        if gemini_text and not gemini_text.startswith("["):
-            context += f"\n\n=== Web & Analyst Intelligence (Gemini) ===\n{gemini_text}"
-        return (
-            f"You are a senior equity analyst. Produce a structured deep-dive on {ticker} stock."
-            f"{context}\n\n"
-            f"Using the intelligence above (and your own knowledge), respond with ONLY a valid JSON "
-            f"object containing exactly these keys:\n"
-            f'  "summary": "2-3 sentence combined summary",\n'
-            f'  "bull_case": "paragraph on the bull case",\n'
-            f'  "bear_case": "paragraph on the bear case",\n'
-            f'  "risk_factors": ["bullet 1", "bullet 2", "bullet 3"],\n'
-            f'  "technical_outlook": "paragraph on the technical outlook",\n'
-            f'  "analyst_sentiment": "paragraph summarizing analyst sentiment"\n\n'
-            f"Return ONLY the JSON object. No markdown fences, no preamble, no commentary."
-        )
-
-    def _parse_synthesis(text: str) -> dict:
-        m = _re.search(r'\{[\s\S]*\}', text)
-        if m:
+        # ── Look up any stored CSV fundamentals for this ticker ───────────────
+        def _get_fundamentals() -> str:
             try:
-                return _json.loads(m.group())
+                store = load_watchlist()
+                if store:
+                    for row in store.get("csv_data", []):
+                        sym = (row.get("Symbol") or row.get("symbol") or "").strip().upper()
+                        if sym == ticker:
+                            parts = []
+                            for label, key in [
+                                ("Price", "Stock Price"), ("MCap", "Market Cap"),
+                                ("PE", "PE Ratio"), ("FwdPE", "Forward PE"),
+                                ("RSI", "Relative Strength Index (RSI)"),
+                                ("RevGrowth", "Revenue Growth (YoY)"),
+                                ("EPSEst", "EPS Growth Est."), ("FCF", "FCF Margin"),
+                                ("GrossMargin", "Gross Margin"), ("DE", "Debt / Equity"),
+                                ("ShortFloat", "Short % Float"), ("EarningsDate", "Earnings Date"),
+                            ]:
+                                val = row.get(key, "")
+                                if val:
+                                    parts.append(f"{label}={val}")
+                            return ", ".join(parts)
             except Exception:
                 pass
-        return {"raw": text}
+            return ""
 
-    # ── Claude synthesis ──────────────────────────────────────────────────────
-    async def call_claude(grok_text: str, gemini_text: str) -> dict:
-        anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
-        if not anthropic_key:
-            return {"error": "[No ANTHROPIC_API_KEY configured]"}
-        prompt = _build_synthesis_prompt(grok_text, gemini_text)
-        try:
-            import anthropic as _anthropic
-            client = _anthropic.AsyncAnthropic(api_key=anthropic_key, timeout=60.0)
-            response = await client.messages.create(
-                model="claude-opus-4-5",
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}],
+        fundamentals = _get_fundamentals()
+        fundamentals_str = f" Fundamentals: {fundamentals}." if fundamentals else ""
+
+        # ── Grok: X/Twitter real-time social sentiment ────────────────────────
+        async def call_grok() -> str:
+            xai_key = os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY", "")
+            if not xai_key:
+                return "[No XAI_API_KEY configured]"
+            prompt = (
+                f"Search X/Twitter for recent posts about {ticker}. "
+                f"Summarize the current retail and institutional sentiment, any viral catalysts "
+                f"or concerns, and notable accounts discussing it. Be specific — mention price "
+                f"targets, meme activity, earnings reactions if relevant. "
+                f"2-4 paragraphs, conversational tone."
             )
-            text = "".join(b.text for b in response.content if hasattr(b, "text"))
-            return _parse_synthesis(text)
-        except asyncio.TimeoutError:
-            return {"error": "[Claude: timed out after 60s]"}
-        except Exception as e:
-            return {"error": f"[Claude error: {type(e).__name__}: {e}]"}
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    resp = await client.post(
+                        "https://api.x.ai/v1/responses",
+                        headers={
+                            "Authorization": f"Bearer {xai_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": "grok-4-1-fast-non-reasoning",
+                            "tools": [{"type": "x_search", "x_search": {}}],
+                            "input": [{"role": "user", "content": prompt}],
+                        },
+                    )
+                if resp.status_code != 200:
+                    return f"[Grok API error {resp.status_code}: {resp.text[:300]}]"
+                data = resp.json()
+                for block in data.get("output", []):
+                    if block.get("type") == "message":
+                        for c in block.get("content", []):
+                            if c.get("type") == "output_text":
+                                return c.get("text", "") or "[Grok: empty output_text]"
+                return "[Grok: no text in response]"
+            except asyncio.TimeoutError:
+                return "[Grok: timed out after 60s]"
+            except Exception as exc:
+                return f"[Grok error: {type(exc).__name__}: {exc}]"
 
-    # ── GPT synthesis ─────────────────────────────────────────────────────────
-    async def call_gpt(grok_text: str, gemini_text: str) -> dict:
-        openai_key = os.getenv("OPENAI_API_KEY", "")
-        if not openai_key:
-            return {"error": "[No OPENAI_API_KEY configured]"}
-        prompt = _build_synthesis_prompt(grok_text, gemini_text)
-        try:
-            from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=openai_key, timeout=60.0)
-            resp = await client.chat.completions.create(
-                model="gpt-4o",
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
+        # ── Gemini: Google News headlines ─────────────────────────────────────
+        async def call_gemini() -> str:
+            gemini_key = os.getenv("GEMINI_API_KEY", "")
+            if not gemini_key:
+                return "[No GEMINI_API_KEY configured]"
+            prompt = (
+                f"Search Google News for {ticker} stock. Summarize the 3-5 most important "
+                f"headlines from the last 30 days: analyst upgrades/downgrades, earnings surprises, "
+                f"product launches, regulatory news, or macro headwinds. "
+                f"Include the source and approximate date for each. "
+                f"2-4 paragraphs."
             )
-            text = resp.choices[0].message.content or "{}"
-            return _json.loads(text)
-        except asyncio.TimeoutError:
-            return {"error": "[GPT: timed out after 60s]"}
-        except Exception as e:
-            return {"error": f"[GPT error: {type(e).__name__}: {e}]"}
+            try:
+                url = (
+                    "https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"gemini-3-flash-preview:generateContent?key={gemini_key}"
+                )
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    resp = await client.post(
+                        url,
+                        headers={"Content-Type": "application/json"},
+                        json={
+                            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                            "tools": [{"google_search": {}}],
+                            "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.2},
+                        },
+                    )
+                resp.raise_for_status()
+                data = resp.json()
+                candidates = data.get("candidates", [])
+                if not candidates:
+                    return "[Gemini: no candidates in response]"
+                parts = candidates[0].get("content", {}).get("parts", [])
+                text = "".join(p.get("text", "") for p in parts if "text" in p)
+                return text or "[Gemini: empty response]"
+            except asyncio.TimeoutError:
+                return "[Gemini: timed out after 60s]"
+            except Exception as exc:
+                return f"[Gemini error: {type(exc).__name__}: {exc}]"
 
-    # ── Phase 1: run data-gathering models in parallel ────────────────────────
-    phase1_coros: list = []
-    phase1_keys: list = []
+        # ── Claude: deep fundamental + technical analysis ─────────────────────
+        async def call_claude_analysis() -> str:
+            anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+            if not anthropic_key:
+                return "[No ANTHROPIC_API_KEY configured]"
+            prompt = (
+                f"You are a senior equity analyst.{fundamentals_str} "
+                f"Given the fundamentals for {ticker}, provide a structured analysis covering: "
+                f"(1) a 2-3 sentence executive summary, (2) the bull case, (3) the bear case, "
+                f"(4) top 3 risk factors, (5) key technical levels/pattern to watch, "
+                f"(6) what sell-side consensus looks like. "
+                f"Write in clear, specific prose — cite actual metrics where possible."
+            )
+            try:
+                import anthropic as _anthropic
+                client = _anthropic.AsyncAnthropic(
+                    api_key=anthropic_key, timeout=60.0
+                )
+                response = await client.messages.create(
+                    model="claude-opus-4-5",
+                    max_tokens=1500,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return "".join(b.text for b in response.content if hasattr(b, "text"))
+            except asyncio.TimeoutError:
+                return "[Claude: timed out after 60s]"
+            except Exception as exc:
+                return f"[Claude error: {type(exc).__name__}: {exc}]"
 
-    if "grok" in models:
-        phase1_coros.append(call_grok())
-        phase1_keys.append("grok")
-    if "gemini" in models:
-        phase1_coros.append(call_gemini())
-        phase1_keys.append("gemini")
+        # ── GPT: deep fundamental + technical analysis ────────────────────────
+        async def call_gpt_analysis() -> str:
+            openai_key = os.getenv("OPENAI_API_KEY", "")
+            if not openai_key:
+                return "[No OPENAI_API_KEY configured]"
+            prompt = (
+                f"You are a senior equity analyst.{fundamentals_str} "
+                f"Given the fundamentals for {ticker}, provide a structured analysis covering: "
+                f"(1) a 2-3 sentence executive summary, (2) the bull case, (3) the bear case, "
+                f"(4) top 3 risk factors, (5) key technical levels/pattern to watch, "
+                f"(6) what sell-side consensus looks like. "
+                f"Write in clear, specific prose — cite actual metrics where possible."
+            )
+            try:
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(api_key=openai_key, timeout=60.0)
+                resp = await client.chat.completions.create(
+                    model="gpt-4o",
+                    max_tokens=1500,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return resp.choices[0].message.content or "[GPT: empty response]"
+            except asyncio.TimeoutError:
+                return "[GPT: timed out after 60s]"
+            except Exception as exc:
+                return f"[GPT error: {type(exc).__name__}: {exc}]"
 
-    phase1_results = await asyncio.gather(*phase1_coros, return_exceptions=True) if phase1_coros else []
+        # ── Phase 1: run ALL requested models concurrently ────────────────────
+        coro_map: Dict[str, Any] = {}
+        if "grok" in models:
+            coro_map["grok"] = call_grok()
+        if "gemini" in models:
+            coro_map["gemini"] = call_gemini()
+        # "claude" or "claude_gpt" in models → run the deep analysis persona
+        run_claude = "claude" in models or "claude_gpt" in models
+        run_gpt_model = "gpt" in models
+        if run_claude and report_model != "gpt":
+            coro_map["claude"] = call_claude_analysis()
+        elif run_gpt_model or (run_claude and report_model == "gpt"):
+            coro_map["gpt"] = call_gpt_analysis()
 
-    result: Dict[str, Any] = {}
-    grok_text = ""
-    gemini_text = ""
+        keys = list(coro_map.keys())
+        coros = list(coro_map.values())
+        raw_results = await asyncio.gather(*coros, return_exceptions=True)
 
-    for key, val in zip(phase1_keys, phase1_results):
-        if isinstance(val, Exception):
-            val = f"[{key} exception: {val}]"
-        result[key] = val
-        if key == "grok":
-            grok_text = val
-        elif key == "gemini":
-            gemini_text = val
+        model_outputs: Dict[str, str] = {}
+        for k, v in zip(keys, raw_results):
+            if isinstance(v, Exception):
+                model_outputs[k] = f"[{k} exception: {v}]"
+            else:
+                model_outputs[k] = str(v)
 
-    if "grok" not in result:
-        result["grok"] = None
-    if "gemini" not in result:
-        result["gemini"] = None
+        grok_text = model_outputs.get("grok", "")
+        gemini_text = model_outputs.get("gemini", "")
+        claude_text = model_outputs.get("claude", "")
+        gpt_text = model_outputs.get("gpt", "")
 
-    # ── Phase 2: synthesis (Claude or GPT) ───────────────────────────────────
-    run_synthesis = "claude_gpt" in models or "claude" in models or "gpt" in models
-    synthesis: dict = {}
+        # ── Phase 2: final synthesis → structured JSON ────────────────────────
+        synthesis_input_parts = []
+        if grok_text and not grok_text.startswith("["):
+            synthesis_input_parts.append(f"=== GROK (X/Twitter Sentiment) ===\n{grok_text}")
+        if gemini_text and not gemini_text.startswith("["):
+            synthesis_input_parts.append(f"=== GEMINI (Google News) ===\n{gemini_text}")
+        analysis_text = claude_text or gpt_text
+        if analysis_text and not analysis_text.startswith("["):
+            synthesis_input_parts.append(f"=== ANALYST DEEP-DIVE ===\n{analysis_text}")
 
-    if run_synthesis and report_model == "gpt":
-        synthesis = await call_gpt(grok_text, gemini_text)
-        result["gpt"] = synthesis.pop("raw", None)
-        result["claude"] = None
-    elif run_synthesis:
-        synthesis = await call_claude(grok_text, gemini_text)
-        result["claude"] = synthesis.pop("raw", None)
-        result["gpt"] = None
-    else:
-        result["claude"] = None
-        result["gpt"] = None
+        synthesis_context = "\n\n".join(synthesis_input_parts)
 
-    # Flatten synthesis fields into top-level keys
-    result["summary"] = synthesis.get("summary", "")
-    result["bull_case"] = synthesis.get("bull_case", "")
-    result["bear_case"] = synthesis.get("bear_case", "")
-    result["risk_factors"] = synthesis.get("risk_factors", [])
-    result["technical_outlook"] = synthesis.get("technical_outlook", "")
-    result["analyst_sentiment"] = synthesis.get("analyst_sentiment", "")
+        synthesis_prompt = (
+            f"You are synthesizing a multi-source research report on {ticker}.{fundamentals_str}\n\n"
+            f"{synthesis_context}\n\n"
+            f"Based on all of the above, respond with ONLY a valid JSON object "
+            f"(no markdown fences, no preamble) containing exactly these keys:\n"
+            f'  "summary": "2-3 sentence executive summary",\n'
+            f'  "bull_case": "bull case paragraph",\n'
+            f'  "bear_case": "bear case paragraph",\n'
+            f'  "risk_factors": ["risk 1", "risk 2", "risk 3"],\n'
+            f'  "technical_outlook": "key technical levels and pattern to watch",\n'
+            f'  "analyst_sentiment": "what sell-side analysts are saying"\n'
+            f"Return ONLY the JSON object."
+        )
 
-    if synthesis.get("error"):
-        result["synthesis_error"] = synthesis["error"]
+        synthesis: dict = {}
+        synth_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if report_model == "gpt" or not synth_key:
+            openai_key = os.getenv("OPENAI_API_KEY", "")
+            if openai_key:
+                try:
+                    from openai import AsyncOpenAI
+                    _oa = AsyncOpenAI(api_key=openai_key, timeout=60.0)
+                    _resp = await _oa.chat.completions.create(
+                        model="gpt-4o",
+                        max_tokens=1500,
+                        messages=[{"role": "user", "content": synthesis_prompt}],
+                        response_format={"type": "json_object"},
+                    )
+                    synthesis = _json.loads(_resp.choices[0].message.content or "{}")
+                except Exception as exc:
+                    print(f"[DEEP-DIVE] GPT synthesis failed: {exc}")
+        if not synthesis and synth_key:
+            try:
+                import anthropic as _anthropic
+                _ac = _anthropic.AsyncAnthropic(api_key=synth_key, timeout=60.0)
+                _cr = await _ac.messages.create(
+                    model="claude-opus-4-5",
+                    max_tokens=1500,
+                    messages=[{"role": "user", "content": synthesis_prompt}],
+                )
+                synth_text = "".join(b.text for b in _cr.content if hasattr(b, "text"))
+                synth_text = _re.sub(r"```json\s*", "", synth_text)
+                synth_text = _re.sub(r"```\s*", "", synth_text).strip()
+                m = _re.search(r'\{[\s\S]*\}', synth_text)
+                if m:
+                    synthesis = _json.loads(m.group())
+            except Exception as exc:
+                print(f"[DEEP-DIVE] Claude synthesis failed: {exc}")
 
-    print(f"[DEEP-DIVE] {ticker}: grok={'ok' if grok_text and not grok_text.startswith('[') else 'err'}, gemini={'ok' if gemini_text and not gemini_text.startswith('[') else 'err'}, report_model={report_model}")
-    return result
+        print(
+            f"[DEEP-DIVE] {ticker}: "
+            f"grok={'ok' if grok_text and not grok_text.startswith('[') else 'skip/err'}, "
+            f"gemini={'ok' if gemini_text and not gemini_text.startswith('[') else 'skip/err'}, "
+            f"claude={'ok' if claude_text and not claude_text.startswith('[') else 'skip/err'}, "
+            f"gpt={'ok' if gpt_text and not gpt_text.startswith('[') else 'skip/err'}"
+        )
+
+        return {
+            "grok":              grok_text or None,
+            "gemini":            gemini_text or None,
+            "claude":            claude_text or None,
+            "gpt":               gpt_text or None,
+            "summary":           synthesis.get("summary", ""),
+            "bull_case":         synthesis.get("bull_case", ""),
+            "bear_case":         synthesis.get("bear_case", ""),
+            "risk_factors":      synthesis.get("risk_factors", []),
+            "technical_outlook": synthesis.get("technical_outlook", ""),
+            "analyst_sentiment": synthesis.get("analyst_sentiment", ""),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        _tb.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Parameterized endpoints (MUST be after static paths) ────────────────────
