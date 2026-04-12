@@ -19,7 +19,6 @@ from services.watchlist_service import (
     clear_watchlist,
     extract_tickers,
     fetch_news_for_tickers,
-    refresh_watchlist_analysis,
     get_stock_detail,
     _WATCHLIST_FILE,
 )
@@ -116,11 +115,29 @@ async def news_endpoint():
 
 @router.post("/refresh")
 async def refresh_endpoint():
-    """Re-run AI analysis with latest news (most recent watchlist)."""
+    """Re-run multi-source parallel analysis on the most recent watchlist."""
     agent = _get_agent()
-    result = await refresh_watchlist_analysis(agent)
-    if result.get("error"):
-        raise HTTPException(status_code=400, detail=result["error"])
+    data_service = _get_data_service()
+
+    store = load_watchlist()
+    if store is None:
+        raise HTTPException(status_code=404, detail="No watchlist saved. Upload a CSV first.")
+
+    tickers = store.get("tickers", [])
+    csv_data = store.get("csv_data", [])
+    if not tickers:
+        raise HTTPException(status_code=400, detail="Watchlist has no tickers")
+
+    result = await run_analysis_pipeline(tickers, csv_data, agent, data_service)
+
+    if isinstance(result, dict) and result.get("error") and "sections" not in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    # Save updated analysis back to the watchlist
+    store_id = store.get("id", "default")
+    store_name = store.get("name", "Watchlist")
+    save_watchlist(csv_data, result, watchlist_id=store_id, name=store_name)
+
     return result
 
 
@@ -239,11 +256,28 @@ async def analyze_by_id_endpoint(watchlist_id: str):
 
 @router.post("/{watchlist_id}/refresh")
 async def refresh_by_id_endpoint(watchlist_id: str):
-    """Re-run AI analysis for a specific watchlist."""
+    """Re-run multi-source parallel analysis for a specific watchlist."""
     agent = _get_agent()
-    result = await refresh_watchlist_analysis(agent, watchlist_id=watchlist_id)
-    if result.get("error"):
-        raise HTTPException(status_code=400, detail=result["error"])
+    data_service = _get_data_service()
+
+    store = load_watchlist(watchlist_id)
+    if store is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    tickers = store.get("tickers", [])
+    csv_data = store.get("csv_data", [])
+    if not tickers:
+        raise HTTPException(status_code=400, detail="Watchlist has no tickers")
+
+    result = await run_analysis_pipeline(tickers, csv_data, agent, data_service)
+
+    if isinstance(result, dict) and result.get("error") and "sections" not in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    # Save updated analysis back to the watchlist
+    store_name = store.get("name", "Watchlist")
+    save_watchlist(csv_data, result, watchlist_id=watchlist_id, name=store_name)
+
     return result
 
 
