@@ -496,43 +496,168 @@ async def analyze_by_id_endpoint(watchlist_id: str):
 
 @router.post("/{watchlist_id}/refresh")
 async def refresh_by_id_endpoint(watchlist_id: str):
-    """Re-run multi-source parallel analysis for a specific watchlist and return the updated watchlist record."""
-    agent = _get_agent()
-    data_service = _get_data_service()
+    """
+    Batched LLM analysis for any size watchlist.
 
-    store = load_watchlist(watchlist_id)
-    if store is None:
-        raise HTTPException(status_code=404, detail="Watchlist not found")
-
-    tickers = store.get("tickers", [])
-    csv_data = store.get("csv_data", [])
-    if not tickers:
-        raise HTTPException(status_code=400, detail="Watchlist has no tickers")
-
-    result = await run_analysis_pipeline(tickers, csv_data, agent, data_service)
-
-    if isinstance(result, dict) and result.get("error") and "sections" not in result:
-        raise HTTPException(status_code=500, detail=result["error"])
-
-    # Save updated analysis back to the watchlist
-    store_name = store.get("name", "Watchlist")
-    save_watchlist(csv_data, result, watchlist_id=watchlist_id, name=store_name)
-
-    # Return the full updated watchlist record so frontend can access id/name/analysis together
-    updated = load_watchlist(watchlist_id)
-    if updated:
-        return updated
-    # Fallback: compose inline if re-load fails
+    Splits tickers into batches of 22, runs up to 3 batches in parallel,
+    collects sections, saves analysis, and returns the full updated watchlist.
+    Works directly via the Anthropic API — no agent/data_service dependency.
+    """
     from datetime import datetime, timezone
-    return {
-        "id": watchlist_id,
-        "name": store_name,
-        "tickers": tickers,
-        "ticker_count": len(tickers),
-        "csv_data": csv_data,
-        "analysis": result,
-        "saved_at": datetime.now(timezone.utc).isoformat(),
-    }
+
+    try:
+        store = load_watchlist(watchlist_id)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Watchlist not found")
+
+        tickers: list = store.get("tickers", [])
+        csv_data: list = store.get("csv_data", [])
+        store_name: str = store.get("name", "Watchlist")
+
+        if not tickers:
+            raise HTTPException(status_code=400, detail="Watchlist has no tickers")
+
+        # Build Symbol → row lookup from csv_data
+        csv_map: dict = {}
+        for row in csv_data:
+            sym = row.get("Symbol") or row.get("symbol") or row.get("Ticker") or ""
+            if sym:
+                csv_map[sym.strip().upper()] = row
+
+        # ── Batch analysis via Claude ─────────────────────────────────────────
+        BATCH_SIZE = 22
+        batches = [tickers[i:i + BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
+
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+
+        async def analyze_batch(batch_tickers: list, batch_index: int) -> dict | None:
+            ticker_summaries = []
+            for sym in batch_tickers:
+                row = csv_map.get(sym.upper(), {})
+                parts = [f"{sym}:"]
+                for label, key in [
+                    ("Price", "Stock Price"),
+                    ("MCap", "Market Cap"),
+                    ("PE", "PE Ratio"),
+                    ("FwdPE", "Forward PE"),
+                    ("RSI", "Relative Strength Index (RSI)"),
+                    ("RevGrowth", "Revenue Growth (YoY)"),
+                    ("EPSEst", "EPS Growth Est."),
+                    ("FCF", "FCF Margin"),
+                    ("GrossMargin", "Gross Margin"),
+                    ("DE", "Debt / Equity"),
+                ]:
+                    val = row.get(key, "")
+                    if val:
+                        parts.append(f"{label}={val}")
+                ticker_summaries.append(" ".join(parts))
+
+            prompt = (
+                f"Analyze these {len(batch_tickers)} stocks and return ONLY a valid JSON object "
+                f"(no markdown fences, no extra text).\n\n"
+                f"Stocks:\n" + "\n".join(ticker_summaries) + "\n\n"
+                f'Return exactly this structure:\n'
+                f'{{\n'
+                f'  "id": "batch_{batch_index}",\n'
+                f'  "title": "<thematic group name, e.g. AI Infrastructure Leaders>",\n'
+                f'  "subtitle": "<one-line market context for this group>",\n'
+                f'  "tickers": [\n'
+                f'    {{\n'
+                f'      "symbol": "<ticker>",\n'
+                f'      "name": "<company name>",\n'
+                f'      "price": <float or null>,\n'
+                f'      "change_pct": <float or null>,\n'
+                f'      "catalyst": "<key near-term catalyst>",\n'
+                f'      "sentiment": "<bullish|neutral|bearish>",\n'
+                f'      "action_note": "<specific actionable note>",\n'
+                f'      "risk_level": "<low|medium|high>",\n'
+                f'      "key_insight": "<single most important insight>",\n'
+                f'      "technical_setup": "<technical pattern or level to watch>"\n'
+                f'    }}\n'
+                f'  ]\n'
+                f'}}'
+            )
+
+            try:
+                import anthropic as _anthropic
+                client = _anthropic.AsyncAnthropic(api_key=anthropic_key, timeout=90.0)
+                response = await client.messages.create(
+                    model="claude-opus-4-5",
+                    max_tokens=4000,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text = "".join(b.text for b in response.content if hasattr(b, "text"))
+                # Strip markdown fences if present
+                text = _re.sub(r"```json\s*", "", text)
+                text = _re.sub(r"```\s*", "", text).strip()
+                # Extract JSON object
+                m = _re.search(r'\{[\s\S]*\}', text)
+                if m:
+                    parsed = _json.loads(m.group())
+                    print(f"[REFRESH] Batch {batch_index}: {len(batch_tickers)} tickers → {len(parsed.get('tickers', []))} analyzed")
+                    return parsed
+                print(f"[REFRESH] Batch {batch_index}: no JSON found in response")
+                return None
+            except Exception as e:
+                print(f"[REFRESH] Batch {batch_index} failed: {type(e).__name__}: {e}")
+                return None
+
+        # Run batches with max 3 in parallel to respect rate limits
+        semaphore = asyncio.Semaphore(3)
+
+        async def guarded_batch(batch_tickers: list, batch_index: int) -> dict | None:
+            async with semaphore:
+                return await analyze_batch(batch_tickers, batch_index)
+
+        print(f"[REFRESH] {watchlist_id}: {len(tickers)} tickers → {len(batches)} batches")
+        batch_tasks = [guarded_batch(b, i) for i, b in enumerate(batches)]
+        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=False)
+
+        sections = [r for r in batch_results if r is not None]
+
+        # ── Extract market themes from section titles ─────────────────────────
+        market_themes: list = []
+        seen: set = set()
+        for section in sections:
+            title = section.get("title", "")
+            if title and title not in seen:
+                market_themes.append(title)
+                seen.add(title)
+        market_themes = market_themes[:8]
+
+        analysis = {
+            "sections": sections,
+            "market_themes": market_themes,
+            "last_updated": datetime.now(timezone.utc).isoformat() + "Z",
+        }
+
+        # ── Persist analysis back to the watchlist ────────────────────────────
+        try:
+            save_watchlist(csv_data, analysis, watchlist_id=watchlist_id, name=store_name)
+        except Exception as save_err:
+            print(f"[REFRESH] Save failed (returning anyway): {save_err}")
+
+        # ── Return the full updated watchlist record ──────────────────────────
+        updated = load_watchlist(watchlist_id)
+        if updated:
+            return updated
+
+        return {
+            "id": watchlist_id,
+            "name": store_name,
+            "tickers": tickers,
+            "ticker_count": len(tickers),
+            "csv_data": csv_data,
+            "analysis": analysis,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Refresh failed: {e}")
 
 
 @router.get("/{watchlist_id}/news")

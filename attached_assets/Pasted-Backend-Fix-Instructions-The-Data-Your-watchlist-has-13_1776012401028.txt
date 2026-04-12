@@ -1,0 +1,165 @@
+Backend Fix Instructions
+The Data
+Your watchlist has 137 tickers (strings like "AAOI", "IREN") stored in watchlist.tickers, and 137 rows in watchlist.csv_data (keyed by Symbol), each with ~38 fundamental fields (Market Cap, PE Ratio, RSI, Revenue Growth, etc.).
+
+The target analysis format your frontend already expects:
+
+{
+  "sections": [
+    {
+      "id": "string",
+      "title": "string",
+      "subtitle": "string",
+      "tickers": [
+        {
+          "symbol": "NVDA",
+          "name": "Nvidia Corp",
+          "price": 900.0,
+          "change_pct": 2.1,
+          "catalyst": "AI infrastructure demand",
+          "sentiment": "bullish",
+          "action_note": "Buy on dips above 850",
+          "risk_level": "medium",
+          "key_insight": "Dominant GPU supplier",
+          "technical_setup": "Breakout above 200DMA"
+        }
+      ]
+    }
+  ],
+  "market_themes": ["AI infrastructure", "Rate sensitivity"],
+  "last_updated": "2026-04-12T16:00:00Z"
+}
+
+Bug 1 — POST /api/watchlist/{watchlist_id}/refresh (crashes on connect, HTTP 000)
+This is your highest priority. The endpoint crashes before returning any HTTP bytes. Most likely cause: a crash during startup of the route handler (before async def body runs), often from a None dereference, missing await, or an import-time error in a dependency.
+
+What it needs to do:
+
+@router.post("/api/watchlist/{watchlist_id}/refresh")
+async def refresh_watchlist(watchlist_id: str):
+    # 1. Load watchlist from DB/storage
+    watchlist = await get_watchlist(watchlist_id)
+    if not watchlist:
+        raise HTTPException(404, "Watchlist not found")
+    tickers = watchlist.get("tickers", [])        # list of strings e.g. ["AAOI", "NVDA"]
+    csv_data = watchlist.get("csv_data", [])       # list of dicts keyed by "Symbol"
+    csv_map = {row["Symbol"]: row for row in csv_data}
+    # 2. Split into batches of 20-25
+    BATCH_SIZE = 22
+    batches = [tickers[i:i+BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
+    # 3. Run up to 3 batches in parallel (respect LLM rate limits)
+    import asyncio
+    semaphore = asyncio.Semaphore(3)
+    async def analyze_batch(batch_tickers, batch_index):
+        async with semaphore:
+            try:
+                return await run_batch_analysis(batch_tickers, csv_map, batch_index)
+            except Exception as e:
+                # Partial results OK — don't let one batch kill everything
+                print(f"Batch {batch_index} failed: {e}")
+                return None
+    tasks = [analyze_batch(b, i) for i, b in enumerate(batches)]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+    # 4. Build final analysis object
+    sections = [r for r in results if r is not None]
+    market_themes = extract_market_themes(sections)  # pull from LLM responses
+    analysis = {
+        "sections": sections,
+        "market_themes": market_themes,
+        "last_updated": datetime.utcnow().isoformat() + "Z"
+    }
+    # 5. Save back to watchlist
+    await save_watchlist_analysis(watchlist_id, analysis)
+    # 6. Return the full watchlist
+    watchlist["analysis"] = analysis
+    return watchlist
+
+run_batch_analysis — what to send to your LLM:
+
+async def run_batch_analysis(batch_tickers, csv_map, batch_index):
+    # Build context from csv_data
+    ticker_summaries = []
+    for sym in batch_tickers:
+        row = csv_map.get(sym, {})
+        ticker_summaries.append(
+            f"{sym}: Price={row.get('Stock Price','?')}, "
+            f"MCap={row.get('Market Cap','?')}, "
+            f"PE={row.get('PE Ratio','?')}, "
+            f"RSI={row.get('Relative Strength Index (RSI)','?')}, "
+            f"RevGrowthYoY={row.get('Revenue Growth (YoY)','?')}, "
+            f"EPSGrowthEst={row.get('EPS Growth Est.','?')}, "
+            f"FCF={row.get('FCF Margin','?')}"
+        )
+    prompt = f"""Analyze these {len(batch_tickers)} stocks and return a JSON object.
+Stocks:
+{chr(10).join(ticker_summaries)}
+Return exactly this JSON (no markdown, no extra text):
+{{
+  "id": "batch_{batch_index}",
+  "title": "<thematic group name for these stocks, e.g. 'AI Infrastructure Leaders'>",
+  "subtitle": "<one line market context>",
+  "tickers": [
+    {{
+      "symbol": "<ticker>",
+      "name": "<company name>",
+      "price": <float>,
+      "change_pct": <float>,
+      "catalyst": "<key near-term catalyst>",
+      "sentiment": "<bullish|neutral|bearish>",
+      "action_note": "<specific actionable note>",
+      "risk_level": "<low|medium|high>",
+      "key_insight": "<single most important insight>",
+      "technical_setup": "<technical pattern or level to watch>"
+    }}
+  ]
+}}"""
+    # Call your LLM (Claude/GPT/Gemini — whichever you're using)
+    response = await your_llm_client.generate(prompt, timeout=90)
+    return json.loads(response)
+
+Bug 2 — POST /api/watchlist (creation returns 500)
+This is likely a validation or DB write error. Add a try/except around the whole route and return the real error:
+
+@router.post("/api/watchlist")
+async def create_watchlist(body: dict):
+    try:
+        name = body.get("name", "Untitled")
+        tickers = body.get("tickers", [])    # list of strings
+        csv_data = body.get("csv_data", [])  # list of row dicts
+        watchlist_id = str(uuid.uuid4())[:8]
+        watchlist = {
+            "id": watchlist_id,
+            "name": name,
+            "tickers": tickers,
+            "csv_data": csv_data,
+            "analysis": None,
+            "created_at": datetime.utcnow().isoformat() + "Z"
+        }
+        await save_watchlist(watchlist)
+        return watchlist
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, detail=str(e))  # return the REAL error
+
+Bug 3 — POST /api/watchlist/stock/{ticker}/deep-dive (needs implementing)
+Your frontend sends { model: "grok"|"gemini"|"claude"|"gpt" } and expects back:
+
+{
+  "grok":       "<X/Twitter sentiment analysis for the ticker>",
+  "gemini":     "<Google News headline analysis>",
+  "claude":     "<deep fundamental + technical analysis>",
+  "summary":    "<2-3 sentence executive summary>",
+  "bull_case":  "<bull case paragraph>",
+  "bear_case":  "<bear case paragraph>",
+  "risk_factors": ["risk 1", "risk 2", "risk 3"],
+  "technical_outlook": "<technical levels and pattern>",
+  "analyst_sentiment": "<what sell-side says>"
+}
+
+Run Grok, Gemini, and Claude/GPT prompts concurrently with asyncio.gather. Each should be a focused prompt for its persona (Grok = social/Twitter sentiment, Gemini = Google news/search, Claude/GPT = deep fundamentals).
+
+Quick Debugging Tip
+Wrap every route in a bare try/except Exception as e and raise HTTPException(500, detail=str(e)) — the HTTP 000 you're seeing means FastAPI never gets a chance to serialize the error, so there's something crashing outside the normal exception path (probably in middleware, a startup event, or a dependency that's None).
+
+

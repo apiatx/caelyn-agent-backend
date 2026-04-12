@@ -1,0 +1,73 @@
+Implement POST /api/watchlist/stock/{ticker}/deep-dive
+The endpoint exists in your OpenAPI spec but returns 502. It needs to actually call your LLMs. The frontend sends:
+
+{ "models": ["grok", "gemini", "claude"], "report_model": "claude" }
+
+And expects back:
+
+{
+  "grok":             "X/Twitter sentiment analysis text...",
+  "gemini":           "Google news headline analysis text...",
+  "claude":           "Deep fundamental + technical analysis text...",
+  "summary":          "2-3 sentence executive summary.",
+  "bull_case":        "Bull case paragraph.",
+  "bear_case":        "Bear case paragraph.",
+  "risk_factors":     ["Risk 1", "Risk 2", "Risk 3"],
+  "technical_outlook": "Key technical levels and pattern to watch.",
+  "analyst_sentiment": "What sell-side analysts are saying."
+}
+
+Implementation:
+
+@router.post("/api/watchlist/stock/{ticker}/deep-dive")
+async def stock_deep_dive(ticker: str, body: dict):
+    try:
+        models = body.get("models", ["grok", "gemini", "claude"])
+        report_model = body.get("report_model", "claude")  # "claude" or "gpt"
+        # Look up any CSV data you have for this ticker
+        csv_data = await get_ticker_csv_data(ticker)  # from your watchlist store
+        fundamentals = format_fundamentals(csv_data)   # PE, RSI, MCap, Rev Growth, etc.
+        # Run all requested models concurrently
+        tasks = {}
+        if "grok" in models:
+            tasks["grok"] = call_grok(ticker, fundamentals)
+        if "gemini" in models:
+            tasks["gemini"] = call_gemini(ticker, fundamentals)
+        if "claude" in models or "gpt" in models:
+            tasks["claude"] = call_claude_or_gpt(ticker, fundamentals, report_model)
+        import asyncio
+        results = dict(zip(tasks.keys(), await asyncio.gather(*tasks.values(), return_exceptions=True)))
+        # Collapse exceptions to error strings
+        for k, v in results.items():
+            if isinstance(v, Exception):
+                results[k] = f"[{k} failed: {str(v)}]"
+        # Build synthesis prompt from the individual results
+        synthesis_input = "\n\n".join(f"=== {k.upper()} ===\n{v}" for k, v in results.items() if v)
+        # One final structured synthesis call (use Claude or GPT)
+        synthesis = await synthesize_report(ticker, synthesis_input, fundamentals, report_model)
+        return {
+            **results,
+            "summary":           synthesis.get("summary", ""),
+            "bull_case":         synthesis.get("bull_case", ""),
+            "bear_case":         synthesis.get("bear_case", ""),
+            "risk_factors":      synthesis.get("risk_factors", []),
+            "technical_outlook": synthesis.get("technical_outlook", ""),
+            "analyst_sentiment": synthesis.get("analyst_sentiment", ""),
+        }
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, detail=str(e))
+
+Grok prompt (X/Twitter persona):
+
+"Search X/Twitter for recent posts about {ticker}. Summarize the current retail and institutional sentiment, any viral catalysts or concerns, and notable accounts discussing it. Be specific — mention price targets, meme activity, earnings reactions if relevant."
+
+Gemini prompt (Google search persona):
+
+"Search Google News for {ticker} ({company_name}). Summarize the 3-5 most important headlines from the last 30 days: analyst upgrades/downgrades, earnings surprises, product launches, regulatory news, or macro headwinds. Include the source and approximate date for each."
+
+Claude/GPT prompt (deep analysis persona):
+
+"You are a senior equity analyst. Given these fundamentals for {ticker}: {fundamentals_string}. Provide a structured analysis with: (1) a 2-3 sentence executive summary, (2) the bull case, (3) the bear case, (4) top 3 risk factors, (5) key technical levels/pattern to watch, (6) what sell-side consensus looks like. Return as JSON with keys: summary, bull_case, bear_case, risk_factors (list), technical_outlook, analyst_sentiment."
+
+The 502 you're currently returning suggests the endpoint exists but your LLM client calls are failing — most likely because of a missing API key (GROK_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY) or the client is initialized in a way that crashes. Add the try/except with traceback.print_exc() at the top of the route to see the real error in your logs.
