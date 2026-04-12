@@ -256,7 +256,7 @@ async def analyze_by_id_endpoint(watchlist_id: str):
 
 @router.post("/{watchlist_id}/refresh")
 async def refresh_by_id_endpoint(watchlist_id: str):
-    """Re-run multi-source parallel analysis for a specific watchlist."""
+    """Re-run multi-source parallel analysis for a specific watchlist and return the updated watchlist record."""
     agent = _get_agent()
     data_service = _get_data_service()
 
@@ -278,7 +278,21 @@ async def refresh_by_id_endpoint(watchlist_id: str):
     store_name = store.get("name", "Watchlist")
     save_watchlist(csv_data, result, watchlist_id=watchlist_id, name=store_name)
 
-    return result
+    # Return the full updated watchlist record so frontend can access id/name/analysis together
+    updated = load_watchlist(watchlist_id)
+    if updated:
+        return updated
+    # Fallback: compose inline if re-load fails
+    from datetime import datetime, timezone
+    return {
+        "id": watchlist_id,
+        "name": store_name,
+        "tickers": tickers,
+        "ticker_count": len(tickers),
+        "csv_data": csv_data,
+        "analysis": result,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @router.get("/{watchlist_id}/news")

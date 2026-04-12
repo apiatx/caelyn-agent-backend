@@ -3113,66 +3113,89 @@ async def clear_cache(request: Request, api_key: str = Header(None, alias="X-API
 
 
 class WatchlistRequest(BaseModel):
+    model_config = {"extra": "ignore"}
     tickers: List[str]
-    conversation_id: Optional[str] = None
-    reasoning_model: Optional[str] = "agent_collab"
+    name: Optional[str] = None
+    csv_data: Optional[str] = None
+
 
 @app.post("/api/watchlist")
-@limiter.limit("10/minute")
-@traceable(name="main.review_watchlist")
-async def review_watchlist(
+@limiter.limit("20/minute")
+async def create_watchlist_endpoint(
     request: Request,
     body: WatchlistRequest,
-    api_key: str = Header(None, alias="X-API-Key"),
 ):
-    import asyncio
-    if not _jwt_or_key(request, api_key):
-        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    """Create a new watchlist record (tickers + optional CSV). Analysis starts null; call POST /api/watchlist/:id/refresh to populate it."""
+    import csv as _csv
+    import io as _io
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
     if not body.tickers:
         raise HTTPException(status_code=400, detail="No tickers provided.")
-    await _wait_for_init()
 
-    tickers = [t.strip().upper() for t in body.tickers if t.strip()][:25]
-    body.reasoning_model = normalize_reasoning_model(body.reasoning_model)
-    print(f"[API] Watchlist review request: {tickers}")
+    tickers = [t.strip().upper() for t in body.tickers if t.strip()]
+    watchlist_id = str(_uuid.uuid4())
+    saved_at = datetime.now(timezone.utc).isoformat()
+
+    if body.name:
+        name = body.name.strip() or None
+    if not body.name or not body.name.strip():
+        name = ", ".join(tickers[:3]) + (f" +{len(tickers) - 3}" if len(tickers) > 3 else "")
+
+    # Parse raw CSV string into list-of-dicts if provided
+    csv_rows: list = []
+    if body.csv_data:
+        try:
+            reader = _csv.DictReader(_io.StringIO(body.csv_data.strip()))
+            csv_rows = [dict(row) for row in reader]
+        except Exception:
+            csv_rows = [{"Symbol": t} for t in tickers]
+    if not csv_rows:
+        csv_rows = [{"Symbol": t} for t in tickers]
+
+    print(f"[API] Creating watchlist '{name}' id={watchlist_id} tickers={tickers}")
 
     try:
-        result = await asyncio.wait_for(
-            agent.review_watchlist(tickers, reasoning_model=body.reasoning_model or "agent_collab"),
-            timeout=90.0,
-        )
-
-        if body.conversation_id:
-            try:
-                from data.chat_history import append_message as _append2
-                _append2(body.conversation_id, "user", f"Review my watchlist: {', '.join(tickers)}", message_type="watchlist", model_used=body.reasoning_model or "agent_collab")
-                _append2(body.conversation_id, "assistant", result.get("analysis", "") if isinstance(result, dict) else _json.dumps(result, default=str)[:8000], message_type="watchlist", structured_payload=result if isinstance(result, dict) else None, model_used=body.reasoning_model or "agent_collab")
-            except Exception as e:
-                print(f"[API] Failed to save watchlist conversation: {e}")
-
-        return result
-    except asyncio.TimeoutError:
-        print("[API] Watchlist review timed out after 90s")
-        return {
-            "type": "chat",
-            "analysis": "",
-            "structured": {
-                "display_type": "chat",
-                "message": "Watchlist review timed out. Try fewer tickers.",
-            },
-        }
+        from data.pg_storage import watchlist_write, is_available as pg_available
+        if pg_available():
+            ok = watchlist_write(watchlist_id, name, csv_rows, {}, tickers)
+            if ok:
+                print(f"[API] Watchlist '{name}' saved to PostgreSQL (id={watchlist_id})")
+                return {
+                    "id": watchlist_id,
+                    "name": name,
+                    "ticker_count": len(tickers),
+                    "saved_at": saved_at,
+                    "analysis": None,
+                }
     except Exception as e:
-        import traceback
-        print(f"[API] Error in /api/watchlist: {e}")
-        traceback.print_exc()
-        return {
-            "type": "chat",
-            "analysis": "",
-            "structured": {
-                "display_type": "chat",
-                "message": f"Error reviewing watchlist: {str(e)}",
-            },
+        print(f"[API] PostgreSQL watchlist create failed ({e}), falling back to JSON")
+
+    # JSON file fallback
+    try:
+        import json as _json_mod
+        from pathlib import Path
+        data_dir = Path(__file__).resolve().parent / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        store_path = data_dir / "watchlist_store.json"
+        store = {
+            "id": watchlist_id, "name": name, "tickers": tickers,
+            "csv_data": csv_rows, "analysis": None, "saved_at": saved_at,
         }
+        store_path.write_text(_json_mod.dumps(store, default=str, indent=2))
+        print(f"[API] Watchlist '{name}' saved to JSON fallback (id={watchlist_id})")
+    except Exception as e:
+        print(f"[API] JSON watchlist fallback failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save watchlist: {e}")
+
+    return {
+        "id": watchlist_id,
+        "name": name,
+        "ticker_count": len(tickers),
+        "saved_at": saved_at,
+        "analysis": None,
+    }
 
 
 class CreateConversationRequest(BaseModel):
