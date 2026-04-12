@@ -20,8 +20,10 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -43,6 +45,11 @@ _DASHBOARD_REFRESH_INTERVAL = 300
 # How long the dashboard cache is considered valid before a background refresh
 _DASHBOARD_CACHE_TTL = 280  # slightly less than refresh interval
 
+# ── Persistent disk cache ────────────────────────────────────────────────────
+# Survives server restarts / redeploys so users ALWAYS see data instantly.
+_DISK_CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "bittensor_dashboard_cache.json"
+_DISK_CACHE_MAX_AGE = 86400  # use disk cache for up to 24 hours after it was written
+
 STAGE_LABELS = {
     1: "Accumulating", 2: "Early Breakout", 3: "Momentum",
     4: "Distributing", 5: "Declining", 6: "Recovery",
@@ -63,6 +70,61 @@ def _cache_get(key: str, ttl: float) -> Any | None:
 
 def _cache_set(key: str, data: Any) -> None:
     _cache[key] = {"data": data, "ts": time.time()}
+
+
+def _save_disk_cache(data: dict) -> None:
+    """Write dashboard snapshot to disk so it survives server restarts."""
+    try:
+        _DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"ts": time.time(), "data": data}
+        _DISK_CACHE_PATH.write_text(json.dumps(payload, default=str))
+        print(f"[bittensor] disk cache saved ({len(data.get('subnets', []))} subnets)")
+    except Exception as exc:
+        print(f"[bittensor] disk cache save failed: {exc}")
+
+
+def _load_disk_cache() -> dict | None:
+    """
+    Load the dashboard snapshot from disk if it exists and isn't too old.
+    Returns the dashboard data dict, or None if unavailable/expired.
+    """
+    try:
+        if not _DISK_CACHE_PATH.exists():
+            return None
+        payload = json.loads(_DISK_CACHE_PATH.read_text())
+        age = time.time() - payload.get("ts", 0)
+        if age > _DISK_CACHE_MAX_AGE:
+            print(f"[bittensor] disk cache too old ({age/3600:.1f}h) — ignoring")
+            return None
+        data = payload.get("data")
+        if data and isinstance(data.get("subnets"), list):
+            print(f"[bittensor] disk cache loaded: {len(data['subnets'])} subnets, age={age/60:.1f}min")
+            return data
+        return None
+    except Exception as exc:
+        print(f"[bittensor] disk cache load failed: {exc}")
+        return None
+
+
+def _preload_disk_cache() -> None:
+    """
+    Called once at import time / startup to populate the in-memory cache from disk.
+    This makes data immediately available before the first background refresh completes.
+    """
+    data = _load_disk_cache()
+    if data:
+        # We store it with the disk file's timestamp so the TTL logic reflects the true age
+        try:
+            payload = json.loads(_DISK_CACHE_PATH.read_text())
+            ts = payload.get("ts", time.time())
+        except Exception:
+            ts = time.time()
+        _cache["dashboard"] = {"data": data, "ts": ts}
+        print(f"[bittensor] in-memory cache pre-loaded from disk ({len(data.get('subnets', []))} subnets)")
+
+
+# Pre-load disk cache immediately on module import so the first request never waits.
+_preload_disk_cache()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -707,14 +769,19 @@ async def _fetch_dashboard_data() -> dict:
 async def _dashboard_refresh_loop() -> None:
     """
     Background coroutine that refreshes the dashboard cache every 5 minutes.
-    First run happens after a 5-second startup delay.
+
+    Disk cache is pre-loaded at import time so this loop doesn't need to rush.
+    It waits 10 s for the server to fully start, then fetches fresh data.
+    After every successful fetch the result is also written to disk so it
+    survives restarts and redeploys.
     """
-    await asyncio.sleep(5)   # let server finish startup
+    await asyncio.sleep(10)  # let server fully start; disk cache already serves data
     while True:
         try:
             async with _dashboard_refresh_lock:
                 data = await _fetch_dashboard_data()
                 _cache_set("dashboard", data)
+                _save_disk_cache(data)  # persist so next restart is instant
         except Exception as exc:
             print(f"[bittensor] bg refresh error: {exc}")
         await asyncio.sleep(_DASHBOARD_REFRESH_INTERVAL)
@@ -854,13 +921,14 @@ async def dashboard_endpoint():
     """
     Returns pre-fetched, cached Bittensor dashboard data.
 
-    Data is populated by a background task that respects the TaoStats 5 req/min
-    rate limit by spacing its 6 calls 13 s apart (~78 s total per refresh).
-    Cache TTL is 5 minutes; the background task refreshes every 5 minutes.
-    First data is available ~78 s after server startup.
+    On warm starts (after the first successful fetch) data comes from the
+    disk-persisted cache and is returned instantly with zero wait.
+
+    On a true cold start (very first ever deployment) data is available within
+    ~15 seconds after the background task completes its first parallel fetch.
     """
-    if not TAOSTATS_API_KEY:
-        return JSONResponse(status_code=503, content={"error": "TAOSTATS_API_KEY not configured"})
+    if not TAOAPP_API_KEY:
+        return JSONResponse(status_code=503, content={"error": "TAOAPP_API_KEY not configured"})
 
     # Ensure the background task is running
     global _dashboard_bg_task
@@ -871,26 +939,23 @@ async def dashboard_endpoint():
         except Exception:
             pass
 
-    cached = _cache_get("dashboard", ttl=_DASHBOARD_CACHE_TTL)
-    if cached is not None:
-        return cached
+    # Try in-memory cache first (may be stale but still useful)
+    entry = _cache.get("dashboard")
+    if entry:
+        return entry["data"]
 
-    # Cache miss — background task is still populating data (takes ~90s on cold start).
-    # Block and poll rather than returning a useless loading placeholder, so the
-    # frontend works without any special retry logic.
-    poll_deadline = time.time() + 120  # wait up to 2 minutes
+    # True cold start — no disk cache yet. Poll briefly while the bg task fetches.
+    poll_deadline = time.time() + 30  # at most 30 seconds on genuine cold start
     while time.time() < poll_deadline:
-        await asyncio.sleep(5)
-        cached = _cache_get("dashboard", ttl=_DASHBOARD_CACHE_TTL)
-        if cached is not None:
-            return cached
+        await asyncio.sleep(3)
+        entry = _cache.get("dashboard")
+        if entry:
+            return entry["data"]
 
-    # Still no data after 2 minutes — return a graceful error so the frontend
-    # can show something meaningful.
     return JSONResponse(status_code=503, content={
         "error": "Dashboard data unavailable",
         "loading": True,
-        "message": "Dashboard data could not be loaded. The server may be rate-limited. Please try again in a minute.",
+        "message": "First-time data load in progress. Please refresh in a moment.",
         "subnets": [],
         "subnet_count": 0,
         "tao_price": {"price": "0", "change_24h": "0"},
