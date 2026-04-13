@@ -379,8 +379,8 @@ async def get_hero_signals(max_ideas: int = 20, min_volume_usd: float = 5_000_00
     No LLM calls — 100% deterministic scoring.
     """
     state = _get_state()
-    if not state.is_ready:
-        raise HTTPException(503, "Screener is still initializing")
+    if not state.is_ready and not state.all_assets():
+        raise HTTPException(503, "Screener has no data yet. Please retry in ~30 seconds.")
 
     return generate_agent_briefing(state, max_ideas=max_ideas, min_volume_usd=min_volume_usd)
 
@@ -400,8 +400,8 @@ async def get_sections(rows_per_section: int = 6):
     `available: false` until enough history has accumulated.
     """
     state = _get_state()
-    if not state.is_ready:
-        raise HTTPException(503, "Screener is still initializing")
+    if not state.is_ready and not state.all_assets():
+        raise HTTPException(503, "Screener has no data yet. Please retry in ~30 seconds.")
 
     sections     = build_signal_sections(state, rows_per_section=rows_per_section)
     summary_cards = build_summary_cards(state)
@@ -741,24 +741,41 @@ async def _generate_llm_analysis(ranked: list[ScreenerAsset], fear_greed: dict) 
         "a specific data point from the tables above. Trader to trader. Be direct."
     )
 
-    async def _call_claude(tokens: int, model: str) -> str:
+    async def _call_claude() -> str:
         import anthropic as _anthropic
         aclient = _anthropic.AsyncAnthropic(api_key=api_key)
         msg = await aclient.messages.create(
-            model=model,
-            max_tokens=tokens,
+            model="claude-3-haiku-20240307",
+            max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
         return msg.content[0].text.strip()
 
-    for attempt in range(2):
-        try:
-            result = await _call_claude(tokens=600, model="claude-3-haiku-20240307")
-            return result
-        except Exception as e:
-            print(f"[HL][agent] LLM attempt {attempt+1} error: {e}")
-            if attempt == 0:
-                await asyncio.sleep(1.5)
+    async def _call_gpt() -> str:
+        oai_key = os.getenv("OPENAI_API_KEY")
+        if not oai_key:
+            raise RuntimeError("No OpenAI key")
+        import openai as _openai
+        aclient = _openai.AsyncOpenAI(api_key=oai_key)
+        resp = await aclient.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.choices[0].message.content.strip()
+
+    # Try Claude first, fall back to GPT-4o-mini
+    for provider_name, provider_fn in [("Claude", _call_claude), ("GPT-4o-mini", _call_gpt)]:
+        for attempt in range(2):
+            try:
+                result = await provider_fn()
+                print(f"[HL][agent] LLM analysis OK via {provider_name} ({len(result)} chars)")
+                return result
+            except Exception as e:
+                print(f"[HL][agent] {provider_name} attempt {attempt+1} error: {type(e).__name__}: {str(e)[:120]}")
+                if attempt == 0:
+                    await asyncio.sleep(1.0)
+    print("[HL][agent] All LLM providers failed — returning empty analysis")
     return ""
 
 
@@ -777,11 +794,15 @@ class AgentRankIn(BaseModel):
 async def agent_rank(req: AgentRankIn):
     """
     Agent ranking + LLM market analysis.
-    Returns deterministic ranked coins + Claude Haiku analysis of the current regime.
+    Returns deterministic ranked coins + Claude (with GPT fallback) analysis.
     """
     state = _get_state()
-    if not state.is_ready:
-        raise HTTPException(503, "Screener is still initializing. Please retry in a moment.")
+
+    # Use any available assets — do NOT block on is_ready.
+    # Only hard-fail if we literally have zero data (never connected to Hyperliquid).
+    all_assets = [a for a in state.all_assets() if a.market_status == "active" and a.market_type == "perp"]
+    if not all_assets:
+        raise HTTPException(503, "Screener has no market data yet. Please wait ~30 seconds after startup and retry.")
 
     mode = req.rankingMode if req.rankingMode in ("balanced", "momentum", "breakout", "mean_reversion", "crowding_dislocation") else "balanced"
 
@@ -789,7 +810,6 @@ async def agent_rank(req: AgentRankIn):
     fg_task = asyncio.create_task(_fetch_fear_greed())
 
     # Rank using our internal state (real-time, richer than frontend rows)
-    all_assets = [a for a in state.all_assets() if a.market_status == "active" and a.market_type == "perp"]
     ranked = rank_assets(all_assets, mode=mode, prev_ranks=state.prev_ranks)
 
     # Update prev ranks for next call
@@ -987,8 +1007,8 @@ async def get_signals(
       }
     """
     state = _get_state()
-    if not state.is_ready:
-        raise HTTPException(503, "Screener is still initializing")
+    if not state.is_ready and not state.all_assets():
+        raise HTTPException(503, "Screener has no data yet. Please retry in ~30 seconds.")
 
     top_n = max(1, min(top_n, 100))
     depth_window_bps = max(5, min(depth_window_bps, 100))
