@@ -1,0 +1,40 @@
+I'm getting agent error "Agent error: Agent returned 500" on the hyperliquid page when clicking agent. Is this a frotnend or backend issue
+
+3 minutes ago
+
+3 actions
+The log tells me exactly what's happening — it's a backend issue. Let me look at the agent-rank proxy route to understand the full error chain:
+
+
+5 actions
+Let me read the full runAgent function to see exactly what payload is being sent:
+
+
+2 actions
+The log says it all — POST /api/hyperliquid/agent-rank 500 in 126ms :: {"error":"Agent 500"}. This is a backend issue. The Express proxy successfully reached the FastAPI backend at fast-api-server-trading-agent-aidanpilon.replit.app, but the backend returned a 500. The frontend code and the proxy are both working correctly.
+
+However, right now the proxy is throwing away the backend's actual error message and only surfacing "Agent 500" — which makes it impossible to know why the backend is failing. Let me fix the proxy to log and pass through the real error body so you can actually see what the backend is saying:
+
+
+2 actions
+Now restart so the improved logging kicks in, then trigger the agent to see the real backend error message:
+
+
+2 actions
+Now let me directly test the agent endpoint to capture the real backend error:
+
+
+4 actions
+It's confirmed: the error is entirely on the backend side, not the frontend. Here's what the logs show:
+
+Before (when you clicked Agent): POST /api/hyperliquid/agent-rank 500 in 126ms — the FastAPI backend at fast-api-server-trading-agent-aidanpilon.replit.app returned a 500 internally.
+
+Just now (my direct test): POST /api/hyperliquid/agent-rank 200 in 537ms — the same backend returned a successful result immediately.
+
+So it was transient — the backend was likely cold-starting, its internal LLM call was temporarily failing, or it was momentarily overloaded. The frontend and the proxy were both working correctly the whole time; they just faithfully forwarded the backend's 500 error to you.
+
+What I improved to help with this going forward:
+
+The proxy now logs the full backend error body to the server console (not just "Agent 500"), so if it fails again you can see the exact reason the FastAPI is returning 500 — whether it's a prompt error, an upstream API failure, a data validation issue, etc.
+The error message surfaced to you in the UI will also include more detail from the backend instead of the generic "Agent returned 500".
+There's nothing more to fix on the frontend for this. If the agent 500s consistently rather than intermittently, it's a bug that needs to be fixed in the FastAPI backend service.

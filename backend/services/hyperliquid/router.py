@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from .models import HeroSignal, ScreenerAsset
 from .ranking_engine import generate_rationale, rank_assets
 from .signal_modules import build_signal_payload
-from .signals import build_signal_sections, build_summary_cards, generate_agent_briefing, generate_hero_signals
+from .signals import build_signal_sections, build_summary_cards, generate_agent_briefing, generate_hero_signals, _compute_market_regime
 from .state import HyperliquidState
 from .tsmom import compute_tsmom_signals
 
@@ -574,73 +574,192 @@ async def _fetch_fear_greed() -> dict:
         return {}
 
 
-async def _generate_llm_analysis(ranked: list, fear_greed: dict) -> str:
+def _build_asset_line(a: ScreenerAsset) -> str:
     """
-    Call Claude Haiku for a concise market analysis from screener data.
-    Returns empty string if ANTHROPIC_API_KEY not set or on error.
+    Build a rich single-line summary of an asset for the LLM prompt.
+    Packs all computed signals into a compact, readable format.
+    """
+    fund_8h  = (a.funding or 0.0) * 8 * 100          # 8-hour funding %
+    chg      = a.pct_change_24h or 0.0
+    oi       = (a.open_interest_usd or 0.0) / 1_000_000
+    vol      = (a.day_ntl_vlm or 0.0) / 1_000_000
+    score    = a.composite_signal_score or 50
+    setup    = a.setup_type or "—"
+
+    parts = [
+        f"{a.coin}",
+        f"${a.mark_px:.4g}" if a.mark_px else "",
+        f"24h:{chg:+.1f}%",
+        f"8hFund:{fund_8h:+.4f}%",
+        f"OI:${oi:.0f}M",
+        f"Vol:${vol:.0f}M",
+        f"score:{score:.0f}",
+        f"setup:{setup}",
+    ]
+
+    extras = []
+    if a.momentum_1h is not None:
+        extras.append(f"mom1h:{a.momentum_1h:+.2f}%")
+    if a.momentum_4h is not None:
+        extras.append(f"mom4h:{a.momentum_4h:+.2f}%")
+    if a.recent_trade_imbalance is not None:
+        flow_pct = a.recent_trade_imbalance * 100
+        extras.append(f"flow:{flow_pct:+.0f}%buy")
+    if a.orderbook_imbalance is not None:
+        extras.append(f"book:{a.orderbook_imbalance:+.2f}")
+    if a.oi_change_1h is not None:
+        extras.append(f"OIchg1h:{a.oi_change_1h*100:+.1f}%")
+    if a.volume_impulse is not None and abs(a.volume_impulse) > 0.2:
+        extras.append(f"volImpulse:{a.volume_impulse:+.2f}")
+    if a.distance_mark_oracle_pct is not None and abs(a.distance_mark_oracle_pct) > 0.3:
+        extras.append(f"oracleDelta:{a.distance_mark_oracle_pct:+.2f}%")
+    if a.exhaustion_score is not None and a.exhaustion_score > 55:
+        extras.append(f"exhaustion:{a.exhaustion_score:.0f}")
+    if a.collapse_risk_score is not None and a.collapse_risk_score > 55:
+        extras.append(f"collapseRisk:{a.collapse_risk_score:.0f}")
+    if a.squeeze_candidate:
+        extras.append("SQUEEZE")
+    if a.crowded_long:
+        extras.append("CROWDED_LONG")
+    if a.crowded_short:
+        extras.append("CROWDED_SHORT")
+
+    if extras:
+        parts.append("|".join(extras))
+
+    return "  " + " · ".join(p for p in parts if p)
+
+
+async def _generate_llm_analysis(ranked: list[ScreenerAsset], fear_greed: dict) -> str:
+    """
+    Call Claude for a full derivatives market analysis using all computed signals.
+    Returns empty string if ANTHROPIC_API_KEY not set or on error (non-fatal).
+    Retries once on transient failure.
     """
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key or not ranked:
         return ""
+
+    perps = [a for a in ranked if a.market_type == "perp"]
+
+    # ── Market regime ───────────────────────────────────────────────────────
     try:
+        regime_data = _compute_market_regime(perps)
+        regime      = regime_data.get("regime", "unknown")
+        regime_desc = regime_data.get("description", "")
+    except Exception:
+        regime = "unknown"; regime_desc = ""
+
+    # ── Breadth stats ───────────────────────────────────────────────────────
+    long_count   = sum(1 for a in perps if a.signal_direction == "long")
+    short_count  = sum(1 for a in perps if a.signal_direction == "short")
+    neutral_count= len(perps) - long_count - short_count
+    crowded_long_ct  = sum(1 for a in perps if a.crowded_long)
+    crowded_short_ct = sum(1 for a in perps if a.crowded_short)
+    squeeze_ct   = sum(1 for a in perps if a.squeeze_candidate)
+    exhaust_ct   = sum(1 for a in perps if (a.exhaustion_score or 0) > 55)
+    collapse_ct  = sum(1 for a in perps if (a.collapse_risk_score or 0) > 55)
+    disloc_ct    = sum(1 for a in perps if a.dislocated_vs_oracle)
+    avg_fund_8h  = (
+        sum((a.funding or 0) * 8 * 100 for a in perps[:60]) / max(len(perps[:60]), 1)
+    )
+
+    fg_val = fear_greed.get("value", "N/A")
+    fg_cls = fear_greed.get("value_classification", "Unknown")
+
+    btc = next((a for a in perps if a.coin == "BTC"), None)
+    eth = next((a for a in perps if a.coin == "ETH"), None)
+    btc_line = (
+        f"BTC ${btc.mark_px:,.0f} | 24h:{btc.pct_change_24h or 0:+.1f}% | "
+        f"8hFund:{(btc.funding or 0)*8*100:+.4f}% | OI:${(btc.open_interest_usd or 0)/1e9:.1f}B"
+    ) if btc else "BTC: not in universe"
+    eth_line = (
+        f"ETH ${eth.mark_px:,.0f} | 24h:{eth.pct_change_24h or 0:+.1f}% | "
+        f"8hFund:{(eth.funding or 0)*8*100:+.4f}%"
+    ) if eth else ""
+
+    # ── Asset buckets ───────────────────────────────────────────────────────
+    top_longs   = [a for a in perps if a.signal_direction == "long"][:8]
+    top_shorts  = [a for a in perps if a.signal_direction == "short"][:8]
+    breakouts   = sorted(perps, key=lambda a: -(a.breakout_score or 0))[:5]
+    squeezes    = [a for a in perps if a.squeeze_candidate][:4]
+    exhausted   = sorted(
+        [a for a in perps if (a.exhaustion_score or 0) > 55],
+        key=lambda a: -(a.exhaustion_score or 0)
+    )[:4]
+    dislocated  = sorted(
+        [a for a in perps if a.dislocated_vs_oracle],
+        key=lambda a: -abs(a.distance_mark_oracle_pct or 0)
+    )[:4]
+
+    def _section(title: str, assets: list[ScreenerAsset]) -> str:
+        if not assets:
+            return f"{title}: (none)\n"
+        lines = "\n".join(_build_asset_line(a) for a in assets)
+        return f"{title}:\n{lines}\n"
+
+    prompt = (
+        "You are a professional Hyperliquid perpetuals trader with deep expertise in "
+        "derivatives microstructure, funding dynamics, and momentum/mean-reversion signals.\n\n"
+        "═══ MARKET CONTEXT ═══\n"
+        f"Fear & Greed: {fg_val}/100 ({fg_cls})\n"
+        f"{btc_line}\n"
+        + (f"{eth_line}\n" if eth_line else "")
+        + f"Regime: {regime} — {regime_desc}\n"
+        f"Breadth: {long_count} bullish / {short_count} bearish / {neutral_count} neutral "
+        f"({len(perps)} perps scanned)\n"
+        f"Avg 8h funding: {avg_fund_8h:+.4f}% "
+        f"(+ve = longs crowded | –ve = shorts crowded)\n"
+        f"Crowded longs: {crowded_long_ct} | Crowded shorts: {crowded_short_ct}\n"
+        f"Squeeze candidates: {squeeze_ct} | Exhaustion signals: {exhaust_ct} | "
+        f"Collapse risk: {collapse_ct} | Oracle dislocations: {disloc_ct}\n\n"
+        "═══ SIGNAL DATA ═══\n"
+        "Fields per asset: coin · price · 24h% · 8hFund% · OI · Vol · compositeScore · setupType "
+        "· mom1h · mom4h · flowBuy% · bookImbalance · OIchg1h · volImpulse · oracleDelta · "
+        "exhaustionScore · collapseRisk · SQUEEZE/CROWDED flags\n\n"
+        + _section("TOP LONG SETUPS", top_longs)
+        + "\n"
+        + _section("TOP SHORT SETUPS", top_shorts)
+        + "\n"
+        + _section("BREAKOUT CANDIDATES", breakouts)
+        + "\n"
+        + (_section("SQUEEZE CANDIDATES (short-crowded, neg funding)", squeezes) if squeezes else "")
+        + (_section("EXHAUSTION / COLLAPSE RISK (overextended, fade setups)", exhausted) if exhausted else "")
+        + (_section("ORACLE DISLOCATIONS (mark vs oracle gap)", dislocated) if dislocated else "")
+        + "\n═══ YOUR ANALYSIS ═══\n"
+        "Write exactly 3 paragraphs, total ≤ 300 words:\n\n"
+        "1. REGIME & BIAS — What the breadth, funding, and fear/greed data tell you about "
+        "current market positioning and risk. Is there crowding? Are there squeeze risks? "
+        "What's the dominant flow narrative?\n\n"
+        "2. BEST LONG SETUPS — Pick 2-3 specific coins from the data above. For each: "
+        "why it ranks (momentum, flow, setup type, funding tail-wind), and the exact "
+        "price/structure condition that makes it a trade right now.\n\n"
+        "3. BEST SHORT OR FADE SETUP — Pick 1-2 coins. Could be a crowded-long fade, "
+        "an exhaustion collapse, a squeeze play, or an oracle-dislocation mean-reversion. "
+        "State the thesis precisely.\n\n"
+        "Rules: No disclaimers. No generic crypto commentary. Every claim must reference "
+        "a specific data point from the tables above. Trader to trader. Be direct."
+    )
+
+    async def _call_claude(tokens: int, model: str) -> str:
         import anthropic as _anthropic
         aclient = _anthropic.AsyncAnthropic(api_key=api_key)
-
-        fg_val = fear_greed.get("value", "N/A")
-        fg_cls = fear_greed.get("value_classification", "Unknown")
-
-        def _fmt(a: ScreenerAsset) -> str:
-            fund_ann = (a.funding or 0.0) * 8760 * 100
-            chg = a.pct_change_24h or 0.0
-            oi  = (a.open_interest_usd or 0.0) / 1_000_000
-            return (
-                f"  {a.coin}: mark=${a.mark_px:.4g}, 24h={chg:+.1f}%, "
-                f"funding={fund_ann:+.1f}%/yr, OI=${oi:.0f}M"
-            )
-
-        top_longs  = [a for a in ranked if a.signal_direction == "long"][:5]
-        top_shorts = [a for a in ranked if a.signal_direction == "short"][:5]
-        long_count  = sum(1 for a in ranked if a.signal_direction == "long")
-        short_count = sum(1 for a in ranked if a.signal_direction == "short")
-
-        btc = next((a for a in ranked if a.coin == "BTC"), None)
-        btc_line = (
-            f"BTC ${btc.mark_px:,.0f} | 24h: {btc.pct_change_24h or 0:+.1f}% | "
-            f"funding: {(btc.funding or 0)*8760*100:+.1f}%/yr"
-        ) if btc else "BTC: not in universe"
-
-        avg_funding = (
-            sum((a.funding or 0) for a in ranked[:50]) / max(len(ranked[:50]), 1) * 8760 * 100
-        )
-
-        longs_text  = "\n".join(_fmt(a) for a in top_longs)  or "  (none)"
-        shorts_text = "\n".join(_fmt(a) for a in top_shorts) or "  (none)"
-
-        prompt = (
-            "You're a professional crypto derivatives trader analyzing Hyperliquid perps.\n\n"
-            f"Fear & Greed Index: {fg_val}/100 ({fg_cls})\n"
-            f"{btc_line}\n"
-            f"Signal split: {long_count} bullish / {short_count} bearish / "
-            f"{len(ranked) - long_count - short_count} neutral out of {len(ranked)} perps\n"
-            f"Avg annualized funding (top 50): {avg_funding:+.1f}% "
-            f"(positive = longs paying shorts, bearish skew)\n\n"
-            f"TOP LONG SETUPS:\n{longs_text}\n\n"
-            f"TOP SHORT SETUPS:\n{shorts_text}\n\n"
-            "Write 2 punchy paragraphs (total ≤160 words):\n"
-            "1. Current regime and positioning bias\n"
-            "2. 2-3 specific assets to focus on right now and the exact setup thesis\n\n"
-            "No disclaimers. Trader to trader."
-        )
-
         msg = await aclient.messages.create(
-            model="claude-3-5-haiku-20241022",
-            max_tokens=300,
+            model=model,
+            max_tokens=tokens,
             messages=[{"role": "user", "content": prompt}],
         )
         return msg.content[0].text.strip()
-    except Exception as e:
-        print(f"[HL][agent] LLM analysis error: {e}")
-        return ""
+
+    for attempt in range(2):
+        try:
+            result = await _call_claude(tokens=600, model="claude-3-haiku-20240307")
+            return result
+        except Exception as e:
+            print(f"[HL][agent] LLM attempt {attempt+1} error: {e}")
+            if attempt == 0:
+                await asyncio.sleep(1.5)
+    return ""
 
 
 class AgentRankIn(BaseModel):
@@ -723,9 +842,16 @@ async def agent_rank(req: AgentRankIn):
         f"Most extreme funding: {extreme_fund[0]} ({extreme_fund[1]:+.0%} ann.)."
     )
 
-    # Await Fear & Greed (should already be done by now) then call LLM
+    # Await Fear & Greed (should already be done by now) then call LLM (25s timeout)
     fear_greed = await fg_task
-    llm_analysis = await _generate_llm_analysis(ranked, fear_greed)
+    try:
+        llm_analysis = await asyncio.wait_for(
+            _generate_llm_analysis(ranked, fear_greed),
+            timeout=25.0,
+        )
+    except asyncio.TimeoutError:
+        print("[HL][agent] LLM analysis timed out after 25s — returning without analysis")
+        llm_analysis = ""
 
     return {
         "rankedCoins":   ranked_coins,
