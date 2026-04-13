@@ -1,10 +1,11 @@
 """
 Hyperliquid Screener — Advanced Signal Modules
 
-Three new signal sections for the dashboard:
+Four signal sections for the dashboard:
   1. Relative Strength Leaders — outperformance vs BTC benchmark
   2. Order Book Pressure — directional pressure from L2 depth
   3. OI Regime Shift — classify price/OI dynamics into regimes
+  4. OI Cap Risk — open interest crowding vs exchange-imposed caps
 
 All computations are deterministic. No LLM calls.
 """
@@ -474,6 +475,154 @@ def compute_oi_regime_shift(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 4. OI Cap Risk
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Configurable thresholds for OI cap utilization status buckets
+OI_CAP_THRESHOLD_CROWDED  = 0.70   # >= 70% utilization
+OI_CAP_THRESHOLD_NEAR_CAP = 0.85   # >= 85%
+OI_CAP_THRESHOLD_CAP_RISK = 0.95   # >= 95%
+
+
+def _classify_oi_cap_status(utilization: float) -> str:
+    """Classify OI cap utilization into a status bucket."""
+    if utilization >= OI_CAP_THRESHOLD_CAP_RISK:
+        return "Cap Risk"
+    elif utilization >= OI_CAP_THRESHOLD_NEAR_CAP:
+        return "Near Cap"
+    elif utilization >= OI_CAP_THRESHOLD_CROWDED:
+        return "Crowded"
+    return "Normal"
+
+
+def compute_oi_cap_risk(
+    state: HyperliquidState,
+    top_n: int = 20,
+) -> list[dict]:
+    """
+    Surface assets whose open interest is crowded relative to their OI cap.
+
+    Data sources:
+    - state.oi_caps: per-coin OI cap in USD notional (from HIP-3 perpDexLimits)
+    - state.perps_at_oi_cap: main crypto perps at their cap (from perpsAtOpenInterestCap)
+    - asset.open_interest_usd: current OI per asset
+
+    Primary sort: utilization descending
+    Secondary sort: absolute funding (extreme funding = more pressure)
+    Tertiary sort: absolute price change (velocity)
+
+    Returns top_n assets sorted by utilization with optional score boosts.
+    """
+    if not state.oi_caps and not state.perps_at_oi_cap:
+        print("[HL][signals] OI Cap Risk: no cap data available")
+        return []
+
+    perps = [
+        a for a in state.perp_assets()
+        if a.market_status == "active"
+        and (not state.universe_allowlist or state.in_universe(a.coin))
+    ]
+
+    results = []
+    skipped = 0
+
+    for asset in perps:
+        current_oi = asset.open_interest_usd
+        if not current_oi or current_oi <= 0:
+            continue
+
+        # Check if this asset has a known OI cap
+        oi_cap = state.oi_caps.get(asset.coin)
+
+        # For main crypto perps at their cap (no explicit cap value),
+        # mark them as Cap Risk with utilization = 1.0
+        is_at_cap = asset.coin in state.perps_at_oi_cap
+
+        if oi_cap is None and not is_at_cap:
+            skipped += 1
+            continue
+
+        if oi_cap is not None and oi_cap <= 0:
+            skipped += 1
+            continue
+
+        # Compute utilization
+        if oi_cap is not None and oi_cap > 0:
+            utilization = current_oi / oi_cap
+            cap_remaining = oi_cap - current_oi
+        elif is_at_cap:
+            # At cap but no explicit cap value — treat as 100% utilized
+            utilization = 1.0
+            oi_cap = current_oi  # approximate the cap as current OI
+            cap_remaining = 0.0
+        else:
+            continue
+
+        status = _classify_oi_cap_status(utilization)
+
+        # ── Sorting score ──────────────────────────────────────────────
+        # Base score is utilization (0-1 scale, higher = more crowded)
+        sort_score = utilization * 100  # scale to 0-100
+
+        # Bonus: extreme funding (annualized)
+        funding_ann = abs((asset.funding or 0) * 8760)
+        if funding_ann > 0.50:  # >50% annualized
+            sort_score += min(funding_ann * 2, 5.0)
+
+        # Bonus: strong recent price change
+        price_change = abs(asset.pct_change_24h or 0)
+        if price_change > 5.0:  # >5% in 24h
+            sort_score += min(price_change * 0.2, 3.0)
+
+        # Bonus: thin book (low liquidity amplifies cap risk)
+        bid_depth = asset.orderbook_bid_depth or 0
+        ask_depth = asset.orderbook_ask_depth or 0
+        total_depth = bid_depth + ask_depth
+        if 0 < total_depth < 50_000:  # very thin book
+            sort_score += 2.0
+
+        # Bonus: abnormal volume
+        vol_impulse = asset.volume_impulse
+        if vol_impulse is not None and vol_impulse > 1.5:
+            sort_score += min((vol_impulse - 1.0) * 1.5, 3.0)
+
+        # Display name: strip DEX prefix for HIP-3 assets
+        display = asset.display_name
+
+        results.append({
+            "symbol": asset.coin,
+            "display_name": display,
+            "mark_price": asset.mark_px,
+            "current_oi": round(current_oi, 2),
+            "oi_cap": round(oi_cap, 2) if oi_cap is not None else None,
+            "utilization": round(utilization, 6),
+            "utilization_pct": round(utilization * 100, 2),
+            "cap_remaining": round(max(cap_remaining, 0), 2),
+            "status": status,
+            "funding_ann_pct": round((asset.funding or 0) * 8760 * 100, 2),
+            "price_change_pct": round(asset.pct_change_24h, 4) if asset.pct_change_24h is not None else None,
+            "volume_24h": asset.day_ntl_vlm,
+            "volume_impulse": round(vol_impulse, 3) if vol_impulse is not None else None,
+            "open_interest_usd": current_oi,
+            "sort_score": round(sort_score, 4),
+        })
+
+    if skipped:
+        print(f"[HL][signals] OI Cap Risk: skipped {skipped} assets (no cap data)")
+
+    # Sort: utilization descending (primary), abs funding (secondary), abs price change (tertiary)
+    results.sort(
+        key=lambda r: (
+            r["sort_score"],
+            abs(r.get("funding_ann_pct") or 0),
+            abs(r.get("price_change_pct") or 0),
+        ),
+        reverse=True,
+    )
+    return results[:top_n]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Combined endpoint builder
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -484,35 +633,45 @@ def build_signal_payload(
     top_n: int = 20,
 ) -> dict:
     """
-    Build the complete signals response payload with all 3 signal modules.
+    Build the complete signals response payload with all 4 signal modules.
 
     Returns:
     {
         "relative_strength_leaders": [...],
         "order_book_pressure": [...],
         "oi_regime_shift": [...],
+        "oi_cap_risk": [...],
         "as_of": "ISO timestamp",
         "metadata": {
             "benchmark": "BTC",
             "depth_window_bps": 20,
             "intervals": ["1h", "4h", "24h"],
             "top_n": 20,
+            "oi_cap_thresholds": {...},
         }
     }
     """
     rs_leaders = compute_relative_strength(state, benchmark=benchmark, top_n=top_n)
     ob_pressure = compute_order_book_pressure(state, depth_window_bps=depth_window_bps, top_n=top_n)
     oi_regime = compute_oi_regime_shift(state, top_n=top_n)
+    oi_cap = compute_oi_cap_risk(state, top_n=top_n)
 
     return {
         "relative_strength_leaders": rs_leaders,
         "order_book_pressure": ob_pressure,
         "oi_regime_shift": oi_regime,
+        "oi_cap_risk": oi_cap,
         "as_of": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "metadata": {
             "benchmark": benchmark,
             "depth_window_bps": depth_window_bps,
             "intervals": ["1h", "4h", "24h"],
             "top_n": top_n,
+            "oi_cap_thresholds": {
+                "normal": OI_CAP_THRESHOLD_CROWDED,
+                "crowded": OI_CAP_THRESHOLD_CROWDED,
+                "near_cap": OI_CAP_THRESHOLD_NEAR_CAP,
+                "cap_risk": OI_CAP_THRESHOLD_CAP_RISK,
+            },
         },
     }

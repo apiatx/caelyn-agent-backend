@@ -69,6 +69,13 @@ class HyperliquidState:
         # Used to compute volume_impulse_5m and volume_impulse_15m
         self.volume_5m_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=30))
 
+        # OI caps: coin → cap in USD notional (from perpDexLimits + perpsAtOpenInterestCap)
+        self.oi_caps: dict[str, float] = {}
+        # Main crypto perps currently at their OI cap (from perpsAtOpenInterestCap)
+        self.perps_at_oi_cap: set[str] = set()
+        # Timestamp of last OI cap refresh
+        self.oi_caps_ts: Optional[float] = None
+
         # Timing
         self.boot_ts: Optional[float] = None
         self.last_mids_ts: Optional[float] = None
