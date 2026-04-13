@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from .models import HeroSignal, ScreenerAsset
 from .ranking_engine import generate_rationale, rank_assets
+from .signal_modules import build_signal_payload
 from .signals import build_signal_sections, build_summary_cards, generate_agent_briefing, generate_hero_signals
 from .state import HyperliquidState
 from .tsmom import compute_tsmom_signals
@@ -833,6 +834,44 @@ async def get_tsmom_signals(top_n: int = 60):
         }
 
     return compute_tsmom_signals(state, top_n=top_n)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/hyperliquid/screener/signals
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/signals")
+async def get_signals(
+    benchmark: str = "BTC",
+    depth_window_bps: float = 20.0,
+    top_n: int = 20,
+):
+    """
+    Advanced signal modules: Relative Strength Leaders, Order Book Pressure,
+    and OI Regime Shift.
+
+    Returns:
+      {
+        "relative_strength_leaders": [...],
+        "order_book_pressure": [...],
+        "oi_regime_shift": [...],
+        "as_of": "ISO timestamp",
+        "metadata": { "benchmark", "depth_window_bps", "intervals", "top_n" }
+      }
+    """
+    state = _get_state()
+    if not state.is_ready:
+        raise HTTPException(503, "Screener is still initializing")
+
+    top_n = max(1, min(top_n, 100))
+    depth_window_bps = max(5, min(depth_window_bps, 100))
+
+    return build_signal_payload(
+        state,
+        benchmark=benchmark,
+        depth_window_bps=depth_window_bps,
+        top_n=top_n,
+    )
 
 
 async def broadcast_asset_update(coin: str, state: HyperliquidState):

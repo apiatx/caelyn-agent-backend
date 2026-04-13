@@ -234,6 +234,17 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
     except Exception as e:
         print(f"[HL][boot] 5m candle error: {e}")
 
+    # 5a. 4h candles for top-40 (used by Relative Strength signal module)
+    print(f"[HL][boot] Fetching 4h candles for {len(top40)} assets...")
+    try:
+        candles_4h = await client.get_candles_multi(top40, "4h", n_bars=12)
+        for coin, bars in candles_4h.items():
+            if bars:
+                state.add_candles(coin, "4h", bars)
+        print(f"[HL][boot] 4h candles loaded for {sum(1 for b in candles_4h.values() if b)} coins")
+    except Exception as e:
+        print(f"[HL][boot] 4h candle error: {e}")
+
     # 5b. 1d candles for top-15 crypto perps — loaded at boot so TSMOM is
     #     ready immediately when is_ready flips True (no waiting for post-boot).
     top15_crypto = [c for c in top20 if ":" not in c][:15]
@@ -541,6 +552,20 @@ async def _periodic_candle_refresh(state: HyperliquidState, client: HyperliquidR
             for coin, bars in candles5.items():
                 if bars:
                     state.add_candles(coin, "5m", bars)
+
+            # Refresh 4h candles for Relative Strength signals
+            candles4h = await client.get_candles_multi(top40, "4h", n_bars=12)
+            for coin, bars in candles4h.items():
+                if bars:
+                    state.add_candles(coin, "4h", bars)
+
+            # Refresh L2 books for Order Book Pressure signals
+            books = await client.get_l2_books_multi(top20)
+            for coin, book in books.items():
+                levels = book.get("levels") or []
+                if levels:
+                    patch_from_l2(state, coin, levels)
+                    state.set_book(coin, book)
 
             # Refresh 1d candles for TSMOM
             tsmom_coins = [c for c in top40 if ":" not in c][:50]
