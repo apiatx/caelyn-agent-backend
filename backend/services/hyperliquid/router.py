@@ -848,15 +848,16 @@ async def get_signals(
 ):
     """
     Advanced signal modules: Relative Strength Leaders, Order Book Pressure,
-    and OI Regime Shift.
+    OI Regime Shift, and OI Cap Risk.
 
     Returns:
       {
         "relative_strength_leaders": [...],
         "order_book_pressure": [...],
         "oi_regime_shift": [...],
+        "oi_cap_risk": [...],
         "as_of": "ISO timestamp",
-        "metadata": { "benchmark", "depth_window_bps", "intervals", "top_n" }
+        "metadata": { "benchmark", "depth_window_bps", "intervals", "top_n", "oi_cap_thresholds" }
       }
     """
     state = _get_state()

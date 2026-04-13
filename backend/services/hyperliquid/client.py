@@ -78,6 +78,29 @@ class HyperliquidRestClient:
         """
         return await self._post({"type": "metaAndAssetCtxs", "dex": dex})
 
+    async def get_perp_dex_limits(self, dex: str) -> Optional[dict]:
+        """
+        Fetch OI cap limits for a HIP-3 DEX.
+        Returns {totalOiCap, oiSzCapPerPerp, maxTransferNtl, coinToOiCap: [[coin, cap], ...]}
+        or None for the main crypto DEX (no caps exposed).
+        """
+        try:
+            data = await self._post({"type": "perpDexLimits", "dex": dex})
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    async def get_perps_at_oi_cap(self) -> list[str]:
+        """
+        Fetch the list of main crypto perps currently at their OI cap.
+        Returns list of coin names (e.g. ['CANTO', 'FTM']).
+        """
+        try:
+            data = await self._post({"type": "perpsAtOpenInterestCap"})
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
     async def get_all_mids(self) -> dict[str, str]:
         """All current mid prices keyed by coin name."""
         return await self._post({"type": "allMids"})

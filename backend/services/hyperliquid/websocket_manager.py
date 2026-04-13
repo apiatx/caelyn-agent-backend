@@ -154,6 +154,7 @@ async def boot_and_run(state: HyperliquidState):
             _periodic_feature_recompute(state),
             _post_boot_enrich(state, client),
             _periodic_hip3_refresh(state, client),
+            _periodic_oi_cap_refresh(state, client),
             return_exceptions=True,
         )
     except Exception as e:
@@ -271,10 +272,70 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
     except Exception as e:
         print(f"[HL][boot] L2 books error: {e}")
 
+    # 6b. OI caps for HIP-3 DEXes + main crypto perps at cap
+    print("[HL][boot] Fetching OI caps...")
+    await _refresh_oi_caps(state, client)
+
     # 7. Initial feature pass
     print("[HL][boot] Running feature pass...")
     n = run_full_feature_pass(state)
     print(f"[HL][boot] Features computed for {n} assets")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OI cap data (HIP-3 perpDexLimits + perpsAtOpenInterestCap)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Known HIP-3 DEX prefixes to query for OI caps
+_HIP3_DEX_PREFIXES = ["xyz", "vntl", "km", "flx", "cash", "hyna", "abcd", "para"]
+
+
+async def _refresh_oi_caps(state: HyperliquidState, client: HyperliquidRestClient):
+    """
+    Fetch OI caps from two sources:
+    1. perpDexLimits for each HIP-3 DEX → per-coin caps in USD notional
+    2. perpsAtOpenInterestCap → list of main crypto perps at their cap
+    Merges into state.oi_caps and state.perps_at_oi_cap.
+    """
+    caps: dict[str, float] = {}
+    dex_defaults: dict[str, float] = {}  # dex prefix → default per-perp cap
+
+    # 1. Fetch HIP-3 DEX limits concurrently
+    results = await asyncio.gather(
+        *[client.get_perp_dex_limits(dex) for dex in _HIP3_DEX_PREFIXES],
+        return_exceptions=True,
+    )
+    for dex, result in zip(_HIP3_DEX_PREFIXES, results):
+        if isinstance(result, Exception) or result is None:
+            continue
+        default_cap = float(result.get("oiSzCapPerPerp", 0))
+        dex_defaults[dex] = default_cap
+        for coin, cap_str in result.get("coinToOiCap", []):
+            try:
+                caps[coin] = float(cap_str)
+            except (TypeError, ValueError):
+                pass
+
+    # For HIP-3 assets without a specific cap entry, use the DEX default
+    for coin in state.assets:
+        if ":" in coin and coin not in caps:
+            prefix = coin.split(":")[0]
+            if prefix in dex_defaults:
+                caps[coin] = dex_defaults[prefix]
+
+    # 2. Fetch main crypto perps at their OI cap
+    try:
+        at_cap = await client.get_perps_at_oi_cap()
+        state.perps_at_oi_cap = set(at_cap)
+    except Exception as e:
+        print(f"[HL][oi_caps] perpsAtOpenInterestCap error: {e}")
+
+    state.oi_caps = caps
+    state.oi_caps_ts = time.time()
+    print(
+        f"[HL][oi_caps] Loaded {len(caps)} HIP-3 caps across {len(dex_defaults)} DEXes, "
+        f"{len(state.perps_at_oi_cap)} main perps at cap"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -594,6 +655,22 @@ async def _periodic_feature_recompute(state: HyperliquidState):
             _save_score_snapshots(state)
         except Exception as e:
             print(f"[HL][feature_recompute] Error: {e}")
+
+
+async def _periodic_oi_cap_refresh(state: HyperliquidState, client: HyperliquidRestClient):
+    """
+    Every 10 minutes: refresh OI cap data from HIP-3 DEX limits and main perp caps.
+    OI caps change infrequently so a 10-min interval is sufficient.
+    Waits 5 minutes initially to avoid overlapping with boot sequence.
+    """
+    await asyncio.sleep(300)   # 5 min head-start
+    while not _shutdown:
+        if state.is_ready:
+            try:
+                await _refresh_oi_caps(state, client)
+            except Exception as exc:
+                print(f"[HL][oi_cap_periodic] Error: {exc}")
+        await asyncio.sleep(600)   # 10 minutes
 
 
 async def _periodic_hip3_refresh(state: HyperliquidState, client: HyperliquidRestClient):
