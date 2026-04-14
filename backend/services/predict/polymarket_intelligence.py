@@ -43,6 +43,29 @@ _MARKET_CACHE_TTL = 90
 _SIGNALS_CACHE_TTL = 120
 _MARKET_DETAIL_TTL = 60
 
+_SPORTS_KEYWORDS = [
+    "nfl", "nba", "mlb", "nhl", "nascar", "ufc", "mma", "boxing",
+    "soccer", "football", "basketball", "baseball", "hockey", "tennis",
+    "golf", "cricket", "f1", "formula 1", "formula one", "rugby",
+    "super bowl", "world series", "stanley cup", "champions league",
+    "premier league", "fifa", "olympics", "paralympics",
+    "vs.", " vs ", "game 1", "game 2", "game 3", "game 4", "game 5",
+    "game 6", "game 7",
+    "yankees", "dodgers", "mets", "cubs", " sox", "astros", "braves",
+    "orioles", "twins", "marlins", "diamondbacks", "rangers", "athletics",
+    "phillies", "angels", "padres", "cardinals", "brewers",
+    "nationals", "tigers", "royals", "mariners", "pirates", "reds",
+    "rockies", "rays", "blue jays", "red sox", "white sox",
+]
+
+
+def _is_sports_market(m: dict) -> bool:
+    """Return True if this market appears to be a live sports game/match result."""
+    question = m.get("question", "").lower()
+    tags = " ".join(str(t).lower() for t in (m.get("tags") or []))
+    combined = f"{question} {tags}"
+    return any(kw in combined for kw in _SPORTS_KEYWORDS)
+
 
 class PolymarketIntelligence:
     """
@@ -109,13 +132,18 @@ class PolymarketIntelligence:
         expired_count = sum(1 for m in markets if m.get("is_expired"))
         resolving_count = sum(1 for m in markets if m.get("is_resolving"))
 
-        edges = [m for m in active_markets if m.get("edge_detected")]
-        mispricings = [m for m in active_markets if m.get("mispricing_score", 0) > 0.03]
-        movers = [m for m in active_markets if abs(m.get("price_change_1d", 0)) > 1.0]
-        momentum_up = [m for m in active_markets if m.get("volume_momentum") == "surging"]
-        momentum_down = [m for m in active_markets if m.get("volume_momentum") == "fading"]
-        whale_markets = [m for m in active_markets if m.get("whale_activity")]
-        competitive = [m for m in active_markets if m.get("is_competitive")]
+        # Exclude sports game markets from all signal lists — sports games resolve
+        # within hours (loser → 0%, winner → 100%) and dominate movers/edges/whale
+        # signals with noise irrelevant to macro/financial prediction markets.
+        macro_markets = [m for m in active_markets if not _is_sports_market(m)]
+
+        edges = [m for m in macro_markets if m.get("edge_detected")]
+        mispricings = [m for m in macro_markets if m.get("mispricing_score", 0) > 0.03]
+        movers = [m for m in macro_markets if abs(m.get("price_change_1d", 0)) > 1.0]
+        momentum_up = [m for m in macro_markets if m.get("volume_momentum") == "surging"]
+        momentum_down = [m for m in macro_markets if m.get("volume_momentum") == "fading"]
+        whale_markets = [m for m in macro_markets if m.get("whale_activity")]
+        competitive = [m for m in macro_markets if m.get("is_competitive")]
 
         total_vol_24h = sum(m.get("volume_24h", 0) for m in markets)
         total_liquidity = sum(m.get("liquidity", 0) for m in active_markets)
