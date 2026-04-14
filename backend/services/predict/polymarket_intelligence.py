@@ -592,8 +592,69 @@ class PolymarketIntelligence:
         The `limit` argument caps how many raw markets are returned before
         enrichment/active-filtering in get_top_markets().
         """
-        slug = tag.strip().lower().replace(" ", "-")
-        PAGE_MAX = 200  # events pages are heavier than markets pages
+        # Explicit label → Gamma slug mapping.
+        # Gamma's /events?tag_slug= requires exact slug values which often differ
+        # from the human-readable category labels the frontend dropdown sends.
+        # Verified against live Gamma API (April 2026).
+        _LABEL_TO_SLUG: dict[str, str] = {
+            # Sports
+            "sports": "sports",
+            # Politics / Government
+            "politics": "politics",
+            "election": "elections",
+            "elections": "elections",
+            # Crypto / Finance
+            "crypto": "crypto",
+            "cryptocurrency": "crypto",
+            "bitcoin": "bitcoin",
+            "finance": "finance",
+            "business": "business",
+            "economy": "economy",
+            "economics": "economy",
+            # Geopolitics
+            "geopolitics": "geopolitics",
+            "global": "world",
+            "world": "world",
+            # Tech / AI
+            "tech": "tech",
+            "technology": "tech",
+            "ai": "ai",
+            "science": "tech",
+            # Culture / Entertainment
+            "culture": "pop-culture",
+            "pop-culture": "pop-culture",
+            "entertainment": "entertainment",
+            "pop culture": "pop-culture",
+            # Weather / Environment
+            "weather": "weather",
+            "climate": "weather",
+            # Special Polymarket categories — no reliable Gamma slug, fall through to None
+            "trending": None,
+            "breaking": None,
+            "new": None,
+            "mentions": None,
+        }
+
+        raw_key = tag.strip().lower()
+        mapped = _LABEL_TO_SLUG.get(raw_key)
+        if mapped is None and raw_key not in _LABEL_TO_SLUG:
+            # Unknown label: derive slug the standard way (lower + hyphenate)
+            mapped = raw_key.replace(" ", "-")
+        # mapped == None means "no good Gamma slug exists" — we return empty so
+        # get_top_markets() falls back to the caller showing no-tag results.
+        if mapped is None:
+            return []
+        slug = mapped
+        # We always fetch a minimum of 200 events per tag regardless of how many
+        # markets the caller requested. Each event embeds many markets (often 10-30)
+        # but most may be closed date-series entries. Fetching at least 200 events
+        # ensures we have a large enough pool to find `limit` OPEN markets after the
+        # caller's active-market filter runs. For tags where the caller needs many
+        # results (limit > 400), we scale up proportionally.
+        EVENT_FETCH_MIN = 200
+        PAGE_MAX = 200  # events endpoint is heavier than markets endpoint
+
+        events_to_fetch = max(EVENT_FETCH_MIN, limit // 5)
 
         base_params = {
             "active": "true",
@@ -605,9 +666,9 @@ class PolymarketIntelligence:
         async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
             all_markets: list[dict] = []
             offset = 0
-            remaining = min(limit, 2000)
+            remaining = min(events_to_fetch, 1000)
 
-            while remaining > 0 and len(all_markets) < limit:
+            while remaining > 0:
                 page_size = min(remaining, PAGE_MAX)
                 params = {**base_params, "limit": str(page_size), "offset": str(offset)}
                 try:
@@ -636,7 +697,7 @@ class PolymarketIntelligence:
                     print(f"[PM_INTEL] _fetch_markets_by_tag({tag!r}) error (offset={offset}): {e}")
                     break
 
-            return all_markets[:limit]
+            return all_markets
 
     async def _fetch_market_by_condition(self, condition_id: str) -> Optional[dict]:
         try:
