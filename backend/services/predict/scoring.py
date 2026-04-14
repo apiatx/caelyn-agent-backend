@@ -47,16 +47,32 @@ WEIGHTS = {
 
 # ── Individual Scoring Dimensions ────────────────────────────────────────────
 
-def _conviction_score(yes_pct: float) -> float:
+def _conviction_score(yes_pct: float, price_change_1h: float = 0.0,
+                      price_change_24h: float = 0.0,
+                      price_change_1wk: float = 0.0) -> float:
     """
     Conviction Score (0-100).
     Markets far from 50/50 have stronger consensus conviction.
     A market at 95% YES or 5% YES both get high conviction.
-    Markets pinned at 0 or 100 with no volume get penalized later by trap_risk.
+
+    CRITICAL: Stale pinned markets (near 0/100 with no recent movement)
+    get conviction crushed to near 0 — these are resolved/dead markets
+    that should NOT dominate recommendations.
     """
     if yes_pct is None:
         return 0.0
+
     distance = abs(yes_pct - 50.0)
+
+    # Pinned market penalty: if near 0% or 100% AND all price changes minimal,
+    # this is a stale/resolved market — conviction should be near zero.
+    if (yes_pct < 5 or yes_pct > 95):
+        all_changes_minimal = (abs(price_change_1h) < 2.0
+                               and abs(price_change_24h) < 2.0
+                               and abs(price_change_1wk) < 2.0)
+        if all_changes_minimal:
+            return 2.0  # near-zero conviction for stale pinned markets
+
     # Scale: 0 distance = 0 conviction, 50 distance = 100 conviction
     return round(min(100.0, (distance / 50.0) * 100.0), 1)
 
@@ -73,11 +89,11 @@ def _momentum_score(
     Rewards acceleration and persistence. Penalizes stale pinned markets.
     Returns (score, label).
     """
-    # Avoid rewarding stale pinned markets at 0% or 100%
-    if yes_pct is not None and (yes_pct <= 1.0 or yes_pct >= 99.0):
+    # Avoid rewarding stale pinned markets near 0% or 100%
+    if yes_pct is not None and (yes_pct < 5.0 or yes_pct > 95.0):
         # If there's no recent movement, this is stale, not momentum
-        if abs(price_change_1h) < 0.5 and abs(price_change_24h) < 1.0:
-            return (5.0, "stale_pinned")
+        if abs(price_change_1h) < 2.0 and abs(price_change_24h) < 2.0:
+            return (0.0, "stale_pinned")
 
     score = 0.0
 
@@ -369,6 +385,7 @@ def _trap_risk_score(
     vol_liq_ratio: float,
     whale_activity: bool,
     days_to_expiry: Optional[int],
+    price_change_1h: float,
     price_change_24h: float,
     volume_momentum: str,
     is_competitive: bool,
@@ -386,9 +403,11 @@ def _trap_risk_score(
     risk = 0.0
 
     # Pinned at extremes with no movement = stale, possibly trap
-    if yes_pct <= 2.0 or yes_pct >= 98.0:
-        if abs(price_change_24h) < 1.0:
-            risk += 25  # pinned and stale
+    if yes_pct < 5.0 or yes_pct > 95.0:
+        if abs(price_change_24h) < 2.0 and abs(price_change_1h) < 2.0:
+            risk += 80  # pinned and stale — very high trap risk
+        elif abs(price_change_24h) < 2.0:
+            risk += 40  # pinned with tiny recent blip
 
     # Very wide spread = ugly execution, likely trap for retail
     if spread > 0.10:
@@ -463,7 +482,7 @@ def score_market(market: dict) -> dict:
     is_expired = market.get("is_expired", False)
     is_resolving = market.get("is_resolving", False)
 
-    conviction = _conviction_score(yes_pct)
+    conviction = _conviction_score(yes_pct, price_change_1h, price_change_24h, price_change_1wk)
 
     momentum_val, momentum_label = _momentum_score(
         price_change_1h, price_change_24h, price_change_1wk,
@@ -487,7 +506,7 @@ def score_market(market: dict) -> dict:
     trap_risk = _trap_risk_score(
         yes_pct, spread, spread_pct, liquidity, volume_24h,
         vol_liq_ratio, whale_activity, days_to_expiry,
-        price_change_24h, volume_momentum, is_competitive,
+        price_change_1h, price_change_24h, volume_momentum, is_competitive,
     )
 
     scores = {

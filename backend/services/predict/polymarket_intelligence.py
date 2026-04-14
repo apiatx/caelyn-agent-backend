@@ -325,6 +325,8 @@ class PolymarketIntelligence:
         """
         Return markets enriched with all 7 Prophetik scoring dimensions
         plus composite_score and momentum_label. Sorted by composite_score desc.
+        Score dimensions are also flattened to top-level keys for direct access.
+        All score fields guaranteed to be numbers (never None).
         """
         key = f"pm:scored:{limit}:{tag}:{min_volume_24h}"
         cached = cache.get(key)
@@ -333,17 +335,43 @@ class PolymarketIntelligence:
 
         markets = await self.get_top_markets(limit=limit, tag=tag, min_volume_24h=min_volume_24h)
         scored = score_markets(markets)
+
+        # Post-process: flatten score dimensions to top level, ensure no None
+        for m in scored:
+            scores = m.get("scores", {})
+            m["conviction_score"] = scores.get("conviction", 0) or 0
+            m["momentum_score"] = scores.get("momentum", 0) or 0
+            m["flow_score"] = scores.get("flow", 0) or 0
+            m["execution_quality_score"] = scores.get("execution_quality", 0) or 0
+            m["participation_quality_score"] = scores.get("participation_quality", 0) or 0
+            m["time_quality_score"] = scores.get("time_quality", 0) or 0
+            m["trap_risk_score"] = scores.get("trap_risk", 0) or 0
+            m["composite_score"] = m.get("composite_score", 0) or 0
+            m["momentum_label"] = m.get("momentum_label", "flat") or "flat"
+            # Add price_change_24h alias for frontend compatibility
+            m["price_change_24h"] = m.get("price_change_1d", 0)
+            # Use slug from Gamma API if available, otherwise generate from question
+            if not m.get("slug"):
+                question = m.get("question", "")
+                slug = question.lower().strip()
+                for ch in ["?", "'", '"', ",", ".", "!", "(", ")", "[", "]", "{", "}", "&", "%", "$", "#", "@"]:
+                    slug = slug.replace(ch, "")
+                slug = slug.replace(" ", "-").replace("--", "-").strip("-")
+                m["slug"] = slug[:100]
+
         cache.set(key, scored, _SCORED_CACHE_TTL)
         return scored
 
     async def get_recommendations(self) -> dict:
         """
         Top decision-layer payload: recommendation buckets with explainability.
-        Uses scored markets as input. Returns:
+        Uses scored markets as input. Returns bucket keys at top level:
         {
             "generated_at": "...",
             "market_count": N,
-            "buckets": { "best_bet_now": [...], ... }
+            "best_bet_now": [...],
+            "best_yes_setup": [...],
+            ...
         }
         """
         key = "pm:recommendations"
@@ -360,10 +388,11 @@ class PolymarketIntelligence:
         except Exception as e:
             print(f"[PREDICT/signal-tracker] update error (non-fatal): {e}")
 
+        # Return bucket keys at the top level for direct frontend access
         result = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "market_count": len(scored),
-            "buckets": buckets,
+            **buckets,
         }
         cache.set(key, result, _RECOMMENDATIONS_CACHE_TTL)
         return result
@@ -602,6 +631,7 @@ class PolymarketIntelligence:
             "clob_token_ids": tokens,
             "image": raw.get("image") or raw.get("icon"),
             "accepting_orders": bool(raw.get("acceptingOrders") or raw.get("accepting_orders")),
+            "slug": raw.get("slug") or raw.get("market_slug") or "",
         }
 
     def _score_efficiency(
@@ -915,12 +945,17 @@ def _slim(markets: list[dict]) -> list[dict]:
 def _slim_scored(markets: list[dict]) -> list[dict]:
     """Return a slimmed version of scored market dicts — includes scoring fields."""
     keep = [
-        "condition_id", "question", "yes_pct", "no_pct",
-        "volume_24h", "liquidity", "spread_pct",
+        "condition_id", "question", "yes_pct", "no_pct", "yes_price",
+        "volume_24h", "liquidity", "spread", "spread_pct",
         "price_change_1h", "price_change_1d", "price_change_1wk",
+        "price_change_24h",
         "volume_momentum", "whale_activity", "is_competitive",
-        "days_to_expiry", "end_date", "tags", "image", "vol_liq_ratio",
+        "days_to_expiry", "hours_to_expiry", "end_date", "tags", "image",
+        "vol_liq_ratio", "slug",
         "scores", "composite_score", "momentum_label",
+        "conviction_score", "momentum_score", "flow_score",
+        "execution_quality_score", "participation_quality_score",
+        "time_quality_score", "trap_risk_score",
     ]
     return [{k: m[k] for k in keep if k in m} for m in markets]
 

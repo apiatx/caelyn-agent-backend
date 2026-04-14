@@ -31,6 +31,41 @@ logger = logging.getLogger("prophetik.recommendations")
 _BUCKET_SIZE = 8  # max items per bucket
 
 
+def _is_stale_pinned(m: dict) -> bool:
+    """
+    Return True if a market is stale/pinned near 0% or 100% with no meaningful
+    recent movement. These should NOT appear in positive recommendation buckets.
+    """
+    yes_pct = m.get("yes_pct", 50)
+    if not (yes_pct < 5 or yes_pct > 95):
+        return False
+    pc_1h = abs(m.get("price_change_1h", 0))
+    pc_24h = abs(m.get("price_change_1d", 0))
+    pc_1wk = abs(m.get("price_change_1wk", 0))
+    return pc_1h < 2.0 and pc_24h < 2.0 and pc_1wk < 2.0
+
+
+def _direction_for_bucket(bucket_name: str, market: dict) -> str:
+    """Determine direction label for a recommendation item."""
+    if bucket_name == "avoid_or_trap_markets":
+        return "AVOID"
+    if bucket_name == "best_no_setup":
+        return "NO"
+    if bucket_name == "best_yes_setup":
+        return "YES"
+    # For other buckets, infer from price direction
+    pc_24h = market.get("price_change_1d", 0)
+    yes_pct = market.get("yes_pct", 50)
+    if bucket_name in ("best_mean_reversion_candidate",):
+        # Mean reversion = opposite of the recent move
+        return "NO" if pc_24h > 0 else "YES"
+    if pc_24h > 0 or yes_pct > 55:
+        return "YES"
+    if pc_24h < 0 or yes_pct < 45:
+        return "NO"
+    return "YES"
+
+
 def build_recommendations(scored_markets: list[dict]) -> dict:
     """
     Given a list of scored markets (output of scoring.score_markets),
@@ -43,23 +78,30 @@ def build_recommendations(scored_markets: list[dict]) -> dict:
         if not m.get("is_expired") and not m.get("is_resolving")
     ]
 
+    # Separate stale pinned markets — these should only appear in avoid bucket
+    non_stale = [m for m in active if not _is_stale_pinned(m)]
+
     buckets = {
-        "best_bet_now": _best_bet_now(active),
-        "best_yes_setup": _best_yes_setup(active),
-        "best_no_setup": _best_no_setup(active),
-        "best_momentum_continuation": _best_momentum_continuation(active),
-        "best_mean_reversion_candidate": _best_mean_reversion(active),
-        "best_whale_follow": _best_whale_follow(active),
-        "avoid_or_trap_markets": _avoid_or_trap(active),
-        "best_execution_quality": _best_execution(active),
-        "strongest_flow_without_confirmation": _flow_without_confirmation(active),
-        "strongest_conviction_with_good_execution": _conviction_with_execution(active),
+        "best_bet_now": _best_bet_now(non_stale),
+        "best_yes_setup": _best_yes_setup(non_stale),
+        "best_no_setup": _best_no_setup(non_stale),
+        "best_momentum_continuation": _best_momentum_continuation(non_stale),
+        "best_mean_reversion_candidate": _best_mean_reversion(non_stale),
+        "best_whale_follow": _best_whale_follow(non_stale),
+        "avoid_or_trap_markets": _avoid_or_trap(active),  # stale pinned CAN appear here
+        "best_execution_quality": _best_execution(non_stale),
+        "strongest_flow_without_confirmation": _flow_without_confirmation(non_stale),
+        "strongest_conviction_with_good_execution": _conviction_with_execution(non_stale),
     }
 
-    # Attach explanation strings to each bucket's items
+    # Attach explanation strings and direction to each bucket's items
     for bucket_name, items in buckets.items():
         for item in items:
             item["reasons"] = _generate_reasons(item, bucket_name)
+            # Ensure reasons always has at least 1 string
+            if not item["reasons"]:
+                item["reasons"] = ["Selected based on composite scoring"]
+            item["direction"] = _direction_for_bucket(bucket_name, item)
 
     logger.info(
         "recommendations built: %s",
@@ -171,10 +213,11 @@ def _best_whale_follow(markets: list[dict]) -> list[dict]:
 
 
 def _avoid_or_trap(markets: list[dict]) -> list[dict]:
-    """High trap risk — steer clear."""
+    """High trap risk — steer clear. Also captures stale pinned markets."""
     candidates = [
         m for m in markets
         if m.get("scores", {}).get("trap_risk", 0) >= 40
+        or _is_stale_pinned(m)
     ]
     candidates.sort(key=lambda m: m.get("scores", {}).get("trap_risk", 0), reverse=True)
     return [_slim_rec(m) for m in candidates[:_BUCKET_SIZE]]
@@ -322,14 +365,46 @@ def _generate_reasons(market: dict, bucket: str) -> list[str]:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _slim_rec(market: dict) -> dict:
-    """Return a recommendation-friendly subset of a scored market."""
+    """Return a recommendation-friendly subset of a scored market.
+    Includes all fields the frontend needs for recommendation cards.
+    """
     keep = [
         "condition_id", "question", "yes_pct", "no_pct",
-        "volume_24h", "liquidity", "spread_pct",
+        "yes_price", "no_price",
+        "volume_24h", "liquidity", "spread", "spread_pct",
         "price_change_1h", "price_change_1d", "price_change_1wk",
         "volume_momentum", "whale_activity", "is_competitive",
-        "days_to_expiry", "end_date", "tags", "image",
+        "days_to_expiry", "hours_to_expiry", "end_date", "tags", "image",
         "vol_liq_ratio", "momentum_label",
         "scores", "composite_score",
     ]
-    return {k: market[k] for k in keep if k in market}
+    result = {k: market[k] for k in keep if k in market}
+
+    # Add price_change_24h alias for frontend compatibility
+    result["price_change_24h"] = market.get("price_change_1d", 0)
+
+    # Add end_date_iso alias
+    result["end_date_iso"] = market.get("end_date")
+
+    # Flatten score dimensions to top level for easy frontend access
+    scores = market.get("scores", {})
+    result["conviction_score"] = scores.get("conviction", 0)
+    result["momentum_score"] = scores.get("momentum", 0)
+    result["flow_score"] = scores.get("flow", 0)
+    result["execution_quality_score"] = scores.get("execution_quality", 0)
+    result["participation_quality_score"] = scores.get("participation_quality", 0)
+    result["time_quality_score"] = scores.get("time_quality", 0)
+    result["trap_risk_score"] = scores.get("trap_risk", 0)
+
+    # Use slug from scored market if available, otherwise generate from question
+    if market.get("slug"):
+        result["slug"] = market["slug"]
+    else:
+        question = market.get("question", "")
+        slug = question.lower().strip()
+        for ch in ["?", "'", '"', ",", ".", "!", "(", ")", "[", "]", "{", "}", "&", "%", "$", "#", "@"]:
+            slug = slug.replace(ch, "")
+        slug = slug.replace(" ", "-").replace("--", "-").strip("-")
+        result["slug"] = slug[:100]
+
+    return result
