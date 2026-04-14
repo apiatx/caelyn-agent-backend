@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 
 from services.predict.polymarket_intelligence import polymarket_intel
 from services.predict.trading_agents import run_predict_analysis
-from services.predict.scoring import WEIGHTS as _SCORING_WEIGHTS
+from services.predict.scoring import score_markets as _score_markets, WEIGHTS as _SCORING_WEIGHTS
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -49,13 +49,36 @@ async def predict_markets(
 ):
     """
     Enhanced Polymarket market list with Jon-Becker analytics:
-    edge detection, volume momentum, whale signals, efficiency scores.
+    edge detection, volume momentum, whale signals, efficiency scores,
+    and Prophetik scoring dimensions (composite, conviction, flow, etc.).
     """
     try:
         markets = await polymarket_intel.get_top_markets(
             limit=limit, tag=tag, min_volume_24h=min_volume
         )
-        return JSONResponse(content={"markets": markets, "count": len(markets)})
+        # Run scoring pipeline so all Prophetik signal fields are present.
+        # score_markets() is pure Python over already-enriched dicts — no extra API calls.
+        scored = _score_markets(markets)
+        for m in scored:
+            scores = m.get("scores", {})
+            m["composite_score"] = m.get("composite_score", 0) or 0
+            m["conviction_score"] = scores.get("conviction", 0) or 0
+            m["momentum_score"] = scores.get("momentum", 0) or 0
+            m["flow_score"] = scores.get("flow", 0) or 0
+            m["execution_quality_score"] = scores.get("execution_quality", 0) or 0
+            m["participation_quality_score"] = scores.get("participation_quality", 0) or 0
+            m["time_quality_score"] = scores.get("time_quality", 0) or 0
+            m["trap_risk_score"] = scores.get("trap_risk", 0) or 0
+            m["momentum_label"] = m.get("momentum_label", "flat") or "flat"
+            m["price_change_24h"] = m.get("price_change_1d", 0)
+            if not m.get("slug"):
+                question = m.get("question", "")
+                slug = question.lower().strip()
+                for ch in ["?", "'", '"', ",", ".", "!", "(", ")", "[", "]", "{", "}", "&", "%", "$", "#", "@"]:
+                    slug = slug.replace(ch, "")
+                slug = slug.replace(" ", "-").replace("--", "-").strip("-")
+                m["slug"] = slug[:100]
+        return JSONResponse(content={"markets": scored, "count": len(scored)})
     except Exception as e:
         print(f"[PREDICT/markets] Error: {e}")
         return JSONResponse(status_code=502, content={"error": str(e)})
