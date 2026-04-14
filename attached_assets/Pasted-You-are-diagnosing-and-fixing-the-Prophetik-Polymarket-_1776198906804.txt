@@ -1,0 +1,216 @@
+You are diagnosing and fixing the Prophetik (Polymarket) page end-to-end.
+
+Project context:
+- Backend Replit contains all Prophetik / Polymarket logic, API integrations, scoring, and response shaping
+- Frontend Replit consumes these endpoints and renders the Prophetik page
+
+Mission:
+Do a strict runtime diagnosis first, then fix the backend so the new Prophetik logic is actually wired up and usable by the frontend.
+
+This is NOT a feature pass.
+This is NOT a speculative refactor.
+This is a forensic audit + repair pass.
+
+Main goal:
+Determine whether each new frontend field on the Prophetik page is actually wired up end-to-end, then fix the backend/API contract issues causing missing, blank, misleading, or broken values.
+
+Critical instructions:
+- Inspect before changing code
+- Do not assume the logic is working because code exists
+- Verify runtime output
+- Prefer small, surgical fixes
+- Do not break existing working Prophetik functionality
+- Be explicit and evidence-driven
+- If a field is not truly supported, say so clearly
+
+==================================================
+STEP 1 — IDENTIFY ALL NEW PROPHETIK FIELDS
+==================================================
+
+Audit the current Prophetik frontend and backend integration and identify every newly added or newly intended field used in these sections:
+
+- Prophetik Signal Engine / recommendation cards
+- Market Screener
+- Movers & Shakers
+- Biggest 24H Odds Movers
+- Whale Watch
+- Top Edges
+- Recent Signal Changes (if present)
+
+Build a list of every derived/new field, including but not limited to:
+- score / signal
+- conviction / conviction_score
+- flow / flow_score
+- execution / execution_quality_score
+- participation / participation_quality_score
+- trap / trap_risk_score
+- momentum label / momentum_score
+- spread / spread_pct
+- liquidity
+- volume_24h
+- price_change_1h
+- price_change_1d / 24h
+- price_change_1wk / 7d
+- days_to_expiry
+- whale score / whale flags
+- recommendation reason bullets
+- best_bet_now / best_yes_setup / best_no_setup / best_momentum / best_mean_reversion / avoid_or_trap buckets
+
+==================================================
+STEP 2 — TRACE EACH FIELD END-TO-END
+==================================================
+
+For EACH field above, trace this chain:
+
+A. Where is it computed in backend?
+B. What exact variable / key name is used?
+C. Is it included in the final API response payload?
+D. Which endpoint returns it?
+E. Does the frontend expect the same exact key name?
+F. What happens when the value is null/missing?
+G. Is the field actually rendering on the page?
+
+Create a truth table like this:
+
+FIELD NAME
+- computed in backend? yes/no
+- backend key name:
+- returned in API? yes/no
+- endpoint:
+- frontend expected key:
+- key mismatch? yes/no
+- currently renders? yes/no
+- current issue:
+- recommended fix:
+
+Do this for every major new field.
+
+==================================================
+STEP 3 — TEST LIVE RUNTIME PAYLOADS
+==================================================
+
+Do not just read code. Actually inspect runtime output.
+
+For all Prophetik endpoints currently used by the frontend, log/sample the real response payloads.
+At minimum inspect:
+- recommendations endpoint
+- scored markets endpoint
+- any endpoint used by Whale Watch
+- any endpoint used by Top Edges
+- any endpoint used by Movers & Shakers
+- any endpoint used by Recent Signal Changes
+
+For each endpoint:
+- show actual keys returned
+- identify missing expected fields
+- identify null-heavy fields
+- identify fields with wrong type/shape
+- identify fields computed but dropped before response shaping
+
+Important:
+If the backend is returning the data correctly, say that clearly.
+If the backend is NOT returning it, identify exactly where it gets lost.
+
+==================================================
+STEP 4 — FIND THE ACTUAL BREAKPOINTS
+==================================================
+
+Find the exact failure points causing the Prophetik page to appear half-wired.
+
+Possible failure types to investigate:
+- field name mismatch between backend and frontend
+- score computed but not attached to response object
+- recommendation buckets shaped differently than frontend expects
+- frontend expecting arrays vs objects
+- backend returning decimals while frontend assumes percentages
+- null values caused by overly strict filters
+- spread/liquidity values in wrong unit
+- stale cached payload masking code changes
+- route returning partial objects
+- serialization dropping computed fields
+- conditional rendering hiding fields unintentionally
+
+Do not hand-wave. Pinpoint the exact breakpoints.
+
+==================================================
+STEP 5 — FIX BACKEND/API CONTRACT ISSUES
+==================================================
+
+Once the audit is complete, fix the backend so the frontend can reliably consume the data.
+
+Rules:
+- Keep fixes surgical
+- Do not invent fake values
+- Do not leave misleading blank fields pretending to be supported
+- If a field cannot be properly computed yet, remove it from the backend contract or mark it unsupported explicitly
+- Normalize units consistently:
+  - percentages vs decimals
+  - spread vs spread_pct
+  - yes_price vs yes_pct
+- Ensure recommendation payloads are frontend-safe and consistent
+
+Priority fixes:
+1. Top recommendation/signal-engine payload must load correctly
+2. Score/signal fields must either be truly populated or removed from payload/UI expectations
+3. Rankings must not be dominated by junk markets because of broken/misweighted logic
+4. Reason/explainability strings must be present for top recommendations
+
+==================================================
+STEP 6 — ADD TEMPORARY DIAGNOSTIC LOGGING
+==================================================
+
+Add lightweight temporary backend diagnostics so we can verify what is happening without guessing.
+
+For Prophetik endpoints, log:
+- number of markets scored
+- number filtered out and why
+- which recommendation buckets are empty
+- whether each major score field exists
+- sample keys of returned objects
+- whether recommendation reasons were generated
+
+Keep logs concise and useful, not spammy.
+
+If there is already a debug mode or diagnostics endpoint, use that instead of inventing a new permanent system.
+
+==================================================
+STEP 7 — PRODUCE A CLEAR REPORT
+==================================================
+
+At the end, report:
+
+1. Which new Prophetik fields are truly wired end-to-end
+2. Which ones are broken
+3. Which ones are missing from backend response
+4. Which ones have key mismatches with frontend
+5. Which ones are wrong-unit or wrong-shape bugs
+6. Which fixes you applied
+7. Which fields are still unsupported and should be hidden in the frontend until later
+
+Format this clearly.
+
+==================================================
+STEP 8 — THEN FIX THE WORST ISSUES
+==================================================
+
+After diagnosis, apply the most important backend fixes first:
+- recommendation payload
+- scored/signal fields
+- reason/explainability generation
+- consistent units
+- removal of fake unsupported fields
+
+Do NOT do a giant refactor.
+Do NOT touch unrelated pages.
+Do NOT over-focus on sports unless it is explicitly proven to be the root cause.
+
+==================================================
+SUCCESS CRITERIA
+==================================================
+
+Success means:
+- We can prove which Prophetik fields are and are not wired up
+- The backend returns a clean, reliable contract for the frontend
+- The top signal engine payload works
+- Derived fields are either populated correctly or clearly unsupported
+- No more pretending the logic is working just because code exists
