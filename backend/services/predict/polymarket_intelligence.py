@@ -50,10 +50,10 @@ _SPORTS_KEYWORDS = [
     "super bowl", "world series", "stanley cup", "champions league",
     "premier league", "fifa", "olympics", "paralympics",
     "vs.", " vs ", "game 1", "game 2", "game 3", "game 4", "game 5",
-    "game 6", "game 7",
+    "game 6", "game 7", "series",
     "yankees", "dodgers", "mets", "cubs", " sox", "astros", "braves",
     "orioles", "twins", "marlins", "diamondbacks", "rangers", "athletics",
-    "phillies", "angels", "padres", "cardinals", "brewers",
+    "phillies", "angels", "padres", "giants", "cardinals", "brewers",
     "nationals", "tigers", "royals", "mariners", "pirates", "reds",
     "rockies", "rays", "blue jays", "red sox", "white sox",
 ]
