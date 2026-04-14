@@ -32,7 +32,7 @@ import httpx
 
 from data.cache import cache
 from services.predict.scoring import score_markets
-from services.predict.recommendations import build_recommendations
+from services.predict.recommendations import build_recommendations, generate_reasons
 from services.predict.signal_changes import signal_tracker
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
@@ -373,6 +373,20 @@ class PolymarketIntelligence:
                     slug = slug.replace(ch, "")
                 slug = slug.replace(" ", "-").replace("--", "-").strip("-")
                 m["slug"] = slug[:100]
+
+        # Enrich with reasons and direction for frontend badges
+        for m in scored:
+            if not m.get("reasons"):
+                m["reasons"] = generate_reasons(m, "best_bet_now")
+            if not m.get("direction"):
+                pc_24h = m.get("price_change_1d", 0)
+                yes_pct = m.get("yes_pct", 50)
+                if pc_24h > 0 or yes_pct > 55:
+                    m["direction"] = "YES"
+                elif pc_24h < 0 or yes_pct < 45:
+                    m["direction"] = "NO"
+                else:
+                    m["direction"] = "YES"
 
         cache.set(key, scored, _SCORED_CACHE_TTL)
         return scored

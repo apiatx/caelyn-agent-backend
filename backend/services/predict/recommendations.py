@@ -103,7 +103,7 @@ def build_recommendations(scored_markets: list[dict]) -> dict:
     # Attach explanation strings and direction to each bucket's items
     for bucket_name, items in buckets.items():
         for item in items:
-            item["reasons"] = _generate_reasons(item, bucket_name)
+            item["reasons"] = generate_reasons(item, bucket_name)
             # Ensure reasons always has at least 1 string
             if not item["reasons"]:
                 item["reasons"] = ["Selected based on composite scoring"]
@@ -271,7 +271,7 @@ def _conviction_with_execution(markets: list[dict]) -> list[dict]:
 
 # ── Explainability ───────────────────────────────────────────────────────────
 
-def _generate_reasons(market: dict, bucket: str) -> list[str]:
+def generate_reasons(market: dict, bucket: str) -> list[str]:
     """
     Generate concise, deterministic, data-driven explanation strings.
     No generic AI fluff — every reason must reference actual data.
