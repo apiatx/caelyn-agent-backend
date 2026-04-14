@@ -327,6 +327,11 @@ class PolymarketIntelligence:
         plus composite_score and momentum_label. Sorted by composite_score desc.
         Score dimensions are also flattened to top-level keys for direct access.
         All score fields guaranteed to be numbers (never None).
+
+        Filters out:
+        - Sports game markets (tennis, cricket, soccer, etc.) — these resolve
+          within hours and flood rankings with non-actionable noise.
+        - Fully resolved markets (0% or 100%) — no remaining trading opportunity.
         """
         key = f"pm:scored:{limit}:{tag}:{min_volume_24h}"
         cached = cache.get(key)
@@ -334,6 +339,13 @@ class PolymarketIntelligence:
             return cached
 
         markets = await self.get_top_markets(limit=limit, tag=tag, min_volume_24h=min_volume_24h)
+
+        # Filter out sports game markets — they dominate rankings with noise
+        markets = [m for m in markets if not _is_sports_market(m)]
+
+        # Filter out fully resolved markets (0% or 100%) — no tradable edge
+        markets = [m for m in markets if 0.5 < m.get("yes_pct", 50) < 99.5]
+
         scored = score_markets(markets)
 
         # Post-process: flatten score dimensions to top level, ensure no None
