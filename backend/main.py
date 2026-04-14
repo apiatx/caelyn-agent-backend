@@ -57,6 +57,7 @@ from services.whale_watch_service import (
     seed_whales as _seed_whales,
 )
 from services.predict.router import router as _predict_router
+from services.predict.investor.router import router as _investor_router
 from services.bittensor.router import router as _bittensor_router
 from services.watchlist_router import router as _watchlist_router
 
@@ -228,6 +229,8 @@ app.include_router(_whale_router, prefix="/api")
 
 # ── Predict / Polymarket Intelligence router ──────────────────────────────────
 app.include_router(_predict_router)
+# ── Investor Mode router (additive — Gambler endpoints unchanged) ─────────────
+app.include_router(_investor_router)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Bittensor Dashboard router ───────────────────────────────────────────────

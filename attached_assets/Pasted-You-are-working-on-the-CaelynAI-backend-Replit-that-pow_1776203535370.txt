@@ -1,0 +1,323 @@
+You are working on the CaelynAI backend Replit that powers the Prophetik page.
+
+Mission:
+Build a NEW “Investor” mode for the Prophetik page without changing or breaking the existing “Gambler” mode.
+
+Critical product requirement:
+- Keep the existing Prophetik implementation exactly as-is for the "Gambler" tab
+- Do NOT remove, rename, or break any existing Prophetik endpoints or response shapes used by the current UI
+- Add a NEW backend layer for an “Investor” tab that translates Polymarket market activity into equity/sector/regime implications for traditional stock investing
+
+This is an additive implementation only.
+
+==================================================
+PRODUCT GOAL
+==================================================
+
+The new “Investor” tab is NOT for betting.
+It should help my agent interpret Polymarket odds, surges, macro/geopolitical shifts, and market-implied probabilities in order to infer:
+
+- macro regime shifts
+- sector rotation implications
+- likely beneficiaries / losers in public equities
+- stock watchlists tied to those themes
+
+This should answer questions like:
+- What is Polymarket implying about the world right now?
+- Which macro/political/geopolitical probabilities are repricing?
+- Which sectors should benefit or suffer if those probabilities continue moving?
+- Which stocks are most exposed to those themes?
+
+==================================================
+ARCHITECTURAL RULES
+==================================================
+
+- Preserve all existing Prophetik/Gambler endpoints
+- Add new endpoints for Investor mode
+- Reuse existing Polymarket ingestion/scoring utilities where possible
+- Keep implementation deterministic and rules-based first
+- Do NOT build vague LLM-only logic as the core engine
+- If narrative text is generated, it must be grounded in deterministic signals already computed
+- Prefer reusable service modules over bloated route handlers
+- Keep this production-minded and incremental
+
+==================================================
+WHAT TO BUILD
+==================================================
+
+Build a new backend “Investor signal engine” on top of the current Polymarket market data.
+
+==================================================
+STEP 1 — MARKET RELEVANCE / CLASSIFICATION LAYER
+==================================================
+
+Create a new service layer that classifies existing Polymarket markets into equity-relevant themes.
+
+For each market, compute at minimum:
+- theme
+- subtheme
+- equity_relevance_score (0-100)
+- sector_relevance_score (0-100)
+- regime_relevance_score (0-100)
+- category_relevance_tags (array)
+- impact_direction_hint (if inferable)
+
+Priority themes include:
+- Macro / Rates / Inflation
+- Geopolitics / War / Trade / Sanctions
+- Energy / Oil / Shipping / Commodities
+- US Politics / Elections / Policy
+- AI / Semiconductors / Export Controls / Regulation
+- Crypto / Risk Appetite / Liquidity
+- China / Taiwan / Supply Chain
+- Defense / Security
+- Consumer / Labor / Recession / Growth
+
+Markets with low equity relevance should not dominate the Investor tab.
+
+Implementation guidance:
+- Start with deterministic keyword / tag / title matching rules
+- Reuse market title, question, description, tags, category
+- Create a maintainable mapping structure for themes and keywords
+- Make this easy to extend later
+
+==================================================
+STEP 2 — THEME CLUSTERING / AGGREGATION
+==================================================
+
+Build a layer that clusters related Polymarket markets into consolidated themes.
+
+Examples:
+- Iran escalation / Strait of Hormuz / oil disruption markets
+- Fed hikes / inflation / recession / cuts / rates markets
+- China tariffs / Taiwan escalation / semiconductor restrictions
+- Election / policy / fiscal / trade-control markets
+
+For each theme cluster, compute:
+- theme_id
+- theme_name
+- supporting_markets (array)
+- weighted_odds_shift_24h
+- weighted_odds_shift_7d
+- weighted_volume
+- confidence_score
+- consistency_score
+- contradiction_score
+- freshness_score
+- regime_signal_strength
+- summary_direction (rising / falling / mixed / unstable)
+
+If markets in a cluster conflict with each other, reflect that honestly:
+- do not force fake certainty
+- allow states like mixed / conflicting / unstable
+
+==================================================
+STEP 3 — MARKET/ THEME → EQUITY IMPACT MAPPING
+==================================================
+
+Build a deterministic impact engine that maps themes to likely equity impacts.
+
+For each theme, compute:
+- bullish_sectors
+- bearish_sectors
+- neutral_or_conditional_sectors
+- affected_asset_baskets
+- likely_regime_implications
+
+Use curated mappings for sectors and assets.
+
+Example outputs:
+- bullish_sectors: ["Energy", "Defense"]
+- bearish_sectors: ["Airlines", "Consumer Discretionary"]
+- affected_asset_baskets: ["XLE", "ITA", "DAL/UAL basket"]
+
+Support at least these sector/asset groups:
+- Energy
+- Defense / Aerospace
+- Airlines / Transports
+- Industrials
+- Financials
+- Small Caps
+- Semiconductors
+- Software / Growth Tech
+- Cybersecurity
+- REITs / Housing
+- Consumer Discretionary
+- Utilities / Power / Nuclear
+- Gold / Metals / Commodities
+- Crypto proxies / Risk appetite baskets
+
+==================================================
+STEP 4 — SECTOR → STOCK WATCHLIST MAPPING
+==================================================
+
+Create a curated stock mapping layer.
+
+For each sector/theme, return likely stock beneficiaries / losers.
+Keep this deterministic and editable.
+
+Examples:
+- Energy → XOM, CVX, COP, SLB, HAL
+- Defense → RTX, LMT, NOC, GD
+- Airlines → DAL, UAL, AAL
+- Semis → NVDA, AMD, AVGO, MU, ASML
+- Cyber → CRWD, PANW, ZS, FTNT
+- AI infra / data center → VRT, ANET, DELL, HPE, MU
+- Nuclear / grid / power → CEG, VST, NRG, TLN, SMR, OKLO
+- Small caps / rate sensitivity → IWM, KRE, regional banks, housing proxies
+- Gold / risk-off → GLD, NEM, GOLD
+
+For each theme cluster, return:
+- bullish_stocks
+- bearish_stocks
+- stock_baskets
+- confidence notes
+
+==================================================
+STEP 5 — REGIME SCOREBOARD
+==================================================
+
+Create a regime aggregation layer for Investor mode.
+
+Compute top-level regime indicators such as:
+- risk_on_vs_risk_off
+- inflationary_vs_disinflationary
+- growth_vs_slowdown
+- geopolitical_stress_vs_easing
+- higher_for_longer_vs_easing
+- commodity_pressure_vs_relief
+- AI_capex_supportive_vs_restrictive
+
+Each should return:
+- label
+- score (0-100)
+- direction
+- confidence
+- supporting themes
+
+This should be derived from the clustered theme layer, not vibes.
+
+==================================================
+STEP 6 — INVESTOR-FACING OUTPUT OBJECTS
+==================================================
+
+Create a new backend response payload for the Investor tab with sections like:
+
+1. top_equity_signals
+For the top 3–5 highest equity-relevance themes, return:
+- title
+- summary
+- why_it_matters
+- supporting_markets
+- odds_move_summary
+- bullish_sectors
+- bearish_sectors
+- bullish_stocks
+- bearish_stocks
+- confidence
+- regime_impact
+- watchlist_priority
+
+2. top_sector_rotation_signals
+Return:
+- strongest positive sector implication
+- strongest negative sector implication
+- emerging leadership
+- fading leadership
+
+3. stock_watchlists_from_prediction_markets
+Return grouped watchlists:
+- bullish watchlist
+- bearish watchlist
+- conditional watchlist
+- each with reasons
+
+4. regime_scoreboard
+Return the regime indicators described above
+
+5. theme_clusters
+Return a deeper drill-down object for the frontend to render expandable theme cards/tables
+
+==================================================
+STEP 7 — NEW ENDPOINTS
+==================================================
+
+Add NEW Investor-specific Prophetik endpoints.
+Do not change existing Gambler endpoints.
+
+Preferred route structure:
+- GET /api/predict/investor/overview
+- GET /api/predict/investor/themes
+- GET /api/predict/investor/regime
+- GET /api/predict/investor/watchlists
+
+You may consolidate some if cleaner, but keep the contract front-end friendly.
+
+At minimum, provide:
+- one overview endpoint that powers the Investor tab
+- optional drill-down endpoints if needed
+
+==================================================
+STEP 8 — EXPLAINABILITY / NARRATIVE
+==================================================
+
+For each top theme and top sector rotation signal, generate concise grounded text:
+
+Examples:
+- “Rising de-escalation odds in Middle East energy markets imply lower near-term crude shock risk.”
+- “That is supportive for airlines/transports and less supportive for energy leadership.”
+- “Prediction market repricing is reinforcing a higher-for-longer macro regime, which is typically less favorable for REITs and long-duration growth.”
+
+Rules:
+- explanations must be based on deterministic computed signals
+- do not generate generic fluff
+- keep it concise and useful
+- clearly distinguish between:
+  - direct implication
+  - conditional implication
+  - low-confidence implication
+
+==================================================
+STEP 9 — DATA / CACHING / PERFORMANCE
+==================================================
+
+- Reuse existing Polymarket cache/fetch patterns where possible
+- Avoid expensive repeated recomputation
+- Add caching for investor aggregation if needed
+- Keep response times sane
+
+==================================================
+STEP 10 — DO NOT BREAK GAMBLER MODE
+==================================================
+
+Before finishing, verify:
+- all existing Prophetik/Gambler endpoints still work
+- existing response shapes used by the current Prophetik UI are unchanged
+- Investor mode is fully additive
+
+==================================================
+SUCCESS CRITERIA
+==================================================
+
+Success means:
+- Existing Prophetik “Gambler” mode still works unchanged
+- New Investor endpoints exist and return clean structured data
+- Investor mode translates Polymarket odds into:
+  - macro/regime interpretation
+  - sector implications
+  - stock watchlists
+- The output is useful for traditional stock investing and sector rotation analysis
+- The implementation is rules-driven and explainable
+
+==================================================
+WHAT TO REPORT BACK
+==================================================
+
+When done, report:
+1. new files/modules created
+2. new endpoints added
+3. exact response shape summaries
+4. theme taxonomy used
+5. sector/stock mapping structure used
+6. any assumptions or limitations
+7. examples of 2–3 live investor outputs

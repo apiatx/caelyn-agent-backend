@@ -64,6 +64,27 @@ The platform's backend is built on FastAPI, designed for robustness and scalabil
 - **Data Architecture & Performance**: Utilizes local TA computation, tiered data sources with fallbacks, and scan budgeting. Enforces "Social→FA Discipline."
 - **Options Flow Screener**: Background precompute loop (`_options_precompute_loop`) fires every 90 seconds, scanning 17 tickers (7 ETFs: SPY/QQQ/IWM/GLD/TLT/XLF/XLK + 10 Stocks: AAPL/NVDA/TSLA/AMZN/META/MSFT/AMD/GOOGL/NFLX/COIN) via Public.com using `scan_full_screener()`. No Claude in the screener — pure data pipeline. Cache key `options_screener_v2` (TTL 120s). `POST /api/options/dashboard` returns in <100ms. Response: `{ tickers:[...], all_contracts:[...500], market_summary:{...} }`. Per-ticker: call_volume, put_volume, pc_ratio, call_oi, put_oi, avg_call_iv (volume-weighted), avg_put_iv, iv_skew, max_pain, top_calls[:10], top_puts[:10]. Flat all_contracts: every active contract with underlying, category (stock/etf), side (call/put), strike, bid/ask/last, volume, openInterest, vol_oi_ratio, delta, gamma, theta, vega, iv — frontend can sort by any field. Claude is only for the conversational chat bar below the screener. Cold-start fallback for first request before loop runs.
 
+## Prophetik Signal Engine — Investor Mode (NEW)
+- **Purpose**: Translates Polymarket prediction market activity into equity/macro implications for traditional stock investing. Fully additive — zero changes to existing Gambler mode endpoints.
+- **Module**: `backend/services/predict/investor/`
+  - `themes.py` — 9 equity-relevant macro theme definitions with keyword/tag/category matching rules
+  - `classifier.py` — per-market theme classification (equity_relevance_score, sector_relevance_score, regime_relevance_score, multi-theme support)
+  - `clustering.py` — aggregates markets per theme: weighted_odds_shift_24h/7d, confidence, consistency, contradiction, freshness, regime_signal_strength, summary_direction
+  - `impact_engine.py` — deterministic curated mappings: theme+direction → bullish/bearish sectors+stocks, asset baskets, regime implications, narrative text
+  - `regime.py` — 7 regime indicators (risk_on_vs_risk_off, inflationary_vs_disinflationary, growth_vs_slowdown, geopolitical_stress_vs_easing, higher_for_longer_vs_easing, commodity_pressure_vs_relief, ai_capex_supportive_vs_restrictive) derived from cluster signals
+  - `investor_intel.py` — orchestration: fetch scored markets (reuses existing cache) → classify → cluster → impact → regime → payload
+  - `router.py` — 4 new endpoints
+- **Endpoints (NEW)**:
+  - `GET /api/predict/investor/overview` — full investor payload (top_equity_signals, sector_rotation, watchlists, regime_scoreboard, theme_clusters)
+  - `GET /api/predict/investor/themes` — theme clusters with full equity impact data (drill-down)
+  - `GET /api/predict/investor/regime` — regime scoreboard only (lightweight)
+  - `GET /api/predict/investor/watchlists` — stock watchlists (bullish/bearish/conditional) + sector reference
+- **9 Themes**: macro_rates_inflation, geopolitics_war_trade, energy_commodities, us_politics_policy, ai_semis_tech, crypto_risk_appetite, china_taiwan_supply_chain, defense_security, consumer_labor_growth
+- **Classification**: deterministic keyword/tag/category matching, multi-theme per market, equity_relevance_score 0-100
+- **Sectors tracked**: Energy, Defense/Aerospace, Airlines/Transport, Industrials, Financials, Semiconductors, Software/Growth Tech, Cybersecurity, AI Infra/Data Centers, REITs/Housing, Consumer Discretionary, Utilities/Nuclear Power, Gold/Metals/Commodities, Crypto Proxies, Small Caps, Clean Energy
+- **Cache**: 150s TTL, reuses existing scored-market cache (no extra Polymarket API calls)
+- **Gambler endpoints**: ALL unchanged — /api/predict/recommendations, /signals, /scored, etc. fully intact
+
 ## Hyperliquid Screener Service
 - **Module**: `backend/services/hyperliquid/` (dedicated service layer)
 - **Boot sequence**: On startup — fetches `metaAndAssetCtxs` (229 perps) + `spotMetaAndAssetCtxs` (286 spot), `allMids` (534 coins), 1h candles for top-40 by volume, 5m candles for top-20, L2 books for top-20 → full feature pass → WS connect
