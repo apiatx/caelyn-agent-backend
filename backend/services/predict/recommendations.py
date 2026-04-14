@@ -78,8 +78,14 @@ def build_recommendations(scored_markets: list[dict]) -> dict:
         if not m.get("is_expired") and not m.get("is_resolving")
     ]
 
+    # Filter out fully resolved markets (0% or 100%) — no trading opportunity
+    tradable = [
+        m for m in active
+        if 0.5 < m.get("yes_pct", 50) < 99.5
+    ]
+
     # Separate stale pinned markets — these should only appear in avoid bucket
-    non_stale = [m for m in active if not _is_stale_pinned(m)]
+    non_stale = [m for m in tradable if not _is_stale_pinned(m)]
 
     buckets = {
         "best_bet_now": _best_bet_now(non_stale),
@@ -88,7 +94,7 @@ def build_recommendations(scored_markets: list[dict]) -> dict:
         "best_momentum_continuation": _best_momentum_continuation(non_stale),
         "best_mean_reversion_candidate": _best_mean_reversion(non_stale),
         "best_whale_follow": _best_whale_follow(non_stale),
-        "avoid_or_trap_markets": _avoid_or_trap(active),  # stale pinned CAN appear here
+        "avoid_or_trap_markets": _avoid_or_trap(active),  # stale/pinned/resolved CAN appear here
         "best_execution_quality": _best_execution(non_stale),
         "strongest_flow_without_confirmation": _flow_without_confirmation(non_stale),
         "strongest_conviction_with_good_execution": _conviction_with_execution(non_stale),
@@ -97,7 +103,7 @@ def build_recommendations(scored_markets: list[dict]) -> dict:
     # Attach explanation strings and direction to each bucket's items
     for bucket_name, items in buckets.items():
         for item in items:
-            item["reasons"] = _generate_reasons(item, bucket_name)
+            item["reasons"] = generate_reasons(item, bucket_name)
             # Ensure reasons always has at least 1 string
             if not item["reasons"]:
                 item["reasons"] = ["Selected based on composite scoring"]
@@ -265,7 +271,7 @@ def _conviction_with_execution(markets: list[dict]) -> list[dict]:
 
 # ── Explainability ───────────────────────────────────────────────────────────
 
-def _generate_reasons(market: dict, bucket: str) -> list[str]:
+def generate_reasons(market: dict, bucket: str) -> list[str]:
     """
     Generate concise, deterministic, data-driven explanation strings.
     No generic AI fluff — every reason must reference actual data.

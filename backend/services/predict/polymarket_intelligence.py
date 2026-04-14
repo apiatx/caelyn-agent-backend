@@ -32,7 +32,7 @@ import httpx
 
 from data.cache import cache
 from services.predict.scoring import score_markets
-from services.predict.recommendations import build_recommendations
+from services.predict.recommendations import build_recommendations, generate_reasons
 from services.predict.signal_changes import signal_tracker
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
@@ -54,7 +54,10 @@ _SPORTS_KEYWORDS = [
     "soccer", "football", "basketball", "baseball", "hockey", "tennis",
     "golf", "cricket", "f1", "formula 1", "formula one", "rugby",
     "super bowl", "world series", "stanley cup", "champions league",
-    "premier league", "fifa", "olympics", "paralympics",
+    "europa league", "premier league", "la liga", "serie a", "bundesliga",
+    "ligue 1", "copa america", "copa del rey", "fa cup",
+    "fifa", "olympics", "paralympics",
+    "ipl", "indian premier league", "wta", "atp", "grand prix",
     "vs.", " vs ", "game 1", "game 2", "game 3", "game 4", "game 5",
     "game 6", "game 7", "series",
     "yankees", "dodgers", "mets", "cubs", " sox", "astros", "braves",
@@ -327,6 +330,11 @@ class PolymarketIntelligence:
         plus composite_score and momentum_label. Sorted by composite_score desc.
         Score dimensions are also flattened to top-level keys for direct access.
         All score fields guaranteed to be numbers (never None).
+
+        Filters out:
+        - Sports game markets (tennis, cricket, soccer, etc.) — these resolve
+          within hours and flood rankings with non-actionable noise.
+        - Fully resolved markets (0% or 100%) — no remaining trading opportunity.
         """
         key = f"pm:scored:{limit}:{tag}:{min_volume_24h}"
         cached = cache.get(key)
@@ -334,6 +342,13 @@ class PolymarketIntelligence:
             return cached
 
         markets = await self.get_top_markets(limit=limit, tag=tag, min_volume_24h=min_volume_24h)
+
+        # Filter out sports game markets — they dominate rankings with noise
+        markets = [m for m in markets if not _is_sports_market(m)]
+
+        # Filter out fully resolved markets (0% or 100%) — no tradable edge
+        markets = [m for m in markets if 0.5 < m.get("yes_pct", 50) < 99.5]
+
         scored = score_markets(markets)
 
         # Post-process: flatten score dimensions to top level, ensure no None
@@ -358,6 +373,20 @@ class PolymarketIntelligence:
                     slug = slug.replace(ch, "")
                 slug = slug.replace(" ", "-").replace("--", "-").strip("-")
                 m["slug"] = slug[:100]
+
+        # Enrich with reasons and direction for frontend badges
+        for m in scored:
+            if not m.get("reasons"):
+                m["reasons"] = generate_reasons(m, "best_bet_now")
+            if not m.get("direction"):
+                pc_24h = m.get("price_change_1d", 0)
+                yes_pct = m.get("yes_pct", 50)
+                if pc_24h > 0 or yes_pct > 55:
+                    m["direction"] = "YES"
+                elif pc_24h < 0 or yes_pct < 45:
+                    m["direction"] = "NO"
+                else:
+                    m["direction"] = "YES"
 
         cache.set(key, scored, _SCORED_CACHE_TTL)
         return scored
