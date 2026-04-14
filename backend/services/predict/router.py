@@ -1,7 +1,7 @@
 """
-Predict page API router — Jon-Becker + TauricResearch integration.
+Predict page API router — Jon-Becker + TauricResearch + Prophetik Signal Engine.
 
-New endpoints:
+Endpoints:
 
   GET  /api/predict/markets          → Enhanced Polymarket market list with signals
   GET  /api/predict/market/{id}      → Deep analysis of a single market
@@ -11,6 +11,13 @@ New endpoints:
   GET  /api/predict/context          → Relevant markets for a question (pre-analyze)
   POST /api/predict/analyze          → Full 6-agent TradingAgents analysis
   GET  /api/polymarket/intelligence  → Market intelligence overview (alias for signals)
+
+  -- Prophetik Signal Engine (new) --
+  GET  /api/predict/scored           → Scored market list (7 dimensions + composite)
+  GET  /api/predict/recommendations  → Top decision-layer recommendation buckets
+  GET  /api/predict/enriched-signals → Extended signals dashboard with scoring summaries
+  GET  /api/predict/scored/{id}      → Single market with full scoring dimensions
+  GET  /api/predict/diagnostics      → Scoring metadata for debugging
 """
 
 from __future__ import annotations
@@ -20,8 +27,11 @@ from typing import Optional
 from fastapi import APIRouter, Query, Request, Depends
 from fastapi.responses import JSONResponse
 
+from datetime import datetime, timezone
+
 from services.predict.polymarket_intelligence import polymarket_intel
 from services.predict.trading_agents import run_predict_analysis
+from services.predict.scoring import WEIGHTS as _SCORING_WEIGHTS
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -129,6 +139,150 @@ async def predict_market_context(
         return JSONResponse(content=context)
     except Exception as e:
         return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+# ── Prophetik Signal Engine Endpoints ─────────────────────────────────────────
+
+
+@router.get("/api/predict/scored")
+async def predict_scored_markets(
+    limit: int = Query(200, ge=1, le=500),
+    tag: Optional[str] = Query(None),
+    min_volume: float = Query(0, ge=0),
+):
+    """
+    Scored market list — each market enriched with 7 Prophetik scoring dimensions
+    (conviction, momentum, flow, execution_quality, participation_quality,
+    time_quality, trap_risk) plus composite_score and momentum_label.
+    Sorted by composite_score descending.
+    """
+    try:
+        scored = await polymarket_intel.get_scored_markets(
+            limit=limit, tag=tag, min_volume_24h=min_volume
+        )
+        return JSONResponse(content={"markets": scored, "count": len(scored)})
+    except Exception as e:
+        print(f"[PREDICT/scored] Error: {e}")
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@router.get("/api/predict/recommendations")
+async def predict_recommendations():
+    """
+    Top decision-layer payload: 10 recommendation buckets with explainability strings.
+    Each bucket contains up to 8 markets with reason arrays explaining why
+    the market was selected. Buckets:
+      best_bet_now, best_yes_setup, best_no_setup, best_momentum_continuation,
+      best_mean_reversion_candidate, best_whale_follow, avoid_or_trap_markets,
+      best_execution_quality, strongest_flow_without_confirmation,
+      strongest_conviction_with_good_execution
+    """
+    try:
+        recs = await polymarket_intel.get_recommendations()
+        return JSONResponse(content=recs)
+    except Exception as e:
+        print(f"[PREDICT/recommendations] Error: {e}")
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@router.get("/api/predict/enriched-signals")
+async def predict_enriched_signals():
+    """
+    Extended signals dashboard: all standard signals PLUS Prophetik scoring summaries
+    and top-scored markets. Backward-compatible with /api/predict/signals — includes
+    all original fields with additional scoring_summary and top_scored sections.
+    """
+    try:
+        signals = await polymarket_intel.get_enriched_signals()
+        return JSONResponse(content=signals)
+    except Exception as e:
+        print(f"[PREDICT/enriched-signals] Error: {e}")
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@router.get("/api/predict/scored/{condition_id}")
+async def predict_scored_market_detail(condition_id: str):
+    """
+    Deep single-market analysis with full Prophetik scoring dimensions.
+    Extends the standard market detail with scores, composite_score,
+    and momentum_label.
+    """
+    try:
+        detail = await polymarket_intel.get_scored_market_detail(condition_id)
+        if not detail:
+            return JSONResponse(status_code=404, content={"error": "Market not found"})
+        return JSONResponse(content=detail)
+    except Exception as e:
+        print(f"[PREDICT/scored/{condition_id}] Error: {e}")
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@router.get("/api/predict/diagnostics")
+async def predict_diagnostics():
+    """
+    Scoring engine diagnostics and metadata. Useful for debugging why
+    a market ranked highly or was flagged as a trap.
+    Returns scoring weights, dimension descriptions, bucket definitions,
+    and data source information.
+    """
+    return JSONResponse(content={
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "engine_version": "1.0.0",
+        "scoring_weights": _SCORING_WEIGHTS,
+        "dimensions": {
+            "conviction": {
+                "range": "0-100",
+                "description": "Distance from 50/50 — higher means stronger consensus",
+            },
+            "momentum": {
+                "range": "0-100",
+                "description": "Price movement strength across 1h/24h/7d with acceleration/persistence bonuses",
+            },
+            "flow": {
+                "range": "0-100",
+                "description": "Volume intensity + burstiness vs 7d average",
+            },
+            "execution_quality": {
+                "range": "0-100",
+                "description": "Spread tightness + liquidity depth + fill quality",
+            },
+            "participation_quality": {
+                "range": "0-100",
+                "description": "Breadth of participation — penalizes concentrated ownership",
+            },
+            "time_quality": {
+                "range": "0-100",
+                "description": "Expiry profile suitability — sweet spot is 3-30 days",
+            },
+            "trap_risk": {
+                "range": "0-100",
+                "description": "Crowdedness / fake-move danger — HIGHER is MORE dangerous",
+            },
+        },
+        "recommendation_buckets": [
+            "best_bet_now",
+            "best_yes_setup",
+            "best_no_setup",
+            "best_momentum_continuation",
+            "best_mean_reversion_candidate",
+            "best_whale_follow",
+            "avoid_or_trap_markets",
+            "best_execution_quality",
+            "strongest_flow_without_confirmation",
+            "strongest_conviction_with_good_execution",
+        ],
+        "data_sources": {
+            "gamma_api": "https://gamma-api.polymarket.com — market metadata, prices, volume, tags",
+            "clob_api": "https://clob.polymarket.com — order book depth (where available)",
+            "derived": "All scoring dimensions are computed from Gamma + CLOB data",
+        },
+        "data_limitations": {
+            "holder_concentration": "Not available from public Polymarket APIs — proxied via vol/liq ratio and competitive flag",
+            "open_interest": "Not directly exposed by Gamma API — volume serves as proxy",
+            "trade_tape": "Individual trades not available — burstiness proxied via 24h vs 7d volume ratio",
+            "whale_identity": "No wallet-level data — whale activity detected via volume/liquidity anomalies",
+        },
+    })
 
 
 @router.post("/api/predict/analyze")

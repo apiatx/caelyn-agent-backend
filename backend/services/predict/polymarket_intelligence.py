@@ -31,6 +31,8 @@ from typing import Optional
 import httpx
 
 from data.cache import cache
+from services.predict.scoring import score_markets
+from services.predict.recommendations import build_recommendations
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 CLOB_BASE = "https://clob.polymarket.com"
@@ -42,6 +44,8 @@ _HEADERS = {
 _MARKET_CACHE_TTL = 90
 _SIGNALS_CACHE_TTL = 120
 _MARKET_DETAIL_TTL = 60
+_SCORED_CACHE_TTL = 90
+_RECOMMENDATIONS_CACHE_TTL = 120
 
 _SPORTS_KEYWORDS = [
     "nfl", "nba", "mlb", "nhl", "nascar", "ufc", "mma", "boxing",
@@ -308,6 +312,110 @@ class PolymarketIntelligence:
             "pulled_at": datetime.now(timezone.utc).isoformat(),
         }
 
+    # ── Prophetik Signal Engine ────────────────────────────────────────────────
+
+    async def get_scored_markets(
+        self,
+        limit: int = 200,
+        tag: Optional[str] = None,
+        min_volume_24h: float = 0,
+    ) -> list[dict]:
+        """
+        Return markets enriched with all 7 Prophetik scoring dimensions
+        plus composite_score and momentum_label. Sorted by composite_score desc.
+        """
+        key = f"pm:scored:{limit}:{tag}:{min_volume_24h}"
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        markets = await self.get_top_markets(limit=limit, tag=tag, min_volume_24h=min_volume_24h)
+        scored = score_markets(markets)
+        cache.set(key, scored, _SCORED_CACHE_TTL)
+        return scored
+
+    async def get_recommendations(self) -> dict:
+        """
+        Top decision-layer payload: recommendation buckets with explainability.
+        Uses scored markets as input. Returns:
+        {
+            "generated_at": "...",
+            "market_count": N,
+            "buckets": { "best_bet_now": [...], ... }
+        }
+        """
+        key = "pm:recommendations"
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        scored = await self.get_scored_markets(limit=200)
+        buckets = build_recommendations(scored)
+
+        result = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "market_count": len(scored),
+            "buckets": buckets,
+        }
+        cache.set(key, result, _RECOMMENDATIONS_CACHE_TTL)
+        return result
+
+    async def get_enriched_signals(self) -> dict:
+        """
+        Extended signals dashboard that includes standard signals PLUS
+        Prophetik scoring summaries and top recommendations.
+        Backward-compatible: includes all fields from get_market_signals().
+        """
+        key = "pm:enriched_signals"
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        # Fetch base signals and scored markets in parallel
+        signals_task = self.get_market_signals()
+        scored_task = self.get_scored_markets(limit=100)
+
+        signals, scored = await asyncio.gather(signals_task, scored_task, return_exceptions=True)
+
+        if isinstance(signals, Exception):
+            signals = {}
+        if isinstance(scored, Exception):
+            scored = []
+
+        # Build scoring summary stats
+        if scored:
+            avg_composite = sum(m.get("composite_score", 0) for m in scored) / len(scored)
+            avg_trap = sum(m.get("scores", {}).get("trap_risk", 0) for m in scored) / len(scored)
+            high_conviction = [m for m in scored if m.get("scores", {}).get("conviction", 0) >= 60]
+            high_momentum = [m for m in scored if m.get("scores", {}).get("momentum", 0) >= 50]
+            high_flow = [m for m in scored if m.get("scores", {}).get("flow", 0) >= 50]
+
+            signals["scoring_summary"] = {
+                "avg_composite_score": round(avg_composite, 1),
+                "avg_trap_risk": round(avg_trap, 1),
+                "high_conviction_count": len(high_conviction),
+                "high_momentum_count": len(high_momentum),
+                "high_flow_count": len(high_flow),
+            }
+            signals["top_scored"] = _slim_scored(sorted(
+                scored, key=lambda m: m.get("composite_score", 0), reverse=True
+            )[:10])
+
+        cache.set(key, signals, _SIGNALS_CACHE_TTL)
+        return signals
+
+    async def get_scored_market_detail(self, condition_id: str) -> Optional[dict]:
+        """
+        Deep analysis of a single market including scoring dimensions.
+        Extends get_market_detail with Prophetik scores.
+        """
+        detail = await self.get_market_detail(condition_id)
+        if not detail:
+            return None
+        # Apply scoring to this single market
+        scored_list = score_markets([detail])
+        return scored_list[0] if scored_list else detail
+
     # ── Analytics Engine (Jon-Becker methodology) ────────────────────────────
 
     def _enrich_market(self, raw: dict) -> dict:
@@ -459,6 +567,7 @@ class PolymarketIntelligence:
             "price_change_1wk": round(price_change_1wk * 100, 2),
             "price_momentum_pct": price_momentum,
             "days_to_expiry": days_to_expiry,
+            "hours_to_expiry": round(hours_to_expiry, 1) if hours_to_expiry is not None else None,
             "is_expired": is_expired,
             "is_resolving": is_resolving,
             "end_date": end_date,
@@ -770,7 +879,21 @@ def _slim(markets: list[dict]) -> list[dict]:
         "mispricing_score", "volume_momentum", "whale_activity", "is_competitive",
         "market_efficiency_score", "spread_pct_of_price",
         "price_change_1h", "price_change_1d", "price_change_1wk", "price_momentum_pct",
-        "days_to_expiry", "is_expired", "is_resolving", "end_date", "tags", "image", "vol_liq_ratio",
+        "days_to_expiry", "hours_to_expiry", "is_expired", "is_resolving", "end_date",
+        "tags", "image", "vol_liq_ratio",
+    ]
+    return [{k: m[k] for k in keep if k in m} for m in markets]
+
+
+def _slim_scored(markets: list[dict]) -> list[dict]:
+    """Return a slimmed version of scored market dicts — includes scoring fields."""
+    keep = [
+        "condition_id", "question", "yes_pct", "no_pct",
+        "volume_24h", "liquidity", "spread_pct",
+        "price_change_1h", "price_change_1d", "price_change_1wk",
+        "volume_momentum", "whale_activity", "is_competitive",
+        "days_to_expiry", "end_date", "tags", "image", "vol_liq_ratio",
+        "scores", "composite_score", "momentum_label",
     ]
     return [{k: m[k] for k in keep if k in m} for m in markets]
 
