@@ -21,6 +21,21 @@ from services.predict.investor.investor_intel import investor_intel
 router = APIRouter(tags=["predict-investor"])
 
 
+@router.get("/api/predict/investor")
+async def investor_root():
+    """
+    Root investor endpoint — alias for /api/predict/investor/overview.
+    Returns the full Investor mode payload (same shape as /overview).
+    """
+    try:
+        result = await investor_intel.get_overview()
+        return JSONResponse(content=result)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
 @router.get("/api/predict/investor/overview")
 async def investor_overview():
     """

@@ -85,15 +85,45 @@ class InvestorIntel:
         sector_rotation = _build_sector_rotation(cluster_impacts, regime)
         watchlists = _build_watchlists(cluster_impacts)
 
+        # Enrich theme_clusters with impact data so frontend can render
+        # theme cards directly from overview without a separate /themes call.
+        enriched_clusters = _enrich_clusters_with_impact(clusters, cluster_impacts)
+
+        # Array form of regime_scoreboard for .map() in frontend code.
+        # Each item: { id, label, score, direction, confidence, supporting_themes, description }
+        regime_list = [
+            {"id": k, **v}
+            for k, v in regime.items()
+        ]
+
         result = {
             "generated_at": _now(),
             "equity_relevant_market_count": len(equity_relevant),
             "total_market_count": len(scored),
+
+            # ── Hero section ──────────────────────────────────────────────
             "top_equity_signals": top_equity_signals,
+
+            # ── Sector rotation ───────────────────────────────────────────
             "sector_rotation": sector_rotation,
+
+            # ── Watchlists (nested + flattened at top level) ──────────────
+            # nested: data.watchlists.bullish_watchlist  (backward-compat)
             "watchlists": watchlists,
+            # flattened: data.bullish_watchlist  (preferred — avoids double nesting)
+            "bullish_watchlist": watchlists["bullish_watchlist"],
+            "bearish_watchlist": watchlists["bearish_watchlist"],
+            "conditional_watchlist": watchlists["conditional_watchlist"],
+            "watchlist_notes": watchlists["watchlist_notes"],
+
+            # ── Regime scoreboard ─────────────────────────────────────────
+            # dict form:  data.regime_scoreboard.risk_on_vs_risk_off.label
             "regime_scoreboard": regime,
-            "theme_clusters": clusters,
+            # array form: data.regime_scoreboard_list.map(r => r.label)
+            "regime_scoreboard_list": regime_list,
+
+            # ── Theme clusters (now includes impact data) ─────────────────
+            "theme_clusters": enriched_clusters,
         }
 
         cache.set(key, result, _INVESTOR_CACHE_TTL)
@@ -156,9 +186,11 @@ class InvestorIntel:
         clusters = build_theme_clusters(equity_relevant)
         regime = compute_regime_scoreboard(clusters)
 
+        regime_list = [{"id": k, **v} for k, v in regime.items()]
         result = {
             "generated_at": _now(),
             "regime_scoreboard": regime,
+            "regime_scoreboard_list": regime_list,
             "supporting_cluster_count": len(clusters),
         }
         cache.set(key, result, _INVESTOR_CACHE_TTL)
@@ -196,6 +228,40 @@ class InvestorIntel:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _enrich_clusters_with_impact(
+    clusters: list[dict],
+    impacts: dict[str, ThemeImpact],
+) -> list[dict]:
+    """
+    Inject impact data (bullish/bearish sectors+stocks, baskets, regime_implications,
+    narrative) into raw cluster dicts so the frontend can render full theme cards
+    from the overview response without a separate /themes call.
+    """
+    enriched = []
+    for cl in clusters:
+        tid = cl["theme_id"]
+        impact = impacts.get(tid)
+        ec = dict(cl)
+        if impact:
+            ec["bullish_sectors"] = impact.bullish_sectors
+            ec["bearish_sectors"] = impact.bearish_sectors
+            ec["bullish_stocks"] = impact.bullish_stocks
+            ec["bearish_stocks"] = impact.bearish_stocks
+            ec["asset_baskets"] = impact.baskets
+            ec["regime_implications"] = impact.regime_implications
+            ec["narrative"] = impact.narrative
+        else:
+            ec.setdefault("bullish_sectors", [])
+            ec.setdefault("bearish_sectors", [])
+            ec.setdefault("bullish_stocks", [])
+            ec.setdefault("bearish_stocks", [])
+            ec.setdefault("asset_baskets", THEME_BASKETS.get(tid, []))
+            ec.setdefault("regime_implications", [])
+            ec.setdefault("narrative", "")
+        enriched.append(ec)
+    return enriched
 
 
 def _compute_cluster_impacts(clusters: list[dict]) -> dict[str, ThemeImpact]:
