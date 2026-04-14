@@ -17,6 +17,7 @@ Endpoints:
   GET  /api/predict/recommendations  → Top decision-layer recommendation buckets
   GET  /api/predict/enriched-signals → Extended signals dashboard with scoring summaries
   GET  /api/predict/scored/{id}      → Single market with full scoring dimensions
+  GET  /api/predict/signal-changes   → Recent signal changes detected via snapshot diffing
   GET  /api/predict/diagnostics      → Scoring metadata for debugging
 """
 
@@ -214,6 +215,33 @@ async def predict_scored_market_detail(condition_id: str):
         return JSONResponse(content=detail)
     except Exception as e:
         print(f"[PREDICT/scored/{condition_id}] Error: {e}")
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@router.get("/api/predict/signal-changes")
+async def predict_signal_changes():
+    """
+    Recent signal changes detected via snapshot diffing.
+    Compares consecutive scored-market snapshots and surfaces meaningful
+    changes: score jumps/drops, trap risk spikes, momentum shifts,
+    repricings, bucket entries/exits, flow spikes, spread changes, etc.
+
+    Returns:
+        {
+            "changes": [...],
+            "change_count": N,
+            "last_updated": "ISO datetime",
+            "snapshot_age_seconds": float
+        }
+
+    Changes are ephemeral (in-memory, last 50 / last 30 min) and reset
+    on server restart.
+    """
+    try:
+        result = await polymarket_intel.get_signal_changes()
+        return JSONResponse(content=result)
+    except Exception as e:
+        print(f"[PREDICT/signal-changes] Error: {e}")
         return JSONResponse(status_code=502, content={"error": str(e)})
 
 

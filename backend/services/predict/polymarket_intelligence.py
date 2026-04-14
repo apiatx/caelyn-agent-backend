@@ -33,6 +33,7 @@ import httpx
 from data.cache import cache
 from services.predict.scoring import score_markets
 from services.predict.recommendations import build_recommendations
+from services.predict.signal_changes import signal_tracker
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 CLOB_BASE = "https://clob.polymarket.com"
@@ -46,6 +47,7 @@ _SIGNALS_CACHE_TTL = 120
 _MARKET_DETAIL_TTL = 60
 _SCORED_CACHE_TTL = 90
 _RECOMMENDATIONS_CACHE_TTL = 120
+_SIGNAL_CHANGES_CACHE_TTL = 60
 
 _SPORTS_KEYWORDS = [
     "nfl", "nba", "mlb", "nhl", "nascar", "ufc", "mma", "boxing",
@@ -352,12 +354,37 @@ class PolymarketIntelligence:
         scored = await self.get_scored_markets(limit=200)
         buckets = build_recommendations(scored)
 
+        # Feed the signal tracker with fresh scored data + buckets
+        try:
+            signal_tracker.update(scored, buckets)
+        except Exception as e:
+            print(f"[PREDICT/signal-tracker] update error (non-fatal): {e}")
+
         result = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "market_count": len(scored),
             "buckets": buckets,
         }
         cache.set(key, result, _RECOMMENDATIONS_CACHE_TTL)
+        return result
+
+    async def get_signal_changes(self) -> dict:
+        """
+        Return recent signal changes detected by snapshot diffing.
+        Triggers a recommendations refresh if the cache is stale so the
+        tracker stays reasonably up-to-date.
+        """
+        key = "pm:signal_changes"
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        # Ensure tracker has fresh data by calling recommendations
+        # (which internally calls get_scored_markets and feeds the tracker)
+        await self.get_recommendations()
+
+        result = signal_tracker.get_recent_changes()
+        cache.set(key, result, _SIGNAL_CHANGES_CACHE_TTL)
         return result
 
     async def get_enriched_signals(self) -> dict:
