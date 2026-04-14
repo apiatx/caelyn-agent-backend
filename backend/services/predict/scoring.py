@@ -3,7 +3,7 @@ Prophetik Signal Engine — Normalized Scoring Module.
 
 Computes seven independent scoring dimensions for each prediction market:
 
-    1. Conviction Score      (0-100)  — distance from 50/50
+    1. Conviction Score      (0-100)  — actionable edge (tradable range + momentum)
     2. Momentum Score        (0-100)  — price movement strength + persistence
     3. Flow Score            (0-100)  — volume intensity + burstiness
     4. Execution Quality     (0-100)  — spread tightness + liquidity depth
@@ -52,29 +52,45 @@ def _conviction_score(yes_pct: float, price_change_1h: float = 0.0,
                       price_change_1wk: float = 0.0) -> float:
     """
     Conviction Score (0-100).
-    Markets far from 50/50 have stronger consensus conviction.
-    A market at 95% YES or 5% YES both get high conviction.
+    Measures actionable edge, not distance from 50%.
 
-    CRITICAL: Stale pinned markets (near 0/100 with no recent movement)
-    get conviction crushed to near 0 — these are resolved/dead markets
-    that should NOT dominate recommendations.
+    - Tradable range (15-85%) scores higher than dead extremes (0-5, 95-100)
+    - Price momentum adds conviction — distinguishes active from stale
+    - Alignment across timeframes = strong directional signal
+    - Dead longshots at extremes with no movement get near-zero
     """
     if yes_pct is None:
         return 0.0
 
+    # Extreme zone (< 5% or > 95%): only gets conviction from actual movement
+    if yes_pct < 5 or yes_pct > 95:
+        if abs(price_change_1h) < 2 and abs(price_change_24h) < 2 and abs(price_change_1wk) < 2:
+            return 2.0  # stale/resolved
+        # Recent movement at extreme = conviction comes from the move, not the level
+        move_strength = min(30, abs(price_change_24h) * 1.5 + abs(price_change_1h) * 2)
+        return round(move_strength, 1)
+
+    # Core zone: 15-85% is the tradable sweet spot
+    # 1. Distance from 50 gives mild base (not too dominant)
     distance = abs(yes_pct - 50.0)
+    base = min(40, distance * 0.8)  # max 40 from distance alone
 
-    # Pinned market penalty: if near 0% or 100% AND all price changes minimal,
-    # this is a stale/resolved market — conviction should be near zero.
-    if (yes_pct < 5 or yes_pct > 95):
-        all_changes_minimal = (abs(price_change_1h) < 2.0
-                               and abs(price_change_24h) < 2.0
-                               and abs(price_change_1wk) < 2.0)
-        if all_changes_minimal:
-            return 2.0  # near-zero conviction for stale pinned markets
+    # 2. Price movement adds conviction — this is the real signal
+    move_24h = min(30, abs(price_change_24h) * 3)  # up to 30 from 24h move
+    move_1h = min(15, abs(price_change_1h) * 3)    # up to 15 from 1h move
+    move_1wk = min(15, abs(price_change_1wk) * 1.5)  # up to 15 from 7d trend
 
-    # Scale: 0 distance = 0 conviction, 50 distance = 100 conviction
-    return round(min(100.0, (distance / 50.0) * 100.0), 1)
+    # 3. Alignment bonus: all timeframes agree = strong conviction
+    alignment = 0
+    if price_change_24h != 0 and price_change_1h != 0:
+        if (price_change_24h > 0) == (price_change_1h > 0):
+            alignment += 5
+    if price_change_24h != 0 and price_change_1wk != 0:
+        if (price_change_24h > 0) == (price_change_1wk > 0):
+            alignment += 5
+
+    score = base + move_24h + move_1h + move_1wk + alignment
+    return round(max(0.0, min(100.0, score)), 1)
 
 
 def _momentum_score(
