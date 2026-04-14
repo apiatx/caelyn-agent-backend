@@ -160,6 +160,30 @@ class PolymarketIntelligence:
         expired_count = sum(1 for m in markets if m.get("is_expired"))
         resolving_count = sum(1 for m in markets if m.get("is_resolving"))
 
+        # Score all active markets so score fields are available for _slim().
+        # score_markets() is pure Python over already-enriched dicts — no extra API calls.
+        scored_active = score_markets(active_markets)
+        for m in scored_active:
+            scores = m.get("scores", {})
+            m["conviction_score"] = scores.get("conviction", 0) or 0
+            m["momentum_score"] = scores.get("momentum", 0) or 0
+            m["flow_score"] = scores.get("flow", 0) or 0
+            m["execution_quality_score"] = scores.get("execution_quality", 0) or 0
+            m["participation_quality_score"] = scores.get("participation_quality", 0) or 0
+            m["time_quality_score"] = scores.get("time_quality", 0) or 0
+            m["trap_risk_score"] = scores.get("trap_risk", 0) or 0
+            m["composite_score"] = m.get("composite_score", 0) or 0
+            m["momentum_label"] = m.get("momentum_label", "flat") or "flat"
+            m["price_change_24h"] = m.get("price_change_1d", 0)
+            if not m.get("slug"):
+                question = m.get("question", "")
+                slug = question.lower().strip()
+                for ch in ["?", "'", '"', ",", ".", "!", "(", ")", "[", "]", "{", "}", "&", "%", "$", "#", "@"]:
+                    slug = slug.replace(ch, "")
+                slug = slug.replace(" ", "-").replace("--", "-").strip("-")
+                m["slug"] = slug[:100]
+        active_markets = scored_active
+
         # Exclude sports game markets from all signal lists — sports games resolve
         # within hours (loser → 0%, winner → 100%) and dominate movers/edges/whale
         # signals with noise irrelevant to macro/financial prediction markets.
@@ -964,9 +988,14 @@ def _slim(markets: list[dict]) -> list[dict]:
         "volume_24h", "liquidity", "spread_pct", "edge_pct", "edge_detected",
         "mispricing_score", "volume_momentum", "whale_activity", "is_competitive",
         "market_efficiency_score", "spread_pct_of_price",
-        "price_change_1h", "price_change_1d", "price_change_1wk", "price_momentum_pct",
+        "price_change_1h", "price_change_1d", "price_change_1wk", "price_change_24h",
+        "price_momentum_pct",
         "days_to_expiry", "hours_to_expiry", "is_expired", "is_resolving", "end_date",
-        "tags", "image", "vol_liq_ratio",
+        "tags", "image", "vol_liq_ratio", "slug",
+        # Score fields — populated when get_market_signals() runs the scoring pipeline
+        "composite_score", "conviction_score", "momentum_score", "momentum_label",
+        "flow_score", "execution_quality_score", "participation_quality_score",
+        "trap_risk_score",
     ]
     return [{k: m[k] for k in keep if k in m} for m in markets]
 
