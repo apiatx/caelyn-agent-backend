@@ -32,7 +32,7 @@ router = APIRouter(tags=["predict"])
 
 @router.get("/api/predict/markets")
 async def predict_markets(
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(200, ge=1, le=500),
     tag: Optional[str] = Query(None),
     min_volume: float = Query(0, ge=0),
 ):

@@ -83,21 +83,39 @@ class PolymarketIntelligence:
 
     async def get_top_markets(
         self,
-        limit: int = 50,
+        limit: int = 200,
         tag: Optional[str] = None,
         min_volume_24h: float = 0,
     ) -> list[dict]:
         """
         Return enriched, analytics-decorated markets sorted by 24h volume.
         Applies all Jon-Becker-style signal computations on top of raw API data.
+
+        When a tag filter is provided we:
+          1. Ask the Gamma API for up to 1 000 markets with that tag (best-effort
+             — Gamma's tag_slug param is inconsistent across market types).
+          2. Apply a reliable client-side tag filter so niche categories always
+             return results even if the API-level filter is incomplete.
+        When no tag is given we fetch a pool 3× the requested limit (capped at
+        600) so sorting by volume picks the best markets after active filtering.
         """
         key = f"pm:intel:top:{limit}:{tag}:{min_volume_24h}"
         cached = cache.get(key)
         if cached is not None:
             return cached
 
-        raw = await self._fetch_markets(limit=min(limit * 2, 200), tag=tag)
+        # Gamma's /markets endpoint does not carry tag data — tags live on /events.
+        # When a tag filter is requested we go through the events API which embeds
+        # markets AND has reliable tag_slug filtering. Without a tag we pull a
+        # large pool from /markets and sort by volume.
+        if tag:
+            raw = await self._fetch_markets_by_tag(tag, limit=min(limit * 5, 2000))
+        else:
+            fetch_size = min(limit * 3, 600)
+            raw = await self._fetch_markets(limit=fetch_size)
+
         enriched = [self._enrich_market(m) for m in raw]
+
         # Drop expired / resolving markets — their volume is settlement noise,
         # not active trading interest. Also apply the accepting_orders guard.
         enriched = [
@@ -107,6 +125,7 @@ class PolymarketIntelligence:
             and m.get("accepting_orders", True)
             and m["volume_24h"] >= min_volume_24h
         ]
+
         enriched.sort(key=lambda m: m["volume_24h"], reverse=True)
         result = enriched[:limit]
         cache.set(key, result, _MARKET_CACHE_TTL)
@@ -518,25 +537,106 @@ class PolymarketIntelligence:
 
     # ── HTTP Helpers ──────────────────────────────────────────────────────────
 
-    async def _fetch_markets(self, limit: int = 100, tag: Optional[str] = None) -> list[dict]:
-        params = {
-            "limit": str(min(limit, 500)),
+    async def _fetch_markets(self, limit: int = 200) -> list[dict]:
+        """
+        Fetch active markets from the Gamma API, ordered by 24-hour volume.
+        Paginates automatically when limit > 500 (Gamma's per-request maximum).
+        No tag filtering — use _fetch_markets_by_tag() for category queries.
+        """
+        PAGE_MAX = 500
+
+        base_params = {
             "active": "true",
             "closed": "false",
             "order": "volume24hr",
             "ascending": "false",
         }
-        if tag:
-            params["tag_slug"] = tag
-        try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-                resp = await client.get(f"{GAMMA_BASE}/markets", params=params, headers=_HEADERS)
-                resp.raise_for_status()
-                data = resp.json()
-                return data if isinstance(data, list) else []
-        except Exception as e:
-            print(f"[PM_INTEL] _fetch_markets error: {e}")
-            return []
+
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            results: list[dict] = []
+            offset = 0
+            remaining = min(limit, 1000)
+
+            while remaining > 0:
+                page_size = min(remaining, PAGE_MAX)
+                params = {**base_params, "limit": str(page_size), "offset": str(offset)}
+                try:
+                    resp = await client.get(f"{GAMMA_BASE}/markets", params=params, headers=_HEADERS)
+                    resp.raise_for_status()
+                    page = resp.json()
+                    if not isinstance(page, list) or not page:
+                        break
+                    results.extend(page)
+                    if len(page) < page_size:
+                        break  # Gamma returned fewer than asked — no more pages
+                    offset += page_size
+                    remaining -= page_size
+                except Exception as e:
+                    print(f"[PM_INTEL] _fetch_markets error (offset={offset}): {e}")
+                    break
+
+            return results
+
+    async def _fetch_markets_by_tag(self, tag: str, limit: int = 1000) -> list[dict]:
+        """
+        Fetch markets that belong to events matching `tag`.
+
+        Gamma's /markets endpoint does not carry tag data — tags are attached to
+        events, and each event embeds its markets. This method:
+
+          1. Queries /events?tag_slug=<slug> (slug = tag.lower().replace(" ", "-"))
+          2. Extracts all embedded markets from matching events
+          3. Injects the parent event's tag labels onto each market's `tags` field
+             so downstream enrichment and _is_sports_market() can read them.
+
+        The `limit` argument caps how many raw markets are returned before
+        enrichment/active-filtering in get_top_markets().
+        """
+        slug = tag.strip().lower().replace(" ", "-")
+        PAGE_MAX = 200  # events pages are heavier than markets pages
+
+        base_params = {
+            "active": "true",
+            "order": "volume24hr",
+            "ascending": "false",
+            "tag_slug": slug,
+        }
+
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+            all_markets: list[dict] = []
+            offset = 0
+            remaining = min(limit, 2000)
+
+            while remaining > 0 and len(all_markets) < limit:
+                page_size = min(remaining, PAGE_MAX)
+                params = {**base_params, "limit": str(page_size), "offset": str(offset)}
+                try:
+                    resp = await client.get(f"{GAMMA_BASE}/events", params=params, headers=_HEADERS)
+                    resp.raise_for_status()
+                    events_page = resp.json()
+                    if not isinstance(events_page, list) or not events_page:
+                        break
+
+                    for ev in events_page:
+                        # Extract tag labels from the event so markets can use them
+                        ev_tags = [
+                            t.get("label", t) if isinstance(t, dict) else t
+                            for t in (ev.get("tags") or [])
+                        ]
+                        for market in (ev.get("markets") or []):
+                            # Inject event tags onto the market raw dict
+                            market["tags"] = ev_tags
+                            all_markets.append(market)
+
+                    if len(events_page) < page_size:
+                        break  # No more pages
+                    offset += page_size
+                    remaining -= page_size
+                except Exception as e:
+                    print(f"[PM_INTEL] _fetch_markets_by_tag({tag!r}) error (offset={offset}): {e}")
+                    break
+
+            return all_markets[:limit]
 
     async def _fetch_market_by_condition(self, condition_id: str) -> Optional[dict]:
         try:
