@@ -435,17 +435,30 @@ class PolymarketIntelligence:
         scored = await self.get_scored_markets(limit=200)
         buckets = build_recommendations(scored)
 
-        # Feed the signal tracker with fresh scored data + buckets
+        # Feed the signal tracker with fresh scored data + buckets.
+        # The tracker runs the stability stabilizer and emits recommendation-level changes.
         try:
             signal_tracker.update(scored, buckets)
         except Exception as e:
             print(f"[PREDICT/signal-tracker] update error (non-fatal): {e}")
+
+        # Retrieve the stability-controlled best bet from the tracker
+        try:
+            pinned = signal_tracker.get_pinned_best_bet()
+        except Exception as e:
+            print(f"[PREDICT/signal-tracker] get_pinned_best_bet error (non-fatal): {e}")
+            pinned = {"market": None, "stability": {}}
 
         # Return bucket keys at the top level for direct frontend access
         result = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "market_count": len(scored),
             **buckets,
+            # Stability-controlled Best Bet — use this instead of best_bet_now[0]
+            # for the prominent "Best Bet Right Now" card in the Signal Engine UI.
+            # Includes hysteresis (min score gap), persistence (N consecutive cycles),
+            # and cooldown (hold for 5 min after change) to prevent rapid flipping.
+            "pinned_best_bet": pinned,
         }
         cache.set(key, result, _RECOMMENDATIONS_CACHE_TTL)
         return result
