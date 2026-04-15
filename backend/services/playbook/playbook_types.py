@@ -4,7 +4,7 @@ Playbook type definitions — Pydantic models shared across the engine.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── Playbook Definition ───────────────────────────────────────────────────────
@@ -55,6 +55,7 @@ class TickerRawData(BaseModel):
     mkt_cap: Optional[float] = None         # USD
     sector: Optional[str] = None
     industry: Optional[str] = None
+    description: Optional[str] = None      # business description from FMP profile
     pe_ratio: Optional[float] = None
     debt_to_equity: Optional[float] = None  # D/E ratio
     revenue_growth_yoy: Optional[float] = None  # decimal e.g. 0.22 = 22%
@@ -62,6 +63,20 @@ class TickerRawData(BaseModel):
     week52_low: Optional[float] = None
     day_change_pct: Optional[float] = None
     fetch_error: Optional[str] = None       # non-None = partial/failed fetch
+
+
+# ── Factor detail metadata (Phase 1.5+) ──────────────────────────────────────
+
+class FactorDetail(BaseModel):
+    """
+    Rich metadata for a single scored factor.
+    Produced by the extended factor engine (Phase 1.5).
+    """
+    model_config = ConfigDict(extra="ignore")
+    score: float                            # 0–100
+    status: str                             # "real" | "manual" | "heuristic" | "fallback" | "stub"
+    reasons: List[str] = Field(default_factory=list)    # human-readable explanation
+    source_tags: List[str] = Field(default_factory=list)  # e.g. ["sector_etf_momentum", "XLK"]
 
 
 # ── Scoring Result ────────────────────────────────────────────────────────────
@@ -74,12 +89,18 @@ class PlaybookScoreResult(BaseModel):
     hard_filter_pass: bool
     hard_filter_failures: List[str]         # human-readable reasons
     summary_label: str
-    factor_scores: Dict[str, float]         # factor_name -> 0–100
+    factor_scores: Dict[str, float]         # factor_name -> 0–100  (BACKWARDS COMPAT)
     penalties_applied: Dict[str, float]     # factor_name -> deduction applied
     matched_rules: List[str]                # rules with strong signal
     risks: List[str]                        # risk notes
     stub_factors: List[str]                 # factors not yet computed from real data
     raw_data: Dict[str, Any]                # subset of fetched data for transparency
+    # ── Phase 1.5 additions (all optional — backwards compatible) ─────────────
+    factor_details: Dict[str, FactorDetail] = Field(default_factory=dict)
+    matched_themes: List[str] = Field(default_factory=list)
+    bottleneck_tags: List[str] = Field(default_factory=list)
+    catalyst_signals: List[str] = Field(default_factory=list)
+    dilution_flags: List[str] = Field(default_factory=list)
 
 
 # ── Service request/response schemas ─────────────────────────────────────────

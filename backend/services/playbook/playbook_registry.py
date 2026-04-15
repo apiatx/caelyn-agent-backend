@@ -1,12 +1,8 @@
 """
-Playbook Registry — single source of truth for all strategy definitions.
+Playbook Registry — defines all playbook configurations.
 
-To add a new playbook: define a PlaybookDefinition and call register().
-No other file needs to change.
-
-Current playbooks:
-  serenity   — bottleneck/supply-chain focus, clean balance sheets, small/mid-cap asymmetry
-  sjcapital  — hot-sector momentum, undervaluation vs peers, revenue acceleration
+Add new playbooks by creating a PlaybookDefinition and calling register().
+Enable/disable via environment variables — no code changes needed.
 """
 from __future__ import annotations
 
@@ -19,53 +15,49 @@ from services.playbook.playbook_types import (
     PlaybookDefinition,
 )
 
-_registry: Dict[str, PlaybookDefinition] = {}
+# ── Feature flags ─────────────────────────────────────────────────────────────
+
+_ENGINE_ON   = os.getenv("ENABLE_PLAYBOOK_ENGINE",   "true").lower() != "false"
+_SERENITY_ON = os.getenv("ENABLE_PLAYBOOK_SERENITY",  "true").lower() != "false"
+_SJCAPITAL_ON= os.getenv("ENABLE_PLAYBOOK_SJCAPITAL", "true").lower() != "false"
+
+
+# ── Registry store ────────────────────────────────────────────────────────────
+
+_REGISTRY: Dict[str, PlaybookDefinition] = {}
 
 
 def register(pb: PlaybookDefinition) -> None:
-    _registry[pb.id] = pb
-    print(f"[PLAYBOOK] Registered: id={pb.id!r} enabled={pb.enabled}")
+    _REGISTRY[pb.id] = pb
 
 
 def get(playbook_id: str) -> Optional[PlaybookDefinition]:
-    return _registry.get(playbook_id)
-
-
-def list_enabled() -> List[PlaybookDefinition]:
-    return [pb for pb in _registry.values() if pb.enabled]
+    return _REGISTRY.get(playbook_id)
 
 
 def list_all() -> List[PlaybookDefinition]:
-    return list(_registry.values())
+    return list(_REGISTRY.values())
 
 
-# ── Feature-flag helpers ─────────────────────────────────────────────────────
-
-def _flag(env_var: str, default: bool = True) -> bool:
-    val = os.getenv(env_var, str(default)).lower()
-    return val in ("true", "1", "yes")
+def list_enabled() -> List[PlaybookDefinition]:
+    return [pb for pb in _REGISTRY.values() if pb.enabled]
 
 
-_ENGINE_ON     = _flag("ENABLE_PLAYBOOK_ENGINE",    True)
-_SERENITY_ON   = _flag("ENABLE_PLAYBOOK_SERENITY",  True)
-_SJCAPITAL_ON  = _flag("ENABLE_PLAYBOOK_SJCAPITAL", True)
-
-
-# ── Serenity Playbook ────────────────────────────────────────────────────────
-# Philosophy: Find structurally advantaged companies sitting inside a physical
-# bottleneck (supply chain, infra, manufacturing), with clean financials,
-# upcoming catalysts, and small/mid-cap asymmetry. Direction > perfect timing.
+# ── Serenity Playbook ─────────────────────────────────────────────────────────
+# Philosophy: Structural edge investing. Identify companies with physical
+# bottleneck positions in critical supply chains. Prefer clean balance sheets,
+# upcoming catalysts, small/mid-cap asymmetry. Sector momentum is secondary.
 #
-# Factor weights (must sum ≤ 1.0):
-#   bottleneck_exposure         0.20  ← primary thesis driver
-#   balance_sheet_strength      0.15  ← dilution / distress protection
-#   catalyst_proximity          0.15  ← event window open
-#   small_cap_asymmetry         0.15  ← size-based upside potential
-#   supply_chain_confirmation   0.10  ← physical confirmation
-#   technical_confirmation      0.10  ← price structure not broken
-#   theme_alignment             0.10  ← sector/theme fit
-#   sector_strength             0.05  ← macro sector tailwind
-#   Total                       1.00
+# v1.5 weight changes vs v1.0:
+#   bottleneck_exposure:       0.20 → 0.22  (primary thesis driver, up)
+#   theme_alignment:           0.10 → 0.14  (thematic precision matters more, up)
+#   sector_strength:           0.05 → 0.08  (light tailwind signal, up)
+#   catalyst_proximity:        0.15 → 0.12  (still important, slightly reduced)
+#   small_cap_asymmetry:       0.15 → 0.12  (still important, slightly reduced)
+#   supply_chain_confirmation: 0.10 → 0.07  (stub, reduced until real data)
+#   balance_sheet_strength:    0.15 → 0.15  (unchanged)
+#   technical_confirmation:    0.10 → 0.10  (unchanged)
+#   Total: 1.00
 
 _SERENITY = PlaybookDefinition(
     id="serenity",
@@ -77,16 +69,16 @@ _SERENITY = PlaybookDefinition(
         "and small/mid-cap asymmetric upside. Favors direction over perfect timing."
     ),
     enabled=_ENGINE_ON and _SERENITY_ON,
-    version="1.0.0",
+    version="1.5.0",
     factor_weights={
-        "bottleneck_exposure":       0.20,
+        "bottleneck_exposure":       0.22,
         "balance_sheet_strength":    0.15,
-        "catalyst_proximity":        0.15,
-        "small_cap_asymmetry":       0.15,
-        "supply_chain_confirmation": 0.10,
+        "theme_alignment":           0.14,
+        "catalyst_proximity":        0.12,
+        "small_cap_asymmetry":       0.12,
         "technical_confirmation":    0.10,
-        "theme_alignment":           0.10,
-        "sector_strength":           0.05,
+        "sector_strength":           0.08,
+        "supply_chain_confirmation": 0.07,
     },
     hard_filters=[
         HardFilter(
@@ -116,13 +108,16 @@ _SERENITY = PlaybookDefinition(
             label="Crowded positioning risk (-6pts)",
         ),
     ],
+    # Internal theme IDs — must match keys in theme_map.ALL_THEMES
     preferred_themes=[
-        "AI infrastructure",
-        "semiconductor supply chain",
-        "defense & aerospace",
-        "energy transition hardware",
-        "critical minerals",
-        "data center components",
+        "photonics_cpo",
+        "advanced_packaging_test",
+        "semicap_supply_chain",
+        "defense_optics",
+        "grid_transformers",
+        "space",
+        "memory",
+        "ai_infrastructure",
     ],
     preferred_sectors=[
         "Technology",
@@ -147,17 +142,18 @@ if _SERENITY_ON and _ENGINE_ON:
 # and approaching EBITDA/FCF inflection. Tighter sector requirements, avoid
 # negative asymmetry. Chart confirmation required.
 #
-# Factor weights (must sum ≤ 1.0):
-#   sector_strength             0.20  ← hot sector is the primary gate
-#   technical_confirmation      0.15  ← chart must confirm
-#   valuation_discount_vs_peers 0.15  ← undervaluation vs sector peers
-#   revenue_growth              0.10  ← must be growing
-#   revenue_acceleration        0.10  ← QoQ acceleration (stub v1)
-#   ebitda_inflection_proximity 0.10  ← approaching profitability inflection (stub v1)
-#   bottleneck_exposure         0.10  ← bottleneck alignment
-#   small_cap_asymmetry         0.05  ← some size preference
-#   theme_alignment             0.05  ← thematic overlay
-#   Total                       1.00
+# v1.5 weight changes vs v1.0:
+#   sector_strength:               0.20 → 0.22  (primary gate, up)
+#   catalyst_proximity:            0.00 → 0.12  (NEW — timely setups matter)
+#   technical_confirmation:        0.15 → 0.12  (slightly reduced)
+#   valuation_discount_vs_peers:   0.15 → 0.12  (slightly reduced)
+#   revenue_acceleration:          0.10 → 0.08  (still stub, slightly reduced)
+#   ebitda_inflection_proximity:   0.10 → 0.08  (still stub, slightly reduced)
+#   bottleneck_exposure:           0.10 → 0.08  (secondary concern for S&J)
+#   small_cap_asymmetry:           0.05 → 0.04  (minor)
+#   theme_alignment:               0.05 → 0.04  (minor)
+#   revenue_growth:                0.10 → 0.10  (unchanged)
+#   Total: 1.00
 
 _SJCAPITAL = PlaybookDefinition(
     id="sjcapital",
@@ -169,17 +165,18 @@ _SJCAPITAL = PlaybookDefinition(
         "Requires chart confirmation and avoids negative asymmetry."
     ),
     enabled=_ENGINE_ON and _SJCAPITAL_ON,
-    version="1.0.0",
+    version="1.5.0",
     factor_weights={
-        "sector_strength":              0.20,
-        "technical_confirmation":       0.15,
-        "valuation_discount_vs_peers":  0.15,
+        "sector_strength":              0.22,
+        "technical_confirmation":       0.12,
+        "valuation_discount_vs_peers":  0.12,
+        "catalyst_proximity":           0.12,
         "revenue_growth":               0.10,
-        "revenue_acceleration":         0.10,
-        "ebitda_inflection_proximity":  0.10,
-        "bottleneck_exposure":          0.10,
-        "small_cap_asymmetry":          0.05,
-        "theme_alignment":              0.05,
+        "revenue_acceleration":         0.08,
+        "ebitda_inflection_proximity":  0.08,
+        "bottleneck_exposure":          0.08,
+        "small_cap_asymmetry":          0.04,
+        "theme_alignment":              0.04,
     },
     hard_filters=[
         HardFilter(
@@ -209,13 +206,14 @@ _SJCAPITAL = PlaybookDefinition(
             label="High execution risk (-5pts)",
         ),
     ],
+    # Internal theme IDs — must match keys in theme_map.ALL_THEMES
     preferred_themes=[
-        "AI/machine learning",
-        "cloud infrastructure",
-        "biotech catalyst",
-        "semiconductor",
-        "energy transition",
-        "fintech",
+        "ai_infrastructure",
+        "neocloud",
+        "ai_software",
+        "ai_power_energy",
+        "energy_transition",
+        "biotech_catalyst",
     ],
     preferred_sectors=[
         "Technology",

@@ -20,6 +20,10 @@ def _fmp_key() -> str:
     return os.getenv("FMP_API_KEY", "")
 
 
+def _finnhub_key() -> str:
+    return os.getenv("FINNHUB_API_KEY", "")
+
+
 # ── Watchlist scoring ─────────────────────────────────────────────────────────
 
 async def score_watchlist(req: ScoreWatchlistRequest) -> List[PlaybookScoreResult]:
@@ -35,7 +39,7 @@ async def score_watchlist(req: ScoreWatchlistRequest) -> List[PlaybookScoreResul
         return []
 
     print(f"[PLAYBOOK_SERVICE] score_watchlist playbook={req.playbook_id!r} tickers={len(tickers)}")
-    return await score_tickers_batch(tickers, pb, _fmp_key())
+    return await score_tickers_batch(tickers, pb, _fmp_key(), _finnhub_key())
 
 
 # ── Portfolio scoring ─────────────────────────────────────────────────────────
@@ -66,7 +70,7 @@ async def score_portfolio(req: ScorePortfolioRequest) -> PortfolioScoreResult:
     tickers = [t for t in tickers if t][:50]
 
     print(f"[PLAYBOOK_SERVICE] score_portfolio playbook={req.playbook_id!r} holdings={len(tickers)}")
-    scored_list = await score_tickers_batch(tickers, pb, _fmp_key())
+    scored_list = await score_tickers_batch(tickers, pb, _fmp_key(), _finnhub_key())
 
     # Build ticker → result lookup
     result_map = {r.ticker: r for r in scored_list}
@@ -122,7 +126,7 @@ async def score_one_ticker(ticker: str, playbook_id: str) -> PlaybookScoreResult
         raise ValueError(f"Unknown playbook_id: {playbook_id!r}")
     if not pb.enabled:
         raise ValueError(f"Playbook {playbook_id!r} is disabled.")
-    return await score_ticker(ticker.upper().strip(), pb, _fmp_key())
+    return await score_ticker(ticker.upper().strip(), pb, _fmp_key(), _finnhub_key())
 
 
 # ── Top-names discovery ───────────────────────────────────────────────────────
@@ -170,5 +174,5 @@ async def get_top_names(
         raise ValueError(f"Unknown universe: {universe!r}. Available: {list(_UNIVERSES.keys())}")
 
     print(f"[PLAYBOOK_SERVICE] get_top_names playbook={playbook_id!r} universe={universe!r} n={len(tickers)}")
-    results = await score_tickers_batch(tickers, pb, _fmp_key())
+    results = await score_tickers_batch(tickers, pb, _fmp_key(), _finnhub_key())
     return results[:max(1, limit)]
