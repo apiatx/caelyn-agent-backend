@@ -2476,6 +2476,8 @@ async def query_agent(
         except Exception as e:
             print(f"[API] Failed to persist user message: {e}")
 
+    _user_id = getattr(request.state, "user_id", "default")
+
     async def _stream_query():
         """
         Runs the query and streams keepalive spaces every 8s.
@@ -2500,6 +2502,7 @@ async def query_agent(
                 reasoning_model=body.reasoning_model or "agent_collab",
                 collab_agents=body.collab_agents,
                 primary_model=body.primary_model,
+                user_id=_user_id,
             )
         )
 

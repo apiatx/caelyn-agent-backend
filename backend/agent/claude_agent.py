@@ -240,9 +240,9 @@ class TradingAgent:
         }
 
     @traceable(name="caelyn_main_agent")
-    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None) -> dict:
+    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default") -> dict:
         try:
-            return await self._handle_query_inner(user_prompt, history=history, preset_intent=preset_intent, request_id=request_id, csv_data=csv_data, chatbox_mode=chatbox_mode, reasoning_model=reasoning_model, collab_agents=collab_agents, primary_model=primary_model)
+            return await self._handle_query_inner(user_prompt, history=history, preset_intent=preset_intent, request_id=request_id, csv_data=csv_data, chatbox_mode=chatbox_mode, reasoning_model=reasoning_model, collab_agents=collab_agents, primary_model=primary_model, user_id=user_id)
         except Exception as e:
             import traceback
             print(f"[AGENT] FATAL: handle_query crashed with unhandled exception: {e}")
@@ -258,7 +258,7 @@ class TradingAgent:
             }
 
     @traceable(name="handle_query_inner")
-    async def _handle_query_inner(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None) -> dict:
+    async def _handle_query_inner(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default") -> dict:
         start_time = time.time()
         if history is None:
             history = []
@@ -829,6 +829,23 @@ class TradingAgent:
                     print(f"[CONTEXT_BROKER] Overlay injected: {list(_sc_overlay.keys())}")
             except Exception as _sc_err:
                 print(f"[CONTEXT_BROKER] Overlay skipped (non-fatal): {_sc_err}")
+
+        # ── User context overlay (portfolio, failure-safe) ────────────────────
+        _USER_CTX_EXCLUDED = frozenset({
+            "crypto", "portfolio_review", "prediction_markets",
+            "earnings_catalyst", "followup", "chat",
+        })
+        if not is_followup and market_data and isinstance(market_data, dict) \
+                and "_user_context" not in market_data \
+                and category not in _USER_CTX_EXCLUDED:
+            try:
+                from services.user_context_service import get_portfolio_slice
+                _uc = get_portfolio_slice(user_id)
+                if _uc:
+                    market_data["_user_context"] = _uc
+                    print(f"[USER_CONTEXT] Portfolio injected for user={user_id!r}: {list(_uc.keys())}")
+            except Exception as _uc_err:
+                print(f"[USER_CONTEXT] Skipped (non-fatal): {_uc_err}")
         # ─────────────────────────────────────────────────────────────────────
 
         plan = query_info.get("orchestration_plan", {}) if 'query_info' in locals() and isinstance(query_info, dict) else {}
