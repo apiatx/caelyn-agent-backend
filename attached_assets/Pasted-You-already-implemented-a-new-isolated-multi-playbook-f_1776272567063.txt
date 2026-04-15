@@ -1,0 +1,444 @@
+You already implemented a new isolated multi-playbook framework under /api/playbooks. Good.
+
+Now your job is to do phase 1.5: make the serenity and sjcapital playbooks feel meaningfully more distinct and intelligent by replacing the highest-impact stub factors with real or semi-real scoring logic.
+
+This is an additive enhancement to the new playbook module only.
+
+Non-negotiable guardrails
+Do not modify /api/query or the default AI Terminal logic in any way.
+Do not change the current default behavior anywhere in the app.
+Do not make playbook selection required anywhere.
+Do not refactor unrelated services.
+Only work inside the isolated playbook module and any tiny helper imports that are strictly necessary.
+Do not break existing playbook routes.
+Keep all new logic graceful under partial/missing data.
+Prefer cached / existing backend data providers wherever possible.
+Do not add fragile heavy dependencies unless absolutely necessary.
+Keep this future-extensible for more playbooks later.
+Objective
+
+Replace the most important current neutral/stub factors so the two playbooks begin to rank names differently in a way that matches their philosophies.
+
+Highest-priority factors to implement now
+
+Implement real or semi-real scoring for these factors, in this order:
+
+sector_strength
+dilution_risk
+catalyst_proximity
+theme_alignment
+bottleneck_exposure
+crowding_risk
+
+These should live inside the shared playbook factor system, not as one-off hacks per playbook.
+
+What each factor should mean
+1. sector_strength
+
+This should capture whether a stock’s sector/theme is currently hot or cold.
+
+Goal
+
+This factor should matter much more for sjcapital than for serenity.
+
+Preferred data sources
+
+Use whichever existing backend sources are already present and safest:
+
+existing sector rotation data/services if available
+sector ETF proxies if already available
+Finviz sector/industry heat if already present
+FMP/Finnhub sector performance proxies if available
+fallback: simple heuristic from price momentum of sector ETF map
+Implementation guidance
+
+Create a lightweight sector strength scoring function that:
+
+maps company sector/industry to a sector bucket
+calculates recent sector trend using one or more time windows, e.g.:
+1 week
+1 month
+3 month
+outputs normalized 0–100 score
+Suggested simple v1 sector ETF map
+
+Use a clean internal mapping like:
+
+Technology → XLK / SOXX / IGV proxy if available
+Industrials → XLI
+Energy → XLE
+Financials → XLF
+Healthcare → XLV
+Utilities → XLU
+Materials / Basic Materials → XLB
+Real Estate → XLRE
+Communication Services → XLC
+Consumer Discretionary → XLY
+Consumer Staples → XLP
+
+If your existing data stack makes ETFs easier than sector APIs, use ETF momentum.
+
+Scoring idea
+strong multi-window positive trend = 80–95
+mixed = 45–65
+weak/cold sector = 10–35
+
+Keep it explainable.
+
+2. dilution_risk
+
+This is a big one. It matters for both, especially Serenity.
+
+Goal
+
+Penalize names with evidence of recent or likely shareholder dilution.
+
+Preferred sources
+
+Use existing sources in this order where practical:
+
+SEC Edgar filings parsing
+recent 8-K / prospectus / shelf / ATM language
+share count trend if already available
+FMP share outstanding / float changes if available
+fallback heuristics based on weak balance sheet + cash burn + capital raise language in news
+Look for signals like
+ATM / “at-the-market”
+shelf registration
+secondary offering
+common stock issuance
+warrant overhang
+convertibles likely to dilute
+rapidly rising share count
+weak cash runway + negative cash flow + small cap = elevated financing risk
+Scoring behavior
+
+Here, higher factor score should mean worse dilution risk only if that is already how your penalties are structured. Otherwise normalize consistently. Be careful.
+
+Recommended:
+
+keep dilution_risk as “higher = riskier”
+let penalty rules deduct points if factor > threshold
+Output
+
+Include reasons in factor metadata, e.g.:
+
+["recent shelf filing", "elevated cash burn", "share count rising"]
+
+If filings/news are absent, degrade gracefully.
+
+3. catalyst_proximity
+
+This makes both playbooks feel timely instead of static.
+
+Goal
+
+Score whether a relevant catalyst window is near.
+
+Sources
+
+Use existing sources if present:
+
+Finnhub earnings calendar
+company news / press release dates
+known industry event calendar if already present
+simple rules for earnings proximity
+optionally existing macro/event feeds already in repo
+Initial v1 catalyst types
+
+Implement at least:
+
+earnings date proximity
+major recent news within past 7–14 days
+upcoming sector/company catalyst within 30 days if available
+unusual volume / breakout confirmation if already easy
+Suggested scoring logic
+earnings within 7–21 days with strong setup = higher
+fresh material news in last 7 days = boost
+no near catalyst = neutral
+stale/no event signal = lower
+
+Keep this simple and deterministic.
+
+4. theme_alignment
+
+This is a core separation factor.
+
+Goal
+
+Measure how strongly a ticker aligns with important investable themes.
+
+Required initial themes
+
+Create a lightweight theme taxonomy and theme mapping for at least:
+
+neocloud
+photonics_cpo
+ai_power_energy
+grid_transformers
+advanced_packaging_test
+defense_optics
+memory
+space
+ai_infrastructure
+semicap_supply_chain
+Implementation approach
+
+Use a hybrid of:
+
+manually curated ticker-to-theme map for obvious names
+company profile / description keyword classification
+industry tags if already available
+Example
+
+A ticker can map to multiple themes with different confidence.
+
+Store something like:
+
+theme_id
+confidence
+source (manual, profile_keywords, industry_map)
+Output
+
+Theme alignment should produce:
+
+score 0–100
+matched themes list
+confidence notes
+
+This will help both playbooks, but the preferred themes and weights differ by playbook.
+
+5. bottleneck_exposure
+
+This is one of the main “Serenity comes alive” factors.
+
+Goal
+
+Identify whether a company has exposure to a chokepoint / bottleneck in a larger macro buildout.
+
+Implementation guidance
+
+Do not overcomplicate with full LLM inference right now.
+
+Use a deterministic first-pass method:
+
+curated bottleneck theme map
+company description keyword match
+supplier/component role heuristics
+optional internal theme map from above
+Initial bottleneck buckets
+
+At least support:
+
+optical components
+SOI / substrates / photonics materials
+test sockets / packaging / interconnect
+transformers / switchgear / grid equipment
+gas turbines / off-grid AI power
+advanced cooling / thermal
+memory / HBM ecosystem
+defense optical / sensing bottlenecks
+Scoring
+direct chokepoint supplier = high
+adjacent beneficiary = moderate
+weak/unclear link = low or neutral
+Important
+
+This should not just duplicate theme_alignment.
+theme_alignment = broad theme fit
+bottleneck_exposure = specific constrained value-capture point inside the theme
+
+6. crowding_risk
+
+This helps Serenity avoid over-owned narrative junk.
+
+Goal
+
+Estimate whether the narrative is already crowded or overhyped.
+
+Initial safe implementation
+
+Start with simple deterministic proxies using data already available:
+
+recent news/article count spike
+extreme price extension near highs without fresh fundamental validation
+social/news saturation if existing APIs support it
+repeated mention count from any existing sentiment/news layer
+valuation extension combined with narrative heat
+
+If true X-based mention tracking is not already safely available in backend, do not bolt on fragile live X ingestion here yet.
+
+Suggested v1 heuristic
+
+Combine:
+
+price extension vs 52-week range
+recent news count spike
+premium valuation vs peers
+recent % move in short period
+optional existing sentiment score
+
+This won’t be perfect, but it is enough for first-pass crowding penalty.
+
+Implementation requirements
+Shared factor metadata
+
+Enhance factor outputs to include optional metadata, not just a number.
+
+For each newly implemented factor, support:
+
+score
+status (real, heuristic, fallback)
+reasons list
+source_tags list
+
+Example:
+
+{
+  "sector_strength": {
+    "score": 84,
+    "status": "real",
+    "reasons": ["Technology sector strong across 1w/1m windows", "XLK and SOXX both positive"],
+    "source_tags": ["sector_etf_momentum"]
+  }
+}
+
+If your current response model only supports numeric factor scores, extend it in a backwards-compatible way:
+
+preserve existing factor_scores numeric map
+add factor_details alongside it
+
+Do not break current route consumers.
+
+Keep response backwards compatible
+
+Current frontend may already expect:
+
+factor_scores
+matched_rules
+risks
+raw_data
+
+Keep those.
+
+Add optional:
+
+factor_details
+matched_themes
+bottleneck_tags
+catalyst_signals
+dilution_flags
+Distinguish playbooks more clearly
+
+Once these factors are real, revisit the playbook configs and make sure weights reflect personality:
+
+Serenity should lean harder into:
+bottleneck_exposure
+theme_alignment
+dilution_risk penalty
+crowding_risk penalty
+catalyst_proximity
+balance sheet cleanliness
+small/mid-cap asymmetry
+SJCapital should lean harder into:
+sector_strength
+valuation_discount_vs_peers
+revenue_acceleration
+catalyst_proximity
+EBITDA/FCF inflection proximity
+technical confirmation
+
+Do not radically rewrite all weights, but tune them enough that the same stock can score materially differently under each playbook.
+
+Data/provider guidance
+Reuse existing services first
+
+Before adding anything new, inspect existing repo services/providers for:
+
+sector rotation data
+ETF quote/history data
+SEC/filings helpers
+earnings calendar
+company profiles / descriptions
+cached news
+technicals
+
+Use existing helpers if possible.
+
+If you must add helper functions
+
+Add them in the playbook module or a tiny clearly named helper file.
+Do not scatter logic across the app.
+
+If data is unavailable
+
+Use:
+
+deterministic heuristic
+documented fallback
+neutral fallback only as last resort
+
+Do not crash. Do not pretend fallback is real.
+
+Suggested internal file additions/changes
+
+Likely files to modify:
+
+services/playbook/playbook_scoring.py
+services/playbook/playbook_service.py
+services/playbook/playbook_types.py
+services/playbook/playbook_registry.py
+
+Possible new helper files:
+
+services/playbook/theme_map.py
+services/playbook/sector_map.py
+services/playbook/dilution_signals.py
+
+Adapt to repo structure, but keep it tidy.
+
+Testing requirements
+
+Add or update tests so we can verify these new factors work safely.
+
+At minimum test:
+
+sector_strength returns sensible values for strong vs weak sector proxies
+theme_alignment detects manual and keyword theme matches
+bottleneck_exposure distinguishes direct bottleneck supplier vs adjacent name
+dilution_risk penalizes obvious financing-risk scenarios
+catalyst_proximity boosts near earnings / fresh event windows
+crowding_risk penalizes overheated setups
+both playbooks now score the same ticker differently when factor mix differs
+partial/missing data still returns a valid score
+/api/query remains untouched
+all existing /api/playbooks/* routes still work
+Acceptance criteria
+
+I want the result to satisfy all of these:
+
+Serenity and S&J produce meaningfully different rankings on the same ticker set
+factor outputs are more explainable, not just numbers
+default AI Terminal behavior remains unchanged
+/api/query remains untouched
+playbook routes remain isolated
+missing data degrades gracefully
+code remains generic for future playbooks
+no duplicated per-playbook service architecture
+Deliverables
+
+When complete, report back with:
+
+exact files added/modified
+which of the 6 target factors are now real vs heuristic
+sample JSON response showing new factor detail structure
+before/after example of one ticker scored under serenity vs sjcapital
+confirmation /api/query and default AI Terminal logic remain untouched
+any TODOs for phase 2 improvements
+Final instruction
+
+This is not a refactor of the main app brain.
+This is a contained intelligence upgrade inside the isolated playbook engine.
+
+Keep it safe. Keep it modular. Keep the default system untouched.
+Make Serenity and S&J actually feel like different brains instead of the same score wearing two different hats.
