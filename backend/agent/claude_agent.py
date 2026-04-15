@@ -818,6 +818,19 @@ class TradingAgent:
                 import traceback
                 traceback.print_exc()
 
+        # ── Shared context overlay (additive, failure-safe) ──────────────────
+        if not is_followup and market_data and isinstance(market_data, dict) \
+                and "_shared_context" not in market_data:
+            try:
+                from agent.context_broker import read_shared_context, build_context_overlay
+                _sc_overlay = build_context_overlay(category, read_shared_context())
+                if _sc_overlay:
+                    market_data["_shared_context"] = _sc_overlay
+                    print(f"[CONTEXT_BROKER] Overlay injected: {list(_sc_overlay.keys())}")
+            except Exception as _sc_err:
+                print(f"[CONTEXT_BROKER] Overlay skipped (non-fatal): {_sc_err}")
+        # ─────────────────────────────────────────────────────────────────────
+
         plan = query_info.get("orchestration_plan", {}) if 'query_info' in locals() and isinstance(query_info, dict) else {}
         _news_model = reasoning_model if 'reasoning_model' in locals() else "agent_collab"
         if isinstance(market_data, dict) and plan.get("web_news") and _news_model in ("agent_collab", "all_agents"):
