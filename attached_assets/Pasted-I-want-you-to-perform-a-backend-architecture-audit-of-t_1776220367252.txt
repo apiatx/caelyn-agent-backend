@@ -1,0 +1,244 @@
+I want you to perform a backend architecture audit of this FastAPI repo before making any code changes.
+
+Goal:
+Determine exactly how my agent system is currently wired, where AI Terminal and popup chat overlap, where page-specific logic lives, and what the safest refactor path is to make the core agent shared across pages without breaking anything.
+
+Important:
+This is an AUDIT ONLY for now.
+Do not refactor yet.
+Do not move files yet.
+Do not rewrite prompts yet.
+Do not “clean up” anything yet.
+First inspect and document the current architecture in a precise, grounded way based on the actual code in this repo.
+
+Context:
+My desired end state is:
+
+* AI Terminal chat and popup chat share the same core backend intelligence
+* popup chat is not a separate weaker assistant
+* pages are context providers / UI surfaces, not separate brains
+* the agent can access relevant context/data from:
+
+  * AI Terminal
+  * Macro Dashboard
+  * Sector Rotation
+  * NotifAI
+  * Watchlist
+  * Portfolio
+  * Hyperliquid
+  * Prophetik
+
+Files/folders that likely matter:
+
+* main.py
+* agent/claude_agent.py
+* agent/caelyn_routing.py
+* agent/prompts.py
+* agent/personality.py
+* agent/mode_normalizer.py
+* agent/data_compressor.py
+* services/
+* core/
+* data/
+
+Audit tasks:
+
+1. Map all agent-related API entrypoints
+   Inspect the FastAPI routes and identify every endpoint that powers any AI/chat/agent behavior.
+   For each relevant endpoint, document:
+
+* route path
+* HTTP method
+* which frontend page/feature likely calls it
+* which backend function handles it
+* whether it is:
+
+  * shared chat
+  * page-specific AI
+  * deterministic/non-LLM
+  * summary/brief generation
+  * specialized assistant flow
+
+At minimum, verify the real wiring for:
+
+* AI Terminal chat
+* popup chatbox
+* NotifAI
+* Prophetik
+* any Hyperliquid-specific AI
+* any Portfolio/Watchlist AI logic
+* any other page-level assistant behavior you find
+
+2. Trace AI Terminal vs popup chat path
+   I specifically need to know whether AI Terminal and popup chat already share the same backend path or not.
+   Audit the exact request flow for both.
+   Answer:
+
+* do they hit the same endpoint?
+* do they use the same request model?
+* where does chatbox_mode get handled?
+* where do their code paths diverge?
+* are they using the same orchestration logic, same model routing, same prompt logic, same data access, or only partially?
+
+3. Audit claude_agent.py responsibilities
+   Inspect agent/claude_agent.py and break down what it currently does.
+   Specifically identify which parts are:
+
+* orchestration / synthesis logic
+* prompt assembly
+* intent routing
+* page-specific logic
+* domain/capability-specific logic
+* model/provider dispatch
+* context gathering
+* data fetching or transformation
+* fallback/error handling
+
+Call out anything in claude_agent.py that should probably stay there versus anything that is overloaded and should eventually move elsewhere.
+
+4. Audit caelyn_routing.py responsibilities
+   Inspect agent/caelyn_routing.py and determine whether it is already acting as:
+
+* intent router
+* page router
+* mode router
+* preset prompt registry
+* capability selector
+
+Document:
+
+* what inputs it uses
+* what outputs it produces
+* whether it is the best place to centralize future shared routing logic
+* what is currently hardcoded there
+
+5. Find all prompt-button / preset-intent logic
+   Search the repo for the backend logic tied to AI Terminal prompt buttons / preset scans / slash commands / prewritten prompts.
+   I need a concrete map of:
+
+* every preset/prompt button name or key you can find
+* where its backend handling lives
+* whether each preset maps to:
+
+  * hardcoded prompt text
+  * a mode
+  * a route branch
+  * a specialized service call
+  * a capability bundle
+* whether the preset system is centralized or scattered
+
+Do not change it yet — just map it.
+
+6. Identify page-specific context/data sources
+   For each of these page domains:
+
+* Macro Dashboard
+* Sector Rotation
+* NotifAI
+* Watchlist
+* Portfolio
+* Hyperliquid
+* Prophetik
+
+Document:
+
+* which backend modules/services own that data
+* whether that data is currently available to the core agent
+* whether access is direct, indirect, or absent
+* whether the page has its own AI path or only its own data path
+* whether the data is already compacted/summarized anywhere for prompt usage
+
+7. Audit reusable capability boundaries
+   Based on the current code, identify candidate reusable capabilities that could be separated cleanly.
+   Examples might include:
+
+* macro
+* news
+* social sentiment
+* technical analysis
+* fundamentals
+* sec/filings
+* watchlist context
+* portfolio context
+* hyperliquid/crypto context
+* prophetik/prediction-market context
+* sector rotation context
+* notifai brief context
+
+For each candidate capability:
+
+* identify which existing files/functions already support it
+* identify whether the logic is currently mixed into page code, route handlers, or claude_agent.py
+* identify the safest future destination (likely services/)
+
+8. Audit mode normalization + prompt compression flow
+   Inspect:
+
+* agent/mode_normalizer.py
+* agent/data_compressor.py
+* agent/prompts.py
+* agent/personality.py
+
+Document:
+
+* where mode normalization happens
+* how popup vs terminal mode differs in practice
+* whether data compression is generic or tied to certain pages/features
+* how prompts are assembled
+* whether the current design supports a shared core agent with different UI modes
+
+9. Identify shared state / memory / context gaps
+   Audit whether the current system has any shared memory/context layer across pages or agents.
+   Document:
+
+* any session/context storage that exists
+* whether page outputs are reusable by the chat agent
+* whether different page agents are isolated
+* where a future shared context broker could fit best without major disruption
+
+10. Produce a final grounded architecture summary
+    At the end, give me a concise but specific summary with these sections:
+
+A. Current architecture
+
+* how the backend agent system actually works today
+
+B. AI Terminal vs popup reality
+
+* same brain, partially shared, or meaningfully different?
+
+C. Where the system is currently page-centric
+
+* exact files / logic patterns causing that
+
+D. Where the system is already capability-centric
+
+* reusable foundations we can build on
+
+E. Biggest risks in refactoring
+
+* what could break if we move too fast
+
+F. Safest refactor path
+
+* a step-by-step recommendation for the next phase
+* must be incremental and backward-compatible
+
+Output format requirements:
+
+* be specific and reference exact files/functions/classes
+* do not give vague architecture advice
+* do not assume; inspect actual code first
+* if something is unclear, say so explicitly
+* separate facts from recommendations
+* do not make code changes yet
+
+Deliverable:
+Return one structured audit report that tells me:
+
+1. what is actually happening today
+2. what is shared already
+3. what is duplicated/scattered
+4. what should stay
+5. what should move later
+6. the safest refactor order
