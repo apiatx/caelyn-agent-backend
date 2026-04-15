@@ -1,0 +1,89 @@
+Good. Now that the audit is complete, do NOT code yet.
+
+I want a concrete backend refactor plan based strictly on the audit findings from this repo.
+
+Goal:
+Preserve existing behavior while incrementally refactoring the shared agent architecture so:
+
+* /api/query remains the shared core brain for AI Terminal + popup chat
+* preset logic becomes centralized
+* capability/domain logic moves out of claude_agent.py into reusable services
+* page-specific AI islands can later plug into the shared core more cleanly
+* no frontend contracts break
+
+This is still a planning step only.
+Do not edit code yet.
+
+Please produce a repo-specific refactor plan with these sections:
+
+1. Exact pain points to fix first
+   Based on the audit, identify the highest-risk / highest-value backend problems in priority order.
+   Be specific and grounded in the files/functions already inspected.
+
+2. Proposed target responsibilities by file
+   Using the actual repo structure, define what each of these should own after refactor:
+
+* main.py
+* agent/claude_agent.py
+* agent/caelyn_routing.py
+* agent/prompts.py
+* agent/personality.py
+* agent/mode_normalizer.py
+* agent/data_compressor.py
+* services/ (new or existing modules)
+
+Be explicit about what should stay versus what should move.
+
+3. Canonical preset/intent architecture
+   Design one single source of truth for:
+
+* preset aliases
+* canonical intent keys
+* intent profiles
+* model/collab routing metadata
+
+Explain exactly where that should live in this repo.
+Also explain how to retire the current split between PRESET_ALIASES / INTENT_PROFILES in claude_agent.py and _ALIAS_MAP / CAELYN_ROUTES in caelyn_routing.py without breaking behavior.
+
+4. Capability extraction plan
+   List the concrete capability modules/services that should be extracted first from claude_agent.py.
+   For each one, include:
+
+* suggested new module/file name
+* which current functions/logic should move there
+* whether extraction is low/medium/high risk
+* dependencies it relies on
+
+5. Safe implementation order
+   Give me the exact safest implementation sequence, step by step.
+   This must be incremental and backward-compatible.
+   I want the order that minimizes regressions.
+
+6. “Do first / do later / do last”
+   Separate the work into:
+
+* do first: low-risk, high-leverage
+* do later: worthwhile but not first-wave
+* do last: only after core cleanup is stable
+
+7. Regression risks
+   Identify the biggest places where behavior could accidentally change, especially around:
+
+* preset button behavior
+* response formatting
+* chatbox_mode
+* follow-up handling
+* watchlist/thematic enforcement
+* special-case categories like prediction_markets and earnings_catalyst
+
+8. Proposed phase 1 implementation scope
+   Define the smallest useful first coding phase.
+   It should be meaningful, safe, and produce a cleaner architecture without changing frontend behavior.
+
+Output requirements:
+
+* no code changes yet
+* no vague advice
+* reference the actual audited files/functions
+* distinguish “must preserve exactly” from “safe to improve later”
+* optimize for minimal breakage
