@@ -1,0 +1,67 @@
+Good. Keep Phase 2 as the new baseline.
+
+Do not start implementing the next phase yet.
+
+I want a planning-only pass for the next likely step: session-aware Watchlist and Portfolio context injection into the shared `/api/query` agent path.
+
+Goal:
+Allow the shared agent to access the current user’s relevant Watchlist and Portfolio context in a compact, selective, backward-compatible way — without turning the prompt into a giant blob and without using a generic global broker pattern where it does not fit.
+
+Please inspect the current code and produce a repo-specific plan covering:
+
+1. Current identity/session path
+
+* where user identity, session id, and/or request context are already available in `/api/query`
+* what identifier would be safest to use for user-specific context lookup
+* whether popup chat and AI Terminal both already carry enough identity/context for this
+
+2. Watchlist data source
+
+* where watchlist data currently lives
+* what persisted files/cache/db structures exist
+* what “last saved watchlist analysis” or equivalent artifacts already exist
+* whether the agent can already access any of it indirectly today
+
+3. Portfolio data source
+
+* where portfolio holdings currently live
+* what persisted files/cache/db structures exist
+* whether there is already a compact portfolio summary anywhere
+* what the safest lightweight context slice would be
+
+4. Injection design
+
+* where in `TradingAgent` the session-aware context should be attached
+* how to keep it compact and selective
+* what categories should benefit
+* what categories should be excluded
+* how to avoid prompt bloat
+
+5. Recommended architecture
+
+* whether this should be:
+
+  * a new session-aware broker/service
+  * direct service calls from `TradingAgent`
+  * or another pattern
+* exact files that would likely change
+
+6. Risks
+
+* privacy / cross-user leakage risks
+* prompt-size risks
+* stale-data risks
+* mismatch risks between watchlist state and current page context
+
+7. Smallest safe implementation scope
+
+* define the narrowest useful first version
+* must be additive and backward-compatible
+* must not require frontend contract changes unless absolutely necessary
+
+Output requirements:
+
+* planning only
+* no code changes yet
+* reference actual files/functions/data stores from this repo
+* separate facts from recommendations
