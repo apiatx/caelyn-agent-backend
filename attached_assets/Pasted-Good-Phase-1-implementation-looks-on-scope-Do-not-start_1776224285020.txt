@@ -1,0 +1,90 @@
+Good. Phase 1 implementation looks on-scope.
+
+Do not start Phase 2 yet.
+
+I want a Phase 1 parity verification pass first. This is a verification/testing step only.
+
+Goals:
+
+* confirm the refactor preserved behavior
+* identify any regressions before additional cleanup
+* specifically test the highest-risk surfaces from the refactor
+
+Run a focused verification pass and return a concise report with:
+
+1. what you tested
+2. what passed
+3. what failed or is uncertain
+4. any exact parity deltas you found
+5. whether Phase 1 is safe to keep as the new baseline
+
+Test these areas specifically:
+
+A. Preset resolution parity
+
+* verify a representative sample across major preset families:
+
+  * daily_briefing / briefing
+  * best_trades
+  * best_investments
+  * sector_rotation
+  * crypto_scanner
+  * social_momentum
+  * earnings_catalyst
+  * prediction_markets / polymarket
+  * thematic presets
+  * screeners (fundamental + technical)
+* include at least a few alias forms, not just canonical keys
+* confirm preset_registry resolution matches prior behavior expectations
+
+B. chatbox_mode parity
+
+* free-form popup-style query with chatbox_mode=true and no preset_intent
+* free-form terminal-style query with chatbox_mode=false
+* preset button request with preset_intent present
+* confirm formatting path still switches correctly between _parse_chatbox_response() and _parse_response()
+
+C. Special-case override parity
+
+* earnings_catalyst preset
+* prediction_markets preset
+* confirm the category override still fires before downstream routing/data gathering
+* confirm response formatting behavior remains correct
+
+D. Follow-up handling parity
+
+* one initial query and one follow-up query
+* confirm follow-up path still uses the follow-up context behavior and does not accidentally hit the normal fresh-data path when it should not
+
+E. Thematic/watchlist parity
+
+* run a thematic preset that previously relied on watchlist backfill
+* confirm watchlist_today or equivalent structured content is still present where expected
+* confirm no blank structured renderer risk was introduced
+
+F. Crypto post-processing parity
+
+* run a crypto preset that triggers the crypto display path
+* confirm the missing chart URL bug is now handled safely
+* confirm no response-shape expansion occurred
+* if chart URL injection is conditional, state exactly when it occurs
+
+G. General/fallback parity
+
+* run one generic query that should land in the general arm
+* run one query that should effectively produce minimal/empty gathered context
+* confirm general arm and final fallback remain behaviorally identical
+
+H. Import/runtime sanity
+
+* confirm server boots cleanly
+* confirm no circular import issues
+* confirm no missing symbol issues in the new modules
+
+Output requirements:
+
+* keep it concise but specific
+* reference exact methods/files when needed
+* separate “confirmed pass” from “not fully verified”
+* do not start new refactors
+* do not expand scope
