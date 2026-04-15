@@ -2,7 +2,7 @@
 Playbook Scoring Engine — per-ticker factor computation and weighted scoring.
 
 ──────────────────────────────────────────────────────────────────────────────
-FACTOR IMPLEMENTATION STATUS (v1.5)
+FACTOR IMPLEMENTATION STATUS (v2.0)
 ──────────────────────────────────────────────────────────────────────────────
 REAL (from FMP market data):
   balance_sheet_strength      — debt/equity ratio
@@ -11,7 +11,7 @@ REAL (from FMP market data):
   small_cap_asymmetry         — market cap tiers
   technical_confirmation      — 52-week price range position
 
-REAL / HEURISTIC (Phase 1.5 — from sector rotation ETFs, Finnhub, EDGAR, curated maps):
+REAL / HEURISTIC (Phase 1.5 — sector ETFs, Finnhub, EDGAR, curated maps):
   sector_strength             — sector ETF momentum (1W/1M/3M windows)
   theme_alignment             — curated map + description keywords + industry inference
   bottleneck_exposure         — curated bottleneck map + description keywords
@@ -19,18 +19,19 @@ REAL / HEURISTIC (Phase 1.5 — from sector rotation ETFs, Finnhub, EDGAR, curat
   dilution_risk               — EDGAR disk cache + news keywords + balance sheet heuristic
   crowding_risk               — price extension + PE premium + news saturation
 
-STUBBED (neutral 50/100 — roadmap for v2):
-  supply_chain_confirmation   — TODO: custom supply-chain confirmation data
-  revenue_acceleration        — TODO: quarterly revenue series (2+ periods)
-  ebitda_inflection_proximity — TODO: EBITDA margin trend
-  backlog_quality             — TODO: 10-K/10-Q backlog parsing
-  execution_risk              — TODO: qualitative scoring
-  insider_buying              — TODO: insider_activity_service integration
-  policy_tailwind             — TODO: thematic policy mapping
-  evidence_freshness          — TODO: news event recency scoring
+REAL / HEURISTIC (Phase 2 — extended_factors module):
+  supply_chain_confirmation   — curated SUPPLY_CHAIN_MAP + description + news inference
+  ebitda_inflection_proximity — FMP income statement trend + margin heuristic
+  backlog_quality             — news keyword scan for backlog/bookings signals
+  evidence_freshness          — news recency scoring (7d / 21d / stale)
+  execution_risk              — margin + leverage + revenue decline heuristics
+  insider_buying              — DB query to insider_transactions + news fallback
+  policy_tailwind             — theme + sector + keyword → policy bucket mapping
 
-Stubbed factors produce a neutral score and appear in result.stub_factors.
-Extended factors appear in result.factor_details (Phase 1.5+).
+STUBBED (neutral 50/100 — remaining):
+  revenue_acceleration        — quarterly revenue series (2+ periods, roadmap v2.1)
+
+Extended factors appear in result.factor_details and result.stub_factors is minimized.
 ──────────────────────────────────────────────────────────────────────────────
 """
 from __future__ import annotations
@@ -83,10 +84,14 @@ _ALL_FACTORS = [
     "policy_tailwind", "evidence_freshness", "theme_alignment", "sector_strength",
 ]
 
-# Factors resolved in Phase 1.5 — excluded from stub list when extended factors run
+# Factors resolved in extended engine (Phase 1.5 + Phase 2) — excluded from stub list
 _PHASE15_FACTORS = {
+    # Phase 1.5
     "sector_strength", "theme_alignment", "bottleneck_exposure",
     "catalyst_proximity", "dilution_risk", "crowding_risk",
+    # Phase 2
+    "supply_chain_confirmation", "ebitda_inflection_proximity", "backlog_quality",
+    "evidence_freshness", "execution_risk", "insider_buying", "policy_tailwind",
 }
 
 
@@ -340,14 +345,21 @@ async def compute_extended_factors(
     raw: TickerRawData,
     playbook: PlaybookDefinition,
     finnhub_key: str,
+    fmp_api_key: str = "",
 ) -> Dict[str, FactorDetail]:
     """
-    Compute the 6 Phase 1.5 factors with real/heuristic implementations.
-    Returns a dict of {factor_name: FactorDetail} for each resolved factor.
+    Compute all extended factors (Phase 1.5 + Phase 2) with real/heuristic implementations.
+    Returns {factor_name: FactorDetail} for each resolved factor.
     These override the neutral-50 stubs produced by compute_factors().
 
     All fetches are concurrent. Any individual failure degrades gracefully
     to a heuristic or fallback — never raises.
+
+    Phase 1.5 factors (6): sector_strength, theme_alignment, bottleneck_exposure,
+                           catalyst_proximity, dilution_risk, crowding_risk
+    Phase 2 factors (7):  supply_chain_confirmation, ebitda_inflection_proximity,
+                          backlog_quality, evidence_freshness, execution_risk,
+                          insider_buying, policy_tailwind
     """
     from services.playbook.sector_map import (
         fetch_sector_etf_history,
@@ -361,14 +373,25 @@ async def compute_extended_factors(
         score_dilution_risk_from_data,
         score_crowding_risk,
     )
+    from services.playbook.extended_factors import (
+        score_supply_chain_confirmation,
+        fetch_income_statement,
+        score_ebitda_inflection_proximity,
+        score_backlog_quality,
+        score_evidence_freshness,
+        score_execution_risk,
+        score_insider_buying,
+        score_policy_tailwind,
+    )
 
     t = raw.ticker
 
     # ── Concurrent async data fetches ─────────────────────────────────────────
-    sector_history, news, earnings = await asyncio.gather(
+    sector_history, news, earnings, income_stmts = await asyncio.gather(
         fetch_sector_etf_history(raw.sector, raw.industry),
         fetch_company_news(t, finnhub_key),
         fetch_earnings_calendar(t, finnhub_key),
+        fetch_income_statement(t, fmp_api_key),
         return_exceptions=True,
     )
 
@@ -381,8 +404,15 @@ async def compute_extended_factors(
     if isinstance(earnings, Exception):
         print(f"[PLAYBOOK_SCORING] earnings fetch error for {t}: {earnings}")
         earnings = []
+    if isinstance(income_stmts, Exception):
+        print(f"[PLAYBOOK_SCORING] income_stmt fetch error for {t}: {income_stmts}")
+        income_stmts = []
 
-    news_count = len(news) if isinstance(news, list) else 0
+    news_list     = news     if isinstance(news, list)     else []
+    earnings_list = earnings if isinstance(earnings, list) else []
+    income_list   = income_stmts if isinstance(income_stmts, list) else []
+
+    news_count = len(news_list)
     results: Dict[str, FactorDetail] = {}
 
     # ── 1. sector_strength ────────────────────────────────────────────────────
@@ -394,89 +424,157 @@ async def compute_extended_factors(
         print(f"[PLAYBOOK_SCORING] sector_strength error for {t}: {e}")
         results["sector_strength"] = FactorDetail(
             score=_STUB_SCORE, status="fallback",
-            reasons=[f"Error computing sector strength: {e}"],
-            source_tags=[]
+            reasons=[f"Error: {e}"], source_tags=[]
         )
 
     # ── 2. theme_alignment ────────────────────────────────────────────────────
     try:
         results["theme_alignment"] = score_theme_alignment(
-            t,
-            raw.description or "",
-            raw.industry or "",
-            playbook.preferred_themes,
+            t, raw.description or "", raw.industry or "", playbook.preferred_themes,
         )
     except Exception as e:
         print(f"[PLAYBOOK_SCORING] theme_alignment error for {t}: {e}")
         results["theme_alignment"] = FactorDetail(
             score=_STUB_SCORE, status="fallback",
-            reasons=[f"Error computing theme alignment: {e}"],
-            source_tags=[]
+            reasons=[f"Error: {e}"], source_tags=[]
         )
 
     # ── 3. bottleneck_exposure ────────────────────────────────────────────────
     try:
         results["bottleneck_exposure"] = score_bottleneck_exposure(
-            t,
-            raw.description or "",
-            raw.industry or "",
+            t, raw.description or "", raw.industry or "",
         )
     except Exception as e:
         print(f"[PLAYBOOK_SCORING] bottleneck_exposure error for {t}: {e}")
         results["bottleneck_exposure"] = FactorDetail(
             score=_STUB_SCORE, status="fallback",
-            reasons=[f"Error computing bottleneck exposure: {e}"],
-            source_tags=[]
+            reasons=[f"Error: {e}"], source_tags=[]
         )
 
     # ── 4. catalyst_proximity ─────────────────────────────────────────────────
     try:
         results["catalyst_proximity"] = score_catalyst_proximity_from_data(
-            t,
-            earnings if isinstance(earnings, list) else [],
-            news if isinstance(news, list) else [],
+            t, earnings_list, news_list,
         )
     except Exception as e:
         print(f"[PLAYBOOK_SCORING] catalyst_proximity error for {t}: {e}")
         results["catalyst_proximity"] = FactorDetail(
             score=_STUB_SCORE, status="fallback",
-            reasons=[f"Error computing catalyst proximity: {e}"],
-            source_tags=[]
+            reasons=[f"Error: {e}"], source_tags=[]
         )
 
     # ── 5. dilution_risk ──────────────────────────────────────────────────────
     try:
         results["dilution_risk"] = score_dilution_risk_from_data(
-            t,
-            raw.mkt_cap,
-            raw.debt_to_equity,
-            raw.revenue_growth_yoy,
-            news if isinstance(news, list) else [],
+            t, raw.mkt_cap, raw.debt_to_equity, raw.revenue_growth_yoy, news_list,
         )
     except Exception as e:
         print(f"[PLAYBOOK_SCORING] dilution_risk error for {t}: {e}")
         results["dilution_risk"] = FactorDetail(
             score=_STUB_SCORE, status="fallback",
-            reasons=[f"Error computing dilution risk: {e}"],
-            source_tags=[]
+            reasons=[f"Error: {e}"], source_tags=[]
         )
 
     # ── 6. crowding_risk ──────────────────────────────────────────────────────
     try:
         results["crowding_risk"] = score_crowding_risk(
-            raw.price,
-            raw.week52_high,
-            raw.week52_low,
-            raw.pe_ratio,
-            raw.sector,
-            news_count,
+            raw.price, raw.week52_high, raw.week52_low,
+            raw.pe_ratio, raw.sector, news_count,
         )
     except Exception as e:
         print(f"[PLAYBOOK_SCORING] crowding_risk error for {t}: {e}")
         results["crowding_risk"] = FactorDetail(
             score=_STUB_SCORE, status="fallback",
-            reasons=[f"Error computing crowding risk: {e}"],
-            source_tags=[]
+            reasons=[f"Error: {e}"], source_tags=[]
+        )
+
+    # ── Phase 2 factors ───────────────────────────────────────────────────────
+
+    # ── 7. supply_chain_confirmation ─────────────────────────────────────────
+    try:
+        results["supply_chain_confirmation"] = score_supply_chain_confirmation(
+            t, raw.description or "", raw.industry or "", news_list,
+        )
+    except Exception as e:
+        print(f"[PLAYBOOK_SCORING] supply_chain_confirmation error for {t}: {e}")
+        results["supply_chain_confirmation"] = FactorDetail(
+            score=_STUB_SCORE, status="fallback",
+            reasons=[f"Error: {e}"], source_tags=[]
+        )
+
+    # ── 8. ebitda_inflection_proximity ───────────────────────────────────────
+    try:
+        results["ebitda_inflection_proximity"] = score_ebitda_inflection_proximity(
+            t, income_list, raw.revenue_growth_yoy, raw.debt_to_equity, raw.mkt_cap,
+        )
+    except Exception as e:
+        print(f"[PLAYBOOK_SCORING] ebitda_inflection_proximity error for {t}: {e}")
+        results["ebitda_inflection_proximity"] = FactorDetail(
+            score=_STUB_SCORE, status="fallback",
+            reasons=[f"Error: {e}"], source_tags=[]
+        )
+
+    # ── 9. backlog_quality ────────────────────────────────────────────────────
+    try:
+        results["backlog_quality"] = score_backlog_quality(
+            t, raw.description or "", raw.industry or "", raw.sector, news_list,
+        )
+    except Exception as e:
+        print(f"[PLAYBOOK_SCORING] backlog_quality error for {t}: {e}")
+        results["backlog_quality"] = FactorDetail(
+            score=_STUB_SCORE, status="fallback",
+            reasons=[f"Error: {e}"], source_tags=[]
+        )
+
+    # ── 10. evidence_freshness ────────────────────────────────────────────────
+    try:
+        results["evidence_freshness"] = score_evidence_freshness(
+            t, news_list, earnings_list,
+        )
+    except Exception as e:
+        print(f"[PLAYBOOK_SCORING] evidence_freshness error for {t}: {e}")
+        results["evidence_freshness"] = FactorDetail(
+            score=_STUB_SCORE, status="fallback",
+            reasons=[f"Error: {e}"], source_tags=[]
+        )
+
+    # ── 11. execution_risk ────────────────────────────────────────────────────
+    try:
+        results["execution_risk"] = score_execution_risk(
+            t, raw.revenue_growth_yoy, raw.debt_to_equity,
+            raw.mkt_cap, raw.price, raw.week52_low, raw.week52_high, news_list,
+        )
+    except Exception as e:
+        print(f"[PLAYBOOK_SCORING] execution_risk error for {t}: {e}")
+        results["execution_risk"] = FactorDetail(
+            score=_STUB_SCORE, status="fallback",
+            reasons=[f"Error: {e}"], source_tags=[]
+        )
+
+    # ── 12. insider_buying ────────────────────────────────────────────────────
+    try:
+        results["insider_buying"] = score_insider_buying(t, news_list, raw.mkt_cap)
+    except Exception as e:
+        print(f"[PLAYBOOK_SCORING] insider_buying error for {t}: {e}")
+        results["insider_buying"] = FactorDetail(
+            score=_STUB_SCORE, status="fallback",
+            reasons=[f"Error: {e}"], source_tags=[]
+        )
+
+    # ── 13. policy_tailwind ───────────────────────────────────────────────────
+    # Uses the matched_themes from theme_alignment (already computed above)
+    try:
+        matched_themes_for_policy: List[str] = results.get(
+            "theme_alignment", FactorDetail(score=50, status="fallback")
+        ).source_tags
+        results["policy_tailwind"] = score_policy_tailwind(
+            t, raw.description or "", raw.sector, matched_themes_for_policy, news_list,
+        )
+    except Exception as e:
+        print(f"[PLAYBOOK_SCORING] policy_tailwind error for {t}: {e}")
+        results["policy_tailwind"] = FactorDetail(
+            score=_STUB_SCORE, status="fallback",
+            reasons=[f"Error: {e}"], source_tags=[]
         )
 
     return results
@@ -528,15 +626,21 @@ def _summary_label(score: float, hf_pass: bool) -> str:
 def _matched_rules(factor_scores: Dict[str, float]) -> List[str]:
     """Return rule labels for factors with a strong signal (≥ 70)."""
     _rule_map = {
-        "balance_sheet_strength":     "clean_balance_sheet",
-        "small_cap_asymmetry":        "small_cap_setup",
-        "technical_confirmation":     "technical_confirmation",
-        "revenue_growth":             "revenue_growth_confirmed",
-        "valuation_discount_vs_peers":"valuation_discount",
-        "bottleneck_exposure":        "physical_bottleneck",
-        "sector_strength":            "hot_sector",
-        "catalyst_proximity":         "event_window_open",
-        "theme_alignment":            "theme_match",
+        "balance_sheet_strength":       "clean_balance_sheet",
+        "small_cap_asymmetry":          "small_cap_setup",
+        "technical_confirmation":       "technical_confirmation",
+        "revenue_growth":               "revenue_growth_confirmed",
+        "valuation_discount_vs_peers":  "valuation_discount",
+        "bottleneck_exposure":          "physical_bottleneck",
+        "supply_chain_confirmation":    "supply_chain_confirmed",
+        "sector_strength":              "hot_sector",
+        "catalyst_proximity":           "event_window_open",
+        "theme_alignment":              "theme_match",
+        "ebitda_inflection_proximity":  "ebitda_inflection",
+        "backlog_quality":              "strong_backlog",
+        "evidence_freshness":           "fresh_thesis",
+        "insider_buying":               "insider_buy_signal",
+        "policy_tailwind":              "policy_beneficiary",
     }
     return [rule for factor, rule in _rule_map.items() if factor_scores.get(factor, 0) >= 70]
 
@@ -556,6 +660,10 @@ def _risk_notes(raw: TickerRawData, factor_scores: Dict[str, float]) -> List[str
         risks.append("Dilution risk elevated — monitor share count")
     if factor_scores.get("crowding_risk", 50) > 75:
         risks.append("Crowded setup — narrative may be saturated")
+    if factor_scores.get("execution_risk", 50) > 70:
+        risks.append("Elevated execution risk — revenue/leverage/distress signal")
+    if factor_scores.get("evidence_freshness", 50) < 35:
+        risks.append("Stale thesis — no meaningful news in 21 days")
     return risks
 
 
@@ -607,9 +715,9 @@ async def score_ticker(
     factor_scores, stubs = compute_factors(raw)
     factor_details: Dict[str, FactorDetail] = {}
 
-    # Extended async factors (Phase 1.5)
+    # Extended async factors (Phase 1.5 + 2)
     try:
-        extended = await compute_extended_factors(raw, playbook, finnhub_key)
+        extended = await compute_extended_factors(raw, playbook, finnhub_key, fmp_api_key)
     except Exception as e:
         print(f"[PLAYBOOK_SCORING] Extended factors error for {t}: {e}")
         extended = {}
@@ -641,6 +749,7 @@ async def score_ticker(
     if "dilution_risk" in factor_details:
         dilution_flags = factor_details["dilution_risk"].reasons
 
+    # Build intermediate result (without explanation fields)
     result = PlaybookScoreResult(
         ticker=t,
         playbook_id=playbook.id,
@@ -671,6 +780,14 @@ async def score_ticker(
         catalyst_signals=catalyst_signals,
         dilution_flags=dilution_flags,
     )
+
+    # Generate explanation fields (Phase 2)
+    try:
+        from services.playbook.explainer import generate_explanation
+        exp = generate_explanation(result, playbook)
+        result = result.model_copy(update=exp)
+    except Exception as e:
+        print(f"[PLAYBOOK_SCORING] Explanation generation error for {t}: {e}")
 
     print(
         f"[PLAYBOOK_SCORING] {t!r} score={final_score} "

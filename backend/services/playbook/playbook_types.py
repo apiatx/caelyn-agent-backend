@@ -70,7 +70,7 @@ class TickerRawData(BaseModel):
 class FactorDetail(BaseModel):
     """
     Rich metadata for a single scored factor.
-    Produced by the extended factor engine (Phase 1.5).
+    Produced by the extended factor engine (Phase 1.5+).
     """
     model_config = ConfigDict(extra="ignore")
     score: float                            # 0–100
@@ -95,12 +95,21 @@ class PlaybookScoreResult(BaseModel):
     risks: List[str]                        # risk notes
     stub_factors: List[str]                 # factors not yet computed from real data
     raw_data: Dict[str, Any]                # subset of fetched data for transparency
-    # ── Phase 1.5 additions (all optional — backwards compatible) ─────────────
+    # ── Phase 1.5 additions ───────────────────────────────────────────────────
     factor_details: Dict[str, FactorDetail] = Field(default_factory=dict)
     matched_themes: List[str] = Field(default_factory=list)
     bottleneck_tags: List[str] = Field(default_factory=list)
     catalyst_signals: List[str] = Field(default_factory=list)
     dilution_flags: List[str] = Field(default_factory=list)
+    # ── Phase 2 additions (all optional — backwards compatible) ───────────────
+    thesis_summary: str = ""
+    fit_reasoning: List[str] = Field(default_factory=list)
+    non_fit_reasoning: List[str] = Field(default_factory=list)
+    key_confirming_signals: List[str] = Field(default_factory=list)
+    top_risks: List[str] = Field(default_factory=list)
+    what_would_improve_score: List[str] = Field(default_factory=list)
+    what_would_break_thesis: List[str] = Field(default_factory=list)
+    supply_chain_tags: List[str] = Field(default_factory=list)
 
 
 # ── Service request/response schemas ─────────────────────────────────────────

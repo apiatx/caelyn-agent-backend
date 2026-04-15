@@ -37,6 +37,7 @@ from services.playbook.playbook_types import (
     ScoreWatchlistRequest,
     ScorePortfolioRequest,
 )
+from services.playbook.analyzer import AnalyzeRequest, AnalyzeResponse, run_analyze
 
 router = APIRouter(prefix="/api/playbooks", tags=["playbooks"])
 
@@ -198,6 +199,32 @@ async def score_one_ticker_endpoint(
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Scoring error: {e}")
+
+
+# ── POST /api/playbooks/analyze ───────────────────────────────────────────────
+# MUST be registered before /{playbook_id}
+
+@router.post("/analyze", response_model=AnalyzeResponse)
+async def analyze_endpoint(body: AnalyzeRequest):
+    """
+    Deep playbook analysis with deterministic explanations.
+
+    Scores tickers against a playbook and returns structured explanations:
+    thesis_summary, fit_reasoning, non_fit_reasoning, key_confirming_signals,
+    top_risks, what_would_improve_score, what_would_break_thesis, supply_chain_tags.
+
+    Context modes: watchlist | portfolio | custom | universe
+    """
+    _require_engine()
+    _require_playbook(body.playbook_id)
+    try:
+        result = await run_analyze(body)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Analysis error: {e}")
 
 
 # ── GET /api/playbooks/{playbook_id} ─────────────────────────────────────────

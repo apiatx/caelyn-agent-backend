@@ -1,0 +1,435 @@
+Prompt
+
+You are working in my backend FastAPI server repo for CaelynAI.
+
+You already implemented:
+
+isolated /api/playbooks routes
+multi-playbook scoring framework
+serenity and sjcapital
+phase 1.5 higher-signal factors
+strict isolation from /api/query
+
+Good.
+
+Now implement the next safe step:
+
+Objective
+
+Upgrade the isolated playbook engine so it:
+
+produces richer, more convincing playbook reasoning for Watchlist and Portfolio
+supports a new dedicated strategy-aware terminal route
+still leaves /api/query and the default AI Terminal logic completely untouched
+
+This is an additive enhancement inside the isolated playbook system only.
+
+Non-negotiable guardrails
+Do not modify /api/query in any way.
+Do not change the default AI Terminal behavior.
+Do not inject playbook logic into the existing orchestrator.
+Do not make strategy selection required anywhere.
+Do not refactor unrelated services.
+Keep all new work isolated under the playbook module/router.
+All new terminal strategy behavior must use a new endpoint, not /api/query.
+Missing data must degrade gracefully.
+Keep everything backwards compatible with current /api/playbooks/* consumers.
+Prefer existing providers/services/caches already in the repo.
+Part 1 — Improve the playbook engine with richer factors and explainability
+Implement or upgrade these factors next
+
+Add real or strong heuristic implementations for these factors:
+
+supply_chain_confirmation
+ebitda_inflection_proximity
+backlog_quality
+evidence_freshness
+execution_risk
+insider_buying
+policy_tailwind
+
+These should continue to live in the shared factor system, not as per-playbook hacks.
+
+Factor definitions
+1. supply_chain_confirmation
+
+Goal:
+
+confirm that a name is not just thematically related, but actually sits in a believable supply chain / customer / component position
+
+Use existing sources if available:
+
+Finnhub supply chain / company profile / industry metadata
+news text
+company description
+existing theme/bottleneck maps
+manually curated supplier/customer associations where needed
+
+Scoring:
+
+high if direct supplier or tightly linked component provider
+medium if adjacent beneficiary
+low/neutral if vague theme-only exposure
+
+Return metadata:
+
+matched supply-chain tags
+confirmation reason(s)
+source type (manual_map, profile_keyword, news_inference, etc.)
+2. ebitda_inflection_proximity
+
+Goal:
+
+support S&J-style rerating logic around near-positive EBITDA/FCF turns
+
+Use existing sources if available:
+
+financial statements
+margins
+operating income / EBITDA trend
+earnings estimate fields if present
+sequential and YoY improvement trends
+
+Scoring:
+
+high if the business appears near a credible inflection
+medium if trending toward improvement
+low if deteriorating badly or nowhere near
+
+If direct EBITDA data is sparse, use a clear documented heuristic.
+
+3. backlog_quality
+
+Goal:
+
+reward companies where backlog/order book/capacity reservations appear real and relevant
+
+Use:
+
+news scan
+company descriptions
+filings/news keywords like backlog, bookings, orders, reservations, awarded contract, purchase commitment
+sector-specific heuristics if necessary
+
+Scoring:
+
+high if backlog/order signals are recent and meaningful
+medium if present but weak/older/unclear
+low/neutral if absent
+4. evidence_freshness
+
+Goal:
+
+distinguish stale thesis support from recent validating evidence
+
+Use:
+
+recency of recent news
+recency of filings
+recency of earnings
+recency of theme-confirming events
+
+Scoring:
+
+fresh confirmation in last 7–21 days = high
+aging evidence = medium
+stale/no recent confirmation = low
+
+This factor should help both playbooks stay current.
+
+5. execution_risk
+
+Goal:
+
+penalize names where the business/story is fragile operationally
+
+Use:
+
+weak margins
+deteriorating revenue trend
+high debt stress
+repeated financing need
+volatile narrative unsupported by business progress
+small-cap fragility heuristics
+
+Scoring:
+
+higher score should mean higher risk if using penalties
+keep consistent with your existing penalty design
+
+Return reasons.
+
+6. insider_buying
+
+Goal:
+
+reward meaningful insider buying signals if available
+
+Use:
+
+any existing insider transaction source in repo
+fallback news keyword scan
+if no real data exists, implement a documented heuristic or leave neutral gracefully
+
+This does not need to be perfect, but should exist as a real factor path if possible.
+
+7. policy_tailwind
+
+Goal:
+
+capture names that benefit from policy/regulatory/onshoring/defense/AI infrastructure tailwinds
+
+Use:
+
+theme map
+sector tags
+keyword inference from descriptions/news
+existing macro/theme logic if available
+
+Examples:
+
+defense optics
+energy infrastructure
+grid equipment
+onshoring/industrial policy
+AI capex buildout beneficiaries
+
+Scoring:
+
+high where policy/macro tailwind clearly aligns
+medium where indirect
+low otherwise
+Part 2 — Add richer explanation fields to playbook responses
+
+Keep current response fields fully intact, including:
+
+factor_scores
+matched_rules
+risks
+raw_data
+
+Add new optional fields in a backwards-compatible way:
+
+factor_details
+thesis_summary
+fit_reasoning
+non_fit_reasoning
+key_confirming_signals
+top_risks
+what_would_improve_score
+what_would_break_thesis
+matched_themes
+bottleneck_tags
+catalyst_signals
+dilution_flags
+supply_chain_tags
+Explanation guidance
+
+These should be concise structured strings/lists, not giant essays.
+
+Example:
+
+{
+  "thesis_summary": "Direct AI power infrastructure beneficiary with strong sector momentum and improving operating profile.",
+  "fit_reasoning": [
+    "Strong alignment with AI power/energy theme",
+    "Sector remains hot across 1m and 3m windows",
+    "Recent catalyst/news flow supports thesis"
+  ],
+  "non_fit_reasoning": [
+    "Limited bottleneck specificity versus top Serenity names"
+  ],
+  "what_would_improve_score": [
+    "Fresh backlog/contract confirmation",
+    "Clearer margin/EBITDA inflection evidence"
+  ],
+  "what_would_break_thesis": [
+    "Sector momentum deterioration",
+    "Evidence of financing stress or dilution"
+  ]
+}
+
+These should be generated deterministically from factor outcomes and metadata where possible, not via a heavy LLM dependency.
+
+Part 3 — Add a dedicated strategy-aware terminal endpoint
+
+This is the key terminal integration step.
+
+Create a new isolated route like:
+
+POST /api/playbooks/analyze
+
+Do not touch /api/query.
+
+Purpose
+
+This route powers the AI Terminal when the user explicitly selects:
+
+Serenity
+S&J
+Default mode in frontend will continue to use /api/query.
+Non-default strategy modes will call this new route.
+Request shape
+
+Support a request body like:
+
+{
+  "playbook_id": "serenity",
+  "query": "Analyze my watchlist for the best asymmetric bottleneck setup",
+  "context_mode": "watchlist",
+  "tickers": ["NBIS", "AAOI", "LITE", "AMPX"],
+  "holdings": [],
+  "limit": 10,
+  "include_breakdown": true
+}
+
+Support at least these fields:
+
+playbook_id
+query
+context_mode (watchlist, portfolio, custom, universe)
+tickers
+holdings
+universe
+limit
+include_breakdown
+
+Be forgiving and validate cleanly.
+
+Endpoint behavior
+For context_mode = watchlist
+score provided tickers with selected playbook
+rank top ideas
+summarize best fits
+summarize weak fits
+return concise playbook-aware answer
+For context_mode = portfolio
+score holdings
+return aggregate alignment
+strongest aligned holdings
+weakest aligned holdings
+concise strategy-aware answer
+For context_mode = custom
+use supplied tickers
+score + summarize
+For context_mode = universe
+use supported universe scan like ai_infra, defense, etc.
+return top ideas
+Response shape
+
+Return something like:
+
+{
+  "playbook_id": "serenity",
+  "playbook_name": "Serenity",
+  "query": "Analyze my watchlist for the best asymmetric bottleneck setup",
+  "answer": "Based on the Serenity playbook, the strongest bottleneck-aligned setups are NBIS and LITE...",
+  "top_ranked": [
+    {
+      "ticker": "NBIS",
+      "final_score": 82.1,
+      "thesis_summary": "...",
+      "fit_reasoning": ["...", "..."]
+    }
+  ],
+  "rejected_or_low_fit": [
+    {
+      "ticker": "XYZ",
+      "final_score": 41.2,
+      "non_fit_reasoning": ["..."]
+    }
+  ],
+  "portfolio_summary": null,
+  "playbook_context": {
+    "preferred_themes": ["neocloud", "photonics_cpo"],
+    "positioning_style": "..."
+  }
+}
+
+Keep this structured and terminal-friendly.
+
+Answer generation rules
+
+Do not call the main general AI brain here.
+
+Build the response deterministically from:
+
+playbook scores
+factor metadata
+explanation fields
+ranking results
+
+If you want a light summarization helper inside playbook service, that’s fine, but keep it isolated and deterministic. No coupling to /api/query.
+
+Tone:
+
+concise
+analytical
+strategy-aware
+not overly verbose
+Part 4 — Tune playbook weights after new factors land
+
+After implementing the new factors, revisit the playbook configs so they feel more distinct.
+
+Serenity should lean harder into:
+bottleneck_exposure
+theme_alignment
+supply_chain_confirmation
+dilution_risk penalty
+crowding_risk penalty
+evidence_freshness
+catalyst_proximity
+small/mid-cap asymmetry
+S&J should lean harder into:
+sector_strength
+valuation_discount_vs_peers
+revenue_growth / revenue_acceleration
+ebitda_inflection_proximity
+backlog_quality
+catalyst_proximity
+technical_confirmation
+policy_tailwind
+
+Do not blow up the whole scoring system. Tune carefully and document the changes.
+
+Part 5 — Tests
+
+Add/update tests for all of this.
+
+At minimum verify:
+
+new factors return sane outputs
+explanation fields populate correctly
+same ticker can now score differently under Serenity vs S&J
+POST /api/playbooks/analyze works for:
+watchlist
+portfolio
+custom
+invalid playbook id returns clean 4xx
+missing data still degrades gracefully
+/api/query remains untouched
+existing /api/playbooks/* routes still work
+Deliverables
+
+When done, report back with:
+
+exact files added/modified
+which new factors are real vs heuristic
+sample JSON for:
+/api/playbooks/ticker/...
+/api/playbooks/analyze
+before/after example of a ticker under both playbooks
+proof /api/query remains untouched
+any TODOs for phase 3
+Final implementation philosophy
+
+This is not a rewrite of the main CaelynAI brain.
+
+This is:
+
+a contained upgrade of the isolated playbook engine
+plus a new dedicated terminal route for non-default strategy modes
+
+Default remains sacred.
+Strategy modes get their own path.
+Keep it clean.

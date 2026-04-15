@@ -1,10 +1,11 @@
 """
-Factor unit tests for Phase 1.5 playbook factor implementations.
+Factor unit tests for playbook factor implementations (Phase 1.5 + Phase 2).
 
 Run from backend directory:
   python3 -m services.playbook.factor_tests
 
 Tests cover:
+  Phase 1.5:
   - sector_strength: sensible values for strong vs weak sectors
   - theme_alignment: manual map + keyword matching + preferred theme weighting
   - bottleneck_exposure: direct map vs keyword vs fallback
@@ -14,6 +15,17 @@ Tests cover:
   - playbook divergence: same ticker scores differently under serenity vs sjcapital
   - partial/missing data degrades gracefully
   - /api/query isolation: playbook module has no references in query handler
+
+  Phase 2:
+  - supply_chain_confirmation: curated map + keyword + news inference
+  - ebitda_inflection_proximity: FMP income statement trend + heuristic
+  - backlog_quality: news keyword scan
+  - evidence_freshness: news recency scoring
+  - execution_risk: leverage + revenue + distress signals
+  - insider_buying: news fallback + neutral for large-caps
+  - policy_tailwind: theme → policy bucket mapping
+  - explainer: deterministic explanation generation (thesis_summary etc.)
+  - playbook_registry: v2.0 weight sums
 """
 from __future__ import annotations
 
@@ -421,6 +433,311 @@ def test_graceful_degradation():
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Phase 2: supply_chain_confirmation
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_supply_chain_confirmation():
+    print("\n[supply_chain_confirmation]")
+    from services.playbook.extended_factors import score_supply_chain_confirmation
+
+    # Tier 1 from manual map
+    r = score_supply_chain_confirmation("ASML", "", "", [])
+    _assert("ASML manual map score >= 90", r.score >= 90, f"got {r.score}")
+    _assert("ASML status manual", r.status == "manual")
+
+    r2 = score_supply_chain_confirmation("LITE", "", "", [])
+    _assert("LITE manual map score >= 80", r2.score >= 80, f"got {r2.score}")
+
+    # Description keyword
+    desc = "We are the sole source supplier of advanced EUV lithography equipment."
+    r3 = score_supply_chain_confirmation("UNKN", desc, "", [])
+    _assert("sole source desc score >= 70", r3.score >= 70, f"got {r3.score}")
+    _assert("sole source desc status heuristic", r3.status == "heuristic")
+
+    # News inference
+    news = [{"headline": "UNKN awarded supply agreement with leading datacenter operator", "summary": ""}]
+    r4 = score_supply_chain_confirmation("UNKN", "", "", news)
+    _assert("news supply agreement score >= 60", r4.score >= 60, f"got {r4.score}")
+
+    # No signal → fallback
+    r5 = score_supply_chain_confirmation("RNDM", "", "Software", [])
+    _assert("no signal fallback", r5.score < 50, f"got {r5.score}")
+    _assert("no signal status fallback", r5.status in ("fallback", "heuristic"))
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 2: ebitda_inflection_proximity
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_ebitda_inflection_proximity():
+    print("\n[ebitda_inflection_proximity]")
+    from services.playbook.extended_factors import score_ebitda_inflection_proximity
+
+    # EBITDA turned positive
+    stmts_positive = [
+        {"ebitda": 100e6, "revenue": 500e6, "operatingIncome": 80e6, "grossProfit": 300e6},
+        {"ebitda": -20e6, "revenue": 400e6, "operatingIncome": -30e6, "grossProfit": 200e6},
+    ]
+    r = score_ebitda_inflection_proximity("TEST", stmts_positive, None, None, None)
+    _assert("ebitda positive flip score >= 85", r.score >= 85, f"got {r.score}")
+    _assert("ebitda positive flip status real", r.status == "real")
+
+    # EBITDA narrowing (still negative)
+    stmts_narrowing = [
+        {"ebitda": -10e6, "revenue": 500e6, "operatingIncome": -5e6, "grossProfit": 300e6},
+        {"ebitda": -80e6, "revenue": 400e6, "operatingIncome": -90e6, "grossProfit": 200e6},
+    ]
+    r2 = score_ebitda_inflection_proximity("TEST", stmts_narrowing, None, None, None)
+    _assert("ebitda narrowing score >= 70", r2.score >= 70, f"got {r2.score}")
+
+    # Revenue growth heuristic (no income statements)
+    r3 = score_ebitda_inflection_proximity("TEST", [], 0.35, 0.4, 2e9)
+    _assert("strong rev growth heuristic >= 65", r3.score >= 65, f"got {r3.score}")
+    _assert("strong rev growth status heuristic", r3.status == "heuristic")
+
+    # Revenue declining (no statements)
+    r4 = score_ebitda_inflection_proximity("TEST", [], -0.25, 3.0, 500e6)
+    _assert("declining rev heuristic <= 35", r4.score <= 35, f"got {r4.score}")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 2: backlog_quality
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_backlog_quality():
+    print("\n[backlog_quality]")
+    from services.playbook.extended_factors import score_backlog_quality
+
+    # Strong news signal
+    news = [{"headline": "record backlog reached $4B, order book at historic high", "summary": ""}]
+    r = score_backlog_quality("LMT", "", "Aerospace", "Industrials", news)
+    _assert("record backlog score >= 78", r.score >= 78, f"got {r.score}")
+    _assert("record backlog status real", r.status == "real")
+
+    # Moderate signal
+    news2 = [{"headline": "new design win at defense customer", "summary": ""}]
+    r2 = score_backlog_quality("KTOS", "", "Defense", "Industrials", news2)
+    _assert("design win score >= 60", r2.score >= 60, f"got {r2.score}")
+
+    # Negative signal
+    news3 = [{"headline": "order cancellation and demand weakness", "summary": ""}]
+    r3 = score_backlog_quality("ENPH", "", "Energy", "Energy", news3)
+    _assert("cancellation score <= 30", r3.score <= 30, f"got {r3.score}")
+
+    # No signal → sector fallback
+    r4 = score_backlog_quality("RNDM", "", "Technology", "Technology", [])
+    _assert("no signal uses sector fallback", r4.status == "fallback")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 2: evidence_freshness
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_evidence_freshness():
+    print("\n[evidence_freshness]")
+    from services.playbook.extended_factors import score_evidence_freshness
+    import time
+
+    now = time.time()
+
+    # Fresh catalyst news (<7 days)
+    fresh_news = [
+        {"headline": "contract award for defense program", "datetime": now - 3 * 86400},
+        {"headline": "analyst upgrade", "datetime": now - 1 * 86400},
+    ]
+    r = score_evidence_freshness("TEST", fresh_news, [])
+    _assert("fresh catalyst score >= 82", r.score >= 82, f"got {r.score}")
+    _assert("fresh catalyst status real", r.status == "real")
+
+    # Recent but no catalyst keyword
+    plain_news = [
+        {"headline": "company updates website", "datetime": now - 2 * 86400},
+        {"headline": "new hire announcement", "datetime": now - 4 * 86400},
+        {"headline": "quarterly report summary", "datetime": now - 5 * 86400},
+    ]
+    r2 = score_evidence_freshness("TEST", plain_news, [])
+    _assert("plain 7d news score >= 65", r2.score >= 65, f"got {r2.score}")
+
+    # Stale news (>21 days)
+    old_news = [{"headline": "old story", "datetime": now - 30 * 86400}]
+    r3 = score_evidence_freshness("TEST", old_news, [])
+    _assert("stale news score <= 45", r3.score <= 45, f"got {r3.score}")
+
+    # No news
+    r4 = score_evidence_freshness("TEST", [], [])
+    _assert("no news score <= 40", r4.score <= 40, f"got {r4.score}")
+    _assert("no news status fallback", r4.status == "fallback")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 2: execution_risk
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_execution_risk():
+    print("\n[execution_risk]")
+    from services.playbook.extended_factors import score_execution_risk
+
+    # Critical news signal
+    news_bad = [{"headline": "going concern warning issued by auditor", "summary": ""}]
+    r = score_execution_risk("TEST", -0.30, 4.5, 200e6, 5.0, 4.0, 20.0, news_bad)
+    _assert("going concern risk score >= 85", r.score >= 85, f"got {r.score}")
+    _assert("going concern status real", r.status == "real")
+
+    # High leverage + declining revenue
+    r2 = score_execution_risk("TEST", -0.25, 5.0, 1e9, 50.0, 40.0, 100.0, [])
+    _assert("high leverage+decline risk >= 65", r2.score >= 65, f"got {r2.score}")
+
+    # Large cap, clean balance sheet, growing revenue → low risk
+    r3 = score_execution_risk("MSFT", 0.15, 0.5, 3e12, 420.0, 300.0, 450.0, [])
+    _assert("large cap clean low risk <= 25", r3.score <= 25, f"got {r3.score}")
+
+    # No data → baseline
+    r4 = score_execution_risk("TEST", None, None, None, None, None, None, [])
+    _assert("no data baseline <= 35", r4.score <= 35, f"got {r4.score}")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 2: insider_buying
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_insider_buying():
+    print("\n[insider_buying]")
+    from services.playbook.extended_factors import score_insider_buying
+
+    # News buy signal
+    news_buy = [{"headline": "CEO insider purchase of $1M shares open market", "summary": ""}]
+    r = score_insider_buying("TEST", news_buy, 500e6)
+    _assert("news insider buy score >= 65", r.score >= 65, f"got {r.score}")
+
+    # Sell signal
+    news_sell = [{"headline": "director insider selling 500K shares on market", "summary": ""}]
+    r2 = score_insider_buying("TEST", news_sell, 500e6)
+    _assert("news insider sell score <= 35", r2.score <= 35, f"got {r2.score}")
+
+    # Large cap no signal → neutral
+    r3 = score_insider_buying("AAPL", [], 3e12)
+    _assert("large cap neutral 40-55", 38 <= r3.score <= 55, f"got {r3.score}")
+
+    # No data, small cap → neutral-low
+    r4 = score_insider_buying("RNDM", [], 200e6)
+    _assert("small cap no signal neutral <= 50", r4.score <= 50, f"got {r4.score}")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 2: policy_tailwind
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_policy_tailwind():
+    print("\n[policy_tailwind]")
+    from services.playbook.extended_factors import score_policy_tailwind
+
+    # Defense theme → NDAA
+    r = score_policy_tailwind("KTOS", "", "Industrials", ["defense_optics"], [])
+    _assert("defense theme policy score >= 80", r.score >= 80, f"got {r.score}")
+
+    # CHIPS Act theme
+    r2 = score_policy_tailwind("ASML", "", "Technology", ["semicap_supply_chain"], [])
+    _assert("CHIPS Act theme score >= 78", r2.score >= 78, f"got {r2.score}")
+
+    # Keyword in description
+    r3 = score_policy_tailwind("TEST", "awarded a federal contract funded by the CHIPS Act", "Technology", [], [])
+    _assert("chips act keyword score >= 70", r3.score >= 70, f"got {r3.score}")
+
+    # No themes, no keywords → fallback
+    r4 = score_policy_tailwind("RNDM", "", "Technology", [], [])
+    _assert("no signal fallback status", r4.status == "fallback")
+    _assert("no signal score 40-60", 38 <= r4.score <= 62, f"got {r4.score}")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 2: playbook_registry v2.0 weight sums
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_playbook_registry_v2():
+    print("\n[playbook_registry_v2]")
+    from services.playbook.playbook_registry import list_all
+
+    for pb in list_all():
+        weight_sum = round(sum(pb.factor_weights.values()), 6)
+        _assert(
+            f"{pb.id} weights sum to 1.0 (got {weight_sum:.4f})",
+            abs(weight_sum - 1.0) < 0.001,
+            f"sum={weight_sum}"
+        )
+        _assert(f"{pb.id} version starts with 2.", pb.version.startswith("2."), f"got {pb.version}")
+        _assert(f"{pb.id} has penalty_rules", len(pb.penalty_rules) >= 1)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 2: explainer deterministic output
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_explainer():
+    print("\n[explainer]")
+    from services.playbook.explainer import generate_explanation
+    from services.playbook.playbook_types import PlaybookScoreResult, FactorDetail
+    from services.playbook.playbook_registry import get as get_pb
+
+    pb = get_pb("serenity")
+    if pb is None:
+        _fail("serenity playbook loaded", "playbook not found")
+        return
+
+    # Build a high-score result
+    factor_scores = {
+        "bottleneck_exposure":       88.0,
+        "supply_chain_confirmation": 85.0,
+        "theme_alignment":           75.0,
+        "balance_sheet_strength":    80.0,
+        "evidence_freshness":        72.0,
+        "catalyst_proximity":        70.0,
+        "small_cap_asymmetry":       82.0,
+        "technical_confirmation":    65.0,
+        "sector_strength":           60.0,
+        "policy_tailwind":           78.0,
+        "dilution_risk":             30.0,
+        "crowding_risk":             40.0,
+        "execution_risk":            25.0,
+    }
+    factor_details = {
+        k: FactorDetail(score=v, status="real", reasons=[f"Test reason for {k}"], source_tags=["test"])
+        for k, v in factor_scores.items()
+    }
+
+    result = PlaybookScoreResult(
+        ticker="ASML",
+        playbook_id="serenity",
+        final_score=78.0,
+        hard_filter_pass=True,
+        hard_filter_failures=[],
+        summary_label="Strong playbook fit",
+        factor_scores=factor_scores,
+        penalties_applied={},
+        matched_rules=["physical_bottleneck", "supply_chain_confirmed"],
+        risks=[],
+        stub_factors=[],
+        raw_data={},
+        factor_details=factor_details,
+        matched_themes=["semicap_supply_chain", "photonics_cpo"],
+        bottleneck_tags=["ASML"],
+    )
+
+    exp = generate_explanation(result, pb)
+
+    _assert("thesis_summary is non-empty string", isinstance(exp.get("thesis_summary"), str) and len(exp["thesis_summary"]) > 20,
+            f"got: {exp.get('thesis_summary')!r}")
+    _assert("fit_reasoning is list", isinstance(exp.get("fit_reasoning"), list))
+    _assert("fit_reasoning not empty", len(exp.get("fit_reasoning", [])) >= 1)
+    _assert("non_fit_reasoning is list", isinstance(exp.get("non_fit_reasoning"), list))
+    _assert("key_confirming_signals is list", isinstance(exp.get("key_confirming_signals"), list))
+    _assert("top_risks is list", isinstance(exp.get("top_risks"), list))
+    _assert("what_would_improve_score is list", isinstance(exp.get("what_would_improve_score"), list))
+    _assert("what_would_break_thesis is list", isinstance(exp.get("what_would_break_thesis"), list))
+    _assert("thesis_summary contains ASML", "ASML" in exp["thesis_summary"],
+            f"got: {exp['thesis_summary']!r}")
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # /api/query isolation guardrail
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -464,9 +781,10 @@ def test_api_query_isolation():
 
 def run_all():
     print("=" * 60)
-    print("PLAYBOOK PHASE 1.5 FACTOR TESTS")
+    print("PLAYBOOK PHASE 1.5 + 2.0 FACTOR TESTS")
     print("=" * 60)
 
+    # Phase 1.5
     test_sector_strength()
     test_theme_alignment()
     test_bottleneck_exposure()
@@ -476,6 +794,17 @@ def run_all():
     test_playbook_divergence()
     test_graceful_degradation()
     test_api_query_isolation()
+
+    # Phase 2
+    test_supply_chain_confirmation()
+    test_ebitda_inflection_proximity()
+    test_backlog_quality()
+    test_evidence_freshness()
+    test_execution_risk()
+    test_insider_buying()
+    test_policy_tailwind()
+    test_playbook_registry_v2()
+    test_explainer()
 
     print()
     print("=" * 60)
