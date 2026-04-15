@@ -241,6 +241,15 @@ app.include_router(_bittensor_router)
 app.include_router(_watchlist_router)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Playbook engine router (isolated, additive — does NOT modify /api/query) ──
+try:
+    from services.playbook.router import router as _playbook_router
+    app.include_router(_playbook_router)
+    print("[PLAYBOOK] Router registered at /api/playbooks")
+except Exception as _pb_err:
+    print(f"[PLAYBOOK] Router unavailable (non-fatal): {_pb_err}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Static file serving ───────────────────────────────────────────────────────
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.exists():

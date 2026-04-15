@@ -1,0 +1,346 @@
+You are working in my backend FastAPI server repo for CaelynAI.
+
+Your job is to implement a new isolated multi-strategy playbook framework that does not break or rewrite my existing agent/orchestrator/query flow.
+
+This is an additive feature, not a refactor.
+
+Core objective
+
+Build a reusable playbook engine that supports multiple investing strategy profiles, starting with:
+
+serenity
+sjcapital
+
+This engine must be generic so I can add more playbooks later without duplicating services.
+
+The framework will power a strategy selector on the frontend AI Terminal, Watchlist page, and Portfolio page.
+
+Non-negotiable guardrails
+Do not modify or break my existing /api/query flow or main orchestration logic.
+Do not change existing route contracts unless absolutely necessary.
+Do not remove or rewrite existing pages/features through backend assumptions.
+Do not create separate duplicated services per playbook.
+Build this as a new isolated backend module/router.
+Use feature flags so this can be enabled safely.
+Keep all new logic modular, typed, and future-extensible.
+If you need to touch shared code, keep it minimal and backwards compatible.
+Prefer new files/modules over invasive edits.
+Add light logging and safe fallbacks. No hard crashes if playbook data is missing.
+What to build
+
+Create a new backend subsystem for multi-playbook scoring and strategy metadata.
+
+New module structure
+
+Create something like:
+
+app/services/playbook/
+  __init__.py
+  playbook_models.py
+  playbook_registry.py
+  playbook_scoring.py
+  playbook_service.py
+  playbook_routes.py
+  playbook_schemas.py
+  playbook_types.py
+
+If this repo uses a different structure, adapt appropriately, but keep this isolated and clean.
+
+Architecture
+
+Implement one shared engine with multiple strategy definitions.
+
+Do not create files like:
+
+serenity_playbook_service.py
+sjcapital_playbook_service.py
+
+Instead:
+
+create one engine
+create one registry of playbook definitions
+create playbook configs for serenity and sjcapital
+Playbook model
+
+Create a typed playbook definition structure with fields like:
+
+id
+name
+short_label
+description
+enabled
+version
+factor_weights
+hard_filters
+penalties
+preferred_themes
+preferred_sectors
+entry_style
+exit_style
+positioning_style
+ui_color or display metadata if helpful
+explanation_template_key
+
+Use Pydantic/dataclass/typed dict depending on repo style.
+
+Initial playbook configs
+
+Implement at least two configs:
+
+1. serenity
+
+Focus on:
+
+bottleneck exposure
+supply chain confirmation
+clean balance sheet
+dilution penalty
+catalyst proximity
+underfollowed / crowded penalty
+small/mid-cap asymmetry
+technical confirmation
+direction over perfect timing
+2. sjcapital
+
+Focus on:
+
+sector strength / hot sector
+undervaluation vs peers
+revenue acceleration
+EBITDA/FCF inflection proximity
+bottleneck alignment
+chart confirmation
+negative asymmetry avoidance
+tighter sector requirement
+
+Do not try to encode every nuance from X posts in v1. Use a strong structured approximation with clear comments so we can evolve later.
+
+Shared factor library
+
+Implement a common factor scoring layer that can score any ticker on reusable dimensions such as:
+
+sector_strength
+theme_alignment
+bottleneck_exposure
+supply_chain_confirmation
+balance_sheet_strength
+dilution_risk
+valuation_discount_vs_peers
+revenue_growth
+revenue_acceleration
+ebitda_inflection_proximity
+backlog_quality
+catalyst_proximity
+crowding_risk
+technical_confirmation
+execution_risk
+small_cap_asymmetry
+insider_buying
+policy_tailwind
+evidence_freshness
+
+If some factors cannot yet be fully sourced from existing APIs, stub them safely with documented placeholders and neutral scoring rather than breaking the engine.
+
+Scoring system
+
+Implement:
+
+Factor computation
+Playbook-weighted final score
+Hard filter pass/fail
+Penalty application
+Score breakdown object
+
+Return all scoring results in structured JSON.
+
+Example response shape
+
+For each ticker, return something like:
+
+{
+  "ticker": "NBIS",
+  "playbook_id": "serenity",
+  "final_score": 84.2,
+  "hard_filter_pass": true,
+  "summary_label": "High-conviction bottleneck setup",
+  "factor_scores": {
+    "bottleneck_exposure": 92,
+    "balance_sheet_strength": 80,
+    "dilution_risk": 18,
+    "catalyst_proximity": 74
+  },
+  "penalties": {
+    "crowding_risk": -6.5
+  },
+  "matched_rules": [
+    "physical_bottleneck",
+    "clean_balance_sheet",
+    "event_window_open"
+  ],
+  "risks": [
+    "crowding rising",
+    "needs fresh supply-chain validation"
+  ]
+}
+API routes
+
+Create a new router namespace like:
+
+GET /api/playbooks
+GET /api/playbooks/{playbook_id}
+POST /api/playbooks/score-watchlist
+POST /api/playbooks/score-portfolio
+GET /api/playbooks/ticker/{ticker}
+GET /api/playbooks/top
+Required query/body behavior
+GET /api/playbooks
+
+Return all enabled playbooks with metadata for dropdowns:
+
+id
+name
+short_label
+description
+enabled
+GET /api/playbooks/{playbook_id}
+
+Return one playbook definition summary for UI display.
+
+POST /api/playbooks/score-watchlist
+
+Request body example:
+
+{
+  "playbook_id": "serenity",
+  "tickers": ["NBIS", "AAOI", "LITE", "AMPX"],
+  "include_breakdown": true
+}
+
+Return ranked scored results.
+
+POST /api/playbooks/score-portfolio
+
+Request body example:
+
+{
+  "playbook_id": "sjcapital",
+  "holdings": [
+    { "ticker": "NBIS", "weight": 0.18 },
+    { "ticker": "AMPX", "weight": 0.12 }
+  ],
+  "include_breakdown": true
+}
+
+Return:
+
+holding-by-holding playbook fit
+aggregate portfolio alignment score
+concentration observations
+strongest/weakest aligned holdings
+GET /api/playbooks/ticker/{ticker}?playbook_id=serenity
+
+Return one ticker’s score and explanation scaffold.
+
+GET /api/playbooks/top?playbook_id=serenity&universe=ai_infra&limit=25
+
+Return ranked top names for a universe.
+
+Universes
+
+Add support for simple universe modes, even if initially basic:
+
+watchlist
+portfolio
+ai_infra
+custom
+
+If existing watchlist/portfolio data sources already exist in backend, integrate carefully without changing old logic.
+
+If not safe yet, support custom first and document TODOs.
+
+Data sourcing
+
+Use existing backend data services where possible.
+
+Prefer reusing existing API integrations rather than creating new fragile ones right now.
+
+Safe v1 priority:
+
+fundamentals already available
+price/technical data already available
+existing news/event data where available
+existing cached data where available
+
+Do not massively expand third-party API usage in this first implementation unless necessary.
+
+Feature flags
+
+Add env/config flags like:
+
+ENABLE_PLAYBOOK_ENGINE=true
+ENABLE_PLAYBOOK_SERENITY=true
+ENABLE_PLAYBOOK_SJCAPITAL=true
+
+Routes should fail gracefully or hide disabled strategies if flags are off.
+
+Backwards compatibility
+
+This is important:
+
+Do not make strategy selection required in old routes.
+Do not assume all callers send playbook_id.
+Do not inject this into old endpoints unless explicitly asked later.
+
+This should be a separate optional capability.
+
+Optional compatibility bridge
+
+Only if clean and low-risk, add a tiny helper so old internal callers can optionally request playbook context later, but do not wire it into /api/query yet.
+
+Testing
+
+Add lightweight tests if the repo supports them.
+
+At minimum verify:
+
+playbook registry loads correctly
+both playbooks serialize correctly
+watchlist scoring returns ranked results
+missing/invalid playbook id returns clean 4xx
+ticker scoring does not crash on partial/missing factor data
+disabled feature flag behavior is graceful
+Logging
+
+Add concise logs for:
+
+playbook loaded
+scoring started
+scoring completed
+missing factor fallback used
+invalid playbook requested
+
+No noisy spam.
+
+Deliverables
+
+When done, provide:
+
+exact files added/modified
+new route list
+request/response examples
+any env vars added
+any TODOs or neutral-placeholder factors still needing richer data
+confirmation that existing /api/query and current core logic were left untouched
+Important implementation philosophy
+
+This v1 is an isolated scoring framework, not a total investing brain rewrite.
+
+Prioritize:
+
+modularity
+safety
+typed structures
+future extensibility
+low blast radius
+
+Do not over-engineer. Do not break anything. Do not get clever in dangerous places.
