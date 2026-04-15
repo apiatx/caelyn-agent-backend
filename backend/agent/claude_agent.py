@@ -834,6 +834,8 @@ class TradingAgent:
         _USER_CTX_EXCLUDED = frozenset({
             "crypto", "portfolio_review", "prediction_markets",
             "earnings_catalyst", "followup", "chat",
+            "ticker_analysis", "social_momentum", "x_trader_consensus",
+            "x_select_trader_consensus", "custom_screen", "deterministic_screener",
         })
         if not is_followup and market_data and isinstance(market_data, dict) \
                 and "_user_context" not in market_data \
