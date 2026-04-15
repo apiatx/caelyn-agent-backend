@@ -120,7 +120,7 @@ async def fetch_ticker_data(ticker: str, api_key: str) -> TickerRawData:
     async with httpx.AsyncClient(timeout=10.0) as client:
         profile_raw, metrics_raw, growth_raw = await asyncio.gather(
             _fmp_get(client, "profile", {"symbol": t}, api_key),
-            _fmp_get(client, "key-metrics", {"symbol": t, "period": "annual", "limit": "1"}, api_key),
+            _fmp_get(client, "ratios", {"symbol": t, "period": "annual", "limit": "1"}, api_key),
             _fmp_get(client, "financial-growth", {"symbol": t, "period": "annual", "limit": "1"}, api_key),
             return_exceptions=True,
         )
@@ -159,15 +159,15 @@ async def fetch_ticker_data(ticker: str, api_key: str) -> TickerRawData:
     return TickerRawData(
         ticker=t,
         price=             _float(profile, "price"),
-        mkt_cap=           _float(profile, "mktCap"),
+        mkt_cap=           _float(profile, "marketCap"),          # stable: marketCap (not mktCap)
         sector=            profile.get("sector") or None,
         industry=          profile.get("industry") or None,
-        pe_ratio=          _float(metrics, "peRatio") or _float(profile, "pe"),
-        debt_to_equity=    _float(metrics, "debtToEquityRatio") or _float(profile, "debtToEquity"),
+        pe_ratio=          _float(metrics, "priceToEarningsRatio"),  # stable ratios endpoint
+        debt_to_equity=    _float(metrics, "debtToEquityRatio"),     # stable ratios endpoint
         revenue_growth_yoy=_float(growth, "revenueGrowth"),
         week52_high=       w52_high,
         week52_low=        w52_low,
-        day_change_pct=    _float(profile, "changes"),
+        day_change_pct=    _float(profile, "changePercentage"),   # stable: changePercentage (not changes)
     )
 
 
