@@ -1164,12 +1164,494 @@ def test_discovery_query_isolation():
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Phase 4 Tests
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_phase4_new_nodes():
+    """Verify Phase 4 expanded NODE_REGISTRY contains new curated nodes."""
+    from services.playbook.supply_chain_graph import NODE_REGISTRY
+
+    # US additions
+    for ticker in ["MRVL", "SMCI", "TER", "PLAB", "UCTT", "KLIC", "WOLF", "CDNS", "SNPS", "BE", "MTZ", "HWM"]:
+        _assert(f"phase4_node_registry.{ticker} exists", ticker in NODE_REGISTRY, f"Missing {ticker}")
+
+    # Japan additions
+    for ticker in ["8035.T", "6981.T", "3436.T", "6146.T", "4901.T", "7735.T"]:
+        _assert(f"phase4_node_registry.{ticker} exists", ticker in NODE_REGISTRY, f"Missing {ticker}")
+
+    # Germany
+    _assert("phase4_node_registry.IFNNY exists", "IFNNY" in NODE_REGISTRY, "Missing IFNNY")
+
+    # UK
+    _assert("phase4_node_registry.IQE.L exists", "IQE.L" in NODE_REGISTRY, "Missing IQE.L")
+
+    # Check new node structure has required fields
+    node = NODE_REGISTRY.get("8035.T", {})
+    _assert("phase4.8035.T has company_name", "company_name" in node, node)
+    _assert("phase4.8035.T has themes", bool(node.get("themes")), node.get("themes"))
+    _assert("phase4.8035.T has us_access_proxy", node.get("us_access_proxy") == "TOELY", node.get("us_access_proxy"))
+    _assert("phase4.8035.T bottleneck_score >= 80", node.get("bottleneck_score", 0) >= 80, node.get("bottleneck_score"))
+
+    node_murata = NODE_REGISTRY.get("6981.T", {})
+    _assert("phase4.Murata has ADR MRAAY", node_murata.get("us_access_proxy") == "MRAAY", node_murata.get("us_access_proxy"))
+
+    node_disco = NODE_REGISTRY.get("6146.T", {})
+    _assert("phase4.Disco layer == 4", node_disco.get("layer") == 4, node_disco.get("layer"))
+    _assert("phase4.Disco bottleneck_score >= 80", node_disco.get("bottleneck_score", 0) >= 80, node_disco.get("bottleneck_score"))
+
+
+def test_phase4_hiddenness_logic():
+    """
+    Verify hiddenness scoring reform:
+    - Thin data does NOT inflate hiddenness
+    - Household AI names get low hiddenness
+    - Foreign layer-3+ names get genuine hiddenness
+    """
+    from services.playbook.discovery_service import _hiddenness_score
+    from services.playbook.supply_chain_graph import NODE_REGISTRY
+
+    # Household name → low hiddenness
+    nvda_node = NODE_REGISTRY.get("NVDA", {"layer": 0, "bottleneck_score": 95, "confidence": "high"})
+    score_nvda, reason_nvda = _hiddenness_score("NVDA", "US", 3_000_000_000_000, "full", nvda_node)
+    _assert("phase4_hiddenness.NVDA household → low", score_nvda <= 20.0, f"Got {score_nvda}")
+    _assert("phase4_hiddenness.NVDA reason mentions household", "household" in reason_nvda.lower() or "widely" in reason_nvda.lower(), reason_nvda)
+
+    # Thin data should NOT inflate hiddenness
+    thin_node = {"layer": 2, "bottleneck_score": 50, "confidence": "low"}
+    score_thin_with_cap, _ = _hiddenness_score("XYZFAKE", "JP", None, "thin", thin_node)
+    score_thin_no_cap,  _ = _hiddenness_score("XYZFAKE", "JP", None, "thin", thin_node)
+    # Both should be similar — thin data doesn't boost hiddenness
+    _assert(
+        "phase4_hiddenness.thin_data_no_boost: thin-data score <= 75",
+        score_thin_with_cap <= 75.0,
+        f"Score too high ({score_thin_with_cap}) — thin data is inflating hiddenness",
+    )
+
+    # Deep foreign layer with real thin ADR → should have moderate hiddenness from country+layer
+    disco_node = NODE_REGISTRY.get("6146.T", {"layer": 4, "bottleneck_score": 84, "confidence": "high"})
+    score_disco, reason_disco = _hiddenness_score("DISCF", "JP", None, "thin", disco_node)
+    _assert("phase4_hiddenness.Disco >= 55 from country+layer", score_disco >= 55.0, f"Got {score_disco}")
+    # Thin data note should NOT be in reason (thin belongs in confidence_penalties)
+    _assert(
+        "phase4_hiddenness.thin_not_in_disco_reason",
+        "thin" not in reason_disco.lower(),
+        f"Thin-data text leaked into hiddenness reason: {reason_disco}",
+    )
+
+    # US mid-cap unknown company
+    mid_cap_node = {"layer": 3, "bottleneck_score": 73, "confidence": "high"}
+    score_mid, _ = _hiddenness_score("UCTT", "US", 1_500_000_000, "full", mid_cap_node)
+    _assert("phase4_hiddenness.US mid-cap layer-3 >= 50", score_mid >= 50.0, f"Got {score_mid}")
+
+
+def test_phase4_confidence_penalties():
+    """Verify confidence_penalties are populated correctly for thin/OTC/no-proxy cases."""
+    from services.playbook.discovery_service import _compute_confidence_penalties
+
+    # Thin OTC ADR — should have multiple penalties
+    penalties_thin = _compute_confidence_penalties(
+        "DISCF", "JP", None, "thin", "low", None, "DISCF"
+    )
+    _assert("phase4_penalties.thin→coverage penalty", any("thin" in p.lower() for p in penalties_thin), penalties_thin)
+    _assert("phase4_penalties.thin→data confidence penalty", any("confidence" in p.lower() for p in penalties_thin), penalties_thin)
+    _assert("phase4_penalties.thin→market cap penalty", any("market cap" in p.lower() for p in penalties_thin), penalties_thin)
+    _assert("phase4_penalties.thin has >=3 penalties", len(penalties_thin) >= 3, penalties_thin)
+
+    # US high-confidence full coverage — should have no penalties
+    penalties_us = _compute_confidence_penalties(
+        "ENTG", "US", 15_000_000_000, "full", "high", None, None
+    )
+    _assert("phase4_penalties.US_full→zero penalties", len(penalties_us) == 0, penalties_us)
+
+    # Foreign with ADR and partial coverage — OTC ADR penalty only
+    penalties_adr = _compute_confidence_penalties(
+        "ATEYY", "JP", 10_000_000_000, "partial", "medium", "ATEYY", "ATEYY"
+    )
+    _assert("phase4_penalties.adr_partial→OTC penalty", any("OTC" in p or "ADR" in p for p in penalties_adr), penalties_adr)
+
+
+def test_phase4_best_blend_score():
+    """Verify best_blend_score ranks candidates sensibly."""
+    from services.playbook.discovery_service import _compute_best_blend_score
+    from services.playbook.discovery_types import DiscoveryScores
+
+    # High bottleneck + high confidence = high blend score
+    scores_high = DiscoveryScores(
+        chain_depth_score=85.0,
+        bottleneck_criticality_score=92.0,
+        hiddenness_score=72.0,
+        giant_dependency_score=80.0,
+        supply_chain_confidence_score=90.0,
+        theme_purity_score=95.0,
+    )
+    blend_high = _compute_best_blend_score(scores_high, "high", [])
+    _assert("phase4_blend.high_quality >= 80", blend_high >= 80.0, f"Got {blend_high}")
+
+    # Low confidence + many penalties = lower blend score
+    scores_low = DiscoveryScores(
+        chain_depth_score=85.0,
+        bottleneck_criticality_score=92.0,
+        hiddenness_score=72.0,
+        giant_dependency_score=80.0,
+        supply_chain_confidence_score=90.0,
+        theme_purity_score=95.0,
+    )
+    penalties = ["thin coverage", "no market cap", "no US proxy"]
+    blend_penalized = _compute_best_blend_score(scores_low, "low", penalties)
+    _assert("phase4_blend.penalized < high", blend_penalized < blend_high, f"Got {blend_penalized} vs {blend_high}")
+    _assert("phase4_blend.penalty_mult < 1.0 applied", blend_penalized < blend_high * 0.95, f"Got {blend_penalized}")
+
+    # Verify ordering: ENTG (bc=85, layer=3, high conf, US) > ATKR (bc=68, layer=4)
+    # ENTG is a hidden specialist; ATKR is lower bottleneck — ENTG should rank higher.
+    from services.playbook.supply_chain_graph import NODE_REGISTRY
+    from services.playbook.discovery_service import _build_candidate
+
+    c_entg = _build_candidate("ENTG", NODE_REGISTRY["ENTG"])
+    c_atkr = _build_candidate("ATKR", NODE_REGISTRY["ATKR"])
+    _assert("phase4_blend.ENTG > ATKR by blend", c_entg.best_blend_score > c_atkr.best_blend_score,
+            f"ENTG={c_entg.best_blend_score}, ATKR={c_atkr.best_blend_score}")
+
+
+def test_phase4_candidate_new_fields():
+    """All new Phase 4 candidate fields are populated on _build_candidate output."""
+    from services.playbook.discovery_service import _build_candidate
+    from services.playbook.supply_chain_graph import NODE_REGISTRY
+
+    for ticker in ["ENTG", "BESI.AS", "8035.T", "6146.T"]:
+        node = NODE_REGISTRY.get(ticker)
+        if not node:
+            _fail(f"phase4_candidate_fields.{ticker} in registry", "Not found")
+            continue
+        canon = node.get("us_access_proxy", ticker) if node.get("country", "US") != "US" else ticker
+        c = _build_candidate(canon, node)
+
+        _assert(f"phase4_fields.{ticker}.best_blend_score > 0", c.best_blend_score > 0, c.best_blend_score)
+        _assert(f"phase4_fields.{ticker}.visibility_bucket set", c.visibility_bucket in ("household", "widely_covered", "known", "specialist", "hidden"), c.visibility_bucket)
+        _assert(f"phase4_fields.{ticker}.chain_role_type set", c.chain_role_type in ("platform_anchor", "direct_bottleneck", "adjacent_supplier", "indirect_beneficiary"), c.chain_role_type)
+        _assert(f"phase4_fields.{ticker}.why_now non-empty", bool(c.why_now), c.why_now)
+        _assert(f"phase4_fields.{ticker}.why_hidden non-empty", bool(c.why_hidden), c.why_hidden)
+        _assert(f"phase4_fields.{ticker}.what_to_verify_next non-empty", bool(c.what_to_verify_next), c.what_to_verify_next)
+        _assert(f"phase4_fields.{ticker}.confidence_penalties is list", isinstance(c.confidence_penalties, list), type(c.confidence_penalties))
+        _assert(f"phase4_fields.{ticker}.data_gaps is list", isinstance(c.data_gaps, list), type(c.data_gaps))
+
+    # NVDA should be household and platform_anchor
+    c_nvda = _build_candidate("NVDA", NODE_REGISTRY["NVDA"])
+    _assert("phase4_fields.NVDA.visibility=household", c_nvda.visibility_bucket == "household", c_nvda.visibility_bucket)
+    _assert("phase4_fields.NVDA.chain_role=platform_anchor", c_nvda.chain_role_type == "platform_anchor", c_nvda.chain_role_type)
+    _assert("phase4_fields.NVDA.hiddenness <= 20", c_nvda.hiddenness_score <= 20.0, c_nvda.hiddenness_score)
+
+
+def test_phase4_ranking_buckets():
+    """Verify ranking buckets populate correctly."""
+    from services.playbook.discovery_service import _build_ranking_buckets, _build_candidate
+    from services.playbook.supply_chain_graph import NODE_REGISTRY
+
+    # Build a set of candidates covering different profiles
+    tickers_to_test = ["ENTG", "ASML", "6857.T", "BESI.AS", "ETN", "6146.T", "CDNS", "TER"]
+    candidates = []
+    for t in tickers_to_test:
+        node = NODE_REGISTRY.get(t)
+        if not node:
+            continue
+        canon = node.get("us_access_proxy", t) if node.get("country", "US") != "US" else t
+        candidates.append(_build_candidate(canon, node))
+
+    buckets = _build_ranking_buckets(candidates, limit=5)
+
+    _assert("phase4_buckets.top_hidden_bottlenecks is list", isinstance(buckets["top_hidden_bottlenecks"], list), type(buckets["top_hidden_bottlenecks"]))
+    _assert("phase4_buckets.top_direct_chokepoints is list", isinstance(buckets["top_direct_chokepoints"], list), type(buckets["top_direct_chokepoints"]))
+    _assert("phase4_buckets.top_foreign_specialists is list", isinstance(buckets["top_foreign_specialists"], list), type(buckets["top_foreign_specialists"]))
+    _assert("phase4_buckets.top_us_accessible_foreign_proxies is list", isinstance(buckets["top_us_accessible_foreign_proxies"], list), type(buckets["top_us_accessible_foreign_proxies"]))
+    _assert("phase4_buckets.highest_confidence_candidates is list", isinstance(buckets["highest_confidence_candidates"], list), type(buckets["highest_confidence_candidates"]))
+    _assert("phase4_buckets.best_blend_candidates is list", isinstance(buckets["best_blend_candidates"], list), type(buckets["best_blend_candidates"]))
+
+    # Foreign specialists should only have non-US names
+    foreign_names = buckets["top_foreign_specialists"]
+    for c in foreign_names:
+        _assert(f"phase4_buckets.foreign_specialist.{c.ticker} is non-US", c.country != "US", f"{c.ticker} country={c.country}")
+
+    # best_blend_candidates should be sorted descending
+    blend_list = buckets["best_blend_candidates"]
+    if len(blend_list) >= 2:
+        _assert("phase4_buckets.best_blend sorted descending",
+                blend_list[0].best_blend_score >= blend_list[-1].best_blend_score,
+                f"{blend_list[0].best_blend_score} vs {blend_list[-1].best_blend_score}")
+
+    # top_direct_chokepoints should only have direct_bottleneck role type
+    for c in buckets["top_direct_chokepoints"]:
+        _assert(f"phase4_buckets.chokepoint.{c.ticker} is direct_bottleneck",
+                c.chain_role_type == "direct_bottleneck", c.chain_role_type)
+
+
+def test_phase4_discover_response_buckets():
+    """DiscoverResponse includes all 6 Phase 4 ranking bucket fields."""
+    import asyncio
+    from services.playbook.discovery_service import run_discover
+    from services.playbook.discovery_types import DiscoverRequest
+
+    async def _run():
+        req = DiscoverRequest(
+            playbook_id="serenity",
+            mode="theme_scan",
+            theme_ids=["semicap_supply_chain", "advanced_packaging_test"],
+            include_foreign=True,
+            max_depth=4,
+            limit=15,
+        )
+        resp = await run_discover(req)
+        _assert("phase4_response.top_hidden_bottlenecks present", isinstance(resp.top_hidden_bottlenecks, list), type(resp.top_hidden_bottlenecks))
+        _assert("phase4_response.top_direct_chokepoints present", isinstance(resp.top_direct_chokepoints, list), type(resp.top_direct_chokepoints))
+        _assert("phase4_response.top_foreign_specialists present", isinstance(resp.top_foreign_specialists, list), type(resp.top_foreign_specialists))
+        _assert("phase4_response.top_us_accessible_foreign_proxies present", isinstance(resp.top_us_accessible_foreign_proxies, list), type(resp.top_us_accessible_foreign_proxies))
+        _assert("phase4_response.highest_confidence_candidates present", isinstance(resp.highest_confidence_candidates, list), type(resp.highest_confidence_candidates))
+        _assert("phase4_response.best_blend_candidates present", isinstance(resp.best_blend_candidates, list), type(resp.best_blend_candidates))
+
+        # All top_candidates have new fields
+        for c in resp.top_candidates[:3]:
+            _assert(f"phase4_response.candidate.{c.ticker}.best_blend_score > 0", c.best_blend_score > 0, c.best_blend_score)
+            _assert(f"phase4_response.candidate.{c.ticker}.visibility_bucket set", bool(c.visibility_bucket), c.visibility_bucket)
+            _assert(f"phase4_response.candidate.{c.ticker}.why_now set", bool(c.why_now), c.why_now)
+
+        # Backward compatibility: top_candidates still present
+        _assert("phase4_response.top_candidates still present", len(resp.top_candidates) > 0, len(resp.top_candidates))
+
+    asyncio.run(_run())
+
+
+def test_phase4_compare_models():
+    """CompareRequest and CompareResponse models parse correctly."""
+    from services.playbook.discovery_types import CompareRequest, CompareResponse, CompareTickerResult
+
+    req = CompareRequest(
+        tickers=["LITE", "AMAT", "ENTG"],
+        playbooks=["serenity", "sjcapital"],
+        include_breakdown=True,
+    )
+    _assert("phase4_compare_req.tickers", req.tickers == ["LITE", "AMAT", "ENTG"], req.tickers)
+    _assert("phase4_compare_req.playbooks", req.playbooks == ["serenity", "sjcapital"], req.playbooks)
+    _assert("phase4_compare_req.include_breakdown", req.include_breakdown, req.include_breakdown)
+
+    # Minimal result model
+    r = CompareTickerResult(ticker="LITE", serenity_score=72.5, sj_score=55.0, classification="serenity_only")
+    _assert("phase4_compare_result.ticker", r.ticker == "LITE", r.ticker)
+    _assert("phase4_compare_result.serenity_score", r.serenity_score == 72.5, r.serenity_score)
+    _assert("phase4_compare_result.classification", r.classification == "serenity_only", r.classification)
+    delta = round(72.5 - 55.0, 1)
+    r2 = r.model_copy(update={"score_delta": delta})
+    _assert("phase4_compare_result.score_delta", r2.score_delta == delta, r2.score_delta)
+
+    resp = CompareResponse(
+        tickers_compared=["LITE"],
+        playbooks=["serenity", "sjcapital"],
+        results=[r],
+        consensus_names=[],
+        serenity_only_names=["LITE"],
+        sj_only_names=[],
+        low_fit_both=[],
+    )
+    _assert("phase4_compare_resp.serenity_only_names", resp.serenity_only_names == ["LITE"], resp.serenity_only_names)
+
+
+def test_phase4_compare_classify():
+    """Compare classifications are deterministic."""
+    from services.playbook.compare_service import _classify
+
+    s_pass, j_pass, both_fail = 70.0, 65.0, 40.0
+
+    cls, sp, jp = _classify(s_pass, j_pass)
+    _assert("phase4_classify.consensus", cls == "consensus", cls)
+    _assert("phase4_classify.consensus.s_pass", sp, sp)
+    _assert("phase4_classify.consensus.j_pass", jp, jp)
+
+    cls, sp, jp = _classify(s_pass, both_fail)
+    _assert("phase4_classify.serenity_only", cls == "serenity_only", cls)
+    _assert("phase4_classify.serenity_only.s_pass", sp, sp)
+    _assert("phase4_classify.serenity_only.j_not_pass", not jp, jp)
+
+    cls, sp, jp = _classify(both_fail, j_pass)
+    _assert("phase4_classify.sj_only", cls == "sj_only", cls)
+
+    cls, sp, jp = _classify(both_fail, both_fail)
+    _assert("phase4_classify.low_fit_both", cls == "low_fit_both", cls)
+
+    cls, sp, jp = _classify(None, j_pass)
+    _assert("phase4_classify.none_serenity→sj_only", cls == "sj_only", cls)
+
+    cls, sp, jp = _classify(s_pass, None)
+    _assert("phase4_classify.none_sj→serenity_only", cls == "serenity_only", cls)
+
+    cls, sp, jp = _classify(None, None)
+    _assert("phase4_classify.both_none→low_fit", cls == "low_fit_both", cls)
+
+
+def test_phase4_serenity_score_in_registry():
+    """_serenity_composite_for_ticker returns valid score for in-registry tickers, None for unknowns."""
+    from services.playbook.compare_service import _serenity_composite_for_ticker
+
+    # ENTG is in registry — should return valid score
+    result = _serenity_composite_for_ticker("ENTG")
+    _assert("phase4_serenity_score.ENTG not None", result is not None, result)
+    if result:
+        score, breakdown = result
+        _assert("phase4_serenity_score.ENTG > 0", score > 0, score)
+        _assert("phase4_serenity_score.ENTG.breakdown has bottleneck_criticality",
+                "bottleneck_criticality_score" in breakdown, breakdown.keys())
+        _assert("phase4_serenity_score.ENTG.in_node_registry", breakdown.get("in_node_registry"), breakdown)
+
+    # BESIY is the ADR for BESI.AS — should resolve
+    result_besi = _serenity_composite_for_ticker("BESIY")
+    _assert("phase4_serenity_score.BESIY resolves", result_besi is not None, result_besi)
+
+    # Random ticker not in registry
+    result_none = _serenity_composite_for_ticker("ZZZMADEUPT")
+    _assert("phase4_serenity_score.unknown→None", result_none is None, result_none)
+
+    # NVDA — household name → low hiddenness, still valid score
+    result_nvda = _serenity_composite_for_ticker("NVDA")
+    _assert("phase4_serenity_score.NVDA not None", result_nvda is not None, result_nvda)
+    if result_nvda:
+        score_nvda, _ = result_nvda
+        _assert("phase4_serenity_score.NVDA > 0 even if household", score_nvda > 0, score_nvda)
+
+
+def test_phase4_foreign_map_expanded():
+    """FOREIGN_ACCESS_MAP has Phase 4 additions."""
+    from services.playbook.foreign_market_map import FOREIGN_ACCESS_MAP
+
+    new_entries = ["8035.T", "6981.T", "3436.T", "6146.T", "4901.T", "7735.T", "IQE.L", "IFNNY"]
+    for native_ticker in new_entries:
+        _assert(f"phase4_foreign_map.{native_ticker} exists", native_ticker in FOREIGN_ACCESS_MAP, f"Missing {native_ticker}")
+
+    # TEL entry should have TOELY as ADR
+    tel = FOREIGN_ACCESS_MAP.get("8035.T", {})
+    _assert("phase4_foreign_map.8035.T.adr=TOELY", tel.get("adr_ticker") == "TOELY", tel.get("adr_ticker"))
+    _assert("phase4_foreign_map.8035.T.coverage=partial", tel.get("coverage_status") == "partial", tel.get("coverage_status"))
+
+    # DISCO should have thin coverage (no liquid US proxy)
+    disco = FOREIGN_ACCESS_MAP.get("6146.T", {})
+    _assert("phase4_foreign_map.6146.T.coverage=thin", disco.get("coverage_status") == "thin", disco.get("coverage_status"))
+    _assert("phase4_foreign_map.6146.T.no_adr", disco.get("adr_ticker") is None, disco.get("adr_ticker"))
+
+    # IFNNY (Infineon, Germany) should have high data confidence
+    inf = FOREIGN_ACCESS_MAP.get("IFNNY", {})
+    _assert("phase4_foreign_map.IFNNY.confidence=high", inf.get("data_confidence") == "high", inf.get("data_confidence"))
+
+
+def test_phase4_giant_map_expanded():
+    """giant_map.py has CoreWeave_Neocloud and all prior giants."""
+    from services.playbook.giant_map import GIANT_MAP, get_giant, list_giants
+
+    _assert("phase4_giant_map.CoreWeave_Neocloud exists", "CoreWeave_Neocloud" in GIANT_MAP, list(GIANT_MAP.keys()))
+
+    cw = GIANT_MAP["CoreWeave_Neocloud"]
+    _assert("phase4_giant.CoreWeave has themes", bool(cw.get("themes")), cw.get("themes"))
+    _assert("phase4_giant.CoreWeave has ai_infrastructure theme", "ai_infrastructure" in cw["themes"], cw["themes"])
+    _assert("phase4_giant.CoreWeave has capex_scale", bool(cw.get("capex_scale")), cw.get("capex_scale"))
+
+    giants = list_giants()
+    _assert("phase4_giant.list_giants length >= 11", len(giants) >= 11, len(giants))
+
+    # get_giant should be case-insensitive
+    g = get_giant("coreweave_neocloud")
+    _assert("phase4_giant.get_giant case insensitive", g is not None, g)
+
+
+def test_phase4_analyze_compare_field():
+    """AnalyzeRequest accepts compare_with_playbook field without error."""
+    from services.playbook.analyzer import AnalyzeRequest
+
+    req = AnalyzeRequest(
+        playbook_id="serenity",
+        context_mode="watchlist",
+        tickers=["NVDA", "ASML"],
+        compare_with_playbook="sjcapital",
+    )
+    _assert("phase4_analyze.compare_with_playbook accepted", req.compare_with_playbook == "sjcapital", req.compare_with_playbook)
+
+    # Should also work with None (default)
+    req2 = AnalyzeRequest(playbook_id="serenity", tickers=["NVDA"])
+    _assert("phase4_analyze.compare_with_playbook default None", req2.compare_with_playbook is None, req2.compare_with_playbook)
+
+
+def test_phase4_no_brave_tavily():
+    """
+    compare_service.py and discovery_service.py contain no Brave/Tavily import statements.
+    Only code lines are checked — comments and docstrings documenting that
+    Brave/Tavily are NOT used are expected and allowed.
+    """
+    import os
+
+    files_to_check = [
+        "services/playbook/compare_service.py",
+        "services/playbook/discovery_service.py",
+        "services/playbook/discovery_types.py",
+    ]
+    # Check actual import/usage patterns — not documentation strings
+    banned_imports = ["import brave", "import tavily", "BraveSearch(", "TavilyClient("]
+
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    while not os.path.basename(backend_dir) == "backend" and backend_dir != "/":
+        backend_dir = os.path.dirname(backend_dir)
+
+    for rel_path in files_to_check:
+        abs_path = os.path.join(backend_dir, rel_path)
+        if not os.path.exists(abs_path):
+            _fail(f"phase4_brave_check.{os.path.basename(rel_path)} file exists", "Not found")
+            continue
+        with open(abs_path) as f:
+            raw_lines = f.readlines()
+        # Only check non-comment, non-docstring lines for banned import patterns
+        code_lines = [
+            l for l in raw_lines
+            if not l.strip().startswith("#") and not l.strip().startswith('"""') and not l.strip().startswith("'''")
+        ]
+        code_src = "".join(code_lines)
+        for b in banned_imports:
+            _assert(
+                f"phase4_brave_tavily.{os.path.basename(rel_path)}: no '{b}' import",
+                b not in code_src,
+                f"Found banned import: {b!r}",
+            )
+
+
+def test_phase4_query_isolation_new_files():
+    """compare_service.py has no /api/query coupling."""
+    import os
+
+    files_to_check = ["services/playbook/compare_service.py"]
+    import_banned  = ["from routes.query", "from api.query", "import query_handler"]
+
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    while not os.path.basename(backend_dir) == "backend" and backend_dir != "/":
+        backend_dir = os.path.dirname(backend_dir)
+
+    for rel_path in files_to_check:
+        abs_path = os.path.join(backend_dir, rel_path)
+        if not os.path.exists(abs_path):
+            _fail(f"phase4_isolation.{os.path.basename(rel_path)} exists", "Not found")
+            continue
+        with open(abs_path) as f:
+            raw = f.readlines()
+        code_lines = [
+            l for l in raw
+            if not l.strip().startswith("#") and not l.strip().startswith('"""') and not l.strip().startswith("'''")
+        ]
+        code_src = "".join(code_lines)
+        for ban in import_banned:
+            _assert(
+                f"phase4_isolation.{os.path.basename(rel_path)}: no '{ban}'",
+                ban not in code_src,
+                f"Found banned import: {ban!r}",
+            )
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Runner
 # ────────────────────────────────────────────────────────────────────────────
 
 def run_all():
     print("=" * 60)
-    print("PLAYBOOK PHASE 1.5 + 2.0 + 3.0 FACTOR TESTS")
+    print("PLAYBOOK PHASE 1.5 + 2.0 + 3.0 + 4.0 FACTOR TESTS")
     print("=" * 60)
 
     # Phase 1.5
@@ -1205,6 +1687,23 @@ def run_all():
     test_supply_chain_map_engine()
     test_discovery_bridge_analyzer()
     test_discovery_query_isolation()
+
+    # Phase 4 — Quality upgrade
+    test_phase4_new_nodes()
+    test_phase4_hiddenness_logic()
+    test_phase4_confidence_penalties()
+    test_phase4_best_blend_score()
+    test_phase4_candidate_new_fields()
+    test_phase4_ranking_buckets()
+    test_phase4_discover_response_buckets()
+    test_phase4_compare_models()
+    test_phase4_compare_classify()
+    test_phase4_serenity_score_in_registry()
+    test_phase4_foreign_map_expanded()
+    test_phase4_giant_map_expanded()
+    test_phase4_analyze_compare_field()
+    test_phase4_no_brave_tavily()
+    test_phase4_query_isolation_new_files()
 
     print()
     print("=" * 60)

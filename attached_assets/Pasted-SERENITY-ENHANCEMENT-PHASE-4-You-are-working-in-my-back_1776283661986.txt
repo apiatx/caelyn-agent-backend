@@ -1,0 +1,375 @@
+SERENITY ENHANCEMENT PHASE 4
+
+You are working in my backend FastAPI server repo for CaelynAI.
+
+You already implemented:
+
+isolated playbook engine
+Serenity + S&J
+/api/playbooks/analyze
+/api/playbooks/discover
+/api/playbooks/supply-chain-map
+Serenity discovery engine
+foreign / ADR / proxy support
+strict isolation from /api/query
+
+Good.
+
+Now implement the next quality upgrade so Serenity becomes sharper, more curated, and more competitive as a discovery product.
+
+Objective
+
+Upgrade the existing Serenity discovery engine so it feels:
+
+more curated
+more complete
+more selective
+more useful out of the box
+more honest about confidence
+more capable of surfacing the best hidden bottlenecks first
+
+This is not a refactor of /api/query or the default AI Terminal.
+
+This is an additive upgrade to the isolated playbook/discovery system only.
+
+Non-negotiable guardrails
+Do not modify /api/query in any way.
+Do not change default AI Terminal behavior.
+Do not introduce background jobs or auto-scanning.
+Do not change S&J philosophy.
+Do not duplicate the playbook engine.
+Keep all changes inside the isolated playbook/discovery modules.
+Respect provider/rate limits exactly as before.
+Continue avoiding Brave/Tavily completely.
+Use Finnhub + curated maps as the primary backbone.
+Use Tradier only for tradable US/ADR quote/market validation.
+Use FMP sparingly.
+Use Perplexity only for shortlisted validation or targeted enrichment.
+Missing/weak data must lower confidence, not fake certainty.
+Upgrade goals
+
+Implement these 5 improvements:
+
+1. Expand curated supply-chain / giant / theme coverage
+2. Improve hiddenness scoring and confidence logic
+3. Add “best surfaced ideas first” ranking logic
+4. Add compare / consensus analysis support
+5. Add richer candidate output structure for frontend usability
+Part 1 — Expand curated chain coverage
+Objective
+
+Increase the breadth and depth of the curated discovery graph so Serenity feels less prototype-ish and more like a serious scanner.
+
+Expand giant anchors
+
+Grow the giant/platform anchor map materially.
+
+Current anchors already exist; expand and deepen them.
+
+At minimum, improve/add explicit support for:
+
+NVDA
+TSM
+AVGO
+MSFT
+AMZN
+META
+GOOGL
+xAI
+CoreWeave / neocloud-style AI capacity bucket
+AI Power Buildout / hyperscaler capex bucket
+Expand theme coverage
+
+Deepen these themes with more curated chain nodes and mappings:
+
+photonics_cpo
+advanced_packaging_test
+semicap_supply_chain
+memory_hbm
+soi_substrates_materials
+ai_power_energy
+grid_transformers
+cooling_thermal
+defense_optics
+ai_infrastructure
+Expand foreign curated names
+
+Increase explicit curated support for high-signal foreign bottleneck names in:
+
+Japan
+South Korea
+Taiwan
+Netherlands
+Germany
+France
+UK
+
+Focus on names that actually matter to Serenity-style logic, not broad market junk.
+
+Implementation requirement
+
+Do not just add raw names randomly.
+For each new curated node, define:
+
+ticker
+company_name
+country
+exchange
+themes
+giant anchors
+chain layers
+bottleneck role
+direct vs indirect importance
+whether ADR / US proxy exists
+confidence level of mapping
+Part 2 — Improve hiddenness scoring and confidence logic
+Objective
+
+Make Serenity feel more “sniper” and less heuristic mush.
+
+Improve hiddenness scoring
+
+Refine hiddenness_score using a more intelligent mix of:
+
+market cap bucket
+narrative crowding / popularity
+chain depth
+obviousness of story
+foreign vs US visibility
+ADR/OTC limitation
+provider data thinness
+whether the company is already a household AI name
+Important
+
+A name should not get a huge hiddenness score just because the data is bad.
+Thin data should reduce confidence, not automatically increase hiddenness.
+
+Add/upgrade these fields
+
+Per candidate, add:
+
+hiddenness_reason
+confidence_penalties
+data_gaps
+visibility_bucket (e.g. household, known, specialist, hidden)
+chain_role_type (e.g. direct_bottleneck, adjacent_supplier, indirect_beneficiary)
+Improve confidence logic
+
+Strengthen data_confidence and coverage_status with deterministic rules:
+
+high
+medium
+low
+
+and
+
+full
+partial
+thin
+
+These should reflect:
+
+provider coverage quality
+price/market cap sanity
+mapping confidence
+proxy clarity
+foreign/ADR ambiguity
+
+Do not overstate confidence.
+
+Part 3 — Add “best surfaced ideas first” ranking logic
+Objective
+
+Make discovery results feel more instantly useful.
+
+Right now discovery likely returns good candidates, but we want a cleaner “best surfaced ideas first” experience.
+
+Add new top-level ranking concepts
+
+Create derived ranking buckets like:
+
+top_hidden_bottlenecks
+top_direct_chokepoints
+top_foreign_specialists
+top_us_accessible_foreign_proxies
+highest_confidence_candidates
+best_blend_candidates
+
+These should be computed from existing discovery scores.
+
+Add a “best_blend_score”
+
+Create a derived composite score for candidate surfacing that balances:
+
+bottleneck criticality
+hiddenness
+supply-chain confidence
+theme purity
+giant dependency
+proxy accessibility
+confidence penalties
+
+This should drive the order of “best surfaced ideas” returned to frontend.
+
+Keep raw dimension scores too
+
+Do not hide the current detailed scores.
+Add the new blended/surfacing logic on top.
+
+Part 4 — Add compare / consensus support
+Objective
+
+Let the system compare how Serenity and S&J see the same discovered names.
+
+Add a new route
+
+Add:
+
+POST /api/playbooks/compare
+
+This route should accept something like:
+
+{
+  "tickers": ["LITE", "AMAT", "ENTG", "BESIY"],
+  "playbooks": ["serenity", "sjcapital"],
+  "include_breakdown": true
+}
+Response should include
+
+For each ticker:
+
+Serenity score
+S&J score
+score delta
+short explanation of why they differ
+whether the ticker is:
+serenity_only
+sj_only
+consensus
+low_fit_both
+Also support discovery compare
+
+If a discovery request is run first, allow compare mode on the resulting candidates.
+
+Important
+
+Do not change S&J philosophy.
+Just compare the same names through both lenses.
+
+Part 5 — Add richer output structure for frontend usability
+Objective
+
+Make frontend able to render smarter result cards without hacking around weak schemas.
+
+Add these optional candidate fields
+
+For discovery candidates, add:
+
+best_blend_score
+visibility_bucket
+chain_role_type
+hiddenness_reason
+confidence_penalties
+data_gaps
+why_now
+why_hidden
+what_to_verify_next
+comparable_names
+consensus_fit (optional if compare mode invoked)
+Add these top-level response sections
+
+To /discover, add optional sections like:
+
+top_hidden_bottlenecks
+top_foreign_specialists
+top_us_accessible_foreign_proxies
+highest_confidence_candidates
+best_blend_candidates
+
+Do not remove top_candidates.
+Keep backward compatibility.
+
+Part 6 — Add better “why this surfaced” explanations
+Objective
+
+Make each surfaced idea more immediately legible.
+
+For each top candidate, generate deterministic short fields:
+
+why_now
+why_hidden
+what_to_verify_next
+
+Example:
+
+why_now: “Hybrid bonding theme remains active and recent supply-chain validation is fresh.”
+why_hidden: “Foreign specialist with partial US coverage and upstream layer-3 role.”
+what_to_verify_next: “Check customer concentration and latest order/backlog commentary.”
+
+These should come from factor outputs and metadata, not an LLM dependency.
+
+Part 7 — Add compare/consensus routing into analyze carefully
+
+Extend /api/playbooks/analyze only if helpful and safe.
+
+Support optional fields like:
+
+compare_with_playbook
+include_consensus_view
+
+If used:
+
+Serenity analyze can show how S&J sees the same top candidates
+do not make this mandatory
+keep response backwards compatible
+
+If too risky to overload analyze, keep compare in its own route only.
+
+Part 8 — Testing requirements
+
+Add/update tests for:
+
+expanded chain maps work
+new curated foreign nodes load correctly
+hiddenness logic does not confuse low data quality with hiddenness
+confidence penalties populate correctly
+best_blend_score ranks candidates sensibly
+top_hidden_bottlenecks and other ranking buckets populate
+/api/playbooks/compare works
+compare classifications are correct (serenity_only, consensus, etc.)
+/api/query remains untouched
+no Brave/Tavily usage exists
+provider usage still respects constraints
+all prior routes remain backwards compatible
+Part 9 — Deliverables
+
+When done, report back with:
+
+exact files added/modified
+new routes added
+giant/theme/foreign coverage expanded
+how hiddenness/confidence logic changed
+sample JSON for:
+/api/playbooks/discover
+/api/playbooks/compare
+examples of:
+top_hidden_bottlenecks
+top_foreign_specialists
+consensus candidate
+proof /api/query remains untouched
+any TODOs for phase 5
+Final implementation philosophy
+
+This is a quality upgrade, not a brain transplant.
+
+We are making Serenity:
+
+deeper
+more curated
+more selective
+more comparable
+more useful immediately
+
+Do not overcomplicate the architecture.
+Do not touch default mode.
+Do not turn this into an API-credit bonfire.

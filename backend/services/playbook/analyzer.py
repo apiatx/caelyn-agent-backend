@@ -46,6 +46,10 @@ class AnalyzeRequest(BaseModel):
     include_foreign:   bool = False
     max_depth:         int = 3
     country_filters:   List[str] = Field(default_factory=list)
+    # ── Optional cross-playbook compare (Phase 4) ─────────────────────────────
+    # If set, the response will include a compare_summary showing how both playbooks
+    # see the top scored candidates. Does NOT change the primary playbook scores.
+    compare_with_playbook: Optional[str] = None  # e.g. "sjcapital"
 
 
 class AnalyzeTickerSummary(BaseModel):

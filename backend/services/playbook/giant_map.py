@@ -147,6 +147,20 @@ GIANT_MAP: Dict[str, Dict[str, Any]] = {
         "capex_scale":      "$1T+ US grid investment by 2030; transformer lead times 2-3 years",
         "anchor_ticker":    None,
     },
+    "CoreWeave_Neocloud": {
+        "name":             "Neocloud / AI-Native Cloud Compute",
+        "description":      "CoreWeave, Lambda Labs, and neocloud peers — pure-play GPU cloud providers; fastest-growing AI compute demand; entirely dependent on NVDA H100/H200/GB200 supply",
+        "themes":           ["ai_infrastructure", "neocloud", "ai_power_energy", "cooling_thermal", "photonics_cpo"],
+        "chain_layers":     ["gpu_cluster_procurement", "datacenter_power", "optical_interconnect",
+                             "cooling_thermal", "advanced_packaging_osat"],
+        "bottleneck_buckets": ["hbm_memory", "osat_packaging", "datacenter_power",
+                               "photonics", "cooling_thermal"],
+        "supplier_classes": ["gpu_memory", "packaging", "power_management", "photonics",
+                             "cooling", "optical_networking"],
+        "foreign_exposure": ["TW", "KR", "NL", "JP"],
+        "capex_scale":      "CoreWeave: $23B committed NVDA GPU orders; Lambda, Together, SambaNova adding capacity",
+        "anchor_ticker":    None,
+    },
 }
 
 

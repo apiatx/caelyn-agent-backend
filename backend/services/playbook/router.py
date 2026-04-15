@@ -45,8 +45,9 @@ from services.playbook.playbook_types import (
     ScorePortfolioRequest,
 )
 from services.playbook.analyzer import AnalyzeRequest, AnalyzeResponse, run_analyze
-from services.playbook.discovery_types import DiscoverRequest, SupplyChainMapRequest
+from services.playbook.discovery_types import DiscoverRequest, SupplyChainMapRequest, CompareRequest
 from services.playbook.discovery_service import run_discover, run_supply_chain_map
+from services.playbook.compare_service import run_compare
 
 router = APIRouter(prefix="/api/playbooks", tags=["playbooks"])
 
@@ -433,6 +434,43 @@ async def discovery_capabilities_endpoint():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Capabilities error: {e}")
+
+
+# ── POST /api/playbooks/compare ───────────────────────────────────────────────
+# MUST be before /{playbook_id} to avoid shadowing
+
+@router.post("/compare")
+async def compare_endpoint(body: CompareRequest):
+    """
+    Compare a list of tickers across Serenity and S&J Capital lenses.
+
+    Request:
+      {
+        "tickers": ["LITE", "AMAT", "ENTG", "BESIY"],
+        "playbooks": ["serenity", "sjcapital"],
+        "include_breakdown": true
+      }
+
+    Response:
+      - Per-ticker: serenity_score, sj_score, delta, classification, explanation
+      - Summary: consensus_names, serenity_only_names, sj_only_names, low_fit_both
+      - Classification: serenity_only | sj_only | consensus | low_fit_both
+
+    Serenity score: derived from curated NODE_REGISTRY discovery composite.
+    S&J score: standard playbook scoring engine (unchanged).
+    Does NOT modify S&J philosophy or factor weights.
+    """
+    _require_engine()
+    if not body.tickers:
+        raise HTTPException(status_code=400, detail="tickers list is required and must not be empty.")
+    if len(body.tickers) > 30:
+        raise HTTPException(status_code=400, detail="Maximum 30 tickers per compare request.")
+    try:
+        result = await run_compare(body)
+        return result.model_dump()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Compare error: {e}")
 
 
 # ── GET /api/playbooks/{playbook_id} ─────────────────────────────────────────

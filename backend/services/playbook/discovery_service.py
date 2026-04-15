@@ -16,12 +16,27 @@ Discovery modes:
 Scoring dimensions (all deterministic/heuristic — no LLM inference):
   chain_depth_score             — layer 3-4 = deeper = more hidden
   bottleneck_criticality_score  — from curated NODE_REGISTRY
-  hiddenness_score              — market cap + coverage + country + crowding heuristics
+  hiddenness_score              — market cap + country + crowding heuristics
+                                   (thin data → confidence_penalties, NOT hiddenness boost)
   giant_dependency_score        — how many giants anchor this node
   foreign_uniqueness_score      — non-US presence penalty/bonus
   supply_chain_confidence_score — evidence count + confidence label
   proxy_accessibility_score     — US=100, ADR=72, ETF=55, foreign=30
   theme_purity_score            — 1 theme=95, 2=80, 3=65, 4+=50
+
+Phase 4 additions:
+  best_blend_score      — weighted composite driving "best surfaced first" ranking
+  visibility_bucket     — household / widely_covered / known / specialist / hidden
+  chain_role_type       — platform_anchor / direct_bottleneck / adjacent_supplier / indirect_beneficiary
+  confidence_penalties  — explicit list of data quality issues (thin data here, NOT in hiddenness)
+  data_gaps             — fields missing from live enrichment
+  why_now               — deterministic theme-driven context string
+  why_hidden            — deterministic visibility explanation
+  what_to_verify_next   — deterministic next-step guidance
+  comparable_names      — peer tickers from same themes/layer
+  Ranking buckets:
+    top_hidden_bottlenecks, top_direct_chokepoints, top_foreign_specialists,
+    top_us_accessible_foreign_proxies, highest_confidence_candidates, best_blend_candidates
 
 Provider usage summary:
   Finnhub   — profile + news enrichment for enriched candidates
@@ -34,6 +49,7 @@ Guardrails:
   - No background scans — user-triggered only
   - No Brave / Tavily usage
   - Cache all provider calls aggressively
+  - Thin data lowers confidence, does NOT inflate hiddenness
 """
 from __future__ import annotations
 
@@ -66,6 +82,57 @@ from services.playbook.foreign_market_map import (
 )
 
 
+# ── Household / widely-known name sets ────────────────────────────────────────
+# These are NOT "hidden" by definition. Penalize hiddenness for these names.
+
+HOUSEHOLD_AI_NAMES: Set[str] = {
+    "NVDA", "AMD", "ASML", "AMAT", "LRCX", "KLAC", "TSM", "MU",
+    "INTC", "AVGO", "QCOM", "GOOGL", "META", "MSFT", "AMZN",
+    "AAPL", "TSM",
+}
+
+WIDELY_COVERED_NAMES: Set[str] = {
+    "SMCI", "NXPI", "CDNS", "SNPS", "MRVL", "MCHP", "TXN",
+    "ONNN", "STM", "ASX", "GEV", "ETN", "VRT", "ENTG",
+}
+
+
+# ── Active-theme explanations for why_now ────────────────────────────────────
+
+_THEME_WHY_NOW: Dict[str, str] = {
+    "ai_infrastructure":       "AI infrastructure buildout remains active and hyperscaler capex is accelerating",
+    "advanced_packaging_test": "Advanced packaging (CoWoS/SoIC/hybrid bonding) remains a confirmed AI chip supply bottleneck",
+    "semicap_supply_chain":    "Semiconductor equipment cycle is tightening ahead of new fab expansions through 2026",
+    "memory_hbm":              "HBM memory capacity is a confirmed supply bottleneck for the AI GPU ramp",
+    "photonics_cpo":           "Co-packaged optics (CPO) transition is gaining design-win momentum at hyperscalers",
+    "ai_power_energy":         "AI datacenter power demand is outpacing utility grid capacity through 2027+",
+    "grid_transformers":       "Grid transformer lead times remain 2-3 years, constraining datacenter expansion",
+    "defense_optics":          "Defense optics and EO/IR spending is accelerating post-Ukraine and INDOPACOM budget increases",
+    "soi_substrates_materials": "Substrate and materials supply is a long-lead gating factor for the 2nm/3nm node ramp",
+    "cooling_thermal":         "Liquid cooling adoption is accelerating for AI GPU racks (GB200 NVL72 requires DLC)",
+    "energy_transition":       "SiC and GaN demand is growing with EV drivetrain ramp and renewable power electronics",
+    "neocloud":                "Neocloud GPU cluster spending remains on aggressive expansion trajectory through 2025-2026",
+}
+
+_THEME_VERIFY_HINTS: Dict[str, str] = {
+    "advanced_packaging_test": "Ask about CoWoS, SoIC, or hybrid bonding qualification status and customer ramps",
+    "photonics_cpo":           "Verify CPO design wins and silicon photonics roadmap traction at hyperscalers",
+    "memory_hbm":              "Check HBM yield, capacity allocation, and next-gen (HBM4) qualification timeline",
+    "ai_power_energy":         "Verify order backlog from datacenter customers and utility grid connection timeline",
+    "grid_transformers":       "Check lead time trends and whether backlogs extend into 2026+",
+    "semicap_supply_chain":    "Monitor WFE spending outlook and TSMC/Samsung capex alignment vs capacity commitments",
+    "soi_substrates_materials": "Check long-lead substrate order book and any 2nm node qualification wins",
+    "defense_optics":          "Verify program names, contract type (IDIQ vs firm-fixed-price), and sole-source status",
+}
+
+_ROLE_TYPE_VERIFY: Dict[str, str] = {
+    "direct_bottleneck":    "Verify customer concentration, sole-source contract status, and lead-time data",
+    "adjacent_supplier":    "Check backlog growth, margin trends, and new platform qualification wins",
+    "indirect_beneficiary": "Confirm theme exposure is growing vs commoditized; check peer pricing power",
+    "platform_anchor":      "Monitor capex guidance and supply chain dependency mapping updates",
+}
+
+
 # ── Discovery scoring engine ───────────────────────────────────────────────────
 
 def _chain_depth_score(layer: int) -> float:
@@ -88,54 +155,301 @@ def _hiddenness_score(
     """
     Estimate how 'hidden' a company is — not widely known, under-covered.
     Returns (score, reason_string).
+
+    CRITICAL: thin/partial data coverage does NOT inflate hiddenness.
+    Thin data → confidence_penalties.  Hiddenness = genuine narrative obscurity.
     """
-    score = 40.0
+    # Household AI name → not hidden at all
+    if ticker in HOUSEHOLD_AI_NAMES:
+        return 15.0, "Household AI name — widely known and well-covered"
+
+    score = 35.0 if country == "US" else 48.0
     reason_parts: List[str] = []
 
-    # Market cap heuristic
-    if market_cap_usd is not None:
-        cap_m = market_cap_usd / 1e6  # convert to millions if in USD
-        # If passed as millions already (Finnhub format):
-        if cap_m > 1e6:
-            cap_m = cap_m / 1e6
-        if cap_m < 2_000:      # < $2B
-            score += 30
-            reason_parts.append(f"Small cap (<$2B)")
-        elif cap_m < 10_000:   # $2-10B
-            score += 15
-            reason_parts.append(f"Mid cap ($2-10B)")
-        elif cap_m > 100_000:  # > $100B mega-cap
-            score -= 20
-            reason_parts.append("Mega-cap — well-covered")
+    # Widely covered (not household but still very well known) — slight deduction
+    if ticker in WIDELY_COVERED_NAMES:
+        score -= 8.0
+        reason_parts.append("Widely covered by US analysts")
 
-    # Country heuristic (foreign = less US coverage = more hidden)
+    # Market cap heuristic — ONLY use if data is credible (not thin OTC distortion)
+    if market_cap_usd is not None and coverage_status != "thin":
+        cap_m = market_cap_usd / 1e6
+        if cap_m > 1e6:
+            cap_m = cap_m / 1e6  # already in millions from Finnhub
+        if cap_m < 500:
+            score += 35
+            reason_parts.append("Small cap (<$500M) — minimal institutional coverage")
+        elif cap_m < 2_000:
+            score += 22
+            reason_parts.append("Small cap (<$2B) — limited institutional coverage")
+        elif cap_m < 10_000:
+            score += 12
+            reason_parts.append("Mid cap ($2-10B) — moderate analyst coverage")
+        elif cap_m > 100_000:
+            score -= 15
+            reason_parts.append("Mega-cap — widely covered by institutional analysts")
+    else:
+        # Unknown or unreliable cap — stay neutral, do NOT inflate hiddenness
+        reason_parts.append("Market cap data unavailable — neutrally weighted")
+
+    # Country heuristic — foreign gets moderate boost (less US analyst coverage)
     if country != "US":
-        score += 15
+        score += 12
         reason_parts.append(f"Foreign ({country}) — limited US analyst coverage")
 
-    # Coverage status from foreign map
-    if coverage_status == "thin":
-        score += 20
-        reason_parts.append("Thin US data coverage")
-    elif coverage_status == "partial":
+    # Deep chain position — below investor radar
+    layer = node.get("layer", 2)
+    if layer >= 3:
         score += 10
-        reason_parts.append("Partial US data coverage")
+        reason_parts.append(f"Layer-{layer} supply chain position — below typical investor radar")
 
-    # Bottleneck score: highly specialized = more hidden
+    # Specialized bottleneck with known niche = narrative is still niche
     bottleneck_score = float(node.get("bottleneck_score", 50))
-    if bottleneck_score >= 85:
+    if bottleneck_score >= 85 and coverage_status != "thin":
         score += 8
-        reason_parts.append("Highly specialized bottleneck position")
+        reason_parts.append("Highly specialized bottleneck — niche narrative with limited crowding")
 
     score = max(10.0, min(95.0, score))
-    return score, "; ".join(reason_parts) if reason_parts else "Mid-cap US company"
+    return score, "; ".join(reason_parts) if reason_parts else "Mid-cap US supply-chain company"
+
+
+def _compute_visibility_bucket(
+    ticker: str,
+    country: str,
+    market_cap_usd: Optional[float],
+    coverage_status: str,
+    node: Dict[str, Any],
+) -> str:
+    """
+    Classify candidate visibility.
+    household | widely_covered | known | specialist | hidden
+    """
+    bc_score = float(node.get("bottleneck_score", 50))
+    layer = node.get("layer", 2)
+
+    if ticker in HOUSEHOLD_AI_NAMES:
+        return "household"
+
+    if country == "US" and market_cap_usd is not None:
+        cap_m = market_cap_usd / 1e6
+        if cap_m > 1e6:
+            cap_m /= 1e6
+        if cap_m > 30_000 and ticker not in WIDELY_COVERED_NAMES:
+            return "widely_covered"
+
+    if ticker in WIDELY_COVERED_NAMES:
+        return "known"
+
+    if country != "US":
+        if coverage_status == "thin" or layer >= 3:
+            return "hidden" if bc_score >= 70 else "specialist"
+        return "specialist"
+
+    if layer >= 3 and bc_score >= 75:
+        return "specialist"
+
+    return "known"
+
+
+def _compute_chain_role_type(layer: int, bc_score: float) -> str:
+    """
+    Classify chain role.
+    platform_anchor | direct_bottleneck | adjacent_supplier | indirect_beneficiary
+    """
+    if layer == 0:
+        return "platform_anchor"
+    if layer >= 3 and bc_score >= 80:
+        return "direct_bottleneck"
+    if layer == 2 or (layer >= 3 and bc_score >= 60):
+        return "adjacent_supplier"
+    return "indirect_beneficiary"
+
+
+def _compute_confidence_penalties(
+    ticker: str,
+    country: str,
+    market_cap_usd: Optional[float],
+    coverage_status: str,
+    data_confidence: str,
+    adr_ticker: Optional[str],
+    us_access_proxy: Optional[str],
+) -> List[str]:
+    """
+    Explicit list of data quality issues.
+    Thin data belongs HERE — not in hiddenness.
+    """
+    penalties: List[str] = []
+    if coverage_status == "thin":
+        penalties.append("Thin US data coverage — limited price/market cap data available")
+    if data_confidence == "low":
+        penalties.append("Low data confidence — key provider metrics unavailable")
+    if country != "US" and not adr_ticker and not us_access_proxy:
+        penalties.append("No US-listed proxy — foreign native only; limited US brokerage access")
+    if adr_ticker and coverage_status in ("thin", "partial"):
+        penalties.append(f"OTC ADR ({adr_ticker}) — wide bid-ask, limited US institutional liquidity")
+    if market_cap_usd is None:
+        penalties.append("Market cap data unavailable from current providers")
+    return penalties
+
+
+def _compute_data_gaps(
+    market_cap_usd: Optional[float],
+    price: Optional[float],
+    coverage_status: str,
+    node: Dict[str, Any],
+) -> List[str]:
+    """List of data fields that are missing or unreliable."""
+    gaps: List[str] = []
+    if market_cap_usd is None:
+        gaps.append("market_cap_usd")
+    if price is None:
+        gaps.append("price")
+    if not node.get("evidence"):
+        gaps.append("evidence_sources")
+    if coverage_status == "thin":
+        gaps.extend(["earnings_data", "analyst_coverage"])
+    return gaps
+
+
+def _compute_why_now(
+    themes: List[str],
+    giant_anchors: List[str],
+    scores: DiscoveryScores,
+    node: Dict[str, Any],
+) -> str:
+    """Deterministic why-this-matters-now string from themes and anchors."""
+    parts: List[str] = []
+
+    for t in themes[:2]:
+        if t in _THEME_WHY_NOW:
+            parts.append(_THEME_WHY_NOW[t])
+            break
+
+    if giant_anchors:
+        anchor = giant_anchors[0]
+        giant_info = GIANT_MAP.get(anchor, {})
+        if giant_info:
+            parts.append(f"Anchored to {giant_info.get('name', anchor)} capex cycle ({giant_info.get('capex_scale', '')})")
+        else:
+            parts.append(f"Anchored to {anchor} supply chain")
+
+    if scores.supply_chain_confidence_score >= 85:
+        parts.append("Supply chain mapping is high-confidence with multiple corroborating evidence sources")
+
+    return "; ".join(parts[:2]) if parts else "Theme activity is ongoing; supply chain position is validated by curated mapping"
+
+
+def _compute_why_hidden(
+    ticker: str,
+    country: str,
+    layer: int,
+    visibility_bucket: str,
+    coverage_status: str,
+    adr_ticker: Optional[str],
+    node: Dict[str, Any],
+) -> str:
+    """Deterministic why-this-is-hidden string."""
+    parts: List[str] = []
+
+    if visibility_bucket == "hidden":
+        parts.append(f"Layer-{layer} supply chain position keeps this below mainstream investor radar")
+    elif visibility_bucket == "specialist":
+        parts.append("Specialist-level name known to sector professionals but not generalist investors")
+    elif visibility_bucket in ("household", "widely_covered"):
+        return "Widely covered — hiddenness advantage is limited"
+
+    if country != "US":
+        if adr_ticker and coverage_status in ("thin", "partial"):
+            parts.append(f"Foreign ({country}) with OTC ADR only — limited US brokerage research coverage")
+        elif not adr_ticker:
+            parts.append(f"Foreign native ({country}) with no direct US-listed proxy — access barriers reduce coverage")
+        else:
+            parts.append(f"Foreign ({country}) — US coverage dominated by ETF-level analysis, not stock-specific")
+
+    bc = float(node.get("bottleneck_score", 50))
+    if bc >= 80 and visibility_bucket not in ("household", "widely_covered"):
+        parts.append("Highly specialized role rarely covered outside sector-specialist research")
+
+    return "; ".join(parts[:2]) if parts else "Chain position is less visible than revenue exposure suggests"
+
+
+def _compute_what_to_verify_next(
+    chain_role_type: str,
+    themes: List[str],
+    country: str,
+) -> str:
+    """Deterministic next-step verification guidance."""
+    base = _ROLE_TYPE_VERIFY.get(chain_role_type, "Review recent earnings for supply chain commentary")
+
+    for t in themes:
+        if t in _THEME_VERIFY_HINTS:
+            return f"{base}. {_THEME_VERIFY_HINTS[t]}"
+
+    if country != "US":
+        return f"{base}. Review FX impact and local market commentary for earnings translation risk"
+
+    return base
+
+
+def _compute_best_blend_score(
+    scores: DiscoveryScores,
+    data_confidence: str,
+    confidence_penalties: List[str],
+) -> float:
+    """
+    Weighted composite score for 'best surfaced first' ranking.
+    Weights: bottleneck(30%) + chain_depth(20%) + hiddenness(15%) +
+             confidence(15%) + theme_purity(10%) + giant_dep(10%)
+    Applies confidence penalty multiplier for data quality issues.
+    """
+    raw = (
+        scores.bottleneck_criticality_score * 0.30 +
+        scores.chain_depth_score            * 0.20 +
+        scores.hiddenness_score             * 0.15 +
+        scores.supply_chain_confidence_score * 0.15 +
+        scores.theme_purity_score           * 0.10 +
+        scores.giant_dependency_score       * 0.10
+    )
+
+    mult = 1.0
+    if data_confidence == "low":
+        mult = 0.82
+    elif data_confidence == "medium":
+        mult = 0.93
+
+    if len(confidence_penalties) >= 3:
+        mult *= 0.90
+    elif len(confidence_penalties) >= 2:
+        mult *= 0.95
+
+    return round(raw * mult, 1)
+
+
+def _compute_comparable_names(
+    ticker: str,
+    themes: List[str],
+    layer: int,
+) -> List[str]:
+    """Find peer tickers in the same themes and similar chain layer."""
+    peers: List[str] = []
+    theme_set = set(themes)
+    for t, n in NODE_REGISTRY.items():
+        if n is None or t == ticker:
+            continue
+        if not (set(n.get("themes", [])) & theme_set):
+            continue
+        if abs(n.get("layer", 2) - layer) > 1:
+            continue
+        canon = n.get("us_access_proxy", t) if n.get("country", "US") != "US" else t
+        if canon != ticker and canon not in peers:
+            peers.append(canon)
+        if len(peers) >= 4:
+            break
+    return peers
 
 
 def _giant_dependency_score(node: Dict[str, Any]) -> float:
-    """
-    How directly tied to a major platform giant?
-    Based on giant_anchors count.
-    """
+    """How directly tied to a major platform giant?"""
     anchors = node.get("giant_anchors", [])
     if not anchors:
         return 30.0
@@ -149,21 +463,16 @@ def _giant_dependency_score(node: Dict[str, Any]) -> float:
 
 
 def _foreign_uniqueness_score(country: str, has_adr: bool, coverage: str) -> float:
-    """
-    Unique foreign exposure not easily accessible.
-    US = 20 (not foreign), foreign with no ADR = 80+, foreign with ADR = 60.
-    """
+    """Unique foreign exposure not easily accessible."""
     if country == "US":
         return 20.0
     if not has_adr:
         return 82.0 if coverage == "thin" else 72.0
-    return 58.0   # has ADR = more accessible = lower uniqueness bonus
+    return 58.0
 
 
 def _supply_chain_confidence_score(node: Dict[str, Any]) -> float:
-    """
-    Evidence quality → confidence score.
-    """
+    """Evidence quality → confidence score."""
     conf_label = node.get("confidence", "medium")
     evidence   = node.get("evidence", [])
     base = {"high": 85.0, "medium": 65.0, "low": 45.0}.get(conf_label, 60.0)
@@ -172,23 +481,18 @@ def _supply_chain_confidence_score(node: Dict[str, Any]) -> float:
 
 
 def _proxy_accessibility_score(country: str, has_us_proxy: bool, adr_ticker: Optional[str]) -> float:
-    """
-    How easily tradable from a US investor perspective.
-    US-listed = 100, US ADR = 72, ETF proxy = 55, foreign-native-only = 30.
-    """
+    """How easily tradable from a US investor perspective."""
     if country == "US":
         return 100.0
     if adr_ticker:
         return 72.0
     if has_us_proxy:
-        return 55.0     # ETF proxy
+        return 55.0
     return 30.0
 
 
 def _theme_purity_score(themes: List[str]) -> float:
-    """
-    Pure-play vs conglomerate. Fewer themes = purer = higher score.
-    """
+    """Pure-play vs conglomerate. Fewer themes = purer = higher score."""
     n = len(themes)
     if n == 0:
         return 40.0
@@ -211,19 +515,20 @@ def _build_candidate(
 ) -> DiscoveryCandidate:
     """
     Construct a DiscoveryCandidate from a NODE_REGISTRY entry + optional live data.
+    Phase 4: populates all new fields including best_blend_score, visibility_bucket,
+    chain_role_type, confidence_penalties, data_gaps, and all why_* fields.
     """
     country         = node.get("country", "US")
     layer           = node.get("layer", 2)
     themes          = node.get("themes", [])
-    confidence      = node.get("confidence", "medium")
     us_access_proxy = node.get("us_access_proxy")
     adr_ticker      = node.get("adr_ticker")
     evidence        = node.get("evidence", [])
-    giant_anchors   = node.get("giant_anchors", []) + (extra_giant_anchors or [])
+    giant_anchors   = list(set(node.get("giant_anchors", []) + (extra_giant_anchors or [])))
 
-    # Determine coverage status
+    # Determine coverage status and data confidence
     if country != "US":
-        foreign_meta = FOREIGN_ACCESS_MAP.get(ticker, {})
+        foreign_meta    = FOREIGN_ACCESS_MAP.get(ticker, {})
         coverage_status = coverage_override or foreign_meta.get("coverage_status", "partial")
         data_confidence = foreign_meta.get("data_confidence", "medium")
         direct_tradable = bool(us_access_proxy or adr_ticker)
@@ -232,13 +537,14 @@ def _build_candidate(
         data_confidence = "high"
         direct_tradable = True
 
-    # Score all 8 dimensions
+    # Score all 8 original dimensions
     hidden_score, hidden_reason = _hiddenness_score(
         ticker, country, market_cap_usd, coverage_status, node
     )
+    bc_score = float(node.get("bottleneck_score", 50))
     scores = DiscoveryScores(
         chain_depth_score=_chain_depth_score(layer),
-        bottleneck_criticality_score=float(node.get("bottleneck_score", 50)),
+        bottleneck_criticality_score=bc_score,
         hiddenness_score=hidden_score,
         giant_dependency_score=_giant_dependency_score(node),
         foreign_uniqueness_score=_foreign_uniqueness_score(country, bool(adr_ticker), coverage_status),
@@ -247,11 +553,22 @@ def _build_candidate(
         theme_purity_score=_theme_purity_score(themes),
     )
 
-    # Build thesis summary
-    role = node.get("role", "")
-    thesis = _build_thesis(ticker, node.get("company_name", ticker), layer, scores, role, themes)
+    # Phase 4 — new derived fields
+    visibility_bucket  = _compute_visibility_bucket(ticker, country, market_cap_usd, coverage_status, node)
+    chain_role_type    = _compute_chain_role_type(layer, bc_score)
+    confidence_penalties = _compute_confidence_penalties(
+        ticker, country, market_cap_usd, coverage_status, data_confidence, adr_ticker, us_access_proxy
+    )
+    data_gaps = _compute_data_gaps(market_cap_usd, price, coverage_status, node)
+    why_now   = _compute_why_now(themes, giant_anchors, scores, node)
+    why_hidden = _compute_why_hidden(ticker, country, layer, visibility_bucket, coverage_status, adr_ticker, node)
+    what_to_verify_next = _compute_what_to_verify_next(chain_role_type, themes, country)
+    comparable_names = _compute_comparable_names(ticker, themes, layer)
+    best_blend_score = _compute_best_blend_score(scores, data_confidence, confidence_penalties)
 
-    # Fit reasoning bullets
+    # Build thesis and fit reasoning
+    role   = node.get("role", "")
+    thesis = _build_thesis(ticker, node.get("company_name", ticker), layer, scores, role, themes)
     fit_reasoning = _build_fit_reasoning(node, scores, evidence)
 
     return DiscoveryCandidate(
@@ -260,16 +577,25 @@ def _build_candidate(
         country=country,
         exchange=node.get("exchange", ""),
         themes=themes,
-        chain_layers=[node.get("role", "")],
+        chain_layers=[role],
         layer_depth=layer,
         scores=scores,
         chain_depth_score=scores.chain_depth_score,
         bottleneck_criticality_score=scores.bottleneck_criticality_score,
         hiddenness_score=scores.hiddenness_score,
         supply_chain_confidence_score=scores.supply_chain_confidence_score,
+        best_blend_score=best_blend_score,
+        visibility_bucket=visibility_bucket,
+        chain_role_type=chain_role_type,
+        confidence_penalties=confidence_penalties,
+        data_gaps=data_gaps,
+        why_now=why_now,
+        why_hidden=why_hidden,
+        what_to_verify_next=what_to_verify_next,
+        comparable_names=comparable_names,
         thesis_summary=thesis,
         fit_reasoning=fit_reasoning,
-        giant_anchors=list(set(giant_anchors)),
+        giant_anchors=giant_anchors,
         us_access_proxy=us_access_proxy,
         adr_ticker=adr_ticker,
         coverage_status=coverage_status,
@@ -293,10 +619,9 @@ def _build_thesis(
     """Build a concise thesis string from discovery scores."""
     depth_adj = {0: "platform-level", 1: "tier-1 supplier", 2: "component-level",
                  3: "bottleneck-positioned", 4: "upstream materials"}.get(layer, "supply-chain")
-    sc_conf = scores.supply_chain_confidence_score
-    bc_score = scores.bottleneck_criticality_score
+    bc_score  = scores.bottleneck_criticality_score
     conviction = "high" if bc_score >= 80 else "moderate" if bc_score >= 60 else "lower"
-    theme_str = themes[0] if themes else "supply-chain"
+    theme_str  = themes[0] if themes else "supply-chain"
     return (
         f"{company_name} is a {depth_adj} name in {theme_str} "
         f"with {conviction} bottleneck criticality ({bc_score:.0f}/100). "
@@ -320,24 +645,66 @@ def _build_fit_reasoning(
     if scores.foreign_uniqueness_score >= 70:
         bullets.append(f"Foreign ({node.get('country', '?')}) — limited US analyst coverage creates alpha opportunity")
     if node.get("us_access_proxy"):
-        bullets.append(f"US access via ADR: {node['us_access_proxy']}")
+        bullets.append(f"US access via proxy: {node['us_access_proxy']}")
     return bullets[:4]
 
 
 def _rank_candidates(candidates: List[DiscoveryCandidate], only_hidden: bool = False) -> List[DiscoveryCandidate]:
     """
-    Rank candidates by composite discovery score.
-    Weights: bottleneck_criticality (35%) + chain_depth (25%) + hiddenness (20%) + confidence (20%)
+    Rank candidates by best_blend_score (Phase 4 primary ranking key).
+    Falls back to legacy composite if best_blend_score is 0.
     """
-    def _composite(c: DiscoveryCandidate) -> float:
-        return (
-            c.scores.bottleneck_criticality_score * 0.35 +
-            c.scores.chain_depth_score            * 0.25 +
-            c.scores.hiddenness_score             * 0.20 +
-            c.scores.supply_chain_confidence_score * 0.20
-        )
     filtered = [c for c in candidates if c.scores.hiddenness_score >= 55] if only_hidden else candidates
-    return sorted(filtered, key=_composite, reverse=True)
+    return sorted(filtered, key=lambda c: c.best_blend_score, reverse=True)
+
+
+def _build_ranking_buckets(
+    candidates: List[DiscoveryCandidate],
+    limit: int = 5,
+) -> Dict[str, List[DiscoveryCandidate]]:
+    """
+    Compute named ranking buckets from all scored candidates.
+    Returns dict with bucket_name → list of top candidates.
+    """
+    top_hidden = sorted(
+        [c for c in candidates
+         if c.hiddenness_score >= 55 and c.bottleneck_criticality_score >= 70],
+        key=lambda c: c.best_blend_score, reverse=True
+    )[:limit]
+
+    top_chokepoints = sorted(
+        [c for c in candidates if c.chain_role_type == "direct_bottleneck"],
+        key=lambda c: c.bottleneck_criticality_score, reverse=True
+    )[:limit]
+
+    top_foreign = sorted(
+        [c for c in candidates
+         if c.country != "US" and c.visibility_bucket in ("specialist", "hidden")],
+        key=lambda c: c.best_blend_score, reverse=True
+    )[:limit]
+
+    top_us_proxies = sorted(
+        [c for c in candidates
+         if c.country != "US" and c.adr_ticker is not None and c.coverage_status != "thin"],
+        key=lambda c: c.best_blend_score, reverse=True
+    )[:limit]
+
+    highest_confidence = sorted(
+        [c for c in candidates
+         if c.data_confidence == "high" and c.supply_chain_confidence_score >= 80],
+        key=lambda c: c.supply_chain_confidence_score, reverse=True
+    )[:limit]
+
+    best_blend = sorted(candidates, key=lambda c: c.best_blend_score, reverse=True)[:limit]
+
+    return {
+        "top_hidden_bottlenecks":          top_hidden,
+        "top_direct_chokepoints":          top_chokepoints,
+        "top_foreign_specialists":         top_foreign,
+        "top_us_accessible_foreign_proxies": top_us_proxies,
+        "highest_confidence_candidates":   highest_confidence,
+        "best_blend_candidates":           best_blend,
+    }
 
 
 def _build_summary(
@@ -349,8 +716,8 @@ def _build_summary(
     if not top_candidates:
         return "No matching supply-chain candidates found with the given filters."
 
-    top_names = [f"{c.ticker} ({c.scores.bottleneck_criticality_score:.0f})" for c in top_candidates[:3]]
-    lead = f"Top hidden bottleneck candidates: {', '.join(top_names)}. "
+    top_names = [f"{c.ticker} ({c.best_blend_score:.0f})" for c in top_candidates[:3]]
+    lead = f"Top surfaced ideas: {', '.join(top_names)}. "
 
     if top_candidates:
         best = top_candidates[0]
@@ -391,7 +758,6 @@ def _candidates_from_nodes(
         if node.get("layer", 2) > max_depth:
             continue
 
-        # Use ADR as canonical ticker for foreign names
         canon = node.get("us_access_proxy", ticker) if country != "US" else ticker
         if canon in seen:
             continue
@@ -428,7 +794,6 @@ def _mode_giant_chain(req: DiscoverRequest) -> List[DiscoveryCandidate]:
 def _mode_theme_scan(req: DiscoverRequest) -> List[DiscoveryCandidate]:
     """Theme scan mode: find all companies across specified themes."""
     if not req.theme_ids:
-        # Default to all high-priority Serenity themes
         req_themes = [tid for tid, meta in THEME_TAXONOMY.items()
                       if meta.get("serenity_priority") == "high"]
     else:
@@ -463,8 +828,6 @@ def _mode_foreign_bottlenecks(req: DiscoverRequest) -> List[DiscoveryCandidate]:
             continue
         items.append((ticker, node))
 
-    # Foreign mode always includes foreign
-    req_copy_include = True
     candidates: List[DiscoveryCandidate] = []
     seen: Set[str] = set()
     for ticker, node in items:
@@ -488,17 +851,14 @@ def _mode_ticker_chain(req: DiscoverRequest) -> List[DiscoveryCandidate]:
     if not ticker:
         return []
 
-    # Find the anchor node
     anchor_node = NODE_REGISTRY.get(ticker)
     if anchor_node is None:
-        # Try to find by us_access_proxy
         for t, n in NODE_REGISTRY.items():
             if n and n.get("us_access_proxy", "").upper() == ticker:
                 anchor_node = n
                 break
 
     if anchor_node is None:
-        # Fallback: match by themes from MANUAL_THEME_MAP in theme_map.py
         from services.playbook.theme_map import MANUAL_THEME_MAP
         anchor_themes = set(MANUAL_THEME_MAP.get(ticker, []))
     else:
@@ -525,7 +885,7 @@ def _mode_ticker_chain(req: DiscoverRequest) -> List[DiscoveryCandidate]:
 
 def _mode_country_theme_scan(req: DiscoverRequest) -> List[DiscoveryCandidate]:
     """Country+theme cross-filter."""
-    country_set = set(req.country_filters) if req.country_filters else {"US", "JP", "KR", "TW", "NL", "DE"}
+    country_set = set(req.country_filters) if req.country_filters else {"US", "JP", "KR", "TW", "NL", "DE", "FR", "GB"}
     theme_set   = set(req.theme_ids) if req.theme_ids else set(THEME_TAXONOMY.keys())
 
     items: List[tuple] = []
@@ -538,7 +898,6 @@ def _mode_country_theme_scan(req: DiscoverRequest) -> List[DiscoveryCandidate]:
             continue
         items.append((ticker, node))
 
-    # Country-theme mode always includes foreign since country_filters is explicit
     return _candidates_from_nodes(items, True, req.country_filters, req.max_depth)
 
 
@@ -548,7 +907,6 @@ def _mode_custom(req: DiscoverRequest) -> List[DiscoveryCandidate]:
         return _mode_giant_chain(req)
     if req.theme_ids:
         return _mode_theme_scan(req)
-    # Default: all nodes with serenity-priority themes
     return _mode_theme_scan(req)
 
 
@@ -558,11 +916,13 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
     """
     Run the discovery engine for a given request.
     Orchestrates mode-specific candidate building, scoring, ranking, and enrichment.
+    Phase 4: adds best_blend_score ranking, visibility/role classification,
+    deterministic explanations, and named ranking buckets in the response.
     """
-    finnhub_key = os.getenv("FINNHUB_API_KEY", "")
-    tradier_key = os.getenv("TRADIER_API_KEY", "")
-    fmp_key     = os.getenv("FMP_API_KEY", "")
-    perp_key    = os.getenv("PERPLEXITY_API_KEY", "")
+    finnhub_key     = os.getenv("FINNHUB_API_KEY", "")
+    tradier_key     = os.getenv("TRADIER_API_KEY", "")
+    fmp_key         = os.getenv("FMP_API_KEY", "")
+    perp_key        = os.getenv("PERPLEXITY_API_KEY", "")
     tradier_sandbox = os.getenv("TRADIER_SANDBOX", "false").lower() == "true"
 
     from services.playbook.discovery_enrichment import (
@@ -588,14 +948,14 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
     else:
         candidates = _mode_custom(req)
 
-    # ── 2. Rank candidates by composite score ─────────────────────────────────
-    ranked = _rank_candidates(candidates, only_hidden=req.only_hidden)
-    shortlist = ranked[:min(req.limit * 2, 40)]  # fetch enrichment for 2x limit
+    # ── 2. Rank candidates by best_blend_score ────────────────────────────────
+    ranked    = _rank_candidates(candidates, only_hidden=req.only_hidden)
+    shortlist = ranked[:min(req.limit * 2, 40)]
 
     # ── 3. Finnhub enrichment for shortlist ───────────────────────────────────
     us_tickers     = [c.ticker for c in shortlist if c.country == "US"]
     adr_tickers    = [c.adr_ticker for c in shortlist if c.adr_ticker and c.country != "US"]
-    enrich_tickers = (us_tickers + adr_tickers)[:20]  # cap to ~20 Finnhub calls
+    enrich_tickers = (us_tickers + adr_tickers)[:20]
 
     finnhub_profiles: Dict[str, Any] = {}
     if finnhub_key and enrich_tickers:
@@ -613,41 +973,33 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
         except Exception as e:
             print(f"[DISCOVERY] Tradier batch quote error: {e}")
 
-    # ── 5. Apply enrichment data to candidates ─────────────────────────────────
+    # ── 5. Apply enrichment data + re-compute all Phase 4 fields ──────────────
     enriched_candidates: List[DiscoveryCandidate] = []
     for c in shortlist:
         lookup_key = c.ticker if c.ticker in finnhub_profiles else (c.adr_ticker or "")
         fh = finnhub_profiles.get(lookup_key, {})
         tq = tradier_quotes.get(c.ticker, {})
 
-        # Update with live data if available
         market_cap = None
         if fh.get("market_cap"):
             market_cap = float(fh["market_cap"]) * 1e6  # Finnhub in millions → USD
 
         price = tq.get("price") or fh.get("price")
 
-        # Re-score hiddenness with real market cap if available
         if market_cap is not None:
-            # Lookup the node to re-score hiddenness with real cap data
+            # Find the original node to fully re-score with real cap data
             node = None
             for t, n in NODE_REGISTRY.items():
                 if n and (n.get("us_access_proxy", t) == c.ticker or t.upper() == c.ticker.upper()):
                     node = n
                     break
             if node:
-                hidden_score, hidden_reason = _hiddenness_score(
-                    c.ticker, c.country, market_cap, c.coverage_status, node
+                # Full rebuild with live data — all Phase 4 fields re-derived
+                c = _build_candidate(
+                    c.ticker, node,
+                    market_cap_usd=market_cap,
+                    price=price,
                 )
-                new_scores = c.scores.model_copy(update={"hiddenness_score": hidden_score})
-                c = c.model_copy(update={
-                    "market_cap_usd":  market_cap,
-                    "price":           price,
-                    "hiddenness_reason": hidden_reason,
-                    "enriched":        True,
-                    "scores":          new_scores,
-                    "hiddenness_score": hidden_score,
-                })
             else:
                 c = c.model_copy(update={"market_cap_usd": market_cap, "price": price, "enriched": True})
         elif price:
@@ -675,12 +1027,15 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
 
     # ── 7. Final ranking and split ─────────────────────────────────────────────
     final_ranked = _rank_candidates(enriched_candidates, only_hidden=req.only_hidden)
-    limit = max(1, min(req.limit, 30))
+    limit        = max(1, min(req.limit, 30))
 
-    top_candidates  = final_ranked[:limit]
-    low_confidence  = [c for c in final_ranked[limit:] if c.scores.supply_chain_confidence_score < 65][:5]
+    top_candidates = final_ranked[:limit]
+    low_confidence = [c for c in final_ranked[limit:] if c.scores.supply_chain_confidence_score < 65][:5]
 
-    # ── 8. Chain map preview (layer breakdown for top theme) ──────────────────
+    # ── 8. Phase 4 — compute ranking buckets over ALL enriched candidates ──────
+    ranking_buckets = _build_ranking_buckets(final_ranked, limit=5)
+
+    # ── 9. Chain map preview (layer breakdown for top theme) ──────────────────
     chain_map_preview: Dict[str, Any] = {}
     preview_theme = req.theme_ids[0] if req.theme_ids else None
     if preview_theme:
@@ -697,7 +1052,7 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
             ],
         }
 
-    # ── 9. ADR/ETF proxy suggestions for low-access foreign ───────────────────
+    # ── 10. ADR/ETF proxy suggestions for low-access foreign ──────────────────
     proxy_suggestions: Dict[str, str] = {}
     if req.include_adr_or_etf_proxies:
         for c in top_candidates:
@@ -707,7 +1062,7 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
                     if etfs:
                         proxy_suggestions[c.ticker] = etfs[0]
 
-    # ── 10. Build summary and response ────────────────────────────────────────
+    # ── 11. Build summary and response ────────────────────────────────────────
     summary = _build_summary(mode, top_candidates, req)
 
     countries_scanned = list({c.country for c in top_candidates + low_confidence})
@@ -728,6 +1083,13 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
         top_candidates=top_candidates,
         low_confidence_candidates=low_confidence,
         chain_map_preview=chain_map_preview,
+        # Phase 4 ranking buckets
+        top_hidden_bottlenecks=ranking_buckets["top_hidden_bottlenecks"],
+        top_direct_chokepoints=ranking_buckets["top_direct_chokepoints"],
+        top_foreign_specialists=ranking_buckets["top_foreign_specialists"],
+        top_us_accessible_foreign_proxies=ranking_buckets["top_us_accessible_foreign_proxies"],
+        highest_confidence_candidates=ranking_buckets["highest_confidence_candidates"],
+        best_blend_candidates=ranking_buckets["best_blend_candidates"],
         meta={
             "total_candidates_found":  len(candidates),
             "total_after_ranking":     len(final_ranked),
@@ -755,9 +1117,9 @@ async def run_supply_chain_map(req: SupplyChainMapRequest) -> SupplyChainMapResp
     layers: List[ChainLayer]
 
     if req.anchor and req.anchor.upper() in {k.upper() for k in GIANT_MAP}:
-        anchor = req.anchor
+        anchor      = req.anchor
         anchor_type = "giant"
-        layers = get_chain_for_giant(
+        layers      = get_chain_for_giant(
             req.anchor,
             max_depth=req.max_depth,
             themes_filter=([req.theme_id] if req.theme_id else None),
@@ -765,19 +1127,18 @@ async def run_supply_chain_map(req: SupplyChainMapRequest) -> SupplyChainMapResp
             country_filters=req.country_filters,
         )
     elif req.theme_id:
-        anchor = req.theme_id
+        anchor      = req.theme_id
         anchor_type = "theme"
-        layers = get_chain_for_theme(
+        layers      = get_chain_for_theme(
             req.theme_id,
             max_depth=req.max_depth,
             include_foreign=req.include_foreign,
             country_filters=req.country_filters,
         )
     elif req.anchor:
-        # anchor is a theme_id
-        anchor = req.anchor
+        anchor      = req.anchor
         anchor_type = "theme"
-        layers = get_chain_for_theme(
+        layers      = get_chain_for_theme(
             req.anchor,
             max_depth=req.max_depth,
             include_foreign=req.include_foreign,
@@ -791,7 +1152,6 @@ async def run_supply_chain_map(req: SupplyChainMapRequest) -> SupplyChainMapResp
             meta={"error": "No anchor or theme_id provided"},
         )
 
-    # Build companies_by_layer
     companies_by_layer: Dict[str, List[str]] = {}
     all_countries: Set[str] = set()
     adr_etf_proxies: Dict[str, str] = {}
@@ -805,7 +1165,6 @@ async def run_supply_chain_map(req: SupplyChainMapRequest) -> SupplyChainMapResp
             if node.us_access_proxy and node.country != "US":
                 adr_etf_proxies[node.ticker or node.company_name] = node.us_access_proxy
 
-    # Add ETF proxies for themes
     if anchor_type == "theme":
         etfs = get_etf_proxies_for_theme(anchor)
         for etf in etfs[:2]:
