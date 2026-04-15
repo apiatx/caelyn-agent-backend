@@ -397,18 +397,29 @@ def _compute_best_blend_score(
     confidence_penalties: List[str],
 ) -> float:
     """
-    Weighted composite score for 'best surfaced first' ranking.
-    Weights: bottleneck(30%) + chain_depth(20%) + hiddenness(15%) +
-             confidence(15%) + theme_purity(10%) + giant_dep(10%)
-    Applies confidence penalty multiplier for data quality issues.
+    Weighted composite score for 'best surfaced first' ranking (Phase 5 tuned).
+
+    Formula:
+      bottleneck_criticality  28%  — primary quality signal
+      chain_depth             18%  — supply-chain obscurity
+      hiddenness              14%  — narrative visibility
+      supply_chain_confidence 14%  — evidence quality
+      theme_purity            10%  — pure-play vs conglomerate
+      giant_dependency        10%  — anchored to large-cap demand
+      proxy_accessibility      6%  — US investor tradability (rewards ADRs over native-only)
+
+    Multipliers:
+      data_confidence: low → 0.82, medium → 0.93
+      penalty count:   >=3 → additional 0.90x, >=2 → 0.95x
     """
     raw = (
-        scores.bottleneck_criticality_score * 0.30 +
-        scores.chain_depth_score            * 0.20 +
-        scores.hiddenness_score             * 0.15 +
-        scores.supply_chain_confidence_score * 0.15 +
-        scores.theme_purity_score           * 0.10 +
-        scores.giant_dependency_score       * 0.10
+        scores.bottleneck_criticality_score  * 0.28 +
+        scores.chain_depth_score             * 0.18 +
+        scores.hiddenness_score              * 0.14 +
+        scores.supply_chain_confidence_score * 0.14 +
+        scores.theme_purity_score            * 0.10 +
+        scores.giant_dependency_score        * 0.10 +
+        scores.proxy_accessibility_score     * 0.06
     )
 
     mult = 1.0
@@ -423,6 +434,134 @@ def _compute_best_blend_score(
         mult *= 0.95
 
     return round(raw * mult, 1)
+
+
+# ── Theme-based thesis-break signals ─────────────────────────────────────────
+
+_THEME_THESIS_BREAK: Dict[str, str] = {
+    "memory_hbm":              "Memory capex cycle downturn, HBM pricing collapse, or customer shift to alternative memory architecture",
+    "photonics_cpo":           "CPO adoption slower than expected or hyperscalers internalize silicon photonics without specialist suppliers",
+    "semicap_supply_chain":    "WFE demand contraction, major customer fab capex cuts, or equipment market share shift to rival",
+    "advanced_packaging_test": "Loss of packaging qualification at TSMC/Samsung or new qualified entrant in ABF substrate / bonding market",
+    "soi_substrates_materials":"New commercial entrant breaking sole-source substrate position or RF-SOI technology disruption",
+    "ai_power_energy":         "AI datacenter power demand flattening or utility grid capacity relief faster than expected",
+    "grid_transformers":       "Utility capex cuts or transformer supply chain relief reducing backlog growth",
+    "defense_optics":          "Defense budget sequestration or loss of key program contract / incumbent re-qualification",
+    "cooling_thermal":         "AI rack cooling commoditization or hyperscaler shift to standardized non-specialist cooling",
+    "energy_transition":       "SiC device demand slowdown from EV market softness or SiC commoditization by new entrants",
+    "ai_infrastructure":       "AI capex slowdown, hyperscaler spend cuts, or GPU architecture shift reducing demand",
+    "neocloud":                "GPU allocation tightening for neocloud operators or hyperscaler in-house compute substitution",
+    "space_sensing":           "Program cancellation, budget cuts, or satellite constellation delays",
+}
+
+_ROLE_THESIS_BREAK: Dict[str, str] = {
+    "direct_bottleneck":    "New qualified alternative supplier breaking sole-source position or technology disruption of this layer",
+    "adjacent_supplier":    "Customer vertical integration into this tier or demand shift reducing exposure to this supply chain position",
+    "indirect_beneficiary": "Theme growth decelerates or this company loses relevance as the chain matures/commoditizes",
+    "platform_anchor":      "Platform capex reduction, competitive loss, or technology disruption at the anchor itself",
+}
+
+
+def _compute_what_would_break_thesis(
+    chain_role_type: str,
+    themes: List[str],
+    country: str,
+    bc_score: float,
+) -> str:
+    """Deterministic thesis-break condition derived from role type, themes, and country."""
+    parts: List[str] = []
+
+    # Theme-specific primary break signal (use most relevant theme)
+    for t in themes:
+        if t in _THEME_THESIS_BREAK:
+            parts.append(_THEME_THESIS_BREAK[t])
+            break
+
+    # Role-type secondary break signal
+    role_break = _ROLE_THESIS_BREAK.get(chain_role_type, "")
+    if role_break and (not parts or role_break not in parts[0]):
+        parts.append(role_break)
+
+    # Foreign currency / geopolitical risk for non-US
+    if country not in ("US", "IL"):
+        if country in ("JP", "KR", "TW"):
+            parts.append(f"Currency risk ({country} FX) combined with US-imposed trade restrictions or export controls")
+        elif country in ("NL", "DE", "FR"):
+            parts.append(f"EU regulatory risk or geopolitical export control expansion affecting {country} supply chain")
+
+    return "; ".join(parts[:2]) if parts else "Competitive or macroeconomic deterioration in the primary theme area"
+
+
+def _compute_crowding_flags(
+    ticker: str,
+    visibility_bucket: str,
+    themes: List[str],
+    country: str,
+    market_cap_usd: Optional[float],
+) -> List[str]:
+    """
+    Detect potential crowding signals — deterministic, no LLM.
+    Crowding here means the name may already be widely owned/followed,
+    reducing the alpha opportunity from discovery surfacing.
+    """
+    flags: List[str] = []
+
+    if visibility_bucket == "household":
+        flags.append("Household name — institutional ownership is likely elevated and crowding risk is high")
+    elif visibility_bucket == "widely_covered":
+        flags.append("Widely covered by sell-side — analyst crowding may have already priced in the theme")
+
+    # High-momentum AI themes with wide retail/institutional awareness
+    crowded_themes = {"ai_infrastructure", "memory_hbm", "neocloud"}
+    if any(t in crowded_themes for t in themes):
+        if ticker in {"NVDA", "AMD", "MU", "SMCI", "MSFT", "GOOGL", "META", "AMZN"}:
+            flags.append("Core AI momentum name — retail and institutional positioning likely extended")
+
+    # Large-cap US names — not a penalty per se, but flag it
+    if country == "US" and market_cap_usd is not None:
+        cap_bn = market_cap_usd / 1e9
+        if cap_m := cap_bn:
+            if cap_m > 100:
+                flags.append("Large-cap ($100B+) — limited surprise discovery upside from coverage angle")
+
+    return flags
+
+
+def _compute_coverage_notes(
+    country: str,
+    coverage_status: str,
+    data_confidence: str,
+    adr_ticker: Optional[str],
+    us_access_proxy: Optional[str],
+    evidence: List[str],
+    node: Dict[str, Any],
+) -> str:
+    """Brief structured note on data coverage quality for frontend display."""
+    if coverage_status == "full" and data_confidence == "high":
+        ev_count = len(evidence)
+        return f"Full coverage — {ev_count} curated evidence point{'s' if ev_count != 1 else ''}"
+
+    parts: List[str] = []
+
+    if coverage_status == "thin":
+        parts.append("Thin US coverage — limited market data from US providers")
+    elif coverage_status == "partial":
+        parts.append("Partial coverage — main financial data via native exchange")
+
+    if data_confidence == "low":
+        parts.append("Low data confidence")
+    elif data_confidence == "medium":
+        parts.append("Medium confidence")
+
+    if country != "US":
+        if adr_ticker:
+            parts.append(f"US access via {adr_ticker} OTC ADR")
+        elif us_access_proxy:
+            parts.append(f"ETF proxy available ({us_access_proxy})")
+        else:
+            parts.append("No US-listed proxy — native exchange only")
+
+    return "; ".join(parts) if parts else "Coverage not fully determined"
 
 
 def _compute_comparable_names(
@@ -566,6 +705,13 @@ def _build_candidate(
     comparable_names = _compute_comparable_names(ticker, themes, layer)
     best_blend_score = _compute_best_blend_score(scores, data_confidence, confidence_penalties)
 
+    # Phase 5 — additional explanation fields
+    what_would_break_thesis = _compute_what_would_break_thesis(chain_role_type, themes, country, bc_score)
+    coverage_notes = _compute_coverage_notes(
+        country, coverage_status, data_confidence, adr_ticker, us_access_proxy, evidence, node
+    )
+    crowding_flags = _compute_crowding_flags(ticker, visibility_bucket, themes, country, market_cap_usd)
+
     # Build thesis and fit reasoning
     role   = node.get("role", "")
     thesis = _build_thesis(ticker, node.get("company_name", ticker), layer, scores, role, themes)
@@ -592,6 +738,10 @@ def _build_candidate(
         why_now=why_now,
         why_hidden=why_hidden,
         what_to_verify_next=what_to_verify_next,
+        # Phase 5 additions
+        what_would_break_thesis=what_would_break_thesis,
+        coverage_notes=coverage_notes,
+        crowding_flags=crowding_flags,
         comparable_names=comparable_names,
         thesis_summary=thesis,
         fit_reasoning=fit_reasoning,
@@ -658,52 +808,74 @@ def _rank_candidates(candidates: List[DiscoveryCandidate], only_hidden: bool = F
     return sorted(filtered, key=lambda c: c.best_blend_score, reverse=True)
 
 
+def _assign_bucket_positions(bucket: List[DiscoveryCandidate]) -> List[DiscoveryCandidate]:
+    """Assign 1-based position_in_bucket to each candidate in a bucket list (mutates in place)."""
+    for i, c in enumerate(bucket):
+        c = c.model_copy(update={"position_in_bucket": i + 1})
+        bucket[i] = c
+    return bucket
+
+
 def _build_ranking_buckets(
     candidates: List[DiscoveryCandidate],
     limit: int = 5,
 ) -> Dict[str, List[DiscoveryCandidate]]:
     """
-    Compute named ranking buckets from all scored candidates.
+    Compute named ranking buckets from all scored candidates (Phase 5 enhanced).
+    - Buckets use more distinct criteria to minimize overlap.
+    - Each candidate in a bucket receives position_in_bucket (1-based rank within that bucket).
     Returns dict with bucket_name → list of top candidates.
     """
+    # Bucket 1 — Hidden bottlenecks: deeply hidden AND high bottleneck score (threshold raised to 75)
     top_hidden = sorted(
         [c for c in candidates
-         if c.hiddenness_score >= 55 and c.bottleneck_criticality_score >= 70],
-        key=lambda c: c.best_blend_score, reverse=True
+         if c.hiddenness_score >= 60 and c.bottleneck_criticality_score >= 75
+         and c.visibility_bucket in ("hidden", "specialist")],
+        key=lambda c: c.best_blend_score, reverse=True,
     )[:limit]
 
+    # Bucket 2 — Direct chokepoints: sole/dual-source bottleneck roles, ranked by bottleneck score
     top_chokepoints = sorted(
-        [c for c in candidates if c.chain_role_type == "direct_bottleneck"],
-        key=lambda c: c.bottleneck_criticality_score, reverse=True
+        [c for c in candidates
+         if c.chain_role_type == "direct_bottleneck" and c.bottleneck_criticality_score >= 70],
+        key=lambda c: c.bottleneck_criticality_score, reverse=True,
     )[:limit]
 
+    # Bucket 3 — Foreign specialists: non-US, specialist/hidden, has ADR or curated foreign coverage
     top_foreign = sorted(
         [c for c in candidates
-         if c.country != "US" and c.visibility_bucket in ("specialist", "hidden")],
-        key=lambda c: c.best_blend_score, reverse=True
+         if c.country != "US"
+         and c.visibility_bucket in ("specialist", "hidden")
+         and (c.adr_ticker or c.us_access_proxy)],
+        key=lambda c: c.best_blend_score, reverse=True,
     )[:limit]
 
+    # Bucket 4 — US-accessible foreign proxies: foreign node with partial+ US access (ADR, not thin)
     top_us_proxies = sorted(
         [c for c in candidates
-         if c.country != "US" and c.adr_ticker is not None and c.coverage_status != "thin"],
-        key=lambda c: c.best_blend_score, reverse=True
+         if c.country != "US"
+         and c.adr_ticker is not None
+         and c.coverage_status in ("partial", "full")],
+        key=lambda c: c.best_blend_score, reverse=True,
     )[:limit]
 
+    # Bucket 5 — Highest confidence: high data_confidence + high supply chain confidence
     highest_confidence = sorted(
         [c for c in candidates
-         if c.data_confidence == "high" and c.supply_chain_confidence_score >= 80],
-        key=lambda c: c.supply_chain_confidence_score, reverse=True
+         if c.data_confidence == "high" and c.supply_chain_confidence_score >= 82],
+        key=lambda c: c.supply_chain_confidence_score, reverse=True,
     )[:limit]
 
+    # Bucket 6 — Best blend: global ranking by composite score (the default catch-all)
     best_blend = sorted(candidates, key=lambda c: c.best_blend_score, reverse=True)[:limit]
 
     return {
-        "top_hidden_bottlenecks":          top_hidden,
-        "top_direct_chokepoints":          top_chokepoints,
-        "top_foreign_specialists":         top_foreign,
-        "top_us_accessible_foreign_proxies": top_us_proxies,
-        "highest_confidence_candidates":   highest_confidence,
-        "best_blend_candidates":           best_blend,
+        "top_hidden_bottlenecks":              _assign_bucket_positions(top_hidden),
+        "top_direct_chokepoints":              _assign_bucket_positions(top_chokepoints),
+        "top_foreign_specialists":             _assign_bucket_positions(top_foreign),
+        "top_us_accessible_foreign_proxies":   _assign_bucket_positions(top_us_proxies),
+        "highest_confidence_candidates":       _assign_bucket_positions(highest_confidence),
+        "best_blend_candidates":               _assign_bucket_positions(best_blend),
     }
 
 
@@ -758,7 +930,7 @@ def _candidates_from_nodes(
         if node.get("layer", 2) > max_depth:
             continue
 
-        canon = node.get("us_access_proxy", ticker) if country != "US" else ticker
+        canon = (node.get("us_access_proxy") or ticker) if country != "US" else ticker
         if canon in seen:
             continue
         seen.add(canon)
@@ -833,7 +1005,7 @@ def _mode_foreign_bottlenecks(req: DiscoverRequest) -> List[DiscoveryCandidate]:
     for ticker, node in items:
         if node is None:
             continue
-        canon = node.get("us_access_proxy", ticker)
+        canon = node.get("us_access_proxy") or ticker
         if canon in seen:
             continue
         seen.add(canon)
@@ -912,13 +1084,94 @@ def _mode_custom(req: DiscoverRequest) -> List[DiscoveryCandidate]:
 
 # ── Main discovery orchestrator ────────────────────────────────────────────────
 
+def _apply_preset_mode(req: DiscoverRequest) -> DiscoverRequest:
+    """
+    Mutate request (immutably) to match a preset_mode profile.
+    Returns a new DiscoverRequest with appropriate mode/filter overrides.
+    """
+    pm = (req.preset_mode or "").lower().strip()
+    if not pm:
+        return req
+
+    overrides: Dict[str, Any] = {}
+
+    if pm == "hidden_bottlenecks":
+        overrides["mode"]            = "theme_scan"
+        overrides["only_hidden"]     = True
+        overrides["include_foreign"] = True
+        overrides["sort_mode"]       = "hiddenness"
+
+    elif pm == "top_direct_chokepoints":
+        overrides["mode"]            = "theme_scan"
+        overrides["include_foreign"] = True
+        overrides["only_hidden"]     = False
+        overrides["sort_mode"]       = "bottleneck"
+
+    elif pm == "foreign_specialists":
+        overrides["mode"]            = "foreign_bottlenecks"
+        overrides["include_foreign"] = True
+        overrides["only_hidden"]     = False
+        overrides["sort_mode"]       = "best_blend"
+
+    elif pm == "us_accessible_foreign_proxies":
+        overrides["mode"]            = "foreign_bottlenecks"
+        overrides["include_foreign"] = True
+        overrides["only_hidden"]     = False
+        # filter further in mode to only those with ADR proxies
+        overrides["sort_mode"]       = "best_blend"
+
+    elif pm == "highest_confidence":
+        overrides["mode"]            = "theme_scan"
+        overrides["include_foreign"] = True
+        overrides["only_hidden"]     = False
+        overrides["sort_mode"]       = "confidence"
+
+    elif pm == "best_blend":
+        overrides["mode"]            = "theme_scan"
+        overrides["include_foreign"] = True
+        overrides["only_hidden"]     = False
+        overrides["sort_mode"]       = "best_blend"
+
+    return req.model_copy(update=overrides)
+
+
+def _rank_by_sort_mode(
+    candidates: List[DiscoveryCandidate],
+    sort_mode: Optional[str],
+    only_hidden: bool = False,
+) -> List[DiscoveryCandidate]:
+    """
+    Apply sort_mode override to ranking.
+    Supported sort_modes: best_blend | hiddenness | bottleneck | confidence | chain_depth
+    Falls back to best_blend_score for unknown modes.
+    """
+    if only_hidden:
+        candidates = [c for c in candidates if c.scores.hiddenness_score >= 55]
+
+    sm = (sort_mode or "best_blend").lower().strip()
+
+    if sm == "hiddenness":
+        return sorted(candidates, key=lambda c: c.hiddenness_score, reverse=True)
+    elif sm == "bottleneck":
+        return sorted(candidates, key=lambda c: c.bottleneck_criticality_score, reverse=True)
+    elif sm == "confidence":
+        return sorted(candidates, key=lambda c: c.supply_chain_confidence_score, reverse=True)
+    elif sm == "chain_depth":
+        return sorted(candidates, key=lambda c: (c.scores.chain_depth_score, c.best_blend_score), reverse=True)
+    else:
+        return sorted(candidates, key=lambda c: c.best_blend_score, reverse=True)
+
+
 async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
     """
     Run the discovery engine for a given request.
     Orchestrates mode-specific candidate building, scoring, ranking, and enrichment.
-    Phase 4: adds best_blend_score ranking, visibility/role classification,
-    deterministic explanations, and named ranking buckets in the response.
+    Phase 5: adds preset_mode dispatch, sort_mode override, position_in_bucket on ranking
+    buckets, and three new candidate-level explanation fields.
     """
+    # Phase 5 — apply preset_mode to override mode/filter defaults
+    req = _apply_preset_mode(req)
+
     finnhub_key     = os.getenv("FINNHUB_API_KEY", "")
     tradier_key     = os.getenv("TRADIER_API_KEY", "")
     fmp_key         = os.getenv("FMP_API_KEY", "")
@@ -948,8 +1201,8 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
     else:
         candidates = _mode_custom(req)
 
-    # ── 2. Rank candidates by best_blend_score ────────────────────────────────
-    ranked    = _rank_candidates(candidates, only_hidden=req.only_hidden)
+    # ── 2. Rank candidates (sort_mode aware) ──────────────────────────────────
+    ranked    = _rank_by_sort_mode(candidates, req.sort_mode, only_hidden=req.only_hidden)
     shortlist = ranked[:min(req.limit * 2, 40)]
 
     # ── 3. Finnhub enrichment for shortlist ───────────────────────────────────
@@ -1025,8 +1278,8 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
             print(f"[DISCOVERY] Perplexity validation error: {e}")
             perp_notes.append(f"Perplexity validation unavailable: {e}")
 
-    # ── 7. Final ranking and split ─────────────────────────────────────────────
-    final_ranked = _rank_candidates(enriched_candidates, only_hidden=req.only_hidden)
+    # ── 7. Final ranking and split (sort_mode aware) ───────────────────────────
+    final_ranked = _rank_by_sort_mode(enriched_candidates, req.sort_mode, only_hidden=req.only_hidden)
     limit        = max(1, min(req.limit, 30))
 
     top_candidates = final_ranked[:limit]

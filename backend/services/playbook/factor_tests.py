@@ -1646,6 +1646,360 @@ def test_phase4_query_isolation_new_files():
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Phase 5 tests — Expanded coverage + new fields
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_phase5_new_nodes_registry():
+    print("\n[phase5_new_nodes_registry]")
+    from services.playbook.supply_chain_graph import NODE_REGISTRY
+
+    phase5_all = [
+        "FN", "LSCC", "SPXC", "MOD", "ESLT", "GFS",           # US
+        "4062.T", "6988.T", "5802.T", "6501.T", "6963.T",      # JP
+        "042700.KS", "086390.KS",                                # KR
+        "3037.TW", "6239.TW", "3711.TW",                        # TW
+        "SOI.PA", "SBGSY", "SAFRY",                             # FR
+        "WAF.DE",                                                # DE
+    ]
+    for t in phase5_all:
+        node = NODE_REGISTRY.get(t)
+        _assert(f"Phase5 node exists: {t}", node is not None, "missing from NODE_REGISTRY")
+        if node:
+            _assert(f"{t}.themes non-empty", len(node.get("themes", [])) > 0)
+            _assert(f"{t}.bottleneck_score >= 70", node.get("bottleneck_score", 0) >= 70,
+                    f"got {node.get('bottleneck_score')}")
+            _assert(f"{t}.company_name non-empty", bool(node.get("company_name")))
+
+    _assert("4062.T ADR = IBDNY", NODE_REGISTRY.get("4062.T", {}).get("us_access_proxy") == "IBDNY")
+    _assert("042700.KS ADR = HASEY", NODE_REGISTRY.get("042700.KS", {}).get("us_access_proxy") == "HASEY")
+    _assert("6501.T ADR = HTHIY", NODE_REGISTRY.get("6501.T", {}).get("us_access_proxy") == "HTHIY")
+    _assert("SOI.PA proxy = SOITF", NODE_REGISTRY.get("SOI.PA", {}).get("us_access_proxy") == "SOITF")
+    _assert("WAF.DE proxy = SSLLF", NODE_REGISTRY.get("WAF.DE", {}).get("us_access_proxy") == "SSLLF")
+
+    ibiden_bc = NODE_REGISTRY.get("4062.T", {}).get("bottleneck_score", 0)
+    _assert("Ibiden ABF bottleneck_score >= 90", ibiden_bc >= 90, f"got {ibiden_bc}")
+    hanmi_bc = NODE_REGISTRY.get("042700.KS", {}).get("bottleneck_score", 0)
+    _assert("Hanmi TC bonder bottleneck_score >= 80", hanmi_bc >= 80, f"got {hanmi_bc}")
+
+    # No private zero-score nodes in registry
+    for t, n in NODE_REGISTRY.items():
+        if n is None:
+            continue
+        if not n.get("themes") and n.get("bottleneck_score", 1) == 0:
+            _fail("no private/zero-score nodes", f"{t} has empty themes and bottleneck_score=0")
+
+
+def test_phase5_foreign_map_entries():
+    print("\n[phase5_foreign_map_entries]")
+    from services.playbook.foreign_market_map import FOREIGN_ACCESS_MAP
+
+    phase5_entries = [
+        "4062.T", "6988.T", "5802.T", "6501.T", "6963.T",
+        "042700.KS", "086390.KS",
+        "3037.TW", "6239.TW", "3711.TW",
+        "SOI.PA", "WAF.DE",
+    ]
+    for key in phase5_entries:
+        entry = FOREIGN_ACCESS_MAP.get(key)
+        _assert(f"FOREIGN_ACCESS_MAP[{key}] exists", entry is not None, "missing entry")
+        if entry:
+            _assert(f"{key}.data_confidence set",
+                    entry.get("data_confidence") in ("low", "medium", "high"),
+                    f"got {entry.get('data_confidence')}")
+            _assert(f"{key}.etf_proxies is list", isinstance(entry.get("etf_proxies"), list))
+
+    _assert("4062.T adr_ticker=IBDNY", FOREIGN_ACCESS_MAP.get("4062.T", {}).get("adr_ticker") == "IBDNY")
+    _assert("6501.T adr_ticker=HTHIY", FOREIGN_ACCESS_MAP.get("6501.T", {}).get("adr_ticker") == "HTHIY")
+    _assert("3037.TW has no ADR", FOREIGN_ACCESS_MAP.get("3037.TW", {}).get("adr_ticker") is None)
+    _assert("WAF.DE has no ADR", FOREIGN_ACCESS_MAP.get("WAF.DE", {}).get("adr_ticker") is None)
+
+
+def test_phase5_candidate_new_fields():
+    print("\n[phase5_candidate_new_fields]")
+    from services.playbook.supply_chain_graph import NODE_REGISTRY
+    from services.playbook.discovery_service import _build_candidate
+
+    fn_node = NODE_REGISTRY.get("FN")
+    _assert("FN in registry", fn_node is not None)
+    if fn_node:
+        c = _build_candidate("FN", fn_node)
+        _assert("FN.what_would_break_thesis non-empty", bool(c.what_would_break_thesis))
+        _assert("FN.coverage_notes non-empty", bool(c.coverage_notes))
+        _assert("FN.crowding_flags is list", isinstance(c.crowding_flags, list))
+        _assert("FN.position_in_bucket defaults None", c.position_in_bucket is None)
+        _assert("FN thesis break mentions CPO or photonics or specialist",
+                "CPO" in c.what_would_break_thesis
+                or "photonic" in c.what_would_break_thesis.lower()
+                or "specialist" in c.what_would_break_thesis.lower(),
+                f"got: {c.what_would_break_thesis!r}")
+
+    ibiden_node = NODE_REGISTRY.get("4062.T")
+    _assert("4062.T in registry", ibiden_node is not None)
+    if ibiden_node:
+        c = _build_candidate("IBDNY", ibiden_node)
+        _assert("Ibiden.what_would_break_thesis non-empty", bool(c.what_would_break_thesis))
+        _assert("Ibiden.coverage_notes mentions ADR or partial or coverage",
+                "ADR" in c.coverage_notes
+                or "partial" in c.coverage_notes
+                or "coverage" in c.coverage_notes.lower(),
+                f"got: {c.coverage_notes!r}")
+        _assert("Ibiden thesis break mentions JP or packaging or currency",
+                "JP" in c.what_would_break_thesis
+                or "packaging" in c.what_would_break_thesis.lower()
+                or "currency" in c.what_would_break_thesis.lower(),
+                f"got: {c.what_would_break_thesis!r}")
+
+
+def test_phase5_best_blend_score_formula():
+    print("\n[phase5_best_blend_score_formula]")
+    from services.playbook.discovery_types import DiscoveryScores
+    from services.playbook.discovery_service import _compute_best_blend_score
+
+    full_scores = DiscoveryScores(
+        bottleneck_criticality_score=100.0, chain_depth_score=100.0,
+        hiddenness_score=100.0, supply_chain_confidence_score=100.0,
+        theme_purity_score=100.0, giant_dependency_score=100.0,
+        proxy_accessibility_score=100.0,
+    )
+    full = _compute_best_blend_score(full_scores, "high", [])
+    _assert("full-score ≈ 100", abs(full - 100.0) < 0.5, f"got {full}")
+
+    # Phase 5 weights sum = 1.0 exactly
+    weights_sum = 0.28 + 0.18 + 0.14 + 0.14 + 0.10 + 0.10 + 0.06
+    _assert("Phase5 weights sum=1.0", abs(weights_sum - 1.0) < 0.001, f"sum={weights_sum}")
+
+    us_scores = DiscoveryScores(
+        bottleneck_criticality_score=80.0, chain_depth_score=70.0,
+        hiddenness_score=50.0, supply_chain_confidence_score=85.0,
+        theme_purity_score=80.0, giant_dependency_score=60.0,
+        proxy_accessibility_score=100.0,
+    )
+    no_proxy = DiscoveryScores(
+        bottleneck_criticality_score=80.0, chain_depth_score=70.0,
+        hiddenness_score=50.0, supply_chain_confidence_score=85.0,
+        theme_purity_score=80.0, giant_dependency_score=60.0,
+        proxy_accessibility_score=30.0,
+    )
+    us_b  = _compute_best_blend_score(us_scores, "high", [])
+    nop_b = _compute_best_blend_score(no_proxy, "high", [])
+    _assert("US proxy > no-proxy blend", us_b > nop_b, f"us={us_b}, nop={nop_b}")
+
+    low_c  = _compute_best_blend_score(us_scores, "low",    [])
+    med_c  = _compute_best_blend_score(us_scores, "medium", [])
+    high_c = _compute_best_blend_score(us_scores, "high",   [])
+    _assert("high > medium > low confidence", high_c > med_c > low_c,
+            f"high={high_c}, med={med_c}, low={low_c}")
+    _assert("low/high ratio ≈ 0.82", abs(low_c / high_c - 0.82) < 0.02,
+            f"ratio={low_c/high_c:.3f}")
+
+
+def test_phase5_ranking_bucket_positions():
+    print("\n[phase5_ranking_bucket_positions]")
+    from services.playbook.supply_chain_graph import NODE_REGISTRY
+    from services.playbook.discovery_service import _build_candidate, _build_ranking_buckets
+
+    candidates = []
+    for ticker, node in list(NODE_REGISTRY.items())[:50]:
+        if node and node.get("themes"):
+            canon = node.get("us_access_proxy", ticker) if node.get("country", "US") != "US" else ticker
+            c = _build_candidate(canon, node)
+            candidates.append(c)
+
+    buckets = _build_ranking_buckets(candidates, limit=5)
+
+    expected_keys = {
+        "top_hidden_bottlenecks", "top_direct_chokepoints", "top_foreign_specialists",
+        "top_us_accessible_foreign_proxies", "highest_confidence_candidates", "best_blend_candidates",
+    }
+    _assert("all 6 bucket keys present", set(buckets.keys()) == expected_keys,
+            f"got {set(buckets.keys())}")
+
+    for bucket_name, bucket_list in buckets.items():
+        for i, c in enumerate(bucket_list):
+            _assert(f"{bucket_name}[{i}].position_in_bucket={i+1}",
+                    c.position_in_bucket == i + 1,
+                    f"got {c.position_in_bucket}")
+
+
+def test_phase5_preset_mode_dispatch():
+    print("\n[phase5_preset_mode_dispatch]")
+    from services.playbook.discovery_types import DiscoverRequest
+    from services.playbook.discovery_service import _apply_preset_mode
+
+    # hidden_bottlenecks
+    r = _apply_preset_mode(DiscoverRequest(mode="theme_scan", preset_mode="hidden_bottlenecks"))
+    _assert("hidden_bottlenecks.only_hidden=True", r.only_hidden is True)
+    _assert("hidden_bottlenecks.include_foreign=True", r.include_foreign is True)
+    _assert("hidden_bottlenecks.sort_mode=hiddenness", r.sort_mode == "hiddenness")
+
+    # top_direct_chokepoints
+    r2 = _apply_preset_mode(DiscoverRequest(mode="theme_scan", preset_mode="top_direct_chokepoints"))
+    _assert("chokepoints.sort_mode=bottleneck", r2.sort_mode == "bottleneck")
+    _assert("chokepoints.only_hidden=False", r2.only_hidden is False)
+
+    # foreign_specialists
+    r3 = _apply_preset_mode(DiscoverRequest(mode="theme_scan", preset_mode="foreign_specialists"))
+    _assert("foreign_specialists.mode=foreign_bottlenecks", r3.mode == "foreign_bottlenecks")
+
+    # highest_confidence
+    r4 = _apply_preset_mode(DiscoverRequest(mode="theme_scan", preset_mode="highest_confidence"))
+    _assert("highest_confidence.sort_mode=confidence", r4.sort_mode == "confidence")
+
+    # no preset — unchanged
+    r5 = _apply_preset_mode(DiscoverRequest(mode="giant_chain", giant="NVDA"))
+    _assert("no preset — mode unchanged", r5.mode == "giant_chain")
+    _assert("no preset — sort_mode unchanged", r5.sort_mode is None)
+
+
+def test_phase5_sort_mode_ranking():
+    print("\n[phase5_sort_mode_ranking]")
+    from services.playbook.supply_chain_graph import NODE_REGISTRY
+    from services.playbook.discovery_service import _build_candidate, _rank_by_sort_mode
+
+    candidates = []
+    for ticker, node in list(NODE_REGISTRY.items())[:60]:
+        if node and node.get("themes"):
+            canon = node.get("us_access_proxy", ticker) if node.get("country", "US") != "US" else ticker
+            c = _build_candidate(canon, node)
+            candidates.append(c)
+
+    if len(candidates) < 5:
+        _fail("enough candidates", f"only {len(candidates)}")
+        return
+
+    for sort_mode, key_fn, label in [
+        ("best_blend",  lambda c: c.best_blend_score,              "best_blend_score"),
+        ("hiddenness",  lambda c: c.hiddenness_score,              "hiddenness_score"),
+        ("bottleneck",  lambda c: c.bottleneck_criticality_score,  "bottleneck_criticality_score"),
+        ("confidence",  lambda c: c.supply_chain_confidence_score, "supply_chain_confidence_score"),
+    ]:
+        ranked = _rank_by_sort_mode(candidates[:], sort_mode)
+        _assert(f"{sort_mode}: first >= second",
+                key_fn(ranked[0]) >= key_fn(ranked[1]),
+                f"{key_fn(ranked[0])} vs {key_fn(ranked[1])}")
+
+    # unknown sort — falls back gracefully
+    ranked_unk = _rank_by_sort_mode(candidates[:], "xyzzy_mode")
+    _assert("unknown sort_mode returns list", isinstance(ranked_unk, list))
+    _assert("unknown sort_mode non-empty", len(ranked_unk) > 0)
+
+
+def test_phase5_compare_consensus_strength():
+    print("\n[phase5_compare_consensus_strength]")
+    from services.playbook.discovery_types import CompareTickerResult
+    from services.playbook.compare_service import _compute_consensus_strength
+
+    # strong — delta < 10
+    r = CompareTickerResult(ticker="T1", serenity_score=75.0, sj_score=70.0, score_delta=5.0,
+                             classification="consensus", serenity_pass=True, sj_pass=True)
+    s, reason = _compute_consensus_strength(r)
+    _assert("strong consensus → strength=strong", s == "strong", f"got {s!r}")
+    _assert("strong consensus → reason=''", reason == "", f"got {reason!r}")
+
+    # moderate — delta 10-20
+    r2 = CompareTickerResult(ticker="T2", serenity_score=78.0, sj_score=63.0, score_delta=15.0,
+                              classification="consensus", serenity_pass=True, sj_pass=True)
+    s2, _ = _compute_consensus_strength(r2)
+    _assert("moderate consensus → strength=moderate", s2 == "moderate", f"got {s2!r}")
+
+    # borderline — delta 20-25
+    r3 = CompareTickerResult(ticker="T3", serenity_score=82.0, sj_score=61.0, score_delta=21.0,
+                              classification="consensus", serenity_pass=True, sj_pass=True)
+    s3, _ = _compute_consensus_strength(r3)
+    _assert("borderline consensus → strength=borderline", s3 == "borderline", f"got {s3!r}")
+
+    # serenity_only — strength=None
+    r4 = CompareTickerResult(ticker="T4", serenity_score=70.0, sj_score=45.0, score_delta=25.0,
+                              classification="serenity_only", serenity_pass=True, sj_pass=False)
+    s4, reason4 = _compute_consensus_strength(r4)
+    _assert("serenity_only → strength=None", s4 is None, f"got {s4!r}")
+    _assert("serenity_only → reason non-empty", bool(reason4), f"got {reason4!r}")
+
+    # low_fit_both — strength=None, reason non-empty
+    r5 = CompareTickerResult(ticker="T5", serenity_score=40.0, sj_score=35.0, score_delta=5.0,
+                              classification="low_fit_both", serenity_pass=False, sj_pass=False)
+    s5, reason5 = _compute_consensus_strength(r5)
+    _assert("low_fit_both → strength=None", s5 is None, f"got {s5!r}")
+    _assert("low_fit_both → reason non-empty", bool(reason5), f"got {reason5!r}")
+
+
+def test_phase5_compare_disagreement_reason():
+    print("\n[phase5_compare_disagreement_reason]")
+    from services.playbook.discovery_types import CompareTickerResult
+    from services.playbook.compare_service import _compute_consensus_strength
+
+    # sj_only with no registry entry → mention registry/profile
+    r = CompareTickerResult(ticker="XYZ", serenity_score=None, sj_score=72.0, score_delta=None,
+                             classification="sj_only", serenity_pass=False, sj_pass=True)
+    _, reason = _compute_consensus_strength(r)
+    _assert("sj_only_no_reg reason mentions registry or profile",
+            "registry" in reason.lower() or "profile" in reason.lower() or "curated" in reason.lower(),
+            f"got {reason!r}")
+
+    # serenity_only large gap → mention divergence or fundamental
+    r2 = CompareTickerResult(ticker="LGP", serenity_score=90.0, sj_score=55.0, score_delta=35.0,
+                              classification="serenity_only", serenity_pass=True, sj_pass=False)
+    _, reason2 = _compute_consensus_strength(r2)
+    _assert("large gap serenity_only mentions divergence or fundamental or pts",
+            "divergence" in reason2.lower() or "fundamental" in reason2.lower() or "pts" in reason2.lower(),
+            f"got {reason2!r}")
+
+
+def test_phase5_compare_high_disagreement_names():
+    print("\n[phase5_compare_high_disagreement_names]")
+    from services.playbook.discovery_types import CompareResponse, CompareTickerResult
+
+    r1 = CompareTickerResult(ticker="A", serenity_score=90.0, sj_score=60.0, score_delta=30.0,
+                              classification="serenity_only", serenity_pass=True, sj_pass=False)
+    r2 = CompareTickerResult(ticker="B", serenity_score=65.0, sj_score=63.0, score_delta=2.0,
+                              classification="consensus", serenity_pass=True, sj_pass=True)
+    r3 = CompareTickerResult(ticker="C", serenity_score=40.0, sj_score=75.0, score_delta=-35.0,
+                              classification="sj_only", serenity_pass=False, sj_pass=True)
+
+    resp = CompareResponse(
+        tickers_compared=["A", "B", "C"], playbooks=["serenity", "sjcapital"],
+        results=[r1, r2, r3], high_disagreement_names=["A", "C"],
+    )
+    _assert("high_disagreement_names is list", isinstance(resp.high_disagreement_names, list))
+    _assert("A in high_disagreement_names", "A" in resp.high_disagreement_names)
+    _assert("C in high_disagreement_names", "C" in resp.high_disagreement_names)
+    _assert("B not in high_disagreement_names", "B" not in resp.high_disagreement_names)
+    _assert("A delta >= 25", abs(r1.score_delta) >= 25.0)
+    _assert("C delta >= 25", abs(r3.score_delta) >= 25.0)
+    _assert("B delta < 25", abs(r2.score_delta) < 25.0)
+
+
+def test_phase5_compare_response_model():
+    print("\n[phase5_compare_response_model]")
+    from services.playbook.discovery_types import (
+        CompareResponse, CompareTickerResult, DiscoverRequest,
+        DiscoveryCandidate, DiscoveryScores,
+    )
+
+    r = CompareTickerResult(ticker="TEST")
+    _assert("CompareTickerResult has consensus_strength", hasattr(r, "consensus_strength"))
+    _assert("CompareTickerResult.consensus_strength default None", r.consensus_strength is None)
+    _assert("CompareTickerResult has disagreement_reason", hasattr(r, "disagreement_reason"))
+    _assert("CompareTickerResult.disagreement_reason default ''", r.disagreement_reason == "")
+
+    resp = CompareResponse(tickers_compared=[], playbooks=[], results=[])
+    _assert("CompareResponse has high_disagreement_names", hasattr(resp, "high_disagreement_names"))
+    _assert("CompareResponse.high_disagreement_names default []", resp.high_disagreement_names == [])
+
+    req = DiscoverRequest()
+    _assert("DiscoverRequest.preset_mode default None", req.preset_mode is None)
+    _assert("DiscoverRequest.sort_mode default None", req.sort_mode is None)
+    _assert("DiscoverRequest.validation_depth default 'none'", req.validation_depth == "none")
+
+    scores = DiscoveryScores()
+    c = DiscoveryCandidate(ticker="T", company_name="Test", scores=scores)
+    _assert("DiscoveryCandidate.what_would_break_thesis default ''", c.what_would_break_thesis == "")
+    _assert("DiscoveryCandidate.coverage_notes default ''", c.coverage_notes == "")
+    _assert("DiscoveryCandidate.crowding_flags default []", c.crowding_flags == [])
+    _assert("DiscoveryCandidate.position_in_bucket default None", c.position_in_bucket is None)
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Runner
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -1704,6 +2058,19 @@ def run_all():
     test_phase4_analyze_compare_field()
     test_phase4_no_brave_tavily()
     test_phase4_query_isolation_new_files()
+
+    # Phase 5 — Expanded coverage + new fields
+    test_phase5_new_nodes_registry()
+    test_phase5_foreign_map_entries()
+    test_phase5_candidate_new_fields()
+    test_phase5_best_blend_score_formula()
+    test_phase5_ranking_bucket_positions()
+    test_phase5_preset_mode_dispatch()
+    test_phase5_sort_mode_ranking()
+    test_phase5_compare_consensus_strength()
+    test_phase5_compare_disagreement_reason()
+    test_phase5_compare_high_disagreement_names()
+    test_phase5_compare_response_model()
 
     print()
     print("=" * 60)

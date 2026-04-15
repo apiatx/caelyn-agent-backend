@@ -710,6 +710,208 @@ NODE_REGISTRY: Dict[str, Dict[str, Any]] = {
         "us_access_proxy": "IQEPY", "adr_ticker": "IQEPY",
         "giant_anchors": [],
     },
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # PHASE 5 — EXPANDED CURATED COVERAGE
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # ──────────────── PHASE 5 — US NEW ADDITIONS ─────────────────────────
+
+    "FN": {
+        "company_name": "Fabrinet", "country": "US", "exchange": "NYSE",
+        "role": "Optical/photonics contract manufacturer — produces coherent optics, CPO modules, and precision assemblies for Ciena, Cisco, Lumentum",
+        "themes": ["photonics_cpo", "advanced_packaging_test", "ai_infrastructure"],
+        "layer": 2, "bottleneck_score": 78, "confidence": "high",
+        "evidence": ["Primary contract mfg for coherent optics transceivers", "CPO module assembly for hyperscaler optical interconnect"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["NVDA", "MSFT", "GOOGL"],
+    },
+    "LSCC": {
+        "company_name": "Lattice Semiconductor", "country": "US", "exchange": "NASDAQ",
+        "role": "Low-power FPGA for AI inference edge and data center — systems management and pre-/post-AI inference control",
+        "themes": ["ai_infrastructure", "semicap_supply_chain"],
+        "layer": 2, "bottleneck_score": 73, "confidence": "high",
+        "evidence": ["Dominant small FPGA for data center baseboard management", "AI-adjacent inference and control plane role"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["NVDA", "MSFT"],
+    },
+    "SPXC": {
+        "company_name": "SPX Technologies", "country": "US", "exchange": "NYSE",
+        "role": "Specialty power transformer manufacturer for utility and data center grid connections",
+        "themes": ["grid_transformers", "ai_power_energy"],
+        "layer": 2, "bottleneck_score": 72, "confidence": "medium",
+        "evidence": ["US-based transformer production with growing data center customer base", "Transformer lead times 2-3 years support order backlog visibility"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["AI_Power_Buildout"],
+    },
+    "MOD": {
+        "company_name": "Modine Manufacturing", "country": "US", "exchange": "NYSE",
+        "role": "Thermal management systems for data center cooling — liquid and air cooling modules for AI GPU racks",
+        "themes": ["cooling_thermal", "ai_power_energy"],
+        "layer": 2, "bottleneck_score": 71, "confidence": "medium",
+        "evidence": ["Data center thermal management is fastest growing segment", "AI rack cooling transition from air to liquid driving demand"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["NVDA", "CoreWeave_Neocloud"],
+    },
+    "ESLT": {
+        "company_name": "Elbit Systems", "country": "IL", "exchange": "NASDAQ",
+        "role": "Defense EO/IR optics, targeting pods, and drone payloads — sold directly on NASDAQ",
+        "themes": ["defense_optics", "space_sensing"],
+        "layer": 2, "bottleneck_score": 79, "confidence": "high",
+        "evidence": ["Leading Israeli defense electronics and EO/IR systems maker", "Significant US DoD and NATO customer base"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": [],
+    },
+    "GFS": {
+        "company_name": "GlobalFoundries", "country": "US", "exchange": "NASDAQ",
+        "role": "Specialty semiconductor foundry — RF, SiGe BiCMOS, FD-SOI for defense, automotive, analog; not chasing leading edge",
+        "themes": ["semicap_supply_chain", "defense_optics", "soi_substrates_materials"],
+        "layer": 2, "bottleneck_score": 75, "confidence": "high",
+        "evidence": ["Only non-US/non-Asian major foundry on mature nodes (12nm and above)", "Sole or preferred source for US defense RF-SOI and SiGe chips"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": [],
+    },
+
+    # ──────────────── PHASE 5 — JAPAN NEW ADDITIONS ──────────────────────
+
+    "4062.T": {
+        "company_name": "Ibiden Co.", "country": "JP", "exchange": "TSE",
+        "role": "ABF (Ajinomoto Build-up Film) substrate monopoly — every advanced AI GPU/CPU package uses Ibiden ABF substrate",
+        "themes": ["advanced_packaging_test", "semicap_supply_chain"],
+        "layer": 3, "bottleneck_score": 92, "confidence": "high",
+        "evidence": ["Near-monopoly in ABF substrate production — Intel, NVDA, AMD depend on Ibiden", "CoWoS and advanced packaging capacity gated by ABF substrate supply"],
+        "us_access_proxy": "IBDNY", "adr_ticker": "IBDNY",
+        "giant_anchors": ["NVDA", "TSM"],
+    },
+    "6988.T": {
+        "company_name": "Nitto Denko", "country": "JP", "exchange": "TSE",
+        "role": "Semiconductor process materials — dicing tape, protective films, and polarizers for advanced packaging and display",
+        "themes": ["semicap_supply_chain", "advanced_packaging_test"],
+        "layer": 4, "bottleneck_score": 76, "confidence": "high",
+        "evidence": ["Leading dicing tape for wafer singulation (OSAT and IDM globally)", "Process film materials for TSMC CoWoS and HBM packaging steps"],
+        "us_access_proxy": "NDEKY", "adr_ticker": "NDEKY",
+        "giant_anchors": ["TSM"],
+    },
+    "5802.T": {
+        "company_name": "Sumitomo Electric Industries", "country": "JP", "exchange": "TSE",
+        "role": "Optical fiber manufacturer for data center interconnect — also supplies wire harness and SiC wafer materials",
+        "themes": ["photonics_cpo", "ai_power_energy", "soi_substrates_materials"],
+        "layer": 3, "bottleneck_score": 75, "confidence": "high",
+        "evidence": ["Leading optical fiber maker; datacenter fiber demand surge with AI buildout", "Also produces SiC epi wafer materials for power device supply chain"],
+        "us_access_proxy": "SMTOY", "adr_ticker": "SMTOY",
+        "giant_anchors": ["AI_Power_Buildout"],
+    },
+    "6501.T": {
+        "company_name": "Hitachi", "country": "JP", "exchange": "TSE",
+        "role": "Power systems and grid infrastructure — Hitachi Energy subsidiary is a leading grid transformer and HVDC supplier",
+        "themes": ["grid_transformers", "ai_power_energy"],
+        "layer": 2, "bottleneck_score": 77, "confidence": "high",
+        "evidence": ["Hitachi Energy is top-3 global HVDC and grid transformer supplier", "Active backlog growth tied to AI datacenter and grid modernization"],
+        "us_access_proxy": "HTHIY", "adr_ticker": "HTHIY",
+        "giant_anchors": ["AI_Power_Buildout"],
+    },
+    "6963.T": {
+        "company_name": "Rohm Semiconductor", "country": "JP", "exchange": "TSE",
+        "role": "SiC power devices (MOSFETs, diodes) for EV and industrial — sole-sourced into Tesla Megapack and Hitachi Energy",
+        "themes": ["energy_transition", "ai_power_energy", "soi_substrates_materials"],
+        "layer": 3, "bottleneck_score": 78, "confidence": "high",
+        "evidence": ["Tier-2 SiC supplier alongside ON Semi and STM", "Vertically integrated: own SiC substrate + device + module"],
+        "us_access_proxy": "ROHCY", "adr_ticker": "ROHCY",
+        "giant_anchors": [],
+    },
+
+    # ──────────────── PHASE 5 — KOREA NEW ADDITIONS ──────────────────────
+
+    "042700.KS": {
+        "company_name": "Hanmi Semiconductor", "country": "KR", "exchange": "KSE",
+        "role": "TC (Thermal Compression) bonder for HBM packaging — dominant position in HBM mass reflow bonding equipment",
+        "themes": ["memory_hbm", "advanced_packaging_test"],
+        "layer": 3, "bottleneck_score": 86, "confidence": "high",
+        "evidence": ["~70-80% share in TC bonder equipment for HBM production", "SK Hynix and Samsung HBM ramp gated by TC bonder capacity"],
+        "us_access_proxy": "HASEY", "adr_ticker": None,
+        "giant_anchors": ["NVDA"],
+    },
+    "086390.KS": {
+        "company_name": "Wonik IPS", "country": "KR", "exchange": "KSE",
+        "role": "Atomic layer deposition (ALD) equipment for memory and logic — DRAM and 3D NAND process tool",
+        "themes": ["semicap_supply_chain", "memory_hbm"],
+        "layer": 3, "bottleneck_score": 74, "confidence": "medium",
+        "evidence": ["Korea-domestic ALD tool supplier for Samsung and SK Hynix fabs", "ALD is critical step for advanced DRAM cell stack"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": [],
+    },
+
+    # ──────────────── PHASE 5 — TAIWAN NEW ADDITIONS ─────────────────────
+
+    "3037.TW": {
+        "company_name": "Unimicron Technology", "country": "TW", "exchange": "TWSE",
+        "role": "ABF substrate and high-density PCB manufacturer — critical for AI GPU and CPU packaging supply chain",
+        "themes": ["advanced_packaging_test", "semicap_supply_chain"],
+        "layer": 3, "bottleneck_score": 84, "confidence": "high",
+        "evidence": ["#2 ABF substrate maker globally after Ibiden", "NVDA, AMD, Intel depend on Unimicron for advanced GPU substrates"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["NVDA", "TSM"],
+    },
+    "6239.TW": {
+        "company_name": "Powertech Technology", "country": "TW", "exchange": "TWSE",
+        "role": "Memory packaging OSAT — specialized in DRAM and HBM testing and packaging",
+        "themes": ["memory_hbm", "advanced_packaging_test"],
+        "layer": 3, "bottleneck_score": 76, "confidence": "medium",
+        "evidence": ["Leading DRAM and HBM packaging OSAT — SK Hynix and Micron key customers", "Capacity additions aligned with HBM3/HBM4 ramp"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": [],
+    },
+    "3711.TW": {
+        "company_name": "ASMedia Technology", "country": "TW", "exchange": "TWSE",
+        "role": "PCIe and USB connectivity chips for AI servers — motherboard and PCIe switch ICs for GPU interconnect",
+        "themes": ["ai_infrastructure", "advanced_packaging_test"],
+        "layer": 3, "bottleneck_score": 71, "confidence": "medium",
+        "evidence": ["Dominant PCIe/USB controller for ASUS/Gigabyte/MSI server boards", "PCIe switch architecture scales with GPU server density"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["NVDA"],
+    },
+
+    # ──────────────── PHASE 5 — FRANCE NEW ADDITIONS ─────────────────────
+
+    "SBGSY": {
+        "company_name": "Schneider Electric", "country": "FR", "exchange": "OTCMKTS",
+        "role": "Data center power distribution and cooling management — UPS, PDUs, and thermal systems for hyperscalers and colocation",
+        "themes": ["ai_power_energy", "grid_transformers", "cooling_thermal"],
+        "layer": 2, "bottleneck_score": 74, "confidence": "high",
+        "evidence": ["#1 global data center power management infrastructure provider", "EcoStruxure platform used by hyperscalers globally"],
+        "us_access_proxy": "SBGSY", "adr_ticker": "SBGSY",
+        "giant_anchors": ["MSFT", "GOOGL", "AMZN", "CoreWeave_Neocloud"],
+    },
+    "SAFRY": {
+        "company_name": "Safran", "country": "FR", "exchange": "OTCMKTS",
+        "role": "Defense EO/IR optics and aerospace sensors — FLIR successor roles, sighting and targeting systems for NATO partners",
+        "themes": ["defense_optics", "space_sensing"],
+        "layer": 2, "bottleneck_score": 77, "confidence": "high",
+        "evidence": ["Major European defense optics and sensor supplier", "Targeting systems for Leclerc, Rafale, and NH90 programs"],
+        "us_access_proxy": "SAFRY", "adr_ticker": "SAFRY",
+        "giant_anchors": [],
+    },
+    "SOI.PA": {
+        "company_name": "Soitec", "country": "FR", "exchange": "EPA",
+        "role": "RF-SOI and FD-SOI wafer monopoly — sole commercial supplier of RF-SOI for 5G smartphone RF front-end; PowerSiC substrate materials",
+        "themes": ["soi_substrates_materials", "semicap_supply_chain", "energy_transition"],
+        "layer": 4, "bottleneck_score": 88, "confidence": "high",
+        "evidence": ["Sole commercial RF-SOI wafer supplier — Qualcomm, Broadcom, qorvo all depend on Soitec", "FD-SOI is only alternative substrate to bulk CMOS for IoT/low-power chips"],
+        "us_access_proxy": "SOITF", "adr_ticker": None,
+        "giant_anchors": [],
+    },
+
+    # ──────────────── PHASE 5 — GERMANY NEW ADDITIONS ────────────────────
+
+    "WAF.DE": {
+        "company_name": "Siltronic", "country": "DE", "exchange": "FRA",
+        "role": "High-purity silicon wafer manufacturer (#3 globally) — 300mm polished and epitaxial wafers for logic and memory",
+        "themes": ["soi_substrates_materials", "semicap_supply_chain"],
+        "layer": 4, "bottleneck_score": 78, "confidence": "high",
+        "evidence": ["#3 silicon wafer globally", "300mm epi wafer for TSMC N5/N3 and Samsung advanced nodes"],
+        "us_access_proxy": "SSLLF", "adr_ticker": None,
+        "giant_anchors": ["TSM"],
+    },
 }
 
 

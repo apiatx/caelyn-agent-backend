@@ -58,9 +58,15 @@ class DiscoveryCandidate(BaseModel):
     data_gaps:            List[str] = Field(default_factory=list)
 
     # Phase 4 — deterministic explanations (no LLM dependency)
-    why_now:              str = ""
-    why_hidden:           str = ""
-    what_to_verify_next:  str = ""
+    why_now:                str = ""
+    why_hidden:             str = ""
+    what_to_verify_next:    str = ""
+
+    # Phase 5 — additional deterministic explanation fields
+    what_would_break_thesis: str = ""   # key risk / thesis invalidation condition
+    coverage_notes:          str = ""   # brief note on data coverage quality
+    crowding_flags:          List[str] = Field(default_factory=list)  # crowding/momentum signals
+    position_in_bucket:      Optional[int] = None   # 1-based rank within the bucket surfacing this candidate
 
     # Phase 4 — peer comparison
     comparable_names: List[str] = Field(default_factory=list)
@@ -103,6 +109,16 @@ class DiscoverRequest(BaseModel):
     only_public:              bool = True
     include_adr_or_etf_proxies: bool = True
     use_web_validation:       bool = False    # Perplexity shortlisted validation (rate-limited)
+
+    # Phase 5 — preset and validation depth
+    preset_mode: Optional[str] = None
+    # hidden_bottlenecks | top_direct_chokepoints | foreign_specialists |
+    # us_accessible_foreign_proxies | highest_confidence | best_blend
+    # When set, overrides mode/filters to match the preset profile.
+    sort_mode: Optional[str] = None
+    # best_blend | hiddenness | bottleneck | confidence | chain_depth
+    # Overrides default ranking key without changing content.
+    validation_depth: str = "none"           # "none" | "shortlist" (Perplexity on top 3-5 only)
 
 
 # ── Discover Response ──────────────────────────────────────────────────────────
@@ -201,6 +217,9 @@ class CompareTickerResult(BaseModel):
     serenity_breakdown:   Dict[str, Any] = Field(default_factory=dict)
     sj_breakdown:         Dict[str, Any] = Field(default_factory=dict)
     in_node_registry:     bool = False    # has a Serenity curated profile
+    # Phase 5 additions
+    consensus_strength:   Optional[str] = None     # "strong" | "moderate" | "borderline" | None
+    disagreement_reason:  str = ""                 # brief deterministic reason for divergence
 
 
 class CompareResponse(BaseModel):
@@ -212,4 +231,5 @@ class CompareResponse(BaseModel):
     serenity_only_names: List[str] = Field(default_factory=list)
     sj_only_names:       List[str] = Field(default_factory=list)
     low_fit_both:        List[str] = Field(default_factory=list)
+    high_disagreement_names: List[str] = Field(default_factory=list)   # Phase 5: delta >= 25
     meta:                Dict[str, Any] = Field(default_factory=dict)

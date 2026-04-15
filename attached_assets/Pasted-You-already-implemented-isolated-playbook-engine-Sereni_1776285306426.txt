@@ -1,0 +1,353 @@
+You already implemented:
+
+isolated playbook engine
+Serenity and S&J
+/api/playbooks/analyze
+/api/playbooks/discover
+/api/playbooks/supply-chain-map
+/api/playbooks/compare
+Serenity discovery engine
+foreign/ADR/proxy support
+ranking buckets
+compare service
+strict isolation from /api/query
+
+Good.
+
+Now implement Phase 5: sharpen the existing Serenity scanner/discovery engine so it feels more curated, more selective, and more useful immediately.
+
+This is not a rewrite.
+This is a quality upgrade to the existing playbook/discovery system only.
+
+Non-negotiable guardrails
+Do not modify /api/query in any way.
+Do not change Default AI Terminal behavior.
+Do not introduce background jobs or auto-scanning.
+Do not change S&J’s investing philosophy.
+Do not duplicate the playbook engine.
+Keep all work inside the isolated playbook/discovery modules.
+Continue avoiding Brave/Tavily completely.
+Continue using Finnhub + curated maps as the backbone.
+Use Tradier only for tradable US/ADR quote/liquidity/trend confirmation.
+Use FMP sparingly.
+Use Perplexity only for shortlisted validation or targeted enrichment.
+Missing or weak data must reduce confidence, not create fake conviction.
+Objective
+
+Improve the existing Serenity system in these 6 ways:
+
+expand curated chain depth and foreign specialist coverage
+refine hiddenness and confidence edge-case handling
+improve “why this surfaced now” logic
+improve result ordering and ranking bucket quality
+improve compare/consensus usefulness
+add better structured output for frontend actionability
+Part 1 — Expand curated chain coverage meaningfully
+
+This is not random ticker stuffing.
+
+Deepen the existing curated graph for the highest-signal Serenity themes:
+
+photonics_cpo
+advanced_packaging_test
+semicap_supply_chain
+memory_hbm
+soi_substrates_materials
+ai_power_energy
+grid_transformers
+cooling_thermal
+defense_optics
+ai_infrastructure
+Required work
+
+Add more curated nodes and relationships for:
+
+direct bottlenecks
+indirect but critical specialists
+upstream tool/material providers
+foreign specialists with real niche importance
+Focus countries
+
+Deepen explicit curated support for:
+
+Japan
+South Korea
+Taiwan
+Netherlands
+Germany
+France
+UK
+For each new node include
+ticker
+company_name
+country
+exchange
+themes
+giant anchors
+chain layers
+chain_role_type
+visibility_bucket
+direct vs indirect bottleneck importance
+ADR/proxy mapping if any
+mapping confidence
+
+Do not just add broad well-known mega caps unless they matter to chain integrity.
+
+Part 2 — Refine hiddenness and confidence logic further
+
+You already separated bad data from hiddenness. Good.
+
+Now tighten it.
+
+Improve hiddenness_score
+
+Refine using:
+
+market cap bucket
+chain depth
+crowding
+analyst-coverage proxy if available
+whether name is already widely known in AI discourse
+foreign / ADR / OTC visibility
+direct vs indirect chain role
+whether the story is obvious or specialist
+Add/upgrade candidate fields
+
+Add or improve:
+
+hiddenness_reason
+confidence_penalties
+data_gaps
+visibility_bucket
+chain_role_type
+crowding_flags
+coverage_notes
+Important
+
+OTC / thin ADR weirdness should:
+
+lower confidence
+add data gaps / coverage notes
+
+It should not accidentally make the name look “more hidden therefore more attractive.”
+
+Part 3 — Improve “why now / verify next / thesis break” logic
+
+This is where the scanner starts feeling dangerous.
+
+Upgrade these deterministic fields
+
+For every strong candidate, improve:
+
+why_now
+why_hidden
+what_to_verify_next
+what_would_break_thesis
+Sources to use
+
+Use existing metadata/factors where available:
+
+catalyst proximity
+evidence freshness
+backlog/contract signals
+policy tailwinds
+earnings window
+recent confirming news
+dilution / execution risk
+crowding
+Output style
+
+Keep concise, structured, and deterministic.
+
+Example:
+
+why_now: “Recent packaging/tooling confirmation plus active semicap chain momentum.”
+why_hidden: “Layer-3 specialist with partial US coverage and lower retail visibility.”
+what_to_verify_next: “Check customer concentration and latest capacity/order commentary.”
+what_would_break_thesis: “Weakening semicap demand or loss of sole-source positioning.”
+Part 4 — Improve ranking quality and bucket usefulness
+
+You already have ranking buckets. Good.
+
+Now make them feel more usable.
+
+Improve best_blend_score
+
+Tune the formula so it better balances:
+
+bottleneck criticality
+chain depth
+hiddenness
+supply-chain confidence
+theme purity
+giant dependency
+confidence penalties
+proxy accessibility when relevant
+
+Document the formula cleanly.
+
+Improve top-level discovery buckets
+
+Make these stronger and more selective:
+
+best_blend_candidates
+top_hidden_bottlenecks
+top_direct_chokepoints
+top_foreign_specialists
+top_us_accessible_foreign_proxies
+highest_confidence_candidates
+Required behavior
+
+Buckets should not just be minor re-sorts of the same list.
+They should feel genuinely distinct.
+
+Part 5 — Make compare/consensus actually useful
+
+The compare backend exists. Good.
+
+Now sharpen it.
+
+Upgrade /api/playbooks/compare
+
+For each ticker, add or improve:
+
+Serenity score
+S&J score
+delta
+classification:
+serenity_only
+sj_only
+consensus
+low_fit_both
+concise explanation of why they differ
+optional consensus_strength
+optional disagreement_reason
+Add top-level compare buckets
+
+Return:
+
+consensus_names
+serenity_only_names
+sj_only_names
+high_disagreement_names
+
+This will make frontend much easier.
+
+Important
+
+Do not change S&J logic.
+This is just comparison output.
+
+Part 6 — Add stronger frontend-facing structured fields
+
+Add or improve these optional fields on discovery candidates:
+
+best_blend_score
+why_now
+why_hidden
+what_to_verify_next
+what_would_break_thesis
+visibility_bucket
+chain_role_type
+coverage_notes
+crowding_flags
+comparable_names
+consensus_fit (if compare invoked)
+position_in_bucket or similar if helpful
+
+Do not remove existing fields.
+Backwards compatibility matters.
+
+Part 7 — Add better support for “sniper presets”
+
+Make the backend support cleaner preset-like discovery requests for frontend.
+
+Add or improve support for clean preset modes like:
+
+hidden_bottlenecks
+top_direct_chokepoints
+foreign_specialists
+us_accessible_foreign_proxies
+highest_confidence
+best_blend
+
+Whether this is:
+
+request flags
+a sort_mode
+a preset_mode
+
+is up to you, but keep it simple and typed.
+
+This will let frontend feel much snappier.
+
+Part 8 — Add optional shortlist validation only where it matters
+
+Do not blow API credits.
+
+But for the top few candidates only, allow optional targeted validation to enrich:
+
+supply-chain role
+proxy mapping
+customer/supplier relationship
+niche/bottleneck confirmation
+
+Use:
+
+Finnhub primary
+Perplexity selectively
+Gemini only if needed and isolated
+
+No full-list web validation.
+
+Expose a flag like:
+
+use_web_validation
+validation_depth: "none" | "shortlist"
+
+Default should remain conservative.
+
+Part 9 — Testing requirements
+
+Add/update tests for:
+
+expanded curated nodes load correctly
+hiddenness no longer over-rewards low-confidence foreign/OTC names
+why_now, why_hidden, what_to_verify_next, what_would_break_thesis populate
+ranking buckets are distinct and sensible
+compare route returns top-level compare buckets
+consensus/disagreement classification works
+sniper preset request modes work if added
+/api/query remains untouched
+prior routes remain backwards compatible
+no Brave/Tavily dependencies exist in this flow
+Part 10 — Deliverables
+
+When done, report back with:
+
+exact files added/modified
+what curated coverage was expanded
+how hiddenness/confidence logic improved
+how ranking buckets changed
+sample JSON for:
+/api/playbooks/discover
+/api/playbooks/compare
+examples of:
+top hidden bottleneck
+top foreign specialist
+top US-accessible foreign proxy
+consensus name
+proof /api/query remains untouched
+any TODOs for phase 6
+Final philosophy
+
+This phase is about:
+
+sharper surfacing
+better curation
+more useful compare
+more actionable outputs
+
+Do not overbuild.
+Do not touch default mode.
+Do not start another architecture adventure.
