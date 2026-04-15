@@ -34,6 +34,18 @@ class AnalyzeRequest(BaseModel):
     universe:          str = "ai_infra"
     limit:             int = 10
     include_breakdown: bool = True
+    # ── Optional discovery bridge (Serenity only) ──────────────────────────────
+    # If discovery_mode is set AND playbook_id=serenity:
+    #   1. Runs the discovery engine to find candidates
+    #   2. Scores the top discovered candidates against the Serenity playbook
+    #   3. Returns a combined answer (discovery context + playbook scores)
+    # S&J: discovery_mode is accepted but does NOT change S&J philosophy or factor logic.
+    discovery_mode:    Optional[str] = None  # giant_chain | theme_scan | foreign_bottlenecks | ...
+    giant:             Optional[str] = None  # e.g. "NVDA" — for giant_chain mode
+    theme_ids:         List[str] = Field(default_factory=list)
+    include_foreign:   bool = False
+    max_depth:         int = 3
+    country_filters:   List[str] = Field(default_factory=list)
 
 
 class AnalyzeTickerSummary(BaseModel):
@@ -72,6 +84,7 @@ class AnalyzeResponse(BaseModel):
     rejected_or_low_fit: List[AnalyzeTickerSummary]
     portfolio_summary: Optional[PortfolioSummaryResult] = None
     playbook_context:  Dict[str, Any] = Field(default_factory=dict)
+    discovery_context: Dict[str, Any] = Field(default_factory=dict)
     meta:              Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -81,6 +94,14 @@ async def run_analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     """
     Execute a playbook analysis request.
     Routes to the appropriate scoring strategy based on context_mode.
+
+    Discovery bridge:
+      If req.discovery_mode is set AND req.playbook_id == "serenity":
+        - Runs the discovery engine to surface candidates
+        - Injects top discovered tickers into the analysis ticker list
+        - Returns a combined answer referencing both discovery context + playbook scores
+      For sjcapital: discovery_mode is accepted but does not alter S&J logic or philosophy.
+      The /api/query handler is fully isolated — this bridge has zero coupling to it.
     """
     import os
     from services.playbook.playbook_registry import get as get_playbook
@@ -103,6 +124,79 @@ async def run_analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     mode = (req.context_mode or "watchlist").lower().strip()
     portfolio_summary_result: Optional[PortfolioSummaryResult] = None
     all_results: List[PlaybookScoreResult] = []
+
+    # ── Discovery bridge (Serenity only) ──────────────────────────────────────
+    # If discovery_mode is set, run the discovery engine and inject top
+    # discovered tickers into the analysis. For sjcapital, we accept the field
+    # but do NOT alter S&J factor logic or philosophy.
+    # This has ZERO coupling to /api/query.
+    discovery_context: Dict[str, Any] = {}
+
+    if req.discovery_mode:
+        try:
+            from services.playbook.discovery_types import DiscoverRequest
+            from services.playbook.discovery_service import run_discover
+
+            disc_req = DiscoverRequest(
+                playbook_id=req.playbook_id,
+                mode=req.discovery_mode,
+                giant=req.giant,
+                theme_ids=req.theme_ids,
+                ticker=req.tickers[0] if req.tickers and req.discovery_mode == "ticker_chain" else None,
+                include_foreign=req.include_foreign,
+                country_filters=req.country_filters,
+                max_depth=req.max_depth,
+                limit=min(req.limit * 2, 20),
+                only_hidden=False,
+                use_web_validation=False,   # validation off in bridge mode for speed
+                include_adr_or_etf_proxies=req.include_foreign,
+            )
+            disc_result = await run_discover(disc_req)
+
+            # Inject discovered US-accessible tickers into the analysis
+            discovered_tickers = [
+                c.ticker for c in disc_result.top_candidates
+                if c.direct_tradable  # only tickers we can actually score
+            ]
+            discovery_context = {
+                "mode":          req.discovery_mode,
+                "summary":       disc_result.summary,
+                "top_discovered": discovered_tickers[:10],
+                "total_found":   disc_result.meta.get("total_candidates_found", 0),
+                "foreign_enabled": req.include_foreign,
+                "candidate_previews": [
+                    {
+                        "ticker":   c.ticker,
+                        "name":     c.company_name,
+                        "country":  c.country,
+                        "layer":    c.layer_depth,
+                        "bc_score": c.scores.bottleneck_criticality_score,
+                        "theme":    c.themes[0] if c.themes else "",
+                    }
+                    for c in disc_result.top_candidates[:8]
+                ],
+            }
+
+            # Merge discovered tickers into analysis tickers (US-accessible only)
+            if discovered_tickers:
+                existing = set(t.upper() for t in req.tickers)
+                new_tickers = [t for t in discovered_tickers if t.upper() not in existing]
+                # For serenity: augment; for sjcapital: augment only if tickers not already set
+                if req.playbook_id.lower() == "serenity":
+                    req = req.model_copy(update={
+                        "tickers":      list(req.tickers) + new_tickers[:15],
+                        "context_mode": "watchlist",
+                    })
+                elif not req.tickers:
+                    req = req.model_copy(update={
+                        "tickers":      new_tickers[:15],
+                        "context_mode": "watchlist",
+                    })
+                mode = "watchlist"  # override mode for discovery bridge
+
+        except Exception as e:
+            print(f"[ANALYZER] Discovery bridge error: {e}")
+            discovery_context = {"error": str(e)}
 
     # ── Route by context_mode ─────────────────────────────────────────────────
     if mode == "portfolio":
@@ -210,10 +304,13 @@ async def run_analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         rejected_or_low_fit=low_summaries,
         portfolio_summary=portfolio_summary_result,
         playbook_context=pb_context,
+        discovery_context=discovery_context,
         meta={
-            "total_scored": len(all_results),
-            "high_fit": len(top_results),
-            "low_fit_or_failed": len(low_results),
+            "total_scored":       len(all_results),
+            "high_fit":           len(top_results),
+            "low_fit_or_failed":  len(low_results),
+            "discovery_used":     bool(discovery_context),
+            "discovery_mode":     req.discovery_mode,
         },
     )
 

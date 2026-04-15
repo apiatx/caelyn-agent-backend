@@ -2,21 +2,28 @@
 Playbook Router — FastAPI endpoints for the multi-strategy playbook engine.
 
 Routes (all under /api/playbooks):
-  GET  /api/playbooks                     — list all enabled playbooks
-  GET  /api/playbooks/top                 — top-ranked tickers in a universe
-  POST /api/playbooks/score-watchlist     — score a ticker list against a playbook
-  POST /api/playbooks/score-portfolio     — score portfolio holdings
-  GET  /api/playbooks/ticker/{ticker}     — score one ticker
-  GET  /api/playbooks/{playbook_id}       — get one playbook definition
+  GET  /api/playbooks                       — list all enabled playbooks
+  GET  /api/playbooks/top                   — top-ranked tickers in a universe
+  POST /api/playbooks/score-watchlist       — score a ticker list against a playbook
+  POST /api/playbooks/score-portfolio       — score portfolio holdings
+  GET  /api/playbooks/ticker/{ticker}       — score one ticker
+  POST /api/playbooks/analyze               — deep analysis with explanations
+  POST /api/playbooks/discover              — on-demand Serenity discovery engine
+  POST /api/playbooks/supply-chain-map      — structured supply-chain map
+  GET  /api/playbooks/themes                — list all supported themes
+  GET  /api/playbooks/giants                — list all supported giant anchors
+  GET  /api/playbooks/discovery-capabilities — discovery engine capabilities
+  GET  /api/playbooks/{playbook_id}         — get one playbook definition
 
-IMPORTANT: Static paths (top, score-watchlist, score-portfolio, ticker/{t})
-are registered BEFORE the parameterized {playbook_id} route to avoid shadowing.
+IMPORTANT: All static paths are registered BEFORE the parameterized {playbook_id}
+route to avoid shadowing.
 
 Guardrails:
   - This router is completely isolated from /api/query.
   - /api/query has NO knowledge of playbook_id and its default behavior is UNCHANGED.
-  - Any new strategy-aware logic lives exclusively in this router.
+  - Discovery routes are fully isolated: no coupling to terminal / AI brain.
   - Feature flag ENABLE_PLAYBOOK_ENGINE=false disables all routes gracefully.
+  - No Brave or Tavily usage in the discovery flow.
 """
 from __future__ import annotations
 
@@ -38,6 +45,8 @@ from services.playbook.playbook_types import (
     ScorePortfolioRequest,
 )
 from services.playbook.analyzer import AnalyzeRequest, AnalyzeResponse, run_analyze
+from services.playbook.discovery_types import DiscoverRequest, SupplyChainMapRequest
+from services.playbook.discovery_service import run_discover, run_supply_chain_map
 
 router = APIRouter(prefix="/api/playbooks", tags=["playbooks"])
 
@@ -214,6 +223,11 @@ async def analyze_endpoint(body: AnalyzeRequest):
     top_risks, what_would_improve_score, what_would_break_thesis, supply_chain_tags.
 
     Context modes: watchlist | portfolio | custom | universe
+
+    Optional discovery bridge (Serenity only):
+    If discovery_mode is provided and playbook_id=serenity, runs the discovery
+    engine first, then scores top discovered candidates and returns a combined
+    answer. S&J is unaffected.
     """
     _require_engine()
     _require_playbook(body.playbook_id)
@@ -225,6 +239,200 @@ async def analyze_endpoint(body: AnalyzeRequest):
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Analysis error: {e}")
+
+
+# ── POST /api/playbooks/discover ──────────────────────────────────────────────
+# MUST be registered before /{playbook_id}
+
+@router.post("/discover")
+async def discover_endpoint(body: DiscoverRequest):
+    """
+    On-demand Serenity discovery + supply-chain intelligence engine.
+
+    Discovers hidden bottleneck names from giants, themes, and supply-chain layers.
+    Supports foreign-market names with explicit confidence metadata.
+
+    Modes: giant_chain | theme_scan | foreign_bottlenecks | ticker_chain | country_theme_scan | custom
+
+    Provider usage:
+      - Finnhub: profile + news enrichment (primary)
+      - Tradier: quote/liquidity for US-listed and ADR names
+      - FMP: market cap sanity (sparing — 250/day cap)
+      - Perplexity: shortlist validation only (if use_web_validation=true)
+
+    Guardrails:
+      - User-triggered only — no background scans
+      - No Brave/Tavily usage
+      - Missing data degrades gracefully
+      - Foreign data confidence is explicit, not hand-wavy
+    """
+    _require_engine()
+    try:
+        result = await run_discover(body)
+        return result.model_dump()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Discovery error: {e}")
+
+
+# ── POST /api/playbooks/supply-chain-map ──────────────────────────────────────
+
+@router.post("/supply-chain-map")
+async def supply_chain_map_endpoint(body: SupplyChainMapRequest):
+    """
+    Return a structured multi-layer supply-chain map for a giant or theme anchor.
+
+    Layers:
+      0 = Giant / End-Demand Anchor
+      1 = Core Systems / Direct Integrators
+      2 = Key Components / Subsystems
+      3 = Constrained Subcomponents / Bottlenecks
+      4 = Upstream Materials / Tooling / Support
+
+    Each node includes: ticker, company, country, exchange, role, evidence, ADR proxy.
+    """
+    _require_engine()
+    try:
+        result = await run_supply_chain_map(body)
+        return result.model_dump()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Supply chain map error: {e}")
+
+
+# ── GET /api/playbooks/themes ─────────────────────────────────────────────────
+
+@router.get("/themes")
+async def list_themes_endpoint():
+    """
+    Return all supported Serenity discovery themes with full metadata.
+    Includes: label, description, giant_anchors, chain_layers, example_companies,
+    preferred_countries, policy_linkage, serenity_priority.
+    """
+    _require_engine()
+    try:
+        from services.playbook.theme_discovery import list_themes
+        return {
+            "themes": list_themes(),
+            "total":  len(list_themes()),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Theme list error: {e}")
+
+
+# ── GET /api/playbooks/giants ─────────────────────────────────────────────────
+
+@router.get("/giants")
+async def list_giants_endpoint():
+    """
+    Return all supported giant anchor platforms for discovery.
+    Includes: id, name, description, themes, capex_scale, anchor_ticker, foreign_exposure.
+    """
+    _require_engine()
+    try:
+        from services.playbook.giant_map import list_giants
+        giants = list_giants()
+        return {
+            "giants": giants,
+            "total":  len(giants),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Giants list error: {e}")
+
+
+# ── GET /api/playbooks/discovery-capabilities ─────────────────────────────────
+
+@router.get("/discovery-capabilities")
+async def discovery_capabilities_endpoint():
+    """
+    Return a structured overview of the discovery engine's capabilities.
+    Useful for the frontend to know what modes/filters are supported.
+    """
+    _require_engine()
+    try:
+        from services.playbook.theme_discovery import list_themes
+        from services.playbook.giant_map import list_giants
+        from services.playbook.foreign_market_map import list_supported_countries
+
+        themes = list_themes()
+        giants = list_giants()
+        countries = list_supported_countries()
+
+        return {
+            "discovery_engine_version": "1.0.0",
+            "supported_modes": [
+                {
+                    "mode":        "giant_chain",
+                    "description": "Traverse supply chain from a major platform giant (NVDA, MSFT, etc.)",
+                    "requires":    ["giant"],
+                },
+                {
+                    "mode":        "theme_scan",
+                    "description": "Scan companies relevant to one or more Serenity themes",
+                    "requires":    ["theme_ids"],
+                },
+                {
+                    "mode":        "foreign_bottlenecks",
+                    "description": "Focus on non-US supply chain positions with US access guidance",
+                    "requires":    [],
+                },
+                {
+                    "mode":        "ticker_chain",
+                    "description": "Find upstream/downstream neighbors of a known ticker",
+                    "requires":    ["ticker"],
+                },
+                {
+                    "mode":        "country_theme_scan",
+                    "description": "Cross-filter by country + theme for targeted regional discovery",
+                    "requires":    ["country_filters"],
+                },
+                {
+                    "mode":        "custom",
+                    "description": "Flexible fallback using any combination of filters",
+                    "requires":    [],
+                },
+            ],
+            "discovery_scoring_dimensions": [
+                "chain_depth_score",
+                "bottleneck_criticality_score",
+                "hiddenness_score",
+                "giant_dependency_score",
+                "foreign_uniqueness_score",
+                "supply_chain_confidence_score",
+                "proxy_accessibility_score",
+                "theme_purity_score",
+            ],
+            "supported_themes":   [{"id": t["id"], "label": t["label"]} for t in themes],
+            "supported_giants":   [{"id": g["id"], "name": g["name"]} for g in giants],
+            "supported_countries": [
+                {"code": c["code"], "name": c["name"], "coverage_status": c["coverage_status"]}
+                for c in countries
+            ],
+            "provider_notes": {
+                "finnhub":    "Primary — profile, news, international metadata (company_profile2, company_news)",
+                "tradier":    "Primary market data — quote/liquidity for US-listed and ADR names only",
+                "fmp":        "Sparing — market cap/profile reference (250/day cap)",
+                "perplexity": "Targeted validation only — shortlisted finalists (max 5 per request)",
+                "gemini":     "Optional — web-grounded synthesis when Perplexity insufficient",
+                "grok":       "Optional — crowding/X sentiment/theme heat",
+                "brave":      "NOT USED — unreliable in this environment",
+                "tavily":     "NOT USED — unreliable in this environment",
+            },
+            "guardrails": [
+                "User-triggered only — no background scan jobs",
+                "No coupling to /api/query or default AI terminal",
+                "No Brave or Tavily usage",
+                "Foreign data confidence is explicit — never hand-wavy",
+                "Missing data degrades gracefully to heuristic/fallback",
+                "S&J philosophy is unchanged — discovery is Serenity-focused",
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Capabilities error: {e}")
 
 
 # ── GET /api/playbooks/{playbook_id} ─────────────────────────────────────────

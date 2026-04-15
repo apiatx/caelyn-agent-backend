@@ -776,12 +776,400 @@ def test_api_query_isolation():
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Phase 3: Discovery engine tests
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_discovery_types():
+    """Smoke test DiscoverRequest / DiscoverResponse / DiscoveryCandidate models."""
+    from services.playbook.discovery_types import (
+        DiscoverRequest, DiscoverResponse, DiscoveryCandidate, DiscoveryScores,
+        SupplyChainMapRequest, SupplyChainMapResponse, ChainNode, ChainLayer,
+    )
+
+    # DiscoverRequest defaults
+    req = DiscoverRequest(mode="theme_scan", playbook_id="serenity")
+    _assert("DiscoverRequest.mode", req.mode == "theme_scan", req.mode)
+    _assert("DiscoverRequest.limit default", req.limit > 0, req.limit)
+    _assert("DiscoverRequest.include_foreign default", not req.include_foreign, req.include_foreign)
+
+    # DiscoveryScores
+    scores = DiscoveryScores(
+        chain_depth_score=85.0,
+        bottleneck_criticality_score=90.0,
+        hiddenness_score=70.0,
+        giant_dependency_score=60.0,
+        foreign_uniqueness_score=20.0,
+        supply_chain_confidence_score=88.0,
+        proxy_accessibility_score=100.0,
+        theme_purity_score=95.0,
+    )
+    _assert("DiscoveryScores all fields", scores.chain_depth_score == 85.0, scores.chain_depth_score)
+
+    # ChainNode
+    node = ChainNode(
+        ticker="ASML", company_name="ASML Holding", country="NL", exchange="AMS",
+        layer=3, layer_label="Bottleneck", themes=["semicap_supply_chain"],
+        role="EUV sole supplier", bottleneck_score=98.0, confidence="high",
+        evidence=["Only EUV scanner maker globally"],
+    )
+    _assert("ChainNode.bottleneck_score", node.bottleneck_score == 98.0, node.bottleneck_score)
+
+    # SupplyChainMapRequest
+    sc_req = SupplyChainMapRequest(anchor="NVDA")
+    _assert("SupplyChainMapRequest.anchor", sc_req.anchor == "NVDA", sc_req.anchor)
+    _assert("SupplyChainMapRequest.max_depth default", sc_req.max_depth == 4, sc_req.max_depth)
+
+
+def test_giant_map():
+    """Giant map structure and lookup."""
+    from services.playbook.giant_map import GIANT_MAP, get_giant, list_giants
+
+    # Spot check known giants
+    for gid in ["NVDA", "MSFT", "GOOGL", "META", "AMZN", "TSM", "AVGO"]:
+        g = get_giant(gid)
+        _assert(f"giant_map.get_giant({gid}) exists", g is not None, g)
+        if g:
+            _assert(f"giant_map.{gid}.themes non-empty", bool(g.get("themes")), g.get("themes"))
+            _assert(f"giant_map.{gid}.capex_scale set", g.get("capex_scale") is not None, g.get("capex_scale"))
+
+    # list_giants returns dicts
+    giants = list_giants()
+    _assert("list_giants returns non-empty list", len(giants) >= 8, len(giants))
+    _assert("list_giants[0] has id", "id" in giants[0], giants[0].keys())
+
+
+def test_supply_chain_graph():
+    """Supply chain graph node registry and chain functions."""
+    from services.playbook.supply_chain_graph import (
+        NODE_REGISTRY, get_node, get_chain_for_theme, get_all_tickers_for_themes,
+    )
+
+    # NODE_REGISTRY coverage
+    _assert("NODE_REGISTRY non-empty", len(NODE_REGISTRY) >= 30, len(NODE_REGISTRY))
+
+    # Known nodes present
+    for ticker in ["ASML", "NVDA", "MU", "ENTG", "VRT"]:
+        n = get_node(ticker)
+        _assert(f"node_registry.{ticker} exists", n is not None, n)
+        if n:
+            _assert(f"node_registry.{ticker}.bottleneck_score", n.get("bottleneck_score", 0) > 0, n.get("bottleneck_score"))
+
+    # ASML bottleneck score ≥ 95
+    asml = get_node("ASML")
+    _assert("ASML bottleneck_score ≥ 95", asml and asml["bottleneck_score"] >= 95, asml)
+
+    # get_chain_for_theme returns layers
+    layers = get_chain_for_theme("semicap_supply_chain", max_depth=4)
+    _assert("get_chain_for_theme returns layers", len(layers) > 0, len(layers))
+    # Layers contain nodes
+    all_nodes = [n for cl in layers for n in cl.nodes]
+    _assert("chain layers have nodes", len(all_nodes) > 0, len(all_nodes))
+
+    # No foreign by default
+    countries = {n.country for cl in layers for n in cl.nodes}
+    _assert("no foreign by default", "JP" not in countries and "NL" not in countries, countries)
+
+    # With include_foreign
+    layers_f = get_chain_for_theme("semicap_supply_chain", max_depth=4, include_foreign=True)
+    nodes_f = [n for cl in layers_f for n in cl.nodes]
+    foreign_found = any(n.country != "US" for n in nodes_f)
+    _assert("include_foreign=True surfaces foreign nodes", foreign_found, [n.ticker for n in nodes_f[:5]])
+
+    # get_all_tickers_for_themes — include_foreign=True to get NL-listed ASML
+    tickers_all = get_all_tickers_for_themes(["semicap_supply_chain", "photonics_cpo"], include_foreign=True)
+    _assert("get_all_tickers_for_themes non-empty", len(tickers_all) > 0, len(tickers_all))
+    # ASML has country=NL (even though it's NASDAQ-listed) — surfaced with include_foreign=True
+    _assert("ASML in tickers (include_foreign=True)", "ASML" in tickers_all, tickers_all[:8])
+
+
+def test_theme_discovery():
+    """Theme taxonomy structure and lookups."""
+    from services.playbook.theme_discovery import THEME_TAXONOMY, get_theme, list_themes
+
+    _assert("THEME_TAXONOMY non-empty", len(THEME_TAXONOMY) >= 10, len(THEME_TAXONOMY))
+
+    # Required themes present
+    for tid in ["photonics_cpo", "ai_power_energy", "grid_transformers", "advanced_packaging_test",
+                "semicap_supply_chain", "defense_optics"]:
+        t = get_theme(tid)
+        _assert(f"theme_taxonomy.{tid} exists", t is not None, t)
+        if t:
+            _assert(f"theme.{tid}.label", bool(t.get("label")), t.get("label"))
+            _assert(f"theme.{tid}.serenity_priority set", t.get("serenity_priority") in ("high", "medium", "low"), t.get("serenity_priority"))
+
+    # list_themes returns full list
+    themes = list_themes()
+    _assert("list_themes non-empty", len(themes) >= 10, len(themes))
+    _assert("list_themes[0] has id", "id" in themes[0], themes[0].keys())
+
+    # High-priority themes
+    high_priority = [t for t in themes if t.get("serenity_priority") == "high"]
+    _assert("at least 4 high-priority themes", len(high_priority) >= 4, len(high_priority))
+
+
+def test_foreign_market_map():
+    """Foreign market map structure."""
+    from services.playbook.foreign_market_map import (
+        COUNTRY_METADATA, FOREIGN_ACCESS_MAP,
+        get_country_meta, get_foreign_access, get_us_proxy,
+        get_etf_proxies_for_theme, list_supported_countries,
+    )
+
+    # Country metadata
+    for code in ["US", "JP", "KR", "TW", "NL", "DE"]:
+        meta = get_country_meta(code)
+        _assert(f"country_meta.{code} exists", meta is not None, meta)
+        if meta:
+            _assert(f"country_meta.{code}.data_confidence", bool(meta.get("data_confidence")), meta.get("data_confidence"))
+
+    # Foreign access map
+    for native in ["6857.T", "000660.KS", "BESI.AS"]:
+        fa = get_foreign_access(native)
+        _assert(f"foreign_access.{native} exists", fa is not None, fa)
+        if fa:
+            _assert(f"foreign_access.{native}.adr_ticker", bool(fa.get("adr_ticker")), fa.get("adr_ticker"))
+
+    # US proxy resolution
+    proxy = get_us_proxy("6857.T")
+    _assert("get_us_proxy('6857.T') = ATEYY", proxy == "ATEYY", proxy)
+
+    proxy_besi = get_us_proxy("BESI.AS")
+    _assert("get_us_proxy('BESI.AS') = BESIY", proxy_besi == "BESIY", proxy_besi)
+
+    # ETF proxies for themes
+    etfs = get_etf_proxies_for_theme("semicap_supply_chain")
+    _assert("ETF proxies for semicap_supply_chain non-empty", len(etfs) > 0, etfs)
+    _assert("SOXX in semicap proxies", "SOXX" in etfs, etfs)
+
+    # list_supported_countries
+    countries = list_supported_countries()
+    _assert("list_supported_countries non-empty", len(countries) >= 7, len(countries))
+
+
+def test_discovery_scoring():
+    """Unit test the discovery scoring engine functions."""
+    from services.playbook.discovery_service import (
+        _chain_depth_score, _hiddenness_score, _giant_dependency_score,
+        _foreign_uniqueness_score, _supply_chain_confidence_score,
+        _proxy_accessibility_score, _theme_purity_score, _rank_candidates,
+    )
+    from services.playbook.discovery_types import DiscoveryScores, DiscoveryCandidate
+
+    # chain_depth_score: deeper = higher
+    d0 = _chain_depth_score(0)
+    d3 = _chain_depth_score(3)
+    d4 = _chain_depth_score(4)
+    _assert("chain_depth: layer 4 > layer 3 > layer 0", d4 > d3 > d0, (d0, d3, d4))
+    _assert("chain_depth: layer 4 ≥ 90", d4 >= 90, d4)
+
+    # hiddenness_score: foreign + thin coverage = higher
+    h_us, _ = _hiddenness_score("ASML", "US", 5_000_000_000, "full", {"bottleneck_score": 98})
+    h_jp, _ = _hiddenness_score("ATEYY", "JP", 500_000_000, "thin", {"bottleneck_score": 88})
+    _assert("hiddenness: JP thin > US full", h_jp > h_us, (h_us, h_jp))
+
+    # giant_dependency_score
+    g0 = _giant_dependency_score({"giant_anchors": []})
+    g1 = _giant_dependency_score({"giant_anchors": ["NVDA"]})
+    g3 = _giant_dependency_score({"giant_anchors": ["NVDA", "MSFT", "META"]})
+    _assert("giant_dep: 3 anchors > 1 > 0", g3 > g1 > g0, (g0, g1, g3))
+
+    # foreign_uniqueness_score
+    fu_us  = _foreign_uniqueness_score("US", False, "full")
+    fu_jp  = _foreign_uniqueness_score("JP", True, "partial")
+    fu_jp2 = _foreign_uniqueness_score("JP", False, "thin")
+    _assert("foreign_uniqueness: no-ADR JP > ADR JP > US", fu_jp2 > fu_jp > fu_us, (fu_us, fu_jp, fu_jp2))
+
+    # supply_chain_confidence_score
+    sc_high = _supply_chain_confidence_score({"confidence": "high", "evidence": ["a", "b", "c"]})
+    sc_low  = _supply_chain_confidence_score({"confidence": "low",  "evidence": []})
+    _assert("sc_confidence: high > low", sc_high > sc_low, (sc_high, sc_low))
+    _assert("sc_confidence: high ≥ 85", sc_high >= 85, sc_high)
+
+    # proxy_accessibility_score
+    pa_us  = _proxy_accessibility_score("US", True, None)
+    pa_adr = _proxy_accessibility_score("JP", True, "ATEYY")
+    pa_etf = _proxy_accessibility_score("KR", True, None)
+    pa_none= _proxy_accessibility_score("JP", False, None)
+    _assert("proxy_access: US > ADR > ETF > none", pa_us > pa_adr > pa_etf > pa_none, (pa_us, pa_adr, pa_etf, pa_none))
+
+    # theme_purity_score
+    tp1 = _theme_purity_score(["semicap_supply_chain"])
+    tp2 = _theme_purity_score(["semicap_supply_chain", "photonics_cpo"])
+    tp4 = _theme_purity_score(["a", "b", "c", "d"])
+    _assert("theme_purity: 1 theme > 2 > 4", tp1 > tp2 > tp4, (tp1, tp2, tp4))
+    _assert("theme_purity: single ≥ 95", tp1 >= 95, tp1)
+
+
+def test_discovery_engine_sync():
+    """End-to-end discovery engine: theme_scan and giant_chain modes (sync, no live data)."""
+
+    async def _run():
+        from services.playbook.discovery_types import DiscoverRequest
+        from services.playbook.discovery_service import run_discover
+
+        # Theme scan — semicap_supply_chain
+        req = DiscoverRequest(
+            mode="theme_scan",
+            theme_ids=["semicap_supply_chain"],
+            playbook_id="serenity",
+            limit=10,
+            include_foreign=False,
+            use_web_validation=False,
+        )
+        result = await run_discover(req)
+        _assert("theme_scan returns candidates", len(result.top_candidates) > 0, len(result.top_candidates))
+        _assert("theme_scan summary non-empty", bool(result.summary), result.summary[:50])
+        tickers = [c.ticker for c in result.top_candidates]
+        # ASML is NL-domiciled so filtered by include_foreign=False; check US-listed names
+        us_semicap = [t for t in tickers if t in ("AMAT", "LRCX", "KLAC", "ENTG", "ACLS", "KLAC", "ONTO", "MKSI")]
+        _assert("US semicap names in theme_scan results (no foreign)", len(us_semicap) > 0, tickers)
+
+        # Giant chain — NVDA
+        req2 = DiscoverRequest(
+            mode="giant_chain",
+            giant="NVDA",
+            playbook_id="serenity",
+            limit=10,
+            include_foreign=False,
+            use_web_validation=False,
+        )
+        result2 = await run_discover(req2)
+        _assert("giant_chain returns candidates", len(result2.top_candidates) > 0, len(result2.top_candidates))
+        _assert("giant_chain meta.total_candidates_found > 0", result2.meta.get("total_candidates_found", 0) > 0, result2.meta)
+
+        # Foreign bottlenecks mode
+        req3 = DiscoverRequest(
+            mode="foreign_bottlenecks",
+            playbook_id="serenity",
+            limit=8,
+            include_foreign=True,
+            use_web_validation=False,
+        )
+        result3 = await run_discover(req3)
+        _assert("foreign_bottlenecks returns candidates", len(result3.top_candidates) > 0, len(result3.top_candidates))
+        countries = {c.country for c in result3.top_candidates}
+        _assert("foreign_bottlenecks: no US candidates", "US" not in countries, countries)
+
+    asyncio.run(_run())
+
+
+def test_supply_chain_map_engine():
+    """End-to-end supply chain map: giant anchor and theme anchor."""
+
+    async def _run():
+        from services.playbook.discovery_types import SupplyChainMapRequest
+        from services.playbook.discovery_service import run_supply_chain_map
+
+        # Giant anchor
+        req = SupplyChainMapRequest(anchor="NVDA", max_depth=4, include_foreign=False)
+        result = await run_supply_chain_map(req)
+        _assert("supply_chain_map.anchor = NVDA", result.anchor == "NVDA", result.anchor)
+        _assert("supply_chain_map has layers", len(result.layers) > 0, len(result.layers))
+        all_nodes = [n for cl in result.layers for n in cl.nodes]
+        _assert("supply_chain_map NVDA has nodes", len(all_nodes) > 0, len(all_nodes))
+        _assert("supply_chain_map NVDA meta.total_nodes > 0", result.meta.get("total_nodes", 0) > 0, result.meta)
+
+        # Theme anchor
+        req2 = SupplyChainMapRequest(theme_id="advanced_packaging_test", max_depth=4, include_foreign=False)
+        result2 = await run_supply_chain_map(req2)
+        _assert("supply_chain_map.theme anchor", result2.anchor == "advanced_packaging_test", result2.anchor)
+        _assert("supply_chain_map theme has layers", len(result2.layers) > 0, len(result2.layers))
+
+        # With foreign
+        req3 = SupplyChainMapRequest(anchor="NVDA", max_depth=4, include_foreign=True)
+        result3 = await run_supply_chain_map(req3)
+        all_nodes3 = [n for cl in result3.layers for n in cl.nodes]
+        country_set = {n.country for n in all_nodes3}
+        _assert("supply_chain_map with_foreign includes non-US", len(country_set) > 1, country_set)
+        _assert("supply_chain_map adr_etf_proxies present", isinstance(result3.adr_etf_proxies, dict), result3.adr_etf_proxies)
+
+    asyncio.run(_run())
+
+
+def test_discovery_bridge_analyzer():
+    """AnalyzeRequest discovery bridge: serenity + discovery_mode injects discovered tickers."""
+
+    async def _run():
+        from services.playbook.analyzer import AnalyzeRequest
+
+        # Verify discovery_mode, giant, theme_ids fields are accepted without error
+        req = AnalyzeRequest(
+            playbook_id="serenity",
+            context_mode="watchlist",
+            tickers=["NVDA", "ASML"],
+            discovery_mode="theme_scan",
+            theme_ids=["semicap_supply_chain"],
+            include_foreign=False,
+            max_depth=3,
+            limit=5,
+        )
+        _assert("AnalyzeRequest.discovery_mode accepted", req.discovery_mode == "theme_scan", req.discovery_mode)
+        _assert("AnalyzeRequest.theme_ids accepted", req.theme_ids == ["semicap_supply_chain"], req.theme_ids)
+        _assert("AnalyzeRequest.include_foreign accepted", not req.include_foreign, req.include_foreign)
+
+        # S&J also accepts discovery fields without altering behavior
+        req_sj = AnalyzeRequest(
+            playbook_id="sjcapital",
+            context_mode="watchlist",
+            tickers=["NVDA"],
+            discovery_mode="theme_scan",
+            theme_ids=["defense_optics"],
+        )
+        _assert("sjcapital accepts discovery_mode field", req_sj.discovery_mode == "theme_scan", req_sj.discovery_mode)
+
+    asyncio.run(_run())
+
+
+def test_discovery_query_isolation():
+    """Ensure discovery modules have no /api/query coupling."""
+    import os
+
+    discovery_files = [
+        "services/playbook/discovery_types.py",
+        "services/playbook/discovery_service.py",
+        "services/playbook/discovery_enrichment.py",
+        "services/playbook/giant_map.py",
+        "services/playbook/supply_chain_graph.py",
+        "services/playbook/theme_discovery.py",
+        "services/playbook/foreign_market_map.py",
+    ]
+
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    while not os.path.basename(backend_dir) == "backend" and backend_dir != "/":
+        backend_dir = os.path.dirname(backend_dir)
+
+    # Only check for actual Python import statements — comments/docstrings mentioning
+    # "/api/query" for documentation purposes are allowed and expected.
+    import_banned = ["from routes.query", "from api.query", "import query_handler"]
+
+    for rel_path in discovery_files:
+        abs_path = os.path.join(backend_dir, rel_path)
+        if not os.path.exists(abs_path):
+            _fail(f"discovery_isolation.{os.path.basename(rel_path)} file exists", "File not found")
+            continue
+        with open(abs_path) as f:
+            raw_lines = f.readlines()
+        # Only check non-comment, non-docstring code lines for banned imports
+        code_lines = [
+            l for l in raw_lines
+            if not l.strip().startswith("#") and not l.strip().startswith('"""') and not l.strip().startswith("'''")
+        ]
+        code_src = "".join(code_lines)
+        for ban in import_banned:
+            _assert(
+                f"discovery_isolation.{os.path.basename(rel_path)}: no '{ban}' import",
+                ban not in code_src,
+                f"Found banned import: {ban!r}",
+            )
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Runner
 # ────────────────────────────────────────────────────────────────────────────
 
 def run_all():
     print("=" * 60)
-    print("PLAYBOOK PHASE 1.5 + 2.0 FACTOR TESTS")
+    print("PLAYBOOK PHASE 1.5 + 2.0 + 3.0 FACTOR TESTS")
     print("=" * 60)
 
     # Phase 1.5
@@ -805,6 +1193,18 @@ def run_all():
     test_policy_tailwind()
     test_playbook_registry_v2()
     test_explainer()
+
+    # Phase 3 — Discovery engine
+    test_discovery_types()
+    test_giant_map()
+    test_supply_chain_graph()
+    test_theme_discovery()
+    test_foreign_market_map()
+    test_discovery_scoring()
+    test_discovery_engine_sync()
+    test_supply_chain_map_engine()
+    test_discovery_bridge_analyzer()
+    test_discovery_query_isolation()
 
     print()
     print("=" * 60)

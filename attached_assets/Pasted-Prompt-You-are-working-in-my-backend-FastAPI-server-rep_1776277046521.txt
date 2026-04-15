@@ -1,0 +1,485 @@
+Prompt
+
+You are working in my backend FastAPI server repo for CaelynAI.
+
+You already implemented:
+
+isolated multi-playbook engine
+serenity and sjcapital
+/api/playbooks/*
+/api/playbooks/analyze
+deterministic factor scoring and explanations
+strict isolation from /api/query
+
+Good.
+
+Now implement the next major step:
+
+Objective
+
+Build a new on-demand Serenity discovery + supply-chain intelligence layer that can:
+
+discover hidden bottleneck names from giants/themes/supply-chain layers
+support foreign-market names where data support is strong enough
+expose a structured multi-layer supply-chain map
+rank names by bottleneck criticality, hiddenness, evidence, and chain depth
+improve S&J only where shared infrastructure helps its existing philosophy, without changing S&J principles
+remain fully isolated from /api/query and default terminal behavior
+stay strictly within realistic API/rate-limit constraints
+
+This is not a background daily scanner.
+This is an on-demand discovery engine triggered only when the frontend/user explicitly calls it.
+
+API/provider constraints — must follow exactly
+Do NOT rely on these for core discovery
+Brave Search — unreliable / inaccurate in this environment
+Tavily — unreliable / inaccurate in this environment
+Polygon — too limited for broad discovery use
+TwelveData — too limited for broad discovery use
+Use these as primary sources
+Finnhub = primary structured discovery/enrichment source
+Tradier = primary real-time market-data / quote / liquidity / trend source where useful
+FMP = sparing profile/reference/basic financial checks only
+SEC Edgar = US filing validation only
+Perplexity = targeted validation and supply-chain role confirmation only
+Gemini = selective web-grounded expansion only when necessary
+Grok = optional X sentiment / crowding / theme heat only
+Rate-limit philosophy
+Discovery must be user-triggered only
+Batch where possible
+Cache aggressively
+Do not perform broad market crawls
+Prefer deterministic maps + provider enrichment over repeated search calls
+Search/web validation should only be used on shortlisted candidates, not full universes
+Non-negotiable guardrails
+Do not modify /api/query in any way.
+Do not change default AI Terminal behavior.
+Do not run any background scan jobs for this feature.
+This must be fully user-triggered via new isolated routes only.
+Do not change S&J’s investing philosophy or factor logic.
+Only add shared context/enrichment that helps S&J when useful.
+Do not duplicate the whole playbook engine.
+Keep Serenity discovery logic modular and isolated.
+Use existing APIs/providers smartly and rate-limit carefully.
+Prefer cached, batched, and deterministic logic over expensive freeform LLM dependence.
+Missing data must degrade gracefully.
+Foreign ticker support must be explicit and confidence-aware, not hand-wavy.
+Core implementation approach
+
+This discovery engine should be built around:
+
+curated giant/theme/supply-chain maps
+Finnhub enrichment
+Tradier quote/trend/liquidity confirmation
+FMP basic profile/financial sanity when needed
+Perplexity targeted validation on shortlisted candidates only
+optional Gemini/Grok enrichment only when explicitly useful
+
+Do not design this as a live crawler.
+
+Part 1 — Build a new discovery subsystem
+
+Create isolated module files inside playbook services, something like:
+
+services/playbook/
+  discovery_service.py
+  supply_chain_graph.py
+  theme_discovery.py
+  foreign_market_map.py
+  giant_map.py
+  discovery_types.py
+  discovery_enrichment.py
+
+Adapt to repo structure, but keep it isolated and clean.
+
+Part 2 — Add new on-demand discovery routes
+
+Add routes like these under the isolated playbook namespace:
+
+POST /api/playbooks/discover
+POST /api/playbooks/supply-chain-map
+GET /api/playbooks/themes
+GET /api/playbooks/giants
+GET /api/playbooks/discovery-capabilities
+
+Do not touch /api/query.
+
+Part 3 — Discovery request model
+
+Support a request body like:
+
+{
+  "playbook_id": "serenity",
+  "query": "Find hidden bottlenecks under NVIDIA in photonics and packaging",
+  "mode": "giant_chain",
+  "giant": "NVDA",
+  "theme_ids": ["photonics_cpo", "advanced_packaging_test"],
+  "country_filters": ["US", "JP", "KR", "NL", "DE"],
+  "include_foreign": true,
+  "max_depth": 4,
+  "limit": 20,
+  "only_hidden": true,
+  "only_public": true,
+  "include_adr_or_etf_proxies": true,
+  "use_web_validation": true
+}
+
+Support modes:
+
+giant_chain
+theme_scan
+foreign_bottlenecks
+ticker_chain
+country_theme_scan
+custom
+Part 4 — Build a real supply-chain graph model
+
+Create a structured graph/relationship system using deterministic mappings plus evidence layers.
+
+Graph entities
+
+Support:
+
+giant/platform
+end market
+system layer
+subcomponent layer
+bottleneck layer
+company
+country
+exchange
+proxy vehicle (ADR/ETF if applicable)
+Graph edges
+
+Examples:
+
+depends_on
+supplied_by
+enables
+upstream_of
+critical_to
+proxy_for
+Required chain layers
+
+Support:
+
+layer 0: giant / end-demand anchor
+layer 1: core systems
+layer 2: key components
+layer 3: constrained subcomponents / bottlenecks
+layer 4: upstream materials / tooling / support
+
+Do not rely on LLM inference to create the chain.
+Use:
+
+curated maps
+keyword/profile matching
+Finnhub metadata/news
+targeted Perplexity validation on finalists
+confidence scoring
+Part 5 — Build giant/platform anchor support
+
+Create a giant_map or equivalent for anchors like:
+
+NVDA
+MSFT
+GOOGL
+AMZN
+META
+TSM
+AVGO
+xAI
+Hyperscalers_AI_Capex
+AI_Power_Buildout
+
+For each anchor, define:
+
+relevant themes
+downstream system layers
+likely bottleneck buckets
+likely supplier classes
+foreign exposure relevance
+
+This powers discovery scans.
+
+Part 6 — Build theme discovery system
+
+Create a Serenity-focused theme taxonomy.
+
+Required themes
+
+At minimum:
+
+photonics_cpo
+ai_power_energy
+grid_transformers
+advanced_packaging_test
+soi_substrates_materials
+memory_hbm
+semicap_supply_chain
+cooling_thermal
+neocloud
+defense_optics
+space_sensing
+industrial_onshoring
+ai_infrastructure
+
+Each theme should include:
+
+label
+description
+giant anchors
+relevant chain layers
+keyword rules
+example companies
+preferred countries
+policy linkage if any
+Part 7 — Add foreign market awareness
+
+Build explicit foreign support rather than pretending.
+
+Preferred provider approach
+
+Use:
+
+Finnhub for international metadata/OHLC where supported
+FMP only for sparse reference/profile help
+Perplexity targeted validation for foreign role mapping
+Gemini only when extra web-grounded clarification is required
+Required v1 country/exchange focus
+
+Support explicit confidence-aware handling for:
+
+US
+Japan
+South Korea
+Taiwan
+Netherlands
+Germany
+France
+UK
+
+For each discovered foreign name, include:
+
+country
+exchange
+direct tradability confidence
+ADR if relevant
+ETF proxy if useful
+data confidence level
+coverage status: full, partial, thin
+Important
+
+If support is thin, say so in the response.
+
+Part 8 — Add hiddenness / bottleneck depth scoring
+
+Create Serenity discovery scoring dimensions separate from the existing general playbook score.
+
+Add these discovery factors
+chain_depth_score
+bottleneck_criticality_score
+hiddenness_score
+giant_dependency_score
+foreign_uniqueness_score
+supply_chain_confidence_score
+proxy_accessibility_score
+theme_purity_score
+Implementation notes
+
+These should be mostly deterministic / heuristic from:
+
+curated maps
+chain layer position
+size/coverage/crowding heuristics
+provider-backed metadata
+targeted validation
+
+Do not require expensive web calls for every candidate.
+
+Part 9 — Provider usage rules
+Finnhub — primary
+
+Use for:
+
+company profile
+news
+supply chain
+international metadata
+ETF/industry exposure
+earnings context
+structured enrichment
+Tradier — primary market-data source
+
+Use for:
+
+real-time quote sanity
+liquidity / price / volume context
+trend confirmation on US-tradable symbols
+options relevance if helpful later
+
+Do not use Tradier for foreign discovery mapping, but do use it for:
+
+US-listed candidates
+ADRs
+ETFs
+proxy vehicles
+FMP — sparing
+
+Use for:
+
+company profile/reference
+market cap / valuation sanity
+US financial basics only when needed
+Avoid broad discovery sweeps due to 250/day cap.
+SEC Edgar
+
+Use only for US filing validation where relevant.
+
+Perplexity
+
+Use only for shortlisted candidate validation:
+
+supply-chain role confirmation
+customer/supplier relationship checks
+ADR/ETF proxy identification
+foreign niche validation
+
+No full-universe web-search blasting.
+
+Gemini
+
+Optional. Use only when:
+
+Perplexity is insufficient
+web-grounded discovery synthesis is truly needed
+Grok
+
+Optional:
+
+crowding
+X narrative heat
+theme chatter
+Do not make it mandatory for core discovery.
+Never use Brave or Tavily for core logic
+
+They are unreliable in this environment.
+
+Part 10 — Add discovery result response shapes
+/api/playbooks/discover response
+
+Return structured output like:
+
+{
+  "playbook_id": "serenity",
+  "mode": "giant_chain",
+  "query": "Find hidden bottlenecks under NVIDIA in photonics and packaging",
+  "summary": "Top hidden bottleneck candidates are ...",
+  "top_candidates": [
+    {
+      "ticker": "LITE",
+      "company_name": "...",
+      "country": "US",
+      "exchange": "NASDAQ",
+      "themes": ["photonics_cpo"],
+      "chain_layers": ["optical_components", "transceivers"],
+      "chain_depth_score": 74,
+      "bottleneck_criticality_score": 83,
+      "hiddenness_score": 41,
+      "supply_chain_confidence_score": 86,
+      "thesis_summary": "...",
+      "fit_reasoning": ["...", "..."],
+      "us_access_proxy": null,
+      "coverage_status": "full"
+    }
+  ],
+  "low_confidence_candidates": [],
+  "chain_map_preview": {},
+  "meta": {
+    "countries_scanned": ["US", "JP", "KR", "NL"],
+    "foreign_enabled": true,
+    "max_depth": 4,
+    "provider_notes": ["Finnhub primary", "Tradier used for tradable US/ADR quote checks", "Perplexity used only for shortlisted validation"]
+  }
+}
+/api/playbooks/supply-chain-map response
+
+Return:
+
+anchor
+theme
+layered nodes
+companies by layer
+country/exchange tags
+evidence/confidence
+ADR/ETF proxy if helpful
+Part 11 — Improve S&J only where shared infrastructure helps
+
+Do not change S&J philosophy.
+
+Allow S&J to benefit from:
+
+better theme evidence
+better policy tailwind context
+better foreign/ADR/ETF awareness
+better backlog/evidence freshness data
+better catalyst mapping
+
+Do not turn S&J into a bottleneck scanner.
+
+Part 12 — Add a strategy-aware discovery/analyze bridge
+
+Extend /api/playbooks/analyze carefully so Serenity can optionally consume discovery context when explicitly requested.
+
+Support request fields like:
+
+discovery_mode
+giant
+theme_ids
+include_foreign
+max_depth
+country_filters
+
+If playbook_id=serenity and discovery fields are present:
+
+run discovery first
+then analyze top candidates
+return a combined terminal-friendly answer
+
+If playbook_id=sjcapital:
+
+ignore bottleneck-chain-specific discovery unless it only enriches evidence context
+do not alter S&J principles
+Part 13 — Testing requirements
+
+Add/update tests for:
+
+discovery routes work
+supply-chain map route works
+foreign metadata fields populate correctly
+hiddenness/depth scores populate
+giant anchor mapping works
+theme scan returns structured candidates
+Serenity uses discovery context correctly
+S&J remains philosophically unchanged
+/api/query remains untouched
+existing /api/playbooks/* routes still work
+provider fallbacks behave correctly when Perplexity/Gemini/Grok are unavailable
+no Brave/Tavily dependencies exist in this flow
+Part 14 — Deliverables
+
+When done, report:
+
+exact files added/modified
+routes added
+supported themes
+supported giant anchors
+supported foreign countries/exchanges
+what is deterministic vs heuristic vs provider-backed
+where Finnhub / Tradier / FMP / Perplexity are used
+sample JSON for:
+/api/playbooks/discover
+/api/playbooks/supply-chain-map
+/api/playbooks/analyze with Serenity discovery context
+proof /api/query remains untouched
+any TODOs for phase 3

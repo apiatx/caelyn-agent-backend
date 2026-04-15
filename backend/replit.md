@@ -100,6 +100,53 @@ The platform's backend is built on FastAPI, designed for robustness and scalabil
 - **Flags**: crowded_long, crowded_short, squeeze_candidate, dislocated_vs_oracle, trend_continuation_candidate, avoid_due_to_spread, illiquid_high_volatility
 - **No auth / no private keys required** — 100% public Hyperliquid market data
 
+## Serenity Discovery Engine (Phase 3) — `/api/playbooks/discover`
+
+### Purpose
+On-demand supply-chain intelligence layer for Serenity strategy. Identifies hidden bottleneck companies within the supply chains of major platform giants (NVDA, MSFT, GOOGL, META, AMZN, TSM, AVGO, xAI, Hyperscalers, AI_Power). Fully isolated from `/api/query`.
+
+### New Routes
+- `POST /api/playbooks/discover` — run the discovery engine
+- `POST /api/playbooks/supply-chain-map` — structured multi-layer chain map
+- `GET  /api/playbooks/themes` — list all 14 supported discovery themes
+- `GET  /api/playbooks/giants` — list all 10 giant anchors
+- `GET  /api/playbooks/discovery-capabilities` — engine metadata
+
+### Discovery Modes
+- `giant_chain` — traverse supply chain from a giant anchor (requires `giant`)
+- `theme_scan` — scan by theme IDs (requires `theme_ids`)
+- `foreign_bottlenecks` — non-US positions with US access guidance
+- `ticker_chain` — upstream/downstream neighbors of a known ticker
+- `country_theme_scan` — cross-filter by country + theme
+- `custom` — flexible fallback
+
+### 8 Scoring Dimensions
+`chain_depth_score`, `bottleneck_criticality_score`, `hiddenness_score`, `giant_dependency_score`, `foreign_uniqueness_score`, `supply_chain_confidence_score`, `proxy_accessibility_score`, `theme_purity_score`
+
+Composite rank: bottleneck_criticality(35%) + chain_depth(25%) + hiddenness(20%) + confidence(20%)
+
+### Key Files
+- `services/playbook/discovery_types.py` — Pydantic models
+- `services/playbook/discovery_service.py` — core engine + scoring
+- `services/playbook/discovery_enrichment.py` — provider enrichment (Finnhub/Tradier/FMP/Perplexity)
+- `services/playbook/giant_map.py` — 10 giant anchors with theme/capex metadata
+- `services/playbook/supply_chain_graph.py` — ~40 curated nodes (5 layers, US+foreign)
+- `services/playbook/theme_discovery.py` — 14 themes with policy/priority metadata
+- `services/playbook/foreign_market_map.py` — JP/KR/TW/NL/DE/FR/UK with ADRs and ETF proxies
+
+### Provider Rules
+- Finnhub = primary (profile, news, international)
+- Tradier = US/ADR quotes only (NOT foreign natives)
+- FMP = sparing market cap reference (250/day cap)
+- Perplexity = shortlist validation only (max 5 per request)
+- Brave/Tavily = NOT USED
+
+### Discovery Bridge in /api/playbooks/analyze
+If `discovery_mode` is set, the analyze endpoint runs discovery first, injects top US-accessible candidates into the ticker list, and returns `discovery_context` alongside playbook scores. S&J philosophy is unchanged.
+
+### Tests
+268 tests (0 failures) in `services/playbook/factor_tests.py`. Includes 10 Phase 3 discovery tests.
+
 ## External Dependencies
 - **AI**: OpenAI (GPT-4o for orchestration/classification), Anthropic (Claude Sonnet for reasoning/analysis), xAI Grok.
 - **Market Data & Screening**: Finviz, TwelveData, Polygon.io, Finnhub, Financial Modeling Prep (FMP), Alpha Vantage, Nasdaq.
