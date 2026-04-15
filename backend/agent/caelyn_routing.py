@@ -28,6 +28,8 @@ except ImportError:
             return args[0]
         return _noop
 
+from agent import preset_registry  # Phase 1: alias resolution delegated here
+
 # ── Routing matrix ────────────────────────────────────────────────────────────
 # Keys are normalized route identifiers.
 # final:        internal model id for the final reasoning/synthesis model
@@ -90,208 +92,9 @@ DEFAULT_ROUTE: dict = {
 }
 
 # ── Category/preset → route key normalization ─────────────────────────────────
-# Maps any string variant the system might use to a canonical route key.
-# Covers: preset_intent values, category strings from the classifier, UI labels.
-
-_ALIAS_MAP: dict[str, str] = {
-    # Daily Briefing
-    "briefing": "daily_briefing",
-    "daily_briefing": "daily_briefing",
-    "daily briefing": "daily_briefing",
-    "daily": "daily_briefing",
-    "market_briefing": "daily_briefing",
-    "morning_briefing": "daily_briefing",
-    "briefing_dashboard": "daily_briefing",
-
-    # Macro Overview
-    "macro_overview": "macro_overview",
-    "macro overview": "macro_overview",
-    "macro": "macro_overview",
-    "macroeconomic": "macro_overview",
-    "macro_snapshot": "macro_overview",
-    "global_macro": "macro_overview",
-    "macro_outlook": "macro_overview",
-    "economy": "macro_overview",
-
-    # Headlines — all news_intelligence variants must resolve here
-    "headlines": "headlines",
-    "news": "headlines",
-    "market_news": "headlines",
-    "newsfeed": "headlines",
-    "news_intelligence": "headlines",
-    "notifai": "headlines",
-    "news_analysis": "headlines",
-    "news_markets": "headlines",
-
-    # Upcoming Catalysts
-    "upcoming_catalysts": "upcoming_catalysts",
-    "catalysts": "upcoming_catalysts",
-    "earnings_catalyst": "upcoming_catalysts",
-    "earnings_agent": "upcoming_catalysts",
-    "earnings": "upcoming_catalysts",
-    "catalyst": "upcoming_catalysts",
-    "upcoming catalysts": "upcoming_catalysts",
-
-    # Trending Now
-    "trending_now": "trending_now",
-    "trending": "trending_now",
-    "trending now": "trending_now",
-    "cross_asset_trending": "trending_now",
-    "cross_asset": "trending_now",
-    "cross_market": "trending_now",
-    "trending_scan": "trending_now",
-    "whats_hot": "trending_now",
-
-    # Social Momentum
-    "social_momentum": "social_momentum",
-    "social momentum": "social_momentum",
-    "social": "social_momentum",
-    "social_scan": "social_momentum",
-    "sentiment": "social_momentum",
-    "wsb": "social_momentum",
-    "reddit": "social_momentum",
-
-    # X Trader Consensus (broader / top traders)
-    "x_trader_consensus": "x_trader_consensus",
-    "trader_consensus": "x_trader_consensus",
-    "top_traders": "x_trader_consensus",
-    "consensus_tickers": "x_trader_consensus",
-    "x_consensus": "x_trader_consensus",
-
-    # X Select Trader Consensus (curated 25-account list)
-    "x_select_trader_consensus": "x_select_trader_consensus",
-    "select_traders": "x_select_trader_consensus",
-    "select_trader_consensus": "x_select_trader_consensus",
-    "curated_traders": "x_select_trader_consensus",
-    "x_select_consensus": "x_select_trader_consensus",
-
-    # Sector Rotation
-    "sector_rotation": "sector_rotation",
-    "sector rotation": "sector_rotation",
-    "rotation": "sector_rotation",
-    "sector_scan": "sector_rotation",
-
-    # Best Trades
-    "best_trades": "best_trades",
-    "best trades": "best_trades",
-    "trades": "best_trades",
-    "market_scan": "best_trades",
-    "breakout": "best_trades",
-    "trade_ideas": "best_trades",
-    "setups": "best_trades",
-    "trade_setups": "best_trades",
-
-    # Best Investments
-    "best_investments": "best_investments",
-    "best investments": "best_investments",
-    "investments": "best_investments",
-    "investment_ideas": "best_investments",
-    "long_term": "best_investments",
-    "long_term_conviction": "best_investments",
-    "sqglp": "best_investments",
-
-    # Asymmetric R:R
-    "asymmetric_rr": "asymmetric_rr",
-    "asymmetric": "asymmetric_rr",
-    "asymmetric r:r": "asymmetric_rr",
-    "asymmetric rr": "asymmetric_rr",
-    "risk_reward": "asymmetric_rr",
-
-    # Small Cap Spec
-    "small_cap_spec": "small_cap_spec",
-    "small_cap": "small_cap_spec",
-    "small cap spec": "small_cap_spec",
-    "small cap": "small_cap_spec",
-    "small_cap_speculation": "small_cap_spec",
-    "microcap": "small_cap_spec",
-    "microcap_spec": "small_cap_spec",
-
-    # Short Squeeze
-    "short_squeeze": "short_squeeze",
-    "squeeze": "short_squeeze",
-    "short squeeze": "short_squeeze",
-    "squeeze_plays": "short_squeeze",
-
-    # Fundamental
-    "fundamental_leaders": "fundamental_leaders",
-    "fundamentals_scan": "fundamental_leaders",
-    "fundamentals": "fundamental_leaders",
-    "fundamental": "fundamental_leaders",
-    "rapidly_improving": "rapidly_improving",
-    "revenue_reaccelerating": "revenue_reaccelerating",
-    "margin_expansion": "margin_expansion",
-    "undervalued_growth": "undervalued_growth",
-    "institutional_accumulation": "institutional_accumulation",
-    "free_cash_flow_leaders": "free_cash_flow_leaders",
-    "earnings_watch": "earnings_watch",
-    "insider_buying": "insider_buying",
-    "insider": "insider_buying",
-
-    # Crypto
-    "crypto": "crypto",
-    "cryptocurrency": "crypto",
-    "crypto_scan": "crypto",
-    "crypto_scanner": "crypto",
-    "crypto_focus": "crypto",
-
-    # Commodities
-    "commodities": "commodities",
-    "commodity": "commodities",
-    "commodity_scan": "commodities",
-    "commodity_focus": "commodities",
-    "commodities_focus": "commodities",
-
-    # Energy
-    "energy": "energy",
-    "sector_energy": "energy",
-    "energy_focus": "energy",
-
-    # Materials
-    "materials": "materials",
-    "sector_materials": "materials",
-    "materials_focus": "materials",
-
-    # Aerospace / Defense
-    "aerospace_defense": "aerospace_defense",
-    "aerospace": "aerospace_defense",
-    "defense": "aerospace_defense",
-    "sector_defense": "aerospace_defense",
-    "aerospace_focus": "aerospace_defense",
-
-    # Tech
-    "tech": "tech",
-    "technology": "tech",
-    "sector_tech": "tech",
-    "tech_focus": "tech",
-
-    # AI / Compute
-    "ai_compute": "ai_compute",
-    "ai": "ai_compute",
-    "ai/compute": "ai_compute",
-    "sector_ai": "ai_compute",
-
-    # Quantum
-    "quantum": "quantum",
-    "quantum_focus": "quantum",
-    "sector_quantum": "quantum",
-
-    # Fintech
-    "fintech": "fintech",
-    "finance_focus": "fintech",
-    "sector_financials": "fintech",
-
-    # Biotech
-    "biotech": "biotech",
-    "biopharma": "biotech",
-    "sector_healthcare": "biotech",
-    "healthcare_focus": "biotech",
-
-    # Real Estate
-    "real_estate": "real_estate",
-    "reits": "real_estate",
-    "sector_real_estate": "real_estate",
-    "real_estate_focus": "real_estate",
-}
+# TODO [Phase 1 wrapper]: _ALIAS_MAP body moved to agent/preset_registry._CAELYN_ALIAS_MAP.
+# Transitional reference — any direct _ALIAS_MAP lookups continue to work.
+_ALIAS_MAP: dict[str, str] = preset_registry._CAELYN_ALIAS_MAP
 
 
 @traceable(name="caelyn_routing.normalize")
@@ -306,6 +109,10 @@ def normalize_route_key(preset_intent: str | None, category: str | None) -> str 
     Try to resolve a canonical route key from preset_intent first,
     then from category as fallback. Returns None if nothing matches
     (caller should use DEFAULT_ROUTE).
+
+    TODO [Phase 1 wrapper]: alias resolution delegated to preset_registry.resolve_to_route_key().
+    CAELYN_ROUTES direct-hit and suffix+route-table checks remain here because
+    preset_registry cannot import CAELYN_ROUTES without a circular dependency.
     """
     for raw in (preset_intent, category):
         if not raw:
@@ -314,17 +121,17 @@ def normalize_route_key(preset_intent: str | None, category: str | None) -> str 
         # Direct hit in route table
         if n in CAELYN_ROUTES:
             return n
-        # Alias table
-        if n in _ALIAS_MAP:
-            return _ALIAS_MAP[n]
-        # Strip common suffixes and retry
+        # Alias resolution — delegated to preset_registry (covers _CAELYN_ALIAS_MAP + suffix stripping)
+        result = preset_registry.resolve_to_route_key(raw)
+        if result:
+            return result
+        # Strip common suffixes and retry against CAELYN_ROUTES directly
+        # (alias suffix-stripping is already handled inside resolve_to_route_key above)
         for suffix in ("_scan", "_ideas", "_mode", "_preset", "_dashboard"):
             if n.endswith(suffix):
                 stripped = n[: -len(suffix)]
                 if stripped in CAELYN_ROUTES:
                     return stripped
-                if stripped in _ALIAS_MAP:
-                    return _ALIAS_MAP[stripped]
     return None
 
 
