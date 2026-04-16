@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class AnalyzeRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     playbook_id:       str
-    query:             str = ""
+    query:             str = ""            # DECORATIVE — shapes the answer string only; does NOT filter tickers or affect scoring.
     context_mode:      str = "watchlist"   # watchlist | portfolio | custom | universe
     tickers:           List[str] = Field(default_factory=list)
     holdings:          List[Dict[str, Any]] = Field(default_factory=list)

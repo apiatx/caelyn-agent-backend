@@ -1,0 +1,107 @@
+Prompt
+
+You are working in my backend FastAPI server repo for CaelynAI.
+
+Your job is to audit the current backend route contract and provider logic used by:
+
+/api/query
+/api/playbooks/analyze
+/api/playbooks/discover
+/api/playbooks/supply-chain-map
+/api/playbooks/compare
+
+This is an audit/debug task, not a feature expansion task.
+
+Objective
+
+I want to verify that the backend is not contributing to the mixed-up Serenity terminal behavior.
+
+Specifically:
+
+are the routes cleanly separated?
+do they expect clear payload shapes?
+could frontend be sending ambiguous inputs that backend interprets inconsistently?
+does Serenity actually choose providers/routes cleanly based on the intended action types?
+is there any backend assumption that old Default-mode collaboration/model settings are still relevant in Serenity mode?
+Non-negotiable guardrails
+Do not modify /api/query behavior unless a real bug is proven.
+Do not refactor the whole playbook engine.
+Do not add new features during this audit.
+Focus on route contracts, payload expectations, and provider-routing logic only.
+Audit tasks
+1. Route contract audit
+
+For each route:
+
+required fields
+optional fields
+supported modes/actions
+what happens if fields are missing
+what happens if irrelevant fields are passed
+
+Especially audit:
+
+/api/playbooks/analyze
+/api/playbooks/discover
+/api/playbooks/supply-chain-map
+
+I want to know if ambiguous payloads could make Serenity behavior unstable.
+
+2. Provider usage audit
+
+Document which providers/routes are actually used for:
+
+Serenity freeform analyze
+Serenity discovery
+Serenity chain map
+S&J analyze
+Default mode (for reference only)
+
+Confirm whether backend already ignores old frontend Customize/collab model settings in playbook routes, or whether those fields could still influence anything.
+
+3. Defensive payload handling
+
+Audit whether playbook routes safely ignore irrelevant/default-mode fields if they are accidentally sent.
+
+Examples:
+
+collaboration preset
+reasoning model
+collab agent selections
+stale Serenity control values in S&J requests
+stale S&J/default values in Serenity requests
+
+If needed, recommend or implement minimal defensive sanitization so the routes remain robust.
+
+4. Contract recommendation
+
+Tell me what the clean backend contract should be for:
+
+Default mode
+S&J mode
+Serenity freeform
+Serenity discovery
+Serenity chain map
+
+I want the backend side of the product contract stated plainly.
+
+If needed, implement only small safe fixes
+
+Only if the audit proves it’s needed, implement small fixes such as:
+
+stricter payload validation
+clearer ignoring of irrelevant fields
+safer request normalization
+better route-specific error messages
+
+Do not do a giant rewrite.
+
+Deliverables
+
+When done, provide:
+
+route contract summary
+provider usage summary by route/action
+whether old default-mode settings can affect Serenity routes
+any fixes made
+proof /api/query remains untouched

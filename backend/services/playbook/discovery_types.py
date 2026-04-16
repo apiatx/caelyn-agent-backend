@@ -95,7 +95,9 @@ class DiscoveryCandidate(BaseModel):
 class DiscoverRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     playbook_id:              str = "serenity"
-    query:                    str = ""
+    query:                    str = ""   # COSMETIC ONLY — echoed in response; never drives discovery behavior.
+    # Discovery is fully mode/filter-driven (mode, giant, theme_ids, country_filters, etc.).
+    # Text queries sent here are ignored. Do NOT expect AI/semantic interpretation.
     mode:                     str = "giant_chain"
     # giant_chain | theme_scan | foreign_bottlenecks | ticker_chain | country_theme_scan | custom
     giant:                    Optional[str] = None      # e.g. "NVDA"
@@ -200,6 +202,8 @@ class CompareRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     tickers:           List[str]
     playbooks:         List[str] = Field(default=["serenity", "sjcapital"])
+    # COSMETIC — only "serenity" and "sjcapital" are ever computed regardless of what's in this list.
+    # Unsupported playbook IDs here are silently ignored, not routed to any new scorer.
     include_breakdown: bool = True
 
 
