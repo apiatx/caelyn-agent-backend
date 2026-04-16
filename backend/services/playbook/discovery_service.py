@@ -1108,34 +1108,58 @@ def _mode_auto(req: DiscoverRequest) -> List[DiscoveryCandidate]:
     return _mode_theme_scan(req)
 
 
-def _auto_choices(req: DiscoverRequest) -> Dict[str, Any]:
-    """Return a dict describing what Auto mode chose and why, for response meta."""
-    from services.playbook.theme_discovery import THEME_TAXONOMY
+def _auto_choices(req: DiscoverRequest, regime: Optional[Any] = None) -> Dict[str, Any]:
+    """
+    Return a dict describing what Auto mode chose and why, for response meta.
+    When regime is provided (SerenityRegime), its path/themes/anchors are included.
+    Manual overrides (giant, theme_ids) always win over regime defaults.
+    """
     if req.giant:
-        return {
+        base = {
             "path":   "giant_chain",
             "anchor": req.giant,
             "reason": f"Explicit giant anchor {req.giant} provided — traversed its supply chain.",
         }
+        if regime:
+            base["regime_label"] = regime.label
+        return base
     if req.theme_ids:
-        return {
+        base = {
             "path":   "theme_scan",
             "themes": req.theme_ids,
-            "reason": f"Explicit theme(s) {req.theme_ids} provided — scanned matching nodes.",
+            "reason": f"Explicit theme(s) provided — scanned matching nodes.",
         }
+        if regime:
+            base["regime_label"] = regime.label
+        return base
+    if regime:
+        return {
+            "path":        "theme_scan",
+            "themes":      regime.top_themes,
+            "anchors":     regime.top_anchors,
+            "regime_id":   regime.regime_id,
+            "regime_label": regime.label,
+            "confidence":  regime.confidence,
+            "sort_mode":   "best_blend",
+            "max_depth":   regime.recommended_depth,
+            "reason":      regime.summary,
+            "why_now":     regime.why_now,
+            "note":        "To narrow results, pass giant=, theme_ids=, or preset_mode= in your request.",
+        }
+    # Fallback: no regime computed (should not happen in practice)
+    from services.playbook.theme_discovery import THEME_TAXONOMY
     high_priority = [tid for tid, meta in THEME_TAXONOMY.items()
                      if meta.get("serenity_priority") == "high"]
     return {
-        "path":       "theme_scan",
-        "themes":     high_priority,
-        "reason":     (
-            "No anchor or theme specified. Auto mode selected all high-priority Serenity "
-            "themes: " + ", ".join(high_priority) + ". "
-            "Results ranked by best_blend_score (composite bottleneck + hiddenness + confidence)."
+        "path":     "theme_scan",
+        "themes":   high_priority,
+        "reason":   (
+            "No anchor or theme specified. Auto mode selected all high-priority Serenity themes. "
+            "Results ranked by best_blend_score."
         ),
-        "sort_mode":  "best_blend",
-        "max_depth":  req.max_depth,
-        "note":       "To narrow results, pass giant=, theme_ids=, or preset_mode= in your request.",
+        "sort_mode": "best_blend",
+        "max_depth": req.max_depth,
+        "note":      "To narrow results, pass giant=, theme_ids=, or preset_mode= in your request.",
     }
 
 
@@ -1245,12 +1269,25 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
     # ── 1. Run mode-specific candidate extraction ──────────────────────────────
     mode = req.mode.lower().strip()
     auto_choices_meta: Dict[str, Any] = {}
+    regime_context_dict: Optional[Dict[str, Any]] = None
 
     if mode == "auto":
-        auto_choices_meta = _auto_choices(req)
-        # auto always ranks by best_blend unless overridden
+        # Compute regime — deterministic, no external calls
+        from services.playbook.regime_service import compute_serenity_regime
+        _regime = compute_serenity_regime()
+        regime_context_dict = _regime.model_dump()
+
+        # Apply regime defaults only when user has NOT explicitly overridden
+        overrides: Dict[str, Any] = {}
         if not req.sort_mode:
-            req = req.model_copy(update={"sort_mode": "best_blend"})
+            overrides["sort_mode"] = "best_blend"
+        if not req.theme_ids and not req.giant:
+            overrides["theme_ids"] = _regime.top_themes
+            overrides["max_depth"] = _regime.recommended_depth
+        if overrides:
+            req = req.model_copy(update=overrides)
+
+        auto_choices_meta = _auto_choices(req, regime=_regime)
         candidates = _mode_auto(req)
     elif mode == "giant_chain":
         candidates = _mode_giant_chain(req)
@@ -1420,6 +1457,7 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
             "provider_notes":         provider_notes,
             **({"auto_choices": auto_choices_meta} if auto_choices_meta else {}),
         },
+        regime_context=regime_context_dict,
     )
 
 

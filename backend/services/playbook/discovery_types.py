@@ -148,6 +148,9 @@ class DiscoverResponse(BaseModel):
     best_blend_candidates:          List[DiscoveryCandidate] = Field(default_factory=list)
 
     meta:                     Dict[str, Any] = Field(default_factory=dict)
+    # Populated when mode="auto" — full SerenityRegime serialized as dict.
+    # Null for all other modes. Frontend can use this to show why Auto Serenity chose this path.
+    regime_context:           Optional[Dict[str, Any]] = None
 
 
 # ── Supply Chain Map Types ─────────────────────────────────────────────────────

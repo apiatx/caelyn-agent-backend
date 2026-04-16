@@ -2000,6 +2000,162 @@ def test_phase5_compare_response_model():
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Phase 6 — Regime detection
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_regime_types_model():
+    print("\n[regime_types_model]")
+    from services.playbook.regime_types import (
+        ThemeRegimeScore, AnchorRegimeScore, SerenityRegime,
+    )
+    t = ThemeRegimeScore(
+        theme_id="photonics_cpo",
+        label="High Priority",
+        regime_score=72.0,
+        candidate_density=5,
+        avg_bottleneck_score=78.0,
+        hiddenness_quality=60.0,
+        policy_score=40.0,
+        anchor_density=2,
+        country_diversity=3,
+        serenity_priority="high",
+        crowding_penalty=0.0,
+    )
+    _assert("ThemeRegimeScore theme_id", t.theme_id == "photonics_cpo")
+    _assert("ThemeRegimeScore regime_score", t.regime_score == 72.0)
+    _assert("ThemeRegimeScore label set", t.label == "High Priority")
+    _assert("ThemeRegimeScore serenity_priority", t.serenity_priority == "high")
+    _assert("ThemeRegimeScore crowding_penalty", t.crowding_penalty == 0.0)
+
+    a = AnchorRegimeScore(
+        anchor_id="NVDA",
+        name="NVIDIA",
+        regime_score=65.0,
+        theme_overlap_count=4,
+        capex_scale_score=80.0,
+        candidate_quality=75.0,
+        foreign_exposure_count=3,
+    )
+    _assert("AnchorRegimeScore anchor_id", a.anchor_id == "NVDA")
+    _assert("AnchorRegimeScore name", a.name == "NVIDIA")
+    _assert("AnchorRegimeScore regime_score", a.regime_score == 65.0)
+    _assert("AnchorRegimeScore theme_overlap_count", a.theme_overlap_count == 4)
+
+    regime = SerenityRegime(
+        regime_id="test_regime",
+        label="Test Regime",
+        summary="Test summary",
+        top_themes=["photonics_cpo"],
+        top_anchors=["NVDA"],
+        top_regions=["US"],
+        recommended_mode="theme_scan",
+        recommended_depth=3,
+        confidence="high",
+        why_now=["Signal A"],
+        evidence_signals=["Evidence B"],
+        rejected_or_lower_priority_paths=["low_theme"],
+        theme_scores=[t],
+        anchor_scores=[a],
+    )
+    _assert("SerenityRegime regime_id", regime.regime_id == "test_regime")
+    _assert("SerenityRegime top_themes list", len(regime.top_themes) == 1)
+    _assert("SerenityRegime top_anchors list", len(regime.top_anchors) == 1)
+    _assert("SerenityRegime confidence is str", isinstance(regime.confidence, str))
+    _assert("SerenityRegime confidence value", regime.confidence in ("high", "medium", "low"))
+    _assert("SerenityRegime theme_scores typed", isinstance(regime.theme_scores[0], ThemeRegimeScore))
+    _assert("SerenityRegime anchor_scores typed", isinstance(regime.anchor_scores[0], AnchorRegimeScore))
+    _assert("SerenityRegime model_dump works", isinstance(regime.model_dump(), dict))
+
+
+def test_regime_service_returns_regime():
+    print("\n[regime_service_returns_regime]")
+    from services.playbook.regime_service import compute_serenity_regime
+    from services.playbook.regime_types import SerenityRegime
+    regime = compute_serenity_regime()
+    _assert("compute_serenity_regime returns SerenityRegime", isinstance(regime, SerenityRegime))
+    _assert("regime_id is a non-empty string", isinstance(regime.regime_id, str) and len(regime.regime_id) > 0)
+    _assert("label is a non-empty string", isinstance(regime.label, str) and len(regime.label) > 0)
+    _assert("summary is a non-empty string", isinstance(regime.summary, str) and len(regime.summary) > 0)
+    _assert("top_themes is a list", isinstance(regime.top_themes, list))
+    _assert("top_anchors is a list", isinstance(regime.top_anchors, list))
+    _assert("why_now is a list", isinstance(regime.why_now, list))
+    _assert("evidence_signals is a list", isinstance(regime.evidence_signals, list))
+    _assert("confidence is str", isinstance(regime.confidence, str))
+    _assert("confidence value valid", regime.confidence in ("high", "medium", "low"))
+    _assert("recommended_depth >= 1", regime.recommended_depth >= 1)
+    _assert("recommended_mode is str", isinstance(regime.recommended_mode, str))
+
+
+def test_regime_service_deterministic():
+    print("\n[regime_service_deterministic]")
+    from services.playbook.regime_service import compute_serenity_regime
+    r1 = compute_serenity_regime()
+    r2 = compute_serenity_regime()
+    _assert("regime_id is deterministic", r1.regime_id == r2.regime_id)
+    _assert("top_themes are deterministic", r1.top_themes == r2.top_themes)
+    _assert("confidence is deterministic", r1.confidence == r2.confidence)
+    _assert("recommended_mode is deterministic", r1.recommended_mode == r2.recommended_mode)
+
+
+def test_regime_theme_scores_sorted():
+    print("\n[regime_theme_scores_sorted]")
+    from services.playbook.regime_service import compute_serenity_regime
+    regime = compute_serenity_regime()
+    scores = [ts.regime_score for ts in regime.theme_scores]
+    _assert("theme_scores list non-empty", len(scores) > 0)
+    _assert("theme_scores sorted descending", scores == sorted(scores, reverse=True))
+
+
+def test_regime_anchor_scores_sorted():
+    print("\n[regime_anchor_scores_sorted]")
+    from services.playbook.regime_service import compute_serenity_regime
+    regime = compute_serenity_regime()
+    scores = [a.regime_score for a in regime.anchor_scores]
+    _assert("anchor_scores list non-empty", len(scores) > 0)
+    _assert("anchor_scores sorted descending", scores == sorted(scores, reverse=True))
+
+
+def test_regime_top_themes_in_theme_scores():
+    print("\n[regime_top_themes_in_theme_scores]")
+    from services.playbook.regime_service import compute_serenity_regime
+    regime = compute_serenity_regime()
+    scored_ids = {ts.theme_id for ts in regime.theme_scores}
+    for theme_id in regime.top_themes:
+        _assert(f"top theme '{theme_id}' is in theme_scores", theme_id in scored_ids)
+
+
+def test_regime_top_anchors_in_anchor_scores():
+    print("\n[regime_top_anchors_in_anchor_scores]")
+    from services.playbook.regime_service import compute_serenity_regime
+    regime = compute_serenity_regime()
+    scored_ids = {a.anchor_id for a in regime.anchor_scores}
+    for anchor_id in regime.top_anchors:
+        _assert(f"top anchor '{anchor_id}' is in anchor_scores", anchor_id in scored_ids)
+
+
+def test_discover_response_regime_context_field():
+    print("\n[discover_response_regime_context_field]")
+    from services.playbook.discovery_types import DiscoverResponse
+    common = dict(
+        playbook_id="serenity",
+        mode="theme_scan",
+        query="",
+        summary="Test",
+        top_candidates=[],
+        low_confidence_candidates=[],
+    )
+    resp = DiscoverResponse(
+        **common,
+        regime_context={"regime_id": "test", "label": "Test Regime"},
+    )
+    _assert("DiscoverResponse has regime_context field", hasattr(resp, "regime_context"))
+    _assert("regime_context roundtrips correctly", resp.regime_context == {"regime_id": "test", "label": "Test Regime"})
+
+    resp_no_regime = DiscoverResponse(**common)
+    _assert("regime_context defaults to None", resp_no_regime.regime_context is None)
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Runner
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -2071,6 +2227,16 @@ def run_all():
     test_phase5_compare_disagreement_reason()
     test_phase5_compare_high_disagreement_names()
     test_phase5_compare_response_model()
+
+    # Phase 6 — Regime detection
+    test_regime_types_model()
+    test_regime_service_returns_regime()
+    test_regime_service_deterministic()
+    test_regime_theme_scores_sorted()
+    test_regime_anchor_scores_sorted()
+    test_regime_top_themes_in_theme_scores()
+    test_regime_top_anchors_in_anchor_scores()
+    test_discover_response_regime_context_field()
 
     print()
     print("=" * 60)

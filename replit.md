@@ -309,6 +309,66 @@ The `PREDICTION_MARKETS_CONTRACT` in prompts.py instructs Caelyn to reference th
 | `backend/services/predict/trading_agents.py` | TauricResearch multi-agent pipeline (6 Gemini agents) |
 | `backend/services/predict/router.py` | FastAPI router for all `/api/predict/*` and `/api/polymarket/intelligence` |
 
+## Playbook Engine — Supply Chain Discovery + Regime Detection (`/api/playbooks/`)
+
+Deterministic supply chain bottleneck discovery engine. No external API calls required for core discovery or regime detection.
+
+### Playbooks
+- **serenity** — Non-obvious supply chain bottlenecks (small/mid-cap chokepoints institutional screens miss)
+- **sjcapital** — S&J Capital (fundamental value / quality)
+
+### Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/playbooks` | List all playbooks |
+| `GET /api/playbooks/{id}` | Playbook detail |
+| `POST /api/playbooks/discover` | Discovery engine: find supply chain candidates |
+| `POST /api/playbooks/analyze` | Analyze + score tickers vs a playbook |
+| `POST /api/playbooks/compare` | Compare tickers across two playbooks |
+| `GET /api/playbooks/serenity-regime` | **Current regime detection result** (deterministic, no web calls) |
+| `GET /api/playbooks/discovery-capabilities` | Full API contract + auto_serenity_guidance block |
+| `GET /api/playbooks/giants` | List giant anchor companies |
+| `GET /api/playbooks/supply-chain-map` | Supply chain map for a given giant |
+
+### Regime Detection (Phase 6)
+
+`GET /api/playbooks/serenity-regime` returns `SerenityRegime`:
+- `regime_id`, `label`, `summary`, `confidence` (high/medium/low)
+- `top_themes`, `top_anchors`, `top_regions`
+- `recommended_mode`, `recommended_depth`
+- `why_now`, `evidence_signals`, `rejected_or_lower_priority_paths`
+- `theme_scores` — per-theme breakdown (regime_score, candidate_density, avg_bottleneck_score, hiddenness_quality, policy_score, anchor_density, country_diversity, serenity_priority, crowding_penalty)
+- `anchor_scores` — per-anchor breakdown (regime_score, theme_overlap_count, capex_scale_score, candidate_quality, foreign_exposure_count)
+
+Regime is deterministic: same NODE_REGISTRY + THEME_TAXONOMY + GIANT_MAP → same result.
+
+### Auto Mode (`mode="auto"` in discover)
+
+When `mode="auto"`:
+1. Regime detection runs first
+2. Highest-conviction theme cluster + anchor selected as defaults
+3. Discovery runs with regime-derived theme/depth defaults
+4. Response includes `regime_context` (full SerenityRegime dict) and `meta.auto_choices`
+
+### Key Files
+
+| File | Role |
+|---|---|
+| `backend/services/playbook/regime_types.py` | Pydantic models: ThemeRegimeScore, AnchorRegimeScore, SerenityRegime |
+| `backend/services/playbook/regime_service.py` | compute_serenity_regime() — deterministic regime detection |
+| `backend/services/playbook/discovery_service.py` | run_discover(), _mode_auto(), _auto_choices() |
+| `backend/services/playbook/discovery_types.py` | DiscoverRequest/Response, AnalyzeRequest/Response types |
+| `backend/services/playbook/analyzer.py` | run_analyze() + discovery bridge (regime_context propagation) |
+| `backend/services/playbook/router.py` | All /api/playbooks/* routes |
+| `backend/services/playbook/supply_chain_graph.py` | NODE_REGISTRY, THEME_TAXONOMY, GIANT_MAP |
+| `backend/services/playbook/factor_tests.py` | 704-test suite (Phase 1.5 → 6), 0 failures |
+
+### Test Suite
+- **Run**: `cd backend && python3.11 -m services.playbook.factor_tests`
+- **Count**: 704 tests, 0 failures (as of Phase 6)
+- **Phases**: 1.5 (factors), 2.0 (supply chain), 3.0 (discovery), 4.0 (quality), 5.0 (fields/compare), 6.0 (regime)
+
 ## Real Portfolio (caelyn-terminal)
 
 - SQGLP framework for investments, Weinstein Stage 2 for trades

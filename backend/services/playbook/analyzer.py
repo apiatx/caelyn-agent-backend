@@ -90,6 +90,9 @@ class AnalyzeResponse(BaseModel):
     playbook_context:  Dict[str, Any] = Field(default_factory=dict)
     discovery_context: Dict[str, Any] = Field(default_factory=dict)
     meta:              Dict[str, Any] = Field(default_factory=dict)
+    # Populated when playbook_id=serenity and discovery_mode="auto".
+    # Contains the SerenityRegime serialized as dict — explains what path Auto chose and why.
+    regime_context:    Optional[Dict[str, Any]] = None
 
 
 # ── Core analyzer ─────────────────────────────────────────────────────────────
@@ -180,6 +183,9 @@ async def run_analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                     for c in disc_result.top_candidates[:8]
                 ],
             }
+            # Propagate regime context when auto bridge ran with regime detection
+            if disc_result.regime_context:
+                discovery_context["regime_context"] = disc_result.regime_context
 
             # Merge discovered tickers into analysis tickers (US-accessible only)
             if discovered_tickers:
@@ -309,6 +315,7 @@ async def run_analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         portfolio_summary=portfolio_summary_result,
         playbook_context=pb_context,
         discovery_context=discovery_context,
+        regime_context=discovery_context.pop("regime_context", None),
         meta={
             "total_scored":       len(all_results),
             "high_fit":           len(top_results),

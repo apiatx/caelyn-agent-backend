@@ -345,6 +345,38 @@ async def list_giants_endpoint():
         raise HTTPException(status_code=500, detail=f"Giants list error: {e}")
 
 
+# ── GET /api/playbooks/serenity-regime ────────────────────────────────────────
+# MUST be registered before /{playbook_id}
+
+@router.get("/serenity-regime")
+async def serenity_regime_endpoint():
+    """
+    Return the current Serenity regime detection result.
+
+    Deterministic — no external API calls. Computes regime from:
+      - NODE_REGISTRY (supply chain graph)
+      - THEME_TAXONOMY (theme priorities and policy data)
+      - GIANT_MAP (anchor capex and theme mapping)
+
+    Returns:
+      regime_id, label, summary, top_themes, top_anchors, top_regions,
+      recommended_mode, recommended_depth, confidence, why_now,
+      evidence_signals, rejected_or_lower_priority_paths,
+      theme_scores (per-theme breakdown), anchor_scores (per-anchor breakdown)
+
+    Frontend use: bootstrap Auto Serenity UI, show which themes/anchors
+    are currently prioritized and why.
+    """
+    _require_engine()
+    try:
+        from services.playbook.regime_service import compute_serenity_regime
+        regime = compute_serenity_regime()
+        return regime.model_dump()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Regime detection error: {e}")
+
+
 # ── GET /api/playbooks/discovery-capabilities ─────────────────────────────────
 
 @router.get("/discovery-capabilities")
@@ -457,6 +489,32 @@ async def discovery_capabilities_endpoint():
                         "This flag drives the ETF fallback lookup for names without a direct ADR."
                     ),
                 },
+            },
+            "auto_serenity_guidance": {
+                "auto_mode_description": (
+                    "Serenity chooses the strongest current bottleneck path automatically "
+                    "using live regime detection — not a static fallback list."
+                ),
+                "default_auto_behavior": (
+                    "Auto mode runs regime detection first (deterministic, no web calls), "
+                    "selects the highest-conviction theme cluster and anchor platforms, "
+                    "then runs discovery using those as defaults. Results are ranked by best_blend_score."
+                ),
+                "serenity_guidance_text": (
+                    "Serenity focuses on non-obvious supply chain bottlenecks — small/mid-cap "
+                    "names with critical chokepoint roles that institutional screens miss. "
+                    "Auto mode surfaces the strongest current cluster. Use manual filters to narrow."
+                ),
+                "regime_endpoint": "GET /api/playbooks/serenity-regime",
+                "regime_context_in_response": (
+                    "When mode=auto, the discover response includes regime_context with the full "
+                    "SerenityRegime: why_now bullets, evidence_signals, rejected paths, "
+                    "theme_scores, and anchor_scores. Frontend can surface this directly."
+                ),
+                "override_behavior": (
+                    "If giant, theme_ids, max_depth, or country_filters are explicitly set, "
+                    "those values always override regime defaults. Regime is for guided/auto mode only."
+                ),
             },
             "discovery_scoring_dimensions": [
                 "chain_depth_score",
