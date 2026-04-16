@@ -1,0 +1,323 @@
+You already implemented:
+
+isolated playbook engine
+Serenity and S&J
+/api/playbooks/analyze
+/api/playbooks/discover
+/api/playbooks/supply-chain-map
+/api/playbooks/compare
+Serenity Auto mode
+discovery capabilities
+strict isolation from /api/query
+
+Good.
+
+Now implement the next step:
+
+Objective
+
+Build a Serenity regime detection layer that powers Auto Serenity intelligently.
+
+This should decide, at request time, the strongest current Serenity path based on current evidence — not just a static fallback theme list.
+
+This is not a giant macro rewrite.
+This is a small regime-prioritization layer on top of the existing Serenity discovery engine.
+
+Non-negotiable guardrails
+Do not modify /api/query in any way.
+Do not change Default AI Terminal behavior.
+Do not change S&J’s investing philosophy.
+Do not introduce background jobs or auto-scanning.
+Do not build a giant generalized macro engine.
+Keep all work inside the isolated playbook/discovery modules.
+Use existing factors and providers where possible.
+Respect API limits exactly as before.
+Continue avoiding Brave/Tavily completely.
+Finnhub + existing discovery/scoring data should remain the main backbone.
+Tradier remains only for tradable US/ADR quote/trend confirmation.
+Perplexity/Gemini should only be optional, selective enrichers — not required for regime calculation.
+Product requirement
+
+When Serenity runs in Auto mode with no explicit anchor/theme/depth override, backend should:
+
+determine the strongest current Serenity regime
+prioritize the best theme cluster(s)
+prioritize the best giant/platform anchor(s)
+choose the best discovery path
+return a clear explanation of what it chose and why
+
+This must be visible to frontend.
+
+Part 1 — Add a Serenity regime service
+
+Create a small isolated module, something like:
+
+services/playbook/regime_service.py
+
+If needed also add:
+
+regime_types.py
+
+Do not overbuild.
+
+Part 2 — Add a regime model
+
+Create a lightweight regime output structure with fields like:
+
+regime_id
+label
+summary
+top_themes
+top_anchors
+top_regions
+recommended_mode
+recommended_depth
+confidence
+why_now
+evidence_signals
+rejected_or_lower_priority_paths
+
+Optional:
+
+theme_scores
+anchor_scores
+
+Example output shape:
+
+{
+  "regime_id": "ai_packaging_bottlenecks",
+  "label": "AI Packaging & Tooling Bottlenecks",
+  "summary": "Serenity is prioritizing advanced packaging, semicap tooling, and photonics because these chains have the strongest current evidence and bottleneck quality.",
+  "top_themes": ["advanced_packaging_test", "semicap_supply_chain", "photonics_cpo"],
+  "top_anchors": ["NVDA", "TSM", "AVGO"],
+  "top_regions": ["US", "TW", "JP", "NL"],
+  "recommended_mode": "theme_scan",
+  "recommended_depth": 3,
+  "confidence": "high",
+  "why_now": [
+    "Packaging/tooling themes have the strongest current evidence freshness",
+    "Multiple giant anchors converge on the same constrained supplier layers",
+    "Policy tailwind and semicap chain relevance remain elevated"
+  ],
+  "evidence_signals": [
+    "theme_strength: advanced_packaging_test = 88",
+    "theme_strength: semicap_supply_chain = 84",
+    "anchor_relevance: NVDA = 90"
+  ],
+  "rejected_or_lower_priority_paths": [
+    "grid_transformers: strong but lower hiddenness today",
+    "defense_optics: promising but lower current signal density"
+  ]
+}
+Part 3 — Build regime scoring logic
+Goal
+
+Create a deterministic scoring layer that ranks Serenity themes/anchors based on current conditions.
+
+Use existing factors/inputs where available
+
+Build regime selection from existing signal components such as:
+
+sector_strength
+evidence_freshness
+policy_tailwind
+catalyst_proximity
+theme_alignment
+bottleneck_exposure
+supply_chain_confirmation
+crowding_risk
+hiddenness quality
+discovery graph richness / candidate density
+giant-anchor relevance
+foreign specialist relevance where applicable
+Important
+
+Do not rely on static priority ordering alone.
+You can still include a base prior, but live evidence should affect ordering.
+
+Add deterministic theme scoring
+
+For each Serenity theme, compute something like:
+
+theme_strength_score
+theme_hiddenness_quality_score
+theme_evidence_freshness_score
+theme_anchor_density_score
+theme_policy_score
+theme_crowding_penalty
+
+Then combine into a theme_regime_score.
+
+Add deterministic anchor scoring
+
+For each giant/platform anchor, compute something like:
+
+anchor_theme_overlap_score
+anchor_candidate_quality_score
+anchor_current_relevance_score
+anchor_convergence_score
+
+Then combine into anchor_regime_score.
+
+Part 4 — Keep it cheap and rate-aware
+
+This regime layer must be cheap.
+
+Rules
+do not run broad new web searches for regime selection
+do not depend on Perplexity or Gemini to compute regime every time
+do not call expensive APIs across huge universes
+use cached data, existing factors, and discovery graph metadata first
+Allowed enrichment
+
+Optional selective enrichment is okay only if:
+
+it is already cached
+or it is very limited and clearly worth it
+
+But the base regime decision should work without it.
+
+Part 5 — Add new backend route
+
+Add:
+
+GET /api/playbooks/serenity-regime
+
+This route should return the current Serenity regime selection and explanatory metadata.
+
+This is useful for frontend bootstrapping and user transparency.
+
+It should be fast and safe.
+
+Part 6 — Integrate regime detection into Auto Serenity
+Update /api/playbooks/discover
+
+When:
+
+playbook_id = serenity
+mode = auto
+
+and the user has not explicitly overridden anchor/theme/depth,
+then:
+
+run regime detection first
+use its output to choose:
+mode
+themes
+anchors
+regions if appropriate
+recommended depth
+run discovery using that chosen path
+include the regime result in the response
+Required response addition
+
+Add something like:
+
+regime_context
+or
+auto_regime
+
+This should explain:
+
+what Serenity chose
+why it chose it
+what lower-priority paths it considered
+
+Do not hide that logic.
+
+Part 7 — Integrate regime into /api/playbooks/analyze
+
+When:
+
+playbook_id = serenity
+no explicit discovery overrides are provided
+and Auto Serenity behavior is intended
+
+allow analyze to include regime context too.
+
+At minimum:
+
+expose regime_context in the analyze response when Serenity auto path is used
+
+Do not change S&J behavior.
+
+Part 8 — Clarify control semantics for frontend
+
+Extend GET /api/playbooks/discovery-capabilities with more regime-aware metadata if useful, such as:
+
+auto_mode_description
+chain_depth_labels
+default_auto_behavior
+serenity_guidance_text
+
+Examples:
+
+auto_mode_description: “Serenity chooses the strongest current bottleneck path automatically.”
+default_auto_behavior: “Auto mode selects the highest-conviction theme and anchor cluster based on current evidence.”
+
+This is optional but recommended if it is a small safe addition.
+
+Part 9 — Keep manual overrides winning
+
+If the user explicitly sends:
+
+giant
+theme_ids
+max_depth
+country_filters
+
+then those overrides should take precedence over regime defaults.
+
+Regime is for auto/guided mode, not for fighting the user.
+
+Part 10 — Improve the explanation output
+
+For Auto Serenity, return fields that frontend can show directly, such as:
+
+auto_mode_used: true
+selected_path_summary
+selected_themes
+selected_anchors
+selected_depth_label
+why_this_path
+why_not_others
+
+Keep it concise and deterministic.
+
+Part 11 — Testing requirements
+
+Add/update tests for:
+
+GET /api/playbooks/serenity-regime works
+Auto mode now uses regime detection
+explicit anchor/theme overrides bypass regime defaults correctly
+regime context is included in discover response
+regime context is optionally included in analyze response
+theme/anchor scoring is deterministic and stable
+S&J behavior remains unchanged
+/api/query remains untouched
+prior routes remain backwards compatible
+Part 12 — Deliverables
+
+When done, report:
+
+exact files added/modified
+how regime scoring works
+sample JSON for:
+GET /api/playbooks/serenity-regime
+POST /api/playbooks/discover in auto mode
+what existing factors/signals are used
+how manual overrides interact with regime defaults
+proof /api/query remains untouched
+any TODOs for future regime improvements
+Final philosophy
+
+This is not “build AGI macro god mode.”
+
+This is:
+
+pick the strongest current Serenity path intelligently
+explain it clearly
+keep it cheap
+keep it deterministic
+make Auto mode actually feel smart
