@@ -1082,6 +1082,63 @@ def _mode_custom(req: DiscoverRequest) -> List[DiscoveryCandidate]:
     return _mode_theme_scan(req)
 
 
+def _mode_auto(req: DiscoverRequest) -> List[DiscoveryCandidate]:
+    """
+    Auto mode: pick the strongest default discovery path when no anchor/theme/depth is specified.
+
+    Chosen path: theme_scan over all high-priority Serenity themes (serenity_priority=="high"),
+    US-only (include_foreign=False unless overridden), depth=3.
+
+    High-priority themes are the strongest current Serenity signal clusters:
+      photonics_cpo, ai_power_energy, grid_transformers,
+      advanced_packaging_test, semicap_supply_chain, defense_optics
+
+    Results are ranked by best_blend_score (composite of bottleneck + hiddenness + confidence +
+    chain_depth + theme_purity + giant_dependency + proxy_accessibility).
+
+    If req.giant is explicitly set, falls back to giant_chain for that anchor.
+    If req.theme_ids is explicitly set, falls back to theme_scan for those themes.
+    """
+    if req.giant:
+        return _mode_giant_chain(req)
+    if req.theme_ids:
+        return _mode_theme_scan(req)
+    # No anchor or theme — run theme_scan over all high-priority themes
+    # _mode_theme_scan already handles empty theme_ids this way
+    return _mode_theme_scan(req)
+
+
+def _auto_choices(req: DiscoverRequest) -> Dict[str, Any]:
+    """Return a dict describing what Auto mode chose and why, for response meta."""
+    from services.playbook.theme_discovery import THEME_TAXONOMY
+    if req.giant:
+        return {
+            "path":   "giant_chain",
+            "anchor": req.giant,
+            "reason": f"Explicit giant anchor {req.giant} provided — traversed its supply chain.",
+        }
+    if req.theme_ids:
+        return {
+            "path":   "theme_scan",
+            "themes": req.theme_ids,
+            "reason": f"Explicit theme(s) {req.theme_ids} provided — scanned matching nodes.",
+        }
+    high_priority = [tid for tid, meta in THEME_TAXONOMY.items()
+                     if meta.get("serenity_priority") == "high"]
+    return {
+        "path":       "theme_scan",
+        "themes":     high_priority,
+        "reason":     (
+            "No anchor or theme specified. Auto mode selected all high-priority Serenity "
+            "themes: " + ", ".join(high_priority) + ". "
+            "Results ranked by best_blend_score (composite bottleneck + hiddenness + confidence)."
+        ),
+        "sort_mode":  "best_blend",
+        "max_depth":  req.max_depth,
+        "note":       "To narrow results, pass giant=, theme_ids=, or preset_mode= in your request.",
+    }
+
+
 # ── Main discovery orchestrator ────────────────────────────────────────────────
 
 def _apply_preset_mode(req: DiscoverRequest) -> DiscoverRequest:
@@ -1187,8 +1244,15 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
 
     # ── 1. Run mode-specific candidate extraction ──────────────────────────────
     mode = req.mode.lower().strip()
+    auto_choices_meta: Dict[str, Any] = {}
 
-    if mode == "giant_chain":
+    if mode == "auto":
+        auto_choices_meta = _auto_choices(req)
+        # auto always ranks by best_blend unless overridden
+        if not req.sort_mode:
+            req = req.model_copy(update={"sort_mode": "best_blend"})
+        candidates = _mode_auto(req)
+    elif mode == "giant_chain":
         candidates = _mode_giant_chain(req)
     elif mode == "theme_scan":
         candidates = _mode_theme_scan(req)
@@ -1354,6 +1418,7 @@ async def run_discover(req: DiscoverRequest) -> DiscoverResponse:
             "only_hidden":            req.only_hidden,
             "proxy_suggestions":      proxy_suggestions,
             "provider_notes":         provider_notes,
+            **({"auto_choices": auto_choices_meta} if auto_choices_meta else {}),
         },
     )
 

@@ -99,17 +99,21 @@ class DiscoverRequest(BaseModel):
     # Discovery is fully mode/filter-driven (mode, giant, theme_ids, country_filters, etc.).
     # Text queries sent here are ignored. Do NOT expect AI/semantic interpretation.
     mode:                     str = "giant_chain"
-    # giant_chain | theme_scan | foreign_bottlenecks | ticker_chain | country_theme_scan | custom
+    # auto | giant_chain | theme_scan | foreign_bottlenecks | ticker_chain | country_theme_scan | custom
+    # Use "auto" when no anchor/theme is pre-selected — backend picks best default path.
     giant:                    Optional[str] = None      # e.g. "NVDA"
     ticker:                   Optional[str] = None      # for ticker_chain mode
     theme_ids:                List[str] = Field(default_factory=list)
     country_filters:          List[str] = Field(default_factory=list)  # ["US", "JP", "KR"]
     include_foreign:          bool = False
     max_depth:                int = 3
+    # Depth meaning: 1=direct integrators, 2=key components, 3=bottlenecks (default), 4=upstream materials
     limit:                    int = 20
-    only_hidden:              bool = False    # only return high hiddenness_score (>=65)
+    only_hidden:              bool = False    # restrict to hiddenness_score >= 55 (small-cap, foreign, low-visibility)
     only_public:              bool = True
     include_adr_or_etf_proxies: bool = True
+    # INFORMATIONAL — when include_foreign=true, foreign names with known US ADR/ETF proxies include the proxy
+    # ticker in each candidate. This field does NOT filter candidates — it only drives the ETF fallback lookup.
     use_web_validation:       bool = False    # Perplexity shortlisted validation (rate-limited)
 
     # Phase 5 — preset and validation depth

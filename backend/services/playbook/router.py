@@ -364,8 +364,19 @@ async def discovery_capabilities_endpoint():
         countries = list_supported_countries()
 
         return {
-            "discovery_engine_version": "1.0.0",
+            "discovery_engine_version": "1.1.0",
             "supported_modes": [
+                {
+                    "mode":        "auto",
+                    "description": (
+                        "Auto Serenity — backend picks the strongest default discovery path. "
+                        "No anchor, theme, or depth required. Scans all high-priority Serenity "
+                        "themes and ranks by best_blend_score. Response meta.auto_choices "
+                        "explains exactly what path was chosen and why."
+                    ),
+                    "requires":    [],
+                    "is_default_for_auto_serenity": True,
+                },
                 {
                     "mode":        "giant_chain",
                     "description": "Traverse supply chain from a major platform giant (NVDA, MSFT, etc.)",
@@ -397,6 +408,56 @@ async def discovery_capabilities_endpoint():
                     "requires":    [],
                 },
             ],
+            "control_semantics": {
+                "max_depth": {
+                    "label":       "Chain Depth",
+                    "help":        "How many supply chain layers deep to scan from the giant anchor.",
+                    "default":     3,
+                    "recommended": 3,
+                    "values": {
+                        "1": "Layer 1 only — direct integrators and core system suppliers closest to giant anchors",
+                        "2": "Layers 1–2 — core systems + key component / subsystem suppliers",
+                        "3": "Layers 1–3 — includes constrained subcomponents and bottlenecks (recommended)",
+                        "4": "All layers — includes upstream materials, tooling, and support vendors",
+                    },
+                },
+                "only_hidden": {
+                    "label":     "Hidden Names Only",
+                    "help":      (
+                        "Restrict results to low-visibility companies unlikely to appear in "
+                        "mainstream screens. Filters to hiddenness_score >= 55."
+                    ),
+                    "threshold": "hiddenness_score >= 55",
+                    "what_qualifies": [
+                        "Market cap < $5B (micro/small-cap)",
+                        "Non-US domicile with no mainstream US analyst coverage",
+                        "Foreign-listed only (no direct US trade, ADR may exist)",
+                        "Niche US names not covered by major sell-side analysts",
+                    ],
+                },
+                "include_foreign": {
+                    "label": "Include Foreign Names",
+                    "help":  (
+                        "Include non-US-domiciled companies in results. "
+                        "Foreign names with a known US ADR proxy will include the proxy ticker. "
+                        "Without this flag, only US-domiciled companies are returned."
+                    ),
+                },
+                "include_adr_or_etf_proxies": {
+                    "label":     "ADR / ETF Proxies",
+                    "help":      (
+                        "When include_foreign=true, foreign names that have a known US ADR or ETF "
+                        "proxy will include that proxy ticker in the candidate response. "
+                        "This makes foreign bottleneck names actionable for US-based accounts."
+                    ),
+                    "is_filter": False,
+                    "note":      (
+                        "INFORMATIONAL only — does not filter which candidates are returned. "
+                        "The proxy ticker is always surfaced when available regardless of this flag. "
+                        "This flag drives the ETF fallback lookup for names without a direct ADR."
+                    ),
+                },
+            },
             "discovery_scoring_dimensions": [
                 "chain_depth_score",
                 "bottleneck_criticality_score",
