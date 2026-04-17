@@ -183,9 +183,17 @@ async def run_analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                     for c in disc_result.top_candidates[:8]
                 ],
             }
-            # Propagate regime context when auto bridge ran with regime detection
-            if disc_result.regime_context:
-                discovery_context["regime_context"] = disc_result.regime_context
+            # Always include regime context for Serenity analyze calls.
+            # When mode=auto: disc_result.regime_context is already the full dict.
+            # When mode=anything_else: discovery didn't run regime detection, so
+            # we compute it here (cheap, deterministic, no external calls) so the
+            # frontend always knows which path was chosen and why.
+            if req.playbook_id.lower() == "serenity":
+                if disc_result.regime_context:
+                    discovery_context["regime_context"] = disc_result.regime_context
+                else:
+                    from services.playbook.regime_service import compute_serenity_regime
+                    discovery_context["regime_context"] = compute_serenity_regime().model_dump()
 
             # Merge discovered tickers into analysis tickers (US-accessible only)
             if discovered_tickers:

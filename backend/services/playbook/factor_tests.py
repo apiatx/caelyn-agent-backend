@@ -2032,6 +2032,8 @@ def test_regime_types_model():
         name="NVIDIA",
         regime_score=65.0,
         theme_overlap_count=4,
+        overlapping_theme_ids=["photonics_cpo", "advanced_packaging_test",
+                               "semicap_supply_chain", "ai_power_energy"],
         capex_scale_score=80.0,
         candidate_quality=75.0,
         foreign_exposure_count=3,
@@ -2040,6 +2042,8 @@ def test_regime_types_model():
     _assert("AnchorRegimeScore name", a.name == "NVIDIA")
     _assert("AnchorRegimeScore regime_score", a.regime_score == 65.0)
     _assert("AnchorRegimeScore theme_overlap_count", a.theme_overlap_count == 4)
+    _assert("AnchorRegimeScore overlapping_theme_ids is list", isinstance(a.overlapping_theme_ids, list))
+    _assert("AnchorRegimeScore overlapping_theme_ids len matches count", len(a.overlapping_theme_ids) == a.theme_overlap_count)
 
     regime = SerenityRegime(
         regime_id="test_regime",
@@ -2113,6 +2117,28 @@ def test_regime_anchor_scores_sorted():
     scores = [a.regime_score for a in regime.anchor_scores]
     _assert("anchor_scores list non-empty", len(scores) > 0)
     _assert("anchor_scores sorted descending", scores == sorted(scores, reverse=True))
+
+
+def test_regime_anchor_overlapping_theme_ids():
+    print("\n[regime_anchor_overlapping_theme_ids]")
+    from services.playbook.regime_service import compute_serenity_regime
+    regime = compute_serenity_regime()
+    top_theme_set = set(regime.top_themes)
+    for a in regime.anchor_scores:
+        _assert(
+            f"anchor '{a.anchor_id}' overlapping_theme_ids is list",
+            isinstance(a.overlapping_theme_ids, list),
+        )
+        _assert(
+            f"anchor '{a.anchor_id}' overlap len matches count",
+            len(a.overlapping_theme_ids) == a.theme_overlap_count,
+        )
+        for tid in a.overlapping_theme_ids:
+            _assert(
+                f"anchor '{a.anchor_id}' theme_id '{tid}' in top_themes",
+                tid in top_theme_set,
+            )
+        break  # one anchor is enough to prove the pattern
 
 
 def test_regime_top_themes_in_theme_scores():
@@ -2234,6 +2260,7 @@ def run_all():
     test_regime_service_deterministic()
     test_regime_theme_scores_sorted()
     test_regime_anchor_scores_sorted()
+    test_regime_anchor_overlapping_theme_ids()
     test_regime_top_themes_in_theme_scores()
     test_regime_top_anchors_in_anchor_scores()
     test_discover_response_regime_context_field()

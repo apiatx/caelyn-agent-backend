@@ -36,11 +36,12 @@ class AnchorRegimeScore(BaseModel):
 
     anchor_id:               str
     name:                    str
-    regime_score:            float   # 0-100 composite
-    theme_overlap_count:     int     # # of top-regime themes this anchor covers
-    capex_scale_score:       float   # 0-100 derived from capex description string
-    candidate_quality:       float   # avg bottleneck_score of nodes listing this anchor
-    foreign_exposure_count:  int     # # foreign countries in anchor's foreign_exposure list
+    regime_score:            float       # 0-100 composite
+    theme_overlap_count:     int         # # of top-regime themes this anchor covers
+    overlapping_theme_ids:   List[str]   # actual top-regime theme IDs this anchor covers
+    capex_scale_score:       float       # 0-100 derived from capex description string
+    candidate_quality:       float       # avg bottleneck_score of nodes listing this anchor
+    foreign_exposure_count:  int         # # foreign countries in anchor's foreign_exposure list
 
 
 class SerenityRegime(BaseModel):

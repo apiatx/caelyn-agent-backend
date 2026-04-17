@@ -279,6 +279,7 @@ def _score_anchors(top_theme_ids: List[str]) -> List[AnchorRegimeScore]:
             name=meta.get("name", anchor_id),
             regime_score=round(regime_score, 1),
             theme_overlap_count=overlap_count,
+            overlapping_theme_ids=sorted(anchor_themes & top_theme_set),
             capex_scale_score=round(capex_sc, 1),
             candidate_quality=round(cand_quality, 1),
             foreign_exposure_count=foreign_count,
