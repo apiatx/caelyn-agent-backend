@@ -144,8 +144,35 @@ Composite rank: bottleneck_criticality(35%) + chain_depth(25%) + hiddenness(20%)
 ### Discovery Bridge in /api/playbooks/analyze
 If `discovery_mode` is set, the analyze endpoint runs discovery first, injects top US-accessible candidates into the ticker list, and returns `discovery_context` alongside playbook scores. S&J philosophy is unchanged.
 
+### Regime Detection (Phase 6)
+`GET /api/playbooks/serenity-regime` — returns full `SerenityRegime` including:
+- `regime_id`, `label`, `confidence`, `recommended_mode`, `recommended_depth`
+- `anchor_scores[].overlapping_theme_ids` — actual overlapping theme IDs (not just count)
+- Regime context propagates through analyze bridge for all Serenity discovery modes
+
+### Strategy Screener Subsystem (Phase 7)
+`services/playbook/strategy_screener/` — isolated publication engine on top of Serenity.
+
+**Routes (all under `/api/strategy-screener`):**
+- `GET /` or `/latest` — latest snapshot (202 + background refresh if none/stale)
+- `GET /snapshots?limit=N` — list recent snapshot metadata
+- `GET /config` — cadence info + grade scale
+- `GET /report/{snapshot_id}/{ticker}` — full deep-dive report for one candidate
+- `POST /refresh` — force manual snapshot regeneration (background task)
+
+**Architecture:**
+- `screener_types.py` — Pydantic models: `ScreenerCandidate`, `ScreenerSnapshot`, `ScreenerReport`, `ScreenerConfig`
+- `screener_storage.py` — Neon PostgreSQL persistence (tables: `screener_snapshots`, `screener_reports`)
+- `screener_report_builder.py` — deterministic section builder (zero LLM dependency): summary, why_it_matters, supply_chain_map_text, competitors, catalysts, rerating_case, key_risk, why_hidden, what_to_verify_next, what_would_break_thesis
+- `screener_service.py` — orchestrator: regime → run_discover(auto) → build_full_report × N → save
+- `screener_scheduler.py` — stale-refresh pattern; `enqueue_background_refresh()` via asyncio.create_task()
+- `screener_router.py` — FastAPI router, registered in main.py
+
+**Grade formula:** `best_blend*0.5 + bottleneck_criticality*0.25 + hiddenness*0.15 + conf_adj`
+Thresholds: A+≥82, A≥72, B+≥60, B≥48, C<48. Cadence: 14 days (env `SCREENER_CADENCE_DAYS`), shortlist: 20 (env `SCREENER_SHORTLIST_SIZE`).
+
 ### Tests
-268 tests (0 failures) in `services/playbook/factor_tests.py`. Includes 10 Phase 3 discovery tests.
+774 tests (0 failures) in `services/playbook/factor_tests.py`. Phase 7 adds 64 screener tests covering types, grade assignment, all report sections, stale logic, candidate conversion, and isolation from /api/query.
 
 ## External Dependencies
 - **AI**: OpenAI (GPT-4o for orchestration/classification), Anthropic (Claude Sonnet for reasoning/analysis), xAI Grok.

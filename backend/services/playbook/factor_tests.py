@@ -2182,6 +2182,282 @@ def test_discover_response_regime_context_field():
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Phase 7 — Strategy Screener
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_screener_types_models():
+    print("\n[screener_types_models]")
+    from services.playbook.strategy_screener.screener_types import (
+        ScreenerCandidate, ScreenerSnapshot, ScreenerReport, ScreenerConfig,
+    )
+
+    c = ScreenerCandidate(ticker="NVDA", company_name="NVIDIA")
+    _assert("ScreenerCandidate ticker", c.ticker == "NVDA")
+    _assert("ScreenerCandidate company_name", c.company_name == "NVIDIA")
+    _assert("ScreenerCandidate grade default", c.grade == "B")
+    _assert("ScreenerCandidate model_dump works", isinstance(c.model_dump(), dict))
+
+    s = ScreenerSnapshot(
+        snapshot_id="serenity_2026_04_18_0000",
+        playbook_id="serenity",
+        generated_at="2026-04-18T00:00:00+00:00",
+        results=[c],
+        results_count=1,
+    )
+    _assert("ScreenerSnapshot snapshot_id", s.snapshot_id == "serenity_2026_04_18_0000")
+    _assert("ScreenerSnapshot results list", len(s.results) == 1)
+    _assert("ScreenerSnapshot is_stale default False", s.is_stale is False)
+    _assert("ScreenerSnapshot model_dump works", isinstance(s.model_dump(), dict))
+
+    r = ScreenerReport(
+        snapshot_id="serenity_2026_04_18_0000",
+        ticker="NVDA",
+        company_name="NVIDIA",
+        headline="NVDA • NVIDIA",
+        meta_line="$3T • US • L0 • A+",
+        summary="Test summary",
+        why_it_matters="Test why",
+        supply_chain_map_text="Test map",
+        competitors="Test comps",
+        catalysts="Test cats",
+        rerating_case="Test rerating",
+        key_risk="Test risk",
+        why_hidden="Test hidden",
+        what_to_verify_next="Test verify",
+        what_would_break_thesis="Test break",
+        generated_at="2026-04-18T00:00:00+00:00",
+    )
+    _assert("ScreenerReport ticker", r.ticker == "NVDA")
+    _assert("ScreenerReport headline", r.headline == "NVDA • NVIDIA")
+    _assert("ScreenerReport grade default", r.grade == "B")
+    _assert("ScreenerReport model_dump works", isinstance(r.model_dump(), dict))
+
+    cfg = ScreenerConfig()
+    _assert("ScreenerConfig cadence_days default 14", cfg.cadence_days == 14)
+    _assert("ScreenerConfig grade_scale has A+", "A+" in cfg.grade_scale)
+    _assert("ScreenerConfig grade_scale has C", "C" in cfg.grade_scale)
+
+
+def test_screener_grade_assignment():
+    print("\n[screener_grade_assignment]")
+    from services.playbook.strategy_screener.screener_report_builder import assign_grade
+
+    g = assign_grade(best_blend_score=90.0, data_confidence="high", hiddenness_score=80.0, bottleneck_criticality_score=85.0)
+    _assert("A+ grade for top scores", g == "A+")
+
+    g = assign_grade(best_blend_score=75.0, data_confidence="high", hiddenness_score=65.0, bottleneck_criticality_score=70.0)
+    _assert("A grade for strong scores", g in ("A+", "A"))
+
+    g = assign_grade(best_blend_score=60.0, data_confidence="medium", hiddenness_score=50.0, bottleneck_criticality_score=55.0)
+    _assert("B+/B grade for medium scores", g in ("A", "B+", "B"))
+
+    g = assign_grade(best_blend_score=20.0, data_confidence="low", hiddenness_score=20.0, bottleneck_criticality_score=20.0)
+    _assert("C grade for low scores", g == "C")
+
+    g_high = assign_grade(best_blend_score=65.0, data_confidence="high", hiddenness_score=60.0, bottleneck_criticality_score=60.0)
+    g_low  = assign_grade(best_blend_score=65.0, data_confidence="low",  hiddenness_score=60.0, bottleneck_criticality_score=60.0)
+    _assert("High confidence grades higher than low", _grade_rank(g_high) >= _grade_rank(g_low))
+
+
+def _grade_rank(g: str) -> int:
+    return {"A+": 5, "A": 4, "B+": 3, "B": 2, "C": 1}.get(g, 0)
+
+
+def test_screener_report_builder_sections():
+    print("\n[screener_report_builder_sections]")
+    from services.playbook.strategy_screener.screener_report_builder import (
+        build_one_line_summary, build_summary, build_why_it_matters,
+        build_supply_chain_map_text, build_competitors, build_catalysts,
+        build_rerating_case, build_key_risk, build_why_hidden,
+        build_what_to_verify_next, build_what_would_break_thesis,
+        build_supply_chain_layers, build_full_report,
+    )
+
+    cand = {
+        "ticker":                       "SIVE",
+        "company_name":                 "Sivers Semiconductors",
+        "country":                      "SE",
+        "exchange":                     "STO",
+        "themes":                       ["photonics_cpo"],
+        "layer_depth":                  4,
+        "chain_role_type":              "direct_bottleneck",
+        "bottleneck_criticality_score": 82.0,
+        "hiddenness_score":             70.0,
+        "best_blend_score":             78.0,
+        "chain_depth_score":            75.0,
+        "supply_chain_confidence_score": 55.0,
+        "data_confidence":              "medium",
+        "coverage_status":              "partial",
+        "giant_anchors":                ["NVDA", "INTC"],
+        "comparable_names":             ["LITE", "IIVI"],
+        "market_cap_usd":               312_000_000.0,
+        "us_access_proxy":              None,
+        "thesis_summary":               "Specialized III-V wafers for data center optics.",
+        "fit_reasoning":                ["Sole-source position in CPO wafer supply"],
+        "why_now":                      "CPO ramp driving exponential demand.",
+        "why_hidden":                   "Swedish microcap, no analyst coverage.",
+        "what_to_verify_next":          "Check Q4 earnings transcript for NVDA customer mention.",
+        "what_would_break_thesis":      "If NVDA moves to InP substrates instead of GaAs.",
+        "crowding_flags":               [],
+        "coverage_notes":               "Thin SEC filing coverage, Swedish annual report only.",
+        "data_gaps":                    ["No US ADR confirmed"],
+        "chain_layers":                 ["III-V substrate supplier", "CPO wafer grower"],
+    }
+
+    summary = build_one_line_summary(cand)
+    _assert("one_line_summary non-empty", len(summary) > 20)
+
+    full_sum = build_summary(cand)
+    _assert("summary contains ticker", "SIVE" in full_sum or "Sivers" in full_sum)
+    _assert("summary non-empty", len(full_sum) > 50)
+
+    wit = build_why_it_matters(cand)
+    _assert("why_it_matters mentions NVDA or criticality", "NVDA" in wit or "criticality" in wit.lower() or "score" in wit.lower())
+
+    scm = build_supply_chain_map_text(cand)
+    _assert("supply_chain_map_text non-empty", len(scm) > 40)
+    _assert("supply_chain_map_text mentions NVDA", "NVDA" in scm)
+
+    comps = build_competitors(cand)
+    _assert("competitors mentions LITE or IIVI", "LITE" in comps or "IIVI" in comps)
+
+    cats = build_catalysts(cand)
+    _assert("catalysts non-empty", len(cats) > 20)
+
+    rr = build_rerating_case(cand)
+    _assert("rerating_case non-empty", len(rr) > 20)
+
+    kr = build_key_risk(cand)
+    _assert("key_risk non-empty", len(kr) > 20)
+
+    wh = build_why_hidden(cand)
+    _assert("why_hidden non-empty", len(wh) > 20)
+    _assert("why_hidden mentions foreign or hiddenness", "SE" in wh or "hidden" in wh.lower() or "coverage" in wh.lower())
+
+    wtv = build_what_to_verify_next(cand)
+    _assert("what_to_verify_next non-empty", len(wtv) > 20)
+
+    wtbt = build_what_would_break_thesis(cand)
+    _assert("what_would_break_thesis non-empty", len(wtbt) > 20)
+    _assert("what_would_break_thesis contains thesis break content", "InP" in wtbt or "break" in wtbt.lower() or "thesis" in wtbt.lower())
+
+    layers = build_supply_chain_layers(cand)
+    _assert("supply_chain_layers is list", isinstance(layers, list))
+    _assert("supply_chain_layers non-empty", len(layers) > 0)
+
+    full_report = build_full_report(cand, snapshot_id="test_snap_001", regime_context=None)
+    _assert("full_report is dict", isinstance(full_report, dict))
+    _assert("full_report has headline", "headline" in full_report)
+    _assert("full_report has meta_line", "meta_line" in full_report)
+    _assert("full_report has grade", "grade" in full_report)
+    _assert("full_report grade is valid", full_report["grade"] in ("A+", "A", "B+", "B", "C"))
+    _assert("full_report has scores dict", isinstance(full_report.get("scores"), dict))
+    _assert("full_report headline contains ticker", "SIVE" in full_report["headline"])
+    _assert("full_report meta_line contains country", "SE" in full_report["meta_line"])
+
+
+def test_screener_stale_logic():
+    print("\n[screener_stale_logic]")
+    from services.playbook.strategy_screener.screener_scheduler import is_snapshot_stale, attach_stale_flag
+    from datetime import datetime, timezone, timedelta
+
+    _assert("None snapshot is stale", is_snapshot_stale(None) is True)
+    _assert("empty dict snapshot is stale", is_snapshot_stale({}) is True)
+    _assert("error status is stale", is_snapshot_stale({"status": "error", "generated_at": datetime.now(timezone.utc).isoformat()}) is True)
+    _assert("generating status is NOT stale", is_snapshot_stale({"status": "generating", "generated_at": datetime.now(timezone.utc).isoformat()}) is False)
+
+    fresh_ts = datetime.now(timezone.utc).isoformat()
+    old_ts   = (datetime.now(timezone.utc) - timedelta(days=20)).isoformat()
+
+    _assert("fresh snapshot is not stale (14d cadence)", is_snapshot_stale({"status": "complete", "generated_at": fresh_ts}, cadence_days=14) is False)
+    _assert("20-day-old snapshot is stale (14d cadence)", is_snapshot_stale({"status": "complete", "generated_at": old_ts}, cadence_days=14) is True)
+    _assert("20-day-old snapshot is NOT stale (30d cadence)", is_snapshot_stale({"status": "complete", "generated_at": old_ts}, cadence_days=30) is False)
+
+    snap = {"status": "complete", "generated_at": fresh_ts, "results": []}
+    flagged = attach_stale_flag(snap, cadence_days=14)
+    _assert("attach_stale_flag fresh → is_stale=False", flagged["is_stale"] is False)
+
+    snap_old = {"status": "complete", "generated_at": old_ts, "results": []}
+    flagged_old = attach_stale_flag(snap_old, cadence_days=14)
+    _assert("attach_stale_flag old → is_stale=True", flagged_old["is_stale"] is True)
+
+
+def test_screener_candidate_to_screener_dict():
+    print("\n[screener_candidate_to_screener_dict]")
+    from services.playbook.strategy_screener.screener_service import _candidate_to_screener_dict, _cadence_label
+
+    fake_candidate = {
+        "ticker":                       "NVDA",
+        "company_name":                 "NVIDIA",
+        "country":                      "US",
+        "exchange":                     "NASDAQ",
+        "themes":                       ["semicap_supply_chain"],
+        "layer_depth":                  0,
+        "chain_role_type":              "platform_anchor",
+        "best_blend_score":             92.0,
+        "bottleneck_criticality_score": 88.0,
+        "hiddenness_score":             15.0,
+        "chain_depth_score":            30.0,
+        "supply_chain_confidence_score": 95.0,
+        "data_confidence":              "high",
+        "coverage_status":              "full",
+        "us_access_proxy":              None,
+        "market_cap_usd":               3_000_000_000_000.0,
+        "giant_anchors":                [],
+        "comparable_names":             [],
+        "thesis_summary":               "",
+        "fit_reasoning":                [],
+        "why_now":                      "",
+        "why_hidden":                   "",
+        "what_to_verify_next":          "",
+        "what_would_break_thesis":      "",
+        "coverage_notes":               "",
+        "crowding_flags":               [],
+        "data_gaps":                    [],
+        "chain_layers":                 [],
+    }
+
+    d = _candidate_to_screener_dict(fake_candidate)
+    _assert("candidate dict has ticker", d["ticker"] == "NVDA")
+    _assert("candidate dict has grade", d["grade"] in ("A+", "A", "B+", "B", "C"))
+    _assert("candidate dict has one_line_summary", len(d.get("one_line_summary", "")) > 0)
+    _assert("candidate dict has theme", "theme" in d)
+    _assert("candidate dict theme matches themes[0]", d["theme"] == "semicap_supply_chain")
+
+    _assert("cadence label daily", _cadence_label(1) == "daily")
+    _assert("cadence label weekly", _cadence_label(7) == "weekly")
+    _assert("cadence label biweekly", _cadence_label(14) == "biweekly")
+    _assert("cadence label monthly", _cadence_label(30) == "monthly")
+    _assert("cadence label custom", "30" in _cadence_label(30) or _cadence_label(30) == "monthly")
+
+
+def test_screener_isolation_from_query():
+    print("\n[screener_isolation_from_query]")
+    import ast, os
+
+    screener_files = [
+        "services/playbook/strategy_screener/screener_service.py",
+        "services/playbook/strategy_screener/screener_router.py",
+        "services/playbook/strategy_screener/screener_storage.py",
+        "services/playbook/strategy_screener/screener_report_builder.py",
+        "services/playbook/strategy_screener/screener_scheduler.py",
+    ]
+
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    forbidden   = ["/api/query", "api_query", "prompts.py", "personality.py",
+                   "mode_normalizer", "data_compressor"]
+
+    for rel_path in screener_files:
+        fpath = os.path.join(backend_dir, rel_path)
+        if not os.path.exists(fpath):
+            continue
+        with open(fpath) as f:
+            src = f.read()
+        for bad in forbidden:
+            _assert(f"{rel_path}: no '{bad}' reference", bad not in src)
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Runner
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -2264,6 +2540,14 @@ def run_all():
     test_regime_top_themes_in_theme_scores()
     test_regime_top_anchors_in_anchor_scores()
     test_discover_response_regime_context_field()
+
+    # Phase 7 — Strategy Screener
+    test_screener_types_models()
+    test_screener_grade_assignment()
+    test_screener_report_builder_sections()
+    test_screener_stale_logic()
+    test_screener_candidate_to_screener_dict()
+    test_screener_isolation_from_query()
 
     print()
     print("=" * 60)

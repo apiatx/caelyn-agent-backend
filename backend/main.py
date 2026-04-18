@@ -248,6 +248,14 @@ try:
     print("[PLAYBOOK] Router registered at /api/playbooks")
 except Exception as _pb_err:
     print(f"[PLAYBOOK] Router unavailable (non-fatal): {_pb_err}")
+
+# ── Strategy Screener router (isolated, no /api/query coupling) ────────────
+try:
+    from services.playbook.strategy_screener.screener_router import router as _screener_router
+    app.include_router(_screener_router)
+    print("[SCREENER] Router registered at /api/strategy-screener")
+except Exception as _sc_err:
+    print(f"[SCREENER] Router unavailable (non-fatal): {_sc_err}")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────

@@ -1,0 +1,405 @@
+You already implemented:
+
+isolated playbook engine
+Serenity and S&J
+/api/playbooks/analyze
+/api/playbooks/discover
+/api/playbooks/supply-chain-map
+/api/playbooks/compare
+Serenity Auto / regime detection
+strict isolation from /api/query
+
+Good.
+
+Now implement a new Strategy Screener snapshot/report system using the existing Serenity logic.
+
+Core objective
+
+Build a new proactive snapshot engine + routes that generate and serve a Serenity Strategy Screener page.
+
+This should:
+
+run on a schedule
+generate a ranked list of candidates
+generate a full stored report per candidate
+expose a clean API for a new frontend page
+reuse the existing Serenity regime/discovery/analyze logic as much as possible
+remain completely separate from /api/query
+Important product requirement
+
+The user wants:
+
+a ranked list page
+a deep report when a stock is clicked
+proactive generation
+not prompt-driven
+cadence currently unclear between daily / weekly / biweekly
+Implement this safely as:
+configurable cadence
+default = every 14 days
+support manual refresh
+persist the generated snapshot and reports
+
+Do not hardcode to daily or weekly only.
+
+Non-negotiable guardrails
+Do not modify /api/query in any way.
+Do not change AI Terminal behavior.
+Do not replace the existing Serenity terminal mode.
+Do not build this as a prompt-only hack.
+Do not duplicate the playbook/discovery engine.
+Reuse existing Serenity discovery/analyze/regime logic.
+Persist snapshots/reports so frontend can load quickly without rerunning heavy discovery every page view.
+Rate-limit provider usage carefully.
+Use Finnhub + existing discovery graph/regime logic as the backbone.
+Use Tradier for quote/tradability checks where useful.
+Use FMP sparingly.
+Use Perplexity only for shortlist/report enrichment if needed and cached.
+Keep this isolated under the playbook/strategy-screener subsystem.
+What to build
+
+Create a new subsystem for scheduled Serenity snapshot generation.
+
+Suggested module structure:
+
+services/playbook/strategy_screener/
+  __init__.py
+  screener_types.py
+  screener_service.py
+  screener_storage.py
+  screener_scheduler.py
+  screener_report_builder.py
+  screener_router.py
+
+Adapt to repo structure if needed, but keep it isolated.
+
+Part 1 — Snapshot model
+
+Create a persisted snapshot model representing one strategy screener issue/run.
+
+Snapshot fields
+
+At minimum include:
+
+snapshot_id
+playbook_id (serenity for v1)
+generated_at
+cadence
+regime_context
+summary
+top_picks
+all_candidates
+status
+version
+
+Optional:
+
+expires_at
+manual_override
+generation_notes
+Candidate summary in snapshot
+
+Each candidate in the list should include:
+
+ticker
+company_name
+country
+exchange
+market_cap_usd
+theme
+chain_role_type
+layer_depth
+grade or score bucket
+best_blend_score
+bottleneck_criticality_score
+hiddenness_score
+coverage_status
+data_confidence
+us_access_proxy
+one_line_summary
+
+This powers the list page.
+
+Part 2 — Full report model
+
+Create a persisted deep report per snapshot candidate.
+
+Full report fields
+
+At minimum:
+
+snapshot_id
+ticker
+company_name
+headline
+summary
+why_it_matters
+supply_chain_map_text
+supply_chain_layers
+competitors
+catalysts
+rerating_case
+key_risk
+why_hidden
+what_to_verify_next
+what_would_break_thesis
+themes
+anchors
+coverage_status
+data_confidence
+us_access_proxy
+market_cap_usd
+country
+exchange
+grade
+scores
+generated_at
+
+This should look like the attached example pages: detailed, readable, thesis-oriented.
+
+Part 3 — Report generation logic
+
+Reuse the existing Serenity stack.
+
+Suggested generation flow
+
+For one snapshot run:
+
+compute current serenity-regime
+run Serenity discovery in auto mode using that regime
+rank candidates
+select shortlist (for example top 10–25)
+for each shortlisted candidate:
+run Serenity analyze
+reuse discovery context
+build a long-form report object
+Report builder sections
+
+Generate deterministic sections like:
+
+Overview / Summary
+Why this matters
+Supply chain map
+Competitors
+Catalysts
+Re-rating case
+Key risk
+Why hidden
+What to verify next
+What would break thesis
+
+Use the existing discovery/analyze outputs and structured fields first.
+
+If needed, allow optional selective enrichment for top candidates only:
+
+Perplexity shortlist-only
+Gemini only if truly needed
+no broad expensive enrichment
+
+Keep it cached/persisted.
+
+Part 4 — Grading system
+
+The attached style has an easy visual grade like A+.
+
+Implement a deterministic grade/bucket for list display, derived from:
+
+best blend
+bottleneck criticality
+confidence
+hiddenness quality
+regime fit
+
+Example:
+
+A+
+A
+B+
+B
+C
+
+Keep it deterministic and documented.
+
+Part 5 — Persistence
+
+This matters.
+
+Do not regenerate everything every page load.
+
+Persist:
+
+latest snapshot metadata
+candidate list
+full reports
+
+Use whatever storage pattern best fits your repo:
+
+DB table(s)
+JSON files
+existing persistence layer
+Suggested endpoints should read from persisted latest snapshot
+
+unless a manual refresh is explicitly triggered.
+
+Part 6 — Scheduling
+
+Implement a scheduler or scheduled job entrypoint that can:
+
+generate a new snapshot on cadence
+default cadence = 14 days
+allow manual refresh endpoint
+allow cadence to be configurable in code/env later
+
+Do not assume background cron exists magically if the deploy environment doesn’t support it cleanly.
+If the repo already has a safe scheduler pattern, use it.
+Otherwise:
+
+implement a callable generation job
+and a “refresh if stale” pattern on request
+Safe fallback
+
+If no scheduler infra is reliable, implement:
+
+when latest snapshot is older than cadence
+and a user visits page / manual refresh endpoint is hit
+backend regenerates snapshot once and persists it
+
+That is much safer than pretending cron always works.
+
+Part 7 — New routes
+
+Add new isolated routes, for example:
+
+GET /api/strategy-screener
+GET /api/strategy-screener/latest
+GET /api/strategy-screener/snapshots
+GET /api/strategy-screener/report/{snapshot_id}/{ticker}
+POST /api/strategy-screener/refresh
+GET /api/strategy-screener/config
+Route purposes
+GET /api/strategy-screener/latest
+
+Returns latest persisted snapshot summary for the list page.
+
+GET /api/strategy-screener/report/{snapshot_id}/{ticker}
+
+Returns the full report for one candidate.
+
+POST /api/strategy-screener/refresh
+
+Triggers manual regeneration of a new snapshot.
+
+GET /api/strategy-screener/config
+
+Returns cadence info and metadata for the page.
+
+Do not touch existing /api/playbooks/* routes more than necessary.
+
+Part 8 — Frontend-facing list response shape
+
+For the list page, return something like:
+
+{
+  "snapshot_id": "serenity_2026_04_18",
+  "playbook_id": "serenity",
+  "generated_at": "2026-04-18T04:00:00Z",
+  "cadence": "biweekly",
+  "summary": "Serenity is currently focused on packaging, semicap tooling, and foreign photonics specialists.",
+  "regime_context": {
+    "label": "AI Packaging & Tooling Bottlenecks",
+    "top_themes": ["advanced_packaging_test", "semicap_supply_chain", "photonics_cpo"],
+    "top_anchors": ["NVDA", "TSM", "AVGO"],
+    "confidence": "high"
+  },
+  "results_count": 12,
+  "results": [
+    {
+      "ticker": "SIVE.ST",
+      "company_name": "Sivers Semiconductors",
+      "country": "Foreign",
+      "exchange": "STO",
+      "theme": "Specialty Materials & Components",
+      "layer": "L4",
+      "market_cap_usd": 312000000,
+      "grade": "A+",
+      "best_blend_score": 89.4,
+      "coverage_status": "partial",
+      "data_confidence": "medium",
+      "one_line_summary": "Specialized III-V semiconductor wafers for data center optics and LiDAR applications."
+    }
+  ]
+}
+Part 9 — Frontend-facing report response shape
+
+For full report route, return something like:
+
+{
+  "snapshot_id": "serenity_2026_04_18",
+  "ticker": "SIVE.ST",
+  "company_name": "Sivers Semiconductors",
+  "headline": "SIVE.ST • Sivers Semiconductors",
+  "meta_line": "$312M • Foreign • Layer 4 • Specialty Materials & Components • A+",
+  "summary": "...",
+  "why_it_matters": "...",
+  "supply_chain_map_text": "...",
+  "competitors": "...",
+  "catalysts": "...",
+  "rerating_case": "...",
+  "key_risk": "...",
+  "why_hidden": "...",
+  "what_to_verify_next": "...",
+  "what_would_break_thesis": "...",
+  "scores": {...},
+  "themes": [...],
+  "anchors": [...],
+  "coverage_status": "partial",
+  "data_confidence": "medium",
+  "us_access_proxy": "XYZ",
+  "generated_at": "..."
+}
+Part 10 — Keep Serenity AI Terminal and Strategy Screener aligned
+
+The screener must use the same Serenity regime/discovery/analyze logic as terminal mode.
+
+Do not fork logic into a second Serenity implementation.
+
+This screener is a proactive snapshot product surface over the same engine.
+
+Part 11 — Testing requirements
+
+Add/update tests for:
+
+snapshot generation works
+full reports are generated and persisted
+latest snapshot route works
+report route works
+refresh route works
+cadence / stale-refresh logic works
+grade assignment works
+no /api/query coupling exists
+playbook routes remain compatible
+Part 12 — Deliverables
+
+When done, report:
+
+exact files added/modified
+routes added
+persistence approach used
+generation cadence logic
+sample JSON for latest snapshot and full report
+proof /api/query remains untouched
+any TODOs for phase 2 of the screener
+Final philosophy
+
+This is:
+
+Serenity as a publication / issue / screener
+not just a prompt mode
+not a live background crawler
+not a second brain
+
+It should feel like:
+
+a curated issue
+generated from the same Serenity brain
+stored and browsable
