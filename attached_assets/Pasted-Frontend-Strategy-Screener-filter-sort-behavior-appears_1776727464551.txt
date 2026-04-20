@@ -1,0 +1,86 @@
+Frontend Strategy Screener filter/sort behavior appears incorrect.
+Your job is to perform a backend contract verification only, unless a real bug is found.
+
+Objective
+
+Verify that GET /api/strategy-screener/latest is correctly applying:
+
+market_cap_bucket
+layer
+sort_by
+limit
+
+and returning the filtered/sorted result set as expected.
+
+This is primarily a verification/debug task.
+
+Non-negotiable guardrails
+Do not modify /api/query.
+Do not change screener generation logic.
+Do not add new features unless a real backend bug is found.
+Do not regenerate snapshots for filtering.
+Keep this to contract verification and small safe fixes only if needed.
+Verify these exact cases live
+
+Use the existing latest snapshot and test all of these against real data:
+
+Market cap filter checks
+GET /api/strategy-screener/latest?market_cap_bucket=large_cap&limit=20
+GET /api/strategy-screener/latest?market_cap_bucket=mid_cap&limit=20
+GET /api/strategy-screener/latest?market_cap_bucket=small_cap&limit=20
+GET /api/strategy-screener/latest?market_cap_bucket=micro_cap&limit=20
+
+For each, report:
+
+HTTP status
+filtered_result_count
+results.length
+example tickers returned
+whether all returned names actually belong in the bucket
+Layer filter checks
+GET /api/strategy-screener/latest?layer=1&limit=20
+GET /api/strategy-screener/latest?layer=2&limit=20
+GET /api/strategy-screener/latest?layer=3&limit=20
+
+For each, report:
+
+filtered_result_count
+whether every returned result has the matching layer_depth
+Combined filter check
+GET /api/strategy-screener/latest?market_cap_bucket=small_cap&layer=3&sort_by=grade&limit=20
+
+Report:
+
+filtered_result_count
+example tickers
+confirm all results match both filters
+All-caps larger limit check
+GET /api/strategy-screener/latest?limit=30
+
+Report:
+
+results.length
+whether 25+ can actually be served from current snapshot
+If a backend bug is found
+
+Only then implement the smallest safe fix.
+
+Most likely backend bug candidates:
+
+layer query param type mismatch
+market cap classification edge case
+filter applied after truncation instead of before truncation
+response metadata wrong even if filtering is right
+
+If no backend bug is found, report that clearly.
+
+Deliverables
+
+When done, provide:
+
+live verification results for each test URL
+whether backend filtering is correct
+whether backend sorting is correct
+whether current snapshot actually contains enough names for 25+ all-cap display
+any backend fix made, if truly needed
+proof /api/query remained untouched
