@@ -1,0 +1,198 @@
+You are working in my backend FastAPI server repo for CaelynAI.
+
+You already implemented the Strategy Screener snapshot/report subsystem and the frontend page is consuming it successfully.
+
+Now implement the next upgrade:
+
+Objective
+
+Add backend support for market cap bucket filtering, layer filtering, and sorting on the Strategy Screener list endpoint, so the frontend can show:
+
+20 stocks in each selected market cap bucket
+optional layer filter
+default rank = best fit to Serenity logic
+optional sort by market cap, layer, or grade
+
+This should operate on the persisted latest snapshot data, not trigger a fresh discovery run.
+
+Non-negotiable guardrails
+Do not modify /api/query in any way.
+Do not change AI Terminal behavior.
+Do not change the screener generation pipeline unless strictly needed to support these filters.
+Do not regenerate the snapshot for filter/sort requests.
+Filtering and sorting must operate on stored snapshot results only.
+Do not add background behavior.
+Do not break the current GET /api/strategy-screener/latest contract for existing consumers.
+Keep the implementation additive and backwards compatible.
+Product requirement
+
+On the Strategy Screener page, the user should be able to choose:
+
+Market cap buckets
+large_cap = $100B+
+mid_cap = $20B–$99B
+small_cap = $2.5B–$19B
+micro_cap = < $2.5B
+Layer filter
+1
+2
+3
+Sort options
+best_fit (default)
+market_cap
+layer
+grade
+Result count
+return up to 20 stocks for the filtered view
+
+If fewer than 20 exist in that filtered bucket, return however many exist.
+
+Part 1 — Define screener list filter/sort semantics
+Market cap classification
+
+Use market_cap_usd already stored on each screener candidate and classify like:
+
+large_cap: >= 100_000_000_000
+mid_cap: >= 20_000_000_000 and < 100_000_000_000
+small_cap: >= 2_500_000_000 and < 20_000_000_000
+micro_cap: < 2_500_000_000
+Layer classification
+
+Use the stored layer_depth field.
+Support filter values:
+
+1
+2
+3
+
+Do not include layer 4 in this first UX unless already required by stored page behavior. The user specifically asked for 1, 2, or 3.
+
+Default ranking
+
+Default sort should remain the strongest Serenity fit.
+Use:
+
+best_blend_score descending
+then maybe tie-break by bottleneck_criticality_score descending
+then supply_chain_confidence_score descending
+Sort options semantics
+
+Implement:
+
+best_fit → default fit ordering
+market_cap → descending by market_cap_usd
+layer → ascending by layer_depth
+grade → descending using grade ordering:
+A+
+A
+B+
+B
+C
+
+Optional:
+
+support sort_direction if easy and safe, but not required unless frontend needs it
+Part 2 — Add filtering/sorting support to latest snapshot route
+
+Update:
+
+GET /api/strategy-screener/latest
+
+to accept optional query params like:
+
+market_cap_bucket=large_cap|mid_cap|small_cap|micro_cap
+layer=1|2|3
+sort_by=best_fit|market_cap|layer|grade
+limit=20
+Behavior
+if no params are passed, existing behavior stays unchanged
+if params are passed, apply them to the stored snapshot results only
+return the filtered/sorted results in the normal response shape
+include metadata about active filters/sorts
+Add response metadata
+
+Add optional fields like:
+
+active_filters
+active_sort
+available_result_count
+filtered_result_count
+
+Backwards compatible only.
+
+Part 3 — Optional dedicated filtered route only if cleaner
+
+If keeping GET /latest backwards compatible becomes awkward, you may instead add a dedicated route like:
+
+GET /api/strategy-screener/latest/results
+
+But prefer extending GET /latest if it can remain clean and backwards compatible.
+
+Use the smallest safe change.
+
+Part 4 — Add config metadata for frontend dropdowns
+
+Update:
+
+GET /api/strategy-screener/config
+
+to include optional metadata like:
+
+{
+  "market_cap_buckets": [
+    {"id": "large_cap", "label": "Large Cap ($100B+)"},
+    {"id": "mid_cap", "label": "Mid Cap ($20B–$99B)"},
+    {"id": "small_cap", "label": "Small Cap ($2.5B–$19B)"},
+    {"id": "micro_cap", "label": "Micro Cap (<$2.5B)"}
+  ],
+  "layer_filters": [
+    {"id": 1, "label": "Layer 1"},
+    {"id": 2, "label": "Layer 2"},
+    {"id": 3, "label": "Layer 3"}
+  ],
+  "sort_options": [
+    {"id": "best_fit", "label": "Best Fit"},
+    {"id": "market_cap", "label": "Market Cap"},
+    {"id": "layer", "label": "Layer"},
+    {"id": "grade", "label": "Grade"}
+  ]
+}
+
+This lets frontend avoid hardcoding if possible.
+
+Part 5 — Keep reports unchanged
+
+Do not change the report route unless needed.
+The filtering/sorting only affects the list page.
+
+Part 6 — Testing requirements
+
+Add/update tests for:
+
+market cap bucket classification works correctly
+layer filter works correctly
+default sort = best fit
+market cap sort works
+grade sort works with correct ordering
+filtered latest route remains backwards compatible when no params are passed
+limit=20 works correctly
+/api/query remains untouched
+Part 7 — Deliverables
+
+When done, provide:
+
+exact files modified
+route/query params added
+exact market cap classification logic
+exact sort ordering logic
+sample JSON for filtered latest response
+confirmation reports remain unchanged
+proof /api/query remains untouched
+Final philosophy
+
+This is a view-layer data upgrade, not a new screener generation system.
+
+Use the stored snapshot.
+Filter it cleanly.
+Sort it cleanly.
+Do not turn a filter into a regeneration job.

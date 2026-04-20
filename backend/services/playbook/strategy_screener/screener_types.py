@@ -4,7 +4,7 @@ Strategy Screener Pydantic models.
 ScreenerCandidate  — one row in the list page
 ScreenerSnapshot   — one full screener issue / run
 ScreenerReport     — one deep-dive report per candidate
-ScreenerConfig     — cadence and metadata
+ScreenerConfig     — cadence, grade scale, and frontend dropdown metadata
 """
 from __future__ import annotations
 
@@ -63,6 +63,12 @@ class ScreenerSnapshot(BaseModel):
     generation_notes:  str  = ""
     is_stale:          bool = False          # set by scheduler at read time
 
+    # Filter/sort metadata — only present when query params were applied
+    active_filters:        Optional[Dict[str, Any]] = None
+    active_sort:           Optional[str] = None
+    filtered_result_count: Optional[int] = None
+    available_result_count: Optional[int] = None
+
 
 class ScreenerReport(BaseModel):
     """
@@ -113,15 +119,38 @@ class ScreenerConfig(BaseModel):
     cadence_days:     int = 14
     shortlist_size:   int = 20
     version:          str = "1.0"
-    grade_scale:      Dict[str, str] = Field(default_factory=lambda: {
+
+    grade_scale: Dict[str, str] = Field(default_factory=lambda: {
         "A+": "best_blend >= 82 (confidence-adjusted)",
         "A":  "best_blend >= 72",
         "B+": "best_blend >= 60",
         "B":  "best_blend >= 48",
         "C":  "best_blend < 48",
     })
+
+    # Frontend dropdown metadata
+    market_cap_buckets: List[Dict[str, Any]] = Field(default_factory=lambda: [
+        {"id": "large_cap",  "label": "Large Cap ($100B+)"},
+        {"id": "mid_cap",    "label": "Mid Cap ($20B\u2013$99B)"},
+        {"id": "small_cap",  "label": "Small Cap ($2.5B\u2013$19B)"},
+        {"id": "micro_cap",  "label": "Micro Cap (<$2.5B)"},
+    ])
+
+    layer_filters: List[Dict[str, Any]] = Field(default_factory=lambda: [
+        {"id": 1, "label": "Layer 1 \u2014 Systems Integrator"},
+        {"id": 2, "label": "Layer 2 \u2014 Key Component"},
+        {"id": 3, "label": "Layer 3 \u2014 Constrained Bottleneck"},
+    ])
+
+    sort_options: List[Dict[str, Any]] = Field(default_factory=lambda: [
+        {"id": "best_fit",   "label": "Best Fit"},
+        {"id": "market_cap", "label": "Market Cap"},
+        {"id": "layer",      "label": "Layer"},
+        {"id": "grade",      "label": "Grade"},
+    ])
+
     description: str = (
-        "Serenity Strategy Screener — proactive supply chain bottleneck publication. "
+        "Serenity Strategy Screener \u2014 proactive supply chain bottleneck publication. "
         "Generated from the same Serenity regime/discovery engine as the terminal. "
         "Stored and browsable; refreshed on cadence or manually."
     )

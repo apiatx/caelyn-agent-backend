@@ -171,8 +171,25 @@ If `discovery_mode` is set, the analyze endpoint runs discovery first, injects t
 **Grade formula:** `best_blend*0.5 + bottleneck_criticality*0.25 + hiddenness*0.15 + conf_adj`
 Thresholds: A+≥82, A≥72, B+≥60, B≥48, C<48. Cadence: 14 days (env `SCREENER_CADENCE_DAYS`), shortlist: 20 (env `SCREENER_SHORTLIST_SIZE`).
 
+### Strategy Screener Filter/Sort (Phase 8)
+`screener_filters.py` — pure view-layer transform on stored snapshot data. Zero DB writes. Zero regeneration.
+
+**GET /api/strategy-screener/latest query params (all optional, backwards compatible):**
+- `market_cap_bucket=large_cap|mid_cap|small_cap|micro_cap`
+- `layer=1|2|3`
+- `sort_by=best_fit|market_cap|layer|grade` (default: best_fit)
+- `limit=1-100` (default: 20)
+
+**Market cap thresholds:** large_cap ≥$100B, mid_cap $20B-$99B, small_cap $2.5B-$19B, micro_cap <$2.5B (None→micro_cap)
+**Sort semantics:** best_fit = bbs DESC → bcs DESC → scs DESC; market_cap = mc_usd DESC (None last); layer = depth ASC; grade = A+>A>B+>B>C DESC
+**Response extras when filters applied:** `active_filters`, `active_sort`, `filtered_result_count`, `available_result_count`, `limit`
+**Unfiltered response is identical to before** — no breaking change.
+
+**GET /api/strategy-screener/config** now includes dropdown metadata:
+- `market_cap_buckets`, `layer_filters`, `sort_options` — all with `id` + `label` for frontend dropdowns
+
 ### Tests
-774 tests (0 failures) in `services/playbook/factor_tests.py`. Phase 7 adds 64 screener tests covering types, grade assignment, all report sections, stale logic, candidate conversion, and isolation from /api/query.
+851 tests (0 failures) in `services/playbook/factor_tests.py`. Phase 8 adds 77 filter/sort tests covering market cap classification, bucket filtering, layer filtering, combined filters, all 4 sort modes, tiebreak logic, limit, backwards compatibility, config dropdown metadata, and isolation from /api/query.
 
 ## External Dependencies
 - **AI**: OpenAI (GPT-4o for orchestration/classification), Anthropic (Claude Sonnet for reasoning/analysis), xAI Grok.

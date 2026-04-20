@@ -2458,6 +2458,325 @@ def test_screener_isolation_from_query():
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Phase 8 — Screener Filter / Sort
+# ────────────────────────────────────────────────────────────────────────────
+
+def _make_candidate(ticker, bbs=70.0, bcs=60.0, scs=80.0, market_cap=None, layer=2, grade="B"):
+    return {
+        "ticker":                       ticker,
+        "company_name":                 f"{ticker} Corp",
+        "best_blend_score":             bbs,
+        "bottleneck_criticality_score": bcs,
+        "supply_chain_confidence_score": scs,
+        "market_cap_usd":               market_cap,
+        "layer_depth":                  layer,
+        "grade":                        grade,
+        "hiddenness_score":             50.0,
+        "chain_depth_score":            50.0,
+        "country":                      "US",
+        "exchange":                     "NASDAQ",
+        "themes":                       [],
+        "giant_anchors":                [],
+    }
+
+
+def test_screener_market_cap_classification():
+    print("\n[screener_market_cap_classification]")
+    from services.playbook.strategy_screener.screener_filters import classify_market_cap
+
+    _assert("None → micro_cap", classify_market_cap(None) == "micro_cap")
+    _assert("0 → micro_cap",    classify_market_cap(0) == "micro_cap")
+    _assert("1B → micro_cap",   classify_market_cap(1_000_000_000) == "micro_cap")
+    _assert("2.49B → micro_cap", classify_market_cap(2_499_999_999) == "micro_cap")
+    _assert("2.5B → small_cap", classify_market_cap(2_500_000_000) == "small_cap")
+    _assert("10B → small_cap",  classify_market_cap(10_000_000_000) == "small_cap")
+    _assert("19.99B → small_cap", classify_market_cap(19_999_999_999) == "small_cap")
+    _assert("20B → mid_cap",    classify_market_cap(20_000_000_000) == "mid_cap")
+    _assert("50B → mid_cap",    classify_market_cap(50_000_000_000) == "mid_cap")
+    _assert("99.99B → mid_cap", classify_market_cap(99_999_999_999) == "mid_cap")
+    _assert("100B → large_cap", classify_market_cap(100_000_000_000) == "large_cap")
+    _assert("1T → large_cap",   classify_market_cap(1_000_000_000_000) == "large_cap")
+
+
+def test_screener_filter_market_cap_bucket():
+    print("\n[screener_filter_market_cap_bucket]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [
+        _make_candidate("LARGE1", market_cap=200_000_000_000),
+        _make_candidate("LARGE2", market_cap=150_000_000_000),
+        _make_candidate("MID1",   market_cap=50_000_000_000),
+        _make_candidate("SMALL1", market_cap=5_000_000_000),
+        _make_candidate("MICRO1", market_cap=500_000_000),
+        _make_candidate("MICRO2", market_cap=None),
+    ]
+
+    res = apply_filters_and_sort(candidates, market_cap_bucket="large_cap")
+    tickers = [c["ticker"] for c in res["results"]]
+    _assert("large_cap returns LARGE1+LARGE2", set(tickers) == {"LARGE1", "LARGE2"})
+    _assert("filtered_result_count=2", res["filtered_result_count"] == 2)
+    _assert("available_result_count=6", res["available_result_count"] == 6)
+
+    res = apply_filters_and_sort(candidates, market_cap_bucket="mid_cap")
+    _assert("mid_cap returns MID1", [c["ticker"] for c in res["results"]] == ["MID1"])
+
+    res = apply_filters_and_sort(candidates, market_cap_bucket="small_cap")
+    _assert("small_cap returns SMALL1", [c["ticker"] for c in res["results"]] == ["SMALL1"])
+
+    res = apply_filters_and_sort(candidates, market_cap_bucket="micro_cap")
+    tickers = {c["ticker"] for c in res["results"]}
+    _assert("micro_cap returns MICRO1+MICRO2 (None)", tickers == {"MICRO1", "MICRO2"})
+
+
+def test_screener_filter_layer():
+    print("\n[screener_filter_layer]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [
+        _make_candidate("L1A", layer=1),
+        _make_candidate("L1B", layer=1),
+        _make_candidate("L2A", layer=2),
+        _make_candidate("L3A", layer=3),
+        _make_candidate("L4A", layer=4),  # layer 4 should be excluded when filtering for 1/2/3
+    ]
+
+    res = apply_filters_and_sort(candidates, layer=1)
+    _assert("layer=1 returns L1A+L1B", {c["ticker"] for c in res["results"]} == {"L1A", "L1B"})
+
+    res = apply_filters_and_sort(candidates, layer=2)
+    _assert("layer=2 returns L2A only", [c["ticker"] for c in res["results"]] == ["L2A"])
+
+    res = apply_filters_and_sort(candidates, layer=3)
+    _assert("layer=3 returns L3A only", [c["ticker"] for c in res["results"]] == ["L3A"])
+
+    res = apply_filters_and_sort(candidates, layer=1)
+    _assert("layer=1 does not include L4", "L4A" not in {c["ticker"] for c in res["results"]})
+
+
+def test_screener_filter_combined():
+    print("\n[screener_filter_combined]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [
+        _make_candidate("HIT",  market_cap=5_000_000_000, layer=3),  # small_cap + layer 3
+        _make_candidate("MISS1", market_cap=50_000_000_000, layer=3), # mid_cap + layer 3
+        _make_candidate("MISS2", market_cap=5_000_000_000, layer=2),  # small_cap + layer 2
+    ]
+
+    res = apply_filters_and_sort(candidates, market_cap_bucket="small_cap", layer=3)
+    _assert("combined filter hits exactly one", [c["ticker"] for c in res["results"]] == ["HIT"])
+    _assert("active_filters has both keys", "market_cap_bucket" in res["active_filters"] and "layer" in res["active_filters"])
+
+
+def test_screener_sort_best_fit():
+    print("\n[screener_sort_best_fit]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [
+        _make_candidate("LOW",  bbs=50.0, bcs=40.0, scs=50.0),
+        _make_candidate("HIGH", bbs=90.0, bcs=85.0, scs=90.0),
+        _make_candidate("MID",  bbs=70.0, bcs=60.0, scs=70.0),
+    ]
+
+    res = apply_filters_and_sort(candidates, sort_by="best_fit")
+    tickers = [c["ticker"] for c in res["results"]]
+    _assert("best_fit: HIGH first",  tickers[0] == "HIGH")
+    _assert("best_fit: LOW last",    tickers[-1] == "LOW")
+    _assert("active_sort is best_fit", res["active_sort"] == "best_fit")
+
+
+def test_screener_sort_best_fit_tiebreak():
+    print("\n[screener_sort_best_fit_tiebreak]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    # Same bbs, different bottleneck score → higher bcs should win
+    candidates = [
+        _make_candidate("LOWER_BCS", bbs=75.0, bcs=55.0, scs=80.0),
+        _make_candidate("HIGHER_BCS", bbs=75.0, bcs=80.0, scs=80.0),
+    ]
+    res = apply_filters_and_sort(candidates, sort_by="best_fit")
+    _assert("best_fit tiebreak: HIGHER_BCS first", res["results"][0]["ticker"] == "HIGHER_BCS")
+
+    # Same bbs + bcs, different scs → higher scs should win
+    candidates2 = [
+        _make_candidate("LOWER_SCS", bbs=75.0, bcs=80.0, scs=50.0),
+        _make_candidate("HIGHER_SCS", bbs=75.0, bcs=80.0, scs=90.0),
+    ]
+    res2 = apply_filters_and_sort(candidates2, sort_by="best_fit")
+    _assert("best_fit tiebreak scs: HIGHER_SCS first", res2["results"][0]["ticker"] == "HIGHER_SCS")
+
+
+def test_screener_sort_market_cap():
+    print("\n[screener_sort_market_cap]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [
+        _make_candidate("SMALL",  market_cap=1_000_000_000),
+        _make_candidate("LARGE",  market_cap=500_000_000_000),
+        _make_candidate("NONE",   market_cap=None),
+        _make_candidate("MEDIUM", market_cap=50_000_000_000),
+    ]
+
+    res = apply_filters_and_sort(candidates, sort_by="market_cap")
+    tickers = [c["ticker"] for c in res["results"]]
+    _assert("market_cap sort: LARGE first",  tickers[0] == "LARGE")
+    _assert("market_cap sort: MEDIUM second", tickers[1] == "MEDIUM")
+    _assert("market_cap sort: None last",    tickers[-1] == "NONE")
+
+
+def test_screener_sort_layer():
+    print("\n[screener_sort_layer]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [
+        _make_candidate("L3", layer=3),
+        _make_candidate("L1", layer=1),
+        _make_candidate("L2", layer=2),
+    ]
+
+    res = apply_filters_and_sort(candidates, sort_by="layer")
+    tickers = [c["ticker"] for c in res["results"]]
+    _assert("layer sort: L1 first", tickers[0] == "L1")
+    _assert("layer sort: L2 second", tickers[1] == "L2")
+    _assert("layer sort: L3 third", tickers[2] == "L3")
+
+
+def test_screener_sort_grade():
+    print("\n[screener_sort_grade]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [
+        _make_candidate("C_STOCK",  grade="C"),
+        _make_candidate("APLUS",    grade="A+"),
+        _make_candidate("B_STOCK",  grade="B"),
+        _make_candidate("BPLUS",    grade="B+"),
+        _make_candidate("A_STOCK",  grade="A"),
+    ]
+
+    res = apply_filters_and_sort(candidates, sort_by="grade")
+    tickers = [c["ticker"] for c in res["results"]]
+    _assert("grade sort: A+ first",  tickers[0] == "APLUS")
+    _assert("grade sort: A second",  tickers[1] == "A_STOCK")
+    _assert("grade sort: B+ third",  tickers[2] == "BPLUS")
+    _assert("grade sort: B fourth",  tickers[3] == "B_STOCK")
+    _assert("grade sort: C last",    tickers[4] == "C_STOCK")
+
+
+def test_screener_limit():
+    print("\n[screener_limit]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [_make_candidate(f"T{i}", bbs=float(100 - i)) for i in range(25)]
+
+    res = apply_filters_and_sort(candidates, limit=20)
+    _assert("limit=20 returns 20", len(res["results"]) == 20)
+    _assert("available_result_count=25", res["available_result_count"] == 25)
+    _assert("limit field is 20", res["limit"] == 20)
+
+    res5 = apply_filters_and_sort(candidates, limit=5)
+    _assert("limit=5 returns 5", len(res5["results"]) == 5)
+    _assert("limit=5 top result has bbs=100", res5["results"][0]["best_blend_score"] == 100.0)
+
+
+def test_screener_no_filter_passes_all():
+    print("\n[screener_no_filter_passes_all]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [_make_candidate(f"T{i}") for i in range(10)]
+    res = apply_filters_and_sort(candidates)  # no params
+
+    _assert("no filter: all 10 pass through", res["filtered_result_count"] == 10)
+    _assert("no filter: active_filters is empty", res["active_filters"] == {})
+    _assert("no filter: active_sort is best_fit", res["active_sort"] == "best_fit")
+    _assert("no filter: limit=20 (default)", res["limit"] == 20)
+
+
+def test_screener_invalid_params_raise():
+    print("\n[screener_invalid_params_raise]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    try:
+        apply_filters_and_sort([], market_cap_bucket="huge_cap")
+        _assert("invalid bucket should raise", False)
+    except ValueError as e:
+        _assert("invalid bucket ValueError raised", "huge_cap" in str(e))
+
+    try:
+        apply_filters_and_sort([], sort_by="random_sort")
+        _assert("invalid sort should raise", False)
+    except ValueError as e:
+        _assert("invalid sort ValueError raised", "random_sort" in str(e))
+
+    try:
+        apply_filters_and_sort([], layer=99)
+        _assert("invalid layer should raise", False)
+    except ValueError as e:
+        _assert("invalid layer ValueError raised", "99" in str(e))
+
+
+def test_screener_backwards_compatible_no_params():
+    print("\n[screener_backwards_compatible_no_params]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [_make_candidate(f"T{i}", bbs=float(90 - i * 5)) for i in range(5)]
+    res = apply_filters_and_sort(candidates)
+
+    _assert("backwards compat: active_filters is empty dict", res["active_filters"] == {})
+    _assert("backwards compat: active_sort=best_fit", res["active_sort"] == "best_fit")
+    _assert("backwards compat: filtered_result_count=5", res["filtered_result_count"] == 5)
+    _assert("backwards compat: available_result_count=5", res["available_result_count"] == 5)
+    _assert("backwards compat: sorted by bbs desc", res["results"][0]["ticker"] == "T0")
+
+
+def test_screener_config_has_dropdown_metadata():
+    print("\n[screener_config_has_dropdown_metadata]")
+    from services.playbook.strategy_screener.screener_types import ScreenerConfig
+
+    cfg = ScreenerConfig()
+    d = cfg.model_dump()
+
+    _assert("config has market_cap_buckets", "market_cap_buckets" in d)
+    _assert("config has layer_filters", "layer_filters" in d)
+    _assert("config has sort_options", "sort_options" in d)
+    _assert("market_cap_buckets has 4 items", len(d["market_cap_buckets"]) == 4)
+    _assert("layer_filters has 3 items", len(d["layer_filters"]) == 3)
+    _assert("sort_options has 4 items", len(d["sort_options"]) == 4)
+
+    bucket_ids = {b["id"] for b in d["market_cap_buckets"]}
+    _assert("bucket ids correct", bucket_ids == {"large_cap", "mid_cap", "small_cap", "micro_cap"})
+
+    sort_ids = {s["id"] for s in d["sort_options"]}
+    _assert("sort ids correct", sort_ids == {"best_fit", "market_cap", "layer", "grade"})
+
+    layer_ids = {l["id"] for l in d["layer_filters"]}
+    _assert("layer ids correct", layer_ids == {1, 2, 3})
+
+    # All buckets and options have id + label
+    for b in d["market_cap_buckets"]:
+        _assert(f"bucket {b['id']} has label", "label" in b)
+    for s in d["sort_options"]:
+        _assert(f"sort {s['id']} has label", "label" in s)
+    for l in d["layer_filters"]:
+        _assert(f"layer {l['id']} has label", "label" in l)
+
+
+def test_screener_filter_isolation_from_query():
+    print("\n[screener_filter_isolation_from_query]")
+    import os
+    fpath = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "services/playbook/strategy_screener/screener_filters.py"
+    )
+    if os.path.exists(fpath):
+        with open(fpath) as f:
+            src = f.read()
+        forbidden = ["/api/query", "api_query", "prompts.py", "personality.py",
+                     "mode_normalizer", "data_compressor"]
+        for bad in forbidden:
+            _assert(f"screener_filters: no '{bad}' reference", bad not in src)
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Runner
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -2548,6 +2867,23 @@ def run_all():
     test_screener_stale_logic()
     test_screener_candidate_to_screener_dict()
     test_screener_isolation_from_query()
+
+    # Phase 8 — Screener Filter / Sort
+    test_screener_market_cap_classification()
+    test_screener_filter_market_cap_bucket()
+    test_screener_filter_layer()
+    test_screener_filter_combined()
+    test_screener_sort_best_fit()
+    test_screener_sort_best_fit_tiebreak()
+    test_screener_sort_market_cap()
+    test_screener_sort_layer()
+    test_screener_sort_grade()
+    test_screener_limit()
+    test_screener_no_filter_passes_all()
+    test_screener_invalid_params_raise()
+    test_screener_backwards_compatible_no_params()
+    test_screener_config_has_dropdown_metadata()
+    test_screener_filter_isolation_from_query()
 
     print()
     print("=" * 60)
