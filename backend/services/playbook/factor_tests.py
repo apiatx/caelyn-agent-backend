@@ -2484,18 +2484,21 @@ def test_screener_market_cap_classification():
     print("\n[screener_market_cap_classification]")
     from services.playbook.strategy_screener.screener_filters import classify_market_cap
 
-    _assert("None → micro_cap", classify_market_cap(None) == "micro_cap")
-    _assert("0 → micro_cap",    classify_market_cap(0) == "micro_cap")
-    _assert("1B → micro_cap",   classify_market_cap(1_000_000_000) == "micro_cap")
-    _assert("2.49B → micro_cap", classify_market_cap(2_499_999_999) == "micro_cap")
-    _assert("2.5B → small_cap", classify_market_cap(2_500_000_000) == "small_cap")
-    _assert("10B → small_cap",  classify_market_cap(10_000_000_000) == "small_cap")
-    _assert("19.99B → small_cap", classify_market_cap(19_999_999_999) == "small_cap")
-    _assert("20B → mid_cap",    classify_market_cap(20_000_000_000) == "mid_cap")
-    _assert("50B → mid_cap",    classify_market_cap(50_000_000_000) == "mid_cap")
-    _assert("99.99B → mid_cap", classify_market_cap(99_999_999_999) == "mid_cap")
-    _assert("100B → large_cap", classify_market_cap(100_000_000_000) == "large_cap")
-    _assert("1T → large_cap",   classify_market_cap(1_000_000_000_000) == "large_cap")
+    # None and sub-$1M values → unknown (NEVER silently micro_cap)
+    _assert("None → unknown",       classify_market_cap(None) == "unknown")
+    _assert("0 → unknown",          classify_market_cap(0) == "unknown")
+    _assert("$999 → unknown",       classify_market_cap(999_999) == "unknown")
+    _assert("$1M boundary → micro_cap", classify_market_cap(1_000_000) == "micro_cap")
+    _assert("1B → micro_cap",       classify_market_cap(1_000_000_000) == "micro_cap")
+    _assert("2.49B → micro_cap",    classify_market_cap(2_499_999_999) == "micro_cap")
+    _assert("2.5B → small_cap",     classify_market_cap(2_500_000_000) == "small_cap")
+    _assert("10B → small_cap",      classify_market_cap(10_000_000_000) == "small_cap")
+    _assert("19.99B → small_cap",   classify_market_cap(19_999_999_999) == "small_cap")
+    _assert("20B → mid_cap",        classify_market_cap(20_000_000_000) == "mid_cap")
+    _assert("50B → mid_cap",        classify_market_cap(50_000_000_000) == "mid_cap")
+    _assert("99.99B → mid_cap",     classify_market_cap(99_999_999_999) == "mid_cap")
+    _assert("100B → large_cap",     classify_market_cap(100_000_000_000) == "large_cap")
+    _assert("1T → large_cap",       classify_market_cap(1_000_000_000_000) == "large_cap")
 
 
 def test_screener_filter_market_cap_bucket():
@@ -2508,24 +2511,38 @@ def test_screener_filter_market_cap_bucket():
         _make_candidate("MID1",   market_cap=50_000_000_000),
         _make_candidate("SMALL1", market_cap=5_000_000_000),
         _make_candidate("MICRO1", market_cap=500_000_000),
-        _make_candidate("MICRO2", market_cap=None),
+        _make_candidate("UNKNOWN1", market_cap=None),    # None → unknown, NOT micro_cap
+        _make_candidate("UNKNOWN2", market_cap=0),       # 0 → unknown
     ]
 
     res = apply_filters_and_sort(candidates, market_cap_bucket="large_cap")
     tickers = [c["ticker"] for c in res["results"]]
     _assert("large_cap returns LARGE1+LARGE2", set(tickers) == {"LARGE1", "LARGE2"})
     _assert("filtered_result_count=2", res["filtered_result_count"] == 2)
-    _assert("available_result_count=6", res["available_result_count"] == 6)
+    _assert("available_result_count=7", res["available_result_count"] == 7)
+    _assert("large_cap does NOT include unknowns", "UNKNOWN1" not in tickers and "UNKNOWN2" not in tickers)
 
     res = apply_filters_and_sort(candidates, market_cap_bucket="mid_cap")
     _assert("mid_cap returns MID1", [c["ticker"] for c in res["results"]] == ["MID1"])
+    _assert("mid_cap does NOT include unknowns", "UNKNOWN1" not in [c["ticker"] for c in res["results"]])
 
     res = apply_filters_and_sort(candidates, market_cap_bucket="small_cap")
     _assert("small_cap returns SMALL1", [c["ticker"] for c in res["results"]] == ["SMALL1"])
 
     res = apply_filters_and_sort(candidates, market_cap_bucket="micro_cap")
     tickers = {c["ticker"] for c in res["results"]}
-    _assert("micro_cap returns MICRO1+MICRO2 (None)", tickers == {"MICRO1", "MICRO2"})
+    _assert("micro_cap returns only MICRO1 (NOT unknowns)", tickers == {"MICRO1"})
+    _assert("micro_cap does NOT include None/unknown", "UNKNOWN1" not in tickers)
+
+    # unknown bucket filter — explicitly selects unknowns only
+    res = apply_filters_and_sort(candidates, market_cap_bucket="unknown")
+    tickers = {c["ticker"] for c in res["results"]}
+    _assert("unknown bucket returns UNKNOWN1+UNKNOWN2", tickers == {"UNKNOWN1", "UNKNOWN2"})
+    _assert("unknown bucket does NOT include MICRO1", "MICRO1" not in tickers)
+
+    # unknown_market_cap_count in response
+    res_all = apply_filters_and_sort(candidates)
+    _assert("unknown_market_cap_count=2", res_all["unknown_market_cap_count"] == 2)
 
 
 def test_screener_filter_layer():
@@ -2738,12 +2755,12 @@ def test_screener_config_has_dropdown_metadata():
     _assert("config has market_cap_buckets", "market_cap_buckets" in d)
     _assert("config has layer_filters", "layer_filters" in d)
     _assert("config has sort_options", "sort_options" in d)
-    _assert("market_cap_buckets has 4 items", len(d["market_cap_buckets"]) == 4)
+    _assert("market_cap_buckets has 5 items (incl unknown)", len(d["market_cap_buckets"]) == 5)
     _assert("layer_filters has 3 items", len(d["layer_filters"]) == 3)
     _assert("sort_options has 4 items", len(d["sort_options"]) == 4)
 
     bucket_ids = {b["id"] for b in d["market_cap_buckets"]}
-    _assert("bucket ids correct", bucket_ids == {"large_cap", "mid_cap", "small_cap", "micro_cap"})
+    _assert("bucket ids correct (incl unknown)", bucket_ids == {"large_cap", "mid_cap", "small_cap", "micro_cap", "unknown"})
 
     sort_ids = {s["id"] for s in d["sort_options"]}
     _assert("sort ids correct", sort_ids == {"best_fit", "market_cap", "layer", "grade"})
@@ -2758,6 +2775,63 @@ def test_screener_config_has_dropdown_metadata():
         _assert(f"sort {s['id']} has label", "label" in s)
     for l in d["layer_filters"]:
         _assert(f"layer {l['id']} has label", "label" in l)
+
+
+def test_screener_unknown_excluded_from_standard_buckets():
+    print("\n[screener_unknown_excluded_from_standard_buckets]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [
+        _make_candidate("LARGE", market_cap=500_000_000_000),   # large_cap
+        _make_candidate("ADR1",  market_cap=None),               # unknown
+        _make_candidate("ADR2",  market_cap=0),                  # unknown (0 = invalid)
+        _make_candidate("ADR3",  market_cap=500_000),            # unknown (sub-$1M)
+        _make_candidate("SMALL", market_cap=5_000_000_000),     # small_cap
+    ]
+
+    for bucket in ["large_cap", "mid_cap", "small_cap", "micro_cap"]:
+        res = apply_filters_and_sort(candidates, market_cap_bucket=bucket)
+        adr_in_results = any(c["ticker"].startswith("ADR") for c in res["results"])
+        _assert(f"{bucket} filter excludes all unknowns", not adr_in_results)
+
+    # The "unknown" bucket filter returns only unknowns
+    res_unknown = apply_filters_and_sort(candidates, market_cap_bucket="unknown")
+    unknown_tickers = {c["ticker"] for c in res_unknown["results"]}
+    _assert("unknown bucket returns ADR1+ADR2+ADR3", unknown_tickers == {"ADR1", "ADR2", "ADR3"})
+    _assert("unknown bucket excludes LARGE", "LARGE" not in unknown_tickers)
+    _assert("unknown bucket excludes SMALL", "SMALL" not in unknown_tickers)
+
+    # No filter → all 5 returned (including unknowns)
+    res_all = apply_filters_and_sort(candidates)
+    _assert("no filter returns all 5 (incl unknowns)", res_all["filtered_result_count"] == 5)
+    _assert("unknown_market_cap_count=3", res_all["unknown_market_cap_count"] == 3)
+
+
+def test_screener_per_result_market_cap_bucket():
+    print("\n[screener_per_result_market_cap_bucket]")
+    from services.playbook.strategy_screener.screener_filters import apply_filters_and_sort
+
+    candidates = [
+        _make_candidate("LARGE",   market_cap=300_000_000_000),
+        _make_candidate("MID",     market_cap=40_000_000_000),
+        _make_candidate("SMALL",   market_cap=8_000_000_000),
+        _make_candidate("MICRO",   market_cap=1_500_000_000),
+        _make_candidate("UNKNOWN", market_cap=None),
+    ]
+
+    res = apply_filters_and_sort(candidates)
+    bucket_map = {c["ticker"]: c["market_cap_bucket"] for c in res["results"]}
+
+    _assert("LARGE → large_cap in result",  bucket_map.get("LARGE")   == "large_cap")
+    _assert("MID → mid_cap in result",      bucket_map.get("MID")     == "mid_cap")
+    _assert("SMALL → small_cap in result",  bucket_map.get("SMALL")   == "small_cap")
+    _assert("MICRO → micro_cap in result",  bucket_map.get("MICRO")   == "micro_cap")
+    _assert("UNKNOWN → unknown in result",  bucket_map.get("UNKNOWN") == "unknown")
+
+    # Also check filtered results include market_cap_bucket
+    res_filter = apply_filters_and_sort(candidates, market_cap_bucket="large_cap")
+    _assert("filtered result has market_cap_bucket", "market_cap_bucket" in res_filter["results"][0])
+    _assert("filtered large has correct bucket", res_filter["results"][0]["market_cap_bucket"] == "large_cap")
 
 
 def test_screener_filter_isolation_from_query():
@@ -2883,6 +2957,9 @@ def run_all():
     test_screener_invalid_params_raise()
     test_screener_backwards_compatible_no_params()
     test_screener_config_has_dropdown_metadata()
+    # Phase 8.1 — unknown bucket + per-result metadata
+    test_screener_unknown_excluded_from_standard_buckets()
+    test_screener_per_result_market_cap_bucket()
     test_screener_filter_isolation_from_query()
 
     print()

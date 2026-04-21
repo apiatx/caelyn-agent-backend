@@ -134,6 +134,7 @@ class ScreenerConfig(BaseModel):
         {"id": "mid_cap",    "label": "Mid Cap ($20B\u2013$99B)"},
         {"id": "small_cap",  "label": "Small Cap ($2.5B\u2013$19B)"},
         {"id": "micro_cap",  "label": "Micro Cap (<$2.5B)"},
+        {"id": "unknown",    "label": "Unknown Market Cap"},
     ])
 
     layer_filters: List[Dict[str, Any]] = Field(default_factory=lambda: [

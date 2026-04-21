@@ -171,6 +171,38 @@ If `discovery_mode` is set, the analyze endpoint runs discovery first, injects t
 **Grade formula:** `best_blend*0.5 + bottleneck_criticality*0.25 + hiddenness*0.15 + conf_adj`
 Thresholds: A+≥82, A≥72, B+≥60, B≥48, C<48. Cadence: 14 days (env `SCREENER_CADENCE_DAYS`), shortlist: 20 (env `SCREENER_SHORTLIST_SIZE`).
 
+### Strategy Screener Market Cap Enrichment (Phase 8.1)
+`screener_enrichment.py` — market cap enrichment for ADR/foreign candidates.
+
+**Root cause of Bug 1 & Bug 2**: All 7 ADR/foreign names (TOELY, HASEY, IBDNY, BESIY, ATEYY, SEMCY, MRAAY) had `market_cap_usd=None`. Old code silently treated `None → micro_cap` which put large Japanese/EU companies in the wrong bucket.
+
+**Enrichment provider chain**:
+1. FMP stable/profile — returns USD directly, works for US-listed ADRs (primary)
+2. Finnhub company_profile2 — international coverage, applies static FX rates for non-USD currencies (fallback)
+3. Neither → mark as `"unknown"` (never fake a value)
+
+**Results on current snapshot**: 4/7 enriched via FMP (TOELY=$129B large_cap, BESIY=$21.7B mid_cap, ATEYY=$126B large_cap, MRAAY=$55.2B mid_cap). 3 remain unknown (HASEY/Hanmi Semiconductor, IBDNY/Ibiden, SEMCY/Samsung Electro-Mechanics — not in FMP database).
+
+**Fixed classification** (`classify_market_cap`):
+```
+None / <$1M   → "unknown"     (was: micro_cap — FIXED)
+$1M - $2.5B   → "micro_cap"
+$2.5B - $20B  → "small_cap"
+$20B - $100B  → "mid_cap"
+≥$100B        → "large_cap"
+```
+
+**New endpoints**:
+- `POST /api/strategy-screener/enrich-market-caps` — backfills market_cap_usd for current snapshot without regeneration. Patches only the results JSONB.
+
+**New response fields** (always present):
+- `market_cap_bucket` per result — e.g. `"large_cap"` | `"unknown"`
+- `unknown_market_cap_count` — how many candidates have unknown market cap in the snapshot
+
+**New bucket filter**: `?market_cap_bucket=unknown` — explicitly selects candidates with no confirmed market cap. Standard buckets (large/mid/small/micro) now exclude unknowns.
+
+**Going forward**: `generate_snapshot()` automatically calls `enrich_candidates()` after building the shortlist. Future snapshots will have correct market caps from day one.
+
 ### Strategy Screener Filter/Sort (Phase 8)
 `screener_filters.py` — pure view-layer transform on stored snapshot data. Zero DB writes. Zero regeneration.
 

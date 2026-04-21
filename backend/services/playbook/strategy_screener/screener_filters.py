@@ -9,7 +9,12 @@ Market cap buckets
   large_cap  >= $100B
   mid_cap    $20B – $99.99B
   small_cap  $2.5B – $19.99B
-  micro_cap  < $2.5B  (also catches None/unknown)
+  micro_cap  < $2.5B
+  unknown    market_cap_usd is None or invalid — NEVER auto-assigned to a standard bucket
+
+Key rule: unknown is NOT included in any of the four standard bucket filters.
+If the user selects large_cap, only confirmed large-cap names appear.
+If no bucket is selected, all names (including unknowns) are returned.
 
 Layer filter   → exact match on layer_depth (1, 2, or 3)
 
@@ -51,11 +56,20 @@ MARKET_CAP_BUCKETS: Dict[str, Dict[str, Any]] = {
         "min":   None,
         "max":   2_500_000_000,
     },
+    "unknown": {
+        "id":    "unknown",
+        "label": "Unknown Market Cap",
+        "min":   None,
+        "max":   None,
+    },
 }
 
 VALID_BUCKETS   = set(MARKET_CAP_BUCKETS.keys())
 VALID_LAYERS    = {1, 2, 3}
 VALID_SORTS     = {"best_fit", "market_cap", "layer", "grade"}
+
+# Standard four buckets — unknown is intentionally excluded from these
+_STANDARD_BUCKETS = {"large_cap", "mid_cap", "small_cap", "micro_cap"}
 
 _GRADE_RANK: Dict[str, int] = {
     "A+": 5,
@@ -66,9 +80,9 @@ _GRADE_RANK: Dict[str, int] = {
 }
 
 LAYER_FILTERS = [
-    {"id": 1, "label": "Layer 1 — Systems Integrator"},
-    {"id": 2, "label": "Layer 2 — Key Component"},
-    {"id": 3, "label": "Layer 3 — Constrained Bottleneck"},
+    {"id": 1, "label": "Layer 1 \u2014 Systems Integrator"},
+    {"id": 2, "label": "Layer 2 \u2014 Key Component"},
+    {"id": 3, "label": "Layer 3 \u2014 Constrained Bottleneck"},
 ]
 
 SORT_OPTIONS = [
@@ -78,12 +92,21 @@ SORT_OPTIONS = [
     {"id": "grade",       "label": "Grade"},
 ]
 
+_MIN_VALID_MARKET_CAP = 1_000_000  # $1M minimum to be considered a real value
+
 
 # ── Market cap helpers ─────────────────────────────────────────────────────────
 
 def classify_market_cap(market_cap_usd: Optional[float]) -> str:
-    """Return the bucket id for a given market_cap_usd value (or None)."""
-    if market_cap_usd is None or market_cap_usd < 2_500_000_000:
+    """
+    Return the bucket id for a given market_cap_usd value.
+
+    None or missing → "unknown"  (never silently classified as micro_cap)
+    Confirmed value → large_cap | mid_cap | small_cap | micro_cap
+    """
+    if market_cap_usd is None or market_cap_usd < _MIN_VALID_MARKET_CAP:
+        return "unknown"
+    if market_cap_usd < 2_500_000_000:
         return "micro_cap"
     if market_cap_usd < 20_000_000_000:
         return "small_cap"
@@ -93,15 +116,26 @@ def classify_market_cap(market_cap_usd: Optional[float]) -> str:
 
 
 def _matches_bucket(candidate: Dict[str, Any], bucket: str) -> bool:
-    mc  = candidate.get("market_cap_usd")
+    """
+    Return True if candidate belongs in the requested bucket.
+
+    Key rule: the "unknown" bucket filter explicitly selects unknowns.
+    Standard bucket filters (large/mid/small/micro) never include unknowns.
+    """
+    mc = candidate.get("market_cap_usd")
+
+    if bucket == "unknown":
+        return mc is None or mc < _MIN_VALID_MARKET_CAP
+
+    # Standard buckets: unknown market cap is NEVER included
+    if mc is None or mc < _MIN_VALID_MARKET_CAP:
+        return False
+
     cfg = MARKET_CAP_BUCKETS[bucket]
-    if cfg["min"] is not None and (mc is None or mc < cfg["min"]):
+    if cfg["min"] is not None and mc < cfg["min"]:
         return False
-    if cfg["max"] is not None and mc is not None and mc >= cfg["max"]:
+    if cfg["max"] is not None and mc >= cfg["max"]:
         return False
-    # micro_cap: allow None
-    if bucket == "micro_cap" and mc is None:
-        return True
     return True
 
 
@@ -109,15 +143,15 @@ def _matches_bucket(candidate: Dict[str, Any], bucket: str) -> bool:
 
 def _sort_key_best_fit(c: Dict[str, Any]):
     return (
-        -c.get("best_blend_score", 0.0),
-        -c.get("bottleneck_criticality_score", 0.0),
-        -c.get("supply_chain_confidence_score", 0.0),
+        -(c.get("best_blend_score") or 0.0),
+        -(c.get("bottleneck_criticality_score") or 0.0),
+        -(c.get("supply_chain_confidence_score") or 0.0),
     )
 
 
 def _sort_key_market_cap(c: Dict[str, Any]):
     mc = c.get("market_cap_usd")
-    # None → sort last (use -0 so we negate: large = most negative = first)
+    # None → sort last (most positive value → sorts after negated large caps)
     return (-(mc if mc is not None else -1),)
 
 
@@ -137,6 +171,14 @@ _SORT_KEYS = {
 }
 
 
+# ── Per-result enrichment ──────────────────────────────────────────────────────
+
+def _add_market_cap_bucket(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """Add market_cap_bucket field to a candidate dict (non-mutating)."""
+    bucket = classify_market_cap(candidate.get("market_cap_usd"))
+    return {**candidate, "market_cap_bucket": bucket}
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def apply_filters_and_sort(
@@ -149,15 +191,22 @@ def apply_filters_and_sort(
     """
     Apply optional filters and sort to a list of stored screener candidate dicts.
 
+    Classification rule: None/missing market_cap_usd → "unknown", NOT micro_cap.
+    Standard bucket filters exclude unknowns. "unknown" bucket filter selects unknowns only.
+    No filter selected → all candidates returned (including unknowns).
+
     Returns:
         {
-            "results":               List[dict],   # filtered + sorted + truncated
-            "filtered_result_count": int,          # after filtering, before limit
+            "results":                List[dict],  # filtered + sorted + truncated
+            "filtered_result_count":  int,         # after filtering, before limit
             "available_result_count": int,         # total in snapshot (no filters)
-            "active_filters":        dict,         # only the filters that were applied
-            "active_sort":           str,
-            "limit":                 int,
+            "unknown_market_cap_count": int,       # how many have unknown market cap
+            "active_filters":         dict,        # only the filters that were applied
+            "active_sort":            str,
+            "limit":                  int,
         }
+
+    Each result dict gets a "market_cap_bucket" field added.
 
     Raises ValueError for invalid bucket/layer/sort values.
     """
@@ -177,7 +226,11 @@ def apply_filters_and_sort(
         )
 
     available = len(candidates)
-    filtered  = list(candidates)
+    unknown_count = sum(
+        1 for c in candidates
+        if (c.get("market_cap_usd") is None or c.get("market_cap_usd", 0) < _MIN_VALID_MARKET_CAP)
+    )
+    filtered = list(candidates)
 
     # ── Filter: market cap bucket ─────────────────────────────────────────────
     if market_cap_bucket is not None:
@@ -194,7 +247,10 @@ def apply_filters_and_sort(
     filtered.sort(key=sort_fn)
 
     # ── Limit ─────────────────────────────────────────────────────────────────
-    results = filtered[:limit]
+    page = filtered[:limit]
+
+    # ── Add market_cap_bucket per result ──────────────────────────────────────
+    results = [_add_market_cap_bucket(c) for c in page]
 
     # ── Active filters metadata ───────────────────────────────────────────────
     active_filters: Dict[str, Any] = {}
@@ -204,10 +260,11 @@ def apply_filters_and_sort(
         active_filters["layer"] = layer
 
     return {
-        "results":               results,
-        "filtered_result_count": filtered_count,
-        "available_result_count": available,
-        "active_filters":        active_filters,
-        "active_sort":           sort_by,
-        "limit":                 limit,
+        "results":                  results,
+        "filtered_result_count":    filtered_count,
+        "available_result_count":   available,
+        "unknown_market_cap_count": unknown_count,
+        "active_filters":           active_filters,
+        "active_sort":              sort_by,
+        "limit":                    limit,
     }

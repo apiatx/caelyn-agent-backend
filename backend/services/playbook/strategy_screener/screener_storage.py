@@ -252,6 +252,37 @@ def _row_to_snapshot(row) -> Dict[str, Any]:
     }
 
 
+def patch_snapshot_market_caps(snapshot_id: str, enriched_results: list) -> bool:
+    """
+    Update only the results JSONB of a stored snapshot (market cap backfill).
+    Does NOT change any other snapshot fields (generated_at, status, summary, etc).
+    """
+    init_screener_tables()
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE public.screener_snapshots
+            SET results = %s::jsonb
+            WHERE snapshot_id = %s
+        """, (json.dumps(enriched_results, default=str), snapshot_id))
+        conn.commit()
+        affected = cur.rowcount
+        cur.close()
+        return affected > 0
+    except Exception as e:
+        print(f"[SCREENER][DB] patch_snapshot_market_caps error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
 # ── Report CRUD ────────────────────────────────────────────────────────────────
 
 def save_report(snapshot_id: str, ticker: str, report: Dict[str, Any]) -> bool:

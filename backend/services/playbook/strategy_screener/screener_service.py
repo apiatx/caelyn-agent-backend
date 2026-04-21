@@ -156,8 +156,17 @@ async def generate_snapshot(manual_override: bool = False) -> Dict[str, Any]:
         all_candidates.sort(key=lambda c: c.best_blend_score, reverse=True)
         shortlist = all_candidates[:SHORTLIST_SIZE]
 
-        # Step 4 — Convert to screener dicts + build reports
+        # Step 4 — Convert to screener dicts
         screener_candidates = [_candidate_to_screener_dict(c) for c in shortlist]
+
+        # Step 4b — Enrich missing market_cap_usd (ADR/foreign names often arrive with None)
+        fmp_key      = os.environ.get("FMP_API_KEY", "")
+        finnhub_key  = os.environ.get("FINNHUB_API_KEY", "")
+        if fmp_key or finnhub_key:
+            from services.playbook.strategy_screener.screener_enrichment import enrich_candidates
+            screener_candidates = await enrich_candidates(screener_candidates, fmp_key, finnhub_key)
+        else:
+            print("[SCREENER] No FMP_API_KEY or FINNHUB_API_KEY — skipping market cap enrichment")
 
         # Step 5 — Build and persist full reports
         regime_slim = {

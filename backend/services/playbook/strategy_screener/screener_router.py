@@ -57,6 +57,7 @@ from services.playbook.strategy_screener.screener_storage import (
     get_snapshot_by_id,
     list_snapshots,
     init_screener_tables,
+    patch_snapshot_market_caps,
 )
 from services.playbook.strategy_screener.screener_scheduler import (
     enqueue_background_refresh,
@@ -65,6 +66,7 @@ from services.playbook.strategy_screener.screener_scheduler import (
 from services.playbook.strategy_screener.screener_types import ScreenerConfig
 from services.playbook.strategy_screener.screener_filters import (
     apply_filters_and_sort,
+    classify_market_cap,
     VALID_BUCKETS,
     VALID_LAYERS,
     VALID_SORTS,
@@ -259,21 +261,35 @@ async def get_latest_screener(
         except ValueError as e:
             raise HTTPException(status_code=422, detail={"error": "filter_error", "message": str(e)})
 
-        result["results"]               = filtered["results"]
-        result["results_count"]         = len(filtered["results"])
-        result["active_filters"]        = filtered["active_filters"]
-        result["active_sort"]           = filtered["active_sort"]
-        result["filtered_result_count"] = filtered["filtered_result_count"]
-        result["available_result_count"] = filtered["available_result_count"]
-        result["limit"]                 = filtered["limit"]
+        result["results"]                  = filtered["results"]
+        result["results_count"]            = len(filtered["results"])
+        result["active_filters"]           = filtered["active_filters"]
+        result["active_sort"]              = filtered["active_sort"]
+        result["filtered_result_count"]    = filtered["filtered_result_count"]
+        result["available_result_count"]   = filtered["available_result_count"]
+        result["unknown_market_cap_count"] = filtered["unknown_market_cap_count"]
+        result["limit"]                    = filtered["limit"]
     elif filter_active:
         # Snapshot not ready yet — still include the filter metadata so frontend
         # knows the params were received, but results is empty
-        result["active_filters"]         = _build_active_filters(market_cap_bucket, layer)
-        result["active_sort"]            = effective_sort
-        result["filtered_result_count"]  = 0
-        result["available_result_count"] = 0
-        result["limit"]                  = limit
+        result["active_filters"]           = _build_active_filters(market_cap_bucket, layer)
+        result["active_sort"]              = effective_sort
+        result["filtered_result_count"]    = 0
+        result["available_result_count"]   = 0
+        result["unknown_market_cap_count"] = 0
+        result["limit"]                    = limit
+    else:
+        # No filter params — backwards compat: add market_cap_bucket per result
+        # and unknown count so frontend always has the metadata, even on the default view
+        raw = result.get("results", [])
+        result["results"] = [
+            {**c, "market_cap_bucket": classify_market_cap(c.get("market_cap_usd"))}
+            for c in raw
+        ]
+        result["unknown_market_cap_count"] = sum(
+            1 for c in raw
+            if c.get("market_cap_usd") is None or c.get("market_cap_usd", 0) < 1_000_000
+        )
 
     http_status = 202 if status == "generating" and not snapshot.get("results") else 200
     if http_status == 202:
@@ -373,6 +389,74 @@ async def _run_refresh_task():
         await generate_snapshot(manual_override=True)
     except Exception as e:
         print(f"[SCREENER] Manual refresh task error: {e}")
+
+
+# ── POST /api/strategy-screener/enrich-market-caps ───────────────────────────
+
+@router.post("/enrich-market-caps")
+async def enrich_market_caps():
+    """
+    Backfill market_cap_usd for candidates in the latest snapshot that are missing it.
+
+    This is a safe, targeted operation:
+      - Loads the current stored snapshot (no regeneration)
+      - Calls FMP (first) then Finnhub (fallback) for any candidate with missing market_cap_usd
+      - Patches only the results JSONB in DB — no other snapshot fields change
+      - Candidates that already have a valid market_cap_usd are left untouched
+
+    Returns a summary of how many were enriched.
+    Use this after the initial snapshot is stored to fix ADR/foreign market caps.
+    """
+    import os
+    from services.playbook.strategy_screener.screener_enrichment import enrich_candidates
+
+    snapshot = get_latest_snapshot()
+    if not snapshot:
+        raise HTTPException(status_code=404, detail={"error": "no_snapshot", "message": "No snapshot found to enrich"})
+
+    if snapshot.get("status") == "generating":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "generating", "message": "Cannot enrich while snapshot is generating. Try again after generation completes."},
+        )
+
+    candidates = snapshot.get("results", [])
+    if not candidates:
+        return {"status": "ok", "enriched_count": 0, "message": "Snapshot has no candidates"}
+
+    missing_before = [c for c in candidates if not (c.get("market_cap_usd") and c["market_cap_usd"] >= 1_000_000)]
+
+    fmp_key     = os.environ.get("FMP_API_KEY", "")
+    finnhub_key = os.environ.get("FINNHUB_API_KEY", "")
+
+    if not fmp_key and not finnhub_key:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "no_providers", "message": "Neither FMP_API_KEY nor FINNHUB_API_KEY is configured"},
+        )
+
+    enriched = await enrich_candidates(candidates, fmp_key, finnhub_key)
+
+    # Persist the backfilled results
+    patched = patch_snapshot_market_caps(snapshot["snapshot_id"], enriched)
+
+    missing_after  = [c for c in enriched if not (c.get("market_cap_usd") and c["market_cap_usd"] >= 1_000_000)]
+    n_fixed        = len(missing_before) - len(missing_after)
+
+    return {
+        "status":          "ok",
+        "snapshot_id":     snapshot["snapshot_id"],
+        "candidates_total": len(candidates),
+        "missing_before":  len(missing_before),
+        "missing_after":   len(missing_after),
+        "enriched_count":  n_fixed,
+        "persisted":       patched,
+        "message": (
+            f"Enriched {n_fixed}/{len(missing_before)} previously-unknown market caps. "
+            f"{len(missing_after)} remain unknown after enrichment."
+            if missing_before else "All candidates already had market cap data."
+        ),
+    }
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

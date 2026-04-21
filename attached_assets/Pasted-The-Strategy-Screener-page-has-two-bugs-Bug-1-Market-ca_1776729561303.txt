@@ -1,0 +1,219 @@
+The Strategy Screener page has two bugs:
+
+Bug 1
+
+Market cap dropdown buckets are not behaving correctly.
+When the user selects:
+
+Large Cap
+Mid Cap
+Small Cap
+Micro Cap
+
+the filtered list is not reliably returning the correct names.
+
+Bug 2
+
+Many screener candidates still have missing market_cap_usd, which breaks:
+
+display
+bucket classification
+filtering accuracy
+
+Your job is to do a backend audit-first fix with the smallest safe surface area.
+
+Non-negotiable guardrails
+Do not modify /api/query in any way.
+Do not change AI Terminal behavior.
+Do not change screener page UX from backend.
+Do not refactor the whole screener system.
+Do not regenerate snapshots on every page request.
+Fix enrichment and filtering at the data/view layer cleanly.
+Use existing APIs carefully and rate-limit responsibly.
+Prefer using already-available structured providers first.
+Core suspicion to audit
+
+I strongly suspect one or more of these are true:
+
+Many snapshot entries were persisted with market_cap_usd = null
+current bucket filtering is operating on incomplete snapshot data
+foreign/ADR names are not getting consistent market cap enrichment
+“unknown market cap” handling is causing bad classification behavior
+the snapshot needs a backfill/enrichment pass so old stored candidates become usable
+
+Audit these before changing behavior.
+
+Part 1 — Audit market cap data quality in stored screener snapshots
+
+Audit the currently stored latest screener snapshot and report:
+
+total number of candidates in latest snapshot
+how many have market_cap_usd present
+how many have market_cap_usd missing/null
+breakdown by:
+US names
+foreign names
+ADR/proxy names
+for missing names, list representative tickers
+
+I want to know whether the root problem is mostly:
+
+missing enrichment
+foreign coverage
+stale old snapshots
+or filter logic
+Part 2 — Audit current market cap enrichment path in screener generation
+
+Trace exactly how market_cap_usd is currently populated during screener snapshot generation.
+
+For each candidate, determine:
+
+which provider is used first
+what fallback chain exists
+when market_cap_usd is left null
+whether foreign names are being skipped or failing silently
+
+Use my actual provider priorities:
+
+Preferred sources for market cap enrichment
+Finnhub first where reliable
+FMP sparingly for market cap sanity / US reference
+Tradier only if helpful for US/ADR tradable names, but it is not the primary market cap source
+do not use Brave/Tavily
+do not add expensive broad web lookups
+Part 3 — Fix market cap enrichment for screener candidates
+
+Implement a clean market-cap enrichment helper for screener generation and/or stored snapshot view logic.
+
+Requirements
+
+For every screener candidate, try to populate market_cap_usd using the best available provider path.
+
+Suggested priority:
+
+use existing candidate/provider-enriched market_cap_usd if already present and sane
+try Finnhub profile/reference market cap
+if missing and US/ADR name, try FMP sparingly
+if still missing, leave null and mark clearly as unknown
+Important
+
+Do not fake market cap.
+Do not classify unknown as micro-cap silently anymore.
+
+Part 4 — Fix classification logic
+
+Current behavior that treats None/unknown -> micro_cap is bad for product behavior.
+
+Replace it with:
+
+large_cap
+mid_cap
+small_cap
+micro_cap
+unknown
+Filtering behavior
+
+If market_cap_bucket is explicitly selected:
+
+large_cap → only true large cap names
+mid_cap → only true mid cap names
+small_cap → only true small cap names
+micro_cap → only true micro cap names
+unknown should not be included in any of the four standard buckets
+
+If no bucket filter is selected:
+
+all candidates may still appear, including unknowns
+Response metadata
+
+Add clear metadata if useful:
+
+unknown_market_cap_count
+optionally include market_cap_bucket per result
+
+This makes frontend much easier.
+
+Part 5 — Consider snapshot backfill / refresh behavior
+
+If the latest stored snapshot is missing too many market caps, I want a safe fix.
+
+Implement one of these, whichever is safest:
+
+Option A — enrich on snapshot generation going forward
+
+and document that current snapshot needs manual refresh
+
+Option B — enrich missing market caps on read for latest snapshot only, cached/persisted safely
+
+only if this is small and safe
+
+Option C — add a one-time manual backfill path for latest screener snapshot
+
+if needed and cleaner
+
+Use the smallest safe approach.
+Do not create background churn.
+
+Part 6 — Fix filtered latest endpoint behavior
+
+Verify and fix:
+
+GET /api/strategy-screener/latest?market_cap_bucket=...
+GET /api/strategy-screener/latest?layer=...
+combined filters
+
+Make sure filtering occurs on the corrected market-cap classification.
+
+Required behavior
+
+If a bucket is selected and there are valid names in that bucket, results should return.
+
+If there are no names in a bucket, return empty cleanly with correct metadata.
+
+No silent fallback to all results.
+
+Part 7 — Improve returned candidate metadata
+
+For each result in GET /latest, include if helpful:
+
+market_cap_usd
+market_cap_bucket
+market_cap_confidence if available
+market_cap_source if easy and safe
+market_cap_missing: true/false
+
+Only if this is a small additive change and helps frontend debugging.
+Do not bloat the contract unnecessarily.
+
+Part 8 — Testing requirements
+
+Add/update tests for:
+
+market cap enrichment helper
+correct classification for:
+large_cap
+mid_cap
+small_cap
+micro_cap
+unknown
+unknown market cap is not included in the four normal bucket filters
+filtered latest route works correctly with mixed known/unknown caps
+old /latest behavior without filters remains compatible
+/api/query remains untouched
+
+Also run live verification against the latest snapshot and show:
+
+counts by market cap bucket
+count of unknowns
+Part 9 — Deliverables
+
+When done, provide:
+
+root cause
+files modified
+exact enrichment/fallback order used
+exact market cap classification logic
+live counts by bucket in latest snapshot
+sample filtered responses for each cap bucket
+whether a manual snapshot refresh is needed to fully populate new market caps
+proof /api/query remained untouched
