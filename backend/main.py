@@ -6063,6 +6063,38 @@ async def _sector_rotation_precompute_loop():
         await asyncio.sleep(_SR_PRECOMPUTE_INTERVAL)
 
 
+# ── GET /api/home/dashboard ──────────────────────────────────────────
+# Aggregator for the new Home page. Composes ALREADY-CACHED services; does
+# not add net-new third-party API calls. Wrapped tasks individually with
+# return_exceptions so one upstream failure never breaks the payload.
+
+@app.get("/api/home/dashboard")
+@limiter.limit("60/minute")
+@traceable(name="main.home_dashboard")
+async def home_dashboard(
+    request: Request,
+    force: bool = False,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Normalized payload for the Artemis-inspired Home landing page."""
+    await _wait_for_init()
+    try:
+        from services.home_service import build_home_dashboard
+        payload = await build_home_dashboard(
+            data_service=data_service,
+            macro_provider=_get_macro_provider(),
+            force=force,
+        )
+        return JSONResponse(content=payload)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Home dashboard error: {str(e)}"},
+        )
+
+
 # ── GET /api/macro/dashboard ─────────────────────────────────────────
 
 @app.get("/api/macro/dashboard")
