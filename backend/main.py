@@ -3440,7 +3440,8 @@ async def backtest_recommendations(request: Request, body: BacktestRequest, _sub
     summary = ""
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        resp = client.messages.create(
+        resp = await asyncio.to_thread(
+            client.messages.create,
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
             messages=[{"role": "user", "content": haiku_prompt}],
@@ -5350,12 +5351,15 @@ RULES:
     messages.append({"role": "user", "content": query})
 
     # ── Call Claude ──────────────────────────────────────────────────────
+    # NOTE: Use asyncio.to_thread() so the sync Anthropic client does NOT
+    # block the uvicorn event loop while waiting for the API response.
     from config import ANTHROPIC_API_KEY
     import anthropic
 
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        resp = client.messages.create(
+        resp = await asyncio.to_thread(
+            client.messages.create,
             model="claude-sonnet-4-20250514",
             max_tokens=2000,
             system=system_prompt,
