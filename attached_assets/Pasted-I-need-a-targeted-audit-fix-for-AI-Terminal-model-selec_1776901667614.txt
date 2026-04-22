@@ -1,0 +1,106 @@
+I need a targeted audit + fix for AI Terminal model selection and Custom Collaboration intent handling. Do not do a broad refactor. Read first, then make surgical changes only where needed.
+
+Context:
+We recently added prompt-aware routing and provider/tier optimization in the backend. That is good. But I need to verify that this did NOT weaken or override the user’s explicit AI Terminal model/collaboration choices.
+
+Critical product rule:
+When the user explicitly chooses a reasoning model family and/or Custom Collaboration setup in AI Terminal, that is intentional user input and must be respected.
+The router may optimize the exact model tier within a chosen family, but it must NOT silently:
+- swap the chosen reasoning family to another family
+- drop explicitly selected collaborators
+- replace the user’s custom collaboration plan with Auto behavior
+unless there is an explicit product rule saying so
+
+Goal:
+Confirm whether Custom Collaboration mode and explicit model/collaborator picks are preserved end-to-end from frontend request -> backend parsing -> routing -> execution.
+Then fix anything that violates that rule.
+
+Please answer these questions after reading the code:
+
+1. What does the frontend send today for AI Terminal in each mode?
+   - Auto
+   - Full Collaboration
+   - Custom Collaboration
+   - Solo family selection
+2. Does it send:
+   - reasoning_model family alias?
+   - exact model id?
+   - collab_agents list?
+   - collaboration_mode?
+   - preset_intent?
+   - reasoning_mode?
+3. In the backend, where are these fields parsed and consumed?
+4. In Custom Collaboration mode, can prompt_router / route_caelyn_override / filter_collaborators currently remove or alter explicitly selected collaborators?
+5. In solo mode, can routing currently override an explicitly selected reasoning family?
+6. In Auto mode, where is the backend allowed to optimize provider family and collaborators?
+
+Implementation requirements:
+
+PHASE 1 — Audit explicit intent preservation
+1. Trace AI Terminal request fields end-to-end:
+   - frontend payload construction
+   - backend request schema
+   - handle_query path
+   - caelyn routing path
+   - prompt_router / route_caelyn_override / filter_collaborators
+2. Produce a concise truth table showing what happens in:
+   - Auto
+   - Full Collaboration
+   - Custom Collaboration
+   - Solo explicit model selection
+
+PHASE 2 — Enforce explicit intent rules
+3. Add/confirm a clear backend rule:
+   - Auto mode:
+     backend may optimize provider family, exact model tier, and collaborator set
+   - Full Collaboration mode:
+     backend may preserve the full predefined collaboration set, but should not silently downgrade it to a smaller custom set
+   - Custom Collaboration mode:
+     backend must preserve user-selected collaborators exactly
+     backend may optimize tier within each explicitly chosen family if that family is used
+     backend must NOT prune explicitly chosen collaborators
+   - Solo explicit model selection:
+     backend must preserve the chosen reasoning family
+     backend may optimize exact tier/model inside that family unless an exact model ID was explicitly supplied
+4. If needed, introduce an explicit boolean or mode check so prompt_router/filter_collaborators only prunes collaborators in Auto mode, not in Custom Collaboration mode.
+
+PHASE 3 — Protect explicit family choice
+5. Ensure route_caelyn_override cannot replace the reasoning family when:
+   - collaboration mode is Custom Collaboration
+   - solo mode has an explicit reasoning family selection
+6. It is okay for backend to resolve:
+   - claude -> balanced Claude default
+   - grok -> balanced/fast Grok default
+   etc.
+   But it must stay within the chosen family.
+
+PHASE 4 — Logging and proof
+7. Add structured logs for AI Terminal requests showing:
+   - collaboration_mode
+   - explicit_reasoning_family
+   - explicit_collaborators
+   - whether provider override was attempted
+   - whether provider override was blocked due to explicit user intent
+   - whether collaborator pruning was attempted
+   - whether pruning was blocked due to explicit user intent
+8. I want to be able to prove from logs that Custom Collaboration is respected.
+
+PHASE 5 — Deliverables
+9. Provide:
+   - files changed
+   - end-to-end truth table for Auto / Full / Custom / Solo
+   - exact current request payload shape
+   - whether frontend changes are needed
+   - 6 example scenarios showing final behavior
+
+Constraints:
+- Keep changes surgical
+- Do not weaken the router in Auto mode
+- Do not break existing presets
+- Do not break tests
+- Work directly on main
+- Commit and push directly to main
+- Run full tests and restart the server
+
+Success criteria:
+After this pass, Custom Collaboration and explicit model choice in AI Terminal are clearly preserved as user intent, while Auto mode still gets the full routing optimization benefits.

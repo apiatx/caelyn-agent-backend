@@ -798,15 +798,60 @@ class TradingAgent:
                   f"response_style={plan.get('response_style') if plan else '?'}")
 
             query_info["reasoning_model"] = reasoning_model
-            # ── Caelyn auto-routing (agent_collab mode, no explicit user override) ──
-            if reasoning_model == "agent_collab" and not collab_agents:
+            # ── AI Terminal explicit intent detection ─────────────────────────────
+            # Detect which AI Terminal mode the user has selected so we can log it
+            # and gate routing correctly.  This drives ALL downstream routing decisions.
+            #
+            # Modes and their request signatures:
+            #   auto               → reasoning_model="agent_collab",  collab_agents=None/[]
+            #   custom_collaboration → reasoning_model="agent_collab", collab_agents=[...picks]
+            #   full_collaboration  → reasoning_model="all_agents",    collab_agents=[...all]
+            #   solo:<family>       → reasoning_model=<family>,         collab_agents=None
+            _explicit_collab_agents = list(collab_agents) if collab_agents else []
+            if reasoning_model == "all_agents":
+                _ai_term_mode = "full_collaboration"
+            elif reasoning_model == "agent_collab" and _explicit_collab_agents:
+                _ai_term_mode = "custom_collaboration"
+            elif reasoning_model == "agent_collab":
+                _ai_term_mode = "auto"
+            else:
+                _ai_term_mode = f"solo:{reasoning_model}"
+
+            print(
+                f"[AI_TERMINAL] mode={_ai_term_mode} "
+                f"| family={reasoning_model} "
+                f"| explicit_collaborators={_explicit_collab_agents or 'none'} "
+                f"| primary_model={primary_model or 'default'} "
+                f"| reasoning_mode={reasoning_mode or 'auto'}"
+            )
+            # ── End intent detection ──────────────────────────────────────────────
+
+            # ── Caelyn auto-routing (ONLY in auto mode — explicit intent is never touched) ──
+            #
+            # CRITICAL PRODUCT RULE:
+            #   Auto mode:               backend may optimize provider family, model tier,
+            #                            and collaborator set freely.
+            #   Custom Collaboration:    backend MUST NOT prune or alter explicit collaborators.
+            #                            Backend may optimize Claude tier within chosen family.
+            #   Full Collaboration:      backend MUST NOT alter the collab agent set.
+            #                            Backend may optimize synthesis model tier.
+            #   Solo explicit selection: backend MUST preserve the chosen reasoning family.
+            #                            Backend may optimize Claude tier via reasoning_mode
+            #                            but cannot switch to a different family.
+            if _ai_term_mode == "auto":
                 from agent.caelyn_routing import get_caelyn_route
                 _caelyn_route = get_caelyn_route(preset_intent, category)
                 collab_agents = _caelyn_route["collaborators"]
                 if not primary_model:
                     primary_model = _caelyn_route["final"]
                 query_info["_caelyn_depth"] = _caelyn_route["mode"]
+                print(
+                    f"[AI_TERMINAL] routing_override=ALLOWED "
+                    f"| category={category} matrix_collabs={collab_agents} "
+                    f"| matrix_final={primary_model}"
+                )
                 # ── Phase 8b: Prompt-aware provider + collaborator refinement ──
+                # Only runs in Auto mode — explicit selections are never sent here.
                 try:
                     _r_final, _r_collabs, _r_changed = _route_caelyn_override(
                         user_prompt or "", category, preset_intent or "",
@@ -818,6 +863,18 @@ class TradingAgent:
                 except Exception as _rce:
                     print(f"[ROUTE_PROVIDER] override error (non-fatal): {_rce}")
                 # ── End provider refinement ───────────────────────────────────
+            else:
+                # EXPLICIT INTENT — Custom Collaboration / Full Collaboration / Solo.
+                # Do NOT call route_caelyn_override or filter_collaborators.
+                # Preserve the user's exact choices.
+                print(
+                    f"[AI_TERMINAL] routing_override=BLOCKED "
+                    f"| mode={_ai_term_mode} "
+                    f"| explicit_family={reasoning_model!r} preserved "
+                    f"| explicit_collaborators={_explicit_collab_agents or 'none'!r} preserved "
+                    f"| collaborator_pruning=SKIPPED "
+                    f"| provider_family_override=SKIPPED"
+                )
             # Gate LLM-backed web search (Perplexity) in data layer: only allowed in agent_collab mode
             self.data._skip_llm_web_search = (reasoning_model not in ("agent_collab", "all_agents"))
             if category == "chat":
@@ -2586,13 +2643,24 @@ class TradingAgent:
         # When preset_intent is set, the synthesis step enforces the preset's structured
         # JSON format so preset buttons always produce cards/charts/data points even
         # when multiple agents collaborate.
-        if reasoning_model == "all_agents" and collab_agents and len(collab_agents) >= 1:
-            agents_to_call = [a for a in (collab_agents or ["grok", "gpt-4o", "gemini", "perplexity"]) if a in self.VALID_COLLAB_AGENTS]
-            # Determine synthesis model: explicit primary_model > reasoning_model > default claude
+        # ── Full Collaboration guard ──────────────────────────────────────────────
+        # Always fire for all_agents regardless of whether collab_agents was sent.
+        # If the frontend sends all_agents without an explicit collab_agents list,
+        # use the canonical default full-collab set so we never silently degrade to
+        # single-model mode.
+        _DEFAULT_FULL_COLLAB_AGENTS = ["grok", "gpt-4o", "gemini", "perplexity"]
+        if reasoning_model == "all_agents":
+            if not collab_agents:
+                print(
+                    f"[AI_TERMINAL] full_collaboration: collab_agents not sent — "
+                    f"using default full set {_DEFAULT_FULL_COLLAB_AGENTS}"
+                )
+            agents_to_call = [a for a in (collab_agents or _DEFAULT_FULL_COLLAB_AGENTS) if a in self.VALID_COLLAB_AGENTS]
+            if not agents_to_call:
+                agents_to_call = [a for a in _DEFAULT_FULL_COLLAB_AGENTS if a in self.VALID_COLLAB_AGENTS]
+            # Determine synthesis model: explicit primary_model > default claude
             if primary_model in ("claude", "gpt-4o", "gemini"):
                 synthesis_model = primary_model
-            elif reasoning_model in ("claude", "gpt-4o", "gemini"):
-                synthesis_model = reasoning_model
             else:
                 synthesis_model = "claude"
             print(f"[ALL_AGENTS] Multi-agent collab: agents={agents_to_call}, synthesis={synthesis_model}, data={data_size:,} chars")
