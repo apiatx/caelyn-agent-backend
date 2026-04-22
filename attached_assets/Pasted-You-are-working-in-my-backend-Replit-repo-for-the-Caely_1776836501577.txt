@@ -1,0 +1,238 @@
+You are working in my **backend Replit repo** for the CaelynAI / FastAPI server.
+
+This is a **surgical refactor only**.
+Do **not** do broad cleanup, renames, architecture changes, or unrelated edits.
+Do **not** break any existing working routes, caching, schemas, or frontend contracts.
+Audit first, then make the smallest safe set of changes.
+
+## Goal
+
+I upgraded from free FMP keys to **one paid FMP Starter key**.
+
+I already:
+
+* removed the old free-key setup from Replit Secrets
+* replaced both:
+
+  * `FMP_API_KEY`
+  * `FMP_API_KEY_CONGRESS`
+    with a single paid:
+* `FMP_API_KEY`
+
+I want the backend updated **carefully and surgically** so that:
+
+1. **FMP becomes the default equities backbone**
+2. **Alpha Vantage is fully retired from stock/equity quote/history/reference flows**
+3. **Finnhub is NOT removed blindly** — first audit exactly where it is still used and whether it adds unique value
+4. **TwelveData is NOT removed blindly** — first audit exactly where it is still used and whether it adds unique value
+5. **Finviz scraping remains in place** for unusual screener/filter combinations where it is already the right tool
+6. Existing frontend payload shapes should remain stable unless there is a clear bug and the change is backward compatible
+
+## Constraints
+
+* **Audit first before editing**
+* Change only what is necessary
+* Preserve existing cache/TTL behavior unless a direct FMP migration requires a minimal adjustment
+* Reuse existing helper/service patterns already in the codebase
+* Do not introduce new providers
+* Do not delete Finnhub or TwelveData code unless the audit proves it is safe and truly unused/redundant
+* Prefer small, explicit patches over refactors
+* Keep logs concise and useful
+* If an env var is removed or deprecated, do it safely and update all references
+* If there are fallback chains, preserve them unless replacing Alpha Vantage directly
+* Do not break any options, crypto, macro, SEC, prediction market, or social/news flows
+
+## What I want you to do
+
+### Phase 1 — Full audit, no assumptions
+
+Inspect the backend and produce a clear inventory of:
+
+1. Everywhere `FMP_API_KEY_CONGRESS` is referenced
+2. Everywhere `FMP_API_KEY` is referenced
+3. Everywhere Alpha Vantage is referenced
+
+   * env var usage
+   * helper/service wrappers
+   * routes
+   * fallback chains
+   * quote/history/indicator logic
+4. Everywhere Finnhub is referenced
+
+   * what exact data it provides
+   * whether that usage is redundant with paid FMP
+   * whether it is still uniquely valuable
+5. Everywhere TwelveData is referenced
+
+   * what exact data it provides
+   * whether that usage is redundant with paid FMP
+   * whether it is still uniquely valuable
+6. Any stock/equity routes or services that currently combine multiple providers for:
+
+   * quote
+   * price change
+   * market cap
+   * volume
+   * relative volume
+   * company profile/reference
+   * historical OHLCV
+   * news
+7. Any current FMP limitations/workarounds that were clearly due to the old free plan
+
+For the audit output, give me a concise table or bullet inventory with:
+
+* file path
+* function/class/route name
+* provider used
+* purpose
+* keep / replace / audit further recommendation
+
+### Phase 2 — Make only the safe FMP key consolidation changes
+
+After the audit, implement the minimum safe changes needed so the backend uses the single paid `FMP_API_KEY`.
+
+Required:
+
+1. Remove all runtime dependency on `FMP_API_KEY_CONGRESS`
+2. Any logic that expected two FMP keys should now use the single `FMP_API_KEY`
+3. If there is fallback or round-robin logic across the two old FMP keys, remove it safely
+4. If any naming/comments/docs reference the old free key split, update them
+5. Keep behavior identical unless the old behavior existed only to work around free-tier rate limits
+
+### Phase 3 — Replace Alpha Vantage with FMP, surgically
+
+Audit first, then replace Alpha Vantage **only where FMP is a clean substitute**.
+
+Priority replacement areas:
+
+* stock quote endpoints
+* historical price/history endpoints
+* company/reference/profile endpoints
+* market cap lookups
+* volume lookups
+* any basic equities enrichment where Alpha Vantage is currently used
+
+Rules:
+
+* preserve existing response shapes
+* preserve existing cache keys if possible
+* if a response shape differs between providers, normalize to the current contract
+* if a route currently falls back to Alpha Vantage, switch that fallback to FMP if safe
+* if Alpha Vantage is only present as dead code, remove it carefully
+* do not touch non-equity use cases unless Alpha Vantage is explicitly used there
+
+### Phase 4 — Audit Finnhub and TwelveData, do not rip them out yet unless clearly safe
+
+I do **not** want blind deletions here.
+
+For each Finnhub usage:
+
+* say whether paid FMP now covers it fully
+* say whether Finnhub still offers unique value
+* say whether it should be:
+
+  * keep
+  * demote to fallback
+  * replace now
+  * leave for later
+
+For each TwelveData usage:
+
+* say whether paid FMP now covers it fully
+* say whether TwelveData still offers unique value
+* say whether it should be:
+
+  * keep
+  * demote to fallback
+  * replace now
+  * leave for later
+
+If there are **obvious low-risk redundant quote/history/reference calls** from Finnhub or TwelveData that are now plainly duplicative, you may migrate those to FMP **only if**:
+
+* the change is low risk
+* the schema can remain the same
+* there is no unique coverage loss
+* you explicitly list what you changed
+
+Otherwise, leave Finnhub/TwelveData in place and document the recommended next pass.
+
+### Phase 5 — Preserve Finviz where it is the right tool
+
+Do not remove or disturb Finviz scraping that is being used for:
+
+* unusual screener combinations
+* screener/discovery workflows
+* Finviz-specific field combinations
+
+Only replace Finviz if it is being used merely as a patch for missing:
+
+* market cap
+* quote
+* company profile/reference
+* stock history
+
+If such “patch” use exists and FMP can cleanly replace it, document it and migrate only if low risk.
+
+## Implementation preferences
+
+When migrating stock data flows to FMP, prefer a clean service/helper structure like this **only if similar helpers already exist**:
+
+* batch quote helper
+* profile/reference helper
+* historical price helper
+* normalization layer that maps raw provider payload to existing app schema
+
+Do not invent a new architecture if the repo already has a provider abstraction or service layer.
+
+## Relative volume
+
+Do not search for a magical provider field if the current backend already computes this well.
+If RVOL is derived today, keep it derived.
+If RVOL is inconsistently sourced from multiple providers, standardize it onto:
+
+* current volume from the main quote source
+* historical average volume from FMP history data
+  But only if that can be done without breaking contracts.
+
+## Deliverables I want back from you
+
+1. **Audit summary**
+
+   * where Alpha Vantage / Finnhub / TwelveData / FMP are used
+   * what should be replaced vs kept
+2. **Exact files changed**
+3. **Why each change was necessary**
+4. **Anything intentionally not changed**
+5. **Any env vars that are now obsolete**
+6. **Any routes/services that still use Finnhub or TwelveData and why**
+7. **Verification steps run**
+
+   * imports / type checks if applicable
+   * app boot sanity check
+   * route-level smoke tests if applicable
+
+## Safety checks before finishing
+
+Before you finish:
+
+* search the repo again for:
+
+  * `FMP_API_KEY_CONGRESS`
+  * `ALPHA_VANTAGE`
+  * `ALPHA_VANTAGE_API_KEY`
+* confirm whether any references remain and why
+* confirm app startup still works
+* confirm no obvious frontend contract was changed unintentionally
+
+## Output style
+
+Be concise but precise.
+Do not give vague “cleanup completed” summaries.
+I want:
+
+* exact findings
+* exact edits
+* exact remaining provider usage
+* exact recommended next steps, if any
+
+Again: **audit first, then smallest safe patch set only.**

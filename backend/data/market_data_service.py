@@ -593,16 +593,26 @@ class MarketDataService:
                 task_keys.append("tavily_news")
                 daily_budget.spend("web_search", 1)
             else:
+                if self.fmp:
+                    tasks.append(
+                        asyncio.wait_for(self.fmp.get_market_news(limit=10),
+                                         timeout=8.0))
+                else:
+                    tasks.append(
+                        asyncio.wait_for(self.alphavantage.get_news_sentiment(
+                            topics="financial_markets"),
+                                         timeout=8.0))
+                task_keys.append("market_news")
+        else:
+            if self.fmp:
+                tasks.append(
+                    asyncio.wait_for(self.fmp.get_market_news(limit=10),
+                                     timeout=8.0))
+            else:
                 tasks.append(
                     asyncio.wait_for(self.alphavantage.get_news_sentiment(
                         topics="financial_markets"),
                                      timeout=8.0))
-                task_keys.append("market_news")
-        else:
-            tasks.append(
-                asyncio.wait_for(self.alphavantage.get_news_sentiment(
-                    topics="financial_markets"),
-                                 timeout=8.0))
             task_keys.append("market_news")
 
         if self.fmp:
@@ -812,11 +822,16 @@ class MarketDataService:
             async_tasks.append(asyncio.wait_for(self.web_search.get_ticker_news_sentiment(ticker), timeout=10.0))
             async_keys.append("tavily_enrichment")
         else:
-            # Fallback to legacy providers
+            # Fallback to legacy providers (FMP replaces Alpha Vantage for news)
+            _news_task = (
+                self.fmp.get_stock_news(ticker, limit=5)
+                if self.fmp
+                else self.alphavantage.get_news_sentiment(ticker)
+            )
             async_tasks.extend([
                 self.stocktwits.get_sentiment(ticker),
                 self.stockanalysis.get_overview(ticker),
-                self.alphavantage.get_news_sentiment(ticker),
+                _news_task,
             ])
             async_keys.extend(["sentiment", "fundamentals", "news_sentiment_ai"])
 
@@ -2270,9 +2285,14 @@ class MarketDataService:
         ]
 
         async def get_buzz(ticker):
+            _buzz_news = (
+                self.fmp.get_stock_news(ticker, limit=5)
+                if self.fmp
+                else self.alphavantage.get_news_sentiment(ticker)
+            )
             async_results = await asyncio.gather(
                 self.stocktwits.get_sentiment(ticker),
-                self.alphavantage.get_news_sentiment(ticker),
+                _buzz_news,
                 return_exceptions=True,
             )
             return {
@@ -2348,10 +2368,15 @@ class MarketDataService:
         ]
 
         async def get_social_detail(ticker):
-            st_result, finn_result, av_result = await asyncio.gather(
+            _social_news = (
+                self.fmp.get_stock_news(ticker, limit=5)
+                if self.fmp
+                else self.alphavantage.get_news_sentiment(ticker)
+            )
+            st_result, finn_result, news_result = await asyncio.gather(
                 self.stocktwits.get_sentiment(ticker),
                 asyncio.to_thread(self.finnhub.get_social_sentiment, ticker),
-                self.alphavantage.get_news_sentiment(ticker),
+                _social_news,
                 return_exceptions=True,
             )
             return {
@@ -2360,7 +2385,7 @@ class MarketDataService:
                 "reddit_twitter":
                 finn_result if not isinstance(finn_result, Exception) else {},
                 "news_sentiment":
-                av_result if not isinstance(av_result, Exception) else {},
+                news_result if not isinstance(news_result, Exception) else {},
             }
 
         results = await asyncio.gather(

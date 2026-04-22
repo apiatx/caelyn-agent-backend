@@ -26,7 +26,7 @@ logger = logging.getLogger("congressional_trading")
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-_FMP_KEY = os.getenv("FMP_API_KEY_CONGRESS", "")
+_FMP_KEY = os.getenv("FMP_API_KEY_CONGRESS") or os.getenv("FMP_API_KEY", "")
 _FMP_BASE = "https://financialmodelingprep.com/stable"
 _TRADIER_KEY = os.getenv("TRADIER_API_KEY", "")
 _FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
@@ -397,7 +397,7 @@ def _build_unique_id(name: str, ticker: str, tx_date: str, tx_type: str) -> str:
 async def _fetch_from_fmp(endpoint: str, source_label: str) -> list[dict]:
     """Fetch records from one FMP endpoint using the dedicated congress API key."""
     if not _FMP_KEY:
-        logger.warning("[CONG_TRADE] FMP_API_KEY_CONGRESS not set")
+        logger.warning("[CONG_TRADE] No FMP key configured (tried FMP_API_KEY_CONGRESS, FMP_API_KEY)")
         return []
     try:
         async with httpx.AsyncClient(timeout=20) as client:
