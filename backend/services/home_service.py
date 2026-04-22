@@ -26,7 +26,7 @@ from typing import Any, Optional
 
 from data.cache import cache
 
-_HOME_CACHE_KEY = "home:dashboard:v2"
+_HOME_CACHE_KEY = "home:dashboard:v3"
 _HOME_CACHE_TTL = 60  # 1 minute — upstream caches do the heavy lifting
 
 
@@ -366,9 +366,15 @@ async def build_home_dashboard(
     except Exception:
         tasks["sector"] = None
 
-    # FMP gainers/losers (FMP_TTL cache upstream)
+    # FMP gainers/losers (FMP_TTL cache upstream). FMP free tier often 403s on
+    # stock_market/gainers and quietly returns [] — we also kick off finviz as a
+    # fallback and merge below, so Home never shows empty movers when either
+    # source succeeds.
     if data_service and getattr(data_service, "fmp", None):
         tasks["movers"] = asyncio.create_task(data_service.fmp.get_gainers_losers())
+    if data_service and getattr(data_service, "finviz", None):
+        tasks["fv_gainers"] = asyncio.create_task(data_service.finviz.get_screener_results("ta_topgainers"))
+        tasks["fv_losers"] = asyncio.create_task(data_service.finviz.get_screener_results("ta_toplosers"))
 
     # Fear & Greed (FEAR_GREED_TTL cache upstream)
     if data_service and getattr(data_service, "fear_greed", None):
@@ -401,8 +407,41 @@ async def build_home_dashboard(
     macro_raw = _safe(results.get("macro"), {}) or {}
     sector_dash = _safe(results.get("sector"), None)
     fmp_movers = _safe(results.get("movers"), {}) or {}
+    fv_gainers = _safe(results.get("fv_gainers"), []) or []
+    fv_losers = _safe(results.get("fv_losers"), []) or []
     fg_equity = _safe(results.get("fg"), {}) or {}
     trending = _safe(results.get("trending"), []) or []
+
+    # Merge FMP + Finviz — prefer whichever source has rows. If FMP 403'd and
+    # returned [], Finviz fills the gap. If both succeeded, FMP takes priority
+    # for stability and we backfill to reach 8 rows.
+    def _merge_movers(primary: list, fallback: list) -> list:
+        seen = set()
+        merged: list = []
+        for r in (primary or []):
+            if not isinstance(r, dict):
+                continue
+            sym = (r.get("ticker") or r.get("symbol") or "").upper()
+            if not sym or sym in seen:
+                continue
+            seen.add(sym)
+            merged.append(r)
+        for r in (fallback or []):
+            if len(merged) >= 8:
+                break
+            if not isinstance(r, dict):
+                continue
+            sym = (r.get("ticker") or r.get("symbol") or "").upper()
+            if not sym or sym in seen:
+                continue
+            seen.add(sym)
+            merged.append(r)
+        return merged
+
+    merged_movers = {
+        "gainers": _merge_movers(fmp_movers.get("gainers") if isinstance(fmp_movers, dict) else [], fv_gainers),
+        "losers": _merge_movers(fmp_movers.get("losers") if isinstance(fmp_movers, dict) else [], fv_losers),
+    }
 
     scan_lite = {"stocktwits_trending": trending}
 
@@ -435,13 +474,17 @@ async def build_home_dashboard(
         "highlighted_companies": _extract_highlighted_companies(watchlists, scan_lite),
         "theme_performance": _extract_theme_performance(sector_dash),
         "trending_ideas": _extract_trending_ideas(scan_lite),
-        "movers": _extract_movers(fmp_movers),
+        "movers": _extract_movers(merged_movers),
         "trending_on_x": trending_on_x,
         "fear_greed": _extract_fear_greed(fg_equity, macro_raw),
         "section_status": {
             "macro": "ok" if not isinstance(results.get("macro"), Exception) and results.get("macro") else "unavailable",
             "sector": "ok" if not isinstance(results.get("sector"), Exception) and results.get("sector") else "unavailable",
-            "movers": "ok" if not isinstance(results.get("movers"), Exception) and results.get("movers") else "unavailable",
+            "movers": (
+                "ok"
+                if (merged_movers.get("gainers") or merged_movers.get("losers"))
+                else "unavailable"
+            ),
             "fear_greed": "ok" if not isinstance(results.get("fg"), Exception) and results.get("fg") else "unavailable",
             "trending": "ok" if not isinstance(results.get("trending"), Exception) and results.get("trending") else "unavailable",
             "trending_on_x": "ok" if trending_on_x.get("available") else ("refreshing" if trending_on_x.get("refresh_in_progress") else "unavailable"),
