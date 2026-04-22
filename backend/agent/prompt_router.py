@@ -5,9 +5,15 @@ Classifies each request into a complexity RouteLabel using heuristic rules
 (no LLM call — pure Python, <1ms), resolves the minimum viable model, and
 supports tier escalation when a response fails.
 
-Integration: called from _build_prompt in claude_agent.py immediately after
-the static category→model selection block, to potentially downgrade the
-assigned model when prompt complexity doesn't warrant premium tier.
+Integration points:
+  1. _build_prompt in claude_agent.py — Claude tier selection
+     Called after static category→model block to downgrade when prompt
+     complexity doesn't warrant premium tier.
+
+  2. Caelyn routing in _handle_query_inner — provider family selection
+     Called after get_caelyn_route() to filter unnecessary collaborators
+     and recommend alternative provider families for freeform queries.
+     Accessed via route_caelyn_override().
 
 Design principles:
   - Never makes an external call — classification is heuristic only
@@ -15,10 +21,19 @@ Design principles:
   - Never removes extended thinking from categories that need it
   - Routing failure must never break a user request (all callers try/except)
   - Logs every routing decision via [ROUTE] + [MODEL_POLICY] structured lines
+  - Never overrides provider when preset_intent is set (format contracts must hold)
 
 RouteLabel hierarchy (cheap → expensive):
   simple_lookup → short_summary → structured_extraction → ranking_scoring
   → standard_synthesis → multi_source_synthesis → deep_research
+
+Provider family selection principles:
+  - Grok        → X/social sentiment, viral/narrative signals
+  - Perplexity  → breaking news, latest headlines, catalyst lookup
+  - Gemini      → web-grounded research, macro/global context
+  - DeepSeek    → cheap structured extraction, ranking, scoring, pure summaries
+  - Claude bal  → strong synthesis, multi-factor analysis
+  - Claude prem → genuine deep research, complex structured output contracts
 """
 
 from __future__ import annotations
@@ -439,3 +454,283 @@ def _model_to_tier(model_id: str) -> Optional[str]:
         if mid == model_id:
             return tier
     return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROVIDER FAMILY ROUTING — Phase 8b
+# Extends routing beyond Claude tier selection to cross-provider family choice.
+# Called at the Caelyn routing call sites in _handle_query_inner.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Provider family signal detectors ─────────────────────────────────────────
+
+_RE_SOCIAL = re.compile(
+    r"\b(social|sentiment|twitter|x\.com|on x\b|on twitter|trending|viral|meme|"
+    r"buzz|retail.*sentiment|narrative|crowd|what.*people.*saying|"
+    r"investor.*sentiment|street.*consensus|x search|x/twitter|"
+    r"social momentum|twitter sentiment|retail.*chatter|wall.*street.*bets|"
+    r"wsb|reddit.*thinks|retail.*bulls|what.*traders.*saying)\b",
+    re.IGNORECASE,
+)
+
+_RE_NEWS = re.compile(
+    r"\b(latest news|breaking news|recent news|today.*news|news.*today|"
+    r"this week.*news|current.*events|press release|announcement|headlines|"
+    r"recent.*development|search.*web|news.*catalyst|latest.*catalyst|"
+    r"what.*happened.*today|any.*news|news.*on\b)\b",
+    re.IGNORECASE,
+)
+
+_RE_WEB_GROUNDED = re.compile(
+    r"\b(global|worldwide|international|geopolitical|macro.*environment|"
+    r"what.*happening.*globally|current.*macro|monetary.*policy|"
+    r"central.*bank|federal.*reserve|ecb|boj|economic.*outlook|"
+    r"interest.*rate.*environment|global.*market.*overview)\b",
+    re.IGNORECASE,
+)
+
+_RE_PURE_STRUCTURED = re.compile(
+    r"\b(sort\s+\w+|sort\s+by|filter\s+by|calculate|compute|"
+    r"give\s+me\s+a\s+table|create\s+a\s+table|build\s+a\s+table|"
+    r"spreadsheet|export|format\s+as|output\s+as)\b",
+    re.IGNORECASE,
+)
+
+# Categories where the final model (primary synthesis model) MUST NOT be changed.
+# These have richly-specified JSON format contracts validated by the frontend.
+# Any deviation in output format would break the card/chart rendering layer.
+_FINAL_MODEL_PROTECTED: frozenset = frozenset({
+    "ticker_analysis",
+    "portfolio_review",
+    "best_trades",
+    "cross_market",
+    "cross_asset_trending",
+    "thematic",
+    "earnings_catalyst",
+    "prediction_markets",
+    "daily_briefing",
+    "briefing",
+    "sector_rotation",
+    "investments",
+})
+
+# Categories where collaborators for specific providers should NEVER be stripped.
+# Maps category → set of collaborator ids that are load-bearing.
+_LOAD_BEARING_COLLABS: dict[str, frozenset] = {
+    "best_trades":       frozenset({"grok"}),       # needs X sentiment for trade conviction
+    "daily_briefing":    frozenset({"perplexity"}),  # needs live news catalyst scan
+    "earnings_catalyst": frozenset({"perplexity"}),  # needs live earnings news
+    "sector_rotation":   frozenset({"gemini"}),      # needs web-grounded sector research
+}
+
+# Collaborator categories: only these provider families are used as collaborators.
+# When we strip collaborators for simple prompts, we skip load-bearing ones.
+_COLLAB_PROVIDERS = frozenset({"grok", "perplexity", "gemini", "gpt-4o", "deepseek"})
+
+# Categories where freeform final-model can be overridden based on prompt signals.
+# Only "open-ended" categories that don't enforce a JSON output contract.
+_FINAL_MODEL_OVERRIDABLE: frozenset = frozenset({
+    "chat",
+    "followup",
+})
+
+
+# ── Provider family recommendation ───────────────────────────────────────────
+
+def recommend_provider_family(
+    text: str,
+    label: RouteLabel,
+    category: str = "",
+    preset_intent: str = "",
+) -> tuple[str, str]:
+    """
+    Recommend a provider family (and tier) for a freeform query where
+    agent_collab mode has not committed to a specific provider.
+
+    Returns (provider_family, rationale) where provider_family is one of:
+      "claude" | "grok" | "gemini" | "deepseek" | "perplexity"
+
+    Priority order:
+      1. Strong social signals → Grok (X/Twitter native search)
+      2. Breaking news / headline lookup → Perplexity (Sonar web search)
+      3. Global macro / web-grounded → Gemini (Google Search grounding)
+      4. Pure ranking/extraction/scoring → DeepSeek (cheap, structured)
+      5. Default → Claude (proprietary data synthesis)
+
+    NEVER changes provider when preset_intent is set.
+    NEVER changes provider for protected categories.
+    """
+    if preset_intent or category in _FINAL_MODEL_PROTECTED:
+        return "claude", "protected category or preset — no override"
+
+    if category not in _FINAL_MODEL_OVERRIDABLE:
+        return "claude", f"category={category} not in overridable set"
+
+    # ── 1. Social/X sentiment → Grok ──────────────────────────────────────────
+    if _RE_SOCIAL.search(text):
+        return "grok", "social/X sentiment signal in prompt"
+
+    # ── 2. Breaking news / headline lookup → Perplexity ──────────────────────
+    if _RE_NEWS.search(text) and label in (
+        RouteLabel.SIMPLE_LOOKUP, RouteLabel.SHORT_SUMMARY, RouteLabel.STANDARD_SYNTHESIS
+    ):
+        return "perplexity", "news/headline signal in prompt"
+
+    # ── 3. Global macro / web-grounded → Gemini ───────────────────────────────
+    if _RE_WEB_GROUNDED.search(text) and label not in (
+        RouteLabel.SIMPLE_LOOKUP,
+    ):
+        return "gemini", "web-grounded/macro signal in prompt"
+
+    # ── 4. Pure structured tasks → DeepSeek ───────────────────────────────────
+    if label in (RouteLabel.STRUCTURED_EXTRACTION, RouteLabel.RANKING_SCORING) or (
+        _RE_PURE_STRUCTURED.search(text) and label not in (RouteLabel.DEEP_RESEARCH,)
+    ):
+        return "deepseek", "structured extraction/ranking — DeepSeek cheaper"
+
+    # ── 5. Default: Claude ─────────────────────────────────────────────────────
+    return "claude", f"default synthesis (label={label.value})"
+
+
+# ── Collaborator filtering ────────────────────────────────────────────────────
+
+def filter_collaborators(
+    text: str,
+    category: str,
+    collaborators: list,
+    mode: str = "standard",
+) -> list:
+    """
+    Prune the Caelyn-assigned collaborator list based on prompt complexity.
+
+    Simple prompts don't need multiple parallel LLM data-gathering calls.
+    Preserves load-bearing collaborators (ones tied to data the category needs).
+
+    Rules:
+      DEEP_RESEARCH               → keep all (maximum data gathering)
+      SIMPLE_LOOKUP + fast mode   → strip all (except load-bearing)
+      SHORT_SUMMARY  + fast mode  → strip all (except load-bearing)
+      SIMPLE_LOOKUP + std mode    → keep max 1 (most relevant)
+      SHORT_SUMMARY  + std mode   → keep max 1 (most relevant)
+      RANKING_SCORING             → strip all (synthesis model handles alone)
+      STRUCTURED_EXTRACTION       → strip all (synthesis model handles alone)
+      Standard/multi-source       → keep all
+    """
+    if not collaborators:
+        return collaborators
+
+    label = classify_prompt(text, category)
+    load_bearing = _LOAD_BEARING_COLLABS.get(category, frozenset())
+
+    def _strip_non_load_bearing(collabs: list) -> list:
+        """Keep only load-bearing collaborators."""
+        kept = [c for c in collabs if c in load_bearing]
+        if len(kept) < len(collabs):
+            stripped = [c for c in collabs if c not in kept]
+            _log_collab_filter(label, category, mode, collabs, kept, "stripped non-load-bearing")
+        return kept
+
+    def _keep_max_one(collabs: list) -> list:
+        """Keep at most one collaborator (prefer load-bearing)."""
+        if not collabs:
+            return collabs
+        # Load-bearing takes priority, else first in list
+        priority = [c for c in collabs if c in load_bearing] or collabs
+        kept = [priority[0]]
+        if kept != collabs:
+            _log_collab_filter(label, category, mode, collabs, kept, "reduced to max-1")
+        return kept
+
+    if label == RouteLabel.DEEP_RESEARCH:
+        return collaborators  # keep all for deep research
+
+    if label in (RouteLabel.SIMPLE_LOOKUP, RouteLabel.SHORT_SUMMARY):
+        if mode == "fast":
+            return _strip_non_load_bearing(collaborators)
+        else:
+            return _keep_max_one(collaborators)
+
+    if label in (RouteLabel.RANKING_SCORING, RouteLabel.STRUCTURED_EXTRACTION):
+        return _strip_non_load_bearing(collaborators)
+
+    return collaborators  # standard_synthesis / multi_source_synthesis: keep all
+
+
+def _log_collab_filter(label, category, mode, original, filtered, reason):
+    print(
+        f"[ROUTE_PROVIDER] collab_filter: {original} → {filtered} "
+        f"(label={label.value}, category={category}, mode={mode}, reason={reason})"
+    )
+
+
+# ── Combined Caelyn route override ────────────────────────────────────────────
+
+def route_caelyn_override(
+    text: str,
+    category: str,
+    preset_intent: str,
+    caelyn_final: str,
+    caelyn_collabs: list,
+    caelyn_mode: str,
+) -> tuple[str, list, bool]:
+    """
+    Refine a Caelyn routing decision using prompt complexity analysis.
+
+    Takes the existing Caelyn route (final model + collaborators + mode)
+    and applies two refinements:
+      1. Collaborator filtering: strip unnecessary parallel LLM calls for
+         simple prompts, preserving load-bearing ones.
+      2. Provider recommendation: for overridable categories (chat, followup)
+         without a preset, override final model when prompt signal is strong.
+
+    Returns (final_model, collaborators, changed) where:
+      - final_model: possibly-overridden primary synthesis model
+      - collaborators: possibly-pruned collaborator list
+      - changed: True if anything was modified (for logging)
+
+    NEVER modifies routing when preset_intent is set.
+    NEVER overrides final_model for protected categories.
+    Always safe to call — routing errors handled by caller's try/except.
+    """
+    label = classify_prompt(text, category, preset_intent)
+    changed = False
+
+    # ── Step 1: Collaborator filtering ────────────────────────────────────────
+    # Skip filtering when preset_intent is set: preset buttons trigger with an
+    # empty or generic user prompt that would always classify as simple_lookup,
+    # but the preset's structured analysis genuinely needs all assigned collaborators.
+    if not preset_intent:
+        new_collabs = filter_collaborators(text, category, caelyn_collabs, caelyn_mode)
+    else:
+        new_collabs = list(caelyn_collabs)
+    if new_collabs != list(caelyn_collabs):
+        changed = True
+
+    # ── Step 2: Provider family override (only for non-preset, overridable cats) ──
+    new_final = caelyn_final
+    if not preset_intent and category in _FINAL_MODEL_OVERRIDABLE:
+        rec_provider, rec_rationale = recommend_provider_family(
+            text, label, category, preset_intent
+        )
+        if rec_provider != caelyn_final:
+            # When overriding the final model to a web-search-capable provider,
+            # remove any collaborators that would just duplicate its search capability.
+            # e.g. if final=grok, no need for a grok collaborator.
+            if rec_provider in _COLLAB_PROVIDERS:
+                new_collabs = [c for c in new_collabs if c != rec_provider]
+            new_final = rec_provider
+            changed = True
+            print(
+                f"[ROUTE_PROVIDER] provider_override: {caelyn_final}→{new_final} "
+                f"({rec_rationale}, label={label.value}, category={category})"
+            )
+
+    if changed:
+        print(
+            f"[ROUTE_PROVIDER] caelyn_override: final={caelyn_final}→{new_final} "
+            f"collabs={caelyn_collabs}→{new_collabs} "
+            f"(label={label.value}, category={category}, mode={caelyn_mode}, "
+            f"preset={'set' if preset_intent else 'none'})"
+        )
+
+    return new_final, new_collabs, changed

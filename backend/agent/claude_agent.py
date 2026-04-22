@@ -32,6 +32,7 @@ from agent.prompt_router import (  # Phase 8: prompt-aware routing
     resolve_route as _route_resolve,
     log_route as _log_route,
     RouteDecision as _RouteDecision,
+    route_caelyn_override as _route_caelyn_override,  # Phase 8b: provider family
 )
 
 try:
@@ -737,6 +738,21 @@ class TradingAgent:
                 if not primary_model:
                     primary_model = _caelyn_route["final"]
                 query_info["_caelyn_depth"] = _caelyn_route["mode"]
+                # ── Phase 8b: Prompt-aware provider + collaborator refinement ──
+                # Strips unnecessary collaborators for simple prompts and can
+                # override the final model family for strong social/news signals.
+                # Never fires when preset_intent is set (format contracts protected).
+                try:
+                    _r_final, _r_collabs, _r_changed = _route_caelyn_override(
+                        user_prompt or "", category, preset_intent or "",
+                        primary_model, list(collab_agents), _caelyn_route["mode"],
+                    )
+                    if _r_changed:
+                        primary_model = _r_final
+                        collab_agents = _r_collabs
+                except Exception as _rce:
+                    print(f"[ROUTE_PROVIDER] override error (non-fatal): {_rce}")
+                # ── End provider refinement ───────────────────────────────────
             # Gate LLM-backed web search (Perplexity) in data layer: only allowed in agent_collab mode
             self.data._skip_llm_web_search = (reasoning_model not in ("agent_collab", "all_agents"))
             if category == "chat":
@@ -790,6 +806,18 @@ class TradingAgent:
                 if not primary_model:
                     primary_model = _caelyn_route["final"]
                 query_info["_caelyn_depth"] = _caelyn_route["mode"]
+                # ── Phase 8b: Prompt-aware provider + collaborator refinement ──
+                try:
+                    _r_final, _r_collabs, _r_changed = _route_caelyn_override(
+                        user_prompt or "", category, preset_intent or "",
+                        primary_model, list(collab_agents), _caelyn_route["mode"],
+                    )
+                    if _r_changed:
+                        primary_model = _r_final
+                        collab_agents = _r_collabs
+                except Exception as _rce:
+                    print(f"[ROUTE_PROVIDER] override error (non-fatal): {_rce}")
+                # ── End provider refinement ───────────────────────────────────
             # Gate LLM-backed web search (Perplexity) in data layer: only allowed in agent_collab mode
             self.data._skip_llm_web_search = (reasoning_model not in ("agent_collab", "all_agents"))
             if category == "chat":
