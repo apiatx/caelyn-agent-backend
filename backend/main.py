@@ -2248,7 +2248,6 @@ def _resp_log(req_id: str, status: int, resp_type: str, resp: dict):
 async def social_grok_query(
     request: Request,
     body: dict = Body(...),
-    api_key: str = Header(None, alias="X-API-Key"),
     _sub: None = Depends(require_subscription),
 ):
     """Direct Grok/X query for the Social page — real-time X search via xAI."""
