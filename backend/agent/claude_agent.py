@@ -794,6 +794,9 @@ class TradingAgent:
                     print(f"[AGENT] Data gathering exception: {market_data}")
                     market_data = {"error": str(market_data)}
                 print(f"[AGENT] Data gathered: {len(json.dumps(market_data, default=str)):,} chars ({time.time() - start_time:.1f}s)")
+        if os.environ.get("CAELYN_TRACE") == "1" and isinstance(market_data, dict):
+            _raw_keys = list(market_data.keys())
+            print(f"[TRACE:RAW_DATA] category={category} raw_keys={_raw_keys[:20]} key_count={len(_raw_keys)}")
 
         SCORING_CATEGORIES = {
             "market_scan", "trending", "investments", "fundamentals_scan",
@@ -1105,6 +1108,16 @@ class TradingAgent:
                 print(f"[SUGGESTIONS] Skipped — analysis_text too short ({len(analysis_text)} chars)")
         except Exception as e:
             print(f"[SUGGESTIONS] Generation failed (non-fatal): {e}")
+
+        if os.environ.get("CAELYN_TRACE") == "1" and isinstance(result, dict):
+            _final_keys = list(result.keys())
+            _dtype = result.get("structured", {}).get("display_type") if isinstance(result.get("structured"), dict) else "?"
+            print(
+                f"[TRACE:FINAL] category={category}"
+                f" result_keys={_final_keys}"
+                f" display_type={_dtype}"
+                f" routing={result.get('_routing', {})}"
+            )
 
         return result
 

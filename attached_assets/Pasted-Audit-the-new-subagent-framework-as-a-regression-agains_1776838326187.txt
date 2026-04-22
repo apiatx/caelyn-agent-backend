@@ -1,0 +1,112 @@
+Audit the new subagent framework as a regression against the last known good commit. Do not refactor broadly. Do not redesign. We need a surgical rollback-or-fix of the broken contract so every existing page works exactly as before.
+
+Goal:
+Identify where the new subagent framework broke shared page-agent functionality across the site, especially:
+
+Options Flow
+Social/X-driven pages
+Macro / overview agent pages
+Any page where the “main brain” is supposed to gather page-specific data before final reasoning
+
+What to inspect first:
+
+Find the exact commit(s) that introduced the new subagent framework.
+Diff the following between last-known-good and current:
+central query route / agent route
+orchestrator entrypoint
+page intent routing
+subagent registry
+provider dispatch layer
+result normalization / merge logic
+final response builder
+Build a regression matrix of every page-agent path and mark where the pipeline breaks:
+frontend request payload
+backend route receipt
+orchestrator decision
+subagent dispatch
+provider call
+normalized result
+final merged payload
+frontend render
+
+Critical checks:
+
+Did request fields change names or nesting?
+Did subagent outputs change shape?
+Are page-specific providers still selected correctly?
+Did generic wrapper logic overwrite page-specific routing?
+Are exceptions being swallowed into empty results?
+Are JSON payloads being returned as strings?
+Did response builder start expecting result where old code used data?
+Did async gather/fanout stop awaiting properly?
+Did page context / preset intent stop being forwarded?
+
+Specific page checks:
+
+Options Flow must still prefer Tradier-backed data path and preserve options-specific structured payloads. Tradier is the primary funded options source in this project.
+Social/X pages must preserve custom provider dispatch and not fall through to a generic LLM path.
+Hyperliquid / crypto pages must preserve page-specific gatherers and not be flattened into generic market-data calls.
+
+Deliverables:
+
+A short written root-cause summary naming the exact broken file(s), function(s), and contract mismatch(es).
+A minimal patch that restores backward compatibility.
+If necessary, add a compatibility adapter so old page outputs still work under the new framework.
+Add logging at these exact points:
+incoming page request payload
+orchestrator route decision
+selected subagent/provider
+raw subagent result keys
+normalized result keys
+final payload keys returned to frontend
+Add a temporary debug flag so we can inspect page-agent traces without changing normal UX.
+
+Implementation rule:
+Prefer compatibility restoration over framework purity.
+If the framework broke existing page behavior, preserve the old contract and adapt the new framework to it.
+Do not change frontend payload expectations unless absolutely required.
+
+Success criteria:
+
+Every previously working page-agent path works again
+Options Flow works again
+Page-specific agents gather and return structured page data again
+Main brain successfully merges page data into final responses
+No generic abstraction should erase page-specific provider behavior
+My recommended fix strategy
+
+Do not start by “improving” the framework more.
+
+Do this in order:
+
+Restore backward-compatible output schema
+Whatever the old orchestrator expected, make the new subagent wrapper emit that exact shape.
+Reintroduce page-aware routing
+Options Flow, Social/X, Hyperliquid, Macro, etc. should still hit their special pipelines.
+Generic subagents should be fallback helpers, not page dictators.
+Add adapter layer, not broad rewrites
+Small compatibility shim:
+normalize old/new request fields
+normalize old/new response fields
+preserve provider-specific metadata
+Turn silent failure into loud failure
+If subagent returns no structured payload, throw a typed error.
+Empty success is fake success.
+What I’m most confident is broken
+
+If I had to bet on one culprit without the repo in front of me:
+
+the new subagent result normalizer / dispatcher broke the contract between page-specific gatherers and the main orchestrator.
+
+And second place:
+
+generic provider routing replaced page-specific provider execution.
+
+That would perfectly explain why everything suddenly feels dead while the app itself still loads.
+
+What I need from you to pinpoint it exactly
+
+Upload either:
+
+the backend files for the new subagent framework, or
+the git diff / affected files list from the framework change.

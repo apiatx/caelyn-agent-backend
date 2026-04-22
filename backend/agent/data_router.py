@@ -48,6 +48,33 @@ class DataRouter:
     @traceable(name="data_router_gather")
     async def gather(self, query_info: dict) -> dict:
         """
+        Thin entry/exit wrapper around _gather_impl().
+        Set CAELYN_TRACE=1 to emit per-call pipeline trace logs.
+        """
+        import os
+        _trace = os.environ.get("CAELYN_TRACE") == "1"
+        _category = query_info.get("category", "general")
+        if _trace:
+            print(
+                f"[ROUTER:ENTRY] category={_category}"
+                f" tickers={query_info.get('tickers', [])[:3]}"
+                f" model={query_info.get('reasoning_model', '?')}"
+                f" has_plan={'orchestration_plan' in query_info}"
+                f" filters_keys={list(query_info.get('filters', {}).keys())}"
+            )
+        _result = await self._gather_impl(query_info)
+        if _trace and isinstance(_result, dict):
+            _keys = list(_result.keys())
+            print(
+                f"[ROUTER:EXIT] category={_category}"
+                f" result_keys={_keys[:15]}"
+                f" key_count={len(_keys)}"
+                f" size={len(str(_result)):,}c"
+            )
+        return _result
+
+    async def _gather_impl(self, query_info: dict) -> dict:
+        """
         Route query_info to the correct data-gathering arm.
         Mirrors TradingAgent._gather_data() exactly — ordering preserved.
         """
