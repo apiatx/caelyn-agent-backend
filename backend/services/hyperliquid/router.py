@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from agent.model_policy import MODEL_CLAUDE_FAST, MODEL_GPT4O_MINI
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -745,7 +746,7 @@ async def _generate_llm_analysis(ranked: list[ScreenerAsset], fear_greed: dict) 
         import anthropic as _anthropic
         aclient = _anthropic.AsyncAnthropic(api_key=api_key)
         msg = await aclient.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=MODEL_CLAUDE_FAST,
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -758,7 +759,7 @@ async def _generate_llm_analysis(ranked: list[ScreenerAsset], fear_greed: dict) 
         import openai as _openai
         aclient = _openai.AsyncOpenAI(api_key=oai_key)
         resp = await aclient.chat.completions.create(
-            model="gpt-4o-mini",
+            model=MODEL_GPT4O_MINI,
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )

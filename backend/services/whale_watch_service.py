@@ -14,7 +14,7 @@ import json
 import logging
 import os
 
-from agent.model_policy import MODEL_CLAUDE_FAST
+from agent.model_policy import MODEL_CLAUDE_FAST, MODEL_SONAR
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -326,7 +326,7 @@ async def discover_top_whales_via_perplexity() -> list[dict]:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "sonar",
+                    "model": MODEL_SONAR,
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user",   "content": user_prompt},
@@ -663,7 +663,7 @@ async def discover_famous_investors_via_perplexity() -> list[dict]:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "sonar",
+                    "model": MODEL_SONAR,
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user",   "content": user_prompt},

@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from agent.model_policy import MODEL_GEMINI
+
 import httpx
 
 from services.sector_rotation.schemas import (
@@ -248,7 +250,7 @@ async def get_or_generate_analysis(
         try:
             async with httpx.AsyncClient(timeout=90.0) as client:
                 resp = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={key}",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_GEMINI}:generateContent?key={key}",
                     headers={"Content-Type": "application/json"},
                     json=body,
                 )

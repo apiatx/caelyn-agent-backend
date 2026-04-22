@@ -1,7 +1,7 @@
 """
 Model Policy Registry — single source of truth for all AI model selection in Caelyn AI.
 
-Phases 2-4 of the centralized model routing initiative (audit in AUDIT.md).
+Phases 2-7 of the centralized model routing initiative.
 
 USAGE:
     from agent.model_policy import resolve as mp_resolve, log_ai_call
@@ -11,49 +11,60 @@ USAGE:
     # Convenience constants (import once, use everywhere):
     from agent.model_policy import (
         MODEL_CLAUDE_FAST, MODEL_CLAUDE_BALANCED, MODEL_CLAUDE_PREMIUM,
-        MODEL_GPT4O, MODEL_GROK, MODEL_GEMINI, MODEL_SONAR_PRO, MODEL_DEEPSEEK,
+        MODEL_GPT4O, MODEL_GPT4O_MINI,
+        MODEL_GROK,
+        MODEL_GEMINI, MODEL_GEMINI_25_FLASH,
+        MODEL_SONAR, MODEL_SONAR_PRO,
+        MODEL_DEEPSEEK,
     )
+
+    # Extended-thinking guard:
+    from agent.model_policy import supports_extended_thinking
+    use_thinking = budget > 0 and supports_extended_thinking(model)
 
 FEATURE FLAG:
     Set MODEL_POLICY_ENABLED=0 in env to disable and fall back to legacy model strings.
     Default: enabled (1).
 
-TASK TAXONOMY (Phase 2):
-    Internal / utility (low cost, not user-visible):
-        query_classification  — classify user intent, 200 tokens
-        followup_suggestions  — generate follow-up questions
+TASK TAXONOMY:
+    Internal / utility (fast, low-cost, not user-visible):
+        query_classification  — classify user intent
+        followup_suggestions  — generate follow-up question list
         short_summary         — brief text summary
         backtest_summary      — backtest results table summary
         notification_digest   — daily AI notification digest
-        hyperliquid_summary   — Hyperliquid data summary
+        hyperliquid_summary   — Hyperliquid screener data summary
         dashboard_scoring     — AI-scored dashboard sections (precomputed)
         whale_discovery       — Perplexity whale/investor discovery
+        discovery_validation  — Perplexity shortlist candidate validation (fast sonar)
+        news_fetch            — Perplexity fast news fetch per ticker (fast sonar)
 
     Orchestration:
         orchestrator_routing  — smart orchestration JSON dispatch
 
-    User-facing synthesis (medium complexity):
+    User-facing synthesis (medium complexity, balanced):
         options_analysis      — options flow chat response
         freeform_query        — free-form user chat
         multi_source_synthesis — multi-model collab synthesis
         watchlist_ranking     — watchlist per-ticker scoring
         watchlist_synthesis   — watchlist final structured synthesis
 
-    User-facing deep analysis (high complexity, extended-thinking eligible):
+    User-facing deep analysis (premium, extended-thinking eligible):
         preset_prompt         — preset button structured response
-        fundamental_analysis  — per-ticker deep analysis
+        fundamental_analysis  — per-ticker deep fundamental analysis
         ticker_analysis       — ticker deep-dive
         high_complexity_research — deep research / CSV analysis
 
-    Social / X sentiment (Grok only):
+    Social / X sentiment (Grok-only):
         x_sentiment           — X/Twitter social sentiment search
 
     Web grounding (collaborator roles):
-        news_grounding        — web/news search (Perplexity)
-        web_research          — web research (Gemini Google Search)
+        news_grounding        — web/news search (Perplexity sonar-pro)
+        web_research          — web research (Gemini 3 Flash + Google Search)
+        watchlist_web_research — watchlist Gemini grounding (Gemini 2.5 Flash)
 
     Background / cached:
-        sector_rotation_ai    — weekly sector rotation (Gemini + Google Search)
+        sector_rotation_ai    — weekly sector rotation (Gemini 3 Flash + Google Search)
 """
 
 from __future__ import annotations
@@ -76,7 +87,7 @@ PROVIDER_REGISTRY: dict[str, dict[str, str]] = {
     "claude": {
         "fast":     "claude-haiku-4-5-20251001",   # classification, notifications, backtest digest
         "balanced": "claude-sonnet-4-20250514",     # orchestration, simpler synthesis, followup
-        "premium":  "claude-sonnet-4-5-20250929",  # deep analysis, watchlist, extended thinking
+        "premium":  "claude-sonnet-4-5-20250929",  # deep analysis, extended thinking
     },
     "gpt-4o": {
         "fast":     "gpt-4o-mini",
@@ -116,6 +127,8 @@ TASK_POLICY: dict[str, dict] = {
     "hyperliquid_summary":      {"provider": "claude",      "tier": "fast",     "max_tokens": 600},
     "dashboard_scoring":        {"provider": "claude",      "tier": "fast",     "max_tokens": 1400},
     "whale_discovery":          {"provider": "perplexity",  "tier": "fast",     "max_tokens": 1000},
+    "discovery_validation":     {"provider": "perplexity",  "tier": "fast",     "max_tokens": 300},
+    "news_fetch":               {"provider": "perplexity",  "tier": "fast",     "max_tokens": 600},
     # ── Orchestration ────────────────────────────────────────────────────────
     "orchestrator_routing":     {"provider": "claude",      "tier": "balanced", "max_tokens": 500},
     # ── User-facing synthesis (medium) ───────────────────────────────────────
@@ -124,7 +137,7 @@ TASK_POLICY: dict[str, dict] = {
     "multi_source_synthesis":   {"provider": "claude",      "tier": "balanced", "max_tokens": 8000},
     "watchlist_ranking":        {"provider": "claude",      "tier": "balanced", "max_tokens": 4096},
     "watchlist_synthesis":      {"provider": "claude",      "tier": "balanced", "max_tokens": 4096},
-    # ── User-facing deep analysis (high, extended-thinking eligible) ─────────
+    # ── User-facing deep analysis (premium, extended-thinking eligible) ──────
     "preset_prompt":            {"provider": "claude",      "tier": "premium",  "max_tokens": 10000},
     "fundamental_analysis":     {"provider": "claude",      "tier": "premium",  "max_tokens": 10000},
     "ticker_analysis":          {"provider": "claude",      "tier": "premium",  "max_tokens": 10000},
@@ -134,6 +147,7 @@ TASK_POLICY: dict[str, dict] = {
     # ── Web grounding (collaborators) ────────────────────────────────────────
     "news_grounding":           {"provider": "perplexity",  "tier": "balanced", "max_tokens": 2000},
     "web_research":             {"provider": "gemini",      "tier": "balanced", "max_tokens": 2000},
+    "watchlist_web_research":   {"provider": "gemini",      "tier": "balanced", "max_tokens": 8192},
     # ── Background / cached ──────────────────────────────────────────────────
     "sector_rotation_ai":       {"provider": "gemini",      "tier": "balanced", "max_tokens": 4096},
 }
@@ -145,15 +159,17 @@ _LEGACY: dict[str, str] = {
     "short_summary":            "claude-haiku-4-5-20251001",
     "backtest_summary":         "claude-haiku-4-5-20251001",
     "notification_digest":      "claude-haiku-4-5-20251001",
-    "hyperliquid_summary":      "claude-3-haiku-20240307",  # original
+    "hyperliquid_summary":      "claude-3-haiku-20240307",
     "dashboard_scoring":        "claude-haiku-4-5-20251001",
     "whale_discovery":          "sonar",
+    "discovery_validation":     "sonar",
+    "news_fetch":               "sonar",
     "orchestrator_routing":     "claude-sonnet-4-20250514",
     "options_analysis":         "claude-sonnet-4-20250514",
     "freeform_query":           "claude-sonnet-4-20250514",
     "multi_source_synthesis":   "claude-sonnet-4-20250514",
-    "watchlist_ranking":        "claude-opus-4-5",          # original (premium)
-    "watchlist_synthesis":      "claude-opus-4-5",          # original (premium)
+    "watchlist_ranking":        "claude-opus-4-5",
+    "watchlist_synthesis":      "claude-opus-4-5",
     "preset_prompt":            "claude-sonnet-4-5-20250929",
     "fundamental_analysis":     "claude-sonnet-4-5-20250929",
     "ticker_analysis":          "claude-sonnet-4-5-20250929",
@@ -161,9 +177,35 @@ _LEGACY: dict[str, str] = {
     "x_sentiment":              "grok-4-1-fast-reasoning",
     "news_grounding":           "sonar-pro",
     "web_research":             "gemini-3-flash-preview",
+    "watchlist_web_research":   "gemini-2.5-flash",
     "sector_rotation_ai":       "gemini-3-flash-preview",
 }
 
+# ── Cost lookup table: (input $/1M tokens, output $/1M tokens) ───────────────
+# Used by log_ai_call() to emit estimated_cost_usd. Best-effort approximation;
+# update as provider pricing changes. Omitting a model → no cost estimate.
+_COST_PER_MILLION: dict[str, tuple[float, float]] = {
+    # Claude
+    "claude-haiku-4-5-20251001":  (0.80,   4.00),
+    "claude-sonnet-4-20250514":   (3.00,  15.00),
+    "claude-sonnet-4-5-20250929": (3.00,  15.00),
+    # OpenAI
+    "gpt-4o":                     (2.50,  10.00),
+    "gpt-4o-mini":                (0.15,   0.60),
+    # xAI
+    "grok-4-1-fast-reasoning":    (5.00,  15.00),
+    # Gemini (approximate)
+    "gemini-3-flash-preview":     (0.075,  0.30),
+    "gemini-2.5-flash":           (0.15,   0.60),
+    # Perplexity
+    "sonar":                      (1.00,   1.00),
+    "sonar-pro":                  (3.00,   3.00),
+    # DeepSeek
+    "deepseek-chat":              (0.14,   0.28),
+}
+
+
+# ── Core resolution functions ─────────────────────────────────────────────────
 
 def resolve(provider: str, task_type: str, tier_override: Optional[str] = None) -> str:
     """
@@ -217,6 +259,37 @@ def resolve_for_task(
     return provider, model_id, task.get("max_tokens", 4096)
 
 
+def supports_extended_thinking(model_id: str) -> bool:
+    """
+    Return True if this model supports Claude extended thinking (budget_tokens).
+
+    Only claude-sonnet-4-5 (MODEL_CLAUDE_PREMIUM) supports extended thinking.
+    Using this function instead of an in-string check means a model ID change
+    in PROVIDER_REGISTRY automatically propagates here.
+    """
+    premium_model = PROVIDER_REGISTRY.get("claude", {}).get("premium", "")
+    return bool(premium_model) and model_id == premium_model
+
+
+def estimate_cost_usd(
+    model: str,
+    input_tokens: Optional[int],
+    output_tokens: Optional[int],
+) -> Optional[float]:
+    """
+    Estimate API cost in USD given a model ID and token counts.
+    Returns None if the model is not in the cost table or tokens are unknown.
+    """
+    if input_tokens is None and output_tokens is None:
+        return None
+    costs = _COST_PER_MILLION.get(model)
+    if costs is None:
+        return None
+    in_cost, out_cost = costs
+    total = (input_tokens or 0) / 1_000_000 * in_cost + (output_tokens or 0) / 1_000_000 * out_cost
+    return round(total, 6)
+
+
 def log_ai_call(
     task_type: str,
     provider: str,
@@ -238,7 +311,8 @@ def log_ai_call(
     Example output:
         [MODEL_POLICY] {"task_type":"query_classification","provider":"claude",
                         "model":"claude-haiku-4-5-20251001","feature":"classify_query",
-                        "latency_ms":312.4}
+                        "latency_ms":312.4,"input_tokens":450,"output_tokens":80,
+                        "estimated_cost_usd":0.000356}
     """
     record: dict = {
         "task_type": task_type,
@@ -253,6 +327,9 @@ def log_ai_call(
         record["input_tokens"] = input_tokens
     if output_tokens is not None:
         record["output_tokens"] = output_tokens
+    cost = estimate_cost_usd(model, input_tokens, output_tokens)
+    if cost is not None:
+        record["estimated_cost_usd"] = cost
     if fallback_used:
         record["fallback_used"] = True
     if escalation_used:
@@ -269,11 +346,14 @@ def log_ai_call(
 # ── Convenience model-ID constants ───────────────────────────────────────────
 # Import these into call sites to avoid string literals.
 # These always reflect the current PROVIDER_REGISTRY values, respecting the flag.
-MODEL_CLAUDE_FAST:     str = resolve("claude",      "query_classification")
-MODEL_CLAUDE_BALANCED: str = resolve("claude",      "orchestrator_routing")
-MODEL_CLAUDE_PREMIUM:  str = resolve("claude",      "preset_prompt")
-MODEL_GPT4O:           str = resolve("gpt-4o",      "orchestrator_routing")
-MODEL_GROK:            str = resolve("grok",        "x_sentiment")
-MODEL_GEMINI:          str = resolve("gemini",      "web_research")
-MODEL_SONAR_PRO:       str = resolve("perplexity",  "news_grounding")
-MODEL_DEEPSEEK:        str = resolve("deepseek",    "orchestrator_routing")
+MODEL_CLAUDE_FAST:      str = resolve("claude",      "query_classification")
+MODEL_CLAUDE_BALANCED:  str = resolve("claude",      "orchestrator_routing")
+MODEL_CLAUDE_PREMIUM:   str = resolve("claude",      "preset_prompt")
+MODEL_GPT4O:            str = resolve("gpt-4o",      "orchestrator_routing")
+MODEL_GPT4O_MINI:       str = PROVIDER_REGISTRY["gpt-4o"]["fast"]
+MODEL_GROK:             str = resolve("grok",        "x_sentiment")
+MODEL_GEMINI:           str = resolve("gemini",      "web_research")
+MODEL_GEMINI_25_FLASH:  str = _LEGACY["watchlist_web_research"]  # "gemini-2.5-flash"
+MODEL_SONAR:            str = PROVIDER_REGISTRY["perplexity"]["fast"]   # "sonar"
+MODEL_SONAR_PRO:        str = resolve("perplexity",  "news_grounding")
+MODEL_DEEPSEEK:         str = resolve("deepseek",    "orchestrator_routing")

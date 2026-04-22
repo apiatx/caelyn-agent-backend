@@ -19,7 +19,7 @@ import csv
 import io
 import json
 
-from agent.model_policy import MODEL_GROK
+from agent.model_policy import MODEL_GROK, MODEL_GEMINI_25_FLASH
 import os
 import re
 import time
@@ -234,7 +234,7 @@ Return ONLY valid JSON:
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_GEMINI_25_FLASH}:generateContent?key={api_key}",
                     headers={"Content-Type": "application/json"},
                     json={
                         "contents": [{"role": "user", "parts": [{"text": prompt}]}],

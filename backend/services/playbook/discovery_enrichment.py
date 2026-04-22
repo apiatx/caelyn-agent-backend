@@ -20,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime, timedelta
+
+from agent.model_policy import MODEL_SONAR
 from typing import Any, Dict, List, Optional
 
 from data.cache import cache, FINNHUB_TTL, FMP_TTL
@@ -274,7 +276,7 @@ async def perplexity_validate_candidate(
             "Content-Type":  "application/json",
         }
         body = {
-            "model":    "sonar",
+            "model":    MODEL_SONAR,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 300,
         }

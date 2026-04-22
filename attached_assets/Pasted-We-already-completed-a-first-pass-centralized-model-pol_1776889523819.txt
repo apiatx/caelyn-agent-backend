@@ -1,0 +1,116 @@
+We already completed a first-pass centralized model policy implementation. Do NOT restart from scratch.
+
+Current known state from prior work:
+- agent/model_policy.py exists as central model policy source of truth
+- 10 files were refactored to replace hardcoded model IDs with policy constants
+- tests passed (876/876)
+- server started cleanly
+- three follow-up gaps were identified:
+  1) a remaining string-based extended-thinking check in _build_prompt
+  2) log_ai_call() exists but token counts / cost tracking are not fully wired
+  3) services/sector_rotation/gemini_analysis.py still embeds a Gemini model in a URL and was not centralized
+
+Objective for this pass:
+Harden and complete the model policy system so it becomes a true task-aware routing layer for all AI usage in the backend, not just a central constants file.
+
+Important intent:
+- Balanced speed + quality for investing/trading use cases
+- Premium deep reasoning models should be rare
+- Family-level user selection should resolve to minimally viable balanced defaults
+- Preserve Grok specialization for X/social sentiment
+- Preserve Gemini / web-grounding strengths
+- Preserve DeepSeek as the budget workhorse
+- Reduce unnecessary overuse of premium models
+- We care about observability and safe rollout
+
+Tasks:
+
+Phase A — Verify coverage
+1. Re-audit the full backend repo for all AI/provider usage:
+   - anthropic / claude
+   - openai / gpt
+   - xai / grok
+   - gemini / google generative ai
+   - deepseek
+   - perplexity / sonar
+   - any provider wrappers
+2. Produce a concise audit diff:
+   - what is already centralized
+   - what still bypasses model_policy
+   - what still contains raw model IDs
+   - what still uses family names incorrectly
+   - what still uses old premium defaults unnecessarily
+
+Phase B — Upgrade model_policy from constants to task-aware policy
+3. Extend agent/model_policy.py so it supports:
+   - task_type
+   - provider family alias
+   - mode alias (fast / balanced / premium)
+   - fallback chain
+   - escalation policy
+   - helper methods such as:
+     - resolve_model(task_type, family=None, mode=None, requires_search=False, requires_x=False)
+     - supports_extended_thinking(model_or_policy_key)
+     - log_ai_call(...) with token/cost support
+4. Define a normalized task taxonomy for all AI uses, for example:
+   - orchestrator_routing
+   - dashboard_scoring
+   - preset_prompt
+   - freeform_query
+   - x_sentiment
+   - news_grounding
+   - multi_source_synthesis
+   - short_summary
+   - fundamental_analysis
+   - technical_analysis
+   - watchlist_ranking
+   - high_complexity_research
+   - code_generation_internal
+
+Phase C — Finish the known gaps
+5. Replace the remaining string-based extended-thinking check in _build_prompt with supports_extended_thinking()
+6. Centralize the Gemini model embedded in services/sector_rotation/gemini_analysis.py so it also resolves through model_policy
+7. Wire log_ai_call() into all major provider call sites and capture:
+   - task_type
+   - provider
+   - resolved model
+   - latency
+   - prompt/input tokens if available
+   - completion/output tokens if available
+   - estimated cost if derivable
+   - fallback used
+   - escalation used
+   - success/failure
+   - cache hit/miss if applicable
+
+Phase D — Eliminate over-modeling
+8. Review all task types and downgrade any obviously overpowered defaults where safe:
+   - dashboards / cached summaries / AI scoring should usually be fast or balanced
+   - freeform investing synthesis should usually be balanced
+   - X/social workflows should usually use Grok
+   - premium models should be limited to high_complexity_research or explicit premium mode
+9. Flag any places where Perplexity is still used as a core reasoning layer and recommend whether to keep, reduce, or remove it
+
+Phase E — Frontend contract readiness
+10. Identify any backend API endpoints that currently expect exact raw model names from the frontend
+11. Recommend the smallest backend-compatible API contract change so the frontend can send:
+   - reasoning_family
+   - reasoning_mode
+   - collaborator_families
+instead of exact model IDs wherever possible
+
+Deliverables:
+- concise audit diff
+- files changed
+- final task taxonomy
+- final policy table by task type
+- list of any remaining bypasses
+- recommended frontend contract changes
+- risky areas / migration notes
+
+Constraints:
+- Work directly on main
+- Commit and push directly to main
+- Do not create a branch or PR
+- Keep changes surgical
+- Preserve current functionality except model selection / observability improvements

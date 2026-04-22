@@ -15,9 +15,10 @@ from data.market_data_service import MarketDataService
 import agent.post_processors as _post_processors  # Phase 1: post-processor registry
 from agent import preset_registry  # Phase 1: canonical preset/intent data
 from agent.data_router import DataRouter  # Phase 1: data-gathering delegate
-from agent.model_policy import (  # Phase 3: centralized model registry
+from agent.model_policy import (  # Phase 3-7: centralized model registry
     resolve as _mp_resolve,
     log_ai_call as _mp_log,
+    supports_extended_thinking,
     MODEL_CLAUDE_FAST,
     MODEL_CLAUDE_BALANCED,
     MODEL_CLAUDE_PREMIUM,
@@ -3373,7 +3374,7 @@ class TradingAgent:
                     body["tools"] = [{"google_search": {}}]
                 async with httpx.AsyncClient(timeout=90.0) as client:
                     resp = await client.post(
-                        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}",
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_GEMINI}:generateContent?key={api_key}",
                         headers={"Content-Type": "application/json"},
                         json=body,
                     )
@@ -5576,7 +5577,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
             model = MODEL_CLAUDE_PREMIUM
             token_limit = 10000
         thinking_budget = self.THINKING_BUDGETS.get(category, 0)
-        use_thinking = thinking_budget > 0 and "sonnet-4-5" in model
+        use_thinking = thinking_budget > 0 and supports_extended_thinking(model)
 
         return system_blocks, messages, model, token_limit, use_thinking, thinking_budget
 

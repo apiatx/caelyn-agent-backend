@@ -8,7 +8,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from agent.model_policy import MODEL_CLAUDE_PREMIUM, MODEL_GROK, MODEL_GPT4O
+from agent.model_policy import MODEL_CLAUDE_PREMIUM, MODEL_GROK, MODEL_GPT4O, MODEL_GEMINI
 
 import asyncio
 import json as _json
@@ -317,7 +317,7 @@ async def stock_deep_dive_endpoint(ticker: str, body: StockDeepDiveRequest):
             try:
                 url = (
                     "https://generativelanguage.googleapis.com/v1beta/models/"
-                    f"gemini-3-flash-preview:generateContent?key={gemini_key}"
+                    f"{MODEL_GEMINI}:generateContent?key={gemini_key}"
                 )
                 async with httpx.AsyncClient(timeout=60.0) as client:
                     resp = await client.post(

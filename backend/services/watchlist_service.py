@@ -12,6 +12,8 @@ import io
 import json
 import os
 import re
+
+from agent.model_policy import MODEL_SONAR
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -235,7 +237,7 @@ async def _fetch_news_perplexity(ticker: str) -> List[Dict[str, Any]]:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "sonar",
+                    "model": MODEL_SONAR,
                     "messages": [
                         {
                             "role": "user",
