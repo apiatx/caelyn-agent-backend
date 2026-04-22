@@ -1,0 +1,149 @@
+We are on the FINAL backend pass for model routing. Do not restart from scratch. Read the existing implementation first, then make only the surgical changes needed to finish the system properly.
+
+Current state you must assume as the starting point:
+- agent/model_policy.py exists and is the centralized source of truth for provider/model tiers
+- hardcoded model IDs have largely been centralized already
+- prompt_router.py exists and currently does:
+  - 7-level prompt classification
+  - tier routing for Claude paths
+  - provider-family recommendations for some Caelyn routing call sites
+  - collaborator pruning for simpler prompts
+- claude_agent.py already wires prompt-aware routing into _build_prompt and Caelyn routing call sites
+- freeform frontend queries now use prompt-aware routing
+- preset prompt buttons are still mostly Claude-tier-only because provider family is locked for format-contract reasons
+- AI Terminal solo mode is intentionally static when the user explicitly picks a model/family
+- some important AI surfaces still remain static / bypass prompt-aware routing:
+  - cached summaries / sector rotation
+  - watchlist deep-dive
+  - sector rotation AI
+  - some background trading/discovery/insider pipelines
+- tests were previously green (876/876). Preserve that.
+
+Goal:
+Finish the routing system so it is as close as possible to the original product intent:
+“Automatically use the minimum viable model/provider for the job across the backend while preserving output quality and keeping premium/deep reasoning rare.”
+
+Non-goals:
+- Do not do a giant refactor
+- Do not rewrite stable output contracts unnecessarily
+- Do not break preset response formats
+- Do not override explicit solo-model user choice in AI Terminal
+- Do not add LLM-based routing/classification calls just to choose a model
+
+What I want implemented in this pass:
+
+PHASE 1 — Verify current coverage and identify exact remaining bypasses
+1. Re-read the relevant files and produce a concise coverage map of all backend AI surfaces:
+   - freeform query path
+   - preset prompt path
+   - AI Terminal reasoning path
+   - collaborator model selection
+   - watchlist analysis / watchlist deep-dive
+   - cached summaries
+   - sector rotation AI
+   - trading agents
+   - insider/discovery/playbook pipelines
+2. For each surface, state:
+   - whether prompt_router currently affects tier
+   - whether prompt_router currently affects provider family
+   - whether it should stay static or be upgraded
+3. Do not stop there — use this map to drive the implementation.
+
+PHASE 2 — Expand prompt-aware routing to the remaining HIGH-VALUE surfaces
+4. Extend routing coverage to the remaining backend surfaces where it is safe and useful:
+   - watchlist deep-dive
+   - cached summaries where the prompt/request shape varies
+   - any background or helper flows that currently pick a heavyweight model by default without needing to
+5. Preserve intentionally static flows only where there is a strong reason:
+   - explicit user-selected AI Terminal solo model
+   - pure deterministic math/scoring flows
+   - provider-specific pipelines where web grounding / X sentiment / format contract is the whole point
+6. If a surface stays static, add an inline comment explaining why.
+
+PHASE 3 — Unlock more provider-family routing for preset prompts WITHOUT breaking format contracts
+7. Audit preset prompt buttons and split them into two buckets:
+   A. Protected presets that must stay provider-locked because output schema/format contract is fragile
+   B. Flexible presets that can safely use provider-family routing
+8. For flexible presets:
+   - allow prompt_router to influence provider family, not just Claude tier
+   - keep existing response contracts intact
+9. For protected presets:
+   - keep them locked
+   - document why they are protected
+
+PHASE 4 — Improve provider selection to better match product intent
+10. Tune provider-family routing so it aligns with the intended roles:
+   - Grok for X/social sentiment / narrative / consensus
+   - Gemini for web-grounded / macro / search-heavy flows
+   - DeepSeek for cheap structured extraction / ranking / sorting / screening / summaries
+   - Claude balanced for stronger synthesis / multi-source reasoning
+   - premium only for deep research, high-complexity synthesis, or escalation
+11. Revisit any remaining Perplexity usage:
+   - identify whether it is being used as a core reasoning layer or just search/news support
+   - reduce or isolate it where practical if Gemini / existing search-grounded paths are better aligned
+   - do not rip it out recklessly; just make the policy cleaner and more intentional
+
+PHASE 5 — Make AI Terminal behavior match the intended UX
+12. Verify what the frontend currently sends for AI Terminal reasoning model selection:
+   - exact raw model
+   - family alias
+   - or mixed behavior
+13. In backend handling:
+   - if the user explicitly selected an exact model, preserve it
+   - if the user selected a family alias (ex: "claude", "grok", "gemini", "openai", "deepseek"), resolve it to the minimally viable default for that family unless premium is explicitly requested
+14. Add support for an optional reasoning_mode if the schema already supports easy extension:
+   - fast
+   - balanced
+   - premium
+15. If adding reasoning_mode is safe, implement it in the backend request handling in a backward-compatible way. Do not require frontend changes immediately.
+
+PHASE 6 — Strengthen escalation logic
+16. Improve escalation behavior so first-pass cheaper routes can step up only when needed.
+Add escalation triggers where practical, such as:
+   - empty response
+   - schema validation failure
+   - missing required sections
+   - obviously low-information output
+   - severe source conflict / ambiguity
+17. Escalation should generally step:
+   - fast -> balanced
+   - balanced -> premium
+18. Log whenever escalation occurs.
+
+PHASE 7 — Observability and proof
+19. Ensure logs clearly show for each routed call:
+   - feature/surface
+   - prompt classification label
+   - chosen provider family
+   - chosen tier/mode
+   - exact resolved model
+   - whether provider-family override happened
+   - whether escalation happened
+   - latency
+   - token counts if available
+   - estimated cost if available
+20. I want enough structured logs to learn where we are still over-modeling.
+
+PHASE 8 — Deliverables
+21. When complete, provide:
+   - files changed
+   - concise coverage map after the changes
+   - which surfaces now use full prompt-aware provider+tier routing
+   - which surfaces intentionally remain static and why
+   - list of presets that remain protected vs now flexible
+   - examples of 10 representative prompts and where they route now
+   - any remaining gaps that truly require a separate follow-up
+
+Implementation constraints:
+- Work directly on main
+- Commit and push directly to main
+- Do not create a branch or PR
+- Keep changes surgical and readable
+- Preserve existing behavior unless the routing change is intentional
+- Run full tests and restart the server at the end
+- If something fails, diagnose and fix it before finishing
+
+Success criteria:
+By the end of this pass, the backend should be meaningfully closer to:
+“minimum viable model/provider automatically chosen per request/surface”
+—not just centralized constants, not just Claude tier routing, and not just freeform queries.

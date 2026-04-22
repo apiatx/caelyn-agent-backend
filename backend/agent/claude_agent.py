@@ -259,9 +259,9 @@ class TradingAgent:
         }
 
     @traceable(name="caelyn_main_agent")
-    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default") -> dict:
+    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default", reasoning_mode: str = None) -> dict:
         try:
-            return await self._handle_query_inner(user_prompt, history=history, preset_intent=preset_intent, request_id=request_id, csv_data=csv_data, chatbox_mode=chatbox_mode, reasoning_model=reasoning_model, collab_agents=collab_agents, primary_model=primary_model, user_id=user_id)
+            return await self._handle_query_inner(user_prompt, history=history, preset_intent=preset_intent, request_id=request_id, csv_data=csv_data, chatbox_mode=chatbox_mode, reasoning_model=reasoning_model, collab_agents=collab_agents, primary_model=primary_model, user_id=user_id, reasoning_mode=reasoning_mode)
         except Exception as e:
             import traceback
             print(f"[AGENT] FATAL: handle_query crashed with unhandled exception: {e}")
@@ -277,7 +277,7 @@ class TradingAgent:
             }
 
     @traceable(name="handle_query_inner")
-    async def _handle_query_inner(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default") -> dict:
+    async def _handle_query_inner(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default", reasoning_mode: str = None) -> dict:
         start_time = time.time()
         if history is None:
             history = []
@@ -1003,7 +1003,7 @@ class TradingAgent:
             and not is_preset_request
         )
 
-        raw_response = await self._ask_claude_with_timeout(user_prompt, claude_data, history, is_followup=is_followup, category=category, chatbox_mode=use_chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent, collab_agents=collab_agents, primary_model=primary_model)
+        raw_response = await self._ask_claude_with_timeout(user_prompt, claude_data, history, is_followup=is_followup, category=category, chatbox_mode=use_chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent, collab_agents=collab_agents, primary_model=primary_model, reasoning_mode=reasoning_mode)
         # Reset web search gate after request completes
         self.data._skip_llm_web_search = False
         claude_ms = int((time.time() - data_done_time) * 1000)
@@ -2575,7 +2575,7 @@ class TradingAgent:
     WEB_SEARCH_CATEGORIES = {"cross_asset_trending", "daily_briefing", "best_trades", "earnings_catalyst"}
 
     @traceable(name="ask_claude_with_timeout")
-    async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None, collab_agents: list = None, primary_model: str = None) -> str:
+    async def _ask_claude_with_timeout(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None, collab_agents: list = None, primary_model: str = None, reasoning_mode: str = None) -> str:
         data_size = len(json.dumps(market_data, default=str)) if market_data else 0
         reasoning_model = reasoning_model if reasoning_model in self.VALID_REASONING_MODELS else "claude"
 
@@ -2689,7 +2689,7 @@ class TradingAgent:
         # Fallback sync Claude path (if async client fails for non-timeout reasons)
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(self._ask_claude, user_prompt, market_data, history, is_followup, category, chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent),
+                asyncio.to_thread(self._ask_claude, user_prompt, market_data, history, is_followup, category, chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent, reasoning_mode=reasoning_mode),
                 timeout=100.0,
             )
         except asyncio.TimeoutError:
@@ -3059,6 +3059,7 @@ class TradingAgent:
                             self._ask_claude, user_prompt, synthesis_market_data,
                             history, is_followup, category, chatbox_mode,
                             reasoning_model="agent_collab", preset_intent=preset_intent,
+                            reasoning_mode=reasoning_mode,
                         ),
                         timeout=100.0,
                     )
@@ -5014,7 +5015,7 @@ Be direct and opinionated. Tell me what you actually think."""
         return messages
 
     @traceable(name="build_prompt")
-    def _build_prompt(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None):
+    def _build_prompt(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None, reasoning_mode: str = None):
         """Build system_blocks, messages, model selection for a Claude call.
         Returns (system_blocks, messages, model, token_limit, use_thinking, thinking_budget)."""
 
@@ -5614,21 +5615,44 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         # is simpler than the static category default (e.g. a simple question
         # in "chat" category doesn't need premium). Upgrade to premium only
         # on explicit deep-research keywords. Routing failure is non-fatal.
-        try:
-            _rd = _route_resolve(
-                text=user_prompt or "",
-                category=category,
-                preset_intent=preset_intent or "",
-                current_model=model,
-                current_tokens=token_limit,
-                feature=f"build_prompt/{category}",
-            )
-            if _rd.model != model:
-                print(f"[ROUTE] {_rd.rationale}")
-                model = _rd.model
-                token_limit = _rd.max_tokens
-        except Exception as _re:
-            print(f"[ROUTE] Router error (non-fatal): {_re}")
+        #
+        # Phase 5: reasoning_mode override — when the caller explicitly requests
+        # a tier ("fast"/"balanced"/"premium"), skip downgrade and lock the floor.
+        #   reasoning_mode="premium"  → never downgrade below premium
+        #   reasoning_mode="fast"     → allow downgrade to fast (ignore category floor)
+        #   reasoning_mode="balanced" → allow downgrade to balanced (ignore premium floor)
+        #   reasoning_mode=None       → automatic (default, prompt-complexity-driven)
+        _norm_mode = (reasoning_mode or "").strip().lower()
+        if _norm_mode == "premium":
+            # Explicit premium request: lock to premium, skip downgrade.
+            # Only effective for solo Claude (AI Terminal "premium" button).
+            if model != MODEL_CLAUDE_PREMIUM:
+                print(f"[ROUTE] reasoning_mode=premium: forcing {model} → {MODEL_CLAUDE_PREMIUM} (category={category})")
+                model = MODEL_CLAUDE_PREMIUM
+                token_limit = max(token_limit, 8000)
+        elif _norm_mode in ("fast", "balanced"):
+            # Explicit tier reduction: allow downgrade regardless of category floor.
+            _target = MODEL_CLAUDE_FAST if _norm_mode == "fast" else MODEL_CLAUDE_BALANCED
+            if model == MODEL_CLAUDE_PREMIUM:
+                print(f"[ROUTE] reasoning_mode={_norm_mode}: allowing {model} → {_target} (category={category})")
+                model = _target
+        else:
+            # Automatic routing: let resolve_route pick the minimum viable tier.
+            try:
+                _rd = _route_resolve(
+                    text=user_prompt or "",
+                    category=category,
+                    preset_intent=preset_intent or "",
+                    current_model=model,
+                    current_tokens=token_limit,
+                    feature=f"build_prompt/{category}",
+                )
+                if _rd.model != model:
+                    print(f"[ROUTE] {_rd.rationale}")
+                    model = _rd.model
+                    token_limit = _rd.max_tokens
+            except Exception as _re:
+                print(f"[ROUTE] Router error (non-fatal): {_re}")
         # ── End routing override ──────────────────────────────────────────────
 
         thinking_budget = self.THINKING_BUDGETS.get(category, 0)
@@ -5637,11 +5661,11 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         return system_blocks, messages, model, token_limit, use_thinking, thinking_budget
 
     @traceable(name="ask_claude")
-    def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None) -> str:
+    def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None, reasoning_mode: str = None) -> str:
         """Send the user's question + market data to Claude with conversation history."""
         import time as _time
         system_blocks, messages, model, token_limit, use_thinking, thinking_budget = self._build_prompt(
-            user_prompt, market_data, history, is_followup, category, chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent
+            user_prompt, market_data, history, is_followup, category, chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent, reasoning_mode=reasoning_mode
         )
 
         _t0 = _time.monotonic()
@@ -5691,16 +5715,41 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
 
         if response.stop_reason == "max_tokens":
             print(f"[Agent] WARNING: Response was truncated (hit max_tokens). Length: {len(response_text)}")
+        # ── Phase 6: Multi-trigger escalation ──────────────────────────────────
+        # Categories where a suspiciously short response is a quality failure.
+        _DEEP_CATS = frozenset({
+            "ticker_analysis", "portfolio_review", "best_trades", "cross_market",
+            "daily_briefing", "sector_rotation", "thematic", "earnings_catalyst",
+            "investments", "crypto",
+        })
+        _MIN_CHARS = {
+            "ticker_analysis": 500, "portfolio_review": 400, "best_trades": 300,
+            "cross_market": 300, "daily_briefing": 400, "sector_rotation": 300,
+            "thematic": 300, "earnings_catalyst": 300, "investments": 300, "crypto": 200,
+        }
+        _should_escalate = False
+        _escalate_reason = ""
         if not response_text or not response_text.strip():
+            _should_escalate = True
+            _escalate_reason = f"empty response (stop_reason={response.stop_reason})"
             print(f"[Agent] WARNING: Claude returned empty content (stop_reason={response.stop_reason}, model={model})")
+        elif category in _DEEP_CATS:
+            _min_len = _MIN_CHARS.get(category, 200)
+            _actual_len = len(response_text.strip())
+            if _actual_len < _min_len:
+                _should_escalate = True
+                _escalate_reason = f"short response ({_actual_len} chars < {_min_len} min) for {category}"
+                print(f"[Agent] WARNING: Response suspiciously short: {_actual_len} chars for {category} (min={_min_len})")
+
+        if _should_escalate:
             # ── Escalation retry: upgrade to premium if not already there ─────
             if model != MODEL_CLAUDE_PREMIUM:
                 try:
-                    print(f"[ROUTE] Empty-response escalation: {model} → {MODEL_CLAUDE_PREMIUM}")
+                    print(f"[ROUTE] Escalation ({_escalate_reason}): {model} → {MODEL_CLAUDE_PREMIUM}")
                     _esc_t0 = _time.monotonic()
                     _esc_resp = self.client.messages.create(
                         model=MODEL_CLAUDE_PREMIUM,
-                        max_tokens=token_limit,
+                        max_tokens=max(token_limit, 8000),
                         system=system_blocks,
                         messages=messages,
                     )
@@ -5718,13 +5767,17 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
                             input_tokens=getattr(_esc_usage, "input_tokens", None),
                             output_tokens=getattr(_esc_usage, "output_tokens", None),
                             escalation_used=True,
+                            extra={"escalate_reason": _escalate_reason},
                         )
                         print(f"[ROUTE] Escalation succeeded ({len(_esc_text)} chars)")
                         return _esc_text
+                    print(f"[ROUTE] Escalation returned empty — serving original response")
                 except Exception as _esc_err:
                     print(f"[ROUTE] Escalation failed: {_esc_err}")
-            # ── End escalation ────────────────────────────────────────────────
-            return json.dumps({"display_type": "chat", "message": "The AI returned an empty response. Please try again."})
+            # ── End escalation ─────────────────────────────────────────────────
+            if not response_text or not response_text.strip():
+                return json.dumps({"display_type": "chat", "message": "The AI returned an empty response. Please try again."})
+        # ── End Phase 6 escalation ─────────────────────────────────────────────
 
         if use_thinking:
             thinking_used = sum(len(b.thinking) for b in response.content if b.type == "thinking")

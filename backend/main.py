@@ -1786,6 +1786,11 @@ class QueryRequest(BaseModel):
     collab_agents: Optional[List[str]] = None       # e.g. ["grok","gpt-4o","gemini","perplexity"]
     primary_model: Optional[str] = None              # final synthesis model (default: claude)
     history: Optional[List[dict]] = None             # client-side conversation history (for model-switch continuity)
+    # Phase 5: optional tier hint for AI Terminal solo-model selection.
+    # "fast" | "balanced" | "premium" — only respected when reasoning_model is a solo model
+    # (claude/gpt-4o/grok/gemini/perplexity/deepseek). Ignored for agent_collab/all_agents.
+    # Default None = tier determined automatically by prompt complexity + category floor.
+    reasoning_mode: Optional[str] = None
 
 @traceable(name="main.build_meta")
 def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, timing_ms=None, reasoning_model=None):
@@ -2515,6 +2520,7 @@ async def query_agent(
                 collab_agents=body.collab_agents,
                 primary_model=body.primary_model,
                 user_id=_user_id,
+                reasoning_mode=body.reasoning_mode,
             )
         )
 

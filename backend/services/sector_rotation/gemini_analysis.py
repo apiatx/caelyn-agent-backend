@@ -1,6 +1,12 @@
 """
 Weekly sector rotation AI analysis using Gemini with Google Search grounding.
 Analysis is persisted to disk and regenerated at most once per 7 days.
+
+Model routing (static-by-design):
+  MODEL_GEMINI (resolved by model_policy.py) is the only viable choice here
+  because this surface requires Google Search grounding, which is a Gemini-
+  exclusive capability.  Do NOT route this to Claude/GPT/DeepSeek — the
+  grounding data will be missing and analysis quality degrades significantly.
 """
 from __future__ import annotations
 

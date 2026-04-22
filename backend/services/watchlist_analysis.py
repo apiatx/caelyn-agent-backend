@@ -19,7 +19,10 @@ import csv
 import io
 import json
 
-from agent.model_policy import MODEL_GROK, MODEL_GEMINI_25_FLASH
+from agent.model_policy import (
+    MODEL_GROK, MODEL_GEMINI_25_FLASH, MODEL_DEEPSEEK,
+    log_ai_call as _mp_log,
+)
 import os
 import re
 import time
@@ -341,22 +344,36 @@ Return ONLY valid JSON:
     ]
 }}"""
 
-    try:
-        raw_text = await asyncio.wait_for(
-            asyncio.to_thread(agent._call_simple_model, "claude", prompt, 16384),
-            timeout=90.0,
-        )
-        result = _parse_ai_json(raw_text)
-        # Index by ticker
-        analysis_map = {}
-        for item in result.get("fundamental_analysis", []):
-            if isinstance(item, dict) and item.get("ticker"):
-                analysis_map[item["ticker"]] = item
-        print(f"[WATCHLIST-ANALYSIS] Claude CSV: analyzed {len(analysis_map)} tickers")
-        return {"fundamental_analysis": analysis_map}
-    except Exception as e:
-        print(f"[WATCHLIST-ANALYSIS] Claude CSV analysis failed: {e}")
-        return {"error": str(e)}
+    # Phase 7: CSV extraction is pure structured JSON extraction — DeepSeek is
+    # cost-optimal (no nuance required). Claude balanced serves as fallback.
+    import time as _time
+    _providers = [("deepseek", MODEL_DEEPSEEK, 16384), ("claude", "claude", 16384)]
+    for _pname, _model_hint, _tokens in _providers:
+        _t0 = _time.monotonic()
+        try:
+            raw_text = await asyncio.wait_for(
+                asyncio.to_thread(agent._call_simple_model, _pname, prompt, _tokens),
+                timeout=90.0,
+            )
+            _lat = (_time.monotonic() - _t0) * 1000
+            _mp_log(
+                task_type="watchlist_csv_extraction",
+                provider=_pname,
+                model=_model_hint,
+                feature="watchlist_analysis/csv_extraction",
+                latency_ms=_lat,
+                extra={"stocks": len(csv_data)},
+            )
+            result = _parse_ai_json(raw_text)
+            analysis_map = {}
+            for item in result.get("fundamental_analysis", []):
+                if isinstance(item, dict) and item.get("ticker"):
+                    analysis_map[item["ticker"]] = item
+            print(f"[WATCHLIST-ANALYSIS] {_pname.upper()} CSV: analyzed {len(analysis_map)} tickers ({_lat:.0f}ms)")
+            return {"fundamental_analysis": analysis_map}
+        except Exception as e:
+            print(f"[WATCHLIST-ANALYSIS] {_pname.upper()} CSV analysis failed: {e} — {'trying fallback' if _pname != _providers[-1][0] else 'giving up'}")
+    return {"error": "All providers failed for CSV extraction"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -761,19 +778,33 @@ async def _synthesize_all_sources(
         tickers, grok_data, gemini_data, claude_csv_data, edgar_data, ta_data,
     )
 
+    # Phase 7: Synthesis stays Claude balanced — multi-source nuance requires
+    # Claude's strong instruction-following and structured JSON reasoning.
+    # DeepSeek is intentionally NOT used here (see CSV extraction above).
     print(f"[WATCHLIST-ANALYSIS] Synthesis prompt: {len(prompt)} chars")
 
+    import time as _time
+    _t0 = _time.monotonic()
     try:
         raw_text = await asyncio.wait_for(
             asyncio.to_thread(agent._call_simple_model, "claude", prompt, 16384),
             timeout=120.0,
+        )
+        _lat = (_time.monotonic() - _t0) * 1000
+        _mp_log(
+            task_type="watchlist_synthesis",
+            provider="claude",
+            model="claude_balanced",
+            feature="watchlist_analysis/synthesis",
+            latency_ms=_lat,
+            extra={"tickers": len(tickers), "prompt_chars": len(prompt)},
         )
         result = _parse_ai_json(raw_text)
         if result.get("error"):
             print(f"[WATCHLIST-ANALYSIS] Synthesis parse error: {result['error']}")
         else:
             sections = result.get("sections", [])
-            print(f"[WATCHLIST-ANALYSIS] Synthesis complete: {len(sections)} sections")
+            print(f"[WATCHLIST-ANALYSIS] Synthesis complete: {len(sections)} sections ({_lat:.0f}ms)")
         return result
     except Exception as e:
         print(f"[WATCHLIST-ANALYSIS] Synthesis failed: {e}")

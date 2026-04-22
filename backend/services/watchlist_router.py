@@ -225,6 +225,13 @@ async def stock_deep_dive_endpoint(ticker: str, body: StockDeepDiveRequest):
     Phase 1 (all parallel): Grok X/Twitter sentiment + Gemini Google News +
                             Claude/GPT deep fundamental analysis
     Phase 2: short final synthesis call → structured JSON output
+
+    Model routing (static-by-design):
+      Models are caller-specified (body.models / body.report_model), defaulting to
+      ["grok", "gemini", "claude"] + claude synthesis.  The prompt_router /
+      reasoning_mode machinery does NOT apply here — the caller selects the panel
+      explicitly from the frontend deep-dive modal.  Do not add dynamic routing
+      inside this endpoint.
     """
     import traceback as _tb
 

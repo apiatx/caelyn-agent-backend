@@ -38,8 +38,9 @@ def _weekly_cache_ttl() -> int:
 
 async def generate_weekly_summary(data_service: Any, agent: Any, force: bool = False) -> dict:
     """
-    Fetch news + earnings + econ calendar, call claude-haiku-4-5-20251001,
-    cache until next Saturday 07:00, and return the result dict.
+    Fetch news + earnings + econ calendar, call Claude (resolved via _mp_resolve
+    to the notification_digest task type — see model_policy.py), cache until
+    next Saturday 07:00, and return the result dict.
 
     Arguments:
         data_service  — MarketDataService instance (from main.py global)

@@ -11,6 +11,13 @@ adapted for Polymarket prediction markets:
   BearAgent          → argues FOR NO with strongest counter-evidence
   RiskManagerAgent   → synthesizes the debate → final recommendation
 
+Model routing (static-by-design):
+  All agents use MODEL_GEMINI (resolved via model_policy.py).  This surface
+  runs six independent LLM calls in a structured debate pipeline; the full
+  reasoning_mode / prompt_router machinery in claude_agent.py does not apply.
+  If you want to change the model here, update _GEMINI_MODEL at the top of
+  this file — do not add routing overrides mid-function.
+
 Agents run in parallel where possible:
   Phase 1: [Fundamentals, Sentiment, Technical] in parallel
   Phase 2: [Bull, Bear] in parallel (receive Phase 1 outputs)
