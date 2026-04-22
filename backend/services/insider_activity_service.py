@@ -42,7 +42,8 @@ logger = logging.getLogger("insider_activity")
 _TRADIER_KEY = os.getenv("TRADIER_API_KEY", "")
 _FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
 _PPLX_KEY = os.getenv("PERPLEXITY_API_KEY", "")
-_PPLX_MODEL = "sonar-pro"
+from agent.model_policy import MODEL_SONAR_PRO
+_PPLX_MODEL = MODEL_SONAR_PRO
 _PPLX_BASE_URL = "https://api.perplexity.ai"
 _SEC_DELAY = 0.15          # seconds between SEC requests (max 10 req/s)
 _FETCH_INTERVAL = 7200     # 2 hours in seconds

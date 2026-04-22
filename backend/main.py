@@ -36,6 +36,10 @@ traceable = _ls_traceable
 
 from pathlib import Path
 from urllib.parse import urlparse, unquote
+from agent.model_policy import (  # Phase 3: centralized model registry
+    MODEL_CLAUDE_FAST,
+    MODEL_CLAUDE_BALANCED,
+)
 
 # ── Hyperliquid Screener service ──────────────────────────────────────────────
 from services.hyperliquid.state import HyperliquidState as _HLState
@@ -3441,7 +3445,7 @@ async def backtest_recommendations(request: Request, body: BacktestRequest, _sub
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         resp = await asyncio.to_thread(
             client.messages.create,
-            model="claude-haiku-4-5-20251001",
+            model=MODEL_CLAUDE_FAST,
             max_tokens=400,
             messages=[{"role": "user", "content": haiku_prompt}],
         )
@@ -3471,7 +3475,7 @@ async def health_check(request: Request):
         response = await asyncio.wait_for(
             asyncio.to_thread(
                 agent.client.messages.create,
-                model="claude-sonnet-4-20250514",
+                model=MODEL_CLAUDE_BALANCED,
                 max_tokens=20,
                 messages=[{"role": "user", "content": "Say ok"}],
             ),
@@ -4751,7 +4755,7 @@ IMPORTANT: Return plain text analysis (not JSON). Be formatted with markdown hea
             response = await asyncio.wait_for(
                 asyncio.to_thread(
                     agent.client.messages.create,
-                    model="claude-sonnet-4-20250514",
+                    model=MODEL_CLAUDE_BALANCED,
                     max_tokens=2000,
                     system=SYSTEM_PROMPT,
                     messages=messages,
@@ -5359,7 +5363,7 @@ RULES:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         resp = await asyncio.to_thread(
             client.messages.create,
-            model="claude-sonnet-4-20250514",
+            model=MODEL_CLAUDE_BALANCED,
             max_tokens=2000,
             system=system_prompt,
             messages=messages,

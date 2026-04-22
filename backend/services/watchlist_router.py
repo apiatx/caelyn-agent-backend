@@ -8,6 +8,8 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+from agent.model_policy import MODEL_CLAUDE_PREMIUM, MODEL_GROK, MODEL_GPT4O
+
 import asyncio
 import json as _json
 import re as _re
@@ -281,7 +283,7 @@ async def stock_deep_dive_endpoint(ticker: str, body: StockDeepDiveRequest):
                             "Content-Type": "application/json",
                         },
                         json={
-                            "model": "grok-4-1-fast-reasoning",
+                            "model": MODEL_GROK,
                             "tools": [{"type": "x_search", "x_search": {}}],
                             "input": [{"role": "user", "content": prompt}],
                         },
@@ -359,7 +361,7 @@ async def stock_deep_dive_endpoint(ticker: str, body: StockDeepDiveRequest):
                     api_key=anthropic_key, timeout=60.0
                 )
                 response = await client.messages.create(
-                    model="claude-opus-4-5",
+                    model=MODEL_CLAUDE_PREMIUM,
                     max_tokens=1500,
                     messages=[{"role": "user", "content": prompt}],
                 )
@@ -386,7 +388,7 @@ async def stock_deep_dive_endpoint(ticker: str, body: StockDeepDiveRequest):
                 from openai import AsyncOpenAI
                 client = AsyncOpenAI(api_key=openai_key, timeout=60.0)
                 resp = await client.chat.completions.create(
-                    model="gpt-4o",
+                    model=MODEL_GPT4O,
                     max_tokens=1500,
                     messages=[{"role": "user", "content": prompt}],
                 )
@@ -461,7 +463,7 @@ async def stock_deep_dive_endpoint(ticker: str, body: StockDeepDiveRequest):
                     from openai import AsyncOpenAI
                     _oa = AsyncOpenAI(api_key=openai_key, timeout=60.0)
                     _resp = await _oa.chat.completions.create(
-                        model="gpt-4o",
+                        model=MODEL_GPT4O,
                         max_tokens=1500,
                         messages=[{"role": "user", "content": synthesis_prompt}],
                         response_format={"type": "json_object"},
@@ -474,7 +476,7 @@ async def stock_deep_dive_endpoint(ticker: str, body: StockDeepDiveRequest):
                 import anthropic as _anthropic
                 _ac = _anthropic.AsyncAnthropic(api_key=synth_key, timeout=60.0)
                 _cr = await _ac.messages.create(
-                    model="claude-opus-4-5",
+                    model=MODEL_CLAUDE_PREMIUM,
                     max_tokens=1500,
                     messages=[{"role": "user", "content": synthesis_prompt}],
                 )
@@ -655,7 +657,7 @@ async def refresh_by_id_endpoint(watchlist_id: str):
                 import anthropic as _anthropic
                 client = _anthropic.AsyncAnthropic(api_key=anthropic_key, timeout=90.0)
                 response = await client.messages.create(
-                    model="claude-opus-4-5",
+                    model=MODEL_CLAUDE_PREMIUM,
                     max_tokens=4000,
                     messages=[{"role": "user", "content": prompt}],
                 )

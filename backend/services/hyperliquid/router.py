@@ -745,7 +745,7 @@ async def _generate_llm_analysis(ranked: list[ScreenerAsset], fear_greed: dict) 
         import anthropic as _anthropic
         aclient = _anthropic.AsyncAnthropic(api_key=api_key)
         msg = await aclient.messages.create(
-            model="claude-3-haiku-20240307",
+            model="claude-haiku-4-5-20251001",
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )

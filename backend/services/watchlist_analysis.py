@@ -18,6 +18,8 @@ import asyncio
 import csv
 import io
 import json
+
+from agent.model_policy import MODEL_GROK
 import os
 import re
 import time
@@ -132,7 +134,7 @@ Return ONLY valid JSON:
                         "Authorization": f"Bearer {api_key}",
                     },
                     json={
-                        "model": "grok-4-1-fast-reasoning",
+                        "model": MODEL_GROK,
                         "tools": [{"type": "x_search", "x_search": {}}],
                         "input": [{"role": "user", "content": prompt}],
                     },

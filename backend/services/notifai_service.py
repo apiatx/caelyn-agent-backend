@@ -4,8 +4,7 @@ NotifAI Service — business logic for the NotifAI page endpoints.
 Extracted from main.py so the two HTTP handlers can be thin wrappers.
 All caching is managed here; callers just await and return.
 
-Claude model used here: claude-haiku-4-5-20251001
-(distinct from the TradingAgent's claude-3-haiku-20240307)
+Claude model is resolved via agent.model_policy (task: notification_digest / fast tier).
 """
 from __future__ import annotations
 
@@ -14,6 +13,8 @@ import re as _re
 import json as _json
 from datetime import datetime, timedelta
 from typing import Any
+
+from agent.model_policy import resolve as _mp_resolve
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -194,7 +195,7 @@ async def generate_weekly_summary(data_service: Any, agent: Any, force: bool = F
             resp = await asyncio.wait_for(
                 asyncio.to_thread(
                     ai_client.messages.create,
-                    model="claude-haiku-4-5-20251001",
+                    model=_mp_resolve("claude", "notification_digest"),
                     max_tokens=1400,
                     system=system,
                     messages=[{"role": "user", "content": user_msg}],

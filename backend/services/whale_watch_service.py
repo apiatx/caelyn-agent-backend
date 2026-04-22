@@ -13,6 +13,8 @@ import asyncio
 import json
 import logging
 import os
+
+from agent.model_policy import MODEL_CLAUDE_FAST
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -1796,7 +1798,7 @@ async def generate_whale_theme(whale_name: str) -> str | None:
                     "content-type":      "application/json",
                 },
                 json={
-                    "model":      "claude-haiku-4-5",
+                    "model":      MODEL_CLAUDE_FAST,
                     "max_tokens": 200,
                     "messages":   [{"role": "user", "content": prompt}],
                 },

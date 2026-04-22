@@ -33,7 +33,8 @@ import httpx
 
 from data.cache import cache
 
-_GEMINI_MODEL = "gemini-3-flash-preview"
+from agent.model_policy import MODEL_GEMINI
+_GEMINI_MODEL = MODEL_GEMINI
 _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _AGENT_TIMEOUT = 45.0
 _ANALYSIS_CACHE_TTL = 300

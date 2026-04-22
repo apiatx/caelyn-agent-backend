@@ -15,6 +15,18 @@ from data.market_data_service import MarketDataService
 import agent.post_processors as _post_processors  # Phase 1: post-processor registry
 from agent import preset_registry  # Phase 1: canonical preset/intent data
 from agent.data_router import DataRouter  # Phase 1: data-gathering delegate
+from agent.model_policy import (  # Phase 3: centralized model registry
+    resolve as _mp_resolve,
+    log_ai_call as _mp_log,
+    MODEL_CLAUDE_FAST,
+    MODEL_CLAUDE_BALANCED,
+    MODEL_CLAUDE_PREMIUM,
+    MODEL_GPT4O,
+    MODEL_GROK,
+    MODEL_GEMINI,
+    MODEL_SONAR_PRO,
+    MODEL_DEEPSEEK,
+)
 
 try:
     from langsmith import traceable
@@ -1484,7 +1496,7 @@ class TradingAgent:
     def _classify_query_claude(self, prompt: str) -> dict:
         try:
             response = self.client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model=MODEL_CLAUDE_FAST,
                 max_tokens=200,
                 messages=[
                     {
@@ -1612,7 +1624,7 @@ class TradingAgent:
         messages = [{"role": "user", "content": prompt}]
         if reasoning_model in ("claude", "agent_collab") or reasoning_model not in self.VALID_REASONING_MODELS:
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=MODEL_CLAUDE_BALANCED,
                 max_tokens=max_tokens,
                 messages=messages,
             )
@@ -1626,7 +1638,7 @@ class TradingAgent:
                 raise ValueError("No OPENAI_API_KEY")
             from openai import OpenAI
             client = OpenAI(api_key=api_key)
-            resp = client.chat.completions.create(model="gpt-4o", max_tokens=max_tokens, messages=oai_msgs)
+            resp = client.chat.completions.create(model=MODEL_GPT4O, max_tokens=max_tokens, messages=oai_msgs)
             return resp.choices[0].message.content or ""
 
         import httpx as _httpx
@@ -1637,7 +1649,7 @@ class TradingAgent:
             resp = _httpx.post(
                 "https://api.x.ai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": "grok-4-1-fast-reasoning", "max_tokens": max_tokens, "messages": oai_msgs},
+                json={"model": MODEL_GROK, "max_tokens": max_tokens, "messages": oai_msgs},
                 timeout=60.0,
             )
             resp.raise_for_status()
@@ -1649,7 +1661,7 @@ class TradingAgent:
             if not api_key:
                 raise ValueError("No GEMINI_API_KEY")
             resp = _httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_GEMINI}:generateContent?key={api_key}",
                 headers={"Content-Type": "application/json"},
                 json={
                     "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -1669,7 +1681,7 @@ class TradingAgent:
             resp = _httpx.post(
                 "https://api.perplexity.ai/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": "sonar-pro", "max_tokens": max_tokens, "messages": oai_msgs},
+                json={"model": MODEL_SONAR_PRO, "max_tokens": max_tokens, "messages": oai_msgs},
                 timeout=60.0,
             )
             resp.raise_for_status()
@@ -1683,7 +1695,7 @@ class TradingAgent:
             from openai import OpenAI
             ds_client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
             resp = ds_client.chat.completions.create(
-                model="deepseek-chat",
+                model=MODEL_DEEPSEEK,
                 max_tokens=max_tokens,
                 messages=oai_msgs,
             )
@@ -1697,7 +1709,7 @@ class TradingAgent:
         Returns the raw text response. Uses sync calls since orchestration runs in a thread."""
         if reasoning_model in ("claude", "agent_collab") or reasoning_model not in self.VALID_REASONING_MODELS:
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=MODEL_CLAUDE_BALANCED,
                 max_tokens=500,
                 system=system_prompt,
                 messages=messages,
@@ -1716,7 +1728,7 @@ class TradingAgent:
             from openai import OpenAI
             client = OpenAI(api_key=api_key)
             resp = client.chat.completions.create(
-                model="gpt-4o",
+                model=MODEL_GPT4O,
                 max_tokens=500,
                 messages=oai_msgs,
             )
@@ -1730,7 +1742,7 @@ class TradingAgent:
             resp = _httpx.post(
                 "https://api.x.ai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": "grok-4-1-fast-reasoning", "max_tokens": 500, "messages": oai_msgs},
+                json={"model": MODEL_GROK, "max_tokens": 500, "messages": oai_msgs},
                 timeout=15.0,
             )
             resp.raise_for_status()
@@ -1747,7 +1759,7 @@ class TradingAgent:
                 contents.append({"role": role, "parts": [{"text": m["content"]}]})
             import httpx as _httpx
             resp = _httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_GEMINI}:generateContent?key={api_key}",
                 headers={"Content-Type": "application/json"},
                 json={
                     "system_instruction": {"parts": [{"text": system_prompt}]},
@@ -1773,7 +1785,7 @@ class TradingAgent:
             resp = _httpx.post(
                 "https://api.perplexity.ai/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": "sonar-pro", "max_tokens": 500, "messages": oai_msgs},
+                json={"model": MODEL_SONAR_PRO, "max_tokens": 500, "messages": oai_msgs},
                 timeout=15.0,
             )
             resp.raise_for_status()
@@ -1787,7 +1799,7 @@ class TradingAgent:
             from openai import OpenAI
             ds_client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
             resp = ds_client.chat.completions.create(
-                model="deepseek-chat",
+                model=MODEL_DEEPSEEK,
                 max_tokens=500,
                 messages=oai_msgs,
             )
@@ -1801,7 +1813,7 @@ class TradingAgent:
         Similar to _call_orchestrator_model but with higher token limits and longer timeouts."""
         if reasoning_model in ("claude", "agent_collab") or reasoning_model not in self.VALID_REASONING_MODELS:
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=MODEL_CLAUDE_BALANCED,
                 max_tokens=max_tokens,
                 system=[
                     {"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}},
@@ -1822,7 +1834,7 @@ class TradingAgent:
             from openai import OpenAI
             client = OpenAI(api_key=api_key)
             resp = client.chat.completions.create(
-                model="gpt-4o",
+                model=MODEL_GPT4O,
                 max_tokens=max_tokens,
                 messages=oai_msgs,
             )
@@ -1836,7 +1848,7 @@ class TradingAgent:
             resp = _httpx.post(
                 "https://api.x.ai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": "grok-4-1-fast-reasoning", "max_tokens": max_tokens, "messages": oai_msgs},
+                json={"model": MODEL_GROK, "max_tokens": max_tokens, "messages": oai_msgs},
                 timeout=90.0,
             )
             resp.raise_for_status()
@@ -1856,7 +1868,7 @@ class TradingAgent:
                 contents.append({"role": role, "parts": [{"text": m["content"]}]})
             import httpx as _httpx
             resp = _httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_GEMINI}:generateContent?key={api_key}",
                 headers={"Content-Type": "application/json"},
                 json={
                     "system_instruction": {"parts": [{"text": system_text}]},
@@ -1881,7 +1893,7 @@ class TradingAgent:
             resp = _httpx.post(
                 "https://api.perplexity.ai/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": "sonar-pro", "max_tokens": max_tokens, "messages": oai_msgs},
+                json={"model": MODEL_SONAR_PRO, "max_tokens": max_tokens, "messages": oai_msgs},
                 timeout=90.0,
             )
             resp.raise_for_status()
@@ -1895,7 +1907,7 @@ class TradingAgent:
             from openai import OpenAI
             ds_client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
             resp = ds_client.chat.completions.create(
-                model="deepseek-chat",
+                model=MODEL_DEEPSEEK,
                 max_tokens=max_tokens,
                 messages=oai_msgs,
             )
@@ -3236,22 +3248,22 @@ class TradingAgent:
                 if use_web_search:
                     # Responses API with web search tool
                     resp = await client.responses.create(
-                        model="gpt-4o",
+                        model=MODEL_GPT4O,
                         tools=[{"type": "web_search"}],
                         input=oai_messages,
                         max_output_tokens=token_limit,
                     )
                     text = resp.output_text or ""
                     search_calls = sum(1 for item in (resp.output or []) if getattr(item, 'type', '') == 'web_search_call')
-                    print(f"[ALT_MODEL] gpt-4o+web_search responded: {len(text):,} chars, {search_calls} searches")
+                    print(f"[ALT_MODEL] {MODEL_GPT4O}+web_search responded: {len(text):,} chars, {search_calls} searches")
                 else:
                     resp = await client.chat.completions.create(
-                        model="gpt-4o",
+                        model=MODEL_GPT4O,
                         max_tokens=token_limit,
                         messages=oai_messages,
                     )
                     text = resp.choices[0].message.content or ""
-                    print(f"[ALT_MODEL] gpt-4o responded: {len(text):,} chars")
+                    print(f"[ALT_MODEL] {MODEL_GPT4O} responded: {len(text):,} chars")
                 return text
             except Exception as e:
                 import traceback
@@ -3265,7 +3277,7 @@ class TradingAgent:
                 print("[ALT_MODEL] No XAI_API_KEY set")
                 return ""
             # Model selection: always use reasoning model
-            grok_model = "grok-4-1-fast-reasoning"
+            grok_model = MODEL_GROK
             # Try Responses API first (supports web_search + x_search tools)
             # Use httpx directly instead of OpenAI SDK — xAI's response format
             # differs slightly and the SDK's output_text property can return empty.
@@ -3394,7 +3406,7 @@ class TradingAgent:
                 return ""
             try:
                 body = {
-                    "model": "sonar-pro",
+                    "model": MODEL_SONAR_PRO,
                     "max_tokens": token_limit,
                     "messages": oai_messages,
                 }
@@ -3413,7 +3425,7 @@ class TradingAgent:
                     text = (choices[0]["message"]["content"] or "") if choices else ""
                     citations = data.get("citations", [])
                     recency_tag = " (recency=day)" if use_web_search else ""
-                    print(f"[ALT_MODEL] perplexity sonar-pro{recency_tag} responded: {len(text):,} chars, {len(citations)} citations")
+                    print(f"[ALT_MODEL] perplexity {MODEL_SONAR_PRO}{recency_tag} responded: {len(text):,} chars, {len(citations)} citations")
                     return text
             except Exception as e:
                 print(f"[ALT_MODEL] perplexity error: {e}")
@@ -3428,12 +3440,12 @@ class TradingAgent:
                 from openai import AsyncOpenAI
                 ds_client = AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com")
                 resp = await ds_client.chat.completions.create(
-                    model="deepseek-chat",
+                    model=MODEL_DEEPSEEK,
                     max_tokens=token_limit,
                     messages=oai_messages,
                 )
                 text = resp.choices[0].message.content or ""
-                print(f"[ALT_MODEL] deepseek-chat responded: {len(text):,} chars")
+                print(f"[ALT_MODEL] {MODEL_DEEPSEEK} responded: {len(text):,} chars")
                 return text
             except Exception as e:
                 import traceback
@@ -5525,43 +5537,43 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
 
         use_fast_model = category not in self.DEEP_ANALYSIS_CATEGORIES
         if category == "crypto":
-            model = "claude-sonnet-4-5-20250929"
+            model = MODEL_CLAUDE_PREMIUM
             token_limit = 6000
         elif category in ("best_trades", "cross_market", "cross_asset_trending"):
-            model = "claude-sonnet-4-5-20250929"
+            model = MODEL_CLAUDE_PREMIUM
             token_limit = 10000
         elif category == "csv_analysis":
-            model = "claude-sonnet-4-20250514"
+            model = MODEL_CLAUDE_BALANCED
             token_limit = 8000
         elif category == "investments":
-            model = "claude-sonnet-4-5-20250929"
+            model = MODEL_CLAUDE_PREMIUM
             token_limit = 8000
         elif category in ("ticker_analysis", "portfolio_review", "prediction_markets", "earnings_catalyst"):
-            model = "claude-sonnet-4-5-20250929"
+            model = MODEL_CLAUDE_PREMIUM
             token_limit = 10000
         elif category == "chat":
-            model = "claude-sonnet-4-5-20250929"
+            model = MODEL_CLAUDE_PREMIUM
             token_limit = 6000
         elif category == "sector_rotation":
-            model = "claude-sonnet-4-5-20250929"
+            model = MODEL_CLAUDE_PREMIUM
             token_limit = 6000
         elif category in ("daily_briefing", "briefing"):
-            model = "claude-sonnet-4-5-20250929"
+            model = MODEL_CLAUDE_PREMIUM
             token_limit = 8000
         elif category == "social_momentum":
-            model = "claude-sonnet-4-5-20250929"
+            model = MODEL_CLAUDE_PREMIUM
             token_limit = 6000
         elif category == "thematic":
-            model = "claude-sonnet-4-5-20250929"
+            model = MODEL_CLAUDE_PREMIUM
             token_limit = 8000
         elif category == "followup":
-            model = "claude-sonnet-4-20250514"
+            model = MODEL_CLAUDE_BALANCED
             token_limit = 4096
         elif use_fast_model:
-            model = "claude-sonnet-4-20250514"
+            model = MODEL_CLAUDE_BALANCED
             token_limit = 4096
         else:
-            model = "claude-sonnet-4-5-20250929"
+            model = MODEL_CLAUDE_PREMIUM
             token_limit = 10000
         thinking_budget = self.THINKING_BUDGETS.get(category, 0)
         use_thinking = thinking_budget > 0 and "sonnet-4-5" in model

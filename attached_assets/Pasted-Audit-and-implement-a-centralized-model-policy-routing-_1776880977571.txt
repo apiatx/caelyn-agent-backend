@@ -1,0 +1,190 @@
+Audit and implement a centralized model policy/routing layer for all AI usage in this backend.
+
+Objective:
+Create an OpenRouter-style internal model selection system that chooses the minimally viable model/provider for each task while preserving quality. We want to reduce unnecessary usage of premium/deep reasoning models (ex: Claude Opus / top-end GPT reasoning) across the product, without hurting output quality for investing/trading tasks.
+
+Important intent:
+- Optimize for balanced speed + quality, not “cheapest possible”
+- Premium/deep reasoning models should be reserved for genuinely complex tasks
+- Most tasks should route to balanced models by provider family
+- If a user selects a provider family (ex: Claude) in the AI Terminal, the backend should resolve that to the minimally viable default model in that family, not the most expensive one
+- We do NOT want Haiku-class models used for deep reasoning/synthesis tasks
+- We are open to reducing or removing Perplexity as a core reasoning layer if it is not materially useful
+- We do want Grok retained where X/social sentiment is the differentiated value
+- We do want Gemini and DeepSeek used more where appropriate for speed/cost
+- We need this applied to ALL AI surfaces:
+  - preloaded dashboards that use AI
+  - AI-scored sections
+  - preset prompt buttons
+  - free-form user queries
+  - AI Terminal reasoning model selection
+  - collaborating model selection
+  - any background jobs / cached AI summaries
+  - any internal orchestration / synthesis layers
+
+Rules:
+1. Do NOT start by changing models blindly.
+2. First produce a full audit of every AI call site in the backend.
+3. Centralize all model-selection logic into one policy/routing layer.
+4. Replace scattered hardcoded model strings with policy-driven resolution.
+5. Preserve existing behavior where possible except for model selection.
+6. Add instrumentation so we can compare old vs new model choices and latency/cost.
+7. Put the new routing behind a feature flag if needed.
+
+Phase 1 — Full audit
+Search the entire backend repo for all AI/provider usage, including:
+- anthropic
+- claude
+- openai
+- gpt
+- xai
+- grok
+- gemini
+- google generative ai
+- deepseek
+- perplexity
+- sonar
+- any custom wrappers or helper functions around these
+
+Create a structured audit report showing for each AI entry point:
+- file path
+- function/method name
+- route/job/caller
+- provider
+- exact model string
+- purpose of the call
+- whether it is user-facing or internal
+- whether it uses search/tools/social/web/X
+- fallback behavior
+- token budget / max tokens if present
+- timeout / retry behavior if present
+- whether it is high, medium, or low complexity
+- recommendation for new default model family + tier
+
+Also identify:
+- duplicated wrappers
+- places where exact model names are hardcoded in multiple layers
+- places where frontend passes exact model names that should instead be aliases/families
+- places where collaborator model selection bypasses any centralized logic
+- places where cached/precomputed dashboard AI uses unnecessarily expensive models
+
+Phase 2 — Define taxonomy
+Create a small normalized task taxonomy for all AI calls, such as:
+- orchestrator_routing
+- dashboard_scoring
+- preset_prompt
+- freeform_query
+- x_sentiment
+- news_grounding
+- multi_source_synthesis
+- short_summary
+- fundamental_analysis
+- technical_analysis
+- watchlist_ranking
+- high_complexity_research
+- code_generation_internal
+
+Map every audited call site to one of these task types.
+
+Phase 3 — Create central model policy registry
+Implement a single source of truth file/module for model policy.
+Example concept:
+- task_type -> default provider/model
+- fallback chain
+- allowed escalation path
+- latency target
+- cost tier
+- reasoning effort if supported
+- tool/search permissions
+- family alias defaults
+
+Support provider family aliases like:
+- claude
+- openai
+- grok
+- gemini
+- deepseek
+- perplexity
+
+And support mode aliases like:
+- fast
+- balanced
+- premium
+
+Important:
+If the user chooses “Claude” in AI Terminal, backend should resolve to the balanced default Claude model unless premium is explicitly requested or escalation rules trigger.
+Same idea for OpenAI, Gemini, Grok, DeepSeek, etc.
+
+Phase 4 — Implement router
+Build a model router service that accepts:
+- task_type
+- requested provider family (optional)
+- requested mode (optional)
+- user-selected reasoning family (optional)
+- collaborator families (optional)
+- whether web/search/X/tools are required
+- latency budget (optional)
+- quality floor (optional)
+
+And returns:
+- resolved provider
+- resolved exact model
+- reasoning config if applicable
+- fallback chain
+- whether escalation is allowed
+
+This router should be the only place that resolves exact model IDs.
+
+Phase 5 — Migrate call sites
+Refactor all existing AI call sites to route through the new model router instead of hardcoding model IDs directly.
+Do this carefully and minimally:
+- preserve prompt construction
+- preserve provider-specific tool wiring
+- preserve output schemas
+- only change how models are selected and how fallback is handled
+
+Phase 6 — Add observability
+For every AI call, log:
+- task_type
+- resolved provider
+- resolved model
+- request path / feature name
+- latency
+- token usage if available
+- estimated cost if available
+- fallback used or not
+- escalation used or not
+- success / failure
+- cache hit / miss if applicable
+
+Make this easy to inspect in logs so we can learn which tasks are over-modelled.
+
+Phase 7 — Safe rollout
+Add a feature flag and/or config switch so we can:
+- enable new routing globally
+- enable by task type
+- enable by route/page
+- quickly revert to previous behavior if needed
+
+Phase 8 — Deliverables
+When done, provide:
+1. audit report
+2. list of all AI entry points
+3. proposed task taxonomy
+4. proposed model policy table
+5. exact files changed
+6. summary of migration approach
+7. any risky areas
+8. any frontend/API contract changes needed
+
+Initial policy guidance:
+- Dashboard scoring / precomputed summaries: prefer fast or balanced lower-cost models
+- X/social sentiment: prefer Grok
+- Search/web-grounded flows: prefer Gemini and/or existing web-grounding paths
+- Multi-source synthesis for investing/trading: balanced Claude default is likely appropriate
+- Very expensive premium reasoning should be rare and explicitly justified
+- Do not use Haiku-class models for deeper synthesis/research tasks
+- DeepSeek should be considered for structured extraction, ranking, summaries, and budget-sensitive mid-tier reasoning
+- Perplexity should be audited critically; keep only if it adds clear value
+
+Do not make assumptions. Read the repo first, inventory everything, then implement the policy layer cleanly.
