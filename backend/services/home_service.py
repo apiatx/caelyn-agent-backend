@@ -26,7 +26,7 @@ from typing import Any, Optional
 
 from data.cache import cache
 
-_HOME_CACHE_KEY = "home:dashboard:v1"
+_HOME_CACHE_KEY = "home:dashboard:v2"
 _HOME_CACHE_TTL = 60  # 1 minute — upstream caches do the heavy lifting
 
 
@@ -186,22 +186,42 @@ def _extract_movers(fmp_movers: dict) -> dict:
     gainers = (fmp_movers or {}).get("gainers") or []
     losers = (fmp_movers or {}).get("losers") or []
 
+    def _to_float(v):
+        if v is None:
+            return None
+        try:
+            return float(str(v).replace("%", "").replace("+", "").replace(",", "").strip())
+        except Exception:
+            return None
+
     def _norm(rows, direction: str) -> list[dict]:
         out = []
         for r in rows[:8]:
             if not isinstance(r, dict):
                 continue
-            chg = r.get("change") or r.get("change_pct") or ""
-            try:
-                chg_num = float(str(chg).replace("%", "").replace("+", ""))
-            except Exception:
-                chg_num = None
+            # Raw provider may expose either 'change' (string like '+3.45%') or
+            # 'change_pct' (float) — accept both.
+            raw_change = r.get("change")
+            raw_change_pct = r.get("change_pct")
+            chg_num = _to_float(raw_change_pct)
+            if chg_num is None:
+                chg_num = _to_float(raw_change)
+            # Preserve a human label regardless of which shape we got
+            if raw_change:
+                label = str(raw_change)
+            elif chg_num is not None:
+                label = f"{chg_num:+.2f}%"
+            else:
+                label = ""
+            ticker = r.get("ticker") or r.get("symbol")
+            if not ticker:
+                continue
             out.append({
-                "ticker": r.get("ticker") or r.get("symbol"),
+                "ticker": ticker,
                 "company": r.get("company") or r.get("name") or "",
-                "price": r.get("price"),
+                "price": _to_float(r.get("price")) if r.get("price") is not None else None,
                 "change_pct": chg_num,
-                "change_label": chg,
+                "change_label": label,
                 "direction": direction,
             })
         return out
@@ -241,15 +261,22 @@ def _extract_theme_performance(sector_dashboard) -> dict:
     sectors = d.get("sectors") or []
     themes = []
     for s in sectors:
+        if not isinstance(s, dict):
+            continue
         themes.append({
             "name": s.get("name") or s.get("ticker"),
             "ticker": s.get("ticker"),
             "rotation_score": s.get("rotation_score"),
-            "change_1d": s.get("change_1d") or s.get("pct_change_1d"),
-            "change_5d": s.get("change_5d") or s.get("pct_change_5d"),
-            "change_1m": s.get("change_1m") or s.get("pct_change_1m"),
+            "relative_strength_rank": s.get("relative_strength_rank"),
+            # Actual SectorSnapshot schema fields: change_1d / change_7d / change_30d / change_ytd
+            "change_1d": s.get("change_1d"),
+            "change_7d": s.get("change_7d"),
+            "change_30d": s.get("change_30d"),
+            "change_ytd": s.get("change_ytd"),
             "regime_tag": s.get("regime_tag"),
         })
+    # Sort by 30D change for a meaningful chart order
+    themes.sort(key=lambda t: (t.get("change_30d") if t.get("change_30d") is not None else -999), reverse=True)
     return {
         "themes": themes,
         "regime": d.get("regime"),
@@ -259,28 +286,27 @@ def _extract_theme_performance(sector_dashboard) -> dict:
     }
 
 
-def _extract_trending_research(scan: dict, watchlists: list[dict]) -> list[dict]:
-    """Built from already-fetched Stocktwits trending + saved watchlists. No new API calls."""
+def _extract_trending_ideas(scan: dict) -> list[dict]:
+    """Trending Ideas, sourced exclusively from the already-cached Stocktwits
+    trending feed (STOCKTWITS_TTL, no net-new API calls).
+
+    Returns up to 8 idea cards with a stable shape the frontend can render
+    without any further enrichment.
+    """
     out: list[dict] = []
     trending = (scan or {}).get("stocktwits_trending") or []
-    for t in trending[:6]:
+    for t in trending[:8]:
         if not isinstance(t, dict):
             continue
+        ticker = (t.get("ticker") or t.get("symbol") or "").upper()
+        if not ticker:
+            continue
         out.append({
-            "kind": "trending_ticker",
-            "title": t.get("ticker") or t.get("symbol"),
-            "summary": t.get("title") or t.get("message") or "Trending on StockTwits",
+            "ticker": ticker,
+            "title": t.get("title") or ticker,
+            "watchlist_count": t.get("watchlist_count"),
             "source": "stocktwits",
         })
-    if isinstance(watchlists, list):
-        for wl in watchlists[:3]:
-            out.append({
-                "kind": "watchlist",
-                "title": wl.get("name") or "Watchlist",
-                "summary": f"{len(wl.get('tickers') or [])} tickers tracked",
-                "source": "watchlist",
-                "id": wl.get("id"),
-            })
     return out
 
 
@@ -380,6 +406,24 @@ async def build_home_dashboard(
 
     scan_lite = {"stocktwits_trending": trending}
 
+    # Trending on X — weekly cached snapshot. Never does a live X scan on page
+    # load: if the disk cache is <7d old we return it, if it's stale/missing we
+    # return what we have (or empty) and kick off one background refresh.
+    trending_on_x: dict = {
+        "generated_at": None,
+        "top_tickers": [],
+        "key_themes": [],
+        "notable_accounts": [],
+        "is_stale": True,
+        "refresh_in_progress": False,
+        "available": False,
+    }
+    try:
+        from services.x_consensus_cache import get_weekly_snapshot
+        trending_on_x = await get_weekly_snapshot(data_service=data_service, allow_refresh=True)
+    except Exception as exc:
+        print(f"[HOME] Trending on X snapshot failed soft: {exc}")
+
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "greeting": {
@@ -390,18 +434,9 @@ async def build_home_dashboard(
         "macro_cards": _extract_macro_cards(macro_raw),
         "highlighted_companies": _extract_highlighted_companies(watchlists, scan_lite),
         "theme_performance": _extract_theme_performance(sector_dash),
-        "trending_dashboards": [
-            {
-                "id": wl.get("id"),
-                "name": wl.get("name") or "Watchlist",
-                "kind": "watchlist",
-                "ticker_count": len(wl.get("tickers") or []),
-                "updated_at": wl.get("updated_at") or wl.get("created_at"),
-            }
-            for wl in (watchlists or [])[:6]
-        ],
+        "trending_ideas": _extract_trending_ideas(scan_lite),
         "movers": _extract_movers(fmp_movers),
-        "trending_research": _extract_trending_research(scan_lite, watchlists),
+        "trending_on_x": trending_on_x,
         "fear_greed": _extract_fear_greed(fg_equity, macro_raw),
         "section_status": {
             "macro": "ok" if not isinstance(results.get("macro"), Exception) and results.get("macro") else "unavailable",
@@ -409,6 +444,7 @@ async def build_home_dashboard(
             "movers": "ok" if not isinstance(results.get("movers"), Exception) and results.get("movers") else "unavailable",
             "fear_greed": "ok" if not isinstance(results.get("fg"), Exception) and results.get("fg") else "unavailable",
             "trending": "ok" if not isinstance(results.get("trending"), Exception) and results.get("trending") else "unavailable",
+            "trending_on_x": "ok" if trending_on_x.get("available") else ("refreshing" if trending_on_x.get("refresh_in_progress") else "unavailable"),
         },
         "timing": {"total_seconds": round(time.time() - t0, 2)},
         "from_cache": False,

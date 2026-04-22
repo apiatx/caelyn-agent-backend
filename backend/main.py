@@ -2272,15 +2272,7 @@ async def social_grok_query(
 
     if is_select_consensus:
         from agent.prompts import X_SELECT_TRADER_CONSENSUS_CONTRACT
-        _X_SELECT_HANDLES = [
-            "aleabitoreddit", "KobeissiLetter", "HyperTechInvest", "crux_capital_",
-            "SJCapitalInvest", "BlackPantherCap", "Kaizen_Investor", "Venu_7_",
-            "DrJebaim", "CKCapitalxx", "TheTape_TNM", "equitydd",
-            "Speculator_io", "StonkValue", "stamatoudism", "yianisz",
-            "sunxliao", "futurist_lens", "Thomas_james_1", "DeepValueBagger",
-            "ConnorJBates_", "BussinBiotech", "BambroughKevin", "AlexfromBabylon",
-            "UncleAlpha007",
-        ]
+        from services.x_consensus_cache import X_SELECT_HANDLES as _X_SELECT_HANDLES
 
         # ── Phase 1: Parallel batched x_search (max ~8 handles per call) ──
         # Grok's allowed_x_handles supports ~10 per call; we batch into groups
