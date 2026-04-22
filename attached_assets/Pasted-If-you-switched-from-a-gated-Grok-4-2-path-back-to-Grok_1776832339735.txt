@@ -1,0 +1,86 @@
+If you switched from a gated Grok 4.2 path back to Grok 4.1 Fast Reasoning in the backend, and the frontend was untouched, but the same Social button still throws the same 402, then the most likely issue is not the frontend. It is one of these:
+
+1. Your running backend is still serving the old code.
+If the frontend calls a deployed backend URL, changing code locally in Replit does nothing until that backend is restarted or republished to the environment the frontend actually uses.
+
+2. That Social button is hitting a different backend code path than the one you edited.
+This is very common. One route/helper was changed, but the button actually calls a different prompt handler, provider wrapper, or fallback path.
+
+3. The request is using an xAI tool/model combination that still requires access on that path.
+xAI currently documents model-specific behavior and agent-tool paths separately. Their docs also show grok-4-1-fast as a valid model family and note that grok-4-1-fast does not use the reasoning_effort parameter, while newer Grok 4.20 variants have separate reasoning/tool behavior. xAI also documents x_search as a built-in tool path, separate from plain text generation.
+
+The release notes also show Grok 4.1 Fast and agent tools evolving as separate platform capabilities, which supports the idea that “switching the model name back” does not guarantee you fixed the exact failing code path if that button is still using an agent/tool route.
+
+Your own project notes support that this app uses Grok/xAI for X sentiment and analysis and expects an XAI_API_KEY in Replit, so the error is almost certainly happening inside the xAI-backed Social pipeline rather than some generic frontend bug.
+
+What I think is most likely
+
+Given your new context, my ranking is:
+
+Backend not actually running the fix
+Wrong route/helper edited
+That button still invokes xAI x_search or another tool-enabled path
+Old deployed secret/config/cached env
+Less likely: frontend issue
+What to do right now
+
+Do these in this order:
+
+A. Verify the backend route the Social button actually hits
+
+In browser devtools → Network, click the failing request and note:
+
+request URL
+response body
+which backend endpoint it calls
+
+If the button hits /api/social/..., /api/query, or some prompt router, you need to inspect that exact handler, not the model config file you think it uses.
+
+B. Add a blunt debug print in the exact backend handler
+
+Right before the xAI call, log:
+
+route name
+selected provider
+exact model string
+whether tools are attached
+whether x_search is enabled
+
+If you see the log still printing the old gated model, you edited the wrong place or didn’t deploy the running backend.
+
+C. Restart or republish the backend actually serving traffic
+
+If your frontend points at a published deployment, just editing/restarting a dev instance may not change production behavior. This is the silent killer.
+
+D. Search the backend for every Grok/xAI reference
+
+Search for:
+
+grok-4.2
+grok-4.20
+grok-4-1-fast
+grok-4-1-fast-reasoning
+x_search
+XAI_API_KEY
+api.x.ai
+SUBSCRIPTION_REQUIRED
+
+You are looking for:
+
+a hardcoded model string in a prompt handler
+a fallback model map
+a separate Social/X-search provider wrapper
+The dead-simple test
+
+Temporarily hardcode that exact Social button’s handler to use the same plain xAI path as one of your known-working Grok features:
+
+same provider wrapper
+same model string
+no tools
+no x_search
+
+If that works, the bug is not “Grok is broken.” It is that this specific Social button is going through a more premium/gated tool path.
+
+Blunt read
+
+You probably fixed a backend Grok setting, not the backend Grok setting that this button actually uses. Different pipe, same toilet.
