@@ -3251,8 +3251,8 @@ class TradingAgent:
             if not api_key:
                 print("[ALT_MODEL] No XAI_API_KEY set")
                 return ""
-            # Model selection: reasoning for solo/primary, non-reasoning for collaborator
-            grok_model = "grok-4-1-fast-non-reasoning" if is_collab_agent else "grok-4-1-fast-reasoning"
+            # Model selection: always use reasoning model
+            grok_model = "grok-4-1-fast-reasoning"
             # Try Responses API first (supports web_search + x_search tools)
             # Use httpx directly instead of OpenAI SDK — xAI's response format
             # differs slightly and the SDK's output_text property can return empty.

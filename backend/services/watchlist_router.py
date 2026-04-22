@@ -281,7 +281,7 @@ async def stock_deep_dive_endpoint(ticker: str, body: StockDeepDiveRequest):
                             "Content-Type": "application/json",
                         },
                         json={
-                            "model": "grok-4-1-fast-non-reasoning",
+                            "model": "grok-4-1-fast-reasoning",
                             "tools": [{"type": "x_search", "x_search": {}}],
                             "input": [{"role": "user", "content": prompt}],
                         },

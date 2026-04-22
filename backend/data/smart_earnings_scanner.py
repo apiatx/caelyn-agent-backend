@@ -174,7 +174,7 @@ async def _grok_batch_scan(xai_key: str, tickers: list[str]) -> list[dict]:
         "Authorization": f"Bearer {xai_key}",
     }
     payload = {
-        "model": "grok-4-1-fast-non-reasoning",
+        "model": "grok-4-1-fast-reasoning",
         "tools": [{"type": "x_search", "x_search": {}}],
         "input": [{"role": "user", "content": prompt}],
     }

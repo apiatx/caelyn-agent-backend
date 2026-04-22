@@ -32,8 +32,8 @@ class XAISentimentProvider:
 
     def __init__(self, api_key: str):
         self.api_key = api_key
-        self.model = "grok-4-1-fast-non-reasoning"  # Non-reasoning for data collection
-        self.deep_model = "grok-4-1-fast-reasoning"  # Reasoning model for deep scans (matches Grok on x.com)
+        self.model = "grok-4-1-fast-reasoning"
+        self.deep_model = "grok-4-1-fast-reasoning"
         self.headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
