@@ -28,6 +28,11 @@ from agent.model_policy import (  # Phase 3-7: centralized model registry
     MODEL_SONAR_PRO,
     MODEL_DEEPSEEK,
 )
+from agent.prompt_router import (  # Phase 8: prompt-aware routing
+    resolve_route as _route_resolve,
+    log_route as _log_route,
+    RouteDecision as _RouteDecision,
+)
 
 try:
     from langsmith import traceable
@@ -5576,6 +5581,28 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
         else:
             model = MODEL_CLAUDE_PREMIUM
             token_limit = 10000
+        # ── Phase 8: Prompt-aware routing override ───────────────────────────
+        # Classify this prompt's complexity. Downgrade model when the prompt
+        # is simpler than the static category default (e.g. a simple question
+        # in "chat" category doesn't need premium). Upgrade to premium only
+        # on explicit deep-research keywords. Routing failure is non-fatal.
+        try:
+            _rd = _route_resolve(
+                text=user_prompt or "",
+                category=category,
+                preset_intent=preset_intent or "",
+                current_model=model,
+                current_tokens=token_limit,
+                feature=f"build_prompt/{category}",
+            )
+            if _rd.model != model:
+                print(f"[ROUTE] {_rd.rationale}")
+                model = _rd.model
+                token_limit = _rd.max_tokens
+        except Exception as _re:
+            print(f"[ROUTE] Router error (non-fatal): {_re}")
+        # ── End routing override ──────────────────────────────────────────────
+
         thinking_budget = self.THINKING_BUDGETS.get(category, 0)
         use_thinking = thinking_budget > 0 and supports_extended_thinking(model)
 
@@ -5584,10 +5611,12 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
     @traceable(name="ask_claude")
     def _ask_claude(self, user_prompt: str, market_data: dict, history: list = None, is_followup: bool = False, category: str = "", chatbox_mode: bool = False, reasoning_model: str = "claude", preset_intent: str = None) -> str:
         """Send the user's question + market data to Claude with conversation history."""
+        import time as _time
         system_blocks, messages, model, token_limit, use_thinking, thinking_budget = self._build_prompt(
             user_prompt, market_data, history, is_followup, category, chatbox_mode, reasoning_model=reasoning_model, preset_intent=preset_intent
         )
 
+        _t0 = _time.monotonic()
         if use_thinking:
             effective_max_tokens = token_limit + thinking_budget
             print(f"[Agent] Sending {len(messages)} messages to Claude (model={model}, category={category}, followup={is_followup}, max_tokens={effective_max_tokens}, thinking={thinking_budget})")
@@ -5606,6 +5635,7 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
                 system=system_blocks,
                 messages=messages,
             )
+        _latency_ms = (_time.monotonic() - _t0) * 1000
 
         # Extract text content (skip thinking blocks when extended thinking is enabled)
         response_text = ""
@@ -5614,10 +5644,58 @@ FOLLOW-UP MODE: The user is continuing a conversation. You have the full convers
                 response_text = block.text
                 break
 
+        # ── Observability: emit [MODEL_POLICY] cost/latency log ──────────────
+        try:
+            _usage = getattr(response, "usage", None)
+            _mp_log(
+                task_type=category or "freeform_query",
+                provider="claude",
+                model=model,
+                feature=f"ask_claude/{category}",
+                latency_ms=_latency_ms,
+                input_tokens=getattr(_usage, "input_tokens", None),
+                output_tokens=getattr(_usage, "output_tokens", None),
+                success=bool(response_text and response_text.strip()),
+            )
+        except Exception:
+            pass
+        # ── End observability ─────────────────────────────────────────────────
+
         if response.stop_reason == "max_tokens":
             print(f"[Agent] WARNING: Response was truncated (hit max_tokens). Length: {len(response_text)}")
         if not response_text or not response_text.strip():
-            print(f"[Agent] WARNING: Claude returned empty content (stop_reason={response.stop_reason})")
+            print(f"[Agent] WARNING: Claude returned empty content (stop_reason={response.stop_reason}, model={model})")
+            # ── Escalation retry: upgrade to premium if not already there ─────
+            if model != MODEL_CLAUDE_PREMIUM:
+                try:
+                    print(f"[ROUTE] Empty-response escalation: {model} → {MODEL_CLAUDE_PREMIUM}")
+                    _esc_t0 = _time.monotonic()
+                    _esc_resp = self.client.messages.create(
+                        model=MODEL_CLAUDE_PREMIUM,
+                        max_tokens=token_limit,
+                        system=system_blocks,
+                        messages=messages,
+                    )
+                    _esc_text = next(
+                        (b.text for b in _esc_resp.content if b.type == "text"), ""
+                    )
+                    if _esc_text and _esc_text.strip():
+                        _esc_usage = getattr(_esc_resp, "usage", None)
+                        _mp_log(
+                            task_type=category or "freeform_query",
+                            provider="claude",
+                            model=MODEL_CLAUDE_PREMIUM,
+                            feature=f"ask_claude_escalated/{category}",
+                            latency_ms=(_time.monotonic() - _esc_t0) * 1000,
+                            input_tokens=getattr(_esc_usage, "input_tokens", None),
+                            output_tokens=getattr(_esc_usage, "output_tokens", None),
+                            escalation_used=True,
+                        )
+                        print(f"[ROUTE] Escalation succeeded ({len(_esc_text)} chars)")
+                        return _esc_text
+                except Exception as _esc_err:
+                    print(f"[ROUTE] Escalation failed: {_esc_err}")
+            # ── End escalation ────────────────────────────────────────────────
             return json.dumps({"display_type": "chat", "message": "The AI returned an empty response. Please try again."})
 
         if use_thinking:

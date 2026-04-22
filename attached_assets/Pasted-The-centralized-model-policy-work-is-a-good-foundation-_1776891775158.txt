@@ -1,0 +1,61 @@
+The centralized model policy work is a good foundation, but it is still mostly static task-to-model mapping. I need the next pass to implement true automatic prompt-aware routing.
+
+Goal:
+Route each AI request to the minimum viable model based on the actual request complexity/need, not just the endpoint or feature bucket.
+
+Implement the following:
+
+1. Add a lightweight routing classifier before final model selection for:
+   - freeform user queries
+   - preset prompt buttons
+   - any AI Terminal query path
+   - any dashboard AI job where the content/request shape can vary
+
+2. The classifier should label requests into a small normalized set such as:
+   - simple_lookup
+   - structured_extraction
+   - short_summary
+   - ranking_scoring
+   - standard_synthesis
+   - multi_source_synthesis
+   - deep_research
+
+3. Use that classification plus feature context to resolve:
+   - provider family
+   - mode/tier (fast / balanced / premium)
+   - exact model from model_policy
+
+4. Add escalation rules:
+   - if first-pass output fails schema validation
+   - if confidence is low
+   - if required fields are missing
+   - if source conflict is high
+   - if user explicitly asks for deep/deeper/full research
+   then retry with the next stronger tier/model
+
+5. Reduce overly static defaults:
+   - do not default all preset prompts to premium
+   - do not default all freeform queries to claude balanced
+   - route structured/ranking/scoring tasks toward cheaper fast/balanced models first
+   - reserve premium for genuinely hard synthesis only
+
+6. Preserve provider specialization:
+   - Grok for X/social sentiment
+   - Gemini for web-grounded/search-heavy tasks
+   - DeepSeek for cheap structured extraction, ranking, summaries
+   - Claude balanced for strong final synthesis
+   - premium only when classifier/escalation warrants it
+
+7. Add logs showing:
+   - feature
+   - classifier result
+   - chosen family
+   - chosen tier
+   - chosen exact model
+   - whether escalation occurred
+   - latency / tokens / cost
+
+Deliver:
+- files changed
+- final routing logic summary
+- examples of how 5 representative prompts would route under the new system
