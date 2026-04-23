@@ -58,6 +58,12 @@ OPTIONS_FLOW_DEFAULTS = {
     "max_moneyness_pct": _env_float("OPTIONS_FLOW_MAX_MONEYNESS_PCT", 0.15),
     "max_contracts_per_ticker": _env_int("OPTIONS_FLOW_MAX_CONTRACTS_PER_TICKER", 60),
     "top_contracts_per_ticker": _env_int("OPTIONS_FLOW_TOP_CONTRACTS_PER_TICKER", 5),
+    # Concurrency: how many tickers inspected in parallel within one scan.
+    # Set via OPTIONS_FLOW_INSPECT_CONCURRENCY env var (default 3).
+    # Each slot makes ~3 Tradier calls; 3 slots × 3 calls = 9 in-flight max.
+    # inter_ticker_sleep pads between tickers to respect Tradier rate limits.
+    "inspect_concurrency": _env_int("OPTIONS_FLOW_INSPECT_CONCURRENCY", 3),
+    "inspect_inter_ticker_sleep": _env_float("OPTIONS_FLOW_INTER_TICKER_SLEEP", 1.5),
 }
 
 
@@ -749,19 +755,22 @@ class OptionsFlowEngine:
         return _clip(score)
 
     async def _inspect_shortlist(self, candidates: list[dict], macro: dict, *, tab: str = "megacap") -> list[dict | None]:
-        # Semaphore(1) = fully sequential ticker processing.
-        # Each ticker makes ~3 Tradier calls; 3s pad keeps us safely under 60 req/min.
-        sem = asyncio.Semaphore(1)
+        # Bounded concurrency — configurable via inspect_concurrency default (default: 3).
+        # Each slot makes ~3 Tradier calls (1 expirations + 2 chain fetches).
+        # inter_ticker_sleep pads per-slot to respect Tradier rate limits.
+        concurrency = int(self.defaults.get("inspect_concurrency", 3))
+        sleep_s = float(self.defaults.get("inspect_inter_ticker_sleep", 1.5))
+        sem = asyncio.Semaphore(concurrency)
 
         async def _bounded(candidate: dict):
             async with sem:
                 try:
                     result = await self._inspect_one_ticker(candidate, macro, tab=tab)
-                    await asyncio.sleep(3)  # ~3 Tradier calls per ticker → 60/min cap with margin
+                    await asyncio.sleep(sleep_s)
                     return result
                 except Exception as exc:
                     print(f"[OPTIONS_FLOW] ticker inspect failed for {candidate.get('ticker')}: {exc}")
-                    await asyncio.sleep(1)  # backoff on error too
+                    await asyncio.sleep(0.5)
                     return None
 
         return await asyncio.gather(*[_bounded(c) for c in candidates])

@@ -498,17 +498,10 @@ def _rank_watchlist_rows(
 
 # ── Unusual Options Flows ──────────────────────────────────────────────────
 
-# ── Home unusual-options seeds ─────────────────────────────────────────────
-# Focused 27-ticker list: highest options open-interest + frequent unusual-flow
-# signal. Used by _fetch_unusual_options_live() for its on-demand live scan.
-_HOME_OPTIONS_SEEDS: list[str] = [
-    "NVDA", "TSLA", "META", "AAPL", "MSFT", "GOOGL", "AMZN",
-    "SPY", "QQQ", "IWM", "SMH", "SOXX", "TLT", "ARKK", "IBIT", "VXX", "UVXY",
-    "AMD", "AVGO", "NFLX", "CRM",
-    "MRVL", "CRWD", "RKLB", "ASTS", "HIMS", "IONQ",
-]
+# ── Home unusual-options cache key ─────────────────────────────────────────
+# The persistent _home_options_fast_loop() in main.py writes to this key every
+# ~90s.  _fetch_unusual_options_live() reads it; the loop owns writes.
 _HOME_OPTIONS_CACHE_KEY = "home:unusual_options:v1"
-_HOME_OPTIONS_CACHE_TTL = 300   # 5-minute TTL — refreshed on demand, not by a loop
 
 
 def _build_options_lkg_index() -> dict[str, dict]:
@@ -594,93 +587,109 @@ def _extract_unusual_options_flows(
     return out
 
 
-async def _run_home_options_scan_bg(data_service) -> None:
+def _get_options_meta(
+    fast: dict | None,
+    lkg_source: str | None = None,
+    lkg_updated_at: str | None = None,
+) -> dict:
     """
-    Background live Tradier scan for the Home unusual-options panel.
+    Build the unusual_options_meta block that accompanies every Home response.
 
-    Runs detached (asyncio.create_task) — does not block the Home response.
-    Writes result to home:unusual_options:v1 (5-min TTL).
-    No Finviz / FMP / Finnhub — Tradier-only.
+    data_state values:
+      no_data_yet          — nothing in any cache layer (very first cold start)
+      refresh_in_progress  — background loop is mid-scan, serving stale data
+      stale_but_available  — serving LKG tab data (full precompute loop)
+      live_ok              — fast cache is warm and scan found results
+      true_zero_results    — most recent scan completed but found 0 unusual flows
     """
     import time as _t
-    from data.tradier_flow_engine import TradierFlowEngine
 
-    try:
-        t0 = _t.time()
-
-        raw_quotes = await data_service.tradier.get_quotes(_HOME_OPTIONS_SEEDS)
-        quote_by_sym = {(q.get("symbol") or "").upper(): q for q in (raw_quotes or [])}
-
-        def _sort_key(sym: str) -> float:
-            q = quote_by_sym.get(sym, {})
-            chg = q.get("change_percentage") or 0
-            vol = q.get("volume") or 0
-            avg_vol = q.get("average_volume") or 1
-            return abs(chg) * 0.6 + min(vol / avg_vol / 5.0, 1.0) * 0.4
-
-        sorted_seeds = sorted(_HOME_OPTIONS_SEEDS, key=_sort_key, reverse=True)
-
-        minimal_prefilter = {
-            "candidates": [
-                {
-                    "ticker": sym,
-                    "price": (quote_by_sym.get(sym) or {}).get("last"),
-                    "source_score": 5.0,
-                    "prefilter_score": 5.0,
-                }
-                for sym in sorted_seeds
-            ],
-            "degraded_sources": [],
-            "macro": {},
+    if fast:
+        cached_at = fast.get("cached_at", _t.time())
+        age = int(_t.time() - cached_at)
+        refresh_in_progress = bool(fast.get("refresh_in_progress"))
+        tickers = fast.get("tickers") or []
+        data_state = fast.get("data_state", "live_ok")
+        if refresh_in_progress and tickers:
+            data_state = "refresh_in_progress"
+        elif refresh_in_progress and not tickers:
+            data_state = "refresh_in_progress"
+        return {
+            "source": "home_fast_cache",
+            "updated_at": fast.get("updated_at"),
+            "age_seconds": age,
+            "stale": age > 300,
+            "refresh_in_progress": refresh_in_progress,
+            "data_state": data_state,
+            "result_count": len(tickers),
+            "scan_scope": fast.get("scan_scope"),
+            "scan_elapsed_s": fast.get("scan_elapsed_s"),
         }
 
-        engine = TradierFlowEngine(data_service)
-        scan = await engine.run_live_scan(
-            seed_tickers=sorted_seeds,
-            prefilter_snapshot=minimal_prefilter,
-            tab="megacap",
-        )
-
-        tickers = scan.get("tickers") or []
-        payload = {
-            "tickers": tickers,
-            "data_source": "tradier",
-            "cached_at": _t.time(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+    if lkg_source:
+        return {
+            "source": lkg_source,
+            "updated_at": lkg_updated_at,
+            "age_seconds": None,
+            "stale": True,
+            "refresh_in_progress": False,
+            "data_state": "stale_but_available",
+            "result_count": None,
         }
-        cache.set(_HOME_OPTIONS_CACHE_KEY, payload, _HOME_OPTIONS_CACHE_TTL)
-        print(f"[HOME_OPTIONS] Background scan done: {len(tickers)} tickers in {_t.time() - t0:.1f}s (cached 5 min)")
 
-    except Exception as exc:
-        print(f"[HOME_OPTIONS] Background scan error (non-fatal): {exc}")
+    return {
+        "source": "none",
+        "updated_at": None,
+        "age_seconds": None,
+        "stale": True,
+        "refresh_in_progress": False,
+        "data_state": "no_data_yet",
+        "result_count": 0,
+    }
 
 
-async def _fetch_unusual_options_live(data_service, limit: int = 8) -> list[dict]:
+async def _fetch_unusual_options_live(
+    data_service, limit: int = 8
+) -> tuple[list[dict], dict]:
     """
-    Return unusual-options-flow rows for the Home panel. Never blocks the response.
+    Return (flows_list, meta_dict) for the Home unusual-options panel.
 
-    Priority:
-      1. home:unusual_options:v1 cache (5-min TTL)  → instant
-      2. LKG tabs (options_screener_lkg_v1:{tab})   → instant (populated by precompute loop)
-      3. Cold path: fire background scan and return [] immediately.
-         The frontend polls every 30s when options are empty so data arrives within
-         one polling cycle (~30-60s after the background scan completes).
+    NEVER returns an empty list unless data_state is 'no_data_yet' or
+    'true_zero_results' (i.e. a completed scan genuinely found nothing).
 
-    Result is cached after scan so subsequent requests within 5 min are instant.
-    No Finviz / FMP / Finnhub — Tradier-only.
+    Priority order (all in-memory reads — zero blocking):
+      1. home:unusual_options:v1  — written by _home_options_fast_loop() every 90s.
+         Always served if tickers exist, even during an active refresh cycle.
+      2. options_screener_lkg_v1:{tab}  — Full Options Flow LKG (4-hr TTL).
+         Used when fast cache has no tickers yet (very first startup window).
+      3. Cold (no_data_yet) — background loop will populate within ~20s on startup.
+
+    The loop in main.py handles all writes; this function is read-only.
+    No Tradier calls. No AI API. No background tasks fired from here.
     """
     # ── 1. Fast cache ────────────────────────────────────────────────────────
     fast = cache.get(_HOME_OPTIONS_CACHE_KEY)
     if fast:
-        idx: dict[str, dict] = {}
-        for ticker in (fast.get("tickers") or []):
-            sym = (ticker.get("ticker") or "").upper()
-            if sym:
-                idx[sym] = {**ticker, "source_tab": "home_fast_cache"}
-        return _extract_unusual_options_flows(idx, limit=limit, updated_at=fast.get("updated_at"))
+        tickers_raw = fast.get("tickers") or []
+        # Serve whatever is in the cache — even if refresh is in progress.
+        # This is the stale-while-revalidate core behaviour.
+        if tickers_raw:
+            idx: dict[str, dict] = {
+                (t.get("ticker") or "").upper(): {**t, "source_tab": "home_fast_cache"}
+                for t in tickers_raw
+                if t.get("ticker")
+            }
+            meta = _get_options_meta(fast)
+            flows = _extract_unusual_options_flows(idx, limit=limit, updated_at=fast.get("updated_at"))
+            return flows, meta
+
+        # fast cache exists but has 0 tickers (e.g. loop running, prior cycle
+        # found true_zero_results) — fall through to LKG for best-effort data.
 
     # ── 2. LKG tab fallback ──────────────────────────────────────────────────
     lkg_index: dict[str, dict] = {}
+    lkg_updated_at: str | None = None
+    lkg_source: str | None = None
     for tab in ["megacap", "large_cap", "small_cap", "etf"]:
         lkg = cache.get(f"options_screener_lkg_v1:{tab}")
         if not lkg:
@@ -689,14 +698,29 @@ async def _fetch_unusual_options_live(data_service, limit: int = 8) -> list[dict
             sym = (ticker.get("ticker") or "").upper()
             if sym and sym not in lkg_index:
                 lkg_index[sym] = {**ticker, "source_tab": tab}
-    if lkg_index:
-        return _extract_unusual_options_flows(lkg_index, limit=limit)
+        if not lkg_source:
+            lkg_source = f"lkg:{tab}"
+            lkg_updated_at = lkg.get("updated_at") or lkg.get("cached_at")
+            if isinstance(lkg_updated_at, (int, float)):
+                from datetime import datetime as _dt2, timezone as _tz2
+                lkg_updated_at = _dt2.fromtimestamp(lkg_updated_at, tz=_tz2.utc).isoformat()
 
-    # ── 3. Cold path — kick background scan, return [] immediately ───────────
-    if data_service and getattr(data_service, "tradier", None):
-        asyncio.create_task(_run_home_options_scan_bg(data_service))
-        print("[HOME_OPTIONS] Cache cold — background scan started (frontend retries in ~30s)")
-    return []
+    if lkg_index:
+        meta = _get_options_meta(fast, lkg_source=lkg_source, lkg_updated_at=lkg_updated_at)
+        # If fast cache is in refresh_in_progress, reflect that in meta
+        if fast and fast.get("refresh_in_progress"):
+            meta["refresh_in_progress"] = True
+            meta["data_state"] = "refresh_in_progress"
+        flows = _extract_unusual_options_flows(lkg_index, limit=limit)
+        return flows, meta
+
+    # ── 3. Truly cold — no data anywhere yet ────────────────────────────────
+    # The fast loop in main.py will populate within ~20s on startup.
+    meta = _get_options_meta(fast)   # fast may be None or empty
+    if fast and fast.get("refresh_in_progress"):
+        meta["data_state"] = "refresh_in_progress"
+    print("[HOME_OPTIONS] Cache cold (no_data_yet) — fast loop will populate shortly")
+    return [], meta
 
 
 # ── Batch-quote helper ─────────────────────────────────────────────────────
@@ -1040,10 +1064,9 @@ async def build_home_dashboard(
         _fetch_portfolio_snapshot(data_service, options_index)
     )
 
-    # ── Unusual options flows — live Tradier pull, on-demand cached 5 min ──
-    # Runs as a parallel task: instant if cache warm, ~5-15s on cold start.
-    # No background precompute loop required. Falls back through: fast cache
-    # → LKG tabs → live Tradier scan. Always returns data, never "pending".
+    # ── Unusual options flows — served from fast-loop cache (pure read) ─
+    # _home_options_fast_loop() in main.py refreshes every ~90s.
+    # This call is instant (no Tradier calls). Returns (flows, meta).
     tasks["unusual_options"] = asyncio.create_task(
         _fetch_unusual_options_live(data_service)
     )
@@ -1114,7 +1137,14 @@ async def build_home_dashboard(
     except Exception as exc:
         print(f"[HOME] Trending on X snapshot failed soft: {exc}")
 
-    unusual_options_flows = _safe(results.get("unusual_options"), []) or []
+    # Unpack (flows, meta) tuple from _fetch_unusual_options_live
+    _uof_result = _safe(results.get("unusual_options"), ([], {}))
+    if isinstance(_uof_result, tuple) and len(_uof_result) == 2:
+        unusual_options_flows, unusual_options_meta = _uof_result
+    else:
+        unusual_options_flows = _uof_result if isinstance(_uof_result, list) else []
+        unusual_options_meta = {"data_state": "no_data_yet", "source": "none"}
+    unusual_options_flows = unusual_options_flows or []
 
     # ── Sub-theme performance — uses already-fetched watchlist quotes ──
     # Pass watchlist quotes so the sub-theme engine reuses them (no extra
@@ -1153,6 +1183,7 @@ async def build_home_dashboard(
         "fear_greed": _extract_fear_greed(fg_equity, macro_raw),
         "latest_news": latest_news,
         "unusual_options_flows": unusual_options_flows,
+        "unusual_options_meta": unusual_options_meta,
         "watchlist_snapshot": watchlist_snapshot,
         "portfolio_snapshot": portfolio_snapshot,
         "section_status": {
@@ -1163,7 +1194,11 @@ async def build_home_dashboard(
             "trending": "ok" if not isinstance(results.get("trending"), Exception) and results.get("trending") else "unavailable",
             "trending_on_x": "ok" if trending_on_x.get("available") else ("refreshing" if trending_on_x.get("refresh_in_progress") else "unavailable"),
             "latest_news": "ok" if latest_news else "unavailable",
-            "unusual_options_flows": "ok" if unusual_options_flows else "unavailable",
+            "unusual_options_flows": (
+                unusual_options_meta.get("data_state", "no_data_yet")
+                if isinstance(unusual_options_meta, dict)
+                else ("ok" if unusual_options_flows else "no_data_yet")
+            ),
             "watchlist_snapshot": "ok" if watchlist_snapshot else "unavailable",
             "highlighted_companies": "ok" if highlighted_companies else "unavailable",
             "portfolio_snapshot": "ok" if portfolio_snapshot else "unavailable",

@@ -189,6 +189,7 @@ async def lifespan(app):
     asyncio.create_task(_briefing_precompute_loop())
     asyncio.create_task(_smart_earnings_loop())
     asyncio.create_task(_edgar_cache_loop())
+    asyncio.create_task(_home_options_fast_loop())
     asyncio.create_task(_options_precompute_loop())
     # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
     asyncio.create_task(_polygon_options_ingestion_loop())
@@ -5041,6 +5042,158 @@ def _options_lkg_cache_key(tab: str) -> str:
     return f"options_screener_lkg_v1:{tab}"
 
 
+_HOME_OPTIONS_FAST_SEEDS: list[str] = [
+    # Highest options volume / most-unusual-flow candidates for the Home panel.
+    # Intentionally compact — scan completes in ~15-20s with Semaphore(3).
+    "NVDA", "TSLA", "META", "AAPL", "MSFT", "GOOGL", "AMZN",
+    "SPY", "QQQ", "IWM", "SMH", "TLT", "IBIT", "UVXY",
+    "AMD", "AVGO", "NFLX", "CRM",
+    "MRVL", "CRWD", "RKLB", "ASTS", "HIMS", "IONQ",
+]
+_HOME_OPTIONS_FAST_CACHE_KEY = "home:unusual_options:v1"
+_HOME_OPTIONS_FAST_CACHE_TTL = 300      # 5-min soft TTL; loop refreshes every ~90s
+_HOME_OPTIONS_FAST_TOP_N = 10           # only scan top movers, not all seeds
+_HOME_OPTIONS_FAST_LOOP_INTERVAL = 90   # seconds between scan cycles
+_HOME_OPTIONS_FAST_LOCK = asyncio.Lock()  # prevent concurrent home scans
+
+
+async def _home_options_fast_loop():
+    """
+    Persistent background loop that keeps the Home 'Unusual Options Flows'
+    section always populated with a fresh Tradier snapshot.
+
+    Architecture:
+      - Starts immediately on app startup (no initial delay).
+      - Batch-quotes all seeds → picks top-N movers by volume/movement.
+      - Scans top-N tickers with Semaphore(3) + 1.5s sleep → ~15-20s per cycle.
+      - Stores result to home:unusual_options:v1 with metadata:
+          updated_at, refresh_in_progress, data_state, stale, result_count
+      - Sets refresh_in_progress=True BEFORE scan; clears it after.
+      - On error: preserves previous snapshot, clears refresh_in_progress.
+      - No Finviz / FMP / Finnhub — Tradier-only minimal prefilter.
+      - No AI API calls.
+    """
+    import time as _t
+    import traceback as _tb
+    from datetime import datetime as _dtloop, timezone as _tzloop
+    from data.tradier_flow_engine import TradierFlowEngine
+    from data.cache import cache
+
+    # Wait for data_service to be initialized (mirrors _options_precompute_loop pattern)
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _init_event.wait, 30)
+
+    if data_service is None or not getattr(data_service, "tradier", None):
+        print("[HOME_OPTIONS_LOOP] Tradier not available, skipping loop")
+        return
+
+    def _to_float(v) -> float | None:
+        try:
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+
+    print("[HOME_OPTIONS_LOOP] Starting persistent Home options fast loop")
+
+    while True:
+        async with _HOME_OPTIONS_FAST_LOCK:
+            try:
+                t0 = _t.time()
+
+                # Mark refresh in progress so any concurrent reader knows
+                existing = cache.get(_HOME_OPTIONS_FAST_CACHE_KEY) or {}
+                cache.set(
+                    _HOME_OPTIONS_FAST_CACHE_KEY,
+                    {**existing, "refresh_in_progress": True},
+                    _HOME_OPTIONS_FAST_CACHE_TTL,
+                )
+
+                # Batch-quote all seeds to rank by current activity
+                raw_quotes = await data_service.tradier.get_quotes(_HOME_OPTIONS_FAST_SEEDS)
+                quote_map: dict = {
+                    (q.get("symbol") or "").upper(): q
+                    for q in (raw_quotes or [])
+                }
+
+                def _activity_score(sym: str) -> float:
+                    q = quote_map.get(sym, {})
+                    chg = abs(q.get("change_percentage") or 0)
+                    vol = q.get("volume") or 0
+                    avg = q.get("average_volume") or 1
+                    return chg * 0.6 + min(vol / avg / 5.0, 1.0) * 0.4
+
+                top_seeds = sorted(
+                    _HOME_OPTIONS_FAST_SEEDS, key=_activity_score, reverse=True
+                )[:_HOME_OPTIONS_FAST_TOP_N]
+
+                minimal_prefilter = {
+                    "candidates": [
+                        {
+                            "ticker": sym,
+                            "price": _to_float((quote_map.get(sym) or {}).get("last")),
+                            "source_score": 5.0,
+                            "prefilter_score": 5.0,
+                        }
+                        for sym in top_seeds
+                    ],
+                    "degraded_sources": [],
+                    "macro": {},
+                }
+
+                # Semaphore(3) + 1.5s sleep — ~3× faster than the old Sem(1)+3s
+                engine = TradierFlowEngine(
+                    data_service,
+                    overrides={
+                        "inspect_concurrency": 3,
+                        "inspect_inter_ticker_sleep": 1.5,
+                    },
+                )
+                scan = await engine.run_live_scan(
+                    seed_tickers=top_seeds,
+                    prefilter_snapshot=minimal_prefilter,
+                    tab="megacap",
+                )
+
+                tickers = scan.get("tickers") or []
+                elapsed = _t.time() - t0
+
+                data_state = "live_ok" if tickers else "true_zero_results"
+                now_iso = _dtloop.now(_tzloop.utc).isoformat()
+
+                payload = {
+                    "tickers": tickers,
+                    "data_source": "tradier",
+                    "cached_at": _t.time(),
+                    "updated_at": now_iso,
+                    "refresh_in_progress": False,
+                    "data_state": data_state,
+                    "result_count": len(tickers),
+                    "stale": False,
+                    "scan_scope": f"top_{_HOME_OPTIONS_FAST_TOP_N}_movers",
+                    "scan_elapsed_s": round(elapsed, 1),
+                }
+                cache.set(_HOME_OPTIONS_FAST_CACHE_KEY, payload, _HOME_OPTIONS_FAST_CACHE_TTL)
+                print(
+                    f"[HOME_OPTIONS_LOOP] Cycle done: {len(tickers)} tickers in {elapsed:.1f}s "
+                    f"(top {_HOME_OPTIONS_FAST_TOP_N} of {len(_HOME_OPTIONS_FAST_SEEDS)} seeds). "
+                    f"Next in {_HOME_OPTIONS_FAST_LOOP_INTERVAL}s."
+                )
+
+            except Exception as exc:
+                _tb.print_exc()
+                print(f"[HOME_OPTIONS_LOOP] Error (non-fatal): {exc}")
+                # Clear refresh_in_progress flag so callers don't wait forever
+                existing = cache.get(_HOME_OPTIONS_FAST_CACHE_KEY) or {}
+                if existing.get("refresh_in_progress"):
+                    cache.set(
+                        _HOME_OPTIONS_FAST_CACHE_KEY,
+                        {**existing, "refresh_in_progress": False},
+                        _HOME_OPTIONS_FAST_CACHE_TTL,
+                    )
+
+        await asyncio.sleep(_HOME_OPTIONS_FAST_LOOP_INTERVAL)
+
+
 async def _options_precompute_loop():
     """
     Background screener loop for the Options Flow dashboard (Tradier-backed).
@@ -5179,7 +5332,8 @@ async def options_dashboard(
     cached = cache.get(cache_key)
     if cached:
         age = int(_time.time() - cached.get("cached_at", _time.time()))
-        print(f"[OPTIONS_DASH] [{tab}] Cache hit (age={age}s, {len(cached.get('tickers', []))} tickers, {len(cached.get('all_contracts', []))} contracts)")
+        n_tickers = len(cached.get("tickers", []))
+        print(f"[OPTIONS_DASH] [{tab}] Cache hit (age={age}s, {n_tickers} tickers, {len(cached.get('all_contracts', []))} contracts)")
         return {
             "response": cached,
             "structured": True,
@@ -5187,8 +5341,11 @@ async def options_dashboard(
             "tab": tab,
             "available_tabs": sorted(_OPTIONS_VALID_TABS),
             "from_cache": True,
+            "stale": False,
             "cache_age_seconds": age,
             "next_refresh_in_seconds": max(0, _OPTIONS_CACHE_TTL - age),
+            "data_state": "live_ok" if n_tickers else "true_zero_results",
+            "result_count": n_tickers,
         }
 
     # ── Stale-while-revalidate: serve last-known-good immediately, refresh in background ─
@@ -5231,7 +5388,8 @@ async def options_dashboard(
     if lkg:
         # Serve stale data immediately, kick off a background refresh so next visit is hot
         lkg_age = int(_time.time() - lkg.get("cached_at", _time.time()))
-        print(f"[OPTIONS_DASH] [{tab}] Cache cold — serving LKG (age={lkg_age}s), refreshing in background")
+        n_lkg = len(lkg.get("tickers", []))
+        print(f"[OPTIONS_DASH] [{tab}] Cache cold — serving LKG (age={lkg_age}s, {n_lkg} tickers), refreshing in background")
         asyncio.create_task(_full_scan_and_cache())
         return {
             "response": lkg,
@@ -5243,6 +5401,9 @@ async def options_dashboard(
             "stale": True,
             "cache_age_seconds": lkg_age,
             "next_refresh_in_seconds": 240,
+            "data_state": "stale_but_available" if n_lkg else "refresh_in_progress",
+            "result_count": n_lkg,
+            "refresh_in_progress": True,
         }
 
     # No LKG at all (first run after deploy) — do a blocking scan with timeout
@@ -5285,6 +5446,7 @@ async def options_dashboard(
         cache.set(lkg_key, result, _OPTIONS_LKG_CACHE_TTL)
         print(f"[OPTIONS_DASH] [{tab}] First live scan completed in {elapsed:.1f}s — {len(screener_data.get('tickers', []))} tickers")
 
+        n_scan = len(screener_data.get("tickers", []))
         return {
             "response": result,
             "structured": True,
@@ -5292,6 +5454,9 @@ async def options_dashboard(
             "tab": tab,
             "available_tabs": sorted(_OPTIONS_VALID_TABS),
             "from_cache": False,
+            "stale": False,
+            "data_state": "live_ok" if n_scan else "true_zero_results",
+            "result_count": n_scan,
             "next_refresh_in_seconds": _OPTIONS_CACHE_TTL,
             "timing": {"total_seconds": round(elapsed, 1)},
         }
@@ -5316,7 +5481,7 @@ async def options_dashboard(
                 "ranked_result_count": 0,
                 "degraded_sources": [f"timeout:scan_exceeded_{int(elapsed)}s"],
             },
-            "market_summary": {"error": "Scan timed out. Data will appear after the background precompute cycle completes (~30s after server start)."},
+            "market_summary": {"error": "Scan timed out. Background precompute loop will populate data shortly."},
         }
         return {
             "response": result,
@@ -5325,6 +5490,10 @@ async def options_dashboard(
             "tab": tab,
             "available_tabs": sorted(_OPTIONS_VALID_TABS),
             "from_cache": False,
+            "stale": False,
+            "data_state": "no_data_yet",
+            "result_count": 0,
+            "refresh_in_progress": True,
             "next_refresh_in_seconds": _OPTIONS_CACHE_TTL,
             "timing": {"total_seconds": round(elapsed, 1), "timed_out": True},
         }
