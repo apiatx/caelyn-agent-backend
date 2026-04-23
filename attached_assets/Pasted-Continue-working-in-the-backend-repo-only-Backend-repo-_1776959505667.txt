@@ -1,0 +1,132 @@
+Continue working in the backend repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+This is a focused cleanup pass. Do not broaden scope.
+
+PRIMARY GOALS
+
+1. Consolidate the duplicate watchlist logic
+   Right now `highlighted_companies` and `watchlist_snapshot` are too duplicative.
+   The unique value from Highlighted Companies appears to just be the signal annotations like:
+
+* vol spike
+* momentum
+* hot
+* trending up
+  etc.
+
+I want the Home page to stop wasting a whole separate section on that duplicate data.
+
+Backend goal:
+
+* keep `watchlist_snapshot` as the main watchlist section
+* fold the useful signal-label logic from `highlighted_companies` into the watchlist snapshot rows
+* make sure `watchlist_snapshot` rows include the same useful signal/context labels that were previously only visible in Highlighted Companies
+
+Desired watchlist row shape should include:
+
+* symbol
+* current_price
+* change_1d_pct
+* volume_increase / volume_vs_avg
+* options_signal
+* signal_label or signal_labels
+* any other lightweight ranking/context already used for Highlighted Companies
+
+You do NOT necessarily need to delete `highlighted_companies` from the payload yet if frontend wants backward compatibility, but the backend should make `watchlist_snapshot` the clearly richer source of truth.
+
+2. Audit Trending on X and Trending on Stocktwits counts
+   It looks like both sections are now showing fewer tickers than before.
+   I need to know whether the backend is truncating them or whether frontend is capping them.
+
+Audit exactly:
+
+* current backend count returned for `trending_on_x.top_tickers`
+* current backend count returned for `trending_ideas` (Stocktwits)
+* whether any backend limit/slice/truncation was recently introduced
+* whether payload is still returning the full intended set
+
+If backend is truncating either one unnecessarily, remove the truncation and return the full intended set for Home.
+
+3. Preserve full X rationale text
+   For Trending on X, make sure the backend still returns the full rationale / blurb text for each ticker, not a shortened/truncated version.
+   The Home card can truncate visually if needed, but when the user clicks a ticker and opens the popup chart/modal, that blurb should be available in full.
+
+AUDIT FIRST
+Inspect and report before changing:
+
+* exact difference between `highlighted_companies` and `watchlist_snapshot` today
+* whether `watchlist_snapshot` already has enough fields to absorb Highlighted Companies’ signal value
+* exact backend counts currently returned for:
+
+  * `trending_on_x.top_tickers`
+  * `trending_ideas`
+* whether `trending_on_x` rationale text is full-length or truncated in backend
+
+IMPLEMENT
+A. Watchlist consolidation support
+
+* enrich `watchlist_snapshot` rows with the useful signal labels/context currently driving Highlighted Companies
+* preserve ranking quality
+* avoid new provider calls
+* reuse existing watchlist scoring/signal logic
+
+B. Trending counts
+
+* if backend is limiting the number of X or Stocktwits items for Home, remove or relax that limit so Home gets the full intended list
+* do not introduce new fetches/providers
+* just stop needless truncation if it exists
+
+C. X rationale text
+
+* ensure full rationale text is preserved in payload
+* do not shorten it server-side unless there is a very explicit need
+* if both short and full versions are helpful, return both cleanly
+
+IMPORTANT
+
+* Do not add new endpoints
+* Do not add new providers
+* Do not turn this into a refactor spree
+* Keep Home aggregator architecture intact
+* Keep API usage disciplined
+
+VERIFY
+Before finishing, report real payload samples for:
+
+* `watchlist_snapshot[0]` showing new signal label field(s)
+* `trending_on_x.top_tickers.length`
+* `trending_ideas.length`
+* one `trending_on_x.top_tickers[0].rationale` sample proving full text is preserved
+
+DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact previous difference between Highlighted Companies and Watchlist Snapshot
+3. what signal/context fields were folded into Watchlist Snapshot
+4. exact backend counts returned now for:
+
+   * trending_on_x.top_tickers
+   * trending_ideas
+5. whether backend truncation was found and fixed
+6. whether full X rationale text is now preserved
+7. whether `highlighted_companies` remains in payload for backward compatibility or is now deprecated
+8. confirmation changes were committed and pushed directly to `main`
+
+EXECUTION STYLE
+
+* Audit first
+* Consolidate intelligently
+* Remove unnecessary truncation
+* Keep payload useful and clean
+* Then commit and push directly to `main`
