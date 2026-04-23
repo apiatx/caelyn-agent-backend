@@ -1,0 +1,102 @@
+I need a final end-to-end smoke test for AI Terminal model/collaboration semantics. Do NOT refactor architecture. Do NOT change behavior unless you find a real mismatch. This is a verification pass first, tiny fix second only if needed.
+
+Goal:
+Verify that frontend payloads and backend interpretation now match correctly for all 5 important AI Terminal modes:
+1. Solo top-row model selection
+2. Default preset
+3. Auto preset
+4. Full Collaboration
+5. Custom Collaboration
+
+Critical product semantics that must be true:
+- Top row = SOLO mode
+- Default preset = fixed Claude + Grok + Gemini collaboration
+- Auto preset = true dynamic router-driven collaboration
+- Full Collaboration = fixed full team
+- Custom Collaboration = exact explicit user-selected team
+- Only Auto should allow provider-family auto-routing
+- Default / Full / Custom / Solo should block provider-family auto-routing
+- Backend may still optimize exact model tier within a chosen family
+
+What I want you to do:
+
+PHASE 1 — Inspect actual frontend payloads
+1. Read the current frontend AI Terminal payload builder and confirm the exact request shape being sent for each of these 5 cases:
+   - Solo Grok from top row
+   - Default preset
+   - Auto preset
+   - Full Collaboration
+   - Custom Collaboration with a non-default mix (example: reasoning model = Gemini, collaborators = Grok + DeepSeek)
+2. For each case, report the exact payload fields and values being sent.
+3. Specifically verify whether frontend sends:
+   - reasoning_model
+   - collab_agents
+   - collaboration_mode
+   - collab_preset
+   - primary_model
+   - preset_intent
+4. Confirm whether the frontend is sending the exact field name the backend now reads for preset semantics.
+   Important: backend now expects collab_preset as the explicit preset discriminator.
+   If frontend only sends collaboration_mode and not collab_preset, identify that clearly.
+
+PHASE 2 — Inspect backend interpretation
+5. Read the current backend request schema, normalization, and mode detection for AI Terminal.
+6. Confirm exactly how backend interprets each of the 5 payloads above.
+7. Verify that only Auto allows family auto-routing.
+8. Verify that Solo / Default / Full / Custom all block family auto-routing.
+9. Verify that Default specifically resolves to fixed families:
+   - primary/reasoning = Claude
+   - collaborators = Grok + Gemini
+
+PHASE 3 — Do a real end-to-end smoke test
+10. Use the running app / dev tools / network inspection / local request simulation / test client (whatever is most reliable in this repo) to verify each of the 5 cases end-to-end.
+11. For each case, capture:
+   - frontend payload sent
+   - backend normalized mode
+   - backend log interpretation
+   - whether auto-routing was ALLOWED or BLOCKED
+12. If subscription/auth gating prevents reaching the relevant log lines, use the most direct safe local test path available in the codebase to exercise the request handling without breaking auth logic.
+
+PHASE 4 — Fix only if there is a mismatch
+13. If frontend and backend already align, do not change code.
+14. If there is a mismatch, make the smallest surgical fix only.
+15. Most likely mismatch to check:
+   - frontend sends collaboration_mode but backend reads collab_preset
+   - frontend still sends a stale preset identifier in one path
+   - follow-up requests omit collab_preset
+16. If you make a fix:
+   - keep styling/UI unchanged
+   - do not redesign anything
+   - do not alter stable preset semantics
+   - do not weaken Auto routing
+
+PHASE 5 — Deliverables
+17. Provide a final verification table with these columns:
+   - Scenario
+   - Frontend payload
+   - Backend interpreted mode
+   - Auto-routing allowed?
+   - Correct? yes/no
+18. Include the 5 rows:
+   - Solo Grok
+   - Default preset
+   - Auto preset
+   - Full Collaboration
+   - Custom Collaboration
+19. Also provide:
+   - files changed, if any
+   - exact mismatch found, if any
+   - exact tiny fix made, if any
+   - confirmation whether frontend must send collab_preset explicitly
+20. Run relevant tests/build checks after any change and confirm the app still runs cleanly.
+
+Constraints:
+- verification first, edits second
+- no broad refactor
+- no architecture changes
+- no UI redesign
+- work directly on main
+- commit and push directly to main only if a real fix was needed
+
+Success criteria:
+At the end of this pass, we have proof that all 5 AI Terminal modes send the correct payload and are interpreted correctly by backend, with Default and Auto clearly distinct and only Auto allowing dynamic family routing.
