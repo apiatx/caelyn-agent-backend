@@ -121,7 +121,7 @@ def _normalize_consensus(raw_result: Any) -> dict:
 
     picks = raw_result.get("consensus_picks") or []
     top_tickers: list[dict] = []
-    for p in picks[:12]:
+    for p in picks[:20]:
         if not isinstance(p, dict):
             continue
         symbol = p.get("ticker") or p.get("symbol") or p.get("asset")

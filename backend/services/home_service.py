@@ -326,7 +326,7 @@ def _extract_theme_performance(sector_dashboard) -> dict:
 def _extract_trending_ideas(scan: dict) -> list[dict]:
     out: list[dict] = []
     trending = (scan or {}).get("stocktwits_trending") or []
-    for t in trending[:8]:
+    for t in trending:
         if not isinstance(t, dict):
             continue
         ticker = (t.get("ticker") or t.get("symbol") or "").upper()
@@ -606,6 +606,7 @@ def _snapshot_row(
     quote: dict,
     options_index: dict[str, dict],
     asset_type: str | None = None,
+    csv_row: dict | None = None,
 ) -> dict:
     last = quote.get("last")
     chg_pct = quote.get("change_percentage")
@@ -613,12 +614,27 @@ def _snapshot_row(
     avg_vol = quote.get("average_volume")
     vol_ratio = round(vol / avg_vol, 2) if vol and avg_vol and avg_vol > 0 else None
     opts = options_index.get(symbol.upper(), {})
+
+    # RSI and relative volume from watchlist csv_data (optional — watchlist rows only)
+    rsi: float | None = None
+    signal_label: str | None = None
+    if csv_row:
+        rsi = _parse_float(
+            csv_row.get("Relative Strength Index (RSI)") or csv_row.get("RSI")
+        )
+        rel_vol_csv = _parse_pct(csv_row.get("Relative Volume"))
+        rel_vol_x = (rel_vol_csv / 100.0) if rel_vol_csv is not None else None
+        effective_rel_vol = vol_ratio if vol_ratio is not None else rel_vol_x
+        signal_label = _signal_label(chg_pct, rsi, effective_rel_vol, opts.get("primary_signal")) or None
+
     row = {
         "symbol": symbol.upper(),
         "current_price": last,
         "change_1d_pct": chg_pct,
         "volume_vs_avg": vol_ratio,
         "options_signal": opts.get("primary_signal"),
+        "rsi": round(rsi, 1) if rsi is not None else None,
+        "signal_label": signal_label,
     }
     if asset_type is not None:
         row["asset_type"] = asset_type
@@ -652,7 +668,12 @@ async def _fetch_watchlist_data(
     quote_by_sym = await _batch_quotes(tickers, data_service)
 
     snapshot = [
-        _snapshot_row(t, quote_by_sym.get(t.upper(), {}), options_index)
+        _snapshot_row(
+            t,
+            quote_by_sym.get(t.upper(), {}),
+            options_index,
+            csv_row=csv_index.get(t.upper()),
+        )
         for t in tickers
     ]
 
