@@ -417,3 +417,52 @@ def build_top_stocks_list(
                 return result
 
     return result
+
+
+def build_ranked_top_stocks(
+    groups: list[SectorStockGroup],
+    limit: int = 15,
+) -> list["SectorStock"]:
+    """
+    Build a flat, live-signal-ranked list of SectorStock objects from one or
+    more sector groups.  This is the canonical stock list for the Sectors page
+    and is computed independently of agent analysis.
+
+    Ranking rules:
+      momentum_leaders   — sorted by change_1d_pct descending (live momentum);
+                           stocks with no price data fall to the end of the group.
+      bottleneck_enablers — kept in curated structural order (supply-chain
+                           criticality is not a daily-price signal).
+      anchor_giants       — kept in curated order (market-cap proxy already baked in).
+
+    Groups from higher-ranked winning sectors appear before lower-ranked ones.
+    Deduplicates by ticker across all groups.
+    """
+    seen: set[str] = set()
+    result: list[SectorStock] = []
+
+    def _add(stock: SectorStock) -> None:
+        if stock.ticker in seen or len(result) >= limit:
+            return
+        seen.add(stock.ticker)
+        result.append(stock)
+
+    for group in groups:
+        # momentum: rank by 1-day change descending; None prices go last
+        ranked_momentum = sorted(
+            group.momentum_leaders,
+            key=lambda s: (s.change_1d_pct is not None, s.change_1d_pct or 0.0),
+            reverse=True,
+        )
+        for s in ranked_momentum:
+            _add(s)
+
+        # bottleneck: curated structural order preserved
+        for s in group.bottleneck_enablers:
+            _add(s)
+
+        # anchor: curated order preserved (market-cap-weighted curation)
+        for s in group.anchor_giants:
+            _add(s)
+
+    return result

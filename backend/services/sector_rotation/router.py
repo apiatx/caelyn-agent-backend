@@ -209,22 +209,27 @@ async def sectors_generate_analysis_endpoint(
                 content={"status": "error", "detail": "AI analysis generation failed — check server logs"},
             )
 
-        # Always inject structured stock objects into top_stocks_to_watch so the
-        # frontend panel has renderable rows immediately after generation.
-        from services.sector_rotation.sector_stocks import get_sector_stocks, build_top_stocks_list
+        # Compute the canonical stock list using the same path as page-data —
+        # both endpoints share the same live-signal-ranked source of truth.
+        from services.sector_rotation.sector_stocks import (
+            get_sector_stocks, build_ranked_top_stocks,
+        )
         from services.sector_rotation.gemini_analysis import _save_disk_cache
-        etfs_for_stocks = winning_etfs[:2]  # top 1-2 winning sectors
+        etfs_for_stocks = winning_etfs[:2]
         stock_groups = await get_sector_stocks(etfs_for_stocks)
-        structured_stocks = build_top_stocks_list(stock_groups, limit=10)
-        analysis = analysis.model_copy(update={"top_stocks_to_watch": structured_stocks})
-        # Re-persist with structured stocks so future page loads also have them
+        top_stocks_ranked = build_ranked_top_stocks(stock_groups, limit=15)
+        structured_dicts = [s.model_dump() for s in top_stocks_ranked]
+
+        # Inject into analysis object and re-persist so future page-loads have it
+        analysis = analysis.model_copy(update={"top_stocks_to_watch": structured_dicts})
         _save_disk_cache(analysis.model_dump())
 
         return {
             "status": "ok",
             "generated_at": analysis.generated_at,
             "winning_sector_etfs": winning_etfs,
-            "top_stocks_to_watch": structured_stocks,
+            # top-level convenience field mirrors page-data contract
+            "top_stocks_in_winning_sectors": [s.model_dump() for s in top_stocks_ranked],
             "analysis": analysis.model_dump(),
         }
     except Exception as e:

@@ -264,29 +264,32 @@ async def get_sectors_page_data(
     winners = get_winning_sectors(dashboard.sectors, top_n=top_sectors_for_stocks + 1)
     top_etf = winners[0].etf if winners else None
 
-    # 3. Stock scan for top sectors
+    # 3. Stock scan for top sectors — always computed, independent of analysis
     sector_stock_groups = []
+    top_stocks_ranked: list = []
     if include_stocks and winners:
-        from services.sector_rotation.sector_stocks import get_sector_stocks
+        from services.sector_rotation.sector_stocks import (
+            get_sector_stocks, build_ranked_top_stocks, build_top_stocks_list,
+        )
         etfs_to_scan = [w.etf for w in winners[:top_sectors_for_stocks]]
         sector_stock_groups = await get_sector_stocks(etfs_to_scan)
+
+        # Flat ranked list — live-signal sorted, used as the authoritative stock set
+        # for both the top-level field AND as the source for analysis injection
+        top_stocks_ranked = build_ranked_top_stocks(sector_stock_groups, limit=15)
 
     # 4. Persisted AI analysis (no TTL — survives until manually regenerated)
     saved = load_cached_analysis()
 
-    # 5. Always populate top_stocks_to_watch with structured objects from the
-    #    curated sector_stocks data — regardless of whether AI analysis exists.
-    #    This ensures the frontend panel always has renderable stock rows.
-    if sector_stock_groups:
-        from services.sector_rotation.sector_stocks import build_top_stocks_list
+    # 5. Always sync top_stocks_to_watch on the analysis object with the ranked
+    #    stock list so both paths (analysis and top-level field) stay consistent.
+    if top_stocks_ranked:
         from services.sector_rotation.schemas import AIAnalysis
-        structured_stocks = build_top_stocks_list(sector_stock_groups, limit=10)
+        structured_dicts = [s.model_dump() for s in top_stocks_ranked]
         if saved is None:
-            # No saved analysis yet — create a shell so top_stocks_to_watch is reachable
-            saved = AIAnalysis(top_stocks_to_watch=structured_stocks)
+            saved = AIAnalysis(top_stocks_to_watch=structured_dicts)
         else:
-            # Always overwrite with fresh structured data (curated, live-priced)
-            saved = saved.model_copy(update={"top_stocks_to_watch": structured_stocks})
+            saved = saved.model_copy(update={"top_stocks_to_watch": structured_dicts})
 
     return SectorsPageData(
         page_title="Sectors",
@@ -299,5 +302,6 @@ async def get_sectors_page_data(
         winning_sectors=winners,
         top_sector_etf=top_etf,
         sector_stocks=sector_stock_groups,
+        top_stocks_in_winning_sectors=top_stocks_ranked,
         saved_analysis=saved,
     )

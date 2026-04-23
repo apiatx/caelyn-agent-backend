@@ -164,7 +164,11 @@ class SectorsPageData(BaseModel):
     # Winning-sector detection output
     winning_sectors: list[WinningSector] = Field(default_factory=list)
     top_sector_etf: Optional[str] = None
-    # Stock scan for top sector(s)
+    # Stock scan for top sector(s) — grouped by role
     sector_stocks: list[SectorStockGroup] = Field(default_factory=list)
+    # Flat ranked stock list for the winning sector(s) — always computed from
+    # live signals, independent of agent analysis. Momentum leaders sorted by
+    # 1-day change descending; bottleneck/anchor keep curated structural order.
+    top_stocks_in_winning_sectors: list[SectorStock] = Field(default_factory=list)
     # Persisted AI analysis — returned regardless of age; None if never generated
     saved_analysis: Optional[AIAnalysis] = None
