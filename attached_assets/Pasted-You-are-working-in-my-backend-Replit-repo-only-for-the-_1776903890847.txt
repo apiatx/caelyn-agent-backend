@@ -1,0 +1,300 @@
+You are working in my **backend Replit repo only** for the CaelynAI / FastAPI server.
+
+This is a **global provider-routing audit and surgical normalization pass** for the backend only.
+
+It applies to all backend logic serving:
+
+* AI Terminal page
+* all other agent / AI-enabled pages
+* popup agent chatbox
+* all routes/services/helpers/providers/toolpaths those surfaces depend on
+
+## Non-negotiable rules
+
+* **Audit first. Do not start editing immediately.**
+* Make the **smallest safe set of changes** needed.
+* Do **not** broad-refactor architecture unless absolutely necessary.
+* Do **not** break existing response contracts unless a bug forces a small backward-compatible normalization.
+* Preserve working caches/TTLs unless a provider migration specifically requires a minimal fix.
+* Reuse existing service/provider/helper patterns already in the codebase.
+* Work directly on `main`.
+* Commit and push directly to `main` only after verification.
+
+## Target architecture to enforce in backend
+
+This routing policy should become true everywhere in backend logic:
+
+### Primary provider roles
+
+* **FMP** = broad structured backbone for:
+
+  * stock reference/profile
+  * fundamentals
+  * market cap / float / liquidity where already supported
+  * news / event / analyst / ratings / calendar
+  * historical daily price data
+  * ranking inputs
+  * sector / industry / market performance context
+
+* **Tradier** = live equities/options intraday lanes where truly needed:
+
+  * live multi-symbol quote panels
+  * short-interval candles
+  * intraday technical pipelines
+  * options-first workflows
+  * fast-refresh equity panels if already wired and appropriate
+
+* **Hyperliquid** = crypto-native / futures-ish / high-velocity market engine:
+
+  * crypto/perps
+  * funding / liquidations / order-book-sensitive workflows
+  * crypto-native real-time market structure
+  * pre-IPO proxy markets already using HL
+
+* **Finviz** = screener/discovery weirdness only:
+
+  * unusual screener combinations
+  * periodic discovery snapshots
+  * Finviz-specific filtering logic
+  * not live quote backbone
+  * not intraday engine
+  * not patching missing basic quote/reference data if FMP already covers it
+
+* **Public** = options fallback only
+
+### Demoted providers
+
+* **Finnhub** = demote heavily unless audit proves a unique niche
+* **TwelveData** = keep only for narrow technical/intraday use cases if Tradier/FMP do not already cover them cleanly
+* **Alpha Vantage** = retire from active stock/equity quote/history/news/reference flows unless there is a truly unavoidable remaining edge case
+
+## Phase 1 — Full backend audit
+
+Produce a precise inventory of every place an API/provider is used in backend for:
+
+* AI Terminal
+* all agent-enabled pages
+* popup chatbox / assistant agent flows
+* dashboards
+* screeners
+* watchlists
+* theme pages
+* movers/losers/top traded sections
+* stock detail / social / macro / options / crypto pages where relevant
+
+### For each usage, identify:
+
+* file path
+* function/class/route/helper/tool name
+* provider used
+* purpose of the data
+* frontend/page/feature it likely serves
+* whether it is:
+
+  * KEEP
+  * REASSIGN TO FMP
+  * REASSIGN TO TRADIER
+  * REASSIGN TO HYPERLIQUID
+  * KEEP FINVIZ ONLY
+  * DEMOTE TO FALLBACK
+  * REMOVE / LEGACY
+
+### Specifically audit for these categories
+
+1. stock quote / quote short / change / afterhours
+2. multi-symbol quote panels (20–100 symbols)
+3. watchlists / home dashboards / movers / losers / top traded
+4. historical daily price
+5. intraday/minute candles
+6. technical indicators
+7. company profile / market cap / sector / industry / float / liquidity
+8. fundamentals / key metrics / ratios / statements
+9. stock news / general market news / ticker news
+10. analyst ratings / targets / grades / revisions
+11. earnings / dividend / split / IPO calendar
+12. insider / congress / senate / house
+13. screener/discovery logic
+14. crypto / perps / commodities-futures-ish / pre-IPO proxy logic
+15. options data / options flow
+16. provider selection logic inside orchestration / tool routing / agent helpers
+17. any helper that silently mixes multiple providers for the same stock datapoint
+18. popup chatbox / assistant enrichment helpers that may still use old providers
+
+### Important audit questions
+
+Answer these explicitly:
+
+* Where are we still relying on Finnhub, and is any of it actually unique/useful?
+* Where are we still relying on TwelveData, and does Tradier or FMP already cover that need?
+* Are any routes incorrectly using Finviz scraping for data that should now come from FMP?
+* Are any live multi-symbol panels currently powered by providers that are too weak/slow/limited?
+* Are any intraday technical paths using FMP where Tradier would be the better live source?
+* Are popup chatbox / agent endpoints still calling stale provider helpers?
+
+## Phase 2 — Backend routing normalization plan
+
+Before editing, produce a concise routing plan showing the final intended source of truth for each major backend data lane:
+
+* stock reference/fundamental/news/event/ranking backbone → FMP
+* live equity intraday / short interval / multi-symbol rapid refresh → Tradier where needed
+* options → Tradier primary, Public fallback
+* crypto/perps / high-velocity crypto-native → Hyperliquid
+* screener oddities / discovery-only weird filters → Finviz
+* Finnhub → only if a clearly unique remaining niche exists
+* TwelveData → only if a clearly unique remaining niche exists
+* Alpha Vantage → legacy only, ideally none
+
+Do not edit until this mapping is explicit.
+
+## Phase 3 — Surgical backend implementation
+
+Implement the smallest safe set of backend changes required to make the routing architecture true everywhere.
+
+### Required goals
+
+1. **FMP becomes the default stock backbone** in backend logic for:
+
+   * profile/reference/fundamentals
+   * stock news / market news
+   * market cap / sector / industry
+   * daily history
+   * analyst/event/calendar/ranking inputs
+   * movers/losers/top traded where appropriate
+
+2. **Tradier becomes the default live intraday lane** where truly needed:
+
+   * multi-symbol live quote panels
+   * short-interval candles
+   * intraday technical paths
+   * options-heavy routes and agent requests that need real live market plumbing
+
+3. **Hyperliquid remains the crypto-native engine**
+
+   * do not accidentally reroute crypto/perps logic to weaker generalized providers
+
+4. **Finviz stays only in discovery/screener lanes**
+
+   * do not use Finviz as live quote backbone
+   * do not use Finviz to patch missing stock basics if FMP already covers them
+
+5. **Public stays as options fallback only**
+
+6. **Finnhub is demoted**
+
+   * keep only where the audit proves unique value
+   * otherwise move to fallback or remove from active path
+
+7. **TwelveData is demoted**
+
+   * keep only where the audit proves Tradier/FMP do not already cover the exact use case
+
+8. Ensure this is true in:
+
+   * backend routes
+   * provider helpers
+   * service layers
+   * agent tools/orchestrator helpers
+   * popup chatbox agent calls
+   * any shared backend enrichment/helper layer
+
+## Phase 4 — Agent / popup chatbox backend audit
+
+This part is critical.
+
+Audit all AI/agent-enabled backend flows to confirm they are not still calling stale provider helpers.
+
+Specifically verify:
+
+* backend agent tool functions
+* preset intent handlers
+* route-specific enrichment helpers
+* social / macro / ideas / terminal / dashboard agent requests
+* popup chatbox context assemblers
+* any hidden ticker enrichment or market snapshot helper reused by agents
+
+If an agent path still uses old Finnhub / TwelveData / Alpha Vantage helpers for generic stock backbone data, normalize it to the new routing.
+
+## Guardrails / do not break
+
+Do not break or broadly change:
+
+* options flow routes already working with Tradier/Public
+* Hyperliquid routes/pages
+* SEC / FRED / macro / prediction markets
+* Grok / Gemini / Perplexity / OpenAI / Claude orchestration logic except where a provider helper is clearly stale
+* Finviz screener-specific flows that are intentionally Finviz-based
+* backend response contracts unless a small compatibility fix is required
+
+## Deliverables required
+
+Return all of the following:
+
+### 1. Audit summary
+
+For each provider:
+
+* where it is used
+* whether that usage stays, moves, demotes, or gets removed
+* why
+
+### 2. Final backend routing matrix
+
+A simple matrix of:
+
+* data lane
+* primary provider
+* fallback provider if any
+* routes/helpers/features affected
+
+### 3. Exact backend files changed
+
+List every changed file.
+
+### 4. Change rationale
+
+For each changed file, explain:
+
+* what changed
+* why it was necessary
+* which provider role it now enforces
+
+### 5. Anything intentionally not changed
+
+Explicitly list:
+
+* remaining Finnhub usage and why it still exists
+* remaining TwelveData usage and why it still exists
+* any remaining Alpha Vantage usage and why
+* any Finviz usages intentionally preserved
+
+### 6. Verification
+
+Run and report:
+
+* tests
+* import/type sanity checks where applicable
+* app startup sanity
+* targeted backend smoke tests for:
+
+  * AI Terminal backend path
+  * at least one non-terminal agent-enabled backend path
+  * popup chatbox / assistant backend request path
+  * one live/intraday lane
+  * one FMP-backed structured lane
+  * one Hyperliquid-backed lane
+  * one Tradier-backed lane
+
+## Success criteria
+
+This task is successful only if:
+
+* provider responsibilities are clearly separated in backend
+* FMP is the structured stock backbone everywhere appropriate
+* Tradier owns live intraday equity/options lanes where appropriate
+* Hyperliquid remains crypto-native engine
+* Finviz is discovery-only
+* Finnhub/TwelveData are demoted unless explicitly justified
+* popup chatbox and all agent-enabled backend flows follow the same routing logic
+* no unrelated breakage is introduced
+
+Again: **audit first, then smallest safe patch set only.**
