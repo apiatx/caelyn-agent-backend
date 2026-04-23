@@ -500,11 +500,29 @@ def _rank_watchlist_rows(
 
 def _build_options_lkg_index() -> dict[str, dict]:
     """
-    Read ALL tab LKG caches from the precompute loop — pure in-memory reads,
-    zero API calls. Returns a dict keyed by uppercase ticker symbol.
+    Build options ticker index for Home unusual-flows section.
+
+    Priority order (all in-memory reads, zero API calls):
+      1. home:unusual_options:v1  — Home-dedicated fast cache (10-min refresh,
+         Tradier-only, no AI). Populated by _home_options_precompute_loop().
+      2. options_screener_lkg_v1:{tab}  — Full Options Flow LKG fallback (4-hr
+         TTL, refreshed every ~3-4 min by the main precompute loop).
+
+    Returns a dict keyed by uppercase ticker symbol.
     """
-    tabs = ["megacap", "large_cap", "small_cap", "etf"]
     index: dict[str, dict] = {}
+
+    # ── Priority 1: Home-dedicated fast cache ─────────────────────────
+    home_cache = cache.get("home:unusual_options:v1")
+    if home_cache:
+        for t in (home_cache.get("tickers") or []):
+            sym = (t.get("ticker") or "").upper()
+            if not sym or sym in index:
+                continue
+            index[sym] = {**t, "source_tab": "home_fast_cache"}
+
+    # ── Priority 2: LKG fallback from full options precompute tabs ────
+    tabs = ["megacap", "large_cap", "small_cap", "etf"]
     for tab in tabs:
         lkg = cache.get(f"options_screener_lkg_v1:{tab}")
         if not lkg:
@@ -514,13 +532,22 @@ def _build_options_lkg_index() -> dict[str, dict]:
             if not sym or sym in index:
                 continue
             index[sym] = {**t, "source_tab": tab}
+
     return index
 
 
-def _extract_unusual_options_flows(options_index: dict[str, dict], limit: int = 8) -> list[dict]:
+def _extract_unusual_options_flows(
+    options_index: dict[str, dict],
+    limit: int = 8,
+    updated_at: str | None = None,
+) -> list[dict]:
     """
     Extract the most unusual flows sorted by composite_score descending.
-    Normalises each row to a compact Home shape.
+    Normalises each row to a compact, frontend-friendly Home shape.
+
+    When the Home-dedicated fast cache (home:unusual_options:v1) is warm,
+    options_index is populated from that 10-minute path (Tradier-only, no AI).
+    Falls back to the full Options Flow LKG tabs otherwise.
     """
     sorted_tickers = sorted(
         options_index.values(),
@@ -532,14 +559,23 @@ def _extract_unusual_options_flows(options_index: dict[str, dict], limit: int = 
         ctx = t.get("options_context_summary")
         if isinstance(ctx, dict):
             ctx = ctx.get("summary") or ctx.get("label") or None
+        primary = t.get("primary_signal")
+        composite = t.get("composite_score")
         out.append({
             "symbol": t.get("ticker"),
-            "primary_signal": t.get("primary_signal"),
-            "composite_score": t.get("composite_score"),
+            # Primary names (spec-aligned)
+            "flow_signal": primary,
+            "unusual_score": composite,
             "call_volume": t.get("call_volume"),
             "put_volume": t.get("put_volume"),
-            "pc_ratio": t.get("pc_ratio"),
+            "call_put_skew": t.get("pc_ratio"),   # ratio < 1 → call-heavy, > 1 → put-heavy
             "price_change_pct": t.get("price_change_pct"),
+            "rationale": ctx,
+            "updated_at": updated_at,
+            # Legacy aliases kept for any existing consumer
+            "primary_signal": primary,
+            "composite_score": composite,
+            "pc_ratio": t.get("pc_ratio"),
             "options_context": ctx,
             "source_tab": t.get("source_tab"),
         })
@@ -932,7 +968,10 @@ async def build_home_dashboard(
     except Exception as exc:
         print(f"[HOME] Trending on X snapshot failed soft: {exc}")
 
-    unusual_options_flows = _extract_unusual_options_flows(options_index)
+    # Grab updated_at from the Home fast cache if it's the active source
+    _home_opts_cache = cache.get("home:unusual_options:v1")
+    _opts_updated_at = (_home_opts_cache or {}).get("updated_at") or None
+    unusual_options_flows = _extract_unusual_options_flows(options_index, updated_at=_opts_updated_at)
 
     # ── Sub-theme performance — uses already-fetched watchlist quotes ──
     # Pass watchlist quotes so the sub-theme engine reuses them (no extra
@@ -981,7 +1020,11 @@ async def build_home_dashboard(
             "trending": "ok" if not isinstance(results.get("trending"), Exception) and results.get("trending") else "unavailable",
             "trending_on_x": "ok" if trending_on_x.get("available") else ("refreshing" if trending_on_x.get("refresh_in_progress") else "unavailable"),
             "latest_news": "ok" if latest_news else "unavailable",
-            "unusual_options_flows": "ok" if unusual_options_flows else "precompute_pending",
+            "unusual_options_flows": (
+                "ok_fast_cache" if (unusual_options_flows and _home_opts_cache)
+                else "ok_lkg_fallback" if unusual_options_flows
+                else "precompute_pending"
+            ),
             "watchlist_snapshot": "ok" if watchlist_snapshot else "unavailable",
             "highlighted_companies": "ok" if highlighted_companies else "unavailable",
             "portfolio_snapshot": "ok" if portfolio_snapshot else "unavailable",
