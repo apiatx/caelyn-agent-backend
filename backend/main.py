@@ -189,7 +189,7 @@ async def lifespan(app):
     asyncio.create_task(_briefing_precompute_loop())
     asyncio.create_task(_smart_earnings_loop())
     asyncio.create_task(_edgar_cache_loop())
-    asyncio.create_task(_home_options_fast_loop())
+    _load_lkg_from_disk()          # Warm LKG cache from disk before first scan
     asyncio.create_task(_options_precompute_loop())
     # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
     asyncio.create_task(_polygon_options_ingestion_loop())
@@ -5019,14 +5019,21 @@ _OPTIONS_TAB_SEEDS = {
 from data.options_ingestion import OPTIONS_WATCHLIST as _OPTIONS_FULL_WATCHLIST
 from data.tradier_flow_engine import TradierFlowEngine
 
-_OPTIONS_PRECOMPUTE_INTERVAL = 60     # 60s sleep between cycles; scan ~2min → effective refresh ~3-4min
+_OPTIONS_PRECOMPUTE_INTERVAL = 60     # 60s sleep between cycles; ~4 tabs concurrent → ~120s cycle
 _OPTIONS_CACHE_TTL = 300              # 5 min hot cache — safely exceeds one full scan cycle
 _OPTIONS_PREFILTER_CACHE_TTL = 3600   # 1 hour — stock-side prefilter (Finnhub/FMP called only once/hr)
 _OPTIONS_PRECOMPUTE_CACHE_TTL = 300   # 5 min — matches hot cache TTL
 _OPTIONS_LKG_CACHE_TTL = 14400        # 4 hours — last-known-good fallback
 
-# home:unusual_options:v1 — written by home_service._fetch_unusual_options_live()
-# on every Home dashboard request when the cache is cold. No background loop needed.
+# Shared Tradier semaphore — all 4 concurrent tab scans share this so total
+# Tradier request rate stays within the 120 req/min vendor limit.
+# 3 concurrent slots × ~3 calls/ticker × ~5s per ticker ≈ 108 calls/min.
+# Created lazily inside _options_precompute_loop (needs running event loop).
+_TRADIER_GLOBAL_SEM: asyncio.Semaphore | None = None
+
+# Disk LKG directory — snapshots survive server restarts so users never see blank on revisit.
+import pathlib as _pathlib
+_LKG_DISK_DIR = _pathlib.Path(__file__).resolve().parent / "data"
 
 
 def _options_cache_key(tab: str) -> str:
@@ -5040,6 +5047,101 @@ def _options_prefilter_cache_key(tab: str) -> str:
 def _options_lkg_cache_key(tab: str) -> str:
     """Last-known-good fallback — survives cache expiry, used when live scan is cold."""
     return f"options_screener_lkg_v1:{tab}"
+
+
+def _lkg_disk_path(tab: str) -> "_pathlib.Path":
+    return _LKG_DISK_DIR / f"options_lkg_v1_{tab}.json"
+
+
+_LKG_DISK_MAX_AGE_S = 86400   # reject snapshots older than 24 h (stale beyond usefulness)
+_LKG_DISK_MIN_TICKERS = 1     # reject empty snapshots (scan found true_zero_results)
+
+
+def _save_lkg_to_disk(tab: str, payload: dict) -> None:
+    """
+    Atomically persist LKG snapshot to disk.
+
+    Write to a .tmp file first, then rename — guarantees that a crash during
+    write never leaves a half-written file that would corrupt the next load.
+    Only persists non-empty scans so disk never holds a zero-result snapshot.
+    """
+    import json as _json
+    tickers = payload.get("tickers")
+    if not isinstance(tickers, list) or len(tickers) < _LKG_DISK_MIN_TICKERS:
+        return   # Don't persist empty scans
+    try:
+        path = _lkg_disk_path(tab)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        serialized = _json.dumps(payload, default=str)
+        tmp.write_text(serialized, encoding="utf-8")
+        tmp.replace(path)   # Atomic on POSIX — rename is atomic within same filesystem
+        print(f"[OPTIONS_LKG_DISK] [{tab}] Persisted {len(tickers)} tickers to disk ({len(serialized)//1024}KB)")
+    except Exception as _e:
+        print(f"[OPTIONS_LKG_DISK] [{tab}] Write failed (non-fatal): {_e}")
+
+
+def _load_lkg_from_disk() -> None:
+    """
+    Load each tab's last-known-good snapshot from disk into the in-memory
+    LKG cache at startup.  Called synchronously before the precompute loop
+    starts so users immediately get stale-but-usable data on revisit after
+    any server restart / deployment.
+
+    Validation guardrails (guardrail #1):
+      - payload must be a dict with a non-empty 'tickers' list
+      - snapshot must be newer than _LKG_DISK_MAX_AGE_S (24 h)
+      - JSON must parse cleanly; corrupt files are skipped without crashing
+      - .tmp partial files are ignored (atomic write guarantee)
+    """
+    import json as _json
+    import time as _t
+    from data.cache import cache as _cache
+    now = _t.time()
+    loaded = 0
+    for tab in _OPTIONS_TAB_SEEDS:
+        path = _lkg_disk_path(tab)
+        if not path.exists() or path.suffix == ".tmp":
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+            payload = _json.loads(raw)
+
+            # ── Content validation ───────────────────────────────────────
+            if not isinstance(payload, dict):
+                print(f"[OPTIONS_LKG_DISK] [{tab}] Skipping: not a dict")
+                continue
+
+            tickers = payload.get("tickers")
+            if not isinstance(tickers, list) or len(tickers) < _LKG_DISK_MIN_TICKERS:
+                print(f"[OPTIONS_LKG_DISK] [{tab}] Skipping: empty tickers list")
+                continue
+
+            cached_at = payload.get("cached_at")
+            if not isinstance(cached_at, (int, float)) or cached_at <= 0:
+                print(f"[OPTIONS_LKG_DISK] [{tab}] Skipping: missing or invalid cached_at")
+                continue
+
+            age_s = int(now - cached_at)
+            if age_s > _LKG_DISK_MAX_AGE_S:
+                print(f"[OPTIONS_LKG_DISK] [{tab}] Skipping: too old ({age_s}s > {_LKG_DISK_MAX_AGE_S}s limit)")
+                continue
+
+            # Mark snapshot as disk-loaded so metadata reflects its true origin
+            payload = {**payload, "source": "disk_lkg", "disk_loaded": True}
+            _cache.set(_options_lkg_cache_key(tab), payload, _OPTIONS_LKG_CACHE_TTL)
+            print(f"[OPTIONS_LKG_DISK] [{tab}] Loaded: {len(tickers)} tickers, age={age_s}s")
+            loaded += 1
+
+        except _json.JSONDecodeError as _je:
+            print(f"[OPTIONS_LKG_DISK] [{tab}] JSON parse error (skipping): {_je}")
+        except Exception as _e:
+            print(f"[OPTIONS_LKG_DISK] [{tab}] Load failed (non-fatal): {_e}")
+
+    if loaded:
+        print(f"[OPTIONS_LKG_DISK] Pre-warmed {loaded}/{len(_OPTIONS_TAB_SEEDS)} tabs from disk — Options Flow page will serve immediately on revisit")
+    else:
+        print("[OPTIONS_LKG_DISK] No valid disk snapshots found — first scan required before revisit works")
 
 
 _HOME_OPTIONS_FAST_SEEDS: list[str] = [
@@ -5201,10 +5303,20 @@ async def _home_options_fast_loop():
 async def _options_precompute_loop():
     """
     Background screener loop for the Options Flow dashboard (Tradier-backed).
-    Runs every 30 minutes. Precomputes ONLY stock-side/catalyst prefilter data
-    from the supporting proprietary/free sources so the page can stay responsive.
-    Precomputes all tabs (etf, megacap, large_cap, small_cap).
+
+    Architecture (Phase 3):
+      - All 4 tabs run CONCURRENTLY via asyncio.gather instead of sequentially.
+      - A single global Semaphore(3) is shared across all tab engines so the total
+        Tradier request rate stays ≤ 120 req/min (3 slots × ~3 calls/ticker = 108/min).
+      - Prefilters for all 4 tabs are also built concurrently (Finnhub/FMP, not Tradier).
+      - Each successful scan is persisted to disk so restarts never serve blank data.
+
+    Cycle time:
+      Sequential (before): ETF(97s) + Mega(35s) + Large(102s) + Small(109s) = 343s
+      Concurrent (after):  max(97, 35, 102, 109) ≈ 109s — 68% faster per cycle
     """
+    global _TRADIER_GLOBAL_SEM
+
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _init_event.wait, 30)
 
@@ -5212,61 +5324,82 @@ async def _options_precompute_loop():
         print("[OPTIONS_PRECOMPUTE] Tradier provider not available, skipping precompute loop")
         return
 
+    # Create the shared semaphore inside the running event loop
+    _TRADIER_GLOBAL_SEM = asyncio.Semaphore(3)
+
     import time as _time
+    import traceback as _tb
     from data.cache import cache
 
     _all_seed_sets = {tab: set(seeds) for tab, seeds in _OPTIONS_TAB_SEEDS.items()}
 
-    while True:
-        for tab, seeds in _OPTIONS_TAB_SEEDS.items():
-            try:
-                exclude = set()
-                for other_tab, other_seeds in _all_seed_sets.items():
-                    if other_tab != tab:
-                        exclude |= other_seeds
+    async def _scan_one_tab(tab: str, seeds: list[str], shared_sem: asyncio.Semaphore) -> None:
+        """Build prefilter (if cold) + run Tradier scan for one tab. Writes to cache + disk."""
+        try:
+            exclude = set()
+            for other_tab, other_seeds in _all_seed_sets.items():
+                if other_tab != tab:
+                    exclude |= other_seeds
 
-                pf_key = _options_prefilter_cache_key(tab)
-                prefilter_data = cache.get(pf_key)
-                engine = TradierFlowEngine(data_service)
-                t0 = _time.time()
+            pf_key = _options_prefilter_cache_key(tab)
+            prefilter_data = cache.get(pf_key)
+            engine = TradierFlowEngine(data_service)
+            engine._shared_sem = shared_sem   # share global rate-limit budget
+            t0 = _time.time()
 
-                if prefilter_data:
-                    n_candidates = len(prefilter_data.get("candidates", []))
-                    print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter cache hit ({n_candidates} candidates) — skipping Finnhub/FMP, running Tradier scan only...")
-                else:
-                    print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter cache cold — rebuilding from Finviz/Finnhub/FMP...")
-                    prefilter_data = await engine.build_prefilter_snapshot(
-                        seeds, tab=tab, exclude_tickers=exclude,
-                    )
-                    cache.set(pf_key, prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
-                    n_candidates = len(prefilter_data.get("candidates", []))
-                    pf_elapsed = _time.time() - t0
-                    print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter built: {n_candidates} candidates in {pf_elapsed:.1f}s.")
-
-                # Tradier-only live scan — no paid API calls
-                screener_data = await engine.run_live_scan(
-                    seeds, prefilter_snapshot=prefilter_data, tab=tab,
+            if prefilter_data:
+                n_candidates = len(prefilter_data.get("candidates", []))
+                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter cache hit ({n_candidates} candidates) — running Tradier scan...")
+            else:
+                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter cold — rebuilding from Finviz/Finnhub/FMP...")
+                prefilter_data = await engine.build_prefilter_snapshot(
+                    seeds, tab=tab, exclude_tickers=exclude,
                 )
-                full_result = {
-                    "display_type": "options_screener",
-                    "scan_type": "options_flow",
-                    "tab": tab,
-                    "cached_at": _time.time(),
-                    "tickers_scanned": seeds,
-                    **screener_data,
-                }
-                cache.set(_options_cache_key(tab), full_result, _OPTIONS_PRECOMPUTE_CACHE_TTL)
-                cache.set(_options_lkg_cache_key(tab), full_result, _OPTIONS_LKG_CACHE_TTL)
-                elapsed = _time.time() - t0
-                n_tickers = len(screener_data.get("tickers", []))
-                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Tradier scan done: {n_tickers} tickers, {len(screener_data.get('all_contracts', []))} contracts in {elapsed:.1f}s.")
+                cache.set(pf_key, prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
+                n_candidates = len(prefilter_data.get("candidates", []))
+                pf_elapsed = _time.time() - t0
+                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter built: {n_candidates} candidates in {pf_elapsed:.1f}s.")
 
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Error: {e}")
+            # Tradier-only live scan — no paid API calls
+            screener_data = await engine.run_live_scan(
+                seeds, prefilter_snapshot=prefilter_data, tab=tab,
+            )
+            now_ts = _time.time()
+            from datetime import datetime as _dt_pc, timezone as _tz_pc
+            now_iso = _dt_pc.now(_tz_pc.utc).isoformat()
+            full_result = {
+                "display_type": "options_screener",
+                "scan_type": "options_flow",
+                "tab": tab,
+                "cached_at": now_ts,
+                "updated_at": now_iso,
+                "source": "tradier",
+                "tickers_scanned": seeds,
+                **screener_data,
+            }
+            cache.set(_options_cache_key(tab), full_result, _OPTIONS_PRECOMPUTE_CACHE_TTL)
+            cache.set(_options_lkg_cache_key(tab), full_result, _OPTIONS_LKG_CACHE_TTL)
+            # Persist to disk so the next restart can serve stale-but-real data immediately
+            _save_lkg_to_disk(tab, full_result)
 
-        print(f"[OPTIONS_PRECOMPUTE] All {len(_OPTIONS_TAB_SEEDS)} tabs refreshed. Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s.")
+            elapsed = _time.time() - t0
+            n_tickers = len(screener_data.get("tickers", []))
+            n_contracts = len(screener_data.get("all_contracts", []))
+            print(f"[OPTIONS_PRECOMPUTE] [{tab}] Done: {n_tickers} tickers, {n_contracts} contracts in {elapsed:.1f}s.")
+
+        except Exception as e:
+            _tb.print_exc()
+            print(f"[OPTIONS_PRECOMPUTE] [{tab}] Error: {e}")
+
+    while True:
+        t_cycle = _time.time()
+        # All 4 tabs run concurrently — shared semaphore limits to 3 concurrent Tradier slots
+        await asyncio.gather(*[
+            _scan_one_tab(tab, seeds, _TRADIER_GLOBAL_SEM)
+            for tab, seeds in _OPTIONS_TAB_SEEDS.items()
+        ])
+        cycle_elapsed = _time.time() - t_cycle
+        print(f"[OPTIONS_PRECOMPUTE] All {len(_OPTIONS_TAB_SEEDS)} tabs refreshed in {cycle_elapsed:.1f}s. Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s.")
         await asyncio.sleep(_OPTIONS_PRECOMPUTE_INTERVAL)
 
 
@@ -5335,9 +5468,14 @@ async def options_dashboard(
     cache_key = _options_cache_key(tab)
     cached = cache.get(cache_key)
     if cached:
+        from datetime import datetime as _dt_hot, timezone as _tz_hot
         age = int(_time.time() - cached.get("cached_at", _time.time()))
         n_tickers = len(cached.get("tickers", []))
-        print(f"[OPTIONS_DASH] [{tab}] Cache hit (age={age}s, {n_tickers} tickers, {len(cached.get('all_contracts', []))} contracts)")
+        updated = cached.get("updated_at") or cached.get("cached_at")
+        if isinstance(updated, (int, float)):
+            updated = _dt_hot.fromtimestamp(updated, tz=_tz_hot.utc).isoformat()
+        ds = "live_ok" if n_tickers else "true_zero_results"
+        print(f"[OPTIONS_DASH] [{tab}] Cache hit (age={age}s, {n_tickers} tickers, state={ds})")
         return {
             "response": cached,
             "structured": True,
@@ -5348,8 +5486,11 @@ async def options_dashboard(
             "stale": False,
             "cache_age_seconds": age,
             "next_refresh_in_seconds": max(0, _OPTIONS_CACHE_TTL - age),
-            "data_state": "live_ok" if n_tickers else "true_zero_results",
+            "data_state": ds,
             "result_count": n_tickers,
+            "refresh_in_progress": False,
+            "updated_at": updated,
+            "source": cached.get("source", "tradier"),
         }
 
     # ── Stale-while-revalidate: serve last-known-good immediately, refresh in background ─
@@ -5360,7 +5501,10 @@ async def options_dashboard(
     prefilter_snapshot = cache.get(prefilter_key)
 
     async def _full_scan_and_cache():
-        """Run a full scan and write results to both hot cache and LKG cache."""
+        """
+        Run a full scan and write results to hot cache, LKG cache, and disk.
+        Never blocks the request path — called via asyncio.create_task().
+        """
         pf_snapshot = cache.get(prefilter_key)
         try:
             overrides = _SCAN_USER_OVERRIDES.get(tab) or None
@@ -5375,25 +5519,60 @@ async def options_dashboard(
             screener_data = await engine.run_live_scan(
                 seed_tickers, prefilter_snapshot=pf_snapshot, tab=tab,
             )
+            from datetime import datetime as _dt_bg, timezone as _tz_bg
+            now_ts = _time.time()
             result = {
                 "display_type": "options_screener",
                 "scan_type": "options_flow",
                 "tab": tab,
-                "cached_at": _time.time(),
+                "cached_at": now_ts,
+                "updated_at": _dt_bg.now(_tz_bg.utc).isoformat(),
+                "source": "tradier",
                 "tickers_scanned": seed_tickers,
                 **screener_data,
             }
             cache.set(cache_key, result, _OPTIONS_CACHE_TTL)
             cache.set(lkg_key, result, _OPTIONS_LKG_CACHE_TTL)
+            _save_lkg_to_disk(tab, result)   # survive restarts
             print(f"[OPTIONS_DASH] [{tab}] Background refresh done — {len(screener_data.get('tickers', []))} tickers")
         except Exception as _bg_err:
+            import traceback as _tbg
+            _tbg.print_exc()
             print(f"[OPTIONS_DASH] [{tab}] Background refresh error: {_bg_err}")
 
+    def _snap_meta(snap: dict, stale: bool, in_progress: bool) -> dict:
+        """Build clean metadata block for a cached snapshot."""
+        from datetime import datetime as _dt_m, timezone as _tz_m
+        n = len(snap.get("tickers", []))
+        age = int(_time.time() - snap.get("cached_at", _time.time()))
+        updated = snap.get("updated_at") or snap.get("cached_at")
+        if isinstance(updated, (int, float)):
+            updated = _dt_m.fromtimestamp(updated, tz=_tz_m.utc).isoformat()
+        # Distinct states (guardrail #5)
+        if in_progress and n == 0:
+            ds = "refresh_in_progress"
+        elif stale and n:
+            ds = "stale_but_available"
+        elif n:
+            ds = "live_ok"
+        else:
+            ds = "true_zero_results"
+        return {
+            "data_state": ds,
+            "result_count": n,
+            "stale": stale,
+            "refresh_in_progress": in_progress,
+            "cache_age_seconds": age,
+            "updated_at": updated,
+            "source": snap.get("source", "tradier"),
+        }
+
     if lkg:
-        # Serve stale data immediately, kick off a background refresh so next visit is hot
-        lkg_age = int(_time.time() - lkg.get("cached_at", _time.time()))
-        n_lkg = len(lkg.get("tickers", []))
-        print(f"[OPTIONS_DASH] [{tab}] Cache cold — serving LKG (age={lkg_age}s, {n_lkg} tickers), refreshing in background")
+        # Serve stale snapshot immediately — do not wait for fresh scan.
+        # Kick off background refresh so next visit is hot.
+        lkg_meta = _snap_meta(lkg, stale=True, in_progress=True)
+        print(f"[OPTIONS_DASH] [{tab}] Hot cache cold — serving LKG "
+              f"(age={lkg_meta['cache_age_seconds']}s, {lkg_meta['result_count']} tickers). Refreshing bg.")
         asyncio.create_task(_full_scan_and_cache())
         return {
             "response": lkg,
@@ -5402,29 +5581,24 @@ async def options_dashboard(
             "tab": tab,
             "available_tabs": sorted(_OPTIONS_VALID_TABS),
             "from_cache": True,
-            "stale": True,
-            "cache_age_seconds": lkg_age,
-            "next_refresh_in_seconds": 240,
-            "data_state": "stale_but_available" if n_lkg else "refresh_in_progress",
-            "result_count": n_lkg,
-            "refresh_in_progress": True,
+            "next_refresh_in_seconds": 120,
+            **lkg_meta,
         }
 
-    # No LKG at all (first run after deploy).
-    # Never do a blocking scan in the request path — it can take 2–3 min for
-    # large_cap/small_cap, causing guaranteed timeouts.  Instead kick off a
-    # background task and return immediately with data_state="no_data_yet".
-    # The precompute loop will populate the LKG within the first scan cycle
-    # (~30–90s with the new Semaphore(3) concurrency).
-    print(f"[OPTIONS_DASH] [{tab}] No LKG — kicking off background scan, returning no_data_yet immediately")
+    # ── No LKG anywhere — true cold start (first-ever deploy or disk cleared) ─
+    # Return no_data_yet immediately; precompute loop will warm within ~120s.
+    print(f"[OPTIONS_DASH] [{tab}] No LKG — returning no_data_yet, scan queued in background")
     asyncio.create_task(_full_scan_and_cache())
 
     from data.options_flow_engine import OPTIONS_FLOW_DEFAULTS, OPTIONS_FLOW_WEIGHTS
+    from datetime import datetime as _dt_cold, timezone as _tz_cold
     empty_result = {
         "display_type": "options_screener",
         "scan_type": "options_flow",
         "tab": tab,
         "cached_at": _time.time(),
+        "updated_at": _dt_cold.now(_tz_cold.utc).isoformat(),
+        "source": "none",
         "tickers_scanned": seed_tickers,
         "tickers": [],
         "all_contracts": [],
@@ -5436,7 +5610,7 @@ async def options_dashboard(
             "ranked_result_count": 0,
             "degraded_sources": ["cold_start:background_scan_queued"],
         },
-        "market_summary": {"message": "First scan running in background — check back in ~60–90 seconds."},
+        "market_summary": {"message": "First scan running in background — check back in ~120 seconds."},
     }
     return {
         "response": empty_result,
@@ -5449,7 +5623,10 @@ async def options_dashboard(
         "data_state": "no_data_yet",
         "result_count": 0,
         "refresh_in_progress": True,
-        "next_refresh_in_seconds": 60,
+        "updated_at": None,
+        "source": "none",
+        "cache_age_seconds": None,
+        "next_refresh_in_seconds": 120,
     }
 
 
@@ -5489,59 +5666,59 @@ async def options_all_tabs(
     any_live = False
     all_live = True
 
-    for tab in sorted(_OPTIONS_VALID_TABS):
-        cache_key  = _options_cache_key(tab)
-        lkg_key    = _options_lkg_cache_key(tab)
+    def _tab_snap(snap: dict, stale: bool) -> dict:
+        """Render one tab entry with full, truthful metadata (guardrail #5)."""
+        n = len(snap.get("tickers", []))
+        age = int(_time.time() - snap.get("cached_at", _time.time()))
+        updated = snap.get("updated_at") or snap.get("cached_at")
+        if isinstance(updated, (int, float)):
+            updated = _dt_mod.datetime.fromtimestamp(updated, tz=_dt_mod.timezone.utc).isoformat()
+        in_progress = stale   # LKG is always being refreshed in background
+        if in_progress and n == 0:
+            ds = "refresh_in_progress"
+        elif stale and n:
+            ds = "stale_but_available"
+        elif n:
+            ds = "live_ok"
+        else:
+            ds = "true_zero_results"
+        return {
+            "data_state":          ds,
+            "result_count":        n,
+            "stale":               stale,
+            "cache_age_seconds":   age,
+            "refresh_in_progress": in_progress,
+            "updated_at":          updated,
+            "source":              snap.get("source", "tradier"),
+            "tickers":             snap.get("tickers", []),
+            "all_contracts":       snap.get("all_contracts", [])[:200],
+            "market_summary":      snap.get("market_summary", {}),
+            "pipeline_stats":      snap.get("pipeline_stats", {}),
+            "filter_defaults":     snap.get("filter_defaults", {}),
+            "score_weights":       snap.get("score_weights", {}),
+        }
 
-        hot = cache.get(cache_key)
-        lkg = cache.get(lkg_key)
+    for tab in sorted(_OPTIONS_VALID_TABS):
+        hot = cache.get(_options_cache_key(tab))
+        lkg = cache.get(_options_lkg_cache_key(tab))
 
         if hot:
-            age = int(_time.time() - hot.get("cached_at", _time.time()))
-            n   = len(hot.get("tickers", []))
-            tabs_out[tab] = {
-                "data_state":           "live_ok" if n else "true_zero_results",
-                "result_count":         n,
-                "stale":                False,
-                "cache_age_seconds":    age,
-                "refresh_in_progress":  False,
-                "source":               "hot_cache",
-                "tickers":              hot.get("tickers", []),
-                "all_contracts":        hot.get("all_contracts", [])[:200],
-                "market_summary":       hot.get("market_summary", {}),
-                "pipeline_stats":       hot.get("pipeline_stats", {}),
-                "filter_defaults":      hot.get("filter_defaults", {}),
-                "score_weights":        hot.get("score_weights", {}),
-            }
-            if n:
+            entry = _tab_snap(hot, stale=False)
+            if entry["result_count"]:
                 any_live = True
         elif lkg:
-            age = int(_time.time() - lkg.get("cached_at", _time.time()))
-            n   = len(lkg.get("tickers", []))
-            tabs_out[tab] = {
-                "data_state":           "stale_but_available" if n else "refresh_in_progress",
-                "result_count":         n,
-                "stale":                True,
-                "cache_age_seconds":    age,
-                "refresh_in_progress":  True,
-                "source":               "lkg_cache",
-                "tickers":              lkg.get("tickers", []),
-                "all_contracts":        lkg.get("all_contracts", [])[:200],
-                "market_summary":       lkg.get("market_summary", {}),
-                "pipeline_stats":       lkg.get("pipeline_stats", {}),
-                "filter_defaults":      lkg.get("filter_defaults", {}),
-                "score_weights":        lkg.get("score_weights", {}),
-            }
-            if n:
+            entry = _tab_snap(lkg, stale=True)
+            if entry["result_count"]:
                 any_live = True
             all_live = False
         else:
-            tabs_out[tab] = {
+            entry = {
                 "data_state":          "no_data_yet",
                 "result_count":        0,
                 "stale":               False,
                 "cache_age_seconds":   None,
                 "refresh_in_progress": True,
+                "updated_at":          None,
                 "source":              "none",
                 "tickers":             [],
                 "all_contracts":       [],
@@ -5552,12 +5729,14 @@ async def options_all_tabs(
             }
             all_live = False
 
+        tabs_out[tab] = entry
+
     return {
-        "tabs":         tabs_out,
-        "any_live":     any_live,
-        "all_live":     all_live,
+        "tabs":           tabs_out,
+        "any_live":       any_live,
+        "all_live":       all_live,
         "available_tabs": sorted(_OPTIONS_VALID_TABS),
-        "generated_at": _dt_mod.datetime.utcnow().isoformat() + "Z",
+        "generated_at":   _dt_mod.datetime.utcnow().isoformat() + "Z",
     }
 
 

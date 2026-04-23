@@ -239,6 +239,10 @@ class OptionsFlowEngine:
                 if k in self.defaults and v is not None:
                     self.defaults[k] = type(self.defaults[k])(v)
         self.weights = dict(OPTIONS_FLOW_WEIGHTS)
+        # Injectable shared semaphore — set externally when multiple tabs run
+        # concurrently so they all share the same Tradier rate-limit budget.
+        # When None, _inspect_shortlist creates a local Sem(inspect_concurrency).
+        self._shared_sem: asyncio.Semaphore | None = None
 
     @traceable(name="options_flow_engine.build_prefilter_snapshot")
     async def build_prefilter_snapshot(
@@ -772,9 +776,12 @@ class OptionsFlowEngine:
         # Bounded concurrency — configurable via inspect_concurrency default (default: 3).
         # Each slot makes ~3 Tradier calls (1 expirations + 2 chain fetches).
         # inter_ticker_sleep pads per-slot to respect Tradier rate limits.
+        # When self._shared_sem is set by the caller (e.g. precompute loop running
+        # 4 tabs concurrently), that single Semaphore gates ALL tabs at once so the
+        # total Tradier request rate stays within the 120 req/min vendor limit.
         concurrency = int(self.defaults.get("inspect_concurrency", 3))
         sleep_s = float(self.defaults.get("inspect_inter_ticker_sleep", 1.5))
-        sem = asyncio.Semaphore(concurrency)
+        sem = self._shared_sem if self._shared_sem is not None else asyncio.Semaphore(concurrency)
 
         async def _bounded(candidate: dict):
             async with sem:

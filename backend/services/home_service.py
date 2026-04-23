@@ -498,10 +498,11 @@ def _rank_watchlist_rows(
 
 # ── Unusual Options Flows ──────────────────────────────────────────────────
 
-# ── Home unusual-options cache key ─────────────────────────────────────────
-# The persistent _home_options_fast_loop() in main.py writes to this key every
-# ~90s.  _fetch_unusual_options_live() reads it; the loop owns writes.
+# ── Home unusual-options constants ─────────────────────────────────────────
+# _HOME_OPTIONS_CACHE_KEY kept for backward compat (old fast loop wrote here).
 _HOME_OPTIONS_CACHE_KEY = "home:unusual_options:v1"
+# All 4 maintained tab universes that Home derives from (Phase 3 arch).
+_HOME_OPTIONS_TABS = ("megacap", "large_cap", "small_cap", "etf")
 
 
 def _build_options_lkg_index() -> dict[str, dict]:
@@ -654,72 +655,92 @@ async def _fetch_unusual_options_live(
     """
     Return (flows_list, meta_dict) for the Home unusual-options panel.
 
-    NEVER returns an empty list unless data_state is 'no_data_yet' or
-    'true_zero_results' (i.e. a completed scan genuinely found nothing).
+    Derives from ALL 4 maintained category tabs (hot cache → LKG) so Home
+    always reflects the strongest unusual signals across the full maintained
+    universe (ETF + megacap + large_cap + small_cap, ~60 scored tickers).
 
-    Priority order (all in-memory reads — zero blocking):
-      1. home:unusual_options:v1  — written by _home_options_fast_loop() every 90s.
-         Always served if tickers exist, even during an active refresh cycle.
-      2. options_screener_lkg_v1:{tab}  — Full Options Flow LKG (4-hr TTL).
-         Used when fast cache has no tickers yet (very first startup window).
-      3. Cold (no_data_yet) — background loop will populate within ~20s on startup.
+    Priority order (all in-memory reads — zero blocking, no Tradier calls):
+      1. Hot caches (options_screener_v9:{tab}) — freshest, 5-min TTL.
+         Any tab that is hot contributes its tickers to the merged index.
+      2. LKG caches (options_screener_lkg_v1:{tab}) — 4-hr TTL, disk-backed
+         (survive restarts). Used for tabs whose hot cache has expired.
+      3. Cold (no_data_yet) — only when no tab has data at all.
+         The precompute loop populates within ~120s on cold start.
 
-    The loop in main.py handles all writes; this function is read-only.
+    Dedup: first-write-wins by symbol across tabs (hot tabs ranked first).
+    Rank:  globally by composite_score — abnormality wins, not cap size.
     No Tradier calls. No AI API. No background tasks fired from here.
     """
-    # ── 1. Fast cache ────────────────────────────────────────────────────────
-    fast = cache.get(_HOME_OPTIONS_CACHE_KEY)
-    if fast:
-        tickers_raw = fast.get("tickers") or []
-        # Serve whatever is in the cache — even if refresh is in progress.
-        # This is the stale-while-revalidate core behaviour.
-        if tickers_raw:
-            idx: dict[str, dict] = {
-                (t.get("ticker") or "").upper(): {**t, "source_tab": "home_fast_cache"}
-                for t in tickers_raw
-                if t.get("ticker")
-            }
-            meta = _get_options_meta(fast)
-            flows = _extract_unusual_options_flows(idx, limit=limit, updated_at=fast.get("updated_at"))
-            return flows, meta
+    from datetime import datetime as _dt2, timezone as _tz2
 
-        # fast cache exists but has 0 tickers (e.g. loop running, prior cycle
-        # found true_zero_results) — fall through to LKG for best-effort data.
+    # ── 1 + 2.  Merge hot caches and LKG across all 4 tabs ──────────────────
+    # Hot tabs first so their fresher scores take priority in dedup.
+    merged_index: dict[str, dict] = {}
+    best_updated_at: str | None = None
+    tabs_hot: list[str] = []
+    tabs_lkg: list[str] = []
+    tabs_absent: list[str] = []
 
-    # ── 2. LKG tab fallback ──────────────────────────────────────────────────
-    lkg_index: dict[str, dict] = {}
-    lkg_updated_at: str | None = None
-    lkg_source: str | None = None
     for tab in ["megacap", "large_cap", "small_cap", "etf"]:
+        hot = cache.get(f"options_screener_v9:{tab}")
         lkg = cache.get(f"options_screener_lkg_v1:{tab}")
-        if not lkg:
+        chosen = hot or lkg
+        if not chosen:
+            tabs_absent.append(tab)
             continue
-        for ticker in (lkg.get("tickers") or []):
+        if hot:
+            tabs_hot.append(tab)
+        else:
+            tabs_lkg.append(tab)
+        tab_updated = chosen.get("updated_at") or chosen.get("cached_at")
+        if isinstance(tab_updated, (int, float)):
+            tab_updated = _dt2.fromtimestamp(tab_updated, tz=_tz2.utc).isoformat()
+        if best_updated_at is None:
+            best_updated_at = tab_updated
+        for ticker in (chosen.get("tickers") or []):
             sym = (ticker.get("ticker") or "").upper()
-            if sym and sym not in lkg_index:
-                lkg_index[sym] = {**ticker, "source_tab": tab}
-        if not lkg_source:
-            lkg_source = f"lkg:{tab}"
-            lkg_updated_at = lkg.get("updated_at") or lkg.get("cached_at")
-            if isinstance(lkg_updated_at, (int, float)):
-                from datetime import datetime as _dt2, timezone as _tz2
-                lkg_updated_at = _dt2.fromtimestamp(lkg_updated_at, tz=_tz2.utc).isoformat()
+            if sym and sym not in merged_index:
+                merged_index[sym] = {**ticker, "source_tab": tab}
 
-    if lkg_index:
-        meta = _get_options_meta(fast, lkg_source=lkg_source, lkg_updated_at=lkg_updated_at)
-        # If fast cache is in refresh_in_progress, reflect that in meta
-        if fast and fast.get("refresh_in_progress"):
-            meta["refresh_in_progress"] = True
-            meta["data_state"] = "refresh_in_progress"
-        flows = _extract_unusual_options_flows(lkg_index, limit=limit)
+    if merged_index:
+        n_tabs_live = len(tabs_hot) + len(tabs_lkg)
+        data_state = "live_ok" if tabs_hot else "stale_but_available"
+        source_desc = (
+            f"all_tabs:{'+'.join(tabs_hot or tabs_lkg)}"
+            if n_tabs_live == len(_HOME_OPTIONS_TABS)
+            else f"partial_tabs:{n_tabs_live}/{len(_HOME_OPTIONS_TABS)}"
+        )
+        meta = {
+            "source": source_desc,
+            "updated_at": best_updated_at,
+            "age_seconds": None,
+            "stale": len(tabs_lkg) > 0 and not tabs_hot,
+            "refresh_in_progress": bool(tabs_absent),
+            "data_state": data_state,
+            "result_count": len(merged_index),
+            "tabs_hot": tabs_hot,
+            "tabs_lkg": tabs_lkg,
+            "tabs_absent": tabs_absent,
+        }
+        flows = _extract_unusual_options_flows(merged_index, limit=limit, updated_at=best_updated_at)
         return flows, meta
 
-    # ── 3. Truly cold — no data anywhere yet ────────────────────────────────
-    # The fast loop in main.py will populate within ~20s on startup.
-    meta = _get_options_meta(fast)   # fast may be None or empty
-    if fast and fast.get("refresh_in_progress"):
-        meta["data_state"] = "refresh_in_progress"
-    print("[HOME_OPTIONS] Cache cold (no_data_yet) — fast loop will populate shortly")
+    # ── 3. Truly cold — no data in any cache layer yet ───────────────────────
+    # Precompute loop will populate within ~120s on first cold start.
+    # Disk-backed LKG means this state only lasts during first-ever deployment.
+    print("[HOME_OPTIONS] All cache layers cold (no_data_yet) — precompute loop will populate shortly")
+    meta = {
+        "source": "none",
+        "updated_at": None,
+        "age_seconds": None,
+        "stale": True,
+        "refresh_in_progress": True,
+        "data_state": "no_data_yet",
+        "result_count": 0,
+        "tabs_hot": [],
+        "tabs_lkg": [],
+        "tabs_absent": list(_HOME_OPTIONS_TABS),
+    }
     return [], meta
 
 

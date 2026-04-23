@@ -42,6 +42,39 @@ except ImportError:
         return _noop
 
 
+class _TradierCountingProxy:
+    """
+    Lightweight transparent proxy around the Tradier provider that counts
+    every async API call made during a scan.  Used to measure actual request
+    budget so the shared-semaphore concurrency setting can be validated
+    against the 120 req/min Tradier vendor limit.
+
+    Only async methods are counted (synchronous attribute access is forwarded
+    directly).  Thread-safe: asyncio is single-threaded, so the int counter
+    needs no lock.
+    """
+
+    __slots__ = ("_wrapped", "call_count", "call_log")
+
+    def __init__(self, wrapped: Any) -> None:
+        self._wrapped = wrapped
+        self.call_count: int = 0
+        self.call_log: list[str] = []   # method names, for debugging
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._wrapped, name)
+        if asyncio.iscoroutinefunction(attr):
+            proxy = self
+
+            async def _counted(*args: Any, **kwargs: Any) -> Any:
+                proxy.call_count += 1
+                proxy.call_log.append(name)
+                return await attr(*args, **kwargs)
+
+            return _counted
+        return attr
+
+
 class TradierFlowEngine(OptionsFlowEngine):
     """
     Production options flow engine backed by Tradier for live data
@@ -61,6 +94,9 @@ class TradierFlowEngine(OptionsFlowEngine):
                 "TradierFlowEngine requires data_service.tradier to be configured (set TRADIER_API_KEY)"
             )
         self._tradier = data_service.tradier
+        # Populated after each run_live_scan — reflects actual Tradier call count
+        self.last_tradier_req_count: int = 0
+        self.last_tradier_req_per_min: float = 0.0
 
     # ── Live scan ──────────────────────────────────────────────────────
 
@@ -71,11 +107,24 @@ class TradierFlowEngine(OptionsFlowEngine):
         prefilter_snapshot: dict | None = None,
         tab: str = "megacap",
     ) -> dict:
-        """Run the full pipeline using Tradier for options data."""
-        # Temporarily swap so parent helper methods (e.g. _inspect_shortlist)
-        # that reference self.data.public_com will hit Tradier instead.
+        """
+        Run the full pipeline using Tradier for options data.
+
+        Wraps the Tradier client in a counting proxy so every API call is
+        tallied and logged.  The observed requests/min is stored in
+        self.last_tradier_req_per_min for the caller to inspect.
+        """
+        import time as _t
+        proxy = _TradierCountingProxy(self._tradier)
+
+        # Swap public_com → counting proxy for the duration of the scan.
         original_public_com = self.data.public_com
-        self.data.public_com = self._tradier
+        self.data.public_com = proxy
+        # Also replace self._tradier so direct calls in _inspect_one_ticker
+        # (e.g. get_quote for price backfill) are counted too.
+        self._tradier = proxy
+
+        t0 = _t.time()
         try:
             result = await super().run_live_scan(
                 seed_tickers=seed_tickers,
@@ -85,7 +134,17 @@ class TradierFlowEngine(OptionsFlowEngine):
             result["data_source"] = "tradier"
             return result
         finally:
+            elapsed = max(_t.time() - t0, 0.001)
+            self.last_tradier_req_count = proxy.call_count
+            self.last_tradier_req_per_min = round(proxy.call_count / elapsed * 60, 1)
+            # Restore originals
             self.data.public_com = original_public_com
+            self._tradier = proxy._wrapped
+            print(
+                f"[TRADIER_RATE] [{tab}] {proxy.call_count} API requests in {elapsed:.1f}s "
+                f"≈ {self.last_tradier_req_per_min} req/min "
+                f"(limit: 120/min, budget used: {round(self.last_tradier_req_per_min/120*100)}%)"
+            )
 
     # ── Prefilter (unchanged — uses Finviz/FMP/Finnhub/FRED) ─────────
 
