@@ -1664,6 +1664,18 @@ async def earnings_detail(request: Request, ticker: str = ""):
     except Exception:
         pass
 
+    # FMP: earnings enrichment — additive, non-breaking
+    # Adds revenue context (actual + estimate per quarter) that Finnhub surprises lacks.
+    # stable/earnings works on Starter; stable/income-statement also works.
+    if agent.data.fmp:
+        try:
+            tasks["fmp_earnings_enrichment"] = asyncio.wait_for(
+                agent.data.fmp.get_earnings_enrichment(ticker),
+                timeout=6.0,
+            )
+        except Exception:
+            pass
+
     if tasks:
         task_keys = list(tasks.keys())
         task_coros = list(tasks.values())
@@ -1757,6 +1769,23 @@ async def earnings_detail(request: Request, ticker: str = ""):
                 print(f"[EARNINGS_DETAIL] EDGAR enriched {ticker}: {list(edgar_financials.keys())}")
     except Exception as e:
         print(f"[EARNINGS_DETAIL] EDGAR enrichment failed for {ticker}: {e}")
+
+    # Phase 4: FMP earnings enrichment — flatten from gathered task result
+    fmp_enrich = result.pop("fmp_earnings_enrichment", None)
+    if isinstance(fmp_enrich, dict):
+        fmp_earnings_history = fmp_enrich.get("earnings_history", [])
+        fmp_income_stmts = fmp_enrich.get("income_statements", [])
+        if fmp_earnings_history:
+            result["fmp_earnings_history"] = fmp_earnings_history
+        if fmp_income_stmts:
+            result["fmp_income_statements"] = fmp_income_stmts
+        # Promote upcoming EPS+revenue estimate from FMP if not already covered
+        upcoming_fmp = [e for e in fmp_earnings_history if not e.get("report_available")]
+        if upcoming_fmp:
+            next_event = upcoming_fmp[0]
+            result.setdefault("fmp_next_earnings_date", next_event.get("date"))
+            result.setdefault("fmp_next_eps_estimate", next_event.get("eps_estimate"))
+            result.setdefault("fmp_next_revenue_estimate", next_event.get("revenue_estimate"))
 
     # Cache for 10 minutes
     cache.set(cache_key, result, 600)

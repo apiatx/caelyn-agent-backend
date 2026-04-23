@@ -868,6 +868,15 @@ class MarketDataService:
             "finnhub_company_news",
         ]
 
+        # FMP: per-ticker earnings history + upcoming with revenue context.
+        # Adds revenue_actual/revenue_estimate per quarter — Finnhub surprises lacks revenue.
+        # best-effort: skipped silently if fmp is not set or call fails.
+        if self.fmp:
+            async_tasks.append(
+                asyncio.wait_for(self.fmp.get_earnings_history(ticker, limit=8), timeout=5.0)
+            )
+            async_keys.append("fmp_earnings_detail")
+
         # Web search for batch enrichment (Perplexity-routed) — only in agent_collab mode
         if self._web_search_allowed:
             async_tasks.append(asyncio.wait_for(self.web_search.get_ticker_news_sentiment(ticker), timeout=10.0))

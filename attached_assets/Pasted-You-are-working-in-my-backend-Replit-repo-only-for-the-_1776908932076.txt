@@ -1,0 +1,274 @@
+You are working in my **backend Replit repo only** for the CaelynAI / FastAPI server.
+
+This is a **surgical earnings architecture upgrade**.
+
+## Goal
+
+Implement a **hybrid earnings model**:
+
+* **Finnhub = earnings calendar / discovery / scanning layer**
+* **FMP = earnings report / detail / enrichment layer**
+* Backend should normalize these into a single internal earnings shape where appropriate
+* Do **not** break existing frontend contracts or existing working earnings pages/routes
+
+This is meant to improve:
+
+* Earnings Calendar page
+* ticker research/detail flows
+* AI Terminal / agent-enriched ticker analysis
+* future earnings-based signal/ranking features
+
+## Non-negotiable rules
+
+* **Audit first. Do not edit immediately.**
+* Make the **smallest safe set of changes**
+* Do **not** broad-refactor unrelated code
+* Do **not** break current working pages/routes
+* Preserve existing caches/TTLs unless a minimal change is required
+* Reuse existing provider/service/helper patterns already in the codebase
+* Work directly on `main`
+* Commit and push directly to `main` only after verification
+
+## Architecture to enforce
+
+### Finnhub should remain primary for:
+
+* market-wide upcoming earnings scans
+* weekly earnings discovery
+* earnings calendar page source-of-truth if that page depends on broad coverage
+* any route/helper scanning many tickers for upcoming earnings
+* surprises/calendar lanes already verified to work better on current plan
+
+### FMP should be added/used for:
+
+* earnings report/detail enrichment
+* per-ticker earnings report context
+* additional report fields that help research_ticker, AI Terminal, and future signal scoring
+* any stable Starter-compatible earnings-report endpoint that actually returns usable data
+
+### Important
+
+Do **not** replace Finnhub calendar blindly.
+This is a **hybrid architecture**, not a forced migration.
+
+## Phase 1 — Audit first
+
+Audit all backend earnings-related logic and identify:
+
+1. Every file/function/route/helper using Finnhub for:
+
+   * earnings calendar
+   * upcoming earnings scans
+   * earnings surprises
+   * ticker-level earnings enrichment
+
+2. Every file/function/route/helper using FMP for:
+
+   * earnings report
+   * earnings calendar
+   * earnings surprises
+   * ticker-level earnings enrichment
+
+3. Every frontend-serving backend route that depends on earnings data:
+
+   * Earnings Calendar page
+   * research_ticker
+   * AI Terminal
+   * any agent helper or popup chatbox enrichment
+   * any options flow / notifai route that uses earnings timing
+
+For each usage, output:
+
+* file path
+* function/helper/route name
+* provider used
+* purpose
+* whether it should stay as-is, be enriched, or be normalized
+
+## Phase 2 — Verify actual FMP Starter earnings endpoints before coding
+
+Before implementing anything, directly verify which FMP Starter **stable** endpoints actually work for my current plan for:
+
+* earnings report
+* earnings calendar by ticker
+* any usable historical earnings/report endpoint
+* any usable surprise-related endpoint
+
+Do not rely on docs alone.
+Test actual Starter behavior.
+
+For each candidate FMP earnings endpoint, report:
+
+* endpoint
+* sample response shape
+* whether it works on Starter
+* whether it is useful for enrichment
+* whether it is reliable enough for production use
+
+If an endpoint is partial/unavailable/empty/inconsistent:
+
+* do **not** force it into active flows
+
+## Phase 3 — Design the normalized hybrid earnings shape
+
+Design a minimal normalized backend earnings object that can combine:
+
+* Finnhub calendar/discovery fields
+* FMP report/detail fields
+
+Keep it lean and backward-compatible.
+
+Suggested shape (adjust only if repo conventions require):
+
+* ticker
+* event_date
+* event_time / session
+* fiscal_period
+* fiscal_year
+* eps_estimate
+* eps_actual
+* revenue_estimate
+* revenue_actual
+* surprise_pct
+* report_available
+* report_summary / report_context
+* source_calendar
+* source_report
+
+Rules:
+
+* Only populate fields that are actually available and reliable
+* Preserve existing output contracts where routes already exist
+* If a route cannot safely change shape, add enrichment internally without breaking existing response fields
+
+## Phase 4 — Surgical implementation
+
+Implement the smallest safe set of changes needed so that:
+
+### A. Earnings Calendar / discovery remains Finnhub-primary
+
+* keep Finnhub as the main scanning/discovery source
+* preserve current working upcoming-earnings behavior
+* do not degrade market-wide scans
+
+### B. Add FMP earnings report enrichment where it genuinely helps
+
+Prioritize:
+
+* `research_ticker`
+* AI Terminal ticker enrichment
+* any existing ticker research/detail helper that would benefit from report context
+* future-safe reusable helper/service layer if one already exists
+
+### C. Normalize without breaking current consumers
+
+* if there is an existing route/page contract, preserve it
+* if adding new fields, make them additive and backward-compatible
+* if a normalized helper is useful, implement it in backend only
+
+### D. Do not force FMP into paths where Starter coverage is weak
+
+If Finnhub remains clearly better for:
+
+* surprises
+* calendar timing
+* weekly scans
+  then keep Finnhub there
+
+## Phase 5 — Agent/chatbox audit
+
+Check whether any AI/agent/popup chatbox ticker enrichment path still uses stale earnings helpers.
+
+If so:
+
+* normalize those backend helper paths to the new hybrid model
+* ensure agents can access:
+
+  * upcoming earnings timing from Finnhub
+  * earnings report context from FMP when available
+
+Do not change orchestration logic beyond the minimum needed to use the correct helper.
+
+## Guardrails
+
+Do not break or broadly modify:
+
+* options flow routes using earnings timing
+* notifai if it depends on Finnhub weekly earnings scans
+* existing frontend earnings calendar contract
+* unrelated provider routing
+* non-earnings stock data flows
+* Hyperliquid / Tradier / Finviz / macro / SEC / prediction market logic
+
+## Deliverables required
+
+Return all of the following:
+
+### 1. Audit summary
+
+* where earnings data currently comes from
+* which parts remain Finnhub-primary
+* which parts gain FMP enrichment
+* why
+
+### 2. Verified FMP Starter endpoint report
+
+For every tested earnings endpoint:
+
+* works / does not work
+* useful / not useful
+* planned usage / not used
+
+### 3. Final hybrid earnings routing plan
+
+Simple matrix:
+
+* earnings use case
+* primary provider
+* enrichment provider
+* affected routes/helpers
+
+### 4. Exact backend files changed
+
+List every changed file.
+
+### 5. Change rationale
+
+For each changed file:
+
+* what changed
+* why
+* what contract was preserved
+
+### 6. Anything intentionally not changed
+
+Especially:
+
+* any Finnhub earnings usage intentionally preserved
+* any FMP earnings endpoint intentionally not used because Starter support was weak
+
+### 7. Verification
+
+Run and report:
+
+* tests
+* import/type sanity checks
+* app startup sanity
+* targeted smoke tests for:
+
+  * Earnings Calendar backend path
+  * research_ticker earnings path
+  * AI Terminal earnings-related path if applicable
+  * one agent/chatbox earnings enrichment path if applicable
+
+## Success criteria
+
+This task is successful only if:
+
+* Finnhub remains the reliable calendar/discovery layer
+* FMP is added only where its earnings report/detail data is actually useful and verified on Starter
+* backend gains a cleaner hybrid earnings model
+* no existing earnings page/route breaks
+* all changes are surgical and backward-compatible
+
+Again: **audit first, verify FMP Starter endpoints second, then smallest safe patch set only.**

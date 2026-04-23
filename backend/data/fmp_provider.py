@@ -228,6 +228,98 @@ class FMPProvider:
                     symbols.append(sym)
         return symbols
 
+    @traceable(name="get_earnings_history")
+    async def get_earnings_history(self, ticker: str, limit: int = 8) -> list:
+        """
+        Per-ticker earnings history + upcoming via stable/earnings.
+        Returns both historical (epsActual populated) and upcoming (epsActual=null).
+        Normalized into a consistent shape for downstream consumption.
+
+        Fields: ticker, date, eps_estimate, eps_actual, revenue_estimate,
+                revenue_actual, surprise_pct, report_available, source.
+        """
+        data = await self._get_stable("earnings", {"symbol": ticker.upper(), "limit": limit})
+        if not isinstance(data, list):
+            return []
+        results = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            eps_actual = item.get("epsActual")
+            eps_est = item.get("epsEstimated")
+            rev_actual = item.get("revenueActual")
+            surprise_pct = None
+            if eps_actual is not None and eps_est is not None and eps_est != 0:
+                try:
+                    surprise_pct = round((eps_actual - eps_est) / abs(eps_est) * 100, 2)
+                except (TypeError, ZeroDivisionError):
+                    surprise_pct = None
+            results.append({
+                "ticker": item.get("symbol", ticker.upper()),
+                "date": item.get("date"),
+                "eps_estimate": eps_est,
+                "eps_actual": eps_actual,
+                "revenue_estimate": item.get("revenueEstimated"),
+                "revenue_actual": rev_actual,
+                "surprise_pct": surprise_pct,
+                "report_available": eps_actual is not None,
+                "source": "fmp",
+            })
+        return results
+
+    @traceable(name="get_income_statement")
+    async def get_income_statement(self, ticker: str, limit: int = 4, period: str = "quarter") -> list:
+        """
+        Per-ticker income statement (quarterly or annual) via stable/income-statement.
+        Returns key financial fields useful for earnings enrichment.
+        period: 'quarter' or 'annual'
+        """
+        data = await self._get_stable(
+            "income-statement",
+            {"symbol": ticker.upper(), "limit": limit, "period": period},
+        )
+        if not isinstance(data, list):
+            return []
+        results = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            results.append({
+                "ticker": item.get("symbol", ticker.upper()),
+                "date": item.get("date"),
+                "fiscal_year": item.get("fiscalYear"),
+                "period": item.get("period"),
+                "revenue": item.get("revenue"),
+                "gross_profit": item.get("grossProfit"),
+                "operating_income": item.get("operatingIncome"),
+                "ebitda": item.get("ebitda"),
+                "net_income": item.get("netIncome"),
+                "eps": item.get("eps"),
+                "eps_diluted": item.get("epsDiluted"),
+                "source": "fmp",
+            })
+        return results
+
+    @traceable(name="get_earnings_enrichment")
+    async def get_earnings_enrichment(self, ticker: str) -> dict:
+        """
+        Hybrid earnings enrichment object: combines stable/earnings (event-level EPS+revenue)
+        with stable/income-statement (quarterly P&L context).
+        Used as an additive enrichment alongside Finnhub calendar/surprise data.
+        """
+        t = ticker.upper()
+        earnings_data, income_data = await asyncio.gather(
+            self.get_earnings_history(t, limit=8),
+            self.get_income_statement(t, limit=4, period="quarter"),
+            return_exceptions=True,
+        )
+        return {
+            "ticker": t,
+            "earnings_history": earnings_data if isinstance(earnings_data, list) else [],
+            "income_statements": income_data if isinstance(income_data, list) else [],
+            "source": "fmp_stable",
+        }
+
     @traceable(name="get_forex_quotes")
     async def get_forex_quotes(self) -> list:
         """Get forex quotes. Returns empty list — DXY requires premium plan."""
