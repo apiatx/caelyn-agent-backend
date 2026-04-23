@@ -1,0 +1,211 @@
+You are working in this repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+* Make small logical commits as you go
+
+Project constraints:
+
+* This repo is the logic/source-of-truth layer. 
+* Reuse existing services/caches and avoid unnecessary API expansion. Tradier is the primary options source. Do not introduce paid AI APIs anywhere in the options path. Avoid unnecessary FMP usage. 
+
+This is a critical options-engine repair pass. Do not broaden scope.
+
+PRIMARY GOALS
+
+1. Fix the Options Flow page engine so all four universes work:
+
+* ETFs
+* Megacaps
+* Large Caps ($100B–$999B)
+* Small Caps ($500M–$99B)
+
+Right now:
+
+* Megacaps works
+* Large Caps / Small Caps are timing out at 90 seconds
+* This is unacceptable if the engine simply needs longer or is architected poorly
+
+2. Make the Options Flow page support a unified 4-panel view
+
+* frontend will render all four categories side by side
+* backend should support loading all four datasets cleanly without requiring users to click tabs one at a time and wait forever
+
+3. Fix the “Unusual Options Flow” logic for both:
+
+* Options Flow page
+* Home page Unusual Options Flow section
+
+The goal is NOT “largest companies with options activity.”
+The goal IS:
+
+* biggest unusual signal across all stocks in the scan universe
+* sudden call/put surges
+* abnormal net flow
+* abnormal relative contract activity
+* strong unusualness / signal / ranking
+* not just megacap dominance by default liquidity
+
+4. Restore trust in the Tradier-based engine
+   The Options Flow page used to return genuinely useful high-signal outputs by tab.
+   Something regressed.
+   Find the regression and fix it.
+
+AUDIT FIRST — NO GUESSING
+
+Inspect the current options architecture and determine exactly:
+
+A. Timeout root cause
+
+* why do Large Cap / Small Cap hit 90-second timeout?
+* where is the timeout enforced?
+* is it a backend request timeout, frontend timeout, proxy timeout, async timeout, or semaphore bottleneck?
+* how long do those scans actually take today?
+* is the problem:
+
+  * oversized scan universe
+  * sequential processing
+  * bad concurrency
+  * too much per-symbol Tradier chain work
+  * poor shortlist selection
+  * broken caching
+  * waiting on unavailable LKG/cache state
+  * something else
+
+B. Regression root cause
+
+* what changed from when the Options Flow page previously returned good signals?
+* compare the current scoring / shortlist / tab-universe flow to the older working path if available in git history/current code structure
+* determine whether the engine now biases too heavily toward megacaps/high-liquidity names and misses true unusual small/large-cap signals
+
+C. Current scoring / ranking logic
+
+* inspect exactly how unusualness is currently ranked:
+
+  * contract volume vs OI?
+  * premium surge?
+  * call/put skew?
+  * net flow?
+  * relative daily abnormality?
+  * historical baseline?
+* determine whether the current score is overly dominated by raw size instead of abnormality
+
+D. Current cache and precompute model
+
+* what cache exists for:
+
+  * Home fast unusual options
+  * each Options Flow tab/category
+* whether all 4 universes can be continuously maintained so the frontend can show them all at once
+* whether the current architecture forces cold recompute too often
+
+IMPLEMENTATION TARGET
+
+PART 1 — Fix the engine so all 4 categories work reliably
+
+* Remove the practical timeout failure for Large Cap / Small Cap
+* If the scans legitimately take longer than 90s today, do not let them hard-fail just because of that
+* But also do not just “increase timeout and call it done” if the architecture is the real problem
+* Strong preference:
+
+  * persistent cached/precomputed snapshots per category
+  * stale-while-revalidate behavior
+  * bounded concurrency
+  * better shortlist selection
+  * avoid recomputing the full world on user interaction
+
+PART 2 — Support a unified 4-panel Options Flow page
+Backend should expose all four category datasets in a way the frontend can request/render them together.
+
+Preferred outcome:
+
+* one options dashboard response contains:
+
+  * etfs
+  * megacaps
+  * large_caps
+  * small_caps
+* each with:
+
+  * rows/tickers
+  * updated_at
+  * source
+  * data_state
+  * refresh_in_progress
+  * stale/stale_age if relevant
+
+If your existing architecture strongly favors separate endpoints, keep shared engine/cache beneath them and provide the cleanest minimal way for frontend to render all four without serial user-click waits.
+
+PART 3 — Make “unusual” actually mean unusual
+For both Home and Options Flow ranking:
+
+* do not let largest-cap/liquid names automatically dominate by raw premium/volume
+* rank for signal quality / abnormality / change / surprise
+* the engine should find:
+
+  * sudden surge in calls/puts
+  * outsized net flow shift
+  * unusual contract activity relative to baseline
+  * significant relative move in options flow
+* size can matter, but abnormality should matter more
+
+You may need to rebalance the scoring formula so:
+
+* raw dollar flow is one component
+* abnormality / relative surge is another
+* concentration / skew / OI relationship matters
+* smaller names with truly extreme signals can surface
+
+PART 4 — Home Unusual Options Flow section
+
+* Home should show the highest-signal unusual names across the broader market, not just biggest companies
+* This can be sourced from the same repaired engine
+* Home can still show a compact top list, but it must be smart
+
+IMPORTANT CONSTRAINTS
+
+* No paid AI APIs in this path
+* Reuse Tradier / Public / existing internal scoring / any already-approved cheap market-data helpers only if truly needed
+* Avoid scope creep
+* Keep the engine explainable and maintainable
+* Do not break Megacap if it is currently the only thing working
+* Prefer architecture that keeps data available continuously rather than recomputing on click
+
+VERIFY
+Before finishing, prove with real checks:
+
+1. ETFs dataset returns usable results
+2. Megacaps dataset returns usable results
+3. Large Caps dataset returns usable results
+4. Small Caps dataset returns usable results
+5. No 90-second hard-fail remains for those categories
+6. Home unusual options flows are no longer obviously dominated just by biggest companies
+7. Show at least a few real sample rows from each category and from Home
+8. Confirm the scoring/ranking now surfaces abnormal signals, not just size
+
+DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact root cause of the 90-second timeout failure
+3. exact root cause of the options-signal quality regression
+4. exact scoring/ranking changes made to improve “unusualness”
+5. exact cache/refresh architecture after the fix
+6. whether frontend can now render all 4 categories together cleanly
+7. explicit confirmation that no paid AI API is used
+8. confirmation changes were committed and pushed directly to `main`
+
+EXECUTION STYLE
+
+* Audit first
+* Fix the engine, not just the symptom
+* Make “unusual” mean unusual
+* Make all four universes continuously usable
+* Then commit and push directly to `main`
