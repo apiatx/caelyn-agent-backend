@@ -750,19 +750,57 @@ class MarketDataService:
 
         finnhub_quote = None
         finnhub_profile = None
-        if daily_budget.can_spend("finnhub", 2):
+        fmp_peers_result = []
+
+        # Pre-fetch FMP profile + peers concurrently (no Finnhub budget needed)
+        if self.fmp:
+            try:
+                _fmp_prof, _fmp_peers = await asyncio.gather(
+                    asyncio.wait_for(self.fmp.get_company_profile(ticker), timeout=4.0),
+                    asyncio.wait_for(self.fmp.get_stock_peers(ticker), timeout=4.0),
+                    return_exceptions=True,
+                )
+                if isinstance(_fmp_prof, dict) and _fmp_prof.get("name"):
+                    finnhub_profile = _fmp_prof
+                if isinstance(_fmp_peers, list) and _fmp_peers:
+                    fmp_peers_result = _fmp_peers
+            except Exception:
+                pass
+
+        # Quote: Tradier primary (real-time, 1 call) → Finnhub fallback
+        if self.tradier:
+            try:
+                tq = await asyncio.wait_for(self.tradier.get_quote(ticker), timeout=4.0)
+                if tq and tq.get("last"):
+                    finnhub_quote = {
+                        "price":      tq.get("last"),
+                        "change":     tq.get("change"),
+                        "change_pct": tq.get("change_percentage"),
+                        "high":       tq.get("high"),
+                        "low":        tq.get("low"),
+                        "open":       tq.get("open"),
+                        "prev_close": tq.get("prevclose"),
+                        "volume":     tq.get("volume"),
+                    }
+            except Exception:
+                pass
+        if finnhub_quote is None and daily_budget.can_spend("finnhub", 1):
             finnhub_quote = await fetch_with_fallback(
                 "equity_price",
                 lambda: asyncio.to_thread(self.finnhub.get_quote, ticker),
                 timeout=3.0,
             )
+            daily_budget.spend("finnhub", 1)
+
+        # Profile fallback to Finnhub if FMP returned nothing
+        if finnhub_profile is None and daily_budget.can_spend("finnhub", 1):
             finnhub_profile = await fetch_with_fallback(
                 "company_profile",
                 lambda: asyncio.to_thread(self.finnhub.get_company_profile,
                                           ticker),
                 timeout=3.0,
             )
-            daily_budget.spend("finnhub", 2)
+            daily_budget.spend("finnhub", 1)
 
         snapshot_compat = {}
         if finnhub_quote:
@@ -802,14 +840,27 @@ class MarketDataService:
             "recommendation_trends":
             self.finnhub.get_recommendation_trends(ticker),
             "social_sentiment": self.finnhub.get_social_sentiment(ticker),
-            "peer_companies": self.finnhub.get_company_peers(ticker),
+            "peer_companies": fmp_peers_result or self.finnhub.get_company_peers(ticker),
         }
 
-        # Finnhub company_news for relevant ticker-specific news (replaces web search)
+        # News: FMP primary (stable, no rate limit) → Finnhub fallback
+        async def _ticker_news_with_fallback():
+            if self.fmp:
+                try:
+                    fmp_news = await asyncio.wait_for(
+                        self.fmp.get_stock_news(ticker, limit=10), timeout=4.0
+                    )
+                    if fmp_news:
+                        return fmp_news
+                except Exception:
+                    pass
+            return await asyncio.to_thread(self.finnhub.get_company_news, ticker)
+
+        # Finnhub company_news key retained for downstream compat
         async_tasks = [
             self.options.get_put_call_ratio(ticker),
             self.edgar.get_company_summary(ticker),
-            asyncio.to_thread(self.finnhub.get_company_news, ticker),
+            _ticker_news_with_fallback(),
         ]
         async_keys = [
             "options_put_call",

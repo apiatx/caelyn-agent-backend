@@ -389,7 +389,7 @@ async def compute_extended_factors(
     # ── Concurrent async data fetches ─────────────────────────────────────────
     sector_history, news, earnings, income_stmts = await asyncio.gather(
         fetch_sector_etf_history(raw.sector, raw.industry),
-        fetch_company_news(t, finnhub_key),
+        fetch_company_news(t, finnhub_key, fmp_api_key),
         fetch_earnings_calendar(t, finnhub_key),
         fetch_income_statement(t, fmp_api_key),
         return_exceptions=True,

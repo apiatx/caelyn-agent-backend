@@ -15,21 +15,24 @@ except ImportError:
 
 class FMPProvider:
     """
-    Financial Modeling Prep API provider.
-    Free tier: 250 calls/day, end-of-day data.
-    Covers: DXY, oil, gold, commodities, sector ETFs, economic calendar,
-    forex, indices, and financial statements.
+    Financial Modeling Prep API provider — Starter plan, stable API.
+    All endpoints use https://financialmodelingprep.com/stable (v3 is legacy/403).
+    Confirmed working: quote, profile, stock-peers, biggest-gainers/losers,
+    most-actives, news/stock, news/general-latest, economic-calendar,
+    treasury-rates, ETF/index quotes.
+    NOT available on Starter: earnings-surprises, per-ticker earnings calendar,
+    sector-performance, commodity futures (GC=F), DXY (premium symbol).
     """
 
-    BASE_URL = "https://financialmodelingprep.com/api/v3"
+    STABLE_URL = "https://financialmodelingprep.com/stable"
 
     def __init__(self, api_key: str):
         self.api_key = api_key
 
-    @traceable(name="get")
-    async def _get(self, endpoint: str, params: dict = None) -> dict | list:
-        """Make a GET request to FMP API."""
-        cache_key = f"fmp:{endpoint}:{str(params)[:80]}"
+    @traceable(name="fmp_get_stable")
+    async def _get_stable(self, endpoint: str, params: dict = None) -> dict | list:
+        """Make a GET request to FMP stable API."""
+        cache_key = f"fmp:stable:{endpoint}:{str(params)[:80]}"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
@@ -39,31 +42,49 @@ class FMPProvider:
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
-                    f"{self.BASE_URL}/{endpoint}",
+                    f"{self.STABLE_URL}/{endpoint}",
                     params=params,
                     timeout=10,
                 )
-            if resp.status_code != 200:
-                if resp.status_code != 403:
-                    print(f"FMP error {resp.status_code}: {endpoint}")
+            if resp.status_code not in (200, 201):
+                if resp.status_code not in (403, 402, 404):
+                    print(f"[FMP] stable/{endpoint} HTTP {resp.status_code}")
                 return []
             result = resp.json()
-            cache.set(cache_key, result, FMP_TTL)
+            if isinstance(result, list) and result:
+                cache.set(cache_key, result, FMP_TTL)
+            elif isinstance(result, dict) and result:
+                cache.set(cache_key, result, FMP_TTL)
             return result
         except Exception as e:
-            print(f"FMP request failed ({endpoint}): {e}")
+            print(f"[FMP] stable/{endpoint} failed: {e}")
             return []
 
     @traceable(name="get_quote")
     async def get_quote(self, symbol: str) -> dict:
-        data = await self._get(f"quote/{symbol}")
+        """Single symbol quote. Returns backward-compat keys matching v3 shape."""
+        data = await self._get_stable("quote", {"symbol": symbol.upper()})
         if data and isinstance(data, list) and len(data) > 0:
             item = data[0]
+            price = item.get("price")
+            change = item.get("change")
+            prev_close = item.get("previousClose")
+            if prev_close is None and price is not None and change is not None:
+                try:
+                    prev_close = round(price - change, 4)
+                except (TypeError, ValueError):
+                    prev_close = None
             return {
-                "price": item.get("price"),
-                "changesPercentage": item.get("changesPercentage"),
-                "previousClose": item.get("previousClose"),
+                "price": price,
+                "change": change,
+                "changesPercentage": item.get("changePercentage"),
+                "previousClose": prev_close,
                 "volume": item.get("volume"),
+                "dayHigh": item.get("dayHigh"),
+                "dayLow": item.get("dayLow"),
+                "yearHigh": item.get("yearHigh"),
+                "yearLow": item.get("yearLow"),
+                "marketCap": item.get("marketCap"),
             }
         return {}
 
@@ -83,7 +104,7 @@ class FMPProvider:
     @traceable(name="get_stock_market_gainers")
     async def get_stock_market_gainers(self) -> list:
         """Get top gaining stocks today."""
-        data = await self._get("stock_market/gainers")
+        data = await self._get_stable("biggest-gainers")
         results = []
         for item in (data or [])[:20]:
             if isinstance(item, dict):
@@ -99,7 +120,7 @@ class FMPProvider:
     @traceable(name="get_stock_market_losers")
     async def get_stock_market_losers(self) -> list:
         """Get top losing stocks today."""
-        data = await self._get("stock_market/losers")
+        data = await self._get_stable("biggest-losers")
         results = []
         for item in (data or [])[:20]:
             if isinstance(item, dict):
@@ -115,7 +136,7 @@ class FMPProvider:
     @traceable(name="get_stock_market_actives")
     async def get_stock_market_actives(self) -> list:
         """Get most active stocks by volume today."""
-        data = await self._get("stock_market/actives")
+        data = await self._get_stable("most-actives")
         results = []
         for item in (data or [])[:20]:
             if isinstance(item, dict):
@@ -132,7 +153,7 @@ class FMPProvider:
     @traceable(name="get_market_news")
     async def get_market_news(self, limit: int = 20) -> list:
         """Get general market news."""
-        data = await self._get("stock_news", {"limit": limit})
+        data = await self._get_stable("news/general-latest", {"limit": limit})
         if not isinstance(data, list):
             return []
         results = []
@@ -140,9 +161,9 @@ class FMPProvider:
             if isinstance(item, dict):
                 results.append({
                     "title": item.get("title", ""),
-                    "text": item.get("text", "")[:200],
+                    "text": (item.get("text") or "")[:200],
                     "symbol": item.get("symbol", ""),
-                    "source": item.get("site", ""),
+                    "source": item.get("site", "") or item.get("publisher", ""),
                     "published": item.get("publishedDate", ""),
                     "url": item.get("url", ""),
                 })
@@ -151,7 +172,7 @@ class FMPProvider:
     @traceable(name="get_stock_news")
     async def get_stock_news(self, ticker: str, limit: int = 5) -> list:
         """Get news for a specific stock."""
-        data = await self._get("stock_news", {"tickers": ticker, "limit": limit})
+        data = await self._get_stable("news/stock", {"symbols": ticker.upper(), "limit": limit})
         if not isinstance(data, list):
             return []
         results = []
@@ -159,113 +180,159 @@ class FMPProvider:
             if isinstance(item, dict):
                 results.append({
                     "title": item.get("title", ""),
-                    "text": item.get("text", "")[:200],
+                    "text": (item.get("text") or "")[:200],
                     "symbol": item.get("symbol", ""),
-                    "source": item.get("site", ""),
+                    "source": item.get("site", "") or item.get("publisher", ""),
                     "published": item.get("publishedDate", ""),
                     "url": item.get("url", ""),
                 })
         return results
 
+    @traceable(name="get_company_profile")
+    async def get_company_profile(self, ticker: str) -> dict:
+        """
+        Get company profile from FMP stable API.
+        Returns keys matching Finnhub profile format for compatibility.
+        """
+        data = await self._get_stable("profile", {"symbol": ticker.upper()})
+        if data and isinstance(data, list) and len(data) > 0:
+            item = data[0]
+            return {
+                "name": item.get("companyName", ""),
+                "sector": item.get("sector", ""),
+                "industry": item.get("industry", ""),
+                "market_cap": item.get("marketCap"),
+                "logo": item.get("image", ""),
+                "exchange": item.get("exchange", ""),
+                "ipo_date": item.get("ipoDate", ""),
+                "country": item.get("country", ""),
+                "web_url": item.get("website", ""),
+                "description": item.get("description", ""),
+            }
+        return {}
+
+    @traceable(name="get_stock_peers")
+    async def get_stock_peers(self, ticker: str) -> list:
+        """
+        Get peer companies for a stock.
+        Returns list of ticker symbol strings (same contract as Finnhub get_company_peers).
+        """
+        data = await self._get_stable("stock-peers", {"symbol": ticker.upper()})
+        if not isinstance(data, list):
+            return []
+        symbols = []
+        for item in data:
+            if isinstance(item, dict):
+                sym = item.get("symbol", "")
+                if sym:
+                    symbols.append(sym)
+        return symbols
+
     @traceable(name="get_forex_quotes")
     async def get_forex_quotes(self) -> list:
-        """Get real-time forex quotes including DXY."""
-        return await self._get("quotes/forex")
+        """Get forex quotes. Returns empty list — DXY requires premium plan."""
+        return []
 
     @traceable(name="get_dxy")
     async def get_dxy(self) -> dict:
-        """Get US Dollar Index (DXY) quote."""
-        data = await self._get("quote/DX-Y.NYB")
-        if data and len(data) > 0:
-            d = data[0]
-            return {
-                "symbol": "DXY",
-                "price": d.get("price"),
-                "change": d.get("change"),
-                "change_pct": d.get("changesPercentage"),
-                "day_high": d.get("dayHigh"),
-                "day_low": d.get("dayLow"),
-                "year_high": d.get("yearHigh"),
-                "year_low": d.get("yearLow"),
-                "prev_close": d.get("previousClose"),
-            }
-        return {"symbol": "DXY", "error": "No data"}
+        """
+        Get US Dollar Index approximation.
+        DX-Y.NYB requires FMP premium. Returns empty dict — FRED covers this.
+        """
+        return {"symbol": "DXY", "error": "Premium symbol — use FRED"}
 
     @traceable(name="get_commodity_quotes")
     async def get_commodity_quotes(self) -> list:
-        """Get all commodity quotes (oil, gold, silver, etc.)."""
-        return await self._get("quotes/commodity")
+        """
+        Get commodity quotes via ETF proxies (futures not available on Starter).
+        GLD=Gold, SLV=Silver, USO=Oil, UNG=NatGas, COPX=Copper.
+        """
+        proxy_symbols = ["GLD", "SLV", "USO", "UNG", "COPX"]
+        tasks = [self.get_quote(s) for s in proxy_symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        out = []
+        name_map = {
+            "GLD": "Gold (ETF)", "SLV": "Silver (ETF)",
+            "USO": "Crude Oil (ETF)", "UNG": "Nat Gas (ETF)",
+            "COPX": "Copper (ETF)",
+        }
+        for sym, res in zip(proxy_symbols, results):
+            if isinstance(res, dict) and res.get("price"):
+                out.append({
+                    "symbol": sym,
+                    "name": name_map.get(sym, sym),
+                    "price": res.get("price"),
+                    "change": res.get("change"),
+                    "changesPercentage": res.get("changesPercentage"),
+                })
+        return out
 
     @traceable(name="get_key_commodities")
     async def get_key_commodities(self) -> dict:
-        """Get prices for key commodities: oil, gold, silver, natural gas."""
-        symbols = "CLUSD,GCUSD,SIUSD,NGUSD,HGUSD"
-        data = await self._get(f"quote/{symbols}")
-        result = {}
-        name_map = {
-            "CLUSD": "Crude Oil (WTI)",
-            "GCUSD": "Gold",
-            "SIUSD": "Silver",
-            "NGUSD": "Natural Gas",
-            "HGUSD": "Copper",
+        """
+        Key commodity prices via ETF proxies (futures not on Starter plan).
+        """
+        symbol_map = {
+            "GLD": "Gold",
+            "USO": "Crude Oil (WTI)",
+            "SLV": "Silver",
+            "UNG": "Natural Gas",
+            "COPX": "Copper",
         }
-        for item in (data or []):
-            symbol = item.get("symbol", "")
-            result[symbol] = {
-                "name": name_map.get(symbol, symbol),
-                "price": item.get("price"),
-                "change": item.get("change"),
-                "change_pct": item.get("changesPercentage"),
-                "day_high": item.get("dayHigh"),
-                "day_low": item.get("dayLow"),
-            }
+        tasks = [self.get_quote(s) for s in symbol_map]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        result = {}
+        for sym, res in zip(symbol_map, results):
+            if isinstance(res, dict) and res.get("price"):
+                result[sym] = {
+                    "name": symbol_map[sym],
+                    "price": res.get("price"),
+                    "change": res.get("change"),
+                    "change_pct": res.get("changesPercentage"),
+                    "day_high": res.get("dayHigh"),
+                    "day_low": res.get("dayLow"),
+                }
         return result
 
     @traceable(name="get_sector_performance")
     async def get_sector_performance(self) -> list:
-        """Get real-time sector performance (S&P 500 sectors). Cached 5 min."""
-        from data.cache import cache, SECTOR_ETF_TTL
-        cached = cache.get("fmp:sector_performance")
-        if cached is not None:
-            return cached
-        result = await self._get("sectors-performance")
-        if result:
-            cache.set("fmp:sector_performance", result, SECTOR_ETF_TTL)
-        return result
+        """Sector performance — not available on FMP Starter stable API. Returns []."""
+        return []
 
     @traceable(name="get_sector_performance_historical")
     async def get_sector_performance_historical(self) -> list:
-        """Get historical sector performance."""
-        return await self._get("historical-sectors-performance")
+        """Historical sector performance — not available on Starter. Returns []."""
+        return []
 
     @traceable(name="get_etf_quotes")
     async def get_etf_quotes(self, symbols: list) -> dict:
-        """Get quotes for a list of ETF symbols."""
-        symbols_str = ",".join(symbols)
-        data = await self._get(f"quote/{symbols_str}")
+        """
+        Get quotes for a list of ETF/stock symbols.
+        Uses individual stable/quote calls (batch not supported on Starter).
+        """
+        tasks = [self.get_quote(s) for s in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         result = {}
-        for item in (data or []):
-            sym = item.get("symbol", "")
-            result[sym] = {
-                "price": item.get("price"),
-                "change": item.get("change"),
-                "change_pct": item.get("changesPercentage"),
-                "volume": item.get("volume"),
-                "avg_volume": item.get("avgVolume"),
-                "day_high": item.get("dayHigh"),
-                "day_low": item.get("dayLow"),
-                "year_high": item.get("yearHigh"),
-                "year_low": item.get("yearLow"),
-                "pe": item.get("pe"),
-                "market_cap": item.get("marketCap"),
-            }
+        for sym, res in zip(symbols, results):
+            if isinstance(res, dict) and not isinstance(res, Exception) and res.get("price"):
+                result[sym] = {
+                    "price": res.get("price"),
+                    "change": res.get("change"),
+                    "change_pct": res.get("changesPercentage"),
+                    "volume": res.get("volume"),
+                    "day_high": res.get("dayHigh"),
+                    "day_low": res.get("dayLow"),
+                    "year_high": res.get("yearHigh"),
+                    "year_low": res.get("yearLow"),
+                    "market_cap": res.get("marketCap"),
+                }
         return result
 
     @traceable(name="get_sector_etf_snapshot")
     async def get_sector_etf_snapshot(self) -> dict:
         """
-        Get a complete sector rotation snapshot using sector ETFs.
-        Returns performance data for all major sector ETFs.
+        Sector rotation snapshot using sector ETFs via stable quote.
+        Sector performance time series not available on Starter — returns [].
         """
         sector_etfs = [
             "XLK", "XLV", "XLF", "XLE", "XLI", "XLP", "XLY",
@@ -274,11 +341,9 @@ class FMPProvider:
             "SMH", "URA", "HACK", "XBI", "GDX", "XOP",
         ]
         quotes = await self.get_etf_quotes(sector_etfs)
-        sector_perf = await self.get_sector_performance()
-
         return {
             "etf_quotes": quotes,
-            "sector_performance": sector_perf,
+            "sector_performance": [],
         }
 
     @traceable(name="get_economic_calendar")
@@ -292,7 +357,7 @@ class FMPProvider:
             params["from"] = from_date
         if to_date:
             params["to"] = to_date
-        return await self._get("economic_calendar", params)
+        return await self._get_stable("economic-calendar", params)
 
     @traceable(name="get_upcoming_economic_events")
     async def get_upcoming_economic_events(self) -> list:
@@ -341,32 +406,33 @@ class FMPProvider:
 
     @traceable(name="get_market_indices")
     async def get_market_indices(self) -> dict:
-        """Get major market index quotes."""
-        symbols = "^GSPC,^DJI,^IXIC,^RUT,^VIX"
-        data = await self._get(f"quote/{symbols}")
-        result = {}
-        name_map = {
+        """Get major market index quotes via stable/quote."""
+        symbol_map = {
             "^GSPC": "S&P 500",
             "^DJI": "Dow Jones",
             "^IXIC": "Nasdaq",
             "^RUT": "Russell 2000",
             "^VIX": "VIX",
         }
-        for item in (data or []):
-            sym = item.get("symbol", "")
-            result[sym] = {
-                "name": name_map.get(sym, sym),
-                "price": item.get("price"),
-                "change": item.get("change"),
-                "change_pct": item.get("changesPercentage"),
-            }
+        tasks = [self.get_quote(s) for s in symbol_map]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        result = {}
+        for sym, res in zip(symbol_map, results):
+            name = symbol_map[sym]
+            if isinstance(res, dict) and not isinstance(res, Exception):
+                result[sym] = {
+                    "name": name,
+                    "price": res.get("price"),
+                    "change": res.get("change"),
+                    "change_pct": res.get("changesPercentage"),
+                }
         return result
 
     @traceable(name="get_treasury_rates")
     async def get_treasury_rates(self) -> dict:
-        """Get current Treasury yields."""
-        data = await self._get("treasury")
-        if data and len(data) > 0:
+        """Get current Treasury yields from stable/treasury-rates."""
+        data = await self._get_stable("treasury-rates")
+        if data and isinstance(data, list) and len(data) > 0:
             latest = data[0]
             return {
                 "date": latest.get("date"),
@@ -387,11 +453,9 @@ class FMPProvider:
     @traceable(name="get_macro_market_data")
     async def get_macro_market_data(self) -> dict:
         """
-        Full macro market data snapshot:
-        DXY, oil, gold, treasuries, indices, sector performance.
-        Uses ~8 API calls.
+        Full macro market data snapshot.
+        DXY not available on Starter (uses FRED instead).
         """
-        import asyncio
         dxy, commodities, indices, treasuries, sector_perf, econ_events = (
             await asyncio.gather(
                 self.get_dxy(),
@@ -416,12 +480,8 @@ class FMPProvider:
     @traceable(name="get_full_commodity_dashboard")
     async def get_full_commodity_dashboard(self) -> dict:
         """
-        Comprehensive commodity market snapshot:
-        All major commodities with prices, changes, and context.
-        Uses ~5 API calls.
+        Commodity market snapshot using ETF proxies (futures not on Starter).
         """
-        import asyncio
-
         all_commodities, key_commodities, energy_etfs, metal_etfs, agri_etfs = (
             await asyncio.gather(
                 self.get_commodity_quotes(),
@@ -445,7 +505,7 @@ class FMPProvider:
     async def get_economic_calendar_nasdaq(self, days_ahead: int = 7) -> list:
         """
         Get upcoming US economic events for the next N days.
-        Uses Nasdaq free calendar API as primary source.
+        Uses Nasdaq free calendar API — independent of FMP plan tier.
         """
         from datetime import datetime, timedelta
 
@@ -509,14 +569,8 @@ class FMPProvider:
 
     @traceable(name="get_commodity_historical")
     async def get_commodity_historical(self, symbol: str, days: int = 30) -> list:
-        """Get historical daily prices for a commodity."""
-        from datetime import datetime, timedelta
-        to_date = datetime.now().strftime("%Y-%m-%d")
-        from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        data = await self._get(
-            f"historical-price-full/{symbol}",
-            {"from": from_date, "to": to_date},
-        )
-        if isinstance(data, dict) and "historical" in data:
-            return data["historical"][:days]
+        """
+        Historical commodity prices — not available on FMP Starter stable API.
+        Returns empty list.
+        """
         return []

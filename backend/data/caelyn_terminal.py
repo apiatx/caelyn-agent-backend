@@ -685,17 +685,41 @@ class CaelynTerminalProvider:
         return results
 
     async def _fetch_news(self, tickers: list[str]) -> list[dict]:
-        if not self.finnhub or not tickers:
+        if not tickers:
             return []
+
+        async def _news_for_ticker(t: str) -> list[dict]:
+            if self.fmp:
+                try:
+                    fmp_news = await asyncio.wait_for(
+                        self.fmp.get_stock_news(t, limit=7), timeout=4.0
+                    )
+                    if fmp_news:
+                        for item in fmp_news:
+                            item["_sym"] = t
+                        return fmp_news
+                except Exception:
+                    pass
+            if self.finnhub:
+                try:
+                    fh_news = await asyncio.to_thread(self.finnhub.get_company_news, t, 7)
+                    if isinstance(fh_news, list):
+                        for item in fh_news:
+                            item["_sym"] = t
+                        return fh_news
+                except Exception:
+                    pass
+            return []
+
         try:
-            tasks = [asyncio.to_thread(self.finnhub.get_company_news, t, 7) for t in tickers[:4]]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(
+                *[_news_for_ticker(t) for t in tickers[:4]],
+                return_exceptions=True,
+            )
             combined = []
-            for sym, res in zip(tickers[:4], results):
+            for res in results:
                 if isinstance(res, list):
-                    for item in res:
-                        item["_sym"] = sym
-                        combined.append(item)
+                    combined.extend(res)
             return combined
         except Exception as e:
             print(f"[CAELYN] News fetch error: {e}")

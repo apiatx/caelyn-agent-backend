@@ -1,6 +1,6 @@
 """
 Market data provider for sector ETFs.
-Quotes:  Finnhub (real-time)
+Quotes:  Tradier (real-time, batch-efficient) → Finnhub fallback
 History: yfinance (daily bars, comprehensive 1Y+)
 """
 from __future__ import annotations
@@ -25,12 +25,92 @@ _QUOTE_TTL = 120
 _executor  = ThreadPoolExecutor(max_workers=13)  # one worker per ticker for max parallelism
 
 
+def _tradier_key() -> str:
+    return os.getenv("TRADIER_API_KEY", "")
+
+
+def _tradier_base() -> str:
+    sandbox = os.getenv("TRADIER_SANDBOX", "false").lower() in ("true", "1", "yes")
+    return "https://sandbox.tradier.com/v1" if sandbox else "https://api.tradier.com/v1"
+
+
 def _finnhub_key() -> str:
     return os.getenv("FINNHUB_API_KEY", "")
 
 
-async def _finnhub_quote(ticker: str, session: httpx.AsyncClient) -> tuple[str, dict]:
-    """Fetch real-time quote from Finnhub for a single ticker."""
+def _normalize_tradier_quote(sym: str, q: dict) -> dict:
+    """
+    Map Tradier quote fields to the canonical sector-rotation output contract:
+    {price, change_1d_pct, prev_close, day_high, day_low}
+    Exact same shape as the previous Finnhub contract — no schema leakage.
+    """
+    last = q.get("last")
+    prevclose = q.get("prevclose")
+    change_pct = q.get("change_percentage")
+    if change_pct is None and last is not None and prevclose is not None and prevclose != 0:
+        try:
+            change_pct = (last - prevclose) / prevclose * 100
+        except (TypeError, ZeroDivisionError):
+            change_pct = None
+    return {
+        "price":        last,
+        "change_1d_pct": change_pct,
+        "prev_close":   prevclose,
+        "day_high":     q.get("high"),
+        "day_low":      q.get("low"),
+    }
+
+
+async def _tradier_quotes_batch(tickers: list[str]) -> dict[str, dict]:
+    """
+    Fetch real-time quotes for all tickers in one Tradier batch call.
+    Returns {ticker: normalized_quote_dict}.
+    """
+    key = _tradier_key()
+    if not key:
+        return {}
+
+    cache_key = f"sr_td_batch:{'_'.join(sorted(tickers))}"
+    hit = cache.get(cache_key)
+    if hit is not None:
+        return hit
+
+    symbols_str = ",".join(t.upper() for t in tickers)
+    base = _tradier_base()
+    try:
+        async with httpx.AsyncClient(timeout=10) as session:
+            resp = await session.get(
+                f"{base}/markets/quotes",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Accept": "application/json",
+                },
+                params={"symbols": symbols_str, "greeks": "false"},
+            )
+        if resp.status_code != 200:
+            print(f"[SR][Tradier] batch quote HTTP {resp.status_code}")
+            return {}
+        data = resp.json()
+        quotes_raw = data.get("quotes", {})
+        quote_list = quotes_raw.get("quote", []) if isinstance(quotes_raw, dict) else []
+        if isinstance(quote_list, dict):
+            quote_list = [quote_list]
+
+        result: dict[str, dict] = {}
+        for q in quote_list:
+            sym = (q.get("symbol") or "").upper()
+            if sym:
+                result[sym] = _normalize_tradier_quote(sym, q)
+
+        cache.set(cache_key, result, _QUOTE_TTL)
+        return result
+    except Exception as e:
+        print(f"[SR][Tradier] batch quote error: {e}")
+        return {}
+
+
+async def _finnhub_quote_single(ticker: str, session: httpx.AsyncClient) -> tuple[str, dict]:
+    """Fetch real-time quote from Finnhub for a single ticker (fallback path)."""
     cache_key = f"sr_fh_q:{ticker}"
     hit = cache.get(cache_key)
     if hit is not None:
@@ -65,19 +145,33 @@ async def _finnhub_quote(ticker: str, session: httpx.AsyncClient) -> tuple[str, 
 
 
 async def fetch_etf_quotes() -> dict[str, dict]:
-    """Fetch real-time quotes for all sector + benchmark tickers via Finnhub."""
-    async with httpx.AsyncClient() as session:
-        results = await asyncio.gather(
-            *[_finnhub_quote(t, session) for t in ALL_TICKERS],
-            return_exceptions=True,
-        )
-    return {
-        t: q
-        for item in results
-        if not isinstance(item, Exception)
-        for t, q in [item]
-        if q
-    }
+    """
+    Fetch real-time quotes for all sector + benchmark tickers.
+    Primary: Tradier batch (single HTTP call for all tickers).
+    Fallback: Finnhub individual calls (if Tradier unavailable or partial miss).
+    Output contract is identical to the previous Finnhub-only implementation:
+    {ticker: {price, change_1d_pct, prev_close, day_high, day_low}}
+    """
+    result: dict[str, dict] = {}
+
+    tradier_data = await _tradier_quotes_batch(ALL_TICKERS)
+    if tradier_data:
+        result.update(tradier_data)
+
+    missing = [t for t in ALL_TICKERS if t not in result or not result[t].get("price")]
+    if missing:
+        async with httpx.AsyncClient() as session:
+            fallbacks = await asyncio.gather(
+                *[_finnhub_quote_single(t, session) for t in missing],
+                return_exceptions=True,
+            )
+        for item in fallbacks:
+            if not isinstance(item, Exception):
+                t, q = item
+                if q:
+                    result[t] = q
+
+    return {t: q for t, q in result.items() if q}
 
 
 def _yfinance_history_sync(ticker: str, days: int = 400) -> list[dict]:

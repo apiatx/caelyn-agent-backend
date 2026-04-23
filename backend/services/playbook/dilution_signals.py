@@ -369,20 +369,44 @@ def score_crowding_risk(
 
 # ── Async data fetchers (thin httpx wrappers, consistent with FMP pattern) ───
 
-async def fetch_company_news(ticker: str, finnhub_key: str) -> List[Dict]:
-    """Fetch last 14 days of company news from Finnhub. Cached at FINNHUB_TTL."""
-    if not finnhub_key:
-        return []
+async def fetch_company_news(ticker: str, finnhub_key: str, fmp_api_key: str = "") -> List[Dict]:
+    """
+    Fetch last 14 days of company news.
+    Primary: FMP stable news/stock (no rate limit).
+    Fallback: Finnhub company-news.
+    """
     from data.cache import cache, FINNHUB_TTL
-    cache_key = f"playbook:fh_news14:{ticker.upper()}"
+    cache_key = f"playbook:news14:{ticker.upper()}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
+
+    import httpx
+
+    # FMP stable primary
+    if fmp_api_key:
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(
+                    "https://financialmodelingprep.com/stable/news/stock",
+                    params={"symbols": ticker.upper(), "limit": 20, "apikey": fmp_api_key},
+                )
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list) and data:
+                    result = data[:20]
+                    cache.set(cache_key, result, FINNHUB_TTL)
+                    return result
+        except Exception as e:
+            print(f"[DILUTION] FMP news error for {ticker}: {e}")
+
+    # Finnhub fallback
+    if not finnhub_key:
+        return []
     try:
-        import httpx
-        today    = date.today()
-        from_dt  = (today - timedelta(days=14)).strftime("%Y-%m-%d")
-        to_dt    = today.strftime("%Y-%m-%d")
+        today   = date.today()
+        from_dt = (today - timedelta(days=14)).strftime("%Y-%m-%d")
+        to_dt   = today.strftime("%Y-%m-%d")
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.get(
                 "https://finnhub.io/api/v1/company-news",
