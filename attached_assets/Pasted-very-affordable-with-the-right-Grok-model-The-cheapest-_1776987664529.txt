@@ -1,0 +1,34 @@
+very affordable with the right Grok model. The cheapest suitable model is grok-4-1-fast-reasoning (also referred to as grok-4-1-fast or grok-4-1-fast-reasoning-latest). 
+docs.x.ai +1
+
+Why this model?Pricing: $0.20 per million input tokens + $0.50 per million output tokens (plus cached input at $0.05/M if you use prompt caching). This is the lowest-priced capable model in the current xAI lineup. 
+docs.x.ai
+Capabilities: 2 million token context window, excellent built-in tool calling (it “excels at tool-calling”), reasoning/thinking steps, and structured JSON outputs. It’s lightweight and fast, ideal for your hourly automated scanner. 
+docs.x.ai
+X integration: It has native access to the X Search tool (x_search), which lets Grok directly query real-time X posts without you needing a separate X API key or scraper. 
+docs.x.ai
+No cheaper Grok model currently available meets the tool-calling + X-search needs for this use case.How your setup works (exactly as you described)Your website makes one automated API call per hour to the xAI Chat Completions endpoint (OpenAI-compatible). In the prompt you send:List your 10–20 favorite X handles.
+Instruct Grok to:Use the X Search tool (with allowed_x_handles parameter — max 10 handles per call, so it will make 1–2 calls if you have >10 accounts).
+Set from_date to ~7 days ago (ISO format).
+Focus on most recent mentions first (new alpha) while still considering the full 7-day window for trending.
+Extract ticker/symbol mentions (e.g., $BTC, $ETH, $SOL, or plain tickers).
+Output a clean structured JSON list (e.g., ticker, mention count, recency score, sample posts, trend direction) for your dashboard to render as a refreshing list view.
+Grok:Calls the X Search tool internally (keyword or semantic search restricted to your exact handles + date range).
+Gets the real-time posts back in its context.
+Analyzes/extracts tickers with recency emphasis.
+Returns the updated trending ticker list as JSON.
+
+Your frontend simply parses the JSON and refreshes the dashboard every hour. If nothing changed, the list stays the same.Cost breakdown (realistic estimate for < $1/day)Tool cost: X Search = $5 per 1,000 calls. You’ll use 1–2 calls per hour → $0.005–$0.01 per hour → **$0.12–$0.24/day**.
+Token cost (conservative):Prompt + tool results (posts from your 10–20 accounts) ≈ 20k–100k input tokens per call.
+Output JSON list ≈ 1k–2k tokens.
+At $0.20/M input + $0.50/M output: ~$0.005–$0.025 per hour → ~$0.12–$0.60/day.
+Total estimated daily cost: $0.25–$0.85/day in almost all realistic scenarios (far under $1). Even heavy post volume stays cheap because of the low per-token rate and 2M context. 
+docs.x.ai
+You can further reduce costs with:Prompt caching (cached input drops to $0.05/M).
+Batch API (50% token discount if you ever batch multiple scans).
+Tuning the from_date or using semantic search to return fewer but more relevant posts.
+
+Rate limits & practicalityModel rate limits (1,800 requests/minute and 10M tokens/minute) are way above your 1 call/hour need.
+X Search returns real-time public posts and supports date ranges + handle filtering perfectly for your “select 10–20 accounts” requirement. 
+docs.x.ai
+
