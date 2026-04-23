@@ -3,7 +3,7 @@ Pydantic schemas for the Sector Rotation / Sectors dashboard.
 """
 from __future__ import annotations
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 
@@ -89,8 +89,9 @@ class AIAnalysis(BaseModel):
     outlook_1_3_months: str = ""
     scenarios: list[AIScenario] = Field(default_factory=list)
     watch_items: list[str] = Field(default_factory=list)
-    # top_stocks_to_watch: "now"-screener strings, e.g. "NVDA — AI cycle momentum leader"
-    top_stocks_to_watch: list[str] = Field(default_factory=list)
+    # top_stocks_to_watch: list of structured stock dicts (SectorStock-shaped)
+    # or legacy strings — always injected at serve time from curated sector data
+    top_stocks_to_watch: List[Union[Dict[str, Any], str]] = Field(default_factory=list)
     sources: list[AISource] = Field(default_factory=list)
     generated_at: str = ""
     # winning_sector_context: which sector(s) drove this analysis

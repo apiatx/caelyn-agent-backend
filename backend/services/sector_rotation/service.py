@@ -268,12 +268,25 @@ async def get_sectors_page_data(
     sector_stock_groups = []
     if include_stocks and winners:
         from services.sector_rotation.sector_stocks import get_sector_stocks
-        # ETFs for stock scan: always top sector; expand to cluster if gap is small
         etfs_to_scan = [w.etf for w in winners[:top_sectors_for_stocks]]
         sector_stock_groups = await get_sector_stocks(etfs_to_scan)
 
     # 4. Persisted AI analysis (no TTL — survives until manually regenerated)
     saved = load_cached_analysis()
+
+    # 5. Always populate top_stocks_to_watch with structured objects from the
+    #    curated sector_stocks data — regardless of whether AI analysis exists.
+    #    This ensures the frontend panel always has renderable stock rows.
+    if sector_stock_groups:
+        from services.sector_rotation.sector_stocks import build_top_stocks_list
+        from services.sector_rotation.schemas import AIAnalysis
+        structured_stocks = build_top_stocks_list(sector_stock_groups, limit=10)
+        if saved is None:
+            # No saved analysis yet — create a shell so top_stocks_to_watch is reachable
+            saved = AIAnalysis(top_stocks_to_watch=structured_stocks)
+        else:
+            # Always overwrite with fresh structured data (curated, live-priced)
+            saved = saved.model_copy(update={"top_stocks_to_watch": structured_stocks})
 
     return SectorsPageData(
         page_title="Sectors",

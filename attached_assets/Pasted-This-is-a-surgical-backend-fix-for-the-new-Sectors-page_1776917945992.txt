@@ -1,0 +1,74 @@
+This is a surgical backend fix for the new "Sectors" page. Do NOT do a broad refactor. Audit first, then fix the specific issue.
+
+Problem:
+The new "Top Stocks in Winning Sectors" section on the frontend is rendering empty / hollow stock rows. That means the backend contract is either not populating the stock objects correctly, or is returning incomplete/empty fields for the frontend panel.
+
+Goal:
+Fix the backend so the Sectors page reliably returns populated top-stock data for the winning sector(s), with enough fields for the current frontend panel to render real stock rows.
+
+Critical product intent:
+- The "Top Stocks in Winning Sectors" section must show real names, not empty placeholders.
+- It should reflect the winning sector(s) identified by the backend.
+- It should include momentum leaders, bottleneck/enablers, and anchor giants.
+- The frontend has already built a panel for analysis.top_stocks_to_watch[]. That data must be populated cleanly.
+
+PHASE 1 — Audit the current response path
+1. Read the current Sectors backend flow end-to-end:
+   - GET /api/sectors/page-data
+   - POST /api/sectors/generate-analysis
+   - any sector stock scan helpers
+   - any analysis serialization / persistence path
+2. Identify exactly why the frontend is rendering empty stock rows.
+3. Specifically inspect:
+   - whether top_stocks_to_watch is empty
+   - whether objects are present but missing label fields like ticker/name/role
+   - whether page-data and generate-analysis return different shapes
+   - whether saved analysis persistence drops the stock list
+   - whether stock data is being generated but not attached to the returned analysis payload
+
+PHASE 2 — Fix the data contract
+4. Ensure BOTH of these return populated stock data consistently:
+   - GET /api/sectors/page-data
+   - POST /api/sectors/generate-analysis
+5. The frontend panel expects a real array of stock objects. Each object should have, at minimum, whatever the current frontend panel needs to render:
+   - ticker
+   - company_name (or clear display name field)
+   - role / group (momentum / bottleneck / anchor)
+   - sector
+   - chart/tradingview symbol if available
+   - reason_for_inclusion
+   - financial/catalyst fields if already available
+6. Be consistent across fresh generation and persisted reloads.
+7. If persistence currently stores only the text analysis and drops the structured stock list, fix that so the saved analysis includes top_stocks_to_watch.
+
+PHASE 3 — Verify winning-sector linkage
+8. Make sure the stock list is derived from the actual winning sector(s), not just a generic sector map.
+9. If multiple sectors are returned as winners, ensure the stock list either:
+   - includes a sector field per stock, or
+   - is grouped/merged intentionally in a deterministic way.
+10. Make sure at least the top names for the #1 winning sector appear.
+
+PHASE 4 — Output contract stability
+11. Do NOT break existing route compatibility.
+12. Prefer additive fixes over changing field names unless absolutely necessary.
+13. If the frontend is currently reading analysis.top_stocks_to_watch, preserve that path.
+
+PHASE 5 — Verification
+14. After the fix, verify live that:
+   - GET /api/sectors/page-data returns populated top_stocks_to_watch after a saved analysis exists
+   - POST /api/sectors/generate-analysis returns populated top_stocks_to_watch immediately
+   - the objects contain real renderable values, not blank strings/null placeholders
+15. Run tests and restart backend.
+
+Deliverables:
+- root cause of empty stock rows
+- files changed
+- before/after sample payload for top_stocks_to_watch
+- confirmation that saved analysis retains the structured stock list on refresh
+
+Constraints:
+- surgical changes only
+- no broad refactor
+- preserve existing routes
+- work directly on main
+- commit and push directly to main

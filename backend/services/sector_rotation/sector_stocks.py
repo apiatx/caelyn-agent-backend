@@ -386,3 +386,34 @@ async def get_sector_stocks(etfs: list[str]) -> list[SectorStockGroup]:
     quotes = await _enrich_with_quotes(all_tickers) if all_tickers else {}
 
     return [_build_group(etf, quotes) for etf in etfs if etf in _RAW]
+
+
+def build_top_stocks_list(
+    groups: list[SectorStockGroup],
+    limit: int = 10,
+) -> list[dict]:
+    """
+    Flatten SectorStockGroup list into a prioritised list of SectorStock dicts
+    suitable for injection into AIAnalysis.top_stocks_to_watch.
+
+    Priority order within each group:
+      1. momentum_leaders   (most immediately actionable)
+      2. bottleneck_enablers
+      3. anchor_giants
+
+    Across groups the top-ranked winning sector comes first.
+    Deduplicates by ticker; returns up to `limit` entries.
+    """
+    seen: set[str] = set()
+    result: list[dict] = []
+
+    for group in groups:
+        for stock in (group.momentum_leaders + group.bottleneck_enablers + group.anchor_giants):
+            if stock.ticker in seen:
+                continue
+            seen.add(stock.ticker)
+            result.append(stock.model_dump())
+            if len(result) >= limit:
+                return result
+
+    return result
