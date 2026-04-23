@@ -236,3 +236,55 @@ async def get_analysis_only(force: bool = False) -> Optional[AIAnalysis]:
     snapshots = build_sector_snapshots(quotes, histories)
     regime    = derive_regime(snapshots, macro)
     return await get_or_generate_analysis(snapshots, regime, macro, force=force)
+
+
+async def get_sectors_page_data(
+    include_stocks: bool = True,
+    top_sectors_for_stocks: int = 2,
+) -> "SectorsPageData":
+    """
+    Unified payload for the Sectors page.
+
+    Composition:
+    1. Full sector market data (reuse existing dashboard cache)
+    2. Winning-sector detection (multi-timeframe composite)
+    3. Stock scan for the top N winning sectors (Tradier-enriched)
+    4. Persisted AI analysis — returned regardless of age; None if never generated
+
+    No AI generation is triggered here — that is only triggered by
+    POST /api/sectors/generate-analysis (user-initiated, subscription-gated).
+    """
+    from services.sector_rotation.schemas import SectorsPageData
+    from services.sector_rotation.analytics import get_winning_sectors
+
+    # 1. Reuse existing dashboard data (already cached/computed)
+    dashboard = await get_dashboard(include_analysis=False)
+
+    # 2. Winning sector detection
+    winners = get_winning_sectors(dashboard.sectors, top_n=top_sectors_for_stocks + 1)
+    top_etf = winners[0].etf if winners else None
+
+    # 3. Stock scan for top sectors
+    sector_stock_groups = []
+    if include_stocks and winners:
+        from services.sector_rotation.sector_stocks import get_sector_stocks
+        # ETFs for stock scan: always top sector; expand to cluster if gap is small
+        etfs_to_scan = [w.etf for w in winners[:top_sectors_for_stocks]]
+        sector_stock_groups = await get_sector_stocks(etfs_to_scan)
+
+    # 4. Persisted AI analysis (no TTL — survives until manually regenerated)
+    saved = load_cached_analysis()
+
+    return SectorsPageData(
+        page_title="Sectors",
+        updated_at=dashboard.updated_at,
+        analysis_updated_at=saved.generated_at if saved else None,
+        regime=dashboard.regime,
+        sectors=dashboard.sectors,
+        leaders=dashboard.leaders,
+        laggards=dashboard.laggards,
+        winning_sectors=winners,
+        top_sector_etf=top_etf,
+        sector_stocks=sector_stock_groups,
+        saved_analysis=saved,
+    )

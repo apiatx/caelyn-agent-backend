@@ -1,9 +1,9 @@
 """
-Pydantic schemas for the Sector Rotation dashboard.
+Pydantic schemas for the Sector Rotation / Sectors dashboard.
 """
 from __future__ import annotations
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -89,8 +89,12 @@ class AIAnalysis(BaseModel):
     outlook_1_3_months: str = ""
     scenarios: list[AIScenario] = Field(default_factory=list)
     watch_items: list[str] = Field(default_factory=list)
+    # top_stocks_to_watch: "now"-screener strings, e.g. "NVDA — AI cycle momentum leader"
+    top_stocks_to_watch: list[str] = Field(default_factory=list)
     sources: list[AISource] = Field(default_factory=list)
     generated_at: str = ""
+    # winning_sector_context: which sector(s) drove this analysis
+    winning_sector_etfs: list[str] = Field(default_factory=list)
 
 
 class SectorRotationDashboard(BaseModel):
@@ -101,3 +105,65 @@ class SectorRotationDashboard(BaseModel):
     laggards: list[SectorSnapshot] = Field(default_factory=list)
     sectors: list[SectorSnapshot] = Field(default_factory=list)
     analysis: Optional[AIAnalysis] = None
+
+
+# ── Sectors page — new models ────────────────────────────────────────────────
+
+class SectorStock(BaseModel):
+    """One stock entry in the Sectors page stock scan."""
+    ticker: str
+    company_name: str
+    sector_etf: str                       # e.g. "XLK"
+    sector_name: str                      # e.g. "Technology"
+    role: str                             # "momentum" | "bottleneck" | "anchor"
+    reason_for_inclusion: str = ""
+    price: Optional[float] = None
+    change_1d_pct: Optional[float] = None
+    market_cap_label: str = ""            # "Mega" | "Large" | "Mid" | "Small"
+    tv_symbol: str = ""                   # TradingView symbol, e.g. "NASDAQ:NVDA"
+
+
+class SectorStockGroup(BaseModel):
+    """Three role-groups of stocks for one sector ETF."""
+    etf: str                              # "XLK"
+    sector_name: str                      # "Technology"
+    momentum_leaders: List[SectorStock] = Field(default_factory=list)
+    bottleneck_enablers: List[SectorStock] = Field(default_factory=list)
+    anchor_giants: List[SectorStock] = Field(default_factory=list)
+
+
+class WinningSector(BaseModel):
+    """One sector in the ranked winning-sectors output."""
+    etf: str
+    sector_name: str
+    rotation_score: Optional[float] = None
+    relative_strength_rank: int = 0
+    regime_tag: str = ""
+    change_1d: Optional[float] = None
+    change_7d: Optional[float] = None
+    change_30d: Optional[float] = None
+    change_ytd: Optional[float] = None
+    is_top: bool = False                  # True for the single strongest sector
+
+
+class SectorsPageData(BaseModel):
+    """
+    Full payload for the Sectors page.
+    Backward-compatible: existing SectorRotationDashboard fields all present.
+    New fields are additive.
+    """
+    page_title: str = "Sectors"
+    updated_at: str
+    analysis_updated_at: Optional[str] = None
+    regime: RegimeSummary
+    # All 11 sector snapshots, sorted by rotation_score desc
+    sectors: list[SectorSnapshot] = Field(default_factory=list)
+    leaders: list[SectorSnapshot] = Field(default_factory=list)
+    laggards: list[SectorSnapshot] = Field(default_factory=list)
+    # Winning-sector detection output
+    winning_sectors: list[WinningSector] = Field(default_factory=list)
+    top_sector_etf: Optional[str] = None
+    # Stock scan for top sector(s)
+    sector_stocks: list[SectorStockGroup] = Field(default_factory=list)
+    # Persisted AI analysis — returned regardless of age; None if never generated
+    saved_analysis: Optional[AIAnalysis] = None

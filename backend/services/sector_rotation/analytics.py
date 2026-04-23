@@ -10,6 +10,7 @@ from services.sector_rotation.schemas import (
     SectorSnapshot,
     ETFSeries,
     RegimeSummary,
+    WinningSector,
     SECTOR_ETF_MAP,
     CYCLICALS,
     DEFENSIVES,
@@ -261,3 +262,79 @@ def derive_regime(
         leadership_style=style,
         macro_overlay=macro_overlay,
     )
+
+
+# ── Winning-sector detection ──────────────────────────────────────────────────
+
+def get_winning_sectors(
+    snapshots: list[SectorSnapshot],
+    *,
+    top_n: int = 3,
+    cluster_gap: float = 8.0,
+) -> list[WinningSector]:
+    """
+    Identify which sectors are "winning" using a multi-timeframe composite.
+
+    Scoring (additive, 0–100 scale):
+      - rotation_score contributes 50 pts (already 0–100; normalised to 0–50)
+      - 7D rank contributes 20 pts (rank from 1=best; linear scale)
+      - 30D rank contributes 20 pts
+      - YTD rank contributes 10 pts
+
+    The first-ranked sector (is_top=True) is always returned; additional
+    sectors are included when they are within `cluster_gap` composite points.
+    Minimum 1 sector, maximum top_n.
+
+    Args:
+        snapshots:   Full list of sector snapshots, any order.
+        top_n:       Maximum number of winners to return.
+        cluster_gap: Include a sector in the cluster if its composite score
+                     is within this many points of the top sector.
+
+    Returns:
+        List of WinningSector ordered by composite score descending.
+    """
+    valid = [s for s in snapshots if s.rotation_score is not None]
+    if not valid:
+        return []
+
+    n = len(valid)
+
+    def _rank_by(attr: str) -> dict[str, int]:
+        ordered = sorted(valid, key=lambda s: getattr(s, attr) or -999.0, reverse=True)
+        return {s.ticker: idx + 1 for idx, s in enumerate(ordered)}
+
+    r7d  = _rank_by("change_7d")
+    r30d = _rank_by("change_30d")
+    rytd = _rank_by("change_ytd")
+
+    def _composite(s: SectorSnapshot) -> float:
+        rot  = (s.rotation_score / 100.0) * 50.0
+        pts7 = (1.0 - (r7d.get(s.ticker, n) - 1) / max(n - 1, 1)) * 20.0
+        pts30 = (1.0 - (r30d.get(s.ticker, n) - 1) / max(n - 1, 1)) * 20.0
+        ptsyd = (1.0 - (rytd.get(s.ticker, n) - 1) / max(n - 1, 1)) * 10.0
+        return round(rot + pts7 + pts30 + ptsyd, 2)
+
+    scored = sorted(valid, key=_composite, reverse=True)
+    top_score = _composite(scored[0])
+
+    winners: list[WinningSector] = []
+    for i, s in enumerate(scored[:top_n]):
+        comp = _composite(s)
+        in_cluster = (i == 0) or ((top_score - comp) <= cluster_gap)
+        if not in_cluster:
+            break
+        winners.append(WinningSector(
+            etf=s.ticker,
+            sector_name=s.name,
+            rotation_score=s.rotation_score,
+            relative_strength_rank=s.relative_strength_rank or (i + 1),
+            regime_tag=s.regime_tag or "",
+            change_1d=s.change_1d,
+            change_7d=s.change_7d,
+            change_30d=s.change_30d,
+            change_ytd=s.change_ytd,
+            is_top=(i == 0),
+        ))
+
+    return winners

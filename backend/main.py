@@ -50,7 +50,7 @@ from agent.model_policy import (  # Phase 3: centralized model registry
 from services.hyperliquid.state import HyperliquidState as _HLState
 from services.hyperliquid.router import router as _hl_router, set_state as _hl_set_state
 from services.hyperliquid.websocket_manager import boot_and_run as _hl_boot_and_run
-from services.sector_rotation.router import router as _sr_router
+from services.sector_rotation.router import router as _sr_router, sectors_router as _sectors_router
 from services.insider_activity_service import (
     router as _insider_router,
     insider_activity_background_loop as _insider_bg_loop,
@@ -222,6 +222,7 @@ app.include_router(_hl_router)
 
 # ── Sector Rotation router ────────────────────────────────────────────────────
 app.include_router(_sr_router)
+app.include_router(_sectors_router)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Insider Activity router ───────────────────────────────────────────────────

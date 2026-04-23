@@ -114,3 +114,108 @@ async def refresh_analysis_endpoint(request: Request, _sub: None = Depends(requi
         return {"status": "ok", "generated_at": analysis.generated_at}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── /api/sectors/* — Sectors page endpoints ──────────────────────────────────
+
+sectors_router = APIRouter(prefix="/api/sectors", tags=["sectors"])
+
+
+@sectors_router.get("/page-data")
+async def sectors_page_data_endpoint(
+    include_stocks: bool = Query(True, description="Include per-sector stock scan"),
+    top_n: int = Query(2, description="Number of winning sectors to return stocks for"),
+):
+    """
+    Unified Sectors page payload.
+
+    Returns:
+    - All 11 sector snapshots (sorted by rotation_score)
+    - Winning-sector detection (multi-timeframe composite)
+    - Stock scan for top N sectors (momentum, bottleneck, anchor roles)
+    - Persisted AI analysis — survives page refresh until user manually regenerates
+    """
+    try:
+        from services.sector_rotation.service import get_sectors_page_data
+        data = await get_sectors_page_data(
+            include_stocks=include_stocks,
+            top_sectors_for_stocks=max(1, min(top_n, 3)),
+        )
+        return data
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Sectors page error: {e}")
+
+
+@sectors_router.post("/generate-analysis")
+async def sectors_generate_analysis_endpoint(
+    request: Request,
+    _sub: None = Depends(require_subscription),
+):
+    """
+    User-triggered analysis generation for the Sectors page.
+    Subscription required. Triggers a new Gemini analysis call that:
+    - Includes stock-level context for winning sectors
+    - Outputs a "top 10 stocks to watch" ranking
+    - Persists to disk (survives page refresh indefinitely)
+    Returns the new analysis on success.
+    """
+    try:
+        from services.sector_rotation.service import get_analysis_only
+        from services.sector_rotation.analytics import get_winning_sectors
+        from services.sector_rotation.gemini_analysis import get_or_generate_analysis
+        from services.sector_rotation.service import (
+            get_dashboard, _fetch_macro_overlay, _enrich_macro_with_treasuries,
+        )
+        from services.sector_rotation.analytics import build_sector_snapshots
+        from services.sector_rotation.providers import fetch_etf_quotes, fetch_all_histories
+        from services.sector_rotation.analytics import _pct_change
+
+        import asyncio
+
+        # Gather fresh market data for the analysis prompt context
+        quotes, histories = await asyncio.gather(
+            fetch_etf_quotes(),
+            fetch_all_histories(),
+        )
+        macro = _fetch_macro_overlay()
+        macro = await _enrich_macro_with_treasuries(macro)
+        spy_hist = histories.get("SPY", [])
+        spy_30d = _pct_change(spy_hist, 22)
+        if spy_30d is not None:
+            macro["spy_change_30d"] = round(spy_30d, 2)
+
+        snapshots = build_sector_snapshots(quotes, histories)
+
+        from services.sector_rotation.analytics import derive_regime
+        regime = derive_regime(snapshots, macro)
+
+        # Detect winning sectors to focus the analysis
+        winners = get_winning_sectors(snapshots, top_n=3)
+        winning_etfs = [w.etf for w in winners]
+
+        analysis = await get_or_generate_analysis(
+            snapshots=snapshots,
+            regime=regime,
+            macro=macro,
+            force=True,
+            winning_etfs=winning_etfs,
+        )
+
+        if analysis is None:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "error", "detail": "AI analysis generation failed — check server logs"},
+            )
+
+        return {
+            "status": "ok",
+            "generated_at": analysis.generated_at,
+            "winning_sector_etfs": winning_etfs,
+            "analysis": analysis.model_dump(),
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
