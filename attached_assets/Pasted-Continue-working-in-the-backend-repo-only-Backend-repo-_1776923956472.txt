@@ -1,0 +1,124 @@
+Continue working in the backend repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+Project constraints:
+
+* Reuse existing services/caches and avoid unnecessary API expansion. 
+* This repo is the logic/source-of-truth layer. 
+
+This is a focused backend change. Do not broaden scope.
+
+PRIMARY GOAL
+The Home page `Unusual Options Flows` section is currently only refreshing on the same 30-minute cadence as the Options Flow page precompute/LKG path.
+
+I want the Home page `Unusual Options Flows` section to refresh every **10 minutes**, while still avoiding any paid AI API usage.
+
+REQUIREMENTS
+
+1. Home page Unusual Options Flows should refresh every 10 minutes
+2. This 10-minute refresh path must use only:
+
+   * Tradier
+   * Public
+   * existing internal strategy/scoring logic
+   * other already-approved cheap/non-AI market data already in the project only if truly necessary
+3. It must NOT call:
+
+   * Anthropic
+   * OpenAI
+   * Grok/xAI
+   * Gemini
+   * any other paid reasoning/generative model
+4. Avoid FMP unless absolutely necessary
+5. Keep API usage disciplined
+6. Do not break or overcomplicate the existing Options Flow page
+
+IMPORTANT ARCHITECTURE INTENT
+
+* It is okay if the Home page uses a separate faster cache/precompute path from the full Options Flow page
+* The Home page section can be a lighter-weight “top unusual flows” snapshot
+* The Options Flow page can remain heavier and/or slower if needed
+* I care about the Home page surfacing unusual flow faster, not about making the full Options Flow page identical
+
+AUDIT FIRST
+Inspect the current implementation and determine:
+
+* exactly where the 30-minute cadence is coming from
+* whether Home is reading directly from the same `options_screener_lkg_v1:{tab}` or similar cache family as the Options Flow page
+* what existing non-AI scoring logic already exists for unusual flow / composite score / net flow / call-put skew / premium / abnormality
+* whether there is already a lighter-weight precompute path that can be reused
+* whether Public and Tradier are both currently available in the options pipeline or if one is the dominant source for Home-quality unusual flow ranking
+
+IMPLEMENTATION STRONG PREFERENCE
+Implement the smallest clean solution, ideally one of these:
+
+Preferred:
+A. Create a separate Home-only fast cache/precompute path for unusual options flows
+
+* refresh every 10 minutes
+* lightweight
+* no AI
+* reuse existing options scoring logic
+* reuse existing market data integrations already present
+* expose normalized rows to Home aggregator
+
+Alternative:
+B. Split the existing options cache family into:
+
+* heavier 30-minute page cache
+* lighter 10-minute Home cache
+
+Either way:
+
+* Home should consume the fast 10-minute non-AI cache
+* Options Flow page does not need to be changed unless required for shared code hygiene
+
+NORMALIZED OUTPUT
+Keep or normalize the Home payload field for `unusual_options_flows` so it remains frontend-friendly:
+
+* symbol
+* flow_signal / unusual_score / composite_score
+* net_flow / premium / call_put_skew / whichever existing metrics are strongest
+* short rationale/label
+* updated_at
+* section_status if relevant
+
+NO-AI GUARANTEE
+I want an explicit audit + confirmation that this 10-minute refresh path does not call any paid AI API at all.
+If any current helper indirectly calls an AI model, do not use it in this path.
+
+VERIFY
+Before finishing, verify:
+
+* Home unusual options flow path now refreshes every 10 minutes
+* it does not use Anthropic/OpenAI/Grok/Gemini/etc
+* it uses only non-AI market data + internal scoring logic
+* Home payload still renders the section cleanly
+* Options Flow page is not broken
+
+DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact cause of the prior 30-minute cadence
+3. exact new cache/precompute cadence for Home unusual options flows
+4. exact data sources used in the 10-minute path
+5. explicit confirmation that no paid AI API is used in that path
+6. whether the full Options Flow page cadence changed or stayed separate
+7. confirmation changes were committed and pushed directly to `main`
+
+EXECUTION STYLE
+
+* Audit first
+* Build the lightest correct 10-minute non-AI path
+* Do not overengineer
+* Then commit and push directly to `main`
