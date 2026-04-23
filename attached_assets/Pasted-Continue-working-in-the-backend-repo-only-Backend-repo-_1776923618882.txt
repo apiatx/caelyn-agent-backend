@@ -1,0 +1,71 @@
+Continue working in the backend repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+Project constraints:
+
+* Reuse existing services/caches and avoid unnecessary API expansion. 
+* This repo is the logic/source-of-truth layer. 
+
+This is a small follow-up pass. Do not broaden scope.
+
+GOALS
+
+1. Keep the current Home payload stable and confirm no backend change is required for:
+
+   * Portfolio Snapshot
+   * Watchlist Snapshot
+   * Latest News
+   * Trending on X
+   * Trending Ideas / Stocktwits
+2. Audit whether the Home payload currently includes any section titles/metadata that still say:
+
+   * `Trending Ideas`
+     instead of
+   * `Trending on Stocktwits`
+3. If there is any backend-provided section metadata, labels, or enum names that should be cleaned up for consistency with the frontend rename, make the smallest possible change.
+4. Do NOT change layout logic in backend.
+5. Do NOT add any new endpoints.
+
+AUDIT FIRST
+Inspect the current Home payload and confirm:
+
+* `watchlist_snapshot` returns the full list, not a truncated list
+* `portfolio_snapshot` returns the full list, not a truncated list
+* `latest_news` is already in the Home payload
+* `trending_ideas` is still the Stocktwits-backed field
+* no backend bug is causing frontend clipping/truncation
+
+IMPLEMENT ONLY IF NEEDED
+Only make backend changes if one of these is true:
+
+* payload is currently truncating watchlist or portfolio rows
+* payload includes outdated section label metadata that should be renamed to “Trending on Stocktwits”
+* payload shape inconsistency is making frontend layout work harder than necessary
+
+OTHERWISE
+If backend is already correct, do not invent work. Just confirm no backend change is needed and report that clearly.
+
+DELIVERABLES
+When done, report:
+
+1. whether any backend files changed
+2. whether `watchlist_snapshot` and `portfolio_snapshot` already return full lists
+3. whether `trending_ideas` is confirmed to be Stocktwits-backed
+4. whether any backend rename/metadata cleanup was necessary
+5. confirmation changes were committed and pushed directly to `main`, or confirmation that no backend changes were required
+
+EXECUTION STYLE
+
+* Audit first
+* Make only minimal consistency fixes if truly needed
+* Do not create work for sport
+* Then commit and push directly to `main` if any changes were made
