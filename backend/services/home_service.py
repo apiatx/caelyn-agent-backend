@@ -498,15 +498,27 @@ def _rank_watchlist_rows(
 
 # ── Unusual Options Flows ──────────────────────────────────────────────────
 
+# ── Home unusual-options seeds ─────────────────────────────────────────────
+# Focused 27-ticker list: highest options open-interest + frequent unusual-flow
+# signal. Used by _fetch_unusual_options_live() for its on-demand live scan.
+_HOME_OPTIONS_SEEDS: list[str] = [
+    "NVDA", "TSLA", "META", "AAPL", "MSFT", "GOOGL", "AMZN",
+    "SPY", "QQQ", "IWM", "SMH", "SOXX", "TLT", "ARKK", "IBIT", "VXX", "UVXY",
+    "AMD", "AVGO", "NFLX", "CRM",
+    "MRVL", "CRWD", "RKLB", "ASTS", "HIMS", "IONQ",
+]
+_HOME_OPTIONS_CACHE_KEY = "home:unusual_options:v1"
+_HOME_OPTIONS_CACHE_TTL = 300   # 5-minute TTL — refreshed on demand, not by a loop
+
+
 def _build_options_lkg_index() -> dict[str, dict]:
     """
-    Build options ticker index for Home unusual-flows section.
+    Build options ticker index for Home sections that need per-symbol options_signal
+    (watchlist rows, sub-theme performance, portfolio snapshot).
 
-    Priority order (all in-memory reads, zero API calls):
-      1. home:unusual_options:v1  — Home-dedicated fast cache (10-min refresh,
-         Tradier-only, no AI). Populated by _home_options_precompute_loop().
-      2. options_screener_lkg_v1:{tab}  — Full Options Flow LKG fallback (4-hr
-         TTL, refreshed every ~3-4 min by the main precompute loop).
+    Priority order (pure in-memory reads, zero API calls):
+      1. home:unusual_options:v1  — written by _fetch_unusual_options_live() on demand
+      2. options_screener_lkg_v1:{tab}  — Full Options Flow LKG (4-hr TTL)
 
     Returns a dict keyed by uppercase ticker symbol.
     """
@@ -580,6 +592,111 @@ def _extract_unusual_options_flows(
             "source_tab": t.get("source_tab"),
         })
     return out
+
+
+async def _run_home_options_scan_bg(data_service) -> None:
+    """
+    Background live Tradier scan for the Home unusual-options panel.
+
+    Runs detached (asyncio.create_task) — does not block the Home response.
+    Writes result to home:unusual_options:v1 (5-min TTL).
+    No Finviz / FMP / Finnhub — Tradier-only.
+    """
+    import time as _t
+    from data.tradier_flow_engine import TradierFlowEngine
+
+    try:
+        t0 = _t.time()
+
+        raw_quotes = await data_service.tradier.get_quotes(_HOME_OPTIONS_SEEDS)
+        quote_by_sym = {(q.get("symbol") or "").upper(): q for q in (raw_quotes or [])}
+
+        def _sort_key(sym: str) -> float:
+            q = quote_by_sym.get(sym, {})
+            chg = q.get("change_percentage") or 0
+            vol = q.get("volume") or 0
+            avg_vol = q.get("average_volume") or 1
+            return abs(chg) * 0.6 + min(vol / avg_vol / 5.0, 1.0) * 0.4
+
+        sorted_seeds = sorted(_HOME_OPTIONS_SEEDS, key=_sort_key, reverse=True)
+
+        minimal_prefilter = {
+            "candidates": [
+                {
+                    "ticker": sym,
+                    "price": (quote_by_sym.get(sym) or {}).get("last"),
+                    "source_score": 5.0,
+                    "prefilter_score": 5.0,
+                }
+                for sym in sorted_seeds
+            ],
+            "degraded_sources": [],
+            "macro": {},
+        }
+
+        engine = TradierFlowEngine(data_service)
+        scan = await engine.run_live_scan(
+            seed_tickers=sorted_seeds,
+            prefilter_snapshot=minimal_prefilter,
+            tab="megacap",
+        )
+
+        tickers = scan.get("tickers") or []
+        payload = {
+            "tickers": tickers,
+            "data_source": "tradier",
+            "cached_at": _t.time(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        cache.set(_HOME_OPTIONS_CACHE_KEY, payload, _HOME_OPTIONS_CACHE_TTL)
+        print(f"[HOME_OPTIONS] Background scan done: {len(tickers)} tickers in {_t.time() - t0:.1f}s (cached 5 min)")
+
+    except Exception as exc:
+        print(f"[HOME_OPTIONS] Background scan error (non-fatal): {exc}")
+
+
+async def _fetch_unusual_options_live(data_service, limit: int = 8) -> list[dict]:
+    """
+    Return unusual-options-flow rows for the Home panel. Never blocks the response.
+
+    Priority:
+      1. home:unusual_options:v1 cache (5-min TTL)  → instant
+      2. LKG tabs (options_screener_lkg_v1:{tab})   → instant (populated by precompute loop)
+      3. Cold path: fire background scan and return [] immediately.
+         The frontend polls every 30s when options are empty so data arrives within
+         one polling cycle (~30-60s after the background scan completes).
+
+    Result is cached after scan so subsequent requests within 5 min are instant.
+    No Finviz / FMP / Finnhub — Tradier-only.
+    """
+    # ── 1. Fast cache ────────────────────────────────────────────────────────
+    fast = cache.get(_HOME_OPTIONS_CACHE_KEY)
+    if fast:
+        idx: dict[str, dict] = {}
+        for ticker in (fast.get("tickers") or []):
+            sym = (ticker.get("ticker") or "").upper()
+            if sym:
+                idx[sym] = {**ticker, "source_tab": "home_fast_cache"}
+        return _extract_unusual_options_flows(idx, limit=limit, updated_at=fast.get("updated_at"))
+
+    # ── 2. LKG tab fallback ──────────────────────────────────────────────────
+    lkg_index: dict[str, dict] = {}
+    for tab in ["megacap", "large_cap", "small_cap", "etf"]:
+        lkg = cache.get(f"options_screener_lkg_v1:{tab}")
+        if not lkg:
+            continue
+        for ticker in (lkg.get("tickers") or []):
+            sym = (ticker.get("ticker") or "").upper()
+            if sym and sym not in lkg_index:
+                lkg_index[sym] = {**ticker, "source_tab": tab}
+    if lkg_index:
+        return _extract_unusual_options_flows(lkg_index, limit=limit)
+
+    # ── 3. Cold path — kick background scan, return [] immediately ───────────
+    if data_service and getattr(data_service, "tradier", None):
+        asyncio.create_task(_run_home_options_scan_bg(data_service))
+        print("[HOME_OPTIONS] Cache cold — background scan started (frontend retries in ~30s)")
+    return []
 
 
 # ── Batch-quote helper ─────────────────────────────────────────────────────
@@ -923,6 +1040,14 @@ async def build_home_dashboard(
         _fetch_portfolio_snapshot(data_service, options_index)
     )
 
+    # ── Unusual options flows — live Tradier pull, on-demand cached 5 min ──
+    # Runs as a parallel task: instant if cache warm, ~5-15s on cold start.
+    # No background precompute loop required. Falls back through: fast cache
+    # → LKG tabs → live Tradier scan. Always returns data, never "pending".
+    tasks["unusual_options"] = asyncio.create_task(
+        _fetch_unusual_options_live(data_service)
+    )
+
     # ── Await all tasks ────────────────────────────────────────────────
     results: dict[str, Any] = {}
     for name, task in tasks.items():
@@ -989,10 +1114,7 @@ async def build_home_dashboard(
     except Exception as exc:
         print(f"[HOME] Trending on X snapshot failed soft: {exc}")
 
-    # Grab updated_at from the Home fast cache if it's the active source
-    _home_opts_cache = cache.get("home:unusual_options:v1")
-    _opts_updated_at = (_home_opts_cache or {}).get("updated_at") or None
-    unusual_options_flows = _extract_unusual_options_flows(options_index, updated_at=_opts_updated_at)
+    unusual_options_flows = _safe(results.get("unusual_options"), []) or []
 
     # ── Sub-theme performance — uses already-fetched watchlist quotes ──
     # Pass watchlist quotes so the sub-theme engine reuses them (no extra
@@ -1041,11 +1163,7 @@ async def build_home_dashboard(
             "trending": "ok" if not isinstance(results.get("trending"), Exception) and results.get("trending") else "unavailable",
             "trending_on_x": "ok" if trending_on_x.get("available") else ("refreshing" if trending_on_x.get("refresh_in_progress") else "unavailable"),
             "latest_news": "ok" if latest_news else "unavailable",
-            "unusual_options_flows": (
-                "ok_fast_cache" if (unusual_options_flows and _home_opts_cache)
-                else "ok_lkg_fallback" if unusual_options_flows
-                else "precompute_pending"
-            ),
+            "unusual_options_flows": "ok" if unusual_options_flows else "unavailable",
             "watchlist_snapshot": "ok" if watchlist_snapshot else "unavailable",
             "highlighted_companies": "ok" if highlighted_companies else "unavailable",
             "portfolio_snapshot": "ok" if portfolio_snapshot else "unavailable",

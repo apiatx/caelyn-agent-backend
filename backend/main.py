@@ -190,7 +190,6 @@ async def lifespan(app):
     asyncio.create_task(_smart_earnings_loop())
     asyncio.create_task(_edgar_cache_loop())
     asyncio.create_task(_options_precompute_loop())
-    asyncio.create_task(_home_options_precompute_loop())
     # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
     asyncio.create_task(_polygon_options_ingestion_loop())
     asyncio.create_task(_macro_precompute_loop())
@@ -5025,26 +5024,8 @@ _OPTIONS_PREFILTER_CACHE_TTL = 3600   # 1 hour — stock-side prefilter (Finnhub
 _OPTIONS_PRECOMPUTE_CACHE_TTL = 300   # 5 min — matches hot cache TTL
 _OPTIONS_LKG_CACHE_TTL = 14400        # 4 hours — last-known-good fallback
 
-# ── Home page: dedicated fast unusual-options-flow cache ──────────────────
-# Separate from the full Options Flow page cache family.
-# Uses a focused seed list + Tradier-only scoring (no AI, no FMP, no Finnhub).
-# Refreshes every 10 minutes; Home reads this key first, falls back to LKG.
-_HOME_OPTIONS_CACHE_KEY = "home:unusual_options:v1"
-_HOME_OPTIONS_INTERVAL  = 600   # 10 minutes
-_HOME_OPTIONS_TTL       = 700   # slightly over interval — never stale before next refresh
-
-# Focused 27-ticker seed list: highest option liquidity + frequent unusual-flow signal.
-# Deliberately smaller than any single tab seed list for a lightweight scan.
-_HOME_OPTIONS_SEEDS: list[str] = [
-    # Mega-cap (always highest options open-interest)
-    "NVDA", "TSLA", "META", "AAPL", "MSFT", "GOOGL", "AMZN",
-    # High-volume ETFs with heavy institutional flow
-    "SPY", "QQQ", "IWM", "SMH", "SOXX", "TLT", "ARKK", "IBIT", "VXX", "UVXY",
-    # Large-cap frequently showing unusual flow
-    "AMD", "AVGO", "NFLX", "CRM",
-    # Volatile small/mid-cap high-signal names
-    "MRVL", "CRWD", "RKLB", "ASTS", "HIMS", "IONQ",
-]
+# home:unusual_options:v1 — written by home_service._fetch_unusual_options_live()
+# on every Home dashboard request when the cache is cold. No background loop needed.
 
 
 def _options_cache_key(tab: str) -> str:
@@ -5068,7 +5049,7 @@ async def _options_precompute_loop():
     Precomputes all tabs (etf, megacap, large_cap, small_cap).
     """
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _init_event.wait, 120)
+    await loop.run_in_executor(None, _init_event.wait, 30)
 
     if data_service is None or not data_service.tradier:
         print("[OPTIONS_PRECOMPUTE] Tradier provider not available, skipping precompute loop")
@@ -5132,102 +5113,6 @@ async def _options_precompute_loop():
         await asyncio.sleep(_OPTIONS_PRECOMPUTE_INTERVAL)
 
 
-async def _home_options_precompute_loop():
-    """
-    Dedicated fast refresh loop for the Home page 'Unusual Options Flows' section.
-
-    Cadence   : every 10 minutes (_HOME_OPTIONS_INTERVAL = 600s)
-    Cache key : home:unusual_options:v1  (TTL 700s)
-    Data sources:
-        - Tradier batch quote (cheap, already cached at _QUOTE_TTL=60s)
-        - TradierFlowEngine.run_live_scan() with a minimal prefilter snapshot
-          (candidates pre-populated from Tradier quotes — no Finviz/FMP/Finnhub)
-    AI usage  : NONE — zero calls to Anthropic, OpenAI, Grok, Gemini, or any
-                other paid reasoning/generative model.
-
-    Separate from the full Options Flow page cache family so the Home section
-    can surface fresh unusual-flow data independently of the heavier tab scans.
-    """
-    import time as _time
-    from data.cache import cache as _cache
-
-    loop = asyncio.get_event_loop()
-    # Wait for app init (same guard as full precompute loop), then run immediately
-    await loop.run_in_executor(None, _init_event.wait, 120)
-
-    if data_service is None or not data_service.tradier:
-        print("[HOME_OPTIONS] Tradier not available — Home unusual options loop skipped")
-        return
-
-    while True:
-        try:
-            t0 = _time.time()
-
-            # Step 1: Tradier batch quote for seed tickers — cheap, cached at 60s
-            raw_quotes = await data_service.tradier.get_quotes(_HOME_OPTIONS_SEEDS)
-            quote_by_sym = {(q.get("symbol") or "").upper(): q for q in (raw_quotes or [])}
-
-            # Step 2: Sort seeds by absolute 1D change (most active first)
-            # so the engine's inspection_limit picks the highest-signal tickers.
-            def _sort_key(sym: str) -> float:
-                q = quote_by_sym.get(sym, {})
-                chg = q.get("change_percentage")
-                vol = q.get("volume") or 0
-                avg_vol = q.get("average_volume") or 1
-                vol_ratio = vol / avg_vol
-                return abs(chg or 0) * 0.6 + min(vol_ratio / 5.0, 1.0) * 0.4
-
-            sorted_seeds = sorted(_HOME_OPTIONS_SEEDS, key=_sort_key, reverse=True)
-
-            # Step 3: Build a minimal prefilter snapshot — no Finviz/FMP/Finnhub.
-            # Passing this to run_live_scan bypasses build_prefilter_snapshot entirely,
-            # so the only outbound calls from here on are Tradier options-chain fetches.
-            minimal_prefilter = {
-                "candidates": [
-                    {
-                        "ticker": sym,
-                        "price": (quote_by_sym.get(sym) or {}).get("last"),
-                        "source_score": 5.0,
-                        "prefilter_score": 5.0,
-                    }
-                    for sym in sorted_seeds
-                ],
-                "degraded_sources": [],
-                "macro": {},
-            }
-
-            # Step 4: Run Tradier-only live scan — no AI, no paid APIs
-            engine = TradierFlowEngine(data_service)
-            scan = await engine.run_live_scan(
-                seed_tickers=sorted_seeds,
-                prefilter_snapshot=minimal_prefilter,
-                tab="megacap",   # tab label only — actual tickers come from prefilter
-            )
-
-            # Step 5: Build payload
-            tickers = scan.get("tickers") or []
-            payload = {
-                "tickers": tickers,
-                "data_source": "tradier",
-                "seeds": _HOME_OPTIONS_SEEDS,
-                "cached_at": _time.time(),
-                "updated_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
-            }
-            _cache.set(_HOME_OPTIONS_CACHE_KEY, payload, _HOME_OPTIONS_TTL)
-
-            elapsed = _time.time() - t0
-            print(
-                f"[HOME_OPTIONS] Refreshed {len(tickers)} unusual-flow tickers "
-                f"from {len(sorted_seeds)} seeds in {elapsed:.1f}s. "
-                f"Next in {_HOME_OPTIONS_INTERVAL}s."
-            )
-
-        except Exception as exc:
-            import traceback
-            traceback.print_exc()
-            print(f"[HOME_OPTIONS] Precompute error (non-fatal): {exc}")
-
-        await asyncio.sleep(_HOME_OPTIONS_INTERVAL)
 
 
 _OPTIONS_DEFAULT_TICKERS = _OPTIONS_MEGACAP_SEEDS
