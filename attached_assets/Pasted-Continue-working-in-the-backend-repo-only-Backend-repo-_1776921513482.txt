@@ -1,0 +1,185 @@
+Continue working in the backend repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+You already implemented the recent Home backend pass. Now fix these two specific problems.
+
+PRIMARY FIXES
+
+1. Theme Performance is still too sector-level and too duplicative of the Sectors page.
+   It needs to become more granular and useful by surfacing **sub-theme / sub-sector alpha**, not just broad sectors.
+
+What I want that section to answer:
+
+* what niche themes are working right now
+* which top gainers are driving those themes
+* what patterns are emerging across 1D / 7D / 30D
+* examples of themes I care about:
+
+  * memory
+  * lasers / photonics
+  * substrates / packaging
+  * AI networking
+  * datacenter / compute
+  * semi materials
+  * power / cooling
+  * nuclear / grid
+  * aerospace / defense
+  * robotics / automation
+  * cybersecurity
+  * data infra / storage
+* I want this section to point me toward where the real sub-thematic momentum is, not just repeat XLK/XLE style sector data
+
+2. Highlighted Companies / Watchlist Snapshot are wrong.
+
+* “Highlighted Companies” is currently showing Stocktwits-trending names, not stocks from my actual saved watchlist
+* “Watchlist Snapshot” is blank
+* It should be pulling from my real watchlist data and surfacing the top signal names from the Watchlist page / watchlist source of truth
+* This needs to show the watchlist stocks that are hot / flashing buy signal / strongest setup, not random trending names
+
+CONSTRAINTS
+
+* Audit first, then implement
+* Reuse existing watchlist storage/source of truth
+* Reuse existing signal logic already used by the Watchlist page if possible
+* Minimize API calls by reusing existing data/services/caches already in project 
+* Do not add new third-party providers
+* Keep the Home aggregator architecture intact
+* Fail soft if some optional enrichment is unavailable
+
+PHASE 1 — AUDIT THE CURRENT FAILURE
+
+A. Theme Performance
+Inspect the current Home theme logic and determine:
+
+* why it is still just broad sectors
+* what existing data/services already exist that could support sub-theme classification without introducing a new provider
+* whether existing gainers/movers/watchlist/news/theme helpers can be combined into a lightweight sub-theme engine
+
+B. Highlighted Companies + Watchlist Snapshot
+Inspect exactly:
+
+* what source currently populates “Highlighted Companies”
+* why it is showing Stocktwits/trending names instead of watchlist names
+* why Watchlist Snapshot is blank
+* whether the primary watchlist identifier/path is wrong
+* whether the Home service is reading the wrong watchlist object
+* whether the watchlist page has separate “signal” logic that Home is not reusing
+
+Do not guess. Find the exact source/path bug(s).
+
+PHASE 2 — IMPLEMENT THE FIXES
+
+A. Replace broad Theme Performance with a more useful sub-theme view
+I do NOT want a giant overengineered classifier, but I do want a much more actionable section.
+
+Strong preference for a lightweight backend approach:
+
+* build a reusable **sub-theme classification / scoring layer** inside the Home aggregator or a helper service
+* derive it from data you already have available, such as:
+
+  * recent top gainers / movers
+  * sector/theme/rotation data
+  * company names / descriptions / existing metadata if already cached
+  * news/title/topic metadata if already available
+  * watchlist and trending names if useful
+* return a normalized list of **sub-theme leaders** rather than broad sectors
+
+Desired output shape can be something like:
+
+* sub_theme
+* 1d_avg_move
+* 7d_avg_move
+* 30d_context if available
+* leader_symbols[]
+* leader_count
+* breadth_score / momentum_score
+* short_pattern_summary
+
+Examples:
+
+* “AI Networking — led by ANET, CIEN, AVGO; strong 1D and 7D breadth”
+* “Memory — led by MU, WOLF? etc depending on real names/data”
+* “Datacenter Power/Cooling — led by VRT, ETN, PWR...”
+* “Photonics / Lasers — led by LITE, COHR...”
+
+Important:
+
+* This can start with a curated theme-map / keyword map if that is the cleanest minimal solution
+* It does NOT need to be perfect taxonomy science
+* But it DOES need to become materially more useful than the current sector duplicate
+* If a full 30D view is too costly right now, prioritize 1D / 7D with optional longer-context field
+
+B. Fix Highlighted Companies
+
+* This section must pull from the actual saved watchlist, not Stocktwits
+* Rename or keep the label as appropriate, but the contents must come from the watchlist source of truth
+* It should show the best current names from my watchlist, not just the full unsorted list
+* Rank by strongest signal using existing watchlist signal logic where available
+* If there is no formal signal score, create a lightweight ranking from currently available fields like:
+
+  * change_1d_pct
+  * options_signal
+  * volume increase
+  * existing recommendation / signal fields if any
+* Normalize cleanly for frontend:
+
+  * symbol
+  * current_price
+  * change_1d_pct
+  * options_signal
+  * volume_increase
+  * optional short label like “hot”, “buy signal”, etc.
+
+C. Fix Watchlist Snapshot
+
+* Use the same actual watchlist source of truth
+* It should not be blank if my saved primary watchlist exists
+* Return the rows needed for the current Home watchlist table
+* Ensure the watchlist snapshot and highlighted companies are consistent with each other:
+
+  * same underlying watchlist source
+  * different presentation/ranking is okay
+* If there is a mismatch between watchlist storage and Home consumption, fix the mapping
+
+PHASE 3 — VERIFY WITH REAL PAYLOADS
+Show real examples from the backend response after your fix:
+
+* one `sub_theme_performance[0]` or equivalent replacement row
+* one `highlighted_companies[0]`
+* one `watchlist_snapshot[0]`
+
+Also explain:
+
+* exact reason Highlighted Companies was using Stocktwits names before
+* exact reason Watchlist Snapshot was blank before
+* exact source of truth now used for both
+* what logic is used to rank the watchlist names
+
+PHASE 4 — DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact reason Theme Performance was still too sector-level before
+3. exact approach you used to create sub-theme usefulness now
+4. exact reason Highlighted Companies was using the wrong source before
+5. exact reason Watchlist Snapshot was blank before
+6. exact watchlist source-of-truth now used
+7. whether the Home payload fields changed and what the new field names are
+8. confirmation changes were committed and pushed directly to `main`
+
+EXECUTION STYLE
+
+* Audit first
+* Fix the source-of-truth bug first
+* Make Theme Performance materially smarter, not academically perfect
+* Keep API usage disciplined
+* Then commit and push directly to `main`
