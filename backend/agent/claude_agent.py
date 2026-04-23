@@ -763,8 +763,15 @@ class TradingAgent:
                 except Exception as _rce:
                     print(f"[ROUTE_PROVIDER] override error (non-fatal): {_rce}")
                 # ── End provider refinement ───────────────────────────────────
-            # Gate LLM-backed web search (Perplexity) in data layer: only allowed in agent_collab mode
-            self.data._skip_llm_web_search = (reasoning_model not in ("agent_collab", "all_agents"))
+            # Preliminary web-search gate (before _ai_term_mode is resolved below).
+            # Allows Perplexity web-search when a collab preset is set OR when the
+            # legacy agent_collab/all_agents reasoning_model is used.
+            # Overridden at the final gate below once _ai_term_mode is known.
+            _likely_collab = (
+                collab_preset is not None or
+                reasoning_model in ("agent_collab", "all_agents")
+            )
+            self.data._skip_llm_web_search = not _likely_collab
             if category == "chat":
                 market_data = await self._gather_chat_context(user_prompt, query_info)
                 data_size = len(json.dumps(market_data, default=str)) if market_data else 0
@@ -924,8 +931,10 @@ class TradingAgent:
                     f"| collaborator_pruning=SKIPPED "
                     f"| provider_family_override=SKIPPED"
                 )
-            # Gate LLM-backed web search (Perplexity) in data layer: only allowed in agent_collab mode
-            self.data._skip_llm_web_search = (reasoning_model not in ("agent_collab", "all_agents"))
+            # Final web-search gate — authoritative; uses _ai_term_mode resolved above.
+            # Perplexity web-search allowed for all collaboration presets (auto / default /
+            # full / custom). Blocked only for solo top-row model selections.
+            self.data._skip_llm_web_search = _ai_term_mode.startswith("solo:")
             if category == "chat":
                 market_data = await self._gather_chat_context(user_prompt, query_info)
                 data_size = len(json.dumps(market_data, default=str)) if market_data else 0

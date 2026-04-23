@@ -1867,6 +1867,12 @@ class QueryRequest(BaseModel):
     # reasoning_model + collab_agents alone.
     # Values: "default" | "auto" | "full" | "custom" | None (legacy/solo inference)
     collab_preset: Optional[str] = None
+    # collaboration_mode: alternate field name the current frontend sends.
+    # Frontend sends collaboration_mode (e.g. "default", "auto", "full_collab", "custom_collab")
+    # alongside reasoning_model=<family> (e.g. "claude", "grok").
+    # Phase 0 bridges this to collab_preset so all downstream logic stays unchanged.
+    # If both are provided, collab_preset wins.
+    collaboration_mode: Optional[str] = None
 
 @traceable(name="main.build_meta")
 def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, timing_ms=None, reasoning_model=None):
@@ -2523,15 +2529,38 @@ async def query_agent(
     body.reasoning_model = normalize_reasoning_model(body.reasoning_model)
     body.collab_preset   = normalize_collab_preset(body.collab_preset)
 
+    # ── Bridge: collaboration_mode → collab_preset ───────────────────────
+    # Current frontend sends collaboration_mode (e.g. "default", "auto", "full_collab",
+    # "custom_collab") alongside reasoning_model=<family_alias> (e.g. "claude", "grok").
+    # If collab_preset was not explicitly set, derive it from collaboration_mode.
+    # collab_preset wins when both are present.
+    # Special case: collaboration_mode="auto" + no collab_agents + solo family = Solo mode.
+    #   Top-row solo selections send collaboration_mode="auto" as a side-effect of the
+    #   frontend state machine; we must NOT promote them to Auto (dynamic routing) preset.
+    if body.collab_preset is None and body.collaboration_mode:
+        _cm_mapped = normalize_collab_preset(body.collaboration_mode)
+        _is_solo_family = body.reasoning_model not in ("agent_collab", "all_agents")
+        _no_collabs     = not body.collab_agents
+        if _cm_mapped == COLLAB_PRESET_AUTO and _is_solo_family and _no_collabs:
+            # Solo selection with collaboration_mode="auto" — keep as solo, do not promote.
+            pass
+        else:
+            body.collab_preset = _cm_mapped
+
     # Structured log so every request shows its exact preset semantics — Default vs Auto must be unmistakable.
     _cp_label = collab_preset_display_label(body.collab_preset) if body.collab_preset else "none[legacy_solo_inference]"
+    _auto_routing = (
+        body.collab_preset == COLLAB_PRESET_AUTO or
+        (not body.collab_preset and body.reasoning_model == "agent_collab" and not body.collab_agents)
+    )
     print(
         f"[PRESET_SEMANTICS] id={req_id} "
         f"collab_preset={body.collab_preset!r} ({_cp_label}) "
+        f"collaboration_mode={body.collaboration_mode!r} "
         f"reasoning_model={body.reasoning_model!r} "
         f"collab_agents={body.collab_agents or 'none'} "
         f"primary_model={body.primary_model or 'none'} "
-        f"auto_routing_allowed={'YES' if body.collab_preset == COLLAB_PRESET_AUTO or (not body.collab_preset and body.reasoning_model == 'agent_collab' and not body.collab_agents) else 'NO'}"
+        f"auto_routing_allowed={'YES' if _auto_routing else 'NO'}"
     )
 
     from data.chat_history import create_conversation, get_conversation, append_message as _append_msg
