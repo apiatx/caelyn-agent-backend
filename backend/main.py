@@ -17,7 +17,12 @@ import os
 import time
 import uuid as _uuid
 from datetime import datetime as _dt, timezone as _tz
-from agent.mode_normalizer import normalize_reasoning_model, mode_concept, mode_display_label
+from agent.mode_normalizer import (
+    normalize_reasoning_model, normalize_collab_preset,
+    mode_concept, mode_display_label, collab_preset_display_label,
+    DEFAULT_PRESET_COLLABORATORS, DEFAULT_PRESET_PRIMARY,
+    COLLAB_PRESET_DEFAULT, COLLAB_PRESET_AUTO, COLLAB_PRESET_FULL, COLLAB_PRESET_CUSTOM,
+)
 
 # Ensure LangSmith env vars are set before any langsmith import
 import config as _cfg  # noqa: F401  — triggers os.environ.setdefault calls
@@ -1071,12 +1076,29 @@ async def get_collab_options(request: Request):
             {"id": "deepseek", "name": "DeepSeek", "description": "DeepSeek — cost-efficient reasoning & analysis", "mode": "solo"},
         ],
         # Collab agents — full list available for multi-agent collaboration.
-        # Frontend sends based on preset:
-        #   Default:            { reasoning_model: "agent_collab", collab_agents: ["grok","perplexity"] }
-        #   Full Collaboration: { reasoning_model: "all_agents", collab_agents: [all], primary_model: "<user-chosen>" }
-        #   Custom Collab:      { reasoning_model: "agent_collab", collab_agents: [...user-picked], primary_model: "<user-chosen>" }
-        #                       OR { reasoning_model: "all_agents", collab_agents: [...user-picked], primary_model: "<user-chosen>" }
-        #                       (frontend decides based on user's agent selection — agent_collab for data-source mode, all_agents for full fan-out)
+        # Frontend sends based on preset — ALWAYS include collab_preset to disambiguate:
+        #
+        #   Solo (top-row):     { reasoning_model: "<id>" }
+        #                       No collab_preset, no collab_agents. Backend preserves family.
+        #
+        #   Auto preset:        { reasoning_model: "agent_collab", collab_preset: "auto" }
+        #                       collab_agents may be omitted — backend chooses dynamically.
+        #                       ONLY preset where backend may override provider family.
+        #
+        #   Default preset:     { reasoning_model: "agent_collab", collab_preset: "default",
+        #                         collab_agents: ["grok","gemini"], primary_model: "claude" }
+        #                       Fixed family. Backend enforces Claude+Grok+Gemini exactly.
+        #                       Backend MUST NOT auto-route to different families.
+        #
+        #   Full Collaboration: { reasoning_model: "all_agents", collab_preset: "full",
+        #                         collab_agents: [all], primary_model: "<user-chosen>" }
+        #                       All agents fixed. Backend MUST NOT prune/alter agents.
+        #
+        #   Custom Collab:      { reasoning_model: "agent_collab", collab_preset: "custom",
+        #                         collab_agents: [...user-picked], primary_model: "<user-chosen>" }
+        #                       User's exact selections preserved. Backend MUST NOT alter.
+        #
+        # LEGACY (no collab_preset): inferred from reasoning_model + collab_agents as before.
         "collab_agents": [
             {"id": "claude", "name": "Claude (Anthropic)", "description": "Deep reasoning, analysis & synthesis", "icon": "anthropic"},
             {"id": "grok", "name": "Grok (X/Twitter)", "description": "Real-time X social scanning & sentiment", "icon": "xai"},
@@ -1088,68 +1110,87 @@ async def get_collab_options(request: Request):
         # Collab presets — pre-configured multi-agent collaboration setups.
         # lock_agents: if true, the collaborator checkboxes are locked (user cannot change them)
         # lock_reasoning: if true, the reasoning model radio is locked (user cannot change it)
+        # collab_preset: the discriminator field frontend MUST send to distinguish presets.
         #
-        # THREE DISTINCT MODES (currently implemented):
+        # FOUR DISTINCT PRESETS (Default, Auto, Full Collab, Custom Collab):
         #
-        # 1. DEFAULT COLLAB — reasoning_model: "agent_collab", agents LOCKED (Grok + Perplexity).
-        #    Backend pipeline: Grok X scan + Perplexity web search + proprietary data → single
-        #    reasoning model synthesizes. User can change the reasoning model (primary_model)
-        #    but cannot change which data sources run. The reasoner does NOT do its own web
-        #    search — all live data comes through the pipeline.
+        # 1. DEFAULT (id="default", collab_preset="default") — FIXED collaboration preset.
+        #    Claude primary + Grok + Gemini collaborators. Provider families are LOCKED.
+        #    Backend enforces these families exactly — no auto-routing, no family override.
+        #    User may change synthesis tier within Claude family (primary_model tier hint).
         #
-        # 2. FULL COLLAB — reasoning_model: "all_agents", ALL agents LOCKED.
-        #    Every agent (Claude, Grok, GPT-4o, Gemini, Perplexity) runs simultaneously,
-        #    each does its own web search / analysis, then the chosen primary_model synthesizes
-        #    all agent theses into a unified response. User picks only the synthesis model.
+        # 2. AUTO (id="auto", collab_preset="auto") — DYNAMIC collaboration preset.
+        #    Backend router chooses collaborators freely based on prompt and category.
+        #    ONLY preset where family auto-routing is allowed. No fixed agent set.
         #
-        # 3. CUSTOM COLLAB — reasoning_model: "agent_collab", agents UNLOCKED, reasoning UNLOCKED.
-        #    Sits between Default and Full. User picks WHICH collaborating agent(s) to include
-        #    AND which reasoning/primary model synthesizes. Highly customizable — NOT a
-        #    one-size-fits-all preset. Defaults to agent_collab (not all_agents) so the user
-        #    builds up their configuration from a clean slate via the frontend dropdowns.
-        #    When the user selects specific collab_agents, the frontend sends the appropriate
-        #    reasoning_model ("agent_collab" for data-source mode, "all_agents" for full fan-out).
+        # 3. FULL COLLAB (id="full_collab", collab_preset="full") — FIXED, all agents.
+        #    Every agent runs simultaneously, user picks synthesis model.
+        #    Provider families LOCKED. Backend MUST NOT prune/alter agents.
+        #
+        # 4. CUSTOM COLLAB (id="custom_collab", collab_preset="custom") — USER-DEFINED.
+        #    User picks WHICH collaborating agents AND which synthesis model.
+        #    Backend MUST preserve user's exact selections. No family override.
         "presets": [
             {
                 "id": "default",
-                # ── Phase 0: ui_concept / ui_label tell the frontend which UX mode to show ──
+                "collab_preset": "default",
                 "ui_concept": "caelyn",
-                "ui_label": "Caelyn",
-                "name": "Caelyn",
-                "description": "Automatic smart mode — Grok X scan + Perplexity web search + proprietary data → chosen reasoning model synthesizes",
-                "agents": ["grok", "perplexity"],
+                "ui_label": "Default",
+                "name": "Default",
+                "description": "Fixed collaboration preset — Claude reasons over Grok + Gemini intelligence. Provider families locked; no auto-routing.",
+                "agents": ["grok", "gemini"],
                 "reasoning_model": "agent_collab",
                 "primary": "claude",
                 "mode": "collab",
                 "default": True,
                 "lock_agents": True,
                 "lock_reasoning": False,
+                "auto_routing_allowed": False,
+            },
+            {
+                "id": "auto",
+                "collab_preset": "auto",
+                "ui_concept": "caelyn",
+                "ui_label": "Auto",
+                "name": "Auto",
+                "description": "Dynamic collaboration preset — backend router chooses the best agent mix for each prompt. Only preset with provider-family auto-routing.",
+                "agents": [],
+                "reasoning_model": "agent_collab",
+                "primary": "claude",
+                "mode": "collab",
+                "lock_agents": True,
+                "lock_reasoning": False,
+                "auto_routing_allowed": True,
             },
             {
                 "id": "full_collab",
+                "collab_preset": "full",
                 "ui_concept": "customize",
                 "ui_label": "Full Collaboration",
                 "name": "Full Collaboration",
-                "description": "All agents collaborate simultaneously — choose which model reasons",
+                "description": "All agents collaborate simultaneously — choose which model reasons. Provider families locked.",
                 "agents": ["claude", "grok", "gpt-4o", "gemini", "perplexity"],
                 "reasoning_model": "all_agents",
                 "primary": "claude",
                 "mode": "collab",
                 "lock_agents": True,
                 "lock_reasoning": False,
+                "auto_routing_allowed": False,
             },
             {
                 "id": "custom_collab",
+                "collab_preset": "custom",
                 "ui_concept": "customize",
                 "ui_label": "Customize",
                 "name": "Customize",
-                "description": "Pick your collaborating agent(s) and reasoning model — fully customizable",
+                "description": "Pick your collaborating agent(s) and reasoning model — fully customizable. Backend preserves your exact selections.",
                 "agents": [],
                 "reasoning_model": "agent_collab",
                 "primary": "claude",
                 "mode": "collab",
                 "lock_agents": False,
                 "lock_reasoning": False,
+                "auto_routing_allowed": False,
             },
         ],
     }
@@ -1820,6 +1861,12 @@ class QueryRequest(BaseModel):
     # (claude/gpt-4o/grok/gemini/perplexity/deepseek). Ignored for agent_collab/all_agents.
     # Default None = tier determined automatically by prompt complexity + category floor.
     reasoning_mode: Optional[str] = None
+    # collab_preset: explicit discriminator for Customize-panel presets.
+    # Tells backend EXACTLY which preset the user is in, eliminating ambiguity between
+    # Default (fixed) and Custom (user-defined) which otherwise look identical by
+    # reasoning_model + collab_agents alone.
+    # Values: "default" | "auto" | "full" | "custom" | None (legacy/solo inference)
+    collab_preset: Optional[str] = None
 
 @traceable(name="main.build_meta")
 def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, timing_ms=None, reasoning_model=None):
@@ -2470,10 +2517,22 @@ async def query_agent(
     if body.csv_data and not user_query.strip():
         user_query = "Analyze every ticker in this uploaded CSV watchlist. For each stock, provide deep analysis including investment thesis, valuation vs peers, upcoming catalysts, competitive moat, and sentiment. Categorize into: top buys now, most undervalued, best catalysts, hidden gems, most revolutionary, and right sector right time. Include an avoid list for overvalued or deteriorating names."
 
-    # ── Phase 0: normalize inbound mode/reasoning_model string ──────────────
+    # ── Phase 0: normalize inbound mode/reasoning_model + collab_preset ────
     # Accepts "caelyn", "customize", legacy aliases, and existing identifiers.
     # All downstream code continues to use internal identifiers unchanged.
     body.reasoning_model = normalize_reasoning_model(body.reasoning_model)
+    body.collab_preset   = normalize_collab_preset(body.collab_preset)
+
+    # Structured log so every request shows its exact preset semantics — Default vs Auto must be unmistakable.
+    _cp_label = collab_preset_display_label(body.collab_preset) if body.collab_preset else "none[legacy_solo_inference]"
+    print(
+        f"[PRESET_SEMANTICS] id={req_id} "
+        f"collab_preset={body.collab_preset!r} ({_cp_label}) "
+        f"reasoning_model={body.reasoning_model!r} "
+        f"collab_agents={body.collab_agents or 'none'} "
+        f"primary_model={body.primary_model or 'none'} "
+        f"auto_routing_allowed={'YES' if body.collab_preset == COLLAB_PRESET_AUTO or (not body.collab_preset and body.reasoning_model == 'agent_collab' and not body.collab_agents) else 'NO'}"
+    )
 
     from data.chat_history import create_conversation, get_conversation, append_message as _append_msg
 
@@ -2550,6 +2609,7 @@ async def query_agent(
                 primary_model=body.primary_model,
                 user_id=_user_id,
                 reasoning_mode=body.reasoning_mode,
+                collab_preset=body.collab_preset,
             )
         )
 

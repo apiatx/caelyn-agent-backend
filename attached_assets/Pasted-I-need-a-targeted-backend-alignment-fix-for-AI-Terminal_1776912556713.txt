@@ -1,0 +1,123 @@
+I need a targeted backend alignment fix for AI Terminal collaboration preset semantics. Do NOT do a broad refactor. Read the current AI Terminal request handling, normalization, and routing first, then make surgical changes only where needed.
+
+Product intent:
+The frontend has two different concepts:
+1. Solo agent mode via the top row (Claude / ChatGPT / Grok / Gemini / Perplexity / DeepSeek)
+2. Collaboration mode via the Customize dropdown
+
+Inside Customize, there must be BOTH:
+- Default = fixed collaboration preset
+- Auto = dynamic router-driven collaboration preset
+
+Current problem:
+The old Default preset semantics were effectively replaced/blurred by Auto.
+That is incorrect.
+
+Correct semantics required:
+
+A. Solo top-row selection
+- Explicit single reasoning family
+- Backend must preserve the chosen family
+- Backend may optimize exact model/tier within that family
+- Backend must NOT auto-pick a different provider family here
+
+B. Default preset
+- Fixed collaboration preset
+- Reasoning family: Claude
+- Collaborators: Grok + Gemini
+- Backend must preserve these provider families
+- Backend may optimize exact model/tier within each chosen family
+- Backend must NOT treat Default as dynamic auto-routing
+
+C. Auto preset
+- Dynamic collaboration preset
+- Backend/router is allowed to choose the collaboration combination based on prompt/need
+- This is the only preset that should trigger provider-family auto-routing behavior
+
+D. Full Collaboration
+- Preserve existing behavior
+
+E. Custom Collaboration
+- Preserve explicit user-selected reasoning family and collaborator families exactly
+
+What I want:
+
+PHASE 1 — Audit current request semantics
+1. Read the current request normalization and routing logic for:
+   - reasoning_model
+   - collab_agents
+   - any preset identifier / collaboration_mode field
+   - auto-collab injection / agent_collab logic
+2. Produce a concise truth table for how backend currently interprets:
+   - solo model selection
+   - default fixed collaboration preset
+   - auto collaboration preset
+   - full collaboration
+   - custom collaboration
+
+PHASE 2 — Add explicit backend distinction between Default and Auto
+3. Update backend request parsing / normalization so Default and Auto are distinct concepts.
+4. Support a clear signal from frontend that indicates:
+   - fixed default preset
+   - true auto preset
+5. Do NOT rely on ambiguous legacy semantics where one value is doing both jobs.
+
+PHASE 3 — Enforce correct behavior
+6. Solo mode:
+   - preserve explicit reasoning family
+   - no provider-family auto-routing
+   - only model-within-family optimization allowed
+
+7. Default preset:
+   - preserve reasoning family Claude
+   - preserve collaborators Grok + Gemini
+   - no provider-family auto-routing
+   - tier/model optimization inside those families is fine
+
+8. Auto preset:
+   - allow prompt_router / caelyn routing / provider-family override logic to choose the collaboration mix dynamically
+   - this is the ONLY preset where family auto-selection should happen by default
+
+9. Full Collaboration:
+   - preserve existing full-collab behavior unless a bug forces a small fix
+
+10. Custom Collaboration:
+   - preserve explicit user-selected reasoning family and collaborator families exactly
+   - no collaborator pruning or provider-family override against explicit user intent
+
+PHASE 4 — Logging / observability
+11. Add structured logs so we can see for each AI Terminal request:
+   - interpreted mode/preset
+   - explicit reasoning family
+   - explicit collaborators
+   - whether family auto-routing was allowed
+   - whether family auto-routing was blocked due to fixed/default/custom/solo semantics
+12. I want logs that make Default vs Auto unmistakable.
+
+PHASE 5 — Backward compatibility
+13. Keep backward compatibility where practical:
+   - if older requests still use legacy fields, normalize them safely
+   - but prefer the new explicit preset semantics from frontend
+14. Do not break stable preset response formats.
+
+Deliverables:
+- files changed
+- before/after interpretation truth table
+- exact new request semantics expected from frontend
+- examples for:
+  - solo Grok
+  - Default preset
+  - Auto preset
+  - Full Collaboration
+  - Custom Collaboration
+- any remaining compatibility notes
+
+Constraints:
+- minimal, surgical changes only
+- preserve current routing gains
+- do not weaken Auto
+- do not break Custom Collaboration
+- do not break tests
+- work directly on main
+- commit and push directly to main
+- run full tests and restart server

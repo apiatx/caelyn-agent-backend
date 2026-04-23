@@ -34,6 +34,16 @@ from agent.prompt_router import (  # Phase 8: prompt-aware routing
     RouteDecision as _RouteDecision,
     route_caelyn_override as _route_caelyn_override,  # Phase 8b: provider family
 )
+from agent.mode_normalizer import (
+    normalize_collab_preset,
+    collab_preset_display_label,
+    DEFAULT_PRESET_COLLABORATORS,
+    DEFAULT_PRESET_PRIMARY,
+    COLLAB_PRESET_DEFAULT,
+    COLLAB_PRESET_AUTO,
+    COLLAB_PRESET_FULL,
+    COLLAB_PRESET_CUSTOM,
+)
 
 try:
     from langsmith import traceable
@@ -259,9 +269,9 @@ class TradingAgent:
         }
 
     @traceable(name="caelyn_main_agent")
-    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default", reasoning_mode: str = None) -> dict:
+    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default", reasoning_mode: str = None, collab_preset: str = None) -> dict:
         try:
-            return await self._handle_query_inner(user_prompt, history=history, preset_intent=preset_intent, request_id=request_id, csv_data=csv_data, chatbox_mode=chatbox_mode, reasoning_model=reasoning_model, collab_agents=collab_agents, primary_model=primary_model, user_id=user_id, reasoning_mode=reasoning_mode)
+            return await self._handle_query_inner(user_prompt, history=history, preset_intent=preset_intent, request_id=request_id, csv_data=csv_data, chatbox_mode=chatbox_mode, reasoning_model=reasoning_model, collab_agents=collab_agents, primary_model=primary_model, user_id=user_id, reasoning_mode=reasoning_mode, collab_preset=collab_preset)
         except Exception as e:
             import traceback
             print(f"[AGENT] FATAL: handle_query crashed with unhandled exception: {e}")
@@ -277,7 +287,7 @@ class TradingAgent:
             }
 
     @traceable(name="handle_query_inner")
-    async def _handle_query_inner(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default", reasoning_mode: str = None) -> dict:
+    async def _handle_query_inner(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default", reasoning_mode: str = None, collab_preset: str = None) -> dict:
         start_time = time.time()
         if history is None:
             history = []
@@ -798,27 +808,57 @@ class TradingAgent:
                   f"response_style={plan.get('response_style') if plan else '?'}")
 
             query_info["reasoning_model"] = reasoning_model
-            # ── AI Terminal explicit intent detection ─────────────────────────────
-            # Detect which AI Terminal mode the user has selected so we can log it
-            # and gate routing correctly.  This drives ALL downstream routing decisions.
+            # ── AI Terminal preset intent detection ───────────────────────────────
+            # Determine which AI Terminal preset the user has selected.
+            # Uses the new collab_preset discriminator field as the PRIMARY signal.
+            # Falls back to legacy reasoning_model + collab_agents inference for backward compat.
             #
-            # Modes and their request signatures:
-            #   auto               → reasoning_model="agent_collab",  collab_agents=None/[]
-            #   custom_collaboration → reasoning_model="agent_collab", collab_agents=[...picks]
-            #   full_collaboration  → reasoning_model="all_agents",    collab_agents=[...all]
-            #   solo:<family>       → reasoning_model=<family>,         collab_agents=None
+            # Preset → _ai_term_mode mapping:
+            #   collab_preset="default" → "default_preset"    (FIXED: Claude+Grok+Gemini, routing LOCKED)
+            #   collab_preset="auto"    → "auto"              (DYNAMIC: routing ALLOWED)
+            #   collab_preset="full"    → "full_collaboration" (FIXED: all agents, routing LOCKED)
+            #   collab_preset="custom"  → "custom_collaboration" (FIXED: user-defined, routing LOCKED)
+            #   None + reasoning_model="all_agents"           → "full_collaboration" (legacy)
+            #   None + reasoning_model="agent_collab" + agents → "custom_collaboration" (legacy)
+            #   None + reasoning_model="agent_collab" + no agents → "auto" (legacy)
+            #   None + solo reasoning_model                   → "solo:<family>"
+
+            _collab_preset = normalize_collab_preset(collab_preset)
             _explicit_collab_agents = list(collab_agents) if collab_agents else []
-            if reasoning_model == "all_agents":
+
+            if _collab_preset == COLLAB_PRESET_DEFAULT:
+                _ai_term_mode = "default_preset"
+                # Enforce fixed Default preset: Claude primary + Grok + Gemini collaborators.
+                # These are LOCKED — backend must not switch to different provider families.
+                collab_agents = list(DEFAULT_PRESET_COLLABORATORS)
+                _explicit_collab_agents = collab_agents
+                if not primary_model:
+                    primary_model = DEFAULT_PRESET_PRIMARY
+            elif _collab_preset == COLLAB_PRESET_AUTO:
+                _ai_term_mode = "auto"
+            elif _collab_preset == COLLAB_PRESET_FULL:
+                _ai_term_mode = "full_collaboration"
+            elif _collab_preset == COLLAB_PRESET_CUSTOM:
+                _ai_term_mode = "custom_collaboration"
+            # ── Legacy inference (no collab_preset field sent) ──
+            elif reasoning_model == "all_agents":
                 _ai_term_mode = "full_collaboration"
             elif reasoning_model == "agent_collab" and _explicit_collab_agents:
+                # Legacy: collab_agents present but no collab_preset → treat as custom_collaboration.
+                # Once frontend sends collab_preset, this branch becomes a safety fallback only.
                 _ai_term_mode = "custom_collaboration"
             elif reasoning_model == "agent_collab":
                 _ai_term_mode = "auto"
             else:
                 _ai_term_mode = f"solo:{reasoning_model}"
 
+            _cp_label = collab_preset_display_label(_collab_preset)
+            print(
+                f"[AI_TERMINAL] ════════════════════════════════════════════"
+            )
             print(
                 f"[AI_TERMINAL] mode={_ai_term_mode} "
+                f"| collab_preset={_collab_preset!r} ({_cp_label}) "
                 f"| family={reasoning_model} "
                 f"| explicit_collaborators={_explicit_collab_agents or 'none'} "
                 f"| primary_model={primary_model or 'default'} "
@@ -826,18 +866,17 @@ class TradingAgent:
             )
             # ── End intent detection ──────────────────────────────────────────────
 
-            # ── Caelyn auto-routing (ONLY in auto mode — explicit intent is never touched) ──
+            # ── Routing gate: ONLY auto preset gets dynamic provider-family routing ──
             #
-            # CRITICAL PRODUCT RULE:
-            #   Auto mode:               backend may optimize provider family, model tier,
-            #                            and collaborator set freely.
-            #   Custom Collaboration:    backend MUST NOT prune or alter explicit collaborators.
-            #                            Backend may optimize Claude tier within chosen family.
-            #   Full Collaboration:      backend MUST NOT alter the collab agent set.
-            #                            Backend may optimize synthesis model tier.
-            #   Solo explicit selection: backend MUST preserve the chosen reasoning family.
-            #                            Backend may optimize Claude tier via reasoning_mode
-            #                            but cannot switch to a different family.
+            # CRITICAL PRODUCT RULES:
+            #   default_preset:     FIXED families (Claude+Grok+Gemini). Routing LOCKED.
+            #                       Backend may optimize model TIER within each family.
+            #                       Backend MUST NOT switch to a different provider family.
+            #   auto:               DYNAMIC. Backend may override provider family, model
+            #                       tier, and collaborator set freely per prompt.
+            #   full_collaboration: FIXED all agents. Routing LOCKED.
+            #   custom_collaboration: FIXED to user's explicit selections. Routing LOCKED.
+            #   solo:<family>:      FIXED family. Backend may optimize tier within family.
             if _ai_term_mode == "auto":
                 from agent.caelyn_routing import get_caelyn_route
                 _caelyn_route = get_caelyn_route(preset_intent, category)
@@ -846,7 +885,7 @@ class TradingAgent:
                     primary_model = _caelyn_route["final"]
                 query_info["_caelyn_depth"] = _caelyn_route["mode"]
                 print(
-                    f"[AI_TERMINAL] routing_override=ALLOWED "
+                    f"[AI_TERMINAL] auto_routing=ALLOWED "
                     f"| category={category} matrix_collabs={collab_agents} "
                     f"| matrix_final={primary_model}"
                 )
@@ -863,12 +902,22 @@ class TradingAgent:
                 except Exception as _rce:
                     print(f"[ROUTE_PROVIDER] override error (non-fatal): {_rce}")
                 # ── End provider refinement ───────────────────────────────────
+            elif _ai_term_mode == "default_preset":
+                # Fixed Default preset — families are already enforced above.
+                # Do NOT call route_caelyn_override. Provider families LOCKED.
+                print(
+                    f"[AI_TERMINAL] auto_routing=BLOCKED "
+                    f"| mode=default_preset "
+                    f"| FIXED: primary={primary_model!r} collaborators={collab_agents!r} "
+                    f"| provider_family_override=SKIPPED "
+                    f"| collaborator_pruning=SKIPPED"
+                )
             else:
-                # EXPLICIT INTENT — Custom Collaboration / Full Collaboration / Solo.
-                # Do NOT call route_caelyn_override or filter_collaborators.
+                # Explicit intent — Custom / Full / Solo.
+                # Do NOT call route_caelyn_override or alter collaborators.
                 # Preserve the user's exact choices.
                 print(
-                    f"[AI_TERMINAL] routing_override=BLOCKED "
+                    f"[AI_TERMINAL] auto_routing=BLOCKED "
                     f"| mode={_ai_term_mode} "
                     f"| explicit_family={reasoning_model!r} preserved "
                     f"| explicit_collaborators={_explicit_collab_agents or 'none'!r} preserved "
