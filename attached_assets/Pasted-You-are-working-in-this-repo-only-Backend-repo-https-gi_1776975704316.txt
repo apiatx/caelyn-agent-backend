@@ -1,0 +1,181 @@
+You are working in this repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+Project constraints:
+
+* This repo is the logic/source-of-truth layer. 
+* Reuse existing services/caches and avoid unnecessary API expansion. Tradier is the primary options source. No paid AI APIs anywhere in the options path. 
+
+This is the critical final options-engine architecture pass. Do not broaden scope.
+
+PRIMARY GOALS
+
+1. Options Flow page must always show usable data on revisit
+2. Home Unusual Options Flow must be built from the strongest unusual signals across all maintained universes, not just one compact shortcut
+3. Engine must rank abnormality/surprise, not raw megacap size
+4. Page loads must not depend on cold blocking scans
+
+CURRENT STATE / KNOWN ISSUES
+From the recent backend audit and implementation:
+
+* prior timeout root cause was oversized/slow prefilter + inspect path
+* scoring had megacap bias because premium size was overweighted
+* Home fast scan had wrong tab filter
+* large/small scans now complete, but still take ~160s total
+* new `/api/options/all-tabs` exists
+* Home now surfaces better names like MRVL/RKLB, but this is still not enough for the product requirement
+* options page still risks empty/stale UX if snapshots are not maintained aggressively enough
+  These points are from the latest backend change summary and must guide this pass. 
+
+AUDIT FIRST
+Inspect the current architecture and answer precisely:
+
+A. Snapshot persistence / revisit behavior
+
+* what exact cache(s) are used for each of:
+
+  * ETFs
+  * Megacaps
+  * Large Caps
+  * Small Caps
+  * Home unusual options
+* what TTL and warmup behavior each one has
+* under what exact condition a user revisiting the Options Flow page still sees blank/no-data
+* whether the backend returns last-known-good snapshots immediately on every revisit
+
+B. Refresh cadence / throughput
+
+* how long each category cycle takes in practice now
+* whether all 4 can be kept hot continuously with the current concurrency budget
+* whether scan time is still too high for acceptable freshness
+* which stages dominate cycle time now:
+
+  * prefilter
+  * quote enrichment
+  * chain fetch
+  * per-contract scoring
+  * historical baseline
+  * seed handling
+
+C. Home aggregation logic
+
+* how Home unusual options is currently populated
+* whether it is still based on a separate fast scan
+* whether Home should instead pull top-ranked names from all 4 maintained category snapshots
+* how to dedupe and rank across categories intelligently
+
+D. Scoring quality
+
+* inspect the current post-fix formula and determine whether it still overweights size/liquidity
+* ensure the strongest unusual signal can come from any cap bucket
+* determine whether ranking should use:
+
+  * relative volume surge
+  * volume vs OI
+  * change in OI if available
+  * premium surge vs normal
+  * call/put skew
+  * directional concentration
+  * abnormality vs ticker baseline
+    more than raw premium alone
+
+IMPLEMENTATION TARGET
+
+PART 1 — Make Options Flow page always populated on revisit
+Required behavior:
+
+* if a last-known-good snapshot exists for a category, return it immediately
+* if refresh is running, return stale snapshot with metadata
+* do not return blank simply because a fresh scan is still computing
+* only show true empty if there has never been a successful snapshot or a completed scan truly found zero
+
+I want reliable stale-while-revalidate behavior for each category.
+
+PART 2 — Make Home derive from all 4 category snapshots
+Strong preference:
+
+* Home unusual options should NOT rely only on a separate mini-scan
+* Instead, build Home unusual options from the best unusual names across:
+
+  * ETFs
+  * Megacaps
+  * Large Caps
+  * Small Caps
+* dedupe by symbol
+* rank globally by repaired unusualness score
+* allow smaller names with extreme abnormality to outrank giant liquid names
+* if you keep a fast home-specific helper, it should be a supplement, not the primary truth source
+
+PART 3 — Reduce cycle time further
+Current ~160s for large/small is still too slow.
+Find the next bottleneck and reduce cycle time materially.
+
+Strong preference:
+
+* keep a maintained shortlist per universe
+* avoid over-enriching too many candidates every cycle
+* reuse recent candidate/baseline data where possible
+* inspect fewer but smarter names
+* improve concurrency safely within Tradier limits
+* do not blow up rate limits, but do not leave performance on the table either
+
+Tradier supports 120 market-data requests/minute and real-time/streaming. The problem is not just the vendor; it is how the engine is using it. The architecture should reflect that. 
+
+PART 4 — Return clean snapshot metadata everywhere
+For each category and for Home unusual options, return:
+
+* updated_at
+* source
+* data_state
+* refresh_in_progress
+* stale
+* age_seconds
+* result_count
+
+And make sure these fields are truthful.
+
+VERY IMPORTANT
+Do NOT solve this by making page loads block longer.
+Do NOT solve this by letting the user stare at blank panels until scans finish.
+Do NOT add paid AI APIs.
+
+VERIFY
+Before finishing, prove:
+
+1. revisiting Options Flow page returns usable cached data immediately
+2. all 4 category datasets are available in backend without waiting on user-triggered recompute
+3. Home unusual options is now derived from all 4 maintained universes, or explain exactly why not
+4. Home leaderboard includes genuinely unusual non-megacap names when warranted
+5. large/small cycle time is materially reduced from the current ~160s
+6. blank/no-data only occurs in true no-snapshot or true zero-result scenarios
+7. no paid AI API is used
+
+DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact root cause of blank-on-revisit behavior before this pass
+3. exact new snapshot/revisit behavior after this pass
+4. exact method Home now uses to build its unusual options list
+5. exact scoring/ranking inputs now used for “unusualness”
+6. exact cycle times after the new optimization
+7. explicit confirmation no paid AI API is used
+8. confirmation changes were committed and pushed directly to `main`
+
+EXECUTION STYLE
+
+* Audit first
+* Fix persistent availability first
+* Then fix ranking truthfulness
+* Then optimize cycle time
+* Do not overengineer
+* Then commit and push directly to `main`
