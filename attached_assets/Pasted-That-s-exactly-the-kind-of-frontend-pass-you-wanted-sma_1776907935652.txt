@@ -1,0 +1,107 @@
+That’s exactly the kind of frontend pass you wanted: small, necessary, and aligned.
+
+This is a good result.
+
+What got fixed
+
+You closed the important gaps without turning the frontend into a second router:
+
+collaboration_mode is now explicitly sent
+reasoning_model is now a real family alias instead of weird internal placeholders like agent_collab / all_agents
+Auto mode now sends actual default collaborators instead of an empty list
+Custom mode now respects the user’s current UI-selected reasoning model instead of stale state
+Follow-ups now carry the same AI/collab intent instead of going in naked and hoping backend reads minds
+Preset fallback now uses claude instead of agent_collab
+
+That is exactly the right cleanup.
+
+Why this matters
+
+Before, the backend router was trying to optimize with muddy intent.
+
+Now the frontend is finally sending clean signals:
+
+what mode the user is in
+which reasoning family they chose
+which collaborators they explicitly selected
+
+That means the backend can now do what it’s supposed to do:
+
+be clever in Auto
+preserve intent in Custom
+respect explicit family choice in Solo
+keep follow-ups consistent with the original setup
+
+That is the handshake we wanted.
+
+The best part
+
+This line is the big win:
+
+Custom Collaboration preserves explicit selections exactly — collab_agents is collabState.collabAgents directly, with zero pruning or inference.
+
+That’s the important one. That means the frontend is no longer accidentally sabotaging the custom collaboration feature before the backend even sees it.
+
+One nuance I’d point out
+
+You currently have:
+
+Solo explicit → collaboration_mode: "auto" with reasoning_model: "grok" and collab_agents: []
+
+That may be fine depending on your backend logic, but it is the one thing I’d sanity-check.
+
+Why? Because semantically, “solo explicit model choice” is not really auto. It’s more like:
+
+explicit reasoning family
+no collaborators
+
+If backend treats collaboration_mode: "auto" as “I’m allowed to override provider family,” then this could create ambiguity.
+
+Cleaner options
+
+If the backend agent comes back and confirms auto is safe here, no issue.
+
+If not, I’d consider one of these:
+
+keep auto, but backend must treat collab_agents: [] + explicit reasoning_model as explicit solo intent
+or introduce a tiny semantic distinction like "custom" for solo explicit choice with no collaborators
+or "solo" if backend wants a dedicated mode
+
+But do not change this yet unless the backend audit says it matters. I’m just flagging it as the only possibly fuzzy part.
+
+Overall verdict
+
+This frontend pass looks right.
+
+What you did correctly
+no big UI changes
+no frontend-side routing logic
+no reasoning mode nonsense
+no exact-model hardcoding
+preserved explicit custom collaboration intent
+aligned follow-ups with the original model/collab state
+
+That’s a clean win.
+
+Where you are now
+
+You now have:
+
+backend that can route intelligently
+frontend that sends intent clearly
+custom collaboration still intact
+auto mode still optimizable
+
+That is the architecture you wanted.
+
+My recommendation
+
+Wait for the backend audit to confirm one thing:
+
+Does collaboration_mode: "auto" on solo explicit model selection create any accidental override risk?
+
+If backend says no, you’re good.
+
+If backend says yes, then make one tiny follow-up tweak for solo explicit mode only.
+
+Other than that, this looks solid. The frontend is no longer stepping on the router’s shoelaces.
