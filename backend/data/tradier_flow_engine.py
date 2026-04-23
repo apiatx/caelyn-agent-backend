@@ -127,27 +127,40 @@ class TradierFlowEngine(OptionsFlowEngine):
                 c["change_pct"] = _safe_float(q.get("change_percentage"))
 
         # Re-add seed tickers that were dropped by the base pipeline
-        # (e.g. price check filtered them out because Finnhub was down)
-        for seed in seeds:
-            if seed not in existing_tickers and seed in seed_quotes:
-                q = seed_quotes[seed]
-                candidates.append({
-                    "ticker": seed,
-                    "price": _safe_float(q["last"]),
-                    "change_pct": _safe_float(q.get("change_percentage")),
-                    "volume": _safe_int(q.get("volume")) or 0,
-                    "avg_volume": _safe_int(q.get("average_volume")),
-                    "category": "etf" if seed in ETF_SET else "stock",
-                    "source_score": 5.0,
-                    "source_hits": ["seed_watchlist"],
-                    "reasons": ["watchlist inclusion"],
-                    "prefilter_score": 5.0,
-                    "profile": {},
-                    "technicals": {},
-                    "stock_relative_volume": None,
-                    "liquidity_dollars": None,
-                    "liquidity_supported": False,
-                })
+        # (e.g. price check filtered them out because Finnhub was down).
+        # Cap at prefilter_target to prevent inflating the candidate list —
+        # a large seed list (24+ tickers) would otherwise cause all of them to be
+        # re-added and then inspected, multiplying Tradier calls.
+        # Prioritise by trading volume so the most active seeds survive.
+        dropped_seeds = [
+            s for s in seeds
+            if s not in existing_tickers and s in seed_quotes
+        ]
+        dropped_seeds.sort(
+            key=lambda s: _safe_int(seed_quotes[s].get("volume")) or 0,
+            reverse=True,
+        )
+        dropped_seeds = dropped_seeds[: self.defaults["prefilter_target"]]
+
+        for seed in dropped_seeds:
+            q = seed_quotes[seed]
+            candidates.append({
+                "ticker": seed,
+                "price": _safe_float(q["last"]),
+                "change_pct": _safe_float(q.get("change_percentage")),
+                "volume": _safe_int(q.get("volume")) or 0,
+                "avg_volume": _safe_int(q.get("average_volume")),
+                "category": "etf" if seed in ETF_SET else "stock",
+                "source_score": 5.0,
+                "source_hits": ["seed_watchlist"],
+                "reasons": ["watchlist inclusion"],
+                "prefilter_score": 5.0,
+                "profile": {},
+                "technicals": {},
+                "stock_relative_volume": None,
+                "liquidity_dollars": None,
+                "liquidity_supported": False,
+            })
 
         if seed_quotes:
             added = len(candidates) - len(existing_tickers)
@@ -352,8 +365,15 @@ class TradierFlowEngine(OptionsFlowEngine):
         polygon_vol_summary = {}
         polygon_technicals = {}
         try:
-            polygon_vol_summary = get_options_volume_summary(symbol, days=30) or {}
-            polygon_technicals = get_latest_technicals(symbol) or {}
+            # Use asyncio.to_thread so synchronous DB calls don't block the event loop.
+            # Without this, a blocking DB query inside an async function serialises all
+            # concurrent _inspect_one_ticker slots even though Semaphore(3) allows 3.
+            polygon_vol_summary, polygon_technicals = await asyncio.gather(
+                asyncio.to_thread(get_options_volume_summary, symbol, 30),
+                asyncio.to_thread(get_latest_technicals, symbol),
+            )
+            polygon_vol_summary = polygon_vol_summary or {}
+            polygon_technicals = polygon_technicals or {}
         except Exception:
             pass  # Non-fatal — Polygon data is enrichment, not required
 

@@ -273,11 +273,17 @@ class OptionsFlowEngine:
             macro = prefilter_data.get("macro", {}) or {}
 
         inspectable = candidates[: self.defaults["options_inspection_limit"]]
-        # Guarantee seed tickers get inspected even if ranked low
-        if seed_tickers:
+        # Guarantee seed tickers get inspected even if ranked low by prefilter_score.
+        # Cap at 2× the inspection_limit so a large seed list (24+ seeds) doesn't
+        # inflate the inspection to all seeds — each seed adds a Tradier round-trip.
+        max_inspectable = self.defaults["options_inspection_limit"] * 2
+        if seed_tickers and len(inspectable) < max_inspectable:
             inspectable_tickers = {c["ticker"] for c in inspectable}
+            seed_set_local = set(seed_tickers)
             for c in candidates:
-                if c["ticker"] in set(seed_tickers) and c["ticker"] not in inspectable_tickers:
+                if len(inspectable) >= max_inspectable:
+                    break
+                if c["ticker"] in seed_set_local and c["ticker"] not in inspectable_tickers:
                     inspectable.append(c)
         print(f"[OPTIONS_FLOW] [{tab}] Pipeline: {len(candidates)} prefilter → {len(inspectable)} inspectable")
         results = await self._inspect_shortlist(inspectable, macro, tab=tab)
@@ -553,20 +559,25 @@ class OptionsFlowEngine:
 
         # Adjust preliminary count per tab — no need to enrich 48 candidates
         # when only a handful will pass the mcap/ETF gate.
+        # Reduced caps (was 45/40/20/40) to cut Finnhub enrichment time:
+        #   small_cap: 28 × ~2.5s/slot ≈ 24s  (was 45 × 5s = 225s)
+        #   large_cap: 25 × ~2.5s/slot ≈ 21s  (was 40 × 5s = 200s)
+        #   etf:       20 × ~2.5s/slot ≈ 17s  (was 40 × 5s = 200s)
+        #   megacap:   16 × ~2.5s/slot ≈ 14s  (was 20 × 5s = 100s)
         if tab == "small_cap":
             prefilter_multiplier = 2
-            preliminary_cap = 45
+            preliminary_cap = 28
         elif tab == "etf":
             # ETFs already filtered — candidate pool IS the final pool
             prefilter_multiplier = 1
-            preliminary_cap = 40
+            preliminary_cap = 20
         elif tab == "megacap":
             # Very few $1T+ companies exist — don't waste time enriching 48
             prefilter_multiplier = 1
-            preliminary_cap = 20
+            preliminary_cap = 16
         else:
             prefilter_multiplier = 2
-            preliminary_cap = 40
+            preliminary_cap = 25
         total_raw = len(candidates)
         preliminary = sorted(candidates.values(), key=lambda x: x["source_score"], reverse=True)
         cut = max(self.defaults["prefilter_target"] * prefilter_multiplier, preliminary_cap)
@@ -582,14 +593,17 @@ class OptionsFlowEngine:
 
         print(f"[OPTIONS_FLOW] [{tab}] Prefilter: {total_raw} raw candidates → {len(preliminary)} preliminary (sources degraded: {degraded_sources})")
 
-        # Throttle Finnhub enrichment: 1 candidate at a time with 3s spacing.
-        # Each candidate fires 3 simultaneous Finnhub calls → 3 calls per ~4s ≈ 45/min (under 60/min limit).
-        enrich_sem = asyncio.Semaphore(1)
+        # Throttle Finnhub enrichment: 3 candidates at a time with 1.5s spacing.
+        # Each candidate fires 3–4 concurrent Finnhub/FMP calls → 9-12 in-flight per slot-window.
+        # Empirically safe: Finnhub allows 60 calls/min; 3 slots × 4 calls / 1.5s ≈ 8 calls/s = 480/min
+        # but practically the network latency limits this.  Sleep adds spacing so we stay well under.
+        # Was: Semaphore(1)+3s → 1 candidate/3s.  Now: Semaphore(3)+1.5s → ~3 candidates/1.5s (≈3× faster).
+        enrich_sem = asyncio.Semaphore(3)
 
         async def _throttled_enrich(row):
             async with enrich_sem:
                 result = await self._enrich_stock_candidate(row, earnings_by_symbol.get(row["ticker"]), macro)
-                await asyncio.sleep(3)
+                await asyncio.sleep(1.5)
                 return result
 
         enriched_rows = await asyncio.gather(*[_throttled_enrich(row) for row in preliminary], return_exceptions=True)
@@ -1086,17 +1100,51 @@ class OptionsFlowEngine:
         return _clip(score)
 
     def _score_flow(self, contract: dict, call_put_volume_ratio: float | None) -> float:
+        """
+        Measures how UNUSUAL a contract's flow is, not how large the company is.
+
+        Primary signal: vol/OI ratio — the best single indicator of abnormal activity.
+          - A ratio > 1.0 means today's volume already exceeds total open interest → major abnormality.
+          - Weighted to 50pts max (was 35pts) so it dominates the score.
+
+        Premium: flat tiered gates, NOT proportional to size.
+          - Previously: log10(premium)*12-36 up to 28pts → NVDA ($5M) got 28pts, RKLB ($50K) got 20pts.
+          - Now: tiered flat bonus → $50K and $5M both reach the 15pt cap.
+          - Reward that meaningful real premium exists, not that the company is bigger.
+
+        Removed: liquidity_quality component (0.22 factor) — that's a size proxy, not an
+          abnormality signal.  Liquidity already gates contracts out via _contract_filter.
+
+        Directional skew: unchanged — still rewards call/put flow imbalance.
+        """
         score = 0.0
+
+        # ── Vol/OI ratio — primary abnormality signal (0–50pts) ───────────
         ratio = contract.get("option_volume_to_oi_ratio")
         if ratio is not None:
-            score += _clip(ratio * 28, 0, 35)
+            # ratio=1.0 → 35pts; ratio=1.5 → 52→clipped 50pts; ratio=0.5 → 17.5pts
+            score += _clip(ratio * 35, 0, 50)
+
+        # ── Premium: flat tiered gate — signals real money at stake, not size ──
+        # Tiers are the same whether the stock is NVDA or RKLB.
         premium = contract.get("premium_traded_estimate") or 0
-        score += _clip(math.log10(max(premium, 1)) * 12 - 36, 0, 28)
-        score += contract.get("liquidity_quality", 0) * 0.22
+        if premium >= 500_000:
+            score += 18
+        elif premium >= 50_000:
+            score += 15
+        elif premium >= 10_000:
+            score += 10
+        elif premium >= 5_000:
+            score += 6
+        elif premium >= 1_000:
+            score += 2
+
+        # ── Directional skew bonus — rewards conviction in one direction ───
         if contract["type"] == "call" and call_put_volume_ratio is not None and call_put_volume_ratio > 1:
             score += _clip((call_put_volume_ratio - 1) * 8, 0, 12)
         if contract["type"] == "put" and call_put_volume_ratio is not None and call_put_volume_ratio < 1:
             score += _clip((1 - call_put_volume_ratio) * 10, 0, 12)
+
         return _clip(score)
 
     def _score_asymmetry(self, contract: dict, spot_price: float) -> float:

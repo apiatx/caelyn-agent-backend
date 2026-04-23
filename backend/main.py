@@ -5140,7 +5140,11 @@ async def _home_options_fast_loop():
                     "macro": {},
                 }
 
-                # Semaphore(3) + 1.5s sleep — ~3× faster than the old Sem(1)+3s
+                # Semaphore(3) + 1.5s sleep — ~3× faster than the old Sem(1)+3s.
+                # tab="small_cap" uses the most relaxed contract filters so diverse
+                # seeds (RKLB, ASTS, IONQ, etc.) aren't filtered out by megacap thresholds.
+                # The prefilter is bypassed (minimal_prefilter) so the tab only affects
+                # _contract_filter and _inspect_one_ticker — the right level.
                 engine = TradierFlowEngine(
                     data_service,
                     overrides={
@@ -5151,7 +5155,7 @@ async def _home_options_fast_loop():
                 scan = await engine.run_live_scan(
                     seed_tickers=top_seeds,
                     prefilter_snapshot=minimal_prefilter,
-                    tab="megacap",
+                    tab="small_cap",
                 )
 
                 tickers = scan.get("tickers") or []
@@ -5406,103 +5410,155 @@ async def options_dashboard(
             "refresh_in_progress": True,
         }
 
-    # No LKG at all (first run after deploy) — do a blocking scan with timeout
-    if prefilter_snapshot:
-        pre_age = int(_time.time() - _dt.fromisoformat(prefilter_snapshot.get("generated_at")).timestamp()) if prefilter_snapshot.get("generated_at") else None
-        print(f"[OPTIONS_DASH] [{tab}] No LKG, using prefilter cache (age={pre_age}s) for first live scan")
-    else:
-        print(f"[OPTIONS_DASH] [{tab}] No LKG, no prefilter — cold first-time scan")
-    t0 = _time.time()
+    # No LKG at all (first run after deploy).
+    # Never do a blocking scan in the request path — it can take 2–3 min for
+    # large_cap/small_cap, causing guaranteed timeouts.  Instead kick off a
+    # background task and return immediately with data_state="no_data_yet".
+    # The precompute loop will populate the LKG within the first scan cycle
+    # (~30–90s with the new Semaphore(3) concurrency).
+    print(f"[OPTIONS_DASH] [{tab}] No LKG — kicking off background scan, returning no_data_yet immediately")
+    asyncio.create_task(_full_scan_and_cache())
 
-    async def _full_scan():
-        overrides = _SCAN_USER_OVERRIDES.get(tab) or None
-        engine = TradierFlowEngine(data_service, overrides=overrides)
-        exclude = set()
-        for other_tab, other_seeds in _OPTIONS_TAB_SEEDS.items():
-            if other_tab != tab:
-                exclude |= set(other_seeds)
-        nonlocal prefilter_snapshot
-        if not prefilter_snapshot:
-            prefilter_snapshot = await engine.build_prefilter_snapshot(seed_tickers, tab=tab, exclude_tickers=exclude)
-            cache.set(prefilter_key, prefilter_snapshot, _OPTIONS_PREFILTER_CACHE_TTL)
-        screener_data = await engine.run_live_scan(
-            seed_tickers, prefilter_snapshot=prefilter_snapshot, tab=tab,
-        )
-        return screener_data
+    from data.options_flow_engine import OPTIONS_FLOW_DEFAULTS, OPTIONS_FLOW_WEIGHTS
+    empty_result = {
+        "display_type": "options_screener",
+        "scan_type": "options_flow",
+        "tab": tab,
+        "cached_at": _time.time(),
+        "tickers_scanned": seed_tickers,
+        "tickers": [],
+        "all_contracts": [],
+        "filter_defaults": dict(OPTIONS_FLOW_DEFAULTS),
+        "score_weights": dict(OPTIONS_FLOW_WEIGHTS),
+        "pipeline_stats": {
+            "prefilter_candidate_count": 0,
+            "options_inspection_count": 0,
+            "ranked_result_count": 0,
+            "degraded_sources": ["cold_start:background_scan_queued"],
+        },
+        "market_summary": {"message": "First scan running in background — check back in ~60–90 seconds."},
+    }
+    return {
+        "response": empty_result,
+        "structured": True,
+        "preset": "options_screener",
+        "tab": tab,
+        "available_tabs": sorted(_OPTIONS_VALID_TABS),
+        "from_cache": False,
+        "stale": False,
+        "data_state": "no_data_yet",
+        "result_count": 0,
+        "refresh_in_progress": True,
+        "next_refresh_in_seconds": 60,
+    }
 
-    try:
-        screener_data = await asyncio.wait_for(_full_scan(), timeout=90)
-        elapsed = _time.time() - t0
 
-        result = {
-            "display_type": "options_screener",
-            "scan_type": "options_flow",
-            "tab": tab,
-            "cached_at": _time.time(),
-            "tickers_scanned": seed_tickers,
-            **screener_data,
-        }
-        cache.set(cache_key, result, _OPTIONS_CACHE_TTL)
-        cache.set(lkg_key, result, _OPTIONS_LKG_CACHE_TTL)
-        print(f"[OPTIONS_DASH] [{tab}] First live scan completed in {elapsed:.1f}s — {len(screener_data.get('tickers', []))} tickers")
+# ── OPTIONS FLOW — Unified 4-panel all-tabs endpoint ────────────────────
 
-        n_scan = len(screener_data.get("tickers", []))
-        return {
-            "response": result,
-            "structured": True,
-            "preset": "options_screener",
-            "tab": tab,
-            "available_tabs": sorted(_OPTIONS_VALID_TABS),
-            "from_cache": False,
-            "stale": False,
-            "data_state": "live_ok" if n_scan else "true_zero_results",
-            "result_count": n_scan,
-            "next_refresh_in_seconds": _OPTIONS_CACHE_TTL,
-            "timing": {"total_seconds": round(elapsed, 1)},
-        }
+@app.get("/api/options/all-tabs")
+@limiter.limit("60/minute")
+async def options_all_tabs(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
+):
+    """
+    Returns all four Options Flow category datasets in a single response.
+    Each tab entry contains its cached data (LKG or hot) with data_state metadata.
+    Frontend can render all 4 panels at once without serial user-click waits.
 
-    except asyncio.TimeoutError:
-        elapsed = _time.time() - t0
-        print(f"[OPTIONS_DASH] [{tab}] Full scan timed out after {elapsed:.1f}s — returning empty shell")
-        from data.options_flow_engine import OPTIONS_FLOW_DEFAULTS, OPTIONS_FLOW_WEIGHTS
-        result = {
-            "display_type": "options_screener",
-            "scan_type": "options_flow",
-            "tab": tab,
-            "cached_at": _time.time(),
-            "tickers_scanned": seed_tickers,
-            "tickers": [],
-            "all_contracts": [],
-            "filter_defaults": dict(OPTIONS_FLOW_DEFAULTS),
-            "score_weights": dict(OPTIONS_FLOW_WEIGHTS),
-            "pipeline_stats": {
-                "prefilter_candidate_count": len(prefilter_snapshot.get("candidates", [])) if prefilter_snapshot else 0,
-                "options_inspection_count": 0,
-                "ranked_result_count": 0,
-                "degraded_sources": [f"timeout:scan_exceeded_{int(elapsed)}s"],
-            },
-            "market_summary": {"error": "Scan timed out. Background precompute loop will populate data shortly."},
-        }
-        return {
-            "response": result,
-            "structured": True,
-            "preset": "options_screener",
-            "tab": tab,
-            "available_tabs": sorted(_OPTIONS_VALID_TABS),
-            "from_cache": False,
-            "stale": False,
-            "data_state": "no_data_yet",
-            "result_count": 0,
-            "refresh_in_progress": True,
-            "next_refresh_in_seconds": _OPTIONS_CACHE_TTL,
-            "timing": {"total_seconds": round(elapsed, 1), "timed_out": True},
-        }
+    Response shape:
+      {
+        "tabs": {
+          "etf":       { "data_state": "live_ok", "result_count": N, "tickers": [...], "updated_at": ..., ... },
+          "megacap":   { ... },
+          "large_cap": { ... },
+          "small_cap": { ... }
+        },
+        "any_live": true,
+        "all_live": false,
+        "generated_at": "2026-..."
+      }
+    """
+    await _wait_for_init()
+    import time as _time
+    from data.cache import cache
+    import datetime as _dt_mod
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"[OPTIONS_DASH] [{tab}] Error: {e}")
-        return JSONResponse(status_code=500, content={"error": f"Options screener error: {str(e)[:300]}"})
+    tabs_out: dict = {}
+    any_live = False
+    all_live = True
+
+    for tab in sorted(_OPTIONS_VALID_TABS):
+        cache_key  = _options_cache_key(tab)
+        lkg_key    = _options_lkg_cache_key(tab)
+
+        hot = cache.get(cache_key)
+        lkg = cache.get(lkg_key)
+
+        if hot:
+            age = int(_time.time() - hot.get("cached_at", _time.time()))
+            n   = len(hot.get("tickers", []))
+            tabs_out[tab] = {
+                "data_state":           "live_ok" if n else "true_zero_results",
+                "result_count":         n,
+                "stale":                False,
+                "cache_age_seconds":    age,
+                "refresh_in_progress":  False,
+                "source":               "hot_cache",
+                "tickers":              hot.get("tickers", []),
+                "all_contracts":        hot.get("all_contracts", [])[:200],
+                "market_summary":       hot.get("market_summary", {}),
+                "pipeline_stats":       hot.get("pipeline_stats", {}),
+                "filter_defaults":      hot.get("filter_defaults", {}),
+                "score_weights":        hot.get("score_weights", {}),
+            }
+            if n:
+                any_live = True
+        elif lkg:
+            age = int(_time.time() - lkg.get("cached_at", _time.time()))
+            n   = len(lkg.get("tickers", []))
+            tabs_out[tab] = {
+                "data_state":           "stale_but_available" if n else "refresh_in_progress",
+                "result_count":         n,
+                "stale":                True,
+                "cache_age_seconds":    age,
+                "refresh_in_progress":  True,
+                "source":               "lkg_cache",
+                "tickers":              lkg.get("tickers", []),
+                "all_contracts":        lkg.get("all_contracts", [])[:200],
+                "market_summary":       lkg.get("market_summary", {}),
+                "pipeline_stats":       lkg.get("pipeline_stats", {}),
+                "filter_defaults":      lkg.get("filter_defaults", {}),
+                "score_weights":        lkg.get("score_weights", {}),
+            }
+            if n:
+                any_live = True
+            all_live = False
+        else:
+            tabs_out[tab] = {
+                "data_state":          "no_data_yet",
+                "result_count":        0,
+                "stale":               False,
+                "cache_age_seconds":   None,
+                "refresh_in_progress": True,
+                "source":              "none",
+                "tickers":             [],
+                "all_contracts":       [],
+                "market_summary":      {},
+                "pipeline_stats":      {},
+                "filter_defaults":     {},
+                "score_weights":       {},
+            }
+            all_live = False
+
+    return {
+        "tabs":         tabs_out,
+        "any_live":     any_live,
+        "all_live":     all_live,
+        "available_tabs": sorted(_OPTIONS_VALID_TABS),
+        "generated_at": _dt_mod.datetime.utcnow().isoformat() + "Z",
+    }
 
 
 # ── OPTIONS FLOW — Agent chat query ─────────────────────────────────────
