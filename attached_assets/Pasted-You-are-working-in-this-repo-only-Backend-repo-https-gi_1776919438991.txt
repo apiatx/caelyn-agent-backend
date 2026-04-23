@@ -1,0 +1,228 @@
+You are working in this repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+* Make small logical commits as you go
+
+Project context:
+
+* This repo is where all logic lives. 
+* The Home page must become a true “everything in one place” alpha dashboard while minimizing API calls by reusing existing services, caches, TTLs, and endpoint families already used elsewhere in the project. 
+* Respect current API/rate-limit constraints. Especially avoid wasteful new fan-out against FMP, Polygon, Alpha Vantage, Finviz scraping, and Tradier. Reuse existing internal services first. Tradier is the preferred source for options flow and supports 120 req/min for market data, but do not build an expensive fresh scan path if logic already exists on the options flow page/backend. 
+
+PRIMARY GOAL
+Audit and implement the backend changes required for the CaelynAI Home page so it can support these sections cleanly from reused existing logic:
+
+Already existing on Home:
+
+* Trending Ideas
+* Theme Performance
+* Top Movers
+* Top Losers
+* Trending on X
+* Latest News
+* Fear and Greed
+
+Need backend support added or improved:
+
+* Unusual Options Flows
+* Watchlist Snapshot
+* Portfolio Snapshot
+
+Possible later / lower-priority:
+
+* Theme Performance becoming more granular into sub-themes instead of just sectors
+
+Also note:
+
+* Hyperliquid Top Signals should use the exact top signals already displayed on the Hyperliquid page, and should not require backend reinvention if that data is already exposed elsewhere. Frontend can reuse the current source/shape if possible.
+* Do NOT change unrelated page behavior.
+* Do NOT change the existing Home page layout sections like Market Snapshot.
+
+NON-NEGOTIABLE ARCHITECTURE RULES
+
+* Audit first. Do not guess.
+* Strong preference: keep Home powered by one backend home aggregator route, reusing existing service calls and caches.
+* No new third-party providers.
+* No new high-frequency polling logic.
+* No per-card or per-row enrichment loops on page load.
+* Reuse current service/cache/TTL/provider priority patterns exactly where they already exist.
+* Any optional section must fail soft without breaking the whole Home payload.
+* If a section already exists on another page, reuse the exact source family and normalization pattern.
+* Do not broaden scope into unrelated refactors.
+
+PHASE 1 — AUDIT
+Inspect the backend and write down the exact reuse surface for these Home sections:
+
+1. Theme Performance
+
+* Find the current source used on Home and on Sector Rotation
+* Determine whether current sector data can support a sub-theme extension later
+* Do not implement a big sub-theme system unless it is already half-built somewhere
+
+2. Top Movers / Top Losers
+
+* Find the existing service and normalization used
+* Confirm current Home payload shape and any cache/reliability gaps
+
+3. Trending Ideas
+
+* Confirm what backend source currently powers it
+* Verify it is real data, not placeholder logic
+
+4. Trending on X
+
+* Find the exact backend logic/account universe/cache currently used
+* Verify current weekly snapshot path
+
+5. Unusual Options Flows
+
+* Inspect the existing Tradier/options flow backend path
+* Find the best already-existing service/logic that can be reused
+* Goal is NOT “largest names by raw flow”
+* Goal is “most unusual/significant increase in flow / net flow / unusual activity,” regardless of market cap
+* Audit what fields already exist to support this ranking without inventing a whole new system if avoidable
+
+6. Watchlist Snapshot
+
+* Find how primary watchlist is stored/exposed
+* Identify how to produce rows with:
+
+  * symbol
+  * current price
+  * 1d price %
+  * options signal
+  * volume increase
+* Reuse existing quote/options/watchlist logic wherever possible
+
+7. Portfolio Snapshot
+
+* Find the current portfolio holdings source/storage
+* Identify how to produce rows with:
+
+  * symbol
+  * current price
+  * 1d price %
+  * options signal
+  * volume increase
+* Reuse existing portfolio/quote/options logic wherever possible
+
+8. Latest News / Fear and Greed
+
+* Confirm current Home source and whether these are already folded into the Home aggregator
+* If Home still requires extra page-level fetches for these, note it so frontend can be simplified after backend normalization
+
+PHASE 2 — IMPLEMENT THE BACKEND SUPPORT
+Implement only the minimum backend changes needed for Home.
+
+A. Home aggregator
+
+* Keep or improve the single Home aggregator endpoint
+* Ensure the payload cleanly includes:
+
+  * trending_ideas
+  * theme_performance
+  * top_movers
+  * top_losers
+  * trending_on_x
+  * unusual_options_flows
+  * latest_news
+  * fear_greed
+  * watchlist_snapshot
+  * portfolio_snapshot
+* Any section that fails should return an empty normalized structure, not explode the response
+
+B. Unusual Options Flows
+
+* Reuse the existing Tradier/options flow page backend logic/setup/wiring as much as possible
+* Do NOT build a totally separate raw options engine if one already exists
+* Rank for unusualness / net-flow spike / abnormality, not just biggest megacap contracts
+* Prefer one reusable helper/service that Home can consume cheaply
+* Normalize rows for Home cards/table:
+
+  * symbol
+  * company_name if already available
+  * flow_signal or unusual_score
+  * net_flow / call_put_skew / premium / whichever metrics already exist and are strongest
+  * 1d move if already available from current source family
+  * short rationale/label
+* Keep it light and cacheable
+
+C. Watchlist Snapshot
+
+* Build a compact snapshot for the primary watchlist
+* Reuse stored watchlist + existing quote/options/volume signal logic
+* Normalize each row:
+
+  * symbol
+  * current_price
+  * change_1d_pct
+  * options_signal
+  * volume_increase
+* Avoid per-symbol fan-out if a batch quote path already exists somewhere
+
+D. Portfolio Snapshot
+
+* Build a compact snapshot for the user’s portfolio holdings using the same row shape as watchlist where possible
+* Reuse existing portfolio data source and existing market signal helpers
+* Avoid duplicate logic between watchlist snapshot and portfolio snapshot
+
+E. Theme Performance
+
+* Keep current sector-level implementation working
+* If there is already a low-cost way to make it slightly more granular using existing data, document it
+* Do NOT force a big sub-theme implementation right now unless it is already mostly available internally
+* Stability beats ambition here
+
+F. Latest News / Fear and Greed
+
+* If these are not already inside the Home aggregator, fold them in so Home can be driven from one backend response
+* Reuse existing sources and caches
+
+PHASE 3 — VERIFY
+Before finishing, prove these with real payload inspection:
+
+* one real `unusual_options_flows[0]`
+* one real `watchlist_snapshot[0]`
+* one real `portfolio_snapshot[0]`
+* one real `theme_performance` row
+* one real `top_movers` row
+* one real `top_losers` row
+* one real `trending_on_x.top_tickers[0]`
+
+Also verify:
+
+* no new provider was introduced
+* Home backend support reuses existing cache/service families
+* no page-load stampede risk was added
+* latest news + fear/greed are available from the Home backend response if possible
+
+DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact existing services/endpoints/helpers reused
+3. whether Home can now be rendered from one backend response
+4. exact payload additions for:
+
+   * unusual_options_flows
+   * watchlist_snapshot
+   * portfolio_snapshot
+5. whether Latest News and Fear & Greed are now folded into Home aggregator
+6. whether Theme Performance was left sector-level for now, and what the future low-cost path is for sub-themes
+7. confirmation changes were committed and pushed directly to `main`
+
+EXECUTION STYLE
+
+* Audit first
+* Reuse first
+* Build the smallest correct backend changes
+* Do not overengineer
+* Then commit and push directly to `main`
