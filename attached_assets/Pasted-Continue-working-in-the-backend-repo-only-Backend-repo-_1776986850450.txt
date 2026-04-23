@@ -1,0 +1,63 @@
+Continue working in the backend repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+This is a short audit/fix pass. Do not broaden scope.
+
+PRIMARY GOAL
+Confirm whether the backend now exposes a clean **master screener endpoint** that returns the ranked, unfiltered unusual-options leaderboard directly, suitable for a single screener UI.
+
+Right now the frontend is still consuming `/api/options/all-tabs` and rendering 4 category panels. I need to move to one real screener UI.
+
+AUDIT FIRST
+Inspect and report:
+
+1. whether a direct master screener endpoint already exists
+
+   * e.g. `/api/options/screener` or equivalent
+2. if it exists, what exact payload shape it returns
+3. whether it includes:
+
+   * ranked rows
+   * `asset_type`
+   * `market_cap_bucket`
+   * `composite_score`
+   * key unusual-flow metrics
+   * snapshot metadata
+4. whether those rows are sufficient to drive one sortable screener page
+5. whether existing ticker click/detail modal backend support remains fully compatible from those rows
+
+IF NEEDED
+If a clean direct master screener endpoint does NOT already exist, add the smallest possible one now.
+
+Required shape:
+
+* one ranked master list
+* master snapshot metadata
+* enough row fields for frontend sorting/filtering
+* no paid AI APIs
+* no regression to existing ticker detail/drilldown support
+
+IMPORTANT
+
+* Do not revert to 4 separate truth pipelines
+* Do not break `/api/options/all-tabs` if frontend still temporarily uses it
+* This is about exposing the master truth cleanly for the next frontend step
+
+DELIVERABLES
+When done, report:
+
+1. whether a direct master screener endpoint existed already
+2. exact endpoint to use for the new frontend screener
+3. exact payload shape
+4. confirmation ticker detail/drilldown compatibility remains intact
+5. whether any backend files changed
+6. confirmation changes were committed and pushed directly to `main`
