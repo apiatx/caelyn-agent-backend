@@ -39,8 +39,14 @@ def _env_float(name: str, default: float) -> float:
 
 
 OPTIONS_FLOW_DEFAULTS = {
-    "prefilter_target": _env_int("OPTIONS_FLOW_PREFILTER_TARGET", 12),
-    "options_inspection_limit": _env_int("OPTIONS_FLOW_INSPECTION_LIMIT", 8),
+    # ── Breadth: how many candidates survive each stage ───────────────────
+    # prefilter_target: Finnhub-enriched candidates kept for options inspection.
+    # Increased from 12 → 18 so more names compete for unusual-activity slots.
+    "prefilter_target": _env_int("OPTIONS_FLOW_PREFILTER_TARGET", 18),
+    # options_inspection_limit: base inspection cap (seed tickers can push to 2×).
+    # Increased from 8 → 16 — with 2-stage scan the extra tickers cost much less.
+    "options_inspection_limit": _env_int("OPTIONS_FLOW_INSPECTION_LIMIT", 16),
+    # ── Filters ───────────────────────────────────────────────────────────
     "min_stock_price": _env_float("OPTIONS_FLOW_MIN_STOCK_PRICE", 8.0),
     "min_stock_liquidity": _env_float("OPTIONS_FLOW_MIN_STOCK_LIQUIDITY", 15_000_000.0),
     # Market-cap ranges are hardcoded per tier — NOT user-editable.
@@ -58,12 +64,26 @@ OPTIONS_FLOW_DEFAULTS = {
     "max_moneyness_pct": _env_float("OPTIONS_FLOW_MAX_MONEYNESS_PCT", 0.15),
     "max_contracts_per_ticker": _env_int("OPTIONS_FLOW_MAX_CONTRACTS_PER_TICKER", 60),
     "top_contracts_per_ticker": _env_int("OPTIONS_FLOW_TOP_CONTRACTS_PER_TICKER", 5),
-    # Concurrency: how many tickers inspected in parallel within one scan.
-    # Set via OPTIONS_FLOW_INSPECT_CONCURRENCY env var (default 3).
-    # Each slot makes ~3 Tradier calls; 3 slots × 3 calls = 9 in-flight max.
-    # inter_ticker_sleep pads between tickers to respect Tradier rate limits.
-    "inspect_concurrency": _env_int("OPTIONS_FLOW_INSPECT_CONCURRENCY", 3),
-    "inspect_inter_ticker_sleep": _env_float("OPTIONS_FLOW_INTER_TICKER_SLEEP", 1.5),
+    # ── Concurrency (2-stage scanner) ────────────────────────────────────
+    # Stage 1 (expiration pre-screen): all candidates concurrently.
+    # Stage 2 (full chain fetch + scoring): finalists only.
+    # inspect_concurrency: fallback semaphore size when no shared sem is set.
+    # Increased from 3 → 6 to use ~88 req/min of the 120/min Tradier budget.
+    # Formula: Semaphore(N) / avg_call_duration → req/s:
+    #   N=6, avg_chain=4.1s  → 6/4.1 = 1.46/s = 88 req/min  ✓
+    #   N=3, avg_chain=4s    → 3/4  = 0.75/s = 45 req/min  (old — too slow)
+    "inspect_concurrency": _env_int("OPTIONS_FLOW_INSPECT_CONCURRENCY", 6),
+    # inspect_inter_ticker_sleep: padding INSIDE the semaphore slot after each
+    # expiration or chain call.  Reduced from 1.5s → 0.1s — the old value wasted
+    # 1.5s of slot time per call; 50 tickers × 1.5s / 3 slots = 25s pure overhead.
+    "inspect_inter_ticker_sleep": _env_float("OPTIONS_FLOW_INTER_TICKER_SLEEP", 0.1),
+    # ── Master screener: Stage 1.5 trim ──────────────────────────────────
+    # When > 0, limits Stage 2 deep-inspect candidates to the top-N by
+    # prefilter_score after Stage 1 expirations have been confirmed.
+    # UnifiedOptionsEngine uses this to keep Stage 2 bounded (e.g. 50)
+    # even when Stage 1 sweeps a larger universe (e.g. 100 candidates).
+    # Set to 0 to disable (per-tab engines leave this at 0).
+    "master_stage2_limit": _env_int("OPTIONS_MASTER_STAGE2_LIMIT", 0),
 }
 
 
@@ -597,17 +617,18 @@ class OptionsFlowEngine:
 
         print(f"[OPTIONS_FLOW] [{tab}] Prefilter: {total_raw} raw candidates → {len(preliminary)} preliminary (sources degraded: {degraded_sources})")
 
-        # Throttle Finnhub enrichment: 3 candidates at a time with 1.5s spacing.
-        # Each candidate fires 3–4 concurrent Finnhub/FMP calls → 9-12 in-flight per slot-window.
-        # Empirically safe: Finnhub allows 60 calls/min; 3 slots × 4 calls / 1.5s ≈ 8 calls/s = 480/min
-        # but practically the network latency limits this.  Sleep adds spacing so we stay well under.
-        # Was: Semaphore(1)+3s → 1 candidate/3s.  Now: Semaphore(3)+1.5s → ~3 candidates/1.5s (≈3× faster).
-        enrich_sem = asyncio.Semaphore(3)
+        # Throttle Finnhub enrichment: up to 5 candidates at a time with 0.4s spacing.
+        # Each candidate fires 3–4 concurrent Finnhub/FMP calls → 12-20 in-flight per slot-window.
+        # Finnhub allows 60 calls/min; 5 slots × 4 calls / 0.4s ≈ 50 calls/s network-gated,
+        # but per-call latency (~2-4s) limits the actual sustained rate well below that ceiling.
+        # Old: Semaphore(3)+1.5s → 28 candidates × 5.5s / 3 = ~51s enrichment time per tab.
+        # New: Semaphore(5)+0.4s → 28 candidates × 3.4s / 5 = ~19s enrichment time per tab.
+        enrich_sem = asyncio.Semaphore(5)
 
         async def _throttled_enrich(row):
             async with enrich_sem:
                 result = await self._enrich_stock_candidate(row, earnings_by_symbol.get(row["ticker"]), macro)
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(0.4)
                 return result
 
         enriched_rows = await asyncio.gather(*[_throttled_enrich(row) for row in preliminary], return_exceptions=True)
@@ -773,49 +794,148 @@ class OptionsFlowEngine:
         return _clip(score)
 
     async def _inspect_shortlist(self, candidates: list[dict], macro: dict, *, tab: str = "megacap") -> list[dict | None]:
-        # Bounded concurrency — configurable via inspect_concurrency default (default: 3).
-        # Each slot makes ~3 Tradier calls (1 expirations + 2 chain fetches).
-        # inter_ticker_sleep pads per-slot to respect Tradier rate limits.
-        # When self._shared_sem is set by the caller (e.g. precompute loop running
-        # 4 tabs concurrently), that single Semaphore gates ALL tabs at once so the
-        # total Tradier request rate stays within the 120 req/min vendor limit.
-        concurrency = int(self.defaults.get("inspect_concurrency", 3))
-        sleep_s = float(self.defaults.get("inspect_inter_ticker_sleep", 1.5))
-        sem = self._shared_sem if self._shared_sem is not None else asyncio.Semaphore(concurrency)
+        """
+        2-Stage scanner — separates cheap breadth-screening from expensive deep-inspect.
 
-        async def _bounded(candidate: dict):
+        Stage 1 — Expiration pre-screen (cheap):
+          For every candidate concurrently, call get_option_expirations (1 Tradier call, ~2s).
+          Any ticker with NO valid expirations in the 7–45 DTE window is dropped immediately —
+          it never reaches Stage 2 and never consumes a chain-fetch slot.
+          This was the primary wasted-work source: in the previous cycle small_cap inspected 15
+          tickers but only 6 made Tradier chain calls (9 were pure slot-waste at 1.5s sleep each).
+
+        Stage 2 — Deep chain inspect (expensive, finalists only):
+          Only survivors from Stage 1 proceed to get_full_chain_with_greeks (2 calls each).
+          Full scoring, normalization, and ranking runs here.
+
+        Shared semaphore:
+          When self._shared_sem is set by the precompute loop (all 4 tabs run concurrently),
+          BOTH Stage 1 and Stage 2 calls compete for the same global Semaphore(6).
+          Effective sustained rate: 6 / 4.1s_avg ≈ 88 req/min < 120 req/min vendor limit.
+          Stage 1 expirations are faster (~2s each) so they pass through quickly, freeing
+          slots for Stage 2 chain fetches.
+        """
+        import time as _ts
+        concurrency = int(self.defaults.get("inspect_concurrency", 6))
+        sleep_s = float(self.defaults.get("inspect_inter_ticker_sleep", 0.1))
+        sem = self._shared_sem if self._shared_sem is not None else asyncio.Semaphore(concurrency)
+        min_dte = self.defaults["min_dte"]
+        max_dte = self.defaults["max_dte"]
+        max_exp = self.defaults["max_expirations_per_ticker"]
+
+        # ── Stage 1: cheap expiration pre-screen ──────────────────────────
+        async def _stage1_expiry(candidate: dict):
+            """Return (ticker, valid_expirations_or_None)."""
+            symbol = candidate["ticker"]
+            if not _safe_float(candidate.get("price")):
+                return symbol, None   # No price — skip immediately (no API call)
             async with sem:
                 try:
-                    result = await self._inspect_one_ticker(candidate, macro, tab=tab)
+                    t1 = _ts.time()
+                    # Use per-engine proxy when available (TradierFlowEngine sets
+                    # self._scan_proxy to avoid shared data_service race condition)
+                    _expiry_api = getattr(self, "_scan_proxy", None) or self.data.public_com
+                    all_exps = await _expiry_api.get_option_expirations(symbol)
+                    await asyncio.sleep(sleep_s)
+                    valid = [e for e in (all_exps or [])
+                             if (dte := _days_to_expiration(e)) is not None and min_dte <= dte <= max_dte]
+                    valid = valid[:max_exp]
+                    if not valid and all_exps:
+                        valid = all_exps[:1]
+                    elapsed = _ts.time() - t1
+                    return symbol, (valid if valid else None)
+                except Exception as exc:
+                    print(f"[OPTIONS_FLOW] [{tab}] Stage1 expiry fetch failed for {symbol}: {exc}")
+                    return symbol, None
+
+        t_stage1 = _ts.time()
+        stage1_raw = await asyncio.gather(*[_stage1_expiry(c) for c in candidates])
+        expiration_map: dict[str, list[str]] = {sym: exps for sym, exps in stage1_raw if exps}
+        alive = [c for c in candidates if c["ticker"] in expiration_map]
+        n_dropped_s1 = len(candidates) - len(alive)
+        print(
+            f"[OPTIONS_FLOW] [{tab}] Stage1 expiry sweep: {len(candidates)} → {len(alive)} alive "
+            f"({n_dropped_s1} had no valid {min_dte}–{max_dte}d expirations) in {_ts.time()-t_stage1:.1f}s"
+        )
+
+        if not alive:
+            return [None] * len(candidates)
+
+        # ── Stage 1.5: optional prefilter_score trim (master screener only) ─
+        # When master_stage2_limit > 0 (set by UnifiedOptionsEngine), limit
+        # deep-inspect to top-N survivors by prefilter_score to bound Tradier
+        # chain call count even when Stage 1 sweeps a large unified universe.
+        stage2_limit = self.defaults.get("master_stage2_limit", 0)
+        if stage2_limit and len(alive) > stage2_limit:
+            alive_before_trim = len(alive)
+            alive.sort(key=lambda c: c.get("prefilter_score", 0), reverse=True)
+            alive = alive[:stage2_limit]
+            print(f"[OPTIONS_FLOW] [{tab}] Stage1.5 trim: {alive_before_trim} → {stage2_limit} (by prefilter_score)")
+
+        # ── Stage 2: deep chain inspect (finalists only) ──────────────────
+        async def _stage2_inspect(candidate: dict):
+            async with sem:
+                try:
+                    exps = expiration_map[candidate["ticker"]]
+                    result = await self._inspect_one_ticker(
+                        candidate, macro, tab=tab, preloaded_expirations=exps,
+                    )
                     await asyncio.sleep(sleep_s)
                     return result
                 except Exception as exc:
-                    print(f"[OPTIONS_FLOW] ticker inspect failed for {candidate.get('ticker')}: {exc}")
-                    await asyncio.sleep(0.5)
+                    print(f"[OPTIONS_FLOW] [{tab}] Stage2 inspect failed for {candidate.get('ticker')}: {exc}")
+                    await asyncio.sleep(0.1)
                     return None
 
-        return await asyncio.gather(*[_bounded(c) for c in candidates])
+        stage2_results = await asyncio.gather(*[_stage2_inspect(c) for c in alive])
+        # Return in original candidate order (None for tickers dropped at Stage 1)
+        result_map = {alive[i]["ticker"]: stage2_results[i] for i in range(len(alive))}
+        return [result_map.get(c["ticker"]) for c in candidates]
 
-    async def _inspect_one_ticker(self, candidate: dict, macro: dict, *, tab: str = "megacap") -> dict | None:
+    async def _inspect_one_ticker(
+        self,
+        candidate: dict,
+        macro: dict,
+        *,
+        tab: str = "megacap",
+        preloaded_expirations: list[str] | None = None,
+    ) -> dict | None:
+        """
+        Deep options-chain inspection for a single ticker.
+
+        Args:
+            preloaded_expirations: When provided (Stage 2 path), skip the
+                get_option_expirations API call — it was already done in Stage 1.
+                When None (legacy/direct-call path), fetch expirations here.
+        """
         symbol = candidate["ticker"]
         price = _safe_float(candidate.get("price"))
         if not price:
             return None
 
-        expirations = await self.data.public_com.get_option_expirations(symbol)
-        valid_expirations = []
-        for exp in expirations:
-            dte = _days_to_expiration(exp)
-            if dte is not None and self.defaults["min_dte"] <= dte <= self.defaults["max_dte"]:
-                valid_expirations.append(exp)
-        valid_expirations = valid_expirations[: self.defaults["max_expirations_per_ticker"]]
-        if not valid_expirations and expirations:
-            valid_expirations = expirations[:1]
+        # Use per-engine proxy when available (TradierFlowEngine sets self._scan_proxy
+        # to avoid overwriting shared data_service.public_com across concurrent tabs)
+        _chain_api = getattr(self, "_scan_proxy", None) or self.data.public_com
+
+        if preloaded_expirations is not None:
+            valid_expirations = preloaded_expirations
+        else:
+            # Legacy path: fetch expirations inline (used when called outside 2-stage flow)
+            expirations = await _chain_api.get_option_expirations(symbol)
+            valid_expirations = []
+            for exp in expirations:
+                dte = _days_to_expiration(exp)
+                if dte is not None and self.defaults["min_dte"] <= dte <= self.defaults["max_dte"]:
+                    valid_expirations.append(exp)
+            valid_expirations = valid_expirations[: self.defaults["max_expirations_per_ticker"]]
+            if not valid_expirations and expirations:
+                valid_expirations = expirations[:1]
+
         if not valid_expirations:
             return None
 
         chain_list = await asyncio.gather(
-            *[self.data.public_com.get_full_chain_with_greeks(symbol, exp) for exp in valid_expirations],
+            *[_chain_api.get_full_chain_with_greeks(symbol, exp) for exp in valid_expirations],
             return_exceptions=True,
         )
 

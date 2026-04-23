@@ -511,23 +511,25 @@ def _build_options_lkg_index() -> dict[str, dict]:
     (watchlist rows, sub-theme performance, portfolio snapshot).
 
     Priority order (pure in-memory reads, zero API calls):
-      1. home:unusual_options:v1  — written by _fetch_unusual_options_live() on demand
-      2. options_screener_lkg_v1:{tab}  — Full Options Flow LKG (4-hr TTL)
+      1. Master screener hot cache (options_master_screener_v1)
+      2. Master screener LKG (options_master_lkg_v1)
+      3. Legacy per-tab LKG fallback (options_screener_lkg_v1:{tab})
 
     Returns a dict keyed by uppercase ticker symbol.
     """
     index: dict[str, dict] = {}
 
-    # ── Priority 1: Home-dedicated fast cache ─────────────────────────
-    home_cache = cache.get("home:unusual_options:v1")
-    if home_cache:
-        for t in (home_cache.get("tickers") or []):
+    # ── Priority 1 + 2: Master screener (unified architecture) ───────
+    master = cache.get("options_master_screener_v1") or cache.get("options_master_lkg_v1")
+    if master:
+        for t in (master.get("tickers") or []):
             sym = (t.get("ticker") or "").upper()
             if not sym or sym in index:
                 continue
-            index[sym] = {**t, "source_tab": "home_fast_cache"}
+            index[sym] = {**t, "source_tab": "master"}
+        return index
 
-    # ── Priority 2: LKG fallback from full options precompute tabs ────
+    # ── Priority 3: Legacy per-tab LKG (transition / cold start) ─────
     tabs = ["megacap", "large_cap", "small_cap", "etf"]
     for tab in tabs:
         lkg = cache.get(f"options_screener_lkg_v1:{tab}")
@@ -655,28 +657,48 @@ async def _fetch_unusual_options_live(
     """
     Return (flows_list, meta_dict) for the Home unusual-options panel.
 
-    Derives from ALL 4 maintained category tabs (hot cache → LKG) so Home
-    always reflects the strongest unusual signals across the full maintained
-    universe (ETF + megacap + large_cap + small_cap, ~60 scored tickers).
-
     Priority order (all in-memory reads — zero blocking, no Tradier calls):
-      1. Hot caches (options_screener_v9:{tab}) — freshest, 5-min TTL.
-         Any tab that is hot contributes its tickers to the merged index.
-      2. LKG caches (options_screener_lkg_v1:{tab}) — 4-hr TTL, disk-backed
-         (survive restarts). Used for tabs whose hot cache has expired.
-      3. Cold (no_data_yet) — only when no tab has data at all.
-         The precompute loop populates within ~120s on cold start.
+      1. Master screener hot cache (options_master_screener_v1) — single unified
+         snapshot covering ETF + megacap + large_cap + small_cap together.
+      2. Master screener LKG (options_master_lkg_v1) — 4-hr TTL, disk-backed.
+      3. Legacy per-tab caches (backward compat during transition period).
+      4. Cold (no_data_yet) — master screener loop populates within ~90s.
 
-    Dedup: first-write-wins by symbol across tabs (hot tabs ranked first).
-    Rank:  globally by composite_score — abnormality wins, not cap size.
+    Rank: globally by composite_score — abnormality wins, not cap size.
     No Tradier calls. No AI API. No background tasks fired from here.
     """
     from datetime import datetime as _dt2, timezone as _tz2
 
-    # ── 1 + 2.  Merge hot caches and LKG across all 4 tabs ──────────────────
-    # Hot tabs first so their fresher scores take priority in dedup.
-    merged_index: dict[str, dict] = {}
-    best_updated_at: str | None = None
+    # ── 1 + 2. Master screener (unified architecture) ────────────────────────
+    master_hot = cache.get("options_master_screener_v1")
+    master_lkg = cache.get("options_master_lkg_v1")
+    master = master_hot or master_lkg
+
+    if master:
+        is_stale = master_hot is None
+        merged_index: dict[str, dict] = {}
+        for ticker in (master.get("tickers") or []):
+            sym = (ticker.get("ticker") or "").upper()
+            if sym and sym not in merged_index:
+                merged_index[sym] = {**ticker, "source_tab": "master"}
+        best_updated_at = master.get("updated_at") or master.get("cached_at")
+        if isinstance(best_updated_at, (int, float)):
+            best_updated_at = _dt2.fromtimestamp(best_updated_at, tz=_tz2.utc).isoformat()
+        meta = {
+            "source":              "master_screener" if not is_stale else "master_screener_lkg",
+            "updated_at":          best_updated_at,
+            "age_seconds":         None,
+            "stale":               is_stale,
+            "refresh_in_progress": is_stale,
+            "data_state":          "live_ok" if not is_stale else "stale_but_available",
+            "result_count":        len(merged_index),
+        }
+        flows = _extract_unusual_options_flows(merged_index, limit=limit, updated_at=best_updated_at)
+        return flows, meta
+
+    # ── 3. Legacy per-tab caches (backward compat / transition) ─────────────
+    merged_index = {}
+    best_updated_at = None
     tabs_hot: list[str] = []
     tabs_lkg: list[str] = []
     tabs_absent: list[str] = []

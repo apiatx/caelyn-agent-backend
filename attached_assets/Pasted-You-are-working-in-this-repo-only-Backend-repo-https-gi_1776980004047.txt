@@ -1,0 +1,280 @@
+You are working in this repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+* Make small logical commits as you go
+
+Project constraints:
+
+* This repo is the logic/source-of-truth layer. 
+* Tradier is the primary options data source and the options path must not use paid AI APIs.
+* Reuse existing scoring, stale/LKG snapshot logic, and detail/drilldown logic wherever possible.
+* Do NOT rip out existing ticker detail support, popup support, contract/detail support, chart/drilldown support, or any existing enriched per-ticker data path unless replacing it with a strictly compatible shared source.
+* Keep API usage disciplined and within Tradier budget. Current Tradier market-data limit context: 120 req/min. 
+
+This is a strategic backend architecture transition. Do not broaden scope.
+
+PRIMARY GOAL
+Transition from the current multi-pipeline category-specific Options Flow architecture into a **single master unusual-options screener architecture** that:
+
+1. scans broadly for unusual options signals across the market
+2. ranks globally by abnormality/signal quality
+3. tags each result with:
+
+   * asset_type (stock / ETF)
+   * market_cap_bucket (megacap / large / small / unknown)
+4. preserves existing deep per-ticker detail/drilldown capability
+5. feeds both:
+
+   * the main Options page
+   * the Home page Unusual Options Flow section
+
+This should reduce backend complexity, improve speed, improve candidate breadth, and stop the current 4-tab orchestration from being the primary truth source.
+
+CRITICAL PRODUCT INTENT
+I do NOT want to lose the current ability to click a ticker and open a richer popup/detail experience with:
+
+* more data
+* ideas/context
+* chart support
+* contract/detail support
+* existing deeper analysis paths
+
+So the transition should be:
+
+* unify the screener truth source
+* preserve or reuse the existing detail endpoints / detail payload builders / contract drilldown logic
+
+Think:
+
+* one master leaderboard
+* filtered views of the same leaderboard
+* existing ticker detail still works when user clicks a row
+
+AUDIT FIRST — NO GUESSING
+Before implementing, inspect the current options backend and report:
+
+A. Current reusable pieces worth preserving
+Identify the exact existing components/services/helpers that should be retained:
+
+* unusualness scoring logic
+* ticker detail payload builders
+* contract detail payload builders
+* chart/drilldown-related backend data shaping
+* stale/LKG persistence logic
+* any useful prefilter helpers
+* any useful market-cap classification helpers
+* any useful ETF vs stock detection helpers
+
+B. What to stop using as primary architecture
+Identify the exact current components that are making the system too complex or too slow:
+
+* four separately maintained truth pipelines
+* per-tab orchestration burden
+* per-tab cache lifecycle complexity
+* repeated category-specific scans
+* any duplicated prefilter/inspection work
+
+C. Current detail dependency graph
+Map how the frontend currently gets detailed ticker popup data:
+
+* which endpoint(s)
+* which payload shape(s)
+* which backend builders
+* what fields are essential to preserve for compatibility
+
+I want a compatibility-minded transition, not a scorched-earth rewrite.
+
+TARGET ARCHITECTURE
+
+PART 1 — Single Master Screener Snapshot
+Create one master unusual-options screener snapshot as the primary truth source.
+
+This master snapshot should:
+
+* rank unusual options names globally
+* include both stocks and ETFs
+* include market-cap bucket tags for stocks
+* preserve enough metadata for filtering/grouping later
+
+Each row should include, at minimum:
+
+* symbol
+* asset_type (stock / ETF)
+* market_cap_bucket (megacap / large / small / unknown)
+* composite_score / unusual_score
+* volume_vs_oi or vol_oi_ratio if available
+* net_flow / premium / put_call_skew / strongest existing flow metrics
+* price_change_pct if already available
+* short signal_label / rationale
+* updated_at or snapshot timestamp
+* source metadata if useful
+
+Important:
+
+* “unusual” must remain abnormality-first, not size-first
+* smaller names with truly abnormal flow should surface
+* megacaps should not dominate by raw premium alone
+
+PART 2 — Two-stage scanner architecture
+Refactor the engine toward one master scanner with:
+
+Stage 1: broad cheap candidate sweep
+
+* broad universe
+* cheaper signals
+* maximize breadth
+* minimize per-symbol cost
+
+Stage 2: deep inspect finalists only
+
+* apply richer chain/detail scoring only to shortlisted names
+* produce final ranked leaderboard
+
+This master screener should be the truth source for:
+
+* main Options page
+* Home page unusual options block
+
+PART 3 — Filters, not separate truth pipelines
+Do NOT make ETFs / Megacaps / Large / Small separate primary pipelines anymore.
+
+Instead:
+
+* maintain one master ranked snapshot
+* attach category tags
+* allow downstream views to filter:
+
+  * ETFs
+  * stocks
+  * megacap
+  * large
+  * small
+
+If you need transitional compatibility, you may still expose derived category slices, but they should come from the master snapshot where practical rather than from four fully separate long-running truth pipelines.
+
+PART 4 — Preserve detail/drilldown compatibility
+This is critical.
+
+Do NOT break:
+
+* ticker detail modal/popup support
+* deeper options detail views
+* chart-related backend support
+* contract detail support
+* existing per-ticker richer data fetch path
+
+Required approach:
+
+* keep existing detail endpoints/builders if they already work
+* make screener rows link/resolve cleanly into those existing detail paths
+* if any payload shape must change, keep backward compatibility or provide a clean adapter layer
+
+The screener and the detail view are different jobs:
+
+* screener = fast ranking
+* detail = deep drilldown on click
+
+Do not destroy the detail layer in the name of simplification.
+
+PART 5 — Snapshot persistence and revisit behavior
+Preserve and improve the new stale/LKG behavior:
+
+* disk-backed validated last-known-good snapshot
+* immediate stale-but-available on revisit/restart
+* background refresh
+* explicit metadata states:
+
+  * live_ok
+  * stale_but_available
+  * refresh_in_progress
+  * true_zero_results
+  * no_data_yet
+
+The main Options page should be able to show the best available snapshot immediately.
+
+PART 6 — Endpoint strategy
+Strong preference:
+
+Create or evolve toward a primary endpoint such as:
+
+* `/api/options/screener`
+  or equivalent
+
+That endpoint should return:
+
+* master ranked rows
+* snapshot metadata
+* optional filtered slices/counts if helpful
+
+If needed for compatibility, keep existing endpoints alive temporarily, but make the master screener the truth source underneath them where reasonable.
+
+For Home:
+
+* Home unusual options should read from the master screener snapshot, not a separate fixed-seed fast loop
+
+For Options page:
+
+* the page should be able to render the master leaderboard with filters/toggles
+* not depend on maintaining 4 independent primary scans
+
+PART 7 — Performance goals
+This transition should improve practical UX:
+
+* page revisit should show results immediately from snapshot/LKG
+* refresh logic should be simpler and more reliable
+* scanner breadth should improve
+* total complexity should decrease
+* do not let category complexity consume most of the engineering effort
+
+Do NOT just move the same 4-tab complexity into a new file and call it “master.”
+
+IMPORTANT CONSTRAINTS
+
+* No paid AI APIs in this path
+* Reuse Tradier-based logic and existing local scoring logic
+* Avoid unnecessary new vendors
+* Keep detail/drilldown compatibility intact
+* Avoid huge breaking changes to frontend contract if not necessary
+* Minimize risk while simplifying architecture
+
+VERIFY
+Before finishing, prove:
+
+1. the master screener snapshot is producing ranked unusual-options rows
+2. those rows include asset_type + market_cap_bucket tagging
+3. Home unusual options can be sourced from the master snapshot
+4. existing ticker detail / drilldown path still works from screener rows
+5. stale/LKG snapshot still works on revisit/startup
+6. no paid AI API is used anywhere in the options path
+7. complexity is actually reduced versus the old 4-primary-pipeline model
+
+DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact old components preserved for detail/drilldown compatibility
+3. exact old components no longer used as primary truth architecture
+4. exact new master screener endpoint/payload shape
+5. how asset_type and market_cap_bucket are derived/tagged
+6. how Home now sources unusual options
+7. how Options page should source/filter the master screener
+8. explicit confirmation that ticker popup/detail support remains intact
+9. explicit confirmation no paid AI API is used
+10. confirmation changes were committed and pushed directly to `main`
+
+EXECUTION STYLE
+
+* Audit first
+* Preserve detail compatibility
+* Simplify the truth architecture
+* Keep the screener fast and the detail view deep
+* Do not rip out working drilldown logic
+* Then commit and push directly to `main`

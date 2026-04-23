@@ -189,8 +189,11 @@ async def lifespan(app):
     asyncio.create_task(_briefing_precompute_loop())
     asyncio.create_task(_smart_earnings_loop())
     asyncio.create_task(_edgar_cache_loop())
-    _load_lkg_from_disk()          # Warm LKG cache from disk before first scan
-    asyncio.create_task(_options_precompute_loop())
+    _load_lkg_from_disk()          # Warm per-tab LKG cache from disk (backward compat)
+    _load_prefilter_from_disk()    # Warm per-tab prefilter cache (backward compat)
+    _load_master_lkg_from_disk()       # Warm master screener LKG — serves on first request
+    _load_master_prefilter_from_disk() # Warm master prefilter — skips cold build on restart
+    asyncio.create_task(_master_screener_loop())
     # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
     asyncio.create_task(_polygon_options_ingestion_loop())
     asyncio.create_task(_macro_precompute_loop())
@@ -5053,6 +5056,30 @@ def _lkg_disk_path(tab: str) -> "_pathlib.Path":
     return _LKG_DISK_DIR / f"options_lkg_v1_{tab}.json"
 
 
+# ── Master screener cache keys (unified architecture) ─────────────────────────
+_OPTIONS_MASTER_CACHE_KEY    = "options_master_screener_v1"
+_OPTIONS_MASTER_LKG_KEY      = "options_master_lkg_v1"
+_OPTIONS_MASTER_PREFILTER_KEY = "options_master_prefilter_v1"
+
+# Tab → market_cap_bucket mapping for dashboard backward-compat filtering
+_TAB_TO_BUCKET: dict[str, str] = {
+    "megacap":   "megacap",
+    "large_cap": "large",
+    "small_cap": "small",
+    "etf":       "etf",
+}
+# Reverse: bucket → tab (used when re-grouping for all-tabs response)
+_BUCKET_TO_TAB: dict[str, str] = {v: k for k, v in _TAB_TO_BUCKET.items()}
+
+
+def _master_lkg_disk_path() -> "_pathlib.Path":
+    return _LKG_DISK_DIR / "options_master_lkg_v1.json"
+
+
+def _master_prefilter_disk_path() -> "_pathlib.Path":
+    return _LKG_DISK_DIR / "options_master_prefilter_v1.json"
+
+
 _LKG_DISK_MAX_AGE_S = 86400   # reject snapshots older than 24 h (stale beyond usefulness)
 _LKG_DISK_MIN_TICKERS = 1     # reject empty snapshots (scan found true_zero_results)
 
@@ -5142,6 +5169,210 @@ def _load_lkg_from_disk() -> None:
         print(f"[OPTIONS_LKG_DISK] Pre-warmed {loaded}/{len(_OPTIONS_TAB_SEEDS)} tabs from disk — Options Flow page will serve immediately on revisit")
     else:
         print("[OPTIONS_LKG_DISK] No valid disk snapshots found — first scan required before revisit works")
+
+
+# ── Master screener disk persistence ─────────────────────────────────────────
+# Single master LKG file replaces 4 separate tab LKG files in the new arch.
+
+def _save_master_lkg_to_disk(payload: dict) -> None:
+    """Atomically persist master screener LKG snapshot to disk."""
+    import json as _json
+    tickers = payload.get("tickers")
+    if not isinstance(tickers, list) or len(tickers) < _LKG_DISK_MIN_TICKERS:
+        return
+    try:
+        path = _master_lkg_disk_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        serialized = _json.dumps(payload, default=str)
+        tmp.write_text(serialized, encoding="utf-8")
+        tmp.replace(path)
+        print(f"[MASTER_LKG_DISK] Persisted {len(tickers)} tickers to disk ({len(serialized)//1024}KB)")
+    except Exception as _e:
+        print(f"[MASTER_LKG_DISK] Write failed (non-fatal): {_e}")
+
+
+def _load_master_lkg_from_disk() -> None:
+    """Load master screener LKG from disk into the in-memory cache at startup."""
+    import json as _json
+    import time as _t
+    from data.cache import cache as _cache
+    now = _t.time()
+    path = _master_lkg_disk_path()
+    if not path.exists() or path.suffix == ".tmp":
+        print("[MASTER_LKG_DISK] No valid disk snapshot found — first scan required")
+        return
+    try:
+        payload = _json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            print("[MASTER_LKG_DISK] Skipping: not a dict")
+            return
+        tickers = payload.get("tickers")
+        if not isinstance(tickers, list) or len(tickers) < _LKG_DISK_MIN_TICKERS:
+            print("[MASTER_LKG_DISK] Skipping: empty tickers list")
+            return
+        cached_at = payload.get("cached_at")
+        if not isinstance(cached_at, (int, float)) or cached_at <= 0:
+            print("[MASTER_LKG_DISK] Skipping: missing cached_at")
+            return
+        age_s = int(now - cached_at)
+        if age_s > _LKG_DISK_MAX_AGE_S:
+            print(f"[MASTER_LKG_DISK] Skipping: too old ({age_s}s > {_LKG_DISK_MAX_AGE_S}s limit)")
+            return
+        payload = {**payload, "source": "disk_lkg", "disk_loaded": True}
+        _cache.set(_OPTIONS_MASTER_LKG_KEY, payload, _OPTIONS_LKG_CACHE_TTL)
+        print(f"[MASTER_LKG_DISK] Loaded: {len(tickers)} tickers, age={age_s}s — master screener ready on first request")
+    except _json.JSONDecodeError as _je:
+        print(f"[MASTER_LKG_DISK] JSON parse error (skipping): {_je}")
+    except Exception as _e:
+        print(f"[MASTER_LKG_DISK] Load failed (non-fatal): {_e}")
+
+
+def _save_master_prefilter_to_disk(payload: dict) -> None:
+    """Atomically persist master prefilter snapshot to disk."""
+    import json as _json
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list) or len(candidates) < _PREFILTER_DISK_MIN_CANDIDATES:
+        return
+    try:
+        path = _master_prefilter_disk_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        stamped = {**payload, "disk_saved_at": __import__("time").time()}
+        serialized = _json.dumps(stamped, default=str)
+        tmp.write_text(serialized, encoding="utf-8")
+        tmp.replace(path)
+        print(f"[MASTER_PREFILTER_DISK] Persisted {len(candidates)} candidates to disk ({len(serialized)//1024}KB)")
+    except Exception as _e:
+        print(f"[MASTER_PREFILTER_DISK] Write failed (non-fatal): {_e}")
+
+
+def _load_master_prefilter_from_disk() -> None:
+    """Load master prefilter from disk into the in-memory cache at startup."""
+    import json as _json
+    import time as _t
+    from data.cache import cache as _cache
+    now = _t.time()
+    path = _master_prefilter_disk_path()
+    if not path.exists() or path.suffix == ".tmp":
+        print("[MASTER_PREFILTER_DISK] No valid disk snapshot — first scan will build from Finviz/Finnhub")
+        return
+    try:
+        payload = _json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return
+        candidates = payload.get("candidates")
+        if not isinstance(candidates, list) or len(candidates) < _PREFILTER_DISK_MIN_CANDIDATES:
+            return
+        saved_at = payload.get("disk_saved_at") or payload.get("cached_at")
+        if not isinstance(saved_at, (int, float)) or saved_at <= 0:
+            return
+        age_s = int(now - saved_at)
+        if age_s > _PREFILTER_DISK_MAX_AGE_S:
+            print(f"[MASTER_PREFILTER_DISK] Skipping: too old ({age_s}s > {_PREFILTER_DISK_MAX_AGE_S}s)")
+            return
+        _cache.set(_OPTIONS_MASTER_PREFILTER_KEY, payload, _OPTIONS_PREFILTER_CACHE_TTL)
+        print(f"[MASTER_PREFILTER_DISK] Loaded: {len(candidates)} candidates, age={age_s}s — skipping cold prefilter build")
+    except _json.JSONDecodeError as _je:
+        print(f"[MASTER_PREFILTER_DISK] JSON parse error (skipping): {_je}")
+    except Exception as _e:
+        print(f"[MASTER_PREFILTER_DISK] Load failed (non-fatal): {_e}")
+
+
+# ── Prefilter disk persistence ────────────────────────────────────────────────
+# Prefilters (Finnhub/FMP-enriched candidate lists) are persisted so restarts
+# skip the 48–112s cold-build phase and go straight to Tradier scanning.
+# Age limit is 4 h (vs 24 h for LKG) because candidate quality decays faster
+# (stock liquidity / market-cap tier membership shifts within the trading day).
+
+_PREFILTER_DISK_MAX_AGE_S = 4 * 3600   # 4 hours
+_PREFILTER_DISK_MIN_CANDIDATES = 1
+
+
+def _prefilter_disk_path(tab: str) -> "_pathlib.Path":
+    return _LKG_DISK_DIR / f"options_prefilter_v1_{tab}.json"
+
+
+def _save_prefilter_to_disk(tab: str, payload: dict) -> None:
+    """
+    Atomically persist prefilter snapshot to disk.
+    Same atomic .tmp→rename pattern as _save_lkg_to_disk.
+    Only persists non-empty candidate lists.
+    """
+    import json as _json
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list) or len(candidates) < _PREFILTER_DISK_MIN_CANDIDATES:
+        return
+    try:
+        path = _prefilter_disk_path(tab)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        # Stamp the write time so load side can check age
+        stamped = {**payload, "disk_saved_at": __import__("time").time()}
+        serialized = _json.dumps(stamped, default=str)
+        tmp.write_text(serialized, encoding="utf-8")
+        tmp.replace(path)
+        print(f"[OPTIONS_PREFILTER_DISK] [{tab}] Persisted {len(candidates)} candidates to disk ({len(serialized)//1024}KB)")
+    except Exception as _e:
+        print(f"[OPTIONS_PREFILTER_DISK] [{tab}] Write failed (non-fatal): {_e}")
+
+
+def _load_prefilter_from_disk() -> None:
+    """
+    Load each tab's prefilter snapshot from disk into the in-memory cache at startup.
+    Eliminates the 48–112s cold-build wait on every restart by pre-warming the
+    prefilter cache before the first Tradier scan cycle begins.
+
+    Validation guardrails:
+      - payload must be a dict with a non-empty 'candidates' list
+      - snapshot must be newer than _PREFILTER_DISK_MAX_AGE_S (4 h)
+      - JSON must parse cleanly; corrupt files are skipped without crashing
+    """
+    import json as _json
+    import time as _t
+    from data.cache import cache as _cache
+    now = _t.time()
+    loaded = 0
+    for tab in _OPTIONS_TAB_SEEDS:
+        path = _prefilter_disk_path(tab)
+        if not path.exists() or path.suffix == ".tmp":
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+            payload = _json.loads(raw)
+
+            if not isinstance(payload, dict):
+                print(f"[OPTIONS_PREFILTER_DISK] [{tab}] Skipping: not a dict")
+                continue
+
+            candidates = payload.get("candidates")
+            if not isinstance(candidates, list) or len(candidates) < _PREFILTER_DISK_MIN_CANDIDATES:
+                print(f"[OPTIONS_PREFILTER_DISK] [{tab}] Skipping: empty candidates list")
+                continue
+
+            saved_at = payload.get("disk_saved_at") or payload.get("cached_at")
+            if not isinstance(saved_at, (int, float)) or saved_at <= 0:
+                print(f"[OPTIONS_PREFILTER_DISK] [{tab}] Skipping: missing timestamp")
+                continue
+
+            age_s = int(now - saved_at)
+            if age_s > _PREFILTER_DISK_MAX_AGE_S:
+                print(f"[OPTIONS_PREFILTER_DISK] [{tab}] Skipping: too old ({age_s}s > {_PREFILTER_DISK_MAX_AGE_S}s limit)")
+                continue
+
+            _cache.set(_options_prefilter_cache_key(tab), payload, _OPTIONS_PREFILTER_CACHE_TTL)
+            print(f"[OPTIONS_PREFILTER_DISK] [{tab}] Loaded: {len(candidates)} candidates, age={age_s}s")
+            loaded += 1
+
+        except _json.JSONDecodeError as _je:
+            print(f"[OPTIONS_PREFILTER_DISK] [{tab}] JSON parse error (skipping): {_je}")
+        except Exception as _e:
+            print(f"[OPTIONS_PREFILTER_DISK] [{tab}] Load failed (non-fatal): {_e}")
+
+    if loaded:
+        print(f"[OPTIONS_PREFILTER_DISK] Pre-warmed {loaded}/{len(_OPTIONS_TAB_SEEDS)} prefilters from disk — first scan skips cold build")
+    else:
+        print("[OPTIONS_PREFILTER_DISK] No valid prefilter snapshots on disk — first scan will build from Finviz/Finnhub")
 
 
 _HOME_OPTIONS_FAST_SEEDS: list[str] = [
@@ -5300,106 +5531,115 @@ async def _home_options_fast_loop():
         await asyncio.sleep(_HOME_OPTIONS_FAST_LOOP_INTERVAL)
 
 
-async def _options_precompute_loop():
+async def _master_screener_loop():
     """
-    Background screener loop for the Options Flow dashboard (Tradier-backed).
+    Unified master unusual-options screener background loop (Phase 5).
 
-    Architecture (Phase 3):
-      - All 4 tabs run CONCURRENTLY via asyncio.gather instead of sequentially.
-      - A single global Semaphore(3) is shared across all tab engines so the total
-        Tradier request rate stays ≤ 120 req/min (3 slots × ~3 calls/ticker = 108/min).
-      - Prefilters for all 4 tabs are also built concurrently (Finnhub/FMP, not Tradier).
-      - Each successful scan is persisted to disk so restarts never serve blank data.
+    Architecture:
+      - Single scan covers ALL universes: ETFs, megacap, large_cap, small_cap.
+      - UnifiedOptionsEngine merges ALL Finviz screens in one batch and tags
+        each candidate with asset_type + market_cap_bucket instead of
+        filtering by per-tab market-cap ranges.
+      - Stage 1 sweeps top-60 candidates (by prefilter_score) for valid expirations.
+      - Stage 1.5 trims to top-30 by prefilter_score (bounding chain-fetch calls).
+      - Stage 2 chain-fetches only those top-30 (~1.5 exp each → ~45 calls).
+      - Token-bucket rate limiter in _TradierCountingProxy caps at 100 req/min.
+      - One LKG + one prefilter file on disk (replaces 4 pairs of files).
+      - /api/options/dashboard?tab=X derives its view by filtering the
+        master snapshot by market_cap_bucket — no separate pipelines.
 
-    Cycle time:
-      Sequential (before): ETF(97s) + Mega(35s) + Large(102s) + Small(109s) = 343s
-      Concurrent (after):  max(97, 35, 102, 109) ≈ 109s — 68% faster per cycle
+    Cycle time estimate (unified):
+      Stage 1:   60 expiry-checks at ≤100 req/min → ≥36s
+      Stage 1.5: negligible (in-memory sort)
+      Stage 2:   ~33 chain-fetches at ≤100 req/min → ≥20s
+      Total per-cycle: ~56-80s  (safely under 120 req/min Tradier cap)
     """
     global _TRADIER_GLOBAL_SEM
 
+    from data.unified_options_engine import UnifiedOptionsEngine
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _init_event.wait, 30)
 
     if data_service is None or not data_service.tradier:
-        print("[OPTIONS_PRECOMPUTE] Tradier provider not available, skipping precompute loop")
+        print("[MASTER_SCREENER] Tradier provider not available, skipping loop")
         return
 
-    # Create the shared semaphore inside the running event loop
-    _TRADIER_GLOBAL_SEM = asyncio.Semaphore(3)
+    _TRADIER_GLOBAL_SEM = asyncio.Semaphore(6)
 
     import time as _time
     import traceback as _tb
     from data.cache import cache
 
-    _all_seed_sets = {tab: set(seeds) for tab, seeds in _OPTIONS_TAB_SEEDS.items()}
+    # Unified seed universe: all tabs merged, deduplicated
+    _master_seeds: list[str] = list(dict.fromkeys([
+        *_OPTIONS_ETF_SEEDS,
+        *_OPTIONS_MEGACAP_SEEDS,
+        *_OPTIONS_LARGE_CAP_SEEDS,
+        *_OPTIONS_SMALL_CAP_SEEDS,
+    ]))
 
-    async def _scan_one_tab(tab: str, seeds: list[str], shared_sem: asyncio.Semaphore) -> None:
-        """Build prefilter (if cold) + run Tradier scan for one tab. Writes to cache + disk."""
-        try:
-            exclude = set()
-            for other_tab, other_seeds in _all_seed_sets.items():
-                if other_tab != tab:
-                    exclude |= other_seeds
-
-            pf_key = _options_prefilter_cache_key(tab)
-            prefilter_data = cache.get(pf_key)
-            engine = TradierFlowEngine(data_service)
-            engine._shared_sem = shared_sem   # share global rate-limit budget
-            t0 = _time.time()
-
-            if prefilter_data:
-                n_candidates = len(prefilter_data.get("candidates", []))
-                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter cache hit ({n_candidates} candidates) — running Tradier scan...")
-            else:
-                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter cold — rebuilding from Finviz/Finnhub/FMP...")
-                prefilter_data = await engine.build_prefilter_snapshot(
-                    seeds, tab=tab, exclude_tickers=exclude,
-                )
-                cache.set(pf_key, prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
-                n_candidates = len(prefilter_data.get("candidates", []))
-                pf_elapsed = _time.time() - t0
-                print(f"[OPTIONS_PRECOMPUTE] [{tab}] Prefilter built: {n_candidates} candidates in {pf_elapsed:.1f}s.")
-
-            # Tradier-only live scan — no paid API calls
-            screener_data = await engine.run_live_scan(
-                seeds, prefilter_snapshot=prefilter_data, tab=tab,
-            )
-            now_ts = _time.time()
-            from datetime import datetime as _dt_pc, timezone as _tz_pc
-            now_iso = _dt_pc.now(_tz_pc.utc).isoformat()
-            full_result = {
-                "display_type": "options_screener",
-                "scan_type": "options_flow",
-                "tab": tab,
-                "cached_at": now_ts,
-                "updated_at": now_iso,
-                "source": "tradier",
-                "tickers_scanned": seeds,
-                **screener_data,
-            }
-            cache.set(_options_cache_key(tab), full_result, _OPTIONS_PRECOMPUTE_CACHE_TTL)
-            cache.set(_options_lkg_cache_key(tab), full_result, _OPTIONS_LKG_CACHE_TTL)
-            # Persist to disk so the next restart can serve stale-but-real data immediately
-            _save_lkg_to_disk(tab, full_result)
-
-            elapsed = _time.time() - t0
-            n_tickers = len(screener_data.get("tickers", []))
-            n_contracts = len(screener_data.get("all_contracts", []))
-            print(f"[OPTIONS_PRECOMPUTE] [{tab}] Done: {n_tickers} tickers, {n_contracts} contracts in {elapsed:.1f}s.")
-
-        except Exception as e:
-            _tb.print_exc()
-            print(f"[OPTIONS_PRECOMPUTE] [{tab}] Error: {e}")
+    print(f"[MASTER_SCREENER] Unified seed universe: {len(_master_seeds)} tickers")
 
     while True:
         t_cycle = _time.time()
-        # All 4 tabs run concurrently — shared semaphore limits to 3 concurrent Tradier slots
-        await asyncio.gather(*[
-            _scan_one_tab(tab, seeds, _TRADIER_GLOBAL_SEM)
-            for tab, seeds in _OPTIONS_TAB_SEEDS.items()
-        ])
-        cycle_elapsed = _time.time() - t_cycle
-        print(f"[OPTIONS_PRECOMPUTE] All {len(_OPTIONS_TAB_SEEDS)} tabs refreshed in {cycle_elapsed:.1f}s. Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s.")
+        try:
+            engine = UnifiedOptionsEngine(data_service)
+            engine._shared_sem = _TRADIER_GLOBAL_SEM
+
+            # Prefilter: load from cache/disk or rebuild
+            prefilter_data = cache.get(_OPTIONS_MASTER_PREFILTER_KEY)
+            if prefilter_data:
+                n_pf = len(prefilter_data.get("candidates", []))
+                print(f"[MASTER_SCREENER] Prefilter cache hit ({n_pf} candidates) — running scan...")
+            else:
+                print("[MASTER_SCREENER] Prefilter cold — building from Finviz/Finnhub/FMP (all universes)...")
+                t_pf = _time.time()
+                prefilter_data = await engine.build_prefilter_snapshot(
+                    _master_seeds, tab="master",
+                )
+                cache.set(_OPTIONS_MASTER_PREFILTER_KEY, prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
+                _save_master_prefilter_to_disk(prefilter_data)
+                n_pf = len(prefilter_data.get("candidates", []))
+                print(f"[MASTER_SCREENER] Prefilter built: {n_pf} candidates in {_time.time()-t_pf:.1f}s.")
+
+            # Tradier-only live scan.
+            # Pass seed_tickers=None — seeds were already guaranteed by
+            # TradierFlowEngine.build_prefilter_snapshot.  Passing them again
+            # causes the base engine to re-inflate the inspectable list to
+            # all 94 seeds, ballooning Stage-1 calls from ~60 to 147.
+            screener_data = await engine.run_live_scan(
+                None, prefilter_snapshot=prefilter_data, tab="master",
+            )
+            from datetime import datetime as _dt_ms, timezone as _tz_ms
+            now_ts = _time.time()
+            now_iso = _dt_ms.now(_tz_ms.utc).isoformat()
+            full_result = {
+                "display_type": "options_screener",
+                "scan_type":    "options_flow",
+                "tab":          "master",
+                "cached_at":    now_ts,
+                "updated_at":   now_iso,
+                "source":       "tradier",
+                "tickers_scanned": _master_seeds,
+                **screener_data,
+            }
+            cache.set(_OPTIONS_MASTER_CACHE_KEY, full_result, _OPTIONS_PRECOMPUTE_CACHE_TTL)
+            cache.set(_OPTIONS_MASTER_LKG_KEY,   full_result, _OPTIONS_LKG_CACHE_TTL)
+            _save_master_lkg_to_disk(full_result)
+
+            n_tickers   = len(screener_data.get("tickers", []))
+            n_contracts = len(screener_data.get("all_contracts", []))
+            elapsed = _time.time() - t_cycle
+            print(
+                f"[MASTER_SCREENER] Cycle done: {n_tickers} tickers, "
+                f"{n_contracts} contracts in {elapsed:.1f}s. "
+                f"Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s."
+            )
+
+        except Exception as _exc:
+            _tb.print_exc()
+            print(f"[MASTER_SCREENER] Cycle error: {_exc}")
+
         await asyncio.sleep(_OPTIONS_PRECOMPUTE_INTERVAL)
 
 
@@ -5420,6 +5660,169 @@ _EDITABLE_SCAN_KEYS = {
 }
 
 
+# ── Master screener helpers ───────────────────────────────────────────────────
+
+def _filter_master_snapshot(snapshot: dict, tab: str | None) -> dict:
+    """
+    Given the master screener snapshot, return a view filtered to a specific
+    tab (by market_cap_bucket).  If tab is None or 'master', return all rows.
+
+    Used by /api/options/dashboard for backward-compat tab-based views and
+    by /api/options/all-tabs to build the per-tab breakdown.
+    """
+    if not tab or tab == "master":
+        return snapshot
+    bucket = _TAB_TO_BUCKET.get(tab)
+    if not bucket:
+        return snapshot  # unknown tab → return everything
+    all_tickers = snapshot.get("tickers", [])
+    all_contracts = snapshot.get("all_contracts", [])
+    filtered_symbols: set[str] = set()
+    filtered_tickers = [
+        t for t in all_tickers
+        if t.get("market_cap_bucket") == bucket or
+           (bucket == "etf" and t.get("asset_type") == "etf")
+    ]
+    filtered_symbols = {t.get("ticker") for t in filtered_tickers if t.get("ticker")}
+    filtered_contracts = [
+        c for c in all_contracts
+        if c.get("ticker") in filtered_symbols
+    ]
+    return {
+        **snapshot,
+        "tab":          tab,
+        "tickers":      filtered_tickers,
+        "all_contracts": filtered_contracts,
+    }
+
+
+# ── /api/options/screener — master unified leaderboard endpoint ──────────────
+
+@app.get("/api/options/screener")
+@limiter.limit("60/minute")
+@traceable(name="main.options_screener")
+async def options_screener(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
+    asset_type: str | None = None,
+    market_cap_bucket: str | None = None,
+    limit: int = 50,
+):
+    """
+    Unified master unusual-options screener — single globally ranked leaderboard
+    covering ETFs, megacap, large-cap, and small/mid-cap stocks together.
+
+    Optional filters:
+      ?asset_type=etf|stock
+      ?market_cap_bucket=megacap|large|small|etf|unknown
+      ?limit=N  (default 50, max 200)
+
+    Every result row carries:
+      asset_type        : "etf" | "stock"
+      market_cap_bucket : "megacap" | "large" | "small" | "etf" | "unknown"
+      composite_score   : global rank key (higher = more unusual flow)
+    """
+    await _wait_for_init()
+
+    if not data_service or not data_service.tradier:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Tradier options provider not configured."},
+        )
+
+    import time as _time
+    from data.cache import cache
+    from datetime import datetime as _dt_s, timezone as _tz_s
+
+    limit = max(1, min(limit, 200))
+
+    snap = cache.get(_OPTIONS_MASTER_CACHE_KEY) or cache.get(_OPTIONS_MASTER_LKG_KEY)
+
+    def _snap_meta_master(snap: dict, stale: bool) -> dict:
+        n = len(snap.get("tickers", []))
+        age = int(_time.time() - snap.get("cached_at", _time.time()))
+        updated = snap.get("updated_at") or snap.get("cached_at")
+        if isinstance(updated, (int, float)):
+            updated = _dt_s.fromtimestamp(updated, tz=_tz_s.utc).isoformat()
+        if stale and n:
+            ds = "stale_but_available"
+        elif n:
+            ds = "live_ok"
+        else:
+            ds = "true_zero_results" if not stale else "refresh_in_progress"
+        return {
+            "data_state":          ds,
+            "result_count":        n,
+            "stale":               stale,
+            "cache_age_seconds":   age,
+            "refresh_in_progress": stale,
+            "updated_at":          updated,
+            "source":              snap.get("source", "tradier"),
+        }
+
+    if not snap:
+        return {
+            "response": {
+                "display_type":  "options_screener",
+                "scan_type":     "options_flow",
+                "tab":           "master",
+                "tickers":       [],
+                "all_contracts": [],
+            },
+            "structured":     True,
+            "preset":         "options_screener",
+            "tab":            "master",
+            "from_cache":     False,
+            "stale":          False,
+            "data_state":     "no_data_yet",
+            "result_count":   0,
+            "refresh_in_progress": True,
+            "updated_at":     None,
+            "source":         "none",
+        }
+
+    stale = cache.get(_OPTIONS_MASTER_CACHE_KEY) is None
+    tickers = snap.get("tickers", [])
+
+    # Apply optional filters
+    if asset_type:
+        tickers = [t for t in tickers if t.get("asset_type") == asset_type]
+    if market_cap_bucket:
+        tickers = [t for t in tickers if t.get("market_cap_bucket") == market_cap_bucket]
+
+    # Global rank by composite_score
+    tickers = sorted(tickers, key=lambda t: (t.get("composite_score") or 0), reverse=True)
+    tickers = tickers[:limit]
+    filtered_syms = {t.get("ticker") for t in tickers if t.get("ticker")}
+    all_contracts = [
+        c for c in snap.get("all_contracts", [])
+        if c.get("ticker") in filtered_syms
+    ]
+
+    meta = _snap_meta_master(snap, stale)
+    return {
+        "response": {
+            **snap,
+            "tickers":       tickers,
+            "all_contracts": all_contracts,
+        },
+        "structured":          True,
+        "preset":              "options_screener",
+        "tab":                 "master",
+        "from_cache":          True,
+        "stale":               stale,
+        "cache_age_seconds":   meta["cache_age_seconds"],
+        "next_refresh_in_seconds": max(0, _OPTIONS_CACHE_TTL - meta["cache_age_seconds"]),
+        "data_state":          meta["data_state"],
+        "result_count":        len(tickers),
+        "refresh_in_progress": stale,
+        "updated_at":          meta["updated_at"],
+        "source":              meta["source"],
+        "available_tabs":      sorted(_OPTIONS_VALID_TABS),
+    }
+
+
 @app.api_route("/api/options/dashboard", methods=["GET", "POST"])
 @limiter.limit("60/minute")
 @traceable(name="main.options_dashboard")
@@ -5429,9 +5832,13 @@ async def options_dashboard(
     _sub: None = Depends(require_subscription),
 ):
     """
-    Options flow screener — pure data endpoint, no Claude involved.
+    Options flow screener — tab-filtered view of the unified master screener.
+
     Accepts tab via query param (?tab=large_cap) or JSON body {"tab": "..."}.
-    Uses Tradier for live options data + Polygon Massive historical data from DB.
+    Data is always derived by filtering the master screener snapshot by
+    market_cap_bucket — no separate per-tab scan pipelines.
+
+    Backward compatible: same response shape, same ?tab param, same LKG fallback.
     """
     await _wait_for_init()
 
@@ -5443,11 +5850,9 @@ async def options_dashboard(
 
     # Parse tab from query param OR request body (default: megacap)
     tab = "megacap"
-    # 1) Check query parameter first  (?tab=large_cap)
     query_tab = request.query_params.get("tab")
     raw_tab = query_tab
     if not raw_tab:
-        # 2) Fall back to POST JSON body  ({"tab": "large_cap"})
         try:
             body = await request.json()
             if isinstance(body, dict):
@@ -5455,178 +5860,129 @@ async def options_dashboard(
         except Exception:
             pass
     if raw_tab:
-        raw_tab = _TAB_ALIASES.get(raw_tab, raw_tab)  # backwards compat
+        raw_tab = _TAB_ALIASES.get(raw_tab, raw_tab)
         if raw_tab in _OPTIONS_VALID_TABS:
             tab = raw_tab
 
-    seed_tickers = _OPTIONS_TAB_SEEDS.get(tab, _OPTIONS_MEGACAP_SEEDS)
-
     import time as _time
     from data.cache import cache
+    from datetime import datetime as _dt_d, timezone as _tz_d
 
-    # ── Primary path: serve short-lived live-response cache ─────────────────
-    cache_key = _options_cache_key(tab)
-    cached = cache.get(cache_key)
-    if cached:
-        from datetime import datetime as _dt_hot, timezone as _tz_hot
-        age = int(_time.time() - cached.get("cached_at", _time.time()))
-        n_tickers = len(cached.get("tickers", []))
-        updated = cached.get("updated_at") or cached.get("cached_at")
-        if isinstance(updated, (int, float)):
-            updated = _dt_hot.fromtimestamp(updated, tz=_tz_hot.utc).isoformat()
-        ds = "live_ok" if n_tickers else "true_zero_results"
-        print(f"[OPTIONS_DASH] [{tab}] Cache hit (age={age}s, {n_tickers} tickers, state={ds})")
-        return {
-            "response": cached,
-            "structured": True,
-            "preset": "options_screener",
-            "tab": tab,
-            "available_tabs": sorted(_OPTIONS_VALID_TABS),
-            "from_cache": True,
-            "stale": False,
-            "cache_age_seconds": age,
-            "next_refresh_in_seconds": max(0, _OPTIONS_CACHE_TTL - age),
-            "data_state": ds,
-            "result_count": n_tickers,
-            "refresh_in_progress": False,
-            "updated_at": updated,
-            "source": cached.get("source", "tradier"),
-        }
-
-    # ── Stale-while-revalidate: serve last-known-good immediately, refresh in background ─
-    lkg_key = _options_lkg_cache_key(tab)
-    lkg = cache.get(lkg_key)
-
-    prefilter_key = _options_prefilter_cache_key(tab)
-    prefilter_snapshot = cache.get(prefilter_key)
-
-    async def _full_scan_and_cache():
-        """
-        Run a full scan and write results to hot cache, LKG cache, and disk.
-        Never blocks the request path — called via asyncio.create_task().
-        """
-        pf_snapshot = cache.get(prefilter_key)
-        try:
-            overrides = _SCAN_USER_OVERRIDES.get(tab) or None
-            engine = TradierFlowEngine(data_service, overrides=overrides)
-            exclude = set()
-            for other_tab, other_seeds in _OPTIONS_TAB_SEEDS.items():
-                if other_tab != tab:
-                    exclude |= set(other_seeds)
-            if not pf_snapshot:
-                pf_snapshot = await engine.build_prefilter_snapshot(seed_tickers, tab=tab, exclude_tickers=exclude)
-                cache.set(prefilter_key, pf_snapshot, _OPTIONS_PREFILTER_CACHE_TTL)
-            screener_data = await engine.run_live_scan(
-                seed_tickers, prefilter_snapshot=pf_snapshot, tab=tab,
-            )
-            from datetime import datetime as _dt_bg, timezone as _tz_bg
-            now_ts = _time.time()
-            result = {
-                "display_type": "options_screener",
-                "scan_type": "options_flow",
-                "tab": tab,
-                "cached_at": now_ts,
-                "updated_at": _dt_bg.now(_tz_bg.utc).isoformat(),
-                "source": "tradier",
-                "tickers_scanned": seed_tickers,
-                **screener_data,
-            }
-            cache.set(cache_key, result, _OPTIONS_CACHE_TTL)
-            cache.set(lkg_key, result, _OPTIONS_LKG_CACHE_TTL)
-            _save_lkg_to_disk(tab, result)   # survive restarts
-            print(f"[OPTIONS_DASH] [{tab}] Background refresh done — {len(screener_data.get('tickers', []))} tickers")
-        except Exception as _bg_err:
-            import traceback as _tbg
-            _tbg.print_exc()
-            print(f"[OPTIONS_DASH] [{tab}] Background refresh error: {_bg_err}")
-
-    def _snap_meta(snap: dict, stale: bool, in_progress: bool) -> dict:
-        """Build clean metadata block for a cached snapshot."""
-        from datetime import datetime as _dt_m, timezone as _tz_m
-        n = len(snap.get("tickers", []))
+    def _snap_meta(snap: dict, stale: bool) -> dict:
+        filtered = _filter_master_snapshot(snap, tab)
+        n = len(filtered.get("tickers", []))
         age = int(_time.time() - snap.get("cached_at", _time.time()))
         updated = snap.get("updated_at") or snap.get("cached_at")
         if isinstance(updated, (int, float)):
-            updated = _dt_m.fromtimestamp(updated, tz=_tz_m.utc).isoformat()
-        # Distinct states (guardrail #5)
-        if in_progress and n == 0:
-            ds = "refresh_in_progress"
-        elif stale and n:
+            updated = _dt_d.fromtimestamp(updated, tz=_tz_d.utc).isoformat()
+        if stale and n:
             ds = "stale_but_available"
+        elif stale:
+            ds = "refresh_in_progress"
         elif n:
             ds = "live_ok"
         else:
             ds = "true_zero_results"
-        return {
-            "data_state": ds,
-            "result_count": n,
-            "stale": stale,
-            "refresh_in_progress": in_progress,
-            "cache_age_seconds": age,
-            "updated_at": updated,
-            "source": snap.get("source", "tradier"),
+        return filtered, {
+            "data_state":          ds,
+            "result_count":        n,
+            "stale":               stale,
+            "refresh_in_progress": stale,
+            "cache_age_seconds":   age,
+            "updated_at":          updated,
+            "source":              snap.get("source", "tradier"),
         }
 
+    # ── Primary: master screener hot cache ──────────────────────────────────
+    hot = cache.get(_OPTIONS_MASTER_CACHE_KEY)
+    if hot:
+        filtered, meta = _snap_meta(hot, stale=False)
+        print(f"[OPTIONS_DASH] [{tab}] Master cache hit — {meta['result_count']} tickers")
+        return {
+            "response":               filtered,
+            "structured":             True,
+            "preset":                 "options_screener",
+            "tab":                    tab,
+            "available_tabs":         sorted(_OPTIONS_VALID_TABS),
+            "from_cache":             True,
+            "next_refresh_in_seconds": max(0, _OPTIONS_CACHE_TTL - meta["cache_age_seconds"]),
+            **meta,
+        }
+
+    # ── Stale-while-revalidate: master screener LKG ──────────────────────────
+    lkg = cache.get(_OPTIONS_MASTER_LKG_KEY)
     if lkg:
-        # Serve stale snapshot immediately — do not wait for fresh scan.
-        # Kick off background refresh so next visit is hot.
-        lkg_meta = _snap_meta(lkg, stale=True, in_progress=True)
-        print(f"[OPTIONS_DASH] [{tab}] Hot cache cold — serving LKG "
-              f"(age={lkg_meta['cache_age_seconds']}s, {lkg_meta['result_count']} tickers). Refreshing bg.")
-        asyncio.create_task(_full_scan_and_cache())
+        filtered, meta = _snap_meta(lkg, stale=True)
+        print(
+            f"[OPTIONS_DASH] [{tab}] Master LKG (age={meta['cache_age_seconds']}s, "
+            f"{meta['result_count']} tickers)"
+        )
         return {
-            "response": lkg,
-            "structured": True,
-            "preset": "options_screener",
-            "tab": tab,
-            "available_tabs": sorted(_OPTIONS_VALID_TABS),
-            "from_cache": True,
+            "response":               filtered,
+            "structured":             True,
+            "preset":                 "options_screener",
+            "tab":                    tab,
+            "available_tabs":         sorted(_OPTIONS_VALID_TABS),
+            "from_cache":             True,
             "next_refresh_in_seconds": 120,
-            **lkg_meta,
+            **meta,
         }
 
-    # ── No LKG anywhere — true cold start (first-ever deploy or disk cleared) ─
-    # Return no_data_yet immediately; precompute loop will warm within ~120s.
-    print(f"[OPTIONS_DASH] [{tab}] No LKG — returning no_data_yet, scan queued in background")
-    asyncio.create_task(_full_scan_and_cache())
+    # ── Legacy fallback: per-tab LKG (populated by old architecture on disk) ─
+    # Allows a seamless transition — disk LKG from before the master screener
+    # was deployed will continue to serve until the first master cycle completes.
+    legacy_lkg = cache.get(_options_lkg_cache_key(tab))
+    if legacy_lkg:
+        filtered, meta = _snap_meta(legacy_lkg, stale=True)
+        print(f"[OPTIONS_DASH] [{tab}] Legacy per-tab LKG fallback — {meta['result_count']} tickers")
+        return {
+            "response":               filtered,
+            "structured":             True,
+            "preset":                 "options_screener",
+            "tab":                    tab,
+            "available_tabs":         sorted(_OPTIONS_VALID_TABS),
+            "from_cache":             True,
+            "next_refresh_in_seconds": 120,
+            **meta,
+        }
 
+    # ── True cold start — no data available anywhere ─────────────────────────
+    print(f"[OPTIONS_DASH] [{tab}] No data yet — master screener loop will warm within ~90s")
     from data.options_flow_engine import OPTIONS_FLOW_DEFAULTS, OPTIONS_FLOW_WEIGHTS
-    from datetime import datetime as _dt_cold, timezone as _tz_cold
     empty_result = {
-        "display_type": "options_screener",
-        "scan_type": "options_flow",
-        "tab": tab,
-        "cached_at": _time.time(),
-        "updated_at": _dt_cold.now(_tz_cold.utc).isoformat(),
-        "source": "none",
-        "tickers_scanned": seed_tickers,
-        "tickers": [],
+        "display_type":  "options_screener",
+        "scan_type":     "options_flow",
+        "tab":           tab,
+        "cached_at":     _time.time(),
+        "updated_at":    _dt_d.now(_tz_d.utc).isoformat(),
+        "source":        "none",
+        "tickers":       [],
         "all_contracts": [],
-        "filter_defaults": dict(OPTIONS_FLOW_DEFAULTS),
-        "score_weights": dict(OPTIONS_FLOW_WEIGHTS),
-        "pipeline_stats": {
+        "filter_defaults":  dict(OPTIONS_FLOW_DEFAULTS),
+        "score_weights":    dict(OPTIONS_FLOW_WEIGHTS),
+        "pipeline_stats":   {
             "prefilter_candidate_count": 0,
-            "options_inspection_count": 0,
-            "ranked_result_count": 0,
-            "degraded_sources": ["cold_start:background_scan_queued"],
+            "options_inspection_count":  0,
+            "ranked_result_count":       0,
+            "degraded_sources":          ["cold_start:master_screener_warming"],
         },
-        "market_summary": {"message": "First scan running in background — check back in ~120 seconds."},
+        "market_summary": {"message": "Master screener warming — check back in ~90 seconds."},
     }
     return {
-        "response": empty_result,
-        "structured": True,
-        "preset": "options_screener",
-        "tab": tab,
-        "available_tabs": sorted(_OPTIONS_VALID_TABS),
-        "from_cache": False,
-        "stale": False,
-        "data_state": "no_data_yet",
-        "result_count": 0,
+        "response":            empty_result,
+        "structured":          True,
+        "preset":              "options_screener",
+        "tab":                 tab,
+        "available_tabs":      sorted(_OPTIONS_VALID_TABS),
+        "from_cache":          False,
+        "stale":               False,
+        "data_state":          "no_data_yet",
+        "result_count":        0,
         "refresh_in_progress": True,
-        "updated_at": None,
-        "source": "none",
-        "cache_age_seconds": None,
-        "next_refresh_in_seconds": 120,
+        "updated_at":          None,
+        "source":              "none",
+        "cache_age_seconds":   None,
+        "next_refresh_in_seconds": 90,
     }
 
 
@@ -5640,14 +5996,14 @@ async def options_all_tabs(
     _sub: None = Depends(require_subscription),
 ):
     """
-    Returns all four Options Flow category datasets in a single response.
-    Each tab entry contains its cached data (LKG or hot) with data_state metadata.
-    Frontend can render all 4 panels at once without serial user-click waits.
+    Returns all four Options Flow category datasets in a single response,
+    derived by filtering the unified master screener snapshot by
+    market_cap_bucket.  Same response shape as before for full backward compat.
 
     Response shape:
       {
         "tabs": {
-          "etf":       { "data_state": "live_ok", "result_count": N, "tickers": [...], "updated_at": ..., ... },
+          "etf":       { "data_state": "live_ok", "result_count": N, "tickers": [...], ... },
           "megacap":   { ... },
           "large_cap": { ... },
           "small_cap": { ... }
@@ -5662,19 +6018,23 @@ async def options_all_tabs(
     from data.cache import cache
     import datetime as _dt_mod
 
+    # Load master snapshot (hot preferred, LKG fallback)
+    master = cache.get(_OPTIONS_MASTER_CACHE_KEY) or cache.get(_OPTIONS_MASTER_LKG_KEY)
+    stale_master = cache.get(_OPTIONS_MASTER_CACHE_KEY) is None
+
     tabs_out: dict = {}
     any_live = False
     all_live = True
 
-    def _tab_snap(snap: dict, stale: bool) -> dict:
-        """Render one tab entry with full, truthful metadata (guardrail #5)."""
-        n = len(snap.get("tickers", []))
-        age = int(_time.time() - snap.get("cached_at", _time.time()))
-        updated = snap.get("updated_at") or snap.get("cached_at")
+    def _tab_entry_from_master(master_snap: dict, tab: str, stale: bool) -> dict:
+        """Build one tab's entry by filtering the master snapshot."""
+        filtered = _filter_master_snapshot(master_snap, tab)
+        n = len(filtered.get("tickers", []))
+        age = int(_time.time() - master_snap.get("cached_at", _time.time()))
+        updated = master_snap.get("updated_at") or master_snap.get("cached_at")
         if isinstance(updated, (int, float)):
             updated = _dt_mod.datetime.fromtimestamp(updated, tz=_dt_mod.timezone.utc).isoformat()
-        in_progress = stale   # LKG is always being refreshed in background
-        if in_progress and n == 0:
+        if stale and n == 0:
             ds = "refresh_in_progress"
         elif stale and n:
             ds = "stale_but_available"
@@ -5687,47 +6047,65 @@ async def options_all_tabs(
             "result_count":        n,
             "stale":               stale,
             "cache_age_seconds":   age,
-            "refresh_in_progress": in_progress,
+            "refresh_in_progress": stale,
             "updated_at":          updated,
-            "source":              snap.get("source", "tradier"),
-            "tickers":             snap.get("tickers", []),
-            "all_contracts":       snap.get("all_contracts", [])[:200],
-            "market_summary":      snap.get("market_summary", {}),
-            "pipeline_stats":      snap.get("pipeline_stats", {}),
-            "filter_defaults":     snap.get("filter_defaults", {}),
-            "score_weights":       snap.get("score_weights", {}),
+            "source":              master_snap.get("source", "tradier"),
+            "tickers":             filtered.get("tickers", []),
+            "all_contracts":       filtered.get("all_contracts", [])[:200],
+            "market_summary":      master_snap.get("market_summary", {}),
+            "pipeline_stats":      master_snap.get("pipeline_stats", {}),
+            "filter_defaults":     master_snap.get("filter_defaults", {}),
+            "score_weights":       master_snap.get("score_weights", {}),
         }
 
     for tab in sorted(_OPTIONS_VALID_TABS):
-        hot = cache.get(_options_cache_key(tab))
-        lkg = cache.get(_options_lkg_cache_key(tab))
-
-        if hot:
-            entry = _tab_snap(hot, stale=False)
+        if master:
+            entry = _tab_entry_from_master(master, tab, stale=stale_master)
             if entry["result_count"]:
                 any_live = True
-        elif lkg:
-            entry = _tab_snap(lkg, stale=True)
-            if entry["result_count"]:
-                any_live = True
-            all_live = False
+            if stale_master:
+                all_live = False
         else:
-            entry = {
-                "data_state":          "no_data_yet",
-                "result_count":        0,
-                "stale":               False,
-                "cache_age_seconds":   None,
-                "refresh_in_progress": True,
-                "updated_at":          None,
-                "source":              "none",
-                "tickers":             [],
-                "all_contracts":       [],
-                "market_summary":      {},
-                "pipeline_stats":      {},
-                "filter_defaults":     {},
-                "score_weights":       {},
-            }
-            all_live = False
+            # No master data yet — try per-tab legacy LKG
+            legacy = cache.get(_options_lkg_cache_key(tab))
+            if legacy:
+                filtered_legacy = _filter_master_snapshot(legacy, None)  # legacy has no bucket tags, return as-is
+                n = len(legacy.get("tickers", []))
+                entry = {
+                    "data_state":          "stale_but_available" if n else "refresh_in_progress",
+                    "result_count":        n,
+                    "stale":               True,
+                    "cache_age_seconds":   int(_time.time() - legacy.get("cached_at", _time.time())),
+                    "refresh_in_progress": True,
+                    "updated_at":          legacy.get("updated_at"),
+                    "source":              legacy.get("source", "tradier"),
+                    "tickers":             legacy.get("tickers", []),
+                    "all_contracts":       legacy.get("all_contracts", [])[:200],
+                    "market_summary":      legacy.get("market_summary", {}),
+                    "pipeline_stats":      legacy.get("pipeline_stats", {}),
+                    "filter_defaults":     legacy.get("filter_defaults", {}),
+                    "score_weights":       legacy.get("score_weights", {}),
+                }
+                if n:
+                    any_live = True
+                all_live = False
+            else:
+                entry = {
+                    "data_state":          "no_data_yet",
+                    "result_count":        0,
+                    "stale":               False,
+                    "cache_age_seconds":   None,
+                    "refresh_in_progress": True,
+                    "updated_at":          None,
+                    "source":              "none",
+                    "tickers":             [],
+                    "all_contracts":       [],
+                    "market_summary":      {},
+                    "pipeline_stats":      {},
+                    "filter_defaults":     {},
+                    "score_weights":       {},
+                }
+                all_live = False
 
         tabs_out[tab] = entry
 

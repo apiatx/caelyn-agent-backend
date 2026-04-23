@@ -1,0 +1,109 @@
+Continue working in the backend repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+This is now a performance-critical scanner optimization pass. Do not broaden scope.
+
+PRIMARY REQUIREMENT
+The Options Flow page must feel real-time in practice.
+
+Targets:
+
+* revisiting the page should show cached results immediately
+* each options category should have fresh enough maintained results
+* effective refresh / compute time per category should be under 30 seconds max, preferably much lower
+* Home unusual options must also benefit from the same improved maintained engine
+
+CURRENT PROBLEM
+The latest backend pass fixed architecture issues, but the cycle is still too slow:
+
+* full concurrent 4-tab cycle is still ~215 seconds
+* that is unacceptable for this product
+* peak observed Tradier usage was only ~38.5 req/min, far below the 120/min market-data ceiling
+* this suggests the engine is still underutilizing Tradier and/or spending too much time on per-candidate work instead of scanning efficiently
+
+AUDIT FIRST
+Determine exactly where time is still going, broken down by stage:
+
+1. candidate universe build
+2. broad prefilter
+3. quote enrichment
+4. options-chain fetch
+5. per-ticker inspection
+6. historical/baseline comparison
+7. scoring/ranking
+8. disk/LKG writes
+
+I want a real timing breakdown per tab and per stage.
+
+SECOND AUDIT
+Determine whether the current peak ~38.5 req/min is limiting scan breadth and causing unusual candidates to be missed.
+Answer explicitly:
+
+* are we missing candidates because the scanner is too conservative?
+* what request budget could safely be increased to?
+* what is the real maximum sustainable concurrency/request usage with current architecture and Tradier limits?
+
+IMPLEMENTATION TARGET
+Refactor the options engine into a faster 2-stage scanner:
+
+Stage 1 — broad, cheap sweep
+
+* scan a much broader universe quickly
+* use cheap features to identify suspicious names
+* minimize per-symbol cost
+* maximize breadth
+
+Stage 2 — deep inspect finalists only
+
+* only inspect the top shortlisted names deeply
+* compute the richer unusualness score on finalists
+* rank them
+
+This should apply to:
+
+* ETFs
+* Megacaps
+* Large Caps
+* Small Caps
+
+GOALS
+
+1. materially reduce effective per-category refresh time
+2. increase safe Tradier usage toward a more appropriate level (for example 75+ req/min if safe)
+3. improve breadth so unusual names are less likely to be missed
+4. keep “unusualness” based on abnormality, not just raw megacap size
+5. preserve instant stale-but-available behavior on revisit
+
+IMPORTANT
+Do NOT just raise a timeout and call it fixed.
+Do NOT just widen concurrency blindly without measuring request usage.
+Do NOT add paid AI APIs.
+Do NOT break the current stale/LKG snapshot architecture.
+
+VERIFY
+Before finishing, report:
+
+1. per-stage timing breakdown before and after
+2. effective per-category cycle time after the optimization
+3. peak observed Tradier req/min after the optimization
+4. whether scan breadth increased
+5. whether Home and Options page still share the same core unusual-options truth source
+6. sample top results from each category showing non-megacap unusual names can surface
+7. confirmation changes were committed and pushed directly to `main`
+
+EXECUTION STYLE
+
+* Audit the remaining bottleneck precisely
+* Optimize the scanner architecture, not just the timeout
+* Push Tradier usage higher safely and intentionally
+* Keep the results always available
+* Then commit and push directly to `main`

@@ -44,22 +44,52 @@ except ImportError:
 
 class _TradierCountingProxy:
     """
-    Lightweight transparent proxy around the Tradier provider that counts
-    every async API call made during a scan.  Used to measure actual request
-    budget so the shared-semaphore concurrency setting can be validated
-    against the 120 req/min Tradier vendor limit.
+    Transparent proxy around the Tradier provider that:
+      1. Counts every async API call for budget logging.
+      2. Enforces a token-bucket rate limit (default: 100 req/min, burst 6)
+         so scans never exceed Tradier's 120 req/min vendor cap.
 
-    Only async methods are counted (synchronous attribute access is forwarded
-    directly).  Thread-safe: asyncio is single-threaded, so the int counter
-    needs no lock.
+    Token bucket behaviour
+    ──────────────────────
+    Tokens refill at `_RL_RATE` per second.  Each call consumes one token.
+    If the bucket is empty, the caller awaits until a token is available.
+    Burst capacity (`_RL_BUCKET`) allows a short burst of concurrent calls
+    at start-up without paying the per-call wait for every request.
     """
 
-    __slots__ = ("_wrapped", "call_count", "call_log")
+    _RL_RATE  = 100.0 / 60.0   # tokens per second  ≈ 1.667  (100 req/min)
+    _RL_BUCKET = 6.0            # maximum burst capacity
+
+    __slots__ = (
+        "_wrapped", "call_count", "call_log",
+        "_rl_tokens", "_rl_last", "_rl_lock",
+    )
 
     def __init__(self, wrapped: Any) -> None:
-        self._wrapped = wrapped
-        self.call_count: int = 0
-        self.call_log: list[str] = []   # method names, for debugging
+        import time as _t
+        self._wrapped    = wrapped
+        self.call_count: int       = 0
+        self.call_log:   list[str] = []
+        self._rl_tokens: float     = self._RL_BUCKET
+        self._rl_last:   float     = _t.monotonic()
+        self._rl_lock:   asyncio.Lock = asyncio.Lock()
+
+    async def _rate_limit(self) -> None:
+        import time as _t
+        while True:
+            async with self._rl_lock:
+                now = _t.monotonic()
+                elapsed = now - self._rl_last
+                self._rl_tokens = min(
+                    self._RL_BUCKET,
+                    self._rl_tokens + elapsed * self._RL_RATE,
+                )
+                self._rl_last = now
+                if self._rl_tokens >= 1.0:
+                    self._rl_tokens -= 1.0
+                    return
+                wait_s = (1.0 - self._rl_tokens) / self._RL_RATE
+            await asyncio.sleep(wait_s)
 
     def __getattr__(self, name: str) -> Any:
         attr = getattr(self._wrapped, name)
@@ -67,6 +97,7 @@ class _TradierCountingProxy:
             proxy = self
 
             async def _counted(*args: Any, **kwargs: Any) -> Any:
+                await proxy._rate_limit()
                 proxy.call_count += 1
                 proxy.call_log.append(name)
                 return await attr(*args, **kwargs)
@@ -117,9 +148,10 @@ class TradierFlowEngine(OptionsFlowEngine):
         import time as _t
         proxy = _TradierCountingProxy(self._tradier)
 
-        # Swap public_com → counting proxy for the duration of the scan.
-        original_public_com = self.data.public_com
-        self.data.public_com = proxy
+        # Store proxy as a per-instance attribute so base-class methods can use
+        # it directly — avoids a shared data_service.public_com race condition
+        # when all 4 tabs run concurrently (each engine is its own instance).
+        self._scan_proxy = proxy
         # Also replace self._tradier so direct calls in _inspect_one_ticker
         # (e.g. get_quote for price backfill) are counted too.
         self._tradier = proxy
@@ -137,13 +169,18 @@ class TradierFlowEngine(OptionsFlowEngine):
             elapsed = max(_t.time() - t0, 0.001)
             self.last_tradier_req_count = proxy.call_count
             self.last_tradier_req_per_min = round(proxy.call_count / elapsed * 60, 1)
-            # Restore originals
-            self.data.public_com = original_public_com
+            # Clear proxy and restore original tradier ref
+            self._scan_proxy = None
             self._tradier = proxy._wrapped
+            # Method-level breakdown for auditing unexpected call volumes
+            from collections import Counter as _Counter
+            method_counts = _Counter(proxy.call_log)
+            breakdown = ", ".join(f"{m}×{n}" for m, n in sorted(method_counts.items()))
             print(
                 f"[TRADIER_RATE] [{tab}] {proxy.call_count} API requests in {elapsed:.1f}s "
                 f"≈ {self.last_tradier_req_per_min} req/min "
-                f"(limit: 120/min, budget used: {round(self.last_tradier_req_per_min/120*100)}%)"
+                f"(limit: 120/min, budget used: {round(self.last_tradier_req_per_min/120*100)}%) "
+                f"[{breakdown}]"
             )
 
     # ── Prefilter (unchanged — uses Finviz/FMP/Finnhub/FRED) ─────────
@@ -391,13 +428,23 @@ class TradierFlowEngine(OptionsFlowEngine):
 
     # ── Ticker inspection — Tradier + Polygon enrichment ─────────────
 
-    async def _inspect_one_ticker(self, candidate: dict, macro: dict, *, tab: str = "megacap") -> dict | None:
+    async def _inspect_one_ticker(
+        self,
+        candidate: dict,
+        macro: dict,
+        *,
+        tab: str = "megacap",
+        preloaded_expirations: list[str] | None = None,
+    ) -> dict | None:
         """
         Override parent to:
         1. Backfill missing price from Tradier (seed tickers may lack Finnhub/FMP price)
         2. Call Tradier directly for expirations + chains
         3. After scoring, enrich each contract with Polygon historical data from DB
         4. Re-score volatility with the enriched data
+
+        preloaded_expirations: When provided (2-stage path), the parent skips
+            get_option_expirations — it was already called in Stage 1.
         """
         # Backfill price from Tradier if enrichment didn't provide one
         if not _safe_float(candidate.get("price")):
@@ -410,7 +457,9 @@ class TradierFlowEngine(OptionsFlowEngine):
                 pass  # Will fail in parent if still no price
 
         # Call parent — which now hits Tradier via the swap in run_live_scan
-        result = await super()._inspect_one_ticker(candidate, macro, tab=tab)
+        result = await super()._inspect_one_ticker(
+            candidate, macro, tab=tab, preloaded_expirations=preloaded_expirations,
+        )
         if result is None:
             return None
 
@@ -445,17 +494,27 @@ class TradierFlowEngine(OptionsFlowEngine):
         # ── Enrich top contracts with Polygon historical IV context ──
         # Use the options_history table (Polygon-ingested) for a longer
         # IV percentile calculation than the flow snapshots provide.
+        # IMPORTANT: _polygon_iv_context is a synchronous DB call — must run in
+        # a thread so it doesn't block the event loop (which would serialize all
+        # concurrent Stage-2 semaphore slots and blow up cycle time).
         top_contracts_data = result.get("top_contracts", [])
-        for contract_resp in top_contracts_data:
-            occ_sym = contract_resp.get("contract_symbol") or contract_resp.get("symbol")
-            if not occ_sym:
-                continue
-            try:
-                polygon_history = _polygon_iv_context(occ_sym)
+        if top_contracts_data:
+            occ_syms = [
+                c.get("contract_symbol") or c.get("symbol")
+                for c in top_contracts_data
+            ]
+            async def _fetch_polygon_history(occ_sym: str | None) -> dict | None:
+                if not occ_sym:
+                    return None
+                try:
+                    return await asyncio.to_thread(_polygon_iv_context, occ_sym)
+                except Exception:
+                    return None
+
+            histories = await asyncio.gather(*[_fetch_polygon_history(s) for s in occ_syms])
+            for contract_resp, polygon_history in zip(top_contracts_data, histories):
                 if polygon_history:
                     contract_resp["polygon_history"] = polygon_history
-            except Exception:
-                pass  # Non-fatal
 
         # ── Refine volatility score using Polygon 30-day volume history ──
         if polygon_vol_summary:
