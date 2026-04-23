@@ -5,12 +5,15 @@ Composes already-cached services used elsewhere in the app so the new Home
 page can render from a single call with no net-new third-party API traffic.
 
 Reused sources (all with their existing cache TTLs in backend/data/cache.py):
-    - MacroProvider.get_dashboard()           → macro:dashboard:v3
-    - sector_rotation.get_dashboard()         → SR dashboard cache (5 min)
-    - fmp.get_gainers_losers()                → FMP_TTL
-    - fear_greed.get_fear_greed_index()       → FEAR_GREED_TTL
-    - stocktwits.get_trending()               → STOCKTWITS_TTL
-    - watchlist_service.list_watchlists()     → file/pg-backed
+    - MacroProvider.get_dashboard()               → macro:dashboard:v3
+    - sector_rotation.get_dashboard()             → SR dashboard cache (5 min)
+    - fmp.get_gainers_losers()                    → FMP_TTL
+    - fmp.get_market_news()                       → FMP_TTL
+    - fear_greed.get_fear_greed_index()           → FEAR_GREED_TTL
+    - stocktwits.get_trending()                   → STOCKTWITS_TTL
+    - watchlist_service.list_watchlists()         → file/pg-backed
+    - tradier.get_quotes()                        → tradier:quotes:{symbols} cache
+    - options_screener_lkg_v1:{tab} caches        → precompute loop (30 min)
 
 All tasks run in parallel with return_exceptions=True so one failure never
 breaks the whole payload. The aggregated result itself is cached for 60 s
@@ -20,14 +23,18 @@ than its upstream caches already do).
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from data.cache import cache
 
 _HOME_CACHE_KEY = "home:dashboard:v3"
 _HOME_CACHE_TTL = 60  # 1 minute — upstream caches do the heavy lifting
+
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
 def _greeting_for_now() -> str:
@@ -336,6 +343,216 @@ def _extract_fear_greed(fg_equity: dict, macro_raw: dict) -> dict:
     }
 
 
+# ── Unusual Options Flows ──────────────────────────────────────────────────
+
+def _build_options_lkg_index() -> dict[str, dict]:
+    """
+    Read ALL tab LKG caches from the precompute loop — pure in-memory reads,
+    zero API calls. Returns a dict keyed by uppercase ticker symbol.
+
+    Each entry has the per-ticker summary from the engine:
+        composite_score, primary_signal, call_volume, put_volume, pc_ratio,
+        price_change_pct, options_context_summary, source_tab.
+    """
+    tabs = ["megacap", "large_cap", "small_cap", "etf"]
+    index: dict[str, dict] = {}
+    for tab in tabs:
+        lkg = cache.get(f"options_screener_lkg_v1:{tab}")
+        if not lkg:
+            continue
+        for t in (lkg.get("tickers") or []):
+            sym = (t.get("ticker") or "").upper()
+            if not sym or sym in index:
+                continue
+            index[sym] = {**t, "source_tab": tab}
+    return index
+
+
+def _extract_unusual_options_flows(options_index: dict[str, dict], limit: int = 8) -> list[dict]:
+    """
+    From the precomputed options index, extract the most unusual flows sorted
+    by composite_score descending. Normalises each row to a compact Home shape.
+
+    Ranking: composite_score from the existing engine (blend of flow_score,
+    gamma_score, asymmetry_score, volatility_score, sentiment_score) — the
+    highest scorers ARE the most unusual/significant flow events.
+    """
+    sorted_tickers = sorted(
+        options_index.values(),
+        key=lambda x: (x.get("composite_score") or 0),
+        reverse=True,
+    )
+
+    out = []
+    for t in sorted_tickers[:limit]:
+        ctx = t.get("options_context_summary")
+        if isinstance(ctx, dict):
+            ctx = ctx.get("summary") or ctx.get("label") or None
+        out.append({
+            "symbol": t.get("ticker"),
+            "primary_signal": t.get("primary_signal"),
+            "composite_score": t.get("composite_score"),
+            "call_volume": t.get("call_volume"),
+            "put_volume": t.get("put_volume"),
+            "pc_ratio": t.get("pc_ratio"),
+            "price_change_pct": t.get("price_change_pct"),
+            "options_context": ctx,
+            "source_tab": t.get("source_tab"),
+        })
+    return out
+
+
+# ── Snapshot helpers (watchlist + portfolio) ───────────────────────────────
+
+async def _batch_quotes(tickers: list[str], data_service) -> dict[str, dict]:
+    """
+    One Tradier batch-quote call for the given tickers (already cached at
+    tradier:quotes:{symbols} TTL). Returns a dict keyed by uppercase symbol.
+    """
+    if not tickers or not data_service or not getattr(data_service, "tradier", None):
+        return {}
+    try:
+        quotes = await data_service.tradier.get_quotes(tickers)
+        return {(q.get("symbol") or "").upper(): q for q in (quotes or [])}
+    except Exception as exc:
+        print(f"[HOME] batch_quotes error (non-fatal): {exc}")
+        return {}
+
+
+def _snapshot_row(
+    symbol: str,
+    quote: dict,
+    options_index: dict[str, dict],
+    asset_type: str | None = None,
+) -> dict:
+    """Build a normalised snapshot row from a single Tradier quote dict."""
+    last = quote.get("last")
+    chg_pct = quote.get("change_percentage")
+    vol = quote.get("volume")
+    avg_vol = quote.get("average_volume")
+    vol_ratio = round(vol / avg_vol, 2) if vol and avg_vol and avg_vol > 0 else None
+
+    opts = options_index.get(symbol.upper(), {})
+    row = {
+        "symbol": symbol.upper(),
+        "current_price": last,
+        "change_1d_pct": chg_pct,
+        "volume_vs_avg": vol_ratio,
+        "options_signal": opts.get("primary_signal"),
+    }
+    if asset_type is not None:
+        row["asset_type"] = asset_type
+    return row
+
+
+async def _fetch_watchlist_snapshot(
+    watchlists: list[dict],
+    data_service,
+    options_index: dict[str, dict],
+) -> list[dict]:
+    """
+    Compact snapshot for the user's primary watchlist.
+    One Tradier batch-quote call, then overlay options signal from LKG cache.
+    NEVER touches shares/cost/portfolio data.
+    """
+    tickers: list[str] = []
+    if isinstance(watchlists, list) and watchlists:
+        first = watchlists[0] or {}
+        for row in (first.get("csv_data") or [])[:20]:
+            t = (row.get("Ticker") or row.get("ticker") or "").strip().upper()
+            if t and t not in tickers:
+                tickers.append(t)
+
+    if not tickers:
+        return []
+
+    quotes = await _batch_quotes(tickers, data_service)
+    return [
+        _snapshot_row(t, quotes.get(t, {}), options_index)
+        for t in tickers
+    ]
+
+
+async def _fetch_portfolio_snapshot(
+    data_service,
+    options_index: dict[str, dict],
+) -> list[dict]:
+    """
+    Compact snapshot for the user's portfolio holdings.
+    Privacy: NEVER exposes shares, avg_cost, cost_basis, or market value.
+    Exposes only: symbol, asset_type, current_price, change_1d_pct,
+                  volume_vs_avg, options_signal.
+    One Tradier batch-quote call, options signal from LKG cache.
+    """
+    try:
+        pf_file = _DATA_DIR / "portfolio_holdings.json"
+        if not pf_file.exists():
+            return []
+        raw = json.loads(pf_file.read_text())
+        holdings = raw.get("holdings", [])
+        if not isinstance(holdings, list) or not holdings:
+            return []
+    except Exception as exc:
+        print(f"[HOME] portfolio read error (non-fatal): {exc}")
+        return []
+
+    # Deduplicate tickers, keep asset_type mapping
+    seen: dict[str, str] = {}
+    for h in holdings:
+        if not isinstance(h, dict):
+            continue
+        sym = (h.get("ticker") or "").upper().strip()
+        if not sym:
+            continue
+        asset_type = (h.get("asset_type") or h.get("type") or "stock").lower()
+        if sym not in seen:
+            seen[sym] = asset_type
+
+    if not seen:
+        return []
+
+    tickers = list(seen.keys())
+    quotes = await _batch_quotes(tickers, data_service)
+    return [
+        _snapshot_row(t, quotes.get(t, {}), options_index, asset_type=seen[t])
+        for t in tickers
+    ]
+
+
+# ── Latest News ────────────────────────────────────────────────────────────
+
+async def _fetch_latest_news(data_service, limit: int = 8) -> list[dict]:
+    """
+    General market news from FMP (already cached at FMP_TTL upstream).
+    Returns up to `limit` normalised articles. Fails soft to [].
+    """
+    if not data_service or not getattr(data_service, "fmp", None):
+        return []
+    try:
+        raw = await data_service.fmp.get_market_news(limit=limit)
+        out = []
+        for art in (raw or [])[:limit]:
+            if not isinstance(art, dict):
+                continue
+            title = (art.get("title") or "").strip()
+            if not title:
+                continue
+            out.append({
+                "headline": title,
+                "summary": (art.get("text") or "")[:200],
+                "url": art.get("url") or "",
+                "published_at": art.get("published") or art.get("publishedDate") or "",
+                "source": art.get("source") or "",
+                "symbol": art.get("symbol") or "",
+            })
+        return out
+    except Exception as exc:
+        print(f"[HOME] latest_news error (non-fatal): {exc}")
+        return []
+
+
+# ── Main aggregator ────────────────────────────────────────────────────────
+
 async def build_home_dashboard(
     *,
     data_service,
@@ -372,6 +589,7 @@ async def build_home_dashboard(
     # source succeeds.
     if data_service and getattr(data_service, "fmp", None):
         tasks["movers"] = asyncio.create_task(data_service.fmp.get_gainers_losers())
+
     if data_service and getattr(data_service, "finviz", None):
         tasks["fv_gainers"] = asyncio.create_task(data_service.finviz.get_screener_results("ta_topgainers"))
         tasks["fv_losers"] = asyncio.create_task(data_service.finviz.get_screener_results("ta_toplosers"))
@@ -384,7 +602,10 @@ async def build_home_dashboard(
     if data_service and getattr(data_service, "stocktwits", None):
         tasks["trending"] = asyncio.create_task(data_service.stocktwits.get_trending())
 
-    # Watchlists (local storage)
+    # Latest news — FMP general market news (FMP_TTL cache upstream)
+    tasks["news"] = asyncio.create_task(_fetch_latest_news(data_service))
+
+    # ── Watchlists (local storage — blocking but fast) ─────────────────
     watchlists: list[dict] = []
     try:
         if watchlists_loader is None:
@@ -394,6 +615,24 @@ async def build_home_dashboard(
     except Exception:
         watchlists = []
 
+    # ── Options LKG index (pure in-memory read — must be synchronous) ──
+    # This reads precomputed cache entries written by _options_precompute_loop
+    # every 30 min. Zero API calls. Safe to do before awaiting other tasks.
+    options_index: dict[str, dict] = {}
+    try:
+        options_index = await asyncio.to_thread(_build_options_lkg_index)
+    except Exception as exc:
+        print(f"[HOME] options_index build error (non-fatal): {exc}")
+
+    # ── Watchlist + Portfolio snapshots (each needs one Tradier batch-quote) ─
+    tasks["watchlist_snap"] = asyncio.create_task(
+        _fetch_watchlist_snapshot(watchlists, data_service, options_index)
+    )
+    tasks["portfolio_snap"] = asyncio.create_task(
+        _fetch_portfolio_snapshot(data_service, options_index)
+    )
+
+    # ── Await all tasks ────────────────────────────────────────────────
     results: dict[str, Any] = {}
     for name, task in tasks.items():
         if task is None:
@@ -411,6 +650,9 @@ async def build_home_dashboard(
     fv_losers = _safe(results.get("fv_losers"), []) or []
     fg_equity = _safe(results.get("fg"), {}) or {}
     trending = _safe(results.get("trending"), []) or []
+    latest_news = _safe(results.get("news"), []) or []
+    watchlist_snapshot = _safe(results.get("watchlist_snap"), []) or []
+    portfolio_snapshot = _safe(results.get("portfolio_snap"), []) or []
 
     # Merge FMP + Finviz — prefer whichever source has rows. If FMP 403'd and
     # returned [], Finviz fills the gap. If both succeeded, FMP takes priority
@@ -463,6 +705,9 @@ async def build_home_dashboard(
     except Exception as exc:
         print(f"[HOME] Trending on X snapshot failed soft: {exc}")
 
+    # Unusual options flows from precomputed LKG cache — zero new API calls
+    unusual_options_flows = _extract_unusual_options_flows(options_index)
+
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "greeting": {
@@ -477,6 +722,12 @@ async def build_home_dashboard(
         "movers": _extract_movers(merged_movers),
         "trending_on_x": trending_on_x,
         "fear_greed": _extract_fear_greed(fg_equity, macro_raw),
+        # ── New panels ──────────────────────────────────────────────────
+        "latest_news": latest_news,
+        "unusual_options_flows": unusual_options_flows,
+        "watchlist_snapshot": watchlist_snapshot,
+        "portfolio_snapshot": portfolio_snapshot,
+        # ────────────────────────────────────────────────────────────────
         "section_status": {
             "macro": "ok" if not isinstance(results.get("macro"), Exception) and results.get("macro") else "unavailable",
             "sector": "ok" if not isinstance(results.get("sector"), Exception) and results.get("sector") else "unavailable",
@@ -488,6 +739,10 @@ async def build_home_dashboard(
             "fear_greed": "ok" if not isinstance(results.get("fg"), Exception) and results.get("fg") else "unavailable",
             "trending": "ok" if not isinstance(results.get("trending"), Exception) and results.get("trending") else "unavailable",
             "trending_on_x": "ok" if trending_on_x.get("available") else ("refreshing" if trending_on_x.get("refresh_in_progress") else "unavailable"),
+            "latest_news": "ok" if latest_news else "unavailable",
+            "unusual_options_flows": "ok" if unusual_options_flows else "precompute_pending",
+            "watchlist_snapshot": "ok" if watchlist_snapshot else "unavailable",
+            "portfolio_snapshot": "ok" if portfolio_snapshot else "unavailable",
         },
         "timing": {"total_seconds": round(time.time() - t0, 2)},
         "from_cache": False,
