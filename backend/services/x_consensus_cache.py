@@ -1,9 +1,9 @@
 """
-Weekly cached X "Select Trader Consensus" snapshot.
+Bi-hourly cached X "Select Trader Consensus" snapshot.
 
 Exposes the same account universe and extraction logic used by the Social page
 `POST /api/social/query` endpoint (preset_intent="x_select_trader_consensus"),
-but persists a single snapshot to disk and refreshes it at most once per 7 days.
+but persists a single snapshot to disk and refreshes it at most once per 2 hours.
 
 Used by the Home page so it never runs a live X scan on page load. If no
 snapshot exists yet, the function returns a stale/empty payload and kicks off
@@ -33,7 +33,7 @@ X_SELECT_HANDLES: list[str] = [
 
 # Disk cache path — mirrors sector_rotation/gemini_analysis.py layout.
 _CACHE_PATH = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
-_CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+_CACHE_TTL_SECONDS = 2 * 3600  # 2 hours (120 minutes)
 _BATCH_SIZE = 8
 
 # Module-level lock so only one background refresh runs at a time across the
