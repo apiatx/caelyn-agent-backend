@@ -5533,26 +5533,27 @@ async def _home_options_fast_loop():
 
 async def _master_screener_loop():
     """
-    Unified master unusual-options screener background loop (Phase 5).
+    Unified master unusual-options screener background loop (Phase 5 + speed).
 
     Architecture:
       - Single scan covers ALL universes: ETFs, megacap, large_cap, small_cap.
       - UnifiedOptionsEngine merges ALL Finviz screens in one batch and tags
         each candidate with asset_type + market_cap_bucket instead of
         filtering by per-tab market-cap ranges.
-      - Stage 1 sweeps top-60 candidates (by prefilter_score) for valid expirations.
-      - Stage 1.5 trims to top-30 by prefilter_score (bounding chain-fetch calls).
-      - Stage 2 chain-fetches only those top-30 (~1.5 exp each → ~45 calls).
-      - Token-bucket rate limiter in _TradierCountingProxy caps at 100 req/min.
-      - One LKG + one prefilter file on disk (replaces 4 pairs of files).
-      - /api/options/dashboard?tab=X derives its view by filtering the
-        master snapshot by market_cap_bucket — no separate pipelines.
+      - Stage 1 sweeps top-60 candidates.  Results are cached for 12 minutes
+        (expirations change weekly, not per-cycle) → ~0s on hot cycles.
+      - Stage 1.5 trims to top-30 by prefilter_score (bounding chain calls).
+      - Stage 2 chain-fetches top-30 (~1.6 exp each → ~47 calls) at 115 req/min.
+      - Polygon DB enrichment runs OUTSIDE the Stage-2 semaphore: all survivors
+        enrich concurrently instead of being serialised 6-at-a-time.
+      - Inter-cycle sleep: 5s (down from 60s) — rate limiter controls throughput.
 
-    Cycle time estimate (unified):
-      Stage 1:   60 expiry-checks at ≤100 req/min → ≥36s
-      Stage 1.5: negligible (in-memory sort)
-      Stage 2:   ~33 chain-fetches at ≤100 req/min → ≥20s
-      Total per-cycle: ~56-80s  (safely under 120 req/min Tradier cap)
+    Expected cycle times:
+      Cold (first cycle / cache miss every 12 min):
+        Stage 1: ~33s  Stage 2 chains: ~25s  DB: ~4s  misc: ~5s  → ~67s
+      Hot (cache warm):
+        Stage 1:  ~0s  Stage 2 chains: ~25s  DB: ~4s  misc: ~5s  → ~34s
+      Period (hot): 34s cycle + 5s sleep ≈ 39s between starts (vs 149s before)
     """
     global _TRADIER_GLOBAL_SEM
 
@@ -5580,11 +5581,20 @@ async def _master_screener_loop():
 
     print(f"[MASTER_SCREENER] Unified seed universe: {len(_master_seeds)} tickers")
 
+    # Stage-1 expiry cache: persists across cycles for the life of this loop.
+    # Dict[ticker → (valid_expirations: list[str], stored_at: float)]
+    # TTL enforced inside _inspect_shortlist (12 minutes).
+    _master_expiry_cache: dict = {}
+
+    _MASTER_CYCLE_SLEEP = 5   # seconds between cycles; rate limiter controls Tradier throughput
+
     while True:
         t_cycle = _time.time()
         try:
             engine = UnifiedOptionsEngine(data_service)
             engine._shared_sem = _TRADIER_GLOBAL_SEM
+            # Share the expiry cache with the engine so Stage 1 can use cached results.
+            engine._expiry_cache = _master_expiry_cache
 
             # Prefilter: load from cache/disk or rebuild
             prefilter_data = cache.get(_OPTIONS_MASTER_PREFILTER_KEY)
@@ -5630,17 +5640,20 @@ async def _master_screener_loop():
             n_tickers   = len(screener_data.get("tickers", []))
             n_contracts = len(screener_data.get("all_contracts", []))
             elapsed = _time.time() - t_cycle
+            _now_ts = _time.time()
+            s1_warm = sum(1 for v in _master_expiry_cache.values() if _now_ts - v[1] < 12 * 60)
             print(
                 f"[MASTER_SCREENER] Cycle done: {n_tickers} tickers, "
-                f"{n_contracts} contracts in {elapsed:.1f}s. "
-                f"Next in {_OPTIONS_PRECOMPUTE_INTERVAL}s."
+                f"{n_contracts} contracts in {elapsed:.1f}s "
+                f"(expiry-cache: {s1_warm}/{len(_master_expiry_cache)} warm). "
+                f"Next in {_MASTER_CYCLE_SLEEP}s."
             )
 
         except Exception as _exc:
             _tb.print_exc()
             print(f"[MASTER_SCREENER] Cycle error: {_exc}")
 
-        await asyncio.sleep(_OPTIONS_PRECOMPUTE_INTERVAL)
+        await asyncio.sleep(_MASTER_CYCLE_SLEEP)
 
 
 

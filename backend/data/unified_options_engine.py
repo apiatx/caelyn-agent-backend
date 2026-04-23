@@ -371,10 +371,12 @@ class UnifiedOptionsEngine(TradierFlowEngine):
         *,
         tab: str = "master",
         preloaded_expirations=None,
+        _skip_polygon: bool = False,
     ):
         """Delegate to parent and stamp asset_type / market_cap_bucket onto result."""
         result = await super()._inspect_one_ticker(
             candidate, macro, tab=tab, preloaded_expirations=preloaded_expirations,
+            _skip_polygon=_skip_polygon,
         )
         if result is not None:
             result["asset_type"]        = candidate.get("asset_type", "stock")

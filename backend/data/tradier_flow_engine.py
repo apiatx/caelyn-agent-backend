@@ -57,8 +57,8 @@ class _TradierCountingProxy:
     at start-up without paying the per-call wait for every request.
     """
 
-    _RL_RATE  = 100.0 / 60.0   # tokens per second  ≈ 1.667  (100 req/min)
-    _RL_BUCKET = 6.0            # maximum burst capacity
+    _RL_RATE  = 115.0 / 60.0   # tokens per second  ≈ 1.917  (115 req/min)
+    _RL_BUCKET = 12.0           # burst capacity — 12 free calls before throttling kicks in
 
     __slots__ = (
         "_wrapped", "call_count", "call_log",
@@ -435,16 +435,20 @@ class TradierFlowEngine(OptionsFlowEngine):
         *,
         tab: str = "megacap",
         preloaded_expirations: list[str] | None = None,
+        _skip_polygon: bool = False,
     ) -> dict | None:
         """
         Override parent to:
         1. Backfill missing price from Tradier (seed tickers may lack Finnhub/FMP price)
         2. Call Tradier directly for expirations + chains
-        3. After scoring, enrich each contract with Polygon historical data from DB
+        3. Unless _skip_polygon=True, enrich with Polygon historical data from DB
         4. Re-score volatility with the enriched data
 
         preloaded_expirations: When provided (2-stage path), the parent skips
             get_option_expirations — it was already called in Stage 1.
+        _skip_polygon: When True, skip the synchronous Polygon DB enrichment so
+            the Stage-2 semaphore slot can be released faster.  Caller is
+            responsible for calling _enrich_polygon_async(result) afterwards.
         """
         # Backfill price from Tradier if enrichment didn't provide one
         if not _safe_float(candidate.get("price")):
@@ -463,19 +467,29 @@ class TradierFlowEngine(OptionsFlowEngine):
         if result is None:
             return None
 
+        result["data_source"] = "tradier"
+
+        if _skip_polygon:
+            # Caller will enrich asynchronously outside the semaphore
+            return result
+
+        return await self._enrich_polygon_async(result)
+
+    async def _enrich_polygon_async(self, result: dict) -> dict:
+        """
+        Enrich a scored ticker result with Polygon historical DB data.
+
+        Designed to be called OUTSIDE the Stage-2 semaphore so all Stage-2
+        survivors can have their DB enrichment run fully concurrently (instead
+        of serialised 6-at-a-time through the Tradier semaphore).
+
+        Non-fatal: if any DB call fails the result is returned unmodified.
+        """
         symbol = result["ticker"]
 
-        # ── Polygon enrichment: add historical context from DB ────────
-        # This runs after the parent has already scored everything.
-        # We fetch Polygon-stored historical volume summaries and technicals,
-        # then use them to refine scores.
-
-        polygon_vol_summary = {}
-        polygon_technicals = {}
+        polygon_vol_summary: dict = {}
+        polygon_technicals: dict = {}
         try:
-            # Use asyncio.to_thread so synchronous DB calls don't block the event loop.
-            # Without this, a blocking DB query inside an async function serialises all
-            # concurrent _inspect_one_ticker slots even though Semaphore(3) allows 3.
             polygon_vol_summary, polygon_technicals = await asyncio.gather(
                 asyncio.to_thread(get_options_volume_summary, symbol, 30),
                 asyncio.to_thread(get_latest_technicals, symbol),
@@ -492,17 +506,13 @@ class TradierFlowEngine(OptionsFlowEngine):
             result["historic_volume"] = polygon_vol_summary
 
         # ── Enrich top contracts with Polygon historical IV context ──
-        # Use the options_history table (Polygon-ingested) for a longer
-        # IV percentile calculation than the flow snapshots provide.
-        # IMPORTANT: _polygon_iv_context is a synchronous DB call — must run in
-        # a thread so it doesn't block the event loop (which would serialize all
-        # concurrent Stage-2 semaphore slots and blow up cycle time).
         top_contracts_data = result.get("top_contracts", [])
         if top_contracts_data:
             occ_syms = [
                 c.get("contract_symbol") or c.get("symbol")
                 for c in top_contracts_data
             ]
+
             async def _fetch_polygon_history(occ_sym: str | None) -> dict | None:
                 if not occ_sym:
                     return None
@@ -525,13 +535,11 @@ class TradierFlowEngine(OptionsFlowEngine):
             if hist_avg_total > 0 and current_total > 0:
                 volume_surge_ratio = current_total / hist_avg_total
                 if volume_surge_ratio > 2.0:
-                    # Significant volume surge — boost composite score
                     surge_bonus = min(volume_surge_ratio * 2, 8)
                     old_composite = result.get("composite_score", 0)
                     result["composite_score"] = round(min(100, old_composite + surge_bonus), 1)
                     result["polygon_volume_surge_ratio"] = round(volume_surge_ratio, 2)
 
-        result["data_source"] = "tradier"
         return result
 
     # ── Ticker-level IV averaging — use smv_vol when available ───────

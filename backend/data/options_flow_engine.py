@@ -823,15 +823,36 @@ class OptionsFlowEngine:
         max_dte = self.defaults["max_dte"]
         max_exp = self.defaults["max_expirations_per_ticker"]
 
+        # ── Stage 1 expiry cache — skip Tradier call on hot cycles ────────
+        # Expirations change at most once per week (new contracts list Friday).
+        # A 12-minute TTL is safe and eliminates ~33s of rate-limited calls on
+        # every warm cycle.  Cache dict lives in the master-screener-loop scope
+        # (main.py) and is shared across cycles via engine._expiry_cache.
+        expiry_cache: dict = getattr(self, "_expiry_cache", {})
+        _EXPIRY_CACHE_TTL = 12 * 60  # 12 minutes
+        _now = _ts.time()
+        _s1_tradier = 0
+        _s1_hits    = 0
+
         # ── Stage 1: cheap expiration pre-screen ──────────────────────────
         async def _stage1_expiry(candidate: dict):
             """Return (ticker, valid_expirations_or_None)."""
+            nonlocal _s1_tradier, _s1_hits
             symbol = candidate["ticker"]
             if not _safe_float(candidate.get("price")):
                 return symbol, None   # No price — skip immediately (no API call)
+
+            # Cache hit? Skip the Tradier call entirely.
+            if symbol in expiry_cache:
+                cached_exps, cached_at = expiry_cache[symbol]
+                if _now - cached_at < _EXPIRY_CACHE_TTL:
+                    _s1_hits += 1
+                    return symbol, (cached_exps if cached_exps else None)
+
+            # Cache miss — fetch from Tradier (costs one rate-limited call).
+            _s1_tradier += 1
             async with sem:
                 try:
-                    t1 = _ts.time()
                     # Use per-engine proxy when available (TradierFlowEngine sets
                     # self._scan_proxy to avoid shared data_service race condition)
                     _expiry_api = getattr(self, "_scan_proxy", None) or self.data.public_com
@@ -842,7 +863,7 @@ class OptionsFlowEngine:
                     valid = valid[:max_exp]
                     if not valid and all_exps:
                         valid = all_exps[:1]
-                    elapsed = _ts.time() - t1
+                    expiry_cache[symbol] = (valid, _ts.time())
                     return symbol, (valid if valid else None)
                 except Exception as exc:
                     print(f"[OPTIONS_FLOW] [{tab}] Stage1 expiry fetch failed for {symbol}: {exc}")
@@ -853,9 +874,11 @@ class OptionsFlowEngine:
         expiration_map: dict[str, list[str]] = {sym: exps for sym, exps in stage1_raw if exps}
         alive = [c for c in candidates if c["ticker"] in expiration_map]
         n_dropped_s1 = len(candidates) - len(alive)
+        t_s1_elapsed = _ts.time() - t_stage1
         print(
             f"[OPTIONS_FLOW] [{tab}] Stage1 expiry sweep: {len(candidates)} → {len(alive)} alive "
-            f"({n_dropped_s1} had no valid {min_dte}–{max_dte}d expirations) in {_ts.time()-t_stage1:.1f}s"
+            f"({n_dropped_s1} dropped, {_s1_hits} cache-hits, {_s1_tradier} Tradier-fetches) "
+            f"in {t_s1_elapsed:.1f}s"
         )
 
         if not alive:
@@ -873,12 +896,21 @@ class OptionsFlowEngine:
             print(f"[OPTIONS_FLOW] [{tab}] Stage1.5 trim: {alive_before_trim} → {stage2_limit} (by prefilter_score)")
 
         # ── Stage 2: deep chain inspect (finalists only) ──────────────────
+        # If the engine exposes _enrich_polygon_async (TradierFlowEngine), we
+        # defer Polygon DB enrichment OUTSIDE the semaphore so all Stage-2
+        # survivors can have their enrichment run fully concurrently, instead of
+        # being serialised 6-at-a-time through the Tradier rate-limit semaphore.
+        _deferred_polygon = hasattr(self, "_enrich_polygon_async")
+
+        t_stage2_chains = _ts.time()
+
         async def _stage2_inspect(candidate: dict):
             async with sem:
                 try:
                     exps = expiration_map[candidate["ticker"]]
                     result = await self._inspect_one_ticker(
                         candidate, macro, tab=tab, preloaded_expirations=exps,
+                        **{"_skip_polygon": True} if _deferred_polygon else {},
                     )
                     await asyncio.sleep(sleep_s)
                     return result
@@ -888,6 +920,28 @@ class OptionsFlowEngine:
                     return None
 
         stage2_results = await asyncio.gather(*[_stage2_inspect(c) for c in alive])
+        t_chains_elapsed = _ts.time() - t_stage2_chains
+
+        # ── Stage 2b: deferred Polygon enrichment (outside sem) ───────────
+        # Run all DB calls fully concurrently now that the rate-limited Tradier
+        # semaphore has been released.  A thread-pool gate (Semaphore(16)) prevents
+        # exhausting the asyncio default thread pool (typically 32 workers).
+        t_db = _ts.time()
+        if _deferred_polygon:
+            _db_sem = asyncio.Semaphore(16)
+            async def _enrich_one(r):
+                if r is None:
+                    return
+                async with _db_sem:
+                    await self._enrich_polygon_async(r)
+
+            await asyncio.gather(*[_enrich_one(r) for r in stage2_results])
+            t_db_elapsed = _ts.time() - t_db
+            print(
+                f"[OPTIONS_FLOW] [{tab}] Stage2 chains: {t_chains_elapsed:.1f}s | "
+                f"Polygon DB (parallel, {sum(1 for r in stage2_results if r)} tickers): {t_db_elapsed:.1f}s"
+            )
+
         # Return in original candidate order (None for tickers dropped at Stage 1)
         result_map = {alive[i]["ticker"]: stage2_results[i] for i in range(len(alive))}
         return [result_map.get(c["ticker"]) for c in candidates]
@@ -899,6 +953,7 @@ class OptionsFlowEngine:
         *,
         tab: str = "megacap",
         preloaded_expirations: list[str] | None = None,
+        _skip_polygon: bool = False,  # accepted & ignored; used by TradierFlowEngine subclass
     ) -> dict | None:
         """
         Deep options-chain inspection for a single ticker.
@@ -907,6 +962,9 @@ class OptionsFlowEngine:
             preloaded_expirations: When provided (Stage 2 path), skip the
                 get_option_expirations API call — it was already done in Stage 1.
                 When None (legacy/direct-call path), fetch expirations here.
+            _skip_polygon: Accepted for interface compatibility; base class has no
+                DB enrichment to skip.  TradierFlowEngine uses this to defer its
+                Polygon DB enrichment outside the Stage-2 semaphore.
         """
         symbol = candidate["ticker"]
         price = _safe_float(candidate.get("price"))
