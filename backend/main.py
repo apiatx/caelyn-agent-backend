@@ -169,6 +169,41 @@ class JWTAuthMiddleware:
         await self.app(scope, receive, send)
 
 
+async def _x_consensus_loop():
+    """Background loop: refresh X Select Trader Consensus every 2 hours.
+
+    Runs entirely independently of home page loads so the cache is always
+    fresh when users arrive at the Home page.  Uses the same lock as the
+    on-demand path so the two never race.
+    """
+    import asyncio as _asyncio
+    loop = _asyncio.get_event_loop()
+    await loop.run_in_executor(None, _init_event.wait, 30)
+
+    if data_service is None or not getattr(data_service, "xai", None):
+        print("[X_CONSENSUS_LOOP] xAI provider not available — background loop disabled")
+        return
+
+    from services.x_consensus_cache import (
+        _is_fresh, _load_disk_cache, _run_refresh, _CACHE_TTL_SECONDS,
+    )
+
+    print("[X_CONSENSUS_LOOP] Started — will refresh every "
+          f"{_CACHE_TTL_SECONDS // 3600}h")
+
+    while True:
+        raw = _load_disk_cache()
+        if not _is_fresh(raw):
+            print("[X_CONSENSUS_LOOP] Cache stale — running refresh now")
+            try:
+                await _run_refresh(data_service)
+            except Exception as exc:
+                print(f"[X_CONSENSUS_LOOP] Refresh error: {exc}")
+        else:
+            print("[X_CONSENSUS_LOOP] Cache fresh — skipping refresh")
+        await _asyncio.sleep(_CACHE_TTL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app):
     _init_postgres_chat_storage_on_startup("lifespan")
@@ -212,6 +247,7 @@ async def lifespan(app):
         asyncio.create_task(_bittensor_refresh_loop())
     except Exception as _e:
         print(f"[STARTUP] Bittensor refresh task error: {_e}")
+    asyncio.create_task(_x_consensus_loop())
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)
