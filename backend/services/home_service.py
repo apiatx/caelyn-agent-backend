@@ -1482,29 +1482,39 @@ async def _movers_etfs(data_service) -> dict:
     return payload
 
 
+_MOVERS_COMM_LKG_KEY = "home:movers:commodities:lkg"
+_MOVERS_COMM_LKG_TTL = 7 * 24 * 3600  # 7 days — survive long uptime gaps
+
+
 async def _movers_commodities(data_service) -> dict:
     """
     Commodities — live HIP-3 DEX assets from the Hyperliquid screener state.
 
-    Reads state.assets, keeps only HIP-3 coins (coin contains ':'), and
-    matches display_name against _HL_COMMODITY_PRESET. When the same
-    commodity appears on multiple DEXes (e.g. xyz:GOLD and flx:GOLD),
-    the highest-priority DEX wins per _COMMODITY_DEX_PRIORITY.
+    Cache strategy (mirrors the HL screener page "never show empty" contract):
+      1. Hot cache  (home:movers:commodities:v1, 5 min TTL) — served immediately.
+      2. Live read  — scan state.assets for HIP-3 commodity coins.  No is_ready
+                      guard: the HIP-3 disk cache is preloaded during boot so
+                      assets are present before is_ready flips True.
+      3. LKG cache  (home:movers:commodities:lkg, 7-day TTL) — written every
+                      time a live read succeeds; served when state has no data
+                      yet (e.g. fresh production deploy before first enrichment).
 
-    Falls back gracefully to empty gainers/losers if HL state is not yet
-    ready (e.g. fresh server boot before post-boot enrichment finishes).
-    Does NOT cache empty results so the next request will retry.
+    De-duplication: same commodity on multiple DEXes resolved by
+    _COMMODITY_DEX_PRIORITY (xyz > km > flx > cash > vntl > hyna).
     """
-    key = "home:movers:commodities:v1"
-    cached = cache.get(key)
+    hot_key = "home:movers:commodities:v1"
+    lkg_key = _MOVERS_COMM_LKG_KEY
+
+    # 1. Hot cache
+    cached = cache.get(hot_key)
     if cached is not None:
         return {**cached, "from_cache": True}
 
+    # 2. Live read from HL state — no is_ready guard
     rows: list[dict] = []
     try:
         state = _hl_get_state()
-        if state is not None and state.is_ready:
-            # best[dn] = (priority_index, ScreenerAsset)
+        if state is not None:
             best: dict[str, tuple[int, object]] = {}
             for coin, asset in state.assets.items():
                 if ":" not in coin:
@@ -1537,20 +1547,33 @@ async def _movers_commodities(data_service) -> dict:
     except Exception as exc:
         print(f"[HOME_MOVERS] commodity hl state error (non-fatal): {exc}")
 
-    rows.sort(key=lambda x: x["change_percent"], reverse=True)
-    gainers = rows[:8]
-    losers  = list(reversed(rows))[:8]
+    if rows:
+        rows.sort(key=lambda x: x["change_percent"], reverse=True)
+        payload = {
+            "category": "commodities",
+            "gainers": rows[:8],
+            "losers": list(reversed(rows))[:8],
+            "updated_at": None,
+            "from_cache": False,
+        }
+        cache.set(hot_key, payload, _MOVERS_CACHE_TTL)   # 5-min hot
+        cache.set(lkg_key, payload, _MOVERS_COMM_LKG_TTL)  # 7-day LKG
+        return payload
 
-    payload = {
+    # 3. LKG fallback — serve last known good rather than empty
+    lkg = cache.get(lkg_key)
+    if lkg is not None:
+        print("[HOME_MOVERS] commodities: HL state not ready — serving LKG data")
+        return {**lkg, "from_cache": True, "stale": True}
+
+    # 4. Truly empty (fresh deploy, no enrichment yet)
+    return {
         "category": "commodities",
-        "gainers": gainers,
-        "losers": losers,
+        "gainers": [],
+        "losers": [],
         "updated_at": None,
         "from_cache": False,
     }
-    if rows:
-        cache.set(key, payload, _MOVERS_CACHE_TTL)
-    return payload
 
 
 async def _movers_crypto(data_service) -> dict:
