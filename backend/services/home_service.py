@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from data.cache import cache
+from services.hyperliquid.router import get_state_optional as _hl_get_state
 
 _HOME_CACHE_KEY = "home:dashboard:v3"
 _HOME_CACHE_TTL = 60  # 1 minute — upstream caches do the heavy lifting
@@ -1253,3 +1254,432 @@ async def build_home_dashboard(
 
     cache.set(_HOME_CACHE_KEY, payload, _HOME_CACHE_TTL)
     return payload
+
+
+# ── Home Movers by Category ────────────────────────────────────────────────
+#
+# Drives the Home page "Top Gainers / Top Losers" category toggle.
+# Five categories: stocks | etfs | commodities | crypto | all
+#
+# Sources:
+#   stocks      → FMP biggest-gainers/losers  (same as existing Home movers)
+#   etfs        → FMP get_etf_quotes on curated ~30-ETF universe
+#   commodities → Hyperliquid get_all_perps() filtered to commodity preset
+#   crypto      → CMC get_listings_latest(250), rank by percent_change_24h
+#   all         → run all 4 in parallel, merge + rank globally by % move
+#
+# Cached per category for 5 minutes (upstream caches do the heavy lifting).
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MOVERS_CACHE_TTL = 300  # 5 minutes per category
+
+# ── ETF universe (sector + broad + thematic + fixed income) ───────────────
+_ETF_UNIVERSE: list[str] = [
+    # Sector SPDR (11)
+    "XLC", "XLY", "XLP", "XLE", "XLF", "XLV", "XLI", "XLB", "XLRE", "XLK", "XLU",
+    # Broad market
+    "SPY", "QQQ", "IWM", "DIA",
+    # Thematic / factor
+    "SMH", "SOXX", "XBI", "IBB", "HACK", "URA", "ARKK",
+    # Fixed income
+    "TLT", "HYG",
+    # International
+    "EEM", "EFA",
+    # Commodity ETFs
+    "GLD", "SLV", "USO", "UNG",
+]
+
+_ETF_NAMES: dict[str, str] = {
+    "XLC": "Communication Services ETF",
+    "XLY": "Consumer Discretionary ETF",
+    "XLP": "Consumer Staples ETF",
+    "XLE": "Energy ETF",
+    "XLF": "Financials ETF",
+    "XLV": "Health Care ETF",
+    "XLI": "Industrials ETF",
+    "XLB": "Materials ETF",
+    "XLRE": "Real Estate ETF",
+    "XLK": "Technology ETF",
+    "XLU": "Utilities ETF",
+    "SPY": "S&P 500 ETF",
+    "QQQ": "Nasdaq 100 ETF",
+    "IWM": "Russell 2000 ETF",
+    "DIA": "Dow Jones ETF",
+    "SMH": "Semiconductor ETF",
+    "SOXX": "Semiconductor ETF",
+    "XBI": "Biotech ETF",
+    "IBB": "Biotech ETF",
+    "HACK": "Cybersecurity ETF",
+    "URA": "Uranium ETF",
+    "ARKK": "ARK Innovation ETF",
+    "TLT": "20+ Year Treasury ETF",
+    "HYG": "High Yield Bond ETF",
+    "EEM": "Emerging Markets ETF",
+    "EFA": "EAFE ETF",
+    "GLD": "Gold ETF",
+    "SLV": "Silver ETF",
+    "USO": "Crude Oil ETF",
+    "UNG": "Natural Gas ETF",
+}
+
+# Commodity category — HIP-3 DEX display_name → (user-facing symbol, nice name).
+# HL spells the metal "ALUMINIUM"; we map it to user-facing "ALUMINUM".
+# "WTI" from cash: DEX is shown as "WTOIL" per the user's requested label.
+_HL_COMMODITY_PRESET: dict[str, tuple[str, str]] = {
+    "GOLD":      ("GOLD",      "Gold"),
+    "SILVER":    ("SILVER",    "Silver"),
+    "COPPER":    ("COPPER",    "Copper"),
+    "PLATINUM":  ("PLATINUM",  "Platinum"),
+    "PALLADIUM": ("PALLADIUM", "Palladium"),
+    "BRENTOIL":  ("BRENTOIL",  "Brent Oil"),
+    "NATGAS":    ("NATGAS",    "Natural Gas"),
+    "WHEAT":     ("WHEAT",     "Wheat"),
+    "ALUMINIUM": ("ALUMINUM",  "Aluminum"),
+    "URNM":      ("URNM",      "Uranium Miners"),
+    "SOY":       ("SOY",       "Soybean"),
+    "OIL":       ("OIL",       "Crude Oil"),
+    "GAS":       ("GAS",       "Gas"),
+    "USOIL":     ("USOIL",     "US Oil"),
+    "WTI":       ("WTOIL",     "WTI Crude"),
+}
+
+# DEX preference order for deduplication (same commodity on multiple DEXes)
+_COMMODITY_DEX_PRIORITY = ["xyz", "km", "flx", "cash", "vntl", "hyna"]
+
+
+# ── Normalisation helper ───────────────────────────────────────────────────
+
+def _norm_mover_row(
+    symbol: str,
+    name: str | None,
+    asset_type: str,
+    price: float | None,
+    change_percent: float | None,
+    source: str,
+    volume_24h: float | None = None,
+    market_cap: float | None = None,
+) -> dict:
+    """Produce a stable, frontend-ready row for any category."""
+    if change_percent is not None:
+        label = f"{change_percent:+.2f}%"
+    else:
+        label = ""
+    return {
+        "symbol": symbol,
+        "name": name or symbol,
+        "asset_type": asset_type,
+        "price": price,
+        "change_percent": change_percent,
+        "change_label": label,
+        "source": source,
+        "volume_24h": volume_24h,
+        "market_cap": market_cap,
+    }
+
+
+def _safe_float(v) -> float | None:
+    try:
+        return float(v) if v is not None else None
+    except Exception:
+        return None
+
+
+# ── Category helpers ───────────────────────────────────────────────────────
+
+async def _movers_stocks(data_service) -> dict:
+    """
+    Stocks — FMP biggest-gainers / biggest-losers.
+    Identical source family to existing Home dashboard movers.
+    """
+    key = "home:movers:stocks:v1"
+    cached = cache.get(key)
+    if cached is not None:
+        return {**cached, "from_cache": True}
+
+    gainers_raw: list = []
+    losers_raw: list = []
+    try:
+        if data_service and getattr(data_service, "fmp", None):
+            result = await data_service.fmp.get_gainers_losers()
+            gainers_raw = (result or {}).get("gainers") or []
+            losers_raw  = (result or {}).get("losers") or []
+    except Exception as exc:
+        print(f"[HOME_MOVERS] stocks fmp error (non-fatal): {exc}")
+
+    def _to_row(r: dict) -> dict | None:
+        sym = (r.get("ticker") or r.get("symbol") or "").upper()
+        if not sym:
+            return None
+        chg_str = r.get("change_pct") or r.get("change") or ""
+        chg_pct = _safe_float(str(chg_str).replace("%", "").replace("+", "").replace(",", "").strip() or None)
+        return _norm_mover_row(
+            symbol=sym,
+            name=r.get("company") or r.get("name") or sym,
+            asset_type="stock",
+            price=_safe_float(r.get("price")),
+            change_percent=chg_pct,
+            source=r.get("source") or "fmp_gainers",
+        )
+
+    gainers = [row for r in gainers_raw[:8] if (row := _to_row(r)) is not None]
+    losers  = [row for r in losers_raw[:8]  if (row := _to_row(r)) is not None]
+
+    payload = {
+        "category": "stocks",
+        "gainers": gainers,
+        "losers": losers,
+        "updated_at": None,
+        "from_cache": False,
+    }
+    cache.set(key, payload, _MOVERS_CACHE_TTL)
+    return payload
+
+
+async def _movers_etfs(data_service) -> dict:
+    """
+    ETFs — FMP quotes on a curated ~30-ETF universe, ranked by % change.
+    Reuses FMP get_etf_quotes() which already caches individual quote calls.
+    """
+    key = "home:movers:etfs:v1"
+    cached = cache.get(key)
+    if cached is not None:
+        return {**cached, "from_cache": True}
+
+    quotes: dict = {}
+    try:
+        if data_service and getattr(data_service, "fmp", None):
+            quotes = await data_service.fmp.get_etf_quotes(_ETF_UNIVERSE) or {}
+    except Exception as exc:
+        print(f"[HOME_MOVERS] etf fmp error (non-fatal): {exc}")
+
+    rows: list[dict] = []
+    for sym, q in quotes.items():
+        chg_pct = _safe_float(q.get("change_pct"))
+        if chg_pct is None:
+            continue
+        rows.append(_norm_mover_row(
+            symbol=sym.upper(),
+            name=_ETF_NAMES.get(sym.upper(), f"{sym} ETF"),
+            asset_type="etf",
+            price=_safe_float(q.get("price")),
+            change_percent=chg_pct,
+            source="fmp_etf",
+            market_cap=_safe_float(q.get("market_cap")),
+        ))
+
+    rows.sort(key=lambda x: x["change_percent"], reverse=True)
+    gainers = rows[:8]
+    losers  = list(reversed(rows))[:8]
+
+    payload = {
+        "category": "etfs",
+        "gainers": gainers,
+        "losers": losers,
+        "updated_at": None,
+        "from_cache": False,
+    }
+    cache.set(key, payload, _MOVERS_CACHE_TTL)
+    return payload
+
+
+async def _movers_commodities(data_service) -> dict:
+    """
+    Commodities — live HIP-3 DEX assets from the Hyperliquid screener state.
+
+    Reads state.assets, keeps only HIP-3 coins (coin contains ':'), and
+    matches display_name against _HL_COMMODITY_PRESET. When the same
+    commodity appears on multiple DEXes (e.g. xyz:GOLD and flx:GOLD),
+    the highest-priority DEX wins per _COMMODITY_DEX_PRIORITY.
+
+    Falls back gracefully to empty gainers/losers if HL state is not yet
+    ready (e.g. fresh server boot before post-boot enrichment finishes).
+    Does NOT cache empty results so the next request will retry.
+    """
+    key = "home:movers:commodities:v1"
+    cached = cache.get(key)
+    if cached is not None:
+        return {**cached, "from_cache": True}
+
+    rows: list[dict] = []
+    try:
+        state = _hl_get_state()
+        if state is not None and state.is_ready:
+            # best[dn] = (priority_index, ScreenerAsset)
+            best: dict[str, tuple[int, object]] = {}
+            for coin, asset in state.assets.items():
+                if ":" not in coin:
+                    continue
+                dn = asset.display_name.upper() if asset.display_name else ""
+                if dn not in _HL_COMMODITY_PRESET:
+                    continue
+                if asset.mark_px is None or asset.pct_change_24h is None:
+                    continue
+                dex_prefix = coin.split(":")[0]
+                priority = (
+                    _COMMODITY_DEX_PRIORITY.index(dex_prefix)
+                    if dex_prefix in _COMMODITY_DEX_PRIORITY
+                    else 99
+                )
+                if dn not in best or priority < best[dn][0]:
+                    best[dn] = (priority, asset)
+
+            for dn, (_, asset) in best.items():
+                user_sym, nice_name = _HL_COMMODITY_PRESET[dn]
+                rows.append(_norm_mover_row(
+                    symbol=user_sym,
+                    name=nice_name,
+                    asset_type="commodity",
+                    price=asset.mark_px,
+                    change_percent=asset.pct_change_24h,
+                    source="hyperliquid",
+                    volume_24h=asset.day_ntl_vlm,
+                ))
+    except Exception as exc:
+        print(f"[HOME_MOVERS] commodity hl state error (non-fatal): {exc}")
+
+    rows.sort(key=lambda x: x["change_percent"], reverse=True)
+    gainers = rows[:8]
+    losers  = list(reversed(rows))[:8]
+
+    payload = {
+        "category": "commodities",
+        "gainers": gainers,
+        "losers": losers,
+        "updated_at": None,
+        "from_cache": False,
+    }
+    if rows:
+        cache.set(key, payload, _MOVERS_CACHE_TTL)
+    return payload
+
+
+async def _movers_crypto(data_service) -> dict:
+    """
+    Crypto — CMC top 250 by market cap, ranked by percent_change_24h.
+    Constrains to large-cap universe so this never surfaces random micro-caps.
+    """
+    key = "home:movers:crypto:v1"
+    cached = cache.get(key)
+    if cached is not None:
+        return {**cached, "from_cache": True}
+
+    listings: list = []
+    try:
+        if data_service and getattr(data_service, "cmc", None):
+            listings = await data_service.cmc.get_listings_latest(limit=500) or []
+    except Exception as exc:
+        print(f"[HOME_MOVERS] crypto cmc error (non-fatal): {exc}")
+
+    rows: list[dict] = []
+    for coin in listings:
+        if not isinstance(coin, dict):
+            continue
+        sym  = (coin.get("symbol") or "").upper()
+        name = coin.get("name") or sym
+        q    = (coin.get("quote") or {}).get("USD") or {}
+        chg_pct = _safe_float(q.get("percent_change_24h"))
+        if chg_pct is None:
+            continue
+        rows.append(_norm_mover_row(
+            symbol=sym,
+            name=name,
+            asset_type="crypto",
+            price=_safe_float(q.get("price")),
+            change_percent=chg_pct,
+            source="cmc_top250",
+            volume_24h=_safe_float(q.get("volume_24h")),
+            market_cap=_safe_float(q.get("market_cap")),
+        ))
+
+    rows.sort(key=lambda x: x["change_percent"], reverse=True)
+    gainers = rows[:8]
+    losers  = list(reversed(rows))[:8]
+
+    payload = {
+        "category": "crypto",
+        "gainers": gainers,
+        "losers": losers,
+        "updated_at": None,
+        "from_cache": False,
+    }
+    cache.set(key, payload, _MOVERS_CACHE_TTL)
+    return payload
+
+
+# ── Main dispatch ──────────────────────────────────────────────────────────
+
+async def get_movers_by_category(category: str, data_service) -> dict:
+    """
+    Entry point for GET /api/home/movers?category=...
+
+    category: "stocks" | "etfs" | "commodities" | "crypto" | "all"
+
+    "all" runs all 4 categories in parallel, then merges gainers/losers
+    globally and ranks by % move (largest move wins, across all asset types).
+    Frontend row shape is identical for every category.
+    """
+    category = (category or "stocks").lower().strip()
+
+    if category == "stocks":
+        return await _movers_stocks(data_service)
+    if category == "etfs":
+        return await _movers_etfs(data_service)
+    if category == "commodities":
+        return await _movers_commodities(data_service)
+    if category == "crypto":
+        return await _movers_crypto(data_service)
+
+    if category == "all":
+        stocks, etfs, comms, crypto = await asyncio.gather(
+            _movers_stocks(data_service),
+            _movers_etfs(data_service),
+            _movers_commodities(data_service),
+            _movers_crypto(data_service),
+            return_exceptions=True,
+        )
+
+        def _safe_rows(result, key: str) -> list:
+            if isinstance(result, Exception) or not isinstance(result, dict):
+                return []
+            return result.get(key) or []
+
+        all_gainers = (
+            _safe_rows(stocks, "gainers")
+            + _safe_rows(etfs, "gainers")
+            + _safe_rows(comms, "gainers")
+            + _safe_rows(crypto, "gainers")
+        )
+        all_losers = (
+            _safe_rows(stocks, "losers")
+            + _safe_rows(etfs, "losers")
+            + _safe_rows(comms, "losers")
+            + _safe_rows(crypto, "losers")
+        )
+
+        def _dedup_by_symbol(rows: list) -> list:
+            seen: set[str] = set()
+            out: list[dict] = []
+            for r in rows:
+                sym = r.get("symbol", "")
+                if sym and sym not in seen:
+                    seen.add(sym)
+                    out.append(r)
+            return out
+
+        all_gainers = _dedup_by_symbol(
+            sorted(all_gainers, key=lambda x: x.get("change_percent") or 0, reverse=True)
+        )[:10]
+        all_losers = _dedup_by_symbol(
+            sorted(all_losers, key=lambda x: x.get("change_percent") or 0)
+        )[:10]
+
+        return {
+            "category": "all",
+            "gainers": all_gainers,
+            "losers": all_losers,
+            "updated_at": None,
+            "from_cache": False,
+        }
+
+    # Unknown category — fallback to stocks
+    return await _movers_stocks(data_service)

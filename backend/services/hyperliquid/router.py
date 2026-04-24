@@ -39,6 +39,11 @@ def set_state(state: HyperliquidState):
     _state = state
 
 
+def get_state_optional() -> "HyperliquidState | None":
+    """Return the live HL state or None if not yet initialised. Never raises."""
+    return _state
+
+
 def _get_state() -> HyperliquidState:
     if _state is None:
         raise HTTPException(503, "Hyperliquid screener not yet initialized")
