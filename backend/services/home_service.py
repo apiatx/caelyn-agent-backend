@@ -1576,16 +1576,32 @@ async def _movers_commodities(data_service) -> dict:
     }
 
 
+_MOVERS_CRYPTO_LKG_KEY = "home:movers:crypto:lkg"
+_MOVERS_CRYPTO_LKG_TTL = 7 * 24 * 3600  # 7 days
+
+
 async def _movers_crypto(data_service) -> dict:
     """
-    Crypto — CMC top 250 by market cap, ranked by percent_change_24h.
-    Constrains to large-cap universe so this never surfaces random micro-caps.
+    Crypto — CMC top 500 by market cap, ranked by percent_change_24h.
+
+    Cache strategy (mirrors 'never empty' contract):
+      1. Hot cache  (home:movers:crypto:v1, 5 min TTL) — served immediately.
+      2. Live CMC call — fetches top-500 listings.
+      3. LKG cache  (home:movers:crypto:lkg, 7-day TTL) — written every time a
+                      live read succeeds; served when CMC is unavailable so the
+                      tab never shows empty.
+
+    Never caches empty results so a CMC error can't lock out data for 5 min.
     """
-    key = "home:movers:crypto:v1"
-    cached = cache.get(key)
+    hot_key = "home:movers:crypto:v1"
+    lkg_key = _MOVERS_CRYPTO_LKG_KEY
+
+    # 1. Hot cache
+    cached = cache.get(hot_key)
     if cached is not None:
         return {**cached, "from_cache": True}
 
+    # 2. Live CMC read
     listings: list = []
     try:
         if data_service and getattr(data_service, "cmc", None):
@@ -1609,24 +1625,38 @@ async def _movers_crypto(data_service) -> dict:
             asset_type="crypto",
             price=_safe_float(q.get("price")),
             change_percent=chg_pct,
-            source="cmc_top250",
+            source="cmc_top500",
             volume_24h=_safe_float(q.get("volume_24h")),
             market_cap=_safe_float(q.get("market_cap")),
         ))
 
-    rows.sort(key=lambda x: x["change_percent"], reverse=True)
-    gainers = rows[:8]
-    losers  = list(reversed(rows))[:8]
+    if rows:
+        rows.sort(key=lambda x: x["change_percent"], reverse=True)
+        payload = {
+            "category": "crypto",
+            "gainers": rows[:8],
+            "losers": list(reversed(rows))[:8],
+            "updated_at": None,
+            "from_cache": False,
+        }
+        cache.set(hot_key, payload, _MOVERS_CACHE_TTL)    # 5-min hot
+        cache.set(lkg_key, payload, _MOVERS_CRYPTO_LKG_TTL)  # 7-day LKG
+        return payload
 
-    payload = {
+    # 3. LKG fallback — serve last known good rather than empty
+    lkg = cache.get(lkg_key)
+    if lkg is not None:
+        print("[HOME_MOVERS] crypto: CMC unavailable — serving LKG data")
+        return {**lkg, "from_cache": True, "stale": True}
+
+    # 4. Truly empty (CMC never returned data in this process lifetime)
+    return {
         "category": "crypto",
-        "gainers": gainers,
-        "losers": losers,
+        "gainers": [],
+        "losers": [],
         "updated_at": None,
         "from_cache": False,
     }
-    cache.set(key, payload, _MOVERS_CACHE_TTL)
-    return payload
 
 
 # ── Main dispatch ──────────────────────────────────────────────────────────
