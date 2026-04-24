@@ -3185,7 +3185,6 @@ class TradingAgent:
                             self._ask_claude, user_prompt, synthesis_market_data,
                             history, is_followup, category, chatbox_mode,
                             reasoning_model="agent_collab", preset_intent=preset_intent,
-                            reasoning_mode=reasoning_mode,
                         ),
                         timeout=100.0,
                     )
