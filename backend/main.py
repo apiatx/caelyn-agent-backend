@@ -4973,6 +4973,200 @@ IMPORTANT: Return plain text analysis (not JSON). Be formatted with markdown hea
         return _err_response(f"Portfolio review encountered an error: {str(e)[:200]}. Please try again.")
 
 
+# ============================================================
+# Portfolio Compare-to-Watchlist  (3 endpoints)
+# ============================================================
+
+@app.get("/api/portfolio/compare-watchlist/options")
+@limiter.limit("30/minute")
+@traceable(name="main.compare_watchlist_options")
+async def compare_watchlist_options(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Return all saved watchlists the user can compare against their portfolio."""
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    from services.watchlist_service import list_watchlists
+
+    try:
+        watchlists_raw = list_watchlists()
+    except Exception as e:
+        print(f"[COMPARE] list_watchlists error: {e}")
+        watchlists_raw = []
+
+    watchlists = [
+        {
+            "id":           w.get("id", "default"),
+            "name":         w.get("name", "Watchlist"),
+            "ticker_count": w.get("ticker_count", 0),
+            "updated_at":   w.get("saved_at") or w.get("updated_at"),
+        }
+        for w in (watchlists_raw or [])
+    ]
+
+    return {
+        "ok": True,
+        "watchlists": watchlists,
+        "default_watchlist_id": watchlists[0]["id"] if watchlists else None,
+    }
+
+
+@app.get("/api/portfolio/compare-watchlist/latest")
+@limiter.limit("30/minute")
+@traceable(name="main.compare_watchlist_latest")
+async def compare_watchlist_latest(
+    request: Request,
+    watchlist_id: str = None,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Return the most recent saved comparison report for user+watchlist.
+    Does NOT regenerate anything — read-only.
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    user_id = getattr(request.state, "user_id", "default")
+
+    if not watchlist_id:
+        return {"ok": False, "exists": False, "message": "watchlist_id query param is required."}
+
+    from services.portfolio_compare_service import load_report, check_staleness
+    from services.watchlist_service import load_watchlist
+
+    # Resolve current portfolio and watchlist tickers for staleness check
+    portfolio_tickers: list[str] = []
+    try:
+        pf = _portfolio_file(user_id)
+        if pf.exists():
+            with open(pf) as f:
+                pd_ = _json.load(f)
+            portfolio_tickers = [
+                h.get("ticker", "").upper().strip()
+                for h in (pd_.get("holdings") or []) if h.get("ticker")
+            ]
+    except Exception:
+        pass
+
+    watchlist_tickers: list[str] = []
+    try:
+        wd = load_watchlist(watchlist_id)
+        if wd:
+            watchlist_tickers = wd.get("tickers") or []
+    except Exception:
+        pass
+
+    report = load_report(user_id, watchlist_id)
+    if not report:
+        return {
+            "ok": True,
+            "exists": False,
+            "message": "No saved comparison report exists for this portfolio/watchlist combination yet.",
+        }
+
+    stale, stale_reasons = check_staleness(report, portfolio_tickers, watchlist_tickers)
+    report["stale"]        = stale
+    report["stale_reasons"] = stale_reasons
+    report["cache_status"] = "stale_cached" if stale else "cached"
+    report["ok"]           = True
+    report["exists"]       = True
+    return report
+
+
+@app.post("/api/portfolio/compare-watchlist/run")
+@limiter.limit("3/minute")
+@traceable(name="main.compare_watchlist_run")
+async def compare_watchlist_run(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
+):
+    """
+    Manually generate (or refresh) the expensive portfolio vs watchlist report.
+    Body: { "watchlist_id": "...", "force_refresh": false }
+
+    Rate-limited to 3/minute to prevent abuse.  Each run may take 30-90s.
+    Returns the full structured report + markdown.
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    await _wait_for_init()
+
+    user_id = getattr(request.state, "user_id", "default")
+    body = await request.json()
+    watchlist_id   = (body.get("watchlist_id") or "").strip()
+    force_refresh  = bool(body.get("force_refresh", False))
+
+    if not watchlist_id:
+        raise HTTPException(status_code=400, detail="watchlist_id is required.")
+
+    from services.watchlist_service import load_watchlist
+    from services.portfolio_compare_service import run_comparison
+
+    # ── Load portfolio ────────────────────────────────────────────────────────
+    portfolio_file = _portfolio_file(user_id)
+    if not portfolio_file.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="No portfolio found. Please add or upload your holdings first.",
+        )
+    try:
+        with open(portfolio_file) as f:
+            pf_data = _json.load(f)
+        portfolio_holdings = pf_data.get("holdings", [])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read portfolio: {e}")
+
+    if not portfolio_holdings:
+        raise HTTPException(
+            status_code=400,
+            detail="Portfolio has no holdings. Please add positions first.",
+        )
+
+    # ── Load watchlist ────────────────────────────────────────────────────────
+    try:
+        watchlist_data = load_watchlist(watchlist_id)
+    except Exception as e:
+        watchlist_data = None
+        print(f"[COMPARE] load_watchlist error: {e}")
+
+    if not watchlist_data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Watchlist '{watchlist_id}' not found. Please save a watchlist first.",
+        )
+    if not watchlist_data.get("tickers"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Watchlist '{watchlist_data.get('name', watchlist_id)}' has no tickers.",
+        )
+
+    # ── Run comparison ────────────────────────────────────────────────────────
+    print(f"[COMPARE] Starting run: user={user_id} watchlist={watchlist_id} force={force_refresh}")
+
+    try:
+        result = await run_comparison(
+            user_id=user_id,
+            watchlist_id=watchlist_id,
+            portfolio_holdings=portfolio_holdings,
+            watchlist_data=watchlist_data,
+            data_service=agent.data,
+            claude_client=agent.client,
+            force_refresh=force_refresh,
+        )
+    except Exception as e:
+        import traceback as _tb
+        _tb.print_exc()
+        print(f"[COMPARE] run_comparison FATAL: {e}")
+        raise HTTPException(status_code=500, detail=f"Comparison failed: {str(e)[:300]}")
+
+    result["exists"] = True
+    return result
+
+
 @app.get("/api/test-altfins")
 @traceable(name="main.test_altfins")
 async def test_altfins(symbol: str = "BTC", api_key: str = Header(None, alias="X-API-Key")):

@@ -1,0 +1,393 @@
+You are working in the CaelynAI backend Replit FastAPI server.
+
+Goal:
+Add a new Portfolio Intelligence feature called “Compare to Watchlist” for the Portfolio page.
+
+This should compare the user’s current saved/uploaded portfolio holdings against one selected saved watchlist from the Watchlist page and return a deeply structured, dated, cached AI report that answers:
+
+1. How does the current portfolio stack up RIGHT NOW?
+2. Which holdings are weaker than watchlist alternatives?
+3. What would the agent replace, and why?
+4. Which names should be kept, upgraded, trimmed, avoided, or monitored?
+5. How does this change based on current market regime, thematic rotation, fundamentals, technicals, filings, news, catalysts, sentiment, and risk?
+
+Important:
+This must be a MANUAL expensive action. Do not run this automatically in the background. Do not refresh it on every page load. The report must persist after refresh/republish/page navigation so the frontend can show the last saved report with a generated timestamp.
+
+Architecture requirements:
+- Backend owns all expensive intelligence, data fetching, AI synthesis, caching, persistence, and refresh logic.
+- Frontend should only call backend endpoints.
+- Do not make the frontend assemble AI prompts or call model providers directly.
+- Reuse existing portfolio/watchlist storage and auth/user identification patterns.
+- Do not break existing Portfolio or Watchlist features.
+- Audit existing Portfolio and Watchlist routes/models before changing anything.
+
+Feature endpoints to add or adapt:
+
+1. GET /api/portfolio/compare-watchlist/options
+Purpose:
+Return available saved watchlists that can be compared against the portfolio.
+
+Response shape example:
+{
+  "ok": true,
+  "watchlists": [
+    {
+      "id": "watchlist_id",
+      "name": "AI Infrastructure Watchlist",
+      "ticker_count": 18,
+      "updated_at": "2026-04-24T14:22:00Z"
+    }
+  ],
+  "default_watchlist_id": "..."
+}
+
+2. GET /api/portfolio/compare-watchlist/latest?watchlist_id=...
+Purpose:
+Return the most recent saved comparison report for the current user + current portfolio snapshot + selected watchlist if it exists.
+
+Do not regenerate anything here.
+
+Response shape example:
+{
+  "ok": true,
+  "exists": true,
+  "report_id": "...",
+  "watchlist_id": "...",
+  "watchlist_name": "...",
+  "portfolio_snapshot_hash": "...",
+  "watchlist_snapshot_hash": "...",
+  "generated_at": "2026-04-24T14:22:00Z",
+  "stale": false,
+  "stale_reasons": [],
+  "summary": {...},
+  "rankings": {...},
+  "replacement_recommendations": [...],
+  "report_markdown": "...",
+  "raw": {...}
+}
+
+If no report exists:
+{
+  "ok": true,
+  "exists": false,
+  "message": "No saved comparison report exists for this portfolio/watchlist combination yet."
+}
+
+3. POST /api/portfolio/compare-watchlist/run
+Purpose:
+Manually generate or refresh the expensive report.
+
+Request shape:
+{
+  "watchlist_id": "...",
+  "force_refresh": false
+}
+
+Behavior:
+- If force_refresh=false and a fresh cached result exists for same user + portfolio hash + watchlist hash, return cached result.
+- If force_refresh=true, regenerate.
+- Save the generated result persistently.
+- Return the full structured report.
+- Include generated_at.
+- Include data freshness metadata.
+- Include API source metadata.
+
+Suggested freshness rules:
+- Cached AI report TTL: 12-24 hours by default.
+- Mark stale if:
+  - Portfolio holdings changed.
+  - Selected watchlist changed.
+  - Report older than 24 hours.
+  - Major data refresh source changed if you already track regime/catalyst snapshots.
+- Even if stale, frontend should be able to display it with a stale badge and a refresh button.
+
+Persistence:
+Create or reuse a table/storage model for comparison reports. Suggested table:
+
+portfolio_watchlist_comparison_reports:
+- id
+- user_id
+- watchlist_id
+- watchlist_name
+- portfolio_snapshot_hash
+- watchlist_snapshot_hash
+- portfolio_tickers_json
+- watchlist_tickers_json
+- generated_at
+- expires_at
+- stale_reasons_json
+- source_freshness_json
+- structured_result_json
+- report_markdown
+- created_at
+- updated_at
+
+If DB migrations are not currently formalized, follow the existing backend pattern for table creation/init.
+
+Snapshot hashing:
+Create deterministic hashes so cached reports survive page refreshes and backend restarts:
+- portfolio_snapshot_hash = hash of sorted holdings with ticker, shares/weight/value/cost basis if available
+- watchlist_snapshot_hash = hash of sorted watchlist tickers and relevant user watchlist fields
+- The same portfolio + same watchlist should reuse the saved report unless force refreshed or TTL expired.
+
+Data pipeline:
+Build a batch-first enrichment function, not one-off calls per ticker where avoidable.
+
+Function suggestion:
+build_portfolio_watchlist_comparison(user_id, watchlist_id, force_refresh=False)
+
+Steps:
+1. Load current portfolio holdings.
+2. Load selected watchlist.
+3. Normalize tickers:
+   - uppercase
+   - dedupe
+   - remove invalid/empty symbols
+   - preserve asset type if available
+4. Create universe:
+   - portfolio tickers
+   - watchlist tickers
+   - mark each ticker as portfolio_only, watchlist_only, or both
+5. Fetch data with strict provider priority and rate protection.
+6. Score each ticker.
+7. Build replacement recommendations.
+8. Ask AI synthesis layer for final structured report.
+9. Persist result.
+10. Return result.
+
+Provider priority / API budget:
+Use the following source strategy:
+
+Primary:
+- FMP for broad fundamentals, profile, key metrics, financials, ratios, enterprise value, revenue growth, margins, FCF, debt, valuation, analyst/earnings basics if available.
+- Tradier for current/near-real-time quotes and price action where available.
+- SEC EDGAR for filings, recent 10-K/10-Q/8-K, risk factors, material events, and filing recency.
+- Existing internal market regime / sector rotation / macro endpoints if they already exist.
+- Existing options flow / Tradier data only when useful, not mandatory for every ticker.
+
+Use sparingly:
+- Finnhub for company news, filings sentiment, recommendation trends, price target, earnings calendar, surprise history, and profile gaps.
+- Alpha Vantage only as a last-resort technical/fundamental fallback because it has very low daily limits.
+- Polygon only if you already have a cheap batch/aggregate path available; respect 5 calls/minute.
+- Finviz scraper for technical setup/snapshot only, with throttling and weekend handling. Do not rely on Finviz on weekends.
+
+AI/model roles:
+- OpenAI can orchestrate and structure the comparison if that is the existing system pattern.
+- Claude/Anthropic should be preferred for final reasoning/synthesis if already used as the final reasoning layer.
+- Grok/xAI should be used only when X/social sentiment is specifically helpful for high-beta/catalyst names, not every ticker automatically.
+- Gemini can be used for grounded web/regime/thematic research if already wired.
+- DeepSeek can be used for cheap intermediate summarization if needed.
+
+Do not blindly call every AI model every time. Use a model budget switch:
+- normal mode: fundamentals + quotes + internal regime + limited news + final Claude synthesis
+- deep mode/future optional: add social sentiment + broader web + filings summaries
+
+For this first implementation, make the manual button “full quality but controlled.” Suggested approach:
+- Always use fundamentals, quotes, cached regime data, and recent news/catalyst scan.
+- Use social/web/filing deep dives only for:
+  - top 5 portfolio holdings by value/weight
+  - top 10 watchlist candidates by preliminary score
+  - any ticker flagged as high catalyst/high momentum/high risk
+This prevents the feature from nuking API budgets.
+
+Scoring:
+Create a transparent scoring model. It does not need to be perfect, but it must be explainable.
+
+Suggested score categories:
+- Fundamental Quality Score, 0-100
+  - revenue growth
+  - gross/operating margin
+  - FCF or cash burn
+  - balance sheet strength
+  - ROIC/ROE if available
+- Valuation Score, 0-100
+  - EV/Sales, P/S, P/E, PEG where available
+  - relative to growth and sector
+- Technical Setup Score, 0-100
+  - trend
+  - distance from moving averages
+  - relative strength
+  - volume/momentum
+  - support/resistance where available
+- Catalyst Score, 0-100
+  - earnings date
+  - product/customer announcements
+  - filings
+  - analyst revisions
+  - sector/regime tailwinds
+  - hyperscaler/order/production/news events if applicable
+- Sentiment/Attention Score, 0-100
+  - news momentum
+  - X/social if available
+  - unusual attention
+- Risk Score, 0-100
+  - dilution
+  - cash burn
+  - debt/refinancing
+  - valuation risk
+  - technical breakdown
+  - binary event risk
+- Regime Fit Score, 0-100
+  - whether current macro/thematic regime favors this ticker/sector/theme
+- Total Opportunity Score, 0-100
+  - weighted output
+
+Output should include a per-ticker object:
+{
+  "ticker": "NVDA",
+  "name": "...",
+  "bucket": "portfolio_only|watchlist_only|both",
+  "asset_type": "stock|etf|crypto|other",
+  "sector": "...",
+  "theme_tags": ["AI Compute", "Data Center"],
+  "scores": {
+    "total": 87,
+    "fundamental_quality": 91,
+    "valuation": 63,
+    "technical_setup": 84,
+    "catalyst": 88,
+    "sentiment_attention": 76,
+    "risk": 42,
+    "regime_fit": 93
+  },
+  "verdict": "Keep / Add / Replace Candidate / Avoid / Watch",
+  "thesis": "...",
+  "risks": ["..."],
+  "catalysts": ["..."],
+  "data_sources": ["FMP", "Tradier", "SEC", "Finnhub"]
+}
+
+Replacement logic:
+The report must clearly show:
+- current holding
+- suggested replacement from watchlist
+- confidence
+- why replace
+- what improves
+- what gets worse
+- timing/entry note
+- risk note
+
+Example:
+{
+  "replace": "XYZ",
+  "with": "ABC",
+  "confidence": "High",
+  "action": "Replace now / Replace on strength / Watch for entry / Do not replace yet",
+  "why": "...",
+  "score_delta": 18,
+  "improves": ["stronger revenue growth", "better regime fit", "cleaner technical setup"],
+  "tradeoffs": ["higher valuation", "more volatility"],
+  "timing": "Better entry above $X breakout or on pullback to $Y",
+  "risk": "..."
+}
+
+Final report structure:
+Return both structured JSON and markdown.
+
+The markdown should have these exact sections:
+
+# Portfolio vs Watchlist Comparison
+Generated: <date/time>
+
+## Executive Verdict
+A blunt 3-6 sentence summary of whether the portfolio is better, worse, or roughly equal to the watchlist right now.
+
+## Portfolio Stack Rank
+Rank current holdings best to worst with short reasons.
+
+## Watchlist Stack Rank
+Rank watchlist names best to worst with short reasons.
+
+## Best Replacements
+Clean table:
+Current Holding | Replace With | Confidence | Why | Timing
+
+## Keep / Add / Trim / Avoid
+Grouped bullets:
+- Keep:
+- Add / Upgrade:
+- Trim / Replace:
+- Avoid / Not Yet:
+
+## Regime & Theme Fit
+Explain current market regime and which themes are being rewarded/punished right now.
+
+## Fundamental Comparison
+Call out growth, margins, valuation, balance sheet, FCF/cash burn, and quality.
+
+## Technical Setup
+Call out trend, momentum, support/resistance, relative strength, and broken setups.
+
+## Catalysts & News
+Call out upcoming earnings, filings, customer wins, production milestones, analyst actions, sector news, and major narrative catalysts.
+
+## Risks
+Call out dilution, cash burn, debt, crowding, valuation, downside technical levels, and binary events.
+
+## Final Action Plan
+Give a prioritized 1-2-3 action list:
+1. Highest conviction replacement.
+2. Best hold/add.
+3. Biggest avoid/trim.
+
+Tone:
+Clear, direct, practical, not legalistic. This is investment intelligence, not generic disclaimers. Still include a small line that this is decision support, not automatic trade execution.
+
+Data freshness:
+Every response must include:
+- generated_at
+- market_data_as_of if available
+- fundamentals_as_of if available
+- news_window
+- filings_window
+- model_used
+- sources_used
+- cache_status: generated | cached | stale_cached
+
+Frontend contract:
+Make sure the frontend can render:
+- latest saved report
+- stale badge
+- generated timestamp
+- refresh button
+- selected watchlist name
+- replacement recommendation cards/table
+- markdown report
+
+Error handling:
+- If no portfolio exists: return clear error telling frontend to create/upload portfolio first.
+- If no watchlist exists: return clear error telling frontend to create/save watchlist first.
+- If a selected watchlist has no tickers: return clear error.
+- If some tickers fail enrichment: continue and include partial_error warnings.
+- Do not fail the whole report because one provider fails.
+- Include provider_errors in response metadata.
+
+Rate-limit safeguards:
+- Implement provider-level caching for ticker data where existing cache does not exist.
+- Batch FMP calls where possible.
+- Avoid Alpha Vantage unless absolutely necessary.
+- Throttle Finviz detailed scraping and skip or degrade on weekends.
+- Do not call Grok/Gemini/Perplexity for every ticker by default.
+- Add log messages showing number of tickers, providers used, cache hits/misses, and skipped providers.
+
+Testing:
+After implementation, test with:
+1. No portfolio
+2. Portfolio exists but no watchlist
+3. Watchlist exists but empty
+4. Portfolio + watchlist with overlapping tickers
+5. Cached latest fetch
+6. Force refresh
+7. Provider failure fallback
+8. Page refresh persistence
+
+Deliverables:
+- New backend endpoints.
+- Persistent saved report storage.
+- Comparison engine/service module.
+- Clean structured JSON response.
+- Markdown report.
+- Safe API budget behavior.
+- No automatic background refresh.
