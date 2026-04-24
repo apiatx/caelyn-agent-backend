@@ -1,0 +1,76 @@
+Urgent backend bug fix. Do NOT do a broad refactor. This is a targeted runtime regression fix first, then a short verification pass.
+
+Problem:
+The AI popup/chatbox now returns:
+{"display_type": "chat", "message": "Error reaching AI: name 'reasoning_mode' is not defined"}
+
+At the same time:
+- AI Terminal "Default" preset works
+- AI Terminal "Auto" preset hangs / never finishes loading
+
+This strongly suggests a backend NameError in the auto-routing / generic query path, likely caused by a leftover reasoning_mode reference in code that still runs even though reasoning_mode is no longer part of the intended product design.
+
+Critical product intent:
+- There should NOT be a reasoning_mode concept exposed or required for AI Terminal behavior
+- Every AI Terminal prompt should reason by default
+- The backend should choose the minimally viable exact model/tier automatically
+- Auto preset should work
+- Popup chatbox should work
+- Default preset should continue working
+
+What I want you to do:
+
+PHASE 1 — Find the runtime bug immediately
+1. Search the backend repo for every reference to:
+   - reasoning_mode
+   - mode == "fast"/"balanced"/"premium"
+   - any recent routing override code that references reasoning_mode
+2. Identify every place where reasoning_mode can be referenced without being defined in scope.
+3. Prioritize the paths used by:
+   - popup chatbox / generic query path
+   - AI Terminal Auto preset path
+   - any shared handle_query / _handle_query_inner / _ask_claude / _build_prompt / caelyn routing path
+
+PHASE 2 — Fix the bug surgically
+4. Remove or neutralize the runtime dependency on reasoning_mode in the affected execution paths.
+5. Since reasoning_mode is not part of the intended product UX, the safe default should be:
+   - prompts reason by default
+   - model/tier selection stays automatic via existing router/policy logic
+6. Do NOT reintroduce a frontend requirement for reasoning_mode.
+7. Do NOT break Default preset, Custom Collaboration, Full Collaboration, or Solo mode.
+
+PHASE 3 — Verify Auto preset and popup chatbox behavior
+8. After the fix, test at minimum:
+   - popup chatbox simple query (example: “Right now, should I buy TRT, INTT, or LPK for explosive gains by next week?”)
+   - AI Terminal Default preset
+   - AI Terminal Auto preset
+   - solo explicit model selection from the top row
+9. Confirm:
+   - no NameError
+   - Auto mode returns normally and does not hang
+   - Default preset still works
+   - routing still distinguishes Auto vs Default correctly
+
+PHASE 4 — Look for the likely root cause
+10. In your summary, explain exactly:
+   - where the undefined reasoning_mode reference was
+   - why Default still worked
+   - why Auto and/or popup chat hit the broken branch
+11. If there are any other dead remnants of the old reasoning_mode threading, clean them up only if it is safe and small.
+
+PHASE 5 — Deliverables
+12. Provide:
+   - root cause
+   - files changed
+   - exact fix made
+   - tests/checks run
+   - confirmation that popup chatbox and Auto preset both work again
+
+Constraints:
+- surgical fix only
+- no broad refactor
+- do not redesign routing semantics
+- do not add reasoning_mode back into frontend requirements
+- work directly on main
+- commit and push directly to main
+- restart backend after fix
