@@ -248,6 +248,11 @@ async def lifespan(app):
     except Exception as _e:
         print(f"[STARTUP] Bittensor refresh task error: {_e}")
     asyncio.create_task(_x_consensus_loop())
+    try:
+        from data.options_screener_snapshot import load_state as _load_opt_snapshot
+        _load_opt_snapshot()
+    except Exception as _e:
+        print(f"[STARTUP] Options snapshot state load error: {_e}")
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)
@@ -5656,6 +5661,12 @@ async def _master_screener_loop():
             screener_data = await engine.run_live_scan(
                 None, prefilter_snapshot=prefilter_data, tab="master",
             )
+            # ── Enrich rows with premium analytics, OTM metrics, heat_score ──
+            try:
+                from data.options_enricher import enrich_ticker_rows
+                enrich_ticker_rows(screener_data.get("tickers", []))
+            except Exception as _enrich_exc:
+                print(f"[MASTER_SCREENER] Enrichment error (non-fatal): {_enrich_exc}")
             from datetime import datetime as _dt_ms, timezone as _tz_ms
             now_ts = _time.time()
             now_iso = _dt_ms.now(_tz_ms.utc).isoformat()
@@ -5840,8 +5851,16 @@ async def options_screener(
     if market_cap_bucket:
         tickers = [t for t in tickers if t.get("market_cap_bucket") == market_cap_bucket]
 
-    # Global rank by composite_score
-    tickers = sorted(tickers, key=lambda t: (t.get("composite_score") or 0), reverse=True)
+    # Global rank: score DESC → heat_score DESC → premium DESC → volume DESC
+    tickers = sorted(
+        tickers,
+        key=lambda t: (
+            -(t.get("composite_score") or 0),
+            -(t.get("heat_score") or 0),
+            -(t.get("premium") or 0),
+            -(t.get("total_volume") or 0),
+        ),
+    )
     tickers = tickers[:limit]
     filtered_syms = {t.get("ticker") for t in tickers if t.get("ticker")}
     all_contracts = [
@@ -5869,6 +5888,186 @@ async def options_screener(
         "updated_at":          meta["updated_at"],
         "source":              meta["source"],
         "available_tabs":      sorted(_OPTIONS_VALID_TABS),
+    }
+
+
+@app.get("/api/options-flow/master/latest")
+@limiter.limit("60/minute")
+async def options_flow_master_latest(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
+    limit: int = 10,
+):
+    """
+    Verification / debug endpoint — returns the top N enriched rows from the
+    master screener, confirming that all enriched fields (premium, heat_score,
+    oi_change_pct, etc.) are present.
+
+    Example:
+      curl /api/options-flow/master/latest?limit=5
+    """
+    from data.cache import cache
+    limit = max(1, min(limit, 50))
+    snap = cache.get(_OPTIONS_MASTER_CACHE_KEY) or cache.get(_OPTIONS_MASTER_LKG_KEY)
+    if not snap:
+        return {"error": "no_data_yet", "tickers": []}
+
+    rows = snap.get("tickers", [])
+    rows = sorted(
+        rows,
+        key=lambda t: (
+            -(t.get("composite_score") or 0),
+            -(t.get("heat_score") or 0),
+            -(t.get("premium") or 0),
+            -(t.get("total_volume") or 0),
+        ),
+    )[:limit]
+
+    # Return a slimmed-down verification payload for each row
+    _ENRICHED_KEYS = [
+        "ticker", "composite_score", "heat_score", "primary_signal",
+        "premium", "premium_display", "premium_change_pct",
+        "oi_change_pct", "call_flow_pct", "put_flow_pct",
+        "call_put_premium_ratio", "call_put_volume_ratio",
+        "otm_pct", "is_otm", "is_unusual_otm",
+        "days_to_expiry", "expiry", "strike", "option_type",
+        "side_bias", "sweep_like", "unusual_volume_ratio",
+        "liquidity_score", "asset_type", "market_cap_bucket",
+        "underlying_price", "total_volume",
+    ]
+    return {
+        "tab": "master",
+        "result_count": len(rows),
+        "updated_at": snap.get("updated_at"),
+        "tickers": [{k: r.get(k) for k in _ENRICHED_KEYS} for r in rows],
+    }
+
+
+@app.get("/api/options/screener/{symbol}")
+@limiter.limit("60/minute")
+async def options_screener_ticker_detail(
+    request: Request,
+    symbol: str,
+    api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
+):
+    """
+    Per-ticker enriched detail view for the popup / drill-down panel.
+
+    Pulls the ticker's row from the master screener cache and adds:
+      premium_breakdown   — per-expiry premium totals
+      call_put_breakdown  — call vs put premium/volume split
+      otm_breakdown       — ITM / ATM / OTM contract counts and premium
+      oi_delta_history    — (reserved for future multi-cycle storage)
+      recent_snapshot_history — most recent contract snapshots for the ticker
+
+    Existing keys (top_contracts, thesis, score, signal, etc.) are
+    preserved exactly.
+    """
+    from data.cache import cache
+    sym = symbol.upper().strip()
+    snap = cache.get(_OPTIONS_MASTER_CACHE_KEY) or cache.get(_OPTIONS_MASTER_LKG_KEY)
+    if not snap:
+        return JSONResponse(status_code=503, content={"error": "no_data_yet"})
+
+    row = next((t for t in snap.get("tickers", []) if t.get("ticker") == sym), None)
+    if not row:
+        return JSONResponse(status_code=404, content={"error": f"{sym} not in current screener results"})
+
+    top_contracts = row.get("top_contracts") or []
+    underlying = row.get("underlying_price")
+
+    # ── premium_breakdown (by expiry) ────────────────────────────────────────
+    from collections import defaultdict as _dd
+    by_expiry: dict = _dd(lambda: {"call_premium": 0.0, "put_premium": 0.0,
+                                    "call_volume": 0, "put_volume": 0, "contracts": 0})
+    for c in top_contracts:
+        expiry = c.get("expiration") or "unknown"
+        side = (c.get("type") or c.get("side") or "").lower()
+        mid = c.get("mid") or c.get("midpoint") or 0
+        vol = c.get("volume") or 0
+        prem = (mid * vol * 100) if mid and vol else (c.get("premium_traded_estimate") or 0)
+        by_expiry[expiry]["contracts"] += 1
+        if side == "call":
+            by_expiry[expiry]["call_premium"] += prem
+            by_expiry[expiry]["call_volume"] += vol
+        elif side == "put":
+            by_expiry[expiry]["put_premium"] += prem
+            by_expiry[expiry]["put_volume"] += vol
+
+    premium_breakdown = [
+        {"expiry": k, **v, "total_premium": round(v["call_premium"] + v["put_premium"], 2)}
+        for k, v in sorted(by_expiry.items())
+    ]
+
+    # ── call_put_breakdown ───────────────────────────────────────────────────
+    total_c_prem = sum(b["call_premium"] for b in by_expiry.values())
+    total_p_prem = sum(b["put_premium"] for b in by_expiry.values())
+    total_c_vol = sum(b["call_volume"] for b in by_expiry.values())
+    total_p_vol = sum(b["put_volume"] for b in by_expiry.values())
+    total_prem = total_c_prem + total_p_prem
+    call_put_breakdown = {
+        "call_premium": round(total_c_prem, 2),
+        "put_premium": round(total_p_prem, 2),
+        "call_volume": total_c_vol,
+        "put_volume": total_p_vol,
+        "call_premium_pct": round(total_c_prem / total_prem * 100, 1) if total_prem else None,
+        "put_premium_pct": round(total_p_prem / total_prem * 100, 1) if total_prem else None,
+    }
+
+    # ── otm_breakdown ────────────────────────────────────────────────────────
+    itm_contracts, atm_contracts, otm_contracts = [], [], []
+    for c in top_contracts:
+        strike = c.get("strike")
+        side = (c.get("type") or c.get("side") or "").lower()
+        if strike is None or underlying is None:
+            otm_contracts.append(c)
+            continue
+        if side == "call":
+            dist = abs(strike - underlying) / underlying
+            bucket = "itm" if strike < underlying else ("atm" if dist <= 0.01 else "otm")
+        elif side == "put":
+            dist = abs(underlying - strike) / underlying
+            bucket = "itm" if strike > underlying else ("atm" if dist <= 0.01 else "otm")
+        else:
+            bucket = "otm"
+        if bucket == "itm":
+            itm_contracts.append(c)
+        elif bucket == "atm":
+            atm_contracts.append(c)
+        else:
+            otm_contracts.append(c)
+
+    def _prem_sum(cs):
+        total = 0.0
+        for c in cs:
+            mid = c.get("mid") or c.get("midpoint") or 0
+            vol = c.get("volume") or 0
+            total += (mid * vol * 100) if mid and vol else (c.get("premium_traded_estimate") or 0)
+        return round(total, 2)
+
+    otm_breakdown = {
+        "itm": {"count": len(itm_contracts), "premium": _prem_sum(itm_contracts)},
+        "atm": {"count": len(atm_contracts), "premium": _prem_sum(atm_contracts)},
+        "otm": {"count": len(otm_contracts), "premium": _prem_sum(otm_contracts)},
+    }
+
+    # ── recent_snapshot_history — most recent snapshot entries for this ticker
+    from data.options_screener_snapshot import _state as _snap_state
+    snap_history = [
+        {"key": k, **v}
+        for k, v in _snap_state.items()
+        if k.startswith(f"{sym}:")
+    ]
+
+    return {
+        **row,
+        "premium_breakdown":      premium_breakdown,
+        "call_put_breakdown":     call_put_breakdown,
+        "otm_breakdown":          otm_breakdown,
+        "oi_delta_history":       [],
+        "recent_snapshot_history": snap_history,
     }
 
 
