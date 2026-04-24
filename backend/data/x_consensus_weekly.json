@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-24T00:43:58.291135+00:00",
+  "generated_at": "2026-04-24T03:15:33.797763+00:00",
   "handles": [
     "aleabitoreddit",
     "KobeissiLetter",
@@ -29,59 +29,59 @@
   ],
   "top_tickers": [
     {
+      "symbol": "INTC",
+      "mentions": null,
+      "sentiment": null,
+      "rationale": "Earnings beat and Trump policy stake drive surge past 2000 highs; US manufacturing push resolves CPU bottlenecks in AI cycle; national security play with fab investments for long-term dominance.",
+      "accounts": []
+    },
+    {
+      "symbol": "AAOI",
+      "mentions": null,
+      "sentiment": null,
+      "rationale": "Key transceiver player in multi-year AI photonics bottleneck with full allocation; outperforms in stage 2 breakouts; core portfolio holding for data center capacity constraints.",
+      "accounts": []
+    },
+    {
       "symbol": "ASTS",
       "mentions": null,
       "sentiment": null,
-      "rationale": "FCC approvals unlocking satellite deployment and service activation; positioned as multi-year cash printer with gov contracts and billions of potential subscribers; key SpaceX IPO proxy amid comms infrastructure boom.",
+      "rationale": "Space-based cellular with FCC low-band approval creating moat; $500M-$1B gov revenue + 3B subs via partners; multi-tenant TAM expansion printing money.",
       "accounts": []
     },
     {
-      "symbol": "RKLB",
+      "symbol": "TRT",
       "mentions": null,
       "sentiment": null,
-      "rationale": "Repeat launch demand and operational successes signaling scaling; relative strength and buy zone status in space sector with strong growth trajectory.",
+      "rationale": "Cheapest AI GPU tester at 2.2x P/S with triple-digit 2026 growth; cash-rich inflection with first confirmed orders; undervalued vs peers like $AEHR.",
       "accounts": []
     },
     {
-      "symbol": "CRDO",
+      "symbol": "AMD",
       "mentions": null,
       "sentiment": null,
-      "rationale": "AI photonics networking leader with 200% rev growth projected; long-term conviction to $800+ by 2030; relative strength in optics ecosystem.",
+      "rationale": "Core of AI era with accelerators/CPUs/GPUs; pounded table through dips to $1T+ potential; upside from $INTC outlook.",
       "accounts": []
     },
     {
-      "symbol": "COHR",
+      "symbol": "LITE",
       "mentions": null,
       "sentiment": null,
-      "rationale": "AI photonics powerhouse with massive targets to $1,300 by 2030; consistent relative strength and inclusion in bullish photonics contexts.",
+      "rationale": "Sold out EMLs to 2028 resolving AI bottlenecks; stage 2 breakout play; key in photonics ecosystem.",
       "accounts": []
     },
     {
-      "symbol": "SOI",
+      "symbol": "NBIS",
       "mentions": null,
       "sentiment": null,
-      "rationale": "Highest conviction AI photonics monopoly on engineered substrate wafers for optical chips; bull case \u20ac2.8B rev, 5x upside to \u20ac500/share.",
+      "rationale": "Superior AI infra with $46B contracts (MSFT/Meta), Nvidia invested, 547% growth; undervalued vs diluted peers.",
       "accounts": []
     },
     {
-      "symbol": "BE",
+      "symbol": "HIMS",
       "mentions": null,
       "sentiment": null,
-      "rationale": "Fast-deploy fuel cells with Oracle 2.8GW deal; long-term target $900 by 2030; relative strength holder.",
-      "accounts": []
-    },
-    {
-      "symbol": "AMPX",
-      "mentions": null,
-      "sentiment": null,
-      "rationale": "Pentagon batteries for defense; 137% earnings growth projection; energy buy zone and high conviction target $150.",
-      "accounts": []
-    },
-    {
-      "symbol": "AVAV",
-      "mentions": null,
-      "sentiment": null,
-      "rationale": "Drone leader in $75B Pentagon budget; defense buy zone amid sector momentum.",
+      "rationale": "Platform precedent for pharma disruption like Netflix; GLP/peptides tailwinds with squeeze potential.",
       "accounts": []
     }
   ],
@@ -117,365 +117,371 @@
     "display_type": "briefing",
     "scan_type": "x_select_trader_consensus",
     "market_pulse": {
-      "verdict": "Risk-On \u2014 Selective Focus on AI Photonics, Space, and Defense",
-      "summary": "Traders exhibiting high conviction in niche AI supply chain plays like photonics substrates and interposers, alongside space infrastructure and drone defense amid multi-year growth catalysts. Collective sentiment leans into specialized tech with strong technicals and contracts, ignoring broader macro noise.",
+      "verdict": "Risk-On \u2014 AI Bottlenecks and Semi Rebound Driving Selective Momentum",
+      "summary": "@KobeissiLetter highlights $INTC surging +15% past 2000 highs on earnings and policy support, with AI stocks at record 45% of S&P 500 market cap. Traders are aggressively positioned in AI supply chain chokepoints like photonics, testing, power infra, and space, showing strong conviction in multi-year themes despite some FOMO warnings.",
       "regime": "Risk-On"
     },
     "hype_radar": [
       {
-        "theme": "AI Photonics Supply Chain (substrates, interposers, glass wafers)",
-        "buzz_level": "high",
+        "theme": "AI Photonics/Optics Bottleneck",
+        "buzz_level": "extreme",
         "key_tickers": [
+          "AAOI",
+          "LITE",
+          "AXTI",
+          "SIVE",
+          "LPK",
           "SOI",
-          "POET",
-          "LPKF",
-          "P4O",
-          "CRDO",
-          "COHR",
-          "AAOI"
+          "POET"
         ],
-        "why_hot": "Accounts detailing monopoly positions, 5-10x upside, and AI data center exposure with specific revenue/EBITDA models."
+        "why_hot": "Multiple accounts screening and positioning in undervalued European/US photonics plays with sold-out capacity to 2028 and hyperscaler backlogs driving explosive growth narratives."
       },
       {
-        "theme": "Space & Satcom Infrastructure",
+        "theme": "Semi Testing & CPU Rebound",
         "buzz_level": "high",
+        "key_tickers": [
+          "TRT",
+          "INTC",
+          "AEHR",
+          "COHU"
+        ],
+        "why_hot": "Fresh AI GPU testing orders and $INTC earnings beat + policy tailwinds sparking turnaround conviction amid broader semi momentum."
+      },
+      {
+        "theme": "Data Center Power/Miners Infra",
+        "buzz_level": "high",
+        "key_tickers": [
+          "NBIS",
+          "IREN",
+          "KEEL",
+          "HPS.A"
+        ],
+        "why_hot": "Grid bottlenecks and hyperscaler leases positioning clean-balance-sheet miners as undervalued AI power plays despite dilution risks."
+      },
+      {
+        "theme": "Space Economy",
+        "buzz_level": "moderate",
         "key_tickers": [
           "ASTS",
           "RKLB"
         ],
-        "why_hot": "FCC approvals, successful launches, and growth projections positioning as SpaceX IPO proxies."
-      },
-      {
-        "theme": "Drones & Defense Tech",
-        "buzz_level": "moderate",
-        "key_tickers": [
-          "AVEX",
-          "ONDS",
-          "AVAV",
-          "AMPX"
-        ],
-        "why_hot": "$75B Pentagon budget, Army contracts, and explosive revenue growth forecasts driving buy lists."
+        "why_hot": "FCC approvals and SpaceX IPO speculation fueling cellular broadband and launch provider hype."
       }
     ],
     "spotlight": {
       "most_hyped": {
-        "ticker": "ASTS",
-        "signal": "Highest cross-account buzz with FCC catalysts, cash flow printing thesis, and space growth inclusion from 4 accounts."
+        "ticker": "INTC",
+        "signal": "$INTC dominates chatter with earnings surge, policy backing, and turnaround momentum across semis-focused accounts."
       },
       "highest_conviction": {
-        "ticker": "SOI",
-        "signal": "Strongest thesis quality on AI photonics monopoly with 5x modeled upside and FCF growth from @UncleAlpha007."
+        "ticker": "TRT",
+        "signal": "HyperTechInvest and yianisz pounding table on cash-rich AI GPU tester at microcap valuation with triple-digit growth inflection."
       },
       "freshest_alpha": {
-        "ticker": "LPKF",
-        "signal": "New photonics PCB enabler entering discourse with 4-5x conviction and @aleabitoreddit all-in nod."
+        "ticker": "TRT",
+        "signal": "Emerging buzz on confirmed AI GPU orders positioning it as undervalued tester before broader recognition."
       },
       "contrarian_pick": {
-        "ticker": "KEEL",
-        "signal": "Undervalued at 70c/watt vs. crowded DC miners, highlighted as superior risk/reward by @CKCapitalxx."
+        "ticker": "INTC",
+        "signal": "Turnaround play when 'nobody believes,' now generational national security bet with fab/policy catalysts."
       }
     },
     "consensus_picks": [
       {
         "rank": 1,
-        "ticker": "ASTS",
-        "name": "AST SpaceMobile",
-        "tradingview_symbol": "NASDAQ:ASTS",
+        "ticker": "INTC",
+        "name": "Intel Corporation",
+        "tradingview_symbol": "NASDAQ:INTC",
         "hype_score": 92,
-        "trader_count": 4,
+        "trader_count": 6,
         "consensus_strength": "Very High",
         "buzz_trend": "Accelerating",
-        "thesis": "FCC approvals unlocking satellite deployment and service activation; positioned as multi-year cash printer with gov contracts and billions of potential subscribers; key SpaceX IPO proxy amid comms infrastructure boom.",
+        "thesis": "Earnings beat and Trump policy stake drive surge past 2000 highs; US manufacturing push resolves CPU bottlenecks in AI cycle; national security play with fab investments for long-term dominance.",
         "catalysts": [
-          "FCC approval for 248 satellites",
-          "FirstNet and $500M-$1B gov revenue",
-          "Service activating this year"
+          "Q1 2026 earnings",
+          "Government stake/policy support"
         ],
-        "risk": "Aggressive expansion and execution on scale",
+        "risk": "Historical underperformance and execution risks on turnaround.",
         "is_fresh_trade": false,
         "fresh_trade_note": null,
         "trader_theses": [
           {
+            "account": "@aleabitoreddit",
+            "thesis": "Holy **** $INTC. Semi earnings, Made in America, CPU bottlenecks, and Intel Foundry go brrr."
+          },
+          {
+            "account": "@KobeissiLetter",
+            "thesis": "$INTC surges over +15% after reporting Q1 2026 earnings and officially surpasses its August 2000 record high. The Trump Administration\u2019s stake\u2026 up nearly +250%."
+          },
+          {
             "account": "@CKCapitalxx",
-            "thesis": "Can you even be more bullish? This company will print money for years. $80 today \u2192 $1,500 by 2030. FCC approved, FirstNet, $500M-$1B gov revenue, 3B subscribers."
+            "thesis": "Most obvious trade ever post-Trump comments."
           },
           {
-            "account": "@TheTape_TNM",
-            "thesis": "FCC approval for 248 satellites."
+            "account": "@DeepValueBagger",
+            "thesis": "Pulling my principal, letting the rest ride... national security play. Knew they sandbagged Q1. Enters generational new paradigm."
           },
           {
-            "account": "@Speculator_io",
-            "thesis": "SpaceX IPO plays: Bullish $RKLB $ASTS $GSAT across infra/comms/imaging."
-          },
-          {
-            "account": "@StonkValue",
-            "thesis": "Buy zones space $RKLB $FLY $SATL $ASTS $BKSY $LUNR; growth leaders $FLY $SATL $ASTS."
+            "account": "@futurist_lens",
+            "thesis": "Told you $INTC would make a comeback. The best turnarounds... when nobody believes."
           }
         ]
       },
       {
         "rank": 2,
-        "ticker": "RKLB",
-        "name": "Rocket Lab USA",
-        "tradingview_symbol": "NASDAQ:RKLB",
+        "ticker": "AAOI",
+        "name": "Applied Optoelectronics Inc",
+        "tradingview_symbol": "NASDAQ:AAOI",
         "hype_score": 88,
-        "trader_count": 4,
+        "trader_count": 8,
         "consensus_strength": "Very High",
         "buzz_trend": "Steady",
-        "thesis": "Repeat launch demand and operational successes signaling scaling; relative strength and buy zone status in space sector with strong growth trajectory.",
+        "thesis": "Key transceiver player in multi-year AI photonics bottleneck with full allocation; outperforms in stage 2 breakouts; core portfolio holding for data center capacity constraints.",
         "catalysts": [
-          "Japan agency launch completion",
-          "Repeat demand indicators"
+          "Hyperscaler capacity buyouts to 2028",
+          "AI data center buildout"
         ],
-        "risk": null,
+        "risk": "FOMO chasing in volatile news cycles.",
         "is_fresh_trade": false,
         "fresh_trade_note": null,
         "trader_theses": [
           {
-            "account": "@TheTape_TNM",
-            "thesis": "Completes launch for Japan agency, repeat demand."
+            "account": "@aleabitoreddit",
+            "thesis": "Most of these span multi-years\u2026 good idea to just be patient with your existing positions ($AAOI fully allocated)."
+          },
+          {
+            "account": "@BlackPantherCap",
+            "thesis": "Core holdings... $AAOI... committed to the curve."
           },
           {
             "account": "@equitydd",
-            "thesis": "High relative strength $... $RKLB $..."
+            "thesis": "Tactical/momentum ($LITE, $MU, $AAOI... Stage 2 breakouts for 50-500% moves)."
           },
           {
             "account": "@Speculator_io",
-            "thesis": "SpaceX IPO plays: Bullish $RKLB $ASTS $GSAT."
+            "thesis": "AI supply chain leaders: $AAOI $AXTI etc. massive YTD gains."
           },
           {
             "account": "@StonkValue",
-            "thesis": "Buy zones space $RKLB $FLY $SATL $ASTS $BKSY $LUNR."
+            "thesis": "Long-term holds... $AAOI... Massive TAMs; don't trade, let compound."
+          },
+          {
+            "account": "@futurist_lens",
+            "thesis": "Photonics - $AAOI $AXTI $AEHR $POET... Explosive demand."
           }
         ]
       },
       {
         "rank": 3,
-        "ticker": "CRDO",
-        "name": "Credo Technology",
-        "tradingview_symbol": "NASDAQ:CRDO",
+        "ticker": "ASTS",
+        "name": "AST SpaceMobile Inc",
+        "tradingview_symbol": "NASDAQ:ASTS",
         "hype_score": 85,
-        "trader_count": 3,
+        "trader_count": 5,
         "consensus_strength": "High",
-        "buzz_trend": "Steady",
-        "thesis": "AI photonics networking leader with 200% rev growth projected; long-term conviction to $800+ by 2030; relative strength in optics ecosystem.",
+        "buzz_trend": "Accelerating",
+        "thesis": "Space-based cellular with FCC low-band approval creating moat; $500M-$1B gov revenue + 3B subs via partners; multi-tenant TAM expansion printing money.",
         "catalysts": [
-          "200% revenue growth",
-          "AI networking demand"
+          "FCC commercial authority",
+          "AT&T/FirstNet partnerships"
         ],
-        "risk": null,
+        "risk": "Execution on satellite launches.",
         "is_fresh_trade": false,
         "fresh_trade_note": null,
         "trader_theses": [
           {
             "account": "@CKCapitalxx",
-            "thesis": "$CRDO $180\u2192$800 (200% rev)."
+            "thesis": "Space-based cellular broadband; FCC commercial authority, FirstNet granted, $500M-$1B annual gov revenue; will 'print money for years.' Can you even be more bullish? BANGGGG."
           },
           {
-            "account": "@equitydd",
-            "thesis": "High relative strength $... $CRDO $..."
+            "account": "@futurist_lens",
+            "thesis": "Space - $RKLB $ASTS $PL $BKSY $SATL $SIDU. Next wave of millionaires."
+          },
+          {
+            "account": "@AlexfromBabylon",
+            "thesis": "FCC just gave low band regulatory approval... huge implications... moat the market is missing. Low-band monopoly (MNO deals, indoor penetration)."
           },
           {
             "account": "@Speculator_io",
-            "thesis": "Photonics layers ecosystem $CRDO $MRVL (networking)."
+            "thesis": "SpaceX IPO plays: $RKLB $ASTS etc."
           }
         ]
       },
       {
         "rank": 4,
-        "ticker": "COHR",
-        "name": "Coherent Corp",
-        "tradingview_symbol": "NASDAQ:COHR",
+        "ticker": "TRT",
+        "name": "Trio-Tech International",
+        "tradingview_symbol": "NYSE:TRT",
         "hype_score": 82,
-        "trader_count": 3,
+        "trader_count": 2,
         "consensus_strength": "High",
-        "buzz_trend": "Steady",
-        "thesis": "AI photonics powerhouse with massive targets to $1,300 by 2030; consistent relative strength and inclusion in bullish photonics contexts.",
+        "buzz_trend": "New Mention",
+        "thesis": "Cheapest AI GPU tester at 2.2x P/S with triple-digit 2026 growth; cash-rich inflection with first confirmed orders; undervalued vs peers like $AEHR.",
         "catalysts": [
-          "AI photonics demand"
+          "AI GPU testing orders",
+          "Revenue growth inflection"
         ],
-        "risk": null,
-        "is_fresh_trade": false,
-        "fresh_trade_note": null,
+        "risk": "Microcap volatility.",
+        "is_fresh_trade": true,
+        "fresh_trade_note": "Just entering conversation with confirmed AI GPU orders signaling early entry before re-rating.",
         "trader_theses": [
           {
-            "account": "@CKCapitalxx",
-            "thesis": "$COHR $335\u2192$1,300 (AI photonics)."
+            "account": "@HyperTechInvest",
+            "thesis": "Started position at $9.3; AI GPU testing orders coming in\u2026 triple-digit growth for 2026. Easy buy while it still trades at microcap levels\u2026 Profitable, growing a lot with 25% of market cap in cash\u2026 first confirmed AI GPU orders."
           },
           {
-            "account": "@equitydd",
-            "thesis": "High relative strength $ICHR $COHR $AAOI $..."
-          },
-          {
-            "account": "@UncleAlpha007",
-            "thesis": "Tagged in bullish photonics context with $aaoi $lite $cohr $mu $p4O $soi alongside long $LPKFF."
+            "account": "@yianisz",
+            "thesis": "Cheapest in AI test/photonics at 2.2x P/S ($110M mcap, $49M TTM rev +82% YoY); burn-in for next-gen AI GPUs (likely $AMD); conservative 5x P/S = 2.2x upside."
           }
         ]
       },
       {
         "rank": 5,
-        "ticker": "SOI",
-        "name": "Soitec SA",
-        "tradingview_symbol": "EPA:SOI",
-        "hype_score": 80,
-        "trader_count": 2,
+        "ticker": "AMD",
+        "name": "Advanced Micro Devices Inc",
+        "tradingview_symbol": "NASDAQ:AMD",
+        "hype_score": 78,
+        "trader_count": 4,
         "consensus_strength": "High",
-        "buzz_trend": "New Mention",
-        "thesis": "Highest conviction AI photonics monopoly on engineered substrate wafers for optical chips; bull case \u20ac2.8B rev, 5x upside to \u20ac500/share.",
+        "buzz_trend": "Steady",
+        "thesis": "Core of AI era with accelerators/CPUs/GPUs; pounded table through dips to $1T+ potential; upside from $INTC outlook.",
         "catalysts": [
-          "Data center photonics shift",
-          "2029 revenue/EBITDA models"
+          "AI compute demand",
+          "ATH breakouts"
         ],
-        "risk": null,
-        "is_fresh_trade": true,
-        "fresh_trade_note": "Photonics basket inclusion signaling early momentum.",
+        "risk": "Competition from NVDA/INTC.",
+        "is_fresh_trade": false,
+        "fresh_trade_note": null,
         "trader_theses": [
           {
-            "account": "@UncleAlpha007",
-            "thesis": "Highest conviction photonics play; monopoly on engineered substrate wafers for next-gen optical chips; 2029 bull \u20ac2.8B+ revenue, \u20ac20B+ mcap, shares >\u20ac500 (5x)."
+            "account": "@HyperTechInvest",
+            "thesis": "Pounded the table on $AMD when no one wanted it\u2026 $AMD can become a $1T+ company\u2026 at the core of the AI era. Good things happen to those who wait."
           },
           {
-            "account": "@Speculator_io",
-            "thesis": "Photonics layers materials $AXTI $ALMU $... $SOI $WOLF."
+            "account": "@equitydd",
+            "thesis": "High earnings growth tech ($CRDO, $MU... $AMD... Strong earnings growth potential)."
+          },
+          {
+            "account": "@yianisz",
+            "thesis": "Upside from $INTC strong outlook."
+          },
+          {
+            "account": "@ConnorJBates_",
+            "thesis": "Semis ($SOXX, $ARM, $MRVL, $MU)\u2026 $ARM Fireworks... Largest holding. Let winners run."
           }
         ]
       },
       {
         "rank": 6,
-        "ticker": "BE",
-        "name": "Bloom Energy",
-        "tradingview_symbol": "NYSE:BE",
+        "ticker": "LITE",
+        "name": "Lumentum Holdings Inc",
+        "tradingview_symbol": "NASDAQ:LITE",
         "hype_score": 75,
-        "trader_count": 2,
+        "trader_count": 5,
         "consensus_strength": "Moderate",
         "buzz_trend": "Steady",
-        "thesis": "Fast-deploy fuel cells with Oracle 2.8GW deal; long-term target $900 by 2030; relative strength holder.",
+        "thesis": "Sold out EMLs to 2028 resolving AI bottlenecks; stage 2 breakout play; key in photonics ecosystem.",
         "catalysts": [
-          "Oracle 2.8GW contract"
+          "Hyperscaler OCS backlogs",
+          "AI optical scaling"
         ],
-        "risk": null,
+        "risk": "Cycle patience needed.",
         "is_fresh_trade": false,
         "fresh_trade_note": null,
         "trader_theses": [
           {
-            "account": "@CKCapitalxx",
-            "thesis": "$BE $235\u2192$900 (Oracle 2.8GW, fast deploy)."
+            "account": "@aleabitoreddit",
+            "thesis": "Hyperscalers buying out capacity (e.g., $LITE sold out to 2028)."
           },
           {
             "account": "@equitydd",
-            "thesis": "High relative strength $... $BE $..."
+            "thesis": "Tactical/momentum ($LITE... Stage 2 breakouts)."
+          },
+          {
+            "account": "@UncleAlpha007",
+            "thesis": "Peers $sive $aaoi $lite $cohr."
           }
         ]
       },
       {
         "rank": 7,
-        "ticker": "AMPX",
-        "name": "Amprius Technologies",
-        "tradingview_symbol": "NYSE:AMPX",
+        "ticker": "NBIS",
+        "name": "Nebius Group N.V.",
+        "tradingview_symbol": "NASDAQ:NBIS",
         "hype_score": 72,
-        "trader_count": 2,
+        "trader_count": 5,
         "consensus_strength": "Moderate",
         "buzz_trend": "Steady",
-        "thesis": "Pentagon batteries for defense; 137% earnings growth projection; energy buy zone and high conviction target $150.",
+        "thesis": "Superior AI infra with $46B contracts (MSFT/Meta), Nvidia invested, 547% growth; undervalued vs diluted peers.",
         "catalysts": [
-          "Pentagon contracts",
-          "Revenue growth"
+          "Hyperscaler contracts",
+          "Nvidia backing"
         ],
-        "risk": null,
+        "risk": "Aggressive expansion risks.",
         "is_fresh_trade": false,
         "fresh_trade_note": null,
         "trader_theses": [
           {
             "account": "@CKCapitalxx",
-            "thesis": "$AMPX $21\u2192$150 (Pentagon batteries)."
+            "thesis": "$NBIS $46B contracts (MSFT/Meta), Nvidia invested, 547% growth."
           },
           {
             "account": "@StonkValue",
-            "thesis": "Earnings/revenue projections 137% growth $AMPX; buy zones energy $TE $AMPX $EOSE."
+            "thesis": "Long-term holds... $NBIS... $300B AI infra TAM."
+          },
+          {
+            "account": "@DeepValueBagger",
+            "thesis": "Iren will be $90 before nbis is $200 (implies >$200 PT)."
+          },
+          {
+            "account": "@ConnorJBates_",
+            "thesis": "Miners/AI infra ($IREN... $NBIS) Looking strong."
           }
         ]
       },
       {
         "rank": 8,
-        "ticker": "AVAV",
-        "name": "AeroVironment",
-        "tradingview_symbol": "NASDAQ:AVAV",
-        "hype_score": 68,
+        "ticker": "HIMS",
+        "name": "Hims & Hers Health Inc",
+        "tradingview_symbol": "NYSE:HIMS",
+        "hype_score": 65,
         "trader_count": 2,
-        "consensus_strength": "Moderate",
-        "buzz_trend": "Steady",
-        "thesis": "Drone leader in $75B Pentagon budget; defense buy zone amid sector momentum.",
+        "consensus_strength": "Emerging",
+        "buzz_trend": "New Mention",
+        "thesis": "Platform precedent for pharma disruption like Netflix; GLP/peptides tailwinds with squeeze potential.",
         "catalysts": [
-          "Pentagon $75B budget"
+          "Lilly product expansion",
+          "Novo ramp"
         ],
-        "risk": null,
+        "risk": "Competition in telehealth.",
         "is_fresh_trade": false,
         "fresh_trade_note": null,
         "trader_theses": [
           {
-            "account": "@Speculator_io",
-            "thesis": "Drones (Pentagon $75B): Bullish $ONDS $AVEX $KTOS ... $AVAV ..."
+            "account": "@BlackPantherCap",
+            "thesis": "$HIMS offering Lilly products\u2026 set a precedent\u2026 pharmas answer to Netflix."
           },
           {
-            "account": "@StonkValue",
-            "thesis": "Buy zones defense $AVAV $ONDS $PLTR $OSS."
+            "account": "@yianisz",
+            "thesis": "Tailwinds from GLP/peptides ($LLY/$NVO), Novo ramp; squeeze above $40."
           }
         ]
       }
     ],
     "fresh_trades": [
       {
-        "ticker": "LPKF",
-        "name": "LPKF Laser & Electronics",
-        "tradingview_symbol": "XETR:LPKF",
-        "first_mentioned_by": [
-          "@UncleAlpha007"
-        ],
-        "why_fresh": "Recently highlighted as all-in photonics play by @aleabitoreddit, with new detailed 4-5x theses.",
-        "entry_thesis": "3x sales, 79-80% gross margins for operating leverage; glass core substrate for AI; $130M-$300M sales potential."
-      },
-      {
-        "ticker": "POET",
-        "name": "POET Technologies",
-        "tradingview_symbol": "NASDAQ:POET",
-        "first_mentioned_by": [
-          "@UncleAlpha007"
-        ],
-        "why_fresh": "Emerging in recent posts as #2 photonics conviction with 10x+ upside models.",
-        "entry_thesis": "Fabless IP monopoly for 800G/1.6T co-packaged optics; $MRVL partnerships; $1B+ sales 2029/2030."
-      },
-      {
         "ticker": "TRT",
-        "name": " trio-tech international",
+        "name": "Trio-Tech International",
         "tradingview_symbol": "NYSE:TRT",
         "first_mentioned_by": [
+          "@HyperTechInvest",
           "@yianisz"
         ],
-        "why_fresh": "Newly called as cheapest AI test play with burn-in catalyst.",
-        "entry_thesis": "$110M MC, 2.2x P/S vs peers 62x; 82% YoY rev growth; AI GPU orders incoming."
-      },
-      {
-        "ticker": "AL2SI",
-        "name": "2CRSi",
-        "tradingview_symbol": "PAR:AL2SI",
-        "first_mentioned_by": [
-          "@DrJebaim"
-        ],
-        "why_fresh": "Undiscovered European server play with first Substack promo.",
-        "entry_thesis": "\u20ac650M MC targeting \u20ac1B rev FY no dilution; high insider own, massive orders no slowdown."
-      },
-      {
-        "ticker": "KEEL",
-        "name": "Keel Energy",
-        "tradingview_symbol": "KEEL",
-        "first_mentioned_by": [
-          "@CKCapitalxx"
-        ],
-        "why_fresh": "Fresh valuation call vs. crowded miners.",
-        "entry_thesis": "70 cents/watt vs peers $4-23/watt; 2.2GW pipeline, $1.6B MC undervalued."
+        "why_fresh": "Just hitting radar with first confirmed AI GPU testing orders and growth inflection, not yet widely discussed.",
+        "entry_thesis": "Microcap valuation with cash hoard and triple-digit growth makes it compelling early entry before semi test layer re-rates."
       }
     ],
-    "portfolio_bias": "Overweight AI photonics chokepoints (SOI, POET, LPKF) and space/defense (ASTS, RKLB, AVAV) per multi-post theses from @UncleAlpha007/@CKCapitalxx/@Speculator_io/@StonkValue; trim crowded DC miners like IREN/NBIS amid valuation calls.",
+    "portfolio_bias": "Overweight AI photonics leaders like $AAOI/$LITE and fresh testers like $TRT for bottleneck leverage; add $INTC/AMD semi rebound on policy tailwinds; selective data center infra favoring $NBIS over high-dilution names per trader rotations and theses.",
     "accounts_analyzed": [
       "@aleabitoreddit",
       "@KobeissiLetter",
@@ -504,5 +510,5 @@
       "@UncleAlpha007"
     ]
   },
-  "_saved_at": 1776991438.2914443
+  "_saved_at": 1777000533.79782
 }
