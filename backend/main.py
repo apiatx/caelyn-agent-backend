@@ -7254,6 +7254,50 @@ async def home_dashboard(
         )
 
 
+# ── GET /api/home/movers ─────────────────────────────────────────────
+# Category-aware Top Gainers / Top Losers for the Home dashboard toggle.
+# category: stocks | etfs | commodities | crypto | all
+# Each category is cached independently for 5 minutes.
+
+@app.get("/api/home/movers")
+@limiter.limit("120/minute")
+@traceable(name="main.home_movers")
+async def home_movers(
+    request: Request,
+    category: str = "stocks",
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Top Gainers and Losers for the Home category toggle.
+
+    Sources by category:
+      stocks      — FMP biggest-gainers/losers (same as existing Home movers)
+      etfs        — FMP quotes on curated 30-ETF universe
+      commodities — Hyperliquid perps filtered to commodity preset
+      crypto      — CMC top-250 by market cap, ranked by 24h % change
+      all         — parallel merge of all four, ranked globally by % move
+
+    Normalized row shape (same across all categories):
+      symbol, name, asset_type, price, change_percent, change_label,
+      source, volume_24h, market_cap
+    """
+    await _wait_for_init()
+    try:
+        from services.home_service import get_movers_by_category
+        payload = await get_movers_by_category(
+            category=category,
+            data_service=data_service,
+        )
+        return JSONResponse(content=payload)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Home movers error: {str(exc)}"},
+        )
+
+
 # ── GET /api/macro/dashboard ─────────────────────────────────────────
 
 @app.get("/api/macro/dashboard")

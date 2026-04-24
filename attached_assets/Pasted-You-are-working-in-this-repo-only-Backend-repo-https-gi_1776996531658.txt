@@ -1,0 +1,178 @@
+You are working in this repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+This is a focused Home dashboard feature pass. Do not broaden scope.
+
+PRIMARY GOAL
+Add backend support so the Home page `Top Gainers` and `Top Losers` sections can be switched together by one category toggle with these 5 options:
+
+* All
+* Stocks
+* Commodities
+* Crypto
+* ETFs
+
+The frontend will have one shared toggle that updates both sections at the same time.
+
+REQUIREMENTS
+
+1. Stocks must remain exactly as they work now
+
+   * do not regress current stocks movers/losers behavior
+2. ETFs should use whatever ETF mover source/family already exists elsewhere in the project if possible
+3. Commodities should use a curated preset list of Hyperliquid commodity futures markets
+4. Crypto should use CoinMarketCap and compute top gainers/losers from the top 250 by market cap
+5. Response shape should stay consistent across all 5 categories so frontend can reuse the exact same UI
+
+ARCHITECTURE RULES
+
+* Audit first
+* Reuse existing services/endpoints/helpers/caches where possible
+* Do not add unnecessary new providers
+* Keep API usage disciplined
+* Strong preference: fold this into the existing Home backend response family cleanly
+* Do not create five unrelated frontend-driven fetch paths if one normalized backend path can serve this cleanly
+
+AUDIT FIRST
+Inspect the backend and determine the best existing source family for each category:
+
+1. Stocks
+
+* identify the current Home movers/losers source
+* preserve it exactly
+
+2. ETFs
+
+* identify if ETF movers logic already exists anywhere in:
+
+  * sector/ETF pages
+  * market scan
+  * watchlist or screener helpers
+* reuse the closest existing source/pattern
+
+3. Commodities
+
+* inspect current Hyperliquid integrations
+* identify the best source for commodity futures price/performance
+* define a curated preset list of commodity-related Hyperliquid markets
+* only use those, not the entire HL universe
+
+4. Crypto
+
+* inspect current CoinMarketCap integration
+* determine the cheapest reliable way to compute top gainers/losers from the top 250 by market cap
+* do not just pull random low-cap junk movers
+* the requirement is: top 250 by market cap, then rank movers/losers from that set
+
+IMPLEMENTATION TARGET
+Add backend support for a shared category-based movers response that can drive both Home sections.
+
+Preferred outcome:
+
+* extend the Home dashboard endpoint so it can return movers/losers for a requested category
+* OR add one clean Home movers endpoint used specifically by the Home page
+* whichever is cleaner with existing architecture
+
+Required normalized output shape for every category:
+
+* category
+* gainers[]
+* losers[]
+* each row should include as many of these as are reasonably available:
+
+  * symbol
+  * name
+  * asset_type / category_type
+  * price
+  * change_percent
+  * source
+  * optional secondary label if already available
+* keep row shape stable across categories
+
+IMPORTANT CATEGORY NOTES
+
+A. All
+
+* define clearly what “All” means
+* strong preference:
+
+  * merge the category outputs across Stocks / Commodities / Crypto / ETFs
+  * rank gainers and losers globally by % move
+  * preserve enough metadata so frontend can show same row layout cleanly
+* do not let one category break the others
+
+B. Stocks
+
+* preserve current behavior
+
+C. ETFs
+
+* use your best existing ETF source family
+* do not invent a totally separate scanner unless needed
+
+D. Commodities
+
+* use Hyperliquid only
+* create a curated preset list of commodity futures/perps that Hyperliquid supports
+* return top gainers/losers from that set
+
+E. Crypto
+
+* use CoinMarketCap
+* first constrain to top 250 by market cap
+* then rank movers/losers within that top-250 universe
+
+CACHE / REFRESH
+
+* reuse existing cache patterns where practical
+* do not create hyper-aggressive refresh loops
+* keep the Home dashboard responsive
+* cache category outputs sensibly
+
+VERIFY
+Before finishing, prove with real payload samples for:
+
+* stocks
+* etfs
+* commodities
+* crypto
+* all
+
+For each, show:
+
+* one gainer sample
+* one loser sample
+* the exact normalized shape
+
+DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact source family used for each category:
+
+   * Stocks
+   * ETFs
+   * Commodities
+   * Crypto
+3. exact definition of “All”
+4. exact normalized payload shape
+5. whether current Home movers/losers endpoint was extended or a new one was added
+6. confirmation Stocks behavior was preserved
+7. confirmation changes were committed and pushed directly to `main`
+
+EXECUTION STYLE
+
+* Audit first
+* Reuse before building
+* Normalize the output cleanly
+* Keep the frontend job easy
+* Then commit and push directly to `main`
