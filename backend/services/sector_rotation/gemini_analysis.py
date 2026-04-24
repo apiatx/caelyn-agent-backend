@@ -72,6 +72,7 @@ def _build_prompt(
     macro: dict,
     winning_etfs: list[str],
     sector_stocks_context: str,
+    theme_context: str = "",
 ) -> str:
     today = datetime.now().strftime("%B %d, %Y")
 
@@ -94,6 +95,10 @@ def _build_prompt(
     spread    = macro.get("yield_curve_spread", "N/A")
 
     winning_str = ", ".join(winning_etfs) if winning_etfs else "undetermined"
+
+    theme_section = (
+        f"\n{theme_context}\n" if theme_context else "\n(No granular theme data available.)\n"
+    )
 
     return f"""You are a senior sector analyst producing a live Sectors briefing for active investors.
 Today is {today}.
@@ -118,7 +123,7 @@ Yield curve (10Y-2Y): {spread}%
 
 STOCKS IN WINNING SECTOR(S):
 {sector_stocks_context}
-
+{theme_section}
 TASK:
 Using Google Search, gather the most current sector news, earnings catalysts, and macro data.
 Cross-reference with the quantitative data and stock universe above.
@@ -130,6 +135,13 @@ REQUIREMENTS:
 4. For each top-10 stock: one sentence on WHY it is actionable NOW (specific catalyst, not generic)
 5. Analyze at least 2 distinct macro/policy scenarios with concrete sector + stock implications
 6. Be specific: name real catalysts (earnings dates, Fed decisions, policy events, product cycles)
+7. Write a "theme_rotation" section (3-6 sentences) that explains WHICH granular investable themes
+   are leading or improving underneath the broad sector moves. Use the Theme ETF Rotation Context
+   data above. Do NOT say "Technology is strong" — specify the sub-themes (e.g. semiconductors,
+   data center infrastructure, cybersecurity, uranium, oil services, regional banks, biotech).
+   If a broad sector is leading but its themes are mixed, call that out. If a lagging sector has
+   improving themes underneath it, call that out as early rotation. Name the strongest 2-4 theme
+   ETFs or theme groups by relative strength and explain why they matter now.
 
 OUTPUT FORMAT — return ONLY valid JSON:
 {{
@@ -150,6 +162,7 @@ OUTPUT FORMAT — return ONLY valid JSON:
     "...up to 10 entries..."
   ],
   "winning_sector_etfs": {json.dumps(winning_etfs)},
+  "theme_rotation": "<3-6 sentences explaining which granular sub-themes are leading/improving/lagging underneath the broad sector moves. Name specific ETFs and explain the investable narrative.>",
   "scenarios": [
     {{
       "name": "<scenario name>",
@@ -225,6 +238,7 @@ def _parse_ai_json(raw: str) -> Optional[AIAnalysis]:
             watch_items=data.get("watch_items", []),
             top_stocks_to_watch=top_stocks,
             winning_sector_etfs=data.get("winning_sector_etfs", []),
+            theme_rotation=data.get("theme_rotation", ""),
             sources=sources,
             generated_at=data.get("generated_at", datetime.now().strftime("%B %d, %Y")),
         )
@@ -276,7 +290,23 @@ async def get_or_generate_analysis(
                     pass
 
         print(f"[SR][Gemini] Generating Sectors analysis for winning ETFs: {_winning_etfs}")
-        prompt = _build_prompt(snapshots, regime, macro, _winning_etfs, sector_stocks_context)
+
+        # Fetch theme data for prompt enrichment (non-blocking — fall back gracefully)
+        theme_context = ""
+        try:
+            from services.sector_rotation.theme_service import (
+                get_theme_data, build_theme_context_for_prompt,
+            )
+            theme_rows = await get_theme_data()
+            if theme_rows:
+                theme_context = build_theme_context_for_prompt(theme_rows, top_n=6)
+        except Exception as _te:
+            print(f"[SR][Gemini] Theme context fetch failed (non-fatal): {_te}")
+
+        prompt = _build_prompt(
+            snapshots, regime, macro, _winning_etfs, sector_stocks_context,
+            theme_context=theme_context,
+        )
 
         body = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],

@@ -96,6 +96,8 @@ class AIAnalysis(BaseModel):
     generated_at: str = ""
     # winning_sector_context: which sector(s) drove this analysis
     winning_sector_etfs: list[str] = Field(default_factory=list)
+    # Theme Rotation section — appended at the bottom of agent analysis
+    theme_rotation: str = ""
 
 
 class SectorRotationDashboard(BaseModel):
@@ -172,3 +174,63 @@ class SectorsPageData(BaseModel):
     top_stocks_in_winning_sectors: list[SectorStock] = Field(default_factory=list)
     # Persisted AI analysis — returned regardless of age; None if never generated
     saved_analysis: Optional[AIAnalysis] = None
+
+
+# ── Theme Rotation models ─────────────────────────────────────────────────────
+
+class ThemePerformance(BaseModel):
+    """Multi-timeframe performance for a theme."""
+    d1:  Optional[float] = Field(None, alias="1d")
+    d5:  Optional[float] = Field(None, alias="5d")
+    m1:  Optional[float] = Field(None, alias="1m")
+    m3:  Optional[float] = Field(None, alias="3m")
+    m6:  Optional[float] = Field(None, alias="6m")
+    ytd: Optional[float] = None
+    y1:  Optional[float] = Field(None, alias="1y")
+
+    model_config = {"populate_by_name": True}
+
+
+class ThemeSnapshot(BaseModel):
+    """One theme entry in the Themes mode response."""
+    id:                    str
+    label:                 str
+    parent_sector:         str = ""
+    theme_type:            str = ""
+    symbols:               list[str] = Field(default_factory=list)
+    leader_symbol:         Optional[str] = None
+    performance:           Dict[str, Optional[float]] = Field(default_factory=dict)
+    pct_from_50d:          Optional[float] = None
+    trend_accel_20d:       Optional[float] = None
+    relative_strength_score: Optional[float] = None
+    momentum_rank:         Optional[int] = None
+    trend_state:           Optional[str] = None   # Leadership | Improving | Neutral | Weakening | Lagging
+    rotation_state:        Optional[str] = None   # Accelerating | Stabilizing | Fading | Reversing
+
+
+class ThemePerformanceResponse(BaseModel):
+    """Response envelope for /api/sectors/performance?mode=themes."""
+    mode:       str = "themes"
+    updated_at: str
+    items:      list[ThemeSnapshot] = Field(default_factory=list)
+
+
+class SectorPerformanceResponse(BaseModel):
+    """Response envelope for /api/sectors/performance?mode=sectors."""
+    mode:    str = "sectors"
+    updated_at: str
+    items:   list[SectorSnapshot] = Field(default_factory=list)
+
+
+class ThemeRelativeStrengthResponse(BaseModel):
+    """Response envelope for /api/sectors/relative-strength?mode=themes."""
+    mode:    str = "themes"
+    updated_at: str
+    ranked:  list[ThemeSnapshot] = Field(default_factory=list)
+
+
+class SectorRelativeStrengthResponse(BaseModel):
+    """Response envelope for /api/sectors/relative-strength?mode=sectors."""
+    mode:    str = "sectors"
+    updated_at: str
+    ranked:  list[SectorSnapshot] = Field(default_factory=list)

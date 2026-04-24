@@ -1,0 +1,736 @@
+Goal
+
+Add a new Theme Rotation ETF layer to the existing Sectors page.
+
+Do not replace or break the existing sector ETF workflow. The current sector view using broad SPDR ETFs like XLK, XLE, XLU, etc. should remain exactly as-is.
+
+Add a parallel “Themes” mode that tracks more granular ETFs representing subsectors and investable themes, such as:
+
+Semiconductors
+Semiconductor equipment
+AI infrastructure
+Data centers
+Cybersecurity
+Software
+Cloud
+Aerospace/Defense
+Robotics/Automation
+Nuclear/Uranium
+Copper/Metals
+Lithium/Battery supply chain
+Oil services
+LNG
+Homebuilders
+Regional banks
+Biotech
+Medical devices
+Fintech
+Crypto equities/blockchain
+Quantum
+Space
+
+This should feed both:
+
+The dashboard table/chart data for Sector Performance and Relative Strength
+A new final section in the existing Agent Analysis called Theme Rotation
+Backend Implementation Requirements
+1. Find the existing Sectors API flow first
+
+Audit the backend before making changes.
+
+Find the current endpoint(s) powering the Sectors page, likely something similar to:
+
+/api/sectors
+/api/sectors/performance
+/api/sector-rotation
+/api/sector-analysis
+/api/query with sector intent
+
+Identify:
+
+Where broad sector ETF symbols are defined
+Where performance periods are calculated
+Where relative strength is calculated
+Where normalized values are produced
+Where agent analysis prompt/context is built
+
+Do not rewrite this system. Extend it.
+
+2. Add a canonical Theme ETF universe
+
+Create a new backend config/helper file if one does not already exist.
+
+Suggested file:
+
+services/sector_theme_universe.py
+
+or similar.
+
+Add a curated ETF universe like this:
+
+THEME_ETF_UNIVERSE = {
+    "semiconductors": {
+        "label": "Semiconductors",
+        "symbols": ["SMH", "SOXX", "XSD", "PSI"],
+        "parent_sector": "Technology",
+        "theme_type": "AI Supply Chain"
+    },
+    "semicap_equipment": {
+        "label": "Semiconductor Equipment",
+        "symbols": ["SOXX", "SMH"],
+        "representative_tickers": ["ASML", "AMAT", "LRCX", "KLAC", "TER", "ACLS"],
+        "parent_sector": "Technology",
+        "theme_type": "Bottleneck"
+    },
+    "datacenter_infrastructure": {
+        "label": "Data Center Infrastructure",
+        "symbols": ["SRVR", "VPN", "DTCR"],
+        "representative_tickers": ["EQIX", "DLR", "VRT", "ETN", "PWR", "CEG", "SMR"],
+        "parent_sector": "Technology / Utilities / Industrials",
+        "theme_type": "AI Infrastructure"
+    },
+    "cybersecurity": {
+        "label": "Cybersecurity",
+        "symbols": ["CIBR", "HACK", "BUG"],
+        "parent_sector": "Technology",
+        "theme_type": "Software/Security"
+    },
+    "cloud_software": {
+        "label": "Cloud Software",
+        "symbols": ["SKYY", "CLOU", "IGV", "WCLD"],
+        "parent_sector": "Technology",
+        "theme_type": "Software"
+    },
+    "aerospace_defense": {
+        "label": "Aerospace & Defense",
+        "symbols": ["ITA", "XAR", "PPA", "DFEN"],
+        "parent_sector": "Industrials",
+        "theme_type": "Defense"
+    },
+    "robotics_automation": {
+        "label": "Robotics & Automation",
+        "symbols": ["BOTZ", "ROBO", "ARKQ"],
+        "parent_sector": "Industrials / Technology",
+        "theme_type": "Automation"
+    },
+    "nuclear_uranium": {
+        "label": "Nuclear & Uranium",
+        "symbols": ["URA", "URNM", "NLR"],
+        "parent_sector": "Energy / Utilities",
+        "theme_type": "Power Bottleneck"
+    },
+    "copper_metals": {
+        "label": "Copper & Industrial Metals",
+        "symbols": ["COPX", "PICK", "DBB"],
+        "parent_sector": "Materials",
+        "theme_type": "Commodity Bottleneck"
+    },
+    "lithium_batteries": {
+        "label": "Lithium & Batteries",
+        "symbols": ["LIT", "BATT"],
+        "parent_sector": "Materials / Industrials",
+        "theme_type": "EV Supply Chain"
+    },
+    "oil_services": {
+        "label": "Oil Services",
+        "symbols": ["OIH", "XES", "IEZ"],
+        "parent_sector": "Energy",
+        "theme_type": "Energy Services"
+    },
+    "lng_gas": {
+        "label": "LNG & Natural Gas",
+        "symbols": ["FCG", "UNG", "BOIL"],
+        "representative_tickers": ["LNG", "FLNG", "NEXT", "WMB", "KMI"],
+        "parent_sector": "Energy",
+        "theme_type": "Energy Infrastructure"
+    },
+    "homebuilders": {
+        "label": "Homebuilders",
+        "symbols": ["XHB", "ITB"],
+        "parent_sector": "Consumer Discretionary",
+        "theme_type": "Rates Sensitive"
+    },
+    "regional_banks": {
+        "label": "Regional Banks",
+        "symbols": ["KRE", "IAT"],
+        "parent_sector": "Financials",
+        "theme_type": "Rates/Credit"
+    },
+    "biotech": {
+        "label": "Biotech",
+        "symbols": ["XBI", "IBB", "ARKG"],
+        "parent_sector": "Healthcare",
+        "theme_type": "Risk-On Growth"
+    },
+    "medical_devices": {
+        "label": "Medical Devices",
+        "symbols": ["IHI"],
+        "parent_sector": "Healthcare",
+        "theme_type": "Healthcare Equipment"
+    },
+    "fintech": {
+        "label": "Fintech",
+        "symbols": ["FINX", "ARKF"],
+        "parent_sector": "Financials / Technology",
+        "theme_type": "Digital Finance"
+    },
+    "crypto_equities": {
+        "label": "Crypto Equities / Blockchain",
+        "symbols": ["BLOK", "BITQ", "BKCH", "WGMI"],
+        "parent_sector": "Technology / Financials",
+        "theme_type": "Crypto Beta"
+    },
+    "quantum": {
+        "label": "Quantum Computing",
+        "symbols": ["QTUM"],
+        "representative_tickers": ["IONQ", "RGTI", "QUBT", "QBTS"],
+        "parent_sector": "Technology",
+        "theme_type": "Speculative Innovation"
+    },
+    "space": {
+        "label": "Space Economy",
+        "symbols": ["ARKX", "UFO"],
+        "representative_tickers": ["RKLB", "ASTS", "LUNR", "SATL", "SPIR"],
+        "parent_sector": "Industrials / Technology",
+        "theme_type": "Space"
+    }
+}
+
+Important: this should be easy to modify later. Do not bury this list deep inside route logic.
+
+3. Add backend mode support: mode=sectors | themes
+
+The existing sector endpoints should support a query param like:
+
+?mode=sectors
+?mode=themes
+
+Default should be:
+
+mode=sectors
+
+So nothing existing breaks.
+
+For example:
+
+GET /api/sectors/performance?mode=sectors
+GET /api/sectors/performance?mode=themes
+
+GET /api/sectors/relative-strength?mode=sectors
+GET /api/sectors/relative-strength?mode=themes
+
+If your current backend has one combined endpoint, add the mode param there.
+
+4. Theme performance calculation
+
+For each theme, compute performance using the representative ETF basket.
+
+Recommended approach:
+
+Pull quote/history data for each ETF symbol.
+Calculate:
+1D
+5D
+1M
+3M
+6M
+YTD
+1Y
+Aggregate theme score using the median or average of valid ETFs in that theme.
+Prefer median if some leveraged/noisy ETFs are included.
+Keep individual ETF details available for drilldown.
+
+Example response shape:
+
+{
+  "mode": "themes",
+  "updated_at": "2026-04-24T18:00:00Z",
+  "items": [
+    {
+      "id": "semiconductors",
+      "label": "Semiconductors",
+      "parent_sector": "Technology",
+      "theme_type": "AI Supply Chain",
+      "symbols": ["SMH", "SOXX", "XSD", "PSI"],
+      "leader_symbol": "SMH",
+      "performance": {
+        "1d": 1.4,
+        "5d": 4.8,
+        "1m": 12.1,
+        "3m": 21.5,
+        "6m": 34.2,
+        "ytd": 18.7,
+        "1y": 55.4
+      },
+      "relative_strength_score": 92,
+      "momentum_rank": 1,
+      "trend_state": "Leadership",
+      "rotation_state": "Accelerating",
+      "notes": "Theme leadership driven by semis and AI infrastructure."
+    }
+  ]
+}
+5. Relative strength calculation for themes
+
+Use the same logic already used for broad sectors, but run it over the theme ETF basket.
+
+Add fields like:
+
+{
+  "relative_strength_score": 0-100,
+  "momentum_rank": 1,
+  "trend_state": "Leadership | Improving | Neutral | Weakening | Lagging",
+  "rotation_state": "Accelerating | Stabilizing | Fading | Reversing"
+}
+
+Suggested scoring model:
+
+relative_strength_score =
+  35% 1M performance percentile
+  25% 3M performance percentile
+  20% 5D performance percentile
+  10% distance above/below 50D moving average
+  10% 20D trend acceleration
+
+Keep it simple first. Don’t build a NASA launch console unless it prints money.
+
+6. Cache aggressively
+
+Theme ETF data does not need to hit APIs every frontend refresh.
+
+Add caching like:
+
+sector_theme_performance_cache_ttl = 15 minutes during market hours
+sector_theme_performance_cache_ttl = 60 minutes outside market hours
+agent_theme_rotation_cache_ttl = 6-12 hours
+
+Use existing backend cache patterns if available.
+
+Do not call expensive AI models just because the user toggled between Sectors and Themes.
+
+7. Data source preference
+
+Use existing market data services already wired into the backend.
+
+Preferred order:
+
+Existing internal quote/history adapter if present
+FMP for ETF quotes/historical EOD when cheap and cached
+TwelveData only if already used for technicals and not rate-bottlenecked
+Finnhub ETF profile/holdings/exposure only for metadata enrichment, not repeated performance polling
+Avoid Polygon unless the existing sector system already uses it and rate limits are protected
+
+Important: FMP and Polygon have tighter limits, so do not loop over 80 ETFs repeatedly on every page load. Cache or batch wherever possible.
+
+8. Add a new backend response for Theme Rotation summary
+
+Add this to the existing sector agent context, not as a separate agent unless necessary.
+
+The agent should now receive:
+
+{
+  "broad_sector_leaders": [...],
+  "broad_sector_laggers": [...],
+  "theme_leaders": [...],
+  "theme_improvers": [...],
+  "theme_laggers": [...],
+  "theme_parent_sector_map": {...}
+}
+
+Then modify the sector analysis prompt so the final response remains exactly as-is, but appends one new section at the bottom:
+
+## Theme Rotation
+- Technology is leading, but the actual strength is concentrated in semiconductors, data center infrastructure, and cybersecurity.
+- Semiconductor equipment is improving faster than broad software, suggesting AI capex bottleneck exposure is outperforming generic tech beta.
+- Watch SMH/SOXX for confirmation; if XSD starts outperforming mega-cap semi ETFs, risk appetite is broadening.
+
+Make this section concise but high-signal.
+
+9. Agent Analysis prompt update
+
+Find the existing prompt builder for Sector Agent Analysis.
+
+Add this instruction:
+
+Keep the current sector analysis structure unchanged.
+
+At the very bottom, append a section titled "Theme Rotation".
+
+In Theme Rotation, explain which granular subsectors/themes are leading or improving underneath the broad sector moves.
+
+Do not simply say "Technology is strong." Specify the investable themes driving that strength, such as semiconductors, semiconductor equipment, photonics, data center infrastructure, AI power, cybersecurity, cloud software, defense electronics, uranium, oil services, regional banks, biotech, etc.
+
+Mention the strongest 2-4 theme ETFs or theme groups by relative strength and explain why they matter.
+
+If a broad sector is leading but its themes are mixed, call that out clearly.
+
+If a lagging broad sector has improving themes underneath it, call that out as early rotation.
+10. Backend acceptance tests
+
+Run these checks:
+
+curl "$BACKEND_URL/api/sectors/performance?mode=sectors"
+curl "$BACKEND_URL/api/sectors/performance?mode=themes"
+curl "$BACKEND_URL/api/sectors/relative-strength?mode=sectors"
+curl "$BACKEND_URL/api/sectors/relative-strength?mode=themes"
+
+If your route names differ, test the actual route names.
+
+Verify:
+
+Existing sector mode still returns the same symbols as before.
+Theme mode returns theme labels and ETF baskets.
+No AI calls fire when simply toggling dashboard views.
+Agent Analysis includes a final Theme Rotation section.
+Empty or missing ETF data does not break the whole response.
+Frontend gets stable fields: label, symbols, performance, relative_strength_score, momentum_rank, trend_state.
+Frontend Replit Agent Instructions
+Goal
+
+Update the existing Sectors page UI to support toggling between:
+
+Sectors | Themes
+
+for these sections only:
+
+Sector Performance
+Relative Strength
+
+The existing sector view should remain visually and functionally unchanged.
+
+When toggled to Themes, the same sections should display granular theme ETF baskets instead of broad sector ETFs.
+
+The existing Agent Analysis section should remain visually unchanged, except the backend response will now include a final section called:
+
+Theme Rotation
+
+Render it naturally as part of the analysis body.
+
+1. Audit the existing Sectors page first
+
+Find the current Sectors page/component.
+
+Likely files may include:
+
+client/src/pages/sectors.tsx
+client/src/pages/Sectors.tsx
+client/src/components/SectorPerformance.tsx
+client/src/components/RelativeStrength.tsx
+client/src/components/SectorRotation.tsx
+
+Identify:
+
+Where Sector Performance is rendered
+Where Relative Strength is rendered
+Where API calls are made
+How loading/error states work
+How normalized/SPDR views are currently handled
+
+Do not refactor the whole page. Add the smallest safe extension.
+
+2. Add local toggle state for each section
+
+Each of these sections should have a top-right toggle:
+
+Sectors | Themes
+
+Both sections should be independently toggleable unless there is already shared state that makes more sense.
+
+User specifically asked:
+
+Sector Performance gets a toggle
+Relative Strength gets a toggle
+“Sectors” mode displays exactly what exists now
+“Themes” mode displays the new granular ETF/theme view
+
+Example state:
+
+const [performanceMode, setPerformanceMode] = useState<"sectors" | "themes">("sectors");
+const [relativeStrengthMode, setRelativeStrengthMode] = useState<"sectors" | "themes">("sectors");
+3. Toggle UI design
+
+The toggle should live in the top right of the card/header.
+
+Style should match existing Bloomberg/terminal aesthetic.
+
+Example:
+
+<div className="flex items-center gap-1 rounded-md border border-cyan-500/20 bg-black/30 p-1">
+  <button
+    className={mode === "sectors" ? activeClass : inactiveClass}
+    onClick={() => setMode("sectors")}
+  >
+    Sectors
+  </button>
+  <button
+    className={mode === "themes" ? activeClass : inactiveClass}
+    onClick={() => setMode("themes")}
+  >
+    Themes
+  </button>
+</div>
+
+Do not use huge pill buttons. Keep it compact and premium.
+
+4. API wiring
+
+When the user switches mode, the frontend should call the same backend endpoint with mode.
+
+Example:
+
+const performanceUrl = `/api/sectors/performance?mode=${performanceMode}`;
+const relativeStrengthUrl = `/api/sectors/relative-strength?mode=${relativeStrengthMode}`;
+
+If the existing endpoint is combined, pass mode into that endpoint.
+
+Use existing API helper/client patterns. Do not create a second random fetch style if a shared client exists.
+
+5. Rendering Theme mode in Sector Performance
+
+In Sectors mode:
+
+Render exactly as today.
+
+In Themes mode:
+
+Rows/cards should show:
+
+Theme Name
+ETF basket
+Parent Sector
+1D
+5D
+1M
+3M
+YTD
+Relative Strength / Rank
+Trend State
+
+Example display:
+
+Semiconductors
+SMH / SOXX / XSD
+Parent: Technology
+1M: +12.4%
+Rank: #1
+State: Leadership
+
+Make sure long theme names do not blow up the table.
+
+Use truncation or smaller text where needed.
+
+6. Rendering Theme mode in Relative Strength
+
+In Sectors mode:
+
+Render exactly as today.
+
+In Themes mode:
+
+Sort by:
+
+relative_strength_score desc
+
+Display:
+
+Rank
+Theme
+ETF basket
+Parent Sector
+RS Score
+Trend State
+Rotation State
+
+Example:
+
+#1 Semiconductors — SMH/SOXX — RS 94 — Leadership — Accelerating
+#2 Nuclear & Uranium — URA/URNM — RS 89 — Leadership — Accelerating
+#3 Aerospace & Defense — ITA/XAR — RS 86 — Improving
+
+If there is a chart, reuse the same chart shell and substitute theme labels.
+
+7. Add concise helper copy when in Themes mode
+
+Optional but recommended: add a tiny subtitle under each section title only when mode is themes.
+
+Example for Sector Performance:
+
+Granular ETF baskets showing which investable subsectors are leading beneath the broad sectors.
+
+Example for Relative Strength:
+
+Ranks theme ETFs by momentum and acceleration to catch early rotation before broad sectors make it obvious.
+
+Keep it small. No essay. This dashboard is not a DMV form.
+
+8. Agent Analysis rendering
+
+Do not redesign Agent Analysis.
+
+The backend will append:
+
+## Theme Rotation
+...
+
+Make sure the frontend renderer supports this section naturally.
+
+If the analysis is currently split into sections manually, add support for detecting/rendering Theme Rotation.
+
+If it just renders markdown/plain text, no change may be needed.
+
+9. Loading and empty states
+
+Add specific empty states for Themes mode.
+
+Example:
+
+Theme ETF data unavailable right now. Showing broad sectors instead.
+
+But do not silently fall back if it would confuse the user. Better:
+
+No theme data available yet.
+
+Also ensure:
+
+Switching modes does not blank the entire page.
+Sector mode still works even if theme endpoint fails.
+Theme endpoint failure does not break Agent Analysis.
+10. Frontend acceptance tests
+
+Verify:
+
+Sectors page loads exactly as before by default.
+Sector Performance default toggle = Sectors.
+Relative Strength default toggle = Sectors.
+Switching Sector Performance to Themes displays granular theme ETF rows.
+Switching Relative Strength to Themes displays ranked theme ETF rows.
+Existing normalized/SPDR/main sector functionality remains intact.
+Agent Analysis includes Theme Rotation at the bottom after backend changes.
+No duplicate calls fire excessively when toggling.
+Mobile/tablet layout does not explode.
+Recommended Theme ETF Starter Universe
+
+Give both agents this starter list so frontend/backend naming stays aligned.
+
+const THEME_ETFS = [
+  {
+    id: "semiconductors",
+    label: "Semiconductors",
+    symbols: ["SMH", "SOXX", "XSD", "PSI"],
+    parentSector: "Technology"
+  },
+  {
+    id: "semicap_equipment",
+    label: "Semiconductor Equipment",
+    symbols: ["SMH", "SOXX"],
+    parentSector: "Technology"
+  },
+  {
+    id: "datacenter_infrastructure",
+    label: "Data Center Infrastructure",
+    symbols: ["SRVR", "VPN", "DTCR"],
+    parentSector: "Technology / Utilities / Industrials"
+  },
+  {
+    id: "cybersecurity",
+    label: "Cybersecurity",
+    symbols: ["CIBR", "HACK", "BUG"],
+    parentSector: "Technology"
+  },
+  {
+    id: "cloud_software",
+    label: "Cloud Software",
+    symbols: ["SKYY", "CLOU", "IGV", "WCLD"],
+    parentSector: "Technology"
+  },
+  {
+    id: "aerospace_defense",
+    label: "Aerospace & Defense",
+    symbols: ["ITA", "XAR", "PPA"],
+    parentSector: "Industrials"
+  },
+  {
+    id: "robotics_automation",
+    label: "Robotics & Automation",
+    symbols: ["BOTZ", "ROBO", "ARKQ"],
+    parentSector: "Industrials / Technology"
+  },
+  {
+    id: "nuclear_uranium",
+    label: "Nuclear & Uranium",
+    symbols: ["URA", "URNM", "NLR"],
+    parentSector: "Energy / Utilities"
+  },
+  {
+    id: "copper_metals",
+    label: "Copper & Industrial Metals",
+    symbols: ["COPX", "PICK", "DBB"],
+    parentSector: "Materials"
+  },
+  {
+    id: "lithium_batteries",
+    label: "Lithium & Batteries",
+    symbols: ["LIT", "BATT"],
+    parentSector: "Materials / Industrials"
+  },
+  {
+    id: "oil_services",
+    label: "Oil Services",
+    symbols: ["OIH", "XES", "IEZ"],
+    parentSector: "Energy"
+  },
+  {
+    id: "lng_gas",
+    label: "LNG & Natural Gas",
+    symbols: ["FCG", "UNG", "BOIL"],
+    parentSector: "Energy"
+  },
+  {
+    id: "homebuilders",
+    label: "Homebuilders",
+    symbols: ["XHB", "ITB"],
+    parentSector: "Consumer Discretionary"
+  },
+  {
+    id: "regional_banks",
+    label: "Regional Banks",
+    symbols: ["KRE", "IAT"],
+    parentSector: "Financials"
+  },
+  {
+    id: "biotech",
+    label: "Biotech",
+    symbols: ["XBI", "IBB", "ARKG"],
+    parentSector: "Healthcare"
+  },
+  {
+    id: "medical_devices",
+    label: "Medical Devices",
+    symbols: ["IHI"],
+    parentSector: "Healthcare"
+  },
+  {
+    id: "fintech",
+    label: "Fintech",
+    symbols: ["FINX", "ARKF"],
+    parentSector: "Financials / Technology"
+  },
+  {
+    id: "crypto_equities",
+    label: "Crypto Equities / Blockchain",
+    symbols: ["BLOK", "BITQ", "BKCH", "WGMI"],
+    parentSector: "Technology / Financials"
+  },
+  {
+    id: "quantum",
+    label: "Quantum Computing",
+    symbols: ["QTUM"],
+    parentSector: "Technology"
+  },
+  {
+    id: "space",
+    label: "Space Economy",
+    symbols: ["ARKX", "UFO"],
+    parentSector: "Industrials / Technology"
+  }
+];

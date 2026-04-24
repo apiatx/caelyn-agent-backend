@@ -23,6 +23,7 @@ from services.sector_rotation.schemas import (
     SectorRotationDashboard,
     AIAnalysis,
     ETFSeries,
+    ThemeSnapshot,
     SECTOR_ETF_MAP,
 )
 from services.sector_rotation.service import get_dashboard, get_analysis_only
@@ -146,6 +147,70 @@ async def sectors_page_data_endpoint(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Sectors page error: {e}")
+
+
+@sectors_router.get("/performance")
+async def sectors_performance_endpoint(
+    mode: str = Query("sectors", description="Mode: sectors | themes"),
+):
+    """
+    Sector or Theme performance data.
+    mode=sectors → all 11 broad SPDR ETF snapshots (unchanged)
+    mode=themes  → all theme ETF baskets, scored and ranked
+    No AI calls are made here — data-only, cached aggressively.
+    """
+    now = __import__("datetime").datetime.utcnow().isoformat() + "Z"
+    if mode == "themes":
+        from services.sector_rotation.theme_service import get_theme_data
+        items = await get_theme_data()
+        return {"mode": "themes", "updated_at": now, "items": items}
+
+    # Default: sectors
+    try:
+        dashboard = await get_dashboard(include_analysis=False)
+        return {
+            "mode": "sectors",
+            "updated_at": now,
+            "items": [s.model_dump() for s in dashboard.sectors],
+        }
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Sector performance error: {e}")
+
+
+@sectors_router.get("/relative-strength")
+async def sectors_relative_strength_endpoint(
+    mode: str = Query("sectors", description="Mode: sectors | themes"),
+):
+    """
+    Sector or Theme relative-strength rankings.
+    mode=sectors → broad SPDR ETFs ranked by rotation_score (unchanged)
+    mode=themes  → theme ETFs ranked by relative_strength_score
+    No AI calls.
+    """
+    now = __import__("datetime").datetime.utcnow().isoformat() + "Z"
+    if mode == "themes":
+        from services.sector_rotation.theme_service import get_theme_data
+        items = await get_theme_data()
+        ranked = sorted(items, key=lambda r: r.get("relative_strength_score") or 0, reverse=True)
+        return {"mode": "themes", "updated_at": now, "ranked": ranked}
+
+    # Default: sectors — sort by rotation_score desc (already sorted from build_sector_snapshots)
+    try:
+        dashboard = await get_dashboard(include_analysis=False)
+        ranked = sorted(
+            dashboard.sectors,
+            key=lambda s: (s.rotation_score or 0),
+            reverse=True,
+        )
+        return {
+            "mode": "sectors",
+            "updated_at": now,
+            "ranked": [s.model_dump() for s in ranked],
+        }
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Sector RS error: {e}")
 
 
 @sectors_router.post("/generate-analysis")
