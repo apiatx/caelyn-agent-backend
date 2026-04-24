@@ -1,0 +1,164 @@
+You are working in caelyn-agent-backend. Do not remove the existing options scoring/signal logic. Preserve current ticker popup/detail support. The goal is to enrich each screener row with better Tradier-powered options datapoints and make default ranking correct.
+
+Context: Tradier is the funded primary options data provider and has usable market-data limits, so prefer Tradier for this page. Backend repo is where logic lives.
+
+1. Preserve existing architecture
+
+Audit current /api/options-flow / unusual options screener routes and identify the row model currently powering the frontend table.
+
+Do not rip out:
+
+Existing combo options indicator scoring
+Existing score
+Existing signal
+Existing confidence
+Existing thesis
+Existing ticker detail/popup endpoint/data shape
+Existing refresh/snapshot/ingestion behavior
+
+Only extend the row schema.
+
+2. Default sort must be highest signal first
+
+Wherever the screener snapshot is produced, sort rows server-side by:
+
+score DESC
+heat_score DESC
+premium DESC
+volume DESC
+
+The frontend should receive highest-quality signals first without requiring the user to click “Score.”
+
+3. Add these enriched options fields per row
+
+Add fields if data is available; otherwise return null, not fake numbers:
+
+premium: number | null                 // option last/mark * volume * 100
+premium_display: string | null          // "$1.2M", "$342K"
+premium_change_pct: number | null       // vs prior snapshot/cache if available
+oi_change_pct: number | null            // current OI vs previous cached OI
+call_flow_pct: number | null            // % call-side premium or volume
+put_flow_pct: number | null             // % put-side premium or volume
+call_put_premium_ratio: number | null
+call_put_volume_ratio: number | null
+otm_pct: number | null                  // distance from underlying spot to strike
+is_otm: boolean
+is_unusual_otm: boolean
+days_to_expiry: number | null
+expiry: string | null
+strike: number | null
+option_type: "call" | "put" | null
+side_bias: "bullish" | "bearish" | "mixed" | "unknown"
+sweep_like: boolean | null              // true if repeated aggressive same-contract prints if detectable
+unusual_volume_ratio: number | null     // volume / open_interest, capped safely
+liquidity_score: number | null
+heat_score: number | null               // custom composite, separate from existing score
+4. Tradier data sources
+
+Use Tradier for:
+
+Options chains
+Option quote fields: bid, ask, last, volume, open_interest, strike, expiration, option_type
+Underlying quote/last price
+Intraday option volume where already supported
+Existing flow/snapshot data if already persisted
+
+Do not assume Tradier gives historical OI deltas directly. If no endpoint exists, compute oi_change_pct by comparing today’s latest snapshot vs the most recent prior cached snapshot for same symbol + expiry + strike + option_type.
+
+Same for premium_change_pct.
+
+5. Add snapshot persistence if missing
+
+If not already stored, create/cache a lightweight options screener snapshot table or JSON cache keyed by:
+
+symbol
+expiry
+strike
+option_type
+captured_at
+volume
+open_interest
+premium
+bid
+ask
+last
+underlying_price
+
+Use it only for deltas:
+
+oi_change_pct = ((current_oi - prior_oi) / max(prior_oi, 1)) * 100
+premium_change_pct = ((current_premium - prior_premium) / max(prior_premium, 1)) * 100
+6. Custom logic definitions
+
+Implement these safely:
+
+mid = (bid + ask) / 2 if bid and ask else last
+premium = mid * volume * 100
+unusual_volume_ratio = volume / max(open_interest, 1)
+
+For calls:
+
+otm_pct = ((strike - underlying_price) / underlying_price) * 100
+is_otm = strike > underlying_price
+
+For puts:
+
+otm_pct = ((underlying_price - strike) / underlying_price) * 100
+is_otm = strike < underlying_price
+
+Unusual OTM:
+
+is_unusual_otm = (
+  is_otm
+  and abs(otm_pct) >= 5
+  and premium >= 25000
+  and unusual_volume_ratio >= 1.5
+)
+
+Heat score should be additive, not a replacement for current score:
+
+heat_score = weighted composite of:
+- existing score
+- premium rank
+- unusual_volume_ratio
+- oi_change_pct
+- premium_change_pct
+- call/put directional concentration
+- unusual_otm flag
+- short DTE urgency
+
+Normalize to 0–100.
+
+7. Preserve popup/detail payload
+
+When user clicks ticker, popup should still work. Extend the detail response with:
+
+top_contracts
+premium_breakdown
+call_put_breakdown
+otm_breakdown
+oi_delta_history
+recent_snapshot_history
+
+But do not break existing frontend keys.
+
+8. Add verification
+
+Add a debug endpoint or log output proving enriched fields exist:
+
+curl /api/options-flow/master/latest
+
+Expected row now includes:
+
+{
+  "ticker": "XYZ",
+  "score": 91,
+  "heat_score": 87,
+  "premium": 1240000,
+  "oi_change_pct": 42.1,
+  "premium_change_pct": 88.4,
+  "call_flow_pct": 76,
+  "put_flow_pct": 24,
+  "otm_pct": 8.2,
+  "is_unusual_otm": true
+}
