@@ -1,0 +1,217 @@
+The Stock Compare feature is partially working but now sometimes returns blank chart data or Backend 500. Fix this urgently.
+
+Core issue
+
+The feature should be fast and reliable. FMP is the primary source and the user’s paid Starter plan supports 300 API calls/minute, US coverage, and up to 5 years of historical data. Do not build this like an unlimited 10-year/YCharts clone. Build it around the actual FMP plan.
+
+Fix goals
+Never return Backend 500 for missing financial data.
+Restrict comparison history to max 5 years.
+Make responses fast by only fetching the endpoints needed for the selected metric.
+Return partial data + warnings instead of crashing.
+Handle unsupported/non-US tickers gracefully.
+Add enough logs to identify exactly which FMP call or symbol failed.
+Required backend behavior
+1. Remove support for 10Y, MAX, and ALL
+
+For Stock Compare fundamentals, backend should only allow:
+
+1Y
+3Y
+5Y
+
+Optional:
+
+YTD
+
+But for annual financial metrics, YTD should map to latest available fiscal/quarterly data, not fake a time series.
+
+If frontend still sends 10Y, MAX, or ALL, backend should not crash. Return:
+
+{
+  "error": "INVALID_RANGE",
+  "message": "Stock Compare supports 1Y, 3Y, and 5Y for fundamentals on the current FMP plan."
+}
+
+Or automatically coerce to 5Y and include a warning:
+
+"warnings": ["Range ALL is not supported on current FMP plan; using 5Y instead."]
+
+I prefer coercing to 5Y so the UI does not break.
+
+2. Fix 1Y annual chart behavior
+
+If selected period is annual and range is 1Y, there may only be one point.
+
+Do one of these:
+
+Preferred:
+
+For annual fundamentals, always return at least 3 years of points for chart continuity, even when range is 1Y.
+
+Include warning:
+
+"warnings": ["Annual financial data updates once per fiscal year; showing the latest available annual points."]
+
+Do not return only one point unless only one point exists.
+
+3. Add strict partial-data handling
+
+The endpoint must never crash because one ticker is missing data.
+
+For each symbol:
+
+try:
+    fetch/normalize symbol data
+except Exception as e:
+    append warning
+    continue
+
+Response should include:
+
+{
+  "series": [],
+  "snapshot": [],
+  "invalidSymbols": [],
+  "missingSymbols": ["SOI.PA"],
+  "meta": {
+    "warnings": [
+      "SOI.PA: FMP returned no annual income statement data.",
+      "NNBR: Missing revenue for 2025."
+    ]
+  }
+}
+
+Never raise a 500 for:
+
+empty FMP array
+missing field
+null value
+negative denominator
+unsupported exchange suffix
+non-US ticker
+FMP 403/404/429 response
+
+Only return 500 for true server bugs.
+
+4. Add FMP call diagnostics
+
+Log each FMP request in a safe way:
+
+[stock_compare] metric=revenue range=5Y period=annual symbols=INTT,TRT,NNBR
+[stock_compare] FMP income-statement INTT status=200 rows=5 ms=184
+[stock_compare] FMP income-statement SOI.PA status=200 rows=0 ms=142
+[stock_compare] warning SOI.PA no data returned
+
+Do not log API keys.
+
+5. Make fetching metric-aware
+
+Do not fetch profile, quote, income statement, balance sheet, cash flow, ratios, metrics, growth, and news for every request.
+
+For revenue, fetch only:
+
+profile/search metadata if cached missing
+income statement
+
+For free_cash_flow, fetch only:
+
+cash flow statement
+
+For total_debt, fetch only:
+
+balance sheet
+
+For gross_margin, profit_margin, ps_ratio, pe_ratio, fetch:
+
+ratios/key metrics first
+fallback financial statements only if needed
+
+For recent_news, fetch only:
+
+stock news
+profile metadata
+
+This is likely why it was fast at first and now slower: the backend may be over-fetching.
+
+6. Cache aggressively
+
+Use existing cache utilities.
+
+TTL:
+
+income statement: 24h
+balance sheet: 24h
+cash flow: 24h
+ratios/key metrics: 24h
+profile: 24h
+news: 30m
+ticker search: 24h
+
+Cache key examples:
+
+stock_compare:fmp:income_statement:INTT:annual:5
+stock_compare:fmp:cash_flow:TRT:annual:5
+stock_compare:fmp:ratios:NNBR:annual:5
+7. Limit returned rows to 5 years
+
+For all annual/quarterly fundamentals:
+
+limit = 5 for annual
+limit = 20 for quarterly
+
+Then normalize and sort ascending.
+
+Response points should look like:
+
+[
+  {
+    "date": "2021-12-31",
+    "fiscalYear": 2021,
+    "value": 84000000,
+    "formatted": "84.00M",
+    "source": "fmp_income_statement"
+  }
+]
+
+Sort ascending before sending to frontend.
+
+8. Fix unsupported international tickers
+
+If ticker contains a suffix like:
+
+.PA
+.L
+.TO
+.DE
+
+do not crash.
+
+Since the current plan is US-focused, mark as unsupported if FMP returns no usable fundamentals:
+
+{
+  "symbol": "SOI.PA",
+  "status": "unsupported_or_no_data",
+  "reason": "No usable FMP annual fundamentals returned for this symbol."
+}
+
+Still return the rest of the valid ticker data.
+
+9. Backend smoke tests
+
+Run these:
+
+curl -X POST "$BACKEND_URL/api/fundamentals/compare" \
+  -H "Content-Type: application/json" \
+  -d '{"symbols":["INTT","TRT","NNBR"],"metric":"revenue","period":"annual","range":"5Y"}'
+curl -X POST "$BACKEND_URL/api/fundamentals/compare" \
+  -H "Content-Type: application/json" \
+  -d '{"symbols":["INTT","TRT","NNBR","SOI.PA"],"metric":"revenue","period":"annual","range":"5Y"}'
+
+Expected:
+
+no 500
+INTT/TRT/NNBR series returned
+SOI.PA either has data or appears in warnings/missingSymbols
+response completes quickly
+chart points sorted ascending

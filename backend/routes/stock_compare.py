@@ -46,7 +46,7 @@ class CompareRequest(BaseModel):
     symbols: List[str]
     metric:  str
     period:  str = "annual"
-    range:   str = "ALL"
+    range:   str = "5Y"
 
 
 # ── Validation helpers ─────────────────────────────────────────────────────────
