@@ -243,35 +243,44 @@ def _build_metadata(snapshot: Optional[dict]) -> dict:
         _in_refresh_window,
         _next_window_open_iso,
         _REFRESH_LOCK,
+        _manual_refresh_available,
+        _next_manual_allowed_iso,
     )
+    window_open = _in_refresh_window()
+    manual_available = _manual_refresh_available()
+    next_manual_iso  = _next_manual_allowed_iso()
+
     if not snapshot:
         return {
-            "updated_at":             None,
-            "data_state":             "no_data_yet",
-            "stale":                  True,
-            "refresh_in_progress":    False,
-            "refresh_window_open":    _in_refresh_window(),
-            "next_allowed_refresh_at": _next_window_open_iso() if not _in_refresh_window() else None,
-            "source":                 "x_consensus_cache",
-            "timezone":               "America/Chicago",
+            "updated_at":                    None,
+            "data_state":                    "no_data_yet",
+            "stale":                         True,
+            "refresh_in_progress":           False,
+            "refresh_window_open":           window_open,
+            "next_allowed_refresh_at":       _next_window_open_iso() if not window_open else None,
+            "manual_refresh_available":      manual_available,
+            "next_manual_refresh_allowed_at": next_manual_iso,
+            "source":                        "x_consensus_cache",
+            "timezone":                      "America/Chicago",
         }
 
     saved_at  = snapshot.get("_saved_at") or 0
     age_s     = time.time() - float(saved_at)
     is_stale  = age_s >= _CACHE_TTL_SECONDS
-    window_open = _in_refresh_window()
 
     return {
-        "updated_at":             snapshot.get("generated_at"),
-        "data_state":             "stale" if is_stale else "available",
-        "stale":                  is_stale,
-        "age_seconds":            int(age_s),
-        "refresh_in_progress":    _REFRESH_LOCK.locked(),
-        "refresh_window_open":    window_open,
-        "next_allowed_refresh_at": _next_window_open_iso() if not window_open else None,
-        "source":                 "x_consensus_cache",
-        "timezone":               "America/Chicago",
-        "handles_count":          len(snapshot.get("handles") or []),
+        "updated_at":                    snapshot.get("generated_at"),
+        "data_state":                    "stale" if is_stale else "available",
+        "stale":                         is_stale,
+        "age_seconds":                   int(age_s),
+        "refresh_in_progress":           _REFRESH_LOCK.locked(),
+        "refresh_window_open":           window_open,
+        "next_allowed_refresh_at":       _next_window_open_iso() if not window_open else None,
+        "manual_refresh_available":      manual_available,
+        "next_manual_refresh_allowed_at": next_manual_iso,
+        "source":                        "x_consensus_cache",
+        "timezone":                      "America/Chicago",
+        "handles_count":                 len(snapshot.get("handles") or []),
     }
 
 

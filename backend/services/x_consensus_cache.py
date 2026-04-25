@@ -55,6 +55,34 @@ _REFRESH_TZ = ZoneInfo("America/Chicago")
 _WINDOW_START_HOUR = 8   # 08:00 Chicago
 _WINDOW_END_HOUR   = 20  # 20:00 Chicago (exclusive)
 
+# ── Manual-refresh cooldown ───────────────────────────────────────────────
+# Prevents overnight spam while still allowing occasional user-initiated
+# overrides.  Module-level float (epoch seconds); None means never run.
+_MANUAL_COOLDOWN_SECONDS: int = 30 * 60  # 30 minutes
+_last_manual_refresh_at: Optional[float] = None
+
+
+def _next_manual_allowed_iso() -> Optional[str]:
+    """ISO-8601 UTC timestamp when the next manual refresh is permitted.
+
+    Returns None if no manual refresh has ever been run (i.e. immediately
+    available).
+    """
+    global _last_manual_refresh_at
+    if _last_manual_refresh_at is None:
+        return None
+    next_ts = _last_manual_refresh_at + _MANUAL_COOLDOWN_SECONDS
+    dt = datetime.fromtimestamp(next_ts, tz=timezone.utc)
+    return dt.isoformat()
+
+
+def _manual_refresh_available() -> bool:
+    """True if the cooldown window has passed (or never been set)."""
+    global _last_manual_refresh_at
+    if _last_manual_refresh_at is None:
+        return True
+    return (time.time() - _last_manual_refresh_at) >= _MANUAL_COOLDOWN_SECONDS
+
 
 def _in_refresh_window() -> bool:
     """Return True only if current America/Chicago time is 08:00–19:59."""
@@ -394,3 +422,84 @@ async def get_weekly_snapshot(data_service=None, *, allow_refresh: bool = True) 
             refresh_in_progress = False
 
     return _public_payload(raw, refresh_in_progress=refresh_in_progress, window_open=True)
+
+
+async def trigger_manual_refresh(data_service) -> dict:
+    """Explicit user-initiated X consensus refresh.
+
+    Unlike the automatic background loop this function:
+      - Bypasses the 08:00–20:00 America/Chicago quiet-hours gate entirely.
+      - Still enforces the module-level _REFRESH_LOCK (single-flight: if a
+        refresh is already running, we return immediately rather than stacking
+        a second one).
+      - Enforces a 30-minute per-process cooldown (_MANUAL_COOLDOWN_SECONDS)
+        so a user cannot hammer Grok overnight.
+
+    Returns a metadata dict suitable for a JSON response:
+      accepted                    bool
+      refresh_in_progress         bool
+      last_updated_at             Optional[str]  (ISO-8601 UTC)
+      next_manual_refresh_allowed_at  Optional[str]
+      manual_refresh_available    bool
+      reason                      Optional[str]  — present when not accepted
+    """
+    global _last_manual_refresh_at
+
+    raw = _load_disk_cache()
+    last_updated_at = raw.get("generated_at") if raw else None
+
+    # ── Guard 1: single-flight (another refresh already running) ───────────
+    if _REFRESH_LOCK.locked():
+        return {
+            "accepted": False,
+            "refresh_in_progress": True,
+            "last_updated_at": last_updated_at,
+            "next_manual_refresh_allowed_at": _next_manual_allowed_iso(),
+            "manual_refresh_available": False,
+            "reason": "refresh_already_running",
+        }
+
+    # ── Guard 2: cooldown window ───────────────────────────────────────────
+    if not _manual_refresh_available():
+        return {
+            "accepted": False,
+            "refresh_in_progress": False,
+            "last_updated_at": last_updated_at,
+            "next_manual_refresh_allowed_at": _next_manual_allowed_iso(),
+            "manual_refresh_available": False,
+            "reason": "cooldown",
+        }
+
+    # ── Guard 3: no xAI provider available ────────────────────────────────
+    if not data_service or not getattr(data_service, "xai", None):
+        return {
+            "accepted": False,
+            "refresh_in_progress": False,
+            "last_updated_at": last_updated_at,
+            "next_manual_refresh_allowed_at": _next_manual_allowed_iso(),
+            "manual_refresh_available": False,
+            "reason": "xai_provider_unavailable",
+        }
+
+    # ── All guards passed — stamp cooldown and fire background refresh ─────
+    _last_manual_refresh_at = time.time()
+    print(
+        f"[X_CONSENSUS] Manual refresh accepted — bypassing quiet-hours gate. "
+        f"Next manual allowed: {_next_manual_allowed_iso()}"
+    )
+    try:
+        asyncio.create_task(_trigger_background_refresh(data_service))
+        refresh_kicked_off = True
+    except RuntimeError:
+        # Called outside an async context — fall back to awaiting directly.
+        refresh_kicked_off = False
+        await _trigger_background_refresh(data_service)
+
+    return {
+        "accepted": True,
+        "refresh_in_progress": refresh_kicked_off or True,
+        "last_updated_at": last_updated_at,
+        "next_manual_refresh_allowed_at": _next_manual_allowed_iso(),
+        "manual_refresh_available": False,
+        "reason": None,
+    }

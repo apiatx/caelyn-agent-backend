@@ -1,0 +1,143 @@
+You are working in this repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+Project constraints:
+
+* This repo is the logic/source-of-truth layer. 
+* XAI/Grok calls are paid and should be conserved. 
+* The current quiet-hours behavior for the Social/Home X snapshot should remain in place by default:
+
+  * automatic refresh every 2 hours
+  * only during 8:00 AM–8:00 PM America/Chicago
+  * zero automatic scans overnight
+
+This is a focused backend change. Do not broaden scope.
+
+PRIMARY GOAL
+Add a **manual refresh override** for the X snapshot used by the Social page so that after 8 PM America/Chicago, a user can still explicitly request a refresh from the UI.
+
+IMPORTANT BEHAVIOR
+Default automatic behavior stays exactly the same:
+
+* automatic refresh only between 8 AM and 8 PM America/Chicago
+* every 2 hours
+* zero automatic overnight scans
+
+New behavior:
+
+* if the user explicitly clicks the manual refresh button on the Social page, backend may run a one-off refresh even after 8 PM
+* this manual refresh should update the same shared X snapshot family used by Social/Home
+* this must NOT turn into unlimited overnight Grok spam
+
+AUDIT FIRST
+Inspect the current X snapshot refresh flow and identify:
+
+1. where the quiet-hours gate is enforced
+2. where the cached read path is
+3. what current endpoint powers the Social page X dashboard
+4. where the Grok/XAI refresh is actually triggered
+5. how refresh_in_progress / stale / next_allowed_refresh_at metadata is currently set
+
+IMPLEMENTATION TARGET
+Add a **manual refresh endpoint or manual-refresh mode** for the Social X dashboard.
+
+Preferred outcome:
+
+* keep the normal Social dashboard read endpoint unchanged
+* add one explicit refresh endpoint, e.g.:
+
+  * `POST /api/social/x-dashboard/refresh`
+    or equivalent
+* this endpoint should:
+
+  * bypass the overnight automatic quiet-hours gate
+  * trigger a one-off refresh of the same X snapshot
+  * return status/metadata cleanly
+
+CRITICAL GUARDRAILS
+Manual refresh must be protected against spam.
+
+Implement at least:
+
+* single-flight protection:
+
+  * if a refresh is already running, do not start another one
+* cooldown:
+
+  * if a manual refresh was run very recently, refuse or reuse the in-progress/latest result
+* honest response metadata such as:
+
+  * `accepted`
+  * `refresh_in_progress`
+  * `last_updated_at`
+  * `next_manual_refresh_allowed_at`
+  * `reason` if denied/throttled
+
+PREFERRED POLICY
+Use a conservative manual-refresh cooldown, something like:
+
+* one manual refresh every 15–30 minutes
+  or whatever is most sensible based on the current cache model and cost discipline
+
+The main point:
+
+* user can override quiet hours occasionally
+* user cannot hammer Grok all night
+
+TIMEZONE
+Use **America/Chicago** timezone logic for the normal automatic gating.
+Manual override can bypass time-window restrictions, but should still preserve cooldown and single-flight protections.
+
+HOME COMPATIBILITY
+Do NOT break the Home page.
+The Home page should continue reading the shared snapshot as usual.
+Manual refresh on Social can refresh the shared snapshot that Home later reads.
+
+RESPONSE METADATA
+If practical, enrich the Social dashboard metadata with fields the frontend can use:
+
+* `updated_at`
+* `refresh_in_progress`
+* `stale`
+* `next_allowed_refresh_at`
+* `next_manual_refresh_allowed_at`
+* `manual_refresh_available`
+* `timezone`
+
+VERIFY
+Before finishing, verify:
+
+1. automatic overnight scans still do NOT happen
+2. manual refresh after 8 PM can trigger a one-off refresh
+3. repeated manual clicks do NOT create repeated Grok calls
+4. Home compatibility remains intact
+5. Social dashboard still reads the same shared snapshot family
+6. DST-safe America/Chicago handling remains intact
+
+DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact endpoint added/updated for manual refresh
+3. exact cooldown / anti-spam policy used
+4. exact overnight automatic behavior after the change
+5. exact metadata added or changed
+6. confirmation Home compatibility remains intact
+7. confirmation changes were committed and pushed directly to `main`
+
+EXECUTION STYLE
+
+* Audit first
+* Preserve automatic quiet hours
+* Add explicit user override cleanly
+* Prevent overnight spam
+* Then commit and push directly to `main`

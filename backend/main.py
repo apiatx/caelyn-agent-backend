@@ -2569,6 +2569,53 @@ async def social_x_dashboard(
         )
 
 
+@app.post("/api/social/x-dashboard/refresh")
+@limiter.limit("4/minute")
+@traceable(name="main.social_x_dashboard_refresh")
+async def social_x_dashboard_refresh(
+    request: Request,
+    _sub: None = Depends(require_subscription),
+):
+    """
+    Manual user-initiated refresh of the X consensus snapshot.
+
+    Bypasses the automatic 08:00–20:00 America/Chicago quiet-hours gate so a
+    user can trigger a one-off refresh from the Social page at any time of day.
+
+    Guardrails (applied even outside the window):
+      1. Single-flight: if a refresh is already running the request is rejected
+         immediately with reason="refresh_already_running".
+      2. 30-minute cooldown: the per-process _last_manual_refresh_at timestamp
+         prevents back-to-back overnight Grok calls.  Rejected with
+         reason="cooldown" and next_manual_refresh_allowed_at set.
+      3. Rate limiter: 4 requests per minute at the HTTP layer (belt-and-
+         suspenders against any client loop bugs).
+
+    The refresh updates the SAME shared x_consensus snapshot used by both
+    the Social dashboard (GET /api/social/x-dashboard) and the Home page
+    "Trending on X" widget — no new snapshot family is created.
+
+    Response fields:
+      accepted                    bool
+      refresh_in_progress         bool
+      last_updated_at             str | null  (ISO-8601 UTC — snapshot timestamp)
+      next_manual_refresh_allowed_at  str | null  (ISO-8601 UTC)
+      manual_refresh_available    bool
+      reason                      str | null  (present when not accepted)
+    """
+    try:
+        from services.x_consensus_cache import trigger_manual_refresh
+        result = await trigger_manual_refresh(data_service)
+        status = 202 if result.get("accepted") else 429
+        return JSONResponse(status_code=status, content=result)
+    except Exception as e:
+        print(f"[SOCIAL_X_DASHBOARD_REFRESH] Error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "endpoint": "/api/social/x-dashboard/refresh"},
+        )
+
+
 @app.post("/api/query")
 @limiter.limit("10/minute")
 @traceable(name="main.query_agent")
