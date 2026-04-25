@@ -73,8 +73,25 @@ _FA_PRIOR_PRESENCE_THRESHOLD: float = 0.30
 # FA: hard recency cutoff in days (mentions older than this are not "fresh alpha")
 _FA_RECENCY_CUTOFF: int = 14
 
-# SA: current raw_score must be at least this multiple of prior to show "acceleration"
+# SA: single-snapshot accel_ratio fallback (used when history has < 4d of spread)
 _SA_ACCEL_RATIO_MIN: float = 1.20
+
+# SA multi-window thresholds — active when ticker history has enough temporal spread
+# to produce meaningful per-day rate comparisons across rolling windows.
+#
+#   _SA_WINDOW_MIN_SPREAD_7D  — require ≥7 days of observation history to compute
+#                                w7 daily-rate vs long-run daily-rate comparison.
+#   _SA_WINDOW_MIN_SPREAD_3D  — require ≥4 days to compare w3 vs w7 daily rates.
+#   _SA_W90_BASE_MIN          — minimum cumulative window score (all obs ≤90d) for a
+#                                ticker to be considered "established" via history.
+#   _SA_W7_DAILY_RATE_MULT    — 7d daily rate must be ≥ this × historical daily rate.
+#   _SA_W3_DAILY_RATE_MULT    — 3d daily rate must be ≥ this × 7d daily rate
+#                                (catches late-breaking surges within the 7d window).
+_SA_WINDOW_MIN_SPREAD_7D:  float = 7.0
+_SA_WINDOW_MIN_SPREAD_3D:  float = 4.0
+_SA_W90_BASE_MIN:          float = 0.30
+_SA_W7_DAILY_RATE_MULT:    float = 1.25
+_SA_W3_DAILY_RATE_MULT:    float = 1.20
 
 # XC: minimum number of bullish accounts required for "shared conviction"
 _XC_MIN_ACCOUNTS: int = 2
@@ -131,6 +148,108 @@ def _name_lookup(current_snap: Optional[dict]) -> dict[str, tuple[str, str]]:
     return lookup
 
 
+# ── SA multi-window signal ────────────────────────────────────────────────────
+
+def _sa_window_signal(
+    ticker: str,
+    ticker_history: Optional[dict],
+    prior_raw: float,
+    cur_raw: float,
+    now_ts: float,
+) -> tuple[bool, bool]:
+    """Compute (has_prior_base, is_accel) using the best available temporal signal.
+
+    Uses ticker history observations (timestamped past scans) to build rolling
+    per-day rate comparisons across windows: w3 / w7 / w90.  The quality of the
+    signal improves automatically as history accumulates over real calendar days.
+
+    Window selection priority:
+
+    1. 7d+ spread:  Compare 7d daily rate vs historical daily rate (long baseline).
+                    Also check 3d daily rate vs 7d daily rate as a surge booster.
+                    This is the "90d baseline → 7d intensity → 3d intensity" signal
+                    the user described — fire SA when recent week is proportionally
+                    stronger than the established long-run rate.
+
+    2. 4d+ spread:  Compare 3d daily rate vs 7d daily rate.
+                    Catches "getting hotter this week vs last few days" when we
+                    don't yet have a full 7-day window split.
+
+    3. Fallback:    Single-snapshot accel_ratio (current / prior raw score).
+                    Used when history is too new to have temporal spread.
+                    This is the minimum viable signal — always available.
+
+    has_prior_base is broadened beyond "appears in immediately prior snapshot":
+      A ticker qualifies as established if its cumulative window score (w90) is
+      above _SA_W90_BASE_MIN — i.e. it has been actively mentioned across multiple
+      past scans, even if it temporarily fell below the save threshold in the
+      latest prior snapshot.
+    """
+    obs_list = (ticker_history or {}).get(ticker, [])
+    if obs_list:
+        # Age each observation in fractional days from now
+        aged = [
+            (max(0.0, (now_ts - float(o["t"])) / 86400.0), float(o.get("r", 0) or 0))
+            for o in obs_list
+        ]
+        spread = max((d for d, _ in aged), default=0.0)
+
+        def wsum(max_d: float) -> float:
+            return sum(r for d, r in aged if d <= max_d)
+
+        if spread >= _SA_WINDOW_MIN_SPREAD_7D:
+            # ── 7d-spread path: primary multi-window gate ──────────────────
+            w3  = wsum(3.0)
+            w7  = wsum(7.0)
+            w90 = wsum(90.0)    # all obs if total span < 90 days
+
+            has_pb = (
+                (w90  >= _SA_W90_BASE_MIN)
+                or (prior_raw >= _FA_PRIOR_PRESENCE_THRESHOLD)
+            )
+
+            # Compare 7d daily rate vs long-run daily rate
+            # base_daily uses actual span so a 10-day history isn't treated as 90d
+            base_daily = w90 / max(spread, 0.1)
+            w7_daily   = w7  / 7.0
+
+            accel = w7_daily >= base_daily * _SA_W7_DAILY_RATE_MULT
+
+            # Boost: 3d daily rate surging above 7d daily rate
+            if not accel and w7 > 0:
+                w3_daily = w3 / 3.0
+                if w3_daily >= (w7 / 7.0) * _SA_W3_DAILY_RATE_MULT:
+                    accel = True
+
+            return has_pb, accel
+
+        if spread >= _SA_WINDOW_MIN_SPREAD_3D:
+            # ── 4-7d spread path: w3 vs w7 rate comparison ────────────────
+            w3 = wsum(3.0)
+            w7 = wsum(7.0)   # includes obs between 3-7 days ago
+
+            has_pb = (
+                (w7   >= _SA_W90_BASE_MIN)
+                or (prior_raw >= _FA_PRIOR_PRESENCE_THRESHOLD)
+            )
+
+            if w7 > 0:
+                w3_daily = w3 / 3.0
+                w7_daily = w7 / 7.0
+                accel    = w3_daily >= w7_daily * _SA_W3_DAILY_RATE_MULT
+            else:
+                accel = False
+
+            return has_pb, accel
+
+    # ── Fallback: single-snapshot accel_ratio ──────────────────────────────
+    # Used when history has < 4 days of spread (e.g. system just started,
+    # or all scans happened within the same day).
+    has_pb = prior_raw >= _FA_PRIOR_PRESENCE_THRESHOLD
+    accel  = (cur_raw / (prior_raw + 0.01)) >= _SA_ACCEL_RATIO_MIN
+    return has_pb, accel
+
+
 # ── Unified classifier ────────────────────────────────────────────────────────
 
 def _classify_tickers_for_sections(
@@ -156,17 +275,16 @@ def _classify_tickers_for_sections(
                             "Accelerating"/"Rising" → has momentum history
                             "New Mention"/""        → brand-new name
 
-    When prior_br_map has data (rich path — use actual historical comparison):
+    When prior_br_map has data (rich path — history-driven):
       is_novel       = prior_raw < FA_PRIOR_PRESENCE_THRESHOLD
                        (brand-new or very low historical presence)
-      has_prior_base = prior_raw >= FA_PRIOR_PRESENCE_THRESHOLD
-                       (was meaningfully active in the prior scan)
-      is_accel       = accel_ratio >= SA_ACCEL_RATIO_MIN
-                       ONLY based on actual measured ratio — no Grok buzz used.
-                       Buzz is a qualitative label; actual prior/current scores
-                       are the ground truth for "is this strengthening."
+      has_prior_base,
+      is_accel       = _sa_window_signal(ticker, ticker_history, prior_raw, cur_raw, now)
+                       Multi-window signal — see _sa_window_signal() docstring.
+                       Priority: 7d-spread → 4d-spread → single-snapshot accel_ratio.
+                       No Grok buzz_trend used anywhere in the rich path.
       XC requires:   NOT fa AND NOT sa AND has_prior_base AND accts >= XC_MIN_ACCOUNTS
-                     Established (has prior) + multi-account + not novel + not accel.
+                     Established + multi-account + not novel + not accelerating.
 
     When prior_br_map is empty (degraded path — last-resort proxies only):
       is_novel       = accts == 1 OR buzz in FA_BUZZ_NOVEL
@@ -175,6 +293,7 @@ def _classify_tickers_for_sections(
       XC:            NOT fa AND NOT sa AND accts >= XC_MIN_ACCOUNTS
     """
     prior_has_data = len(prior_br_map) > 0
+    now            = time.time()
     classes: dict[str, str] = {}
 
     for bs in backend_ranked:
@@ -202,11 +321,15 @@ def _classify_tickers_for_sections(
         accel_ratio   = cur_raw / (prior_raw + 0.01)
 
         if prior_has_data:
-            # ── Rich path: actual historical accel_ratio drives classification ──
-            # No Grok buzz used here — actual measured change is the signal.
-            is_novel       = prior_raw < _FA_PRIOR_PRESENCE_THRESHOLD
-            has_prior_base = prior_raw >= _FA_PRIOR_PRESENCE_THRESHOLD
-            is_accel       = accel_ratio >= _SA_ACCEL_RATIO_MIN
+            # ── Rich path: multi-window history drives classification ──────────
+            # Novelty is still based on prior_raw (supplemented from history above).
+            is_novel = prior_raw < _FA_PRIOR_PRESENCE_THRESHOLD
+            # SA has_prior_base and is_accel use the best available window signal.
+            # _sa_window_signal() selects: 7d-spread → 4d-spread → accel_ratio.
+            # Grok buzz_trend is not consulted here.
+            has_prior_base, is_accel = _sa_window_signal(
+                ticker, ticker_history, prior_raw, cur_raw, now
+            )
         else:
             # ── Degraded path: no prior data — proxy signals only ─────────────
             # Use only the strongest Grok buzz signal ("Accelerating") as proxy
