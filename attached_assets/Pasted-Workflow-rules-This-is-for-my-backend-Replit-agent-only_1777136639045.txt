@@ -1,0 +1,171 @@
+Workflow rules:
+
+This is for my backend Replit agent only
+Do not worry about pushing to git
+Audit first, then implement
+
+This is a focused fix for the X/social snapshot derivation logic. Do not broaden scope.
+
+PRIMARY PROBLEMS
+
+Freshest Alpha is still not surfacing all recent fresh tickers from my high-quality trader accounts
+X Consensus is now showing names that belong more in Freshest Alpha than in true shared-conviction consensus
+The backend/frontend data separation may be contributing to ticker-thesis mismatches if ticker metadata is not cleanly keyed
+
+CRITICAL PRODUCT INTENT
+
+I need three sections to be clearly separated:
+
+A. X Consensus
+
+top tickers mentioned with real shared conviction across the included accounts
+broader agreement matters here
+should not be dominated by one or two very recent fresh calls
+
+B. Freshest Alpha
+
+all newly emerging bullish tickers from ONLY:
+top_trader
+above_average_trader
+if one of those accounts starts talking positively about a new ticker in the last 7 days, it should show up here
+more recent = higher rank
+this should not be overly restrictive
+I want hidden/time-sensitive alpha here, not just the obvious names
+
+C. Sentiment Acceleration
+
+consensus/popular names across the full account universe
+where momentum is increasing and attention is strengthening
+not just brand-new single-name fresh calls
+
+CURRENT OBSERVED ISSUES
+
+Freshest Alpha still seems to miss recent new names
+X Consensus seems contaminated by names that are really just recent fresh calls
+section boundaries are still not clean enough
+
+AUDIT FIRST
+Inspect and report:
+
+Current X Consensus derivation
+exactly what fields and scoring it uses right now
+why recent fresh-call names can still bubble into X Consensus
+whether shared-conviction/breadth thresholds are too weak
+Current Freshest Alpha derivation
+exactly why some recent fresh names from top/above-average traders are still excluded
+whether there is:
+a hard cap that is too low
+an over-strict novelty filter
+a prior-history penalty that suppresses valid recent calls
+a breadth requirement that is too strict
+any over-deduping
+Current Sentiment Acceleration derivation
+verify it still uses all-account momentum and is not overlapping too much with Freshest Alpha
+Current snapshot row/key integrity
+verify that each ticker’s thesis/rationale/catalysts are stored keyed by ticker correctly
+confirm there is no backend-level possibility that one ticker’s thesis text is being assigned to another ticker in the normalized payload
+
+IMPLEMENTATION TARGET
+
+PART 1 — Tighten X Consensus so it means shared conviction
+Refine X Consensus scoring/eligibility so it favors:
+
+broader bullish agreement across accounts
+weighted breadth
+sustained conviction
+less novelty bias than Freshest Alpha
+
+Strong preference:
+
+require a meaningful breadth threshold or breadth-weighted score floor
+reduce the influence of very recent single-account or dual-account fresh calls
+keep top-trader weighting, but do not let one fresh call hijack consensus
+
+In plain English:
+X Consensus = “what the account universe is most collectively aligned on”
+
+PART 2 — Make Freshest Alpha inclusive for new top/above-average trader calls
+Refine Freshest Alpha so:
+
+it uses ONLY top_trader and above_average_trader accounts
+any bullish new ticker mentioned in the last 7 days by those accounts is eligible
+newer mentions rank higher
+multiple strong-account mentions rank higher
+but do NOT require high consensus to appear
+this section should surface all qualifying fresh names, not just the obvious few
+
+Important:
+
+if a ticker was barely present before and starts showing up in the last 7 days, it should appear
+if a top or above-average trader starts shilling a new name in the last few days, it should show
+do not over-penalize because a ticker appeared once long ago
+
+Strong preference for explicit rules like:
+
+eligibility window = bullish mentions within last 7 days from top/above-average accounts
+scoring = recency-first, then tier-weighted breadth, then conviction/specificity
+default surfaced count should be increased if current cap is too low
+
+PART 3 — Keep Sentiment Acceleration focused on strengthening consensus
+Do not let it drift into Freshest Alpha.
+It should continue to use all-account strengthening over multi-window horizons.
+If needed, explicitly de-emphasize names that are too new and have no broader buildup yet.
+
+In plain English:
+Sentiment Acceleration = “consensus names getting hotter”
+Freshest Alpha = “new high-quality trader calls”
+
+PART 4 — Expose enough Freshest Alpha names
+Audit current response caps and increase if needed.
+
+Strong preference:
+
+Social page Freshest Alpha should receive a large enough list to actually show the fresh hidden names
+do not truncate too early in backend
+
+PART 5 — Preserve contracts
+Do NOT break:
+
+Home page Trending on X
+Social page section contracts
+Theme Leadership
+Only improve separation/quality between:
+X Consensus
+Freshest Alpha
+Sentiment Acceleration
+
+PART 6 — Ticker-key integrity
+Verify ticker-specific narrative fields are stored and returned keyed by ticker cleanly so the frontend can bind them safely.
+If useful, expose per-ticker fields more explicitly and avoid ambiguous merged narrative blobs.
+
+VERIFY
+Before finishing, prove with real examples:
+
+Freshest Alpha now includes all qualifying fresh bullish tickers from top/above-average traders in the last 7 days
+those names are ordered primarily by recency and quality, not just consensus size
+X Consensus now reflects broader shared conviction and excludes names that are really just fresh isolated calls
+Sentiment Acceleration remains distinct from both
+payloads remain backward compatible
+
+Also provide:
+
+3 example tickers that now appear in Freshest Alpha and why
+3 example tickers that remain in X Consensus and why
+2 example tickers that belong in Sentiment Acceleration and why
+
+DELIVERABLES
+When done, report:
+
+exact backend files changed
+exact changes made to X Consensus derivation
+exact changes made to Freshest Alpha derivation
+exact surfaced-count changes if any
+exact changes made to keep Sentiment Acceleration distinct
+confirmation contracts remained compatible
+
+EXECUTION STYLE
+
+Audit first
+Separate the three concepts cleanly
+Make Freshest Alpha less restrictive and more recency-driven
+Keep X Consensus about shared conviction
