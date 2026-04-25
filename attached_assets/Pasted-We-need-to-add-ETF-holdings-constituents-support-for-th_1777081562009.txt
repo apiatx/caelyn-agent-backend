@@ -1,0 +1,173 @@
+We need to add ETF holdings (constituents) support for the Sectors page popup without breaking anything and while respecting VERY LOW Finnhub API limits.
+
+This applies to:
+- Sector Performance → Sectors mode (XLK, XLE, XLF, etc.)
+- Sector Performance → Themes mode (SMH, SOXX, QTUM, SRVR, BLOK, etc.)
+
+----------------------------------
+GOAL
+----------------------------------
+
+When the frontend opens the ETF popup, backend should return:
+- Price
+- Performance (1D, 7D, 30D, YTD, 1Y)
+- ETF holdings (stocks inside the ETF)
+
+----------------------------------
+CRITICAL CONSTRAINT
+----------------------------------
+
+Finnhub API usage must be MINIMIZED.
+
+DO NOT:
+- Refresh holdings frequently
+- Fetch holdings for all ETFs automatically
+- Waste calls on page load
+
+----------------------------------
+ARCHITECTURE
+----------------------------------
+
+1. CREATE ETF HOLDINGS SERVICE
+
+File:
+services/sector_rotation/etf_holdings_service.py
+
+Function:
+
+get_etf_holdings(symbol: str) -> dict
+
+Return format:
+
+{
+  "symbol": "SMH",
+  "as_of": "2026-04-24",
+  "source": "finnhub",
+  "holding_count": 25,
+  "top_holdings": [
+    { "ticker": "NVDA", "name": "NVIDIA Corp", "weight": 22.4 },
+    ...
+  ],
+  "holdings": [
+    { "ticker": "NVDA", "name": "NVIDIA Corp", "weight": 22.4 },
+    ...
+  ],
+  "updated_at": "2026-04-24T18:00:00Z"
+}
+
+----------------------------------
+2. DATA SOURCE PRIORITY
+----------------------------------
+
+1. Finnhub ETF Holdings (PRIMARY)
+2. FMP ETF holdings (FALLBACK, ONLY if needed and safe)
+3. No scraping
+
+----------------------------------
+3. CACHE STRATEGY (VERY IMPORTANT)
+----------------------------------
+
+ETF holdings change slowly.
+
+Use:
+
+TTL = 7 DAYS (MINIMUM)
+
+Also implement:
+
+STALE-WHILE-REVALIDATE behavior:
+
+- 0–7 days → fresh
+- 7–30 days → stale but still usable
+- >30 days → force refresh
+
+Rules:
+
+- NEVER fetch holdings unless:
+  a) popup is opened
+  b) cache is missing OR stale
+- If stale (7–30 days):
+  → return cached immediately
+  → trigger async refresh in background (if possible)
+- If API fails:
+  → return stale data anyway
+
+Store:
+
+sector_etf_holdings:{symbol}
+
+Cache must persist across restarts if possible.
+
+----------------------------------
+4. ADD ETF DETAIL ENDPOINT
+----------------------------------
+
+Route:
+
+GET /api/sectors/etf/{symbol}
+
+Response:
+
+{
+  "symbol": "SMH",
+  "price": 160.22,
+  "performance": {
+    "1d": 5.64,
+    "7d": 11.69,
+    "30d": 35.09,
+    "ytd": 51.20,
+    "1y": 167.08
+  },
+  "holding_count": 25,
+  "top_holdings": [...],
+  "holdings": [...],
+  "as_of": "...",
+  "updated_at": "...",
+  "source": "finnhub"
+}
+
+----------------------------------
+5. PERFORMANCE + PRICE
+----------------------------------
+
+Reuse existing quote/history logic.
+
+DO NOT add extra API calls.
+
+----------------------------------
+6. INTEGRATION WITH THEMES
+----------------------------------
+
+For themes:
+- Use leader_symbol (e.g. SMH)
+- Only return holdings for that ETF
+
+----------------------------------
+7. DO NOT MODIFY EXISTING ENDPOINTS
+----------------------------------
+
+Do NOT:
+- Break /api/sectors/performance
+- Break /api/sectors/relative-strength
+- Add heavy payloads to existing responses
+
+Keep holdings ONLY in detail endpoint.
+
+----------------------------------
+8. ACCEPTANCE TESTS
+----------------------------------
+
+curl /api/sectors/etf/XLK
+curl /api/sectors/etf/SMH
+
+Must return:
+- price
+- performance
+- holdings
+- top_holdings
+- holding_count
+
+Must:
+- NOT trigger AI calls
+- NOT spam Finnhub
+- Use cache after first call

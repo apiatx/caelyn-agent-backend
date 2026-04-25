@@ -18,6 +18,8 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from subscription import require_subscription
 
+import httpx
+
 from services.sector_rotation.providers import fetch_etf_quotes, fetch_all_histories
 from services.sector_rotation.schemas import (
     SectorRotationDashboard,
@@ -147,6 +149,99 @@ async def sectors_page_data_endpoint(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Sectors page error: {e}")
+
+
+@sectors_router.get("/etf/{symbol}")
+async def etf_detail_endpoint(symbol: str):
+    """
+    ETF detail: price, multi-timeframe performance, and holdings.
+
+    Works for both broad SPDR sector ETFs (XLK, XLE, …) and theme ETFs
+    (SMH, SOXX, CIBR, URA, …).
+
+    Holdings are lazy-loaded with a 7-day fresh / 30-day stale cache.
+    No AI calls. No extra quote fetches — reuses existing Tradier/Finnhub providers.
+    """
+    sym = symbol.upper().strip()
+    if not sym or not sym.isalpha() or len(sym) > 10:
+        raise HTTPException(status_code=400, detail=f"Invalid ETF symbol: {symbol!r}")
+
+    import datetime as _dt
+    from services.sector_rotation.providers import (
+        fetch_etf_history,
+        _tradier_quotes_batch,
+        _finnhub_quote_single,
+    )
+    from services.sector_rotation.analytics import _pct_change, _ytd_change
+    from services.sector_rotation.etf_holdings_service import get_etf_holdings
+
+    now_iso = _dt.datetime.utcnow().isoformat() + "Z"
+
+    # ── 1. Quote (price + 1D change) ─────────────────────────────────────────
+    price: float | None = None
+    change_1d: float | None = None
+
+    try:
+        td_data = await _tradier_quotes_batch([sym])
+        q = td_data.get(sym, {})
+        if not q:
+            async with httpx.AsyncClient() as session:
+                _, q = await _finnhub_quote_single(sym, session)
+        price     = q.get("price") or q.get("last")
+        change_1d = q.get("change_1d_pct")
+    except Exception as e:
+        print(f"[ETF_DETAIL] Quote error for {sym}: {e}")
+
+    # ── 2. History (performance periods) ─────────────────────────────────────
+    hist: list[dict] = []
+    try:
+        hist = await fetch_etf_history(sym, days=400)
+    except Exception as e:
+        print(f"[ETF_DETAIL] History error for {sym}: {e}")
+
+    if price is None and hist:
+        price = round(float(hist[-1]["close"]), 2)
+
+    if change_1d is None and len(hist) >= 2:
+        prev = float(hist[-2]["close"])
+        last = float(hist[-1]["close"])
+        change_1d = round((last - prev) / prev * 100, 2) if prev else None
+
+    def _pct(n: int) -> float | None:
+        v = _pct_change(hist, n)
+        return round(v, 2) if v is not None else None
+
+    _ytd = _ytd_change(hist)
+    performance = {
+        "1d":  round(change_1d, 2) if change_1d is not None else None,
+        "7d":  _pct(5),
+        "30d": _pct(22),
+        "ytd": round(_ytd, 2) if _ytd is not None else None,
+        "1y":  _pct(252),
+    }
+
+    # ── 3. Holdings (lazy, aggressively cached) ───────────────────────────────
+    holdings_data: dict = {}
+    try:
+        holdings_data = await get_etf_holdings(sym)
+    except Exception as e:
+        print(f"[ETF_DETAIL] Holdings error for {sym}: {e}")
+        holdings_data = {
+            "symbol": sym, "source": "none",
+            "holding_count": 0, "holdings": [], "top_holdings": [],
+        }
+
+    return {
+        "symbol":        sym,
+        "price":         round(price, 2) if price else None,
+        "performance":   performance,
+        "holding_count": holdings_data.get("holding_count", 0),
+        "top_holdings":  holdings_data.get("top_holdings") or holdings_data.get("holdings", [])[:10],
+        "holdings":      holdings_data.get("holdings", []),
+        "as_of":         holdings_data.get("as_of"),
+        "updated_at":    holdings_data.get("updated_at") or now_iso,
+        "source":        holdings_data.get("source", "none"),
+    }
 
 
 @sectors_router.get("/performance")
