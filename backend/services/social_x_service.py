@@ -5,31 +5,25 @@ Derives 4 Social sections from the existing x_consensus_cache snapshot —
 NO additional Grok / XAI calls are made here.
 
 Sections:
-  A. x_consensus         — from raw.consensus_picks            [UNCHANGED]
-  B. freshest_alpha      — deterministic from _mention_data    [REWRITTEN]
+  A. x_consensus         — from raw.consensus_picks (breadth-gated)
+  B. freshest_alpha      — deterministic from _mention_data
   C. theme_leadership    — from raw.hype_radar + raw.market_pulse [UNCHANGED]
-  D. sentiment_accel     — deterministic from _mention_data    [REWRITTEN]
+  D. sentiment_accel     — deterministic from _mention_data
 
-B and D were previously driven by Grok-written fields (raw.fresh_trades,
-raw.consensus_picks delta).  They now use _mention_data — the per-account,
-per-mention extraction saved during Phase-1 of each refresh cycle — to
-derive rankings deterministically without any additional API calls.
+Section separation design:
+  X Consensus      = multi-account shared conviction. Requires ≥2 bullish accounts
+                     OR an established mention (>7 days old). Single-account fresh
+                     calls are excluded — they belong in Freshest Alpha.
+  Freshest Alpha   = ONLY top_trader + above_average_trader. Any bullish mention
+                     ≤21d qualifies. No consensus required. Cap raised to 20.
+                     More recency-first than consensus-first.
+  Sentiment Accel  = ALL accounts, multi-window momentum. Requires either ≥2
+                     accounts OR some prior 30d history (w30>0). Prevents pure
+                     single-account brand-new calls from appearing here.
 
-freshest_alpha:
-  • ONLY top_trader + above_average_trader accounts
-  • Aggressive recency weighting (0d=3.0× vs 14d=0.3×)
-  • Novelty boost for tickers absent from prior backend-ranked top-10
-  • Goal: "what are my best active traders NEWLY calling?"
-
-sentiment_acceleration:
-  • ALL accounts (excl. macro_big_picture for ticker scoring)
-  • Multi-window scoring: 3d / 7d / 14d / 30d / 90d
-  • Acceleration = slope steepening (3d hotter than 7d hotter than 14d)
-  • Goal: "which consensus names are getting stronger and stronger lately?"
-
-Fallback: if _mention_data is absent (pre-existing snapshot before this
-update), both sections fall back to the legacy Grok-field approach so the
-dashboard never goes empty.
+Fallback: if _mention_data is absent (pre-existing snapshot), both deterministic
+sections fall back to the legacy Grok-field approach so the dashboard never
+goes empty.
 """
 from __future__ import annotations
 
@@ -43,15 +37,18 @@ from typing import Any, Optional
 _FA_ELIGIBLE_TIERS: frozenset[str] = frozenset({"top_trader", "above_average_trader"})
 
 # Aggressive recency boosts for FA (much steeper than the general scoring buckets).
-# "Fresh" means recent — a 14-day-old call is NOT freshest alpha.
+# Grok's recency estimates are integer approximations — a tweet from 10 days ago may
+# come back as recency_days=15. The window extends to 21d to absorb that imprecision;
+# the steep decay ensures only truly fresh calls score meaningfully.
 _FA_RECENCY_BOOSTS: list[tuple[int, float]] = [
     (0,  3.0),   # today
     (1,  2.5),   # yesterday
     (3,  2.0),   # last 3 days
     (7,  1.0),   # last week
-    (14, 0.3),   # 2 weeks — barely qualifies
+    (14, 0.3),   # 2 weeks — low score but still eligible
+    (21, 0.1),   # 3 weeks — very low; catches Grok off-by-a-few-days estimates
 ]
-_FA_RECENCY_FALLBACK = 0.05  # >14d effectively excluded
+_FA_RECENCY_FALLBACK = 0.02  # >21d: effectively excluded (near-zero score)
 
 
 def _fa_recency_boost(days: int) -> float:
@@ -108,20 +105,51 @@ def _name_lookup(current_snap: Optional[dict]) -> dict[str, tuple[str, str]]:
 
 # ── Section A — X Consensus ─────────────────────────────────────────────────
 
-def _build_x_consensus(raw: dict) -> list[dict]:
+def _build_x_consensus(raw: dict, current_snap: Optional[dict] = None) -> list[dict]:
     """
     Normalise consensus_picks into the Social-page row format.
-    All fields come directly from the Grok contract output.
-    UNCHANGED from original implementation.
+
+    Breadth gate (new):
+      To keep X Consensus about SHARED conviction rather than individual fresh calls,
+      each pick is checked against _backend_ranked:
+        • Accepted: bullish_account_count ≥ 2  (multi-account consensus)
+        • Accepted: bullish_account_count = 1 AND recency_days_min > 7  (single but
+          established — has been discussed for more than a week, not a flash fresh call)
+        • Rejected: bullish_account_count ≤ 1 AND recency_days_min ≤ 7  (single-account
+          fresh call — belongs in Freshest Alpha, not X Consensus)
+        • Accepted: no backend data for this ticker (Grok-only fallback; trust Grok)
+
+    Grok-flagged fresh trades (is_fresh_trade=True) are accepted IF they meet the
+    breadth requirement; otherwise they are also excluded.
+
+    Contract fields are preserved exactly for backward compatibility.
     """
     picks = raw.get("consensus_picks") or []
+
+    # Build backend-rank lookup for breadth filtering
+    backend_ranked: list[dict] = (current_snap or {}).get("_backend_ranked") or []
+    backend_by_ticker: dict[str, dict] = {s["ticker"]: s for s in backend_ranked}
+
     out: list[dict] = []
+    excluded_count = 0
+
     for p in picks:
         if not isinstance(p, dict):
             continue
         ticker = (p.get("ticker") or "").upper().lstrip("$")
         if not ticker:
             continue
+
+        # ── Breadth gate ──────────────────────────────────────────────────
+        bs = backend_by_ticker.get(ticker)
+        if bs:
+            acct_count  = bs.get("bullish_account_count") or 0
+            min_recency = bs.get("recency_days_min")
+            # Reject: clearly a single fresh call — not consensus
+            if acct_count <= 1 and min_recency is not None and min_recency <= 7:
+                excluded_count += 1
+                continue
+
         out.append({
             "rank":               p.get("rank"),
             "ticker":             ticker,
@@ -138,6 +166,12 @@ def _build_x_consensus(raw: dict) -> list[dict]:
             "fresh_trade_note":   p.get("fresh_trade_note"),
             "trader_theses":      p.get("trader_theses") or [],
         })
+
+    if excluded_count:
+        print(
+            f"[social_x] X Consensus breadth gate: removed {excluded_count} "
+            f"single-account fresh pick(s) from consensus_picks"
+        )
     return out
 
 
@@ -202,8 +236,8 @@ def _build_freshest_alpha(
             recency_days = int(rd_raw) if rd_raw is not None else 30
             recency_days = max(0, min(recency_days, 365))
 
-            if recency_days > 14:
-                continue  # too stale for freshest alpha
+            if recency_days > 21:
+                continue  # >21d: too stale for freshest alpha (>14d already near-zero score)
 
             fa_boost = _fa_recency_boost(recency_days)
             conviction = (m.get("conviction") or "medium").lower()
@@ -233,10 +267,13 @@ def _build_freshest_alpha(
 
     results: list[dict] = []
     for ticker, b in buckets.items():
-        if b["min_recency"] > 14 or b["score"] <= 0:
+        if b["min_recency"] > 21 or b["score"] <= 0:
             continue
 
         # Novelty multiplier (prior snapshot comparison)
+        # Penalises well-known names so truly new calls surface above established
+        # favourites — but penalty is gentler (0.75 not 0.6) to avoid burying a
+        # re-emerging name if a top trader starts re-shilling it with fresh calls.
         prior_rank = prior_rank_by_ticker.get(ticker)
         if prior_rank is None:
             novelty_mult = 1.5    # brand new — not in prior at all
@@ -245,7 +282,7 @@ def _build_freshest_alpha(
         elif prior_rank >= 5:
             novelty_mult = 0.9    # seen, moderately established
         else:
-            novelty_mult = 0.6    # rank 0-4: well-established favorite
+            novelty_mult = 0.75   # rank 0-4: known name, but still valid fresh call
 
         n_accts = len(b["accounts"])
         breadth_mult = 1.0 + min(0.20 * (n_accts - 1), 0.40)
@@ -306,7 +343,9 @@ def _build_freshest_alpha(
             "signal": top["spotlight_signal"],
         }
 
-    return {"trades": results[:10], "spotlight": spotlight}
+    # Cap raised from 10 → 20 so hidden/lower-ranked fresh calls are visible.
+    # Frontend can truncate if it wants to show fewer; backend sends the full set.
+    return {"trades": results[:20], "spotlight": spotlight}
 
 
 def _build_freshest_alpha_legacy(raw: dict) -> dict:
@@ -523,10 +562,19 @@ def _build_sentiment_accel(
     results: list[dict] = []
     for ticker, b in buckets.items():
         w3, w7, w14, w30, w90 = b["w3"], b["w7"], b["w14"], b["w30"], b["w90"]
+        n_accts_pre = len(b["accounts"])
 
         # Must have some activity in the last 14d to qualify
         if w14 <= 0:
             continue
+
+        # ── SA breadth gate ────────────────────────────────────────────────
+        # SA = "strengthening consensus" — requires either:
+        #   • ≥2 accounts (genuine multi-account momentum), OR
+        #   • Single account with prior 30d activity (not a brand-new isolated call)
+        # Single-account brand-new calls belong in Freshest Alpha, not SA.
+        if n_accts_pre == 1 and w30 == 0:
+            continue  # fresh single-account call — exclude from SA
 
         # Slope ratios (ε prevents div-by-zero; ratio > 1.0 means recent hotter)
         slope_7_to_3   = w3  / (w7  + 0.01)
@@ -818,6 +866,7 @@ def build_x_dashboard() -> dict:
             "market_pulse":           None,
             "portfolio_bias":         None,
             "spotlight":              None,
+            "x_consensus":            [],
             "freshest_alpha":         {"trades": [], "spotlight": None},
             "theme_leadership":       {"themes": [], "market_pulse": None},
             "sentiment_acceleration": [],
@@ -829,6 +878,8 @@ def build_x_dashboard() -> dict:
         "market_pulse":   cur_raw.get("market_pulse"),
         "portfolio_bias": cur_raw.get("portfolio_bias"),
         "spotlight":      cur_raw.get("spotlight"),
+        # Pass current_snap so X Consensus can apply the backend-rank breadth gate
+        "x_consensus":            _build_x_consensus(cur_raw, current_snap),
         "freshest_alpha":         _build_freshest_alpha(current_snap, prior_snap),
         "theme_leadership":       _build_theme_leadership(cur_raw),
         "sentiment_acceleration": _build_sentiment_accel(current_snap, prior_snap),
