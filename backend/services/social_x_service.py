@@ -325,34 +325,86 @@ def _build_metadata(snapshot: Optional[dict]) -> dict:
 
 def build_x_dashboard() -> dict:
     """
-    Build the full Social X-dashboard payload from cached snapshots only.
+    Build the Social X-dashboard payload from cached snapshots only.
+    Zero Grok/XAI calls.
 
-    Zero Grok calls.  Returns all 4 sections plus metadata.
+    Shape contract — the response is a MERGE of:
+
+    A. The existing Home-style consensus payload (flat, unchanged):
+         generated_at, top_tickers, key_themes, notable_accounts,
+         is_stale, stale, data_state, age_seconds, refresh_in_progress,
+         available, refresh_window_open, next_allowed_refresh_at, timezone
+       These keys are produced by _public_payload() — identical to the shape
+       the Home page and the existing Social consensus section already consume.
+       They must remain byte-for-byte identical so the existing frontend
+       consensus rendering path does not break.
+
+    B. Three Social-only sibling sections (new, additive):
+         freshest_alpha       — from raw.fresh_trades + spotlight.freshest_alpha
+         theme_leadership     — from raw.hype_radar + raw.market_pulse
+         sentiment_acceleration — deterministic delta vs prior snapshot
+
+    C. Extra convenience keys from the raw snapshot:
+         market_pulse, portfolio_bias, spotlight
+
+    D. Social-specific metadata (richer than the Home subset):
+         updated_at, data_state, stale, refresh_in_progress,
+         auto_refresh_window_open, refresh_window_open,
+         next_allowed_refresh_at, manual_refresh_available,
+         next_manual_refresh_allowed_at, manual_refresh_reason,
+         timezone, handles_count
     """
+    from services.x_consensus_cache import (
+        _load_disk_cache as _ldc,
+        _public_payload,
+        _in_refresh_window,
+        _REFRESH_LOCK,
+    )
+
     current_snap, prior_snap = _load_snapshots()
     cur_raw  = _raw(current_snap)
     prev_raw = _raw(prior_snap)
 
+    # ── A. Existing Home-style flat payload (MUST NOT change) ─────────────
+    window_open         = _in_refresh_window()
+    refresh_in_progress = _REFRESH_LOCK.locked()
+    home_payload = _public_payload(
+        current_snap,
+        refresh_in_progress=refresh_in_progress,
+        window_open=window_open,
+    )
+    # home_payload now contains:
+    #   generated_at, top_tickers, key_themes, notable_accounts, is_stale,
+    #   stale, data_state, age_seconds, refresh_in_progress, available,
+    #   refresh_window_open, next_allowed_refresh_at, timezone
+
     if not cur_raw:
-        # No snapshot yet — return honest no_data state
+        # No snapshot on disk yet — return Home-style empty payload plus empty
+        # Social-only sections so the frontend can render gracefully.
         return {
-            "market_pulse":          None,
-            "portfolio_bias":        None,
-            "spotlight":             None,
-            "x_consensus":           [],
-            "freshest_alpha":        {"trades": [], "spotlight": None},
-            "theme_leadership":      {"themes": [], "market_pulse": None},
+            **home_payload,
+            # ── Social-only additions ─────────────────────────────────
+            "market_pulse":           None,
+            "portfolio_bias":         None,
+            "spotlight":              None,
+            "freshest_alpha":         {"trades": [], "spotlight": None},
+            "theme_leadership":       {"themes": [], "market_pulse": None},
             "sentiment_acceleration": [],
-            "metadata":              _build_metadata(None),
+            "metadata":               _build_metadata(None),
         }
 
+    # ── B+C+D. Merge Social-only sections alongside unchanged Home payload ─
     return {
+        # ── A. Home-style flat keys (byte-for-byte identical to Home shape) ─
+        **home_payload,
+        # ── C. Extra convenience keys ──────────────────────────────────────
         "market_pulse":   cur_raw.get("market_pulse"),
         "portfolio_bias": cur_raw.get("portfolio_bias"),
         "spotlight":      cur_raw.get("spotlight"),
-        "x_consensus":            _build_x_consensus(cur_raw),
+        # ── B. Social-only sections (new, additive) ────────────────────────
         "freshest_alpha":         _build_freshest_alpha(cur_raw),
         "theme_leadership":       _build_theme_leadership(cur_raw),
         "sentiment_acceleration": _build_sentiment_accel(cur_raw, prev_raw),
+        # ── D. Social-specific metadata (richer than Home subset) ──────────
         "metadata":               _build_metadata(current_snap),
     }

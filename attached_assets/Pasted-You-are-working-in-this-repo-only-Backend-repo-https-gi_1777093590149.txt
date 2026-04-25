@@ -1,0 +1,128 @@
+You are working in this repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+This is a focused Social X dashboard backend bug fix. Do not broaden scope.
+
+PRIMARY BUG
+The Social page frontend verified the live payload and it is still receiving only the old Home-style `trending_on_x` shape:
+
+* generated_at
+* top_tickers
+* key_themes
+* notable_accounts
+* is_stale
+* stale
+* data_state
+* age_seconds
+* refresh_in_progress
+* available
+* refresh_window_open
+* next_allowed_refresh_at
+* timezone
+
+Critically:
+
+* `freshest_alpha` is missing
+* `x_consensus` is missing
+* `theme_leadership` is missing
+* `sentiment_acceleration` is missing
+
+So the frontend is not receiving the Social X dashboard payload it was promised.
+
+EXPECTED BACKEND CONTRACT
+The Social page should be powered by the dedicated Social X dashboard endpoint, not the old Home-style subset.
+The backend previously claimed the Social X dashboard returns:
+
+* `x_consensus`
+* `freshest_alpha`
+* `theme_leadership`
+* `sentiment_acceleration`
+* plus metadata
+  and that this is built from the existing cached X snapshot with zero extra Grok calls. 
+
+AUDIT FIRST — NO GUESSING
+Inspect and prove exactly:
+
+1. What endpoint the Social page is actually hitting today
+
+   * exact route in backend
+   * exact frontend proxy path if relevant/known from backend side
+2. Whether `/api/social/x-dashboard` exists live in the running backend
+3. What exact JSON it returns right now in production/dev
+4. Whether the frontend-facing proxy route is incorrectly mapped to:
+
+   * the Home `trending_on_x` payload
+   * or another legacy endpoint
+5. Whether the Social endpoint exists but is not wired into the public API surface correctly
+6. Whether the Social endpoint is returning the wrong shape even when called directly
+
+ROOT QUESTION TO ANSWER
+Why is the Social page still receiving the Home-style `trending_on_x` payload instead of the dedicated 4-section Social X dashboard payload?
+
+IMPLEMENT
+Fix the backend/public routing so the Social page can receive the correct dedicated payload.
+
+Required result:
+The Social X dashboard endpoint used by frontend must return:
+
+* `x_consensus`
+* `freshest_alpha`
+* `theme_leadership`
+* `sentiment_acceleration`
+* `market_pulse`
+* `portfolio_bias`
+* metadata such as:
+
+  * `updated_at`
+  * `data_state`
+  * `stale`
+  * `refresh_in_progress`
+  * `next_allowed_refresh_at`
+  * `next_manual_refresh_allowed_at`
+  * `timezone`
+
+IMPORTANT
+
+* Do NOT add extra Grok/XAI calls
+* Reuse the existing cached X snapshot
+* Preserve Home compatibility
+* Do NOT break the existing Home `Trending on X` path
+* This is about making Social hit the correct backend contract
+
+VERIFY
+Before finishing, prove with real payload inspection:
+
+1. direct call to the Social X dashboard endpoint returns:
+
+   * `x_consensus`
+   * `freshest_alpha`
+   * `theme_leadership`
+   * `sentiment_acceleration`
+2. the payload is not just the old Home-style `trending_on_x` subset
+3. `freshest_alpha.trades` is present when the underlying snapshot contains fresh trade entries, or is an empty array when truly empty
+4. no extra Grok calls were introduced
+5. Home payload remains unchanged
+
+DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact root cause
+3. exact endpoint/path the Social page should now use
+4. exact live payload keys after the fix
+5. whether the bug was:
+
+   * wrong endpoint
+   * wrong proxy mapping
+   * wrong response shape
+   * legacy route still being served
+6. confirmation changes were committed and pushed directly to `main`
