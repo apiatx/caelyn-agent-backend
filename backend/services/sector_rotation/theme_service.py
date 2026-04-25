@@ -29,7 +29,7 @@ from services.sector_rotation.schemas import ThemeSnapshot
 import httpx
 
 _HIST_TTL   = 3600     # 1h — daily bars don't change intraday
-_THEME_KEY  = "sr:theme_data:v1"
+_THEME_KEY  = "sr:theme_data:v2"
 
 
 def _market_hours_ttl() -> int:
@@ -218,13 +218,19 @@ def _build_theme_row(
     pct50s: list[float] = []
     accels: list[float] = []
     leader_sym: Optional[str] = None
+    leader_price: Optional[float] = None
     best_data_count = -1
 
     for sym in symbols:
         hist = histories.get(sym, [])
         q    = quotes.get(sym, {})
 
-        price = q.get("price") or (float(hist[-1]["close"]) if hist else None)
+        price = (
+            q.get("price")
+            or q.get("last")
+            or q.get("close")
+            or (round(float(hist[-1]["close"]), 2) if hist else None)
+        )
         if price:
             prices.append(price)
 
@@ -233,6 +239,7 @@ def _build_theme_row(
         if data_count > best_data_count:
             best_data_count = data_count
             leader_sym = sym
+            leader_price = price
 
         # 1D from quote
         c1d = q.get("change_1d_pct")
@@ -281,8 +288,12 @@ def _build_theme_row(
         "label":        meta["label"],
         "parent_sector": meta["parent_sector"],
         "theme_type":   meta["theme_type"],
-        "symbols":      symbols,
+        "symbols":       symbols,
         "leader_symbol": leader_sym,
+        "ticker":        leader_sym,
+        "price":         round(leader_price, 2) if leader_price else None,
+        "leader_price":  round(leader_price, 2) if leader_price else None,
+        "current_price": round(leader_price, 2) if leader_price else None,
         "performance": {
             "1d":  _med("1d"),
             "5d":  _med("5d"),

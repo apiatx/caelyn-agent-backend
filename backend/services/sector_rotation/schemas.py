@@ -199,6 +199,10 @@ class ThemeSnapshot(BaseModel):
     theme_type:            str = ""
     symbols:               list[str] = Field(default_factory=list)
     leader_symbol:         Optional[str] = None
+    ticker:                Optional[str] = None   # alias for leader_symbol — frontend convenience
+    price:                 Optional[float] = None  # current price of leader ETF
+    leader_price:          Optional[float] = None  # same as price — explicit alias
+    current_price:         Optional[float] = None  # same as price — extra alias
     performance:           Dict[str, Optional[float]] = Field(default_factory=dict)
     pct_from_50d:          Optional[float] = None
     trend_accel_20d:       Optional[float] = None
