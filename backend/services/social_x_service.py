@@ -5,25 +5,48 @@ Derives 4 Social sections from the existing x_consensus_cache snapshot —
 NO additional Grok / XAI calls are made here.
 
 Sections:
-  A. x_consensus         — from raw.consensus_picks (breadth-gated)
-  B. freshest_alpha      — deterministic from _mention_data
+  A. x_consensus         — from raw.consensus_picks (classification-gated)
+  B. freshest_alpha      — deterministic, novelty-relative
   C. theme_leadership    — from raw.hype_radar + raw.market_pulse [UNCHANGED]
-  D. sentiment_accel     — deterministic from _mention_data
+  D. sentiment_accel     — deterministic, prior-base + strengthening slope
 
-Section separation design:
-  X Consensus      = multi-account shared conviction. Requires ≥2 bullish accounts
-                     OR an established mention (>7 days old). Single-account fresh
-                     calls are excluded — they belong in Freshest Alpha.
-  Freshest Alpha   = ONLY top_trader + above_average_trader. Any bullish mention
-                     ≤21d qualifies. No consensus required. Cap raised to 20.
-                     More recency-first than consensus-first.
-  Sentiment Accel  = ALL accounts, multi-window momentum. Requires either ≥2
-                     accounts OR some prior 30d history (w30>0). Prevents pure
-                     single-account brand-new calls from appearing here.
+Section separation design (unified classification pass):
+  A single _classify_tickers_for_sections() pass runs first and assigns
+  every ticker in _backend_ranked to exactly one bucket:
 
-Fallback: if _mention_data is absent (pre-existing snapshot), both deterministic
-sections fall back to the legacy Grok-field approach so the dashboard never
-goes empty.
+    fa   — Freshest Alpha
+           Criteria: high-quality source (top_trader/above_average_trader)
+                   + recency ≤ FA_RECENCY_CUTOFF
+                   + IS novel relative to prior history
+           Novelty (when prior_br populated):
+             prior_raw_score < FA_PRIOR_PRESENCE_THRESHOLD
+           Novelty (when prior_br empty — fallback to current-snapshot signals):
+             bullish_account_count == 1  (single-source, not yet consensus)
+             OR buzz_trend == "New Mention"  (Grok flags as brand-new)
+
+    sa   — Sentiment Acceleration
+           Criteria: NOT classified as FA
+                   + has established prior base (prior_raw ≥ threshold OR
+                     Grok signals "Accelerating"/"Rising")
+                   + is strengthening (accel_ratio > threshold OR Grok says so)
+
+    xc   — X Consensus
+           Criteria: NOT classified as FA or SA
+                   + bullish_account_count ≥ 2
+
+    none — excluded from all three sections
+
+  Mutual exclusion is enforced. FA is highest priority, XC is lowest.
+
+Data paths:
+  When _mention_data IS present: rich per-mention window scoring is used for
+  FA + SA, with classification applied as a post-filter (mutual exclusion).
+  When _mention_data is absent: deterministic builders use _backend_ranked
+  directly (always populated). Legacy Grok field fallbacks are REMOVED —
+  they were causing the wrong tickers to appear.
+
+  X Consensus always uses consensus_picks (Grok curated) filtered by
+  classification: only 'xc'-classified tickers survive.
 """
 from __future__ import annotations
 
@@ -31,24 +54,39 @@ import time
 from typing import Any, Optional
 
 
-# ── Freshest Alpha tier config ────────────────────────────────────────────────
+# ── Tier constants ────────────────────────────────────────────────────────────
 
-# Only these two tiers are eligible for Freshest Alpha
 _FA_ELIGIBLE_TIERS: frozenset[str] = frozenset({"top_trader", "above_average_trader"})
 
-# Aggressive recency boosts for FA (much steeper than the general scoring buckets).
-# Grok's recency estimates are integer approximations — a tweet from 10 days ago may
-# come back as recency_days=15. The window extends to 21d to absorb that imprecision;
-# the steep decay ensures only truly fresh calls score meaningfully.
+# Grok buzz_trend values that signal "brand-new name" vs "has momentum history"
+_FA_BUZZ_NOVEL:    frozenset[str] = frozenset({"New Mention", ""})
+_SA_BUZZ_MOMENTUM: frozenset[str] = frozenset({"Accelerating", "Rising"})
+
+# ── Classification thresholds ─────────────────────────────────────────────────
+
+# Prior raw_score below this → ticker has no meaningful established history → FA eligible
+_FA_PRIOR_PRESENCE_THRESHOLD: float = 0.30
+
+# FA: hard recency cutoff in days (mentions older than this are not "fresh alpha")
+_FA_RECENCY_CUTOFF: int = 14
+
+# SA: current raw_score must be at least this multiple of prior to show "acceleration"
+_SA_ACCEL_RATIO_MIN: float = 1.20
+
+# XC: minimum number of bullish accounts required for "shared conviction"
+_XC_MIN_ACCOUNTS: int = 2
+
+# ── Freshest Alpha scoring ────────────────────────────────────────────────────
+
 _FA_RECENCY_BOOSTS: list[tuple[int, float]] = [
-    (0,  3.0),   # today
-    (1,  2.5),   # yesterday
-    (3,  2.0),   # last 3 days
-    (7,  1.0),   # last week
-    (14, 0.3),   # 2 weeks — low score but still eligible
-    (21, 0.1),   # 3 weeks — very low; catches Grok off-by-a-few-days estimates
+    (0,  3.0),
+    (1,  2.5),
+    (3,  2.0),
+    (7,  1.0),
+    (14, 0.3),
+    (21, 0.1),
 ]
-_FA_RECENCY_FALLBACK = 0.02  # >21d: effectively excluded (near-zero score)
+_FA_RECENCY_FALLBACK = 0.02
 
 
 def _fa_recency_boost(days: int) -> float:
@@ -58,16 +96,14 @@ def _fa_recency_boost(days: int) -> float:
     return _FA_RECENCY_FALLBACK
 
 
-# ── Snapshot loaders ─────────────────────────────────────────────────────────
+# ── Snapshot loaders ──────────────────────────────────────────────────────────
 
 def _load_snapshots() -> tuple[Optional[dict], Optional[dict]]:
-    """Return (current_snap, prior_snap).  Either may be None if not on disk."""
     from services.x_consensus_cache import _load_disk_cache, _load_prior_cache
     return _load_disk_cache(), _load_prior_cache()
 
 
 def _raw(snapshot: Optional[dict]) -> dict:
-    """Extract the raw Grok dict from a snapshot; return {} if absent."""
     if not snapshot or not isinstance(snapshot, dict):
         return {}
     r = snapshot.get("raw")
@@ -75,10 +111,6 @@ def _raw(snapshot: Optional[dict]) -> dict:
 
 
 def _name_lookup(current_snap: Optional[dict]) -> dict[str, tuple[str, str]]:
-    """
-    Build a {ticker: (name, tradingview_symbol)} lookup from consensus_picks.
-    Used to annotate FA and SA results with display names without extra API calls.
-    """
     lookup: dict[str, tuple[str, str]] = {}
     raw = _raw(current_snap)
     for p in (raw.get("consensus_picks") or []):
@@ -86,52 +118,128 @@ def _name_lookup(current_snap: Optional[dict]) -> dict[str, tuple[str, str]]:
             continue
         t = (p.get("ticker") or "").upper().lstrip("$").strip()
         if t:
-            lookup[t] = (
-                p.get("name") or "",
-                p.get("tradingview_symbol") or "",
-            )
-    # Also check fresh_trades (Grok may have names there too)
+            lookup[t] = (p.get("name") or "", p.get("tradingview_symbol") or "")
     for ft in (raw.get("fresh_trades") or []):
         if not isinstance(ft, dict):
             continue
         t = (ft.get("ticker") or "").upper().lstrip("$").strip()
         if t and t not in lookup:
-            lookup[t] = (
-                ft.get("name") or "",
-                ft.get("tradingview_symbol") or "",
-            )
+            lookup[t] = (ft.get("name") or "", ft.get("tradingview_symbol") or "")
     return lookup
 
 
-# ── Section A — X Consensus ─────────────────────────────────────────────────
+# ── Unified classifier ────────────────────────────────────────────────────────
 
-def _build_x_consensus(raw: dict, current_snap: Optional[dict] = None) -> list[dict]:
+def _classify_tickers_for_sections(
+    backend_ranked: list[dict],
+    prior_br_map: dict[str, dict],
+    buzz_map: dict[str, str],
+) -> dict[str, str]:
+    """
+    Assign every ticker in backend_ranked to exactly one section bucket.
+
+    Returns {ticker: 'fa' | 'sa' | 'xc' | 'none'}
+
+    Classification priority: fa > sa > xc > none
+
+    Signals used:
+      has_top_conviction  — any top_trader/above_average_trader in top_accounts
+      recency_days_min    — freshest mention in current scan
+      bullish_account_count — unique bullish accounts in current scan
+      prior_raw_score     — from prior _backend_ranked (0 if brand-new or prior empty)
+      accel_ratio         — cur_raw / (prior_raw + ε): how much stronger than before
+      buzz_trend          — Grok's label from consensus_picks:
+                            "Accelerating"/"Rising" → has momentum history
+                            "New Mention"/""        → brand-new name
+
+    When prior_br_map has data (ideal case):
+      is_novel     = prior_raw < FA_PRIOR_PRESENCE_THRESHOLD
+      has_prior_base = prior_raw ≥ FA_PRIOR_PRESENCE_THRESHOLD
+      is_accelerating = accel_ratio ≥ SA_ACCEL_RATIO_MIN
+                     OR buzz in SA_BUZZ_MOMENTUM
+
+    When prior_br_map is empty (degraded case — no historical baseline):
+      is_novel     = accts == 1            (single-source = not yet consensus)
+                  OR buzz in FA_BUZZ_NOVEL  (Grok says brand-new)
+      has_prior_base = buzz in SA_BUZZ_MOMENTUM  (Grok says has momentum history)
+      is_accelerating = buzz in SA_BUZZ_MOMENTUM
+    """
+    prior_has_data = len(prior_br_map) > 0
+    classes: dict[str, str] = {}
+
+    for bs in backend_ranked:
+        ticker        = bs["ticker"]
+        accts         = bs.get("bullish_account_count") or 0
+        rec           = bs.get("recency_days_min")
+        rec           = int(rec) if rec is not None else 999
+        cur_raw       = float(bs.get("raw_score") or 0.0)
+        has_top_qual  = bs.get("has_top_conviction", False)
+        buzz          = buzz_map.get(ticker, "")
+
+        prior         = prior_br_map.get(ticker)
+        prior_raw     = float(prior.get("raw_score") or 0.0) if prior else 0.0
+        accel_ratio   = cur_raw / (prior_raw + 0.01)
+
+        if prior_has_data:
+            # ── Rich path: actual historical comparison ────────────────────
+            is_novel       = prior_raw < _FA_PRIOR_PRESENCE_THRESHOLD
+            has_prior_base = prior_raw >= _FA_PRIOR_PRESENCE_THRESHOLD
+            is_accel       = (accel_ratio >= _SA_ACCEL_RATIO_MIN
+                              or buzz in _SA_BUZZ_MOMENTUM)
+        else:
+            # ── Degraded path: no prior data, use current signals ──────────
+            # Novel = single-source (not yet multi-account) OR Grok says new
+            is_novel       = (accts == 1) or (buzz in _FA_BUZZ_NOVEL)
+            # Prior base = Grok's context signals prior momentum history
+            has_prior_base = buzz in _SA_BUZZ_MOMENTUM
+            is_accel       = buzz in _SA_BUZZ_MOMENTUM
+
+        # Priority 1 — Freshest Alpha
+        if has_top_qual and rec <= _FA_RECENCY_CUTOFF and is_novel:
+            classes[ticker] = "fa"
+            continue
+
+        # Priority 2 — Sentiment Acceleration
+        if has_prior_base and is_accel:
+            classes[ticker] = "sa"
+            continue
+
+        # Priority 3 — X Consensus
+        if accts >= _XC_MIN_ACCOUNTS:
+            classes[ticker] = "xc"
+            continue
+
+        classes[ticker] = "none"
+
+    fa_n  = sum(1 for v in classes.values() if v == "fa")
+    sa_n  = sum(1 for v in classes.values() if v == "sa")
+    xc_n  = sum(1 for v in classes.values() if v == "xc")
+    print(
+        f"[social_x] classifier: {len(classes)} tickers → "
+        f"FA={fa_n}, SA={sa_n}, XC={xc_n}, none={len(classes)-fa_n-sa_n-xc_n} "
+        f"(prior_has_data={prior_has_data})"
+    )
+    return classes
+
+
+# ── Section A — X Consensus ───────────────────────────────────────────────────
+
+def _build_x_consensus(
+    raw: dict,
+    classified: dict[str, str],
+) -> list[dict]:
     """
     Normalise consensus_picks into the Social-page row format.
 
-    Breadth gate (new):
-      To keep X Consensus about SHARED conviction rather than individual fresh calls,
-      each pick is checked against _backend_ranked:
-        • Accepted: bullish_account_count ≥ 2  (multi-account consensus)
-        • Accepted: bullish_account_count = 1 AND recency_days_min > 7  (single but
-          established — has been discussed for more than a week, not a flash fresh call)
-        • Rejected: bullish_account_count ≤ 1 AND recency_days_min ≤ 7  (single-account
-          fresh call — belongs in Freshest Alpha, not X Consensus)
-        • Accepted: no backend data for this ticker (Grok-only fallback; trust Grok)
-
-    Grok-flagged fresh trades (is_fresh_trade=True) are accepted IF they meet the
-    breadth requirement; otherwise they are also excluded.
+    Only tickers classified as 'xc' survive.
+    Tickers classified as 'fa' or 'sa' are excluded — they have a more precise
+    section that better represents their signal.
 
     Contract fields are preserved exactly for backward compatibility.
     """
     picks = raw.get("consensus_picks") or []
-
-    # Build backend-rank lookup for breadth filtering
-    backend_ranked: list[dict] = (current_snap or {}).get("_backend_ranked") or []
-    backend_by_ticker: dict[str, dict] = {s["ticker"]: s for s in backend_ranked}
-
     out: list[dict] = []
-    excluded_count = 0
+    excluded = 0
 
     for p in picks:
         if not isinstance(p, dict):
@@ -140,15 +248,10 @@ def _build_x_consensus(raw: dict, current_snap: Optional[dict] = None) -> list[d
         if not ticker:
             continue
 
-        # ── Breadth gate ──────────────────────────────────────────────────
-        bs = backend_by_ticker.get(ticker)
-        if bs:
-            acct_count  = bs.get("bullish_account_count") or 0
-            min_recency = bs.get("recency_days_min")
-            # Reject: clearly a single fresh call — not consensus
-            if acct_count <= 1 and min_recency is not None and min_recency <= 7:
-                excluded_count += 1
-                continue
+        section = classified.get(ticker, "xc")
+        if section in ("fa", "sa", "none"):
+            excluded += 1
+            continue
 
         out.append({
             "rank":               p.get("rank"),
@@ -167,59 +270,66 @@ def _build_x_consensus(raw: dict, current_snap: Optional[dict] = None) -> list[d
             "trader_theses":      p.get("trader_theses") or [],
         })
 
-    if excluded_count:
+    if excluded:
         print(
-            f"[social_x] X Consensus breadth gate: removed {excluded_count} "
-            f"single-account fresh pick(s) from consensus_picks"
+            f"[social_x] X Consensus: excluded {excluded} ticker(s) "
+            f"(classified as FA or SA)"
         )
     return out
 
 
-# ── Section B — Freshest Alpha (rewritten) ───────────────────────────────────
+# ── Section B — Freshest Alpha ────────────────────────────────────────────────
 
 def _build_freshest_alpha(
     current_snap: Optional[dict],
     prior_snap: Optional[dict],
+    classified: dict[str, str],
 ) -> dict:
     """
     Surface newly emerging ticker calls from ONLY top_trader + above_average_trader
-    accounts, using per-mention recency extracted during Phase-1.
+    accounts.
 
-    Scoring per qualifying mention:
-      base = tier_weight × fa_recency_boost(recency_days) × conviction_mult
-    Final ticker score:
-      base_sum × novelty_mult × breadth_mult
+    Primary path (_mention_data present):
+      Uses per-mention recency + conviction from Phase-1 extraction.
+      Only tickers classified as 'fa' are emitted (mutual exclusion enforced).
 
-    novelty_mult:
-      • Ticker absent from prior _backend_ranked top-10:   ×1.5 (brand-new call)
-      • Ticker in prior _backend_ranked rank 11-20:        ×1.2 (emerging)
-      • Ticker in prior _backend_ranked rank 6-10:         ×0.9 (somewhat known)
-      • Ticker in prior _backend_ranked rank 1-5:          ×0.6 (established fav)
-
-    Only tickers with min_recency_days ≤ 14 are included (older is not fresh alpha).
-
-    Fallback: if _mention_data is missing, falls back to Grok's raw.fresh_trades.
+    Fallback path (_mention_data absent):
+      Uses _backend_ranked directly — always available.
+      Tickers classified as 'fa' are scored by raw_score × fa_recency_boost.
+      No legacy Grok fresh_trades fallback (removed — caused wrong classifications).
     """
     mention_data: list[dict] = (current_snap or {}).get("_mention_data") or []
 
-    if not mention_data:
-        # Legacy fallback — Grok wrote fresh_trades directly
-        return _build_freshest_alpha_legacy(_raw(current_snap))
+    if mention_data:
+        return _build_fa_from_mention_data(current_snap, prior_snap, classified)
 
-    # Prior backend-rank lookup for novelty detection
-    prior_br: list[dict] = (prior_snap or {}).get("_backend_ranked") or []
-    prior_rank_by_ticker: dict[str, int] = {
-        s["ticker"]: i for i, s in enumerate(prior_br)
-    }
+    # _backend_ranked fallback
+    backend_ranked: list[dict] = (current_snap or {}).get("_backend_ranked") or []
+    prior_br: list[dict]       = (prior_snap   or {}).get("_backend_ranked") or []
+    prior_rank_by_ticker        = {s["ticker"]: i for i, s in enumerate(prior_br)}
+    name_map                    = _name_lookup(current_snap)
+    return _build_fa_from_backend_ranked(
+        classified, backend_ranked, prior_rank_by_ticker, name_map
+    )
 
-    name_map = _name_lookup(current_snap)
-    buckets: dict[str, dict] = {}
+
+def _build_fa_from_mention_data(
+    current_snap: Optional[dict],
+    prior_snap: Optional[dict],
+    classified: dict[str, str],
+) -> dict:
+    """FA using rich per-mention data from _mention_data."""
+    mention_data: list[dict] = (current_snap or {}).get("_mention_data") or []
+    prior_br: list[dict]     = (prior_snap or {}).get("_backend_ranked") or []
+    prior_rank_by_ticker      = {s["ticker"]: i for i, s in enumerate(prior_br)}
+    name_map                  = _name_lookup(current_snap)
+    buckets: dict[str, dict]  = {}
 
     for acct in mention_data:
         if acct.get("category") not in _FA_ELIGIBLE_TIERS:
             continue
-        handle   = acct.get("handle", "")
-        tier_w   = float(acct.get("weight") or 0.0)
+        handle  = acct.get("handle", "")
+        tier_w  = float(acct.get("weight") or 0.0)
         if tier_w <= 0:
             continue
 
@@ -232,27 +342,29 @@ def _build_freshest_alpha(
             if not ticker or len(ticker) > 12 or " " in ticker:
                 continue
 
-            rd_raw = m.get("recency_days")
+            # Mutual exclusion: only 'fa' classified tickers
+            if classified.get(ticker, "fa") != "fa":
+                continue
+
+            rd_raw       = m.get("recency_days")
             recency_days = int(rd_raw) if rd_raw is not None else 30
             recency_days = max(0, min(recency_days, 365))
-
             if recency_days > 21:
-                continue  # >21d: too stale for freshest alpha (>14d already near-zero score)
+                continue
 
-            fa_boost = _fa_recency_boost(recency_days)
+            fa_boost  = _fa_recency_boost(recency_days)
             conviction = (m.get("conviction") or "medium").lower()
-            conv_mult = {"high": 1.3, "medium": 1.0, "low": 0.6}.get(conviction, 1.0)
-
+            conv_mult  = {"high": 1.3, "medium": 1.0, "low": 0.6}.get(conviction, 1.0)
             mention_score = tier_w * fa_boost * conv_mult
 
             if ticker not in buckets:
                 buckets[ticker] = {
-                    "ticker":       ticker,
-                    "score":        0.0,
-                    "min_recency":  9999,
-                    "accounts":     {},          # handle → contribution
-                    "theses":       [],
-                    "catalysts":    [],
+                    "ticker":          ticker,
+                    "score":           0.0,
+                    "min_recency":     9999,
+                    "accounts":        {},
+                    "theses":          [],
+                    "catalysts":       [],
                     "conviction_seen": set(),
                 }
             b = buckets[ticker]
@@ -270,37 +382,30 @@ def _build_freshest_alpha(
         if b["min_recency"] > 21 or b["score"] <= 0:
             continue
 
-        # Novelty multiplier (prior snapshot comparison)
-        # Penalises well-known names so truly new calls surface above established
-        # favourites — but penalty is gentler (0.75 not 0.6) to avoid burying a
-        # re-emerging name if a top trader starts re-shilling it with fresh calls.
         prior_rank = prior_rank_by_ticker.get(ticker)
         if prior_rank is None:
-            novelty_mult = 1.5    # brand new — not in prior at all
+            novelty_mult = 1.5
         elif prior_rank >= 10:
-            novelty_mult = 1.2    # appeared before but outside top-10
+            novelty_mult = 1.2
         elif prior_rank >= 5:
-            novelty_mult = 0.9    # seen, moderately established
+            novelty_mult = 0.9
         else:
-            novelty_mult = 0.75   # rank 0-4: known name, but still valid fresh call
+            novelty_mult = 0.75
 
-        n_accts = len(b["accounts"])
+        n_accts      = len(b["accounts"])
         breadth_mult = 1.0 + min(0.20 * (n_accts - 1), 0.40)
+        final_score  = b["score"] * novelty_mult * breadth_mult
 
-        final_score = b["score"] * novelty_mult * breadth_mult
-
-        # Pick the highest-tier thesis
         tier_order = {"top_trader": 0, "above_average_trader": 1}
         top_thesis_entry = min(
             b["theses"],
             key=lambda t: tier_order.get(t["tier"], 9),
         ) if b["theses"] else None
 
-        name, tv_sym = name_map.get(ticker, ("", ""))
-        accts_sorted = sorted(b["accounts"].items(), key=lambda x: -x[1])
+        name, tv_sym   = name_map.get(ticker, ("", ""))
+        accts_sorted   = sorted(b["accounts"].items(), key=lambda x: -x[1])
 
         results.append({
-            # ── Backward-compat fields ───────────────────────────────────
             "ticker":              ticker,
             "name":                name,
             "tradingview_symbol":  tv_sym,
@@ -309,24 +414,111 @@ def _build_freshest_alpha(
                 f"{'New' if prior_rank is None else 'Emerging'} call "
                 f"from {n_accts} top-quality trader(s) within last "
                 f"{b['min_recency']}d"
-                + (f" — {', '.join(sorted(b['conviction_seen']))} conviction" if b["conviction_seen"] else "")
+                + (f" — {', '.join(sorted(b['conviction_seen']))} conviction"
+                   if b["conviction_seen"] else "")
             ),
-            "entry_thesis":        top_thesis_entry["text"] if top_thesis_entry else "",
-            "spotlight_badge":     False,   # set on top result below
-            "spotlight_signal":    None,    # set on top result below
-            # ── New enrichment fields ────────────────────────────────────
+            "entry_thesis":       top_thesis_entry["text"] if top_thesis_entry else "",
+            "spotlight_badge":    False,
+            "spotlight_signal":   None,
             "freshest_alpha_score":   round(final_score, 3),
             "min_recency_days":       b["min_recency"] if b["min_recency"] < 9999 else None,
             "quality_account_count":  n_accts,
             "is_brand_new":           prior_rank is None,
             "novelty_mult":           round(novelty_mult, 2),
             "catalysts":              list(dict.fromkeys(b["catalysts"]))[:5],
-            "top_accounts":           [{"handle": h, "contribution": round(s, 3)} for h, s in accts_sorted],
+            "top_accounts": [
+                {"handle": h, "contribution": round(s, 3)} for h, s in accts_sorted
+            ],
         })
 
+    return _finalise_fa(results)
+
+
+def _build_fa_from_backend_ranked(
+    classified: dict[str, str],
+    backend_ranked: list[dict],
+    prior_rank_by_ticker: dict[str, int],
+    name_map: dict[str, tuple[str, str]],
+) -> dict:
+    """
+    FA fallback when _mention_data is absent.
+
+    Scores each 'fa'-classified ticker using:
+      raw_score × fa_recency_boost(recency_days_min) × novelty_mult × breadth_mult
+
+    where novelty_mult is based on prior snapshot ranking (same as _mention_data path).
+    No Grok fresh_trades used — _backend_ranked always contains more complete data.
+    """
+    results: list[dict] = []
+
+    for bs in backend_ranked:
+        ticker = bs["ticker"]
+        if classified.get(ticker) != "fa":
+            continue
+
+        rec = int(bs.get("recency_days_min") or 0)
+        if rec > 21:
+            continue
+
+        cur_raw   = float(bs.get("raw_score") or 0.0)
+        fa_boost  = _fa_recency_boost(rec)
+
+        prior_rank = prior_rank_by_ticker.get(ticker)
+        if prior_rank is None:
+            novelty_mult = 1.5
+        elif prior_rank >= 10:
+            novelty_mult = 1.2
+        elif prior_rank >= 5:
+            novelty_mult = 0.9
+        else:
+            novelty_mult = 0.75
+
+        n_accts      = bs.get("bullish_account_count") or 1
+        breadth_mult = 1.0 + min(0.20 * (n_accts - 1), 0.40)
+        final_score  = cur_raw * fa_boost * novelty_mult * breadth_mult
+
+        name, tv_sym  = name_map.get(ticker, ("", ""))
+        theses        = bs.get("thesis_fragments") or []
+        top_thesis    = theses[0]["text"] if theses else ""
+        top_accts_raw = sorted(
+            bs.get("top_accounts") or [],
+            key=lambda a: -float(a.get("contribution") or 0),
+        )
+
+        results.append({
+            "ticker":              ticker,
+            "name":                name,
+            "tradingview_symbol":  tv_sym,
+            "first_mentioned_by":  [f"@{a['handle']}" for a in top_accts_raw],
+            "why_fresh": (
+                f"{'New' if prior_rank is None else 'Emerging'} call "
+                f"from {n_accts} top-quality trader(s), recency ≤{rec}d"
+            ),
+            "entry_thesis":       top_thesis,
+            "spotlight_badge":    False,
+            "spotlight_signal":   None,
+            "freshest_alpha_score":   round(final_score, 3),
+            "min_recency_days":       rec,
+            "quality_account_count":  n_accts,
+            "is_brand_new":           prior_rank is None,
+            "novelty_mult":           round(novelty_mult, 2),
+            "catalysts":              (bs.get("catalyst_list") or [])[:5],
+            "top_accounts": [
+                {
+                    "handle":       a.get("handle"),
+                    "contribution": round(float(a.get("contribution") or 0), 3),
+                }
+                for a in top_accts_raw
+            ],
+        })
+
+    return _finalise_fa(results)
+
+
+def _finalise_fa(results: list[dict]) -> dict:
+    """Sort FA results, attach spotlight badge, return standard shape."""
     results.sort(key=lambda x: -x["freshest_alpha_score"])
 
-    # Mark the spotlight entry (highest score)
     if results:
         results[0]["spotlight_badge"]  = True
         results[0]["spotlight_signal"] = (
@@ -338,59 +530,14 @@ def _build_freshest_alpha(
     spotlight = None
     if results:
         top = results[0]
-        spotlight = {
-            "ticker": top["ticker"],
-            "signal": top["spotlight_signal"],
-        }
+        spotlight = {"ticker": top["ticker"], "signal": top["spotlight_signal"]}
 
-    # Cap raised from 10 → 20 so hidden/lower-ranked fresh calls are visible.
-    # Frontend can truncate if it wants to show fewer; backend sends the full set.
     return {"trades": results[:20], "spotlight": spotlight}
 
 
-def _build_freshest_alpha_legacy(raw: dict) -> dict:
-    """Legacy fallback: read Grok-written fresh_trades + spotlight.freshest_alpha."""
-    fresh_trades = raw.get("fresh_trades") or []
-    spotlight    = raw.get("spotlight") or {}
-    spotlight_fa = spotlight.get("freshest_alpha") or {}
-    spotlight_ticker = (spotlight_fa.get("ticker") or "").upper().lstrip("$")
-
-    trades: list[dict] = []
-    for t in fresh_trades:
-        if not isinstance(t, dict):
-            continue
-        ticker = (t.get("ticker") or "").upper().lstrip("$")
-        if not ticker:
-            continue
-        is_spotlight = ticker == spotlight_ticker
-        trades.append({
-            "ticker":             ticker,
-            "name":               t.get("name") or "",
-            "tradingview_symbol": t.get("tradingview_symbol") or "",
-            "first_mentioned_by": t.get("first_mentioned_by") or [],
-            "why_fresh":          t.get("why_fresh") or "",
-            "entry_thesis":       t.get("entry_thesis") or "",
-            "spotlight_badge":    is_spotlight,
-            "spotlight_signal":   spotlight_fa.get("signal") if is_spotlight else None,
-        })
-
-    return {
-        "trades": trades,
-        "spotlight": {
-            "ticker": spotlight_ticker or None,
-            "signal": spotlight_fa.get("signal") or None,
-        } if spotlight_ticker else None,
-    }
-
-
-# ── Section C — Theme Leadership ─────────────────────────────────────────────
+# ── Section C — Theme Leadership (unchanged) ──────────────────────────────────
 
 def _build_theme_leadership(raw: dict) -> dict:
-    """
-    Return hype_radar rows enriched with market_pulse context.
-    Source: raw.hype_radar + raw.market_pulse.
-    UNCHANGED from original implementation.
-    """
     hype_radar   = raw.get("hype_radar") or []
     market_pulse = raw.get("market_pulse") or {}
 
@@ -419,10 +566,8 @@ def _build_theme_leadership(raw: dict) -> dict:
     }
 
 
-# ── Section D — Sentiment Acceleration (rewritten) ──────────────────────────
+# ── Section D — Sentiment Acceleration ───────────────────────────────────────
 
-# Multi-window definitions for acceleration analysis
-# name, upper_bound_days_inclusive
 _SA_WINDOWS: list[tuple[str, int]] = [
     ("w3",  3),
     ("w7",  7),
@@ -443,18 +588,8 @@ def _sa_consensus_strength(account_count: int, accel_score: float) -> str:
 
 
 def _sa_buzz_trend(slope_7_to_3: float, slope_14_to_7: float, w3_vs_w14: float = 0.0) -> str:
-    """
-    Classify momentum trend from three complementary slope signals.
-
-    slope_7_to_3  — w3/(w7+ε): > 1 means last 3d hotter than 7d
-    slope_14_to_7 — w7/(w14+ε): > 1 means last 7d hotter than 14d
-    w3_vs_w14     — w3/(w14+ε): fraction of 14d activity concentrated in last 3d.
-                    Catches the case where ALL mentions are ≤3d (w3==w7, slope≈1).
-    """
-    # Classic steepening: each window hotter than the one before
     if slope_7_to_3 >= 1.5 and slope_14_to_7 >= 1.2:
         return "Accelerating"
-    # Most 14d activity is concentrated in last 3 days (high recency clustering)
     if w3_vs_w14 >= 0.6 and slope_14_to_7 >= 0.6:
         return "Accelerating"
     if slope_7_to_3 >= 1.2 or w3_vs_w14 >= 0.7:
@@ -467,46 +602,55 @@ def _sa_buzz_trend(slope_7_to_3: float, slope_14_to_7: float, w3_vs_w14: float =
 def _build_sentiment_accel(
     current_snap: Optional[dict],
     prior_snap: Optional[dict],
+    classified: dict[str, str],
 ) -> list[dict]:
     """
-    Surface tickers where social consensus is INTENSIFYING over time.
+    Surface tickers where social consensus is intensifying over time.
 
-    Uses ALL account tiers (excl. macro_big_picture which has weight=0) and
-    computes per-ticker weighted scores across five time windows:
-      w3  = sum of tier×conviction×specificity for mentions with recency_days ≤ 3
-      w7  = same for ≤ 7d
-      w14 = same for ≤ 14d
-      w30 = same for ≤ 30d
-      w90 = same for ≤ 90d  (broadest; used as baseline)
+    Primary path (_mention_data present):
+      Multi-window slope analysis from per-mention recency data.
+      Only tickers classified as 'sa' are emitted (mutual exclusion enforced).
 
-    Acceleration score:
-      base_intensity = w3×4.0 + w7×2.0 + w14×1.0 + w30×0.5
-      accel_bonus    = 0 unless slopes are steepening:
-        slope_7_to_3  = w3 / (w7+ε)   → bonus if > 0.5
-        slope_14_to_7 = w7 / (w14+ε)  → bonus if > 0.5
-        slope_30_to_14= w14/ (w30+ε)  → bonus if > 0.5
-      breadth_mult   = 1 + 0.15×(n_accounts−1), capped at ×1.45
-      final = base_intensity × (1+accel_bonus) × breadth_mult
-
-    Tickers with no activity in the last 14 days are excluded.
-
-    Fallback: if _mention_data is missing, falls back to the original
-    hype_score delta approach.
+    Fallback path (_mention_data absent):
+      Uses _backend_ranked directly (always available).
+      Requires classification='sa' (prior-base + strengthening signal).
+      No legacy hype_score fallback (removed — caused wrong classifications).
     """
     mention_data: list[dict] = (current_snap or {}).get("_mention_data") or []
 
-    if not mention_data:
-        return _build_sentiment_accel_legacy(_raw(current_snap), _raw(prior_snap))
+    if mention_data:
+        return _build_sa_from_mention_data(current_snap, prior_snap, classified)
+
+    backend_ranked: list[dict] = (current_snap or {}).get("_backend_ranked") or []
+    prior_br: list[dict]       = (prior_snap   or {}).get("_backend_ranked") or []
+    prior_br_map                = {s["ticker"]: s for s in prior_br}
+
+    cur_raw_snap = _raw(current_snap)
+    buzz_map: dict[str, str] = {
+        (p.get("ticker") or "").upper().lstrip("$"): p.get("buzz_trend", "")
+        for p in (cur_raw_snap.get("consensus_picks") or [])
+        if isinstance(p, dict)
+    }
 
     name_map = _name_lookup(current_snap)
+    return _build_sa_from_backend_ranked(
+        classified, backend_ranked, prior_br_map, buzz_map, name_map
+    )
 
-    # Prior backend ranked for trader_count comparison
+
+def _build_sa_from_mention_data(
+    current_snap: Optional[dict],
+    prior_snap: Optional[dict],
+    classified: dict[str, str],
+) -> list[dict]:
+    """SA using rich per-mention window data."""
+    mention_data: list[dict] = (current_snap or {}).get("_mention_data") or []
+    name_map                  = _name_lookup(current_snap)
     prior_br_by_ticker: dict[str, dict] = {
         s["ticker"]: s
         for s in ((prior_snap or {}).get("_backend_ranked") or [])
     }
 
-    # Aggregate per-ticker across all windows
     buckets: dict[str, dict] = {}
 
     for acct in mention_data:
@@ -527,20 +671,24 @@ def _build_sentiment_accel(
             if not ticker or len(ticker) > 12 or " " in ticker:
                 continue
 
-            rd_raw = m.get("recency_days")
+            # Mutual exclusion: only 'sa' classified tickers
+            if classified.get(ticker, "sa") != "sa":
+                continue
+
+            rd_raw       = m.get("recency_days")
             recency_days = int(rd_raw) if rd_raw is not None else 91
             recency_days = max(0, min(recency_days, 365))
 
-            conviction = (m.get("conviction") or "medium").lower()
-            conv_mult = {"high": 1.2, "medium": 1.0, "low": 0.7}.get(conviction, 1.0)
-            catalysts = [str(c) for c in (m.get("catalysts") or []) if c]
-            spec_mult = 1.2 if catalysts else 1.0
-            base_score = tier_w * conv_mult * spec_mult
+            conviction  = (m.get("conviction") or "medium").lower()
+            conv_mult   = {"high": 1.2, "medium": 1.0, "low": 0.7}.get(conviction, 1.0)
+            catalysts   = [str(c) for c in (m.get("catalysts") or []) if c]
+            spec_mult   = 1.2 if catalysts else 1.0
+            base_score  = tier_w * conv_mult * spec_mult
 
             if ticker not in buckets:
                 buckets[ticker] = {
                     "ticker":      ticker,
-                    "w3":  0.0, "w7": 0.0, "w14": 0.0, "w30": 0.0, "w90": 0.0,
+                    "w3": 0.0, "w7": 0.0, "w14": 0.0, "w30": 0.0, "w90": 0.0,
                     "total":       0.0,
                     "accounts":    set(),
                     "min_recency": 9999,
@@ -562,29 +710,21 @@ def _build_sentiment_accel(
     results: list[dict] = []
     for ticker, b in buckets.items():
         w3, w7, w14, w30, w90 = b["w3"], b["w7"], b["w14"], b["w30"], b["w90"]
-        n_accts_pre = len(b["accounts"])
 
-        # Must have some activity in the last 14d to qualify
         if w14 <= 0:
             continue
 
-        # ── SA breadth gate ────────────────────────────────────────────────
-        # SA = "strengthening consensus" — requires either:
-        #   • ≥2 accounts (genuine multi-account momentum), OR
-        #   • Single account with prior 30d activity (not a brand-new isolated call)
-        # Single-account brand-new calls belong in Freshest Alpha, not SA.
-        if n_accts_pre == 1 and w30 == 0:
-            continue  # fresh single-account call — exclude from SA
+        # SA requires prior base: must have activity outside the freshest window
+        # (w30 > 0 means there were mentions older than 7 days — established presence)
+        if w30 == 0 and len(b["accounts"]) == 1:
+            continue
 
-        # Slope ratios (ε prevents div-by-zero; ratio > 1.0 means recent hotter)
         slope_7_to_3   = w3  / (w7  + 0.01)
         slope_14_to_7  = w7  / (w14 + 0.01)
         slope_30_to_14 = w14 / (w30 + 0.01)
 
-        # Base intensity: heavily weight the most recent windows
         base_intensity = w3 * 4.0 + w7 * 2.0 + w14 * 1.0 + w30 * 0.5
 
-        # Acceleration bonus: reward steepening slopes
         accel_bonus = 0.0
         if slope_7_to_3   > 0.5:
             accel_bonus += 0.3 * min(slope_7_to_3, 2.0)
@@ -593,11 +733,10 @@ def _build_sentiment_accel(
         if slope_30_to_14 > 0.5:
             accel_bonus += 0.1 * min(slope_30_to_14, 2.0)
 
-        n_accts = len(b["accounts"])
+        n_accts      = len(b["accounts"])
         breadth_mult = 1.0 + min(0.15 * (n_accts - 1), 0.45)
-        final_accel_score = base_intensity * (1.0 + accel_bonus) * breadth_mult
+        final_accel  = base_intensity * (1.0 + accel_bonus) * breadth_mult
 
-        # Rationale text
         parts: list[str] = []
         if slope_7_to_3 >= 1.5 and slope_14_to_7 >= 1.2:
             parts.append("Rapidly accelerating — stronger each window")
@@ -612,50 +751,34 @@ def _build_sentiment_accel(
         elif n_accts == 2:
             parts.append("Cross-account agreement")
 
-        # Top thesis
-        top_thesis = b["theses"][0]["text"] if b["theses"] else ""
-
-        # Prior comparison (for backward-compat fields)
-        prior = prior_br_by_ticker.get(ticker)
-        prior_acct_count = prior["bullish_account_count"] if prior else 0
-
-        # Normalise accel_score to 0-100 range for hype_score compat
-        # We cap at 50 as a practical upper bound for the normalised form
-        norm_score = min(round(final_accel_score * 2.0), 100)
-        prior_norm  = 0
-
-        # Third slope signal: what fraction of 14d activity is in the last 3 days?
-        # Catches the case where all mentions are ≤3d (w3==w7 → slope_7_to_3 ≈1.0 but
-        # the pattern is still highly fresh / accelerating).
+        top_thesis   = b["theses"][0]["text"] if b["theses"] else ""
+        prior        = prior_br_by_ticker.get(ticker)
+        prior_acct   = prior["bullish_account_count"] if prior else 0
+        norm_score   = min(round(final_accel * 2.0), 100)
         w3_vs_w14    = w3 / (w14 + 0.01)
         buzz_trend   = _sa_buzz_trend(slope_7_to_3, slope_14_to_7, w3_vs_w14)
-        con_strength = _sa_consensus_strength(n_accts, final_accel_score)
-
-        name, tv_sym = name_map.get(ticker, ("", ""))
+        con_strength = _sa_consensus_strength(n_accts, final_accel)
+        name, tv_sym = _name_lookup(current_snap).get(ticker, ("", ""))
 
         results.append({
-            # ── Backward-compat fields ───────────────────────────────────────
             "ticker":                    ticker,
             "name":                      name,
             "tradingview_symbol":        tv_sym,
             "current_hype_score":        norm_score,
-            "prior_hype_score":          prior_norm,
-            "hype_delta":                norm_score - prior_norm,
+            "prior_hype_score":          0,
+            "hype_delta":                norm_score,
             "current_trader_count":      n_accts,
-            "prior_trader_count":        prior_acct_count,
-            "trader_count_delta":        n_accts - prior_acct_count,
+            "prior_trader_count":        prior_acct,
+            "trader_count_delta":        n_accts - prior_acct,
             "current_consensus_strength": con_strength,
             "buzz_trend":                buzz_trend,
             "is_new_entry":              prior is None,
             "thesis":                    top_thesis,
             "why_now": "; ".join(parts) if parts else "Sustained momentum",
-            # ── New enrichment fields ────────────────────────────────────────
-            "accel_score":               round(final_accel_score, 3),
+            "accel_score":               round(final_accel, 3),
             "window_scores": {
-                "w3":  round(w3,  3),
-                "w7":  round(w7,  3),
-                "w14": round(w14, 3),
-                "w30": round(w30, 3),
+                "w3":  round(w3,  3), "w7":  round(w7,  3),
+                "w14": round(w14, 3), "w30": round(w30, 3),
                 "w90": round(w90, 3),
             },
             "slope_7_to_3":              round(slope_7_to_3,  2),
@@ -670,73 +793,102 @@ def _build_sentiment_accel(
     return results[:12]
 
 
-def _build_sentiment_accel_legacy(current_raw: dict, prior_raw: dict) -> list[dict]:
+def _build_sa_from_backend_ranked(
+    classified: dict[str, str],
+    backend_ranked: list[dict],
+    prior_br_map: dict[str, dict],
+    buzz_map: dict[str, str],
+    name_map: dict[str, tuple[str, str]],
+) -> list[dict]:
     """
-    Legacy fallback: compare current vs prior consensus_picks hype_score / trader_count.
-    Used when _mention_data is not available in the snapshot (pre-update snapshots).
+    SA fallback when _mention_data is absent.
+
+    Scores each 'sa'-classified ticker using:
+      raw_score × breadth_mult × (1 + accel_bonus)
+
+    accel_bonus:
+      When prior available: based on accel_ratio (current / prior)
+      When prior absent:    based on buzz_trend (Accelerating → +0.3)
     """
-    cur_picks  = current_raw.get("consensus_picks") or []
-    prev_picks = prior_raw.get("consensus_picks") if prior_raw else []
-    prev_picks = prev_picks or []
+    results: list[dict] = []
 
-    prior_by_ticker: dict[str, dict] = {}
-    for p in prev_picks:
-        if not isinstance(p, dict):
-            continue
-        t = (p.get("ticker") or "").upper().lstrip("$")
-        if t:
-            prior_by_ticker[t] = p
-
-    out: list[dict] = []
-    for p in cur_picks:
-        if not isinstance(p, dict):
-            continue
-        ticker = (p.get("ticker") or "").upper().lstrip("$")
-        if not ticker:
+    for bs in backend_ranked:
+        ticker = bs["ticker"]
+        if classified.get(ticker) != "sa":
             continue
 
-        cur_score = p.get("hype_score") or 0
-        cur_count = p.get("trader_count") or 0
-        prior = prior_by_ticker.get(ticker)
-        is_new = prior is None
-        prev_score = (prior.get("hype_score") or 0) if prior else 0
-        prev_count = (prior.get("trader_count") or 0) if prior else 0
-        hype_delta   = cur_score - prev_score
-        trader_delta = cur_count - prev_count
+        cur_raw = float(bs.get("raw_score") or 0.0)
+        accts   = bs.get("bullish_account_count") or 1
+        rec     = int(bs.get("recency_days_min") or 0)
+        buzz    = buzz_map.get(ticker, "")
 
-        if not is_new and hype_delta <= 0 and trader_delta <= 0:
-            continue
+        prior     = prior_br_map.get(ticker)
+        prior_raw = float(prior.get("raw_score") or 0.0) if prior else 0.0
 
-        buzz_trend = p.get("buzz_trend") or ""
-        parts = []
-        if is_new:
-            parts.append("New entry — not in prior snapshot")
-        if hype_delta > 0:
-            parts.append(f"Hype score up {hype_delta:+.0f}")
-        if trader_delta > 0:
-            parts.append(f"Trader count up {trader_delta:+d}")
-        if buzz_trend in ("Accelerating", "New Mention"):
-            parts.append(f"Buzz trend: {buzz_trend}")
+        breadth_mult = 1.0 + min(0.15 * (accts - 1), 0.45)
 
-        out.append({
-            "ticker":                   ticker,
-            "name":                     p.get("name") or "",
-            "tradingview_symbol":        p.get("tradingview_symbol") or "",
-            "current_hype_score":       cur_score,
-            "prior_hype_score":         prev_score,
-            "hype_delta":               hype_delta,
-            "current_trader_count":     cur_count,
-            "prior_trader_count":       prev_count,
-            "trader_count_delta":       trader_delta,
-            "current_consensus_strength": p.get("consensus_strength") or "",
-            "buzz_trend":               buzz_trend,
-            "is_new_entry":             is_new,
-            "thesis":                   p.get("thesis") or "",
-            "why_now": "; ".join(parts) if parts else "Continued momentum",
+        if prior_raw > 0:
+            accel_ratio  = cur_raw / (prior_raw + 0.01)
+            accel_bonus  = min((accel_ratio - 1.0) * 0.5, 0.5) if accel_ratio > 1 else 0.0
+        else:
+            # Degraded: no prior data — use Grok buzz as proxy
+            accel_bonus = 0.3 if buzz in _SA_BUZZ_MOMENTUM else 0.0
+            accel_ratio = 1.0
+
+        final_score = cur_raw * breadth_mult * (1.0 + accel_bonus)
+
+        # buzz_trend label
+        if buzz in _SA_BUZZ_MOMENTUM:
+            buzz_trend = buzz
+        elif accel_ratio >= 1.5:
+            buzz_trend = "Accelerating"
+        elif accel_ratio >= 1.1:
+            buzz_trend = "Rising"
+        else:
+            buzz_trend = "Stable"
+
+        name, tv_sym  = name_map.get(ticker, ("", ""))
+        theses        = bs.get("thesis_fragments") or []
+        top_thesis    = theses[0]["text"] if theses else ""
+        prior_acct    = prior["bullish_account_count"] if prior else 0
+        norm_score    = min(round(final_score * 2.0), 100)
+        con_strength  = _sa_consensus_strength(accts, final_score)
+
+        parts: list[str] = []
+        if buzz in _SA_BUZZ_MOMENTUM:
+            parts.append(f"{buzz} momentum — {accts} account(s)")
+        if prior_raw > 0 and accel_ratio > 1.2:
+            parts.append(f"Score {accel_ratio:.1f}× prior baseline")
+
+        results.append({
+            "ticker":                    ticker,
+            "name":                      name,
+            "tradingview_symbol":        tv_sym,
+            "current_hype_score":        norm_score,
+            "prior_hype_score":          0,
+            "hype_delta":                norm_score,
+            "current_trader_count":      accts,
+            "prior_trader_count":        prior_acct,
+            "trader_count_delta":        accts - prior_acct,
+            "current_consensus_strength": con_strength,
+            "buzz_trend":                buzz_trend,
+            "is_new_entry":              prior is None,
+            "thesis":                    top_thesis,
+            "why_now": ("; ".join(parts) if parts else "Sustained and strengthening momentum"),
+            "accel_score":               round(final_score, 3),
+            "window_scores": {
+                "w3": 0.0, "w7": 0.0, "w14": 0.0, "w30": 0.0, "w90": 0.0,
+            },
+            "slope_7_to_3":  0.0,
+            "slope_14_to_7": 0.0,
+            "w3_vs_w14":     0.0,
+            "account_count":             accts,
+            "min_recency_days":          rec,
+            "catalysts":                 (bs.get("catalyst_list") or [])[:5],
         })
 
-    out.sort(key=lambda x: (not x["is_new_entry"], -x["hype_delta"], -x["current_hype_score"]))
-    return out
+    results.sort(key=lambda x: -x["accel_score"])
+    return results[:12]
 
 
 # ── Metadata helpers ──────────────────────────────────────────────────────────
@@ -748,7 +900,7 @@ def _build_metadata(snapshot: Optional[dict]) -> dict:
     SEPARATE so the frontend can enable/disable each button independently.
 
     Auto-schedule fields:
-      auto_refresh_window_open    — True only 08:00–20:00 America/Chicago
+      auto_refresh_window_open    — True only 08:00-20:00 America/Chicago
       next_allowed_refresh_at     — next auto window open (ISO-8601 UTC); null if open now
       refresh_window_open         — kept for backward compat (same value as auto_refresh_window_open)
 
@@ -826,22 +978,27 @@ def build_x_dashboard() -> dict:
     Build the Social X-dashboard payload from cached snapshots only.
     Zero Grok/XAI calls.
 
-    Shape contract — the response is a MERGE of:
+    Orchestration:
+      1. Load current + prior snapshots.
+      2. Run _classify_tickers_for_sections() — single unified pass that assigns
+         every ticker in _backend_ranked to fa / sa / xc / none.
+      3. Pass classification map to all three section builders.
+      4. Each builder enforces mutual exclusion: only tickers with its own
+         classification are emitted.
 
-    A. The existing Home-style consensus payload (flat, unchanged):
-         generated_at, top_tickers, key_themes, notable_accounts,
-         is_stale, stale, data_state, age_seconds, refresh_in_progress,
-         available, refresh_window_open, next_allowed_refresh_at, timezone
-
-    B. Three Social-only sibling sections (additive):
-         freshest_alpha       — deterministic from _mention_data (top_trader+above_avg only)
-         theme_leadership     — from raw.hype_radar + raw.market_pulse [UNCHANGED]
-         sentiment_acceleration — deterministic multi-window from _mention_data
-
-    C. Extra convenience keys from the raw snapshot:
-         market_pulse, portfolio_bias, spotlight
-
-    D. Social-specific metadata (richer than the Home subset).
+    Shape contract:
+      A. Home-style consensus payload (flat, unchanged):
+           generated_at, top_tickers, key_themes, notable_accounts,
+           is_stale, stale, data_state, age_seconds, refresh_in_progress,
+           available, refresh_window_open, next_allowed_refresh_at, timezone
+      B. Three Social-only sibling sections (additive):
+           x_consensus          — consensus_picks filtered by classification
+           freshest_alpha       — novelty-relative, top-tier accounts only
+           theme_leadership     — from raw.hype_radar + raw.market_pulse [UNCHANGED]
+           sentiment_acceleration — prior-base + strengthening slope
+      C. Convenience keys from raw snapshot:
+           market_pulse, portfolio_bias, spotlight
+      D. Social-specific metadata.
     """
     from services.x_consensus_cache import (
         _public_payload,
@@ -873,15 +1030,29 @@ def build_x_dashboard() -> dict:
             "metadata":               _build_metadata(None),
         }
 
+    # ── Step 1: Build classifier inputs ──────────────────────────────────────
+    backend_ranked: list[dict] = (current_snap or {}).get("_backend_ranked") or []
+    prior_br: list[dict]       = (prior_snap   or {}).get("_backend_ranked") or []
+    prior_br_map: dict[str, dict] = {s["ticker"]: s for s in prior_br}
+
+    buzz_map: dict[str, str] = {
+        (p.get("ticker") or "").upper().lstrip("$"): (p.get("buzz_trend") or "")
+        for p in (cur_raw.get("consensus_picks") or [])
+        if isinstance(p, dict)
+    }
+
+    # ── Step 2: Unified classification pass ──────────────────────────────────
+    classified = _classify_tickers_for_sections(backend_ranked, prior_br_map, buzz_map)
+
+    # ── Step 3: Build sections (each respects classified map) ─────────────────
     return {
         **home_payload,
         "market_pulse":   cur_raw.get("market_pulse"),
         "portfolio_bias": cur_raw.get("portfolio_bias"),
         "spotlight":      cur_raw.get("spotlight"),
-        # Pass current_snap so X Consensus can apply the backend-rank breadth gate
-        "x_consensus":            _build_x_consensus(cur_raw, current_snap),
-        "freshest_alpha":         _build_freshest_alpha(current_snap, prior_snap),
+        "x_consensus":            _build_x_consensus(cur_raw, classified),
+        "freshest_alpha":         _build_freshest_alpha(current_snap, prior_snap, classified),
         "theme_leadership":       _build_theme_leadership(cur_raw),
-        "sentiment_acceleration": _build_sentiment_accel(current_snap, prior_snap),
+        "sentiment_acceleration": _build_sentiment_accel(current_snap, prior_snap, classified),
         "metadata":               _build_metadata(current_snap),
     }

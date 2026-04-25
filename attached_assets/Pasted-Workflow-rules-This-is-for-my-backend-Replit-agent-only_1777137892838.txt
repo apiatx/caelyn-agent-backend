@@ -1,0 +1,163 @@
+Workflow rules:
+
+This is for my backend Replit agent only
+Do not worry about pushing to git
+Audit first, then implement
+
+This is a focused refinement of the Social X section derivation logic. Do not broaden scope.
+
+PRIMARY PROBLEM
+The current classification logic between the Social X sections is still wrong.
+
+The system is still confusing:
+
+newly emerging names
+established shared-conviction names
+names with strengthening consensus over time
+
+I do NOT want any ticker-specific hardcoding.
+Do NOT use specific tickers in the logic.
+This must be solved with general classification logic only.
+
+CORRECT SECTION MEANINGS
+
+X Consensus
+broad shared conviction
+more established consensus across accounts/time
+should NOT be dominated by newly emerging names just because they suddenly got recent mentions
+Freshest Alpha
+newly emerging names from only the highest-quality active trader tiers
+strong recent mentions
+low historical presence before the recent spike
+this section is about novelty + recency + high-quality trader source
+not generic popularity
+Sentiment Acceleration
+names that already had prior discussion / prior base presence
+and are getting stronger recently
+this section is about increasing momentum/attention on already-developing names
+not brand-new fresh names
+
+AUDIT FIRST
+Inspect and report exactly:
+
+Why newly emerging names are still leaking into X Consensus
+what exact rule or threshold currently causes that
+whether simple breadth is overpowering novelty/historical-baseline logic
+Why established names with prior history are still leaking into Freshest Alpha
+what exact rule currently makes that happen
+whether the system is ignoring historical baseline and only looking at recent mentions
+What historical baseline data is actually available from current stored mention-level data
+can you compute:
+recent weighted mentions
+historical weighted mentions
+prior active-account count
+recent-to-historical ratio
+prior presence score
+for each ticker?
+
+IMPLEMENTATION TARGET
+
+PART 1 — Freshest Alpha must be novelty-relative, not just recent
+Freshest Alpha should be determined primarily by:
+
+recent mentions from top_trader / above_average_trader accounts
+low historical baseline before the recent window
+recent spike relative to prior history
+
+Do NOT classify Freshest Alpha mainly by account count or raw breadth.
+
+Strong preference:
+Compute a freshness / novelty score using concepts like:
+
+weighted_recent_mentions in the last 7 days, especially 0–3 days
+compared against weighted_historical_mentions in an earlier comparison window
+adjusted by account-tier quality
+adjusted by recency
+
+In plain English:
+Freshest Alpha = names that are newly surfacing relative to their prior history.
+
+PART 2 — X Consensus must represent established shared conviction
+X Consensus should require:
+
+broader weighted breadth and/or consensus depth
+some established presence beyond only the most recent few days
+not merely recent emergence
+
+Do NOT let simple recent 2-account breadth automatically force a name into X Consensus.
+
+In plain English:
+X Consensus = broader, more established shared conviction.
+
+PART 3 — Sentiment Acceleration must require prior base + strengthening slope
+Sentiment Acceleration should require:
+
+meaningful prior presence before the current recent window
+increasing weighted intensity in recent windows
+stronger recent activity relative to an earlier baseline
+
+Use all included accounts except macro, as before.
+
+This should identify names where consensus is intensifying, not names that are simply new.
+
+In plain English:
+Sentiment Acceleration = already-developing names whose social momentum is increasing.
+
+PART 4 — Keep the three sections mutually distinct
+Refine the classification so the three buckets are clearly separated:
+
+Freshest Alpha = new emerging names
+Sentiment Acceleration = existing names getting hotter
+X Consensus = broadly shared conviction
+
+Do not let the same classification heuristic dominate all three.
+
+PART 5 — Preserve contracts
+Do NOT break payload shape.
+Do NOT change Theme Leadership logic unless absolutely necessary.
+Do NOT change Grok/XAI call count.
+Do NOT hard code any specific tickers.
+
+PART 6 — If helpful, add explicit internal metrics
+If useful, compute/store internal logic metrics like:
+
+recent_weighted_mentions
+historical_weighted_mentions
+novelty_ratio
+prior_presence_score
+consensus_depth_score
+acceleration_score
+
+But keep frontend contract compatible.
+
+VERIFY
+Before finishing, prove with logic-based validation only:
+
+newly emerging low-baseline names are classified into Freshest Alpha
+names with prior base + recent strengthening are classified into Sentiment Acceleration
+broader established shared-conviction names are classified into X Consensus
+the three sections are more cleanly separated than before
+Grok/XAI call count remains unchanged
+payload contracts remain compatible
+
+Do NOT use ticker-specific hardcoding.
+Do NOT use ticker examples as the logic itself.
+This must be a pure general solution.
+
+DELIVERABLES
+When done, report:
+
+exact backend files changed
+exact new classification logic for Freshest Alpha
+exact new classification logic for Sentiment Acceleration
+exact new classification logic for X Consensus
+whether any new internal metrics were added
+confirmation no ticker-specific hardcoding was introduced
+confirmation contracts remained compatible
+
+EXECUTION STYLE
+
+Audit first
+Fix the logic cleanly
+No ticker-specific hardcoding
+Keep the solution general and deterministic
