@@ -58,9 +58,12 @@ from typing import Any, Optional
 
 _FA_ELIGIBLE_TIERS: frozenset[str] = frozenset({"top_trader", "above_average_trader"})
 
-# Grok buzz_trend values that signal "brand-new name" vs "has momentum history"
+# Grok buzz_trend values used ONLY in the degraded classifier path
+# (when prior _backend_ranked is empty and no actual accel_ratio is computable).
+# These are proxies of last resort — never used when real prior data is available.
 _FA_BUZZ_NOVEL:    frozenset[str] = frozenset({"New Mention", ""})
-_SA_BUZZ_MOMENTUM: frozenset[str] = frozenset({"Accelerating", "Rising"})
+_SA_BUZZ_ACCEL:    frozenset[str] = frozenset({"Accelerating"})      # strong momentum only
+_SA_BUZZ_MOMENTUM: frozenset[str] = frozenset({"Accelerating", "Rising"})  # kept for SA builder
 
 # ── Classification thresholds ─────────────────────────────────────────────────
 
@@ -98,9 +101,9 @@ def _fa_recency_boost(days: int) -> float:
 
 # ── Snapshot loaders ──────────────────────────────────────────────────────────
 
-def _load_snapshots() -> tuple[Optional[dict], Optional[dict]]:
-    from services.x_consensus_cache import _load_disk_cache, _load_prior_cache
-    return _load_disk_cache(), _load_prior_cache()
+def _load_snapshots() -> tuple[Optional[dict], Optional[dict], dict]:
+    from services.x_consensus_cache import _load_disk_cache, _load_prior_cache, load_ticker_history
+    return _load_disk_cache(), _load_prior_cache(), load_ticker_history()
 
 
 def _raw(snapshot: Optional[dict]) -> dict:
@@ -134,6 +137,7 @@ def _classify_tickers_for_sections(
     backend_ranked: list[dict],
     prior_br_map: dict[str, dict],
     buzz_map: dict[str, str],
+    ticker_history: Optional[dict] = None,
 ) -> dict[str, str]:
     """
     Assign every ticker in backend_ranked to exactly one section bucket.
@@ -152,17 +156,23 @@ def _classify_tickers_for_sections(
                             "Accelerating"/"Rising" → has momentum history
                             "New Mention"/""        → brand-new name
 
-    When prior_br_map has data (ideal case):
-      is_novel     = prior_raw < FA_PRIOR_PRESENCE_THRESHOLD
-      has_prior_base = prior_raw ≥ FA_PRIOR_PRESENCE_THRESHOLD
-      is_accelerating = accel_ratio ≥ SA_ACCEL_RATIO_MIN
-                     OR buzz in SA_BUZZ_MOMENTUM
+    When prior_br_map has data (rich path — use actual historical comparison):
+      is_novel       = prior_raw < FA_PRIOR_PRESENCE_THRESHOLD
+                       (brand-new or very low historical presence)
+      has_prior_base = prior_raw >= FA_PRIOR_PRESENCE_THRESHOLD
+                       (was meaningfully active in the prior scan)
+      is_accel       = accel_ratio >= SA_ACCEL_RATIO_MIN
+                       ONLY based on actual measured ratio — no Grok buzz used.
+                       Buzz is a qualitative label; actual prior/current scores
+                       are the ground truth for "is this strengthening."
+      XC requires:   NOT fa AND NOT sa AND has_prior_base AND accts >= XC_MIN_ACCOUNTS
+                     Established (has prior) + multi-account + not novel + not accel.
 
-    When prior_br_map is empty (degraded case — no historical baseline):
-      is_novel     = accts == 1            (single-source = not yet consensus)
-                  OR buzz in FA_BUZZ_NOVEL  (Grok says brand-new)
-      has_prior_base = buzz in SA_BUZZ_MOMENTUM  (Grok says has momentum history)
-      is_accelerating = buzz in SA_BUZZ_MOMENTUM
+    When prior_br_map is empty (degraded path — last-resort proxies only):
+      is_novel       = accts == 1 OR buzz in FA_BUZZ_NOVEL
+      has_prior_base = buzz == "Accelerating"   (strongest Grok signal only)
+      is_accel       = has_prior_base
+      XC:            NOT fa AND NOT sa AND accts >= XC_MIN_ACCOUNTS
     """
     prior_has_data = len(prior_br_map) > 0
     classes: dict[str, str] = {}
@@ -178,34 +188,51 @@ def _classify_tickers_for_sections(
 
         prior         = prior_br_map.get(ticker)
         prior_raw     = float(prior.get("raw_score") or 0.0) if prior else 0.0
+
+        # History supplement: if the ticker is missing from the immediately prior
+        # snapshot but has appeared in multiple past scans (history), use its
+        # historical mean as prior_raw.  This prevents an established ticker that
+        # temporarily fell below the save threshold from being mis-labelled as novel.
+        if prior_raw == 0.0 and ticker_history:
+            hist_obs = [o for o in (ticker_history.get(ticker) or [])
+                        if float(o.get("r", 0)) >= _FA_PRIOR_PRESENCE_THRESHOLD]
+            if len(hist_obs) >= 2:
+                prior_raw = sum(float(o["r"]) for o in hist_obs) / len(hist_obs)
+
         accel_ratio   = cur_raw / (prior_raw + 0.01)
 
         if prior_has_data:
-            # ── Rich path: actual historical comparison ────────────────────
+            # ── Rich path: actual historical accel_ratio drives classification ──
+            # No Grok buzz used here — actual measured change is the signal.
             is_novel       = prior_raw < _FA_PRIOR_PRESENCE_THRESHOLD
             has_prior_base = prior_raw >= _FA_PRIOR_PRESENCE_THRESHOLD
-            is_accel       = (accel_ratio >= _SA_ACCEL_RATIO_MIN
-                              or buzz in _SA_BUZZ_MOMENTUM)
+            is_accel       = accel_ratio >= _SA_ACCEL_RATIO_MIN
         else:
-            # ── Degraded path: no prior data, use current signals ──────────
-            # Novel = single-source (not yet multi-account) OR Grok says new
+            # ── Degraded path: no prior data — proxy signals only ─────────────
+            # Use only the strongest Grok buzz signal ("Accelerating") as proxy
+            # for "has prior history". "Rising"/"Stable" are ambiguous; only
+            # "Accelerating" implies Grok observed repeated multi-scan momentum.
             is_novel       = (accts == 1) or (buzz in _FA_BUZZ_NOVEL)
-            # Prior base = Grok's context signals prior momentum history
-            has_prior_base = buzz in _SA_BUZZ_MOMENTUM
-            is_accel       = buzz in _SA_BUZZ_MOMENTUM
+            has_prior_base = (buzz in _SA_BUZZ_ACCEL)
+            is_accel       = has_prior_base
 
         # Priority 1 — Freshest Alpha
+        # low/no prior history + top-tier source + fresh recency
         if has_top_qual and rec <= _FA_RECENCY_CUTOFF and is_novel:
             classes[ticker] = "fa"
             continue
 
         # Priority 2 — Sentiment Acceleration
+        # had meaningful prior presence AND is measurably stronger now
         if has_prior_base and is_accel:
             classes[ticker] = "sa"
             continue
 
         # Priority 3 — X Consensus
-        if accts >= _XC_MIN_ACCOUNTS:
+        # established (has prior presence) + multi-account + not novel + not accelerating
+        # In the rich path: stable or declining established multi-account conviction.
+        # In the degraded path: multi-account not captured by FA or SA.
+        if accts >= _XC_MIN_ACCOUNTS and (has_prior_base or not prior_has_data):
             classes[ticker] = "xc"
             continue
 
@@ -342,8 +369,10 @@ def _build_fa_from_mention_data(
             if not ticker or len(ticker) > 12 or " " in ticker:
                 continue
 
-            # Mutual exclusion: only 'fa' classified tickers
-            if classified.get(ticker, "fa") != "fa":
+            # Mutual exclusion: only 'fa' classified tickers.
+            # Default 'none' for tickers outside _backend_ranked top-N
+            # (e.g. rank 31+): they haven't been through the historical gate.
+            if classified.get(ticker, "none") != "fa":
                 continue
 
             rd_raw       = m.get("recency_days")
@@ -671,8 +700,9 @@ def _build_sa_from_mention_data(
             if not ticker or len(ticker) > 12 or " " in ticker:
                 continue
 
-            # Mutual exclusion: only 'sa' classified tickers
-            if classified.get(ticker, "sa") != "sa":
+            # Mutual exclusion: only 'sa' classified tickers.
+            # Default 'none' for tickers outside _backend_ranked top-N.
+            if classified.get(ticker, "none") != "sa":
                 continue
 
             rd_raw       = m.get("recency_days")
@@ -1006,7 +1036,7 @@ def build_x_dashboard() -> dict:
         _REFRESH_LOCK,
     )
 
-    current_snap, prior_snap = _load_snapshots()
+    current_snap, prior_snap, ticker_history = _load_snapshots()
     cur_raw = _raw(current_snap)
 
     window_open         = _in_refresh_window()
@@ -1042,7 +1072,9 @@ def build_x_dashboard() -> dict:
     }
 
     # ── Step 2: Unified classification pass ──────────────────────────────────
-    classified = _classify_tickers_for_sections(backend_ranked, prior_br_map, buzz_map)
+    classified = _classify_tickers_for_sections(
+        backend_ranked, prior_br_map, buzz_map, ticker_history
+    )
 
     # ── Step 3: Build sections (each respects classified map) ─────────────────
     return {

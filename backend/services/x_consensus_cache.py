@@ -102,8 +102,13 @@ _RECENCY_BUCKETS: list[tuple[int, float]] = [
 _RECENCY_FALLBACK = 0.05  # older than 3 months
 
 # Disk cache paths — current snapshot + immediately prior snapshot for delta math.
-_CACHE_PATH       = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
-_PRIOR_CACHE_PATH = Path(__file__).parent.parent / "data" / "x_consensus_weekly_prior.json"
+_CACHE_PATH         = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
+_PRIOR_CACHE_PATH   = Path(__file__).parent.parent / "data" / "x_consensus_weekly_prior.json"
+# Rolling per-ticker raw_score history — accumulated across N past snapshots.
+# Provides a multi-scan baseline so the classifier can detect long-term establishment
+# even when a ticker temporarily drops out of the current top-ranked slice.
+_TICKER_HISTORY_PATH = Path(__file__).parent.parent / "data" / "x_consensus_ticker_history.json"
+_TICKER_HISTORY_MAX_OBS = 10   # keep last N scored observations per ticker
 _CACHE_TTL_SECONDS = 2 * 3600  # 2 hours (120 minutes)
 _BATCH_SIZE = 8
 
@@ -197,6 +202,53 @@ def _load_prior_cache() -> Optional[dict]:
         return None
 
 
+def _update_ticker_history(backend_ranked: list, saved_at: float) -> None:
+    """Append the current snapshot's raw_scores to the rolling ticker history.
+
+    Stores the last _TICKER_HISTORY_MAX_OBS observations per ticker so the
+    classifier can detect long-term establishment without relying solely on
+    the immediately prior snapshot.
+    """
+    try:
+        history: dict = {}
+        if _TICKER_HISTORY_PATH.exists():
+            try:
+                history = json.loads(_TICKER_HISTORY_PATH.read_text()) or {}
+            except Exception:
+                history = {}
+
+        for bs in backend_ranked:
+            ticker    = bs.get("ticker")
+            raw_score = bs.get("raw_score")
+            accts     = bs.get("bullish_account_count", 0)
+            if not ticker or raw_score is None:
+                continue
+            obs = {"t": saved_at, "r": round(float(raw_score), 4), "a": accts}
+            ticker_obs = history.get(ticker, [])
+            ticker_obs.append(obs)
+            # Keep only the most recent N observations
+            history[ticker] = ticker_obs[-_TICKER_HISTORY_MAX_OBS:]
+
+        _TICKER_HISTORY_PATH.write_text(json.dumps(history, indent=2))
+    except Exception as e:
+        print(f"[X_CONSENSUS] Ticker history write error: {e}")
+
+
+def load_ticker_history() -> dict:
+    """Return the rolling ticker history dict {ticker: [obs, ...]} from disk.
+
+    Each observation: {"t": epoch_float, "r": raw_score, "a": acct_count}
+    Returns empty dict if the file does not exist yet.
+    """
+    if not _TICKER_HISTORY_PATH.exists():
+        return {}
+    try:
+        return json.loads(_TICKER_HISTORY_PATH.read_text()) or {}
+    except Exception as e:
+        print(f"[X_CONSENSUS] Ticker history read error: {e}")
+        return {}
+
+
 def _save_disk_cache(data: dict) -> None:
     try:
         _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -208,6 +260,11 @@ def _save_disk_cache(data: dict) -> None:
                 print(f"[X_CONSENSUS] Prior cache rotate error: {e}")
         data["_saved_at"] = time.time()
         _CACHE_PATH.write_text(json.dumps(data, indent=2))
+        # Update rolling per-ticker history for multi-scan historical signals.
+        _update_ticker_history(
+            data.get("_backend_ranked", []),
+            data["_saved_at"],
+        )
     except Exception as e:
         print(f"[X_CONSENSUS] Cache write error: {e}")
 
@@ -756,7 +813,7 @@ async def _run_refresh(data_service) -> Optional[dict]:
         "notable_accounts":  normalized["notable_accounts"],
         "raw":               normalized.get("raw"),
         # Internal fields — not included in public Home/Social payload
-        "_backend_ranked":      backend_ranked[:30],
+        "_backend_ranked":      backend_ranked[:50],
         "_backend_parse_count": len(all_account_mentions),
         # Per-account Phase-1 mention data (category + weight enriched).
         # Used by Social section builders (freshest_alpha, sentiment_acceleration)
