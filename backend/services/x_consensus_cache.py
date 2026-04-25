@@ -12,6 +12,13 @@ exactly one background refresh (lock-guarded to prevent stampede).
 Refresh window: 08:00–20:00 America/Chicago only.  Outside that window the
 function never triggers a Grok/XAI call — it serves the last cached snapshot
 (or a no_data_yet state) regardless of staleness.
+
+Account tiers and weights:
+  top_trader          1.0  — Highest conviction; strongest influence on consensus_picks
+  above_average_trader 0.8  — Strong trade signal quality
+  breaking_news       0.75 — High urgency/recency; amplifies thesis, not primary signal
+  thematic_investor   0.5  — Thematic context + broad market reads; NOT direct conviction
+  theme_datapoints    0.33 — Discovery + stock list datapoints; informs hype_radar only
 """
 from __future__ import annotations
 
@@ -27,18 +34,79 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo  # Python <3.9 fallback
 
-# Canonical 25-account universe. The Social page `/api/social/query`
-# (preset: x_select_trader_consensus) imports this same list to guarantee
-# Home and Social use the EXACT same handles.
-X_SELECT_HANDLES: list[str] = [
-    "aleabitoreddit", "KobeissiLetter", "HyperTechInvest", "crux_capital_",
-    "SJCapitalInvest", "BlackPantherCap", "Kaizen_Investor", "Venu_7_",
-    "DrJebaim", "CKCapitalxx", "TheTape_TNM", "equitydd",
-    "Speculator_io", "StonkValue", "stamatoudism", "yianisz",
-    "sunxliao", "futurist_lens", "Thomas_james_1", "DeepValueBagger",
-    "ConnorJBates_", "BussinBiotech", "BambroughKevin", "AlexfromBabylon",
-    "UncleAlpha007",
+# ── Canonical account universe with category + weight metadata ─────────────
+# Single source of truth for both the refresh flow and the Social page prompt.
+# The Social page `/api/social/query` imports X_SELECT_HANDLES (derived below)
+# to guarantee Home and Social use the EXACT same universe.
+X_SELECT_ACCOUNTS: list[dict] = [
+    # ── Breaking News / Research (weight 0.75) ──────────────────────────────
+    {"handle": "MikeTrap_TNM",      "category": "breaking_news",        "weight": 0.75,
+     "notes": "Breaking ticker news + market research"},
+    # ── Top Traders — highest conviction (weight 1.0) ───────────────────────
+    {"handle": "Prophets0Stocks",   "category": "top_trader",           "weight": 1.0},
+    {"handle": "MattCKleinlein",    "category": "top_trader",           "weight": 1.0},
+    {"handle": "SysVslt",           "category": "top_trader",           "weight": 1.0},
+    {"handle": "MarketBlogger",     "category": "top_trader",           "weight": 1.0},
+    {"handle": "UncleAlpha007",     "category": "top_trader",           "weight": 1.0},
+    {"handle": "MikeCon07163",      "category": "top_trader",           "weight": 1.0},
+    # ── Above Average Traders — second tier (weight 0.8) ───────────────────
+    {"handle": "HyperTechInvest",   "category": "above_average_trader", "weight": 0.8},
+    {"handle": "ThematicTrader",    "category": "above_average_trader", "weight": 0.8},
+    {"handle": "VortexTraders",     "category": "above_average_trader", "weight": 0.8},
+    {"handle": "Ben_aram6",         "category": "above_average_trader", "weight": 0.8},
+    # ── Thematic / Retail Investors (weight 0.5) ────────────────────────────
+    # Useful for thematic context + broad market reads; NOT for direct conviction
+    {"handle": "Thomas_james_1",    "category": "thematic_investor",    "weight": 0.5},
+    {"handle": "Pokemdollars_",     "category": "thematic_investor",    "weight": 0.5},
+    {"handle": "BlackPantherCap",   "category": "thematic_investor",    "weight": 0.5},
+    {"handle": "BussinBiotech",     "category": "thematic_investor",    "weight": 0.5},
+    {"handle": "TuffCap",           "category": "thematic_investor",    "weight": 0.5},
+    {"handle": "Venu_7_",           "category": "thematic_investor",    "weight": 0.5},
+    {"handle": "futurist_lens",     "category": "thematic_investor",    "weight": 0.5},
+    {"handle": "DougVaccaroBagger", "category": "thematic_investor",    "weight": 0.5},
+    {"handle": "nundab",            "category": "thematic_investor",    "weight": 0.5},
+    {"handle": "AlexfromBabylon",   "category": "thematic_investor",    "weight": 0.5},
+    {"handle": "StableKopek",       "category": "thematic_investor",    "weight": 0.5},
+    # ── Investment Themes + Datapoints (weight 0.33) ────────────────────────
+    # Useful for discovery and hype_radar themes; NOT for consensus_picks scores
+    {"handle": "mrephd",            "category": "theme_datapoints",     "weight": 0.33},
+    {"handle": "Speculator_io",     "category": "theme_datapoints",     "weight": 0.33},
+    {"handle": "StockVision",       "category": "theme_datapoints",     "weight": 0.33},
 ]
+
+# Flat handle list derived from the structured config — preserves backward
+# compatibility with all code that imports X_SELECT_HANDLES.
+X_SELECT_HANDLES: list[str] = [a["handle"] for a in X_SELECT_ACCOUNTS]
+
+# Category weight lookup for prompt injection
+_ACCOUNT_WEIGHT_BY_HANDLE: dict[str, float] = {
+    a["handle"]: a["weight"] for a in X_SELECT_ACCOUNTS
+}
+_ACCOUNT_CATEGORY_BY_HANDLE: dict[str, str] = {
+    a["handle"]: a["category"] for a in X_SELECT_ACCOUNTS
+}
+
+# Human-readable weighting context injected into the synthesis prompt.
+# Kept here (not in prompts.py) so it travels with the account list.
+_SYNTHESIS_WEIGHT_CONTEXT: str = """
+ACCOUNT TIER WEIGHTING — apply these rules when scoring consensus_picks:
+
+Tiers (highest → lowest influence on consensus_picks hype_score / conviction):
+  top_trader (1.0):           @Prophets0Stocks @MattCKleinlein @SysVslt @MarketBlogger @UncleAlpha007 @MikeCon07163
+  above_average_trader (0.8): @HyperTechInvest @ThematicTrader @VortexTraders @Ben_aram6
+  breaking_news (0.75):       @MikeTrap_TNM — adds urgency/recency; amplifies existing thesis, NOT a primary conviction signal on its own
+  thematic_investor (0.5):    @Thomas_james_1 @Pokemdollars_ @BlackPantherCap @BussinBiotech @TuffCap @Venu_7_ @futurist_lens @DougVaccaroBagger @nundab @AlexfromBabylon @StableKopek — thematic/broad context only
+  theme_datapoints (0.33):    @mrephd @Speculator_io @StockVision — discovery + stock list datapoints; informs hype_radar, NOT consensus_picks scores
+
+SCORING RULES:
+- consensus_picks hype_score: weight each mention by the account's tier weight above.
+- A single top_trader pick outweighs multiple thematic_investor mentions for hype_score.
+- consensus_strength of 'High' or 'Very High' requires at least one top_trader OR above_average_trader mention.
+- theme_datapoints accounts should inform hype_radar themes and key_themes ONLY — do not inflate consensus_picks hype_score from them.
+- breaking_news accounts contribute to market_pulse freshness and recency — do not independently drive consensus_picks conviction unless corroborated by top_trader or above_average_trader.
+- thematic_investor accounts contribute to hype_radar buzz_level, portfolio_bias context, and medium-term theme validation — not fast-entry conviction scoring.
+- trader_count should reflect only top_trader + above_average_trader account mentions for accurate conviction signal.
+"""
 
 # Disk cache paths — current snapshot + immediately prior snapshot for delta math.
 _CACHE_PATH       = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
@@ -161,18 +229,33 @@ def _is_fresh(raw: Optional[dict]) -> bool:
         return False
 
 
-async def _fetch_batch(data_service, handles: list[str], batch_num: int, total_batches: int) -> str:
-    """Phase-1 helper — fetch raw post data for one batch of handles.
+async def _fetch_batch(
+    data_service,
+    batch_accounts: list[dict],
+    batch_num: int,
+    total_batches: int,
+) -> str:
+    """Phase-1 helper — fetch raw post data for one batch of accounts.
 
-    Mirrors the logic inside `/api/social/query` line ~2293 so Home and Social
-    behave identically.
+    batch_accounts: list of account dicts from X_SELECT_ACCOUNTS
+    Each entry has: handle, category, weight.  The category label is included
+    in the prompt so Grok knows the tier of each account it's reading.
     """
+    handles = [a["handle"] for a in batch_accounts]
+    # Include category label so Grok can weight accounts correctly in Phase 1
+    handle_labels = ", ".join(
+        f"@{a['handle']} [{a['category']}]" for a in batch_accounts
+    )
     batch_prompt = (
         "Search the last 20 posts from EACH of these accounts: "
-        + ", ".join(f"@{h}" for h in handles)
+        + handle_labels
         + ". For each account, list the tickers/assets they mention with "
         "bullish/bearish context, their thesis, conviction level, and any "
         "catalysts they cite. Include the account handle with each finding. "
+        "Note the account tier in brackets — top_trader and above_average_trader "
+        "posts are highest conviction signals; thematic_investor posts provide "
+        "broad thematic context; theme_datapoints posts identify themes/stocks "
+        "for discovery; breaking_news posts add urgency/recency context. "
         "Be thorough and specific — quote or closely paraphrase their actual posts."
     )
     try:
@@ -259,14 +342,25 @@ async def _run_refresh(data_service) -> Optional[dict]:
         print("[X_CONSENSUS] No xAI provider — skipping refresh")
         return None
 
-    batches = [X_SELECT_HANDLES[i:i + _BATCH_SIZE]
-               for i in range(0, len(X_SELECT_HANDLES), _BATCH_SIZE)]
-    print(f"[X_CONSENSUS] Refresh starting — {len(X_SELECT_HANDLES)} handles "
-          f"in {len(batches)} batches")
+    # Build batches from the structured account config (not the flat handle list)
+    batches: list[list[dict]] = [
+        X_SELECT_ACCOUNTS[i:i + _BATCH_SIZE]
+        for i in range(0, len(X_SELECT_ACCOUNTS), _BATCH_SIZE)
+    ]
+    print(
+        f"[X_CONSENSUS] Refresh starting — {len(X_SELECT_ACCOUNTS)} accounts "
+        f"in {len(batches)} batches "
+        f"({sum(1 for a in X_SELECT_ACCOUNTS if a['category']=='top_trader')} top_trader, "
+        f"{sum(1 for a in X_SELECT_ACCOUNTS if a['category']=='above_average_trader')} above_avg, "
+        f"{sum(1 for a in X_SELECT_ACCOUNTS if a['category']=='thematic_investor')} thematic, "
+        f"{sum(1 for a in X_SELECT_ACCOUNTS if a['category']=='theme_datapoints')} datapoints, "
+        f"{sum(1 for a in X_SELECT_ACCOUNTS if a['category']=='breaking_news')} news)"
+    )
 
-    # Phase 1: parallel batched fetch
+    # Phase 1: parallel batched fetch (category labels included in each prompt)
     batch_results = await asyncio.gather(
-        *[_fetch_batch(data_service, batch, i, len(batches)) for i, batch in enumerate(batches)],
+        *[_fetch_batch(data_service, batch, i, len(batches))
+          for i, batch in enumerate(batches)],
         return_exceptions=True,
     )
     combined_data: list[str] = []
@@ -275,22 +369,33 @@ async def _run_refresh(data_service) -> Optional[dict]:
             print(f"[X_CONSENSUS] Batch {i + 1} failed: {res}")
             continue
         if res and isinstance(res, str) and not res.startswith("xAI"):
+            batch_labels = ", ".join(
+                f"@{a['handle']} [{a['category']}]" for a in batches[i]
+            )
             combined_data.append(
-                f"=== Batch {i + 1} ({', '.join('@' + h for h in batches[i])}) ===\n{res}"
+                f"=== Batch {i + 1} ({batch_labels}) ===\n{res}"
             )
 
     if not combined_data:
         print("[X_CONSENSUS] All batches failed — aborting refresh (keep existing cache)")
         return None
 
-    # Phase 2: synthesis with deep reasoning model
+    # Phase 2: synthesis with deep reasoning model.
+    # The system_text (X_SELECT_TRADER_CONSENSUS_CONTRACT) is the canonical output
+    # schema contract — NOT modified here.  Category weighting instructions are
+    # injected into the USER-side synthesis prompt so the model scores correctly
+    # without touching prompts.py.
     combined_text = "\n\n".join(combined_data)
     print(f"[X_CONSENSUS] Synthesis phase: {len(combined_text):,} chars")
     synthesis_prompt = (
-        "Below is raw data from X/Twitter posts by 25 select trader accounts. "
-        "Analyze ALL of this data and produce the consensus JSON output per your schema.\n\n"
-        "RAW X DATA:\n" + combined_text + "\n\n"
-        "Now synthesize this into the exact JSON schema from your system instructions. "
+        f"Below is raw data from X/Twitter posts by {len(X_SELECT_ACCOUNTS)} accounts "
+        f"spanning {len(set(a['category'] for a in X_SELECT_ACCOUNTS))} tiers "
+        "(top_trader, above_average_trader, breaking_news, thematic_investor, theme_datapoints).\n\n"
+        + _SYNTHESIS_WEIGHT_CONTEXT.strip()
+        + "\n\nRAW X DATA (each batch annotated with account tier):\n"
+        + combined_text
+        + "\n\nNow synthesize ALL of this data into the exact JSON schema from your system "
+        "instructions, applying the tier weighting rules above. "
         "Return ONLY valid JSON — no markdown, no backticks, no extra text."
     )
     try:
@@ -311,13 +416,20 @@ async def _run_refresh(data_service) -> Optional[dict]:
         return None
 
     normalized = _normalize_consensus(result)
+
+    # Account config snapshot: categories + handle list for downstream consumers
+    accounts_meta = [
+        {"handle": a["handle"], "category": a["category"], "weight": a["weight"]}
+        for a in X_SELECT_ACCOUNTS
+    ]
     snapshot = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "handles": X_SELECT_HANDLES,
-        "top_tickers": normalized["top_tickers"],
-        "key_themes": normalized["key_themes"],
+        "generated_at":   datetime.now(timezone.utc).isoformat(),
+        "handles":        X_SELECT_HANDLES,           # flat list (backward compat)
+        "accounts":       accounts_meta,              # structured config (new)
+        "top_tickers":    normalized["top_tickers"],
+        "key_themes":     normalized["key_themes"],
         "notable_accounts": normalized["notable_accounts"],
-        "raw": normalized.get("raw"),
+        "raw":            normalized.get("raw"),
     }
     _save_disk_cache(snapshot)
     print(f"[X_CONSENSUS] Refresh complete — {len(snapshot['top_tickers'])} tickers saved")
