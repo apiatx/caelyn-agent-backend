@@ -1,0 +1,129 @@
+Backend + Frontend Sync Contract for Stock Compare
+
+Both agents can work in parallel, but do not drift from this API contract.
+
+Backend must expose:
+
+1) GET /api/fundamentals/compare/search?q={query}&limit=10
+
+Response:
+{
+  "query": "TRT",
+  "results": [
+    {
+      "symbol": "TRT",
+      "name": "Trio-Tech International",
+      "exchange": "AMEX",
+      "type": "stock",
+      "currency": "USD",
+      "cik": "...",
+      "sector": "...",
+      "industry": "...",
+      "marketCap": 49220000
+    }
+  ],
+  "source": "fmp",
+  "cached": true
+}
+
+2) POST /api/fundamentals/compare
+
+Request:
+{
+  "symbols": ["INTT", "TRT", "NNBR"],
+  "metric": "revenue",
+  "period": "annual",
+  "range": "ALL"
+}
+
+Response:
+{
+  "metric": {
+    "key": "revenue",
+    "label": "Revenue",
+    "unit": "currency",
+    "period": "annual"
+  },
+  "range": "ALL",
+  "symbols": ["INTT", "TRT", "NNBR"],
+  "series": [
+    {
+      "symbol": "INTT",
+      "name": "inTEST Corporation",
+      "points": [
+        {
+          "date": "2021-12-31",
+          "fiscalYear": 2021,
+          "value": 84000000,
+          "formatted": "84.00M",
+          "source": "fmp_income_statement"
+        }
+      ],
+      "latest": {
+        "date": "2025-12-31",
+        "value": 113830000,
+        "formatted": "113.83M"
+      }
+    }
+  ],
+  "snapshot": [],
+  "news": {},
+  "meta": {
+    "cached": true,
+    "generatedAt": "...",
+    "warnings": []
+  }
+}
+
+Frontend should build against this exact shape. If backend is not ready yet, frontend should use mocked data with the same response shape only.
+
+Shared metric keys:
+market_cap
+revenue
+revenue_growth
+gross_profit
+gross_margin
+profit_margin
+eps_diluted
+operating_income
+net_income
+ebitda
+free_cash_flow
+total_debt
+ps_ratio
+pe_ratio
+recent_news
+
+Shared ranges:
+1M
+3M
+6M
+YTD
+1Y
+3Y
+5Y
+10Y
+MAX
+ALL
+
+Shared period values:
+annual
+quarterly
+
+Validation:
+- Max 15 tickers.
+- Symbols uppercase.
+- Frontend should gracefully handle partial backend data.
+- Backend should return partial results instead of failing the entire request when one ticker has missing data.
+
+Do not rename fields without telling the other agent.
+Do not change endpoint paths without telling the other agent.
+Do not invent frontend-only metric keys.
+Do not return backend data in a different nested shape.
+
+Minimum integration test:
+- Frontend can search TRT from the search endpoint.
+- Frontend can compare INTT, TRT, NNBR by revenue.
+- Chart renders lines.
+- Snapshot table renders.
+- Missing data shows N/A instead of crashing.

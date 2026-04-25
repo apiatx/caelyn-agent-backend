@@ -128,8 +128,31 @@ class StockCompareFMP:
             return []
 
     async def search(self, query: str, limit: int = 10) -> list:
-        ck = f"sc:search:{query.lower()}:{limit}"
-        return await self._get("search", {"query": query, "limit": limit}, ck, _TTL_SEARCH)
+        """
+        Try search-symbol first (ticker prefix match), then search-name (company name).
+        Both return {symbol, name, currency, exchange, exchangeFullName}.
+        The /stable/search endpoint is non-functional on the Starter plan.
+        """
+        ck_sym  = f"sc:searchsym:{query.lower()}:{limit}"
+        ck_name = f"sc:searchname:{query.lower()}:{limit}"
+
+        sym_results  = await self._get("search-symbol", {"query": query, "limit": limit}, ck_sym, _TTL_SEARCH)
+        name_results = await self._get("search-name",   {"query": query, "limit": limit}, ck_name, _TTL_SEARCH)
+
+        # Merge: symbol results first, then name results; dedup by symbol
+        merged: dict[str, dict] = {}
+        for item in (sym_results or []):
+            if isinstance(item, dict):
+                sym = (item.get("symbol") or "").upper()
+                if sym and sym not in merged:
+                    merged[sym] = item
+        for item in (name_results or []):
+            if isinstance(item, dict):
+                sym = (item.get("symbol") or "").upper()
+                if sym and sym not in merged:
+                    merged[sym] = item
+
+        return list(merged.values())[:limit]
 
     async def profile(self, symbol: str) -> dict:
         ck = f"sc:profile:{symbol}"
@@ -315,6 +338,18 @@ async def search_symbols(
     if not isinstance(raw, list):
         raw = []
 
+    q_upper = query.upper().strip()
+
+    def _match_rank(sym: str) -> int:
+        """Higher = better match. exact=3, starts-with=2, contains=1, other=0."""
+        if sym == q_upper:
+            return 3
+        if sym.startswith(q_upper):
+            return 2
+        if q_upper in sym:
+            return 1
+        return 0
+
     # Deduplicate by symbol (prefer US exchange)
     seen: dict[str, dict] = {}
     for item in raw:
@@ -328,8 +363,11 @@ async def search_symbols(
         if not sym or not name:
             continue
 
-        # Skip clearly non-stock types
-        skip = any(t in typ for t in _SKIP_TYPES)
+        # Skip clearly non-stock types (only when type field is present and matches)
+        skip = bool(typ) and any(t in typ for t in _SKIP_TYPES)
+
+        exch_score  = 1 if exc in _PREFER_EXCHANGES else 0
+        match_score = _match_rank(sym)
 
         if sym not in seen:
             seen[sym] = {
@@ -343,29 +381,36 @@ async def search_symbols(
                 "industry":  item.get("industry") or "",
                 "marketCap": item.get("marketCap"),
                 "_skip":     skip,
-                "_score":    1 if exc in _PREFER_EXCHANGES else 0,
+                "_exch":     exch_score,
+                "_match":    match_score,
             }
         else:
             # Prefer US exchange variant
-            if exc in _PREFER_EXCHANGES and seen[sym]["_score"] == 0:
+            if exch_score > seen[sym]["_exch"]:
                 seen[sym].update({
                     "exchange": exc,
                     "type":     (item.get("type") or "stock").lower(),
-                    "_score":   1,
+                    "_exch":    exch_score,
                     "_skip":    skip,
                 })
 
     results = [
         {k: v for k, v in r.items() if not k.startswith("_")}
-        for r in sorted(seen.values(), key=lambda x: (-x["_score"], x["symbol"]))
+        for r in sorted(
+            seen.values(),
+            key=lambda x: (-x["_match"], -x["_exch"], x["symbol"]),
+        )
         if not r["_skip"]
     ]
 
-    # If nothing passes the filter, include everything
+    # If nothing passes the filter, include everything (e.g. all ETFs)
     if not results:
         results = [
             {k: v for k, v in r.items() if not k.startswith("_")}
-            for r in seen.values()
+            for r in sorted(
+                seen.values(),
+                key=lambda x: (-x["_match"], -x["_exch"], x["symbol"]),
+            )
         ]
 
     results = results[:limit]
@@ -409,7 +454,7 @@ async def _fetch_symbol_data(
         tasks["balance"]  = fmp.balance_sheet(symbol, period, limit)
     if metric_source == "ratios":
         tasks["income"]   = fmp.income_statement(symbol, period, 5)   # snapshot only
-        tasks["metrics"]  = fmp.key_metrics(symbol, period, limit)
+        tasks["metrics"]  = fmp.ratios(symbol, period, limit)         # ratios has priceToSalesRatio/priceToEarningsRatio
     if metric_source == "market_cap":
         tasks["income"]   = fmp.income_statement(symbol, period, 5)   # snapshot only
         tasks["hist_mc"]  = fmp.hist_market_cap(symbol, limit)
@@ -420,10 +465,10 @@ async def _fetch_symbol_data(
     # Always fetch income for snapshot if not already fetched
     if "income" not in tasks:
         tasks["income"] = fmp.income_statement(symbol, period, 5)
-    # Always fetch cash flow + balance + key_metrics for full snapshot
+    # Always fetch cash flow + balance + ratios for full snapshot
     tasks["snapshot_cf"]  = fmp.cash_flow(symbol, period, 2)
     tasks["snapshot_bs"]  = fmp.balance_sheet(symbol, period, 2)
-    tasks["snapshot_km"]  = fmp.key_metrics(symbol, period, 2)
+    tasks["snapshot_km"]  = fmp.ratios(symbol, period, 2)             # ratios has P/S and P/E
 
     keys   = list(tasks.keys())
     values = await asyncio.gather(*tasks.values(), return_exceptions=True)
@@ -653,19 +698,26 @@ def _ratio_value(
     symbol: str,
     warnings: list[str],
 ) -> Optional[float]:
+    """
+    FMP /stable/ratios fields:
+      P/S: priceToSalesRatio
+      P/E: priceToEarningsRatio
+    FMP /stable/key-metrics fields (not used here — key-metrics lacks these):
+      none of the above
+    """
     if metric_key == "ps_ratio":
-        v = row.get("priceToSalesRatio") or row.get("revenuePerShare")
+        v = row.get("priceToSalesRatio")
         if v is None:
             warnings.append(f"{symbol}: P/S ratio missing for {row.get('date')}")
         return v
     if metric_key == "pe_ratio":
-        v = row.get("peRatio") or row.get("priceEarningsRatio")
+        v = row.get("priceToEarningsRatio")
         if v is None:
             warnings.append(f"{symbol}: P/E ratio missing for {row.get('date')}")
             return None
         if v < 0:
             warnings.append(f"{symbol}: P/E negative (negative earnings) for {row.get('date')}")
-            return None   # skip negative P/E — meaningless for chart
+            return None   # skip negative P/E — not useful for comparison chart
         return v
     return None
 
@@ -749,7 +801,7 @@ def _build_snapshot_row(symbol: str, profile: dict, quote: dict, data: dict) -> 
             total_debt = None
 
     ps  = km0.get("priceToSalesRatio")
-    pe  = km0.get("peRatio") or km0.get("priceEarningsRatio")
+    pe  = km0.get("priceToEarningsRatio")   # ratios endpoint field name
     if pe is not None and pe < 0:
         pe = None   # skip nonsensical negative P/E
 

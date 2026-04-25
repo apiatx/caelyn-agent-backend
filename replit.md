@@ -369,6 +369,39 @@ When `mode="auto"`:
 - **Count**: 704 tests, 0 failures (as of Phase 6)
 - **Phases**: 1.5 (factors), 2.0 (supply chain), 3.0 (discovery), 4.0 (quality), 5.0 (fields/compare), 6.0 (regime)
 
+## Stock Compare API (`/api/fundamentals/compare`)
+
+Router: `backend/routes/stock_compare.py`
+Service: `backend/services/stock_compare_service.py`
+Data source: FMP Stable API primary. SEC EDGAR / Finnhub fallback only.
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/fundamentals/compare/search?q=TRT&limit=10` | Ticker / company-name autocomplete |
+| `POST` | `/api/fundamentals/compare` | Multi-ticker metric comparison |
+
+### Supported metrics
+`revenue`, `revenue_growth`, `gross_profit`, `gross_margin`, `profit_margin`,
+`eps_diluted`, `operating_income`, `net_income`, `ebitda`, `free_cash_flow`,
+`total_debt`, `ps_ratio`, `pe_ratio`, `market_cap`, `recent_news`
+
+Aliases: `price_to_sales`→`ps_ratio`, `p_s_ratio`→`ps_ratio`, `p_e_ratio`→`pe_ratio`,
+`eps`→`eps_diluted`, `fcf`→`free_cash_flow`, `debt`→`total_debt`
+
+### Cache TTLs
+- Search / profile / statements / ratios / growth: 24 h
+- Quote / market cap: 15 min
+- News: 30 min
+
+### Key design decisions
+- `StockCompareFMP` in the service file is a lightweight standalone FMP client (not `FMPProvider`) with stock-compare-specific cache keys (`sc:*`).
+- Metric-aware fetching: only the endpoints required for the chosen metric are called per symbol.
+- `ratios` endpoint (not `key_metrics`) used for P/S and P/E — FMP field names `priceToSalesRatio` / `priceToEarningsRatio`.
+- Search uses `search-symbol` + `search-name` endpoints (FMP `/stable/search` is broken on Starter plan). Results ranked: exact > starts-with > contains.
+- Validation is done inside endpoint functions (not Pydantic `field_validator`) to avoid Pydantic v2 `ctx.error` serialisation issue in the app's existing `validation_exception_handler`.
+
 ## Real Portfolio (caelyn-terminal)
 
 - SQGLP framework for investments, Weinstein Stage 2 for trades

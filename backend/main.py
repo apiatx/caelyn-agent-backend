@@ -319,6 +319,15 @@ except Exception as _sc_err:
     print(f"[SCREENER] Router unavailable (non-fatal): {_sc_err}")
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Stock Compare router (/api/fundamentals/compare) ─────────────────────────
+try:
+    from routes.stock_compare import router as _stock_compare_router
+    app.include_router(_stock_compare_router)
+    print("[STOCK_COMPARE] Router registered at /api/fundamentals/compare")
+except Exception as _cmp_err:
+    print(f"[STOCK_COMPARE] Router unavailable (non-fatal): {_cmp_err}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Static file serving ───────────────────────────────────────────────────────
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.exists():
