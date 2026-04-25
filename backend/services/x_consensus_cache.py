@@ -8,15 +8,24 @@ but persists a single snapshot to disk and refreshes it at most once per 2 hours
 Used by the Home page so it never runs a live X scan on page load. If no
 snapshot exists yet, the function returns a stale/empty payload and kicks off
 exactly one background refresh (lock-guarded to prevent stampede).
+
+Refresh window: 08:00–20:00 America/Chicago only.  Outside that window the
+function never triggers a Grok/XAI call — it serves the last cached snapshot
+(or a no_data_yet state) regardless of staleness.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # Python <3.9 fallback
 
 # Canonical 25-account universe. The Social page `/api/social/query`
 # (preset: x_select_trader_consensus) imports this same list to guarantee
@@ -39,6 +48,39 @@ _BATCH_SIZE = 8
 # Module-level lock so only one background refresh runs at a time across the
 # whole process, regardless of how many Home requests land simultaneously.
 _REFRESH_LOCK = asyncio.Lock()
+
+# ── Refresh window: 08:00–20:00 America/Chicago, DST-safe ─────────────────
+_REFRESH_TZ = ZoneInfo("America/Chicago")
+_WINDOW_START_HOUR = 8   # 08:00 Chicago
+_WINDOW_END_HOUR   = 20  # 20:00 Chicago (exclusive)
+
+
+def _in_refresh_window() -> bool:
+    """Return True only if current America/Chicago time is 08:00–19:59."""
+    now_ct = datetime.now(_REFRESH_TZ)
+    return _WINDOW_START_HOUR <= now_ct.hour < _WINDOW_END_HOUR
+
+
+def _next_window_open_iso() -> str:
+    """
+    ISO-8601 timestamp (UTC) of the next 08:00 America/Chicago open.
+
+    If we are currently before 08:00 today, that is still today's open.
+    If we are at or after 20:00, the next open is tomorrow at 08:00.
+    """
+    now_ct = datetime.now(_REFRESH_TZ)
+    # Choose today or tomorrow depending on where we are in the day
+    if now_ct.hour < _WINDOW_START_HOUR:
+        target_date = now_ct.date()
+    else:
+        target_date = now_ct.date() + timedelta(days=1)
+    # Build 08:00 Chicago in a DST-aware way (ZoneInfo handles fold/gap)
+    next_open_ct = datetime(
+        target_date.year, target_date.month, target_date.day,
+        _WINDOW_START_HOUR, 0, 0,
+        tzinfo=_REFRESH_TZ,
+    )
+    return next_open_ct.astimezone(timezone.utc).isoformat()
 
 
 def _load_disk_cache() -> Optional[dict]:
@@ -251,8 +293,15 @@ async def _trigger_background_refresh(data_service) -> None:
             print(f"[X_CONSENSUS] Background refresh failed: {e}")
 
 
-def _public_payload(raw: Optional[dict], *, refresh_in_progress: bool) -> dict:
+def _public_payload(
+    raw: Optional[dict],
+    *,
+    refresh_in_progress: bool,
+    window_open: bool,
+) -> dict:
     """Build the outward-facing Home payload from a raw disk snapshot."""
+    next_refresh = _next_window_open_iso() if not window_open else None
+
     if not raw:
         return {
             "generated_at": None,
@@ -260,23 +309,34 @@ def _public_payload(raw: Optional[dict], *, refresh_in_progress: bool) -> dict:
             "key_themes": [],
             "notable_accounts": [],
             "is_stale": True,
-            "refresh_in_progress": refresh_in_progress,
+            "stale": True,
+            "data_state": "no_data_yet",
+            "refresh_in_progress": False,
             "available": False,
+            "refresh_window_open": window_open,
+            "next_allowed_refresh_at": next_refresh,
+            "timezone": "America/Chicago",
         }
     age_s = 0.0
     try:
         age_s = time.time() - float(raw.get("_saved_at") or 0)
     except Exception:
         age_s = 0.0
+    is_stale = age_s >= _CACHE_TTL_SECONDS
     return {
         "generated_at": raw.get("generated_at"),
         "top_tickers": raw.get("top_tickers") or [],
         "key_themes": raw.get("key_themes") or [],
         "notable_accounts": raw.get("notable_accounts") or [],
-        "is_stale": age_s >= _CACHE_TTL_SECONDS,
+        "is_stale": is_stale,
+        "stale": is_stale,
+        "data_state": "stale" if is_stale else "available",
         "age_seconds": int(age_s) if age_s else None,
         "refresh_in_progress": refresh_in_progress,
         "available": True,
+        "refresh_window_open": window_open,
+        "next_allowed_refresh_at": next_refresh,
+        "timezone": "America/Chicago",
     }
 
 
@@ -284,15 +344,26 @@ async def get_weekly_snapshot(data_service=None, *, allow_refresh: bool = True) 
     """Return the current weekly snapshot for the Home page.
 
     Rules:
-      - If a fresh (<7d) snapshot exists on disk, return it with is_stale=False.
-      - If a stale (>=7d) snapshot exists, return it immediately (is_stale=True)
-        and kick off a single background refresh.
-      - If no snapshot exists, return an empty payload and kick off a refresh.
-      - Never blocks the Home page request waiting for Grok.
+      - Refreshes only between 08:00–20:00 America/Chicago (DST-safe).
+      - Outside that window: serve stale cache or no_data_yet — zero Grok calls.
+      - During the window: if cache is stale (>2 h), trigger one background refresh.
+      - Never blocks the caller — Grok always runs in the background.
     """
     raw = _load_disk_cache()
     fresh = _is_fresh(raw)
 
+    # ── Time-window gate — the single place where Grok calls are allowed ──
+    window_open = _in_refresh_window()
+    if not window_open:
+        # Overnight / early morning: never touch Grok/XAI, just serve cache.
+        next_open = _next_window_open_iso()
+        print(
+            f"[X_CONSENSUS] Refresh window closed (Chicago time). "
+            f"Serving cached snapshot. Next open: {next_open}"
+        )
+        return _public_payload(raw, refresh_in_progress=False, window_open=False)
+
+    # ── Within the 08:00–20:00 Chicago window ─────────────────────────────
     refresh_in_progress = False
     if allow_refresh and not fresh and data_service is not None:
         # Don't await the refresh — run it in the background so Home renders now.
@@ -300,7 +371,7 @@ async def get_weekly_snapshot(data_service=None, *, allow_refresh: bool = True) 
         try:
             asyncio.create_task(_trigger_background_refresh(data_service))
         except RuntimeError:
-            # No running loop — unusual for the Home code path, but stay safe.
+            # No running event loop — unusual but stay safe.
             refresh_in_progress = False
 
-    return _public_payload(raw, refresh_in_progress=refresh_in_progress)
+    return _public_payload(raw, refresh_in_progress=refresh_in_progress, window_open=True)

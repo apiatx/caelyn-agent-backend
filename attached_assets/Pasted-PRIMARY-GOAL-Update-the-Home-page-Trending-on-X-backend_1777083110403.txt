@@ -1,0 +1,107 @@
+PRIMARY GOAL
+Update the Home page Trending on X backend refresh behavior so it only scans during daytime hours and never burns Grok/XAI calls overnight.
+
+REQUIRED BEHAVIOR
+Trending on X should refresh:
+
+every 2 hours
+only during 8:00 AM to 8:00 PM America/Chicago local time
+
+And it should do:
+
+zero scans after 8:00 PM local time
+zero scans before 8:00 AM local time
+the next allowed refresh after the overnight pause should be 8:00 AM America/Chicago
+
+IMPORTANT
+Use America/Chicago timezone logic, not server-local time and not a hardcoded UTC offset.
+This must work correctly across DST changes.
+
+EXPECTED NIGHT BEHAVIOR
+If a user visits the Home page overnight:
+
+do NOT trigger a new X/Grok scan
+serve the most recent cached weekly/daytime snapshot
+mark it stale if needed, but do not refresh until the window reopens at 8:00 AM America/Chicago
+
+AUDIT FIRST
+Inspect the current Trending on X implementation and report:
+
+what currently triggers refreshes
+where the 2-hour cadence is enforced
+whether refresh is lazy-on-read, scheduled, or both
+where the Grok/XAI call is actually made
+what cache/snapshot store is used
+whether current logic already has any timezone or quiet-hours concept
+
+IMPLEMENT
+Add a clean refresh gate for Trending on X using America/Chicago local time.
+
+Required logic:
+
+if current America/Chicago time is between 08:00 and 20:00:
+allow normal 2-hour refresh behavior
+otherwise:
+never run a refresh
+return the last cached snapshot only
+
+If the cache is stale overnight:
+
+still do not refresh
+serve stale snapshot with honest metadata
+
+If no snapshot exists at all and user visits overnight:
+
+do not trigger Grok/XAI
+return a clean no_data_yet / equivalent state
+next allowed refresh should be 8:00 AM America/Chicago
+
+PREFERRED IMPLEMENTATION
+Keep this as a backend gating rule near the actual refresh decision point, not just a UI hint.
+
+Also add/return useful metadata if practical:
+
+updated_at
+refresh_in_progress
+stale
+next_allowed_refresh_at
+timezone
+data_state
+
+That way the frontend can show honest state if needed, but frontend changes are optional.
+
+VERY IMPORTANT
+
+No changes to frontend are required unless payload metadata changes and you want it surfaced
+Do not add a frontend timer or frontend time-window logic
+Do not let overnight page visits trigger XAI/Grok calls
+Keep existing cache/snapshot behavior intact apart from the time-window restriction
+
+VERIFY
+Before finishing, verify:
+
+refresh is allowed during 8 AM–8 PM America/Chicago
+refresh is blocked outside that window
+overnight requests return cached snapshot without triggering Grok/XAI
+DST-safe timezone handling is used
+next allowed refresh time is correct after 8 PM
+no unrelated Home sections are affected
+
+DELIVERABLES
+When done, report:
+
+exact backend files changed
+exact place where refresh is now gated
+exact timezone used
+exact overnight behavior when cache is stale
+whether any response metadata was added/changed
+confirmation no frontend changes are required unless I want to expose the schedule in UI
+confirmation changes were committed and pushed directly to main
+
+EXECUTION STYLE
+
+Audit first
+Add the time-window gate at the refresh decision point
+Preserve cached read behavior
+Save Grok/XAI calls overnight
+Then commit and push directly to main

@@ -186,21 +186,27 @@ async def _x_consensus_loop():
 
     from services.x_consensus_cache import (
         _is_fresh, _load_disk_cache, _run_refresh, _CACHE_TTL_SECONDS,
+        _in_refresh_window, _next_window_open_iso,
     )
 
     print("[X_CONSENSUS_LOOP] Started — will refresh every "
-          f"{_CACHE_TTL_SECONDS // 3600}h")
+          f"{_CACHE_TTL_SECONDS // 3600}h (window: 08:00–20:00 America/Chicago)")
 
     while True:
-        raw = _load_disk_cache()
-        if not _is_fresh(raw):
-            print("[X_CONSENSUS_LOOP] Cache stale — running refresh now")
-            try:
-                await _run_refresh(data_service)
-            except Exception as exc:
-                print(f"[X_CONSENSUS_LOOP] Refresh error: {exc}")
+        if not _in_refresh_window():
+            next_open = _next_window_open_iso()
+            print(f"[X_CONSENSUS_LOOP] Outside refresh window — skipping. "
+                  f"Next open: {next_open}")
         else:
-            print("[X_CONSENSUS_LOOP] Cache fresh — skipping refresh")
+            raw = _load_disk_cache()
+            if not _is_fresh(raw):
+                print("[X_CONSENSUS_LOOP] Cache stale — running refresh now")
+                try:
+                    await _run_refresh(data_service)
+                except Exception as exc:
+                    print(f"[X_CONSENSUS_LOOP] Refresh error: {exc}")
+            else:
+                print("[X_CONSENSUS_LOOP] Cache fresh — skipping refresh")
         await _asyncio.sleep(_CACHE_TTL_SECONDS)
 
 
