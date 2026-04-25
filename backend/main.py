@@ -2536,6 +2536,39 @@ async def social_grok_query(
         return JSONResponse(status_code=500, content={"error": str(e), "query": query})
 
 
+@app.get("/api/social/x-dashboard")
+@limiter.limit("60/minute")
+@traceable(name="main.social_x_dashboard")
+async def social_x_dashboard(
+    request: Request,
+    _sub: None = Depends(require_subscription),
+):
+    """
+    Social page X-dashboard — 4 sections derived from the shared X consensus snapshot.
+
+    Zero additional Grok/XAI calls on every page load.  All sections are derived
+    from the same cached snapshot that powers Home 'Trending on X'.
+
+    Sections returned:
+      x_consensus          — from raw.consensus_picks
+      freshest_alpha       — from raw.fresh_trades + raw.spotlight.freshest_alpha
+      theme_leadership     — from raw.hype_radar + raw.market_pulse
+      sentiment_acceleration — deterministic delta between current and prior snapshots
+
+    Also returns: market_pulse, portfolio_bias, spotlight, metadata.
+    """
+    try:
+        from services.social_x_service import build_x_dashboard
+        payload = build_x_dashboard()
+        return JSONResponse(content=payload)
+    except Exception as e:
+        print(f"[SOCIAL_X_DASHBOARD] Error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "endpoint": "/api/social/x-dashboard"},
+        )
+
+
 @app.post("/api/query")
 @limiter.limit("10/minute")
 @traceable(name="main.query_agent")

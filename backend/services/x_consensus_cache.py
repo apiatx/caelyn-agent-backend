@@ -40,8 +40,9 @@ X_SELECT_HANDLES: list[str] = [
     "UncleAlpha007",
 ]
 
-# Disk cache path — mirrors sector_rotation/gemini_analysis.py layout.
-_CACHE_PATH = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
+# Disk cache paths — current snapshot + immediately prior snapshot for delta math.
+_CACHE_PATH       = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
+_PRIOR_CACHE_PATH = Path(__file__).parent.parent / "data" / "x_consensus_weekly_prior.json"
 _CACHE_TTL_SECONDS = 2 * 3600  # 2 hours (120 minutes)
 _BATCH_SIZE = 8
 
@@ -95,9 +96,27 @@ def _load_disk_cache() -> Optional[dict]:
         return None
 
 
+def _load_prior_cache() -> Optional[dict]:
+    """Return the previous snapshot dict if it exists on disk, else None."""
+    if not _PRIOR_CACHE_PATH.exists():
+        return None
+    try:
+        raw = json.loads(_PRIOR_CACHE_PATH.read_text())
+        return raw if isinstance(raw, dict) else None
+    except Exception as e:
+        print(f"[X_CONSENSUS] Prior cache read error: {e}")
+        return None
+
+
 def _save_disk_cache(data: dict) -> None:
     try:
         _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # Rotate: current → prior before writing new current.
+        if _CACHE_PATH.exists():
+            try:
+                _PRIOR_CACHE_PATH.write_text(_CACHE_PATH.read_text())
+            except Exception as e:
+                print(f"[X_CONSENSUS] Prior cache rotate error: {e}")
         data["_saved_at"] = time.time()
         _CACHE_PATH.write_text(json.dumps(data, indent=2))
     except Exception as e:

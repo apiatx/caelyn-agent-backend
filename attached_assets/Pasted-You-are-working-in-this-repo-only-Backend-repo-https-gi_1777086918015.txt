@@ -1,0 +1,248 @@
+You are working in this repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+Project constraints:
+
+* This repo is the logic/source-of-truth layer. 
+* The existing X/Grok pipeline already works well and should be reused, not multiplied.
+* Minimize XAI/Grok calls. The Social page must derive its sections from the existing cached X consensus snapshot as much as possible.
+* Do NOT create 4 separate Grok calls for 4 Social sections.
+* Preserve the existing Home page `Trending on X` behavior/UI contract unless absolutely necessary.
+* Existing X refresh cadence / quiet-hours behavior should remain intact unless a very small compatibility change is needed.
+
+PRIMARY GOAL
+Implement backend support for 4 Social-page sections derived from the existing X consensus snapshot, using the current Grok output as the source of truth:
+
+1. X Consensus
+2. Freshest Alpha
+3. Theme Leadership
+4. Sentiment Acceleration
+
+CRITICAL PRODUCT INTENT
+The Social page should become a richer view over the same X intelligence already powering Home, without materially increasing XAI/Grok calls.
+
+That means:
+
+* one shared X snapshot
+* multiple backend-derived views from that same snapshot
+* no extra model calls just because there are more sections
+
+CURRENT KNOWN SOURCE OF TRUTH
+The current Grok/X pipeline already returns or persists:
+
+* `consensus_picks`
+* `fresh_trades`
+* `hype_radar`
+* `spotlight`
+* `market_pulse`
+* `portfolio_bias`
+* normalized `top_tickers`
+* `key_themes`
+* `notable_accounts`
+* raw/full snapshot written to disk
+  This is the existing working source of truth and should be leveraged, not duplicated. 
+
+AUDIT FIRST
+Before implementing, inspect and report:
+
+1. Current X snapshot source of truth
+
+* exact service / cache file / snapshot loader currently used by Home `Trending on X`
+* what normalized fields already exist
+* what raw fields from Grok are preserved and accessible
+
+2. Existing refresh/caching behavior
+
+* where refresh is triggered
+* where cached reads happen
+* confirm Social can reuse the same snapshot safely
+
+3. Section mapping to current schema
+   For each target section, identify whether it is:
+
+* directly available from current Grok output
+* or needs deterministic backend derivation from current + prior snapshots
+
+Expected mapping:
+
+* X Consensus -> direct from `consensus_picks`
+* Freshest Alpha -> direct from `fresh_trades` + `spotlight.freshest_alpha`
+* Theme Leadership -> direct from `hype_radar`
+* Sentiment Acceleration -> derived by comparing current snapshot vs prior snapshot(s)
+
+IMPLEMENTATION TARGET
+
+PART 1 — Create one Social X endpoint/view model
+Create or extend one backend endpoint for the Social page that returns all 4 sections from one cached snapshot family.
+
+Strong preference:
+
+* one endpoint such as `/api/social/x-dashboard` or similar
+* built from the existing X snapshot
+* no extra Grok calls on normal page load
+
+Response should include:
+
+* `market_pulse`
+* `portfolio_bias`
+* `x_consensus`
+* `freshest_alpha`
+* `theme_leadership`
+* `sentiment_acceleration`
+* metadata such as:
+
+  * `updated_at`
+  * `data_state`
+  * `refresh_in_progress`
+  * `stale`
+  * `next_allowed_refresh_at`
+  * `source`
+
+PART 2 — Section definitions
+Define each section clearly:
+
+A. X Consensus
+Source:
+
+* `consensus_picks` from current Grok output
+
+Normalize each row with fields like:
+
+* rank
+* ticker
+* name
+* tradingview_symbol
+* hype_score
+* trader_count
+* consensus_strength
+* buzz_trend
+* thesis
+* catalysts
+* risk
+* is_fresh_trade
+* fresh_trade_note
+* trader_theses
+
+B. Freshest Alpha
+Source:
+
+* `fresh_trades`
+* optionally also `spotlight.freshest_alpha`
+
+Normalize with fields like:
+
+* ticker
+* name
+* tradingview_symbol
+* first_mentioned_by
+* why_fresh
+* entry_thesis
+* optional spotlight badge if it matches spotlight freshest_alpha
+
+C. Theme Leadership
+Source:
+
+* `hype_radar`
+* optional supporting info from `market_pulse`
+
+Normalize with fields like:
+
+* theme
+* buzz_level
+* key_tickers
+* why_hot
+
+D. Sentiment Acceleration
+This is the only section that is NOT directly native to the Grok schema.
+
+Build it deterministically from cached snapshots only:
+
+* compare the current snapshot to the prior stored snapshot(s)
+* compute which tickers show the strongest increase in:
+
+  * mentions
+  * breadth / trader_count if available
+  * hype score if available
+  * freshness / new-entry behavior
+* no additional Grok call allowed for this
+
+Normalize with fields like:
+
+* ticker
+* current_mentions
+* prior_mentions
+* mention_delta
+* current_hype_score
+* prior_hype_score
+* hype_delta
+* current_consensus_strength
+* buzz_trend
+* rationale / why_now
+
+Keep this section lightweight and deterministic.
+
+PART 3 — Snapshot history support
+If needed, persist minimal prior-snapshot history so Sentiment Acceleration can be computed reliably.
+
+Preferred approach:
+
+* keep current snapshot as-is
+* also retain the immediately previous snapshot (or a small rolling history)
+* do NOT create a huge storage system unless necessary
+* do NOT trigger additional model refreshes
+
+PART 4 — Preserve Home compatibility
+Do NOT break the existing Home page `Trending on X` section.
+If Home uses a subset of the same snapshot, keep that contract stable or backward compatible.
+
+PART 5 — Keep XAI/Grok call count flat
+This is critical.
+
+The Social page must NOT trigger:
+
+* one Grok call for X Consensus
+* another for Freshest Alpha
+* another for Theme Leadership
+* another for Sentiment Acceleration
+
+All 4 sections should come from the same already-refreshed X snapshot family.
+
+VERIFY
+Before finishing, prove:
+
+1. no extra XAI/Grok refresh calls were introduced for the Social page
+2. one Social endpoint now returns all 4 sections
+3. X Consensus is sourced directly from current Grok output
+4. Freshest Alpha is sourced directly from current Grok output
+5. Theme Leadership is sourced directly from current Grok output
+6. Sentiment Acceleration is derived from snapshot delta, not extra Grok calls
+7. Home compatibility remains intact
+
+DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact endpoint added or updated for the Social page
+3. exact mapping of each section to current Grok output vs derived logic
+4. exact fields returned for each of the 4 sections
+5. whether any snapshot-history storage was added
+6. explicit confirmation that XAI/Grok call count did not increase materially
+7. confirmation Home `Trending on X` compatibility was preserved
+8. confirmation changes were committed and pushed directly to `main`
+
+EXECUTION STYLE
+
+* Audit first
+* Reuse the existing X snapshot
+* Derive more value from one Grok call instead of multiplying calls
+* Preserve Home compatibility
+* Then commit and push directly to `main`
