@@ -1,0 +1,465 @@
+Implement a new backend API surface for a Stock Compare feature on the existing CaelynAI backend FastAPI server.
+
+The frontend will call this from the existing Fundamentals page. The user should be able to enter up to 15 stock tickers, select a financial metric, choose a time range, and receive normalized chart-ready comparison data.
+
+Goal
+
+Create backend endpoints that support:
+
+Ticker autocomplete/search.
+Multi-ticker financial metric comparison.
+Recent news per ticker.
+Cached FMP-backed financial data.
+Optional SEC filing enrichment where useful.
+
+Primary source should be the paid FMP API. Use Finnhub/SEC EDGAR only as fallback/enrichment, not the default lane.
+
+Relevant paid FMP capabilities available:
+
+300 API calls/minute.
+Up to 5 years historical data.
+US coverage.
+Annual fundamentals and ratios.
+Company profile/reference data.
+Financial market news.
+Stock quote / price change.
+Limited market cap / batch market cap.
+Limited income statement, balance sheet, cash flow statement.
+Limited key metrics, financial ratios, TTM metrics, growth endpoints.
+Full SEC filings endpoints.
+Limited earnings report/calendar.
+Full company search endpoints.
+New Routes
+
+Add these routes under an existing fundamentals/stocks router if one exists. Otherwise create a dedicated router such as:
+
+backend/routes/stock_compare.py
+
+and mount it in the FastAPI app.
+
+Use route prefix:
+
+/api/fundamentals/compare
+Endpoint 1: Ticker Search / Autocomplete
+GET /api/fundamentals/compare/search?q={query}&limit=10
+Purpose
+
+When the user starts typing a ticker or company name, return matching stock suggestions.
+
+Data source
+
+Use FMP company search endpoints first:
+
+Stock Symbol Search
+Company Name Search
+CIK
+CUSIP / ISIN if already wrapped
+Response shape
+{
+  "query": "TRT",
+  "results": [
+    {
+      "symbol": "TRT",
+      "name": "Trio-Tech International",
+      "exchange": "AMEX",
+      "type": "stock",
+      "currency": "USD",
+      "cik": "0000730263",
+      "sector": "Technology",
+      "industry": "Semiconductor Equipment & Materials",
+      "marketCap": 49220000
+    }
+  ],
+  "source": "fmp",
+  "cached": true
+}
+Requirements
+Normalize symbols to uppercase.
+Deduplicate duplicate exchange variants.
+Prefer US common stocks over ETFs, funds, warrants, units, and OTC unless no better result exists.
+Include company name so the user knows they selected the right ticker.
+Cache search results for 24 hours.
+Endpoint 2: Compare Metrics
+POST /api/fundamentals/compare
+Request body
+{
+  "symbols": ["INTT", "TRT", "NNBR"],
+  "metric": "revenue",
+  "period": "annual",
+  "range": "all"
+}
+Supported range values
+1M, 3M, 6M, YTD, 1Y, 3Y, 5Y, 10Y, MAX, ALL
+
+For fundamentals, annual/quarterly data will not map perfectly to 1M/3M/6M. For short ranges, return the most recent available annual/quarterly points and let the frontend display a helpful “financial statement data updates quarterly/annually” note. Do not fake monthly data.
+
+Supported metric values
+
+Backend should support these canonical metric keys:
+
+market_cap
+revenue
+revenue_growth
+gross_profit
+gross_margin
+profit_margin
+eps_diluted
+operating_income
+net_income
+ebitda
+free_cash_flow
+total_debt
+ps_ratio
+pe_ratio
+recent_news
+
+Optional but useful aliases:
+
+price_to_sales -> ps_ratio
+p_s_ratio -> ps_ratio
+p_e_ratio -> pe_ratio
+eps -> eps_diluted
+fcf -> free_cash_flow
+debt -> total_debt
+FMP endpoint mapping
+
+Use FMP as primary source:
+
+Profile / market data
+profile
+market-capitalization
+historical-market-capitalization
+quote
+stock-price-change
+Financial statements
+
+Use annual first, with period=annual; optionally allow quarterly later.
+
+Income Statement:
+revenue
+grossProfit
+operatingIncome
+netIncome
+epsdiluted / epsDiluted
+ebitda if available
+Balance Sheet:
+totalDebt
+totalLiabilities
+cashAndCashEquivalents
+Cash Flow Statement:
+freeCashFlow
+operatingCashFlow
+capitalExpenditure
+Ratios / key metrics:
+grossProfitMargin
+netProfitMargin
+priceToSalesRatio
+priceEarningsRatio
+enterpriseValue
+marketCap if available
+Growth endpoints:
+revenueGrowth
+incomeStatementGrowth
+financialStatementGrowth
+News:
+stock news / search stock news.
+Response shape
+
+Return chart-ready data, ticker metadata, and latest values.
+
+{
+  "metric": {
+    "key": "revenue",
+    "label": "Revenue",
+    "unit": "currency",
+    "period": "annual"
+  },
+  "range": "ALL",
+  "symbols": ["INTT", "TRT", "NNBR"],
+  "series": [
+    {
+      "symbol": "INTT",
+      "name": "inTEST Corporation",
+      "colorKey": "blue",
+      "points": [
+        {
+          "date": "2021-12-31",
+          "fiscalYear": 2021,
+          "value": 84000000,
+          "formatted": "84.00M",
+          "source": "fmp_income_statement"
+        }
+      ],
+      "latest": {
+        "date": "2025-12-31",
+        "value": 113830000,
+        "formatted": "113.83M"
+      }
+    }
+  ],
+  "snapshot": [
+    {
+      "symbol": "INTT",
+      "name": "inTEST Corporation",
+      "marketCap": 122000000,
+      "revenue": 113830000,
+      "revenueGrowth": 0.084,
+      "grossProfit": 54000000,
+      "grossMargin": 0.474,
+      "profitMargin": 0.062,
+      "epsDiluted": 0.71,
+      "operatingIncome": 9400000,
+      "netIncome": 7200000,
+      "ebitda": 13200000,
+      "freeCashFlow": 8500000,
+      "totalDebt": 21000000,
+      "psRatio": 1.07,
+      "peRatio": 17.4,
+      "lastPrice": 9.83,
+      "priceChange1D": -0.018
+    }
+  ],
+  "news": {
+    "INTT": [
+      {
+        "title": "Example headline",
+        "url": "https://...",
+        "site": "FMP",
+        "publishedDate": "2026-04-24",
+        "summary": "Short summary..."
+      }
+    ]
+  },
+  "meta": {
+    "sourcePriority": ["fmp", "sec_edgar_fallback", "finnhub_fallback"],
+    "cached": true,
+    "generatedAt": "2026-04-24T21:00:00Z",
+    "warnings": []
+  }
+}
+Metric Calculation Rules
+
+Use raw FMP fields when available. Calculate only when the formula is straightforward.
+
+Revenue Growth
+
+Prefer FMP growth endpoint. Fallback:
+
+(current revenue - previous revenue) / previous revenue
+
+Return as decimal:
+
+0.128 = 12.8%
+Gross Margin
+grossProfit / revenue
+Profit Margin
+
+Prefer netProfitMargin from ratios. Fallback:
+
+netIncome / revenue
+Free Cash Flow
+
+Prefer freeCashFlow from cash flow statement. Fallback:
+
+operatingCashFlow - capitalExpenditure
+
+Be careful: capex may be negative in FMP data. Normalize correctly.
+
+Total Debt
+
+Prefer balance sheet totalDebt. Fallback:
+
+shortTermDebt + longTermDebt
+P/S Ratio
+
+Prefer FMP ratios/key metrics. Fallback:
+
+marketCap / revenue
+P/E Ratio
+
+Prefer FMP ratios/key metrics. Fallback:
+
+marketCap / netIncome
+
+Avoid calculating if denominator is zero or negative. Return null and a warning.
+
+Caching Strategy
+
+Add caching because the user may compare up to 15 tickers, and this can fan out quickly.
+
+Suggested TTLs:
+
+ticker search: 24 hours
+company profile: 24 hours
+annual financial statements: 24 hours
+ratios/key metrics: 24 hours
+market cap / quote: 15 minutes
+stock news: 30 minutes
+SEC filings metadata: 6 hours
+
+Cache key format:
+
+stock_compare:{endpoint}:{symbol}:{period}:{limit}
+
+Examples:
+
+stock_compare:income_statement:INTT:annual:40
+stock_compare:ratios:TRT:annual:40
+stock_compare:profile:NNBR
+stock_compare:news:INTT:10
+
+Use existing project cache utilities if available. Do not introduce a new cache layer unless necessary.
+
+API Call Efficiency
+
+For 15 symbols, do not blindly call every endpoint for every metric.
+
+Use metric-aware fetching:
+
+If metric is revenue
+
+Fetch only:
+
+profile
+income statement
+quote/market cap if needed for snapshot
+If metric is free_cash_flow
+
+Fetch only:
+
+profile
+cash flow statement
+If metric is total_debt
+
+Fetch only:
+
+profile
+balance sheet
+If metric is ps_ratio or pe_ratio
+
+Fetch:
+
+profile
+key metrics / ratios
+market cap fallback if needed
+income statement fallback if needed
+If metric is recent_news
+
+Fetch:
+
+profile
+stock news
+
+Do not fetch SEC filings unless:
+
+FMP financial statement data is missing.
+CIK enrichment is needed.
+The user selects or later requests filings.
+SEC EDGAR Enrichment
+
+SEC EDGAR should be fallback/enrichment only.
+
+Use SEC when:
+
+FMP returns no company CIK but SEC lookup can resolve it.
+A ticker’s latest financial values are missing.
+You want to add a “latest filing” metadata object.
+
+Optional response addition:
+
+"filings": {
+  "INTT": [
+    {
+      "form": "10-K",
+      "filingDate": "2026-03-15",
+      "accessionNumber": "...",
+      "url": "https://www.sec.gov/Archives/..."
+    }
+  ]
+}
+
+Respect SEC limit of 10 requests/second from the project API limits doc.
+
+Error Handling
+
+Return partial data instead of failing the whole request.
+
+Example:
+
+{
+  "series": [...],
+  "meta": {
+    "warnings": [
+      "NNBR missing free cash flow for 2020.",
+      "TRT P/E ratio unavailable because net income is negative."
+    ]
+  }
+}
+
+If a symbol is invalid:
+
+{
+  "invalidSymbols": ["ABCXYZ"],
+  "validSymbols": ["INTT", "TRT"]
+}
+
+Frontend should be able to render valid symbols even if one ticker fails.
+
+Validation
+
+Backend should enforce:
+
+max symbols: 15
+min symbols: 1
+symbols: uppercase A-Z, dot, hyphen allowed
+metric: must be allowlisted
+period: annual or quarterly
+range: allowlisted
+
+Return 400 for invalid request shape.
+
+Implementation Checklist
+Add canonical metric map.
+Add FMP client helper methods if missing:
+search symbols/company names
+profile
+quote
+market cap
+historical market cap
+income statement
+balance sheet
+cash flow statement
+ratios
+key metrics
+growth
+stock news
+Add cache wrappers.
+Add compare service that:
+validates symbols
+fetches only required endpoints
+normalizes response
+calculates fallbacks
+returns chart-ready series
+Add FastAPI routes.
+Add tests or smoke cURL examples.
+Backend Smoke Tests
+
+Use examples like:
+
+curl "$BACKEND_URL/api/fundamentals/compare/search?q=TRT&limit=10"
+curl -X POST "$BACKEND_URL/api/fundamentals/compare" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbols": ["INTT", "TRT", "NNBR"],
+    "metric": "revenue",
+    "period": "annual",
+    "range": "ALL"
+  }'
+curl -X POST "$BACKEND_URL/api/fundamentals/compare" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbols": ["INTT", "TRT", "NNBR"],
+    "metric": "ps_ratio",
+    "period": "annual",
+    "range": "5Y"
+  }'
