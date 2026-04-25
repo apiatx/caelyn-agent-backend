@@ -1,29 +1,25 @@
 """
 Bi-hourly cached X "Select Trader Consensus" snapshot.
 
-Exposes the same account universe and extraction logic used by the Social page
-`POST /api/social/query` endpoint (preset_intent="x_select_trader_consensus"),
-but persists a single snapshot to disk and refreshes it at most once per 2 hours.
+Architecture:
+  Phase 1 (parallel batches): Grok searches X and returns structured per-account
+    mention data (ticker, sentiment, recency_days, conviction, thesis, catalysts).
+  Backend scoring: deterministic weighted engine aggregates Phase 1 data and
+    produces a ranked ticker list using tier weights × recency × conviction × breadth.
+  Phase 2 (1 synthesis call): Grok writes thesis text / schema fields using the
+    backend-determined rank order — it does NOT re-rank.
 
-Used by the Home page so it never runs a live X scan on page load. If no
-snapshot exists yet, the function returns a stale/empty payload and kicks off
-exactly one background refresh (lock-guarded to prevent stampede).
+This ensures top_trader accounts have real numeric influence, recency is
+prioritised via explicit decay buckets, and fresh/hidden names surface instead
+of only the most-obvious tickers.
 
-Refresh window: 08:00–20:00 America/Chicago only.  Outside that window the
-function never triggers a Grok/XAI call — it serves the last cached snapshot
-(or a no_data_yet state) regardless of staleness.
-
-Account tiers and weights:
-  top_trader          1.0  — Highest conviction; strongest influence on consensus_picks
-  above_average_trader 0.8  — Strong trade signal quality
-  breaking_news       0.75 — High urgency/recency; amplifies thesis, not primary signal
-  thematic_investor   0.5  — Thematic context + broad market reads; NOT direct conviction
-  theme_datapoints    0.33 — Discovery + stock list datapoints; informs hype_radar only
+Refresh window: 08:00–20:00 America/Chicago only.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import re as _re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,79 +30,76 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo  # Python <3.9 fallback
 
-# ── Canonical account universe with category + weight metadata ─────────────
-# Single source of truth for both the refresh flow and the Social page prompt.
-# The Social page `/api/social/query` imports X_SELECT_HANDLES (derived below)
-# to guarantee Home and Social use the EXACT same universe.
+# ── Canonical account universe (27 accounts, 6 categories) ────────────────
+# SOURCE OF TRUTH — do not edit individual handles without user approval.
+# The Social page `/api/social/query` imports X_SELECT_HANDLES (derived below).
 X_SELECT_ACCOUNTS: list[dict] = [
-    # ── Breaking News / Research (weight 0.75) ──────────────────────────────
-    {"handle": "MikeTrap_TNM",      "category": "breaking_news",        "weight": 0.75,
-     "notes": "Breaking ticker news + market research"},
-    # ── Top Traders — highest conviction (weight 1.0) ───────────────────────
-    {"handle": "Prophets0Stocks",   "category": "top_trader",           "weight": 1.0},
-    {"handle": "MattCKleinlein",    "category": "top_trader",           "weight": 1.0},
-    {"handle": "SysVslt",           "category": "top_trader",           "weight": 1.0},
-    {"handle": "MarketBlogger",     "category": "top_trader",           "weight": 1.0},
-    {"handle": "UncleAlpha007",     "category": "top_trader",           "weight": 1.0},
-    {"handle": "MikeCon07163",      "category": "top_trader",           "weight": 1.0},
-    # ── Above Average Traders — second tier (weight 0.8) ───────────────────
-    {"handle": "HyperTechInvest",   "category": "above_average_trader", "weight": 0.8},
-    {"handle": "ThematicTrader",    "category": "above_average_trader", "weight": 0.8},
-    {"handle": "VortexTraders",     "category": "above_average_trader", "weight": 0.8},
-    {"handle": "Ben_aram6",         "category": "above_average_trader", "weight": 0.8},
-    # ── Thematic / Retail Investors (weight 0.5) ────────────────────────────
-    # Useful for thematic context + broad market reads; NOT for direct conviction
-    {"handle": "Thomas_james_1",    "category": "thematic_investor",    "weight": 0.5},
-    {"handle": "Pokemdollars_",     "category": "thematic_investor",    "weight": 0.5},
-    {"handle": "BlackPantherCap",   "category": "thematic_investor",    "weight": 0.5},
-    {"handle": "BussinBiotech",     "category": "thematic_investor",    "weight": 0.5},
-    {"handle": "TuffCap",           "category": "thematic_investor",    "weight": 0.5},
-    {"handle": "Venu_7_",           "category": "thematic_investor",    "weight": 0.5},
-    {"handle": "futurist_lens",     "category": "thematic_investor",    "weight": 0.5},
-    {"handle": "DougVaccaroBagger", "category": "thematic_investor",    "weight": 0.5},
-    {"handle": "nundab",            "category": "thematic_investor",    "weight": 0.5},
-    {"handle": "AlexfromBabylon",   "category": "thematic_investor",    "weight": 0.5},
-    {"handle": "StableKopek",       "category": "thematic_investor",    "weight": 0.5},
-    # ── Investment Themes + Datapoints (weight 0.33) ────────────────────────
-    # Useful for discovery and hype_radar themes; NOT for consensus_picks scores
-    {"handle": "mrephd",            "category": "theme_datapoints",     "weight": 0.33},
-    {"handle": "Speculator_io",     "category": "theme_datapoints",     "weight": 0.33},
-    {"handle": "StockVision",       "category": "theme_datapoints",     "weight": 0.33},
+    # ── Macro / Big Picture — used for market_pulse only, NOT ticker ranking ─
+    {"handle": "KobeissiLetter",  "category": "macro_big_picture",    "weight": 0.0},
+    # ── Top Traders — highest conviction (weight 1.0) ────────────────────────
+    {"handle": "aleabitoreddit",  "category": "top_trader",           "weight": 1.0},
+    {"handle": "PepInvestStocks", "category": "top_trader",           "weight": 1.0},
+    {"handle": "Kaizen_Investor", "category": "top_trader",           "weight": 1.0},
+    {"handle": "yianisz",         "category": "top_trader",           "weight": 1.0},
+    {"handle": "FinnStockinger",  "category": "top_trader",           "weight": 1.0},
+    {"handle": "UncleAlpha007",   "category": "top_trader",           "weight": 1.0},
+    {"handle": "Mike10947310",    "category": "top_trader",           "weight": 1.0},
+    # ── Above Average Traders — second tier (weight 0.8) ─────────────────────
+    {"handle": "crux_capital_",   "category": "above_average_trader", "weight": 0.8},
+    {"handle": "HyperTechInvest", "category": "above_average_trader", "weight": 0.8},
+    {"handle": "ThematicTrader",  "category": "above_average_trader", "weight": 0.8},
+    {"handle": "JonkooTrades",    "category": "above_average_trader", "weight": 0.8},
+    {"handle": "Ren_aramb",       "category": "above_average_trader", "weight": 0.8},
+    # ── Retail Traders (weight 0.35) ──────────────────────────────────────────
+    {"handle": "Thomas_james_1",  "category": "retail_trader",        "weight": 0.35},
+    {"handle": "ConnorJBates_",   "category": "retail_trader",        "weight": 0.35},
+    # ── Thematic Investors (weight 0.45) ─────────────────────────────────────
+    # Valuable for thematic context and medium-term theme validation
+    {"handle": "BlackPantherCap", "category": "thematic_investor",    "weight": 0.45},
+    {"handle": "TheValueist",     "category": "thematic_investor",    "weight": 0.45},
+    {"handle": "ToffCap",         "category": "thematic_investor",    "weight": 0.45},
+    {"handle": "Venu_7_",         "category": "thematic_investor",    "weight": 0.45},
+    {"handle": "futurist_lens",   "category": "thematic_investor",    "weight": 0.45},
+    {"handle": "DeepValueBagger", "category": "thematic_investor",    "weight": 0.45},
+    {"handle": "sunxliao",        "category": "thematic_investor",    "weight": 0.45},
+    {"handle": "AlexfromBabylon", "category": "thematic_investor",    "weight": 0.45},
+    {"handle": "CKCapitalxx",     "category": "thematic_investor",    "weight": 0.45},
+    # ── Investment Themes + Datapoints + Stock Lists (weight 0.55) ───────────
+    # Higher than thematic_investor because these are specific stock/sector lists
+    {"handle": "equitydd",        "category": "theme_datapoints",     "weight": 0.55},
+    {"handle": "Speculator_io",   "category": "theme_datapoints",     "weight": 0.55},
+    {"handle": "StonkValue",      "category": "theme_datapoints",     "weight": 0.55},
 ]
 
 # Flat handle list derived from the structured config — preserves backward
 # compatibility with all code that imports X_SELECT_HANDLES.
 X_SELECT_HANDLES: list[str] = [a["handle"] for a in X_SELECT_ACCOUNTS]
 
-# Category weight lookup for prompt injection
-_ACCOUNT_WEIGHT_BY_HANDLE: dict[str, float] = {
-    a["handle"]: a["weight"] for a in X_SELECT_ACCOUNTS
+# Fast per-handle lookups
+_ACCOUNT_WEIGHT_BY_HANDLE: dict[str, float]    = {a["handle"]: a["weight"]   for a in X_SELECT_ACCOUNTS}
+_ACCOUNT_CATEGORY_BY_HANDLE: dict[str, str]    = {a["handle"]: a["category"] for a in X_SELECT_ACCOUNTS}
+
+# ── Tier weights (used by backend scoring engine) ─────────────────────────
+_TIER_WEIGHTS: dict[str, float] = {
+    "top_trader":          1.00,
+    "above_average_trader": 0.80,
+    "theme_datapoints":    0.55,
+    "thematic_investor":   0.45,
+    "retail_trader":       0.35,
+    "macro_big_picture":   0.0,   # excluded from ticker ranking
 }
-_ACCOUNT_CATEGORY_BY_HANDLE: dict[str, str] = {
-    a["handle"]: a["category"] for a in X_SELECT_ACCOUNTS
-}
 
-# Human-readable weighting context injected into the synthesis prompt.
-# Kept here (not in prompts.py) so it travels with the account list.
-_SYNTHESIS_WEIGHT_CONTEXT: str = """
-ACCOUNT TIER WEIGHTING — apply these rules when scoring consensus_picks:
-
-Tiers (highest → lowest influence on consensus_picks hype_score / conviction):
-  top_trader (1.0):           @Prophets0Stocks @MattCKleinlein @SysVslt @MarketBlogger @UncleAlpha007 @MikeCon07163
-  above_average_trader (0.8): @HyperTechInvest @ThematicTrader @VortexTraders @Ben_aram6
-  breaking_news (0.75):       @MikeTrap_TNM — adds urgency/recency; amplifies existing thesis, NOT a primary conviction signal on its own
-  thematic_investor (0.5):    @Thomas_james_1 @Pokemdollars_ @BlackPantherCap @BussinBiotech @TuffCap @Venu_7_ @futurist_lens @DougVaccaroBagger @nundab @AlexfromBabylon @StableKopek — thematic/broad context only
-  theme_datapoints (0.33):    @mrephd @Speculator_io @StockVision — discovery + stock list datapoints; informs hype_radar, NOT consensus_picks scores
-
-SCORING RULES:
-- consensus_picks hype_score: weight each mention by the account's tier weight above.
-- A single top_trader pick outweighs multiple thematic_investor mentions for hype_score.
-- consensus_strength of 'High' or 'Very High' requires at least one top_trader OR above_average_trader mention.
-- theme_datapoints accounts should inform hype_radar themes and key_themes ONLY — do not inflate consensus_picks hype_score from them.
-- breaking_news accounts contribute to market_pulse freshness and recency — do not independently drive consensus_picks conviction unless corroborated by top_trader or above_average_trader.
-- thematic_investor accounts contribute to hype_radar buzz_level, portfolio_bias context, and medium-term theme validation — not fast-entry conviction scoring.
-- trader_count should reflect only top_trader + above_average_trader account mentions for accurate conviction signal.
-"""
+# ── Recency decay buckets: (upper_bound_days_inclusive, weight) ───────────
+# Most-recent → highest weight; 3-month-old → very small weight.
+_RECENCY_BUCKETS: list[tuple[int, float]] = [
+    (1,  1.00),   # today / yesterday
+    (3,  0.80),   # last 3 days
+    (7,  0.60),   # past week
+    (14, 0.40),   # past 2 weeks
+    (30, 0.20),   # past month
+    (90, 0.10),   # past 3 months
+]
+_RECENCY_FALLBACK = 0.05  # older than 3 months
 
 # Disk cache paths — current snapshot + immediately prior snapshot for delta math.
 _CACHE_PATH       = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
@@ -235,28 +228,44 @@ async def _fetch_batch(
     batch_num: int,
     total_batches: int,
 ) -> str:
-    """Phase-1 helper — fetch raw post data for one batch of accounts.
+    """Phase-1 helper — structured extraction for one batch of accounts.
 
-    batch_accounts: list of account dicts from X_SELECT_ACCOUNTS
-    Each entry has: handle, category, weight.  The category label is included
-    in the prompt so Grok knows the tier of each account it's reading.
+    Asks Grok to return a JSON array with per-account mention data so the
+    backend scoring engine can apply deterministic tier × recency weighting.
+    Falls back gracefully to raw text if Grok doesn't return parseable JSON.
     """
     handles = [a["handle"] for a in batch_accounts]
-    # Include category label so Grok can weight accounts correctly in Phase 1
-    handle_labels = ", ".join(
-        f"@{a['handle']} [{a['category']}]" for a in batch_accounts
+    handle_labels = "\n".join(
+        f"  - @{a['handle']} [{a['category']}]" for a in batch_accounts
     )
     batch_prompt = (
-        "Search the last 20 posts from EACH of these accounts: "
+        "Search the recent X/Twitter posts (last 30 days) for EACH of these accounts:\n"
         + handle_labels
-        + ". For each account, list the tickers/assets they mention with "
-        "bullish/bearish context, their thesis, conviction level, and any "
-        "catalysts they cite. Include the account handle with each finding. "
-        "Note the account tier in brackets — top_trader and above_average_trader "
-        "posts are highest conviction signals; thematic_investor posts provide "
-        "broad thematic context; theme_datapoints posts identify themes/stocks "
-        "for discovery; breaking_news posts add urgency/recency context. "
-        "Be thorough and specific — quote or closely paraphrase their actual posts."
+        + "\n\nFor every account, find ALL ticker and asset mentions."
+        " Return a JSON array — exactly one element per account — with this structure:\n"
+        '[\n'
+        '  {\n'
+        '    "handle": "accounthandle",\n'
+        '    "mentions": [\n'
+        '      {\n'
+        '        "ticker": "$NVDA",\n'
+        '        "sentiment": "bullish",\n'
+        '        "recency_days": 1,\n'
+        '        "conviction": "high",\n'
+        '        "thesis": "Short summary of their reasoning",\n'
+        '        "catalysts": ["earnings beat", "AI demand"]\n'
+        '      }\n'
+        '    ]\n'
+        '  }\n'
+        ']\n\n'
+        "Rules:\n"
+        "- sentiment must be exactly 'bullish', 'bearish', or 'neutral'.\n"
+        "- recency_days: best-estimate days since the post (0=today, 1=yesterday, 7=a week ago).\n"
+        "- conviction: 'high', 'medium', or 'low' based on the trader's language and emphasis.\n"
+        "- catalysts: list specific events/catalysts cited; empty array [] if none.\n"
+        "- Include ALL tickers mentioned, even ETFs and sector plays.\n"
+        "- If an account has no ticker mentions, include them with 'mentions': [].\n"
+        "- Return ONLY the JSON array. No markdown fences, no explanation text."
     )
     try:
         result = await data_service.xai._call_grok_with_x_search(
@@ -277,61 +286,300 @@ async def _fetch_batch(
     return text
 
 
-def _normalize_consensus(raw_result: Any) -> dict:
+# ── Backend scoring helpers ───────────────────────────────────────────────
+
+
+def _get_recency_weight(days: int) -> float:
+    """Map an approximate age-in-days to a recency decay weight."""
+    for threshold, weight in _RECENCY_BUCKETS:
+        if days <= threshold:
+            return weight
+    return _RECENCY_FALLBACK
+
+
+def _parse_batch_mentions(batch_text: str) -> list[dict]:
+    """Extract the JSON array from a Phase-1 Grok response.
+
+    Tries three strategies in order:
+      1. Whole text is valid JSON.
+      2. First '[' … last ']' span is valid JSON.
+      3. Returns [] so the caller degrades gracefully.
+    """
+    if not batch_text:
+        return []
+    stripped = batch_text.strip()
+    # Strategy 1 — whole text
+    try:
+        data = json.loads(stripped)
+        if isinstance(data, list):
+            return data
+    except Exception:
+        pass
+    # Strategy 2 — find outermost [ … ] span
+    start = stripped.find("[")
+    end   = stripped.rfind("]")
+    if start != -1 and end > start:
+        try:
+            data = json.loads(stripped[start:end + 1])
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+    # Strategy 3 — no parseable JSON found
+    print(f"[X_CONSENSUS] Batch parse fallback — no JSON in {len(batch_text)} chars (Phase-1 raw text kept for synthesis)")
+    return []
+
+
+def _backend_score_tickers(all_account_mentions: list[dict]) -> list[dict]:
+    """Deterministic weighted scoring engine.
+
+    Input: list of {handle, mentions: [{ticker, sentiment, recency_days,
+           conviction, thesis, catalysts}]} from parsed Phase-1 output.
+
+    Scoring formula per bullish mention:
+      base  = tier_weight × recency_weight × conviction_mult × specificity_mult
+    Final score per ticker:
+      base_sum × breadth_mult × freshness_mult
+
+    Returns ranked list (highest backend_score first) of ticker score dicts.
+    macro_big_picture accounts are excluded entirely.
+    Only bullish mentions contribute to ranking score.
+    """
+    # {ticker → aggregation bucket}
+    buckets: dict[str, dict] = {}
+
+    for acct in all_account_mentions:
+        if not isinstance(acct, dict):
+            continue
+        handle   = acct.get("handle", "")
+        category = _ACCOUNT_CATEGORY_BY_HANDLE.get(handle, "")
+        tier_w   = _TIER_WEIGHTS.get(category, 0.0)
+        if tier_w == 0.0:
+            continue  # skip macro + unknowns
+
+        for m in acct.get("mentions", []):
+            if not isinstance(m, dict):
+                continue
+            raw_ticker = (m.get("ticker") or "").upper().strip().lstrip("$").strip()
+            # Basic sanity checks — skip garbage tokens
+            if not raw_ticker or len(raw_ticker) > 12 or " " in raw_ticker:
+                continue
+            sentiment = (m.get("sentiment") or "neutral").lower()
+            if sentiment not in ("bullish", "bearish", "neutral"):
+                sentiment = "neutral"
+            if sentiment != "bullish":
+                continue  # bearish/neutral don't inflate ranking score
+
+            _recency_raw = m.get("recency_days")
+            recency_days = int(_recency_raw) if _recency_raw is not None else 14
+            recency_days = max(0, min(recency_days, 365))
+            recency_w    = _get_recency_weight(recency_days)
+
+            conviction      = (m.get("conviction") or "medium").lower()
+            conviction_mult = {"high": 1.2, "medium": 1.0, "low": 0.7}.get(conviction, 1.0)
+
+            catalysts        = [str(c) for c in (m.get("catalysts") or []) if c]
+            specificity_mult = 1.2 if catalysts else 1.0
+
+            mention_score = tier_w * recency_w * conviction_mult * specificity_mult
+
+            if raw_ticker not in buckets:
+                buckets[raw_ticker] = {
+                    "ticker":                raw_ticker,
+                    "raw_score":             0.0,
+                    "bullish_accounts":      set(),
+                    "account_contributions": {},
+                    "min_recency":           9999,
+                    "theses":                [],
+                    "all_catalysts":         [],
+                }
+            b = buckets[raw_ticker]
+            b["raw_score"]       += mention_score
+            b["bullish_accounts"].add(handle)
+            b["account_contributions"][handle] = (
+                b["account_contributions"].get(handle, 0.0) + mention_score
+            )
+            b["min_recency"] = min(b["min_recency"], recency_days)
+            thesis_text = (m.get("thesis") or "").strip()
+            if thesis_text:
+                b["theses"].append({
+                    "handle":      handle,
+                    "category":    category,
+                    "tier_weight": tier_w,
+                    "text":        thesis_text,
+                })
+            b["all_catalysts"].extend(catalysts)
+
+    _TIER_ORDER = {
+        "top_trader": 0, "above_average_trader": 1,
+        "theme_datapoints": 2, "thematic_investor": 3, "retail_trader": 4,
+    }
+
+    results: list[dict] = []
+    for ticker, b in buckets.items():
+        unique_n = len(b["bullish_accounts"])
+        if unique_n == 0:
+            continue
+
+        # Breadth bonus: +15% per additional unique bullish account, capped at +50%
+        breadth_mult = 1.0 + min(0.15 * (unique_n - 1), 0.50)
+
+        # Freshness boost: new call within 3 days → +30%, within 7 days → +10%
+        min_rec = b["min_recency"]
+        freshness_mult = 1.30 if min_rec <= 3 else (1.10 if min_rec <= 7 else 1.0)
+
+        final_score = b["raw_score"] * breadth_mult * freshness_mult
+
+        has_top_conviction = any(
+            _ACCOUNT_CATEGORY_BY_HANDLE.get(h, "") in ("top_trader", "above_average_trader")
+            for h in b["bullish_accounts"]
+        )
+
+        # Top-tier theses first
+        sorted_theses = sorted(
+            b["theses"],
+            key=lambda t: (_TIER_ORDER.get(t["category"], 9), -t["tier_weight"]),
+        )[:3]
+
+        # Deduplicate catalysts (case-insensitive)
+        seen: set[str] = set()
+        deduped_cats: list[str] = []
+        for c in b["all_catalysts"]:
+            lc = c.lower().strip()
+            if lc and lc not in seen:
+                seen.add(lc)
+                deduped_cats.append(c)
+
+        top_accounts = sorted(
+            [
+                {
+                    "handle":       h,
+                    "category":     _ACCOUNT_CATEGORY_BY_HANDLE.get(h, ""),
+                    "contribution": round(s, 3),
+                }
+                for h, s in b["account_contributions"].items()
+            ],
+            key=lambda x: -x["contribution"],
+        )[:6]
+
+        results.append({
+            "ticker":                ticker,
+            "backend_score":         round(final_score, 3),
+            "raw_score":             round(b["raw_score"], 3),
+            "breadth_score":         round(breadth_mult, 3),
+            "freshness_score":       round(freshness_mult, 3),
+            "recency_days_min":      min_rec if min_rec < 9999 else None,
+            "bullish_account_count": unique_n,
+            "has_top_conviction":    has_top_conviction,
+            "top_accounts":          top_accounts,
+            "thesis_fragments":      sorted_theses,
+            "catalyst_list":         deduped_cats[:6],
+        })
+
+    # Sort: backend_score DESC, top_conviction as tiebreaker
+    results.sort(key=lambda x: (-x["backend_score"], not x["has_top_conviction"]))
+    return results
+
+
+# ── Consensus normaliser ──────────────────────────────────────────────────
+
+
+def _normalize_consensus(
+    raw_result: Any,
+    *,
+    backend_scores: Optional[dict] = None,
+) -> dict:
     """Convert the Grok synthesis response into the Home-shaped snapshot.
 
-    The synthesis schema (X_SELECT_TRADER_CONSENSUS_CONTRACT) returns fields:
-      consensus_picks[], fresh_trades[], hype_radar[], spotlight{}, market_pulse,
-      portfolio_bias, accounts_analyzed[]
-    We flatten to a Home-friendly shape:
-      top_tickers[{symbol, mentions, sentiment, rationale}]
-      key_themes[str]
-      notable_accounts[str]
+    backend_scores: optional {ticker: score_dict} from _backend_score_tickers.
+    When provided, consensus_picks are RE-SORTED by backend_score and each
+    entry is enriched with scoring metadata.  If absent, Grok's own order
+    is preserved (safe fallback for when Phase-1 parsing yields nothing).
+
+    Limits increased: top_tickers cap raised from 20 → 30.
     """
     if not isinstance(raw_result, dict):
         return {"top_tickers": [], "key_themes": [], "notable_accounts": []}
 
     picks = raw_result.get("consensus_picks") or []
-    top_tickers: list[dict] = []
-    for p in picks[:20]:
+
+    # Build enriched list, merging backend scores where available
+    enriched: list[dict] = []
+    for p in picks:
         if not isinstance(p, dict):
             continue
-        symbol = p.get("ticker") or p.get("symbol") or p.get("asset")
+        symbol = (p.get("ticker") or p.get("symbol") or p.get("asset") or "").upper().lstrip("$").strip()
         if not symbol:
             continue
-        top_tickers.append({
-            "symbol": str(symbol).upper().lstrip("$"),
-            "mentions": p.get("mention_count") or p.get("mentions") or p.get("count"),
+        bs = (backend_scores or {}).get(symbol)
+        enriched.append({
+            "_symbol":         symbol,
+            "_backend_score":  bs["backend_score"] if bs else -1.0,
+            "_bs":             bs,
+            "_p":              p,
+        })
+
+    # Re-sort by backend score when available; otherwise keep Grok's order
+    if backend_scores:
+        enriched.sort(key=lambda x: -x["_backend_score"])
+
+    top_tickers: list[dict] = []
+    for e in enriched[:30]:   # increased cap: 20 → 30
+        p  = e["_p"]
+        bs = e["_bs"]
+        entry: dict = {
+            "symbol":    e["_symbol"],
+            "mentions":  p.get("mention_count") or p.get("mentions") or p.get("count"),
             "sentiment": p.get("sentiment") or p.get("bias") or p.get("direction"),
             "rationale": p.get("thesis") or p.get("rationale") or p.get("summary") or "",
-            "accounts": p.get("accounts") or p.get("traders") or [],
-        })
+            "accounts":  p.get("accounts") or p.get("traders") or [],
+        }
+        if bs:
+            entry.update({
+                "backend_score":         bs.get("backend_score"),
+                "recency_days_min":      bs.get("recency_days_min"),
+                "bullish_account_count": bs.get("bullish_account_count"),
+                "has_top_conviction":    bs.get("has_top_conviction"),
+                "top_accounts":          bs.get("top_accounts"),
+                "catalyst_list":         bs.get("catalyst_list"),
+            })
+        top_tickers.append(entry)
 
     key_themes_raw = raw_result.get("market_pulse") or raw_result.get("key_themes") or []
     if isinstance(key_themes_raw, str):
         key_themes = [key_themes_raw]
     elif isinstance(key_themes_raw, list):
-        key_themes = [str(t) for t in key_themes_raw if t][:6]
+        key_themes = [str(t) for t in key_themes_raw if t][:8]   # raised: 6 → 8
     else:
         key_themes = []
 
     accounts = raw_result.get("accounts_analyzed") or []
-    if isinstance(accounts, list):
-        notable_accounts = [str(a) for a in accounts if a][:25]
-    else:
-        notable_accounts = []
+    notable_accounts = [str(a) for a in accounts if a][:27] if isinstance(accounts, list) else []
 
     return {
-        "top_tickers": top_tickers,
-        "key_themes": key_themes,
+        "top_tickers":     top_tickers,
+        "key_themes":      key_themes,
         "notable_accounts": notable_accounts,
-        # Preserve the full raw result for clients that want deeper detail.
-        "raw": raw_result,
+        "raw":             raw_result,
     }
 
 
 async def _run_refresh(data_service) -> Optional[dict]:
-    """Actually execute the 2-phase X consensus scan and persist the result."""
+    """3-phase X consensus refresh.
+
+    Phase 1 (parallel batches): Grok searches X, returns structured JSON per
+      account — ticker mentions with sentiment, recency_days, conviction, thesis.
+    Backend scoring: deterministic engine aggregates Phase-1 data and produces
+      a ranked ticker list (tier × recency × conviction × breadth).  Macro
+      accounts (@KobeissiLetter) are excluded from ticker ranking.
+    Phase 2 (1 synthesis call): Grok writes thesis text and all schema fields.
+      It receives the backend-determined rank order and must follow it — it does
+      NOT decide final ranking itself.
+
+    Fallback: if Phase-1 parsing yields no structured data (Grok returned prose),
+      the combined raw text is still passed to Phase 2 and the system behaves like
+      the old approach.  No crash, no skip.
+    """
     try:
         from agent.prompts import X_SELECT_TRADER_CONSENSUS_CONTRACT
     except Exception as e:
@@ -342,62 +590,124 @@ async def _run_refresh(data_service) -> Optional[dict]:
         print("[X_CONSENSUS] No xAI provider — skipping refresh")
         return None
 
-    # Build batches from the structured account config (not the flat handle list)
+    _cat_counts = {}
+    for a in X_SELECT_ACCOUNTS:
+        _cat_counts[a["category"]] = _cat_counts.get(a["category"], 0) + 1
+
     batches: list[list[dict]] = [
         X_SELECT_ACCOUNTS[i:i + _BATCH_SIZE]
         for i in range(0, len(X_SELECT_ACCOUNTS), _BATCH_SIZE)
     ]
     print(
         f"[X_CONSENSUS] Refresh starting — {len(X_SELECT_ACCOUNTS)} accounts "
-        f"in {len(batches)} batches "
-        f"({sum(1 for a in X_SELECT_ACCOUNTS if a['category']=='top_trader')} top_trader, "
-        f"{sum(1 for a in X_SELECT_ACCOUNTS if a['category']=='above_average_trader')} above_avg, "
-        f"{sum(1 for a in X_SELECT_ACCOUNTS if a['category']=='thematic_investor')} thematic, "
-        f"{sum(1 for a in X_SELECT_ACCOUNTS if a['category']=='theme_datapoints')} datapoints, "
-        f"{sum(1 for a in X_SELECT_ACCOUNTS if a['category']=='breaking_news')} news)"
+        f"({_cat_counts.get('top_trader',0)} top, "
+        f"{_cat_counts.get('above_average_trader',0)} above_avg, "
+        f"{_cat_counts.get('retail_trader',0)} retail, "
+        f"{_cat_counts.get('thematic_investor',0)} thematic, "
+        f"{_cat_counts.get('theme_datapoints',0)} datapoints, "
+        f"{_cat_counts.get('macro_big_picture',0)} macro) "
+        f"in {len(batches)} batches"
     )
 
-    # Phase 1: parallel batched fetch (category labels included in each prompt)
+    # ── Phase 1: parallel structured extraction ───────────────────────────
     batch_results = await asyncio.gather(
         *[_fetch_batch(data_service, batch, i, len(batches))
           for i, batch in enumerate(batches)],
         return_exceptions=True,
     )
-    combined_data: list[str] = []
+
+    all_account_mentions: list[dict] = []   # for backend scoring
+    combined_data: list[str] = []            # raw text for Phase-2 synthesis
+
     for i, res in enumerate(batch_results):
         if isinstance(res, Exception):
             print(f"[X_CONSENSUS] Batch {i + 1} failed: {res}")
             continue
-        if res and isinstance(res, str) and not res.startswith("xAI"):
-            batch_labels = ", ".join(
-                f"@{a['handle']} [{a['category']}]" for a in batches[i]
-            )
-            combined_data.append(
-                f"=== Batch {i + 1} ({batch_labels}) ===\n{res}"
-            )
+        if not res or not isinstance(res, str) or res.startswith("xAI"):
+            continue
+
+        batch_labels = ", ".join(
+            f"@{a['handle']} [{a['category']}]" for a in batches[i]
+        )
+        combined_data.append(f"=== Batch {i + 1} ({batch_labels}) ===\n{res}")
+
+        # Try to parse structured mention data for backend scoring
+        parsed = _parse_batch_mentions(res)
+        if parsed:
+            print(f"[X_CONSENSUS] Batch {i + 1}: parsed {len(parsed)} account records from JSON")
+            all_account_mentions.extend(parsed)
+        # (fallback: raw text still appended to combined_data above)
 
     if not combined_data:
         print("[X_CONSENSUS] All batches failed — aborting refresh (keep existing cache)")
         return None
 
-    # Phase 2: synthesis with deep reasoning model.
-    # The system_text (X_SELECT_TRADER_CONSENSUS_CONTRACT) is the canonical output
-    # schema contract — NOT modified here.  Category weighting instructions are
-    # injected into the USER-side synthesis prompt so the model scores correctly
-    # without touching prompts.py.
+    # ── Backend scoring ───────────────────────────────────────────────────
+    backend_ranked: list[dict] = []
+    if all_account_mentions:
+        backend_ranked = _backend_score_tickers(all_account_mentions)
+        print(
+            f"[X_CONSENSUS] Backend scoring: {len(all_account_mentions)} account records → "
+            f"{len(backend_ranked)} scored tickers"
+        )
+        if backend_ranked:
+            top5 = [(s["ticker"], s["backend_score"]) for s in backend_ranked[:5]]
+            print(f"[X_CONSENSUS] Top-5 backend: {top5}")
+    else:
+        print("[X_CONSENSUS] No structured Phase-1 data — backend scoring skipped; using Grok-only rank")
+
+    backend_score_by_ticker: dict[str, dict] = {s["ticker"]: s for s in backend_ranked}
+
+    # ── Phase 2: synthesis (Grok writes text, backend determined order) ───
     combined_text = "\n\n".join(combined_data)
-    print(f"[X_CONSENSUS] Synthesis phase: {len(combined_text):,} chars")
+    print(f"[X_CONSENSUS] Synthesis phase: {len(combined_text):,} chars of raw data")
+
+    # Build the rank preamble only when backend produced results
+    if backend_ranked:
+        top_for_synthesis = backend_ranked[:30]
+        rank_lines = "\n".join(
+            f"  {i + 1:2d}. ${s['ticker']}"
+            f" [score={s['backend_score']:.2f}"
+            f", {s['bullish_account_count']} accts"
+            f", recency≤{s['recency_days_min']}d"
+            + (", ⭐top_trader" if s["has_top_conviction"] else "")
+            + "]"
+            for i, s in enumerate(top_for_synthesis)
+        )
+        rank_preamble = (
+            f"BACKEND PRE-RANKED TICKER ORDER "
+            f"(deterministic: tier_weight × recency_decay × conviction × breadth — "
+            f"{len(backend_ranked)} total tickers scored):\n"
+            + rank_lines
+            + "\n\n"
+            "SYNTHESIS RULES:\n"
+            "1. Output consensus_picks in EXACTLY the above rank order — do NOT reorder.\n"
+            "2. Your role is writing accurate thesis text, catalysts, name, and schema fields.\n"
+            "3. For any tickers in the data but NOT in the pre-ranked list, append them after.\n"
+            "4. Market pulse / portfolio bias: use @KobeissiLetter macro context heavily.\n"
+            "5. fresh_trades: tickers with recency_days ≤ 7 and has_top_conviction=True are best candidates.\n\n"
+        )
+    else:
+        rank_preamble = (
+            "Note: backend scoring had insufficient structured data. "
+            "Use your best judgment to rank by conviction strength and recency.\n\n"
+        )
+
     synthesis_prompt = (
-        f"Below is raw data from X/Twitter posts by {len(X_SELECT_ACCOUNTS)} accounts "
-        f"spanning {len(set(a['category'] for a in X_SELECT_ACCOUNTS))} tiers "
-        "(top_trader, above_average_trader, breaking_news, thematic_investor, theme_datapoints).\n\n"
-        + _SYNTHESIS_WEIGHT_CONTEXT.strip()
-        + "\n\nRAW X DATA (each batch annotated with account tier):\n"
+        f"Raw X/Twitter data from {len(X_SELECT_ACCOUNTS)} curated trader accounts "
+        f"({_cat_counts.get('top_trader',0)} top_traders, "
+        f"{_cat_counts.get('above_average_trader',0)} above_avg, "
+        f"{_cat_counts.get('retail_trader',0)} retail, "
+        f"{_cat_counts.get('thematic_investor',0)} thematic, "
+        f"{_cat_counts.get('theme_datapoints',0)} datapoints, "
+        f"1 macro/market-context account).\n\n"
+        + rank_preamble
+        + "RAW TRADER DATA (per-account, with tier labels):\n"
         + combined_text
-        + "\n\nNow synthesize ALL of this data into the exact JSON schema from your system "
-        "instructions, applying the tier weighting rules above. "
-        "Return ONLY valid JSON — no markdown, no backticks, no extra text."
+        + "\n\nReturn ONLY valid JSON per your system schema. "
+        "No markdown fences, no backticks, no extra text."
     )
+
     try:
         result = await data_service.xai._call_grok_with_x_search(
             prompt=synthesis_prompt,
@@ -415,24 +725,30 @@ async def _run_refresh(data_service) -> Optional[dict]:
         print(f"[X_CONSENSUS] Synthesis error: {err}")
         return None
 
-    normalized = _normalize_consensus(result)
+    # ── Normalise and persist ─────────────────────────────────────────────
+    normalized = _normalize_consensus(result, backend_scores=backend_score_by_ticker)
 
-    # Account config snapshot: categories + handle list for downstream consumers
     accounts_meta = [
         {"handle": a["handle"], "category": a["category"], "weight": a["weight"]}
         for a in X_SELECT_ACCOUNTS
     ]
     snapshot = {
-        "generated_at":   datetime.now(timezone.utc).isoformat(),
-        "handles":        X_SELECT_HANDLES,           # flat list (backward compat)
-        "accounts":       accounts_meta,              # structured config (new)
-        "top_tickers":    normalized["top_tickers"],
-        "key_themes":     normalized["key_themes"],
-        "notable_accounts": normalized["notable_accounts"],
-        "raw":            normalized.get("raw"),
+        "generated_at":      datetime.now(timezone.utc).isoformat(),
+        "handles":           X_SELECT_HANDLES,     # flat list (backward compat)
+        "accounts":          accounts_meta,         # structured config
+        "top_tickers":       normalized["top_tickers"],
+        "key_themes":        normalized["key_themes"],
+        "notable_accounts":  normalized["notable_accounts"],
+        "raw":               normalized.get("raw"),
+        # Scoring metadata for diagnostics (not in public payload)
+        "_backend_ranked":   backend_ranked[:30],
+        "_backend_parse_count": len(all_account_mentions),
     }
     _save_disk_cache(snapshot)
-    print(f"[X_CONSENSUS] Refresh complete — {len(snapshot['top_tickers'])} tickers saved")
+    print(
+        f"[X_CONSENSUS] Refresh complete — {len(snapshot['top_tickers'])} tickers saved "
+        f"({len(backend_ranked)} backend-scored)"
+    )
     return snapshot
 
 

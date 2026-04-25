@@ -1,0 +1,258 @@
+You are working in this repo only:
+
+Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+This is for my backend Replit agent only
+Do not worry about pushing to git
+Audit first, then implement
+
+This is a focused fix for the X/Grok social-consensus pipeline. Do not broaden scope.
+
+PRIMARY PROBLEM
+The recent X/Grok weighting update made the output worse and more generic.
+
+Symptoms:
+
+the current picks feel too generic / obvious
+the strongest hidden alpha / fresh trader calls are not surfacing
+my top traders do not appear to have enough weight
+recency is not being prioritized strongly enough
+too few tickers are being surfaced in Home/Social
+
+CRITICAL CONTEXT
+Before the recent account/weighting rewrite, the feature was working much better.
+I want the system to behave more like it did before — focused on the exact curated accounts I gave — but improved with real recency weighting and real account-tier weighting.
+
+The recent change appears to have gone wrong because:
+
+it replaced my intended account list incorrectly
+it pushed weighting into prompt text rather than robust backend scoring
+Grok is still doing too much ranking instead of extraction/synthesis only
+
+Use the exact account list I provide below. Do NOT substitute different handles.
+Also: remove Breaking News entirely. I do not want that category or handle included at all.
+
+SOURCE OF TRUTH ACCOUNT LIST TO USE
+
+MACRO / BIG PICTURE
+
+@KobeissiLetter
+
+ACTIVE THEMATIC SWING TRADERS — Top Traders
+
+@aleabitoreddit
+@PepInvestStocks
+@Kaizen_Investor
+@yianisz
+@FinnStockinger
+@UncleAlpha007
+@Mike10947310
+
+ACTIVE THEMATIC SWING TRADERS — Above Average Tier
+
+@crux_capital_
+@HyperTechInvest
+@ThematicTrader
+@JonkooTrades
+@Ren_aramb
+
+Retail Traders
+
+@Thomas_james_1
+@ConnorJBates_
+
+Thematic Investors
+
+@BlackPantherCap
+@TheValueist
+@ToffCap
+@Venu_7_
+@futurist_lens
+@DeepValueBagger
+@sunxliao
+@AlexfromBabylon
+@CKCapitalxx
+
+Investment Themes + Datapoints + Stock Lists
+
+@equitydd
+@Speculator_io
+@StonkValue
+
+IMPORTANT:
+
+Do NOT include any Breaking News category
+Do NOT include @TheTape_TNM
+Do NOT add any replacement breaking-news handle
+
+PRIMARY GOAL
+Refactor the X consensus pipeline so:
+
+the exact account list above is restored and used
+Grok focuses on extraction/summarization, not fuzzy final ranking
+backend computes deterministic weighted scoring
+recency heavily favors new / current mentions
+top traders have real numeric influence
+more hidden / fresh names surface instead of only generic obvious tickers
+Home and Social can display more tickers cleanly
+
+AUDIT FIRST
+Inspect and report:
+
+What exact handle list is live right now
+compare it against the account list above
+identify every incorrect substitution/removal/addition
+Where ranking is currently decided
+what is Grok deciding
+what is backend deciding
+how much weighting is currently prompt-only
+Current normalization/storage shape
+what raw extraction is stored from Grok
+whether account-level mention details are retained
+whether recency by post can be computed from current stored data
+Current surfacing limits
+how many top tickers are currently persisted
+how many Home renders
+how many Social renders
+whether hidden names are getting cut off too early
+
+IMPLEMENTATION TARGET
+
+PART 1 — Restore exact account list
+Replace the current live account config with the exact list above.
+Do not improvise substitutes.
+
+PART 2 — Separate extraction from ranking
+Grok should primarily do:
+
+fetch/search posts from each account
+identify tickers/assets mentioned
+determine positive/bullish vs negative/bearish context
+extract thesis/catalysts/freshness clues
+summarize account-specific rationale
+
+Backend should primarily do:
+
+weighted scoring
+final ticker ranking
+acceleration detection
+freshness prioritization
+
+PART 3 — Deterministic scoring engine
+Implement a backend scoring model for ticker ranking using real numeric weights.
+
+At minimum use:
+
+A. Account tier weights
+Example target ordering:
+
+top_trader: 1.00
+above_average_trader: 0.80
+theme_datapoints: 0.55
+thematic_investor: 0.45
+retail_trader: 0.35
+macro_big_picture: excluded from ticker ranking, used only for market pulse
+
+B. Recency weights
+Use explicit recency buckets with highest weight on newest mentions:
+
+today: 1.00
+last 3 days: 0.80
+past week: 0.60
+past 2 weeks: 0.40
+past month: 0.20
+past 3 months: 0.10
+
+C. Positive-sentiment bias
+Only bullish / positive mentions should meaningfully contribute to X Consensus / Freshest Alpha ranking.
+Bearish mentions may still inform risks, but should not elevate a ticker into the main bullish rankings.
+
+D. Distinct-account breadth
+A ticker mentioned by multiple strong accounts should score higher than repeated mentions from one weak account.
+
+E. Freshness / new-call boost
+If a ticker is newly appearing in the last few days across strong accounts, give it additional score.
+I care a lot about:
+
+gaining traction
+new calls
+better investments with momentum
+hidden alpha
+
+F. Thesis-specificity boost
+Specific catalysts / detailed reasoning should score above generic hype.
+
+PART 4 — Keep Grok useful, not dominant
+You may still use Grok synthesis to generate concise thesis text, but the final ranking order should be backend-determined by the scoring engine above, not left mostly to prompt phrasing.
+
+PART 5 — Increase surfaced ticker counts
+Audit and increase the number of tickers surfaced where appropriate.
+
+Strong preference:
+
+Home Trending on X: increase to something like 10–15 if not already there
+Social sections: increase to something like 12–20 depending on section
+do not bury the hidden names by truncating too early
+
+PART 6 — Preserve existing downstream compatibility
+Do NOT break:
+
+Home page Trending on X
+Social page X Consensus
+Freshest Alpha
+Theme Leadership
+Sentiment Acceleration
+
+You may enrich internal fields, but keep existing frontend contracts working or backward compatible.
+
+PART 7 — Snapshot metadata
+If useful, store richer per-ticker ranking metadata internally, for example:
+
+weighted_mention_score
+recency_score
+breadth_score
+freshness_score
+top_weighted_accounts
+bullish_account_count
+But do not bloat frontend payload unnecessarily unless the fields are useful.
+
+VERIFY
+Before finishing, prove with real output inspection:
+
+exact account list now matches the user-provided list
+top_trader names like:
+@aleabitoreddit
+@PepInvestStocks
+visibly influence rankings when they have fresh calls
+recency weighting is working:
+mentions today beat older mentions
+fresh / hidden names surface more than before
+surfaced ticker counts increased appropriately
+Home/Social contracts still work
+
+Also provide a before/after comparison for at least a few names showing:
+
+old score / rank behavior
+new score / rank behavior
+why the new ranking is better
+
+DELIVERABLES
+When done, report:
+
+exact backend files changed
+exact canonical account config now used
+exact weighting model now used
+exact recency buckets now used
+how Grok’s role vs backend scoring changed
+whether surfaced ticker counts changed
+confirmation Home/Social compatibility remains intact
+
+EXECUTION STYLE
+
+Audit first
+Restore the exact account universe
+Move ranking intelligence into deterministic backend scoring
+Make recency and top-trader influence real
+Surface more hidden/fresh names
