@@ -237,7 +237,21 @@ def _build_sentiment_accel(current_raw: dict, prior_raw: dict) -> list[dict]:
 # ── Metadata helpers ─────────────────────────────────────────────────────────
 
 def _build_metadata(snapshot: Optional[dict]) -> dict:
-    """Build the standard metadata block from a current snapshot."""
+    """Build the standard metadata block from a current snapshot.
+
+    Key design: auto-schedule fields and manual-refresh fields are COMPLETELY
+    SEPARATE so the frontend can enable/disable each button independently.
+
+    Auto-schedule fields:
+      auto_refresh_window_open    — True only 08:00–20:00 America/Chicago
+      next_allowed_refresh_at     — next auto window open (ISO-8601 UTC); null if open now
+      refresh_window_open         — kept for backward compat (same value as auto_refresh_window_open)
+
+    Manual-refresh fields:
+      manual_refresh_available    — True unless single-flight lock held OR cooldown active
+      next_manual_refresh_allowed_at — ISO-8601 UTC cooldown expiry; null if never triggered
+      manual_refresh_reason       — null when available; "refresh_in_progress" | "cooldown" when not
+    """
     from services.x_consensus_cache import (
         _CACHE_TTL_SECONDS,
         _in_refresh_window,
@@ -246,38 +260,61 @@ def _build_metadata(snapshot: Optional[dict]) -> dict:
         _manual_refresh_available,
         _next_manual_allowed_iso,
     )
-    window_open = _in_refresh_window()
-    manual_available = _manual_refresh_available()
+    window_open      = _in_refresh_window()
+    lock_held        = _REFRESH_LOCK.locked()
+    cooldown_clear   = _manual_refresh_available()
     next_manual_iso  = _next_manual_allowed_iso()
+
+    # manual_refresh_available is independent of the auto schedule window.
+    # A user can always trigger a manual refresh after hours UNLESS:
+    #   a) a refresh is already running (single-flight)
+    #   b) the 30-minute manual cooldown hasn't elapsed
+    if lock_held:
+        manual_available = False
+        manual_reason    = "refresh_in_progress"
+    elif not cooldown_clear:
+        manual_available = False
+        manual_reason    = "cooldown"
+    else:
+        manual_available = True
+        manual_reason    = None
 
     if not snapshot:
         return {
             "updated_at":                    None,
             "data_state":                    "no_data_yet",
             "stale":                         True,
-            "refresh_in_progress":           False,
+            "refresh_in_progress":           lock_held,
+            # ── auto-schedule fields ──────────────────────────────────────
+            "auto_refresh_window_open":      window_open,
             "refresh_window_open":           window_open,
             "next_allowed_refresh_at":       _next_window_open_iso() if not window_open else None,
+            # ── manual-refresh fields ─────────────────────────────────────
             "manual_refresh_available":      manual_available,
             "next_manual_refresh_allowed_at": next_manual_iso,
+            "manual_refresh_reason":         manual_reason,
             "source":                        "x_consensus_cache",
             "timezone":                      "America/Chicago",
         }
 
-    saved_at  = snapshot.get("_saved_at") or 0
-    age_s     = time.time() - float(saved_at)
-    is_stale  = age_s >= _CACHE_TTL_SECONDS
+    saved_at = snapshot.get("_saved_at") or 0
+    age_s    = time.time() - float(saved_at)
+    is_stale = age_s >= _CACHE_TTL_SECONDS
 
     return {
         "updated_at":                    snapshot.get("generated_at"),
         "data_state":                    "stale" if is_stale else "available",
         "stale":                         is_stale,
         "age_seconds":                   int(age_s),
-        "refresh_in_progress":           _REFRESH_LOCK.locked(),
+        "refresh_in_progress":           lock_held,
+        # ── auto-schedule fields ──────────────────────────────────────────
+        "auto_refresh_window_open":      window_open,
         "refresh_window_open":           window_open,
         "next_allowed_refresh_at":       _next_window_open_iso() if not window_open else None,
+        # ── manual-refresh fields ─────────────────────────────────────────
         "manual_refresh_available":      manual_available,
         "next_manual_refresh_allowed_at": next_manual_iso,
+        "manual_refresh_reason":         manual_reason,
         "source":                        "x_consensus_cache",
         "timezone":                      "America/Chicago",
         "handles_count":                 len(snapshot.get("handles") or []),

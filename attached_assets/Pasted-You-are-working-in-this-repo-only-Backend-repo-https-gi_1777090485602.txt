@@ -1,0 +1,106 @@
+You are working in this repo only:
+
+* Backend repo: https://github.com/apiatx/caelyn-agent-backend.git
+
+Workflow rules:
+
+* Work directly on `main`
+* Do NOT create a branch
+* Do NOT create a PR
+* Commit directly to `main`
+* Push directly to `main`
+
+This is a focused bug fix. Do not broaden scope.
+
+PRIMARY BUG
+The Social page `Refresh Snapshot` button is currently grayed out after hours and shows something like “next one in 10 hr”.
+
+That means the backend/manual-refresh logic is incorrectly tying **manual refresh eligibility** to the **next automatic refresh window**.
+
+That is wrong.
+
+REQUIRED BEHAVIOR
+Separate these two concepts completely:
+
+1. Automatic refresh eligibility
+
+* runs every 2 hours
+* only between 8:00 AM and 8:00 PM America/Chicago
+* zero automatic scans overnight
+
+2. Manual refresh eligibility
+
+* user may manually trigger refresh at any time, including after hours
+* manual refresh should still be guarded by:
+
+  * single-flight protection
+  * cooldown / anti-spam
+* manual refresh must NOT be blocked just because it is after 8 PM
+
+AUDIT FIRST
+Inspect the current implementation and identify exactly:
+
+1. where the button-disabled metadata is coming from
+2. whether `next_allowed_refresh_at` is incorrectly being reused for manual refresh
+3. whether `manual_refresh_available` is being computed from the automatic schedule instead of manual cooldown state
+4. what metadata the frontend currently receives that causes the button to gray out
+
+IMPLEMENT
+Fix the backend so it returns separate metadata for:
+
+* automatic schedule
+* manual refresh availability
+
+Preferred metadata shape:
+
+* `refresh_in_progress`
+* `manual_refresh_available`
+* `next_allowed_refresh_at`              # next automatic refresh window
+* `next_manual_refresh_allowed_at`       # cooldown only
+* `auto_refresh_window_open`
+* `timezone`
+* `manual_refresh_reason`                # optional human-readable reason when unavailable
+
+Required logic:
+
+* if after hours:
+
+  * `auto_refresh_window_open = false`
+  * automatic refresh blocked
+  * BUT `manual_refresh_available = true` unless cooldown or single-flight says otherwise
+* if refresh already running:
+
+  * `manual_refresh_available = false`
+  * `manual_refresh_reason = "refresh_in_progress"`
+* if cooldown active:
+
+  * `manual_refresh_available = false`
+  * `manual_refresh_reason = "cooldown"`
+* otherwise:
+
+  * `manual_refresh_available = true`
+
+IMPORTANT
+Do NOT change the automatic quiet-hours policy.
+Do NOT remove anti-spam protections.
+Just stop using the overnight auto schedule to disable manual refresh.
+
+VERIFY
+Before finishing, verify:
+
+1. after 8 PM America/Chicago, automatic refresh is still blocked
+2. after 8 PM America/Chicago, manual refresh is still allowed
+3. button metadata now distinguishes auto schedule vs manual availability
+4. cooldown still works
+5. refresh-in-progress still blocks duplicate clicks
+6. Home compatibility remains intact
+
+DELIVERABLES
+When done, report:
+
+1. exact backend files changed
+2. exact root cause
+3. exact metadata fields now returned
+4. exact after-hours behavior now
+5. exact cooldown/single-flight behavior now
+6. confirmation changes were committed and pushed directly to `main`
