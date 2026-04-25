@@ -1,0 +1,232 @@
+Workflow rules:
+
+This is for my backend Replit agent only
+Do not worry about pushing to git
+Audit first, then implement
+
+This is a focused refinement of the X consensus snapshot derivation logic. Do not broaden scope.
+
+PRIMARY GOAL
+Keep the current X/Grok refresh architecture and call count exactly the same, but refine the derivation logic for only these two Social sections:
+
+freshest_alpha
+sentiment_acceleration
+
+Do NOT change:
+
+X Consensus
+Theme Leadership
+Home page Trending on X contract
+overall Grok call count
+current quiet-hours / refresh cadence
+
+CRITICAL CLARIFICATION
+I still want to use the same one Grok refresh cycle.
+I do NOT want more model calls.
+
+I want the backend to derive these sections better from the same extracted snapshot.
+
+NO CHANGE SECTIONS
+
+X Consensus section
+No change needed
+Theme Leadership section
+No change needed
+
+SECTIONS TO CHANGE
+
+A. Freshest Alpha
+Freshest Alpha needs to show the most recent/new tickers being mentioned by these accounts:
+
+Top Traders:
+
+@aleabitoreddit
+@PepInvestStocks
+@Kaizen_Investor
+@yianisz
+@FinnStockinger
+@UncleAlpha007
+@Mike10947310
+
+Above Average Tier:
+
+@crux_capital_
+@HyperTechInvest
+@ThematicTrader
+@JonkooTrades
+@Ren_aramb
+
+Important:
+
+this section should focus ONLY on Top Trader + Above Average Trader accounts
+it should surface NEW tickers being mentioned in the last few days
+even if those tickers are not yet the most talked about or highest consensus
+I care about time-sensitive fresh calls here
+examples of the kind of names I want surfaced are things like TRT, VIVO, ALMU when they suddenly start appearing across these stronger accounts
+
+This should be a “newly emerging fresh trade ideas from the highest-quality active traders” section, not a generic popularity section.
+
+B. Sentiment Acceleration
+Sentiment Acceleration should focus on:
+
+consensus tickers across ALL included accounts
+where consensus/popularity has been building over time
+and especially where that strength has increased in the past week and then accelerated further in the past 2–3 days
+
+This is NOT just “new names.”
+This is:
+
+existing or developing consensus names
+where social momentum is strengthening
+where attention rotation is clearly increasing
+
+Think:
+
+90-day context
+stronger in last week
+even stronger in the last 2–3 days
+
+This should detect “consensus is intensifying” across the full account universe.
+
+AUDIT FIRST
+Inspect the current implementation and report:
+
+How freshest_alpha is currently derived
+what fields/snapshots it uses
+whether it currently uses all accounts equally
+whether it currently filters by Top + Above Average traders only
+whether it is currently overbiased toward generic high-consensus names
+How sentiment_acceleration is currently derived
+what prior/current snapshot logic it uses
+whether it is too focused on raw delta instead of sustained strengthening
+whether it currently captures 90d -> 7d -> 2–3d momentum improvement
+What post-level or mention-level history is available from the current stored snapshot / extraction output
+can we identify:
+which account mentioned which ticker
+recency bucket
+sentiment
+conviction
+thesis/catalyst presence
+Whether current storage/history is enough
+if not, add the minimum necessary history/metadata to support better derivation
+do NOT increase Grok calls
+
+IMPLEMENTATION TARGET
+
+PART 1 — Keep the same Grok call architecture
+Do NOT add new Grok calls.
+Do NOT add another phase.
+Do NOT create separate model calls for these sections.
+
+The same refresh cycle should still be:
+
+Phase 1 extraction
+backend ranking/aggregation
+Phase 2 synthesis
+snapshot write
+
+PART 2 — Redefine Freshest Alpha properly
+Freshest Alpha should now be derived using ONLY:
+
+top_trader
+above_average_trader
+
+It should prioritize tickers that are:
+
+mentioned bullishly/positively
+recent, especially:
+today
+last 3 days
+last week
+low historical presence before the recent spike
+appearing across multiple high-quality active trader accounts if possible
+time-sensitive / new / emerging
+
+Strong preference for a scoring approach like:
+
+high score for mentions from Top/Above Average traders in the last 1–3 days
+strong boost if the ticker had low or near-zero presence in the prior broader window
+boost if multiple strong accounts independently mention it
+do NOT let stale long-running favorites dominate this section
+
+In plain English:
+Freshest Alpha = “what are my best active traders newly starting to talk about?”
+
+PART 3 — Redefine Sentiment Acceleration properly
+Sentiment Acceleration should use ALL included accounts, but emphasize momentum strengthening over time.
+
+Strong preference:
+
+compare weighted popularity / weighted conviction across multiple time windows:
+last 90 days
+last 14 days
+last 7 days
+last 3 days
+identify tickers where weighted consensus is increasing, especially recently
+reward names whose signal slope is steepening:
+stronger in 14d than 90d baseline
+stronger in 7d than 14d
+stronger in 3d than 7d
+
+This is not just raw mention delta.
+This is momentum/acceleration in social consensus.
+
+In plain English:
+Sentiment Acceleration = “which consensus names are getting stronger and stronger lately?”
+
+PART 4 — Preserve X Consensus and Theme Leadership
+Do not alter derivation logic for:
+
+x_consensus
+theme_leadership
+
+PART 5 — Preserve frontend compatibility
+Do not break the current Social/Home contracts.
+You may improve internals and enrich fields if useful, but preserve compatibility.
+
+PART 6 — Optional internal metadata
+If useful for better section quality, store or expose internal fields such as:
+
+freshness_score
+historical_presence_score
+recent_high_quality_mentions
+acceleration_score
+window_scores
+top_accounts
+But do not bloat the payload unnecessarily unless the fields are useful.
+
+VERIFY
+Before finishing, prove:
+
+Freshest Alpha now only uses Top Trader + Above Average Trader accounts
+Freshest Alpha favors newly emerging names from the last few days, not generic crowded consensus names
+Sentiment Acceleration uses all accounts
+Sentiment Acceleration captures strengthening consensus over 90d -> 14d -> 7d -> 3d windows
+X Consensus unchanged
+Theme Leadership unchanged
+Grok/XAI call count unchanged
+
+Also provide 2–4 example tickers showing:
+
+why they now rank in Freshest Alpha
+why they now rank in Sentiment Acceleration
+what changed versus the previous derivation
+
+DELIVERABLES
+When done, report:
+
+exact backend files changed
+exact new derivation logic for freshest_alpha
+exact new derivation logic for sentiment_acceleration
+whether any new history/snapshot metadata was added
+confirmation X Consensus unchanged
+confirmation Theme Leadership unchanged
+confirmation Grok/XAI call count unchanged
+
+EXECUTION STYLE
+
+Audit first
+Refine only the two section derivations
+Keep one Grok refresh cycle
+Make Freshest Alpha truly fresh
+Make Sentiment Acceleration truly about strengthening consensus

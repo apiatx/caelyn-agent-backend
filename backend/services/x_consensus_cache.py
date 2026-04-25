@@ -732,6 +732,21 @@ async def _run_refresh(data_service) -> Optional[dict]:
         {"handle": a["handle"], "category": a["category"], "weight": a["weight"]}
         for a in X_SELECT_ACCOUNTS
     ]
+
+    # Enrich Phase-1 per-account mention data with category + weight so Social
+    # section builders can filter by tier without re-importing account config.
+    # This adds zero API calls — data is already computed during the refresh.
+    mention_data: list[dict] = [
+        {
+            "handle":   acct.get("handle", ""),
+            "category": _ACCOUNT_CATEGORY_BY_HANDLE.get(acct.get("handle", ""), ""),
+            "weight":   _ACCOUNT_WEIGHT_BY_HANDLE.get(acct.get("handle", ""), 0.0),
+            "mentions": acct.get("mentions", []),
+        }
+        for acct in all_account_mentions
+        if acct.get("handle") and acct.get("mentions")
+    ]
+
     snapshot = {
         "generated_at":      datetime.now(timezone.utc).isoformat(),
         "handles":           X_SELECT_HANDLES,     # flat list (backward compat)
@@ -740,14 +755,18 @@ async def _run_refresh(data_service) -> Optional[dict]:
         "key_themes":        normalized["key_themes"],
         "notable_accounts":  normalized["notable_accounts"],
         "raw":               normalized.get("raw"),
-        # Scoring metadata for diagnostics (not in public payload)
-        "_backend_ranked":   backend_ranked[:30],
+        # Internal fields — not included in public Home/Social payload
+        "_backend_ranked":      backend_ranked[:30],
         "_backend_parse_count": len(all_account_mentions),
+        # Per-account Phase-1 mention data (category + weight enriched).
+        # Used by Social section builders (freshest_alpha, sentiment_acceleration)
+        # to derive section rankings deterministically — zero extra API calls.
+        "_mention_data":        mention_data,
     }
     _save_disk_cache(snapshot)
     print(
-        f"[X_CONSENSUS] Refresh complete — {len(snapshot['top_tickers'])} tickers saved "
-        f"({len(backend_ranked)} backend-scored)"
+        f"[X_CONSENSUS] Refresh complete — {len(snapshot['top_tickers'])} tickers, "
+        f"{len(backend_ranked)} backend-scored, {len(mention_data)} mention records saved"
     )
     return snapshot
 
