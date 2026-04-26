@@ -1,0 +1,91 @@
+Please audit the Catalyst Calendar Earnings Dates API response.
+
+Current issue:
+Frontend needs to show company logo + company name + ticker for stocks on the Earnings Calendar, but rows may only have ticker.
+
+Important guardrails:
+- Do NOT break existing Earnings calendar behavior.
+- Do NOT break existing Earnings popup/modal behavior.
+- Do NOT reintroduce Polymarket rows into the main earnings calendar/list.
+- Main Earnings Dates data should remain FMP company earnings only.
+- Polymarket can remain only as clicked-stock popup enrichment.
+
+Required:
+For every FMP earnings event returned by:
+GET /api/catalysts/events?tab=earnings_dates&mode=upcoming
+GET /api/catalysts/events?tab=earnings_dates&mode=recent
+
+include normalized company identity fields:
+
+{
+  "symbol": string,
+  "companyName": string | null,
+  "logo": string | null,
+  "image": string | null,
+  "sector": string | null,
+  "industry": string | null,
+  "marketCap": number | null
+}
+
+Use FMP profile/reference data for enrichment where possible:
+- companyName
+- image/logo
+- sector
+- industry
+- marketCap
+
+Do not make one profile call per rendered row on every request without caching.
+
+Caching requirement:
+Cache company profile enrichment per symbol:
+fmp:company_profile:v1:{symbol}
+
+TTL:
+24 hours or longer.
+
+If batch/profile helper already exists, reuse it.
+If FMP profile endpoint is rate-safe under Starter, use it but cache aggressively.
+
+If profile enrichment fails:
+- Keep the earnings event.
+- companyName can fallback to symbol.
+- logo/image can be null.
+- Do not fail the full response.
+
+Normalized title:
+Set event.title to:
+"{companyName or symbol} Earnings"
+
+Example normalized earnings event:
+{
+  "symbol": "VZ",
+  "companyName": "Verizon Communications Inc.",
+  "logo": "https://...",
+  "image": "https://...",
+  "eventType": "earnings",
+  "eventLabel": "Earnings",
+  "title": "Verizon Communications Inc. Earnings",
+  "period": "Q1 2026",
+  "time": "Pre-Market",
+  "epsEstimated": 1.23,
+  "source": "fmp"
+}
+
+Validation:
+Test:
+- /api/catalysts/events?tab=earnings_dates&mode=upcoming
+- /api/catalysts/events?tab=earnings_dates&mode=recent
+
+Confirm first 10 symbol events include:
+- symbol
+- companyName or fallback
+- logo/image if FMP profile has it
+- title
+
+Final response:
+Tell me:
+- Which files changed
+- Whether company profile enrichment already existed
+- Confirm earnings events now include companyName and logo/image
+- Confirm profile enrichment is cached
+- Confirm Earnings popup behavior was untouched

@@ -413,6 +413,9 @@ def _build_event(**kw) -> dict:
         "ratingTo":           kw.get("ratingTo"),
         "action":             kw.get("action"),
         "analystFirm":        kw.get("analystFirm"),
+        # company identity (populated by profile enrichment)
+        "logo":               kw.get("logo"),
+        "image":              kw.get("image"),
         # insider
         "insiderName":        kw.get("insiderName"),
         "transactionType":    kw.get("transactionType"),
@@ -455,12 +458,16 @@ async def _enrich_profiles(
             enriched[sym] = {}
             continue
         mc = _safe(res.get("mktCap") or res.get("marketCap"))
+        # FMP profile returns logo as the "image" field
+        logo_url = res.get("image") or res.get("logo") or None
         enriched[sym] = {
             "companyName":     res.get("companyName") or res.get("name") or sym,
             "sector":          res.get("sector"),
             "industry":        res.get("industry"),
             "marketCap":       mc,
             "marketCapBucket": _mc_bucket(mc),
+            "logo":            logo_url,
+            "image":           logo_url,
         }
     return enriched
 
@@ -470,12 +477,29 @@ def _apply_enrichment(events: list[dict], enriched: dict[str, dict]) -> list[dic
         sym = ev.get("symbol")
         if sym and sym in enriched:
             info = enriched[sym]
-            ev["companyName"]     = ev.get("companyName") or info.get("companyName")
+            # Company identity — profile always wins over the raw calendar name
+            # because the earnings calendar row's "name" field is often just the ticker.
+            enriched_name = info.get("companyName")
+            ev["companyName"] = enriched_name or ev.get("companyName")
             ev["sector"]          = ev.get("sector") or info.get("sector")
             ev["industry"]        = ev.get("industry") or info.get("industry")
+            # Logo / image — only from profile enrichment, not the raw calendar row
+            if not ev.get("logo"):
+                ev["logo"]  = info.get("logo")
+            if not ev.get("image"):
+                ev["image"] = info.get("image")
             if ev.get("marketCap") is None:
                 ev["marketCap"]       = info.get("marketCap")
                 ev["marketCapBucket"] = info.get("marketCapBucket", "unknown")
+            # For earnings events: refresh title to use enriched company name
+            # Preserve any suffix after "Earnings" (e.g. " Report (Beat)", " Report (Miss)")
+            if ev.get("eventType") in ("earnings_dates", "earnings_report") and enriched_name:
+                display = ev["companyName"] or sym
+                current_title = ev.get("title", "")
+                suffix = ""
+                if " Earnings" in current_title:
+                    suffix = current_title.split(" Earnings", 1)[1]
+                ev["title"] = f"{display} Earnings{suffix}"
     return events
 
 
