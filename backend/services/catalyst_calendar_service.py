@@ -153,9 +153,74 @@ class CatalystFMP:
     # ── Calendar endpoints ─────────────────────────────────────────────────
 
     async def earnings_calendar(self, from_date: str, to_date: str) -> list:
-        ck = f"cat:earn:v2:{from_date}:{to_date}"
-        d  = await self._get("earnings-calendar", {"from": from_date, "to": to_date}, ck, _TTL_EARNINGS)
-        return d if isinstance(d, list) else []
+        """
+        Fetch FMP earnings-calendar in 7-day chunks.
+
+        Why chunking?
+        FMP's earnings-calendar endpoint caps responses at 4 000 rows and,
+        for wide date ranges, does NOT return them in ascending date order.
+        A 60-day window can return 4 000 events starting from week 3, silently
+        omitting weeks 1–2.  Splitting into ≤7-day slices keeps each call well
+        under the cap (≤750 events/week) so every day in the range is covered.
+
+        Cache strategy
+        ──────────────
+        • Each 7-day slice is cached independently (key: cat:earn:v5:chunk:{s}:{e}).
+        • The merged result for the full range is also cached (key: cat:earn:v5:{f}:{t})
+          so repeated requests for the same range are instant.
+        • Key prefix v5 to invalidate any stale v4 single-call entries.
+        """
+        master_ck = f"cat:earn:v5:{from_date}:{to_date}"
+        hit = cache.get(master_ck)
+        if hit is not None:
+            return hit if isinstance(hit, list) else []
+
+        # Build weekly date chunks
+        try:
+            start = datetime.strptime(from_date, "%Y-%m-%d").date()
+            end   = datetime.strptime(to_date,   "%Y-%m-%d").date()
+        except ValueError:
+            return []
+
+        chunks: list[tuple[str, str]] = []
+        cur = start
+        while cur <= end:
+            chunk_end = min(cur + timedelta(days=6), end)
+            chunks.append((cur.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d")))
+            cur = chunk_end + timedelta(days=1)
+
+        async def _fetch_chunk(f: str, t: str) -> list:
+            ck = f"cat:earn:v5:chunk:{f}:{t}"
+            hit = cache.get(ck)
+            if hit is not None:
+                return hit if isinstance(hit, list) else []
+            rows = await self._get(
+                "earnings-calendar", {"from": f, "to": t}, ck, _TTL_EARNINGS
+            )
+            return rows if isinstance(rows, list) else []
+
+        results = await asyncio.gather(*[_fetch_chunk(f, t) for f, t in chunks])
+
+        # Merge and deduplicate (symbol + date is the natural unique key)
+        seen: set[tuple[str, str]] = set()
+        merged: list[dict] = []
+        for chunk_rows in results:
+            for row in chunk_rows:
+                key = (row.get("symbol", ""), row.get("date", ""))
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(row)
+
+        # Sort merged result by date ASC for consistent downstream processing
+        merged.sort(key=lambda r: r.get("date", ""))
+
+        print(
+            f"[catalyst] earnings_calendar chunks={len(chunks)} "
+            f"total_rows={len(merged)} range={from_date}→{to_date}"
+        )
+        if merged:
+            cache.set(master_ck, merged, _TTL_EARNINGS)
+        return merged
 
     async def dividends_calendar(self, from_date: str, to_date: str) -> list:
         ck = f"cat:div:{from_date}:{to_date}"
@@ -453,6 +518,7 @@ def _build_event(**kw) -> dict:
 async def _enrich_profiles(
     symbols: list[str],
     fmp: CatalystFMP,
+    max_live_fetches: Optional[int] = None,
 ) -> dict[str, dict]:
     """
     Batch-fetch company profiles for a list of symbols.
@@ -466,16 +532,47 @@ async def _enrich_profiles(
     • Cache-hits skip the semaphore entirely (only uncached symbols go live).
     • Per-symbol cache TTL = 24 h (key: fmp:company_profile:v1:{symbol}).
     • Any per-symbol failure is silently swallowed — caller gets empty dict.
+
+    max_live_fetches
+      When set, limits the number of *live* (uncached) HTTP fetches per call.
+      Cached symbols are always returned without limit.  Symbols beyond the
+      cap return an empty profile (companyName will fall back to ticker); they
+      will be enriched on the next cache-warm request.
+      Use this for large calendar requests (1000+ symbols) where enriching
+      every cold-cache symbol would take minutes.
     """
     unique = list(dict.fromkeys(s for s in symbols if s))
     if not unique:
         return {}
 
+    # Pre-scan: separate already-cached from uncached to respect max_live_fetches
+    ck_base = "fmp:company_profile:v1:"
+    cached_syms: list[str] = []
+    uncached_syms: list[str] = []
+    for sym in unique:
+        if cache.get(f"{ck_base}{sym}") is not None:
+            cached_syms.append(sym)
+        else:
+            uncached_syms.append(sym)
+
+    # Cap live fetches to avoid overwhelming FMP on cold cache
+    if max_live_fetches is not None and len(uncached_syms) > max_live_fetches:
+        live_syms   = uncached_syms[:max_live_fetches]
+        skipped     = uncached_syms[max_live_fetches:]
+        print(
+            f"[enrich_profiles] cap={max_live_fetches} cached={len(cached_syms)} "
+            f"live={len(live_syms)} skipped={len(skipped)} (will warm on next request)"
+        )
+    else:
+        live_syms = uncached_syms
+        skipped   = []
+
+    active_syms = cached_syms + live_syms
     sem = _get_profile_sem()
 
     async def _fetch_one(sym: str) -> tuple[str, dict]:
         # Fast path: already in cache (no semaphore needed)
-        ck = f"fmp:company_profile:v1:{sym}"
+        ck = f"{ck_base}{sym}"
         cached = cache.get(ck)
         if cached is not None:
             return sym, cached
@@ -484,7 +581,7 @@ async def _enrich_profiles(
             return sym, await fmp.company_profile(sym)
 
     pair_results = await asyncio.gather(
-        *[_fetch_one(s) for s in unique],
+        *[_fetch_one(s) for s in active_syms],
         return_exceptions=True,
     )
 
@@ -579,6 +676,7 @@ async def _fetch_earnings_dates(
 ) -> list[dict]:
     rows = await fmp.earnings_calendar(from_date, to_date)
     events: list[dict] = []
+    poly_skipped = 0
     for row in (rows or []):
         sym   = (row.get("symbol") or "").upper()
         date  = row.get("date") or row.get("reportDate") or ""
@@ -593,6 +691,7 @@ async def _fetch_earnings_dates(
 
         # Safety guard: skip anything that resembles a Polymarket market row
         if _is_polymarket_row(row, title, sym):
+            poly_skipped += 1
             continue
 
         imp = _score_importance("earnings_dates", bucket, sym, name, watchlist, portfolio)
@@ -616,6 +715,21 @@ async def _fetch_earnings_dates(
             source        = "fmp",
             raw           = row,
         ))
+
+    # Debug logging — date distribution
+    date_counts: dict[str, int] = {}
+    for ev in events:
+        d = ev.get("date") or "unknown"
+        date_counts[d] = date_counts.get(d, 0) + 1
+    sorted_dates = sorted(date_counts.items())
+    first_5 = sorted_dates[:5]
+    last_5  = sorted_dates[-5:]
+    print(
+        f"[Earnings Upcoming] from={from_date} to={to_date} "
+        f"raw={len(rows or [])} normalized={len(events)} poly_skipped={poly_skipped} "
+        f"unique_dates={len(date_counts)} "
+        f"first_dates={first_5} last_dates={last_5}"
+    )
     return events
 
 
@@ -1543,7 +1657,14 @@ async def _fetch_tab(
                 ev["eventCategory"] = "recent"
         # ─────────────────────────────────────────────────────────────────────
 
-        evs = _sort_by_importance_date(evs, date_desc=(mode == "recent"))[:limit]
+        # For earnings_dates calendar view (upcoming): do NOT apply limit here.
+        # A limit=100 applied before date-sorting drops all events beyond the
+        # first few high-importance dates.  The outer get_events() applies the
+        # final limit after date-sorting the full dataset.
+        if tab == "earnings_dates" and mode == "upcoming":
+            evs = sorted(evs, key=lambda e: e.get("date", ""))
+        else:
+            evs = _sort_by_importance_date(evs, date_desc=(mode == "recent"))[:limit]
         return evs, None
 
     except Exception as e:
@@ -1702,29 +1823,79 @@ async def get_events(
             errors.append({"tab": t_name, "message": err})
         all_events.extend(evs)
 
-    # Enrich
-    syms = list({ev["symbol"] for ev in all_events if ev.get("symbol")})
-    enriched = await _enrich_profiles(syms, fmp)
-    all_events = _apply_enrichment(all_events, enriched)
+    # ── Earnings-dates calendar fast path ────────────────────────────────────
+    # For upcoming earnings calendar: sort by date ASC and cap BEFORE enrichment.
+    # The full FMP dataset for a 60-day window can be 800-2000 events.  Enriching
+    # all symbols simultaneously exhausts FMP Starter rate limits (429) even with
+    # a semaphore of 8.  By capping to `limit` events (date-first) up front, we
+    # enrich only the symbols that will actually appear in the response.
+    if tab == "earnings_dates" and mode == "upcoming":
+        # Apply scope/search filter first (no enrichment needed for this)
+        all_events = _filter_events(all_events, effective_syms, sector, mc_bucket, event_type_filter)
+        # Sort by date ASC, then by symbol for stable ordering within a day
+        all_events = sorted(
+            all_events, key=lambda e: (e.get("date", ""), e.get("symbol", ""))
+        )[:limit]
+        # Debug: log date distribution so we can confirm all weekdays are covered
+        _date_counts: dict[str, int] = {}
+        for _ev in all_events:
+            _d = _ev.get("date", "?")
+            _date_counts[_d] = _date_counts.get(_d, 0) + 1
+        print(f"[earnings_dates] upcoming date_dist={sorted(_date_counts.items())} total={len(all_events)}")
+        # Enrich only the capped set.
+        # max_live_fetches=40: cap cold-cache HTTP calls to ~30s max
+        # (40 / 8 concurrent × 6s each ≈ 30s).  Cached profiles are always
+        # returned without limit; uncached symbols beyond the cap fall back to
+        # ticker-only and warm on the next request.
+        syms = list(dict.fromkeys(ev["symbol"] for ev in all_events if ev.get("symbol")))
+        enriched = await _enrich_profiles(syms, fmp, max_live_fetches=40)
+        all_events = _apply_enrichment(all_events, enriched)
+        # Re-score importance after enrichment (affects display badges, not sort order)
+        for ev in all_events:
+            ev["importance"] = _score_importance(
+                ev["eventType"], ev.get("marketCapBucket", "unknown"), ev.get("symbol"),
+                ev.get("title", ""), watchlist, portfolio,
+            )
+    else:
+        # ── Standard path (all other tabs/modes) ─────────────────────────────
+        # Enrich ALL events first (needed for importance re-scoring before sort)
+        syms = list({ev["symbol"] for ev in all_events if ev.get("symbol")})
+        enriched = await _enrich_profiles(syms, fmp)
+        all_events = _apply_enrichment(all_events, enriched)
 
-    # Re-score importance after enrichment
-    for ev in all_events:
-        sym = ev.get("symbol")
-        ev["importance"] = _score_importance(
-            ev["eventType"], ev.get("marketCapBucket", "unknown"), sym,
-            ev.get("title", ""), watchlist, portfolio,
-            form_type=ev.get("formType"), transaction_value=ev.get("transactionValue"),
-            action=ev.get("action"),
-        )
+        # Re-score importance after enrichment
+        for ev in all_events:
+            sym = ev.get("symbol")
+            ev["importance"] = _score_importance(
+                ev["eventType"], ev.get("marketCapBucket", "unknown"), sym,
+                ev.get("title", ""), watchlist, portfolio,
+                form_type=ev.get("formType"), transaction_value=ev.get("transactionValue"),
+                action=ev.get("action"),
+            )
 
-    # Filter
-    all_events = _filter_events(all_events, effective_syms, sector, mc_bucket, event_type_filter)
+        # Filter
+        all_events = _filter_events(all_events, effective_syms, sector, mc_bucket, event_type_filter)
 
-    # Sort and limit
-    all_events = _sort_by_importance_date(all_events, date_desc=(mode == "recent"))[:limit]
+        # Sort and limit
+        all_events = _sort_by_importance_date(all_events, date_desc=(mode == "recent"))[:limit]
 
     ms = int((time.monotonic() - t0) * 1000)
-    print(f"[catalyst] get_events tab={tab} mode={mode} events={len(all_events)} errors={len(errors)} ms={ms}")
+    # Summary logging for earnings calendar
+    if tab == "earnings_dates" and mode == "upcoming":
+        date_counts: dict[str, int] = {}
+        for ev in all_events:
+            d = ev.get("date") or "unknown"
+            date_counts[d] = date_counts.get(d, 0) + 1
+        sorted_dc = sorted(date_counts.items())
+        srcs = set(ev.get("source", "?") for ev in all_events)
+        print(
+            f"[catalyst] get_events tab={tab} mode={mode} events={len(all_events)} "
+            f"unique_dates={len(date_counts)} sources={srcs} "
+            f"first_5={sorted_dc[:5]} last_5={sorted_dc[-5:]} "
+            f"errors={len(errors)} ms={ms}"
+        )
+    else:
+        print(f"[catalyst] get_events tab={tab} mode={mode} events={len(all_events)} errors={len(errors)} ms={ms}")
     status = "ok" if not errors else "partial"
     return {
         "asOf":    datetime.now(timezone.utc).isoformat(),

@@ -1,0 +1,113 @@
+Catalyst Calendar > Earnings Dates is not returning a complete upcoming earnings calendar.
+
+Current issue:
+The Earnings Dates calendar only shows earnings for today/tomorrow and a couple random days next week. It should show earnings across every trading day in the selected week/month/date range, assuming FMP has events.
+
+Important guardrails:
+- Catalyst Calendar should use FMP only.
+- Do NOT use Finnhub for Catalyst Calendar.
+- Do NOT use Polymarket for main calendar rows.
+- Polymarket remains popup-only enrichment.
+- Do NOT break existing earnings popup/modal.
+- Do NOT break companyName/logo enrichment.
+
+Affected endpoint:
+GET /api/catalysts/events?tab=earnings_dates&mode=upcoming
+
+Required behavior:
+For upcoming earnings, backend should fetch and return the full FMP earnings calendar for the requested date window.
+
+Default upcoming window:
+- from = today
+- to = today + 60 days
+
+If frontend passes explicit from/to:
+- respect frontend date window
+- do not shrink it internally
+
+For calendar week view:
+If frontend requests a visible week, backend must return all FMP earnings events for that whole week.
+
+FMP source:
+Use FMP Earnings Calendar from paid Starter FMP_API_KEY.
+
+Audit these likely bugs:
+1. FMP request is missing from/to params.
+2. FMP request uses wrong date param names.
+3. Backend default window is too narrow, e.g. today/tomorrow only.
+4. Backend is using limit before date grouping, causing later days to be dropped.
+5. Backend is filtering out valid events because epsEstimated/companyName/logo missing.
+6. Backend is filtering out non-US/international tickers too aggressively.
+7. Cache key does not include from/to/mode and is serving stale partial data.
+8. Old Finnhub/calendar cache is still used for upcoming mode.
+9. `limit=100` is applied too early and cuts off most week/month events.
+10. Weekend/no-call days are expected, but weekdays should not be missing if FMP has events.
+
+Correct processing order:
+1. Fetch FMP earnings events for full date range.
+2. Normalize every valid event.
+3. Enrich company profile/logo where possible.
+4. Filter source to FMP only.
+5. Sort by date ascending for upcoming.
+6. Apply optional frontend filters: watchlist/portfolio/search.
+7. Apply limit only after date range is fully normalized and preferably only for list views, not calendar views.
+
+Calendar mode should not hard-limit to 100 if that drops future dates.
+For earnings calendar upcoming, either:
+- allow limit=1000, or
+- ignore low limit when view=calendar/week/month, or
+- return grouped by date with enough rows for the selected range.
+
+Add/support query params:
+- from=YYYY-MM-DD
+- to=YYYY-MM-DD
+- mode=upcoming
+- limit optional, default 1000 for earnings_dates upcoming calendar
+
+Cache:
+Use cache key including mode/from/to:
+catalysts:earnings:fmp_only:v4:{mode}:{from}:{to}:{scope}:{search}
+
+Bump cache version if needed so stale partial data is not served.
+
+Debug logging:
+Add temporary safe logs:
+- requested from/to
+- actual FMP URL path without API key
+- raw FMP event count
+- normalized event count
+- count by date
+- first 5 dates returned
+- last 5 dates returned
+- source counts
+
+Example log:
+[Earnings Upcoming] from=2026-04-26 to=2026-06-25 raw=1840 normalized=1792 dates={"2026-04-27":111,"2026-04-28":217,...}
+
+Validation:
+Test manually:
+GET /api/catalysts/events?tab=earnings_dates&mode=upcoming&from=2026-04-26&to=2026-05-02&limit=2000
+
+Confirm response includes events for every weekday in that range where FMP has earnings.
+
+Also test:
+GET /api/catalysts/events?tab=earnings_dates&mode=upcoming&from=2026-04-26&to=2026-05-31&limit=5000
+
+Confirm:
+- many dates are represented
+- not just today/tomorrow
+- source is always fmp
+- no Finnhub
+- no Polymarket questions
+- companyName/logo still present where FMP profile exists
+
+Final response:
+Tell me:
+- What date range was previously being requested/fetched
+- Whether FMP params were wrong or backend default was too narrow
+- Whether limit/cache/filtering caused days to be dropped
+- Which files changed
+- Example count-by-date output for a week
+- Confirm upcoming earnings now returns all FMP events for the requested range
+- Confirm no Finnhub/Polymarket main rows
+- Confirm popup behavior untouched

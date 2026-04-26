@@ -148,8 +148,12 @@ async def catalyst_events(
     limit: int = Query(
         default=100,
         ge=1,
-        le=500,
-        description="Max events to return.",
+        le=5000,
+        description=(
+            "Max events to return.  For earnings_dates upcoming calendar view the "
+            "effective minimum is 1000 so every weekday in the requested window "
+            "is represented.  Pass limit=5000 to get the full FMP dataset."
+        ),
     ),
 ):
     """
@@ -186,6 +190,13 @@ async def catalyst_events(
     if symbols:
         sym_set = {s.strip().upper() for s in symbols.split(",") if s.strip()}
 
+    # For earnings_dates calendar upcoming: override the 100-event default so
+    # every weekday in the requested window gets events.  Callers that want a
+    # smaller slice can pass an explicit limit.
+    effective_limit = limit
+    if tab == "earnings_dates" and mode == "upcoming" and limit == 100:
+        effective_limit = 1000
+
     try:
         data = await get_events(
             fmp_key=FMP_API_KEY,
@@ -197,7 +208,7 @@ async def catalyst_events(
             sector=sector,
             mc_bucket=mc_bucket,
             event_type_filter=event_type,
-            limit=limit,
+            limit=effective_limit,
             mode=mode,
         )
         return JSONResponse(content=data)
