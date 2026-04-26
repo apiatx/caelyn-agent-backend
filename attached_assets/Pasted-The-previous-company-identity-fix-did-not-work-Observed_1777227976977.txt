@@ -1,0 +1,190 @@
+The previous company identity fix did not work.
+
+Observed issue:
+On the Catalyst Calendar > Earnings Dates tab:
+- Almost every earnings event still shows only the ticker.
+- Only Verizon/VZ shows company name for some reason.
+- Logos are not showing for the earnings events.
+- Hundreds of earnings events are still missing companyName/logo.
+
+This strongly suggests:
+1. The frontend component may support company identity now,
+2. But the backend earnings calendar response is still returning mostly raw earnings rows with only `symbol`,
+3. Or company profile enrichment is only working for watchlist/cached tickers, not the full earnings calendar universe.
+
+Goal:
+Fix backend enrichment so every Earnings Calendar event returned to frontend has:
+- symbol
+- companyName
+- logo/image when available
+- title
+- sector/industry/marketCap if available
+
+Important guardrails:
+- Do NOT break the existing Earnings popup/modal.
+- Do NOT reintroduce Polymarket rows into the main earnings calendar/list.
+- Main Earnings Dates calendar/list must remain FMP company earnings only.
+- Polymarket remains only as clicked-stock popup enrichment.
+- Do NOT fail the earnings response if enrichment fails for some symbols.
+- Do NOT make hundreds of uncached FMP profile calls on every page load.
+
+Affected endpoints:
+Audit every endpoint feeding Earnings Dates, including but not limited to:
+- GET /api/catalysts/events?tab=earnings_dates&mode=upcoming
+- GET /api/catalysts/events?tab=earnings_dates&mode=recent
+- any legacy earnings calendar endpoint still used by the frontend
+- any AI/Smart earnings endpoint if it builds cards separately
+
+Step 1: Confirm actual response shape
+Log/dev inspect the first 20 events returned by the endpoint actually used by the frontend.
+For each event, verify:
+- symbol
+- companyName
+- logo
+- image
+- title
+- raw keys
+
+Do not assume the frontend is using /api/catalysts/events if another legacy earnings endpoint is still feeding the calendar.
+
+Step 2: Build a proper symbol identity map
+For every unique symbol in the earnings events response:
+- collect unique symbols
+- look up company profile/reference data
+- create map:
+  identityBySymbol[symbol] = {
+    companyName,
+    logo,
+    image,
+    sector,
+    industry,
+    marketCap
+  }
+
+Preferred FMP source:
+Use FMP Company Profile endpoint if available in the existing FMP helper.
+FMP profile typically includes:
+- companyName
+- image
+- sector
+- industry
+- mktCap
+
+If there is an existing profile cache/helper, reuse it.
+
+Step 3: Avoid hundreds of live profile calls
+This page can have 1000+ earnings calls in a week. Do not naively call profile one-by-one on every request.
+
+Use this strategy:
+1. First check existing cache for each symbol.
+2. Only fetch missing identities.
+3. Limit live enrichment per request if necessary, but the response should still return fallback values.
+4. Cache each profile per symbol for 24h+.
+5. If possible, use any available FMP batch/profile endpoint or existing app-level company metadata cache.
+6. If no batch endpoint is available under the plan, implement concurrent but rate-limited profile fetching with sane cap.
+
+Cache key:
+fmp:company_profile:v1:{symbol}
+
+TTL:
+24 hours minimum.
+
+Step 4: Add fallback identity, but do not stop at ticker
+For every earnings event:
+- If FMP profile has companyName, use it.
+- Else if event.raw has companyName/name/company, use it.
+- Else use symbol as fallback companyName.
+- title should always be:
+  "{companyName or symbol} Earnings"
+
+Fields required on every normalized earnings event:
+{
+  "symbol": "AAPL",
+  "companyName": "Apple Inc.",
+  "logo": "https://...",
+  "image": "https://...",
+  "eventType": "earnings",
+  "eventLabel": "Earnings",
+  "title": "Apple Inc. Earnings",
+  "time": "Pre-Market",
+  "period": "Q1 2026",
+  "epsEstimated": 1.23,
+  "revenueEstimated": null,
+  "sector": "Technology",
+  "industry": "Consumer Electronics",
+  "marketCap": 3000000000000,
+  "source": "fmp",
+  "raw": {...}
+}
+
+If logo/image unavailable:
+- logo/image can be null
+- frontend will render fallback avatar
+But companyName should not be missing if profile is available.
+
+Step 5: Check if Smart and All use different data paths
+Current symptom:
+Only one/few names appear.
+This may mean:
+- Smart cards use enriched data
+- All cards use raw data
+- Recent uses raw data
+- Day chips use raw data
+
+Fix every Earnings Dates data path:
+- Upcoming > All
+- Upcoming > Smart
+- selected day list
+- Recent
+- any high conviction/most talked about group if still used
+
+All should receive enriched company identity too.
+
+Step 6: Remove stale cache problem
+If old cached earnings calendar responses lack companyName/logo, bump cache version.
+
+Old key examples might be:
+earnings_calendar:v1
+catalysts:earnings:v1
+
+Create new version:
+earnings_calendar:v2
+or
+catalysts:earnings_calendar:v2
+
+Do not keep serving stale v1 objects without identity fields.
+
+Step 7: Validation
+Manually hit the exact endpoint used by frontend and check at least 20 random events.
+
+Test:
+GET /api/catalysts/events?tab=earnings_dates&mode=upcoming
+GET /api/catalysts/events?tab=earnings_dates&mode=recent
+
+Also test any legacy endpoint still used by the frontend.
+
+For the returned data:
+- At least most normal listed company symbols should have companyName.
+- Many should have image/logo.
+- title should not just be ticker.
+- source should be fmp.
+- no Polymarket questions should appear.
+
+Print a dev sample like:
+[
+  {symbol:"VZ", companyName:"Verizon Communications Inc.", hasLogo:true},
+  {symbol:"DPZ", companyName:"Domino's Pizza Inc.", hasLogo:true},
+  {symbol:"CDNS", companyName:"Cadence Design Systems Inc.", hasLogo:true}
+]
+
+Final response:
+Tell me:
+- Which exact endpoint was feeding the Earnings UI
+- Why only Verizon had companyName
+- Whether stale cache was involved
+- Which cache key/version was updated
+- How profile enrichment is now applied to all earnings events
+- Confirm companyName is present for normal listed tickers
+- Confirm logo/image is present when FMP profile provides it
+- Confirm popup behavior was untouched
+- Confirm Polymarket remains excluded from main earnings calendar/list

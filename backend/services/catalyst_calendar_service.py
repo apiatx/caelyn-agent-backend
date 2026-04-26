@@ -45,6 +45,19 @@ _TTL_ANALYST     = 6  * 3600   # 6 h
 _TTL_INSIDER     = 4  * 3600   # 4 h
 _TTL_PROFILE     = 24 * 3600   # 24 h
 
+# Max concurrent FMP profile HTTP calls.  FMP Starter allows ~10 req/s;
+# 8 concurrent keeps us well inside the limit while staying fast.
+_PROFILE_CONCURRENCY = 8
+# Lazy-initialised per event-loop (avoids SemaphoreError on module import)
+_profile_sem: asyncio.Semaphore | None = None
+
+def _get_profile_sem() -> asyncio.Semaphore:
+    """Return (or create) the module-level profile-fetch semaphore."""
+    global _profile_sem
+    if _profile_sem is None:
+        _profile_sem = asyncio.Semaphore(_PROFILE_CONCURRENCY)
+    return _profile_sem
+
 # Default date windows
 _UPCOMING_DAYS  = 60
 _RECENT_DAYS    = 30
@@ -140,7 +153,7 @@ class CatalystFMP:
     # ── Calendar endpoints ─────────────────────────────────────────────────
 
     async def earnings_calendar(self, from_date: str, to_date: str) -> list:
-        ck = f"cat:earn:{from_date}:{to_date}"
+        ck = f"cat:earn:v2:{from_date}:{to_date}"
         d  = await self._get("earnings-calendar", {"from": from_date, "to": to_date}, ck, _TTL_EARNINGS)
         return d if isinstance(d, list) else []
 
@@ -209,7 +222,7 @@ class CatalystFMP:
         return []
 
     async def company_profile(self, symbol: str) -> dict:
-        ck = f"cat:profile:{symbol}"
+        ck = f"fmp:company_profile:v1:{symbol}"
         hit = cache.get(ck)
         if hit is not None:
             return hit
@@ -443,22 +456,48 @@ async def _enrich_profiles(
 ) -> dict[str, dict]:
     """
     Batch-fetch company profiles for a list of symbols.
-    Returns {symbol: {companyName, sector, industry, marketCap, marketCapBucket}}.
-    Uses per-symbol cache (TTL 24 h). Silently ignores failures.
+    Returns {symbol: {companyName, logo, image, sector, industry, marketCap, …}}.
+
+    Design
+    ──────
+    • All unique symbols are enriched — no hard cap.
+    • Concurrent HTTP calls are throttled by _PROFILE_CONCURRENCY semaphore
+      so we stay inside FMP Starter rate limits even for 100+ symbols.
+    • Cache-hits skip the semaphore entirely (only uncached symbols go live).
+    • Per-symbol cache TTL = 24 h (key: fmp:company_profile:v1:{symbol}).
+    • Any per-symbol failure is silently swallowed — caller gets empty dict.
     """
-    unique = list(dict.fromkeys(s for s in symbols if s))[:80]
+    unique = list(dict.fromkeys(s for s in symbols if s))
     if not unique:
         return {}
 
-    tasks = [fmp.company_profile(s) for s in unique]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    sem = _get_profile_sem()
+
+    async def _fetch_one(sym: str) -> tuple[str, dict]:
+        # Fast path: already in cache (no semaphore needed)
+        ck = f"fmp:company_profile:v1:{sym}"
+        cached = cache.get(ck)
+        if cached is not None:
+            return sym, cached
+        # Slow path: live HTTP fetch under semaphore
+        async with sem:
+            return sym, await fmp.company_profile(sym)
+
+    pair_results = await asyncio.gather(
+        *[_fetch_one(s) for s in unique],
+        return_exceptions=True,
+    )
+
     enriched: dict[str, dict] = {}
-    for sym, res in zip(unique, results):
-        if isinstance(res, Exception) or not res:
+    for item in pair_results:
+        if isinstance(item, Exception):
+            continue
+        sym, res = item
+        if not res:
             enriched[sym] = {}
             continue
         mc = _safe(res.get("mktCap") or res.get("marketCap"))
-        # FMP profile returns logo as the "image" field
+        # FMP profile returns the logo URL in the "image" field
         logo_url = res.get("image") or res.get("logo") or None
         enriched[sym] = {
             "companyName":     res.get("companyName") or res.get("name") or sym,
@@ -1665,7 +1704,7 @@ async def get_events(
 
     # Enrich
     syms = list({ev["symbol"] for ev in all_events if ev.get("symbol")})
-    enriched = await _enrich_profiles(syms[:60], fmp)
+    enriched = await _enrich_profiles(syms, fmp)
     all_events = _apply_enrichment(all_events, enriched)
 
     # Re-score importance after enrichment
