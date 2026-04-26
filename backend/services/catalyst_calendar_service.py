@@ -68,7 +68,7 @@ _RECENT_EVENT_TYPES: dict[str, str] = {
     "ipos":              "ipo",
     "splits":            "stock_split",
     "economic_releases": "economic_release",
-    "treasury_macro":    "treasury_macro",
+    "treasury_macro":    "treasury_rate",
 }
 
 # Importance keywords for economic events
@@ -294,11 +294,19 @@ def _score_importance(
 
     # Mega / large cap
     if mc_bucket in ("mega", "large"):
-        if event_type in ("earnings_dates", "recent_earnings", "dividends"):
+        if event_type in ("earnings_dates", "recent_earnings", "earnings_report",
+                          "dividends", "dividend"):
             return "high"
 
-    # Economic release keywords
-    if event_type in ("economic_releases", "treasury_macro"):
+    # Treasury rates: scored by maturity only — NOT by _HIGH_IMPACT_ECON keywords
+    # (title "Treasury Yield Snapshot" contains "Treasury" which would falsely score high)
+    if event_type in ("treasury_rate", "treasury_macro"):
+        if any(m in title for m in ("10Y", "2Y", "30Y")):
+            return "high"
+        return "medium"
+
+    # Economic release keywords (both old plural and new singular forms)
+    if event_type in ("economic_releases", "economic_release", "macro_indicator"):
         t_upper = title.upper()
         if any(kw.upper() in t_upper for kw in _HIGH_IMPACT_ECON):
             return "high"
@@ -331,14 +339,14 @@ def _score_importance(
             return "medium"
         return "low"
 
-    # IPOs of larger companies
-    if event_type == "ipos":
+    # IPOs of larger companies (both old "ipos" and new "ipo")
+    if event_type in ("ipos", "ipo"):
         if mc_bucket in ("mega", "large", "mid"):
             return "high"
         return "medium"
 
     # Mid-cap earnings
-    if event_type in ("earnings_dates", "recent_earnings"):
+    if event_type in ("earnings_dates", "recent_earnings", "earnings_report"):
         if mc_bucket in ("mega", "large"):
             return "high"
         if mc_bucket == "mid":
@@ -355,8 +363,11 @@ def _build_event(**kw) -> dict:
         "symbol":             kw.get("symbol"),
         "companyName":        kw.get("companyName"),
         "eventType":          kw.get("eventType", ""),
+        "eventLabel":         kw.get("eventLabel"),
         "eventCategory":      kw.get("eventCategory", "upcoming"),
         "title":              kw.get("title", ""),
+        "subtitle":           kw.get("subtitle"),
+        "keyDetails":         kw.get("keyDetails"),
         "date":               kw.get("date", ""),
         "time":               kw.get("time"),
         "period":             kw.get("period"),
@@ -515,15 +526,17 @@ async def _fetch_dividends(
     portfolio: set,
 ) -> list[dict]:
     """
-    Date mapping: FMP `date` field IS the ex-dividend date (YYYY-MM-DD).
-    Fallback chain: date → exDividendDate → recordDate → paymentDate.
-    Rows with no parseable date are skipped.
+    FMP dividends-calendar fields: symbol, date (ex-div), recordDate,
+    paymentDate, declarationDate, adjDividend, dividend, yield, frequency.
+    No companyName field — symbol used as display name until profile enrichment.
     """
     rows = await fmp.dividends_calendar(from_date, to_date)
     events: list[dict] = []
+    missing_date = 0
     for row in (rows or []):
-        sym  = (row.get("symbol") or "").upper()
-        # FMP dividends-calendar: 'date' is the ex-dividend date
+        sym = (row.get("symbol") or "").upper()
+        if not sym:
+            continue
         raw_date = (
             row.get("date")
             or row.get("exDividendDate")
@@ -533,34 +546,66 @@ async def _fetch_dividends(
         )
         date, _ = _parse_date_time(raw_date)
         if not date:
-            continue  # skip undated events — do not mix into calendar
-        div  = _safe(row.get("dividend") or row.get("adjDividend"))
-        name = row.get("companyName") or row.get("name") or sym
-        mc   = _safe(row.get("marketCap"))
-        bucket = _mc_bucket(mc)
-        imp = _score_importance("dividends", bucket, sym, f"{sym} Dividend", watchlist, portfolio)
-        # exDividendDate in the normalized event is always the ex-div date
-        ex_div = row.get("exDividendDate") or row.get("date") or date
-        ex_div_clean, _ = _parse_date_time(ex_div)
-        div_str = f" ${div:.4f}" if div is not None else ""
+            missing_date += 1
+            continue
+
+        div        = _safe(row.get("dividend") or row.get("adjDividend"))
+        yld        = _safe(row.get("yield"))
+        frequency  = row.get("frequency") or ""
+        ex_div, _  = _parse_date_time(row.get("date") or row.get("exDividendDate") or date)
+        rec_date, _ = _parse_date_time(row.get("recordDate") or "")
+        pay_date, _ = _parse_date_time(row.get("paymentDate") or "")
+        decl_date, _ = _parse_date_time(row.get("declarationDate") or "")
+        mc         = _safe(row.get("marketCap"))
+        bucket     = _mc_bucket(mc)
+
+        # title — always meaningful
+        title = f"{sym} Dividend"
+
+        # subtitle — quick descriptor
+        subtitle = f"Ex-Date: {ex_div}" if ex_div else "Dividend"
+
+        # keyDetails — pack all useful numbers
+        kd_parts: list[str] = []
+        if div is not None:
+            kd_parts.append(f"${div:.4f}" if div < 1 else f"${div:.2f}")
+        if ex_div:
+            kd_parts.append(f"Ex: {ex_div}")
+        if pay_date:
+            kd_parts.append(f"Pay: {pay_date}")
+        if yld is not None:
+            kd_parts.append(f"Yield: {yld:.2f}%")
+        if frequency:
+            kd_parts.append(frequency)
+        key_details = " · ".join(kd_parts) or None
+
+        imp = _score_importance("dividend", bucket, sym, title, watchlist, portfolio)
         events.append(_build_event(
-            id             = _event_id("dividends", sym, date),
-            symbol         = sym or None,
-            companyName    = name,
-            eventType      = "dividends",
-            eventCategory  = "upcoming",
-            title          = f"{sym} Dividend{div_str}",
-            date           = date,
-            marketCap      = mc,
+            id              = _event_id("dividend", sym, date),
+            symbol          = sym,
+            companyName     = sym,           # enriched to real name after profile fetch
+            eventType       = "dividend",
+            eventLabel      = "Dividend",
+            eventCategory   = "upcoming",
+            title           = title,
+            subtitle        = subtitle,
+            keyDetails      = key_details,
+            date            = date,
+            marketCap       = mc,
             marketCapBucket = bucket,
-            importance     = imp,
-            dividend       = div,
-            exDividendDate = ex_div_clean or date,
-            recordDate     = _parse_date_time(row.get("recordDate") or "")[0],
-            paymentDate    = _parse_date_time(row.get("paymentDate") or "")[0],
-            declarationDate = _parse_date_time(row.get("declarationDate") or "")[0],
-            raw            = row,
+            importance      = imp,
+            dividend        = div,
+            exDividendDate  = ex_div or date,
+            recordDate      = rec_date,
+            paymentDate     = pay_date,
+            declarationDate = decl_date,
+            raw             = row,
         ))
+
+    print(f"[catalyst:debug] dividends raw={len(rows or [])} normalized={len(events)} skipped_date={missing_date}")
+    if events:
+        e = events[0]
+        print(f"[catalyst:debug] dividends[0]: date={e['date']} title={e['title']!r} keyDetails={e['keyDetails']!r}")
     return events
 
 
@@ -572,47 +617,104 @@ async def _fetch_ipos(
     portfolio: set,
 ) -> list[dict]:
     """
-    Date mapping: ipoDate → date.
-    FMP returns YYYY-MM-DD. Rows with no parseable date are skipped.
+    FMP ipo-calendar fields: symbol, date, company/companyName/name, exchange,
+    priceRangeLow, priceRangeHigh, offerPrice, shares, marketCap, actions.
+
+    NOTE: FMP Starter plan may return 0 IPOs. When data is available, all
+    fields are normalised. companyName uses 'company' → 'companyName' → symbol.
     """
     rows = await fmp.ipo_calendar(from_date, to_date)
     events: list[dict] = []
+    missing_date = 0
     for row in (rows or []):
-        sym    = (row.get("symbol") or "").upper()
-        name   = row.get("company") or row.get("companyName") or sym
-        raw_date = row.get("ipoDate") or row.get("date") or ""
+        sym  = (row.get("symbol") or "").upper()
+        name = (
+            row.get("company")
+            or row.get("companyName")
+            or row.get("name")
+            or sym
+            or "Unknown"
+        )
+        raw_date = (
+            row.get("date")
+            or row.get("ipoDate")
+            or row.get("pricedDate")
+            or row.get("filingDate")
+            or ""
+        )
         date, _ = _parse_date_time(raw_date)
         if not date:
-            continue  # skip undated events
-        shares = _safe(row.get("shares") or row.get("totalSharesValue"))
-        low_p  = row.get("priceFrom") or row.get("priceLow")
-        high_p = row.get("priceTo") or row.get("priceHigh")
-        price_range = (
-            f"${low_p}–${high_p}" if low_p and high_p
-            else (f"${low_p}" if low_p else (f"${high_p}" if high_p else None))
-        )
-        offer = row.get("offerPrice")
-        mc   = _safe(row.get("marketCap") or (
-            shares * offer if shares and offer else None
+            missing_date += 1
+            continue
+
+        exchange   = row.get("exchange") or row.get("market") or ""
+        low_p      = row.get("priceRangeLow") or row.get("priceFrom") or row.get("priceLow")
+        high_p     = row.get("priceRangeHigh") or row.get("priceTo") or row.get("priceHigh")
+        offer      = _safe(row.get("offerPrice"))
+        shares_raw = _safe(row.get("shares") or row.get("totalSharesValue"))
+        mc         = _safe(row.get("marketCap") or (
+            shares_raw * offer if shares_raw and offer else None
         ))
-        bucket = _mc_bucket(mc)
-        imp = _score_importance("ipos", bucket, sym or None, name, watchlist, portfolio)
+        bucket     = _mc_bucket(mc)
+
+        # Price range string
+        if low_p and high_p:
+            price_range = f"${low_p}–${high_p}"
+        elif offer:
+            price_range = f"${offer}"
+        elif low_p:
+            price_range = f"${low_p}+"
+        else:
+            price_range = None
+
+        # title
+        title = f"{name} IPO"
+
+        # subtitle
+        subtitle = f"Exchange: {exchange}" if exchange else "IPO"
+
+        # keyDetails
+        kd_parts: list[str] = []
+        if exchange:
+            kd_parts.append(f"Exchange: {exchange}")
+        if price_range:
+            kd_parts.append(f"Price: {price_range}")
+        elif offer:
+            kd_parts.append(f"Offer: ${offer:.2f}")
+        if shares_raw:
+            s_fmt = f"{shares_raw/1_000_000:.1f}M" if shares_raw >= 1_000_000 else str(int(shares_raw))
+            kd_parts.append(f"Shares: {s_fmt}")
+        if mc:
+            mc_fmt = f"${mc/1_000_000_000:.1f}B" if mc >= 1e9 else f"${mc/1_000_000:.0f}M"
+            kd_parts.append(f"Mkt Cap: {mc_fmt}")
+        key_details = " · ".join(kd_parts) or None
+
+        imp = _score_importance("ipo", bucket, sym or None, title, watchlist, portfolio)
         events.append(_build_event(
-            id             = _event_id("ipos", sym or name, date),
-            symbol         = sym or None,
-            companyName    = name,
-            eventType      = "ipos",
-            eventCategory  = "upcoming",
-            title          = f"{name} IPO",
-            date           = date,
-            exchange       = row.get("exchange"),
-            shares         = shares,
-            priceRange     = price_range,
-            marketCap      = mc,
+            id              = _event_id("ipo", sym or name, date),
+            symbol          = sym or None,
+            companyName     = name,
+            eventType       = "ipo",
+            eventLabel      = "IPO",
+            eventCategory   = "upcoming",
+            title           = title,
+            subtitle        = subtitle,
+            keyDetails      = key_details,
+            date            = date,
+            exchange        = exchange or None,
+            shares          = shares_raw,
+            priceRange      = price_range,
+            offerPrice      = offer,
+            marketCap       = mc,
             marketCapBucket = bucket,
-            importance     = imp,
-            raw            = row,
+            importance      = imp,
+            raw             = row,
         ))
+
+    print(f"[catalyst:debug] ipos raw={len(rows or [])} normalized={len(events)} skipped_date={missing_date}")
+    if events:
+        e = events[0]
+        print(f"[catalyst:debug] ipos[0]: date={e['date']} title={e['title']!r} keyDetails={e['keyDetails']!r}")
     return events
 
 
@@ -624,44 +726,92 @@ async def _fetch_splits(
     portfolio: set,
 ) -> list[dict]:
     """
-    Date mapping: splitDate → executionDate → date (FMP field).
-    FMP returns YYYY-MM-DD. Rows with no parseable date are skipped.
+    FMP splits-calendar fields: symbol, date, numerator, denominator, splitType.
+    numerator=3, denominator=1 → "3-for-1" (forward split).
+    numerator=1, denominator=30 → "1-for-30" (reverse split).
+    No companyName in FMP response — symbol used as display name.
     """
     rows = await fmp.splits_calendar(from_date, to_date)
     events: list[dict] = []
+    missing_date = 0
     for row in (rows or []):
-        sym  = (row.get("symbol") or "").upper()
+        sym = (row.get("symbol") or "").upper()
+        if not sym:
+            continue
         raw_date = (
-            row.get("splitDate")
+            row.get("date")
+            or row.get("splitDate")
             or row.get("executionDate")
             or row.get("effectiveDate")
-            or row.get("date")
             or ""
         )
         date, _ = _parse_date_time(raw_date)
         if not date:
-            continue  # skip undated events
-        num  = row.get("numerator")
-        den  = row.get("denominator")
-        ratio = f"{num}:{den}" if num and den else row.get("ratio") or row.get("splitFactor")
-        name = row.get("companyName") or row.get("name") or sym
-        mc   = _safe(row.get("marketCap"))
+            missing_date += 1
+            continue
+
+        num = row.get("numerator")
+        den = row.get("denominator")
+        split_type = (row.get("splitType") or "").lower()
+
+        # Build canonical ratio string: "N-for-M"
+        if num and den:
+            ratio_str = f"{num}-for-{den}"
+        elif row.get("ratio") or row.get("splitFactor"):
+            ratio_str = str(row.get("ratio") or row.get("splitFactor"))
+        else:
+            ratio_str = None
+
+        # Detect reverse split
+        is_reverse = (
+            "reverse" in split_type
+            or (num and den and float(num) < float(den))
+        )
+        split_label = "Reverse Split" if is_reverse else "Stock Split"
+
+        mc     = _safe(row.get("marketCap"))
         bucket = _mc_bucket(mc)
-        imp = _score_importance("splits", bucket, sym, name, watchlist, portfolio)
+
+        # title
+        title = f"{sym} {ratio_str} {split_label}" if ratio_str else f"{sym} {split_label}"
+
+        # subtitle
+        subtitle = ratio_str if ratio_str else split_label
+
+        # keyDetails
+        kd_parts: list[str] = []
+        if ratio_str:
+            kd_parts.append(f"Ratio: {ratio_str}")
+        kd_parts.append(split_label)
+        if date:
+            kd_parts.append(f"Effective: {date}")
+        key_details = " · ".join(kd_parts) or None
+
+        imp = _score_importance("stock_split", bucket, sym, title, watchlist, portfolio)
         events.append(_build_event(
-            id             = _event_id("splits", sym, date),
-            symbol         = sym or None,
-            companyName    = name,
-            eventType      = "splits",
-            eventCategory  = "upcoming",
-            title          = f"{sym} {ratio} Stock Split" if ratio else f"{sym} Stock Split",
-            date           = date,
-            splitRatio     = str(ratio) if ratio else None,
-            marketCap      = mc,
+            id              = _event_id("stock_split", sym, date),
+            symbol          = sym,
+            companyName     = sym,           # no companyName from FMP splits-calendar
+            eventType       = "stock_split",
+            eventLabel      = split_label,
+            eventCategory   = "upcoming",
+            title           = title,
+            subtitle        = subtitle,
+            keyDetails      = key_details,
+            date            = date,
+            splitRatio      = ratio_str,
+            numerator       = num,
+            denominator     = den,
+            marketCap       = mc,
             marketCapBucket = bucket,
-            importance     = imp,
-            raw            = row,
+            importance      = imp,
+            raw             = row,
         ))
+
+    print(f"[catalyst:debug] splits raw={len(rows or [])} normalized={len(events)} skipped_date={missing_date}")
+    if events:
+        e = events[0]
+        print(f"[catalyst:debug] splits[0]: date={e['date']} title={e['title']!r} keyDetails={e['keyDetails']!r}")
     return events
 
 
@@ -671,113 +821,201 @@ async def _fetch_economic_releases(
     to_date: str,
 ) -> list[dict]:
     """
-    Date mapping: FMP `date` field contains "YYYY-MM-DD HH:MM:SS".
-    _parse_date_time() splits it — date = YYYY-MM-DD, time = HH:MM:SS.
-    FMP has NO separate `time` key; the time is embedded in `date`.
-    Rows with no parseable date are skipped.
+    FMP economic-calendar fields: date (datetime), country, event, currency,
+    previous, estimate, actual, change, impact, changePercentage, unit.
+    The 'event' field is the human-readable name (e.g. "CPI YoY (Jul)").
+    FMP embeds time in the date field: "2026-04-13 01:40:00".
     """
     rows = await fmp.economic_calendar(from_date, to_date)
     events: list[dict] = []
+    missing_date = 0
+
+    _COUNTRY_NAMES: dict[str, str] = {
+        "US": "United States", "JP": "Japan", "GB": "United Kingdom",
+        "EU": "Eurozone", "DE": "Germany", "CN": "China", "CA": "Canada",
+        "AU": "Australia", "NZ": "New Zealand", "CH": "Switzerland",
+    }
+
+    def _fmt_val(v: object, u: str) -> str:
+        if v is None:
+            return "—"
+        try:
+            fv = float(v)  # type: ignore[arg-type]
+            s = f"{fv:,.2f}" if abs(fv) < 1000 else f"{fv:,.1f}"
+            return f"{s}{u}" if u else s
+        except (TypeError, ValueError):
+            return str(v)
+
     for row in (rows or []):
-        country = row.get("country", "")
-        title   = row.get("event") or row.get("name") or ""
-        # ── FIX: FMP embeds time in the date field, e.g. "2026-04-13 01:40:00"
-        raw_date = row.get("releaseDate") or row.get("date") or ""
+        country   = (row.get("country") or "").upper()
+        title     = (row.get("event") or row.get("name") or "").strip()
+        if not title:
+            continue
+        raw_date  = row.get("date") or row.get("releaseDate") or ""
         date, time_val = _parse_date_time(raw_date)
         if not date:
-            continue  # skip undated events — do not mix into calendar
-        # ────────────────────────────────────────────────────────────────
-        impact  = (row.get("impact") or "").lower()
+            missing_date += 1
+            continue
+
+        impact    = (row.get("impact") or "").lower()
+        actual    = row.get("actual")
+        estimate  = row.get("estimate")
+        previous  = row.get("previous")
+        unit      = (row.get("unit") or "").strip()
+        currency  = (row.get("currency") or "").upper()
+
+        # importance
         is_high = impact == "high" or any(
             kw.lower() in title.lower() for kw in _HIGH_IMPACT_ECON
         )
         imp = "high" if is_high else ("medium" if impact == "medium" else "low")
+
+        # subtitle
+        country_label = _COUNTRY_NAMES.get(country, country) if country else "Global"
+        subtitle = country_label if country else "Economic Release"
+
+        kd_parts: list[str] = []
+        if actual is not None:
+            kd_parts.append(f"Actual: {_fmt_val(actual, unit)}")
+        if estimate is not None:
+            kd_parts.append(f"Est: {_fmt_val(estimate, unit)}")
+        if previous is not None:
+            kd_parts.append(f"Prev: {_fmt_val(previous, unit)}")
+        if currency:
+            kd_parts.append(currency)
+        key_details = " · ".join(kd_parts) or None
+
         events.append(_build_event(
-            id             = _event_id("economic_releases", None, date, title[:30]),
-            symbol         = None,
-            companyName    = None,
-            eventType      = "economic_releases",
-            eventCategory  = "macro",
-            title          = title,
-            date           = date,
-            time           = time_val,
-            importance     = imp,
-            actual         = row.get("actual"),
-            estimate       = row.get("estimate"),
-            previous       = row.get("previous"),
-            country        = country,
-            eventName      = title,
-            raw            = row,
+            id            = _event_id("economic_release", None, date, title[:30]),
+            symbol        = "Macro",
+            companyName   = title,           # event name used as "company" display
+            eventType     = "economic_release",
+            eventLabel    = "Economic Release",
+            eventCategory = "macro",
+            title         = title,
+            subtitle      = subtitle,
+            keyDetails    = key_details,
+            date          = date,
+            time          = time_val,
+            importance    = imp,
+            actual        = actual,
+            estimate      = estimate,
+            previous      = previous,
+            country       = country,
+            eventName     = title,
+            raw           = row,
         ))
+
+    print(f"[catalyst:debug] economic_releases raw={len(rows or [])} normalized={len(events)} skipped_date={missing_date}")
+    if events:
+        e = events[0]
+        print(f"[catalyst:debug] econ[0]: date={e['date']} title={e['title']!r} keyDetails={e['keyDetails']!r}")
     return events
 
 
 # ── Treasury maturity labels (FMP field → human label) ────────────────────────
-_TREASURY_MATURITIES = [
+_TREASURY_MATURITIES: list[tuple[str, str]] = [
     ("month1", "1M"), ("month2", "2M"), ("month3", "3M"), ("month6", "6M"),
     ("year1", "1Y"),  ("year2", "2Y"),  ("year3", "3Y"),  ("year5", "5Y"),
     ("year7", "7Y"),  ("year10", "10Y"), ("year20", "20Y"), ("year30", "30Y"),
 ]
 
+# Key maturities to emit as individual events for the latest snapshot
+_TREASURY_KEY_MATURITIES: list[tuple[str, str]] = [
+    ("month1", "1M"), ("month3", "3M"), ("month6", "6M"),
+    ("year2", "2Y"),  ("year5", "5Y"),  ("year10", "10Y"),
+    ("year20", "20Y"), ("year30", "30Y"),
+]
+# Maturities that are considered "high" importance
+_TREASURY_HIGH_IMP: frozenset = frozenset({"2Y", "10Y", "30Y"})
+
 
 async def _fetch_treasury_macro(fmp: CatalystFMP) -> list[dict]:
     """
-    Return treasury yield curve as macro events (latest snapshot + recent history).
-    Emits one summary event (yield_curve) and individual maturity events for the
-    latest row so the frontend can render the full curve.
+    FMP treasury-rates fields: date, month1-month6, year1-year30 (all yields).
+    One row per trading day. Strategy:
+      • Latest row → one event PER KEY MATURITY (rich individual events).
+      • Historical rows (up to 29) → one SUMMARY event per date with keyDetails.
     """
-    rows  = await fmp.treasury_rates()
+    rows = await fmp.treasury_rates()
     events: list[dict] = []
     if not rows:
+        print("[catalyst:debug] treasury_macro: no rows returned by FMP")
         return events
 
-    latest = rows[0] if rows else {}
-    date   = latest.get("date") or _today()
+    # ── Latest row: individual maturity events ─────────────────────────────────
+    latest      = rows[0]
+    latest_date = latest.get("date") or _today()
 
-    # Build human-readable summary
-    y10 = latest.get("year10")
-    y2  = latest.get("year2")
-    y30 = latest.get("year30")
-    parts = []
-    if y10:  parts.append(f"10Y: {y10:.2f}%")
-    if y2:   parts.append(f"2Y: {y2:.2f}%")
-    if y30:  parts.append(f"30Y: {y30:.2f}%")
-    title = "Treasury Yields: " + ", ".join(parts) if parts else "Treasury Yield Snapshot"
+    for fmp_field, label in _TREASURY_KEY_MATURITIES:
+        val = latest.get(fmp_field)
+        if val is None:
+            continue
+        try:
+            val = float(val)
+        except (TypeError, ValueError):
+            continue
 
-    events.append(_build_event(
-        id            = _event_id("treasury_macro", None, date, "yield_curve"),
-        eventType     = "treasury_macro",
-        eventCategory = "macro",
-        title         = title,
-        date          = date,
-        importance    = "high",
-        actual        = y10,
-        value         = y10,
-        maturity      = "10Y",
-        indicatorName = "Treasury Yield Curve",
-        raw           = latest,
-    ))
-
-    # Add recent historical rows as data points (last 29 = up to 30 days)
-    for i, row in enumerate(rows[1:30]):
-        d    = row.get("date") or ""
-        y10r = row.get("year10")
-        y2r  = row.get("year2")
-        prev_row = rows[i + 2] if i + 2 < len(rows) else {}  # row before this one
+        imp     = "high" if label in _TREASURY_HIGH_IMP else "medium"
+        title   = f"{label} Treasury Rate"
+        kd      = f"Yield: {val:.2f}%"
         events.append(_build_event(
-            id            = _event_id("treasury_macro", None, d, "yield_history"),
-            eventType     = "treasury_macro",
+            id            = _event_id("treasury_rate", None, latest_date, label),
+            symbol        = "Macro",
+            companyName   = "US Treasury",
+            eventType     = "treasury_rate",
+            eventLabel    = "Treasury Rate",
             eventCategory = "macro",
-            title         = f"Treasury Yield Snapshot ({d})",
+            title         = title,
+            subtitle      = f"As of {latest_date}",
+            keyDetails    = kd,
+            date          = latest_date,
+            importance    = imp,
+            value         = val,
+            actual        = val,
+            maturity      = label,
+            indicatorName = f"{label} Treasury Rate",
+            raw           = latest,
+        ))
+
+    # ── Historical rows: one summary per date ──────────────────────────────────
+    for row in rows[1:30]:
+        d = row.get("date") or ""
+        if not d:
+            continue
+        y10 = row.get("year10")
+        y2  = row.get("year2")
+        y30 = row.get("year30")
+        y5  = row.get("year5")
+        parts: list[str] = []
+        if y10 is not None: parts.append(f"10Y: {float(y10):.2f}%")
+        if y2  is not None: parts.append(f"2Y: {float(y2):.2f}%")
+        if y5  is not None: parts.append(f"5Y: {float(y5):.2f}%")
+        if y30 is not None: parts.append(f"30Y: {float(y30):.2f}%")
+        kd = " · ".join(parts) or None
+        events.append(_build_event(
+            id            = _event_id("treasury_rate", None, d, "summary"),
+            symbol        = "Macro",
+            companyName   = "US Treasury",
+            eventType     = "treasury_rate",
+            eventLabel    = "Treasury Rate",
+            eventCategory = "macro",
+            title         = "Treasury Yield Snapshot",
+            subtitle      = d,
+            keyDetails    = kd,
             date          = d,
             importance    = "medium",
-            actual        = y10r,
-            value         = y10r,
-            previousValue = prev_row.get("year10"),
+            value         = y10,
+            actual        = y10,
             maturity      = "10Y",
             indicatorName = "Treasury Yield Curve",
             raw           = row,
         ))
+
+    print(f"[catalyst:debug] treasury_macro rows={len(rows)} emitted={len(events)}")
+    if events:
+        e = events[0]
+        print(f"[catalyst:debug] treasury[0]: date={e['date']} title={e['title']!r} keyDetails={e['keyDetails']!r}")
     return events
 
 
@@ -1019,13 +1257,15 @@ def _filter_events(
     return out
 
 
-def _sort_by_importance_date(events: list[dict]) -> list[dict]:
-    """Sort: high > medium > low, then by date ascending."""
+def _sort_by_importance_date(events: list[dict], date_desc: bool = False) -> list[dict]:
+    """
+    Sort: high > medium > low importance first, then by date within each tier.
+    date_desc=True → most-recent dates first (for recent/history views).
+    Uses two stable passes so importance tier is always preserved.
+    """
     _rank = {"high": 0, "medium": 1, "low": 2}
-    return sorted(
-        events,
-        key=lambda e: (_rank.get(e.get("importance", "low"), 2), e.get("date", "")),
-    )
+    by_date = sorted(events, key=lambda e: e.get("date", ""), reverse=date_desc)
+    return sorted(by_date, key=lambda e: _rank.get(e.get("importance", "low"), 2))
 
 
 # ── Watchlist / portfolio loaders ─────────────────────────────────────────────
@@ -1161,7 +1401,7 @@ async def _fetch_tab(
                 ev["eventCategory"] = "recent"
         # ─────────────────────────────────────────────────────────────────────
 
-        evs = _sort_by_importance_date(evs)[:limit]
+        evs = _sort_by_importance_date(evs, date_desc=(mode == "recent"))[:limit]
         return evs, None
 
     except Exception as e:
@@ -1339,7 +1579,7 @@ async def get_events(
     all_events = _filter_events(all_events, effective_syms, sector, mc_bucket, event_type_filter)
 
     # Sort and limit
-    all_events = _sort_by_importance_date(all_events)[:limit]
+    all_events = _sort_by_importance_date(all_events, date_desc=(mode == "recent"))[:limit]
 
     ms = int((time.monotonic() - t0) * 1000)
     print(f"[catalyst] get_events tab={tab} mode={mode} events={len(all_events)} errors={len(errors)} ms={ms}")

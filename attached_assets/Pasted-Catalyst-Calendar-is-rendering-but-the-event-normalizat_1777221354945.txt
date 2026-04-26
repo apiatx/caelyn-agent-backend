@@ -1,0 +1,354 @@
+Catalyst Calendar is rendering, but the event normalization is currently too generic and the IPO tab is not working.
+
+Observed issues from screenshots:
+1. IPOs Upcoming and Recent are not showing usable data.
+2. Dividends, Stock Splits, Economic Releases, and Treasury/Macro rows are showing generic useless values:
+   - Company / Event = —
+   - Event Type = Event
+   - Key Details = —
+   - Importance = Low
+3. Economic Releases show actual/estimate/previous in Key Details, but Company/Event is blank and Event Type is still generic “Event.”
+4. Treasury/Macro shows raw treasury values like 4.31 but no label explaining which treasury rate/maturity it is.
+5. Stock Splits show symbols but no split ratio or event label.
+6. Dividends show symbols but no dividend amount, ex-date, record date, payment date, or company/event title.
+
+Goal:
+Fix Catalyst Calendar backend normalization so each tab returns real, human-readable event data.
+
+Important guardrails:
+- Do NOT break the existing Earnings calendar.
+- Do NOT break the existing Earnings popup/modal behavior.
+- Do NOT remove the Upcoming/Recent mode support.
+- Do NOT use LLM calls.
+- Keep using FMP_API_KEY as primary source.
+
+Affected endpoint:
+GET /api/catalysts/events
+
+Affected tabs:
+- dividends
+- ipos
+- splits
+- economic_releases
+- treasury_macro
+
+Modes:
+- upcoming
+- recent
+
+Required normalized event contract:
+Every event returned to frontend must have meaningful top-level fields:
+
+{
+  "id": string,
+  "date": "YYYY-MM-DD",
+  "symbol": string | null,
+  "companyName": string | null,
+  "eventType": string,
+  "eventLabel": string,
+  "eventCategory": "upcoming" | "recent" | "macro",
+  "title": string,
+  "subtitle": string | null,
+  "keyDetails": string | null,
+  "source": "fmp",
+  "importance": "high" | "medium" | "low",
+  "sector": string | null,
+  "industry": string | null,
+  "marketCap": number | null,
+  "marketCapBucket": string | null,
+  "raw": object
+}
+
+Do not return generic:
+- eventType: "event"
+- title: null
+- title: "—"
+- keyDetails: "—"
+
+Use tab-specific eventType values:
+- dividends: "dividend"
+- ipos: "ipo"
+- splits: "stock_split"
+- economic_releases: "economic_release"
+- treasury_macro: "treasury_rate" or "macro_indicator"
+
+Use tab-specific eventLabel values:
+- dividends: "Dividend"
+- ipos: "IPO"
+- splits: "Stock Split"
+- economic_releases: "Economic Release"
+- treasury_macro: "Treasury Rate" or "Macro Indicator"
+
+Normalization rules:
+
+1. Dividends
+Source:
+FMP Dividends Calendar or existing FMP dividend endpoint.
+
+Date priority:
+- exDividendDate
+- date
+- recordDate
+- paymentDate
+
+Fields:
+- symbol
+- companyName, if available
+- dividend
+- exDividendDate
+- recordDate
+- paymentDate
+- declarationDate
+
+title:
+If companyName exists: "{symbol} Dividend"
+Else: "{symbol} Dividend"
+
+keyDetails:
+Include useful details:
+"Dividend: $0.25 · Ex-Date: 2026-03-31 · Payable: 2026-04-15"
+Only include fields that exist.
+
+subtitle:
+"Ex-dividend date" or similar.
+
+importance:
+- medium for watchlist/portfolio/large cap if enriched
+- low otherwise
+- high only if portfolio/watchlist match or unusually large/special dividend if that field exists
+
+2. IPOs
+Source:
+FMP IPOs Calendar.
+
+Fix this tab specifically. It currently appears empty/broken.
+
+Date priority:
+- date
+- ipoDate
+- pricedDate
+- filingDate if no better field exists
+
+Fields:
+- symbol
+- companyName
+- exchange
+- priceRange
+- offerPrice
+- shares
+- marketCap if available
+
+title:
+"{companyName} IPO" if companyName exists
+Else "{symbol} IPO"
+Else "IPO"
+
+keyDetails:
+Examples:
+"Exchange: NASDAQ · Price: $15-$17 · Shares: 10M"
+or
+"Offer Price: $16 · Exchange: NYSE"
+
+Recent IPOs:
+Use previous 90 days through today by default.
+Upcoming IPOs:
+Use today through next 90 days by default.
+
+If FMP returns IPOs under fields like:
+- company
+- companyName
+- name
+- symbol
+- exchange
+- actions
+- priceRangeLow
+- priceRangeHigh
+Map them properly.
+
+3. Stock Splits
+Source:
+FMP Stock Splits Calendar.
+
+Date priority:
+- date
+- splitDate
+- executionDate
+
+Fields:
+- symbol
+- companyName, if available
+- splitRatio
+- numerator
+- denominator
+
+title:
+"{symbol} Stock Split"
+
+keyDetails:
+"Split: 10-for-1"
+or
+"Ratio: 10:1"
+or use numerator/denominator if available.
+
+If FMP provides numerator/denominator, normalize:
+splitRatio = "{numerator}-for-{denominator}"
+
+Do not show rows with Key Details blank if split ratio data exists in raw.
+
+4. Economic Releases
+Source:
+FMP Economic Data Releases Calendar.
+
+Date priority:
+- date
+- releaseDate
+
+Fields:
+- eventName / name / title
+- country
+- actual
+- estimate
+- previous
+- impact if available
+
+title:
+Use real event name:
+"CPI"
+"Initial Jobless Claims"
+"GDP Growth Rate"
+"Retail Sales"
+etc.
+
+Never show Company/Event as "—" if a name/title/event field exists in raw.
+
+symbol:
+"Macro"
+
+keyDetails:
+"Actual: 91.8 · Est: 87.8 · Prev: 91 · US"
+Already partially works, but keep it and improve title/event label.
+
+eventType:
+"economic_release"
+
+eventLabel:
+"Economic Release"
+
+importance:
+Set high for major US macro releases:
+- CPI
+- Core CPI
+- PCE
+- Core PCE
+- Nonfarm Payrolls
+- Unemployment Rate
+- GDP
+- FOMC
+- Fed Interest Rate Decision
+- Retail Sales
+- ISM
+- PMI
+- Initial Jobless Claims
+Set medium for other US releases.
+Set low for non-US minor releases.
+
+5. Treasury / Macro
+Source:
+FMP Treasury Rates plus economics indicators if used.
+
+Current issue:
+Rows show values like 4.31 but no label. User cannot tell what they are looking at.
+
+Each treasury row must identify the maturity/series:
+- 1M Treasury
+- 3M Treasury
+- 6M Treasury
+- 1Y Treasury
+- 2Y Treasury
+- 5Y Treasury
+- 10Y Treasury
+- 30Y Treasury
+
+If FMP returns one row per date with multiple maturity fields, explode it into separate event rows OR create one row per date with a keyDetails summary.
+
+Preferred:
+Create rows like:
+title: "10Y Treasury Rate"
+keyDetails: "Yield: 4.31%"
+eventType: "treasury_rate"
+eventLabel: "Treasury Rate"
+symbol: "Macro"
+
+If showing one row per date:
+title: "Treasury Rates"
+keyDetails: "10Y: 4.31% · 2Y: 4.88% · 30Y: 4.64%"
+That is acceptable too, but do not leave Company/Event blank.
+
+importance:
+High for 10Y, 2Y, 30Y.
+Medium for others.
+
+6. Company profile enrichment
+For symbol-based events, enrich with:
+- companyName
+- sector
+- industry
+- marketCap
+- marketCapBucket
+
+But if enrichment fails, still return title/keyDetails from raw event data.
+Do not let failed enrichment cause blank Company/Event.
+
+7. Sorting
+For upcoming:
+Sort ascending by date.
+For recent:
+Sort descending by date.
+
+8. Limit
+Keep limit support, but do not return 100 useless rows if fields are blank. Normalize first, filter invalid/undated rows second, then limit.
+
+9. Filtering invalid rows
+Skip events only if:
+- no usable date
+- and no usable symbol/title/name
+
+Do not skip valid macro rows without symbols.
+
+10. Debug support
+Add temporary structured debug logs for each tab:
+- raw FMP count
+- normalized count
+- first normalized event sample
+- missing date count
+- missing title count
+
+Do not log API keys.
+
+11. Test these directly:
+GET /api/catalysts/events?tab=dividends&mode=recent
+GET /api/catalysts/events?tab=dividends&mode=upcoming
+GET /api/catalysts/events?tab=ipos&mode=recent
+GET /api/catalysts/events?tab=ipos&mode=upcoming
+GET /api/catalysts/events?tab=splits&mode=recent
+GET /api/catalysts/events?tab=splits&mode=upcoming
+GET /api/catalysts/events?tab=economic_releases&mode=recent
+GET /api/catalysts/events?tab=economic_releases&mode=upcoming
+GET /api/catalysts/events?tab=treasury_macro&mode=recent
+GET /api/catalysts/events?tab=treasury_macro&mode=upcoming
+
+For each endpoint, verify the first few rows have:
+- date
+- eventType not equal to generic "event"
+- eventLabel not generic
+- title not blank
+- keyDetails populated when the raw data has useful fields
+
+Final response:
+Tell me:
+- Why IPOs were empty/broken
+- Which normalizers were fixed
+- Example normalized row for each tab
+- Confirm generic "Event" rows are gone
+- Confirm Company/Event and Key Details now populate correctly
+- Confirm Earnings calendar/popup was untouched
