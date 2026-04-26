@@ -233,6 +233,22 @@ $20B - $100B  → "mid_cap"
 - **Cryptocurrency Data**: CoinGecko, CoinMarketCap, Hyperliquid, altFINS.
 - **Options Data**: Public.com.
 
+## Stock Compare Section (Fundamentals)
+- **Router**: `backend/routes/stock_compare.py` — mounted at `/api/fundamentals/compare`
+- **Service**: `backend/services/stock_compare_service.py`
+- **Data source**: FMP Stable API (Starter plan, 300 req/min, 5Y max)
+- **Endpoints**:
+  - `GET  /api/fundamentals/compare/metrics` — canonical registry of all 24 supported metrics
+  - `GET  /api/fundamentals/compare/diagnostics?symbols=X,Y&period=annual` — per-symbol metric availability + per-endpoint status
+  - `GET  /api/fundamentals/compare/search?q=...` — ticker autocomplete
+  - `POST /api/fundamentals/compare` — multi-ticker comparison (series + screener + snapshot + news)
+- **24 supported numeric metrics**: price, price_change_percent, market_cap, enterprise_value, revenue, revenue_growth, gross_profit, gross_margin, operating_income, operating_margin, net_income, profit_margin, eps_diluted, ebitda, free_cash_flow, fcf_margin, total_debt, debt_to_equity, current_ratio, ps_ratio, pe_ratio, ev_to_ebitda, roe, roa
+- **recent_news**: non-chart section; sends a warning if used as chart metric (no 500)
+- **Fallbacks**: ev_to_ebitda from EV/EBITDA, roe/roa from income+balance, debt_to_equity from balance sheet, price_change_percent from change/previousClose
+- **Response shape**: `{ metric, range, symbols, series, screener (24-metric bundle), snapshot (compat), news, metricAvailability, missingSymbols, meta }`
+- **Cache TTLs**: statements/ratios/key_metrics 24h; quote 15min; news 30min
+- **Never 500**: every per-symbol block wrapped in try/except; unsupported tickers return empty series + warning
+
 ## Caelyn Terminal API
 - **URL**: `GET /api/caelyn-terminal`
 - **Auth**: X-API-Key header (auth currently disabled — all requests pass)

@@ -1,0 +1,504 @@
+Task: Audit and fix Stock Compare metric support using the actual FMP Starter plan access. Then expose a clean metric availability + normalized data contract for the frontend.
+
+Context:
+The Stock Compare section on the Fundamentals page currently has these chart metrics:
+
+- Market Cap
+- Revenue
+- Revenue Growth
+- Gross Profit
+- Gross Margin
+- Profit Margin
+- EPS (Diluted)
+- Operating Income
+- Net Income
+- EBITDA
+- Free Cash Flow
+- Total Debt
+- P/S Ratio
+- P/E Ratio
+- Recent News
+
+Some metrics are missing for certain tickers. I need backend to clearly support what FMP can provide, calculate safe fallbacks where possible, return null when not available, and never throw 500s for missing metrics.
+
+Important:
+FMP is the primary source. Use existing FMP client/cache utilities. Do not introduce a new data provider unless absolutely needed. SEC/Finnhub should not be used for this first cleanup unless already wired and needed as fallback.
+
+Main backend goals:
+1. Keep all valid numeric financial metrics.
+2. Remove Recent News from chart metric behavior; news should be returned separately, not as a line-chart metric.
+3. Add a few additional FMP-supported metrics that are useful in Stock Compare.
+4. Add safe fallback calculations.
+5. Add diagnostics so I can see which metrics are available per ticker.
+6. Make the frontend response predictable and stable.
+
+Supported numeric chart/screener metrics should be:
+
+price
+price_change_percent
+market_cap
+enterprise_value
+revenue
+revenue_growth
+gross_profit
+gross_margin
+operating_income
+operating_margin
+net_income
+profit_margin
+eps_diluted
+ebitda
+free_cash_flow
+fcf_margin
+total_debt
+debt_to_equity
+current_ratio
+ps_ratio
+pe_ratio
+ev_to_ebitda
+roe
+roa
+
+Recent news:
+- Do NOT treat recent_news as a chart metric.
+- Keep news as a separate response field/panel data.
+- If existing frontend sends metric=recent_news, backend should return a graceful message/warning, not 500.
+
+Metric source mapping:
+
+1. price
+Source: FMP quote
+Fields to check:
+- price
+- previousClose if needed
+Return number or null.
+
+2. price_change_percent
+Source: FMP quote or stock-price-change
+Fields to check:
+- changesPercentage
+- changePercentage
+- 1D
+Normalize as percent number, not decimal.
+Example: -1.82 means -1.82%, not -0.0182.
+
+3. market_cap
+Source priority:
+- quote.marketCap
+- profile.mktCap
+- market-capitalization endpoint
+Return number or null.
+
+4. enterprise_value
+Source:
+- enterprise values endpoint
+- key metrics if available
+Return latest enterpriseValue or null.
+
+5. revenue
+Source:
+- income statement revenue
+
+6. revenue_growth
+Source priority:
+- income statement growth revenueGrowth
+- fallback calculation from latest two annual revenue rows:
+  (latestRevenue - priorRevenue) / priorRevenue
+Return decimal.
+Example: 0.084 means 8.4%.
+
+7. gross_profit
+Source:
+- income statement grossProfit
+
+8. gross_margin
+Source priority:
+- ratios grossProfitMargin / grossMargin
+- fallback:
+  grossProfit / revenue
+Return decimal.
+
+9. operating_income
+Source:
+- income statement operatingIncome
+
+10. operating_margin
+Fallback:
+- operatingIncome / revenue
+Return decimal.
+
+11. net_income
+Source:
+- income statement netIncome
+
+12. profit_margin
+Source priority:
+- ratios netProfitMargin / profitMargin
+- fallback:
+  netIncome / revenue
+Return decimal.
+
+13. eps_diluted
+Source:
+- income statement epsdiluted
+- income statement epsDiluted
+- income statement eps
+Return number or null.
+
+14. ebitda
+Source:
+- income statement ebitda
+- key metrics if available
+Return number or null.
+Do not crash if missing.
+
+15. free_cash_flow
+Source priority:
+- cash flow statement freeCashFlow
+- fallback:
+  operatingCashFlow - capitalExpenditure
+Be careful: FMP capex is often negative. If capex is already negative, operatingCashFlow + capitalExpenditure may be equivalent. Inspect current project conventions and avoid double-counting.
+Return number or null.
+
+16. fcf_margin
+Fallback:
+- freeCashFlow / revenue
+Return decimal.
+
+17. total_debt
+Source priority:
+- balance sheet totalDebt
+- fallback:
+  shortTermDebt + longTermDebt
+Return number or null.
+
+18. debt_to_equity
+Source priority:
+- ratios debtEquityRatio / debtToEquity
+- fallback:
+  totalDebt / totalStockholdersEquity
+Return decimal/ratio number or null.
+
+19. current_ratio
+Source:
+- ratios currentRatio
+- fallback:
+  totalCurrentAssets / totalCurrentLiabilities
+Return number or null.
+
+20. ps_ratio
+Source priority:
+- ratios priceToSalesRatio
+- key metrics priceToSalesRatio
+- fallback:
+  marketCap / revenue
+Return number or null.
+
+21. pe_ratio
+Source priority:
+- ratios priceEarningsRatio
+- key metrics peRatio
+- fallback:
+  marketCap / netIncome
+Only calculate fallback if netIncome > 0.
+Return null if denominator <= 0.
+
+22. ev_to_ebitda
+Source priority:
+- key metrics enterpriseValueOverEBITDA
+- fallback:
+  enterpriseValue / ebitda
+Only calculate if ebitda > 0.
+Return null otherwise.
+
+23. roe
+Source:
+- ratios returnOnEquity / roe
+Return decimal.
+
+24. roa
+Source:
+- ratios returnOnAssets / roa
+Return decimal.
+
+Required backend changes:
+
+1. Update canonical metric map
+
+Add a single canonical metric registry like:
+
+METRIC_DEFINITIONS = {
+  "price": {"label": "Price", "unit": "price"},
+  "price_change_percent": {"label": "Price Change %", "unit": "percent_already"},
+  "market_cap": {"label": "Market Cap", "unit": "currency"},
+  "enterprise_value": {"label": "Enterprise Value", "unit": "currency"},
+  "revenue": {"label": "Revenue", "unit": "currency"},
+  "revenue_growth": {"label": "Revenue Growth", "unit": "percent_decimal"},
+  "gross_profit": {"label": "Gross Profit", "unit": "currency"},
+  "gross_margin": {"label": "Gross Margin", "unit": "percent_decimal"},
+  "operating_income": {"label": "Operating Income", "unit": "currency"},
+  "operating_margin": {"label": "Operating Margin", "unit": "percent_decimal"},
+  "net_income": {"label": "Net Income", "unit": "currency"},
+  "profit_margin": {"label": "Profit Margin", "unit": "percent_decimal"},
+  "eps_diluted": {"label": "EPS (Diluted)", "unit": "number"},
+  "ebitda": {"label": "EBITDA", "unit": "currency"},
+  "free_cash_flow": {"label": "Free Cash Flow", "unit": "currency"},
+  "fcf_margin": {"label": "FCF Margin", "unit": "percent_decimal"},
+  "total_debt": {"label": "Total Debt", "unit": "currency"},
+  "debt_to_equity": {"label": "Debt / Equity", "unit": "ratio"},
+  "current_ratio": {"label": "Current Ratio", "unit": "ratio"},
+  "ps_ratio": {"label": "P/S Ratio", "unit": "ratio"},
+  "pe_ratio": {"label": "P/E Ratio", "unit": "ratio"},
+  "ev_to_ebitda": {"label": "EV / EBITDA", "unit": "ratio"},
+  "roe": {"label": "ROE", "unit": "percent_decimal"},
+  "roa": {"label": "ROA", "unit": "percent_decimal"}
+}
+
+Aliases:
+- price_change -> price_change_percent
+- marketCap -> market_cap
+- revenueGrowth -> revenue_growth
+- grossProfit -> gross_profit
+- grossMargin -> gross_margin
+- profitMargin -> profit_margin
+- eps -> eps_diluted
+- epsDiluted -> eps_diluted
+- operatingIncome -> operating_income
+- netIncome -> net_income
+- freeCashFlow -> free_cash_flow
+- fcf -> free_cash_flow
+- totalDebt -> total_debt
+- price_to_sales -> ps_ratio
+- p_s_ratio -> ps_ratio
+- price_to_earnings -> pe_ratio
+- p_e_ratio -> pe_ratio
+- ev_ebitda -> ev_to_ebitda
+
+2. Update Stock Compare response
+
+The compare response should include:
+
+{
+  "metric": {
+    "key": "revenue",
+    "label": "Revenue",
+    "unit": "currency",
+    "period": "annual"
+  },
+  "range": "5Y",
+  "symbols": ["INTT", "TRT", "NNBR"],
+  "series": [],
+  "screener": [],
+  "snapshot": [],
+  "news": {},
+  "metricAvailability": {},
+  "missingSymbols": [],
+  "invalidSymbols": [],
+  "meta": {
+    "cached": true,
+    "generatedAt": "...",
+    "warnings": []
+  }
+}
+
+3. Add /api/fundamentals/compare/metrics
+
+Create endpoint:
+
+GET /api/fundamentals/compare/metrics
+
+Return all supported frontend metric metadata:
+
+{
+  "metrics": [
+    {
+      "key": "revenue",
+      "label": "Revenue",
+      "unit": "currency",
+      "chartable": true,
+      "screener": true,
+      "source": "income_statement",
+      "fallback": null
+    },
+    {
+      "key": "gross_margin",
+      "label": "Gross Margin",
+      "unit": "percent_decimal",
+      "chartable": true,
+      "screener": true,
+      "source": "ratios",
+      "fallback": "grossProfit / revenue"
+    }
+  ],
+  "nonChartSections": [
+    {
+      "key": "recent_news",
+      "label": "Recent News"
+    }
+  ]
+}
+
+4. Add diagnostics endpoint
+
+Create endpoint:
+
+GET /api/fundamentals/compare/diagnostics?symbols=INTT,TRT,NNBR&period=annual
+
+Return:
+
+{
+  "symbols": ["INTT", "TRT", "NNBR"],
+  "results": [
+    {
+      "symbol": "INTT",
+      "name": "inTEST Corporation",
+      "availableMetrics": ["price", "market_cap", "revenue", "gross_profit"],
+      "missingMetrics": ["ev_to_ebitda"],
+      "sourceEndpoints": {
+        "profile": {"status": "ok", "rows": 1, "cached": true},
+        "quote": {"status": "ok", "rows": 1, "cached": true},
+        "income_statement": {"status": "ok", "rows": 5, "cached": true},
+        "balance_sheet": {"status": "ok", "rows": 5, "cached": true},
+        "cash_flow": {"status": "ok", "rows": 5, "cached": true},
+        "ratios": {"status": "ok", "rows": 5, "cached": true},
+        "key_metrics": {"status": "ok", "rows": 5, "cached": true},
+        "enterprise_values": {"status": "ok", "rows": 5, "cached": true}
+      },
+      "warnings": []
+    }
+  ],
+  "meta": {
+    "generatedAt": "...",
+    "warnings": []
+  }
+}
+
+This endpoint is for debugging/admin visibility. It should not crash if endpoints fail.
+
+5. Screener bundle
+
+Ensure existing compare endpoint returns a full screener row for each selected symbol:
+
+{
+  "symbol": "INTT",
+  "name": "inTEST Corporation",
+  "price": 9.83,
+  "priceChangePercent": -1.82,
+  "marketCap": 122000000,
+  "enterpriseValue": 150000000,
+  "revenue": 113830000,
+  "revenueGrowth": 0.084,
+  "grossProfit": 54000000,
+  "grossMargin": 0.474,
+  "operatingIncome": 9400000,
+  "operatingMargin": 0.083,
+  "netIncome": 7200000,
+  "profitMargin": 0.062,
+  "epsDiluted": 0.71,
+  "ebitda": 13200000,
+  "freeCashFlow": 8500000,
+  "fcfMargin": 0.074,
+  "totalDebt": 21000000,
+  "debtToEquity": 0.42,
+  "currentRatio": 2.1,
+  "psRatio": 1.07,
+  "peRatio": 17.4,
+  "evToEbitda": 11.3,
+  "roe": 0.118,
+  "roa": 0.064,
+  "latestFiscalDate": "2025-12-31",
+  "latestFiscalYear": 2025,
+  "dataQuality": "complete",
+  "availableMetrics": [],
+  "missingMetrics": [],
+  "warnings": []
+}
+
+Use null for unavailable values.
+
+6. Do not 500
+
+Every per-symbol bundle should be wrapped defensively.
+
+Expected behavior:
+- Missing EBITDA => ebitda: null + warning
+- Negative net income => peRatio: null + warning if fallback would be invalid
+- Missing ratios endpoint => calculate fallbacks where possible
+- Unsupported ticker like SOI.PA => empty/null row + warning, not 500
+- Recent news unavailable => news empty, not 500
+
+7. Cache
+
+Use existing cache utilities.
+
+Cache TTLs:
+- stock_compare:bundle:{symbol}:annual = 15 minutes
+- profile = 24 hours
+- quote = 5-15 minutes
+- price_change = 5-15 minutes
+- income_statement = 24 hours
+- balance_sheet = 24 hours
+- cash_flow = 24 hours
+- ratios = 24 hours
+- key_metrics = 24 hours
+- enterprise_values = 24 hours
+- news = 30 minutes
+
+8. Metric chart series generation
+
+When selected chart metric changes:
+- Use cached raw endpoint/bundle where possible.
+- Do not refetch all endpoints every time.
+- If selected metric can be generated from already-fetched data, use it.
+- Return series points sorted ascending.
+- For ratio/margin metrics, generate historical points if the needed historical rows exist.
+- If not enough history exists, return as many valid points as possible and include warnings.
+
+9. Recent news behavior
+
+If metric=recent_news is sent:
+- Do not 500.
+- Return no chart series and include warning:
+  "recent_news is not a numeric chart metric. Use the news field instead."
+- Continue returning screener and news.
+
+10. Logging
+
+Add clear logs:
+
+[stock_compare] metrics supported=24
+[stock_compare] bundle INTT cache=hit ms=18
+[stock_compare] bundle TRT cache=miss endpoints=quote,income,balance,cashflow,ratios,key_metrics,enterprise_values ms=642
+[stock_compare] metricAvailability INTT available=22 missing=2
+[stock_compare] warning NNBR missing ebitda
+[stock_compare] diagnostics symbols=INTT,TRT,NNBR ms=812
+
+Never log API keys.
+
+11. Smoke tests
+
+Run:
+
+curl "$BACKEND_URL/api/fundamentals/compare/metrics"
+
+curl "$BACKEND_URL/api/fundamentals/compare/diagnostics?symbols=INTT,TRT,NNBR&period=annual"
+
+curl -X POST "$BACKEND_URL/api/fundamentals/compare" \
+  -H "Content-Type: application/json" \
+  -d '{"symbols":["INTT","TRT","NNBR"],"metric":"revenue","period":"annual","range":"5Y"}'
+
+curl -X POST "$BACKEND_URL/api/fundamentals/compare" \
+  -H "Content-Type: application/json" \
+  -d '{"symbols":["INTT","TRT","NNBR"],"metric":"ev_to_ebitda","period":"annual","range":"5Y"}'
+
+curl -X POST "$BACKEND_URL/api/fundamentals/compare" \
+  -H "Content-Type: application/json" \
+  -d '{"symbols":["INTT","TRT","NNBR","SOI.PA"],"metric":"ebitda","period":"annual","range":"5Y"}'
+
+Expected:
+- No 500s.
+- Supported metrics endpoint returns metric registry.
+- Diagnostics shows available/missing metrics per ticker.
+- Compare response includes series + screener + metricAvailability.
+- Missing fields are null/warnings, not crashes.
+- SOI.PA does not break US tickers.
