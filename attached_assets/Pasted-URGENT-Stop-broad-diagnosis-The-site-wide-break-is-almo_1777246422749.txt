@@ -1,0 +1,81 @@
+URGENT: Stop broad diagnosis. The site-wide break is almost certainly caused by the last FMP Earnings Calendar changes.
+
+Context:
+Right before the site broke, we added:
+- backend/services/earnings_clean_service.py
+- backend/routes/earnings_upcoming.py
+- main.py router registration for /api/catalysts/earnings/*
+- new FMP chunked earnings calls
+- new FMP profile/quote/marketCap enrichment
+
+Now Home, Sectors, Macro Terminal, and Catalyst Calendar are failing. These pages rely on FMP/shared backend/API resources. This is likely FMP overload, shared HTTP client/cache exhaustion, startup import issue, or rate-limit poisoning from the new earnings clean service.
+
+Do NOT spend time auditing unrelated frontend/UI/auth.
+Do NOT keep calling FMP heavily.
+Do NOT run broad validation suites that burn API credits.
+
+Immediate objective:
+Restore the site by disabling the new FMP-heavy earnings-clean path.
+
+Step 1 — Disable the new route immediately:
+In backend/main.py, comment out/remove only the router registration for:
+- backend/routes/earnings_upcoming.py
+- /api/catalysts/earnings/*
+
+Do not delete files.
+Do not touch auth.
+Do not touch Home/Sectors/Macro routes.
+Do not touch existing /api/catalysts/events recent earnings route.
+
+Step 2 — Restart backend.
+
+Step 3 — Verify recovery with minimal calls only:
+Make ONE lightweight request each:
+- health/root endpoint if available
+- Home endpoint that is failing
+- Sectors endpoint that is failing
+- Macro overview endpoint that is failing
+
+Do not call the new earnings-clean endpoint.
+Do not run 30-day/60-day FMP earnings tests.
+Do not call 800 profile enrichments.
+
+Step 4 — If site recovers:
+Confirm the new earnings-clean route/service was the cause.
+Leave it disabled for now.
+
+Step 5 — Then inspect the new FMP clean service offline/by reading code only:
+Look specifically for:
+- FMP calls happening at import/startup
+- chunked FMP calls firing too many requests
+- profile/quote/marketCap enrichment hitting hundreds/thousands of symbols
+- shared FMP client/session being exhausted
+- global cache/shared state being overwritten
+- no timeout / no rate limiter
+- route doing work on page load even before user opens Earnings
+- frontend polling/refetching the new endpoint repeatedly
+- any code that runs /api/catalysts/earnings/upcoming-clean automatically from Home or global layout
+
+Step 6 — Required safe redesign, but do NOT enable yet:
+The clean earnings upcoming route must be made safe before re-enabling:
+
+Rules:
+- No FMP calls at import/startup.
+- No route should fetch 30 days + enrich thousands of symbols in one request.
+- Calendar counts endpoint should fetch only earnings calendar events, no profile/quote enrichment.
+- Selected day endpoint may enrich only that selected day, with a hard cap and cache.
+- Use from/to max 7 days for initial calendar view, not 30 days, unless cached.
+- Add strict timeout per FMP call.
+- Add concurrency limit 3-5.
+- Add global FMP request budget guard.
+- If FMP returns 429 or timeout, fail only this endpoint, not shared app routes.
+- Do not share mutable FMP client state in a way that can break other routes.
+- Cache key must isolate earnings-clean from other FMP caches.
+
+Step 7 — Final response:
+Tell me only:
+- Was the new earnings router disabled?
+- Did Home/Sectors/Macro recover after disabling it?
+- What FMP-heavy behavior in the new service likely caused the break?
+- Confirm the route remains disabled.
+- Minimal files changed.

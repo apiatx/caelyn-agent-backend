@@ -1,0 +1,103 @@
+URGENT: The whole website is broken after the last Earnings Calendar backend change.
+
+Symptoms:
+- Home page: macro/theme/news data unavailable/loading
+- Catalyst Calendar: Upcoming Earnings shows 0 calls
+- Sectors page: “Could not load sector market data”
+- Macro Terminal: “Failed to load overview data”
+- Login now works, but app data endpoints are broken globally
+
+This happened immediately after the last Earnings Calendar work where new files/routes were added:
+- backend/services/earnings_clean_service.py
+- backend/routes/earnings_upcoming.py
+- backend/main.py router registration for /api/catalysts/earnings/*
+
+Priority:
+Restore the entire website first.
+Do NOT continue building Earnings features until all core pages work again.
+
+Required process:
+
+1. Check backend runtime logs immediately.
+Look for:
+- import errors
+- startup exceptions
+- route registration errors
+- dependency errors
+- auth middleware errors
+- 401/403/500 patterns
+- port conflicts
+- missing env vars
+- FMP/API exceptions causing startup failure
+
+2. Test health/core endpoints directly.
+Run curl or equivalent against:
+- root/health endpoint if exists
+- /api/caelyn-terminal
+- /api/sector-performance or whatever powers Sectors
+- /api/macro/overview or Macro Terminal overview
+- /api/catalysts/earnings/upcoming-clean
+- /api/catalysts/events?tab=earnings_dates&mode=recent
+
+Use the required auth/API headers if needed.
+
+3. Identify whether the backend app is:
+A. not starting,
+B. starting but core routes 500,
+C. starting but auth rejects internal frontend calls,
+D. frontend points to wrong backend,
+E. only the new earnings route fails.
+
+4. Immediate rollback rule:
+If the new earnings router/service is causing startup or global failures, temporarily disable it.
+
+Specifically:
+- Comment out/remove router registration in main.py for earnings_upcoming router.
+- Do NOT delete files unless necessary.
+- Restart backend.
+- Confirm Home, Sectors, Macro Terminal, and existing Catalyst routes recover.
+
+5. If disabling the new router fixes the site:
+Leave it disabled for now.
+Then report exactly what import/dependency/route caused the global failure.
+
+6. If backend starts fine but core endpoints fail:
+Find the shared dependency that changed:
+- auth dependency
+- require_subscription
+- API key dependency
+- CORS
+- proxy headers
+- global exception handler
+- startup event
+- shared FMP client/session
+- global cache/client initialization
+
+7. Do not let one FMP endpoint failure break the whole app.
+The new earnings-clean service must not run heavy FMP calls at import/startup.
+All FMP calls must happen only inside request handlers.
+If earnings_clean_service performs work during import, move it inside functions.
+
+8. Confirm no global env requirements were added.
+The new earnings route must not require new env vars at startup beyond existing FMP_API_KEY.
+If FMP_API_KEY missing, route should fail gracefully, not crash the app.
+
+9. After rollback/fix, validate these pages:
+- Home loads market/news/theme data again
+- Sectors loads sector market data
+- Macro Terminal loads overview data
+- Catalyst Calendar page loads
+- Recent Earnings still works if it worked before
+- Login still works
+
+10. Do NOT touch frontend yet unless backend is confirmed healthy.
+
+Final response:
+Tell me:
+- Whether backend was crashing or endpoints were 500/401/403
+- Exact error from logs
+- Whether disabling earnings_upcoming router fixed the site
+- Which files were changed
+- Which endpoint caused global breakage
+- Confirm Home/Sectors/Macro/Catalyst core endpoints work again
+- Confirm login still works
