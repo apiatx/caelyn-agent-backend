@@ -1,0 +1,179 @@
+Add backend support for Recent mode on each Catalyst Calendar tab.
+
+Important:
+Do NOT break existing Catalyst Calendar upcoming behavior.
+Do NOT break the existing Earnings page/popup data flow.
+
+Current tabs:
+- earnings_dates
+- dividends
+- ipos
+- splits
+- economic_releases
+- treasury_macro
+
+New requirement:
+Support a `mode` query param on catalyst events:
+
+GET /api/catalysts/events?tab={tab}&mode=upcoming
+GET /api/catalysts/events?tab={tab}&mode=recent
+
+Default:
+mode=upcoming if not provided.
+
+Upcoming:
+Should continue returning future/current catalyst events for calendar view.
+
+Recent:
+Should return historical/recent catalyst events for list view.
+
+Recent default windows:
+- earnings_dates: previous 30 days through today
+- dividends: previous 60 days through today
+- ipos: previous 90 days through today
+- splits: previous 90 days through today
+- economic_releases: previous 30 days through today
+- treasury_macro: previous 30 days through today
+
+Allow frontend to override with:
+- from=YYYY-MM-DD
+- to=YYYY-MM-DD
+
+FMP mapping for recent data:
+
+1. earnings_dates with mode=recent:
+Use FMP Earnings Report where available.
+If Earnings Report requires symbol and no symbol filter is provided, fallback to Earnings Calendar with date window in the past.
+Normalize as eventType = "earnings_report" or "earnings".
+
+2. dividends with mode=recent:
+Use FMP Dividends Calendar for historical date window.
+Normalize as eventType = "dividend".
+
+3. ipos with mode=recent:
+Use FMP IPO Calendar for historical date window.
+Normalize as eventType = "ipo".
+
+4. splits with mode=recent:
+Use FMP Stock Splits Calendar for historical date window.
+Normalize as eventType = "stock_split".
+
+5. economic_releases with mode=recent:
+Use FMP Economic Data Releases Calendar for historical date window.
+Normalize as eventType = "economic_release".
+
+6. treasury_macro with mode=recent:
+Use FMP Treasury Rates and relevant Economics Indicators for historical/recent values.
+Normalize as eventType = "treasury_macro" or "macro_indicator".
+
+Normalized event contract:
+Every returned event must include:
+
+{
+  "id": string,
+  "symbol": string | null,
+  "companyName": string | null,
+  "eventType": string,
+  "eventCategory": "upcoming" | "recent" | "macro",
+  "title": string,
+  "date": string,
+  "time": string | null,
+  "source": "fmp",
+  "sector": string | null,
+  "industry": string | null,
+  "marketCap": number | null,
+  "marketCapBucket": string,
+  "importance": "high" | "medium" | "low",
+  "raw": object
+}
+
+Include event-specific fields when available:
+
+Earnings:
+- epsEstimated
+- epsActual
+- revenueEstimated
+- revenueActual
+- surprise
+- surprisePercent
+- period
+
+Dividends:
+- dividend
+- declarationDate
+- recordDate
+- paymentDate
+- exDividendDate
+
+IPOs:
+- exchange
+- shares
+- priceRange
+- offerPrice
+
+Splits:
+- splitRatio
+- numerator
+- denominator
+
+Economic:
+- actual
+- estimate
+- previous
+- country
+- eventName
+
+Treasury / Macro:
+- rate
+- yield
+- maturity
+- value
+- previousValue
+- indicatorName
+
+Filtering:
+Recent mode must support the same filters as upcoming:
+- symbols
+- scope=all/watchlist/portfolio
+- sector
+- marketCap
+- eventType
+- limit
+- refresh
+
+Caching:
+Use separate cache keys for upcoming vs recent.
+
+Suggested keys:
+catalysts:v1:{tab}:{mode}:{from}:{to}:{symbols_hash}:{filters_hash}
+
+Suggested TTLs:
+- recent earnings: 6 hours
+- recent dividends: 12 hours
+- recent IPOs: 12 hours
+- recent splits: 12 hours
+- recent economic releases: 6 hours
+- recent treasury/macro: 3-6 hours
+
+Error handling:
+No full 500 if one FMP source fails.
+Return:
+status = "partial"
+errors = [...]
+
+Validation endpoints:
+Test:
+- /api/catalysts/events?tab=earnings_dates&mode=recent
+- /api/catalysts/events?tab=dividends&mode=recent
+- /api/catalysts/events?tab=ipos&mode=recent
+- /api/catalysts/events?tab=splits&mode=recent
+- /api/catalysts/events?tab=economic_releases&mode=recent
+- /api/catalysts/events?tab=treasury_macro&mode=recent
+
+Final response:
+Tell me:
+- Which backend files changed
+- Confirm mode=upcoming remains default
+- Confirm mode=recent works for all six tabs
+- Confirm date windows used
+- Mention any FMP recent source that was unavailable or had limited data

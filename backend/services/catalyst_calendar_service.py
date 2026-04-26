@@ -205,6 +205,35 @@ def _date_offset(days: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d")
 
 
+_DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
+
+def _parse_date_time(raw: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """
+    Split a raw FMP date string into (date_part, time_part).
+
+    FMP returns:
+      - YYYY-MM-DD              → ("2026-04-13", None)
+      - "YYYY-MM-DD HH:MM:SS"   → ("2026-04-13", "HH:MM:SS")
+      - None / ""               → (None, None)  — caller should skip the event
+
+    Always returns date_part in YYYY-MM-DD or None if unparseable.
+    """
+    if not raw:
+        return None, None
+    raw = str(raw).strip()
+    if " " in raw:
+        parts = raw.split(" ", 1)
+        d, t = parts[0], parts[1]
+    elif "T" in raw:
+        parts = raw.split("T", 1)
+        d, t = parts[0], parts[1].split(".")[0].split("Z")[0]
+    else:
+        d, t = raw, None
+    if not _DATE_RE.match(d):
+        return None, None
+    return d, (t if t else None)
+
+
 def _mc_bucket(mc: Optional[float]) -> str:
     if mc is None:
         return "unknown"
@@ -454,32 +483,51 @@ async def _fetch_dividends(
     watchlist: set,
     portfolio: set,
 ) -> list[dict]:
+    """
+    Date mapping: FMP `date` field IS the ex-dividend date (YYYY-MM-DD).
+    Fallback chain: date → exDividendDate → recordDate → paymentDate.
+    Rows with no parseable date are skipped.
+    """
     rows = await fmp.dividends_calendar(from_date, to_date)
     events: list[dict] = []
     for row in (rows or []):
         sym  = (row.get("symbol") or "").upper()
-        date = row.get("date") or row.get("exDividendDate") or ""
+        # FMP dividends-calendar: 'date' is the ex-dividend date
+        raw_date = (
+            row.get("date")
+            or row.get("exDividendDate")
+            or row.get("recordDate")
+            or row.get("paymentDate")
+            or ""
+        )
+        date, _ = _parse_date_time(raw_date)
+        if not date:
+            continue  # skip undated events — do not mix into calendar
         div  = _safe(row.get("dividend") or row.get("adjDividend"))
         name = row.get("companyName") or row.get("name") or sym
         mc   = _safe(row.get("marketCap"))
         bucket = _mc_bucket(mc)
         imp = _score_importance("dividends", bucket, sym, f"{sym} Dividend", watchlist, portfolio)
+        # exDividendDate in the normalized event is always the ex-div date
+        ex_div = row.get("exDividendDate") or row.get("date") or date
+        ex_div_clean, _ = _parse_date_time(ex_div)
+        div_str = f" ${div:.4f}" if div is not None else ""
         events.append(_build_event(
             id             = _event_id("dividends", sym, date),
             symbol         = sym or None,
             companyName    = name,
             eventType      = "dividends",
             eventCategory  = "upcoming",
-            title          = f"{sym} Dividend${f' ${div:.4f}' if div else ''}",
+            title          = f"{sym} Dividend{div_str}",
             date           = date,
             marketCap      = mc,
             marketCapBucket = bucket,
             importance     = imp,
             dividend       = div,
-            exDividendDate = row.get("exDividendDate") or row.get("date"),
-            recordDate     = row.get("recordDate"),
-            paymentDate    = row.get("paymentDate"),
-            declarationDate = row.get("declarationDate"),
+            exDividendDate = ex_div_clean or date,
+            recordDate     = _parse_date_time(row.get("recordDate") or "")[0],
+            paymentDate    = _parse_date_time(row.get("paymentDate") or "")[0],
+            declarationDate = _parse_date_time(row.get("declarationDate") or "")[0],
             raw            = row,
         ))
     return events
@@ -492,12 +540,19 @@ async def _fetch_ipos(
     watchlist: set,
     portfolio: set,
 ) -> list[dict]:
+    """
+    Date mapping: ipoDate → date.
+    FMP returns YYYY-MM-DD. Rows with no parseable date are skipped.
+    """
     rows = await fmp.ipo_calendar(from_date, to_date)
     events: list[dict] = []
     for row in (rows or []):
         sym    = (row.get("symbol") or "").upper()
         name   = row.get("company") or row.get("companyName") or sym
-        date   = row.get("date") or row.get("ipoDate") or ""
+        raw_date = row.get("ipoDate") or row.get("date") or ""
+        date, _ = _parse_date_time(raw_date)
+        if not date:
+            continue  # skip undated events
         shares = _safe(row.get("shares") or row.get("totalSharesValue"))
         low_p  = row.get("priceFrom") or row.get("priceLow")
         high_p = row.get("priceTo") or row.get("priceHigh")
@@ -537,11 +592,24 @@ async def _fetch_splits(
     watchlist: set,
     portfolio: set,
 ) -> list[dict]:
+    """
+    Date mapping: splitDate → executionDate → date (FMP field).
+    FMP returns YYYY-MM-DD. Rows with no parseable date are skipped.
+    """
     rows = await fmp.splits_calendar(from_date, to_date)
     events: list[dict] = []
     for row in (rows or []):
         sym  = (row.get("symbol") or "").upper()
-        date = row.get("date") or row.get("effectiveDate") or ""
+        raw_date = (
+            row.get("splitDate")
+            or row.get("executionDate")
+            or row.get("effectiveDate")
+            or row.get("date")
+            or ""
+        )
+        date, _ = _parse_date_time(raw_date)
+        if not date:
+            continue  # skip undated events
         num  = row.get("numerator")
         den  = row.get("denominator")
         ratio = f"{num}:{den}" if num and den else row.get("ratio") or row.get("splitFactor")
@@ -571,14 +639,24 @@ async def _fetch_economic_releases(
     from_date: str,
     to_date: str,
 ) -> list[dict]:
+    """
+    Date mapping: FMP `date` field contains "YYYY-MM-DD HH:MM:SS".
+    _parse_date_time() splits it — date = YYYY-MM-DD, time = HH:MM:SS.
+    FMP has NO separate `time` key; the time is embedded in `date`.
+    Rows with no parseable date are skipped.
+    """
     rows = await fmp.economic_calendar(from_date, to_date)
     events: list[dict] = []
     for row in (rows or []):
         country = row.get("country", "")
         title   = row.get("event") or row.get("name") or ""
-        date    = row.get("date") or ""
+        # ── FIX: FMP embeds time in the date field, e.g. "2026-04-13 01:40:00"
+        raw_date = row.get("releaseDate") or row.get("date") or ""
+        date, time_val = _parse_date_time(raw_date)
+        if not date:
+            continue  # skip undated events — do not mix into calendar
+        # ────────────────────────────────────────────────────────────────
         impact  = (row.get("impact") or "").lower()
-        # High impact = FMP labels it "High" or matches our keywords
         is_high = impact == "high" or any(
             kw.lower() in title.lower() for kw in _HIGH_IMPACT_ECON
         )
@@ -591,7 +669,7 @@ async def _fetch_economic_releases(
             eventCategory  = "macro",
             title          = title,
             date           = date,
-            time           = row.get("time"),
+            time           = time_val,
             importance     = imp,
             actual         = row.get("actual"),
             estimate       = row.get("estimate"),
