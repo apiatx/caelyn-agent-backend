@@ -402,6 +402,58 @@ Aliases: `price_to_sales`→`ps_ratio`, `p_s_ratio`→`ps_ratio`, `p_e_ratio`→
 - Search uses `search-symbol` + `search-name` endpoints (FMP `/stable/search` is broken on Starter plan). Results ranked: exact > starts-with > contains.
 - Validation is done inside endpoint functions (not Pydantic `field_validator`) to avoid Pydantic v2 `ctx.error` serialisation issue in the app's existing `validation_exception_handler`.
 
+## Catalyst Calendar (`/api/catalysts/*`)
+
+Router: `backend/routes/catalyst_calendar.py`
+Service: `backend/services/catalyst_calendar_service.py`
+Data source: FMP Stable API (Starter plan). Per-symbol enrichment via `company_profile` + `ratings-snapshot`.
+
+### Tabs (10 total)
+
+| Tab | Source | Notes |
+|---|---|---|
+| `earnings_dates` | `FMP /stable/earnings-calendar` | Upcoming earnings, EPS/revenue estimates |
+| `dividends` | `FMP /stable/dividends-calendar` | Ex-div dates, payment dates, dividend amounts |
+| `ipos` | `FMP /stable/ipo-calendar` | Upcoming IPOs with price range + exchange |
+| `splits` | `FMP /stable/splits-calendar` | Stock splits with ratio (e.g. 2:1) |
+| `economic_releases` | `FMP /stable/economic-calendar` | CPI, FOMC, NFP, GDP; importance auto-labelled |
+| `treasury_macro` | `FMP /stable/treasury-rates` | Yield curve snapshot + recent 5 history points |
+| `recent_earnings` | `FMP /stable/earnings-calendar` (past dates) | Only rows with actual eps/revenue populated; Beat/Miss in title |
+| `sec_filings` | `FMP /stable/sec-filings?symbol=X` | Per-symbol for watchlist/portfolio only (404 on Starter for bulk) |
+| `analyst_ratings` | `FMP /stable/ratings-snapshot?symbol=X` | Per-symbol rating A–S scale for watchlist/portfolio symbols |
+| `insider_transactions` | `FMP /stable/insider-trading?symbol=X` | Per-symbol for watchlist/portfolio only |
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/catalysts/overview` | All 10 tabs (capped 20 each) + summary of high-importance / portfolio catalysts |
+| `GET` | `/api/catalysts/events` | One tab or all, full pagination, filtering |
+| `GET` | `/api/catalysts/filters` | Available sectors, mc buckets, eventTypes, watchlist/portfolio symbols |
+| `GET` | `/api/catalysts/by-symbol/{symbol}` | All catalysts for one ticker (profile + all tabs) |
+
+### Query params for `/api/catalysts/events`
+
+`tab` (default `all`), `from` / `to` (YYYY-MM-DD), `symbols` (comma-sep), `scope` (`all`/`watchlist`/`portfolio`), `sector`, `marketCap` (bucket), `eventType`, `limit` (1-500, default 100)
+
+### Normalized event schema
+
+Every event has: `id`, `symbol`, `companyName`, `eventType`, `eventCategory`, `title`, `date`, `time`, `period`, `source`, `sector`, `industry`, `marketCap`, `marketCapBucket`, `importance` (high/medium/low), `raw`, plus type-specific fields (`epsEstimated`, `epsActual`, `dividend`, `splitRatio`, `formType`, `ratingTo`, `insiderName`, `transactionValue`, etc.)
+
+### Importance scoring (deterministic, no LLM)
+
+- `high`: portfolio/watchlist match; mega/large cap earnings or dividends; economic events with CPI/FOMC/NFP keywords; SEC 8-K/10-K/Form-4; insider trades ≥$1M; IPOs of mid+ cap
+- `medium`: other US economic events; mid-cap earnings; sec filings in `_MED_SEC_FORMS`; insider trades ≥$250K; analyst upgrades/downgrades
+- `low`: everything else
+
+### Key design decisions
+
+- `CatalystFMP` in service is a standalone Starter-compatible FMP client (separate from `FMPProvider`). Cache keys prefixed `cat:*`.
+- Tabs that require per-symbol data (`sec_filings`, `analyst_ratings`, `insider_transactions`) operate over watchlist + portfolio symbols only; gracefully return empty when no symbols are loaded.
+- Bulk `upgrades-downgrades` and `insider-trading` return 404 on FMP Starter — the service never calls them.
+- Profile enrichment batched in parallel for all unique symbols in a tab response; TTL 24 h.
+- Existing `/api/earnings/*` endpoints (Finnhub-backed) are NOT modified by this module.
+
 ## Real Portfolio (caelyn-terminal)
 
 - SQGLP framework for investments, Weinstein Stage 2 for trades

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-25T17:40:31.480945+00:00",
+  "generated_at": "2026-04-26T13:02:50.112994+00:00",
   "handles": [
     "KobeissiLetter",
     "aleabitoreddit",
@@ -14,6 +14,8 @@
     "ThematicTrader",
     "JonkooTrades",
     "Ren_aramb",
+    "napoleon21st",
+    "TheStockDon",
     "Thomas_james_1",
     "ConnorJBates_",
     "BlackPantherCap",
@@ -96,6 +98,16 @@
       "weight": 0.8
     },
     {
+      "handle": "napoleon21st",
+      "category": "above_average_trader",
+      "weight": 0.8
+    },
+    {
+      "handle": "TheStockDon",
+      "category": "above_average_trader",
+      "weight": 0.8
+    },
+    {
       "handle": "Thomas_james_1",
       "category": "retail_trader",
       "weight": 0.35
@@ -168,299 +180,53 @@
   ],
   "top_tickers": [
     {
-      "symbol": "AMD",
+      "symbol": "APLD",
       "mentions": null,
       "sentiment": null,
-      "rationale": "AMD positioned for CPU supercycle from agentic AI with market share gains, higher ASPs, and burn-in demand for GPUs; potential client ties to microcaps like TRT add alpha. Traders see sustained AI demand driving outperformance.",
-      "accounts": [],
-      "backend_score": 6.003,
-      "recency_days_min": 0,
-      "bullish_account_count": 3,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "JonkooTrades",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        },
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "contribution": 0.96
-        }
-      ],
-      "catalyst_list": [
-        "agentic AI",
-        "20-30% spikes",
-        "AI GPU demand",
-        "Data center revenue growth",
-        "AI engineering lab",
-        "Advanced packaging"
-      ]
-    },
-    {
-      "symbol": "INTC",
-      "mentions": null,
-      "sentiment": null,
-      "rationale": "INTC leading CPU resurgence for agentic AI orchestration amid tightening CPU-to-GPU ratios and server reallocation; historic recovery signals strength. Key play in inference demand inflection.",
-      "accounts": [],
-      "backend_score": 5.09,
-      "recency_days_min": 0,
-      "bullish_account_count": 3,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "contribution": 0.42
-        }
-      ],
-      "catalyst_list": [
-        "agentic AI",
-        "20-30% demand spikes",
-        "Xeon demand inflection",
-        "Capacity reallocation to servers"
-      ]
-    },
-    {
-      "symbol": "ARM",
-      "mentions": null,
-      "sentiment": null,
-      "rationale": "ARM as IP royalty winner in hyperscaler custom silicon and CPU shift for AGI; new TAM from resurgence. Riding semis momentum.",
-      "accounts": [],
-      "backend_score": 4.948,
-      "recency_days_min": 0,
-      "bullish_account_count": 3,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "contribution": 0.336
-        }
-      ],
-      "catalyst_list": [
-        "agentic AI",
-        "Hyperscaler adoption"
-      ]
-    },
-    {
-      "symbol": "SIVE",
-      "mentions": null,
-      "sentiment": null,
-      "rationale": "Small cap with lasers designed into AAPL/MRVL/JBL and satellite antennas/CPO for hyperscalers/LEO; SpaceX listing potential. High asymmetry despite size.",
-      "accounts": [],
-      "backend_score": 3.875,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "Ren_aramb",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        }
-      ],
-      "catalyst_list": [
-        "design wins with sector leaders",
-        "SpaceX listing",
-        "LEO capex",
-        "POET/Ayar/Jabil partnerships"
-      ]
-    },
-    {
-      "symbol": "NVDA",
-      "mentions": null,
-      "sentiment": null,
-      "rationale": "GPU leader integral to CPU supercycle shift and DC transformation with 800VDC power/BESS needs. Vera Rubin roadmap fuels long-term.",
-      "accounts": [],
-      "backend_score": 3.875,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        }
-      ],
-      "catalyst_list": [
-        "agentic AI",
-        "Vera Rubin roadmap 2027"
-      ]
-    },
-    {
-      "symbol": "TRT",
-      "mentions": null,
-      "sentiment": null,
-      "rationale": "Undervalued microcap with revenue/cash positioned for AI GPU burn-in ramp; mystery client likely AMD, potential 3x on cycle recovery/margins.",
-      "accounts": [],
-      "backend_score": 3.875,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "JonkooTrades",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        }
-      ],
-      "catalyst_list": [
-        "cycle recovery",
-        "AI demand",
-        "margin expansion",
-        "$5.3M AI GPU order",
-        "Malaysia AI lab"
-      ]
-    },
-    {
-      "symbol": "FTC",
-      "mentions": null,
-      "sentiment": null,
-      "rationale": "Undervalued critical supplier for SpaceX; interesting research candidate in space/semis chain.",
-      "accounts": [],
-      "backend_score": 3.648,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "PepInvestStocks",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "Kaizen_Investor",
-          "category": "top_trader",
-          "contribution": 1.0
-        }
-      ],
-      "catalyst_list": [
-        "SpaceX supply"
-      ]
+      "rationale": "Strong AI data center play with hyperscaler lease at Delta Forge 1 ($7.5B over 15 years) and general conviction in setup amid compute demand.",
+      "accounts": []
     },
     {
       "symbol": "NBIS",
       "mentions": null,
       "sentiment": null,
-      "rationale": "Strong recovery in neocloud semis, correlating with miners/power infra; technical setup inside week.",
-      "accounts": [],
-      "backend_score": 3.542,
-      "recency_days_min": 0,
-      "bullish_account_count": 3,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "contribution": 0.96
-        },
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "contribution": 0.8
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "contribution": 0.336
-        }
-      ],
-      "catalyst_list": []
+      "rationale": "Leading contracted neocloud outside CoreWeave with massive backlogs and growth; strong setup in AI infra.",
+      "accounts": []
     },
     {
-      "symbol": "POET",
+      "symbol": "CRWV",
       "mentions": null,
       "sentiment": null,
-      "rationale": "Photonics leader with deep research validation, CFO insights, and key partnerships.",
-      "accounts": [],
-      "backend_score": 3.157,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        },
-        {
-          "handle": "Ren_aramb",
-          "category": "above_average_trader",
-          "contribution": 0.96
-        }
-      ],
-      "catalyst_list": [
-        "CFO interview",
-        "OFC 2026 update",
-        "Marvell/Celestial AI"
-      ]
+      "rationale": "Premier AI compute infrastructure with huge hyperscaler commitments; positioned strongly.",
+      "accounts": []
     },
     {
       "symbol": "IREN",
       "mentions": null,
       "sentiment": null,
-      "rationale": "Recovering strongly in power/AI infra, strong with bitcoin miners.",
-      "accounts": [],
-      "backend_score": 1.938,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "contribution": 0.96
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "contribution": 0.336
-        }
-      ],
-      "catalyst_list": []
+      "rationale": "Strong in game theory for deals, ramping key sites amid compute constraints.",
+      "accounts": []
+    },
+    {
+      "symbol": "COHU",
+      "mentions": null,
+      "sentiment": null,
+      "rationale": "Photonics earnings this week with big upside potential; building semis base.",
+      "accounts": []
+    },
+    {
+      "symbol": "NVTS",
+      "mentions": null,
+      "sentiment": null,
+      "rationale": "Building stage 1 base in semis; power semis theme for AI.",
+      "accounts": []
+    },
+    {
+      "symbol": "ASTS",
+      "mentions": null,
+      "sentiment": null,
+      "rationale": "Space theme for future wealth; FirstNet promotion.",
+      "accounts": []
     }
   ],
   "key_themes": [],
@@ -495,404 +261,296 @@
     "display_type": "briefing",
     "scan_type": "x_select_trader_consensus",
     "market_pulse": {
-      "verdict": "Cautiously Bullish \u2014 Selective Risk-On in Semis",
-      "summary": "No recent macro posts from @KobeissiLetter, but collective trader sentiment centers on agentic AI sparking a CPU supercycle and photonics breakthroughs for AI scaling. Smart money is leaning heavily into semis leaders and enablers amid tightening CPU/GPU dynamics.",
+      "verdict": "Risk-On \u2014 Selective Focus on Photonics Earnings and AI Infra",
+      "summary": "Traders are buzzing on photonics earnings plays this week and AI neocloud infrastructure with massive hyperscaler contracts amid semis base-building. No direct macro from @KobeissiLetter, but collective sentiment leans into high-conviction niche tech setups. Smart money positioning for catalysts in AI compute constraints and earnings beats.",
       "regime": "Risk-On"
     },
     "hype_radar": [
       {
-        "theme": "Agentic AI CPU Supercycle",
+        "theme": "Photonics Earnings",
         "buzz_level": "high",
         "key_tickers": [
-          "AMD",
-          "INTC",
-          "ARM",
-          "NVDA"
+          "COHU",
+          "GLW",
+          "SANM"
         ],
-        "why_hot": "Traders highlight shift to CPU orchestration for agentic inference, tightening ratios, and new TAMs driving demand spikes."
+        "why_hot": "Cluster of earnings this week positioned for significant gains in AI photonics supply chain."
       },
       {
-        "theme": "Photonics Revolution for AI",
-        "buzz_level": "high",
+        "theme": "AI Neocloud Infrastructure",
+        "buzz_level": "extreme",
         "key_tickers": [
-          "SIVE",
-          "POET",
-          "LITE",
-          "TSEM"
+          "APLD",
+          "NBIS",
+          "CRWV"
         ],
-        "why_hot": "Deep validation in CPO, lasers, and optical tech essential for hyperscaler AI connectivity, with design wins and partnerships emerging."
+        "why_hot": "Hyperscaler leases and multi-billion backlogs from MSFT/Meta/Nvidia in compute-constrained environment."
       },
       {
-        "theme": "AI Power Infrastructure",
+        "theme": "Semis Stage 1 Bases",
         "buzz_level": "moderate",
         "key_tickers": [
-          "IREN",
-          "NBIS",
-          "FLNC",
-          "EOSE"
+          "NVTS",
+          "COHU",
+          "MRVL"
         ],
-        "why_hot": "Exploding GPU power needs fueling recovery in data center power plays, batteries, and semis for AI campuses."
+        "why_hot": "Traders calling breakouts and measured moves in semis sub-themes."
+      },
+      {
+        "theme": "Space Infrastructure",
+        "buzz_level": "moderate",
+        "key_tickers": [
+          "ASTS",
+          "RKLB"
+        ],
+        "why_hot": "Emerging picks for long-term wealth in space tech narratives."
       }
     ],
     "spotlight": {
       "most_hyped": {
-        "ticker": "AMD",
-        "signal": "Top-ranked with 3 accounts citing CPU share gains, AI GPU ties, and supercycle momentum."
+        "ticker": "APLD",
+        "signal": "Cross-account buzz on hyperscaler lease and strong setup in AI data centers."
       },
       "highest_conviction": {
-        "ticker": "INTC",
-        "signal": "Strongest theses on agentic AI CPU orchestration and Xeon inflection from multiple top traders."
+        "ticker": "NBIS",
+        "signal": "Detailed thesis on $46B MSFT/Meta backlog, Nvidia investment, 547% growth to $7-9B ARR."
       },
       "freshest_alpha": {
-        "ticker": "TRT",
-        "signal": "Microcap burn-in tester just entering chatter with AI GPU order ramps and 3x potential."
+        "ticker": "CRWV",
+        "signal": "New mentions as gold standard AI compute with $10B+ MSFT/Applied Digital commitments."
       },
       "contrarian_pick": {
-        "ticker": "FTC",
-        "signal": "SpaceX-critical undervalued play from sharp accounts amid semis dominance."
+        "ticker": "KEEL",
+        "signal": "Asymmetric low-valuation play with 2.2GW secured power pipeline vs pricier peers."
       }
     },
     "consensus_picks": [
       {
         "rank": 1,
-        "ticker": "AMD",
-        "name": "Advanced Micro Devices, Inc.",
-        "tradingview_symbol": "NASDAQ:AMD",
-        "hype_score": 95,
-        "trader_count": 3,
-        "consensus_strength": "Very High",
+        "ticker": "APLD",
+        "name": "Applied Digital Corporation",
+        "tradingview_symbol": "NASDAQ:APLD",
+        "hype_score": 85,
+        "trader_count": 2,
+        "consensus_strength": "High",
         "buzz_trend": "Accelerating",
-        "thesis": "AMD positioned for CPU supercycle from agentic AI with market share gains, higher ASPs, and burn-in demand for GPUs; potential client ties to microcaps like TRT add alpha. Traders see sustained AI demand driving outperformance.",
+        "thesis": "Strong AI data center play with hyperscaler lease at Delta Forge 1 ($7.5B over 15 years) and general conviction in setup amid compute demand.",
         "catalysts": [
-          "Agentic AI demand spikes",
-          "Market share gains",
-          "Higher ASPs",
-          "AI GPU burn-in"
+          "hyperscaler lease",
+          "$7.5B contract"
         ],
-        "risk": "GPU exposure concerns",
-        "is_fresh_trade": false,
-        "fresh_trade_note": null,
+        "risk": "Execution on ramp-up",
+        "is_fresh_trade": true,
+        "fresh_trade_note": "Recent hyperscaler pact highlights new entry in neocloud rush.",
         "trader_theses": [
           {
-            "account": "@yianisz",
-            "thesis": "CPU supercycle, taking share, higher ASPs, burn-in for GPUs"
+            "account": "@ConnorJBates_",
+            "thesis": "In lease pact with hyperscaler at Delta Forge 1, $7.5B contracted value over 15 years"
           },
           {
-            "account": "@crux_capital_",
-            "thesis": "Market share gainer in CPUs but GPU exposure a concern"
-          },
-          {
-            "account": "@JonkooTrades",
-            "thesis": "Potential TRT client with Malaysia GPU hub"
+            "account": "@CKCapitalxx",
+            "thesis": "Likes APLD a lot."
           }
         ]
       },
       {
         "rank": 2,
-        "ticker": "INTC",
-        "name": "Intel Corporation",
-        "tradingview_symbol": "NASDAQ:INTC",
+        "ticker": "NBIS",
+        "name": "Nebius Group",
+        "tradingview_symbol": "NASDAQ:NBIS",
         "hype_score": 92,
-        "trader_count": 3,
-        "consensus_strength": "Very High",
-        "buzz_trend": "Accelerating",
-        "thesis": "INTC leading CPU resurgence for agentic AI orchestration amid tightening CPU-to-GPU ratios and server reallocation; historic recovery signals strength. Key play in inference demand inflection.",
+        "trader_count": 2,
+        "consensus_strength": "High",
+        "buzz_trend": "New Mention",
+        "thesis": "Leading contracted neocloud outside CoreWeave with massive backlogs and growth; strong setup in AI infra.",
         "catalysts": [
-          "Agentic AI CPU orchestration",
-          "Xeon demand inflection",
-          "Capacity to servers",
-          "Historic highs recovery"
+          "$46B MSFT/Meta backlog",
+          "Nvidia $2B invested"
         ],
-        "risk": "",
-        "is_fresh_trade": false,
-        "fresh_trade_note": null,
+        "risk": null,
+        "is_fresh_trade": true,
+        "fresh_trade_note": "Fresh spotlight on explosive guidance and contracts as new alpha.",
         "trader_theses": [
           {
-            "account": "@yianisz",
-            "thesis": "CPU supercycle from agentic AI needing CPU orchestration"
-          },
-          {
-            "account": "@crux_capital_",
-            "thesis": "Strong CPU play amid tightening CPU-to-GPU ratios and agentic inference demand"
-          },
-          {
             "account": "@ConnorJBates_",
-            "thesis": "Historic recovery above 2000 highs"
+            "thesis": "Looking strong"
+          },
+          {
+            "account": "@CKCapitalxx",
+            "thesis": "Most contracted neocloud outside CoreWeave; $46B backlog from MSFT/Meta, Nvidia $2B invested, 547% revenue growth, guiding $7-9B ARR."
           }
         ]
       },
       {
         "rank": 3,
-        "ticker": "ARM",
-        "name": "Arm Holdings plc",
-        "tradingview_symbol": "NASDAQ:ARM",
-        "hype_score": 90,
-        "trader_count": 3,
-        "consensus_strength": "Very High",
-        "buzz_trend": "Accelerating",
-        "thesis": "ARM as IP royalty winner in hyperscaler custom silicon and CPU shift for AGI; new TAM from resurgence. Riding semis momentum.",
+        "ticker": "CRWV",
+        "name": "CRWV Corp",
+        "tradingview_symbol": "NASDAQ:CRWV",
+        "hype_score": 88,
+        "trader_count": 2,
+        "consensus_strength": "High",
+        "buzz_trend": "New Mention",
+        "thesis": "Premier AI compute infrastructure with huge hyperscaler commitments; positioned strongly.",
         "catalysts": [
-          "Hyperscaler custom silicon",
-          "CPU resurgence for AGI",
-          "New TAM"
+          "MSFT $10B committed",
+          "$11B from Applied Digital"
         ],
-        "risk": "",
-        "is_fresh_trade": false,
-        "fresh_trade_note": null,
+        "risk": null,
+        "is_fresh_trade": true,
+        "fresh_trade_note": "Emerging as top-tier play with recent contract details.",
         "trader_theses": [
           {
-            "account": "@yianisz",
-            "thesis": "CPU resurgence for AGI, new TAM"
-          },
-          {
-            "account": "@crux_capital_",
-            "thesis": "Key IP royalty play for hyperscaler custom silicon and CPU shift"
-          },
-          {
             "account": "@ConnorJBates_",
-            "thesis": "Overbought with SOXX"
+            "thesis": "Looking strong"
+          },
+          {
+            "account": "@CKCapitalxx",
+            "thesis": "Gold standard AI compute infrastructure; MSFT $10B committed, $11B from Applied Digital."
           }
         ]
       },
       {
         "rank": 4,
-        "ticker": "SIVE",
-        "name": "SIVE Technologies Inc.",
-        "tradingview_symbol": "NASDAQ:SIVE",
-        "hype_score": 85,
+        "ticker": "IREN",
+        "name": "Iris Energy Limited",
+        "tradingview_symbol": "NASDAQ:IREN",
+        "hype_score": 78,
         "trader_count": 2,
-        "consensus_strength": "High",
-        "buzz_trend": "Accelerating",
-        "thesis": "Small cap with lasers designed into AAPL/MRVL/JBL and satellite antennas/CPO for hyperscalers/LEO; SpaceX listing potential. High asymmetry despite size.",
+        "consensus_strength": "Moderate",
+        "buzz_trend": "Steady",
+        "thesis": "Strong in game theory for deals, ramping key sites amid compute constraints.",
         "catalysts": [
-          "Design wins AAPL/MRVL/JBL",
-          "SpaceX/LEO capex",
-          "POET/Ayar/Jabil partnerships"
+          "Sweetwater & Childress ramp-up",
+          "Compute constraint environment"
         ],
-        "risk": "Small cap volatility",
-        "is_fresh_trade": true,
-        "fresh_trade_note": "Recent buzz on design wins and hyperscaler CPO positioning it as fresh early entry.",
+        "risk": "Deal timing delays",
+        "is_fresh_trade": false,
+        "fresh_trade_note": null,
         "trader_theses": [
           {
-            "account": "@aleabitoreddit",
-            "thesis": "Lasers designed into AAPL, MRVL, JBL despite being small"
+            "account": "@ConnorJBates_",
+            "thesis": "Looking strong"
           },
           {
-            "account": "@Ren_aramb",
-            "thesis": "Satellite antennas and CPO for hyperscalers"
+            "account": "@AlexfromBabylon",
+            "thesis": "Management key in game theory for best deal; delays useful but expect signing by H1 2026 to avoid time value destruction."
           }
         ]
       },
       {
         "rank": 5,
-        "ticker": "NVDA",
-        "name": "NVIDIA Corporation",
-        "tradingview_symbol": "NASDAQ:NVDA",
-        "hype_score": 84,
-        "trader_count": 2,
-        "consensus_strength": "High",
-        "buzz_trend": "Accelerating",
-        "thesis": "GPU leader integral to CPU supercycle shift and DC transformation with 800VDC power/BESS needs. Vera Rubin roadmap fuels long-term.",
-        "catalysts": [
-          "CPU supercycle shift",
-          "800VDC power for DCs",
-          "Vera Rubin 2027"
-        ],
-        "risk": "",
-        "is_fresh_trade": false,
-        "fresh_trade_note": null,
-        "trader_theses": [
-          {
-            "account": "@yianisz",
-            "thesis": "Part of CPU supercycle shift"
-          },
-          {
-            "account": "@ThematicTrader",
-            "thesis": "Transforming DCs with 800VDC power requiring BESS integration"
-          }
-        ]
-      },
-      {
-        "rank": 6,
-        "ticker": "TRT",
-        "name": "Trio-Tech International",
-        "tradingview_symbol": "NYSE:TRT",
-        "hype_score": 84,
-        "trader_count": 2,
-        "consensus_strength": "High",
-        "buzz_trend": "New Mention",
-        "thesis": "Undervalued microcap with revenue/cash positioned for AI GPU burn-in ramp; mystery client likely AMD, potential 3x on cycle recovery/margins.",
-        "catalysts": [
-          "AI GPU burn-in demand",
-          "$5.3M order",
-          "Malaysia AI lab",
-          "Margin expansion"
-        ],
-        "risk": "",
-        "is_fresh_trade": true,
-        "fresh_trade_note": "Freshly highlighted with specific AI GPU order and client speculation for early entry.",
-        "trader_theses": [
-          {
-            "account": "@yianisz",
-            "thesis": "Undervalued microcap with revenue, cash, AI GPU burn-in demand, potential 3x"
-          },
-          {
-            "account": "@JonkooTrades",
-            "thesis": "Mystery AI GPU client likely AMD, burn-in testing ramp"
-          }
-        ]
-      },
-      {
-        "rank": 7,
-        "ticker": "FTC",
-        "name": "Filtronic plc",
-        "tradingview_symbol": "LON:FTC",
+        "ticker": "COHU",
+        "name": "Cohu, Inc.",
+        "tradingview_symbol": "NASDAQ:COHU",
         "hype_score": 82,
         "trader_count": 2,
-        "consensus_strength": "High",
+        "consensus_strength": "Moderate",
         "buzz_trend": "Accelerating",
-        "thesis": "Undervalued critical supplier for SpaceX; interesting research candidate in space/semis chain.",
+        "thesis": "Photonics earnings this week with big upside potential; building semis base.",
         "catalysts": [
-          "SpaceX supply chain"
+          "earnings"
         ],
-        "risk": "",
-        "is_fresh_trade": true,
-        "fresh_trade_note": "Emerging as SpaceX key play with high conviction from top traders.",
-        "trader_theses": [
-          {
-            "account": "@PepInvestStocks",
-            "thesis": "Great undervalued stock important for SpaceX"
-          },
-          {
-            "account": "@Kaizen_Investor",
-            "thesis": "Interesting stock, research on Filtronic"
-          }
-        ]
-      },
-      {
-        "rank": 8,
-        "ticker": "NBIS",
-        "name": "Nebius Group",
-        "tradingview_symbol": "NASDAQ:NBIS",
-        "hype_score": 88,
-        "trader_count": 3,
-        "consensus_strength": "Very High",
-        "buzz_trend": "Steady",
-        "thesis": "Strong recovery in neocloud semis, correlating with miners/power infra; technical setup inside week.",
-        "catalysts": [
-          "Neocloud semis recovery"
-        ],
-        "risk": "",
-        "is_fresh_trade": false,
-        "fresh_trade_note": null,
-        "trader_theses": [
-          {
-            "account": "@HyperTechInvest",
-            "thesis": "Strong recovery in neocloud semis"
-          },
-          {
-            "account": "@ThematicTrader",
-            "thesis": "Inside week on declining volume"
-          },
-          {
-            "account": "@ConnorJBates_",
-            "thesis": "Strong with miners"
-          }
-        ]
-      },
-      {
-        "rank": 9,
-        "ticker": "POET",
-        "name": "POET Technologies Inc.",
-        "tradingview_symbol": "TSXV:POET",
-        "hype_score": 80,
-        "trader_count": 2,
-        "consensus_strength": "High",
-        "buzz_trend": "Accelerating",
-        "thesis": "Photonics leader with deep research validation, CFO insights, and key partnerships.",
-        "catalysts": [
-          "CFO interview",
-          "OFC 2026 update",
-          "Marvell/Celestial AI"
-        ],
-        "risk": "",
+        "risk": "Earnings miss",
         "is_fresh_trade": false,
         "fresh_trade_note": null,
         "trader_theses": [
           {
             "account": "@crux_capital_",
-            "thesis": "Photonics leader with deep research validation"
+            "thesis": "Photonics earnings this week with potential for significant gains"
           },
           {
-            "account": "@Ren_aramb",
-            "thesis": "Photonics validation"
+            "account": "@Venu_7_",
+            "thesis": "Building stage 1 base in semis sub-theme"
           }
         ]
       },
       {
-        "rank": 10,
-        "ticker": "IREN",
-        "name": "Iris Energy Ltd",
-        "tradingview_symbol": "NASDAQ:IREN",
-        "hype_score": 78,
+        "rank": 6,
+        "ticker": "NVTS",
+        "name": "Navitas Semiconductor Corporation",
+        "tradingview_symbol": "NASDAQ:NVTS",
+        "hype_score": 75,
         "trader_count": 2,
-        "consensus_strength": "High",
+        "consensus_strength": "Emerging",
         "buzz_trend": "Steady",
-        "thesis": "Recovering strongly in power/AI infra, strong with bitcoin miners.",
-        "catalysts": [
-          "Power/AI infra recovery"
-        ],
-        "risk": "",
+        "thesis": "Building stage 1 base in semis; power semis theme for AI.",
+        "catalysts": [],
+        "risk": null,
         "is_fresh_trade": false,
         "fresh_trade_note": null,
         "trader_theses": [
           {
-            "account": "@HyperTechInvest",
-            "thesis": "Recovering nicely in power/AI infra"
+            "account": "@Venu_7_",
+            "thesis": "Building stage 1 base in semis sub-theme"
           },
           {
-            "account": "@ConnorJBates_",
-            "thesis": "Strong with bitcoin miners"
+            "account": "@futurist_lens",
+            "thesis": "Power semis theme"
+          }
+        ]
+      },
+      {
+        "rank": 7,
+        "ticker": "ASTS",
+        "name": "AST SpaceMobile, Inc.",
+        "tradingview_symbol": "NASDAQ:ASTS",
+        "hype_score": 70,
+        "trader_count": 2,
+        "consensus_strength": "Emerging",
+        "buzz_trend": "New Mention",
+        "thesis": "Space theme for future wealth; FirstNet promotion.",
+        "catalysts": [],
+        "risk": null,
+        "is_fresh_trade": false,
+        "fresh_trade_note": null,
+        "trader_theses": [
+          {
+            "account": "@futurist_lens",
+            "thesis": "Space theme for future wealth"
+          },
+          {
+            "account": "@AlexfromBabylon",
+            "thesis": "FirstNet promotion of the Bluebird network."
           }
         ]
       }
     ],
     "fresh_trades": [
       {
-        "ticker": "SIVE",
-        "name": "SIVE Technologies Inc.",
-        "tradingview_symbol": "NASDAQ:SIVE",
+        "ticker": "APLD",
+        "name": "Applied Digital Corporation",
+        "tradingview_symbol": "NASDAQ:APLD",
         "first_mentioned_by": [
-          "@aleabitoreddit",
-          "@Ren_aramb"
+          "@CKCapitalxx",
+          "@ConnorJBates_"
         ],
-        "why_fresh": "Just entering trader conversation with recent design wins and hyperscaler CPO buzz.",
-        "entry_thesis": "Lasers in big tech products and sat antenna potential offer high-conviction asymmetry for early positioning."
+        "why_fresh": "Just entering trader convos with new hyperscaler lease details.",
+        "entry_thesis": "Hyperscaler pact at Delta Forge signals early positioning in AI infra boom."
       },
       {
-        "ticker": "TRT",
-        "name": "Trio-Tech International",
-        "tradingview_symbol": "NYSE:TRT",
+        "ticker": "NBIS",
+        "name": "Nebius Group",
+        "tradingview_symbol": "NASDAQ:NBIS",
         "first_mentioned_by": [
-          "@yianisz",
-          "@JonkooTrades"
+          "@CKCapitalxx",
+          "@ConnorJBates_"
         ],
-        "why_fresh": "Newly surfaced microcap in AI GPU burn-in with specific order details.",
-        "entry_thesis": "Revenue-backed with cash, ramping AI demand and 3x upside before broader awareness."
+        "why_fresh": "New name surfacing with standout contract backlog thesis.",
+        "entry_thesis": "Most contracted neocloud with hypergrowth guidance offers prime entry."
       },
       {
-        "ticker": "FTC",
-        "name": "Filtronic plc",
-        "tradingview_symbol": "LON:FTC",
+        "ticker": "CRWV",
+        "name": "CRWV Corp",
+        "tradingview_symbol": "NASDAQ:CRWV",
         "first_mentioned_by": [
-          "@PepInvestStocks",
-          "@Kaizen_Investor"
+          "@CKCapitalxx",
+          "@ConnorJBates_"
         ],
-        "why_fresh": "Emerging SpaceX supply chain mention amid space/semis focus.",
-        "entry_thesis": "Undervalued critical component for major capex like SpaceX, high conviction setup."
+        "why_fresh": "Freshly highlighted as top AI compute play.",
+        "entry_thesis": "Massive MSFT commitments position it ahead of crowd."
       }
     ],
-    "portfolio_bias": "Overweight CPU semis (AMD, INTC, ARM) for agentic AI supercycle per 3+ account consensus; add photonics (SIVE, POET) and power (NBIS, IREN) for AI infra buildout as highlighted in recent top trader posts.",
+    "portfolio_bias": "Overweight photonics earners like COHU ahead of this week catalysts and AI neocloud trio APLD/NBIS/CRWV on hyperscaler backlogs; trail semis like NVTS on base breaks. Evidence from multiple high-conviction calls on contracts/earnings.",
     "accounts_analyzed": [
       "@aleabitoreddit",
       "@KobeissiLetter",
@@ -921,1585 +579,8 @@
       "@UncleAlpha007"
     ]
   },
-  "_backend_ranked": [
-    {
-      "ticker": "AMD",
-      "backend_score": 6.003,
-      "raw_score": 3.552,
-      "breadth_score": 1.3,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 3,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "JonkooTrades",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        },
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "contribution": 0.96
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "CPU supercycle, taking share, higher ASPs, burn-in for GPUs"
-        },
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Market share gainer in CPUs but GPU exposure a concern"
-        },
-        {
-          "handle": "JonkooTrades",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Potential TRT client with Malaysia GPU hub"
-        }
-      ],
-      "catalyst_list": [
-        "agentic AI",
-        "20-30% spikes",
-        "AI GPU demand",
-        "Data center revenue growth",
-        "AI engineering lab",
-        "Advanced packaging"
-      ]
-    },
-    {
-      "ticker": "INTC",
-      "backend_score": 5.09,
-      "raw_score": 3.012,
-      "breadth_score": 1.3,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 3,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "contribution": 0.42
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "CPU supercycle from agentic AI needing CPU orchestration"
-        },
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Strong CPU play amid tightening CPU-to-GPU ratios and agentic inference demand"
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "tier_weight": 0.35,
-          "text": "Historic recovery above 2000 highs"
-        }
-      ],
-      "catalyst_list": [
-        "agentic AI",
-        "20-30% demand spikes",
-        "Xeon demand inflection",
-        "Capacity reallocation to servers"
-      ]
-    },
-    {
-      "ticker": "ARM",
-      "backend_score": 4.948,
-      "raw_score": 2.928,
-      "breadth_score": 1.3,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 3,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "contribution": 0.336
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "CPU resurgence for AGI, new TAM"
-        },
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Key IP royalty play for hyperscaler custom silicon and CPU shift"
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "tier_weight": 0.35,
-          "text": "Overbought with SOXX"
-        }
-      ],
-      "catalyst_list": [
-        "agentic AI",
-        "Hyperscaler adoption"
-      ]
-    },
-    {
-      "ticker": "SIVE",
-      "backend_score": 3.875,
-      "raw_score": 2.592,
-      "breadth_score": 1.15,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "Ren_aramb",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Lasers designed into AAPL, MRVL, JBL despite being small"
-        },
-        {
-          "handle": "Ren_aramb",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Satellite antennas and CPO for hyperscalers"
-        }
-      ],
-      "catalyst_list": [
-        "design wins with sector leaders",
-        "SpaceX listing",
-        "LEO capex",
-        "POET/Ayar/Jabil partnerships"
-      ]
-    },
-    {
-      "ticker": "NVDA",
-      "backend_score": 3.875,
-      "raw_score": 2.592,
-      "breadth_score": 1.15,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Part of CPU supercycle shift"
-        },
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Transforming DCs with 800VDC power requiring BESS integration"
-        }
-      ],
-      "catalyst_list": [
-        "agentic AI",
-        "Vera Rubin roadmap 2027"
-      ]
-    },
-    {
-      "ticker": "TRT",
-      "backend_score": 3.875,
-      "raw_score": 2.592,
-      "breadth_score": 1.15,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "JonkooTrades",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Undervalued microcap with revenue, cash, AI GPU burn-in demand, potential 3x"
-        },
-        {
-          "handle": "JonkooTrades",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Mystery AI GPU client likely AMD, burn-in testing ramp"
-        }
-      ],
-      "catalyst_list": [
-        "cycle recovery",
-        "AI demand",
-        "margin expansion",
-        "$5.3M AI GPU order",
-        "Malaysia AI lab"
-      ]
-    },
-    {
-      "ticker": "FTC",
-      "backend_score": 3.648,
-      "raw_score": 2.44,
-      "breadth_score": 1.15,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "PepInvestStocks",
-          "category": "top_trader",
-          "contribution": 1.44
-        },
-        {
-          "handle": "Kaizen_Investor",
-          "category": "top_trader",
-          "contribution": 1.0
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "PepInvestStocks",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Great undervalued stock important for SpaceX"
-        },
-        {
-          "handle": "Kaizen_Investor",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Interesting stock, research on Filtronic"
-        }
-      ],
-      "catalyst_list": [
-        "SpaceX supply"
-      ]
-    },
-    {
-      "ticker": "NBIS",
-      "backend_score": 3.542,
-      "raw_score": 2.096,
-      "breadth_score": 1.3,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 3,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "contribution": 0.96
-        },
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "contribution": 0.8
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "contribution": 0.336
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Strong recovery in neocloud semis"
-        },
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Inside week on declining volume"
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "tier_weight": 0.35,
-          "text": "Strong with miners"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "POET",
-      "backend_score": 3.157,
-      "raw_score": 2.112,
-      "breadth_score": 1.15,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        },
-        {
-          "handle": "Ren_aramb",
-          "category": "above_average_trader",
-          "contribution": 0.96
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "crux_capital_",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Photonics leader with deep research validation"
-        },
-        {
-          "handle": "Ren_aramb",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Photonics validation"
-        }
-      ],
-      "catalyst_list": [
-        "CFO interview",
-        "OFC 2026 update",
-        "Marvell/Celestial AI"
-      ]
-    },
-    {
-      "ticker": "IREN",
-      "backend_score": 1.938,
-      "raw_score": 1.296,
-      "breadth_score": 1.15,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 2,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "contribution": 0.96
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "contribution": 0.336
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Recovering nicely in power/AI infra"
-        },
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "tier_weight": 0.35,
-          "text": "Strong with bitcoin miners"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "CRM",
-      "backend_score": 1.872,
-      "raw_score": 1.44,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "UncleAlpha007",
-          "category": "top_trader",
-          "contribution": 1.44
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "UncleAlpha007",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Easy double in 3 years from buybacks and FCF growth"
-        }
-      ],
-      "catalyst_list": [
-        "$50B buybacks",
-        "6% FCF growth"
-      ]
-    },
-    {
-      "ticker": "RKLB",
-      "backend_score": 1.56,
-      "raw_score": 1.2,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "contribution": 1.2
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Long position due to reusable rocket success rate despite analysts claiming crash"
-        }
-      ],
-      "catalyst_list": [
-        "reusable rocket success"
-      ]
-    },
-    {
-      "ticker": "HOOD",
-      "backend_score": 1.56,
-      "raw_score": 1.2,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "contribution": 1.2
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Long position due to massive consumer base and TAM expansion"
-        }
-      ],
-      "catalyst_list": [
-        "consumer base",
-        "TAM expansion"
-      ]
-    },
-    {
-      "ticker": "BER",
-      "backend_score": 1.56,
-      "raw_score": 1.2,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "Mike10947310",
-          "category": "top_trader",
-          "contribution": 1.2
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "Mike10947310",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Positive momentum in photonics/MicroLEDs context"
-        }
-      ],
-      "catalyst_list": [
-        "MicroLED adoption"
-      ]
-    },
-    {
-      "ticker": "CGEH",
-      "backend_score": 1.56,
-      "raw_score": 1.2,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 1,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "Mike10947310",
-          "category": "top_trader",
-          "contribution": 1.2
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "Mike10947310",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Good asymmetry with 2-3x potential, core business fine"
-        }
-      ],
-      "catalyst_list": [
-        "optionality"
-      ]
-    },
-    {
-      "ticker": "FLNC",
-      "backend_score": 1.498,
-      "raw_score": 1.152,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "High-speed lithium-ion for GPU power shaving"
-        }
-      ],
-      "catalyst_list": [
-        "$3.4B order backlog"
-      ]
-    },
-    {
-      "ticker": "EOSE",
-      "backend_score": 1.498,
-      "raw_score": 1.152,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Long-duration zinc for dense AI campuses, non-flammable"
-        }
-      ],
-      "catalyst_list": [
-        "Q1 results in-line"
-      ]
-    },
-    {
-      "ticker": "SHMD",
-      "backend_score": 1.498,
-      "raw_score": 1.152,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 1,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "contribution": 1.152
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "ThematicTrader",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "SpaceX 700mm substrates and Intel glass cores partner"
-        }
-      ],
-      "catalyst_list": [
-        "March order",
-        "Terafab project"
-      ]
-    },
-    {
-      "ticker": "VIVO",
-      "backend_score": 1.3,
-      "raw_score": 1.0,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "PepInvestStocks",
-          "category": "top_trader",
-          "contribution": 1.0
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "PepInvestStocks",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Positive response to position addition and chart"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "INFQ",
-      "backend_score": 1.3,
-      "raw_score": 1.0,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 1,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "contribution": 1.0
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "yianisz",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Setting up for next breakout"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "P4O.DE",
-      "backend_score": 1.3,
-      "raw_score": 1.0,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "UncleAlpha007",
-          "category": "top_trader",
-          "contribution": 1.0
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "UncleAlpha007",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Surprised not rerated more, undervalued"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "BE",
-      "backend_score": 1.3,
-      "raw_score": 1.0,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 1,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "Mike10947310",
-          "category": "top_trader",
-          "contribution": 1.0
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "Mike10947310",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Achieved 24x from lows"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "TSEM",
-      "backend_score": 1.248,
-      "raw_score": 0.96,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "contribution": 0.96
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Photonics analog to TSMC"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "LITE",
-      "backend_score": 1.248,
-      "raw_score": 0.96,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "contribution": 0.96
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Photonics analog to NVDA"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "SVAC",
-      "backend_score": 1.04,
-      "raw_score": 0.8,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "contribution": 0.8
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "HyperTechInvest",
-          "category": "above_average_trader",
-          "tier_weight": 0.8,
-          "text": "Undervalued nuclear fusion play ignored by market"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "AAPL",
-      "backend_score": 0.91,
-      "raw_score": 0.7,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "contribution": 0.7
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Potential customer for SIVE lasers"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "MRVL",
-      "backend_score": 0.91,
-      "raw_score": 0.7,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "contribution": 0.7
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Potential customer for SIVE lasers"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "JBL",
-      "backend_score": 0.91,
-      "raw_score": 0.7,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 0,
-      "bullish_account_count": 1,
-      "has_top_conviction": true,
-      "top_accounts": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "contribution": 0.7
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "aleabitoreddit",
-          "category": "top_trader",
-          "tier_weight": 1.0,
-          "text": "Potential customer for SIVE lasers"
-        }
-      ],
-      "catalyst_list": []
-    },
-    {
-      "ticker": "SOXX",
-      "backend_score": 0.524,
-      "raw_score": 0.403,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 2,
-      "bullish_account_count": 1,
-      "has_top_conviction": false,
-      "top_accounts": [
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "contribution": 0.403
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "tier_weight": 0.35,
-          "text": "Historic overbought semis run"
-        }
-      ],
-      "catalyst_list": [
-        "16 days gains"
-      ]
-    },
-    {
-      "ticker": "APLD",
-      "backend_score": 0.524,
-      "raw_score": 0.403,
-      "breadth_score": 1.0,
-      "freshness_score": 1.3,
-      "recency_days_min": 2,
-      "bullish_account_count": 1,
-      "has_top_conviction": false,
-      "top_accounts": [
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "contribution": 0.403
-        }
-      ],
-      "thesis_fragments": [
-        {
-          "handle": "ConnorJBates_",
-          "category": "retail_trader",
-          "tier_weight": 0.35,
-          "text": "$7.5B hyperscaler lease"
-        }
-      ],
-      "catalyst_list": [
-        "Delta Forge 1 pact"
-      ]
-    }
-  ],
-  "_backend_parse_count": 16,
-  "_mention_data": [
-    {
-      "handle": "aleabitoreddit",
-      "category": "top_trader",
-      "weight": 1.0,
-      "mentions": [
-        {
-          "ticker": "$RKLB",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "medium",
-          "thesis": "Long position due to reusable rocket success rate despite analysts claiming crash",
-          "catalysts": [
-            "reusable rocket success"
-          ]
-        },
-        {
-          "ticker": "$HOOD",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "medium",
-          "thesis": "Long position due to massive consumer base and TAM expansion",
-          "catalysts": [
-            "consumer base",
-            "TAM expansion"
-          ]
-        },
-        {
-          "ticker": "$SIVE",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Lasers designed into AAPL, MRVL, JBL despite being small",
-          "catalysts": [
-            "design wins with sector leaders"
-          ]
-        },
-        {
-          "ticker": "$AAPL",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "low",
-          "thesis": "Potential customer for SIVE lasers",
-          "catalysts": []
-        },
-        {
-          "ticker": "$MRVL",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "low",
-          "thesis": "Potential customer for SIVE lasers",
-          "catalysts": []
-        },
-        {
-          "ticker": "$JBL",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "low",
-          "thesis": "Potential customer for SIVE lasers",
-          "catalysts": []
-        },
-        {
-          "ticker": "$ATOMERA",
-          "sentiment": "bearish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "No-revenue R&D partnership with dilution risk",
-          "catalysts": [
-            "massive dilution vote",
-            "Synopsys collab"
-          ]
-        },
-        {
-          "ticker": "$LWLG",
-          "sentiment": "neutral",
-          "recency_days": 0,
-          "conviction": "low",
-          "thesis": "Comparison to no-revenue R&D partnership",
-          "catalysts": []
-        },
-        {
-          "ticker": "$TSEM",
-          "sentiment": "neutral",
-          "recency_days": 0,
-          "conviction": "low",
-          "thesis": "Comparison to no-revenue R&D partnership",
-          "catalysts": []
-        }
-      ]
-    },
-    {
-      "handle": "PepInvestStocks",
-      "category": "top_trader",
-      "weight": 1.0,
-      "mentions": [
-        {
-          "ticker": "$VIVO",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "medium",
-          "thesis": "Positive response to position addition and chart",
-          "catalysts": []
-        },
-        {
-          "ticker": "$FTC",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Great undervalued stock important for SpaceX",
-          "catalysts": [
-            "SpaceX supply"
-          ]
-        }
-      ]
-    },
-    {
-      "handle": "Kaizen_Investor",
-      "category": "top_trader",
-      "weight": 1.0,
-      "mentions": [
-        {
-          "ticker": "$ASTS",
-          "sentiment": "neutral",
-          "recency_days": 0,
-          "conviction": "low",
-          "thesis": "Major customer for discussed company",
-          "catalysts": []
-        },
-        {
-          "ticker": "$FTC",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "medium",
-          "thesis": "Interesting stock, research on Filtronic",
-          "catalysts": []
-        }
-      ]
-    },
-    {
-      "handle": "yianisz",
-      "category": "top_trader",
-      "weight": 1.0,
-      "mentions": [
-        {
-          "ticker": "$INFQ",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "medium",
-          "thesis": "Setting up for next breakout",
-          "catalysts": []
-        },
-        {
-          "ticker": "$INTC",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "high",
-          "thesis": "CPU supercycle from agentic AI needing CPU orchestration",
-          "catalysts": [
-            "agentic AI",
-            "20-30% demand spikes"
-          ]
-        },
-        {
-          "ticker": "$AMD",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "high",
-          "thesis": "CPU supercycle, taking share, higher ASPs, burn-in for GPUs",
-          "catalysts": [
-            "agentic AI",
-            "20-30% spikes",
-            "AI GPU demand"
-          ]
-        },
-        {
-          "ticker": "$ARM",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "high",
-          "thesis": "CPU resurgence for AGI, new TAM",
-          "catalysts": [
-            "agentic AI"
-          ]
-        },
-        {
-          "ticker": "$NVDA",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "high",
-          "thesis": "Part of CPU supercycle shift",
-          "catalysts": [
-            "agentic AI"
-          ]
-        },
-        {
-          "ticker": "$TRT",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "high",
-          "thesis": "Undervalued microcap with revenue, cash, AI GPU burn-in demand, potential 3x",
-          "catalysts": [
-            "cycle recovery",
-            "AI demand",
-            "margin expansion"
-          ]
-        }
-      ]
-    },
-    {
-      "handle": "UncleAlpha007",
-      "category": "top_trader",
-      "weight": 1.0,
-      "mentions": [
-        {
-          "ticker": "$WMT",
-          "sentiment": "neutral",
-          "recency_days": 0,
-          "conviction": "low",
-          "thesis": "Trades at 40+ PE",
-          "catalysts": []
-        },
-        {
-          "ticker": "$CRM",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Easy double in 3 years from buybacks and FCF growth",
-          "catalysts": [
-            "$50B buybacks",
-            "6% FCF growth"
-          ]
-        },
-        {
-          "ticker": "$P4O.DE",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "medium",
-          "thesis": "Surprised not rerated more, undervalued",
-          "catalysts": []
-        }
-      ]
-    },
-    {
-      "handle": "Mike10947310",
-      "category": "top_trader",
-      "weight": 1.0,
-      "mentions": [
-        {
-          "ticker": "$BER",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "medium",
-          "thesis": "Positive momentum in photonics/MicroLEDs context",
-          "catalysts": [
-            "MicroLED adoption"
-          ]
-        },
-        {
-          "ticker": "$BE",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "medium",
-          "thesis": "Achieved 24x from lows",
-          "catalysts": []
-        },
-        {
-          "ticker": "$CGEH",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "medium",
-          "thesis": "Good asymmetry with 2-3x potential, core business fine",
-          "catalysts": [
-            "optionality"
-          ]
-        }
-      ]
-    },
-    {
-      "handle": "crux_capital_",
-      "category": "above_average_trader",
-      "weight": 0.8,
-      "mentions": [
-        {
-          "ticker": "$INTC",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Strong CPU play amid tightening CPU-to-GPU ratios and agentic inference demand",
-          "catalysts": [
-            "Xeon demand inflection",
-            "Capacity reallocation to servers"
-          ]
-        },
-        {
-          "ticker": "$ARM",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Key IP royalty play for hyperscaler custom silicon and CPU shift",
-          "catalysts": [
-            "Hyperscaler adoption"
-          ]
-        },
-        {
-          "ticker": "$AMD",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "medium",
-          "thesis": "Market share gainer in CPUs but GPU exposure a concern",
-          "catalysts": [
-            "Data center revenue growth"
-          ]
-        },
-        {
-          "ticker": "$POET",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Photonics leader with deep research validation",
-          "catalysts": [
-            "CFO interview",
-            "OFC 2026 update",
-            "Marvell/Celestial AI"
-          ]
-        }
-      ]
-    },
-    {
-      "handle": "HyperTechInvest",
-      "category": "above_average_trader",
-      "weight": 0.8,
-      "mentions": [
-        {
-          "ticker": "$SVAC",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "medium",
-          "thesis": "Undervalued nuclear fusion play ignored by market",
-          "catalysts": []
-        },
-        {
-          "ticker": "$NBIS",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Strong recovery in neocloud semis",
-          "catalysts": []
-        },
-        {
-          "ticker": "$IREN",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Recovering nicely in power/AI infra",
-          "catalysts": []
-        },
-        {
-          "ticker": "$TSEM",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Photonics analog to TSMC",
-          "catalysts": []
-        },
-        {
-          "ticker": "$LITE",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Photonics analog to NVDA",
-          "catalysts": []
-        }
-      ]
-    },
-    {
-      "handle": "ThematicTrader",
-      "category": "above_average_trader",
-      "weight": 0.8,
-      "mentions": [
-        {
-          "ticker": "$NVDA",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Transforming DCs with 800VDC power requiring BESS integration",
-          "catalysts": [
-            "Vera Rubin roadmap 2027"
-          ]
-        },
-        {
-          "ticker": "$FLNC",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "High-speed lithium-ion for GPU power shaving",
-          "catalysts": [
-            "$3.4B order backlog"
-          ]
-        },
-        {
-          "ticker": "$EOSE",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Long-duration zinc for dense AI campuses, non-flammable",
-          "catalysts": [
-            "Q1 results in-line"
-          ]
-        },
-        {
-          "ticker": "$SHMD",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "high",
-          "thesis": "SpaceX 700mm substrates and Intel glass cores partner",
-          "catalysts": [
-            "March order",
-            "Terafab project"
-          ]
-        },
-        {
-          "ticker": "$NBIS",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "medium",
-          "thesis": "Inside week on declining volume",
-          "catalysts": []
-        }
-      ]
-    },
-    {
-      "handle": "JonkooTrades",
-      "category": "above_average_trader",
-      "weight": 0.8,
-      "mentions": [
-        {
-          "ticker": "$TRT",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Mystery AI GPU client likely AMD, burn-in testing ramp",
-          "catalysts": [
-            "$5.3M AI GPU order",
-            "Malaysia AI lab"
-          ]
-        },
-        {
-          "ticker": "$AMD",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Potential TRT client with Malaysia GPU hub",
-          "catalysts": [
-            "AI engineering lab",
-            "Advanced packaging"
-          ]
-        },
-        {
-          "ticker": "$AEHR",
-          "sentiment": "neutral",
-          "recency_days": 0,
-          "conviction": "medium",
-          "thesis": "Comparable but different business model",
-          "catalysts": []
-        }
-      ]
-    },
-    {
-      "handle": "Ren_aramb",
-      "category": "above_average_trader",
-      "weight": 0.8,
-      "mentions": [
-        {
-          "ticker": "$SIVE",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Satellite antennas and CPO for hyperscalers",
-          "catalysts": [
-            "SpaceX listing",
-            "LEO capex",
-            "POET/Ayar/Jabil partnerships"
-          ]
-        },
-        {
-          "ticker": "$POET",
-          "sentiment": "bullish",
-          "recency_days": 0,
-          "conviction": "high",
-          "thesis": "Photonics validation",
-          "catalysts": []
-        }
-      ]
-    },
-    {
-      "handle": "ConnorJBates_",
-      "category": "retail_trader",
-      "weight": 0.35,
-      "mentions": [
-        {
-          "ticker": "$ORCL",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "medium",
-          "thesis": "Positive chart",
-          "catalysts": []
-        },
-        {
-          "ticker": "$INTC",
-          "sentiment": "bullish",
-          "recency_days": 1,
-          "conviction": "high",
-          "thesis": "Historic recovery above 2000 highs",
-          "catalysts": []
-        },
-        {
-          "ticker": "$SOXX",
-          "sentiment": "bullish",
-          "recency_days": 2,
-          "conviction": "high",
-          "thesis": "Historic overbought semis run",
-          "catalysts": [
-            "16 days gains"
-          ]
-        },
-        {
-          "ticker": "$ARM",
-          "sentiment": "bullish",
-          "recency_days": 2,
-          "conviction": "high",
-          "thesis": "Overbought with SOXX",
-          "catalysts": []
-        },
-        {
-          "ticker": "$IREN",
-          "sentiment": "bullish",
-          "recency_days": 2,
-          "conviction": "high",
-          "thesis": "Strong with bitcoin miners",
-          "catalysts": []
-        },
-        {
-          "ticker": "$NBIS",
-          "sentiment": "bullish",
-          "recency_days": 2,
-          "conviction": "high",
-          "thesis": "Strong with miners",
-          "catalysts": []
-        },
-        {
-          "ticker": "$APLD",
-          "sentiment": "bullish",
-          "recency_days": 2,
-          "conviction": "high",
-          "thesis": "$7.5B hyperscaler lease",
-          "catalysts": [
-            "Delta Forge 1 pact"
-          ]
-        }
-      ]
-    },
-    {
-      "handle": "BlackPantherCap",
-      "category": "thematic_investor",
-      "weight": 0.45,
-      "mentions": [
-        {
-          "ticker": "$IREN",
-          "sentiment": "neutral",
-          "recency_days": 0,
-          "conviction": "low",
-          "thesis": "Debate ongoing, treat as thesis not religion",
-          "catalysts": []
-        },
-        {
-          "ticker": "$NBIS",
-          "sentiment": "neutral",
-          "recency_days": 0,
-          "conviction": "low",
-          "thesis": "Debate ongoing, stay objective",
-          "catalysts": []
-        }
-      ]
-    }
-  ],
-  "_saved_at": 1777138831.5611074
+  "_backend_ranked": [],
+  "_backend_parse_count": 0,
+  "_mention_data": [],
+  "_saved_at": 1777208570.2347825
 }

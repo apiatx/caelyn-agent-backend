@@ -1,0 +1,295 @@
+We are converting the existing “Earnings” page into a broader “Catalyst Calendar” page powered primarily by my paid FMP Starter API plan.
+
+IMPORTANT GUARDRAIL:
+Do NOT break, remove, rewrite, or degrade the current Earnings page logic that already works:
+- Existing earnings data pulls
+- Existing custom logic
+- Existing popup/modal behavior when clicking an earnings stock
+- Existing stock-level earnings detail behavior
+Keep all of that intact. This task is additive.
+
+Goal:
+Add backend support for a new Catalyst Calendar data layer that exposes multiple event tabs to the frontend:
+
+Upcoming tabs:
+1. Earnings Dates
+2. Dividend Dates
+3. IPO Calendar
+4. Stock Split Calendar
+5. Economic Releases
+6. Treasury Rate Updates / Macro Events
+
+Recent tabs:
+1. Earnings Reports
+2. SEC Filings
+3. Analyst Rating Changes
+4. Insider Transactions
+
+Primary data source:
+Use FMP_API_KEY from Replit secrets as the primary source. My FMP Starter plan supports:
+- Earnings Calendar
+- Earnings Report
+- Dividends Calendar
+- IPOs Calendar
+- Stock Splits Calendar
+- Economic Data Releases Calendar
+- Treasury Rates
+- Economics Indicators
+- Latest SEC Filings / SEC filings by symbol/form
+- Ratings Snapshot / Historical Ratings / Stock Grades
+- Latest Insider Trading / Search Insider Trades
+- Company profile/reference data
+- Market cap, sector, industry where available
+
+Do not use LLM calls for this page. This should be deterministic API + normalization + filtering.
+
+Architecture requirements:
+1. Audit the current Earnings page backend implementation first.
+   - Identify existing routes/services used by the current Earnings page.
+   - Preserve those routes and response shapes unless absolutely necessary.
+   - If adding to an existing route risks breaking the current page, create new routes instead.
+
+2. Create a new Catalyst Calendar backend module/service.
+   Suggested files if they fit the repo structure:
+   - services/catalyst_calendar.py
+   - routers/catalyst_calendar.py
+   or match the existing project conventions.
+
+3. Add normalized event schema returned by all Catalyst Calendar endpoints.
+
+Each normalized event should include as many of these fields as available:
+
+{
+  "id": string,
+  "symbol": string | null,
+  "companyName": string | null,
+  "eventType": string,
+  "eventCategory": "upcoming" | "recent" | "macro",
+  "title": string,
+  "date": string,
+  "time": string | null,
+  "period": string | null,
+  "source": "fmp",
+  "sector": string | null,
+  "industry": string | null,
+  "marketCap": number | null,
+  "marketCapBucket": "mega" | "large" | "mid" | "small" | "micro" | "unknown",
+  "importance": "high" | "medium" | "low",
+  "raw": object,
+
+  // earnings-specific
+  "epsEstimated": number | null,
+  "epsActual": number | null,
+  "revenueEstimated": number | null,
+  "revenueActual": number | null,
+
+  // dividend-specific
+  "dividend": number | null,
+  "recordDate": string | null,
+  "paymentDate": string | null,
+  "declarationDate": string | null,
+  "exDividendDate": string | null,
+
+  // IPO-specific
+  "exchange": string | null,
+  "shares": number | null,
+  "priceRange": string | null,
+
+  // split-specific
+  "splitRatio": string | null,
+
+  // SEC filing-specific
+  "formType": string | null,
+  "filingUrl": string | null,
+
+  // analyst-specific
+  "ratingFrom": string | null,
+  "ratingTo": string | null,
+  "action": string | null,
+  "analystFirm": string | null,
+
+  // insider-specific
+  "insiderName": string | null,
+  "transactionType": string | null,
+  "sharesTraded": number | null,
+  "transactionValue": number | null,
+
+  // macro-specific
+  "actual": number | string | null,
+  "estimate": number | string | null,
+  "previous": number | string | null,
+  "country": string | null
+}
+
+4. Implement these backend endpoints:
+
+GET /api/catalysts/overview
+Returns:
+{
+  "asOf": string,
+  "tabs": {
+    "earnings_dates": { "count": number, "events": [...] },
+    "dividends": { "count": number, "events": [...] },
+    "ipos": { "count": number, "events": [...] },
+    "splits": { "count": number, "events": [...] },
+    "economic_releases": { "count": number, "events": [...] },
+    "treasury_macro": { "count": number, "events": [...] },
+    "recent_earnings": { "count": number, "events": [...] },
+    "sec_filings": { "count": number, "events": [...] },
+    "analyst_ratings": { "count": number, "events": [...] },
+    "insider_transactions": { "count": number, "events": [...] }
+  },
+  "summary": {
+    "highImportanceCount": number,
+    "watchlistCatalystsCount": number,
+    "portfolioCatalystsCount": number,
+    "nextMajorCatalysts": [...]
+  },
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+GET /api/catalysts/events
+Query params:
+- tab: earnings_dates | dividends | ipos | splits | economic_releases | treasury_macro | recent_earnings | sec_filings | analyst_ratings | insider_transactions | all
+- from: YYYY-MM-DD
+- to: YYYY-MM-DD
+- symbols: comma-separated tickers, optional
+- scope: all | watchlist | portfolio
+- sector: optional
+- marketCap: all | mega | large | mid | small | micro
+- eventType: optional
+- limit: default 100
+- refresh: boolean default false
+
+Returns:
+{
+  "asOf": string,
+  "tab": string,
+  "from": string,
+  "to": string,
+  "filters": {...},
+  "events": [...],
+  "count": number,
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+GET /api/catalysts/filters
+Returns available filter values:
+{
+  "sectors": [...],
+  "marketCapBuckets": ["mega", "large", "mid", "small", "micro", "unknown"],
+  "eventTypes": [...],
+  "watchlistSymbols": [...],
+  "portfolioSymbols": [...]
+}
+
+Optional but preferred:
+GET /api/catalysts/by-symbol/{symbol}
+Returns all recent and upcoming catalysts for one ticker. This can power the existing popup later without replacing it now.
+
+5. FMP endpoint mapping:
+Use existing FMP client/helper if the project already has one. Do not create duplicate API helper logic if there is an existing FMP utility.
+
+Map tabs roughly like this:
+- earnings_dates: FMP Earnings Calendar
+- dividends: FMP Dividends Calendar
+- ipos: FMP IPOs Calendar
+- splits: FMP Stock Splits Calendar
+- economic_releases: FMP Economic Data Releases Calendar
+- treasury_macro: FMP Treasury Rates + Economics Indicators + Market Risk Premium if available
+- recent_earnings: FMP Earnings Report
+- sec_filings: FMP Latest SEC Filings, Latest 8-K filings, SEC filings by symbol/form as needed
+- analyst_ratings: FMP Ratings Snapshot, Historical Ratings, Stock Grades / Historical Stock Grades
+- insider_transactions: FMP Latest Insider Trading / Search Insider Trades
+
+6. Date windows:
+Defaults:
+- upcoming tabs: today through next 60 days
+- recent tabs: previous 30 days through today
+- economic/macro: previous 14 days through next 45 days where supported
+Allow frontend to override from/to.
+
+7. Caching:
+Implement caching aggressively because calendar data does not need second-by-second refresh.
+Suggested TTLs:
+- earnings_dates: 6 hours
+- dividends: 12 hours
+- IPO calendar: 12 hours
+- stock splits: 12 hours
+- economic releases: 6 hours
+- treasury rates/macro: 3-6 hours
+- recent earnings reports: 6 hours
+- SEC filings: 1-3 hours
+- analyst ratings: 6 hours
+- insider transactions: 3-6 hours
+- profile/reference enrichment: 24 hours
+
+Use the existing cache layer if the repo has one. If not, use a small disk-backed cache or existing in-memory cache pattern with clear keys.
+
+Cache key examples:
+catalysts:v1:{tab}:{from}:{to}:{scope}:{symbols_hash}
+catalysts:profile:v1:{symbol}
+catalysts:filters:v1
+
+8. Enrichment:
+For symbol-based events, enrich with:
+- companyName
+- sector
+- industry
+- marketCap
+- marketCapBucket
+
+Use FMP company profile/reference/market cap if available.
+Avoid calling profile one-by-one too aggressively. Cache profile enrichment for 24 hours.
+If enrichment fails, keep the event and set enrichment fields to null. Do not fail the whole response.
+
+9. Filtering:
+Support backend filtering by:
+- Watchlist
+- Portfolio
+- Sector
+- Market cap bucket
+- Event type
+- Symbol list
+
+Important:
+If watchlist/portfolio data already exists in backend storage/routes, reuse that.
+If frontend currently owns this state and backend cannot access it, support explicit `symbols` query param so frontend can pass watchlist/portfolio symbols.
+
+10. Importance scoring:
+Add a simple deterministic scoring field:
+- high: portfolio/watchlist match, megacap/largecap, earnings, major SEC forms like 8-K/10-Q/10-K, analyst upgrade/downgrade, large insider transaction, CPI/FOMC/jobs/GDP/PCE/treasury rate event
+- medium: normal dividends/splits, mid-cap earnings, normal filings
+- low: smaller/less relevant events
+
+Do not overcomplicate. This is for UI sorting and badges.
+
+11. Error handling:
+No 500s because one FMP endpoint fails.
+Return partial responses with:
+status: "partial"
+errors: [{tab, message}]
+Keep successful tabs populated.
+
+12. Tests / validation:
+After implementation, run backend locally or via Replit and test:
+- /api/catalysts/overview
+- /api/catalysts/events?tab=earnings_dates
+- /api/catalysts/events?tab=dividends
+- /api/catalysts/events?tab=ipos
+- /api/catalysts/events?tab=splits
+- /api/catalysts/events?tab=economic_releases
+- /api/catalysts/events?tab=treasury_macro
+- /api/catalysts/events?tab=sec_filings
+- /api/catalysts/events?tab=analyst_ratings
+- /api/catalysts/events?tab=insider_transactions
+
+13. Final response:
+Tell me:
+- Which files were changed
+- Which endpoints were added
+- Whether existing Earnings page popup/click behavior was left untouched
+- Any FMP endpoint that returned unexpected shapes or was unavailable under Starter
+- Example JSON response from /api/catalysts/overview

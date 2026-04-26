@@ -328,6 +328,15 @@ except Exception as _cmp_err:
     print(f"[STOCK_COMPARE] Router unavailable (non-fatal): {_cmp_err}")
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Catalyst Calendar router (/api/catalysts/*) ───────────────────────────────
+try:
+    from routes.catalyst_calendar import router as _catalyst_router
+    app.include_router(_catalyst_router)
+    print("[CATALYST_CALENDAR] Router registered at /api/catalysts/*")
+except Exception as _cat_err:
+    print(f"[CATALYST_CALENDAR] Router unavailable (non-fatal): {_cat_err}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Static file serving ───────────────────────────────────────────────────────
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.exists():
