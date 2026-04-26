@@ -50,6 +50,8 @@ X_SELECT_ACCOUNTS: list[dict] = [
     {"handle": "ThematicTrader",  "category": "above_average_trader", "weight": 0.8},
     {"handle": "JonkooTrades",    "category": "above_average_trader", "weight": 0.8},
     {"handle": "Ren_aramb",       "category": "above_average_trader", "weight": 0.8},
+    {"handle": "napoleon21st",    "category": "above_average_trader", "weight": 0.8},
+    {"handle": "TheStockDon",     "category": "above_average_trader", "weight": 0.8},
     # ── Retail Traders (weight 0.35) ──────────────────────────────────────────
     {"handle": "Thomas_james_1",  "category": "retail_trader",        "weight": 0.35},
     {"handle": "ConnorJBates_",   "category": "retail_trader",        "weight": 0.35},

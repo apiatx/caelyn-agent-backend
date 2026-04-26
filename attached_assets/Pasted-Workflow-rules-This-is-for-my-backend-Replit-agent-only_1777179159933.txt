@@ -1,0 +1,169 @@
+Workflow rules:
+
+This is for my backend Replit agent only
+Do not worry about pushing to git
+Audit first, then implement
+
+This is a focused rollback/refinement task. Do not broaden scope.
+
+CRITICAL SCOPE — ONLY CHANGE THESE TWO THINGS
+
+Revert/fix X Consensus only
+Redefine Freshest Alpha only
+
+DO NOT change:
+
+Theme Leadership
+Sentiment Acceleration
+Home/Social payload shape unless absolutely necessary for backward-compatible fields
+quiet-hours/manual refresh behavior
+shared snapshot caching
+
+PRIMARY INTENT
+The old X Consensus / Home “Trending on X” quality was better before the heavy custom rebucketing logic.
+I want that alpha quality back.
+
+At the same time, I want Freshest Alpha to become very simple and explicit:
+
+Freshest Alpha = positive mentions from this exact account subset only:
+
+@aleabitoreddit
+@PepInvestStocks
+@Kaizen_Investor
+@yianisz
+@Ren_aramb
+@FinnStockinger
+@napoleon21st
+@TheStockDon
+
+And only within:
+
+today
+past 5 days
+
+If the ticker is a lower-cap / non-market-leader name, it should get urgency priority.
+These accounts are not used here to surface random garbage; the point is high-upside fresh calls.
+
+NO OTHER SOCIAL SECTIONS SHOULD BE CHANGED.
+
+AUDIT FIRST
+Before changing anything, inspect and report:
+
+What exact logic currently drives:
+X Consensus
+Freshest Alpha
+What exact code currently drives:
+Theme Leadership
+Sentiment Acceleration
+and confirm you will leave those untouched
+Which code changes caused X Consensus quality to get worse compared with the older better behavior
+Whether the exact Freshest Alpha account subset above is already present in the canonical account config
+if not, add/update it carefully
+do not disturb the broader account universe used for other sections unless necessary
+
+IMPLEMENTATION TARGET
+
+PART 1 — X Consensus
+Revert/fix only X Consensus so it behaves more like the older better Grok-led output.
+
+Intent:
+
+X Consensus should again reflect the strongest overall ticker ideas / shared conviction across the broader included account universe
+do not let the newer custom classifier logic over-sanitize it into generic or distorted outputs
+prefer the older better Grok-led ranking behavior over heavy backend rebucketing for this section
+
+Important:
+
+do NOT change Theme Leadership
+do NOT change Sentiment Acceleration
+do NOT globally rip out all social logic
+only restore/fix the quality of X Consensus
+
+PART 2 — Freshest Alpha
+Redefine Freshest Alpha to be simple and explicit.
+
+Source accounts for Freshest Alpha ONLY:
+
+@aleabitoreddit
+@PepInvestStocks
+@Kaizen_Investor
+@yianisz
+@Ren_aramb
+@FinnStockinger
+@napoleon21st
+@TheStockDon
+
+Eligibility rules:
+
+positive / bullish mentions only
+mention timestamp / recency must be:
+today
+or within the past 5 days
+this section should surface the tickers these accounts have started talking about recently
+this is not a consensus section
+this is a fresh-call discovery section
+
+Ranking rules:
+
+more recent mentions rank higher
+stronger-account mentions rank higher if you have tier info
+if a ticker is lower-cap / not a market leader, give it urgency priority / extra ranking weight
+do NOT overcomplicate this with broad historical rebucketing
+do NOT require broad consensus to appear here
+if these accounts positively mention a fresh ticker in the past 5 days, it should show up
+
+This section should feel like:
+“what are these elite active accounts newly talking about right now?”
+
+PART 3 — Preserve Theme Leadership unchanged
+Do not touch Theme Leadership logic.
+
+PART 4 — Preserve Sentiment Acceleration unchanged
+Do not touch Sentiment Acceleration logic.
+
+PART 5 — Preserve contracts
+Do not break:
+
+Home page Trending on X
+Social page payload shape
+existing frontend rendering contracts
+
+If you need to enrich Freshest Alpha internally, keep it backward compatible.
+
+VERY IMPORTANT
+
+No ticker-specific hardcoding
+No giant new classifier project
+No unnecessary rewrites
+This should be a narrow rollback + narrow Freshest Alpha refinement
+Keep Grok/XAI call count unchanged unless absolutely impossible
+
+VERIFY
+Before finishing, prove:
+
+Theme Leadership logic is unchanged
+Sentiment Acceleration logic is unchanged
+X Consensus behavior was specifically reverted/fixed without disturbing the other sections
+Freshest Alpha now uses only the exact 8 specified accounts
+Freshest Alpha only includes positive mentions from today / past 5 days
+Freshest Alpha ranks recent and lower-cap/non-market-leader names with urgency priority
+Home/Social compatibility remains intact
+
+DELIVERABLES
+When done, report:
+
+exact backend files changed
+exact logic changed for X Consensus
+exact logic changed for Freshest Alpha
+confirmation Theme Leadership was untouched
+confirmation Sentiment Acceleration was untouched
+confirmation Grok/XAI call count stayed the same or explain exactly if not
+confirmation payload compatibility remained intact
+
+EXECUTION STYLE
+
+Audit first
+Keep scope extremely narrow
+Revert/fix X Consensus only
+Simplify Freshest Alpha exactly as described
+Leave Theme Leadership and Sentiment Acceleration alone

@@ -96,7 +96,46 @@ _SA_W3_DAILY_RATE_MULT:    float = 1.20
 # XC: minimum number of bullish accounts required for "shared conviction"
 _XC_MIN_ACCOUNTS: int = 2
 
-# ── Freshest Alpha scoring ────────────────────────────────────────────────────
+# ── Freshest Alpha — source accounts (explicit 8-account subset) ──────────────
+# These are the ONLY accounts used to populate Freshest Alpha.
+# Only bullish mentions within the past _FA_MAX_RECENCY_DAYS are eligible.
+# No other social sections read this set; it does not disturb the broader
+# account universe used for XC / SA / Theme Leadership.
+_FA_SOURCE_ACCOUNTS: frozenset[str] = frozenset({
+    "aleabitoreddit",
+    "PepInvestStocks",
+    "Kaizen_Investor",
+    "yianisz",
+    "Ren_aramb",
+    "FinnStockinger",
+    "napoleon21st",
+    "TheStockDon",
+})
+
+# Maximum recency in days for a mention to qualify for Freshest Alpha.
+# Mentions older than this are ignored regardless of account.
+_FA_MAX_RECENCY_DAYS: int = 5
+
+# Recency decay weights for the 0–5 day window.
+# More recent = higher weight; anything beyond _FA_MAX_RECENCY_DAYS is dropped.
+_FA_SOURCE_RECENCY_BOOSTS: list[tuple[int, float]] = [
+    (0, 3.0),   # today
+    (1, 2.5),   # yesterday
+    (2, 2.0),
+    (3, 1.5),
+    (4, 1.0),
+    (5, 0.7),
+]
+
+
+def _fa_source_recency_boost(days: int) -> float:
+    for bound, w in _FA_SOURCE_RECENCY_BOOSTS:
+        if days <= bound:
+            return w
+    return 0.0   # beyond _FA_MAX_RECENCY_DAYS — caller already filters these out
+
+
+# ── Freshest Alpha scoring (legacy — used by old classify-gated path) ─────────
 
 _FA_RECENCY_BOOSTS: list[tuple[int, float]] = [
     (0,  3.0),
@@ -398,8 +437,12 @@ def _build_x_consensus(
         if not ticker:
             continue
 
+        # Only exclude tickers captured by Freshest Alpha (they have a dedicated
+        # section that is more precise).  SA, XC, and unclassified tickers all
+        # belong here — X Consensus reflects Grok's curated overall conviction
+        # picture, not a narrowly filtered residual.
         section = classified.get(ticker, "xc")
-        if section in ("fa", "sa", "none"):
+        if section == "fa":
             excluded += 1
             continue
 
@@ -430,30 +473,172 @@ def _build_x_consensus(
 
 # ── Section B — Freshest Alpha ────────────────────────────────────────────────
 
+def _build_fa_from_source_accounts(
+    current_snap: Optional[dict],
+) -> dict:
+    """
+    Freshest Alpha — primary path.
+
+    Sources ONLY the 8 accounts defined in _FA_SOURCE_ACCOUNTS.
+    Eligibility: bullish sentiment + recency_days <= _FA_MAX_RECENCY_DAYS.
+    No classifier gate — if these accounts positively mention a ticker recently,
+    it appears here regardless of broader consensus or prior-snapshot history.
+
+    Ranking factors:
+      1. Recency: more recent → higher weight (see _FA_SOURCE_RECENCY_BOOSTS)
+      2. Account weight: from X_SELECT_ACCOUNTS (top_trader=1.0, above_avg=0.8)
+      3. Conviction: high=×1.3, medium=×1.0, low=×0.7
+      4. Lower-cap urgency boost: ×1.5 for tickers NOT in the major consensus set
+         (i.e. not in consensus_picks with hype_score≥75 AND trader_count≥2).
+         This is data-driven — no ticker names hardcoded.
+
+    Returns the standard FA dict shape:
+      {"trades": [...], "spotlight": {...}}
+    """
+    from services.x_consensus_cache import _ACCOUNT_WEIGHT_BY_HANDLE
+
+    mention_data: list[dict] = (current_snap or {}).get("_mention_data") or []
+    raw = _raw(current_snap)
+
+    # Build "major names" set — consensus tickers with high conviction + breadth.
+    # Tickers NOT here are treated as lower-cap / non-market-leader candidates.
+    major_names: set[str] = {
+        (p.get("ticker") or "").upper().lstrip("$")
+        for p in (raw.get("consensus_picks") or [])
+        if isinstance(p, dict)
+        and (p.get("hype_score") or 0) >= 75
+        and (p.get("trader_count") or 0) >= 2
+    }
+
+    name_map = _name_lookup(current_snap)
+    buckets: dict[str, dict] = {}
+
+    for acct in mention_data:
+        handle = acct.get("handle", "")
+        if handle not in _FA_SOURCE_ACCOUNTS:
+            continue
+
+        acct_weight = float(
+            _ACCOUNT_WEIGHT_BY_HANDLE.get(handle) or acct.get("weight") or 0.8
+        )
+
+        for m in (acct.get("mentions") or []):
+            if not isinstance(m, dict):
+                continue
+            if (m.get("sentiment") or "neutral").lower() != "bullish":
+                continue
+
+            ticker = (m.get("ticker") or "").upper().strip().lstrip("$")
+            if not ticker or len(ticker) > 12 or " " in ticker:
+                continue
+
+            rd_raw = m.get("recency_days")
+            recency_days = int(rd_raw) if rd_raw is not None else 999
+            recency_days = max(0, recency_days)
+            if recency_days > _FA_MAX_RECENCY_DAYS:
+                continue
+
+            rec_boost   = _fa_source_recency_boost(recency_days)
+            conviction  = (m.get("conviction") or "medium").lower()
+            conv_mult   = {"high": 1.3, "medium": 1.0, "low": 0.7}.get(conviction, 1.0)
+            mention_score = acct_weight * rec_boost * conv_mult
+
+            if ticker not in buckets:
+                buckets[ticker] = {
+                    "ticker":          ticker,
+                    "score":           0.0,
+                    "min_recency":     9999,
+                    "accounts":        {},
+                    "theses":          [],
+                    "catalysts":       [],
+                    "conviction_seen": set(),
+                }
+            b = buckets[ticker]
+            b["score"]       += mention_score
+            b["min_recency"]  = min(b["min_recency"], recency_days)
+            b["accounts"][handle] = b["accounts"].get(handle, 0.0) + mention_score
+            thesis = (m.get("thesis") or "").strip()
+            if thesis:
+                b["theses"].append({"handle": handle, "text": thesis})
+            catalysts = [str(c) for c in (m.get("catalysts") or []) if c]
+            b["catalysts"].extend(catalysts)
+            b["conviction_seen"].add(conviction)
+
+    if not buckets:
+        return {"trades": [], "spotlight": None}
+
+    results: list[dict] = []
+    for ticker, b in buckets.items():
+        if b["score"] <= 0 or b["min_recency"] > _FA_MAX_RECENCY_DAYS:
+            continue
+
+        n_accts = len(b["accounts"])
+
+        # Lower-cap urgency boost: tickers outside the major-names set are likely
+        # smaller/less-followed names — the exact use-case for this section.
+        lower_cap_mult = 1.0 if ticker in major_names else 1.5
+
+        # Breadth: multiple source accounts mentioning same ticker is a signal.
+        breadth_mult = 1.0 + min(0.20 * (n_accts - 1), 0.40)
+
+        final_score = b["score"] * lower_cap_mult * breadth_mult
+
+        accts_sorted = sorted(b["accounts"].items(), key=lambda x: -x[1])
+        name, tv_sym = name_map.get(ticker, ("", ""))
+        top_thesis   = b["theses"][0]["text"] if b["theses"] else ""
+        is_major     = ticker in major_names
+
+        results.append({
+            "ticker":              ticker,
+            "name":                name,
+            "tradingview_symbol":  tv_sym,
+            "first_mentioned_by":  [f"@{h}" for h, _ in accts_sorted],
+            "why_fresh": (
+                f"{'Known' if is_major else 'Fresh'} call"
+                f" from {n_accts} source account(s) within last "
+                f"{b['min_recency']}d"
+                + (f" — {', '.join(sorted(b['conviction_seen']))} conviction"
+                   if b["conviction_seen"] else "")
+            ),
+            "entry_thesis":            top_thesis,
+            "spotlight_badge":         False,
+            "spotlight_signal":        None,
+            "freshest_alpha_score":    round(final_score, 3),
+            "min_recency_days":        b["min_recency"] if b["min_recency"] < 9999 else None,
+            "quality_account_count":   n_accts,
+            "is_brand_new":            not is_major,
+            "novelty_mult":            round(lower_cap_mult, 2),
+            "catalysts":               list(dict.fromkeys(b["catalysts"]))[:5],
+            "top_accounts": [
+                {"handle": h, "contribution": round(s, 3)} for h, s in accts_sorted
+            ],
+        })
+
+    return _finalise_fa(results)
+
+
 def _build_freshest_alpha(
     current_snap: Optional[dict],
     prior_snap: Optional[dict],
     classified: dict[str, str],
 ) -> dict:
     """
-    Surface newly emerging ticker calls from ONLY top_trader + above_average_trader
-    accounts.
+    Surface fresh ticker calls from the 8 specified FA source accounts.
 
-    Primary path (_mention_data present):
-      Uses per-mention recency + conviction from Phase-1 extraction.
-      Only tickers classified as 'fa' are emitted (mutual exclusion enforced).
+    Primary path: _build_fa_from_source_accounts()
+      Filters _mention_data to _FA_SOURCE_ACCOUNTS, bullish, recency <= 5 days.
+      No classifier gate — FA is purely account-driven, not consensus-driven.
 
-    Fallback path (_mention_data absent):
-      Uses _backend_ranked directly — always available.
-      Tickers classified as 'fa' are scored by raw_score × fa_recency_boost.
-      No legacy Grok fresh_trades fallback (removed — caused wrong classifications).
+    Fallback (no mention data at all):
+      Uses _backend_ranked directly with the classified 'fa' gate.
+      This only fires when Grok returned no per-mention extraction.
     """
     mention_data: list[dict] = (current_snap or {}).get("_mention_data") or []
 
     if mention_data:
-        return _build_fa_from_mention_data(current_snap, prior_snap, classified)
+        return _build_fa_from_source_accounts(current_snap)
 
-    # _backend_ranked fallback
+    # _backend_ranked fallback — only when Grok returned no per-mention data
     backend_ranked: list[dict] = (current_snap or {}).get("_backend_ranked") or []
     prior_br: list[dict]       = (prior_snap   or {}).get("_backend_ranked") or []
     prior_rank_by_ticker        = {s["ticker"]: i for i, s in enumerate(prior_br)}
