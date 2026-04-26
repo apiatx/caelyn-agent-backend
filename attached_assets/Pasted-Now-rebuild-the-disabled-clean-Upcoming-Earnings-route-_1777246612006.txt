@@ -1,0 +1,137 @@
+Now rebuild the disabled clean Upcoming Earnings route safely.
+
+Do NOT re-enable the router until the implementation is safe and validated locally with mocked/small calls.
+
+Confirmed root cause:
+The disabled earnings_clean_service caused site-wide FMP failure because:
+1. upcoming-clean fired 5 simultaneous FMP earnings-calendar chunk requests.
+2. day-clean could fire up to 80 FMP profile calls with semaphore=16.
+3. each profile call created a brand-new httpx.AsyncClient.
+4. the route shared the same FMP_API_KEY quota with Home/Sectors/Macro.
+5. bursts poisoned FMP quota and broke the rest of the site.
+
+Final requirement:
+Catalyst Calendar > Earnings Dates > Upcoming must be FMP-only, but it must be FMP-safe.
+
+Hard rules:
+- No FMP calls at import/startup.
+- No asyncio.gather burst to FMP.
+- No 80-profile enrichment burst.
+- No new httpx.AsyncClient per symbol.
+- No route can consume enough FMP quota to break Home/Sectors/Macro.
+- If FMP errors/429s/timeouts, fail this route only.
+- Router stays disabled until safe.
+
+Architecture:
+
+Endpoint 1:
+GET /api/catalysts/earnings/upcoming-clean
+
+Purpose:
+Calendar counts and basic event list only.
+
+Default window:
+- today through today + 7 days, not 30 days
+
+Params:
+- from optional
+- to optional
+- max date range allowed: 14 days
+- if caller asks for more than 14 days, clamp to 14 days or return 400 with clear error
+
+Behavior:
+- Fetch FMP earnings calendar for only the requested 7-14 day range.
+- No profile enrichment.
+- No quote enrichment.
+- No market cap enrichment.
+- No logos.
+- Just basic FMP earnings event data:
+  symbol, date, time, period, epsEstimated, revenueEstimated, source=fmp.
+- Return eventsByDate/countsByDate.
+
+FMP calls:
+- Sequential 7-day chunks only if chunking is still needed.
+- Max 2 FMP calls per request.
+- No parallel chunk gather.
+
+Endpoint 2:
+GET /api/catalysts/earnings/day-clean
+
+Purpose:
+Selected day list.
+
+Params:
+- date required
+- limit default 200
+- enrich=true optional, default false initially
+
+Behavior:
+- Fetch or reuse earnings calendar for that one day only.
+- Return all FMP earnings for the selected day.
+- Basic fields always included:
+  symbol, date, time, period, epsEstimated, epsActual, revenueEstimated, revenueActual, source=fmp.
+- If enrich=false:
+  do NOT call FMP profile/quote/market cap.
+- If enrich=true:
+  enrich only top N symbols safely.
+
+Safe enrichment:
+- max_live_profiles default 10, max 20
+- concurrency max 2
+- reuse one shared httpx.AsyncClient per request or existing shared FMP helper
+- timeout 3 seconds per call
+- cache per symbol for 24h
+- cached profiles do not count against max_live_profiles
+- if 429 happens, stop enrichment immediately and return partial data
+- never retry storm
+
+Sorting:
+Without enrichment:
+- sort symbols alphabetically or by revenue estimate descending if available.
+With enrichment:
+- marketCap descending where available, then revenue estimate, then symbol.
+
+Required response includes:
+{
+  "status": "ok" | "partial" | "error",
+  "source": "fmp",
+  "fmpCallsUsed": number,
+  "rateLimited": boolean,
+  "errors": [],
+  "events": [...]
+}
+
+Circuit breaker:
+Add a small in-memory FMP circuit breaker specific to this earnings-clean service:
+- If FMP returns 429, set earnings_clean_fmp_block_until = now + 60 seconds
+- During block, return status=partial/error quickly without making more FMP calls.
+- This must only affect earnings-clean route, not other routes.
+
+Do not touch:
+- Home
+- Sectors
+- Macro
+- existing /api/catalysts/events
+- Earnings Recent
+- earnings popup endpoint
+- auth
+
+Keep disabled:
+Leave router disabled in main.py until after code review.
+After implementation, tell me it is ready but do not enable unless asked.
+
+Validation without burning quota:
+- Use one request for a 1-day range only.
+- Use one day-clean request with enrich=false.
+- Do not test enrich=true with more than 3 symbols unless manually capped.
+- Do not run 30-day tests.
+- Do not run repeated load tests.
+
+Final response:
+- Confirm router remains disabled
+- Confirm max FMP calls per upcoming-clean request
+- Confirm day-clean default enrich=false
+- Confirm enrichment max/concurrency
+- Confirm no new AsyncClient per symbol
+- Confirm 429 circuit breaker exists
+- Confirm no other routes touched

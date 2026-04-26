@@ -1,20 +1,22 @@
 """
-earnings_upcoming.py — Clean FMP-only Upcoming Earnings routes.
+earnings_upcoming.py — Clean FMP-only Upcoming Earnings routes (v2).
 
 Endpoints
 ─────────
 GET /api/catalysts/earnings/upcoming-clean
 GET /api/catalysts/earnings/day-clean
 
-These endpoints are completely isolated from the legacy Catalyst Calendar
-tabs logic.  No Finnhub, no Polymarket, no beat odds, no AI curation.
-source="fmp" on every event.
+Safety constraints (enforced here and in earnings_clean_service):
+  • upcoming-clean: 7-day default window, 14-day hard max, NO enrichment.
+  • day-clean: single day, enrich=false by default, max_live capped at 20.
+  • Router is DISABLED in main.py until explicitly re-enabled after review.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 try:
@@ -29,7 +31,8 @@ except ImportError:
 
 router = APIRouter(tags=["earnings_clean"])
 
-_AUTH_HEADER = "X-API-Key"
+_AUTH_HEADER    = "X-API-Key"
+_MAX_RANGE_DAYS = 14      # matches earnings_clean_service._MAX_RANGE_DAYS
 
 
 def _check_key(api_key: Optional[str]) -> Optional[JSONResponse]:
@@ -50,39 +53,45 @@ def _get_fmp_key() -> Optional[str]:
         return None
 
 
+def _validate_date(val: str, param: str) -> None:
+    try:
+        datetime.strptime(val, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {param}: expected YYYY-MM-DD, got '{val}'",
+        )
+
+
 # ── GET /api/catalysts/earnings/upcoming-clean ────────────────────────────────
 
 @router.get("/api/catalysts/earnings/upcoming-clean")
 @traceable(name="earnings_clean.upcoming")
 async def upcoming_clean(
-    request: Request,
-    api_key:  str = Header(None, alias=_AUTH_HEADER),
-    from_date: Optional[str] = Query(None, alias="from"),
-    to_date:   Optional[str] = Query(None, alias="to"),
-    selected_date: Optional[str] = Query(None, alias="selectedDate"),
-    search:    Optional[str] = Query(None),
-    scope:     Optional[str] = Query(None),
-    limit:     int           = Query(10000, ge=1, le=20000),
+    request:    Request,
+    api_key:    str          = Header(None, alias=_AUTH_HEADER),
+    from_date:  Optional[str] = Query(None, alias="from",
+                                      description="YYYY-MM-DD, default today"),
+    to_date:    Optional[str] = Query(None, alias="to",
+                                      description="YYYY-MM-DD, default today+7, max today+14"),
+    search:     Optional[str] = Query(None, description="Ticker or company name substring"),
+    scope:      Optional[str] = Query(None, description="all | watchlist | portfolio"),
+    limit:      int           = Query(500, ge=1, le=2000,
+                                      description="Max events in flat list"),
 ):
     """
     Clean FMP earnings calendar for a date range.
 
-    Returns:
-      events        — flat sorted list (date ASC, symbol ASC)
-      eventsByDate  — {YYYY-MM-DD: [events]}
-      countsByDate  — {YYYY-MM-DD: n}  ← use this for calendar dot counts
-      asOf, source, from, to, status, errors
+    Constraints:
+      • Default window: today → today+7 days.
+      • Max range: 14 days. If caller sends a wider range, it is CLAMPED (not rejected).
+      • No profile/quote/marketCap enrichment — basic event fields + counts only.
+      • Max 2 sequential FMP calls per request.
+      • 429 circuit breaker: if FMP rate-limits, returns partial data with
+        status=partial and rateLimited=true. Does not affect other site routes.
 
-    No enrichment on this endpoint (fast, returns null for logo/price/marketCap).
-    Use /day-clean to get fully enriched events for a specific selected date.
-
-    Params:
-      from         YYYY-MM-DD, default today
-      to           YYYY-MM-DD, default today+30
-      selectedDate YYYY-MM-DD — if provided, also returns day-level events inline
-      search       ticker or company name substring
-      scope        all | watchlist | portfolio
-      limit        max events in flat list (default 10000)
+    Returns: { status, source, fmpCallsUsed, rateLimited, errors,
+               from, to, events, eventsByDate, countsByDate }
     """
     err = _check_key(api_key)
     if err:
@@ -92,8 +101,25 @@ async def upcoming_clean(
     if not fmp_key:
         return JSONResponse(
             status_code=503,
-            content={"error": "FMP API key not configured", "status": "error"},
+            content={"error": "FMP API key not configured", "status": "error",
+                     "fmpCallsUsed": 0, "rateLimited": False, "errors": []},
         )
+
+    if from_date:
+        _validate_date(from_date, "from")
+    if to_date:
+        _validate_date(to_date, "to")
+
+    # Range enforcement: warn in response if clamped (clamping done inside service)
+    clamped = False
+    if from_date and to_date:
+        try:
+            start = datetime.strptime(from_date, "%Y-%m-%d")
+            end   = datetime.strptime(to_date,   "%Y-%m-%d")
+            if (end - start).days >= _MAX_RANGE_DAYS:
+                clamped = True
+        except ValueError:
+            pass
 
     from services.earnings_clean_service import get_upcoming_clean
 
@@ -106,6 +132,12 @@ async def upcoming_clean(
         limit=limit,
     )
 
+    if clamped:
+        result.setdefault("errors", [])
+        result["errors"].append(
+            f"Requested range exceeded {_MAX_RANGE_DAYS} days — clamped to {result.get('to')}"
+        )
+
     return JSONResponse(content=result)
 
 
@@ -114,38 +146,35 @@ async def upcoming_clean(
 @router.get("/api/catalysts/earnings/day-clean")
 @traceable(name="earnings_clean.day")
 async def day_clean(
-    request: Request,
-    api_key:  str = Header(None, alias=_AUTH_HEADER),
-    date:     Optional[str] = Query(None),
+    request:  Request,
+    api_key:  str          = Header(None, alias=_AUTH_HEADER),
+    date:     Optional[str] = Query(None,
+                                    description="YYYY-MM-DD (required)"),
     search:   Optional[str] = Query(None),
-    scope:    Optional[str] = Query(None),
-    limit:    int           = Query(2000, ge=1, le=5000),
-    max_live: int           = Query(80, ge=0, le=500),
+    scope:    Optional[str] = Query(None, description="all | watchlist | portfolio"),
+    limit:    int           = Query(200, ge=1, le=1000),
+    enrich:   bool          = Query(False,
+                                    description="Fetch FMP profiles (default false)"),
+    max_live: int           = Query(10, ge=0, le=20,
+                                    description="Max live profile fetches (0-20, default 10)"),
 ):
     """
-    Fully enriched FMP earnings events for a single selected date.
+    FMP earnings events for a single selected date.
 
-    Enrichment includes: companyName, logo/image, price, marketCap,
-    marketCapBucket, EPS estimates/actuals, revenue estimates/actuals.
+    enrich=false (default):
+      • 1 FMP calendar call only. No profile/quote/marketCap calls.
+      • Sort: revenueEstimated desc → symbol alpha.
 
-    Sort order (deterministic, no AI):
-      1. US major exchange (NASDAQ/NYSE/AMEX) first
-      2. Largest market cap first
-      3. Revenue estimate present first
-      4. EPS estimate present first
-      5. Ticker alphabetical
+    enrich=true:
+      • Enriches up to max_live (default 10, max 20) symbols with FMP profiles.
+      • Concurrency: 2 simultaneous HTTP calls (semaphore-limited).
+      • Timeout: 3 s per profile call.
+      • Cached profiles (24 h TTL) are always resolved — don't count against max_live.
+      • On 429: circuit breaker fires, enrichment stops, returns partial with
+        rateLimited=true. Does not affect other site routes.
+      • Sort: US exchange first → marketCap desc → revenueEst → epsEst → symbol.
 
-    Cache:
-      Profile data: fmp:co_profile:v2:{symbol} (24 h)
-      Cached profiles are always resolved; only uncached symbols make HTTP calls.
-      max_live controls the number of live HTTP profile fetches per request.
-
-    Params:
-      date     YYYY-MM-DD (required)
-      search   ticker or company name substring
-      scope    all | watchlist | portfolio
-      limit    max events returned (default 2000)
-      max_live max cold-cache HTTP profile fetches (default 80)
+    Returns: { status, source, fmpCallsUsed, rateLimited, errors, date, count, events }
     """
     err = _check_key(api_key)
     if err:
@@ -155,14 +184,15 @@ async def day_clean(
     if not fmp_key:
         return JSONResponse(
             status_code=503,
-            content={"error": "FMP API key not configured", "status": "error"},
+            content={"error": "FMP API key not configured", "status": "error",
+                     "fmpCallsUsed": 0, "rateLimited": False, "errors": []},
         )
 
+    from services.earnings_clean_service import get_day_clean, _today
     if not date:
-        from services.earnings_clean_service import _today
         date = _today()
-
-    from services.earnings_clean_service import get_day_clean
+    else:
+        _validate_date(date, "date")
 
     result = await get_day_clean(
         api_key=fmp_key,
@@ -170,6 +200,7 @@ async def day_clean(
         search=search,
         scope=scope,
         limit=limit,
+        enrich=enrich,
         max_live=max_live,
     )
 
