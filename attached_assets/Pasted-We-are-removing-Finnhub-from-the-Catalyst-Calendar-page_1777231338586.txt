@@ -1,0 +1,122 @@
+We are removing Finnhub from the Catalyst Calendar page entirely.
+
+Reason:
+Finnhub is causing the Earnings Dates Upcoming calendar to use a separate raw data path with missing company names/logos. The Catalyst Calendar should use FMP as the single source of truth.
+
+IMPORTANT:
+This applies to Catalyst Calendar only.
+Do NOT delete Finnhub globally from the app if other pages/features still use it.
+Do NOT break the existing earnings popup/modal.
+Do NOT remove Polymarket from clicked-stock popup enrichment if it is already working.
+Do NOT reintroduce Polymarket rows into the main earnings calendar.
+
+Final architecture:
+Catalyst Calendar data source = FMP only.
+
+Catalyst Calendar tabs:
+- Earnings Dates
+- Dividends
+- IPOs
+- Stock Splits
+- Economic Releases
+- Treasury / Macro
+
+All of these should be served by:
+GET /api/catalysts/events
+
+The Earnings Dates tab must no longer depend on:
+- Finnhub earnings calendar
+- legacy /api/earnings/calendar if it proxies Finnhub
+- fetchFinnhubCalendar
+- raw Finnhub calendar response
+- any backend call where companyName = ticker because Finnhub has no company name
+
+Required endpoint behavior:
+GET /api/catalysts/events?tab=earnings_dates&mode=upcoming
+must return FMP earnings calendar events only.
+
+GET /api/catalysts/events?tab=earnings_dates&mode=recent
+must return FMP earnings report/recent earnings events only.
+
+Each earnings event must include:
+{
+  "id": string,
+  "date": "YYYY-MM-DD",
+  "symbol": string,
+  "companyName": string,
+  "logo": string | null,
+  "image": string | null,
+  "title": string,
+  "eventType": "earnings",
+  "eventLabel": "Earnings",
+  "time": string | null,
+  "period": string | null,
+  "epsEstimated": number | null,
+  "epsActual": number | null,
+  "revenueEstimated": number | null,
+  "revenueActual": number | null,
+  "sector": string | null,
+  "industry": string | null,
+  "marketCap": number | null,
+  "source": "fmp",
+  "raw": object
+}
+
+Company identity:
+Use FMP company profile/reference data.
+Cache per symbol:
+fmp:company_profile:v1:{symbol}
+TTL: 24h+
+
+Do not do one unbounded live profile request per row on every request.
+Use cache + controlled concurrency.
+
+Cache version:
+If any old earnings cache may contain Finnhub/raw/ticker-only data, bump it.
+Use something like:
+catalysts:earnings:fmp_only:v3:{from}:{to}:{mode}
+
+Hard rule:
+No Catalyst Calendar endpoint should return source="finnhub".
+No Catalyst Calendar main event should contain Polymarket market questions.
+Polymarket can remain only inside the clicked earnings popup enrichment.
+
+Please audit:
+- all backend routes feeding Catalyst Calendar
+- legacy earnings calendar route
+- any route the frontend uses for Upcoming calendar
+- ask-context endpoint
+
+Ask Caelyn:
+GET /api/catalysts/ask-context should also use FMP Catalyst Calendar data only.
+Do not include Finnhub raw calendar rows in Ask Caelyn context.
+If popup-level enrichment uses Finnhub elsewhere, leave that separate.
+
+Validation:
+Run and confirm:
+
+GET /api/catalysts/events?tab=earnings_dates&mode=upcoming
+GET /api/catalysts/events?tab=earnings_dates&mode=recent
+GET /api/catalysts/events?tab=dividends&mode=upcoming
+GET /api/catalysts/events?tab=ipos&mode=upcoming
+GET /api/catalysts/events?tab=splits&mode=upcoming
+GET /api/catalysts/events?tab=economic_releases&mode=upcoming
+GET /api/catalysts/events?tab=treasury_macro&mode=upcoming
+GET /api/catalysts/ask-context
+
+Confirm:
+- no source=finnhub anywhere in Catalyst Calendar responses
+- earnings upcoming has companyName/logo/image for normal listed tickers
+- no Polymarket questions in main events
+- IPOs still work from FMP stable IPO calendar
+- popup endpoint was untouched
+
+Final response:
+Tell me:
+- Which backend files changed
+- Which Finnhub Catalyst Calendar paths were removed or bypassed
+- Confirm /api/catalysts/events is now the only Catalyst Calendar data source
+- Confirm no Catalyst Calendar response returns source=finnhub
+- Confirm Earnings Upcoming is FMP only
+- Confirm companyName/logo/image are included
+- Confirm popup behavior was untouched

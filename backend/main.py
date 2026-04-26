@@ -1437,7 +1437,7 @@ async def notifai_the_brief(request: Request):
 
 
 # ============================================================
-# Earnings Calendar Endpoint — Full Finnhub calendar by date range
+# Earnings Calendar Endpoint — FMP calendar by date range (enriched)
 # ============================================================
 
 @app.get("/api/earnings/calendar")
@@ -1445,66 +1445,102 @@ async def notifai_the_brief(request: Request):
 @traceable(name="main.earnings_calendar")
 async def earnings_calendar(request: Request, from_date: str = "", to_date: str = ""):
     """
-    Returns all earnings for a date range from Finnhub.
-    Defaults to current week (Mon-Fri) if no dates provided.
+    Returns FMP earnings calendar for a date range, fully enriched with
+    company identity (companyName, logo, sector, industry, marketCap).
+
+    Previously Finnhub-backed; switched to FMP to match the Catalyst Calendar
+    data source.  Finnhub is only used in the earnings popup (/api/earnings/detail).
+
+    Cache key: fmp:earnings_calendar:v3:{from}:{to}  TTL: 6 h
     """
     from datetime import datetime, timedelta
+    from services.catalyst_calendar_service import CatalystFMP, _enrich_profiles
 
     await _wait_for_init()
 
-    # Default to current week
+    # Default to current week (Mon–Fri)
     today = datetime.now()
     if not from_date:
-        # Go to Monday of current week
         monday = today - timedelta(days=today.weekday())
         from_date = monday.strftime("%Y-%m-%d")
     if not to_date:
         monday = today - timedelta(days=today.weekday())
-        friday = monday + timedelta(days=4)
-        to_date = friday.strftime("%Y-%m-%d")
+        to_date = (monday + timedelta(days=4)).strftime("%Y-%m-%d")
 
     from data.cache import cache
-    cache_key = f"earnings_calendar:{from_date}:{to_date}"
+    from config import FMP_API_KEY as _fmp_key
+    cache_key = f"fmp:earnings_calendar:v3:{from_date}:{to_date}"
     cached = cache.get(cache_key)
     if cached is not None:
         return JSONResponse(content=cached)
 
     try:
-        data = await asyncio.wait_for(
-            asyncio.to_thread(
-                agent.data.finnhub.client.earnings_calendar,
-                _from=from_date,
-                to=to_date,
-                symbol=None,
-            ),
-            timeout=10.0,
-        )
-        earnings = data.get("earningsCalendar", [])
+        fmp = CatalystFMP(_fmp_key)
+        raw_rows = await fmp.earnings_calendar(from_date, to_date)
+        if not isinstance(raw_rows, list):
+            raw_rows = []
+
+        # Deduplicate and collect unique symbols for profile enrichment
+        unique_syms = list(dict.fromkeys(
+            r.get("symbol", "").upper()
+            for r in raw_rows
+            if r.get("symbol")
+        ))
+        enriched_profiles = await _enrich_profiles(unique_syms, fmp)
 
         results = []
-        for e in earnings:
-            symbol = e.get("symbol")
-            if not symbol:
+        for row in raw_rows:
+            sym = (row.get("symbol") or "").upper()
+            if not sym:
                 continue
+            profile = enriched_profiles.get(sym, {})
+            company_name = (
+                profile.get("companyName")
+                or row.get("name")
+                or row.get("companyName")
+                or sym
+            )
+            logo_url = profile.get("logo") or None
             results.append({
-                "ticker": symbol,
-                "date": e.get("date"),
-                "eps_estimate": e.get("epsEstimate"),
-                "eps_actual": e.get("epsActual"),
-                "revenue_estimate": e.get("revenueEstimate"),
-                "revenue_actual": e.get("revenueActual"),
-                "hour": e.get("hour", ""),  # "bmo", "amc", or ""
-                "quarter": e.get("quarter"),
-                "year": e.get("year"),
+                # ── backward-compatible fields ──────────────────────────
+                "ticker":           sym,
+                "date":             row.get("date"),
+                "eps_estimate":     row.get("epsEstimated"),
+                "eps_actual":       row.get("eps") or row.get("epsActual"),
+                "revenue_estimate": row.get("revenueEstimated"),
+                "revenue_actual":   row.get("revenue") or row.get("revenueActual"),
+                "hour":             row.get("time", ""),
+                "quarter":          row.get("fiscalDateEnding") or row.get("period"),
+                "year":             None,
+                # ── enriched company identity ───────────────────────────
+                "symbol":           sym,
+                "companyName":      company_name,
+                "logo":             logo_url,
+                "image":            logo_url,
+                "sector":           profile.get("sector"),
+                "industry":         profile.get("industry"),
+                "marketCap":        profile.get("marketCap"),
+                "title":            f"{company_name} Earnings",
+                "source":           "fmp",
             })
 
-        response = {"earnings": results, "from": from_date, "to": to_date, "count": len(results)}
-        cache.set(cache_key, response, 300)  # Cache 5 minutes
+        response = {
+            "earnings": results,
+            "from":     from_date,
+            "to":       to_date,
+            "count":    len(results),
+            "source":   "fmp",
+        }
+        cache.set(cache_key, response, 6 * 3600)   # 6-hour TTL matches catalyst service
+        print(f"[EARNINGS_CALENDAR] FMP returned {len(results)} events ({from_date} → {to_date})")
         return JSONResponse(content=response)
 
     except Exception as e:
         print(f"[EARNINGS_CALENDAR] Error: {e}")
-        return JSONResponse(status_code=502, content={"error": f"Finnhub calendar unavailable: {str(e)[:200]}"})
+        return JSONResponse(
+            status_code=502,
+            content={"error": f"FMP earnings calendar unavailable: {str(e)[:200]}"},
+        )
 
 
 # ============================================================
