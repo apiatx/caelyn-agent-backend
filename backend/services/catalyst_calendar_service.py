@@ -150,8 +150,13 @@ class CatalystFMP:
         return d if isinstance(d, list) else []
 
     async def ipo_calendar(self, from_date: str, to_date: str) -> list:
-        ck = f"cat:ipo:{from_date}:{to_date}"
-        d  = await self._get("ipo-calendar", {"from": from_date, "to": to_date}, ck, _TTL_IPO)
+        """
+        FMP stable endpoint is /stable/ipos-calendar (note: 'ipos', not 'ipo').
+        Date params work for upcoming windows; for broad/recent windows FMP may
+        return the full dataset — caller should filter locally by date.
+        """
+        ck = f"cat:ipos:{from_date}:{to_date}"
+        d  = await self._get("ipos-calendar", {"from": from_date, "to": to_date}, ck, _TTL_IPO)
         return d if isinstance(d, list) else []
 
     async def splits_calendar(self, from_date: str, to_date: str) -> list:
@@ -617,24 +622,41 @@ async def _fetch_ipos(
     portfolio: set,
 ) -> list[dict]:
     """
-    FMP ipo-calendar fields: symbol, date, company/companyName/name, exchange,
-    priceRangeLow, priceRangeHigh, offerPrice, shares, marketCap, actions.
+    FMP /stable/ipos-calendar fields (confirmed):
+      symbol, date, daa, company, exchange, actions, shares, priceRange, marketCap
 
-    NOTE: FMP Starter plan may return 0 IPOs. When data is available, all
-    fields are normalised. companyName uses 'company' → 'companyName' → symbol.
+    Key notes:
+    - Correct FMP endpoint is 'ipos-calendar' (with 's'), NOT 'ipo-calendar'
+    - 'company' is the name field (no separate companyName)
+    - 'priceRange' is already a formatted string "4.00 - 6.00"
+    - 'actions': "Expected" (upcoming), "Priced" (recent/complete), "Withdrawn"
+    - FMP may return the full dataset for broad date windows → filter locally
+    - Do NOT skip rows with no symbol; companyName + date is enough to emit an event
     """
     rows = await fmp.ipo_calendar(from_date, to_date)
+    raw_count = len(rows or [])
+
+    # Log request path without API key for debugging
+    print(f"[catalyst:debug] ipos-calendar request: from={from_date} to={to_date} raw={raw_count}")
+    if rows:
+        print(f"[catalyst:debug] ipos first row keys: {list(rows[0].keys())}")
+        print(f"[catalyst:debug] ipos first row: {rows[0]}")
+
     events: list[dict] = []
     missing_date = 0
+    out_of_window = 0
+
     for row in (rows or []):
-        sym  = (row.get("symbol") or "").upper()
+        sym  = (row.get("symbol") or "").upper() or None
         name = (
             row.get("company")
             or row.get("companyName")
             or row.get("name")
             or sym
-            or "Unknown"
+            or "IPO"
         )
+
+        # Date: 'date' field is YYYY-MM-DD in the ipos-calendar endpoint
         raw_date = (
             row.get("date")
             or row.get("ipoDate")
@@ -647,31 +669,44 @@ async def _fetch_ipos(
             missing_date += 1
             continue
 
-        exchange   = row.get("exchange") or row.get("market") or ""
-        low_p      = row.get("priceRangeLow") or row.get("priceFrom") or row.get("priceLow")
-        high_p     = row.get("priceRangeHigh") or row.get("priceTo") or row.get("priceHigh")
-        offer      = _safe(row.get("offerPrice"))
+        # Local date window filter — FMP may return the full dataset
+        if from_date and date < from_date:
+            out_of_window += 1
+            continue
+        if to_date and date > to_date:
+            out_of_window += 1
+            continue
+
+        exchange   = (row.get("exchange") or row.get("market") or "").strip()
+        actions    = (row.get("actions") or "").strip()          # "Expected", "Priced", etc.
         shares_raw = _safe(row.get("shares") or row.get("totalSharesValue"))
-        mc         = _safe(row.get("marketCap") or (
-            shares_raw * offer if shares_raw and offer else None
-        ))
+        mc         = _safe(row.get("marketCap"))
+        offer      = _safe(row.get("offerPrice") or row.get("priceOffer"))
         bucket     = _mc_bucket(mc)
 
-        # Price range string
-        if low_p and high_p:
-            price_range = f"${low_p}–${high_p}"
+        # priceRange: FMP returns "4.00 - 6.00"; add $ prefix
+        pr_raw = (row.get("priceRange") or "").strip()
+        if pr_raw:
+            parts_pr = [p.strip() for p in pr_raw.split("-")]
+            if len(parts_pr) == 2 and all(p for p in parts_pr):
+                price_range = f"${parts_pr[0]}–${parts_pr[1]}"
+            else:
+                price_range = f"${pr_raw}"
         elif offer:
-            price_range = f"${offer}"
-        elif low_p:
-            price_range = f"${low_p}+"
+            price_range = f"${offer:.2f}"
         else:
             price_range = None
 
         # title
-        title = f"{name} IPO"
+        if name and name != "IPO":
+            title = f"{name} IPO"
+        elif sym:
+            title = f"{sym} IPO"
+        else:
+            title = "IPO"
 
         # subtitle
-        subtitle = f"Exchange: {exchange}" if exchange else "IPO"
+        subtitle = f"Exchange: {exchange}" if exchange else (actions if actions else "IPO")
 
         # keyDetails
         kd_parts: list[str] = []
@@ -679,20 +714,22 @@ async def _fetch_ipos(
             kd_parts.append(f"Exchange: {exchange}")
         if price_range:
             kd_parts.append(f"Price: {price_range}")
-        elif offer:
-            kd_parts.append(f"Offer: ${offer:.2f}")
         if shares_raw:
-            s_fmt = f"{shares_raw/1_000_000:.1f}M" if shares_raw >= 1_000_000 else str(int(shares_raw))
+            s_fmt = (f"{shares_raw/1_000_000:.1f}M" if shares_raw >= 1_000_000
+                     else f"{int(shares_raw):,}")
             kd_parts.append(f"Shares: {s_fmt}")
         if mc:
-            mc_fmt = f"${mc/1_000_000_000:.1f}B" if mc >= 1e9 else f"${mc/1_000_000:.0f}M"
+            mc_fmt = (f"${mc/1_000_000_000:.1f}B" if mc >= 1e9
+                      else f"${mc/1_000_000:.0f}M")
             kd_parts.append(f"Mkt Cap: {mc_fmt}")
-        key_details = " · ".join(kd_parts) or None
+        if actions:
+            kd_parts.append(actions)
+        key_details = " · ".join(kd_parts) or "IPO scheduled"
 
-        imp = _score_importance("ipo", bucket, sym or None, title, watchlist, portfolio)
+        imp = _score_importance("ipo", bucket, sym, title, watchlist, portfolio)
         events.append(_build_event(
             id              = _event_id("ipo", sym or name, date),
-            symbol          = sym or None,
+            symbol          = sym,
             companyName     = name,
             eventType       = "ipo",
             eventLabel      = "IPO",
@@ -711,10 +748,19 @@ async def _fetch_ipos(
             raw             = row,
         ))
 
-    print(f"[catalyst:debug] ipos raw={len(rows or [])} normalized={len(events)} skipped_date={missing_date}")
+    print(
+        f"[catalyst:debug] ipos: raw={raw_count} "
+        f"normalized={len(events)} "
+        f"skipped_date={missing_date} "
+        f"out_of_window={out_of_window}"
+    )
     if events:
         e = events[0]
-        print(f"[catalyst:debug] ipos[0]: date={e['date']} title={e['title']!r} keyDetails={e['keyDetails']!r}")
+        print(
+            f"[catalyst:debug] ipos[0]: date={e['date']} "
+            f"title={e['title']!r} "
+            f"keyDetails={e['keyDetails']!r}"
+        )
     return events
 
 
@@ -1619,6 +1665,169 @@ async def get_filters(fmp_key: str) -> dict:
         "watchlistSymbols": sorted(watchlist),
         "portfolioSymbols": sorted(portfolio),
     }
+
+
+_TTL_ASK_CONTEXT = 4 * 3600   # 4-hour TTL for ask-context responses
+
+_ASK_CONTEXT_TABS = [
+    "earnings_dates",
+    "dividends",
+    "ipos",
+    "splits",
+    "economic_releases",
+    "treasury_macro",
+]
+
+
+async def get_ask_context(
+    fmp_key: str,
+    scope: str = "all",
+    symbols: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    include_recent: bool = True,
+    include_upcoming: bool = True,
+    refresh: bool = False,
+    per_tab_limit: int = 100,
+) -> dict:
+    """
+    Return a full Catalyst Calendar context package across all 6 tabs for Ask Caelyn.
+
+    Reuses get_events() for every tab × mode combination so all normalisation,
+    caching, enrichment, and filter logic is shared.  The ask-context response
+    is itself cached at 4-hour TTL (bypassed when refresh=True).
+
+    Cache key:
+        catalysts:ask_context:v1:{scope}:{symbols_hash}:{from}:{to}:{recent}:{upcoming}
+    """
+    syms_hash = hashlib.md5((symbols or "").lower().encode()).hexdigest()[:8]
+    ck = (
+        f"catalysts:ask_context:v1:{scope}:{syms_hash}:"
+        f"{from_date or ''}:{to_date or ''}:"
+        f"{int(include_recent)}:{int(include_upcoming)}"
+    )
+
+    if not refresh:
+        hit = cache.get(ck)
+        if hit is not None:
+            return hit
+
+    t0 = time.monotonic()
+
+    # Resolve symbols_filter set once
+    symbols_filter: Optional[set] = None
+    if symbols:
+        symbols_filter = {s.strip().upper() for s in symbols.split(",") if s.strip()}
+
+    modes: list[str] = []
+    if include_upcoming:
+        modes.append("upcoming")
+    if include_recent:
+        modes.append("recent")
+
+    # Build all parallel tasks: 6 tabs × up-to-2 modes
+    task_keys: list[tuple[str, str]] = []
+    coros = []
+    for tab in _ASK_CONTEXT_TABS:
+        for mode in modes:
+            task_keys.append((tab, mode))
+            coros.append(get_events(
+                fmp_key=fmp_key,
+                tab=tab,
+                mode=mode,
+                scope=scope,
+                symbols_filter=symbols_filter,
+                from_date=from_date,
+                to_date=to_date,
+                limit=per_tab_limit,
+                refresh=refresh,
+            ))
+
+    results = await asyncio.gather(*coros, return_exceptions=True)
+
+    # Assemble response
+    tab_data: dict[str, dict] = {t: {"upcoming": [], "recent": []} for t in _ASK_CONTEXT_TABS}
+    errors: list[dict] = []
+    total_events = 0
+    high_importance = 0
+    actual_from: Optional[str] = from_date
+    actual_to: Optional[str]   = to_date
+
+    watchlist    = _load_watchlist_symbols()
+    portfolio_s  = _load_portfolio_symbols()
+    watchlist_matches  = 0
+    portfolio_matches  = 0
+
+    for (tab, mode), res in zip(task_keys, results):
+        if isinstance(res, Exception):
+            errors.append({"tab": tab, "mode": mode, "message": str(res)})
+            continue
+        evs = res.get("events", [])
+        if res.get("errors"):
+            errors.extend(res["errors"])
+        tab_data[tab][mode] = evs
+        total_events += len(evs)
+
+        # Track range actually used
+        if not actual_from and res.get("from"):
+            actual_from = res["from"]
+        if not actual_to and res.get("to"):
+            actual_to = res["to"]
+
+        for ev in evs:
+            if ev.get("importance") == "high":
+                high_importance += 1
+            sym = ev.get("symbol")
+            if sym:
+                if sym in watchlist:
+                    watchlist_matches += 1
+                if sym in portfolio_s:
+                    portfolio_matches += 1
+
+    # Derive next/recent major catalysts across all tabs
+    today_str = _today()
+    all_upcoming = [ev for t in _ASK_CONTEXT_TABS for ev in tab_data[t]["upcoming"]]
+    all_recent   = [ev for t in _ASK_CONTEXT_TABS for ev in tab_data[t]["recent"]]
+
+    next_major = _sort_by_importance_date(
+        [e for e in all_upcoming if e.get("importance") == "high" and (e.get("date") or "") >= today_str],
+        date_desc=False,
+    )[:10]
+    recent_major = _sort_by_importance_date(
+        [e for e in all_recent if e.get("importance") == "high"],
+        date_desc=True,
+    )[:10]
+
+    ms = int((time.monotonic() - t0) * 1000)
+    print(
+        f"[catalyst] ask-context scope={scope} tabs={len(_ASK_CONTEXT_TABS)} "
+        f"modes={modes} total={total_events} high={high_importance} "
+        f"errors={len(errors)} ms={ms}"
+    )
+
+    status = "ok" if not errors else "partial"
+    payload = {
+        "asOf":   datetime.now(timezone.utc).isoformat(),
+        "source": "fmp",
+        "range":  {
+            "from": actual_from or _date_offset(-_RECENT_DAYS),
+            "to":   actual_to   or _date_offset(_UPCOMING_DAYS),
+        },
+        "tabs": tab_data,
+        "summary": {
+            "totalEvents":         total_events,
+            "highImportanceEvents": high_importance,
+            "watchlistMatches":    watchlist_matches,
+            "portfolioMatches":    portfolio_matches,
+            "nextMajorCatalysts":  next_major,
+            "recentMajorCatalysts": recent_major,
+        },
+        "status": status,
+        "errors": errors,
+    }
+
+    cache.set(ck, payload, _TTL_ASK_CONTEXT)
+    return payload
 
 
 async def get_by_symbol(fmp_key: str, symbol: str) -> dict:

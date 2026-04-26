@@ -9,6 +9,7 @@ Endpoints
 GET /api/catalysts/overview
 GET /api/catalysts/events
 GET /api/catalysts/filters
+GET /api/catalysts/ask-context
 GET /api/catalysts/by-symbol/{symbol}
 """
 from __future__ import annotations
@@ -29,6 +30,7 @@ except ImportError:
 from config import FMP_API_KEY
 from services.catalyst_calendar_service import (
     ALL_TABS,
+    get_ask_context,
     get_by_symbol,
     get_events,
     get_filters,
@@ -228,6 +230,97 @@ async def catalyst_filters(
         return JSONResponse(content=data)
     except Exception as e:
         print(f"[catalyst] filters unhandled: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "status": "error"},
+        )
+
+
+# ── GET /api/catalysts/ask-context ────────────────────────────────────────────
+
+@router.get("/api/catalysts/ask-context")
+@traceable(name="catalyst_calendar.ask_context")
+async def catalyst_ask_context(
+    request: Request,
+    api_key: str = Header(None, alias=_AUTH_HEADER),
+    scope: str = Query(
+        default="all",
+        description="'all', 'watchlist', or 'portfolio'.",
+    ),
+    symbols: Optional[str] = Query(
+        default=None,
+        description="Comma-separated symbols to restrict context to.",
+    ),
+    from_date: Optional[str] = Query(
+        default=None,
+        description="Start date YYYY-MM-DD for the context window.",
+        alias="from",
+    ),
+    to_date: Optional[str] = Query(
+        default=None,
+        description="End date YYYY-MM-DD for the context window.",
+        alias="to",
+    ),
+    include_recent: bool = Query(
+        default=True,
+        description="Include recent (historical) events.",
+        alias="includeRecent",
+    ),
+    include_upcoming: bool = Query(
+        default=True,
+        description="Include upcoming (future) events.",
+        alias="includeUpcoming",
+    ),
+    refresh: bool = Query(
+        default=False,
+        description="Force-bypass the 4-hour cache and re-fetch all data.",
+    ),
+):
+    """
+    Full Catalyst Calendar context package across all six tabs for Ask Caelyn.
+
+    Returns earnings, dividends, IPOs, splits, economic releases, and treasury
+    data in a single response.  Reuses existing per-tab caches — no duplicated
+    FMP calls.  Response is itself cached for 4 hours (bypass with refresh=true).
+
+    Tabs: earnings_dates, dividends, ipos, splits, economic_releases, treasury_macro
+    """
+    err = _check_key(api_key)
+    if err:
+        return err
+
+    if not FMP_API_KEY:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "FMP API key not configured", "status": "error"},
+        )
+
+    if scope not in ("all", "watchlist", "portfolio"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid scope {scope!r}. Valid: all, watchlist, portfolio"},
+        )
+
+    if not include_recent and not include_upcoming:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "At least one of includeRecent or includeUpcoming must be true"},
+        )
+
+    try:
+        data = await get_ask_context(
+            fmp_key=FMP_API_KEY,
+            scope=scope,
+            symbols=symbols,
+            from_date=from_date,
+            to_date=to_date,
+            include_recent=include_recent,
+            include_upcoming=include_upcoming,
+            refresh=refresh,
+        )
+        return JSONResponse(content=data)
+    except Exception as e:
+        print(f"[catalyst] ask-context unhandled: {e}")
         return JSONResponse(
             status_code=500,
             content={"error": str(e), "status": "error"},

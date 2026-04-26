@@ -1,0 +1,215 @@
+Catalyst Calendar needs three fixes. Please handle backend pieces for Fix #2 and Fix #3.
+
+IMPORTANT GUARDRAILS:
+- Do NOT break the existing Earnings calendar.
+- Do NOT break existing Earnings popup/click behavior.
+- Do NOT remove current Catalyst Calendar tab support.
+- Do NOT use LLM calls for data collection.
+- Use FMP_API_KEY from Replit secrets.
+- Do not log API keys.
+
+Fix #2 Backend: Ask Caelyn needs access to all Catalyst Calendar FMP data across all tabs
+
+Current issue:
+Ask Caelyn is only visible/available on the Earnings tab and appears tied mostly to earnings data.
+
+Required:
+Create or update a backend endpoint that returns a full Catalyst Calendar context package across all tabs so Ask Caelyn can answer questions about:
+- Earnings
+- Dividends
+- IPOs
+- Stock Splits
+- Economic Releases
+- Treasury / Macro
+
+Suggested endpoint:
+GET /api/catalysts/ask-context
+
+Query params:
+- scope=all|watchlist|portfolio
+- symbols=comma-separated optional
+- from=YYYY-MM-DD optional
+- to=YYYY-MM-DD optional
+- includeRecent=true|false default true
+- includeUpcoming=true|false default true
+- refresh=true|false default false
+
+Response shape:
+{
+  "asOf": string,
+  "source": "fmp",
+  "range": {
+    "from": string,
+    "to": string
+  },
+  "tabs": {
+    "earnings_dates": {
+      "upcoming": [...],
+      "recent": [...]
+    },
+    "dividends": {
+      "upcoming": [...],
+      "recent": [...]
+    },
+    "ipos": {
+      "upcoming": [...],
+      "recent": [...]
+    },
+    "splits": {
+      "upcoming": [...],
+      "recent": [...]
+    },
+    "economic_releases": {
+      "upcoming": [...],
+      "recent": [...]
+    },
+    "treasury_macro": {
+      "upcoming": [...],
+      "recent": [...]
+    }
+  },
+  "summary": {
+    "totalEvents": number,
+    "highImportanceEvents": number,
+    "watchlistMatches": number,
+    "portfolioMatches": number,
+    "nextMajorCatalysts": [...],
+    "recentMajorCatalysts": [...]
+  },
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+Important:
+This endpoint should reuse existing Catalyst Calendar service/normalizers/cache. Do NOT duplicate all logic.
+
+The goal is to collect the already-normalized FMP data across all tabs in one context package for Ask Caelyn.
+
+Caching:
+Use a cache key like:
+catalysts:ask_context:v1:{scope}:{symbols_hash}:{from}:{to}:{includeRecent}:{includeUpcoming}
+
+TTL:
+3-6 hours is fine, unless refresh=true.
+
+Do not make excessive API calls:
+- Reuse cached tab responses where possible.
+- Apply reasonable per-tab limits.
+- Suggested max per bucket: 100 events.
+- For Ask Caelyn, prioritize high-importance, watchlist/portfolio matches, and near-date events.
+
+Fix #3 Backend: IPO data is still not returning/displaying
+
+Current issue:
+IPO tab is blank or not showing useful rows for Upcoming or Recent.
+
+FMP endpoint to use:
+https://financialmodelingprep.com/stable/ipos-calendar
+
+Use FMP_API_KEY.
+
+Please audit the current IPO implementation and fix it.
+
+Common likely bugs to check:
+1. Wrong endpoint path:
+   - incorrect: /api/v3/ipo_calendar
+   - incorrect: /stable/ipo-calendar
+   - correct stable endpoint: /stable/ipos-calendar
+
+2. Wrong tab key:
+   - frontend/backend must agree on tab=ipos
+
+3. Wrong date params:
+   Confirm FMP stable IPO calendar date param names.
+   Try the documented playground pattern.
+   If from/to are not accepted, call endpoint without date params and filter locally by normalized date.
+
+4. Date field mismatch:
+   Normalize from whatever FMP returns:
+   - date
+   - ipoDate
+   - pricedDate
+   - filingDate
+
+5. Company field mismatch:
+   Normalize from:
+   - companyName
+   - company
+   - name
+
+6. Price/share field mismatch:
+   Normalize from:
+   - priceRange
+   - priceRangeLow / priceRangeHigh
+   - offerPrice
+   - shares
+   - exchange
+
+7. Over-filtering:
+   Do not drop IPO rows just because symbol is missing.
+   IPO rows can be valid with only companyName + date.
+
+Required IPO normalized event:
+{
+  "id": string,
+  "date": "YYYY-MM-DD",
+  "symbol": string | null,
+  "companyName": string | null,
+  "eventType": "ipo",
+  "eventLabel": "IPO",
+  "eventCategory": "upcoming" | "recent",
+  "title": string,
+  "subtitle": string | null,
+  "keyDetails": string | null,
+  "source": "fmp",
+  "importance": "medium",
+  "exchange": string | null,
+  "priceRange": string | null,
+  "offerPrice": string | number | null,
+  "shares": number | string | null,
+  "raw": object
+}
+
+Title rules:
+- If companyName exists: "{companyName} IPO"
+- Else if symbol exists: "{symbol} IPO"
+- Else: "IPO"
+
+Key details examples:
+- "Exchange: NASDAQ · Price: $15-$17 · Shares: 10M"
+- "Offer Price: $16 · Exchange: NYSE"
+- If only company/date exists, use "IPO scheduled"
+
+Recent IPO default window:
+- previous 90 days through today
+
+Upcoming IPO default window:
+- today through next 90 days
+
+Sorting:
+- upcoming IPOs ascending by date
+- recent IPOs descending by date
+
+Validation:
+Test these endpoints manually:
+GET /api/catalysts/events?tab=ipos&mode=upcoming
+GET /api/catalysts/events?tab=ipos&mode=recent
+GET /api/catalysts/ask-context
+
+For IPO endpoint validation, log:
+- request URL path without API key
+- raw IPO count
+- first raw IPO object keys
+- normalized IPO count
+- first normalized IPO
+
+Do not log the API key.
+
+Final response:
+Tell me:
+- Whether IPO endpoint path was wrong
+- Whether date params or local filtering were needed
+- Why IPOs were blank
+- Confirm /api/catalysts/events?tab=ipos works for upcoming and recent
+- Confirm /api/catalysts/ask-context returns all six catalyst categories
+- Confirm Earnings calendar/popup behavior was untouched
