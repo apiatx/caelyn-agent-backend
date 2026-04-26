@@ -102,14 +102,23 @@ async def catalyst_events(
         default="all",
         description=f"Tab name or 'all'. Options: all, {', '.join(ALL_TABS)}",
     ),
+    mode: str = Query(
+        default="upcoming",
+        description=(
+            "'upcoming' (default) = future/calendar events. "
+            "'recent' = historical events for list view. "
+            "Default windows: earnings 30d, dividends 60d, "
+            "ipos/splits 90d, economic/treasury 30d."
+        ),
+    ),
     from_date: Optional[str] = Query(
         default=None,
-        description="Start date YYYY-MM-DD. Defaults vary per tab.",
+        description="Start date YYYY-MM-DD. Overrides mode default window.",
         alias="from",
     ),
     to_date: Optional[str] = Query(
         default=None,
-        description="End date YYYY-MM-DD. Defaults vary per tab.",
+        description="End date YYYY-MM-DD. Overrides mode default window.",
         alias="to",
     ),
     symbols: Optional[str] = Query(
@@ -143,7 +152,10 @@ async def catalyst_events(
 ):
     """
     Flexible event feed with filtering.
+
     Use `tab=all` for a unified sorted stream, or specify a single tab.
+    Use `mode=upcoming` (default) for forward-looking calendar events.
+    Use `mode=recent` for historical events in list view.
     """
     err = _check_key(api_key)
     if err:
@@ -159,6 +171,12 @@ async def catalyst_events(
         return JSONResponse(
             status_code=400,
             content={"error": f"Unknown tab {tab!r}. Valid: all, {', '.join(ALL_TABS)}"},
+        )
+
+    if mode not in ("upcoming", "recent"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid mode {mode!r}. Valid: upcoming, recent"},
         )
 
     # Parse comma-separated symbols
@@ -178,6 +196,7 @@ async def catalyst_events(
             mc_bucket=mc_bucket,
             event_type_filter=event_type,
             limit=limit,
+            mode=mode,
         )
         return JSONResponse(content=data)
     except Exception as e:

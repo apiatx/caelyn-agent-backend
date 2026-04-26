@@ -51,6 +51,26 @@ _RECENT_DAYS    = 30
 _MACRO_BACK     = 14
 _MACRO_AHEAD    = 45
 
+# Recent mode: how many days back to look per tab (spec-defined defaults)
+_RECENT_BACK: dict[str, int] = {
+    "earnings_dates":    30,
+    "dividends":         60,
+    "ipos":              90,
+    "splits":            90,
+    "economic_releases": 30,
+    "treasury_macro":    30,
+}
+
+# eventType normalisation for recent mode (per spec)
+_RECENT_EVENT_TYPES: dict[str, str] = {
+    "earnings_dates":    "earnings_report",
+    "dividends":         "dividend",
+    "ipos":              "ipo",
+    "splits":            "stock_split",
+    "economic_releases": "economic_release",
+    "treasury_macro":    "treasury_macro",
+}
+
 # Importance keywords for economic events
 _HIGH_IMPACT_ECON = {
     "CPI", "PCE", "FOMC", "Federal Reserve", "Interest Rate", "NFP",
@@ -352,6 +372,8 @@ def _build_event(**kw) -> dict:
         "epsActual":          kw.get("epsActual"),
         "revenueEstimated":   kw.get("revenueEstimated"),
         "revenueActual":      kw.get("revenueActual"),
+        "surprise":           kw.get("surprise"),
+        "surprisePercent":    kw.get("surprisePercent"),
         # dividend
         "dividend":           kw.get("dividend"),
         "recordDate":         kw.get("recordDate"),
@@ -362,8 +384,11 @@ def _build_event(**kw) -> dict:
         "exchange":           kw.get("exchange"),
         "shares":             kw.get("shares"),
         "priceRange":         kw.get("priceRange"),
+        "offerPrice":         kw.get("offerPrice"),
         # split
         "splitRatio":         kw.get("splitRatio"),
+        "numerator":          kw.get("numerator"),
+        "denominator":        kw.get("denominator"),
         # SEC filing
         "formType":           kw.get("formType"),
         "filingUrl":          kw.get("filingUrl"),
@@ -377,11 +402,17 @@ def _build_event(**kw) -> dict:
         "transactionType":    kw.get("transactionType"),
         "sharesTraded":       kw.get("sharesTraded"),
         "transactionValue":   kw.get("transactionValue"),
-        # macro
+        # macro / economic
         "actual":             kw.get("actual"),
         "estimate":           kw.get("estimate"),
         "previous":           kw.get("previous"),
         "country":            kw.get("country"),
+        "eventName":          kw.get("eventName"),
+        # treasury / macro indicators
+        "maturity":           kw.get("maturity"),
+        "value":              kw.get("value"),
+        "previousValue":      kw.get("previousValue"),
+        "indicatorName":      kw.get("indicatorName"),
     }
 
 
@@ -675,13 +706,26 @@ async def _fetch_economic_releases(
             estimate       = row.get("estimate"),
             previous       = row.get("previous"),
             country        = country,
+            eventName      = title,
             raw            = row,
         ))
     return events
 
 
+# ── Treasury maturity labels (FMP field → human label) ────────────────────────
+_TREASURY_MATURITIES = [
+    ("month1", "1M"), ("month2", "2M"), ("month3", "3M"), ("month6", "6M"),
+    ("year1", "1Y"),  ("year2", "2Y"),  ("year3", "3Y"),  ("year5", "5Y"),
+    ("year7", "7Y"),  ("year10", "10Y"), ("year20", "20Y"), ("year30", "30Y"),
+]
+
+
 async def _fetch_treasury_macro(fmp: CatalystFMP) -> list[dict]:
-    """Return treasury yield curve as a macro event (latest snapshot)."""
+    """
+    Return treasury yield curve as macro events (latest snapshot + recent history).
+    Emits one summary event (yield_curve) and individual maturity events for the
+    latest row so the frontend can render the full curve.
+    """
     rows  = await fmp.treasury_rates()
     events: list[dict] = []
     if not rows:
@@ -708,13 +752,18 @@ async def _fetch_treasury_macro(fmp: CatalystFMP) -> list[dict]:
         date          = date,
         importance    = "high",
         actual        = y10,
+        value         = y10,
+        maturity      = "10Y",
+        indicatorName = "Treasury Yield Curve",
         raw           = latest,
     ))
 
-    # Add recent historical rows as data points (last 5)
-    for row in rows[1:6]:
-        d   = row.get("date") or ""
+    # Add recent historical rows as data points (last 29 = up to 30 days)
+    for i, row in enumerate(rows[1:30]):
+        d    = row.get("date") or ""
         y10r = row.get("year10")
+        y2r  = row.get("year2")
+        prev_row = rows[i + 2] if i + 2 < len(rows) else {}  # row before this one
         events.append(_build_event(
             id            = _event_id("treasury_macro", None, d, "yield_history"),
             eventType     = "treasury_macro",
@@ -723,6 +772,10 @@ async def _fetch_treasury_macro(fmp: CatalystFMP) -> list[dict]:
             date          = d,
             importance    = "medium",
             actual        = y10r,
+            value         = y10r,
+            previousValue = prev_row.get("year10"),
+            maturity      = "10Y",
+            indicatorName = "Treasury Yield Curve",
             raw           = row,
         ))
     return events
@@ -756,8 +809,12 @@ async def _fetch_recent_earnings(
         bucket = _mc_bucket(mc)
         imp = _score_importance("recent_earnings", bucket, sym, name, watchlist, portfolio)
         beat_miss = ""
+        surprise     = None
+        surp_pct     = None
         if eps_a is not None and eps_e is not None:
             beat_miss = " (Beat)" if eps_a >= eps_e else " (Miss)"
+            surprise  = round(eps_a - eps_e, 4)
+            surp_pct  = round((surprise / abs(eps_e)) * 100, 2) if eps_e else None
         events.append(_build_event(
             id               = _event_id("recent_earnings", sym, date),
             symbol           = sym or None,
@@ -775,6 +832,8 @@ async def _fetch_recent_earnings(
             epsActual        = eps_a,
             revenueEstimated = rev_e,
             revenueActual    = rev_a,
+            surprise         = surprise,
+            surprisePercent  = surp_pct,
             raw              = row,
         ))
     return events
@@ -1019,8 +1078,18 @@ def _load_portfolio_symbols() -> set[str]:
 
 # ── Main entry points ─────────────────────────────────────────────────────────
 
-def _default_dates(tab: str) -> tuple[str, str]:
-    """Return (from_date, to_date) defaults for a tab."""
+def _default_dates(tab: str, mode: str = "upcoming") -> tuple[str, str]:
+    """
+    Return (from_date, to_date) defaults for a tab.
+
+    mode="upcoming"  →  forward-looking windows (existing behaviour)
+    mode="recent"    →  backward-looking windows defined by _RECENT_BACK
+    """
+    if mode == "recent":
+        back = _RECENT_BACK.get(tab, _RECENT_DAYS)
+        return _date_offset(-back), _today()
+
+    # --- upcoming / default ---
     upcoming = {"earnings_dates", "dividends", "ipos", "splits"}
     recent   = {"recent_earnings", "sec_filings", "analyst_ratings", "insider_transactions"}
     macro    = {"economic_releases", "treasury_macro"}
@@ -1042,13 +1111,24 @@ async def _fetch_tab(
     watchlist: set,
     portfolio: set,
     limit: int = 100,
+    mode: str = "upcoming",
 ) -> tuple[list[dict], Optional[str]]:
     """
     Fetch one tab. Returns (events, error_message).
     Never raises — all exceptions become error messages.
+
+    mode="upcoming" → forward-looking calendar events (default, unchanged).
+    mode="recent"   → historical events for list view.
+      - earnings_dates  → delegates to _fetch_recent_earnings (has actual EPS/rev data)
+      - dividends/ipos/splits/economic_releases/treasury_macro → same fetcher,
+        backward date window, then eventType + eventCategory are normalised.
     """
     try:
-        if tab == "earnings_dates":
+        if mode == "recent" and tab == "earnings_dates":
+            # Use the dedicated recent-earnings fetcher (filters to reported rows)
+            evs = await _fetch_recent_earnings(fmp, from_date, to_date, watchlist, portfolio)
+
+        elif tab == "earnings_dates":
             evs = await _fetch_earnings_dates(fmp, from_date, to_date, watchlist, portfolio)
         elif tab == "dividends":
             evs = await _fetch_dividends(fmp, from_date, to_date, watchlist, portfolio)
@@ -1071,11 +1151,21 @@ async def _fetch_tab(
         else:
             return [], f"Unknown tab: {tab!r}"
 
+        # ── Recent-mode normalisation ─────────────────────────────────────────
+        # Override eventType and eventCategory for all events returned in
+        # recent mode so the frontend gets consistent, mode-aware field values.
+        if mode == "recent" and tab in _RECENT_EVENT_TYPES:
+            recent_type = _RECENT_EVENT_TYPES[tab]
+            for ev in evs:
+                ev["eventType"]     = recent_type
+                ev["eventCategory"] = "recent"
+        # ─────────────────────────────────────────────────────────────────────
+
         evs = _sort_by_importance_date(evs)[:limit]
         return evs, None
 
     except Exception as e:
-        print(f"[catalyst] tab={tab} error: {e}")
+        print(f"[catalyst] tab={tab} mode={mode} error: {e}")
         return [], str(e)
 
 
@@ -1178,8 +1268,19 @@ async def get_events(
     event_type_filter: Optional[str] = None,
     limit: int = 100,
     refresh: bool = False,
+    mode: str = "upcoming",
 ) -> dict:
-    """Fetch events for one tab (or all) with filtering."""
+    """
+    Fetch events for one tab (or all) with filtering.
+
+    mode="upcoming"  →  future/current catalyst events for calendar view (default).
+    mode="recent"    →  historical events for list view; backward date windows
+                        per _RECENT_BACK; eventType and eventCategory normalised
+                        per _RECENT_EVENT_TYPES.
+    """
+    if mode not in ("upcoming", "recent"):
+        mode = "upcoming"
+
     t0  = time.monotonic()
     fmp = CatalystFMP(fmp_key)
 
@@ -1208,10 +1309,13 @@ async def get_events(
 
     for t_name in tabs_to_fetch:
         f_date, t_date = (
-            (from_date or _default_dates(t_name)[0]),
-            (to_date   or _default_dates(t_name)[1]),
+            (from_date or _default_dates(t_name, mode)[0]),
+            (to_date   or _default_dates(t_name, mode)[1]),
         )
-        evs, err = await _fetch_tab(fmp, t_name, f_date, t_date, watchlist, portfolio, limit=limit)
+        evs, err = await _fetch_tab(
+            fmp, t_name, f_date, t_date, watchlist, portfolio,
+            limit=limit, mode=mode,
+        )
         if err:
             errors.append({"tab": t_name, "message": err})
         all_events.extend(evs)
@@ -1238,12 +1342,14 @@ async def get_events(
     all_events = _sort_by_importance_date(all_events)[:limit]
 
     ms = int((time.monotonic() - t0) * 1000)
+    print(f"[catalyst] get_events tab={tab} mode={mode} events={len(all_events)} errors={len(errors)} ms={ms}")
     status = "ok" if not errors else "partial"
     return {
         "asOf":    datetime.now(timezone.utc).isoformat(),
         "tab":     tab,
-        "from":    from_date or "",
-        "to":      to_date or "",
+        "mode":    mode,
+        "from":    from_date or _default_dates(tab if tab != "all" else "earnings_dates", mode)[0],
+        "to":      to_date   or _default_dates(tab if tab != "all" else "earnings_dates", mode)[1],
         "filters": {
             "scope":     scope,
             "sector":    sector,
