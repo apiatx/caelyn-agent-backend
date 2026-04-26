@@ -1898,6 +1898,59 @@ async def earnings_detail(request: Request, ticker: str = ""):
             result.setdefault("fmp_next_eps_estimate", next_event.get("eps_estimate"))
             result.setdefault("fmp_next_revenue_estimate", next_event.get("revenue_estimate"))
 
+    # Phase 5: Polymarket enrichment — popup-only, never shown in main calendar
+    # Search for active prediction markets referencing this ticker or company.
+    # Results are keyed as "polymarket_markets" so the frontend can render them
+    # as a distinct "Prediction Markets / Beat-Miss Odds" section inside the popup.
+    try:
+        # Common words that appear in company names but are too generic to search on
+        _POLY_STOPWORDS = {
+            "inc", "corp", "ltd", "llc", "co", "company", "group", "holdings",
+            "the", "and", "of", "for", "a", "an", "plc", "sa", "ag", "se",
+            "technologies", "technology", "services", "solutions", "international",
+        }
+
+        def _poly_keywords(text: str) -> list[str]:
+            """Extract meaningful keywords from a ticker or company name."""
+            words = text.lower().replace(",", " ").replace(".", " ").split()
+            return [w for w in words if len(w) > 2 and w not in _POLY_STOPWORDS]
+
+        def _poly_event_matches(ev: dict, keywords: list[str]) -> bool:
+            """True if any keyword appears as a whole-word-ish match in the event text."""
+            combined = (
+                f"{ev.get('title', '')} {ev.get('description', '')} "
+                + " ".join(ev.get("tags", []))
+            ).lower()
+            return any(kw in combined for kw in keywords)
+
+        # Fetch top events once (cached by polymarket provider)
+        all_poly = await asyncio.wait_for(
+            agent.data.polymarket.get_top_events(limit=100),
+            timeout=5.0,
+        )
+
+        poly_markets: list[dict] = []
+        if isinstance(all_poly, list):
+            ticker_kw = _poly_keywords(ticker)
+            cname_kw = _poly_keywords(result.get("company_name", ""))
+            # Use all unique meaningful keywords; require at least one to be >3 chars
+            all_kw = list({*ticker_kw, *cname_kw})
+            all_kw = [kw for kw in all_kw if len(kw) > 3]
+
+            if all_kw:
+                for ev in all_poly:
+                    if _poly_event_matches(ev, all_kw):
+                        poly_markets.append(ev)
+
+        if poly_markets:
+            result["polymarket_markets"] = poly_markets[:8]
+            print(f"[EARNINGS_DETAIL] Polymarket enriched {ticker}: {len(poly_markets)} markets found")
+        else:
+            result["polymarket_markets"] = []
+    except Exception as e:
+        print(f"[EARNINGS_DETAIL] Polymarket enrichment failed for {ticker}: {e}")
+        result["polymarket_markets"] = []
+
     # Cache for 10 minutes
     cache.set(cache_key, result, 600)
     return JSONResponse(content=result)

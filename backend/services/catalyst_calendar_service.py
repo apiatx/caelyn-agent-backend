@@ -481,6 +481,32 @@ def _apply_enrichment(events: list[dict], enriched: dict[str, dict]) -> list[dic
 
 # ── Tab fetchers ──────────────────────────────────────────────────────────────
 
+def _is_polymarket_row(row: dict, title: str, sym: str) -> bool:
+    """
+    Safety guard: return True if a row looks like a Polymarket prediction market
+    rather than a genuine stock earnings event.  The main earnings calendar must
+    contain only real company earnings events sourced from FMP.
+
+    Reject conditions (any one is sufficient):
+    - row has a Polymarket-style 'source' field set to 'polymarket'
+    - row carries prediction-market keys (outcomes / odds / probability)
+    - title starts with a question word pattern ("Will ", "Does ", "Did ", "Is ", "Are ")
+    - no stock ticker symbol is present
+    - row contains a 'question' or 'slug' key (Gamma API shape)
+    """
+    if row.get("source") == "polymarket":
+        return True
+    if any(k in row for k in ("outcomes", "odds", "probability", "question", "slug")):
+        return True
+    title_lower = title.lower()
+    question_prefixes = ("will ", "does ", "did ", "is ", "are ", "can ", "has ", "have ")
+    if any(title_lower.startswith(p) for p in question_prefixes):
+        return True
+    if not sym:
+        return True
+    return False
+
+
 async def _fetch_earnings_dates(
     fmp: CatalystFMP,
     from_date: str,
@@ -500,6 +526,12 @@ async def _fetch_earnings_dates(
         name  = row.get("name") or row.get("companyName") or sym
         mc    = _safe(row.get("marketCap"))
         bucket = _mc_bucket(mc)
+        title = f"{name} Earnings" if name != sym else f"{sym} Earnings"
+
+        # Safety guard: skip anything that resembles a Polymarket market row
+        if _is_polymarket_row(row, title, sym):
+            continue
+
         imp = _score_importance("earnings_dates", bucket, sym, name, watchlist, portfolio)
         events.append(_build_event(
             id            = _event_id("earnings_dates", sym, date),
@@ -507,7 +539,7 @@ async def _fetch_earnings_dates(
             companyName   = name,
             eventType     = "earnings_dates",
             eventCategory = "upcoming",
-            title         = f"{name} Earnings" if name != sym else f"{sym} Earnings",
+            title         = title,
             date          = date,
             time          = row.get("time"),
             period        = row.get("fiscalDateEnding") or row.get("period"),
@@ -518,6 +550,7 @@ async def _fetch_earnings_dates(
             epsActual     = eps_a,
             revenueEstimated = rev_e,
             revenueActual = rev_a,
+            source        = "fmp",
             raw           = row,
         ))
     return events

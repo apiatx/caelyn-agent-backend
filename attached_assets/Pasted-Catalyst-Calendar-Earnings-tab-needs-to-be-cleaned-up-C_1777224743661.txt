@@ -1,0 +1,187 @@
+Catalyst Calendar Earnings tab needs to be cleaned up.
+
+Current problem:
+The main Earnings Calendar is currently polluted with Polymarket earnings markets/questions, such as:
+- "Will Google say YouTube during earnings..."
+- "Will Google say Alphabet during earnings..."
+These should NOT appear as rows/cards in the main Earnings Calendar.
+
+Required behavior:
+The main Earnings Calendar should be sourced from FMP earnings calendar data, just like the other Catalyst Calendar tabs use FMP.
+
+Important guardrails:
+- Do NOT remove Polymarket entirely.
+- Do NOT break the existing earnings stock click popup/modal.
+- Keep Polymarket only as enrichment inside the earnings detail popup when a user clicks a stock earnings event.
+- Keep the popup behavior exactly as-is structurally, but allow more FMP enrichment inside it.
+- Do NOT show Polymarket prediction market rows in the main earnings calendar/list/screener.
+
+Primary source for main Earnings Calendar:
+Use FMP earnings calendar endpoint via FMP_API_KEY.
+
+Backend requirements:
+
+1. Audit current Earnings Calendar data flow.
+Find where the Earnings tab gets:
+- calendar day cards
+- earnings event list
+- Polymarket earnings markets
+- popup/detail data
+
+Separate these concerns cleanly:
+- Main calendar data = FMP earnings events only
+- Popup/detail enrichment = FMP + Finnhub/Polymarket/other enrichment if already used
+
+2. Main Earnings Calendar endpoint/data should return only stock earnings events.
+
+Every main earnings event should represent an actual company earnings catalyst, not a prediction market question.
+
+Normalized event shape for main calendar:
+{
+  "id": string,
+  "date": "YYYY-MM-DD",
+  "symbol": string,
+  "companyName": string | null,
+  "eventType": "earnings",
+  "eventLabel": "Earnings",
+  "title": string,
+  "time": string | null,
+  "period": string | null,
+  "fiscalDateEnding": string | null,
+  "epsEstimated": number | null,
+  "epsActual": number | null,
+  "revenueEstimated": number | null,
+  "revenueActual": number | null,
+  "source": "fmp",
+  "raw": object
+}
+
+Title examples:
+- "GOOGL Earnings"
+- "Booking Holdings Earnings"
+- "MSFT Earnings"
+
+Do NOT return titles like:
+- "Will Google say YouTube..."
+- "Will Google mention AI..."
+- Any Polymarket market/question text
+
+3. Use FMP for the main earnings calendar.
+Use the project’s existing FMP client/helper if present.
+Do not duplicate FMP request code if there is already a shared FMP helper.
+
+Expected source:
+FMP Earnings Calendar.
+
+Make sure this works for:
+- current week
+- selected month
+- today
+- next/previous week navigation
+- Smart/All filtering if still used by frontend
+
+4. Preserve Smart/All behavior if frontend depends on it.
+If the existing Smart filter selects high-signal earnings:
+- Apply it to FMP earnings events only.
+- Do not include Polymarket markets in Smart or All.
+
+Smart can be based on:
+- watchlist/portfolio match
+- market cap if enriched
+- well-known tickers
+- analyst/estimate availability
+- volume/importance if already implemented
+
+5. Popup/detail enrichment:
+When user clicks an actual FMP earnings event, the popup can still fetch/display:
+- FMP earnings data
+- FMP company profile
+- FMP financials/ratios if already supported
+- Finnhub fundamentals if already supported
+- Polymarket earnings markets/beat odds if available for that specific stock/earnings call
+
+But Polymarket should only appear inside the popup as an enrichment section, such as:
+"Prediction Markets"
+"Polymarket Earnings Odds"
+"Beat/Miss Odds"
+
+Do not let popup enrichment leak into the main calendar rows.
+
+6. Add FMP enrichment to popup if not already present.
+For clicked earnings stock, include available FMP fields:
+- earnings date/time
+- EPS estimate
+- EPS actual if reported
+- revenue estimate
+- revenue actual if reported
+- company profile
+- sector/industry
+- market cap
+- recent stock news if already cheap/cached
+- analyst rating snapshot if available and already within plan
+
+Do not overfetch aggressively. Use cache.
+
+7. Backend separation:
+If current backend has one mixed object that combines calendar events + Polymarket markets, split it into something like:
+
+{
+  "calendarEvents": [FMP earnings only],
+  "popupEnrichment": {
+    "polymarket": [...],
+    "fmp": {...},
+    "finnhub": {...}
+  }
+}
+
+Or expose separate routes:
+- /api/catalysts/events?tab=earnings_dates → FMP earnings only
+- /api/earnings/{symbol}/details → detailed popup enrichment including Polymarket
+
+Do whichever best matches current architecture without breaking frontend.
+
+8. Filtering rule:
+Before returning main calendar events, explicitly filter out anything that looks like a Polymarket market:
+- item has market/question slug
+- title starts with "Will "
+- source == "polymarket"
+- has outcome/odds/probability but no symbol/date earnings event
+- lacks stock symbol but has prediction question text
+
+But do not rely only on text filtering. The real fix is source separation.
+
+9. Caching:
+Cache FMP earnings calendar by date range:
+fmp:earnings_calendar:v1:{from}:{to}
+
+TTL:
+3-6 hours is fine.
+
+Popup enrichment cache:
+earnings:detail:v1:{symbol}:{date}
+
+TTL:
+3-6 hours.
+
+10. Validation:
+Test main earnings endpoint/calendar data and confirm:
+- No Polymarket questions in main calendar rows.
+- All main rows are company earnings events from FMP.
+- date, symbol, company/event title are populated.
+- Smart/All still works, but only over FMP earnings events.
+- Clicking an earnings stock still opens the same popup.
+- Popup still can show Polymarket odds if available.
+
+Test examples:
+- /api/catalysts/events?tab=earnings_dates&mode=upcoming
+- /api/catalysts/events?tab=earnings_dates&mode=recent
+- Existing earnings popup/detail endpoint for a known ticker
+
+Final response:
+Tell me:
+- Which files changed
+- Where Polymarket was previously entering the main calendar
+- Confirm main Earnings Calendar now uses FMP only
+- Confirm Polymarket is only used inside clicked-stock popup enrichment
+- Confirm popup behavior was preserved
+- Confirm what FMP fields were added to popup enrichment
