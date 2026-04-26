@@ -1,0 +1,240 @@
+We need to stop patching the broken Upcoming Earnings logic and rebuild it cleanly.
+
+Scope:
+Only rebuild Catalyst Calendar > Earnings Dates > Upcoming.
+
+Do NOT touch:
+- Earnings Dates > Recent, which is working.
+- The clicked earnings popup/modal behavior.
+- Non-earnings Catalyst tabs.
+- Ask Caelyn global placement unless needed to keep data shape compatible.
+
+Current problem:
+Upcoming Earnings is still polluted by legacy logic:
+- Polymarket-style beat odds appear in the main earnings list.
+- Smart/high-conviction/most-talked-about logic is still influencing display.
+- Finnhub legacy paths previously fed this view.
+- Company names/logos are inconsistent.
+- Some rows show real company names/logos, others show ticker-only.
+- Backend had profile enrichment caps, causing random identity gaps.
+- User wants a clean FMP earnings calendar only.
+
+FINAL REQUIREMENT:
+Catalyst Calendar > Earnings Dates > Upcoming must be FMP-only.
+
+No Finnhub.
+No Polymarket.
+No beat odds.
+No Smart ranking.
+No “High Conviction Earnings.”
+No “Most Talked About.”
+No AI curation.
+No duplicated earnings from prediction markets.
+
+Just a clean FMP earnings calendar for the next 30 days.
+
+Required endpoint:
+Create a clean new endpoint or cleanly replace the existing Upcoming path:
+
+Preferred:
+GET /api/catalysts/earnings/upcoming-clean
+
+Params:
+- from=YYYY-MM-DD optional, default today
+- to=YYYY-MM-DD optional, default today + 30 days
+- selectedDate=YYYY-MM-DD optional
+- search=optional ticker/company search
+- scope=all|watchlist|portfolio optional
+- limit optional, default high enough for calendar
+
+Response:
+{
+  "asOf": string,
+  "source": "fmp",
+  "from": "YYYY-MM-DD",
+  "to": "YYYY-MM-DD",
+  "events": [...],
+  "eventsByDate": {
+    "YYYY-MM-DD": [...]
+  },
+  "countsByDate": {
+    "YYYY-MM-DD": number
+  },
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+Event schema:
+{
+  "id": string,
+  "date": "YYYY-MM-DD",
+  "symbol": string,
+  "companyName": string | null,
+  "logo": string | null,
+  "image": string | null,
+  "price": number | null,
+  "marketCap": number | null,
+  "marketCapBucket": string | null,
+
+  "eventType": "earnings",
+  "eventLabel": "Earnings",
+  "title": string,
+  "time": string | null,
+  "period": string | null,
+
+  "epsEstimated": number | null,
+  "epsActual": number | null,
+  "revenueEstimated": number | null,
+  "revenueActual": number | null,
+
+  "source": "fmp",
+  "raw": object
+}
+
+Title:
+"{companyName or symbol} Earnings"
+
+Hard source rules:
+- source must always be "fmp"
+- no source="finnhub"
+- no source="polymarket"
+- no prediction-market questions
+- no beat odds
+- no probability fields
+- no “will company say X” rows
+
+FMP data requirements:
+Use FMP Earnings Calendar as the event source.
+
+For each event, display:
+- symbol
+- companyName
+- logo/image if available
+- price if available
+- marketCap if available
+- revenue estimate
+- revenue actual if available
+- EPS estimate
+- EPS actual if available
+- date
+- time
+- period
+
+Important:
+If logo/image is unavailable, return null. Frontend will use fallback avatar.
+But companyName should be attempted from FMP profile/reference when possible.
+
+Fetching strategy:
+The previous backend discovered FMP has a 4,000-row cap and arbitrary ordering on wide date ranges. Keep the weekly chunking approach, but reduce default window to 30 days.
+
+Use chunked fetching:
+- split from/to into 7-day chunks
+- fetch FMP earnings calendar per chunk
+- merge
+- deduplicate by symbol + date + time/period if available
+- sort by date ascending, then time, then symbol
+
+Do not use a single wide 30/60-day FMP call if it risks missing dates.
+
+Enrichment strategy:
+Do NOT randomly enrich only 40 profiles and leave the rest inconsistent.
+
+Instead:
+1. Return all earnings events first.
+2. Enrich company profile/price/marketCap using cached FMP profile/quote/market-cap data.
+3. Cache per symbol for at least 24h.
+4. If live enrichment is too slow, still return all events, but include clear nulls.
+5. Do not mix enriched and non-enriched rows due to arbitrary cap without marking.
+6. Prefer batch endpoints if available under my FMP Starter plan:
+   - batch market cap if available
+   - quote short or quote if useful
+   - company profile/reference data
+7. If batch profile is not available, use controlled concurrency and cache, but do not block the entire calendar indefinitely.
+
+Practical rule:
+For the selected visible day, company identity/price/marketCap should be prioritized and fully enriched.
+For future/non-visible days, basic event fields are acceptable as long as no wrong/Polymarket/Finnhub data appears.
+
+Add optional endpoint if cleaner:
+GET /api/catalysts/earnings/day-clean?date=YYYY-MM-DD
+
+This can return fully enriched events for one selected day. The frontend can use:
+- upcoming-clean for calendar counts/date map
+- day-clean for selected-day list
+
+This is acceptable and probably better because some days have 400-600 calls.
+
+Selected day event schema must include:
+- companyName
+- logo/image
+- price
+- marketCap
+- revenue estimate/actual
+- EPS estimate/actual
+
+Sort selected day cleanly:
+Default sort:
+1. US-listed / major exchanges first if exchange data exists
+2. large/mega market cap first
+3. revenue estimate available
+4. EPS estimate available
+5. ticker alphabetical
+
+Do NOT use Polymarket odds or AI scoring.
+
+Cache:
+Use new cache keys so stale polluted data is impossible:
+fmp:earnings:upcoming_clean:v1:{from}:{to}
+fmp:earnings:day_clean:v1:{date}
+fmp:company_profile:v2:{symbol}
+fmp:quote_or_price:v1:{symbol}
+fmp:market_cap:v1:{symbol}
+
+Do not reuse old catalyst earnings cache keys that may contain Finnhub/Polymarket/Smart rows.
+
+Remove/bypass old logic from Upcoming:
+Audit backend and make sure Upcoming Clean does NOT call:
+- Finnhub earnings calendar
+- Polymarket earnings markets
+- Smart earnings builder
+- high conviction builder
+- most talked about builder
+- beat probability enrichment
+- Grok/Perplexity/AI curation
+
+Keep popup endpoint untouched:
+When user clicks an earnings event, keep existing popup behavior.
+Do not remove Polymarket from popup if it is currently there, unless it is causing main page pollution. The main page must be clean.
+
+Validation:
+Run these:
+
+GET /api/catalysts/earnings/upcoming-clean
+GET /api/catalysts/earnings/upcoming-clean?from=2026-04-26&to=2026-05-26
+GET /api/catalysts/earnings/day-clean?date=2026-04-27
+GET /api/catalysts/earnings/day-clean?date=2026-04-28
+
+Confirm:
+- no source=finnhub
+- no source=polymarket
+- no beat odds
+- no probability fields
+- no question-style titles beginning with “Will”
+- all events source=fmp
+- countsByDate covers the full 30-day range where FMP has events
+- selected day events include EPS/revenue fields
+- selected day events include price/marketCap where available
+- selected day events include companyName/logo/image where available
+- popup endpoint unchanged
+
+Final response:
+Tell me:
+- Which files changed
+- Which old upcoming earnings logic was bypassed/removed
+- Confirm Finnhub is gone from Catalyst Calendar Upcoming
+- Confirm Polymarket is gone from Catalyst Calendar Upcoming
+- Confirm beat odds/high-conviction/most-talked-about are gone from Upcoming
+- Confirm new clean FMP endpoint(s)
+- Show sample JSON for 3 events
+- Show countsByDate for the next 7 days
+- Confirm popup behavior was untouched
