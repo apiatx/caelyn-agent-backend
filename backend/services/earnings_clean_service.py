@@ -282,6 +282,7 @@ def _normalize_row(row: dict) -> Optional[dict]:
         "revenueEstimated": _safe_float(row.get("revenueEstimated")),
         "revenueActual":    _safe_float(row.get("revenueActual")),
         "source":           "fmp",
+        "raw":              row,
     }
 
 
@@ -502,9 +503,9 @@ async def get_upcoming_clean(
     events = _apply_scope(events, search, scope, watchlist, portfolio)
     events.sort(key=lambda e: (e.get("date", ""), e.get("symbol", "")))
 
-    if limit and len(events) > limit:
-        events = events[:limit]
-
+    # Build date aggregations from the FULL event set BEFORE applying the flat limit.
+    # countsByDate and eventsByDate must reflect all FMP events in the range, not
+    # just the first `limit` rows — otherwise days beyond the limit appear empty.
     events_by_date: dict[str, list] = {}
     counts_by_date: dict[str, int]  = {}
     for ev in events:
@@ -512,6 +513,10 @@ async def get_upcoming_clean(
         if d:
             events_by_date.setdefault(d, []).append(ev)
             counts_by_date[d] = counts_by_date.get(d, 0) + 1
+
+    # Trim flat events list only (calendar uses countsByDate, not this list)
+    if limit and len(events) > limit:
+        events = events[:limit]
 
     return {
         "asOf":         _today(),
