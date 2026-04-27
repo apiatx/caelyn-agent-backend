@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -673,6 +674,34 @@ _THEME_BOTTLENECKS: set[str] = {
 
 _ALL_THEME_SYMS: set[str] = {sym for basket in _THEME_BASKETS.values() for sym in basket}
 
+# ── Quality / liquidity scoring constants ─────────────────────────────────────
+
+# Matches preferred shares, warrants, units by symbol suffix pattern.
+# Intentionally conservative — avoids hitting normal tickers like BRK.B, GOOGL.
+_QUAL_PREF_RE = re.compile(
+    r'[-.]P[A-Z]$'     # -PA, -PB, .PA … preferred class
+    r'|^.{2,}-P$'      # TICKER-P  (e.g. JPM-P, WFC-P)
+    r'|[/.]WS$'        # /WS, .WS  warrant
+    r'|[-.]WT$'        # -WT       warrant alt
+    r'|\^'             # ^ in symbol (Bloomberg-style preferred notation)
+    r'|\.PFD$'         # .PFD      preferred
+    r'|[-.]U$',        # -U, .U    SPAC unit
+    re.IGNORECASE,
+)
+
+# Company name keywords that indicate preferred/warrant instruments
+_QUAL_NAME_PREF_RE = re.compile(r'\bpreferred\b|\bwarrant\b', re.IGNORECASE)
+
+# ADR / foreign ordinary share indication in company name (softer penalty)
+_QUAL_NAME_ADR_RE  = re.compile(r'\bADR\b|\bordinary\s+share', re.IGNORECASE)
+
+# Score adjustments
+_QL_MAJOR_US_BOOST  =  15   # NYSE / Nasdaq / AMEX listed
+_QL_OTC_PENALTY     = -10   # OTC / foreign / unknown (unless theme-exempt or large/mega cap)
+_QL_PREF_SYM_HIT    = -25   # high-confidence preferred / warrant from symbol pattern
+_QL_PREF_NAME_HIT   = -20   # preferred / warrant detected in company name
+_QL_ADR_PENALTY     =  -8   # ADR (softer — often legitimate large-cap instruments)
+
 _MAX_WEEK_ENRICH    = 40   # max live profile fetches for week-clean
 _WEEK_CONCURRENCY   = 2    # semaphore for week-clean enrichment
 _WEEK_LIMIT_DEFAULT = 8    # default per-session cap
@@ -712,6 +741,12 @@ def _pre_score(ev: dict, watchlist: set[str], portfolio: set[str]) -> dict:
 
     Theme scoring (capped at 40 total):
       in theme basket: +20 | anchor: +25 | bottleneck: +20
+
+    qualityLiquidity (partial — exchange component added after enrichment):
+      preferred/warrant symbol pattern: -25
+      preferred/warrant company name:   -20
+      ADR / ordinary share name:         -8
+      Theme-basket membership cancels any pre-enrichment penalty.
     """
     sym = (ev.get("symbol") or "").upper()
     has_eps = ev.get("epsEstimated") is not None
@@ -736,29 +771,51 @@ def _pre_score(ev: dict, watchlist: set[str], portfolio: set[str]) -> dict:
     if has_rev: est_score += 5
     if has_eps and has_rev: est_score += 5
 
+    # ── Quality / liquidity pre-score (symbol + name patterns only) ──────────
+    cname = ev.get("companyName") or ""
+    ql_pre = 0
+    if _QUAL_PREF_RE.search(sym):
+        ql_pre = _QL_PREF_SYM_HIT                  # -25: high-confidence preferred/warrant
+    elif _QUAL_NAME_PREF_RE.search(cname):
+        ql_pre = _QL_PREF_NAME_HIT                  # -20: name says "preferred" or "warrant"
+    elif _QUAL_NAME_ADR_RE.search(cname):
+        ql_pre = _QL_ADR_PENALTY                    # -8:  ADR / ordinary share
+
+    # Theme-basket membership cancels the pre-enrichment penalty:
+    # If the ticker is a known hot theme, anchor, or bottleneck let it through.
+    if ql_pre < 0 and (in_theme or is_anchor or is_bottleneck):
+        ql_pre = 0
+
     return {
-        "score":        theme_score + wp_score + est_score,
+        "score":        theme_score + wp_score + est_score + ql_pre,
         "isAnchor":     is_anchor,
         "isBottleneck": is_bottleneck,
         "themes":       _symbol_themes(sym),
         "breakdown": {
-            "marketCap":            0,   # filled after enrichment
+            "marketCap":            0,        # filled after enrichment
             "theme":                theme_score,
             "watchlistPortfolio":   wp_score,
             "estimateAvailability": est_score,
-            "priceMomentum":        0,   # filled after enrichment
+            "priceMomentum":        0,        # filled after enrichment
+            "qualityLiquidity":     ql_pre,   # exchange component added in _apply_full_score
         },
     }
 
 
 def _apply_full_score(ev: dict, pre: dict) -> tuple[int, dict]:
     """
-    Compute final importance score after enrichment adds marketCap / price %.
+    Compute final importance score after enrichment adds marketCap / price % / exchange.
     Returns (total_score, updated_breakdown).
+
+    qualityLiquidity (exchange component — only for enriched events):
+      Major US exchange (NYSE/Nasdaq/AMEX/…): +15
+      OTC / foreign / unknown exchange:       -10
+        Exception: skipped if large/mega cap OR in any theme basket.
     """
     mc     = ev.get("marketCap")
     pct    = ev.get("changesPercentage")
     bucket = _mc_bucket(mc)
+    sym    = (ev.get("symbol") or "").upper()
 
     mc_score = {"mega": 40, "large": 30, "mid": 15, "small": 5}.get(bucket or "", 0)
 
@@ -771,14 +828,32 @@ def _apply_full_score(ev: dict, pre: dict) -> tuple[int, dict]:
         elif pct < -5 and bucket in ("mega", "large"):
             pm_score = 5
 
+    # ── Exchange quality component ────────────────────────────────────────────
+    ql_pre      = pre["breakdown"].get("qualityLiquidity", 0)
+    ql_exchange = 0
+    exchange    = (ev.get("_exchange") or "").upper()
+
+    if exchange:  # only present on enriched events
+        is_major_us   = exchange in _US_MAJOR
+        is_large_plus = bucket in ("mega", "large")
+        is_theme_sym  = sym in _ALL_THEME_SYMS or pre.get("isAnchor") or pre.get("isBottleneck")
+
+        if is_major_us:
+            ql_exchange = _QL_MAJOR_US_BOOST          # +15
+        elif not is_large_plus and not is_theme_sym:
+            ql_exchange = _QL_OTC_PENALTY             # -10
+
+    ql_total = ql_pre + ql_exchange
+
     breakdown = {
         "marketCap":            mc_score,
         "theme":                pre["breakdown"].get("theme", 0),
         "watchlistPortfolio":   pre["breakdown"].get("watchlistPortfolio", 0),
         "estimateAvailability": pre["breakdown"].get("estimateAvailability", 0),
         "priceMomentum":        pm_score,
+        "qualityLiquidity":     ql_total,
     }
-    return pre["score"] + mc_score + pm_score, breakdown
+    return pre["score"] + mc_score + pm_score + ql_exchange, breakdown
 
 
 def _build_empty_days(week_start, week_end) -> list[dict]:
@@ -950,7 +1025,8 @@ async def get_week_clean(
         "score": 0, "isAnchor": False, "isBottleneck": False,
         "themes": [],
         "breakdown": {"marketCap": 0, "theme": 0, "watchlistPortfolio": 0,
-                      "estimateAvailability": 0, "priceMomentum": 0},
+                      "estimateAvailability": 0, "priceMomentum": 0,
+                      "qualityLiquidity": 0},
     }
     decorated: list[dict] = []
 
