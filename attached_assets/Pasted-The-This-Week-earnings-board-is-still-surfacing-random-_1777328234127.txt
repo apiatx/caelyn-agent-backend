@@ -1,0 +1,217 @@
+The This Week earnings board is still surfacing random / low-quality / poorly enriched stocks like TRPTF, BDNNY, BOVNF, unknown company names, missing logos, and random OTC-looking names.
+
+This is a backend issue in /api/catalysts/earnings/week-clean.
+
+The frontend is rendering what the endpoint returns. The popup sometimes shows names/logos because it uses a separate enrichment path, which proves week-clean is not reliably enriching/filtering its curated entries.
+
+Goal:
+Fix /api/catalysts/earnings/week-clean once and for all so the weekly board only returns clean, curated, market-relevant earnings events.
+
+Important:
+This Week is curated. It does NOT need to show every earnings call.
+If there are not enough good names for a day, return fewer cards.
+Do NOT fill empty slots with random OTC/foreign/unknown names.
+
+Do NOT touch:
+- Day mode
+- Recent mode
+- earnings popup endpoint
+- non-earnings Catalyst tabs
+- Home/Sectors/Macro
+- auth
+- frontend
+
+No Finnhub.
+No Polymarket.
+No AI.
+FMP only.
+
+Current problem examples from UI:
+- TRPTF
+- BDNNY
+- BOVNF
+- TRPTF / SPHXF / TTDKF style foreign/OTC-looking tickers
+- missing company names
+- missing logos
+- marketCapBucket = unknown
+- random “unknown” reason lines
+- FOCUS badge on junk names
+
+Root cause to fix:
+The endpoint is selecting/ranking some entries before fully knowing:
+- companyName
+- logo/image
+- exchange
+- marketCap
+- whether it is common stock / ADR / OTC / preferred / warrant
+- whether it is actually market-moving
+
+Required architecture change:
+Do NOT score final board entries from raw earnings rows alone.
+
+New pipeline:
+
+1. Fetch FMP earnings for the selected week.
+2. Normalize/deduplicate by:
+   symbol + date + session
+3. Build a candidate pool.
+4. Enrich candidate pool enough to determine quality.
+5. Filter out junk/unknown/low-quality names.
+6. Score final eligible candidates.
+7. Return top curated entries per day/session.
+
+Eligibility rules:
+An event is eligible for This Week board only if at least one of these is true:
+
+A. Major/liquid company:
+- marketCap >= 5B
+- OR exchange is NYSE/Nasdaq/AMEX/CBOE/BATS
+- OR marketCapBucket is mega/large/mid
+
+B. Explicit theme/anchor/bottleneck:
+- symbol is in one of the hardcoded theme baskets
+- OR symbol is in anchor list
+- OR symbol is in bottleneck list
+
+C. User relevance:
+- symbol is in watchlist
+- OR symbol is in portfolio
+
+D. Strong estimate/data quality:
+- revenueEstimated exists and is meaningful
+- AND companyName is known
+- AND symbol is not OTC/preferred/warrant-looking
+
+Hard exclusion rules:
+Exclude from final curated board unless explicit theme/watchlist/portfolio:
+- companyName missing or companyName equals symbol
+- marketCap missing AND exchange unknown AND no themeTags
+- marketCapBucket = unknown AND no themeTags
+- OTC/foreign ordinary style symbols with no marketCap
+- 5-letter symbols ending in F or Y when exchange/marketCap are missing
+- preferred/warrant/unit/share-class patterns:
+  - -P
+  - -PR
+  - .P
+  - ^ 
+  - /WS
+  - WS
+  - WT
+  - U suffix when clearly unit
+  - preferred/warrant/unit keywords in name
+- any title/company that looks like a fund, preferred, warrant, unit, rights, note, trust preferred, etc.
+
+Important:
+Large foreign companies can stay if marketCap is large/mega and companyName is known.
+Do not blindly remove all ADRs/foreign companies.
+But random OTC/unknown foreign tickers should not appear.
+
+Enrichment strategy:
+The board does not need every symbol enriched. It needs the right candidates enriched.
+
+Use this safe process:
+
+Phase 1 — raw candidate prefilter:
+For each day, keep candidates that are likely worth enriching:
+- symbols in theme/anchor/bottleneck baskets
+- high revenueEstimated
+- EPS estimate exists
+- recognizable major ticker format
+- no obvious preferred/warrant pattern
+- optionally top 100-150 raw candidates per week max
+
+Phase 2 — enrich candidates:
+For candidate pool only:
+- fetch cached profile/quote/marketCap first
+- live fetch only missing profiles up to safe cap
+- concurrency max 2
+- one shared AsyncClient per request
+- cache profiles 24h+
+- cache quote/price 15-60 min
+- if FMP 429s, stop enrichment and return partial curated results from cache only
+
+Suggested caps:
+- max candidates to enrich per week: 150
+- max live FMP profile/quote calls per request: 40
+- concurrency: 2
+
+Phase 3 — final filter:
+After enrichment, drop candidates that still have:
+- companyName missing/equal to symbol
+- marketCap missing
+- exchange unknown
+- no themeTags
+unless watchlist/portfolio or explicit theme/anchor/bottleneck.
+
+Phase 4 — final scoring:
+Use existing scoring, but make quality/liquidity a gate, not just a small penalty.
+
+Scoring should prioritize:
+1. theme anchor / bottleneck
+2. mega/large market cap
+3. major US exchange
+4. revenue/EPS estimate availability
+5. positive/large price movement
+6. watchlist/portfolio
+
+Do not allow unknown micro/OTC names to outrank clean market movers just because the board needs more rows.
+
+Per-day card count:
+- limit_per_session is a max, not a requirement.
+- If only 3 good names exist for a day, return 3.
+- Do not pad to 8 with junk.
+
+FOCUS:
+Backend can still return isThemeAnchor/isBottleneck/importanceScore.
+But random events should not be marked focus.
+
+Response shape:
+Do not break current frontend response shape.
+Keep:
+- asOf
+- source
+- weekStart
+- weekEnd
+- days[]
+- topEvents[]
+- status
+- errors
+
+Each returned event must include clean values:
+- symbol
+- companyName
+- logo/image when available
+- priceChangePct when available
+- marketCap
+- marketCapBucket
+- sector/industry
+- themeTags
+- isThemeAnchor
+- isBottleneck
+- importanceScore
+- scoreBreakdown
+
+Validation:
+Test /api/catalysts/earnings/week-clean for the current week.
+
+Must confirm:
+1. No TRPTF / BDNNY / BOVNF / random unknown OTC names unless they have known companyName + marketCap + legitimate reason.
+2. No cards with companyName missing/equal to symbol unless explicit theme/watchlist/portfolio.
+3. No cards with marketCapBucket unknown unless explicit theme/watchlist/portfolio.
+4. No random preferred/warrant/unit names.
+5. META, MSFT, GOOGL, AMZN, KLAC, HOOD, PWR, LHX, KO, etc. rank above obscure names when present.
+6. If a day only has a few good names, return fewer cards.
+7. topEvents contains clean major/theme-relevant names.
+8. source is always fmp.
+9. no Finnhub, no Polymarket, no AI.
+
+Final response:
+Tell me:
+- Which file changed
+- Where junk/unknown names were entering the final board
+- What final eligibility filter was added
+- What candidate enrichment cap is used
+- Sample before/after top events
+- Confirm no random unknown/OTC names appear in the final board
+- Confirm This Week response shape is unchanged
+- Confirm Day, Recent, and popup were untouched

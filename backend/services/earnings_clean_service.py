@@ -702,7 +702,9 @@ _QL_PREF_SYM_HIT    = -25   # high-confidence preferred / warrant from symbol pa
 _QL_PREF_NAME_HIT   = -20   # preferred / warrant detected in company name
 _QL_ADR_PENALTY     =  -8   # ADR (softer — often legitimate large-cap instruments)
 
-_MAX_WEEK_ENRICH    = 40   # max live profile fetches for week-clean
+_WEEK_CAND_MAX      = 150  # max raw candidates forwarded to enrichment
+_MAX_WEEK_ENRICH    = 120  # max events passed to _enrich_events (cache-first; live cap = 40)
+_WEEK_MAX_LIVE      = 40   # hard cap on live FMP profile/quote calls for week-clean
 _WEEK_CONCURRENCY   = 2    # semaphore for week-clean enrichment
 _WEEK_LIMIT_DEFAULT = 8    # default per-session cap
 _WEEK_TOTAL_DEFAULT = 60   # default topEvents cap
@@ -897,6 +899,129 @@ def _decorate_event(ev: dict, pre: dict, score: int, breakdown: dict) -> dict:
     }
 
 
+# ── Week-clean candidate helpers ──────────────────────────────────────────────
+
+# OTC/foreign ticker pattern: 4-5 uppercase letters ending in F (foreign) or Y (ADR OTC)
+_OTC_TICKER_RE = re.compile(r'^[A-Z]{4,5}[FY]$')
+
+# Broad "fund / trust / preferred / rights / note" guard for company names
+_JUNK_NAME_RE = re.compile(
+    r'\b(fund|trust\s+preferred|rights|notes?\s+due|unit\s+series|'
+    r'acquisition\s+corp|blank\s+check)\b',
+    re.IGNORECASE,
+)
+
+
+def _is_raw_candidate(ev: dict, watchlist: set[str], portfolio: set[str]) -> bool:
+    """
+    Fast pre-filter (no HTTP) — decide whether a raw FMP row is worth enriching.
+
+    Returns True only for events that have a realistic chance of being eligible
+    for the curated This Week board.
+    """
+    sym = (ev.get("symbol") or "").upper()
+
+    # Always keep: explicit theme, anchor, bottleneck
+    if sym in _ALL_THEME_SYMS or sym in _THEME_ANCHORS or sym in _THEME_BOTTLENECKS:
+        return True
+
+    # Always keep: user watchlist / portfolio
+    if sym in watchlist or sym in portfolio:
+        return True
+
+    # Hard drop: preferred/warrant/unit symbol pattern
+    if _QUAL_PREF_RE.search(sym):
+        return False
+
+    # Hard drop: preferred/warrant keyword in company name
+    cname = ev.get("companyName") or ""
+    if _QUAL_NAME_PREF_RE.search(cname) or _JUNK_NAME_RE.search(cname):
+        return False
+
+    # Soft drop: obvious OTC foreign ticker (4-5 letters + F or Y) unless has BOTH estimates
+    if _OTC_TICKER_RE.match(sym):
+        if ev.get("epsEstimated") is None or ev.get("revenueEstimated") is None:
+            return False
+
+    # Pass: has at least one estimate signal (most meaningful filter for unknown names)
+    if ev.get("epsEstimated") is not None or ev.get("revenueEstimated") is not None:
+        return True
+
+    # Pass: short ticker (≤4 chars) — likely US-listed; enrich and decide later
+    if len(sym) <= 4:
+        return True
+
+    # Default: exclude (5-letter tickers with no estimates and no theme = likely OTC junk)
+    return False
+
+
+def _is_eligible(ev: dict, pre: dict, watchlist: set[str], portfolio: set[str]) -> bool:
+    """
+    Post-enrichment eligibility gate for the curated This Week board.
+
+    An event must pass at least one eligibility rule (A-D).
+    Hard exclusions override everything except explicit theme / watchlist / portfolio.
+    """
+    sym      = (ev.get("symbol") or "").upper()
+    mc       = ev.get("marketCap")
+    exchange = (ev.get("_exchange") or "").upper()
+    bucket   = _mc_bucket(mc)
+    cname    = (ev.get("companyName") or "").strip()
+    themes   = pre.get("themes", [])
+    is_anchor    = pre.get("isAnchor", False)
+    is_bottleneck = pre.get("isBottleneck", False)
+
+    # Rule B: Explicit theme/anchor/bottleneck — always eligible
+    if is_anchor or is_bottleneck or themes:
+        return True
+
+    # Rule C: User watchlist / portfolio — always eligible
+    if sym in watchlist or sym in portfolio:
+        return True
+
+    # ── Hard exclusions (for everything not in theme / watchlist / portfolio) ──
+
+    # Missing or trivial company name (enrichment didn't resolve it)
+    if not cname or cname.upper() == sym:
+        return False
+
+    # Preferred/warrant pattern guard (belt-and-suspenders after pre-filter)
+    if _QUAL_PREF_RE.search(sym) or _QUAL_NAME_PREF_RE.search(cname):
+        return False
+
+    # Junk name keywords
+    if _JUNK_NAME_RE.search(cname):
+        return False
+
+    # Unknown market cap AND unknown/missing exchange → not enough signal
+    if (bucket is None or bucket == "unknown") and exchange not in _US_MAJOR:
+        return False
+
+    # Missing market cap AND not on a major US exchange → exclude
+    if mc is None and exchange not in _US_MAJOR:
+        return False
+
+    # ── Eligibility rules ─────────────────────────────────────────────────────
+
+    # Rule A: Major/liquid company
+    is_major_us  = exchange in _US_MAJOR
+    is_large_mc  = mc is not None and mc >= 5_000_000_000   # ≥ $5 B
+    is_mid_plus  = bucket in ("mega", "large", "mid")
+
+    if is_major_us or is_large_mc or is_mid_plus:
+        return True
+
+    # Rule D: Known company + both estimates + not OTC-looking ticker
+    has_rev      = ev.get("revenueEstimated") is not None
+    has_eps      = ev.get("epsEstimated") is not None
+    is_otc_like  = bool(_OTC_TICKER_RE.match(sym))
+
+    if has_rev and has_eps and not is_otc_like:
+        return True
+
+    return False
+
+
 # ── Public API: get_week_clean ─────────────────────────────────────────────────
 
 async def get_week_clean(
@@ -962,19 +1087,19 @@ async def get_week_clean(
             from_str, to_str, api_key, client, call_counter,
         )
 
-        # -- Phase 2: Normalize and scope
+        # -- Phase 2: Normalize, scope, raw candidate pre-filter
         watchlist = _load_watchlist()
         portfolio = _load_portfolio()
 
-        events: list[dict] = []
+        raw_events: list[dict] = []
         for row in raw_rows:
             ev = _normalize_row(row)
             if ev:
-                events.append(ev)
+                raw_events.append(ev)
 
-        events = _apply_scope(events, search, scope, watchlist, portfolio)
+        raw_events = _apply_scope(raw_events, search, scope, watchlist, portfolio)
 
-        if not events:
+        if not raw_events:
             return {
                 "asOf":      _today(),
                 "source":    "fmp",
@@ -986,16 +1111,37 @@ async def get_week_clean(
                 "errors":    errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
             }
 
-        # -- Phase 3: Pre-score (no HTTP — uses only raw FMP data)
+        # Phase 2.5: Raw pre-filter — only keep events worth enriching
+        # Theme/anchor/bottleneck/watchlist/portfolio always pass.
+        # Junk OTC tickers, preferred/warrant patterns, no-estimate unknowns are dropped.
+        candidates = [ev for ev in raw_events if _is_raw_candidate(ev, watchlist, portfolio)]
+
+        # Sort candidates: theme/watchlist first, then both-estimates, then by symbol length
+        def _cand_key(ev: dict):
+            sym = (ev.get("symbol") or "").upper()
+            in_theme = sym in _ALL_THEME_SYMS or sym in _THEME_ANCHORS or sym in _THEME_BOTTLENECKS
+            in_wp    = sym in watchlist or sym in portfolio
+            has_rev  = ev.get("revenueEstimated") is not None
+            has_eps  = ev.get("epsEstimated") is not None
+            return (
+                0 if (in_theme or in_wp) else 1,
+                0 if (has_rev and has_eps) else 1,
+                0 if has_rev else 1,
+                len(sym),         # shorter = more likely major US exchange
+            )
+        candidates.sort(key=_cand_key)
+        candidates = candidates[:_WEEK_CAND_MAX]   # cap at 150
+
+        # -- Phase 3: Pre-score candidates only (no HTTP)
         pre_scores: dict[str, dict] = {}
-        for ev in events:
+        for ev in candidates:
             sym = ev.get("symbol", "")
             if sym and sym not in pre_scores:
                 pre_scores[sym] = _pre_score(ev, watchlist, portfolio)
 
-        # Rank symbols by pre-score to select enrichment candidates
+        # Select top _MAX_WEEK_ENRICH (120) by pre-score for enrichment
         sym_best_score: dict[str, int] = {}
-        for ev in events:
+        for ev in candidates:
             sym = ev.get("symbol", "")
             s   = pre_scores.get(sym, {}).get("score", 0)
             if sym not in sym_best_score or s > sym_best_score[sym]:
@@ -1005,22 +1151,22 @@ async def get_week_clean(
             sorted(sym_best_score, key=lambda s: sym_best_score[s], reverse=True)[:_MAX_WEEK_ENRICH]
         )
 
-        # -- Phase 4: Enrich top candidates (concurrency=2, shared client)
-        enrich_candidates = [ev for ev in events if ev.get("symbol") in enrich_syms]
-        not_enriched      = [ev for ev in events if ev.get("symbol") not in enrich_syms]
+        # -- Phase 4: Enrich (cache-first, max _WEEK_MAX_LIVE live calls, concurrency=2)
+        enrich_pool   = [ev for ev in candidates if ev.get("symbol") in enrich_syms]
+        not_enriched  = [ev for ev in candidates if ev.get("symbol") not in enrich_syms]
 
-        if enrich_candidates and not rate_limited:
-            enrich_candidates, enrich_rl = await _enrich_events(
-                enrich_candidates,
+        if enrich_pool and not rate_limited:
+            enrich_pool, enrich_rl = await _enrich_events(
+                enrich_pool,
                 api_key, client, call_counter,
-                max_live=_MAX_WEEK_ENRICH,
+                max_live=_WEEK_MAX_LIVE,
                 concurrency=_WEEK_CONCURRENCY,
             )
             if enrich_rl:
                 rate_limited = True
                 errors.append("FMP rate limit during enrichment — partial enrichment")
 
-    # -- Phase 5: Apply full score and decorate all events
+    # -- Phase 5: Eligibility gate + score + decorate
     _empty_pre = {
         "score": 0, "isAnchor": False, "isBottleneck": False,
         "themes": [],
@@ -1028,17 +1174,28 @@ async def get_week_clean(
                       "estimateAvailability": 0, "priceMomentum": 0,
                       "qualityLiquidity": 0},
     }
-    decorated: list[dict] = []
+    decorated:  list[dict] = []
+    dropped_ct: int        = 0
 
-    for ev in enrich_candidates:
-        sym  = ev.get("symbol", "")
-        pre  = pre_scores.get(sym, _empty_pre)
+    # Enriched events: apply eligibility gate, then score
+    for ev in enrich_pool:
+        sym = ev.get("symbol", "")
+        pre = pre_scores.get(sym, _empty_pre)
+        if not _is_eligible(ev, pre, watchlist, portfolio):
+            dropped_ct += 1
+            continue
         score, breakdown = _apply_full_score(ev, pre)
         decorated.append(_decorate_event(ev, pre, score, breakdown))
 
+    # Not-enriched candidates: only include if explicitly theme/watchlist/portfolio
+    # (they were in the pre-filtered pool but below the enrichment cap)
     for ev in not_enriched:
-        sym  = ev.get("symbol", "")
-        pre  = pre_scores.get(sym, _empty_pre)
+        sym = ev.get("symbol", "")
+        pre = pre_scores.get(sym, _empty_pre)
+        # No profile data → only safe to include explicit theme/wp events
+        if not (pre.get("isAnchor") or pre.get("isBottleneck") or pre.get("themes")
+                or sym in watchlist or sym in portfolio):
+            continue
         decorated.append(_decorate_event(ev, pre, pre["score"], pre["breakdown"]))
 
     # -- Phase 6: Group by date and session, dedup, apply per-session cap
@@ -1092,8 +1249,9 @@ async def get_week_clean(
 
     print(
         f"[earn_clean] week-clean {from_str}→{to_str} "
-        f"raw={len(raw_rows)} decorated={len(decorated)} deduped={len(all_deduped)} "
-        f"enriched={len(enrich_candidates)} calls={call_counter[0]}"
+        f"raw={len(raw_rows)} candidates={len(candidates)} "
+        f"enriched={len(enrich_pool)} eligible={len(decorated)} "
+        f"dropped={dropped_ct} deduped={len(all_deduped)} calls={call_counter[0]}"
     )
 
     return {
