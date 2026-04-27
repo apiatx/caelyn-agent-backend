@@ -1,0 +1,291 @@
+Build the backend endpoint for the existing Catalyst Calendar > Earnings Dates > This Week toggle.
+
+Important frontend context:
+The frontend already has three Earnings modes:
+- This Week => earningsMode = "thisweek"
+- Day => earningsMode = "upcoming"
+- Recent => earningsMode = "recent"
+
+This Week currently renders a blank placeholder and calls no endpoint.
+Day already uses:
+- GET /api/catalysts/earnings/upcoming-clean?from=YYYY-MM-DD&to=YYYY-MM-DD
+- GET /api/catalysts/earnings/day-clean?date=YYYY-MM-DD&enrich=false
+
+Recent already uses:
+- GET /api/catalysts/events?tab=earnings_dates&mode=recent
+
+Do NOT touch:
+- Day / upcoming mode
+- Recent mode
+- earnings popup endpoint
+- non-earnings Catalyst tabs
+- Home/Sectors/Macro
+- auth
+
+Goal:
+Create a new backend endpoint for the This Week toggle only.
+
+Endpoint:
+GET /api/catalysts/earnings/week-clean
+
+Query params:
+- week_start=YYYY-MM-DD optional
+- weekStart=YYYY-MM-DD optional alias
+- week_end=YYYY-MM-DD optional
+- weekEnd=YYYY-MM-DD optional alias
+- scope=all|watchlist|portfolio optional, default all
+- search optional
+- limit_per_session optional, default 10, max 20
+- max_total optional, default 80, max 150
+- include_theme_scoring optional, default true
+
+Default behavior:
+- If week_start not provided, use current week Monday.
+- weekEnd should be Friday by default.
+- Return Monday-Friday earnings grouped by day and session.
+- Do not fetch more than one week.
+- Do not preload 30 days.
+- Do not call AI APIs.
+
+Use FMP only:
+- No Finnhub.
+- No Polymarket.
+- No beat odds.
+- No prediction market data.
+- No Grok / Claude / OpenAI / Perplexity / Gemini calls.
+
+Response shape:
+{
+  "asOf": "ISO timestamp",
+  "source": "fmp",
+  "weekStart": "YYYY-MM-DD",
+  "weekEnd": "YYYY-MM-DD",
+  "days": [
+    {
+      "date": "YYYY-MM-DD",
+      "label": "Mon, Apr 27",
+      "weekday": "Monday",
+      "count": 12,
+      "preMarket": [...],
+      "afterHours": [...],
+      "duringMarket": [...],
+      "unknown": [...],
+      "entries": [...]
+    }
+  ],
+  "topEvents": [...],
+  "themeSummary": [...],
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+Each event:
+{
+  "id": "string",
+  "date": "YYYY-MM-DD",
+  "session": "preMarket" | "afterHours" | "duringMarket" | "unknown",
+  "symbol": "string",
+  "companyName": "string | null",
+  "logo": "string | null",
+  "image": "string | null",
+  "price": number | null,
+  "priceChangePct": number | null,
+  "marketCap": number | null,
+  "marketCapBucket": "mega" | "large" | "mid" | "small" | "micro" | "unknown",
+  "sector": "string | null",
+  "industry": "string | null",
+  "time": "string | null",
+  "period": "string | null",
+  "epsEstimated": number | null,
+  "revenueEstimated": number | null,
+  "themeTags": ["string"],
+  "isThemeAnchor": boolean,
+  "isBottleneck": boolean,
+  "isWatchlist": boolean,
+  "isPortfolio": boolean,
+  "importanceScore": number,
+  "scoreBreakdown": {
+    "marketCap": number,
+    "theme": number,
+    "sectorMomentum": number,
+    "bottleneck": number,
+    "watchlistPortfolio": number,
+    "estimateAvailability": number,
+    "priceMomentum": number
+  },
+  "source": "fmp",
+  "raw": object
+}
+
+Implementation location:
+Prefer adding this to the existing safe earnings clean service/router:
+- backend/services/earnings_clean_service.py
+- backend/routes/earnings_upcoming.py
+
+But do not modify Day/recent behavior.
+
+Important route status:
+If the earnings_upcoming router is still disabled in main.py, keep it disabled until implementation is complete and reviewed.
+Do not re-enable the router unless explicitly told after this build.
+
+FMP safety rules:
+This endpoint must not repeat the prior FMP overload problem.
+
+Hard limits:
+- One week only.
+- No 30-day or 60-day fetch.
+- No all-universe profile enrichment.
+- No FMP calls at import/startup.
+- No unbounded asyncio.gather.
+- No new AsyncClient per symbol.
+- No polling/retry storm.
+- No route should be capable of breaking Home/Sectors/Macro if FMP 429s.
+
+Fetching:
+- Use existing safe FMP earnings calendar helper if possible.
+- Fetch only weekStart through weekEnd.
+- If chunking is needed, chunks must be sequential, not parallel.
+- Max earnings-calendar FMP calls: 1-2 per request.
+
+Enrichment:
+This Week is curated, so enrichment should happen only after reducing candidates.
+
+Process:
+1. Fetch all FMP earnings for the week.
+2. Normalize basic events.
+3. Apply rough pre-score using only fields already in the earnings calendar:
+   - symbol
+   - EPS estimate availability
+   - revenue estimate availability
+   - time/session
+   - known theme baskets
+4. Select likely candidates for enrichment.
+5. Enrich only top candidates, not every tiny/OTC symbol.
+
+Enrichment rules:
+- company/profile cache TTL: 24h+
+- quote/price cache TTL: 15-60 min
+- marketCap cache TTL: 24h
+- max live profile/quote/marketCap calls should be capped.
+- suggested max_live_enrich default: 40 total symbols for the week
+- concurrency max: 2
+- one shared httpx.AsyncClient per request
+- timeout max 3 seconds per FMP call
+- if FMP returns 429, stop enrichment and return partial data
+- earnings route-specific 429 circuit breaker should apply
+
+Scoring model:
+Use deterministic scoring only.
+
+1. Market cap / market-moving importance:
+- mega cap: +40
+- large cap: +30
+- mid cap: +15
+- small cap: +5
+- micro/unknown: +0
+
+2. Theme relevance:
+Create deterministic theme baskets:
+
+AI Buildout:
+NVDA, AMD, AVGO, MRVL, MU, TSM, ASML, ARM, SMCI, DELL, HPE, ANET, VRT, ETN, ORCL, GOOGL, MSFT, AMZN, META
+
+AI Data Center / Power:
+VRT, ETN, PWR, CEG, VST, NRG, GE, GEV, SMR, OKLO, DELL, SMCI
+
+Semiconductor Bottlenecks:
+ASML, AMAT, LRCX, KLAC, TER, AEHR, ACLS, FORM, COHR
+
+AI Networking:
+ANET, AVGO, MRVL, CIEN, CSCO, NOK, ERIC
+
+Cloud / Software Infra:
+MSFT, AMZN, GOOGL, META, ORCL, SNOW, DDOG, NET, CRWD, PANW, MDB, NOW
+
+Aerospace / Defense / Space:
+RKLB, ASTS, LMT, RTX, NOC, BA, LHX, TDG, HEI, PLTR, KTOS, IRDM
+
+Nuclear / Power / Electrification:
+CEG, VST, NRG, ETN, PWR, GEV, SMR, OKLO, BWXT
+
+Crypto / Fintech:
+COIN, HOOD, MSTR, SQ, PYPL, IBKR, CME
+
+If symbol in any hot theme basket: +25
+If symbol is an anchor: +30
+If symbol is a bottleneck: +25
+
+Anchor examples:
+NVDA, GOOGL, AMZN, MSFT, META, AVGO, TSM, ASML
+
+Bottleneck examples:
+MU, MRVL, VRT, ETN, ANET, LRCX, KLAC, AMAT, RKLB, ASTS, PWR, GEV
+
+3. Sector/theme momentum:
+If existing cached Sectors/Home theme performance data is cheaply available without extra heavy calls, use it.
+If not available, skip this for v1.
+Do not call AI or expensive endpoints to get it.
+
+4. Watchlist / Portfolio:
+If existing watchlist/portfolio symbols are available cheaply:
+- portfolio holding: +25
+- watchlist symbol: +20
+If not available, skip for v1.
+
+5. Estimate quality:
+- EPS estimate available: +5
+- revenue estimate available: +5
+- both available: +5 extra
+
+6. Price momentum:
+If priceChangePct is available from cheap cached quote data:
+- positive > 3%: +5
+- positive > 7%: +8
+- negative move > 5% but mega/large cap: +5 because market-moving
+
+Sorting:
+- Sort by importanceScore descending inside each date/session.
+- Then cap each session to limit_per_session.
+- topEvents = highest scores across entire week, capped by max_total.
+
+Session mapping:
+Normalize FMP time values:
+- "bmo", "before market open", "pre-market" => preMarket
+- "amc", "after market close", "after-hours" => afterHours
+- "dmh", "during market" => duringMarket
+- unknown/null => unknown
+
+Important:
+The frontend audit recommended a simple `days[]` shape because This Week has no current data expectations, and the existing DayCleanEntry fields already match most of the needed fields. Return `days[]` exactly as requested above so frontend wiring is straightforward.
+
+Validation:
+Do minimal testing only. Do not burn FMP credits.
+
+Test:
+GET /api/catalysts/earnings/week-clean?week_start=2026-04-27&week_end=2026-05-01
+
+Confirm:
+- response has days[]
+- Monday-Friday present
+- entries grouped by preMarket/afterHours/unknown
+- source is always fmp
+- no source=finnhub
+- no source=polymarket
+- no beat odds/probability fields
+- no question-style “Will…” titles
+- no AI calls
+- no 30-day fetch
+- no giant enrichment burst
+- route-specific 429 protection remains
+
+Final response:
+Tell me:
+- Files changed
+- Whether router remains disabled or was enabled
+- Endpoint path
+- Max FMP calls this endpoint can make
+- Enrichment cap/concurrency
+- Sample top 10 events for current week
+- Sample `days[]` response shape
+- Confirm no Finnhub/Polymarket/AI
+- Confirm Day, Recent, and popup were untouched

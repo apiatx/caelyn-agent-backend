@@ -1,0 +1,202 @@
+Build the backend endpoint for Catalyst Calendar > Earnings Dates > This Week.
+
+Frontend context:
+The frontend already has:
+- This Week => earningsMode = "thisweek"
+- Day => earningsMode = "upcoming"
+- Recent => earningsMode = "recent"
+
+This Week currently renders a blank placeholder.
+Day and Recent are working. Do not touch them.
+
+Goal:
+Create a simple curated weekly earnings board endpoint modeled after a weekly earnings watchlist UI.
+
+Endpoint:
+GET /api/catalysts/earnings/week-clean
+
+Query params:
+- week_start=YYYY-MM-DD optional
+- weekStart=YYYY-MM-DD optional alias
+- week_end=YYYY-MM-DD optional
+- weekEnd=YYYY-MM-DD optional alias
+- limit_per_session default 8, max 15
+- max_total default 60, max 100
+- search optional
+- scope=all|watchlist|portfolio optional
+
+Default:
+- current week Monday through Friday
+- one week only
+
+Hard rules:
+- FMP only
+- no Finnhub
+- no Polymarket
+- no beat odds
+- no AI calls
+- no 30-day preload
+- no changes to Day, Recent, popup, Home, Sectors, Macro
+
+Response shape:
+{
+  "asOf": "ISO timestamp",
+  "source": "fmp",
+  "weekStart": "YYYY-MM-DD",
+  "weekEnd": "YYYY-MM-DD",
+  "days": [
+    {
+      "date": "YYYY-MM-DD",
+      "label": "Mon, Apr 27",
+      "weekday": "Monday",
+      "count": 0,
+      "preMarket": [],
+      "afterHours": [],
+      "duringMarket": [],
+      "unknown": [],
+      "entries": []
+    }
+  ],
+  "topEvents": [],
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+Each event:
+{
+  "id": "string",
+  "date": "YYYY-MM-DD",
+  "session": "preMarket" | "afterHours" | "duringMarket" | "unknown",
+  "symbol": "string",
+  "companyName": "string | null",
+  "logo": "string | null",
+  "image": "string | null",
+  "price": number | null,
+  "priceChangePct": number | null,
+  "marketCap": number | null,
+  "marketCapBucket": "mega" | "large" | "mid" | "small" | "micro" | "unknown",
+  "sector": "string | null",
+  "industry": "string | null",
+  "time": "string | null",
+  "period": "string | null",
+  "epsEstimated": number | null,
+  "revenueEstimated": number | null,
+  "themeTags": ["string"],
+  "isThemeAnchor": boolean,
+  "isBottleneck": boolean,
+  "importanceScore": number,
+  "scoreBreakdown": {
+    "marketCap": number,
+    "theme": number,
+    "estimateAvailability": number,
+    "priceMomentum": number,
+    "watchlistPortfolio": number
+  },
+  "source": "fmp",
+  "raw": object
+}
+
+Important duplicate rule:
+A ticker can belong to multiple themes, but it must appear only once per earnings event.
+Deduplicate by:
+symbol + date + session
+
+If a symbol belongs to multiple themes:
+- attach all themeTags
+- increase score, but cap total theme score at 40
+- do not duplicate the card
+
+Theme baskets for v1:
+
+AI Buildout:
+NVDA, AMD, AVGO, MRVL, MU, TSM, ASML, ARM, SMCI, DELL, HPE, ANET, VRT, ETN, ORCL, GOOGL, MSFT, AMZN, META
+
+AI Data Center / Power:
+VRT, ETN, PWR, CEG, VST, NRG, GE, GEV, SMR, OKLO, DELL, SMCI
+
+Semiconductor Bottlenecks:
+ASML, AMAT, LRCX, KLAC, TER, AEHR, ACLS, FORM, COHR
+
+AI Networking:
+ANET, AVGO, MRVL, CIEN, CSCO, NOK, ERIC
+
+Cloud / Software Infra:
+MSFT, AMZN, GOOGL, META, ORCL, SNOW, DDOG, NET, CRWD, PANW, MDB, NOW
+
+Aerospace / Defense / Space:
+RKLB, ASTS, LMT, RTX, NOC, BA, LHX, TDG, HEI, PLTR, KTOS, IRDM
+
+Nuclear / Power / Electrification:
+CEG, VST, NRG, ETN, PWR, GEV, SMR, OKLO, BWXT
+
+Crypto / Fintech:
+COIN, HOOD, MSTR, SQ, PYPL, IBKR, CME
+
+Anchor tickers:
+NVDA, GOOGL, AMZN, MSFT, META, AVGO, TSM, ASML
+
+Bottleneck tickers:
+MU, MRVL, VRT, ETN, ANET, LRCX, KLAC, AMAT, RKLB, ASTS, PWR, GEV
+
+Scoring v1:
+- mega cap: +40
+- large cap: +30
+- mid cap: +15
+- small cap: +5
+- unknown: +0
+
+Theme:
+- in theme basket: +20
+- anchor: +25
+- bottleneck: +20
+- cap total theme score at 40
+
+Estimates:
+- EPS estimate available: +5
+- revenue estimate available: +5
+- both available: +5 extra
+
+Price momentum:
+- priceChangePct > 3%: +5
+- priceChangePct > 7%: +8
+- priceChangePct < -5% and marketCap large/mega: +5
+
+Watchlist/portfolio:
+- if easily available, portfolio +25, watchlist +20
+- if not easily available, skip for v1
+
+Sort:
+- sort by importanceScore descending inside each day/session
+- cap each session to limit_per_session
+- topEvents = top scored events across week, max_total
+
+FMP safety:
+- one week only
+- no FMP calls at startup/import
+- no parallel burst
+- one shared AsyncClient per request
+- concurrency max 2 for enrichment
+- cache company profiles 24h
+- cache quote/price 15-60 min
+- if FMP 429s, return partial response and stop enrichment
+- do not break other routes
+
+Validation:
+Test only one week.
+Confirm:
+- days[] has Monday-Friday
+- entries grouped by session
+- major names sort above random tiny tickers
+- duplicates do not appear
+- source always fmp
+- no Finnhub
+- no Polymarket
+- no AI calls
+
+Final response:
+- files changed
+- endpoint path
+- sample top 10
+- confirm duplicate symbols are deduped
+- confirm themeTags can contain multiple themes
+- confirm no Day/Recent/popup changes

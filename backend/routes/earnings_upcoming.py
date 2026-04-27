@@ -5,6 +5,7 @@ Endpoints
 ─────────
 GET /api/catalysts/earnings/upcoming-clean
 GET /api/catalysts/earnings/day-clean
+GET /api/catalysts/earnings/week-clean
 """
 from __future__ import annotations
 
@@ -198,6 +199,73 @@ async def day_clean(
         limit=limit,
         enrich=enrich,
         max_live=max_live,
+    )
+
+    return JSONResponse(content=result)
+
+
+# ── GET /api/catalysts/earnings/week-clean ────────────────────────────────────
+
+@router.get("/api/catalysts/earnings/week-clean")
+@traceable(name="earnings_clean.week")
+async def week_clean(
+    request:           Request,
+    api_key:           str          = Header(None, alias=_AUTH_HEADER),
+    week_start:        Optional[str] = Query(None, description="YYYY-MM-DD (Monday); default current week"),
+    week_end:          Optional[str] = Query(None, description="YYYY-MM-DD (Friday); default current week Friday"),
+    scope:             Optional[str] = Query(None, description="all | watchlist | portfolio"),
+    search:            Optional[str] = Query(None, description="Ticker or company name filter"),
+    limit_per_session: int           = Query(8, ge=1, le=15, description="Max events per session slot per day (default 8)"),
+    max_total:         int           = Query(60, ge=1, le=100, description="Max events in topEvents (default 60)"),
+):
+    """
+    Curated weekly earnings board for the Catalyst Calendar 'This Week' view.
+
+    Returns Mon–Fri earnings grouped by day and session (preMarket / afterHours /
+    duringMarket / unknown), scored by market cap + theme relevance + estimate
+    quality. FMP only — no AI, no Finnhub, no Polymarket.
+
+    Accepts camelCase aliases: weekStart, weekEnd (resolved from raw query params).
+
+    Constraints:
+      • One week only (7 days max).
+      • Max 2 FMP calendar calls per request (1 week = 1 chunk).
+      • Enrichment: top 40 candidates, concurrency=2, cache 24 h.
+      • 429 circuit breaker → partial data, status=partial.
+
+    Returns: { asOf, source, weekStart, weekEnd, days[], topEvents[], status, errors }
+    """
+    err = _check_key(api_key)
+    if err:
+        return err
+
+    fmp_key = _get_fmp_key()
+    if not fmp_key:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "FMP API key not configured", "status": "error", "errors": []},
+        )
+
+    # Accept camelCase aliases from raw query string
+    qp         = request.query_params
+    week_start = week_start or qp.get("weekStart") or None
+    week_end   = week_end   or qp.get("weekEnd")   or None
+
+    if week_start:
+        _validate_date(week_start, "week_start")
+    if week_end:
+        _validate_date(week_end, "week_end")
+
+    from services.earnings_clean_service import get_week_clean
+
+    result = await get_week_clean(
+        api_key=fmp_key,
+        week_start=week_start,
+        week_end=week_end,
+        scope=scope,
+        search=search,
+        limit_per_session=limit_per_session,
+        max_total=max_total,
     )
 
     return JSONResponse(content=result)

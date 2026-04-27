@@ -303,6 +303,7 @@ async def _enrich_events(
     client: httpx.AsyncClient,
     call_counter: list[int],
     max_live: int,
+    concurrency: int = _ENRICH_CONCURRENCY,
 ) -> tuple[list[dict], bool]:
     """
     Enrich events with FMP company profile data (companyName, logo, price, mktcap, etc).
@@ -333,7 +334,7 @@ async def _enrich_events(
         print(f"[earn_clean] enrich: cached={len(cached_syms)} live={len(live_syms)} skipped={skipped}")
 
     all_syms = cached_syms + live_syms
-    sem = asyncio.Semaphore(_ENRICH_CONCURRENCY)
+    sem = asyncio.Semaphore(concurrency)
 
     async def _bounded_profile(sym: str) -> tuple[str, dict]:
         ck = f"{ck_base}{sym}"
@@ -624,4 +625,408 @@ async def get_day_clean(
         "fmpCallsUsed": call_counter[0],
         "rateLimited":  rate_limited,
         "errors":       (["FMP rate limit hit — partial data"] if rate_limited else []),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WEEK-CLEAN — This Week curated earnings view
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Theme baskets (deterministic — no AI) ─────────────────────────────────────
+
+_THEME_BASKETS: dict[str, set[str]] = {
+    "AI Buildout": {
+        "NVDA", "AMD", "AVGO", "MRVL", "MU", "TSM", "ASML", "ARM",
+        "SMCI", "DELL", "HPE", "ANET", "VRT", "ETN", "ORCL",
+        "GOOGL", "MSFT", "AMZN", "META",
+    },
+    "AI Data Center / Power": {
+        "VRT", "ETN", "PWR", "CEG", "VST", "NRG", "GE", "GEV",
+        "SMR", "OKLO", "DELL", "SMCI",
+    },
+    "Semiconductor Bottlenecks": {
+        "ASML", "AMAT", "LRCX", "KLAC", "TER", "AEHR", "ACLS", "FORM", "COHR",
+    },
+    "AI Networking": {
+        "ANET", "AVGO", "MRVL", "CIEN", "CSCO", "NOK", "ERIC",
+    },
+    "Cloud / Software Infra": {
+        "MSFT", "AMZN", "GOOGL", "META", "ORCL", "SNOW", "DDOG",
+        "NET", "CRWD", "PANW", "MDB", "NOW",
+    },
+    "Aerospace / Defense / Space": {
+        "RKLB", "ASTS", "LMT", "RTX", "NOC", "BA", "LHX",
+        "TDG", "HEI", "PLTR", "KTOS", "IRDM",
+    },
+    "Nuclear / Power / Electrification": {
+        "CEG", "VST", "NRG", "ETN", "PWR", "GEV", "SMR", "OKLO", "BWXT",
+    },
+    "Crypto / Fintech": {
+        "COIN", "HOOD", "MSTR", "SQ", "PYPL", "IBKR", "CME",
+    },
+}
+
+_THEME_ANCHORS:     set[str] = {"NVDA", "GOOGL", "AMZN", "MSFT", "META", "AVGO", "TSM", "ASML"}
+_THEME_BOTTLENECKS: set[str] = {
+    "MU", "MRVL", "VRT", "ETN", "ANET", "LRCX", "KLAC", "AMAT", "RKLB", "ASTS", "PWR", "GEV",
+}
+
+_ALL_THEME_SYMS: set[str] = {sym for basket in _THEME_BASKETS.values() for sym in basket}
+
+_MAX_WEEK_ENRICH    = 40   # max live profile fetches for week-clean
+_WEEK_CONCURRENCY   = 2    # semaphore for week-clean enrichment
+_WEEK_LIMIT_DEFAULT = 8    # default per-session cap
+_WEEK_TOTAL_DEFAULT = 60   # default topEvents cap
+_WEEK_LIMIT_MAX     = 15   # hard ceiling for limit_per_session
+_WEEK_TOTAL_MAX     = 100  # hard ceiling for max_total
+
+_WEEKDAY_NAMES = {0: "Monday", 1: "Tuesday", 2: "Wednesday",
+                  3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
+
+
+# ── Week-clean helpers ─────────────────────────────────────────────────────────
+
+def _symbol_themes(sym: str) -> list[str]:
+    """Return list of theme basket names the symbol belongs to."""
+    return [name for name, syms in _THEME_BASKETS.items() if sym in syms]
+
+
+def _session(time_str: Optional[str]) -> str:
+    """Map FMP time string to session key."""
+    if not time_str:
+        return "unknown"
+    t = time_str.lower().strip()
+    if t in {"bmo", "before market open", "pre-market", "pre market", "pre", "pm"}:
+        return "preMarket"
+    if t in {"amc", "after market close", "after-hours", "after hours", "after", "ah", "postmarket"}:
+        return "afterHours"
+    if t in {"dmh", "during market", "during market hours", "during", "midday"}:
+        return "duringMarket"
+    return "unknown"
+
+
+def _pre_score(ev: dict, watchlist: set[str], portfolio: set[str]) -> dict:
+    """
+    Deterministic pre-score using only raw FMP calendar fields + theme knowledge.
+    No profile data needed — safe to call before enrichment.
+
+    Theme scoring (capped at 40 total):
+      in theme basket: +20 | anchor: +25 | bottleneck: +20
+    """
+    sym = (ev.get("symbol") or "").upper()
+    has_eps = ev.get("epsEstimated") is not None
+    has_rev = ev.get("revenueEstimated") is not None
+
+    is_anchor     = sym in _THEME_ANCHORS
+    is_bottleneck = sym in _THEME_BOTTLENECKS
+    in_theme      = sym in _ALL_THEME_SYMS
+
+    raw_theme = 0
+    if in_theme:      raw_theme += 20
+    if is_anchor:     raw_theme += 25
+    if is_bottleneck: raw_theme += 20
+    theme_score = min(raw_theme, 40)   # cap at 40
+
+    is_portfolio = sym in portfolio
+    is_watchlist = sym in watchlist
+    wp_score = 25 if is_portfolio else (20 if is_watchlist else 0)
+
+    est_score = 0
+    if has_eps: est_score += 5
+    if has_rev: est_score += 5
+    if has_eps and has_rev: est_score += 5
+
+    return {
+        "score":        theme_score + wp_score + est_score,
+        "isAnchor":     is_anchor,
+        "isBottleneck": is_bottleneck,
+        "themes":       _symbol_themes(sym),
+        "breakdown": {
+            "marketCap":            0,   # filled after enrichment
+            "theme":                theme_score,
+            "watchlistPortfolio":   wp_score,
+            "estimateAvailability": est_score,
+            "priceMomentum":        0,   # filled after enrichment
+        },
+    }
+
+
+def _apply_full_score(ev: dict, pre: dict) -> tuple[int, dict]:
+    """
+    Compute final importance score after enrichment adds marketCap / price %.
+    Returns (total_score, updated_breakdown).
+    """
+    mc     = ev.get("marketCap")
+    pct    = ev.get("changesPercentage")
+    bucket = _mc_bucket(mc)
+
+    mc_score = {"mega": 40, "large": 30, "mid": 15, "small": 5}.get(bucket or "", 0)
+
+    pm_score = 0
+    if pct is not None:
+        if pct > 7:
+            pm_score = 8
+        elif pct > 3:
+            pm_score = 5
+        elif pct < -5 and bucket in ("mega", "large"):
+            pm_score = 5
+
+    breakdown = {
+        "marketCap":            mc_score,
+        "theme":                pre["breakdown"].get("theme", 0),
+        "watchlistPortfolio":   pre["breakdown"].get("watchlistPortfolio", 0),
+        "estimateAvailability": pre["breakdown"].get("estimateAvailability", 0),
+        "priceMomentum":        pm_score,
+    }
+    return pre["score"] + mc_score + pm_score, breakdown
+
+
+def _build_empty_days(week_start, week_end) -> list[dict]:
+    """Return a days[] with zero-count slots for each date in range."""
+    days = []
+    cur = week_start
+    while cur <= week_end:
+        d_str = cur.strftime("%Y-%m-%d")
+        label = cur.strftime("%a, %b ") + str(cur.day)
+        days.append({
+            "date":         d_str,
+            "label":        label,
+            "weekday":      _WEEKDAY_NAMES.get(cur.weekday(), ""),
+            "count":        0,
+            "preMarket":    [],
+            "afterHours":   [],
+            "duringMarket": [],
+            "unknown":      [],
+            "entries":      [],
+        })
+        cur += timedelta(days=1)
+    return days
+
+
+def _decorate_event(ev: dict, pre: dict, score: int, breakdown: dict) -> dict:
+    """Attach week-clean fields to a (possibly enriched) normalized event."""
+    mc     = ev.get("marketCap")
+    bucket = _mc_bucket(mc) or "unknown"
+    base   = {k: v for k, v in ev.items() if k != "_exchange"}
+    return {
+        **base,
+        "session":         _session(ev.get("time")),
+        "priceChangePct":  ev.get("changesPercentage"),
+        "marketCapBucket": bucket,
+        "themeTags":       pre.get("themes", []),
+        "isThemeAnchor":   pre.get("isAnchor", False),
+        "isBottleneck":    pre.get("isBottleneck", False),
+        "importanceScore": score,
+        "scoreBreakdown":  breakdown,
+        "source":          "fmp",
+    }
+
+
+# ── Public API: get_week_clean ─────────────────────────────────────────────────
+
+async def get_week_clean(
+    api_key:           str,
+    week_start:        Optional[str] = None,
+    week_end:          Optional[str] = None,
+    scope:             Optional[str] = None,
+    search:            Optional[str] = None,
+    limit_per_session: int = _WEEK_LIMIT_DEFAULT,
+    max_total:         int = _WEEK_TOTAL_DEFAULT,
+) -> dict:
+    """
+    FMP earnings calendar for a single business week — curated and scored.
+
+    Safety rules:
+      • One week only (Mon–Fri by default) — hard clamped to 7 days max.
+      • Max 1-2 FMP calendar calls (one 7-day chunk; cache hit after first call).
+      • Two-phase enrichment: pre-score all → enrich top 40 candidates only.
+      • Enrichment: concurrency=2, circuit breaker, partial on 429.
+      • No AI, no Finnhub, no Polymarket.
+
+    Response: { asOf, source, weekStart, weekEnd, days[], topEvents[], status, errors }
+    """
+    limit_per_session = min(max(1, limit_per_session), _WEEK_LIMIT_MAX)
+    max_total         = min(max(1, max_total), _WEEK_TOTAL_MAX)
+
+    # -- Resolve week bounds
+    today_d = datetime.now(timezone.utc).date()
+    if week_start:
+        try:
+            ws = datetime.strptime(week_start, "%Y-%m-%d").date()
+        except ValueError:
+            ws = today_d - timedelta(days=today_d.weekday())
+    else:
+        ws = today_d - timedelta(days=today_d.weekday())   # Monday
+
+    if week_end:
+        try:
+            we = datetime.strptime(week_end, "%Y-%m-%d").date()
+        except ValueError:
+            we = ws + timedelta(days=4)
+    else:
+        we = ws + timedelta(days=4)   # Friday
+
+    # Hard clamp: never more than 7 days
+    if we > ws + timedelta(days=6):
+        we = ws + timedelta(days=6)
+
+    from_str = ws.strftime("%Y-%m-%d")
+    to_str   = we.strftime("%Y-%m-%d")
+
+    call_counter: list[int] = [0]
+    errors:       list[str] = []
+    rate_limited             = False
+
+    # -- Phase 1: Fetch calendar (1-2 FMP calls max, heavily cached)
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(_FMP_TIMEOUT),
+        follow_redirects=True,
+    ) as client:
+
+        raw_rows, rate_limited = await _fetch_earnings_range(
+            from_str, to_str, api_key, client, call_counter,
+        )
+
+        # -- Phase 2: Normalize and scope
+        watchlist = _load_watchlist()
+        portfolio = _load_portfolio()
+
+        events: list[dict] = []
+        for row in raw_rows:
+            ev = _normalize_row(row)
+            if ev:
+                events.append(ev)
+
+        events = _apply_scope(events, search, scope, watchlist, portfolio)
+
+        if not events:
+            return {
+                "asOf":      _today(),
+                "source":    "fmp",
+                "weekStart": from_str,
+                "weekEnd":   to_str,
+                "days":      _build_empty_days(ws, we),
+                "topEvents": [],
+                "status":    "partial" if rate_limited else "ok",
+                "errors":    errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
+            }
+
+        # -- Phase 3: Pre-score (no HTTP — uses only raw FMP data)
+        pre_scores: dict[str, dict] = {}
+        for ev in events:
+            sym = ev.get("symbol", "")
+            if sym and sym not in pre_scores:
+                pre_scores[sym] = _pre_score(ev, watchlist, portfolio)
+
+        # Rank symbols by pre-score to select enrichment candidates
+        sym_best_score: dict[str, int] = {}
+        for ev in events:
+            sym = ev.get("symbol", "")
+            s   = pre_scores.get(sym, {}).get("score", 0)
+            if sym not in sym_best_score or s > sym_best_score[sym]:
+                sym_best_score[sym] = s
+
+        enrich_syms: set[str] = set(
+            sorted(sym_best_score, key=lambda s: sym_best_score[s], reverse=True)[:_MAX_WEEK_ENRICH]
+        )
+
+        # -- Phase 4: Enrich top candidates (concurrency=2, shared client)
+        enrich_candidates = [ev for ev in events if ev.get("symbol") in enrich_syms]
+        not_enriched      = [ev for ev in events if ev.get("symbol") not in enrich_syms]
+
+        if enrich_candidates and not rate_limited:
+            enrich_candidates, enrich_rl = await _enrich_events(
+                enrich_candidates,
+                api_key, client, call_counter,
+                max_live=_MAX_WEEK_ENRICH,
+                concurrency=_WEEK_CONCURRENCY,
+            )
+            if enrich_rl:
+                rate_limited = True
+                errors.append("FMP rate limit during enrichment — partial enrichment")
+
+    # -- Phase 5: Apply full score and decorate all events
+    _empty_pre = {
+        "score": 0, "isAnchor": False, "isBottleneck": False,
+        "themes": [],
+        "breakdown": {"marketCap": 0, "theme": 0, "watchlistPortfolio": 0,
+                      "estimateAvailability": 0, "priceMomentum": 0},
+    }
+    decorated: list[dict] = []
+
+    for ev in enrich_candidates:
+        sym  = ev.get("symbol", "")
+        pre  = pre_scores.get(sym, _empty_pre)
+        score, breakdown = _apply_full_score(ev, pre)
+        decorated.append(_decorate_event(ev, pre, score, breakdown))
+
+    for ev in not_enriched:
+        sym  = ev.get("symbol", "")
+        pre  = pre_scores.get(sym, _empty_pre)
+        decorated.append(_decorate_event(ev, pre, pre["score"], pre["breakdown"]))
+
+    # -- Phase 6: Group by date and session, dedup, apply per-session cap
+    # Dedup rule: symbol + date + session (keep highest-scored occurrence)
+    days_map: dict[str, list[dict]] = {}
+    cur = ws
+    while cur <= we:
+        days_map[cur.strftime("%Y-%m-%d")] = []
+        cur += timedelta(days=1)
+
+    seen_key: set[tuple[str, str, str]] = set()
+    for ev in sorted(decorated, key=lambda e: -(e.get("importanceScore") or 0)):
+        sym     = ev.get("symbol", "")
+        d       = ev.get("date", "")
+        sess    = ev.get("session", "unknown")
+        dedup_k = (sym, d, sess)
+        if dedup_k in seen_key:
+            continue
+        seen_key.add(dedup_k)
+        if d in days_map:
+            days_map[d].append(ev)
+
+    days: list[dict] = []
+    for date_str in sorted(days_map.keys()):
+        day_evs = sorted(days_map[date_str], key=lambda e: -(e.get("importanceScore") or 0))
+
+        pre_mkt   = [e for e in day_evs if e.get("session") == "preMarket"][:limit_per_session]
+        after_hrs = [e for e in day_evs if e.get("session") == "afterHours"][:limit_per_session]
+        during    = [e for e in day_evs if e.get("session") == "duringMarket"][:limit_per_session]
+        unknown   = [e for e in day_evs if e.get("session") == "unknown"][:limit_per_session]
+        entries   = pre_mkt + during + after_hrs + unknown
+
+        d_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        label = d_obj.strftime("%a, %b ") + str(d_obj.day)
+
+        days.append({
+            "date":         date_str,
+            "label":        label,
+            "weekday":      _WEEKDAY_NAMES.get(d_obj.weekday(), ""),
+            "count":        len(day_evs),
+            "preMarket":    pre_mkt,
+            "afterHours":   after_hrs,
+            "duringMarket": during,
+            "unknown":      unknown,
+            "entries":      entries,
+        })
+
+    # topEvents: all decorated events (post-dedup), sorted by score, capped
+    all_deduped = [ev for evs in days_map.values() for ev in evs]
+    top_events  = sorted(all_deduped, key=lambda e: -(e.get("importanceScore") or 0))[:max_total]
+
+    print(
+        f"[earn_clean] week-clean {from_str}→{to_str} "
+        f"raw={len(raw_rows)} decorated={len(decorated)} deduped={len(all_deduped)} "
+        f"enriched={len(enrich_candidates)} calls={call_counter[0]}"
+    )
+
+    return {
+        "asOf":      _today(),
+        "source":    "fmp",
+        "weekStart": from_str,
+        "weekEnd":   to_str,
+        "days":      days,
+        "topEvents": top_events,
+        "status":    "partial" if rate_limited else "ok",
+        "errors":    errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
     }
