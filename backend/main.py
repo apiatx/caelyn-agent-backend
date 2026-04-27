@@ -1461,17 +1461,25 @@ async def earnings_calendar(
     """
     Returns FMP earnings calendar for a date range with company enrichment.
 
-    Defaults to today → today+30 days.  Enriches up to 50 companies by profile
+    Accepts ?from=YYYY-MM-DD&to=YYYY-MM-DD (preferred, used by frontend) OR
+    ?from_date=...&to_date=... (legacy).  Defaults to today → today+30 days.
+
+    Enriches up to 50 companies by profile
     (name, logo, price, changesPercentage, marketCap, sector, industry).
     Logos fall back to the FMP image-stock CDN pattern for un-enriched companies.
 
     Returns: { earnings, countsByDate, eventsByDate, from, to, count, source }
-    Cache key: fmp:earnings_calendar:v4:{from}:{to}  TTL: 6 h
+    Cache key: fmp:earnings_calendar:v5:{from}:{to}  TTL: 6 h
     """
     from datetime import datetime, timedelta
     from services.catalyst_calendar_service import CatalystFMP, _enrich_profiles
 
     await _wait_for_init()
+
+    # Accept both ?from=... and ?from_date=... (frontend sends the shorter form)
+    qp = request.query_params
+    from_date = qp.get("from") or from_date or ""
+    to_date   = qp.get("to")   or to_date   or ""
 
     today = datetime.now()
     if not from_date:
@@ -1481,7 +1489,7 @@ async def earnings_calendar(
 
     from data.cache import cache
     from config import FMP_API_KEY as _fmp_key
-    cache_key = f"fmp:earnings_calendar:v4:{from_date}:{to_date}"
+    cache_key = f"fmp:earnings_calendar:v5:{from_date}:{to_date}"
     cached = cache.get(cache_key)
     if cached is not None:
         return JSONResponse(content=cached)

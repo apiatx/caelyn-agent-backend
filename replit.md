@@ -1,461 +1,77 @@
 # Caelyn AI — FastAPI Trading Analysis Platform
 
-## Architecture
-
-FastAPI Python backend (port 5000) with two main tracks:
-
-1. **`/api/caelyn-terminal`** — Real portfolio analytics (NVDA, OSS, BUZZ via Tradier; GOLD via Yahoo; BTC via CoinGecko)
-2. **`/api/hyperliquid/screener`** — Live Hyperliquid perpetuals/spot screener
-
-## Key Files
-
-| File | Role |
-|---|---|
-| `backend/main.py` | FastAPI app entry point |
-| `backend/services/hyperliquid/websocket_manager.py` | Boot sequence + WS consumer + periodic tasks |
-| `backend/services/hyperliquid/normalizer.py` | REST snapshot → ScreenerAsset; universe filtering |
-| `backend/services/hyperliquid/feature_engine.py` | Signal/score computation (all 14 components) |
-| `backend/services/hyperliquid/signals.py` | Agent briefing, hero signals, section builder |
-| `backend/services/hyperliquid/router.py` | HTTP endpoints + row serializer |
-| `backend/services/hyperliquid/state.py` | In-memory state (assets, candles, trades, books, OI history) |
-| `backend/services/hyperliquid/models.py` | ScreenerAsset Pydantic model |
-
-## HIP-3 Disk-Persistent Cache
-
-Stocks, commodities, pre-IPO, and indices (HIP-3 DEX assets) are now loaded instantly on every server restart from a disk cache at `backend/data/hyperliquid_hip3_cache.json`. This eliminates the previous 5-minute wait.
-
-**Boot flow:**
-1. Crypto perps + spot load from Hyperliquid REST API (~10s)
-2. HIP-3 assets load from disk cache (`<25ms`) — stocks/equities/commodities immediately visible
-3. Background task (`_post_boot_enrich`) refreshes HIP-3 from the live API and overwrites the cache
-4. `_periodic_hip3_refresh` runs every 5 minutes to keep prices live and cache warm
-
-**Cache file:** `backend/data/hyperliquid_hip3_cache.json` (~100+ assets, 24h TTL)  
-**First-boot behavior:** No cache → HIP-3 loads from API (3-5 min), cache written afterward  
-**All subsequent boots:** 103+ HIP-3 assets available at `is_ready=True` before any API call
-
-## Universe Filtering (HL_STRICT_UNIVERSE_ONLY)
-
-Default: enabled (`true`).
-
-- **Perps**: All entries from `metaAndAssetCtxs.universe[]` except `isDelisted=true` are admitted. 39 delisted perps dropped on boot, 190 active perps admitted.
-- **Spot**: All entries from `spotMetaAndAssetCtxs.universe[]` are admitted to state (288 markets), representing the full official Hyperliquid spot universe. A **$50K/day display-layer volume gate** in the snapshot endpoint eliminates user-created junk tokens (GPT, 2Z, DROP, JPEG, etc.) from all responses. This leaves ~31 actively-traded spot markets visible.
-- **Allowlists**: `state.perp_allowlist`, `state.spot_allowlist`, `state.universe_allowlist` (combined) built at boot.
-- **Logging**: Every dropped delisted perp logs `[HL][universe] unknown_market_filtered coin=X source=perp reason=delisted`.
-
-## API Identity Fields (every market row)
-
-| Field | Description |
-|---|---|
-| `canonicalCoinId` | Exact Hyperliquid market identifier (key in state.assets) |
-| `displaySymbol` | Clean frontend label (strips /USDC suffix from spot) |
-| `isListedOnHyperliquid` | Always `true` — non-universe assets never enter state |
-| `marketType` | `"perp"` or `"spot"` |
-
-## Screener Endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /api/hyperliquid/screener/snapshot` | Full market snapshot with filters (market_type, min_volume_usd, max_spread_bps, sort_by) |
-| `GET /api/hyperliquid/screener/hero` | Agent Market Brief: market_regime, best_long/short, guidance buckets, selected_thesis |
-| `GET /api/hyperliquid/screener/sections` | 21 signal sections + 9 summary cards + 5 hero signals |
-| `GET /api/hyperliquid/screener/agent-rank` | POST-style ranking with rationale |
-| `GET /api/hyperliquid/screener/asset/{coin}` | Single asset detail with candles, trades, L2, score history |
-
-## Scoring Engine (version 3.0 — Hierarchical Pipeline)
-
-### Pipeline stages
-1. **Candle features** — momentum, volatility (5m + 1h candles, up to 120 bars)
-2. **Short-term scores** — 14 signal components (unchanged from v2)
-3. **Structural quality + regime** — `compute_structural_quality()` uses 1h candle history
-4. **Bucket classification** — 5 buckets based on regime + structural quality
-5. **Hero selection** — guardrails prevent dead-cat bounces from appearing as top longs
-
-### 7 Asset Regimes (new in v3)
-| Regime | Meaning |
-|---|---|
-| `structural_uptrend_pullback` | Multi-day uptrend intact, buyable pullback |
-| `structural_uptrend_breakout_watch` | Coiling/tightening base on top of uptrend |
-| `late_extension_exhaustion` | Good uptrend but aging + momentum fading |
-| `speculative_reversal` | Weak structure, short-term reversal signals only |
-| `downtrend_dead_cat` | Long downtrend + sharp short-term spike = dead cat |
-| `chop_low_quality` | No clear trend, mixed signals |
-| `collapse_risk` | Active breakdown, OI dropping, book deteriorating |
-
-### 8 Score Families (new in v3)
-| Score | Description |
-|---|---|
-| `structural_quality_score` | 0-100: overall multi-day structural quality (primary filter) |
-| `liquidity_quality_score` | Comprehensive liq + tradability quality |
-| `pullback_quality_score` | Quality of pullback within an uptrend |
-| `breakout_readiness_score` | Range tightening + volume dry-up + base quality |
-| `continuation_score` | Likelihood trend continues |
-| `speculative_reversal_score` | Quality as a speculative short-term bounce |
-| + all 8 v2 setup scores | unchanged |
-
-### structural_quality_score factors (from 1h candles)
-- Long-window OLS slope (100 bars ≈ 4 days) → 30%
-- Pct of bars above rolling median → 20%
-- Higher-high / higher-low persistence in synthetic 4h bars → 20%
-- Range tightening (base/consolidation quality) → 15%
-- Momentum persistence (green bar ratio) → 15%
-
-### 5 Guidance Buckets (new in v3)
-| Bucket | Criteria | Legacy alias |
-|---|---|---|
-| `buy_now` | regime=uptrend_pullback, SQ≥52, liq≥38, flow≥46 | `trade_now` |
-| `high_quality_watchlist` | SQ≥45, uptrend regime, setup not yet triggered | `watch_breakout` |
-| `speculative_reversals` | regime=speculative_reversal or dead_cat | (new) |
-| `collapse_watch` | regime=collapse_risk or late_extension_exhaustion | `watch_collapse` |
-| `avoid` | high tradability_penalty or illiquid | unchanged |
-
-### Guardrails for top longs (hero)
-- Must NOT be in `downtrend_dead_cat` or `speculative_reversal` regime
-- Must have `structural_quality_score ≥ 42`
-- Must come from `buy_now` or `high_quality_watchlist` bucket (never from speculative_reversals)
-
-### 7 Setup types (unchanged from v2)
-`breakout`, `mean_reversion`, `trend_continuation`, `crowding_unwind`, `exhaustion`, `collapse_risk`, `avoid`
-
-## Rolling History
-
-| History | Source | Available |
-|---|---|---|
-| OI changes (5m/15m/1h) | ~60s snapshot intervals | After ~5 min |
-| Score changes | Same | After ~1 cycle |
-| Volume impulse (5m/15m) | 5m candle data | Available at boot |
-
-## Market Regime (generate_agent_briefing)
-
-5 regimes from breadth (long_pct/short_pct), avg funding, composite score, exhaustion_pct:
-`risk_on_bull`, `risk_off_bear`, `crowded_leveraged_bull`, `exhausted_distribution`, `mixed / rotational`
-
-## Sector Rotation Dashboard (`/api/sector-rotation/`)
-
-| Endpoint | Description |
-|---|---|
-| `GET /api/sector-rotation/dashboard` | 11 SPDR sector ETFs with rotation scores, YTD, 1M, MA %, rel-SPY, regime tags; macro overlay (FRED); market breadth; cyclical-vs-defensive spread. 300s in-memory cache. |
-| `GET /api/sector-rotation/history?range=1y` | 1Y daily price series for all 11 ETFs (yfinance); supports 1m/3m/6m/1y |
-| `GET /api/sector-rotation/analysis` | Cached Gemini AI analysis (7-day disk cache at `backend/data/sector_rotation_analysis.json`) |
-| `POST /api/sector-rotation/refresh-analysis` | Force-regenerate Gemini AI analysis with Google Search grounding |
-
-### Data Sources
-- **Quotes**: Finnhub real-time (1m cache)
-- **History**: yfinance daily bars
-- **Macro**: FRED (Fed Funds, CPI, 10Y, 2Y; YC spread computed)
-- **AI Analysis**: `gemini-3-flash-preview` + `google_search` tool grounding
-
-### Rotation Scoring Formula
-`rotation_score (0-100)` = 25% 1M rank + 25% YTD rank + 20% pct-above-50MA + 15% pct-above-200MA + 15% rel-vs-SPY-30D
-
-Regime tags: Leading≥70, Improving≥50, Weakening≥30, Lagging<30
-
-### AI Analysis Schema
-Fields: `market_regime`, `macro_regime`, `leadership_style`, `summary`, `current_leadership` (leaders/laggards/explanation), `scenarios` (name/probability/sector_winners/sector_losers), `watch_items`, `sources`, `generated_at`
-
-## Insider Activity Dashboard (`/api/insider-activity`)
-
-Fetches SEC Form 4 filings via edgartools, scores each transaction 0-100, stores in Neon PostgreSQL with 30-day retention.
-
-| Endpoint | Description |
-|---|---|
-| `GET /api/insider-activity` | Paginated feed with filters: `type`, `timeframe`, `min_score`, `sort`, `order`, `search`, `limit`, `offset`, `cluster_type` (coordinated_buy/coordinated_sell/lockup_expiry/mixed), `clustered_only` (bool), `sector` |
-| `GET /api/insider-activity/stats` | Aggregate stats: total_transactions, buys, sales, avg_buy_score, top_buy, top_sell, last_refresh, refresh_in_progress |
-| `GET /api/insider-activity/{ticker}` | All transactions for ticker + insider_summary (net_direction, buy/sell 30d values) |
-| `GET /api/insider-activity/detail/{accession_number}` | Full detail including score_breakdown, price_context, cluster_type, cluster_metadata |
-| `POST /api/insider-activity/refresh` | Manual refresh trigger |
-
-### 8-Factor Conviction Scoring (0-100)
-
-| Factor | Weight |
-|---|---|
-| Transaction size ($) | 15 |
-| Insider role (CEO/Director/10%) | 20 |
-| Transaction type (buy vs grant vs sale) | 10 |
-| Price context (near 52w low, vs MA) | 15 |
-| Cluster activity (type-multiplied: coordinated_buy×1.0, coordinated_sell×0.9, mixed×0.5, lockup_expiry×0.2) | 15 |
-| Position change % | 10 |
-| Track record (filing frequency) | 10 |
-| Earnings proximity | 5 |
-
-### Cluster Classification (`cluster_type`)
-`_detect_cluster_type()` queries DB for same-ticker transactions within ±14-day window and classifies:
-- `coordinated_buy`: >70% buys → multiplier 1.0
-- `coordinated_sell`: >70% sells, diverse stagger → multiplier 0.9
-- `lockup_expiry`: >70% sells, tight date-spread (≤2 days) or low position-impact stdev → multiplier 0.2
-- `mixed`: else → multiplier 0.5
-Metadata: cluster_size, date_spread_days, insiders_in_cluster, distinct_role_count, total_cluster_value, avg/stdev position impact
-
-### Data Pipeline
-- **Source**: edgartools `get_filings(form="4")` → `filing.obj().market_trades` DataFrame
-- **Price enrichment**: Tradier batch (50/call) → Finnhub quote+metric → yfinance fallback
-- **DB**: Neon PostgreSQL `insider_transactions` table; `expires_at = NOW() + 30 days`
-- **Background loop**: Creates table → cleans expired rows → initial load (300 filings) → refreshes every 2 hours
-- **Dedup key**: `{accession_number}:{row_idx}` (max 29 chars) — handles multiple transactions per filing
-
-## Whale Watch — Institutional 13F Tracker (`/api/whales`)
-
-Tracks top institutional investors via SEC EDGAR 13F-HR filings. Fetches quarterly holdings, maps CUSIPs to tickers via EDGAR's own ticker index (no external APIs), calculates weighted portfolio returns (1m/3m/6m/1y vs SPY), and generates AI theme summaries via Anthropic.
-
-### Tracked Institutions
-
-| Name | CIK | Manager |
-|---|---|---|
-| Berkshire Hathaway | 1067983 | Warren Buffett |
-| Pershing Square Capital Management | 1336528 | Bill Ackman |
-| Duquesne Family Office | 1536411 | Stanley Druckenmiller |
-| Elliott Investment Management | 1791786 | Paul Singer |
-| Appaloosa Management | 1006438 | David Tepper |
-| Baupost Group | 1061768 | Seth Klarman |
-| Third Point | 1040273 | Dan Loeb |
-| Soros Fund Management | 1029160 | George Soros |
-| Renaissance Technologies | 1037389 | Jim Simons |
-| Bridgewater Associates | 1350694 | Ray Dalio |
-
-### Endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /api/whales?category=institution` | All whales sorted by 3m return (best first) |
-| `GET /api/whales/{whale_name}/holdings` | Latest quarter holdings sorted by weight_pct |
-| `GET /api/whales/{whale_name}/returns` | All quarterly return records vs SPY benchmark |
-| `POST /api/whales/refresh` | Trigger background refresh of all whales |
-| `POST /api/whales/{whale_name}/refresh` | Trigger refresh for a single whale (whale_name = exact DB name) |
-| `POST /api/whales/discover` | Re-discover top whales via Perplexity AI |
-
-### Data Pipeline (EDGAR-Only, No External APIs)
-
-- **Source**: SEC EDGAR `data.sec.gov/submissions/CIK{cik}.json` → find 13F-HR accession → parse infotable XML
-- **CUSIP → Ticker — Pass 1 (In-Memory)**: Downloads `company_tickers_exchange.json` from EDGAR on startup (~8 000 companies); column-oriented format `{"fields":[...], "data":[[...],...]}`. Normalized-name → ticker dict built at boot. Normalization order: (1) strip `/XX` jurisdiction suffixes, (2) uppercase + strip punctuation, (3) strip legal suffixes (INC/CORP/LLC/LP/etc.) iteratively, (4) collapse spaces.
-- **CUSIP → Ticker — Pass 2 (FTS Fallback)**: Hits `efts.sec.gov/hits.json` full-text search for any company name that missed Pass 1. Semaphore(5) limits concurrency. Ticker validated as `^[A-Z]{1,5}$` or `^[A-Z]{1,5}-[A-Z]{1,2}$`; dots (ADRs/preferreds) blocked.
-- **Cap**: Top 500 positions by value per whale (covers 95%+ of portfolio weight; prevents long waits for RenTech with 3000+ positions)
-- **Returns**: yfinance batch download (2y) → weighted portfolio 1m/3m/6m/1y returns; SPY as benchmark
-- **AI Themes**: Claude claude-haiku-4-5 summarizes top-15 holdings into 2-3 sentence investment thesis
-- **Background loop**: Runs on startup if stale (> 24h); refreshes all whales every 24h
-- **DB Tables**: `whales`, `whale_holdings`, `whale_portfolio_returns` (Neon PostgreSQL)
-- **Key file**: `backend/services/whale_watch_service.py`
-- **Safety guard**: `_save_holdings_to_db` skips overwrite when 0 holdings resolved (prevents wiping DB on failed refreshes)
-- **No FMP / OpenFIGI dependency**: Both removed; EDGAR index is the sole source of truth for CUSIP resolution
-- **No concurrent refreshes**: `_refresh_in_progress` flag prevents overlapping refreshes. Pass 2 FTS uses `asyncio.Semaphore(5)` to keep EDGAR requests polite.
-
-## Predict Page — Polymarket Intelligence + TradingAgents (`/api/predict/`)
-
-Integrates Jon-Becker/prediction-market-analysis methodology and TauricResearch/TradingAgents architecture.
-
-### New Endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /api/predict/markets?limit=50&tag=&min_volume=0` | Enhanced market list: edge detection, momentum, whale signals, Kelly fraction, efficiency score |
-| `GET /api/predict/signals` | Dashboard intelligence: top edges, mispricings, surging markets, whale watch, top by volume |
-| `GET /api/predict/whale-watch?limit=20` | Markets with vol/liquidity ratio > 5x — large coordinated position signals |
-| `GET /api/predict/categories` | Volume + count breakdown by tag (uses Gamma events API for real tag data) |
-| `GET /api/predict/market/{condition_id}` | Deep single-market analysis with order book depth, Kelly fraction, book imbalance |
-| `GET /api/predict/context?question=...` | Pre-analyze: finds relevant Polymarket markets for a given question |
-| `POST /api/predict/analyze` body: `{"question":"..."}` | Full 6-agent TradingAgents pipeline → final recommendation |
-| `GET /api/polymarket/intelligence` | Alias for `/api/predict/signals` |
-
-### Per-Market Analytics Fields (Jon-Becker methodology)
-
-| Field | Description |
-|---|---|
-| `yes_price` / `no_price` | Current market prices (0–1) |
-| `yes_pct` / `no_pct` | As percentage (0–100) |
-| `spread_pct` | Bid-ask spread as % |
-| `volume_24h` / `volume_1wk` / `volume_1mo` | Volume at different timeframes |
-| `volume_momentum` | `surging` / `accelerating` / `stable` / `fading` (24h vs 7d avg) |
-| `whale_activity` | true if vol/liquidity > 5x (large coordinated positions) |
-| `vol_liq_ratio` | Raw volume/liquidity ratio |
-| `edge_detected` / `edge_pct` | Whether implied probs ≠ 100% (mispricing signal) |
-| `mispricing_score` | Distance between displayed price and best bid/ask mid |
-| `market_efficiency_score` | 0-100 score (tight spread + high liquidity + competitive flag) |
-| `kelly_fraction_pct` | Kelly Criterion position size recommendation (%) |
-| `is_competitive` | Polymarket competitive market flag (sharp money marker) |
-| `days_to_expiry` | Calendar days to market close |
-| `price_momentum_pct` | Last trade vs displayed price % delta |
-
-### TradingAgents Pipeline (`POST /api/predict/analyze`)
-
-Phase 1 (parallel): `FundamentalsAgent` + `SentimentAgent` + `TechnicalAgent`
-Phase 2 (parallel): `BullAgent` + `BearAgent` (receive Phase 1 outputs)
-Phase 3 (sequential): `RiskManagerAgent` → final decision
-
-All agents use `gemini-3-flash-preview` with Google Search grounding.
-
-Response includes `agents.{fundamentals,sentiment,technical,bull,bear,risk_manager}` and a top-level `final` object with:
-- `recommendation`: `LONG_YES | LONG_NO | PASS`
-- `final_yes_probability_pct`: synthesized fair value
-- `consensus_probability_pct`: simple average of 5 agent estimates
-- `market_price_pct`: current Polymarket price
-- `edge_pct`: edge vs market price
-- `conviction`: `low | medium | high | very_high`
-- `debate_winner`: `bull | bear | draw`
-- `thesis`, `key_risk`, `position_sizing`, `entry_note`, `exit_note`
-
-### Caelyn AI Enhancement
-
-When the prediction_markets category fires, the agent now receives `intelligence_signals` in its context:
-- `summary`: market-wide stats
-- `top_edges` / `top_mispricings`: actionable mispricing signals
-- `surging_markets`: smart money accumulation signals
-- `whale_markets`: large coordinated positioning
-
-The `PREDICTION_MARKETS_CONTRACT` in prompts.py instructs Caelyn to reference these signals explicitly.
-
-### Key Files
-| File | Role |
-|---|---|
-| `backend/services/predict/polymarket_intelligence.py` | Jon-Becker analytics engine (edge detection, whale watch, Kelly, efficiency scoring) |
-| `backend/services/predict/trading_agents.py` | TauricResearch multi-agent pipeline (6 Gemini agents) |
-| `backend/services/predict/router.py` | FastAPI router for all `/api/predict/*` and `/api/polymarket/intelligence` |
-
-## Playbook Engine — Supply Chain Discovery + Regime Detection (`/api/playbooks/`)
-
-Deterministic supply chain bottleneck discovery engine. No external API calls required for core discovery or regime detection.
-
-### Playbooks
-- **serenity** — Non-obvious supply chain bottlenecks (small/mid-cap chokepoints institutional screens miss)
-- **sjcapital** — S&J Capital (fundamental value / quality)
-
-### Endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /api/playbooks` | List all playbooks |
-| `GET /api/playbooks/{id}` | Playbook detail |
-| `POST /api/playbooks/discover` | Discovery engine: find supply chain candidates |
-| `POST /api/playbooks/analyze` | Analyze + score tickers vs a playbook |
-| `POST /api/playbooks/compare` | Compare tickers across two playbooks |
-| `GET /api/playbooks/serenity-regime` | **Current regime detection result** (deterministic, no web calls) |
-| `GET /api/playbooks/discovery-capabilities` | Full API contract + auto_serenity_guidance block |
-| `GET /api/playbooks/giants` | List giant anchor companies |
-| `GET /api/playbooks/supply-chain-map` | Supply chain map for a given giant |
-
-### Regime Detection (Phase 6)
-
-`GET /api/playbooks/serenity-regime` returns `SerenityRegime`:
-- `regime_id`, `label`, `summary`, `confidence` (high/medium/low)
-- `top_themes`, `top_anchors`, `top_regions`
-- `recommended_mode`, `recommended_depth`
-- `why_now`, `evidence_signals`, `rejected_or_lower_priority_paths`
-- `theme_scores` — per-theme breakdown (regime_score, candidate_density, avg_bottleneck_score, hiddenness_quality, policy_score, anchor_density, country_diversity, serenity_priority, crowding_penalty)
-- `anchor_scores` — per-anchor breakdown (regime_score, theme_overlap_count, capex_scale_score, candidate_quality, foreign_exposure_count)
-
-Regime is deterministic: same NODE_REGISTRY + THEME_TAXONOMY + GIANT_MAP → same result.
-
-### Auto Mode (`mode="auto"` in discover)
-
-When `mode="auto"`:
-1. Regime detection runs first
-2. Highest-conviction theme cluster + anchor selected as defaults
-3. Discovery runs with regime-derived theme/depth defaults
-4. Response includes `regime_context` (full SerenityRegime dict) and `meta.auto_choices`
-
-### Key Files
-
-| File | Role |
-|---|---|
-| `backend/services/playbook/regime_types.py` | Pydantic models: ThemeRegimeScore, AnchorRegimeScore, SerenityRegime |
-| `backend/services/playbook/regime_service.py` | compute_serenity_regime() — deterministic regime detection |
-| `backend/services/playbook/discovery_service.py` | run_discover(), _mode_auto(), _auto_choices() |
-| `backend/services/playbook/discovery_types.py` | DiscoverRequest/Response, AnalyzeRequest/Response types |
-| `backend/services/playbook/analyzer.py` | run_analyze() + discovery bridge (regime_context propagation) |
-| `backend/services/playbook/router.py` | All /api/playbooks/* routes |
-| `backend/services/playbook/supply_chain_graph.py` | NODE_REGISTRY, THEME_TAXONOMY, GIANT_MAP |
-| `backend/services/playbook/factor_tests.py` | 704-test suite (Phase 1.5 → 6), 0 failures |
-
-### Test Suite
-- **Run**: `cd backend && python3.11 -m services.playbook.factor_tests`
-- **Count**: 704 tests, 0 failures (as of Phase 6)
-- **Phases**: 1.5 (factors), 2.0 (supply chain), 3.0 (discovery), 4.0 (quality), 5.0 (fields/compare), 6.0 (regime)
-
-## Stock Compare API (`/api/fundamentals/compare`)
-
-Router: `backend/routes/stock_compare.py`
-Service: `backend/services/stock_compare_service.py`
-Data source: FMP Stable API primary. SEC EDGAR / Finnhub fallback only.
-
-### Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/fundamentals/compare/search?q=TRT&limit=10` | Ticker / company-name autocomplete |
-| `POST` | `/api/fundamentals/compare` | Multi-ticker metric comparison |
-
-### Supported metrics
-`revenue`, `revenue_growth`, `gross_profit`, `gross_margin`, `profit_margin`,
-`eps_diluted`, `operating_income`, `net_income`, `ebitda`, `free_cash_flow`,
-`total_debt`, `ps_ratio`, `pe_ratio`, `market_cap`, `recent_news`
-
-Aliases: `price_to_sales`→`ps_ratio`, `p_s_ratio`→`ps_ratio`, `p_e_ratio`→`pe_ratio`,
-`eps`→`eps_diluted`, `fcf`→`free_cash_flow`, `debt`→`total_debt`
-
-### Cache TTLs
-- Search / profile / statements / ratios / growth: 24 h
-- Quote / market cap: 15 min
-- News: 30 min
-
-### Key design decisions
-- `StockCompareFMP` in the service file is a lightweight standalone FMP client (not `FMPProvider`) with stock-compare-specific cache keys (`sc:*`).
-- Metric-aware fetching: only the endpoints required for the chosen metric are called per symbol.
-- `ratios` endpoint (not `key_metrics`) used for P/S and P/E — FMP field names `priceToSalesRatio` / `priceToEarningsRatio`.
-- Search uses `search-symbol` + `search-name` endpoints (FMP `/stable/search` is broken on Starter plan). Results ranked: exact > starts-with > contains.
-- Validation is done inside endpoint functions (not Pydantic `field_validator`) to avoid Pydantic v2 `ctx.error` serialisation issue in the app's existing `validation_exception_handler`.
-
-## Catalyst Calendar (`/api/catalysts/*`)
-
-Router: `backend/routes/catalyst_calendar.py`
-Service: `backend/services/catalyst_calendar_service.py`
-Data source: FMP Stable API (Starter plan). Per-symbol enrichment via `company_profile` + `ratings-snapshot`.
-
-### Tabs (10 total)
-
-| Tab | Source | Notes |
-|---|---|---|
-| `earnings_dates` | `FMP /stable/earnings-calendar` | Upcoming earnings, EPS/revenue estimates |
-| `dividends` | `FMP /stable/dividends-calendar` | Ex-div dates, payment dates, dividend amounts |
-| `ipos` | `FMP /stable/ipo-calendar` | Upcoming IPOs with price range + exchange |
-| `splits` | `FMP /stable/splits-calendar` | Stock splits with ratio (e.g. 2:1) |
-| `economic_releases` | `FMP /stable/economic-calendar` | CPI, FOMC, NFP, GDP; importance auto-labelled |
-| `treasury_macro` | `FMP /stable/treasury-rates` | Yield curve snapshot + recent 5 history points |
-| `recent_earnings` | `FMP /stable/earnings-calendar` (past dates) | Only rows with actual eps/revenue populated; Beat/Miss in title |
-| `sec_filings` | `FMP /stable/sec-filings?symbol=X` | Per-symbol for watchlist/portfolio only (404 on Starter for bulk) |
-| `analyst_ratings` | `FMP /stable/ratings-snapshot?symbol=X` | Per-symbol rating A–S scale for watchlist/portfolio symbols |
-| `insider_transactions` | `FMP /stable/insider-trading?symbol=X` | Per-symbol for watchlist/portfolio only |
-
-### Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/catalysts/overview` | All 10 tabs (capped 20 each) + summary of high-importance / portfolio catalysts |
-| `GET` | `/api/catalysts/events` | One tab or all, full pagination, filtering |
-| `GET` | `/api/catalysts/filters` | Available sectors, mc buckets, eventTypes, watchlist/portfolio symbols |
-| `GET` | `/api/catalysts/by-symbol/{symbol}` | All catalysts for one ticker (profile + all tabs) |
-
-### Query params for `/api/catalysts/events`
-
-`tab` (default `all`), `from` / `to` (YYYY-MM-DD), `symbols` (comma-sep), `scope` (`all`/`watchlist`/`portfolio`), `sector`, `marketCap` (bucket), `eventType`, `limit` (1-500, default 100)
-
-### Normalized event schema
-
-Every event has: `id`, `symbol`, `companyName`, `eventType`, `eventCategory`, `title`, `date`, `time`, `period`, `source`, `sector`, `industry`, `marketCap`, `marketCapBucket`, `importance` (high/medium/low), `raw`, plus type-specific fields (`epsEstimated`, `epsActual`, `dividend`, `splitRatio`, `formType`, `ratingTo`, `insiderName`, `transactionValue`, etc.)
-
-### Importance scoring (deterministic, no LLM)
-
-- `high`: portfolio/watchlist match; mega/large cap earnings or dividends; economic events with CPI/FOMC/NFP keywords; SEC 8-K/10-K/Form-4; insider trades ≥$1M; IPOs of mid+ cap
-- `medium`: other US economic events; mid-cap earnings; sec filings in `_MED_SEC_FORMS`; insider trades ≥$250K; analyst upgrades/downgrades
-- `low`: everything else
-
-### Key design decisions
-
-- `CatalystFMP` in service is a standalone Starter-compatible FMP client (separate from `FMPProvider`). Cache keys prefixed `cat:*`.
-- Tabs that require per-symbol data (`sec_filings`, `analyst_ratings`, `insider_transactions`) operate over watchlist + portfolio symbols only; gracefully return empty when no symbols are loaded.
-- Bulk `upgrades-downgrades` and `insider-trading` return 404 on FMP Starter — the service never calls them.
-- Profile enrichment batched in parallel for all unique symbols in a tab response; TTL 24 h.
-- Existing `/api/earnings/*` endpoints (Finnhub-backed) are NOT modified by this module.
-
-## Real Portfolio (caelyn-terminal)
-
-- SQGLP framework for investments, Weinstein Stage 2 for trades
-- Positions: NVDA, OSS, BUZZ (Tradier), GOLD→GC=F (Yahoo), BTC (CoinGecko)
-- Cache key: `caelyn:terminal:v7`
+## Overview
+
+Caelyn AI is a sophisticated FastAPI-based platform designed for real-time trading analysis and intelligence. It provides a comprehensive suite of tools for institutional and retail investors, covering diverse asset classes from traditional equities and commodities to cryptocurrencies and prediction markets. The platform aims to deliver actionable insights through advanced screening, AI-driven analysis, and proprietary scoring engines, helping users identify opportunities and manage risk effectively.
+
+Key capabilities include:
+- Real-time Hyperliquid perpetuals and spot market screener with multi-factor scoring.
+- Comprehensive sector rotation analysis and AI-generated market commentary.
+- Deep dive into SEC Form 4 insider activity with conviction scoring and cluster detection.
+- Institutional 13F whale tracking, portfolio return analysis, and AI-summarized investment themes.
+- Polymarket prediction market intelligence with edge detection, mispricing signals, and a multi-agent AI trading pipeline.
+- Deterministic supply chain bottleneck discovery and regime detection engine for strategic investment playbooks.
+- Fundamental stock comparison tool with a wide range of financial metrics.
+- Catalyst calendar aggregating key market events like earnings, dividends, IPOs, and economic releases.
+- Real portfolio analytics for tracking and analyzing specific holdings.
+
+## User Preferences
+
+No explicit user preferences were provided in the original `replit.md` file.
+
+## System Architecture
+
+The Caelyn AI platform is built on a FastAPI Python backend, running on port 5000. It features a modular architecture with distinct services for different analytical functions.
+
+**Core Architectural Patterns:**
+- **Microservices-like Structure:** Each major analytical feature (Hyperliquid Screener, Sector Rotation, Insider Activity, Whale Watch, Prediction Markets, Playbook Engine, Stock Compare, Catalyst Calendar, Real Portfolio) is implemented as a self-contained service with its own router, service logic, and data models.
+- **In-Memory State Management:** Utilized for high-performance data access, particularly for Hyperliquid market data (assets, candles, trades, books, OI history).
+- **Disk-Persistent Caching:** Critical for fast server restarts and reducing initial data load times, especially for frequently accessed or static datasets like HIP-3 DEX assets and AI analysis results.
+- **Hierarchical Scoring Engines:** Employed in the Hyperliquid Screener to process candle features, short-term signals, structural quality, regime classification, and hero selection with guardrails.
+- **Multi-Agent AI Pipeline:** The Prediction Markets feature leverages a 6-agent Gemini pipeline (Fundamentals, Sentiment, Technical, Bull, Bear, RiskManager) for comprehensive market analysis and trading recommendations.
+- **Deterministic Regime Detection:** The Playbook Engine's `serenity-regime` is designed to produce consistent results based on predefined taxonomies and graphs, without external API calls for core detection.
+- **Metric-Aware Data Fetching:** For stock comparison, the system intelligently fetches only the necessary data points from external APIs based on the requested metrics.
+- **Importance Scoring:** Catalysts are automatically categorized by importance (high, medium, low) using deterministic rules based on event type, market cap, and associated keywords.
+
+**UI/UX Decisions (Implied):**
+- Features like "Market Brief," "signal sections," "summary cards," and "guidance buckets" in the Hyperliquid Screener suggest a dashboard-oriented interface presenting categorized and summarized insights.
+- The "Sector Rotation Dashboard" and "Insider Activity Dashboard" imply visually rich interfaces for displaying trends, scores, and aggregated statistics.
+- The "Playbook" concept indicates a structured approach to investment strategies, potentially guiding users through discovery and analysis workflows.
+
+**Technical Implementations:**
+- **FastAPI:** Used for building robust and high-performance APIs.
+- **Pydantic:** Extensively used for data validation and serialization, defining models for various market assets, API requests, and responses.
+- **WebSockets:** Utilized for real-time data streaming from sources like Hyperliquid.
+- **Asynchronous Programming:** `asyncio` is used for managing concurrent operations, particularly for external API calls and background tasks.
+- **Database:** Neon PostgreSQL is used for persisting data such as insider transactions, whale holdings, and portfolio returns.
+- **Caching:** Redis or an in-memory dictionary-based cache is used for transient data (e.g., Finnhub quotes, FMP API responses) with defined TTLs.
+- **Universe Filtering:** Implemented with strict rules for Hyperliquid assets to ensure data quality, including volume gates for spot markets and allowlists.
+
+## External Dependencies
+
+The Caelyn AI platform integrates with several external services and APIs to gather and process financial data:
+
+-   **Hyperliquid:**
+    *   REST API (for market snapshots, meta-data)
+    *   WebSocket API (for real-time market data)
+-   **Tradier:** For real-time portfolio analytics of specific stock positions (e.g., NVDA, OSS, BUZZ).
+-   **Yahoo Finance (`yfinance`):** For historical price data (e.g., GOLD, sector rotation ETFs) and fallback for stock price enrichment.
+-   **CoinGecko:** For cryptocurrency data (e.g., BTC).
+-   **Finnhub:**
+    *   Real-time stock quotes.
+    *   Company profile and metrics (fallback for insider activity price enrichment).
+-   **FRED (Federal Reserve Economic Data):** For macro-economic indicators (e.g., Fed Funds Rate, CPI, 10Y/2Y Treasury yields).
+-   **SEC EDGAR (edgartools):**
+    *   For fetching SEC Form 4 filings (insider activity).
+    *   For fetching SEC Form 13F-HR filings (institutional holdings for Whale Watch).
+    *   For company ticker indices and full-text search (CUSIP to Ticker resolution).
+-   **Financial Modeling Prep (FMP) Stable API (Starter Plan):**
+    *   Primary source for stock comparison metrics.
+    *   Primary source for Catalyst Calendar data (earnings, dividends, IPOs, splits, economic releases, treasury rates, SEC filings, analyst ratings, insider transactions).
+-   **Polymarket:**
+    *   For prediction market data (prices, volume, order book).
+    *   Gamma events API (for market tags).
+-   **Google Gemini (gemini-3-flash-preview):** Used for AI analysis in Sector Rotation and as the engine for all agents in the Prediction Market TradingAgents pipeline.
+-   **Google Search:** Provides real-time information grounding for Gemini AI agents.
+-   **Anthropic Claude (claude-haiku-4-5):** Used for generating AI theme summaries in the Whale Watch feature.
+-   **Perplexity AI:** Used to discover new top whales for the Whale Watch feature.
