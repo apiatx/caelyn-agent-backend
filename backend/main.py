@@ -336,15 +336,14 @@ try:
 except Exception as _cat_err:
     print(f"[CATALYST_CALENDAR] Router unavailable (non-fatal): {_cat_err}")
 
-# ── Clean Earnings Upcoming router (/api/catalysts/earnings/*) ── DISABLED ────
-# Disabled: FMP-heavy service suspected of exhausting shared FMP client/rate
-# limits and causing site-wide data failures. Re-enable only after redesign.
-# try:
-#     from routes.earnings_upcoming import router as _earnings_clean_router
-#     app.include_router(_earnings_clean_router)
-#     print("[EARNINGS_CLEAN] Router registered at /api/catalysts/earnings/*")
-# except Exception as _earn_err:
-#     print(f"[EARNINGS_CLEAN] Router unavailable (non-fatal): {_earn_err}")
+# ── Clean Earnings Upcoming router (/api/catalysts/earnings/*) ───────────────
+# v2 safe architecture: sequential chunks, max 2 FMP calls, circuit breaker.
+try:
+    from routes.earnings_upcoming import router as _earnings_clean_router
+    app.include_router(_earnings_clean_router)
+    print("[EARNINGS_CLEAN] Router registered at /api/catalysts/earnings/*")
+except Exception as _earn_err:
+    print(f"[EARNINGS_CLEAN] Router unavailable (non-fatal): {_earn_err}")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────
