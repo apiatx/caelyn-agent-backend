@@ -4,15 +4,15 @@ earnings_clean_service.py — Safe FMP-only Upcoming Earnings service (v2).
 Safety architecture (replaces the burst-prone v1):
   • ONE shared httpx.AsyncClient per top-level request — no new client per symbol.
   • SEQUENTIAL 7-day chunk fetches — no asyncio.gather burst on calendar calls.
-  • Max 2 FMP calendar calls per request (14-day window / 7-day chunks).
-  • Profile enrichment: opt-in only, concurrency=2 semaphore, hard cap 20 live fetches.
+  • Max 5 FMP calendar calls per request (30-day window / 7-day chunks).
+  • Profile enrichment: opt-in only, concurrency=5 semaphore, hard cap 50 live fetches.
   • Circuit breaker: 429 → block all FMP calls from THIS service for 60 s.
     Does NOT touch FMP clients used by Home / Sectors / Macro routes.
   • All FMP errors are contained: return partial data, never propagate exceptions.
 
 Public API:
-  get_upcoming_clean(...)  → calendar counts + flat event list, no enrichment
-  get_day_clean(...)       → single-day events, optional enrichment (default off)
+  get_upcoming_clean(...)  → calendar counts + flat event list, logos via URL pattern
+  get_day_clean(...)       → single-day events with full enrichment (name, logo, price, mktcap)
 
 Response always includes: status, source, fmpCallsUsed, rateLimited, errors.
 """
@@ -31,19 +31,20 @@ from data.cache import cache
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 _FMP_STABLE         = "https://financialmodelingprep.com/stable"
+_FMP_LOGO_BASE      = "https://financialmodelingprep.com/image-stock"
 
 _TTL_CAL_CHUNK      = 6  * 3600    # 6 h  — raw FMP chunk
 _TTL_UPCOMING       = 6  * 3600    # 6 h  — merged calendar result
 _TTL_PROFILE        = 24 * 3600    # 24 h — company profile
 
-_DEFAULT_DAYS       = 7             # default upcoming window
-_MAX_RANGE_DAYS     = 14            # hard cap on date range (2 chunks of 7)
-_MAX_CHUNKS         = 2             # max sequential FMP calendar calls per request
+_DEFAULT_DAYS       = 14            # default upcoming window (2 weeks)
+_MAX_RANGE_DAYS     = 30            # hard cap on date range (30 days)
+_MAX_CHUNKS         = 5             # max sequential FMP calendar calls (5 × 7d = 35d covers 30d)
 
-_MAX_LIVE_DEFAULT   = 10            # default live profile fetches for enrichment
-_MAX_LIVE_CAP       = 20            # absolute ceiling for live profile fetches
-_ENRICH_CONCURRENCY = 2             # max concurrent live profile HTTP calls
-_FMP_TIMEOUT        = 3.0           # seconds per FMP HTTP call
+_MAX_LIVE_DEFAULT   = 30            # default live profile fetches for day-clean enrichment
+_MAX_LIVE_CAP       = 50            # absolute ceiling for live profile fetches
+_ENRICH_CONCURRENCY = 5             # max concurrent live profile HTTP calls
+_FMP_TIMEOUT        = 8.0           # seconds per FMP HTTP call (generous for profile)
 _CB_BLOCK_SECS      = 60            # 429 circuit-breaker block duration
 
 _US_MAJOR = {"NASDAQ", "NYSE", "AMEX", "NYSE ARCA", "NYSE MKT", "CBOE", "BATS"}
@@ -146,13 +147,13 @@ async def _fetch_earnings_range(
 
     Hard constraints:
       • Sequential — no asyncio.gather burst.
-      • Max _MAX_CHUNKS (2) FMP calls; extra days beyond 14 are silently dropped
+      • Max _MAX_CHUNKS (5) FMP calls; extra days beyond 35 are silently dropped
         (caller must clamp before calling).
       • On 429, stops immediately and returns partial data.
 
     Returns (rows, rate_limited).
     """
-    master_ck = f"fmp:earncln:cal:v2:{from_date}:{to_date}"
+    master_ck = f"fmp:earncln:cal:v3:{from_date}:{to_date}"
     hit = cache.get(master_ck)
     if hit is not None:
         return (hit if isinstance(hit, list) else []), False
@@ -175,7 +176,7 @@ async def _fetch_earnings_range(
     rate_limited = False
 
     for f, t in chunks:                         # ← sequential, NOT gather
-        ck = f"fmp:earncln:chunk:v2:{f}:{t}"
+        ck = f"fmp:earncln:chunk:v3:{f}:{t}"
         rows, rl = await _fmp_get(
             "earnings-calendar", {"from": f, "to": t},
             ck, _TTL_CAL_CHUNK, api_key, client, call_counter,
@@ -251,6 +252,11 @@ def _is_polymarket_row(title: str, symbol: str) -> bool:
     return False
 
 
+def _logo_url(sym: str) -> str:
+    """Return the FMP image-stock CDN URL for a ticker — no API call needed."""
+    return f"{_FMP_LOGO_BASE}/{sym}.png"
+
+
 def _normalize_row(row: dict) -> Optional[dict]:
     sym  = (row.get("symbol") or "").strip().upper()
     date = (row.get("date")   or "").strip()
@@ -262,14 +268,17 @@ def _normalize_row(row: dict) -> Optional[dict]:
     if _is_polymarket_row(title, sym):
         return None
 
+    logo = _logo_url(sym)
+
     return {
         "id":               _event_id(sym, date),
         "date":             date,
         "symbol":           sym,
         "companyName":      name if name != sym else None,
-        "logo":             None,
-        "image":            None,
+        "logo":             logo,
+        "image":            logo,
         "price":            None,
+        "changesPercentage": None,
         "marketCap":        None,
         "marketCapBucket":  None,
         "eventType":        "earnings",
@@ -286,7 +295,7 @@ def _normalize_row(row: dict) -> Optional[dict]:
     }
 
 
-# ── Safe profile enrichment (concurrency=2, shared client) ───────────────────
+# ── Safe profile enrichment (concurrency=5, shared client) ───────────────────
 
 async def _enrich_events(
     events: list[dict],
@@ -296,12 +305,12 @@ async def _enrich_events(
     max_live: int,
 ) -> tuple[list[dict], bool]:
     """
-    Enrich events with FMP company profile data.
+    Enrich events with FMP company profile data (companyName, logo, price, mktcap, etc).
 
     Rules:
       • Cache hits: resolved instantly — no HTTP, don't count against max_live.
-      • Live fetches: capped at max_live (default 10, never > _MAX_LIVE_CAP=20).
-      • Concurrency: semaphore(_ENRICH_CONCURRENCY=2) limits simultaneous HTTP calls.
+      • Live fetches: capped at max_live (default 30, never > _MAX_LIVE_CAP=50).
+      • Concurrency: semaphore(_ENRICH_CONCURRENCY=5) limits simultaneous HTTP calls.
       • Shared client: no new AsyncClient per symbol.
       • 429: circuit breaker triggers, remaining tasks return [] immediately.
 
@@ -362,16 +371,22 @@ async def _enrich_events(
         p   = profiles.get(sym, {})
         mc  = _safe_float(p.get("mktCap") or p.get("marketCap"))
         ev  = dict(ev)
-        ev["companyName"]     = (
+
+        # Company identity — profile wins; fall back to ticker-derived logo
+        profile_logo = p.get("image") or p.get("logo") or None
+        ev["companyName"]      = (
             p.get("companyName") or p.get("name")
             or ev.get("companyName") or (sym or None)
         )
-        ev["logo"]            = p.get("image") or p.get("logo") or None
-        ev["image"]           = ev["logo"]
-        ev["price"]           = _safe_float(p.get("price"))
-        ev["marketCap"]       = mc
-        ev["marketCapBucket"] = _mc_bucket(mc)
-        ev["_exchange"]       = p.get("exchangeShortName") or p.get("exchange") or ""
+        ev["logo"]             = profile_logo or ev.get("logo") or _logo_url(sym)
+        ev["image"]            = ev["logo"]
+        ev["price"]            = _safe_float(p.get("price"))
+        ev["changesPercentage"] = _safe_float(p.get("changePercentage") or p.get("changesPercentage") or p.get("changes"))
+        ev["marketCap"]        = mc
+        ev["marketCapBucket"]  = _mc_bucket(mc)
+        ev["sector"]           = p.get("sector") or None
+        ev["industry"]         = p.get("industry") or None
+        ev["_exchange"]        = p.get("exchangeShortName") or p.get("exchange") or ""
         out.append(ev)
 
     return out, rate_limited
@@ -463,16 +478,17 @@ async def get_upcoming_clean(
     to_date:   Optional[str] = None,
     search:    Optional[str] = None,
     scope:     Optional[str] = None,
-    limit:     int = 500,
+    limit:     int = 5000,
 ) -> dict:
     """
-    FMP earnings calendar for a date range — counts + basic event list only.
+    FMP earnings calendar for a date range — counts + event list with logos.
 
     Hard limits:
-      • Default window: today → today + 7 days.
-      • Max window: 14 days (silently clamped — never 400, just truncated).
-      • Max 2 sequential FMP calls (2 × 7-day chunks).
-      • No profile / quote / marketCap enrichment — calendar counts only.
+      • Default window: today → today + 14 days.
+      • Max window: 30 days (silently clamped — never 400, just truncated).
+      • Max 5 sequential FMP calendar calls (5 × 7-day chunks).
+      • Logos populated via FMP image-stock CDN URL (no API call needed).
+      • No profile enrichment (names are ticker when FMP doesn't include them).
       • One shared AsyncClient for the whole request lifecycle.
 
     Response: { status, source, fmpCallsUsed, rateLimited, errors,
@@ -514,7 +530,7 @@ async def get_upcoming_clean(
             events_by_date.setdefault(d, []).append(ev)
             counts_by_date[d] = counts_by_date.get(d, 0) + 1
 
-    # Trim flat events list only (calendar uses countsByDate, not this list)
+    # Trim flat events list only (calendar tiles use countsByDate; day detail uses eventsByDate)
     if limit and len(events) > limit:
         events = events[:limit]
 
@@ -538,29 +554,29 @@ async def get_day_clean(
     date:     str,
     search:   Optional[str] = None,
     scope:    Optional[str] = None,
-    limit:    int  = 200,
-    enrich:   bool = False,
+    limit:    int  = 500,
+    enrich:   bool = True,
     max_live: int  = _MAX_LIVE_DEFAULT,
 ) -> dict:
     """
-    FMP earnings events for a single selected date.
+    FMP earnings events for a single selected date with full enrichment.
 
-    enrich=False (default):
-      • 1 FMP calendar call max.
-      • No profile / quote calls.
-      • Sort: revenueEstimated desc → symbol alpha.
-
-    enrich=True:
-      • After calendar fetch, enriches up to max_live symbols with FMP profiles.
-      • max_live clamped to _MAX_LIVE_CAP (20). Default 10.
-      • Concurrency: 2 concurrent profile HTTP calls (semaphore).
+    enrich=True (default):
+      • 1 FMP calendar call + up to max_live profile calls.
+      • Returns companyName, logo (URL or CDN), price, changesPercentage, marketCap,
+        sector, industry for each event.
+      • Profiles are cached 24 h — subsequent requests for the same symbols are instant.
+      • Concurrency: 5 simultaneous profile HTTP calls (semaphore).
       • Shared AsyncClient — no new client per symbol.
-      • Timeout: 3 s per call.
+      • Timeout: 8 s per call.
       • 429: circuit breaker activates, enrichment stops, returns partial data.
       • Sort: US exchange → marketCap desc → revenueEst → epsEst → symbol.
 
-    Response: { status, source, fmpCallsUsed, rateLimited, errors,
-                date, count, events }
+    enrich=False:
+      • 1 FMP calendar call only. Logos still populated via CDN URL.
+      • Sort: revenueEstimated desc → symbol alpha.
+
+    Response: { status, source, fmpCallsUsed, rateLimited, errors, date, count, events }
     """
     max_live = min(max(0, max_live), _MAX_LIVE_CAP)
     call_counter: list[int] = [0]

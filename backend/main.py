@@ -1452,36 +1452,41 @@ async def notifai_the_brief(request: Request):
 @app.get("/api/earnings/calendar")
 @limiter.limit("10/minute")
 @traceable(name="main.earnings_calendar")
-async def earnings_calendar(request: Request, from_date: str = "", to_date: str = ""):
+async def earnings_calendar(
+    request: Request,
+    from_date: str = "",
+    to_date: str = "",
+    days: int = 30,
+):
     """
-    Returns FMP earnings calendar for a date range, fully enriched with
-    company identity (companyName, logo, sector, industry, marketCap).
+    Returns FMP earnings calendar for a date range with company enrichment.
 
-    Previously Finnhub-backed; switched to FMP to match the Catalyst Calendar
-    data source.  Finnhub is only used in the earnings popup (/api/earnings/detail).
+    Defaults to today → today+30 days.  Enriches up to 50 companies by profile
+    (name, logo, price, changesPercentage, marketCap, sector, industry).
+    Logos fall back to the FMP image-stock CDN pattern for un-enriched companies.
 
-    Cache key: fmp:earnings_calendar:v3:{from}:{to}  TTL: 6 h
+    Returns: { earnings, countsByDate, eventsByDate, from, to, count, source }
+    Cache key: fmp:earnings_calendar:v4:{from}:{to}  TTL: 6 h
     """
     from datetime import datetime, timedelta
     from services.catalyst_calendar_service import CatalystFMP, _enrich_profiles
 
     await _wait_for_init()
 
-    # Default to current week (Mon–Fri)
     today = datetime.now()
     if not from_date:
-        monday = today - timedelta(days=today.weekday())
-        from_date = monday.strftime("%Y-%m-%d")
+        from_date = today.strftime("%Y-%m-%d")
     if not to_date:
-        monday = today - timedelta(days=today.weekday())
-        to_date = (monday + timedelta(days=4)).strftime("%Y-%m-%d")
+        to_date = (today + timedelta(days=days)).strftime("%Y-%m-%d")
 
     from data.cache import cache
     from config import FMP_API_KEY as _fmp_key
-    cache_key = f"fmp:earnings_calendar:v3:{from_date}:{to_date}"
+    cache_key = f"fmp:earnings_calendar:v4:{from_date}:{to_date}"
     cached = cache.get(cache_key)
     if cached is not None:
         return JSONResponse(content=cached)
+
+    _fmp_logo_base = "https://financialmodelingprep.com/image-stock"
 
     try:
         fmp = CatalystFMP(_fmp_key)
@@ -1489,59 +1494,91 @@ async def earnings_calendar(request: Request, from_date: str = "", to_date: str 
         if not isinstance(raw_rows, list):
             raw_rows = []
 
-        # Deduplicate and collect unique symbols for profile enrichment
-        unique_syms = list(dict.fromkeys(
-            r.get("symbol", "").upper()
-            for r in raw_rows
-            if r.get("symbol")
-        ))
-        enriched_profiles = await _enrich_profiles(unique_syms, fmp)
+        # Deduplicate symbols — enrich top 50 by revenue estimate (most important)
+        seen_syms: dict[str, float] = {}
+        for r in raw_rows:
+            sym = (r.get("symbol") or "").upper()
+            if sym:
+                rev = r.get("revenueEstimated") or 0
+                if sym not in seen_syms or rev > seen_syms[sym]:
+                    seen_syms[sym] = rev
+
+        # Sort by revenue estimate desc — prioritises the biggest companies for enrichment
+        sorted_syms = sorted(seen_syms, key=lambda s: seen_syms[s], reverse=True)
+        unique_syms = sorted_syms[:200]   # fetch profiles for up to 200; hard cap inside _enrich_profiles
+
+        # Enrich profiles — capped at 50 live HTTP calls; cached 24 h
+        enriched_profiles = await _enrich_profiles(unique_syms, fmp, max_live_fetches=50)
 
         results = []
+        counts_by_date: dict[str, int] = {}
+        events_by_date: dict[str, list] = {}
+
         for row in raw_rows:
             sym = (row.get("symbol") or "").upper()
             if not sym:
                 continue
+            date_str = row.get("date") or ""
             profile = enriched_profiles.get(sym, {})
+
             company_name = (
                 profile.get("companyName")
                 or row.get("name")
                 or row.get("companyName")
                 or sym
             )
-            logo_url = profile.get("logo") or None
-            results.append({
-                # ── backward-compatible fields ──────────────────────────
-                "ticker":           sym,
-                "date":             row.get("date"),
-                "eps_estimate":     row.get("epsEstimated"),
-                "eps_actual":       row.get("eps") or row.get("epsActual"),
-                "revenue_estimate": row.get("revenueEstimated"),
-                "revenue_actual":   row.get("revenue") or row.get("revenueActual"),
-                "hour":             row.get("time", ""),
-                "quarter":          row.get("fiscalDateEnding") or row.get("period"),
-                "year":             None,
-                # ── enriched company identity ───────────────────────────
-                "symbol":           sym,
-                "companyName":      company_name,
-                "logo":             logo_url,
-                "image":            logo_url,
-                "sector":           profile.get("sector"),
-                "industry":         profile.get("industry"),
-                "marketCap":        profile.get("marketCap"),
-                "title":            f"{company_name} Earnings",
-                "source":           "fmp",
-            })
+            # Profile logo wins; fall back to predictable FMP CDN URL (no API call)
+            logo_url = profile.get("logo") or f"{_fmp_logo_base}/{sym}.png"
+            price = profile.get("price")
+            changes_pct = profile.get("changePercentage") or profile.get("changesPercentage") or profile.get("changes")
+            market_cap = profile.get("marketCap")
+
+            item = {
+                # backward-compatible fields
+                "ticker":             sym,
+                "date":               date_str,
+                "eps_estimate":       row.get("epsEstimated"),
+                "eps_actual":         row.get("eps") or row.get("epsActual"),
+                "revenue_estimate":   row.get("revenueEstimated"),
+                "revenue_actual":     row.get("revenue") or row.get("revenueActual"),
+                "hour":               row.get("time", ""),
+                "quarter":            row.get("fiscalDateEnding") or row.get("period"),
+                "year":               None,
+                # enriched fields
+                "symbol":             sym,
+                "companyName":        company_name,
+                "logo":               logo_url,
+                "image":              logo_url,
+                "price":              price,
+                "changesPercentage":  changes_pct,
+                "sector":             profile.get("sector"),
+                "industry":           profile.get("industry"),
+                "marketCap":          market_cap,
+                "epsEstimated":       row.get("epsEstimated"),
+                "epsActual":          row.get("eps") or row.get("epsActual"),
+                "revenueEstimated":   row.get("revenueEstimated"),
+                "revenueActual":      row.get("revenue") or row.get("revenueActual"),
+                "title":              f"{company_name} Earnings",
+                "source":             "fmp",
+            }
+            results.append(item)
+
+            if date_str:
+                counts_by_date[date_str] = counts_by_date.get(date_str, 0) + 1
+                events_by_date.setdefault(date_str, []).append(item)
 
         response = {
-            "earnings": results,
-            "from":     from_date,
-            "to":       to_date,
-            "count":    len(results),
-            "source":   "fmp",
+            "earnings":      results,
+            "countsByDate":  counts_by_date,
+            "eventsByDate":  events_by_date,
+            "from":          from_date,
+            "to":            to_date,
+            "count":         len(results),
+            "source":        "fmp",
         }
-        cache.set(cache_key, response, 6 * 3600)   # 6-hour TTL matches catalyst service
-        print(f"[EARNINGS_CALENDAR] FMP returned {len(results)} events ({from_date} → {to_date})")
+        cache.set(cache_key, response, 6 * 3600)
+        print(f"[EARNINGS_CALENDAR] FMP {len(results)} events ({from_date} → {to_date}), "
+              f"enriched={len(enriched_profiles)}")
         return JSONResponse(content=response)
 
     except Exception as e:

@@ -5,11 +5,6 @@ Endpoints
 ─────────
 GET /api/catalysts/earnings/upcoming-clean
 GET /api/catalysts/earnings/day-clean
-
-Safety constraints (enforced here and in earnings_clean_service):
-  • upcoming-clean: 7-day default window, 14-day hard max, NO enrichment.
-  • day-clean: single day, enrich=false by default, max_live capped at 20.
-  • Router is DISABLED in main.py until explicitly re-enabled after review.
 """
 from __future__ import annotations
 
@@ -32,7 +27,7 @@ except ImportError:
 router = APIRouter(tags=["earnings_clean"])
 
 _AUTH_HEADER    = "X-API-Key"
-_MAX_RANGE_DAYS = 14      # matches earnings_clean_service._MAX_RANGE_DAYS
+_MAX_RANGE_DAYS = 30      # matches earnings_clean_service._MAX_RANGE_DAYS
 
 
 def _check_key(api_key: Optional[str]) -> Optional[JSONResponse]:
@@ -73,22 +68,25 @@ async def upcoming_clean(
     from_date:  Optional[str] = Query(None, alias="from",
                                       description="YYYY-MM-DD, default today"),
     to_date:    Optional[str] = Query(None, alias="to",
-                                      description="YYYY-MM-DD, default today+7, max today+14"),
+                                      description="YYYY-MM-DD, default today+14, max today+30"),
     search:     Optional[str] = Query(None, description="Ticker or company name substring"),
     scope:      Optional[str] = Query(None, description="all | watchlist | portfolio"),
-    limit:      int           = Query(500, ge=1, le=2000,
+    limit:      int           = Query(5000, ge=1, le=10000,
                                       description="Max events in flat list"),
 ):
     """
-    Clean FMP earnings calendar for a date range.
+    FMP earnings calendar for a date range (up to 30 days).
+
+    Returns logos via FMP image CDN (no extra API call), counts per day, and
+    the full event list with EPS/revenue estimates.
 
     Constraints:
-      • Default window: today → today+7 days.
-      • Max range: 14 days. If caller sends a wider range, it is CLAMPED (not rejected).
-      • No profile/quote/marketCap enrichment — basic event fields + counts only.
-      • Max 2 sequential FMP calls per request.
-      • 429 circuit breaker: if FMP rate-limits, returns partial data with
-        status=partial and rateLimited=true. Does not affect other site routes.
+      • Default window: today → today+14 days.
+      • Max range: 30 days. If caller sends a wider range, it is CLAMPED (not rejected).
+      • Logos populated for every event via predictable FMP CDN URL.
+      • No profile enrichment on this endpoint — use day-clean for full company data.
+      • Max 5 sequential FMP calls per request (5 × 7-day chunks).
+      • 429 circuit breaker: returns partial data with status=partial and rateLimited=true.
 
     Returns: { status, source, fmpCallsUsed, rateLimited, errors,
                from, to, events, eventsByDate, countsByDate }
@@ -152,27 +150,25 @@ async def day_clean(
                                     description="YYYY-MM-DD (required)"),
     search:   Optional[str] = Query(None),
     scope:    Optional[str] = Query(None, description="all | watchlist | portfolio"),
-    limit:    int           = Query(200, ge=1, le=1000),
-    enrich:   bool          = Query(False,
-                                    description="Fetch FMP profiles (default false)"),
-    max_live: int           = Query(10, ge=0, le=20,
-                                    description="Max live profile fetches (0-20, default 10)"),
+    limit:    int           = Query(500, ge=1, le=2000),
+    enrich:   bool          = Query(True,
+                                    description="Fetch FMP profiles for company name, price, mktcap (default true)"),
+    max_live: int           = Query(30, ge=0, le=50,
+                                    description="Max live profile fetches (0-50, default 30)"),
 ):
     """
-    FMP earnings events for a single selected date.
+    Full FMP earnings data for a single selected date.
 
-    enrich=false (default):
-      • 1 FMP calendar call only. No profile/quote/marketCap calls.
-      • Sort: revenueEstimated desc → symbol alpha.
-
-    enrich=true:
-      • Enriches up to max_live (default 10, max 20) symbols with FMP profiles.
-      • Concurrency: 2 simultaneous HTTP calls (semaphore-limited).
-      • Timeout: 3 s per profile call.
-      • Cached profiles (24 h TTL) are always resolved — don't count against max_live.
-      • On 429: circuit breaker fires, enrichment stops, returns partial with
-        rateLimited=true. Does not affect other site routes.
+    With enrich=true (default):
+      • Returns companyName, logo, price, changesPercentage, marketCap, sector, industry.
+      • Profiles are cached 24 h — subsequent calls for the same day are fast.
+      • Concurrency: 5 simultaneous HTTP calls, capped at max_live (default 30).
+      • On 429: circuit breaker fires, returns partial with rateLimited=true.
       • Sort: US exchange first → marketCap desc → revenueEst → epsEst → symbol.
+
+    With enrich=false:
+      • 1 FMP calendar call only. Logos still populated via CDN URL.
+      • Sort: revenueEstimated desc → symbol alpha.
 
     Returns: { status, source, fmpCallsUsed, rateLimited, errors, date, count, events }
     """

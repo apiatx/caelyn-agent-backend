@@ -585,25 +585,32 @@ async def _enrich_profiles(
         return_exceptions=True,
     )
 
+    _fmp_logo_base = "https://financialmodelingprep.com/image-stock"
+
     enriched: dict[str, dict] = {}
     for item in pair_results:
         if isinstance(item, Exception):
             continue
         sym, res = item
         if not res:
-            enriched[sym] = {}
+            # No profile — still provide a predictable logo URL
+            enriched[sym] = {"logo": f"{_fmp_logo_base}/{sym}.png",
+                             "image": f"{_fmp_logo_base}/{sym}.png"}
             continue
         mc = _safe(res.get("mktCap") or res.get("marketCap"))
-        # FMP profile returns the logo URL in the "image" field
-        logo_url = res.get("image") or res.get("logo") or None
+        # FMP profile returns the logo URL in the "image" field;
+        # fall back to the predictable CDN URL so logos always render.
+        logo_url = res.get("image") or res.get("logo") or f"{_fmp_logo_base}/{sym}.png"
         enriched[sym] = {
-            "companyName":     res.get("companyName") or res.get("name") or sym,
-            "sector":          res.get("sector"),
-            "industry":        res.get("industry"),
-            "marketCap":       mc,
-            "marketCapBucket": _mc_bucket(mc),
-            "logo":            logo_url,
-            "image":           logo_url,
+            "companyName":       res.get("companyName") or res.get("name") or sym,
+            "sector":            res.get("sector"),
+            "industry":          res.get("industry"),
+            "marketCap":         mc,
+            "marketCapBucket":   _mc_bucket(mc),
+            "logo":              logo_url,
+            "image":             logo_url,
+            "price":             res.get("price"),
+            "changesPercentage": res.get("changePercentage") or res.get("changesPercentage") or res.get("changes"),
         }
     return enriched
 
@@ -619,14 +626,22 @@ def _apply_enrichment(events: list[dict], enriched: dict[str, dict]) -> list[dic
             ev["companyName"] = enriched_name or ev.get("companyName")
             ev["sector"]          = ev.get("sector") or info.get("sector")
             ev["industry"]        = ev.get("industry") or info.get("industry")
-            # Logo / image — only from profile enrichment, not the raw calendar row
-            if not ev.get("logo"):
-                ev["logo"]  = info.get("logo")
-            if not ev.get("image"):
-                ev["image"] = info.get("image")
+            # Logo / image — profile wins over CDN fallback already set on the event
+            profile_logo = info.get("logo") or info.get("image")
+            if profile_logo:
+                ev["logo"]  = profile_logo
+                ev["image"] = profile_logo
+            elif not ev.get("logo"):
+                _fmp_logo_base = "https://financialmodelingprep.com/image-stock"
+                ev["logo"]  = f"{_fmp_logo_base}/{sym}.png"
+                ev["image"] = ev["logo"]
             if ev.get("marketCap") is None:
                 ev["marketCap"]       = info.get("marketCap")
                 ev["marketCapBucket"] = info.get("marketCapBucket", "unknown")
+            if ev.get("price") is None:
+                ev["price"] = info.get("price")
+            if ev.get("changesPercentage") is None:
+                ev["changesPercentage"] = info.get("changesPercentage")
             # For earnings events: refresh title to use enriched company name
             # Preserve any suffix after "Earnings" (e.g. " Report (Beat)", " Report (Miss)")
             if ev.get("eventType") in ("earnings_dates", "earnings_report") and enriched_name:
@@ -674,6 +689,7 @@ async def _fetch_earnings_dates(
     watchlist: set,
     portfolio: set,
 ) -> list[dict]:
+    _fmp_logo_base = "https://financialmodelingprep.com/image-stock"
     rows = await fmp.earnings_calendar(from_date, to_date)
     events: list[dict] = []
     poly_skipped = 0
@@ -688,6 +704,7 @@ async def _fetch_earnings_dates(
         mc    = _safe(row.get("marketCap"))
         bucket = _mc_bucket(mc)
         title = f"{name} Earnings" if name != sym else f"{sym} Earnings"
+        logo  = f"{_fmp_logo_base}/{sym}.png" if sym else None
 
         # Safety guard: skip anything that resembles a Polymarket market row
         if _is_polymarket_row(row, title, sym):
@@ -699,6 +716,7 @@ async def _fetch_earnings_dates(
             id            = _event_id("earnings_dates", sym, date),
             symbol        = sym or None,
             companyName   = name,
+            logo          = logo,
             eventType     = "earnings_dates",
             eventCategory = "upcoming",
             title         = title,
