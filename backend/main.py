@@ -259,6 +259,7 @@ async def lifespan(app):
         _load_opt_snapshot()
     except Exception as _e:
         print(f"[STARTUP] Options snapshot state load error: {_e}")
+    asyncio.create_task(_earnings_calendar_warmup())
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)
@@ -1446,6 +1447,132 @@ async def notifai_the_brief(request: Request):
 
 
 # ============================================================
+# Earnings Calendar — startup cache warmer
+# ============================================================
+
+async def _earnings_calendar_warmup():
+    """
+    Background task that runs once on startup.
+    Pre-warms the earnings calendar cache for the current week and next two
+    weeks so the very first user click is instant (cache hit) rather than
+    triggering a cold FMP call that can take 2-5 s.
+
+    Each weekly fetch also pre-populates the individual per-day cache entries
+    (via the pre-warm logic inside earnings_calendar), so clicking any day in
+    those weeks is also instant.
+    """
+    from datetime import datetime, timedelta
+    import asyncio as _asyncio
+    from data.cache import cache as _cache
+    from services.catalyst_calendar_service import CatalystFMP as _CFMP, _enrich_profiles as _enrich
+    from config import FMP_API_KEY as _fmp_key
+
+    await _asyncio.sleep(5)   # Brief pause so the server finishes starting up
+
+    today = datetime.now()
+    _fmp_logo_base = "https://financialmodelingprep.com/image-stock"
+
+    # Find the Sunday of the current week (week start for the frontend's weekly view)
+    days_since_sunday = today.weekday() + 1 if today.weekday() != 6 else 0
+    week_start = (today - timedelta(days=days_since_sunday)).date()
+
+    # Warm current week + next 2 weeks
+    weeks_to_warm = [week_start + timedelta(weeks=i) for i in range(3)]
+
+    for ws in weeks_to_warm:
+        from_d = ws.strftime("%Y-%m-%d")
+        to_d   = (ws + timedelta(days=6)).strftime("%Y-%m-%d")
+        ck     = f"fmp:earnings_calendar:v5:{from_d}:{to_d}"
+
+        if _cache.get(ck) is not None:
+            print(f"[EARN_WARMUP] {from_d}→{to_d}: already cached, skip")
+            continue
+
+        try:
+            print(f"[EARN_WARMUP] Warming {from_d}→{to_d} …")
+            fmp = _CFMP(_fmp_key)
+            raw_rows = await fmp.earnings_calendar(from_d, to_d)
+            if not isinstance(raw_rows, list):
+                raw_rows = []
+
+            seen_syms: dict[str, float] = {}
+            for r in raw_rows:
+                sym = (r.get("symbol") or "").upper()
+                if sym:
+                    rev = r.get("revenueEstimated") or 0
+                    if sym not in seen_syms or rev > seen_syms[sym]:
+                        seen_syms[sym] = rev
+
+            sorted_syms = sorted(seen_syms, key=lambda s: seen_syms[s], reverse=True)
+            enriched    = await _enrich(sorted_syms[:200], fmp, max_live_fetches=50)
+
+            results: list = []
+            counts_by_date: dict[str, int] = {}
+            events_by_date: dict[str, list] = {}
+
+            for row in raw_rows:
+                sym = (row.get("symbol") or "").upper()
+                if not sym:
+                    continue
+                date_str = row.get("date") or ""
+                profile  = enriched.get(sym, {})
+                co_name  = (profile.get("companyName") or row.get("name")
+                            or row.get("companyName") or sym)
+                logo_url = profile.get("logo") or f"{_fmp_logo_base}/{sym}.png"
+                item = {
+                    "ticker": sym, "date": date_str, "symbol": sym,
+                    "companyName": co_name, "logo": logo_url, "image": logo_url,
+                    "price": profile.get("price"),
+                    "changesPercentage": (profile.get("changePercentage")
+                                         or profile.get("changesPercentage")),
+                    "marketCap": profile.get("marketCap"),
+                    "sector": profile.get("sector"),
+                    "industry": profile.get("industry"),
+                    "epsEstimated":    row.get("epsEstimated"),
+                    "epsActual":       row.get("eps") or row.get("epsActual"),
+                    "revenueEstimated":row.get("revenueEstimated"),
+                    "revenueActual":   row.get("revenue") or row.get("revenueActual"),
+                    "eps_estimate":    row.get("epsEstimated"),
+                    "eps_actual":      row.get("eps") or row.get("epsActual"),
+                    "revenue_estimate":row.get("revenueEstimated"),
+                    "revenue_actual":  row.get("revenue") or row.get("revenueActual"),
+                    "hour": row.get("time", ""), "quarter": row.get("fiscalDateEnding"),
+                    "year": None, "source": "fmp",
+                    "title": f"{co_name} Earnings",
+                }
+                results.append(item)
+                if date_str:
+                    counts_by_date[date_str] = counts_by_date.get(date_str, 0) + 1
+                    events_by_date.setdefault(date_str, []).append(item)
+
+            response = {
+                "earnings": results, "countsByDate": counts_by_date,
+                "eventsByDate": events_by_date, "from": from_d, "to": to_d,
+                "count": len(results), "source": "fmp",
+            }
+            _cache.set(ck, response, 6 * 3600)
+
+            # Also pre-warm each individual day
+            for day_date, day_events in events_by_date.items():
+                day_key = f"fmp:earnings_calendar:v5:{day_date}:{day_date}"
+                if _cache.get(day_key) is None:
+                    _cache.set(day_key, {
+                        "earnings": day_events,
+                        "countsByDate": {day_date: len(day_events)},
+                        "eventsByDate": {day_date: day_events},
+                        "from": day_date, "to": day_date,
+                        "count": len(day_events), "source": "fmp",
+                    }, 6 * 3600)
+
+            print(f"[EARN_WARMUP] {from_d}→{to_d}: {len(results)} events, "
+                  f"{len(events_by_date)} days pre-warmed")
+            await _asyncio.sleep(2)   # Throttle between weeks to avoid FMP rate spikes
+
+        except Exception as _ex:
+            print(f"[EARN_WARMUP] {from_d}→{to_d} error: {_ex}")
+
+
+# ============================================================
 # Earnings Calendar Endpoint — FMP calendar by date range (enriched)
 # ============================================================
 
@@ -1585,8 +1712,30 @@ async def earnings_calendar(
             "source":        "fmp",
         }
         cache.set(cache_key, response, 6 * 3600)
+
+        # ── Pre-warm per-day cache entries ──────────────────────────────────
+        # When the frontend loads a weekly view then clicks a single day, it
+        # calls ?from=DATE&to=DATE.  That is a different cache key from the
+        # weekly response, so without pre-warming it would trigger a live FMP
+        # call (slow, ~2-5 s) while the frontend shows "No earnings calls".
+        # We build and store each day's response now so single-day clicks are
+        # instant cache hits.
+        for day_date, day_events in events_by_date.items():
+            day_key = f"fmp:earnings_calendar:v5:{day_date}:{day_date}"
+            if cache.get(day_key) is None:
+                day_response = {
+                    "earnings":      day_events,
+                    "countsByDate":  {day_date: len(day_events)},
+                    "eventsByDate":  {day_date: day_events},
+                    "from":          day_date,
+                    "to":            day_date,
+                    "count":         len(day_events),
+                    "source":        "fmp",
+                }
+                cache.set(day_key, day_response, 6 * 3600)
+
         print(f"[EARNINGS_CALENDAR] FMP {len(results)} events ({from_date} → {to_date}), "
-              f"enriched={len(enriched_profiles)}")
+              f"enriched={len(enriched_profiles)}, pre-warmed {len(events_by_date)} day caches")
         return JSONResponse(content=response)
 
     except Exception as e:

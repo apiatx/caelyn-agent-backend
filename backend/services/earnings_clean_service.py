@@ -539,6 +539,7 @@ async def get_upcoming_clean(
         "source":       "fmp",
         "from":         frm,
         "to":           to,
+        "count":        len(events),
         "events":       events,
         "eventsByDate": events_by_date,
         "countsByDate": counts_by_date,
