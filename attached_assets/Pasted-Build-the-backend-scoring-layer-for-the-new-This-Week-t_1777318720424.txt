@@ -1,0 +1,207 @@
+Build the backend scoring layer for the new “This Week” toggle on Catalyst Calendar > Earnings.
+
+Goal:
+Create a curated weekly earnings endpoint that returns the most important earnings calls to track this week.
+
+Important:
+Do NOT touch the existing Earnings Day view if it is working.
+Do NOT touch Earnings Recent if it is working.
+Do NOT break the earnings popup.
+Do NOT use Finnhub.
+Do NOT use Polymarket.
+Use FMP as the primary earnings/fundamental data source.
+Do NOT use LLM/AI calls for the first version.
+
+New endpoint:
+GET /api/catalysts/earnings/this-week
+
+Query params:
+- weekStart=YYYY-MM-DD optional, default start of current week
+- weekEnd=YYYY-MM-DD optional, default end of current week
+- scope=all|watchlist|portfolio optional
+- limitPerSession default 10
+- maxTotal default 80
+- includeThemes=true default true
+
+Response shape:
+{
+  "asOf": string,
+  "source": "fmp",
+  "weekStart": "YYYY-MM-DD",
+  "weekEnd": "YYYY-MM-DD",
+  "eventsByDay": {
+    "2026-04-27": {
+      "preMarket": [...],
+      "afterHours": [...],
+      "duringMarket": [...],
+      "unknown": [...]
+    }
+  },
+  "topEvents": [...],
+  "themeSummary": [...],
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+Each event:
+{
+  "id": string,
+  "date": "YYYY-MM-DD",
+  "session": "preMarket" | "afterHours" | "duringMarket" | "unknown",
+  "symbol": string,
+  "companyName": string | null,
+  "logo": string | null,
+  "price": number | null,
+  "priceChangePct": number | null,
+  "marketCap": number | null,
+  "marketCapBucket": string | null,
+  "sector": string | null,
+  "industry": string | null,
+  "epsEstimated": number | null,
+  "epsActual": number | null,
+  "revenueEstimated": number | null,
+  "revenueActual": number | null,
+  "themeTags": string[],
+  "isThemeAnchor": boolean,
+  "isBottleneck": boolean,
+  "isWatchlist": boolean,
+  "isPortfolio": boolean,
+  "importanceScore": number,
+  "scoreBreakdown": {
+    "marketCap": number,
+    "theme": number,
+    "sectorMomentum": number,
+    "bottleneck": number,
+    "watchlistPortfolio": number,
+    "estimateAvailability": number,
+    "priceMomentum": number,
+    "newsCatalyst": number
+  },
+  "source": "fmp",
+  "raw": object
+}
+
+Data source:
+Use the existing clean FMP earnings service if available.
+For the selected week only:
+- fetch FMP earnings calendar for weekStart to weekEnd
+- do not fetch 30/60 days
+- no Finnhub
+- no Polymarket
+- no AI
+
+Enrichment:
+Use cached company profile / quote / market cap if available.
+Do not overload FMP.
+
+Safe enrichment rules:
+- company identity cache TTL: 24h+
+- quote/price cache TTL: 15-60 min
+- market cap cache TTL: 24h
+- concurrency max 2-3
+- no new AsyncClient per symbol
+- no profile enrichment for every tiny OTC ticker if expensive
+- prioritize enrichment for likely top candidates first
+
+Scoring model:
+
+Base score:
+1. Market cap / market-moving importance
+- mega cap: +40
+- large cap: +30
+- mid cap: +15
+- small cap: +5
+- micro/unknown: +0
+
+2. Theme relevance
+Create deterministic theme baskets in code:
+AI Buildout:
+NVDA, AMD, AVGO, MRVL, MU, TSM, ASML, ARM, SMCI, DELL, HPE, ANET, VRT, ETN, ORCL, GOOGL, MSFT, AMZN, META
+
+AI Data Center / Power:
+VRT, ETN, PWR, CEG, VST, NRG, GE, GEV, SMR, OKLO, DELL, SMCI
+
+Semiconductor Bottlenecks:
+ASML, AMAT, LRCX, KLAC, TER, AEHR, ACLS, FORM, COHR
+
+AI Networking:
+ANET, AVGO, MRVL, CIEN, CSCO, NOK, ERIC
+
+Cloud / Software Infra:
+MSFT, AMZN, GOOGL, META, ORCL, SNOW, DDOG, NET, CRWD, PANW, MDB, NOW
+
+Aerospace / Defense / Space:
+RKLB, ASTS, LMT, RTX, NOC, BA, LHX, TDG, HEI, PLTR, KTOS
+
+Nuclear / Power / Electrification:
+CEG, VST, NRG, ETN, PWR, GEV, SMR, OKLO, BWXT
+
+Crypto / Fintech:
+COIN, HOOD, MSTR, SQ, PYPL, IBKR, CME
+
+If symbol in hot theme basket: +25
+If symbol is anchor: +30
+If symbol is bottleneck: +25
+
+3. Hot sector / theme boost
+Pull current hot sectors/themes from existing app data if available:
+- Sectors page sector performance
+- Home Theme Performance
+- cached theme performance data
+
+If company sector/theme is currently hot:
++10 to +25 depending on rank
+
+4. Watchlist / Portfolio
+- portfolio holding: +25
+- watchlist symbol: +20
+
+5. Estimate quality
+- EPS estimate available: +5
+- revenue estimate available: +5
+- both available: +5 extra
+
+6. Price action / momentum
+Use FMP price change if available:
+- 1D positive > 3%: +5
+- 5D/7D positive > 5% if available: +8
+- 30D positive > 10% if available: +10
+- large negative move can still be relevant: +5 if market cap large
+
+7. News/catalyst
+If cheap cached FMP news exists:
+- recent major news: +5 to +10
+Do not make fresh expensive calls per ticker for v1.
+
+Sorting:
+Sort by importanceScore descending within each date/session.
+
+Then cap:
+- limitPerSession default 10
+- maxTotal default 80
+
+Session mapping:
+Normalize FMP earnings time to:
+- preMarket
+- afterHours
+- duringMarket
+- unknown
+
+Validation:
+Test one current week.
+Confirm that:
+- mega/large caps sort above random OTC/tiny names
+- theme anchors like NVDA/GOOG/AMZN/MU/MRVL/VRT/RKLB surface when they have earnings that week
+- no Finnhub
+- no Polymarket
+- no AI call
+- endpoint does not overload FMP
+
+Final response:
+Tell me:
+- Which files changed
+- New endpoint path
+- Scoring model implemented
+- Example top 10 results for the week
+- How hot themes/sectors are sourced
+- Confirm no AI/Finnhub/Polymarket
