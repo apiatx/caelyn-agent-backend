@@ -1,0 +1,101 @@
+Backend /api/catalysts/earnings/week-clean has been fixed.
+
+Important backend behavior:
+- It now filters raw FMP earnings down to clean curated candidates.
+- It no longer returns thousands of unenriched junk rows.
+- It returns only eligible fully enriched/clean events for the board.
+- Response shape is unchanged.
+- Day, Recent, popup, Home, Sectors, Macro were untouched.
+- No Finnhub, no Polymarket, no AI.
+
+Frontend task:
+Do a small cleanup pass on the This Week board only.
+
+Do NOT touch:
+- Day mode
+- Recent mode
+- earnings popup internals
+- non-earnings Catalyst tabs
+- Home/Sectors/Macro
+- backend fetch path
+
+Keep using:
+GET /api/catalysts/earnings/week-clean
+
+Changes:
+
+1. Trust backend curation.
+Render the events returned by backend.
+Do not add old fallback rows.
+Do not pad empty days/sessions with any old data.
+If a day has only 2 clean events, show 2.
+If a day has none, show a clean empty state.
+
+2. Defensive hiding.
+If somehow an event still has:
+- companyName missing or companyName equals symbol
+- AND marketCapBucket is "unknown"
+- AND no themeTags
+- AND not isThemeAnchor/isBottleneck
+
+then hide that card from the board.
+
+3. Hide bad reason labels.
+Do not show "unknown" as a visible reason.
+If no good reason exists, hide the reason line.
+
+Good reason line examples:
+- AI Buildout · Anchor
+- Semiconductor Bottlenecks · Bottleneck
+- Mega cap
+- Large cap
+- Cloud / Software Infra
+
+4. FOCUS badge behavior.
+Only show FOCUS when:
+- event.isThemeAnchor === true
+- OR event.isBottleneck === true
+- OR event.importanceScore >= 85
+- OR event is top 3 within that day
+
+Do not show FOCUS on every card.
+
+5. Logo fallback.
+If logo/image missing:
+- show fallback avatar with ticker initials
+- no broken image icons
+
+6. Empty states.
+For each weekday:
+- If no clean events, show "No major calls"
+- Do not show “No earnings” because there may be earnings, just not curated ones.
+
+7. Preserve backend order.
+Do not re-sort client-side.
+Backend already ranks the list.
+
+8. Top watches strip.
+Use response.topEvents.slice(0, 8).
+If any topEvent fails defensive quality filter, skip it.
+Clicking a chip should open the existing earnings popup.
+
+Validation:
+- This Week uses /api/catalysts/earnings/week-clean only
+- No old upcoming endpoint
+- No Finnhub
+- No Polymarket
+- No junk fallback rows
+- No visible “unknown” reason labels
+- FOCUS is selective
+- Day works unchanged
+- Recent works unchanged
+- Popup opens unchanged
+
+Final response:
+Tell me:
+- files changed
+- confirm no fallback/padding rows
+- confirm defensive hide logic
+- confirm no visible unknown labels
+- confirm FOCUS threshold logic
+- confirm Day/Recent/popup untouched
