@@ -1,0 +1,97 @@
+Stabilize Earnings Calendar FMP usage before any more UI work.
+
+Goal:
+Keep Month view, but make sure it cannot overload FMP or break the site.
+
+Do NOT remove Month.
+Do NOT touch popup.
+Do NOT touch Recent.
+Do NOT use Finnhub, Polymarket, or AI.
+
+Required architecture:
+
+1. Month All must be lightweight.
+It should:
+- use FMP earnings calendar only
+- fetch month via 7-day chunks
+- return count by day
+- optionally return basic top symbols per day
+- NOT profile/enrich every ticker in the month
+- NOT call quote/profile/marketCap for thousands of events
+
+2. Month Curated must reuse weekly curated results.
+It should:
+- split month into weeks
+- reuse get_curated_earnings_range for each week
+- group curated events by date
+- return topEvents per day, max 3–5
+- not run a separate full-month enrichment blast
+
+3. Day views do the detail work.
+Day All:
+- fetch selected date only
+- can return full day list
+
+Day Curated:
+- selected date only, from shared curated weekly engine
+
+4. Add explicit FMP budget guards for earnings calendar routes:
+- max calendar chunk calls per request:
+  - Day: 1
+  - Week: 1–2
+  - Month: max 5
+- max live profile/quote calls:
+  - Month All: 0
+  - Month Curated: use cached + max 20 live
+  - Week Curated: existing safe cap
+  - Day: safe cap only if enrich=true
+
+5. Add route-specific circuit breaker:
+If FMP returns 429:
+- set earnings_calendar_fmp_block_until = now + 60 seconds
+- return status partial/error for that earnings route
+- do not keep calling FMP
+- do not affect Home/Sectors/Macro routes
+
+6. Add cache keys:
+- earnings:all:day:{date}
+- earnings:all:week:{weekStart}:{weekEnd}
+- earnings:all:month:{year}:{month}
+- earnings:curated:week:{weekStart}:{weekEnd}
+- earnings:curated:month:{year}:{month}
+
+Cache TTL:
+- all month/week/day earnings calendar: 6 hours
+- curated week/month: 6 hours
+- profiles: 24 hours
+- quotes/price: 15–60 minutes
+
+7. Add safe telemetry logs:
+For each earnings route, log:
+- route name
+- date range
+- FMP calendar calls used
+- live profile calls used
+- cache hit/miss
+- rateLimited true/false
+Do not log API key.
+
+8. Validation:
+Run one call each only:
+- day all
+- day curated
+- week all
+- week curated
+- month all
+- month curated
+
+Then verify one lightweight Home/Sectors/Macro call still works.
+
+Final response:
+Tell me:
+- whether Month All does zero profile enrichment
+- whether Month Curated caps live enrichment
+- max FMP calls per route
+- cache TTLs
+- circuit breaker behavior
+- confirm Home/Sectors/Macro cannot be taken down by Month

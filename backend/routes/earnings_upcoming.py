@@ -387,6 +387,65 @@ async def week_all(
     return JSONResponse(content=result)
 
 
+# ── GET /api/catalysts/earnings/month-all ─────────────────────────────────────
+
+@router.get("/api/catalysts/earnings/month-all")
+@traceable(name="earnings_clean.month_all")
+async def month_all(
+    request: Request,
+    api_key: str           = Header(None, alias=_AUTH_HEADER),
+    year:    Optional[int] = Query(None, description="4-digit year (default current year)"),
+    month:   Optional[int] = Query(None, ge=1, le=12,
+                                   description="Month 1-12 (default current month)"),
+    scope:   Optional[str] = Query(None, description="all | watchlist | portfolio"),
+    search:  Optional[str] = Query(None),
+    top_n:   int           = Query(5, ge=1, le=20,
+                                   description="Max symbols shown per day (1-20, default 5)"),
+):
+    """
+    Lightweight FMP earnings calendar for a full month.
+
+    ZERO profile/quote enrichment — only raw FMP calendar data.
+    Returns count-per-day and top N symbols sorted by revenue estimate.
+
+    Budget:
+      • Max 5 sequential FMP calendar calls (5 × 7-day chunks covers any month).
+      • Zero live profile calls — no marketCap, no sector, no price fetches.
+      • 429 circuit breaker (earnings-service only — Home/Sectors/Macro unaffected).
+      • Cache: earnings:all:month:{year}:{month}, TTL 6 h.
+
+    Returns: { asOf, source, year, month, monthLabel, monthStart, monthEnd,
+               days[{date, dayOfMonth, isCurrentMonth, count, topSymbols[]}],
+               fmpCallsUsed, rateLimited, status, errors }
+    """
+    err = _check_key(api_key)
+    if err:
+        return err
+
+    fmp_key = _get_fmp_key()
+    if not fmp_key:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "FMP API key not configured", "status": "error", "errors": []},
+        )
+
+    now = datetime.utcnow()
+    y   = year  if year  else now.year
+    m   = month if month else now.month
+
+    from services.earnings_clean_service import get_month_all as _get_month_all
+
+    result = await _get_month_all(
+        api_key=fmp_key,
+        year=y,
+        month=m,
+        scope=scope,
+        search=search,
+        top_n=top_n,
+    )
+    return JSONResponse(content=result)
+
+
 # ── GET /api/catalysts/earnings/month-curated ─────────────────────────────────
 
 @router.get("/api/catalysts/earnings/month-curated")

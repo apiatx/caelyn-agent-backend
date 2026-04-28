@@ -34,13 +34,26 @@ from data.cache import cache
 _FMP_STABLE         = "https://financialmodelingprep.com/stable"
 _FMP_LOGO_BASE      = "https://financialmodelingprep.com/image-stock"
 
-_TTL_CAL_CHUNK      = 6  * 3600    # 6 h  — raw FMP chunk
+_TTL_CAL_CHUNK      = 6  * 3600    # 6 h  — raw FMP chunk (per 7-day slice)
 _TTL_UPCOMING       = 6  * 3600    # 6 h  — merged calendar result
 _TTL_PROFILE        = 24 * 3600    # 24 h — company profile
+_TTL_RESULT         = 6  * 3600    # 6 h  — top-level route result cache
+_TTL_QUOTE          = 15 * 60      # 15 min — live quote / price data
 
 _DEFAULT_DAYS       = 14            # default upcoming window (2 weeks)
 _MAX_RANGE_DAYS     = 30            # hard cap on date range (30 days)
 _MAX_CHUNKS         = 5             # max sequential FMP calendar calls (5 × 7d = 35d covers 30d)
+
+# ── Per-route FMP budget limits ───────────────────────────────────────────────
+# Hard maximums on how many sequential calendar-chunk calls each route may use.
+# Prevents a single request from exhausting the FMP quota.
+_BUDGET_DAY_CHUNKS   = 1   # Day views  (1 × 7d chunk — always enough for 1 day)
+_BUDGET_WEEK_CHUNKS  = 2   # Week views (2 × 7d chunks — enough for any Mon–Fri week)
+_BUDGET_MONTH_CHUNKS = 5   # Month views (5 × 7d chunks — enough for any 28-31 day month)
+
+# Month-all: zero live profile calls (lightweight calendar-only)
+# Month-curated: caps inherited from week-clean engine (WEEK_MAX_LIVE=40 per week, cached)
+_MONTH_ALL_LIVE_PROFILES = 0
 
 _MAX_LIVE_DEFAULT   = 30            # default live profile fetches for day-clean enrichment
 _MAX_LIVE_CAP       = 50            # absolute ceiling for live profile fetches
@@ -69,6 +82,30 @@ def _set_blocked() -> None:
     global _fmp_block_until
     _fmp_block_until = time.monotonic() + _CB_BLOCK_SECS
     print(f"[earn_clean] ⚠ 429 — blocking FMP for {_CB_BLOCK_SECS}s (this service only)")
+
+
+# ── Structured telemetry logger (earnings routes only) ────────────────────────
+
+def _log_telemetry(
+    route:              str,
+    date_range:         str,
+    fmp_calendar_calls: int  = 0,
+    live_profile_calls: int  = 0,
+    cache_hit:          bool = False,
+    rate_limited:       bool = False,
+) -> None:
+    """
+    Emit one structured telemetry line per earnings route request.
+    Never logs API keys.
+    Format: [earn_clean][TEL] route=X range=Y fmp_cal=N fmp_live=N cache=HIT/MISS rl=T/F
+    """
+    cache_str = "HIT" if cache_hit else "MISS"
+    rl_str    = str(rate_limited).upper()
+    print(
+        f"[earn_clean][TEL] route={route} range={date_range} "
+        f"fmp_cal={fmp_calendar_calls} fmp_live={live_profile_calls} "
+        f"cache={cache_str} rl={rl_str}"
+    )
 
 
 # ── Low-level FMP call (shared client, circuit-breaker aware) ─────────────────
@@ -137,20 +174,22 @@ async def _fmp_get(
 # ── Sequential chunked calendar fetch ─────────────────────────────────────────
 
 async def _fetch_earnings_range(
-    from_date: str,
-    to_date: str,
-    api_key: str,
-    client: httpx.AsyncClient,
+    from_date:  str,
+    to_date:    str,
+    api_key:    str,
+    client:     httpx.AsyncClient,
     call_counter: list[int],
+    max_chunks: int = _MAX_CHUNKS,
 ) -> tuple[list[dict], bool]:
     """
     Fetch FMP earnings-calendar in sequential 7-day chunks.
 
     Hard constraints:
       • Sequential — no asyncio.gather burst.
-      • Max _MAX_CHUNKS (5) FMP calls; extra days beyond 35 are silently dropped
-        (caller must clamp before calling).
+      • max_chunks (default _MAX_CHUNKS=5) FMP calls max; extra days are dropped.
+        Per-route budgets: Day=1, Week=2, Month=5.
       • On 429, stops immediately and returns partial data.
+      • 429 circuit breaker covers only this service — Home/Sectors/Macro unaffected.
 
     Returns (rows, rate_limited).
     """
@@ -165,9 +204,11 @@ async def _fetch_earnings_range(
     except ValueError:
         return [], False
 
+    effective_max = min(max_chunks, _MAX_CHUNKS)   # never exceed global hard cap
+
     chunks: list[tuple[str, str]] = []
     cur = start
-    while cur <= end and len(chunks) < _MAX_CHUNKS:
+    while cur <= end and len(chunks) < effective_max:
         chunk_end = min(cur + timedelta(days=6), end)
         chunks.append((cur.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d")))
         cur = chunk_end + timedelta(days=1)
@@ -591,6 +632,7 @@ async def get_day_clean(
     ) as client:
         raw_rows, rate_limited = await _fetch_earnings_range(
             date, date, api_key, client, call_counter,
+            max_chunks=_BUDGET_DAY_CHUNKS,       # day: max 1 FMP calendar call
         )
 
         events: list[dict] = []
@@ -1187,6 +1229,13 @@ async def get_curated_earnings_range(
       "rateLimited":  bool,
     }
     """
+    # Result cache — only when scope/search are default (avoid polluting filtered views)
+    _rng_ck = f"earn:cur:rng:{from_date}:{to_date}"
+    if not scope and not search:
+        _rng_cached = cache.get(_rng_ck)
+        if _rng_cached is not None:
+            return _rng_cached
+
     call_counter: list[int] = [0]
     errors:       list[str] = []
     rate_limited             = False
@@ -1197,6 +1246,7 @@ async def get_curated_earnings_range(
     ) as client:
         raw_rows, rate_limited = await _fetch_earnings_range(
             from_date, to_date, api_key, client, call_counter,
+            max_chunks=_BUDGET_WEEK_CHUNKS,      # curated-range: max 2 FMP calls (week boundary)
         )
 
         watchlist = _load_watchlist()
@@ -1266,7 +1316,7 @@ async def get_curated_earnings_range(
         f"eligible={len(decorated)} dates={len(events_by_date)} calls={call_counter[0]}"
     )
 
-    return {
+    result = {
         "eventsByDate": events_by_date,
         "allEvents":    all_events_sorted,
         "rawCounts":    raw_counts,
@@ -1275,6 +1325,11 @@ async def get_curated_earnings_range(
         "fmpCallsUsed": call_counter[0],
         "rateLimited":  rate_limited,
     }
+
+    if not rate_limited and not scope and not search:
+        cache.set(_rng_ck, result, _TTL_RESULT)
+
+    return result
 
 
 # ── Public API: get_week_clean ─────────────────────────────────────────────────
@@ -1327,6 +1382,14 @@ async def get_week_clean(
 
     from_str = ws.strftime("%Y-%m-%d")
     to_str   = we.strftime("%Y-%m-%d")
+
+    # -- Result cache (skip for filtered views)
+    _wk_ck = f"earnings:curated:week:{from_str}:{to_str}"
+    if not scope and not search:
+        _wk_cached = cache.get(_wk_ck)
+        if _wk_cached is not None:
+            _log_telemetry("week-curated", f"{from_str}→{to_str}", cache_hit=True)
+            return _wk_cached
 
     # -- Canonical curated range (same engine, same params as every curated view)
     rng = await get_curated_earnings_range(api_key, from_str, to_str, scope, search)
@@ -1393,12 +1456,7 @@ async def get_week_clean(
     all_deduped = [ev for evs in days_map.values() for ev in evs]
     top_events  = sorted(all_deduped, key=lambda e: -(e.get("importanceScore") or 0))[:max_total]
 
-    print(
-        f"[earn_clean] week-clean {from_str}→{to_str} "
-        f"eligible={len(all_events)} deduped={len(all_deduped)}"
-    )
-
-    return {
+    _wk_result = {
         "asOf":      _today(),
         "source":    "fmp",
         "weekStart": from_str,
@@ -1408,6 +1466,17 @@ async def get_week_clean(
         "status":    rng["status"],
         "errors":    errors,
     }
+
+    if not rng["rateLimited"] and not scope and not search:
+        cache.set(_wk_ck, _wk_result, _TTL_RESULT)
+
+    _log_telemetry(
+        "week-curated", f"{from_str}→{to_str}",
+        fmp_calendar_calls=rng["fmpCallsUsed"],
+        live_profile_calls=len(all_events),
+        rate_limited=rng["rateLimited"],
+    )
+    return _wk_result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1456,6 +1525,14 @@ async def get_week_all(
     from_str = ws.strftime("%Y-%m-%d")
     to_str   = we.strftime("%Y-%m-%d")
 
+    # -- Result cache (skip for filtered views)
+    _wa_ck = f"earnings:all:week:{from_str}:{to_str}"
+    if not scope and not search:
+        _wa_cached = cache.get(_wa_ck)
+        if _wa_cached is not None:
+            _log_telemetry("week-all", f"{from_str}→{to_str}", cache_hit=True)
+            return _wa_cached
+
     call_counter: list[int] = [0]
 
     async with httpx.AsyncClient(
@@ -1464,6 +1541,7 @@ async def get_week_all(
     ) as client:
         raw_rows, rate_limited = await _fetch_earnings_range(
             from_str, to_str, api_key, client, call_counter,
+            max_chunks=_BUDGET_WEEK_CHUNKS,      # week-all: max 2 FMP calls
         )
 
     events: list[dict] = []
@@ -1488,12 +1566,7 @@ async def get_week_all(
     if limit and len(events) > limit:
         events = events[:limit]
 
-    print(
-        f"[earn_clean] week-all {from_str}→{to_str} "
-        f"raw={len(raw_rows)} returned={len(events)} calls={call_counter[0]}"
-    )
-
-    return {
+    _wa_result = {
         "asOf":          _today(),
         "source":        "fmp",
         "weekStart":     from_str,
@@ -1506,6 +1579,159 @@ async def get_week_all(
         "rateLimited":   rate_limited,
         "errors":        (["FMP rate limit hit — partial data"] if rate_limited else []),
     }
+
+    if not rate_limited and not scope and not search:
+        cache.set(_wa_ck, _wa_result, _TTL_RESULT)
+
+    _log_telemetry(
+        "week-all", f"{from_str}→{to_str}",
+        fmp_calendar_calls=call_counter[0], live_profile_calls=0,
+        rate_limited=rate_limited,
+    )
+    return _wa_result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MONTH-ALL — Lightweight FMP monthly calendar (zero profile enrichment)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_month_days_all(
+    year:           int,
+    month:          int,
+    counts_by_date: dict[str, int],
+    events_by_date: dict[str, list[dict]],
+    top_n:          int,
+) -> list[dict]:
+    """
+    Build month calendar for month-all.
+    count     = total FMP events for the date (pre-filter).
+    topSymbols = up to top_n symbol strings, sorted by revenueEstimated desc.
+    No live profile calls — raw calendar data only.
+    """
+    import calendar as _cal
+    today_str = _today()
+    this_ym   = today_str[:7]
+    month_ym  = f"{year:04d}-{month:02d}"
+    num_days  = _cal.monthrange(year, month)[1]
+    days: list[dict] = []
+    for day_num in range(1, num_days + 1):
+        d_str   = f"{year:04d}-{month:02d}-{day_num:02d}"
+        day_evs = events_by_date.get(d_str, [])
+        sorted_evs = sorted(day_evs, key=lambda e: -(e.get("revenueEstimated") or 0))
+        top_syms   = [e["symbol"] for e in sorted_evs[:top_n] if e.get("symbol")]
+        days.append({
+            "date":           d_str,
+            "dayOfMonth":     day_num,
+            "isCurrentMonth": month_ym == this_ym,
+            "count":          counts_by_date.get(d_str, 0),
+            "topSymbols":     top_syms,
+        })
+    return days
+
+
+async def get_month_all(
+    api_key:     str,
+    year:        int,
+    month:       int,
+    scope:       Optional[str] = None,
+    search:      Optional[str] = None,
+    top_n:       int = 5,
+) -> dict:
+    """
+    Lightweight FMP earnings calendar for a full month — ZERO profile enrichment.
+
+    Architecture:
+      • Fetches via sequential 7-day chunks (max _BUDGET_MONTH_CHUNKS=5 FMP calls).
+      • No profile/quote/marketCap calls — counts and raw calendar fields only.
+      • Returns count-per-day + top N symbols sorted by revenueEstimated.
+      • 429 circuit breaker (earnings-service only — does NOT affect Home/Sectors/Macro).
+      • Cache key: earnings:all:month:{year}:{month}, TTL 6 h.
+
+    FMP calls: max 5 calendar chunks.
+    Live profile calls: 0 (month-all never calls profile or quote endpoints).
+
+    Response: { asOf, source, year, month, monthLabel, monthStart, monthEnd,
+                days[{date, dayOfMonth, isCurrentMonth, count, topSymbols[]}],
+                fmpCallsUsed, rateLimited, status, errors }
+    """
+    import calendar as _cal
+
+    top_n = min(max(1, top_n), 20)
+
+    last_day_num  = _cal.monthrange(year, month)[1]
+    month_start_d = datetime(year, month, 1).date()
+    month_end_d   = datetime(year, month, last_day_num).date()
+    month_label   = datetime(year, month, 1).strftime("%B %Y")
+    month_start   = month_start_d.strftime("%Y-%m-%d")
+    month_end     = month_end_d.strftime("%Y-%m-%d")
+
+    # -- Result cache (skip for filtered views)
+    _ma_ck = f"earnings:all:month:{year}:{month}"
+    if not scope and not search:
+        _ma_cached = cache.get(_ma_ck)
+        if _ma_cached is not None:
+            _log_telemetry("month-all", f"{month_start}→{month_end}", cache_hit=True)
+            return _ma_cached
+
+    call_counter: list[int] = [0]
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(_FMP_TIMEOUT),
+        follow_redirects=True,
+    ) as client:
+        raw_rows, rate_limited = await _fetch_earnings_range(
+            month_start, month_end, api_key, client, call_counter,
+            max_chunks=_BUDGET_MONTH_CHUNKS,     # month-all: max 5 FMP calendar calls
+        )
+        # ← NO profile enrichment, NO quote calls — deliberately ends here
+
+    watchlist = _load_watchlist()
+    portfolio = _load_portfolio()
+
+    raw_events: list[dict] = []
+    for row in (raw_rows if isinstance(raw_rows, list) else []):
+        ev = _normalize_row(row)
+        if ev:
+            raw_events.append(ev)
+
+    raw_events = _apply_scope(raw_events, search, scope, watchlist, portfolio)
+
+    counts_by_date: dict[str, int]        = {}
+    events_by_date: dict[str, list[dict]] = {}
+    for ev in raw_events:
+        d = ev.get("date", "")
+        if not d:
+            continue
+        counts_by_date[d] = counts_by_date.get(d, 0) + 1
+        events_by_date.setdefault(d, []).append(ev)
+
+    days = _build_month_days_all(year, month, counts_by_date, events_by_date, top_n)
+
+    _ma_result = {
+        "asOf":         _today(),
+        "source":       "fmp",
+        "year":         year,
+        "month":        month,
+        "monthLabel":   month_label,
+        "monthStart":   month_start,
+        "monthEnd":     month_end,
+        "days":         days,
+        "fmpCallsUsed": call_counter[0],
+        "rateLimited":  rate_limited,
+        "status":       "partial" if rate_limited else "ok",
+        "errors":       (["FMP rate limit hit — partial data"] if rate_limited else []),
+    }
+
+    if not rate_limited and not scope and not search:
+        cache.set(_ma_ck, _ma_result, _TTL_RESULT)
+
+    _log_telemetry(
+        "month-all", f"{month_start}→{month_end}",
+        fmp_calendar_calls=call_counter[0],
+        live_profile_calls=_MONTH_ALL_LIVE_PROFILES,   # always 0
+        rate_limited=rate_limited,
+    )
+    return _ma_result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1641,6 +1867,14 @@ async def get_month_curated(
     month_start   = month_start_d.strftime("%Y-%m-%d")
     month_end     = month_end_d.strftime("%Y-%m-%d")
 
+    # -- Result cache (skip for filtered views)
+    _mc_ck = f"earnings:curated:month:{year}:{month}"
+    if not scope and not search:
+        _mc_cached = cache.get(_mc_ck)
+        if _mc_cached is not None:
+            _log_telemetry("month-curated", f"{month_start}→{month_end}", cache_hit=True)
+            return _mc_cached
+
     # Split the month into Mon–Fri weeks (same boundaries as week-clean).
     # Starting from the Monday of the week containing the 1st of the month
     # ensures that partial weeks at month edges are handled correctly.
@@ -1693,13 +1927,7 @@ async def get_month_curated(
     days          = _build_month_days(year, month, merged_raw_counts, curated_by_date)
     total_curated = sum(len(v) for v in curated_by_date.values())
 
-    print(
-        f"[earn_clean] month-curated {year}-{month:02d} "
-        f"weeks={len(weeks)} curated_days={len(curated_by_date)} "
-        f"total_curated={total_curated}"
-    )
-
-    return {
+    _mc_result = {
         "asOf":        _today(),
         "source":      "fmp",
         "year":        year,
@@ -1711,3 +1939,14 @@ async def get_month_curated(
         "status":      "partial" if any_partial else "ok",
         "errors":      all_errors,
     }
+
+    if not any_partial and not scope and not search:
+        cache.set(_mc_ck, _mc_result, _TTL_RESULT)
+
+    _log_telemetry(
+        "month-curated", f"{month_start}→{month_end}",
+        fmp_calendar_calls=len(weeks),        # one per week (each ≤2 FMP calls, mostly cached)
+        live_profile_calls=total_curated,     # approximate: eligible events enriched
+        rate_limited=any_partial,
+    )
+    return _mc_result
