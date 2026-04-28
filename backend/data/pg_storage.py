@@ -391,6 +391,57 @@ def init_tables():
             ON public.options_flow_snapshots (underlying, captured_at DESC)
         """)
 
+        # ── Data retention rules registry ──────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.data_retention_rules (
+                id               BIGSERIAL PRIMARY KEY,
+                table_name       TEXT NOT NULL UNIQUE,
+                timestamp_column TEXT NOT NULL,
+                retention_days   INTEGER NOT NULL,
+                enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+                description      TEXT NOT NULL DEFAULT '',
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+        # Seed default retention rules — only insert rows that don't yet exist
+        _retention_rules = [
+            # ── AI chat / agent responses (45 days) ──────────────────────────
+            ("public.conversations",       "updated_at",   45, True,
+             "AI chat conversation records — 45-day rolling window"),
+            ("public.messages",            "created_at",   45, True,
+             "AI chat messages — 45-day rolling window"),
+            ("public.chat_conversations",  "updated_at",   45, True,
+             "Legacy chat conversation store — 45-day rolling window"),
+            ("public.prompt_history",      "updated_at",   45, True,
+             "Per-user AI prompt history/cache — 45-day rolling window"),
+            ("public.ticker_mentions",     "created_at",   45, True,
+             "Ticker mentions extracted from chat messages — 45-day rolling window"),
+            ("insider_ai_cache",           "created_at",   45, True,
+             "AI-generated insider-activity summaries cache — 45-day rolling window"),
+            # ── Options flow snapshots (14 days) ─────────────────────────────
+            ("public.options_flow_snapshots", "captured_at", 14, True,
+             "Intraday live options flow snapshot rows — 14-day rolling window"),
+            ("public.options_history",     "fetched_at",   14, True,
+             "Historical options OHLCV data fetched from broker — 14-day rolling window"),
+            # ── Sector / theme / market cache (21 days) ───────────────────────
+            ("public.stock_technicals",    "fetched_at",   21, True,
+             "Technical indicator cache for underlying stocks — 21-day rolling window"),
+            # ── AI screener snapshots / reports (45 days) ────────────────────
+            ("public.screener_snapshots",  "generated_at", 45, True,
+             "Serenity strategy screener snapshots (AI-generated) — 45-day rolling window"),
+            ("public.screener_reports",    "generated_at", 45, True,
+             "Per-ticker Serenity screener reports (AI-generated) — 45-day rolling window"),
+        ]
+        for (tbl, ts_col, days, enabled, desc) in _retention_rules:
+            cur.execute("""
+                INSERT INTO public.data_retention_rules
+                    (table_name, timestamp_column, retention_days, enabled, description)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (table_name) DO NOTHING
+            """, (tbl, ts_col, days, enabled, desc))
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
