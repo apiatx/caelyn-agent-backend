@@ -34,7 +34,9 @@ from data.cache import cache
 _FMP_STABLE         = "https://financialmodelingprep.com/stable"
 _FMP_LOGO_BASE      = "https://financialmodelingprep.com/image-stock"
 
-_TTL_CAL_CHUNK      = 6  * 3600    # 6 h  — raw FMP chunk (per 7-day slice)
+_TTL_CAL_CHUNK      = 6  * 3600    # 6 h  — legacy raw FMP chunk (upcoming-clean only)
+_TTL_RAW_CHUNK      = 6  * 3600    # 6 h  — canonical Mon-Fri raw chunk (fresh)
+_TTL_LKG            = 30 * 24 * 3600  # 30 d — last-known-good stale fallback
 _TTL_UPCOMING       = 6  * 3600    # 6 h  — merged calendar result
 _TTL_PROFILE        = 24 * 3600    # 24 h — company profile
 _TTL_RESULT         = 6  * 3600    # 6 h  — top-level route result cache
@@ -89,21 +91,28 @@ def _set_blocked() -> None:
 def _log_telemetry(
     route:              str,
     date_range:         str,
+    raw_hits:           int  = 0,
+    raw_misses:         int  = 0,
     fmp_calendar_calls: int  = 0,
     live_profile_calls: int  = 0,
+    stale_lkg:          bool = False,
     cache_hit:          bool = False,
     rate_limited:       bool = False,
 ) -> None:
     """
     Emit one structured telemetry line per earnings route request.
     Never logs API keys.
-    Format: [earn_clean][TEL] route=X range=Y fmp_cal=N fmp_live=N cache=HIT/MISS rl=T/F
+    Format:
+      [earn_clean][TEL] route=X range=Y raw_hits=N raw_misses=N
+                        fmp_cal=N fmp_live=N stale=F rl=F cache=HIT/MISS
     """
     cache_str = "HIT" if cache_hit else "MISS"
     rl_str    = str(rate_limited).upper()
     print(
         f"[earn_clean][TEL] route={route} range={date_range} "
+        f"raw_hits={raw_hits} raw_misses={raw_misses} "
         f"fmp_cal={fmp_calendar_calls} fmp_live={live_profile_calls} "
+        f"stale={str(stale_lkg).lower()} "
         f"cache={cache_str} rl={rl_str}"
     )
 
@@ -171,7 +180,215 @@ async def _fmp_get(
         return [], False
 
 
-# ── Sequential chunked calendar fetch ─────────────────────────────────────────
+# ── Canonical Mon-Fri chunk helper ────────────────────────────────────────────
+
+def _canonical_week_chunks(
+    from_date: str,
+    to_date:   str,
+    max_weeks: int = _MAX_CHUNKS,
+) -> list[tuple[str, str]]:
+    """
+    Return canonical Mon-Fri week boundaries that overlap [from_date, to_date].
+
+    Mon-Fri alignment means the SAME cache keys are produced regardless of
+    which view (day / week / month / curated) triggers the fetch first.
+
+    Example  — April 2026:
+      weeks → [2026-03-30:2026-04-03, 2026-04-06:2026-04-10, …, 2026-04-27:2026-05-01]
+    A subsequent call for week 2026-04-27→2026-05-01 reuses the last chunk.
+    """
+    try:
+        start = datetime.strptime(from_date, "%Y-%m-%d").date()
+        end   = datetime.strptime(to_date,   "%Y-%m-%d").date()
+    except ValueError:
+        return []
+    # Snap back to Monday of the week containing start
+    mon   = start - timedelta(days=start.weekday())
+    weeks: list[tuple[str, str]] = []
+    while mon <= end and len(weeks) < min(max_weeks, _MAX_CHUNKS):
+        fri = mon + timedelta(days=4)
+        weeks.append((mon.strftime("%Y-%m-%d"), fri.strftime("%Y-%m-%d")))
+        mon += timedelta(days=7)
+    return weeks
+
+
+# ── Canonical raw FMP fetcher — shared by ALL six earnings views ──────────────
+
+async def get_raw_earnings_chunks(
+    from_date: str,
+    to_date:   str,
+    api_key:   str,
+    max_weeks: int = _BUDGET_MONTH_CHUNKS,
+) -> dict:
+    """
+    Canonical raw FMP earnings-calendar fetcher shared by Day/Week/Month All
+    and Day/Week/Month Curated.
+
+    Cache architecture
+    ------------------
+    Fresh  key:  earnings:raw:week:{mon}:{fri}  — TTL 6 h
+    LKG    key:  earnings:raw:lkg:week:{mon}:{fri} — TTL 30 d
+      • On every successful FMP fetch, both keys are written.
+      • On FMP 429 / error, the LKG key is read and served with staleLKG=True.
+      • Circuit breaker (this service only) also returns LKG when blocked.
+      • Home / Sectors / Macro are on separate FMP clients — unaffected.
+
+    Returns
+    -------
+    {
+      "rows":         list[dict],   # raw FMP rows filtered to [from_date, to_date]
+      "rawHits":      int,          # chunks served from fresh cache (0 FMP calls each)
+      "rawMisses":    int,          # chunks fetched live from FMP
+      "fmpCallsUsed": int,          # live FMP HTTP calls made
+      "rateLimited":  bool,         # any 429 encountered
+      "staleLKG":     bool,         # any stale LKG data returned
+    }
+    """
+    weeks        = _canonical_week_chunks(from_date, to_date, max_weeks)
+    raw_hits     = 0
+    raw_misses   = 0
+    fmp_calls    = 0
+    rate_limited = False
+    stale_lkg    = False
+    merged:      list[dict]           = []
+    seen:        set[tuple[str, str]] = set()
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(_FMP_TIMEOUT),
+        follow_redirects=True,
+    ) as client:
+        for mon_str, fri_str in weeks:
+            fresh_ck = f"earnings:raw:week:{mon_str}:{fri_str}"
+            lkg_ck   = f"earnings:raw:lkg:week:{mon_str}:{fri_str}"
+
+            # 1. Fresh cache hit — zero FMP cost
+            fresh = cache.get(fresh_ck)
+            if fresh is not None:
+                raw_hits += 1
+                for row in (fresh if isinstance(fresh, list) else []):
+                    k = (row.get("symbol", ""), row.get("date", ""))
+                    if k not in seen:
+                        seen.add(k)
+                        merged.append(row)
+                continue
+
+            raw_misses += 1
+
+            # 2. Circuit-breaker active — fall back to LKG, don't call FMP
+            if _is_blocked():
+                lkg = cache.get(lkg_ck)
+                if lkg is not None:
+                    stale_lkg = True
+                    for row in (lkg if isinstance(lkg, list) else []):
+                        k = (row.get("symbol", ""), row.get("date", ""))
+                        if k not in seen:
+                            seen.add(k)
+                            merged.append(row)
+                rate_limited = True
+                continue
+
+            # 3. Live FMP fetch
+            fmp_calls += 1
+            t0 = time.monotonic()
+            try:
+                resp = await client.get(
+                    f"{_FMP_STABLE}/earnings-calendar",
+                    params={"from": mon_str, "to": fri_str, "apikey": api_key},
+                )
+                ms = int((time.monotonic() - t0) * 1000)
+
+                if resp.status_code == 429:
+                    _set_blocked()
+                    print(f"[earn_clean] raw-chunk {mon_str}→{fri_str} 429 ms={ms}")
+                    lkg = cache.get(lkg_ck)
+                    if lkg is not None:
+                        stale_lkg = True
+                        for row in (lkg if isinstance(lkg, list) else []):
+                            k = (row.get("symbol", ""), row.get("date", ""))
+                            if k not in seen:
+                                seen.add(k)
+                                merged.append(row)
+                    rate_limited = True
+                    break  # stop — don't burn more quota
+
+                if resp.status_code not in (200, 201):
+                    print(f"[earn_clean] raw-chunk {mon_str}→{fri_str} status={resp.status_code} ms={ms}")
+                    lkg = cache.get(lkg_ck)
+                    if lkg is not None:
+                        stale_lkg = True
+                        for row in (lkg if isinstance(lkg, list) else []):
+                            k = (row.get("symbol", ""), row.get("date", ""))
+                            if k not in seen:
+                                seen.add(k)
+                                merged.append(row)
+                    continue
+
+                rows_data = resp.json()
+                if not isinstance(rows_data, list):
+                    rows_data = []
+                print(f"[earn_clean] raw-chunk {mon_str}→{fri_str} 200 rows={len(rows_data)} ms={ms}")
+
+                # Write both fresh and LKG on every successful fetch
+                if rows_data:
+                    cache.set(fresh_ck, rows_data, _TTL_RAW_CHUNK)
+                    cache.set(lkg_ck,   rows_data, _TTL_LKG)
+
+                for row in rows_data:
+                    k = (row.get("symbol", ""), row.get("date", ""))
+                    if k not in seen:
+                        seen.add(k)
+                        merged.append(row)
+
+            except httpx.TimeoutException:
+                ms = int((time.monotonic() - t0) * 1000)
+                print(f"[earn_clean] raw-chunk {mon_str}→{fri_str} timeout ms={ms}")
+                lkg = cache.get(lkg_ck)
+                if lkg is not None:
+                    stale_lkg = True
+                    for row in (lkg if isinstance(lkg, list) else []):
+                        k = (row.get("symbol", ""), row.get("date", ""))
+                        if k not in seen:
+                            seen.add(k)
+                            merged.append(row)
+            except Exception as exc:
+                ms = int((time.monotonic() - t0) * 1000)
+                print(f"[earn_clean] raw-chunk {mon_str}→{fri_str} error={exc} ms={ms}")
+
+    # Filter merged rows to exact requested date range
+    try:
+        from_d = datetime.strptime(from_date, "%Y-%m-%d").date()
+        to_d   = datetime.strptime(to_date,   "%Y-%m-%d").date()
+
+        def _in_range(row: dict) -> bool:
+            d_str = row.get("date", "")
+            if not d_str:
+                return False
+            try:
+                return from_d <= datetime.strptime(d_str, "%Y-%m-%d").date() <= to_d
+            except ValueError:
+                return False
+
+        merged = [r for r in merged if _in_range(r)]
+    except ValueError:
+        pass  # bad date strings — return unfiltered
+
+    merged.sort(key=lambda r: r.get("date", ""))
+    print(
+        f"[earn_clean] raw-chunks weeks={len(weeks)} rows={len(merged)} "
+        f"hits={raw_hits} misses={raw_misses} fmp={fmp_calls} "
+        f"range={from_date}→{to_date}"
+    )
+    return {
+        "rows":         merged,
+        "rawHits":      raw_hits,
+        "rawMisses":    raw_misses,
+        "fmpCallsUsed": fmp_calls,
+        "rateLimited":  rate_limited,
+        "staleLKG":     stale_lkg,
+    }
+
+
+# ── Legacy fetcher — used only by get_upcoming_clean ─────────────────────────
 
 async def _fetch_earnings_range(
     from_date:  str,
@@ -623,37 +840,45 @@ async def get_day_clean(
     Response: { status, source, fmpCallsUsed, rateLimited, errors, date, count, events }
     """
     max_live = min(max(0, max_live), _MAX_LIVE_CAP)
-    call_counter: list[int] = [0]
-    rate_limited = False
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(_FMP_TIMEOUT),
-        follow_redirects=True,
-    ) as client:
-        raw_rows, rate_limited = await _fetch_earnings_range(
-            date, date, api_key, client, call_counter,
-            max_chunks=_BUDGET_DAY_CHUNKS,       # day: max 1 FMP calendar call
-        )
+    # Phase 1: raw calendar fetch — shared Mon-Fri chunk cache
+    raw_result   = await get_raw_earnings_chunks(
+        date, date, api_key, max_weeks=_BUDGET_DAY_CHUNKS,
+    )
+    raw_rows     = raw_result["rows"]
+    rate_limited = raw_result["rateLimited"]
+    stale_lkg    = raw_result["staleLKG"]
+    cal_calls    = raw_result["fmpCallsUsed"]
+    raw_hits     = raw_result["rawHits"]
+    raw_misses   = raw_result["rawMisses"]
 
-        events: list[dict] = []
-        for row in raw_rows:
-            ev = _normalize_row(row)
-            if ev:
-                events.append(ev)
+    events: list[dict] = []
+    for row in raw_rows:
+        ev = _normalize_row(row)
+        if ev:
+            events.append(ev)
 
-        watchlist = _load_watchlist()
-        portfolio = _load_portfolio()
-        events = _apply_scope(events, search, scope, watchlist, portfolio)
+    watchlist = _load_watchlist()
+    portfolio = _load_portfolio()
+    events = _apply_scope(events, search, scope, watchlist, portfolio)
 
-        if enrich and not rate_limited and events:
+    enrich_calls = 0
+    # Phase 2: live profile enrichment — separate client, only when needed
+    if enrich and not rate_limited and events:
+        enrich_counter: list[int] = [0]
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(_FMP_TIMEOUT),
+            follow_redirects=True,
+        ) as enrich_client:
             events, enrich_rl = await _enrich_events(
-                events, api_key, client, call_counter, max_live,
+                events, api_key, enrich_client, enrich_counter, max_live,
             )
-            if enrich_rl:
-                rate_limited = True
-            events = _sort_enriched(events)
-        else:
-            events = _sort_basic(events)
+        enrich_calls = enrich_counter[0]
+        if enrich_rl:
+            rate_limited = True
+        events = _sort_enriched(events)
+    else:
+        events = _sort_basic(events)
 
     if limit and len(events) > limit:
         events = events[:limit]
@@ -665,8 +890,9 @@ async def get_day_clean(
         "count":        len(events),
         "events":       events,
         "status":       "partial" if rate_limited else "ok",
-        "fmpCallsUsed": call_counter[0],
+        "fmpCallsUsed": cal_calls + enrich_calls,
         "rateLimited":  rate_limited,
+        "staleLKG":     stale_lkg,
         "errors":       (["FMP rate limit hit — partial data"] if rate_limited else []),
     }
 
@@ -1236,64 +1462,70 @@ async def get_curated_earnings_range(
         if _rng_cached is not None:
             return _rng_cached
 
-    call_counter: list[int] = [0]
     errors:       list[str] = []
-    rate_limited             = False
 
+    # Phase 1: raw calendar fetch — shared Mon-Fri chunk cache
+    raw_result   = await get_raw_earnings_chunks(
+        from_date, to_date, api_key, max_weeks=_BUDGET_WEEK_CHUNKS,
+    )
+    raw_rows     = raw_result["rows"]
+    rate_limited = raw_result["rateLimited"]
+    stale_lkg    = raw_result["staleLKG"]
+    cal_calls    = raw_result["fmpCallsUsed"]
+    raw_hits     = raw_result["rawHits"]
+    raw_misses   = raw_result["rawMisses"]
+    call_counter: list[int] = [cal_calls]   # enrichment pipeline adds to this
+
+    watchlist = _load_watchlist()
+    portfolio = _load_portfolio()
+
+    # Capture raw totals BEFORE scope/normalise filtering (for accurate calendar counts)
+    raw_counts: dict[str, int] = {}
+    for row in (raw_rows if isinstance(raw_rows, list) else []):
+        sym = (row.get("symbol") or "").strip().upper()
+        d   = (row.get("date")   or "").strip()
+        if not sym or not d:
+            continue
+        name  = (row.get("name") or row.get("companyName") or sym)
+        title = f"{name} Earnings" if name != sym else f"{sym} Earnings"
+        if _is_polymarket_row(title, sym):
+            continue
+        raw_counts[d] = raw_counts.get(d, 0) + 1
+
+    raw_events: list[dict] = []
+    for row in (raw_rows if isinstance(raw_rows, list) else []):
+        ev = _normalize_row(row)
+        if ev:
+            raw_events.append(ev)
+
+    raw_events = _apply_scope(raw_events, search, scope, watchlist, portfolio)
+
+    if not raw_events:
+        return {
+            "eventsByDate": {},
+            "allEvents":    [],
+            "rawCounts":    raw_counts,
+            "status":       "partial" if rate_limited else "ok",
+            "errors":       errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
+            "fmpCallsUsed": cal_calls,
+            "rateLimited":  rate_limited,
+            "staleLKG":     stale_lkg,
+        }
+
+    # Phase 2: enrichment pipeline — own client (sequential, max concurrency 2)
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(_FMP_TIMEOUT),
         follow_redirects=True,
-    ) as client:
-        raw_rows, rate_limited = await _fetch_earnings_range(
-            from_date, to_date, api_key, client, call_counter,
-            max_chunks=_BUDGET_WEEK_CHUNKS,      # curated-range: max 2 FMP calls (week boundary)
-        )
-
-        watchlist = _load_watchlist()
-        portfolio = _load_portfolio()
-
-        # Capture raw totals BEFORE scope/normalise filtering (for accurate calendar counts)
-        raw_counts: dict[str, int] = {}
-        for row in (raw_rows if isinstance(raw_rows, list) else []):
-            sym = (row.get("symbol") or "").strip().upper()
-            d   = (row.get("date")   or "").strip()
-            if not sym or not d:
-                continue
-            name  = (row.get("name") or row.get("companyName") or sym)
-            title = f"{name} Earnings" if name != sym else f"{sym} Earnings"
-            if _is_polymarket_row(title, sym):
-                continue
-            raw_counts[d] = raw_counts.get(d, 0) + 1
-
-        raw_events: list[dict] = []
-        for row in (raw_rows if isinstance(raw_rows, list) else []):
-            ev = _normalize_row(row)
-            if ev:
-                raw_events.append(ev)
-
-        raw_events = _apply_scope(raw_events, search, scope, watchlist, portfolio)
-
-        if not raw_events:
-            return {
-                "eventsByDate": {},
-                "allEvents":    [],
-                "rawCounts":    raw_counts,
-                "status":       "partial" if rate_limited else "ok",
-                "errors":       errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
-                "fmpCallsUsed": call_counter[0],
-                "rateLimited":  rate_limited,
-            }
-
-        # Run scoring pipeline with canonical week-clean parameters
+    ) as enrich_client:
         decorated, rate_limited = await _run_curated_pipeline(
-            raw_events, watchlist, portfolio, client, api_key, call_counter, rate_limited,
+            raw_events, watchlist, portfolio, enrich_client, api_key, call_counter, rate_limited,
             max_candidates=_WEEK_CAND_MAX,
             max_enrich=_MAX_WEEK_ENRICH,
             max_live=_WEEK_MAX_LIVE,
             concurrency=_WEEK_CONCURRENCY,
         )
-        if rate_limited:
-            errors.append("FMP rate limit during enrichment — partial data")
+    if rate_limited:
+        errors.append("FMP rate limit during enrichment — partial data")
 
     # Group by date, sort by importanceScore desc, dedup by symbol per date
     all_events_sorted = sorted(decorated, key=lambda e: -(e.get("importanceScore") or 0))
@@ -1324,6 +1556,9 @@ async def get_curated_earnings_range(
         "errors":       errors,
         "fmpCallsUsed": call_counter[0],
         "rateLimited":  rate_limited,
+        "staleLKG":     stale_lkg,
+        "rawHits":      raw_hits,
+        "rawMisses":    raw_misses,
     }
 
     if not rate_limited and not scope and not search:
@@ -1472,8 +1707,11 @@ async def get_week_clean(
 
     _log_telemetry(
         "week-curated", f"{from_str}→{to_str}",
+        raw_hits=rng.get("rawHits", 0),
+        raw_misses=rng.get("rawMisses", 0),
         fmp_calendar_calls=rng["fmpCallsUsed"],
         live_profile_calls=len(all_events),
+        stale_lkg=rng.get("staleLKG", False),
         rate_limited=rng["rateLimited"],
     )
     return _wk_result
@@ -1533,16 +1771,16 @@ async def get_week_all(
             _log_telemetry("week-all", f"{from_str}→{to_str}", cache_hit=True)
             return _wa_cached
 
-    call_counter: list[int] = [0]
-
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(_FMP_TIMEOUT),
-        follow_redirects=True,
-    ) as client:
-        raw_rows, rate_limited = await _fetch_earnings_range(
-            from_str, to_str, api_key, client, call_counter,
-            max_chunks=_BUDGET_WEEK_CHUNKS,      # week-all: max 2 FMP calls
-        )
+    # Raw calendar fetch — shared Mon-Fri chunk cache
+    raw_result   = await get_raw_earnings_chunks(
+        from_str, to_str, api_key, max_weeks=_BUDGET_WEEK_CHUNKS,
+    )
+    raw_rows     = raw_result["rows"]
+    rate_limited = raw_result["rateLimited"]
+    stale_lkg    = raw_result["staleLKG"]
+    cal_calls    = raw_result["fmpCallsUsed"]
+    raw_hits     = raw_result["rawHits"]
+    raw_misses   = raw_result["rawMisses"]
 
     events: list[dict] = []
     for row in raw_rows:
@@ -1575,8 +1813,9 @@ async def get_week_all(
         "eventsByDate":  events_by_date,
         "countsByDate":  counts_by_date,
         "status":        "partial" if rate_limited else "ok",
-        "fmpCallsUsed":  call_counter[0],
+        "fmpCallsUsed":  cal_calls,
         "rateLimited":   rate_limited,
+        "staleLKG":      stale_lkg,
         "errors":        (["FMP rate limit hit — partial data"] if rate_limited else []),
     }
 
@@ -1585,8 +1824,9 @@ async def get_week_all(
 
     _log_telemetry(
         "week-all", f"{from_str}→{to_str}",
-        fmp_calendar_calls=call_counter[0], live_profile_calls=0,
-        rate_limited=rate_limited,
+        raw_hits=raw_hits, raw_misses=raw_misses,
+        fmp_calendar_calls=cal_calls, live_profile_calls=0,
+        stale_lkg=stale_lkg, rate_limited=rate_limited,
     )
     return _wa_result
 
@@ -1673,17 +1913,17 @@ async def get_month_all(
             _log_telemetry("month-all", f"{month_start}→{month_end}", cache_hit=True)
             return _ma_cached
 
-    call_counter: list[int] = [0]
-
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(_FMP_TIMEOUT),
-        follow_redirects=True,
-    ) as client:
-        raw_rows, rate_limited = await _fetch_earnings_range(
-            month_start, month_end, api_key, client, call_counter,
-            max_chunks=_BUDGET_MONTH_CHUNKS,     # month-all: max 5 FMP calendar calls
-        )
-        # ← NO profile enrichment, NO quote calls — deliberately ends here
+    # Raw calendar fetch — shared Mon-Fri chunk cache, zero profile enrichment
+    raw_result   = await get_raw_earnings_chunks(
+        month_start, month_end, api_key, max_weeks=_BUDGET_MONTH_CHUNKS,
+    )
+    raw_rows     = raw_result["rows"]
+    rate_limited = raw_result["rateLimited"]
+    stale_lkg    = raw_result["staleLKG"]
+    cal_calls    = raw_result["fmpCallsUsed"]
+    raw_hits     = raw_result["rawHits"]
+    raw_misses   = raw_result["rawMisses"]
+    # ← NO profile enrichment, NO quote calls — deliberately ends here
 
     watchlist = _load_watchlist()
     portfolio = _load_portfolio()
@@ -1716,8 +1956,9 @@ async def get_month_all(
         "monthStart":   month_start,
         "monthEnd":     month_end,
         "days":         days,
-        "fmpCallsUsed": call_counter[0],
+        "fmpCallsUsed": cal_calls,
         "rateLimited":  rate_limited,
+        "staleLKG":     stale_lkg,
         "status":       "partial" if rate_limited else "ok",
         "errors":       (["FMP rate limit hit — partial data"] if rate_limited else []),
     }
@@ -1727,9 +1968,10 @@ async def get_month_all(
 
     _log_telemetry(
         "month-all", f"{month_start}→{month_end}",
-        fmp_calendar_calls=call_counter[0],
+        raw_hits=raw_hits, raw_misses=raw_misses,
+        fmp_calendar_calls=cal_calls,
         live_profile_calls=_MONTH_ALL_LIVE_PROFILES,   # always 0
-        rate_limited=rate_limited,
+        stale_lkg=stale_lkg, rate_limited=rate_limited,
     )
     return _ma_result
 
@@ -1893,9 +2135,11 @@ async def get_month_curated(
     merged_raw_counts:     dict[str, int]        = {}
     all_errors:            list[str]             = []
     any_partial                                   = False
+    week_results:          list[dict]            = []   # collected for telemetry aggregation
 
     for w_from, w_to in weeks:
         rng = await get_curated_earnings_range(api_key, w_from, w_to, scope, search)
+        week_results.append(rng)
         if rng["rateLimited"]:
             any_partial = True
         for err in rng["errors"]:
@@ -1943,10 +2187,16 @@ async def get_month_curated(
     if not any_partial and not scope and not search:
         cache.set(_mc_ck, _mc_result, _TTL_RESULT)
 
+    total_raw_hits   = sum(w.get("rawHits",   0) for w in week_results)
+    total_raw_misses = sum(w.get("rawMisses", 0) for w in week_results)
+    any_stale        = any(w.get("staleLKG",  False) for w in week_results)
     _log_telemetry(
         "month-curated", f"{month_start}→{month_end}",
-        fmp_calendar_calls=len(weeks),        # one per week (each ≤2 FMP calls, mostly cached)
-        live_profile_calls=total_curated,     # approximate: eligible events enriched
+        raw_hits=total_raw_hits,
+        raw_misses=total_raw_misses,
+        fmp_calendar_calls=sum(w.get("fmpCallsUsed", 0) for w in week_results),
+        live_profile_calls=total_curated,
+        stale_lkg=any_stale,
         rate_limited=any_partial,
     )
     return _mc_result

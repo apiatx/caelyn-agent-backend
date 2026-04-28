@@ -1,0 +1,156 @@
+Tighten the Earnings Calendar backend cache architecture before frontend wiring.
+
+Current implementation is safer, but I want one clean shared raw FMP source of truth.
+
+Goal:
+All Earnings views should derive from the same cached raw FMP earnings calendar chunks.
+
+Views:
+- Day All
+- Week All
+- Month All
+- Day Curated
+- Week Curated
+- Month Curated
+
+must all reuse the same raw FMP weekly chunk cache.
+
+Do NOT touch:
+- popup
+- Recent
+- non-earnings tabs
+- Home/Sectors/Macro
+- auth
+
+No Finnhub.
+No Polymarket.
+No AI.
+
+Required architecture:
+
+1. Create/confirm canonical raw fetcher:
+get_raw_earnings_chunks(startDate, endDate)
+
+Behavior:
+- Split date range into weekly chunks.
+- Each weekly chunk makes at most 1 FMP earnings-calendar call.
+- Fetch chunks sequentially or with max concurrency 1–2.
+- Cache each chunk independently.
+
+Raw chunk cache key:
+earnings:raw:week:{chunkStart}:{chunkEnd}
+
+Fresh TTL:
+- 6 to 24 hours
+
+Last-known-good retention:
+- 30 days if cache layer supports it
+- If FMP fails or 429s, return stale LKG data with status=partial instead of blanking the page.
+
+2. All-mode views must use raw chunk cache:
+Day All:
+- get_raw_earnings_chunks(date, date)
+- filter to selected date
+
+Week All:
+- get_raw_earnings_chunks(weekStart, weekEnd)
+- group by date
+
+Month All:
+- get_raw_earnings_chunks(monthStart, monthEnd)
+- merge weekly chunks
+- group by date
+
+Month All should not use Recent endpoints.
+Month All should not profile/enrich every ticker.
+Month All should return counts and basic earnings rows from raw FMP data.
+
+3. Curated views must use same raw chunks:
+Day Curated:
+- get raw week containing selected date
+- run curated engine on that raw week
+- filter to selected date
+
+Week Curated:
+- get raw week
+- run curated engine
+
+Month Curated:
+- get raw chunks for the month
+- run curated engine by week or over merged chunks safely
+- group curated results by date
+
+4. Route-level result caches are okay, but secondary.
+Keep result caches if useful:
+- earnings:all:week:{start}:{end}
+- earnings:all:month:{year}:{month}
+- earnings:curated:week:{start}:{end}
+- earnings:curated:month:{year}:{month}
+
+But these must derive from the shared raw weekly chunk cache, not trigger independent raw FMP fetches.
+
+5. FMP safety:
+- Max calendar calls on cold Month request: 4–6 weekly chunks.
+- Warm Month request: 0 FMP calls.
+- Day/Week/Month toggles should not cause new FMP calls if raw chunk cache is warm.
+- No profile enrichment for Month All.
+- Month Curated enrichment only for curated candidates, capped.
+- 429 circuit breaker stays route-specific.
+- Home/Sectors/Macro must not share this circuit breaker.
+
+6. Telemetry:
+For every endpoint, log:
+- route
+- requested range
+- raw chunk cache hits
+- raw chunk cache misses
+- FMP calendar calls used
+- live profile calls used
+- staleLKG used true/false
+- rateLimited true/false
+
+Examples:
+Month All warm:
+route=month-all raw_hits=5 raw_misses=0 fmp_cal=0 live_profiles=0 stale=false
+
+Month All cold:
+route=month-all raw_hits=0 raw_misses=5 fmp_cal=5 live_profiles=0 stale=false
+
+FMP 429:
+route=month-all raw_hits=4 raw_misses=1 fmp_cal=1 stale=true rateLimited=true
+
+7. Validation:
+Run this sequence:
+
+A. Call Month All April.
+Expected cold:
+- 4–6 FMP calendar calls max
+- 0 live profile calls
+
+B. Call Day All for a date inside April.
+Expected:
+- 0 FMP calls if month raw chunks are warm
+
+C. Call Week All inside April.
+Expected:
+- 0 FMP calls if that week chunk is warm
+
+D. Call Month Curated April.
+Expected:
+- reuses same raw chunks
+- only live profile calls for curated candidates if needed
+
+E. Call Month All April again.
+Expected:
+- 0 FMP calls
+
+Final response:
+Tell me:
+- raw weekly chunk cache key
+- fresh TTL
+- LKG retention behavior
+- whether Day/Week/Month All derive from the same raw chunks
+- whether Curated views derive from the same raw chunks
+- cold vs warm FMP call counts
+- confirm Month All has zero profile enrichment
+- confirm Home/Sectors/Macro are isolated
