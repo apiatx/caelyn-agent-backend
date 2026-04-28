@@ -362,6 +362,7 @@ def _aggregate_universe(
     x_consensus_rows: list[dict],
     sentiment_accel_rows: list[dict],
     freshest_alpha: dict,
+    theme_leadership: Optional[dict] = None,
 ) -> dict[str, dict]:
     """Walk the existing Social pipeline data and produce one bucket per ticker.
 
@@ -370,12 +371,37 @@ def _aggregate_universe(
         min_recency_days, sample_mentions (list of {handle, ticker, sentiment,
         recency_days, thesis}), source_tags (set).
 
-    Source: _mention_data  (per-account list of bullish/bearish mentions with
-    recency_days), and the existing section outputs for source_tags / membership.
+    Fallback order (each level only activates when the previous yields nothing):
+      1. _mention_data  — richest signal; per-account mention list
+      2. _backend_ranked — scored ticker list written by the Grok refresh loop
+      3. built dashboard sections — x_consensus / freshest_alpha /
+         sentiment_acceleration / theme_leadership tickers already on the page
+
+    Additionally, after the waterfall, ALL tickers visible in the built sections
+    are ensured to be present as at least minimal buckets, so the screener is
+    always a superset of what the Social page is already displaying.
     """
     buckets: dict[str, dict] = {}
 
-    # 1. Tag membership in existing sections
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def _empty_bucket(sym: str) -> dict:
+        return {
+            "symbol":           sym,
+            "accounts":         set(),
+            "accounts_1d":      set(),
+            "accounts_7d":      set(),
+            "mentions_total":   0,
+            "mentions_1d":      0,
+            "mentions_7d":      0,
+            "min_recency_days": 9999,
+            "sample_mentions":  [],
+            "source_tags":      set(),
+            "bullish_count":    0,
+            "bearish_count":    0,
+        }
+
+    # 1. Collect the full set of tickers from the built dashboard sections
+    #    (used both for source-tagging and as the final fallback / fill-in).
     in_xc = {_normalize_ticker(r.get("ticker") or r.get("symbol")) for r in x_consensus_rows
              if isinstance(r, dict)}
     in_xc.discard("")
@@ -389,10 +415,23 @@ def _aggregate_universe(
              if isinstance(r, dict)}
     in_fa.discard("")
 
-    # Theme leadership tickers — use existing key_tickers as the "theme" tag set
-    in_tl: set[str] = set()  # populated lazily per-ticker
+    in_tl: set[str] = set()
+    for _th in (theme_leadership or {}).get("themes") or []:
+        if not isinstance(_th, dict):
+            continue
+        for kt in _th.get("key_tickers") or []:
+            if isinstance(kt, str):
+                sym = _normalize_ticker(kt)
+                if sym:
+                    in_tl.add(sym)
+            elif isinstance(kt, dict):
+                sym = _normalize_ticker(kt.get("ticker") or kt.get("symbol") or "")
+                if sym:
+                    in_tl.add(sym)
 
-    # 2. Walk _mention_data
+    section_tickers: set[str] = in_xc | in_sa | in_fa | in_tl
+
+    # 2. Walk _mention_data (richest signal)
     mention_data = (snapshot or {}).get("_mention_data") or []
     for acct in mention_data:
         if not isinstance(acct, dict):
@@ -414,20 +453,7 @@ def _aggregate_universe(
                 rd = 30
             rd = max(0, min(rd, 365))
 
-            b = buckets.setdefault(sym, {
-                "symbol":            sym,
-                "accounts":          set(),
-                "accounts_1d":       set(),
-                "accounts_7d":       set(),
-                "mentions_total":    0,
-                "mentions_1d":       0,
-                "mentions_7d":       0,
-                "min_recency_days":  9999,
-                "sample_mentions":   [],
-                "source_tags":       set(),
-                "bullish_count":     0,
-                "bearish_count":     0,
-            })
+            b = buckets.setdefault(sym, _empty_bucket(sym))
             b["mentions_total"] += 1
             b["accounts"].add(handle)
             if rd <= 1:
@@ -485,8 +511,17 @@ def _aggregate_universe(
                 "bearish_count":     0,
             }
 
-    # 4. Tag source memberships now that buckets exist
-    theme_tickers_by_theme: dict[str, set[str]] = {}
+    # 4. Guarantee every ticker already visible on the Social page appears in the
+    #    screener.  Tickers already present from _mention_data / _backend_ranked
+    #    keep their rich data; only genuinely absent tickers get a minimal entry.
+    #    This also acts as the final fallback when both sources above are empty.
+    for sym in section_tickers:
+        if not sym or len(sym) > 12 or " " in sym:
+            continue
+        if sym not in buckets:
+            buckets[sym] = _empty_bucket(sym)
+
+    # 5. Apply source-membership tags now that all buckets exist
     for sym, b in buckets.items():
         if sym in in_xc:
             b["source_tags"].add("x_consensus")
@@ -494,6 +529,8 @@ def _aggregate_universe(
             b["source_tags"].add("freshest_alpha")
         if sym in in_sa:
             b["source_tags"].add("sentiment_acceleration")
+        if sym in in_tl:
+            b["source_tags"].add("theme_leadership")
 
     return buckets
 
@@ -509,7 +546,8 @@ def build_social_screener(
 ) -> dict:
     """Produce the social_screener payload — additive, no Grok call."""
     buckets = _aggregate_universe(snapshot, x_consensus_rows,
-                                  sentiment_accel_rows, freshest_alpha)
+                                  sentiment_accel_rows, freshest_alpha,
+                                  theme_leadership)
 
     # Theme-leadership tickers also count as a source tag
     for th in (theme_leadership or {}).get("themes") or []:
@@ -899,6 +937,7 @@ async def build_screeners(
         # 1. Walk universe to know which symbols we need to enrich
         universe = _aggregate_universe(
             snapshot, x_consensus_rows, sentiment_accel_rows, freshest_alpha,
+            theme_leadership,
         )
         # Pre-rank for fundamental cap: prefer known acceleration / consensus
         in_xc_set = {(_normalize_ticker(r.get("ticker") or r.get("symbol")))
