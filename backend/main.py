@@ -2891,16 +2891,126 @@ async def social_x_dashboard(
       sentiment_acceleration — deterministic delta between current and prior snapshots
 
     Also returns: market_pulse, portfolio_bias, spotlight, metadata.
+
+    Additive (non-breaking) keys appended on top of the above, derived from the
+    SAME existing Social/X/Grok snapshot — no second Grok/XAI call is made:
+      social_screener      — per-ticker rows w/ consensus / freshness /
+                             social-acceleration scores, enriched from FMP
+                             (company name, market cap, volume, price changes).
+      fundamental_screener — per-ticker fundamentals from FMP (TTM ratios +
+                             latest annual income/balance/cashflow).  Capped to
+                             top 50 tickers by social-acceleration/consensus
+                             score.  Missing per-symbol data returns null +
+                             data_quality="partial|missing" rather than 500.
     """
     try:
         from services.social_x_service import build_x_dashboard
+        from services.social_screener_service import build_screeners
+        from services.x_consensus_cache import _load_disk_cache
+        from config import FMP_API_KEY
+
         payload = build_x_dashboard()
+
+        # Additive screeners — derived from the SAME snapshot, zero extra Grok calls.
+        try:
+            snapshot = _load_disk_cache()
+            social_screener, fundamental_screener = await build_screeners(
+                snapshot=snapshot,
+                x_consensus_rows=payload.get("x_consensus") or [],
+                sentiment_accel_rows=payload.get("sentiment_acceleration") or [],
+                freshest_alpha=payload.get("freshest_alpha") or {},
+                theme_leadership=payload.get("theme_leadership") or {},
+                fmp_api_key=FMP_API_KEY,
+            )
+            payload["social_screener"]      = social_screener
+            payload["fundamental_screener"] = fundamental_screener
+            print(
+                f"[SOCIAL_X_DASHBOARD] screeners appended — "
+                f"social={social_screener['meta']['ticker_count']} "
+                f"enrichment={social_screener['meta']['enrichment_status']} "
+                f"fund={fundamental_screener['meta']['ticker_count']} "
+                f"cache={fundamental_screener['meta']['cache_status']} "
+                f"xai_call_added={social_screener['meta']['xai_call_added']}"
+            )
+        except Exception as screener_exc:
+            # Screener failure must never break the existing Social top sections.
+            print(f"[SOCIAL_X_DASHBOARD] Screener build failed (non-fatal): {screener_exc}")
+            from datetime import datetime as _dt, timezone as _tz
+            _now = _dt.now(_tz.utc).isoformat()
+            payload["social_screener"] = {
+                "generated_at": _now,
+                "source":       "existing_social_payload",
+                "rows":         [],
+                "meta": {
+                    "xai_call_added":    False,
+                    "ticker_count":      0,
+                    "enrichment_status": "unavailable",
+                },
+            }
+            payload["fundamental_screener"] = {
+                "generated_at": _now,
+                "source":       "fmp_enrichment",
+                "rows":         [],
+                "meta": {
+                    "ticker_count": 0,
+                    "cache_status": "unavailable",
+                },
+            }
+
         return JSONResponse(content=payload)
     except Exception as e:
         print(f"[SOCIAL_X_DASHBOARD] Error: {e}")
         return JSONResponse(
             status_code=500,
             content={"error": str(e), "endpoint": "/api/social/x-dashboard"},
+        )
+
+
+@app.get("/api/social/fundamental-screener")
+@limiter.limit("30/minute")
+@traceable(name="main.social_fundamental_screener")
+async def social_fundamental_screener(
+    request: Request,
+    _sub: None = Depends(require_subscription),
+):
+    """
+    Lazy fundamental screener — reuses the most recent cached Social ticker
+    universe and enriches via FMP.  No additional Grok/XAI call is made.
+
+    Missing per-symbol data returns null + data_quality="partial|missing"
+    rather than 500ing the endpoint.
+    """
+    try:
+        from services.social_x_service import build_x_dashboard
+        from services.social_screener_service import build_screeners
+        from services.x_consensus_cache import _load_disk_cache
+        from config import FMP_API_KEY
+
+        payload   = build_x_dashboard()
+        snapshot  = _load_disk_cache()
+        _social, fundamental_screener = await build_screeners(
+            snapshot=snapshot,
+            x_consensus_rows=payload.get("x_consensus") or [],
+            sentiment_accel_rows=payload.get("sentiment_acceleration") or [],
+            freshest_alpha=payload.get("freshest_alpha") or {},
+            theme_leadership=payload.get("theme_leadership") or {},
+            fmp_api_key=FMP_API_KEY,
+        )
+        return JSONResponse(content=fundamental_screener)
+    except Exception as e:
+        print(f"[SOCIAL_FUND_SCREENER] Error: {e}")
+        from datetime import datetime as _dt, timezone as _tz
+        return JSONResponse(
+            content={
+                "generated_at": _dt.now(_tz.utc).isoformat(),
+                "source":       "fmp_enrichment",
+                "rows":         [],
+                "meta": {
+                    "ticker_count": 0,
+                    "cache_status": "unavailable",
+                },
+                "error": str(e),
+            },
         )
 
 
