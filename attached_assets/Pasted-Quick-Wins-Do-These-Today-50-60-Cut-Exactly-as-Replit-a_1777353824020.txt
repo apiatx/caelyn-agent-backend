@@ -1,0 +1,33 @@
+Quick Wins (Do These Today — 50–60% Cut)Exactly as Replit agent said:Cache TTL → 4 hours (instead of 2h) → max 3 refreshes in the 12h window.
+Refresh window → 10h (e.g. 07:00–17:00 Chicago, or just 08:00–18:00) → drops another refresh.
+Batch size → 14 accounts (2 batches of 14 + 1 synthesis) → Phase-1 drops from 4 → 2 Grok calls.
+
+New math: 3 calls/refresh × ~3 refreshes/day = 9 Grok calls/day instead of 30 → ~$3/day.This maintains your exact current freshness and coverage.Bigger Wins: Refactor for Parallel Tool Calls + Batch API (70–90% Total Cut)The real lever is that Grok 4.1 (and Grok models in general) natively supports multiple tool calls in parallel inside a single API request. Your current agent is doing 1 Grok call per batch — that’s the expensive part.Optimal Architecture (1–2 Grok calls per refresh)One prompt that tells Grok:Split the 27 handles into 3–4 logical batches (9 handles each).
+Issue parallel x_keyword_search calls (using (from:handle1 OR from:handle2 OR …) since:YYYY-MM-DD for each batch).
+Then synthesize the full 4-part report (#1 Consensus, #2 Freshest S/A+ only, etc.) in the same response.
+
+Query length is fine: 9–10 handles per batch = ~220–250 chars (well under the 512-char X recent-search limit). Even 14–15 per batch works.
+Result: Grok makes 3–4 parallel tool calls + does synthesis → only 1 Grok model call per refresh.→ 3 refreshes/day × 1 call = 3 calls/day → ~$1/day or less.
+Even cheaper long-term: Switch the entire background refresh to xAI Batch API (launched recently).50% cheaper tokens.
+Doesn’t count against normal rate limits.
+Designed exactly for “nightly reports / bulk jobs / consensus refreshes”.
+Fire-and-forget async jobs.
+
+Your Replit agent can submit the batch job once per window instead of polling synchronous calls.
+
+Other High-Impact Tweaks (Zero Extra Cost)Tweak
+Impact
+Freshness Trade-off
+Dynamic since: date
+Only fetch posts since last successful scan per handle/batch
+None
+Tiered scanning
+S-Tier + A+ Tier every 1–2h; full 27 every 4h
+S/A+ stays ultra-fresh
+Smarter cache
+Per-handle last-timestamp cache + only re-scan active accounts
+None
+Limit=10 + Latest mode
+Already optimal for “this week” alpha
+None
+

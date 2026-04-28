@@ -111,17 +111,17 @@ _PRIOR_CACHE_PATH   = Path(__file__).parent.parent / "data" / "x_consensus_weekl
 # even when a ticker temporarily drops out of the current top-ranked slice.
 _TICKER_HISTORY_PATH = Path(__file__).parent.parent / "data" / "x_consensus_ticker_history.json"
 _TICKER_HISTORY_MAX_OBS = 10   # keep last N scored observations per ticker
-_CACHE_TTL_SECONDS = 2 * 3600  # 2 hours (120 minutes)
-_BATCH_SIZE = 8
+_CACHE_TTL_SECONDS = 4 * 3600  # 4 hours — max 2-3 refreshes in the active window
+_BATCH_SIZE = 14               # group size used inside the single Phase-1 call
 
 # Module-level lock so only one background refresh runs at a time across the
 # whole process, regardless of how many Home requests land simultaneously.
 _REFRESH_LOCK = asyncio.Lock()
 
-# ── Refresh window: 08:00–20:00 America/Chicago, DST-safe ─────────────────
+# ── Refresh window: 08:00–18:00 America/Chicago, DST-safe (10-hour window) ─
 _REFRESH_TZ = ZoneInfo("America/Chicago")
 _WINDOW_START_HOUR = 8   # 08:00 Chicago
-_WINDOW_END_HOUR   = 20  # 20:00 Chicago (exclusive)
+_WINDOW_END_HOUR   = 18  # 18:00 Chicago (exclusive) — narrowed from 20:00
 
 # ── Manual-refresh cooldown ───────────────────────────────────────────────
 # Prevents overnight spam while still allowing occasional user-initiated
@@ -281,27 +281,43 @@ def _is_fresh(raw: Optional[dict]) -> bool:
         return False
 
 
-async def _fetch_batch(
-    data_service,
-    batch_accounts: list[dict],
-    batch_num: int,
-    total_batches: int,
-) -> str:
-    """Phase-1 helper — structured extraction for one batch of accounts.
+async def _fetch_all_parallel(data_service) -> str:
+    """Phase-1 in a SINGLE Grok API call — parallel x_search inside.
 
-    Asks Grok to return a JSON array with per-account mention data so the
-    backend scoring engine can apply deterministic tier × recency weighting.
-    Falls back gracefully to raw text if Grok doesn't return parseable JSON.
+    Splits all accounts into groups of _BATCH_SIZE and asks Grok to search
+    them simultaneously using its native parallel tool-call capability.
+    Returns the raw combined text (JSON array or prose fallback).
+
+    Cost vs old approach:
+      Before: N separate asyncio-concurrent HTTP calls (one per batch of 8)
+      After:  1 HTTP call — Grok issues multiple x_search tool calls internally
     """
-    handles = [a["handle"] for a in batch_accounts]
-    handle_labels = "\n".join(
-        f"  - @{a['handle']} [{a['category']}]" for a in batch_accounts
-    )
-    batch_prompt = (
-        "Search the recent X/Twitter posts (last 30 days) for EACH of these accounts:\n"
-        + handle_labels
-        + "\n\nFor every account, find ALL ticker and asset mentions."
-        " Return a JSON array — exactly one element per account — with this structure:\n"
+    from datetime import datetime, timedelta, timezone as _tz
+    since_date = (datetime.now(_tz.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+
+    all_handles = [a["handle"] for a in X_SELECT_ACCOUNTS]
+
+    # Split into groups for the parallel-search prompt description
+    groups = [
+        X_SELECT_ACCOUNTS[i:i + _BATCH_SIZE]
+        for i in range(0, len(X_SELECT_ACCOUNTS), _BATCH_SIZE)
+    ]
+    group_blocks = []
+    for idx, group in enumerate(groups, 1):
+        labels = "\n".join(
+            f"  - @{a['handle']} [{a['category']}]" for a in group
+        )
+        group_blocks.append(f"GROUP {idx} ({len(group)} accounts):\n{labels}")
+    group_text = "\n\n".join(group_blocks)
+
+    prompt = (
+        f"Search X/Twitter posts (since {since_date}) for ALL of these "
+        f"{len(X_SELECT_ACCOUNTS)} curated trader accounts. "
+        f"Use PARALLEL x_search queries — search all {len(groups)} groups "
+        f"simultaneously — then combine results into a single JSON array:\n\n"
+        + group_text
+        + "\n\nFor EVERY account across all groups, extract ALL ticker and asset mentions. "
+        "Return a single JSON array — exactly one element per account — with this structure:\n"
         '[\n'
         '  {\n'
         '    "handle": "accounthandle",\n'
@@ -326,22 +342,26 @@ async def _fetch_batch(
         "- If an account has no ticker mentions, include them with 'mentions': [].\n"
         "- Return ONLY the JSON array. No markdown fences, no explanation text."
     )
+
     try:
         result = await data_service.xai._call_grok_with_x_search(
-            prompt=batch_prompt,
+            prompt=prompt,
             raw_mode=True,
             use_deep_model=False,
-            timeout=60.0,
-            x_search_config={"allowed_x_handles": handles},
+            timeout=90.0,
+            x_search_config={"allowed_x_handles": all_handles, "from_date": since_date},
         )
     except Exception as e:
-        print(f"[X_CONSENSUS] Batch {batch_num + 1}/{total_batches} exception: {e}")
+        print(f"[X_CONSENSUS] Parallel Phase-1 exception: {e}")
         return ""
 
     text = ""
     if isinstance(result, dict):
         text = result.get("_raw_analysis", "") or result.get("error", "")
-    print(f"[X_CONSENSUS] Batch {batch_num + 1}/{total_batches}: {len(handles)} handles -> {len(text)} chars")
+    print(
+        f"[X_CONSENSUS] Parallel Phase-1: {len(X_SELECT_ACCOUNTS)} accounts "
+        f"({len(groups)} groups) in 1 Grok call → {len(text):,} chars"
+    )
     return text
 
 
@@ -624,10 +644,11 @@ def _normalize_consensus(
 
 
 async def _run_refresh(data_service) -> Optional[dict]:
-    """3-phase X consensus refresh.
+    """2-call X consensus refresh (Phase-1 is now a single parallel Grok call).
 
-    Phase 1 (parallel batches): Grok searches X, returns structured JSON per
-      account — ticker mentions with sentiment, recency_days, conviction, thesis.
+    Phase 1 (1 call): _fetch_all_parallel() asks Grok to search all 27 accounts
+      in parallel x_search queries within one API request, returning structured
+      JSON per account — ticker mentions with sentiment, recency_days, conviction.
     Backend scoring: deterministic engine aggregates Phase-1 data and produces
       a ranked ticker list (tier × recency × conviction × breadth).  Macro
       accounts (@KobeissiLetter) are excluded from ticker ranking.
@@ -635,9 +656,10 @@ async def _run_refresh(data_service) -> Optional[dict]:
       It receives the backend-determined rank order and must follow it — it does
       NOT decide final ranking itself.
 
+    Total: 2 Grok API calls per refresh (was 5).  ~$0.66/refresh vs ~$1.65.
+
     Fallback: if Phase-1 parsing yields no structured data (Grok returned prose),
-      the combined raw text is still passed to Phase 2 and the system behaves like
-      the old approach.  No crash, no skip.
+      the combined raw text is still passed to Phase 2 unchanged.  No crash.
     """
     try:
         from agent.prompts import X_SELECT_TRADER_CONSENSUS_CONTRACT
@@ -653,10 +675,7 @@ async def _run_refresh(data_service) -> Optional[dict]:
     for a in X_SELECT_ACCOUNTS:
         _cat_counts[a["category"]] = _cat_counts.get(a["category"], 0) + 1
 
-    batches: list[list[dict]] = [
-        X_SELECT_ACCOUNTS[i:i + _BATCH_SIZE]
-        for i in range(0, len(X_SELECT_ACCOUNTS), _BATCH_SIZE)
-    ]
+    n_groups = -(-len(X_SELECT_ACCOUNTS) // _BATCH_SIZE)   # ceil division
     print(
         f"[X_CONSENSUS] Refresh starting — {len(X_SELECT_ACCOUNTS)} accounts "
         f"({_cat_counts.get('top_trader',0)} top, "
@@ -665,40 +684,28 @@ async def _run_refresh(data_service) -> Optional[dict]:
         f"{_cat_counts.get('thematic_investor',0)} thematic, "
         f"{_cat_counts.get('theme_datapoints',0)} datapoints, "
         f"{_cat_counts.get('macro_big_picture',0)} macro) "
-        f"in {len(batches)} batches"
+        f"— 1 parallel Phase-1 call ({n_groups} groups of ≤{_BATCH_SIZE})"
     )
 
-    # ── Phase 1: parallel structured extraction ───────────────────────────
-    batch_results = await asyncio.gather(
-        *[_fetch_batch(data_service, batch, i, len(batches))
-          for i, batch in enumerate(batches)],
-        return_exceptions=True,
-    )
+    # ── Phase 1: single Grok call, Grok issues parallel x_searches inside ──
+    phase1_text = await _fetch_all_parallel(data_service)
 
     all_account_mentions: list[dict] = []   # for backend scoring
     combined_data: list[str] = []            # raw text for Phase-2 synthesis
 
-    for i, res in enumerate(batch_results):
-        if isinstance(res, Exception):
-            print(f"[X_CONSENSUS] Batch {i + 1} failed: {res}")
-            continue
-        if not res or not isinstance(res, str) or res.startswith("xAI"):
-            continue
-
-        batch_labels = ", ".join(
-            f"@{a['handle']} [{a['category']}]" for a in batches[i]
+    if phase1_text and not phase1_text.startswith("xAI"):
+        combined_data.append(
+            f"=== All {len(X_SELECT_ACCOUNTS)} accounts ===\n{phase1_text}"
         )
-        combined_data.append(f"=== Batch {i + 1} ({batch_labels}) ===\n{res}")
-
-        # Try to parse structured mention data for backend scoring
-        parsed = _parse_batch_mentions(res)
+        parsed = _parse_batch_mentions(phase1_text)
         if parsed:
-            print(f"[X_CONSENSUS] Batch {i + 1}: parsed {len(parsed)} account records from JSON")
+            print(f"[X_CONSENSUS] Phase-1: parsed {len(parsed)} account records from JSON")
             all_account_mentions.extend(parsed)
-        # (fallback: raw text still appended to combined_data above)
+        else:
+            print("[X_CONSENSUS] Phase-1: no structured JSON — raw text kept for Phase-2 fallback")
 
     if not combined_data:
-        print("[X_CONSENSUS] All batches failed — aborting refresh (keep existing cache)")
+        print("[X_CONSENSUS] Phase-1 returned nothing — aborting refresh (keep existing cache)")
         return None
 
     # ── Backend scoring ───────────────────────────────────────────────────

@@ -187,10 +187,12 @@ async def _x_consensus_loop():
     from services.x_consensus_cache import (
         _is_fresh, _load_disk_cache, _run_refresh, _CACHE_TTL_SECONDS,
         _in_refresh_window, _next_window_open_iso,
+        _WINDOW_START_HOUR, _WINDOW_END_HOUR,
     )
 
     print("[X_CONSENSUS_LOOP] Started — will refresh every "
-          f"{_CACHE_TTL_SECONDS // 3600}h (window: 08:00–20:00 America/Chicago)")
+          f"{_CACHE_TTL_SECONDS // 3600}h "
+          f"(window: {_WINDOW_START_HOUR:02d}:00–{_WINDOW_END_HOUR:02d}:00 America/Chicago)")
 
     while True:
         if not _in_refresh_window():
