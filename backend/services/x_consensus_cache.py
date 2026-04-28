@@ -52,25 +52,8 @@ X_SELECT_ACCOUNTS: list[dict] = [
     {"handle": "Ren_aramb",       "category": "above_average_trader", "weight": 0.8},
     {"handle": "napoleon21st",    "category": "above_average_trader", "weight": 0.8},
     {"handle": "TheStockDon",     "category": "above_average_trader", "weight": 0.8},
-    # ── Retail Traders (weight 0.35) ──────────────────────────────────────────
-    {"handle": "Thomas_james_1",  "category": "retail_trader",        "weight": 0.35},
-    {"handle": "ConnorJBates_",   "category": "retail_trader",        "weight": 0.35},
-    # ── Thematic Investors (weight 0.45) ─────────────────────────────────────
-    # Valuable for thematic context and medium-term theme validation
-    {"handle": "BlackPantherCap", "category": "thematic_investor",    "weight": 0.45},
-    {"handle": "TheValueist",     "category": "thematic_investor",    "weight": 0.45},
-    {"handle": "ToffCap",         "category": "thematic_investor",    "weight": 0.45},
-    {"handle": "Venu_7_",         "category": "thematic_investor",    "weight": 0.45},
-    {"handle": "futurist_lens",   "category": "thematic_investor",    "weight": 0.45},
-    {"handle": "DeepValueBagger", "category": "thematic_investor",    "weight": 0.45},
-    {"handle": "sunxliao",        "category": "thematic_investor",    "weight": 0.45},
-    {"handle": "AlexfromBabylon", "category": "thematic_investor",    "weight": 0.45},
-    {"handle": "CKCapitalxx",     "category": "thematic_investor",    "weight": 0.45},
     # ── Investment Themes + Datapoints + Stock Lists (weight 0.55) ───────────
-    # Higher than thematic_investor because these are specific stock/sector lists
     {"handle": "equitydd",        "category": "theme_datapoints",     "weight": 0.55},
-    {"handle": "Speculator_io",   "category": "theme_datapoints",     "weight": 0.55},
-    {"handle": "StonkValue",      "category": "theme_datapoints",     "weight": 0.55},
 ]
 
 # Flat handle list derived from the structured config — preserves backward
