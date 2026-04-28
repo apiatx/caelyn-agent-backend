@@ -1,0 +1,157 @@
+Fix curated earnings consistency across Day / Week / Month.
+
+Current bug:
+- Week + Curated works and shows curated earnings.
+- Day + Curated shows “No high-signal earnings found” for days that clearly have Week curated events.
+- Month + Curated shows a blank calendar.
+- Week + All shows “No earnings data for this week.”
+
+Required product behavior:
+Week + Curated should be the source of truth for curated earnings.
+
+Day + Curated:
+Should show the curated earnings from Week + Curated filtered to the selected date.
+
+Month + Curated:
+Should show curated earnings from each week in the visible month, grouped under each respective calendar day.
+
+Do NOT let Day Curated, Week Curated, and Month Curated use three separate scoring/filtering pipelines that produce different answers.
+
+Architecture change:
+Create one shared curated source function, something like:
+
+get_curated_earnings_range(startDate, endDate)
+
+It should:
+- fetch FMP earnings for the date range
+- run the same curated scoring/eligibility logic currently used by week-clean
+- return curated events grouped by date
+- be reusable by:
+  - week-clean
+  - day-curated
+  - month-curated
+
+Important:
+The exact same curated event that appears in week-clean for 2026-04-29 should appear in:
+- day-curated?date=2026-04-29
+- month-curated?year=2026&month=4 under 2026-04-29
+
+Endpoint behavior:
+
+1. /api/catalysts/earnings/week-clean
+Keep current working behavior.
+This remains the main curated source.
+
+2. /api/catalysts/earnings/day-curated?date=YYYY-MM-DD
+Do NOT run a separate day-only scoring pipeline that can filter everything out.
+
+Instead:
+- Determine the week containing the selected date.
+- Call/reuse the same curated range function for that week.
+- Return events where event.date === selected date.
+- If Week Curated has events for that date, Day Curated must return them.
+
+Response:
+{
+  "asOf": string,
+  "source": "fmp",
+  "date": "YYYY-MM-DD",
+  "events": [...],
+  "count": number,
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+3. /api/catalysts/earnings/month-curated?year=YYYY&month=M
+Do NOT run a separate month scoring pipeline that filters everything out.
+
+Instead:
+- Build the visible month calendar date range, including leading/trailing days if needed or at minimum monthStart to monthEnd.
+- Split into weeks.
+- For each week, call/reuse the same curated range function used by week-clean.
+- Merge curated events from all weeks.
+- Group by date.
+- Each day cell gets topEvents from the curated events on that date.
+- count should be total FMP earnings count for that date if available, or curated count if full count is not available.
+
+Response:
+{
+  "asOf": string,
+  "source": "fmp",
+  "year": 2026,
+  "month": 4,
+  "monthLabel": "April 2026",
+  "monthStart": "2026-04-01",
+  "monthEnd": "2026-04-30",
+  "days": [
+    {
+      "date": "2026-04-29",
+      "dayOfMonth": 29,
+      "isCurrentMonth": true,
+      "count": number,
+      "topEvents": [...]
+    }
+  ],
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+4. /api/catalysts/earnings/week-all
+Fix this too.
+Week All should return all FMP earnings for the week, not curated.
+
+Behavior:
+- use FMP-only safe all earnings source
+- from weekStart to weekEnd
+- return events, eventsByDate, countsByDate
+- no curated filtering
+- no junk filtering except true invalid rows
+- no Finnhub, no Polymarket
+
+If existing upcoming-clean can serve this, week-all can wrap/reuse it.
+
+FMP safety:
+- Do not reintroduce FMP overload.
+- Use cached week-clean/range results where possible.
+- Month-curated can call weekly cached curated results.
+- No 30-day full enrichment burst.
+- Week-level calls only.
+- Concurrency max 1-2.
+- 429 circuit breaker remains.
+- No AI.
+
+Validation:
+Pick a known week where Week Curated returns events.
+
+Example:
+GET /api/catalysts/earnings/week-clean?weekStart=2026-04-27&weekEnd=2026-05-01
+
+Take a date with events, e.g. 2026-04-29.
+
+Then test:
+GET /api/catalysts/earnings/day-curated?date=2026-04-29
+
+Expected:
+Day Curated returns the same 2026-04-29 events that appeared in Week Curated.
+
+Then test:
+GET /api/catalysts/earnings/month-curated?year=2026&month=4
+
+Expected:
+Month Curated has those same events under 2026-04-29.
+
+Also test:
+GET /api/catalysts/earnings/week-all?weekStart=2026-04-27&weekEnd=2026-05-01
+
+Expected:
+returns all FMP earnings grouped by date/counts, not empty.
+
+Final response:
+Tell me:
+- files changed
+- how shared curated range function works
+- confirm Day Curated reuses Week Curated logic
+- confirm Month Curated is grouped weekly curated results
+- confirm Week All returns all FMP earnings
+- provide one example symbol/date that appears in Week Curated, Day Curated, and Month Curated
+- confirm Day/Week/Month response shapes did not break frontend

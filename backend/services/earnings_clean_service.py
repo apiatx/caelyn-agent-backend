@@ -1152,6 +1152,131 @@ async def _run_curated_pipeline(
     return decorated, rate_limited
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# CANONICAL CURATED ENGINE — single shared source used by all curated views
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def get_curated_earnings_range(
+    api_key:   str,
+    from_date: str,
+    to_date:   str,
+    scope:     Optional[str] = None,
+    search:    Optional[str] = None,
+) -> dict:
+    """
+    Core curated earnings engine — THE single source of truth for all curated views.
+
+    Always uses week-clean parameters:
+      max_candidates=_WEEK_CAND_MAX (150), max_enrich=_MAX_WEEK_ENRICH (120),
+      max_live=_WEEK_MAX_LIVE (40),        concurrency=_WEEK_CONCURRENCY (2)
+
+    All curated endpoints (week-clean, day-curated, month-curated) MUST call
+    this function so they produce identical events for the same date.
+    FMP calendar data and profile caches are shared — subsequent calls for the
+    same range cost no additional FMP calls.
+
+    Returns
+    -------
+    {
+      "eventsByDate": dict[str, list[dict]],  # date → curated events (sorted by score, deduped)
+      "allEvents":    list[dict],             # all curated events sorted by importanceScore
+      "rawCounts":    dict[str, int],         # date → total FMP events (pre-filter, for calendar totals)
+      "status":       "ok" | "partial",
+      "errors":       list[str],
+      "fmpCallsUsed": int,
+      "rateLimited":  bool,
+    }
+    """
+    call_counter: list[int] = [0]
+    errors:       list[str] = []
+    rate_limited             = False
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(_FMP_TIMEOUT),
+        follow_redirects=True,
+    ) as client:
+        raw_rows, rate_limited = await _fetch_earnings_range(
+            from_date, to_date, api_key, client, call_counter,
+        )
+
+        watchlist = _load_watchlist()
+        portfolio = _load_portfolio()
+
+        # Capture raw totals BEFORE scope/normalise filtering (for accurate calendar counts)
+        raw_counts: dict[str, int] = {}
+        for row in (raw_rows if isinstance(raw_rows, list) else []):
+            sym = (row.get("symbol") or "").strip().upper()
+            d   = (row.get("date")   or "").strip()
+            if not sym or not d:
+                continue
+            name  = (row.get("name") or row.get("companyName") or sym)
+            title = f"{name} Earnings" if name != sym else f"{sym} Earnings"
+            if _is_polymarket_row(title, sym):
+                continue
+            raw_counts[d] = raw_counts.get(d, 0) + 1
+
+        raw_events: list[dict] = []
+        for row in (raw_rows if isinstance(raw_rows, list) else []):
+            ev = _normalize_row(row)
+            if ev:
+                raw_events.append(ev)
+
+        raw_events = _apply_scope(raw_events, search, scope, watchlist, portfolio)
+
+        if not raw_events:
+            return {
+                "eventsByDate": {},
+                "allEvents":    [],
+                "rawCounts":    raw_counts,
+                "status":       "partial" if rate_limited else "ok",
+                "errors":       errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
+                "fmpCallsUsed": call_counter[0],
+                "rateLimited":  rate_limited,
+            }
+
+        # Run scoring pipeline with canonical week-clean parameters
+        decorated, rate_limited = await _run_curated_pipeline(
+            raw_events, watchlist, portfolio, client, api_key, call_counter, rate_limited,
+            max_candidates=_WEEK_CAND_MAX,
+            max_enrich=_MAX_WEEK_ENRICH,
+            max_live=_WEEK_MAX_LIVE,
+            concurrency=_WEEK_CONCURRENCY,
+        )
+        if rate_limited:
+            errors.append("FMP rate limit during enrichment — partial data")
+
+    # Group by date, sort by importanceScore desc, dedup by symbol per date
+    all_events_sorted = sorted(decorated, key=lambda e: -(e.get("importanceScore") or 0))
+    events_by_date:  dict[str, list[dict]] = {}
+    seen_per_date:   dict[str, set[str]]   = {}
+    for ev in all_events_sorted:
+        d   = ev.get("date", "")
+        sym = ev.get("symbol", "")
+        if not d or not sym:
+            continue
+        seen = seen_per_date.setdefault(d, set())
+        if sym in seen:
+            continue
+        seen.add(sym)
+        events_by_date.setdefault(d, []).append(ev)
+
+    print(
+        f"[earn_clean] curated-range {from_date}→{to_date} "
+        f"raw={len(raw_rows) if isinstance(raw_rows, list) else 0} "
+        f"eligible={len(decorated)} dates={len(events_by_date)} calls={call_counter[0]}"
+    )
+
+    return {
+        "eventsByDate": events_by_date,
+        "allEvents":    all_events_sorted,
+        "rawCounts":    raw_counts,
+        "status":       "partial" if rate_limited else "ok",
+        "errors":       errors,
+        "fmpCallsUsed": call_counter[0],
+        "rateLimited":  rate_limited,
+    }
+
+
 # ── Public API: get_week_clean ─────────────────────────────────────────────────
 
 async def get_week_clean(
@@ -1203,58 +1328,25 @@ async def get_week_clean(
     from_str = ws.strftime("%Y-%m-%d")
     to_str   = we.strftime("%Y-%m-%d")
 
-    call_counter: list[int] = [0]
-    errors:       list[str] = []
-    rate_limited             = False
+    # -- Canonical curated range (same engine, same params as every curated view)
+    rng = await get_curated_earnings_range(api_key, from_str, to_str, scope, search)
 
-    # -- Phase 1: Fetch calendar (1-2 FMP calls max, heavily cached)
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(_FMP_TIMEOUT),
-        follow_redirects=True,
-    ) as client:
+    all_events = rng["allEvents"]
+    errors     = list(rng["errors"])
 
-        raw_rows, rate_limited = await _fetch_earnings_range(
-            from_str, to_str, api_key, client, call_counter,
-        )
+    if not all_events:
+        return {
+            "asOf":      _today(),
+            "source":    "fmp",
+            "weekStart": from_str,
+            "weekEnd":   to_str,
+            "days":      _build_empty_days(ws, we),
+            "topEvents": [],
+            "status":    rng["status"],
+            "errors":    errors,
+        }
 
-        # -- Phase 2: Normalize, scope, raw candidate pre-filter
-        watchlist = _load_watchlist()
-        portfolio = _load_portfolio()
-
-        raw_events: list[dict] = []
-        for row in raw_rows:
-            ev = _normalize_row(row)
-            if ev:
-                raw_events.append(ev)
-
-        raw_events = _apply_scope(raw_events, search, scope, watchlist, portfolio)
-
-        if not raw_events:
-            return {
-                "asOf":      _today(),
-                "source":    "fmp",
-                "weekStart": from_str,
-                "weekEnd":   to_str,
-                "days":      _build_empty_days(ws, we),
-                "topEvents": [],
-                "status":    "partial" if rate_limited else "ok",
-                "errors":    errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
-            }
-
-        # Phases 2.5–5: shared curated pipeline (pre-filter → pre-score →
-        # enrich top candidates → eligibility gate → score → decorate)
-        decorated, rate_limited = await _run_curated_pipeline(
-            raw_events, watchlist, portfolio, client, api_key, call_counter, rate_limited,
-            max_candidates=_WEEK_CAND_MAX,
-            max_enrich=_MAX_WEEK_ENRICH,
-            max_live=_WEEK_MAX_LIVE,
-            concurrency=_WEEK_CONCURRENCY,
-        )
-        if rate_limited and "FMP rate limit during enrichment — partial enrichment" not in errors:
-            errors.append("FMP rate limit during enrichment — partial enrichment")
-
-    # -- Phase 6: Group by date and session, dedup, apply per-session cap
-    # Dedup rule: symbol + date + session (keep highest-scored occurrence)
+    # -- Group by date and session, dedup (symbol+date+session), apply per-session cap
     days_map: dict[str, list[dict]] = {}
     cur = ws
     while cur <= we:
@@ -1262,7 +1354,7 @@ async def get_week_clean(
         cur += timedelta(days=1)
 
     seen_key: set[tuple[str, str, str]] = set()
-    for ev in sorted(decorated, key=lambda e: -(e.get("importanceScore") or 0)):
+    for ev in all_events:          # already sorted by importanceScore desc
         sym     = ev.get("symbol", "")
         d       = ev.get("date", "")
         sess    = ev.get("session", "unknown")
@@ -1298,14 +1390,12 @@ async def get_week_clean(
             "entries":      entries,
         })
 
-    # topEvents: all decorated events (post-dedup), sorted by score, capped
     all_deduped = [ev for evs in days_map.values() for ev in evs]
     top_events  = sorted(all_deduped, key=lambda e: -(e.get("importanceScore") or 0))[:max_total]
 
     print(
         f"[earn_clean] week-clean {from_str}→{to_str} "
-        f"raw={len(raw_rows)} eligible={len(decorated)} "
-        f"deduped={len(all_deduped)} calls={call_counter[0]}"
+        f"eligible={len(all_events)} deduped={len(all_deduped)}"
     )
 
     return {
@@ -1315,8 +1405,8 @@ async def get_week_clean(
         "weekEnd":   to_str,
         "days":      days,
         "topEvents": top_events,
-        "status":    "partial" if rate_limited else "ok",
-        "errors":    errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
+        "status":    rng["status"],
+        "errors":    errors,
     }
 
 
@@ -1447,66 +1537,27 @@ async def get_day_curated(
     """
     limit = min(max(1, limit), _DAY_LIMIT_MAX)
 
-    call_counter: list[int] = [0]
-    errors:       list[str] = []
-    rate_limited             = False
+    # Determine the Mon–Fri week that contains this date.
+    # Fetching the full week (same range as week-clean) ensures we reuse the
+    # cached FMP calendar data and produce identical events.
+    try:
+        target_d = datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
+        target_d = datetime.now(timezone.utc).date()
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(_FMP_TIMEOUT),
-        follow_redirects=True,
-    ) as client:
-        raw_rows, rate_limited = await _fetch_earnings_range(
-            date, date, api_key, client, call_counter,
-        )
+    mon = target_d - timedelta(days=target_d.weekday())   # Monday of that week
+    fri = mon + timedelta(days=4)                          # Friday of that week
+    from_str = mon.strftime("%Y-%m-%d")
+    to_str   = fri.strftime("%Y-%m-%d")
 
-        watchlist = _load_watchlist()
-        portfolio = _load_portfolio()
-
-        raw_events: list[dict] = []
-        for row in raw_rows:
-            ev = _normalize_row(row)
-            if ev:
-                raw_events.append(ev)
-
-        raw_events = _apply_scope(raw_events, search, scope, watchlist, portfolio)
-
-        if not raw_events:
-            return {
-                "asOf":    _today(),
-                "source":  "fmp",
-                "date":    date,
-                "events":  [],
-                "count":   0,
-                "status":  "partial" if rate_limited else "ok",
-                "errors":  errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
-            }
-
-        decorated, rate_limited = await _run_curated_pipeline(
-            raw_events, watchlist, portfolio, client, api_key, call_counter, rate_limited,
-            max_candidates=_DAY_CAND_MAX,
-            max_enrich=_DAY_MAX_ENRICH,
-            max_live=_DAY_MAX_LIVE,
-            concurrency=_DAY_CONCURRENCY,
-        )
-
-    if rate_limited:
-        errors.append("FMP rate limit during enrichment — partial data")
-
-    # Sort by importanceScore desc; dedup by symbol (keep best-scored occurrence)
-    seen_syms: set[str] = set()
-    deduped:   list[dict] = []
-    for ev in sorted(decorated, key=lambda e: -(e.get("importanceScore") or 0)):
-        sym = ev.get("symbol", "")
-        if sym and sym not in seen_syms:
-            seen_syms.add(sym)
-            deduped.append(ev)
-
-    events = deduped[:limit]
+    # Canonical engine — same function, same parameters as week-clean
+    rng    = await get_curated_earnings_range(api_key, from_str, to_str, scope, search)
+    events = rng["eventsByDate"].get(date, [])[:limit]
 
     print(
-        f"[earn_clean] day-curated {date} raw={len(raw_rows)} "
-        f"eligible={len(decorated)} deduped={len(deduped)} "
-        f"returned={len(events)} calls={call_counter[0]}"
+        f"[earn_clean] day-curated {date} (week {from_str}→{to_str}) "
+        f"day_events={len(events)} total_eligible={len(rng['allEvents'])} "
+        f"calls={rng['fmpCallsUsed']}"
     )
 
     return {
@@ -1515,8 +1566,8 @@ async def get_day_curated(
         "date":    date,
         "events":  events,
         "count":   len(events),
-        "status":  "partial" if rate_limited else "ok",
-        "errors":  errors,
+        "status":  rng["status"],
+        "errors":  list(rng["errors"]),
     }
 
 
@@ -1583,92 +1634,69 @@ async def get_month_curated(
 
     max_per_day = min(max(1, max_per_day), _MONTH_PER_DAY_MAX)
 
-    last_day_num = _cal.monthrange(year, month)[1]
-    month_start  = f"{year:04d}-{month:02d}-01"
-    month_end    = f"{year:04d}-{month:02d}-{last_day_num:02d}"
-    month_label  = datetime(year, month, 1).strftime("%B %Y")
+    last_day_num  = _cal.monthrange(year, month)[1]
+    month_start_d = datetime(year, month, 1).date()
+    month_end_d   = datetime(year, month, last_day_num).date()
+    month_label   = datetime(year, month, 1).strftime("%B %Y")
+    month_start   = month_start_d.strftime("%Y-%m-%d")
+    month_end     = month_end_d.strftime("%Y-%m-%d")
 
-    call_counter: list[int] = [0]
-    errors:       list[str] = []
-    rate_limited             = False
+    # Split the month into Mon–Fri weeks (same boundaries as week-clean).
+    # Starting from the Monday of the week containing the 1st of the month
+    # ensures that partial weeks at month edges are handled correctly.
+    first_mon = month_start_d - timedelta(days=month_start_d.weekday())
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(_FMP_TIMEOUT),
-        follow_redirects=True,
-    ) as client:
-        raw_rows, rate_limited = await _fetch_earnings_range(
-            month_start, month_end, api_key, client, call_counter,
-        )
+    weeks: list[tuple[str, str]] = []
+    cur_mon = first_mon
+    while cur_mon <= month_end_d:
+        cur_fri = cur_mon + timedelta(days=4)
+        weeks.append((cur_mon.strftime("%Y-%m-%d"), cur_fri.strftime("%Y-%m-%d")))
+        cur_mon += timedelta(days=7)
 
-        watchlist = _load_watchlist()
-        portfolio = _load_portfolio()
+    # Call the canonical curated engine per week (sequential; FMP calendar cache
+    # means any week already fetched by week-clean costs zero FMP calls here).
+    merged_events_by_date: dict[str, list[dict]] = {}
+    merged_raw_counts:     dict[str, int]        = {}
+    all_errors:            list[str]             = []
+    any_partial                                   = False
 
-        raw_events: list[dict] = []
-        for row in raw_rows:
-            ev = _normalize_row(row)
-            if ev:
-                raw_events.append(ev)
+    for w_from, w_to in weeks:
+        rng = await get_curated_earnings_range(api_key, w_from, w_to, scope, search)
+        if rng["rateLimited"]:
+            any_partial = True
+        for err in rng["errors"]:
+            if err not in all_errors:
+                all_errors.append(err)
+        # Only keep days within the calendar month
+        for d, evs in rng["eventsByDate"].items():
+            try:
+                d_date = datetime.strptime(d, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if d_date < month_start_d or d_date > month_end_d:
+                continue
+            merged_events_by_date[d] = evs   # already sorted + deduped by the engine
+        for d, cnt in rng["rawCounts"].items():
+            try:
+                d_date = datetime.strptime(d, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if d_date < month_start_d or d_date > month_end_d:
+                continue
+            merged_raw_counts[d] = cnt
 
-        raw_events = _apply_scope(raw_events, search, scope, watchlist, portfolio)
+    # Apply max_per_day cap (engine already deduped by symbol per date)
+    curated_by_date: dict[str, list[dict]] = {
+        d: evs[:max_per_day] for d, evs in merged_events_by_date.items()
+    }
 
-        # Capture total-per-day counts BEFORE curated filtering
-        raw_counts: dict[str, int] = {}
-        for ev in raw_events:
-            d = ev.get("date", "")
-            if d:
-                raw_counts[d] = raw_counts.get(d, 0) + 1
-
-        if not raw_events:
-            return {
-                "asOf":        _today(),
-                "source":      "fmp",
-                "year":        year,
-                "month":       month,
-                "monthLabel":  month_label,
-                "monthStart":  month_start,
-                "monthEnd":    month_end,
-                "days":        _build_month_days(year, month, {}, {}),
-                "status":      "partial" if rate_limited else "ok",
-                "errors":      errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
-            }
-
-        decorated, rate_limited = await _run_curated_pipeline(
-            raw_events, watchlist, portfolio, client, api_key, call_counter, rate_limited,
-            max_candidates=_MONTH_CAND_MAX,
-            max_enrich=_MONTH_MAX_ENRICH,
-            max_live=_MONTH_MAX_LIVE,
-            concurrency=_MONTH_CONCURRENCY,
-        )
-
-    if rate_limited:
-        errors.append("FMP rate limit during enrichment — partial data")
-
-    # Group curated events by date; sort by importanceScore; dedup per day by symbol;
-    # cap at max_per_day
-    curated_by_date: dict[str, list[dict]] = {}
-    seen_per_day:    dict[str, set[str]]   = {}
-    for ev in sorted(decorated, key=lambda e: -(e.get("importanceScore") or 0)):
-        d   = ev.get("date", "")
-        sym = ev.get("symbol", "")
-        if not d or not sym:
-            continue
-        bucket    = curated_by_date.setdefault(d, [])
-        seen_syms = seen_per_day.setdefault(d, set())
-        if sym in seen_syms:
-            continue
-        if len(bucket) >= max_per_day:
-            continue
-        seen_syms.add(sym)
-        bucket.append(ev)
-
-    days           = _build_month_days(year, month, raw_counts, curated_by_date)
-    total_curated  = sum(len(v) for v in curated_by_date.values())
+    days          = _build_month_days(year, month, merged_raw_counts, curated_by_date)
+    total_curated = sum(len(v) for v in curated_by_date.values())
 
     print(
         f"[earn_clean] month-curated {year}-{month:02d} "
-        f"raw={len(raw_rows)} eligible={len(decorated)} "
-        f"curated_days={len(curated_by_date)} total_curated={total_curated} "
-        f"calls={call_counter[0]}"
+        f"weeks={len(weeks)} curated_days={len(curated_by_date)} "
+        f"total_curated={total_curated}"
     )
 
     return {
@@ -1680,6 +1708,6 @@ async def get_month_curated(
         "monthStart":  month_start,
         "monthEnd":    month_end,
         "days":        days,
-        "status":      "partial" if rate_limited else "ok",
-        "errors":      errors,
+        "status":      "partial" if any_partial else "ok",
+        "errors":      all_errors,
     }
