@@ -111,9 +111,9 @@ _PRIOR_CACHE_PATH   = Path(__file__).parent.parent / "data" / "x_consensus_weekl
 # even when a ticker temporarily drops out of the current top-ranked slice.
 _TICKER_HISTORY_PATH = Path(__file__).parent.parent / "data" / "x_consensus_ticker_history.json"
 _TICKER_HISTORY_MAX_OBS = 10   # keep last N scored observations per ticker
-_CACHE_TTL_SECONDS = 4 * 3600  # 4 hours — max 2-3 refreshes in the active window
-_BATCH_SIZE = 8                # accounts per Phase-1 batch (focused x_search per group)
-_PHASE1_CONCURRENCY = 2        # max concurrent Grok batch calls
+_CACHE_TTL_SECONDS = 23 * 3600  # 23 hours — refreshed once daily at noon; fresh all day
+_BATCH_SIZE = 8                 # accounts per Phase-1 batch (focused x_search per group)
+_PHASE1_CONCURRENCY = 2         # max concurrent Grok batch calls
 
 # Module-level lock so only one background refresh runs at a time across the
 # whole process, regardless of how many Home requests land simultaneously.
@@ -910,37 +910,25 @@ def _public_payload(
 
 
 async def get_weekly_snapshot(data_service=None, *, allow_refresh: bool = True) -> dict:
-    """Return the current weekly snapshot for the Home page.
+    """Return the current daily snapshot for the Home page.
 
     Rules:
-      - Refreshes only between 08:00–20:00 America/Chicago (DST-safe).
-      - Outside that window: serve stale cache or no_data_yet — zero Grok calls.
-      - During the window: if cache is stale (>4 h), trigger one background refresh.
+      - Cache is considered fresh for 23 hours after each noon refresh, so this
+        function will almost never trigger a background refresh during the day.
+      - If the cache is somehow older than 23 hours (e.g. the server was down
+        at noon), a background refresh is kicked off immediately as a catch-up.
       - Never blocks the caller — Grok always runs in the background.
     """
     raw = _load_disk_cache()
     fresh = _is_fresh(raw)
 
-    # ── Time-window gate — the single place where Grok calls are allowed ──
-    window_open = _in_refresh_window()
-    if not window_open:
-        # Overnight / early morning: never touch Grok/XAI, just serve cache.
-        next_open = _next_window_open_iso()
-        print(
-            f"[X_CONSENSUS] Refresh window closed (Chicago time). "
-            f"Serving cached snapshot. Next open: {next_open}"
-        )
-        return _public_payload(raw, refresh_in_progress=False, window_open=False)
-
-    # ── Within the 08:00–20:00 Chicago window ─────────────────────────────
     refresh_in_progress = False
     if allow_refresh and not fresh and data_service is not None:
-        # Don't await the refresh — run it in the background so Home renders now.
+        # Cache is >23 h stale — noon refresh was missed; catch up now.
         refresh_in_progress = not _REFRESH_LOCK.locked()
         try:
             asyncio.create_task(_trigger_background_refresh(data_service))
         except RuntimeError:
-            # No running event loop — unusual but stay safe.
             refresh_in_progress = False
 
     return _public_payload(raw, refresh_in_progress=refresh_in_progress, window_open=True)

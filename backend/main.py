@@ -170,13 +170,19 @@ class JWTAuthMiddleware:
 
 
 async def _x_consensus_loop():
-    """Background loop: refresh X Select Trader Consensus every 2 hours.
+    """Background loop: refresh X Select Trader Consensus once daily at 12:00 noon Chicago.
 
-    Runs entirely independently of home page loads so the cache is always
-    fresh when users arrive at the Home page.  Uses the same lock as the
-    on-demand path so the two never race.
+    Sleeps until the next 12:00 noon America/Chicago, fires the refresh,
+    then sleeps 24 hours until the following noon.  Uses the same lock as
+    the on-demand path so manual and scheduled refreshes never race.
     """
     import asyncio as _asyncio
+    from datetime import datetime, timedelta, timezone as _tz
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo
+
     loop = _asyncio.get_event_loop()
     await loop.run_in_executor(None, _init_event.wait, 30)
 
@@ -184,32 +190,45 @@ async def _x_consensus_loop():
         print("[X_CONSENSUS_LOOP] xAI provider not available — background loop disabled")
         return
 
-    from services.x_consensus_cache import (
-        _is_fresh, _load_disk_cache, _run_refresh, _CACHE_TTL_SECONDS,
-        _in_refresh_window, _next_window_open_iso,
-        _WINDOW_START_HOUR, _WINDOW_END_HOUR,
-    )
+    from services.x_consensus_cache import _run_refresh
 
-    print("[X_CONSENSUS_LOOP] Started — will refresh every "
-          f"{_CACHE_TTL_SECONDS // 3600}h "
-          f"(window: {_WINDOW_START_HOUR:02d}:00–{_WINDOW_END_HOUR:02d}:00 America/Chicago)")
+    _CT = ZoneInfo("America/Chicago")
+    _NOON = 12  # 12:00 Chicago
+
+    print("[X_CONSENSUS_LOOP] Started — scheduled once daily at 12:00 noon America/Chicago")
 
     while True:
-        if not _in_refresh_window():
-            next_open = _next_window_open_iso()
-            print(f"[X_CONSENSUS_LOOP] Outside refresh window — skipping. "
-                  f"Next open: {next_open}")
+        now_ct = datetime.now(_CT)
+
+        # Next noon: today if before noon, otherwise tomorrow
+        if now_ct.hour < _NOON:
+            target_date = now_ct.date()
         else:
-            raw = _load_disk_cache()
-            if not _is_fresh(raw):
-                print("[X_CONSENSUS_LOOP] Cache stale — running refresh now")
-                try:
-                    await _run_refresh(data_service)
-                except Exception as exc:
-                    print(f"[X_CONSENSUS_LOOP] Refresh error: {exc}")
-            else:
-                print("[X_CONSENSUS_LOOP] Cache fresh — skipping refresh")
-        await _asyncio.sleep(_CACHE_TTL_SECONDS)
+            target_date = now_ct.date() + timedelta(days=1)
+
+        next_noon_ct = datetime(
+            target_date.year, target_date.month, target_date.day,
+            _NOON, 0, 0,
+            tzinfo=_CT,
+        )
+        sleep_secs = max(
+            (next_noon_ct.astimezone(_tz.utc) - datetime.now(_tz.utc)).total_seconds(),
+            0,
+        )
+        print(
+            f"[X_CONSENSUS_LOOP] Next refresh: {next_noon_ct.isoformat()} "
+            f"(sleeping {sleep_secs / 3600:.1f}h)"
+        )
+        await _asyncio.sleep(sleep_secs)
+
+        print("[X_CONSENSUS_LOOP] 12:00 noon reached — running daily refresh")
+        try:
+            await _run_refresh(data_service)
+        except Exception as exc:
+            print(f"[X_CONSENSUS_LOOP] Refresh error: {exc}")
+
+        # Small buffer before recalculating next noon (avoids same-minute re-trigger)
+        await _asyncio.sleep(90)
 
 
 @asynccontextmanager
