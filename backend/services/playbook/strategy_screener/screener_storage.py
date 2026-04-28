@@ -7,14 +7,54 @@ Two tables:
 
 Reuses the same connection pool from data.pg_storage.
 All functions are synchronous (psycopg2) — same pattern as the rest of the app.
+
+Disk fallback: when PostgreSQL is unavailable, completed snapshots are persisted to
+  SCREENER_DISK_PATH (JSON) and loaded from there so the page stays functional.
+  Only "complete" snapshots are written to disk; placeholder/error rows are not.
 """
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 _TABLES_CREATED = False
+
+# Disk fallback path — relative to this file's repo root
+_HERE = os.path.dirname(os.path.abspath(__file__))
+SCREENER_DISK_PATH = os.path.join(_HERE, "..", "..", "..", "data", "strategy_screener_lkg.json")
+SCREENER_DISK_PATH = os.path.normpath(SCREENER_DISK_PATH)
+
+
+def _save_to_disk(snapshot: Dict[str, Any]) -> None:
+    """Write a completed snapshot to the disk fallback file."""
+    if snapshot.get("status") != "complete":
+        return
+    if not snapshot.get("results"):
+        return
+    try:
+        with open(SCREENER_DISK_PATH, "w") as f:
+            json.dump(snapshot, f, default=str)
+        print(f"[SCREENER][DISK] Saved snapshot {snapshot.get('snapshot_id')} ({snapshot.get('results_count', 0)} candidates)")
+    except Exception as e:
+        print(f"[SCREENER][DISK] save_to_disk error: {e}")
+
+
+def _load_from_disk() -> Optional[Dict[str, Any]]:
+    """Load the last-known-good snapshot from disk. Returns None if absent or incomplete."""
+    try:
+        if not os.path.exists(SCREENER_DISK_PATH):
+            return None
+        with open(SCREENER_DISK_PATH) as f:
+            snap = json.load(f)
+        if snap.get("status") != "complete" or not snap.get("results"):
+            return None
+        print(f"[SCREENER][DISK] Loaded snapshot {snap.get('snapshot_id')} ({snap.get('results_count', 0)} candidates) from disk fallback")
+        return snap
+    except Exception as e:
+        print(f"[SCREENER][DISK] load_from_disk error: {e}")
+        return None
 
 
 def _get_conn():
@@ -99,7 +139,10 @@ def init_screener_tables() -> bool:
 # ── Snapshot CRUD ──────────────────────────────────────────────────────────────
 
 def save_snapshot(snapshot: Dict[str, Any]) -> bool:
-    """Upsert a snapshot row."""
+    """Upsert a snapshot row. Also writes to disk as fallback when DB is unavailable."""
+    # Always attempt disk write for complete snapshots first (DB-independent)
+    _save_to_disk(snapshot)
+
     init_screener_tables()
     conn = _get_conn()
     if conn is None:
@@ -152,11 +195,12 @@ def save_snapshot(snapshot: Dict[str, Any]) -> bool:
 
 
 def get_latest_snapshot() -> Optional[Dict[str, Any]]:
-    """Return the most recently generated snapshot row, or None."""
+    """Return the most recently generated snapshot row, or None.
+    Falls back to disk if the database is unavailable or returns nothing."""
     init_screener_tables()
     conn = _get_conn()
     if conn is None:
-        return None
+        return _load_from_disk()
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -170,11 +214,17 @@ def get_latest_snapshot() -> Optional[Dict[str, Any]]:
         row = cur.fetchone()
         cur.close()
         if not row:
-            return None
-        return _row_to_snapshot(row)
+            return _load_from_disk()
+        snap = _row_to_snapshot(row)
+        # If DB row is a placeholder/error with no results, prefer disk if it has data
+        if snap.get("status") in ("generating", "error") and not snap.get("results"):
+            disk = _load_from_disk()
+            if disk:
+                return disk
+        return snap
     except Exception as e:
         print(f"[SCREENER][DB] get_latest_snapshot error: {e}")
-        return None
+        return _load_from_disk()
     finally:
         _put_conn(conn)
 
