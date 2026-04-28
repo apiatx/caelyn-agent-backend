@@ -35,7 +35,7 @@ _FMP_STABLE         = "https://financialmodelingprep.com/stable"
 _FMP_LOGO_BASE      = "https://financialmodelingprep.com/image-stock"
 
 _TTL_CAL_CHUNK      = 6  * 3600    # 6 h  — legacy raw FMP chunk (upcoming-clean only)
-_TTL_RAW_CHUNK      = 6  * 3600    # 6 h  — canonical Mon-Fri raw chunk (fresh)
+_TTL_RAW_CHUNK      = 24 * 3600    # 24 h — canonical Mon-Fri raw chunk (fresh)
 _TTL_LKG            = 30 * 24 * 3600  # 30 d — last-known-good stale fallback
 _TTL_UPCOMING       = 6  * 3600    # 6 h  — merged calendar result
 _TTL_PROFILE        = 24 * 3600    # 24 h — company profile
@@ -89,29 +89,38 @@ def _set_blocked() -> None:
 # ── Structured telemetry logger (earnings routes only) ────────────────────────
 
 def _log_telemetry(
-    route:              str,
-    date_range:         str,
-    raw_hits:           int  = 0,
-    raw_misses:         int  = 0,
-    fmp_calendar_calls: int  = 0,
-    live_profile_calls: int  = 0,
-    stale_lkg:          bool = False,
-    cache_hit:          bool = False,
-    rate_limited:       bool = False,
+    route:                   str,
+    date_range:              str,
+    raw_hits:                int  = 0,
+    raw_misses:              int  = 0,
+    fmp_calendar_http_calls: int  = 0,
+    raw_events_count:        int  = 0,
+    live_profile_calls:      int  = 0,
+    stale_lkg:               bool = False,
+    cache_hit:               bool = False,
+    rate_limited:            bool = False,
 ) -> None:
     """
     Emit one structured telemetry line per earnings route request.
     Never logs API keys.
-    Format:
-      [earn_clean][TEL] route=X range=Y raw_hits=N raw_misses=N
-                        fmp_cal=N fmp_live=N stale=F rl=F cache=HIT/MISS
+
+    Field semantics (all counts are actual FMP HTTP calls, never event counts):
+      raw_hits              — Mon-Fri chunk cache hits (0 FMP HTTP calls each)
+      raw_misses            — Mon-Fri chunk cache misses (1 FMP HTTP call each)
+      fmp_cal_http          — actual HTTP calls to FMP /earnings-calendar endpoint
+      raw_events            — number of raw FMP earnings rows returned (before filter)
+      fmp_live              — actual HTTP calls to FMP /profile (or /quote) endpoint
+      stale                 — true if any chunk was served from 30-day LKG fallback
+      cache (HIT/MISS)      — top-level result-cache hit (0 FMP calls of any kind)
+      rl                    — true if FMP returned 429 during this request
     """
     cache_str = "HIT" if cache_hit else "MISS"
     rl_str    = str(rate_limited).upper()
     print(
         f"[earn_clean][TEL] route={route} range={date_range} "
         f"raw_hits={raw_hits} raw_misses={raw_misses} "
-        f"fmp_cal={fmp_calendar_calls} fmp_live={live_profile_calls} "
+        f"fmp_cal_http={fmp_calendar_http_calls} raw_events={raw_events_count} "
+        f"fmp_live={live_profile_calls} "
         f"stale={str(stale_lkg).lower()} "
         f"cache={cache_str} rl={rl_str}"
     )
@@ -1474,7 +1483,8 @@ async def get_curated_earnings_range(
     cal_calls    = raw_result["fmpCallsUsed"]
     raw_hits     = raw_result["rawHits"]
     raw_misses   = raw_result["rawMisses"]
-    call_counter: list[int] = [cal_calls]   # enrichment pipeline adds to this
+    # enrich_counter tracks only live profile/quote HTTP calls — separate from cal_calls
+    enrich_counter: list[int] = [0]
 
     watchlist = _load_watchlist()
     portfolio = _load_portfolio()
@@ -1502,28 +1512,34 @@ async def get_curated_earnings_range(
 
     if not raw_events:
         return {
-            "eventsByDate": {},
-            "allEvents":    [],
-            "rawCounts":    raw_counts,
-            "status":       "partial" if rate_limited else "ok",
-            "errors":       errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
-            "fmpCallsUsed": cal_calls,
-            "rateLimited":  rate_limited,
-            "staleLKG":     stale_lkg,
+            "eventsByDate":   {},
+            "allEvents":      [],
+            "rawCounts":      raw_counts,
+            "status":         "partial" if rate_limited else "ok",
+            "errors":         errors + (["FMP rate limit hit — partial data"] if rate_limited else []),
+            "fmpCallsUsed":   cal_calls,
+            "calHttpCalls":   cal_calls,   # actual HTTP calls to /earnings-calendar
+            "enrichHttpCalls": 0,          # actual HTTP calls to /profile (none — skipped)
+            "rawEventsCount": len(raw_rows),
+            "rateLimited":    rate_limited,
+            "staleLKG":       stale_lkg,
+            "rawHits":        raw_hits,
+            "rawMisses":      raw_misses,
         }
 
-    # Phase 2: enrichment pipeline — own client (sequential, max concurrency 2)
+    # Phase 2: enrichment pipeline — own client, enrich_counter tracks profile HTTP calls only
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(_FMP_TIMEOUT),
         follow_redirects=True,
     ) as enrich_client:
         decorated, rate_limited = await _run_curated_pipeline(
-            raw_events, watchlist, portfolio, enrich_client, api_key, call_counter, rate_limited,
+            raw_events, watchlist, portfolio, enrich_client, api_key, enrich_counter, rate_limited,
             max_candidates=_WEEK_CAND_MAX,
             max_enrich=_MAX_WEEK_ENRICH,
             max_live=_WEEK_MAX_LIVE,
             concurrency=_WEEK_CONCURRENCY,
         )
+    enrich_calls = enrich_counter[0]
     if rate_limited:
         errors.append("FMP rate limit during enrichment — partial data")
 
@@ -1544,21 +1560,24 @@ async def get_curated_earnings_range(
 
     print(
         f"[earn_clean] curated-range {from_date}→{to_date} "
-        f"raw={len(raw_rows) if isinstance(raw_rows, list) else 0} "
-        f"eligible={len(decorated)} dates={len(events_by_date)} calls={call_counter[0]}"
+        f"raw={len(raw_rows)} eligible={len(decorated)} dates={len(events_by_date)} "
+        f"cal_http={cal_calls} enrich_http={enrich_calls}"
     )
 
     result = {
-        "eventsByDate": events_by_date,
-        "allEvents":    all_events_sorted,
-        "rawCounts":    raw_counts,
-        "status":       "partial" if rate_limited else "ok",
-        "errors":       errors,
-        "fmpCallsUsed": call_counter[0],
-        "rateLimited":  rate_limited,
-        "staleLKG":     stale_lkg,
-        "rawHits":      raw_hits,
-        "rawMisses":    raw_misses,
+        "eventsByDate":   events_by_date,
+        "allEvents":      all_events_sorted,
+        "rawCounts":      raw_counts,
+        "status":         "partial" if rate_limited else "ok",
+        "errors":         errors,
+        "fmpCallsUsed":   cal_calls + enrich_calls,
+        "calHttpCalls":   cal_calls,      # actual HTTP calls to /earnings-calendar
+        "enrichHttpCalls": enrich_calls,  # actual HTTP calls to /profile
+        "rawEventsCount": len(raw_rows),  # raw FMP rows before filter/score
+        "rateLimited":    rate_limited,
+        "staleLKG":       stale_lkg,
+        "rawHits":        raw_hits,
+        "rawMisses":      raw_misses,
     }
 
     if not rate_limited and not scope and not search:
@@ -1709,8 +1728,9 @@ async def get_week_clean(
         "week-curated", f"{from_str}→{to_str}",
         raw_hits=rng.get("rawHits", 0),
         raw_misses=rng.get("rawMisses", 0),
-        fmp_calendar_calls=rng["fmpCallsUsed"],
-        live_profile_calls=len(all_events),
+        fmp_calendar_http_calls=rng.get("calHttpCalls", 0),
+        raw_events_count=rng.get("rawEventsCount", 0),
+        live_profile_calls=rng.get("enrichHttpCalls", 0),
         stale_lkg=rng.get("staleLKG", False),
         rate_limited=rng["rateLimited"],
     )
@@ -1825,7 +1845,9 @@ async def get_week_all(
     _log_telemetry(
         "week-all", f"{from_str}→{to_str}",
         raw_hits=raw_hits, raw_misses=raw_misses,
-        fmp_calendar_calls=cal_calls, live_profile_calls=0,
+        fmp_calendar_http_calls=cal_calls,
+        raw_events_count=len(raw_rows),
+        live_profile_calls=0,
         stale_lkg=stale_lkg, rate_limited=rate_limited,
     )
     return _wa_result
@@ -1969,8 +1991,9 @@ async def get_month_all(
     _log_telemetry(
         "month-all", f"{month_start}→{month_end}",
         raw_hits=raw_hits, raw_misses=raw_misses,
-        fmp_calendar_calls=cal_calls,
-        live_profile_calls=_MONTH_ALL_LIVE_PROFILES,   # always 0
+        fmp_calendar_http_calls=cal_calls,
+        raw_events_count=len(raw_rows),
+        live_profile_calls=_MONTH_ALL_LIVE_PROFILES,   # always 0 — intentional
         stale_lkg=stale_lkg, rate_limited=rate_limited,
     )
     return _ma_result
@@ -2187,15 +2210,19 @@ async def get_month_curated(
     if not any_partial and not scope and not search:
         cache.set(_mc_ck, _mc_result, _TTL_RESULT)
 
-    total_raw_hits   = sum(w.get("rawHits",   0) for w in week_results)
-    total_raw_misses = sum(w.get("rawMisses", 0) for w in week_results)
+    total_raw_hits   = sum(w.get("rawHits",       0) for w in week_results)
+    total_raw_misses = sum(w.get("rawMisses",     0) for w in week_results)
+    total_cal_http   = sum(w.get("calHttpCalls",  0) for w in week_results)
+    total_enrich_http = sum(w.get("enrichHttpCalls", 0) for w in week_results)
+    total_raw_events = sum(w.get("rawEventsCount", 0) for w in week_results)
     any_stale        = any(w.get("staleLKG",  False) for w in week_results)
     _log_telemetry(
         "month-curated", f"{month_start}→{month_end}",
         raw_hits=total_raw_hits,
         raw_misses=total_raw_misses,
-        fmp_calendar_calls=sum(w.get("fmpCallsUsed", 0) for w in week_results),
-        live_profile_calls=total_curated,
+        fmp_calendar_http_calls=total_cal_http,
+        raw_events_count=total_raw_events,
+        live_profile_calls=total_enrich_http,
         stale_lkg=any_stale,
         rate_limited=any_partial,
     )
