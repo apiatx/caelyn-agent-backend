@@ -221,11 +221,15 @@ async def _x_consensus_loop():
         )
         await _asyncio.sleep(sleep_secs)
 
-        print("[X_CONSENSUS_LOOP] 12:00 noon reached — running daily refresh")
-        try:
-            await _run_refresh(data_service)
-        except Exception as exc:
-            print(f"[X_CONSENSUS_LOOP] Refresh error: {exc}")
+        # Saturday (weekday 5) — skip entirely, no Grok call
+        if datetime.now(_CT).weekday() == 5:
+            print("[X_CONSENSUS_LOOP] Saturday — skipping refresh (no Grok call)")
+        else:
+            print("[X_CONSENSUS_LOOP] 12:00 noon reached — running daily refresh")
+            try:
+                await _run_refresh(data_service)
+            except Exception as exc:
+                print(f"[X_CONSENSUS_LOOP] Refresh error: {exc}")
 
         # Small buffer before recalculating next noon (avoids same-minute re-trigger)
         await _asyncio.sleep(90)
