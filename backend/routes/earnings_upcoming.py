@@ -3,9 +3,12 @@ earnings_upcoming.py — Clean FMP-only Upcoming Earnings routes (v2).
 
 Endpoints
 ─────────
-GET /api/catalysts/earnings/upcoming-clean
-GET /api/catalysts/earnings/day-clean
-GET /api/catalysts/earnings/week-clean
+GET /api/catalysts/earnings/upcoming-clean   — All: date range calendar
+GET /api/catalysts/earnings/day-clean        — All: single day full list
+GET /api/catalysts/earnings/week-clean       — Curated: scored weekly board
+GET /api/catalysts/earnings/day-curated      — Curated: scored single day
+GET /api/catalysts/earnings/week-all         — All: full week list
+GET /api/catalysts/earnings/month-curated    — Curated: monthly calendar overview
 """
 from __future__ import annotations
 
@@ -268,4 +271,177 @@ async def week_clean(
         max_total=max_total,
     )
 
+    return JSONResponse(content=result)
+
+
+# ── GET /api/catalysts/earnings/day-curated ───────────────────────────────────
+
+@router.get("/api/catalysts/earnings/day-curated")
+@traceable(name="earnings_clean.day_curated")
+async def day_curated(
+    request: Request,
+    api_key: str           = Header(None, alias=_AUTH_HEADER),
+    date:    Optional[str] = Query(None,
+                                   description="YYYY-MM-DD (required)"),
+    search:  Optional[str] = Query(None),
+    scope:   Optional[str] = Query(None, description="all | watchlist | portfolio"),
+    limit:   int           = Query(15, ge=1, le=30,
+                                   description="Max curated events returned (1-30, default 15)"),
+):
+    """
+    Curated FMP earnings for a single date — same scoring / eligibility engine
+    as week-clean.  Only high-signal events are returned; never pads with junk.
+
+    Constraints:
+      • 1 FMP calendar call; enrich up to 80 candidates, max 20 live fetches.
+      • Concurrency=2. 429 circuit breaker → partial data.
+      • No AI, no Finnhub, no Polymarket.
+
+    Returns: { asOf, source, date, events[], count, status, errors }
+    Event shape matches week-clean (session, themeTags, importanceScore, …).
+    """
+    err = _check_key(api_key)
+    if err:
+        return err
+
+    fmp_key = _get_fmp_key()
+    if not fmp_key:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "FMP API key not configured", "status": "error", "errors": []},
+        )
+
+    from services.earnings_clean_service import get_day_curated as _get_day_curated, _today
+    if not date:
+        date = _today()
+    else:
+        _validate_date(date, "date")
+
+    result = await _get_day_curated(
+        api_key=fmp_key,
+        date=date,
+        scope=scope,
+        search=search,
+        limit=limit,
+    )
+    return JSONResponse(content=result)
+
+
+# ── GET /api/catalysts/earnings/week-all ─────────────────────────────────────
+
+@router.get("/api/catalysts/earnings/week-all")
+@traceable(name="earnings_clean.week_all")
+async def week_all(
+    request:    Request,
+    api_key:    str           = Header(None, alias=_AUTH_HEADER),
+    week_start: Optional[str] = Query(None, description="YYYY-MM-DD (Monday); default current week"),
+    week_end:   Optional[str] = Query(None, description="YYYY-MM-DD (Friday); default current week Friday"),
+    scope:      Optional[str] = Query(None, description="all | watchlist | portfolio"),
+    search:     Optional[str] = Query(None, description="Ticker or company name filter"),
+    limit:      int           = Query(5000, ge=1, le=10000,
+                                      description="Max events in flat list (default 5000)"),
+):
+    """
+    Full FMP earnings list for a business week — no scoring, no filtering.
+
+    Mirrors upcoming-clean but scoped to one week.  No profile enrichment;
+    logos populated via CDN URL.  Accepts camelCase weekStart / weekEnd aliases.
+
+    Constraints:
+      • Max 2 FMP calendar calls (one 7-day chunk, heavily cached).
+      • 429 circuit breaker → partial data.
+
+    Returns: { asOf, source, weekStart, weekEnd, events[], eventsByDate,
+               countsByDate, fmpCallsUsed, rateLimited, status, errors }
+    """
+    err = _check_key(api_key)
+    if err:
+        return err
+
+    fmp_key = _get_fmp_key()
+    if not fmp_key:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "FMP API key not configured", "status": "error", "errors": []},
+        )
+
+    qp         = request.query_params
+    week_start = week_start or qp.get("weekStart") or None
+    week_end   = week_end   or qp.get("weekEnd")   or None
+
+    if week_start:
+        _validate_date(week_start, "week_start")
+    if week_end:
+        _validate_date(week_end, "week_end")
+
+    from services.earnings_clean_service import get_week_all as _get_week_all
+
+    result = await _get_week_all(
+        api_key=fmp_key,
+        week_start=week_start,
+        week_end=week_end,
+        scope=scope,
+        search=search,
+        limit=limit,
+    )
+    return JSONResponse(content=result)
+
+
+# ── GET /api/catalysts/earnings/month-curated ─────────────────────────────────
+
+@router.get("/api/catalysts/earnings/month-curated")
+@traceable(name="earnings_clean.month_curated")
+async def month_curated(
+    request:     Request,
+    api_key:     str           = Header(None, alias=_AUTH_HEADER),
+    year:        Optional[int] = Query(None, description="4-digit year (default current year)"),
+    month:       Optional[int] = Query(None, ge=1, le=12,
+                                       description="Month 1-12 (default current month)"),
+    scope:       Optional[str] = Query(None, description="all | watchlist | portfolio"),
+    search:      Optional[str] = Query(None),
+    max_per_day: int           = Query(5, ge=1, le=10,
+                                       description="Max curated events per day (1-10, default 5)"),
+):
+    """
+    Curated monthly earnings calendar overview.
+
+    For each calendar day:
+      count     = total FMP earnings that day (raw, before any filtering)
+      topEvents = curated scored events (up to max_per_day)
+
+    Curated pipeline is identical to week-clean scaled to a full month:
+      • Raw month fetch in sequential 7-day chunks (≤ 5 FMP calls).
+      • Enrich top 200 candidates, max 40 live profiles, concurrency=2.
+      • 429 circuit breaker → partial result.
+      • No AI, no Finnhub, no Polymarket.
+
+    Returns: { asOf, source, year, month, monthLabel, monthStart, monthEnd,
+               days[{date, dayOfMonth, isCurrentMonth, count, topEvents[]}],
+               status, errors }
+    """
+    err = _check_key(api_key)
+    if err:
+        return err
+
+    fmp_key = _get_fmp_key()
+    if not fmp_key:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "FMP API key not configured", "status": "error", "errors": []},
+        )
+
+    now = datetime.utcnow()
+    y   = year  if year  else now.year
+    m   = month if month else now.month
+
+    from services.earnings_clean_service import get_month_curated as _get_month_curated
+
+    result = await _get_month_curated(
+        api_key=fmp_key,
+        year=y,
+        month=m,
+        scope=scope,
+        search=search,
+        max_per_day=max_per_day,
+    )
     return JSONResponse(content=result)

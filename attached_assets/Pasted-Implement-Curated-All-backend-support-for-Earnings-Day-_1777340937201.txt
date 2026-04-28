@@ -1,0 +1,261 @@
+Implement Curated/All backend support for Earnings Day, Week, and Month without breaking existing working views.
+
+Current frontend modes:
+- Recent
+- Day
+- Week
+- Month
+
+New product behavior:
+- Day has Curated / All
+- Week has Curated / All
+- Month has Curated / All
+- Recent stays unchanged
+
+Definitions:
+Curated = use the existing weekly scoring/filtering engine to show selected high-signal earnings.
+All = show the full FMP earnings list for that date/week/month.
+
+Important:
+Do NOT break existing All behavior.
+Do NOT break existing Week curated behavior.
+Do NOT touch Recent.
+Do NOT touch the earnings popup.
+Do NOT use Finnhub.
+Do NOT use Polymarket.
+Do NOT use AI.
+FMP only.
+
+Existing behavior:
+- Week currently behaves like Curated.
+- Day currently behaves like All.
+- Month currently behaves like All.
+
+Goal:
+Add clean curated endpoints for Day and Month, and preserve all existing All endpoints.
+
+Backend endpoint strategy:
+
+1. Week Curated
+Keep existing:
+GET /api/catalysts/earnings/week-clean
+
+This remains the Curated Week endpoint.
+
+2. Week All
+Use the existing full earnings week/list endpoint if one already exists.
+If not, create:
+GET /api/catalysts/earnings/week-all
+
+Params:
+- weekStart / week_start
+- weekEnd / week_end
+- search optional
+- scope optional
+- limit optional, high enough for full week
+
+Response can be simple:
+{
+  "asOf": string,
+  "source": "fmp",
+  "weekStart": "YYYY-MM-DD",
+  "weekEnd": "YYYY-MM-DD",
+  "events": [...],
+  "eventsByDate": {...},
+  "countsByDate": {...},
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+But if existing Day/Month All logic already covers this, reuse it.
+
+3. Day All
+Keep existing:
+GET /api/catalysts/earnings/day-clean?date=YYYY-MM-DD&enrich=false
+
+This remains the All Day endpoint.
+
+4. Day Curated
+Create:
+GET /api/catalysts/earnings/day-curated
+
+Params:
+- date=YYYY-MM-DD required
+- limit default 15, max 30
+- search optional
+- scope optional
+
+Behavior:
+Use the same candidate eligibility/scoring logic from week-clean, but only for one date.
+
+Response:
+{
+  "asOf": string,
+  "source": "fmp",
+  "date": "YYYY-MM-DD",
+  "events": [...],
+  "count": number,
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+Each event should match the week-clean event shape:
+- id
+- date
+- session
+- symbol
+- companyName
+- logo/image
+- price
+- priceChangePct
+- marketCap
+- marketCapBucket
+- sector
+- industry
+- time
+- period
+- epsEstimated
+- revenueEstimated
+- themeTags
+- isThemeAnchor
+- isBottleneck
+- importanceScore
+- scoreBreakdown
+- source=fmp
+- raw
+
+Important:
+If only 5 high-quality events exist for the day, return 5.
+Do not pad with junk.
+
+5. Month All
+Keep existing month list/calendar behavior if it already returns all earnings for the month.
+
+If there is no explicit backend route, do not rebuild it yet. Frontend can keep using the current Month All path.
+
+6. Month Curated
+Create:
+GET /api/catalysts/earnings/month-curated
+
+Params:
+- year required/optional default current year
+- month required/optional default current month
+- max_per_day default 5, max 10
+- search optional
+- scope optional
+
+Behavior:
+Use the same curated scoring/eligibility engine as week-clean.
+Return the month calendar overview with top curated names per date.
+
+Response:
+{
+  "asOf": string,
+  "source": "fmp",
+  "year": 2026,
+  "month": 4,
+  "monthLabel": "April 2026",
+  "monthStart": "2026-04-01",
+  "monthEnd": "2026-04-30",
+  "days": [
+    {
+      "date": "2026-04-27",
+      "dayOfMonth": 27,
+      "isCurrentMonth": true,
+      "count": 499,
+      "topEvents": [...]
+    }
+  ],
+  "status": "ok" | "partial" | "error",
+  "errors": []
+}
+
+Important:
+- count = total FMP earnings for that date
+- topEvents = curated selected events only
+- do not enrich every event in the month
+- do not pad with junk
+
+7. Shared scoring helper
+Refactor the week-clean scoring/eligibility pipeline into reusable helpers if not already:
+- raw candidate prefilter
+- enrichment candidate selection
+- enrichment
+- eligibility gate
+- final scoring
+- grouping
+
+Use this same engine for:
+- week-clean
+- day-curated
+- month-curated
+
+Do not duplicate separate scoring logic that will drift.
+
+8. FMP safety
+Hard rules:
+- no 30/60-day heavy enrichment
+- no full month profile enrichment
+- no unbounded asyncio.gather
+- concurrency max 2 for enrichment
+- live enrichment cap
+- cache profiles/quotes/market cap
+- 429 circuit breaker remains
+- if FMP is rate-limited, return partial for this route only
+- never break Home/Sectors/Macro
+
+Suggested caps:
+Day curated:
+- enrich up to 80 raw candidates
+- max live profiles 20
+- return up to 15-30
+
+Week curated:
+- keep current behavior
+
+Month curated:
+- raw fetch for month is okay if chunked safely
+- prefilter raw events
+- enrich only top candidates per day / per month
+- suggested enrich pool max 200 for whole month
+- max live profiles 40
+- max_per_day default 5
+
+9. Route names summary:
+Curated:
+- GET /api/catalysts/earnings/day-curated
+- GET /api/catalysts/earnings/week-clean
+- GET /api/catalysts/earnings/month-curated
+
+All:
+- Day: existing day-clean
+- Week: existing all/week route or new week-all if needed
+- Month: existing current month all behavior
+
+10. Validation:
+Test only minimal calls:
+- /api/catalysts/earnings/day-curated?date=YYYY-MM-DD
+- /api/catalysts/earnings/week-clean?weekStart=YYYY-MM-DD&weekEnd=YYYY-MM-DD
+- /api/catalysts/earnings/month-curated?year=2026&month=4
+
+Confirm:
+- Curated responses do not include junk/unknown filler
+- All responses still include full earnings lists
+- Day/Week/Month All still work
+- Recent unchanged
+- popup unchanged
+- no Finnhub
+- no Polymarket
+- no AI
+
+Final response:
+Tell me:
+- files changed
+- endpoints added
+- which existing endpoints remain All
+- shared scoring helper changes
+- sample Day Curated top events
+- sample Month Curated busy day
+- confirm Week Curated unchanged
+- confirm All views unchanged
+- confirm Recent/popup untouched
