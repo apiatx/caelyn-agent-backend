@@ -54,7 +54,7 @@ The Caelyn AI platform integrates with several external services and APIs to gat
 -   **Hyperliquid:**
     *   REST API (for market snapshots, meta-data)
     *   WebSocket API (for real-time market data)
--   **Tradier:** For real-time portfolio analytics of specific stock positions (e.g., NVDA, OSS, BUZZ).
+-   **Tradier:** Primary live quote source (price, volume, bid/ask, 1D%) for Portfolio, Social Screener, Watchlist, and Calendar pages. Resilient fallback chain: Tradier → LKG Tradier cache (72 h) → FMP cached quote → Finnhub → null. Per-quote metadata fields: quote_source, quote_cached_at, quote_is_stale, quote_fallback_reason.
 -   **Yahoo Finance (`yfinance`):** For historical price data (e.g., GOLD, sector rotation ETFs) and fallback for stock price enrichment.
 -   **CoinGecko:** For cryptocurrency data (e.g., BTC).
 -   **Finnhub:**

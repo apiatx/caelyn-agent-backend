@@ -714,6 +714,107 @@ def _apply_enrichment(events: list[dict], enriched: dict[str, dict]) -> list[dic
     return events
 
 
+# ── Tradier live-quote enrichment for calendar events ─────────────────────────
+
+async def _enrich_tradier_quotes(
+    symbols: list[str],
+    max_syms: int = 30,
+) -> dict[str, dict]:
+    """Batch-fetch Tradier live quotes for the top `max_syms` visible symbols.
+
+    Returns {SYMBOL: {price, changesPercentage, volume, bid, ask,
+                      quote_source, quote_is_stale}}.
+    Only US equity symbols (no ":") are submitted. Result is also stored in
+    per-symbol LKG cache (72 h) so the calendar degrades gracefully when
+    Tradier is down.
+
+    Never raises — returns empty dict on any failure.
+    """
+    import os as _os, time as _time_mod, httpx as _httpx
+    api_key  = _os.getenv("TRADIER_API_KEY", "")
+    sandbox  = _os.getenv("TRADIER_SANDBOX", "false").lower() == "true"
+    base_url = "https://sandbox.tradier.com/v1" if sandbox else "https://api.tradier.com/v1"
+    _LKG_TTL = 72 * 3600
+    _LKG_PFX = "cal:tradier_lkg:"
+    _now_ts  = _time_mod.time()
+
+    us_syms = [s for s in symbols if s and ":" not in s][:max_syms]
+    if not api_key or not us_syms:
+        return {}
+
+    out: dict[str, dict] = {}
+    try:
+        syms_str = ",".join(s.upper() for s in us_syms)
+        async with _httpx.AsyncClient(timeout=8.0) as _c:
+            resp = await _c.get(
+                f"{base_url}/markets/quotes",
+                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                params={"symbols": syms_str, "greeks": "false"},
+            )
+        if resp.status_code != 200:
+            print(f"[CALENDAR_TRADIER] batch quotes HTTP {resp.status_code}")
+        else:
+            raw = resp.json()
+            ql = raw.get("quotes", {})
+            quote_list = ql.get("quote", []) if isinstance(ql, dict) else []
+            if isinstance(quote_list, dict):
+                quote_list = [quote_list]
+            for q in quote_list:
+                sym = (q.get("symbol") or "").upper()
+                if not sym:
+                    continue
+                def _sf(v):
+                    try:
+                        return float(v) if v not in (None, "", "-") else None
+                    except (TypeError, ValueError):
+                        return None
+                last    = _sf(q.get("last"))
+                chg_pct = _sf(q.get("change_percentage"))
+                if last is None:
+                    continue
+                row = {
+                    "price":             last,
+                    "changesPercentage": chg_pct,
+                    "volume":            q.get("volume"),
+                    "bid":               _sf(q.get("bid")),
+                    "ask":               _sf(q.get("ask")),
+                    "quote_source":      "tradier",
+                    "quote_is_stale":    False,
+                    "quote_cached_at":   _now_ts,
+                }
+                out[sym] = row
+                cache.set(f"{_LKG_PFX}{sym}", row, _LKG_TTL)
+            print(f"[CALENDAR_TRADIER] {len(out)} live quotes for {len(us_syms)} symbols")
+    except Exception as exc:
+        print(f"[CALENDAR_TRADIER] batch error: {exc}")
+
+    # Fall back to LKG for tickers we couldn't get live
+    for sym in us_syms:
+        sym_u = sym.upper()
+        if sym_u not in out:
+            lkg = cache.get(f"{_LKG_PFX}{sym_u}")
+            if lkg and lkg.get("price"):
+                out[sym_u] = {**lkg, "quote_is_stale": True}
+
+    return out
+
+
+def _apply_tradier_quotes(events: list[dict], tradier: dict[str, dict]) -> list[dict]:
+    """Overwrite price / changesPercentage on events with Tradier live data."""
+    for ev in events:
+        sym = (ev.get("symbol") or "").upper()
+        if not sym or sym not in tradier:
+            continue
+        tq = tradier[sym]
+        # Always overwrite with Tradier — it's fresher than FMP profile price
+        if tq.get("price") is not None:
+            ev["price"]             = tq["price"]
+            ev["changesPercentage"] = tq.get("changesPercentage")
+            ev["quote_source"]      = tq.get("quote_source", "tradier")
+            ev["quote_is_stale"]    = tq.get("quote_is_stale", False)
+    return events
+
+
 # ── Tab fetchers ──────────────────────────────────────────────────────────────
 
 def _is_polymarket_row(row: dict, title: str, sym: str) -> bool:
@@ -1794,6 +1895,15 @@ async def get_overview(fmp_key: str) -> dict:
     for tab in ALL_TABS:
         tabs_out[tab]["events"] = _apply_enrichment(tabs_out[tab]["events"], enriched)
 
+    # Tradier live quotes for visible symbols (cap 30 — one batch call)
+    _tradier_syms = list(dict.fromkeys(
+        ev["symbol"] for ev in all_events if ev.get("symbol")
+    ))[:30]
+    _tradier_data = await _enrich_tradier_quotes(_tradier_syms)
+    if _tradier_data:
+        for tab in ALL_TABS:
+            tabs_out[tab]["events"] = _apply_tradier_quotes(tabs_out[tab]["events"], _tradier_data)
+
     # Rebuild importance after enrichment (mc_bucket may have changed)
     for tab in ALL_TABS:
         for ev in tabs_out[tab]["events"]:
@@ -1947,6 +2057,10 @@ async def get_events(
         syms = list(dict.fromkeys(ev["symbol"] for ev in all_events if ev.get("symbol")))
         enriched = await _enrich_profiles(syms, fmp, max_live_fetches=40)
         all_events = _apply_enrichment(all_events, enriched)
+        # Tradier live quotes for visible symbols
+        _tq = await _enrich_tradier_quotes(syms[:30])
+        if _tq:
+            all_events = _apply_tradier_quotes(all_events, _tq)
         # Re-score importance after enrichment (affects display badges, not sort order)
         for ev in all_events:
             ev["importance"] = _score_importance(
@@ -1975,6 +2089,12 @@ async def get_events(
 
         # Sort and limit
         all_events = _sort_by_importance_date(all_events, date_desc=(mode == "recent"))[:limit]
+
+        # Tradier live quotes for the final visible set (post-filter/sort)
+        _tq_syms = list(dict.fromkeys(ev["symbol"] for ev in all_events if ev.get("symbol")))[:30]
+        _tq = await _enrich_tradier_quotes(_tq_syms)
+        if _tq:
+            all_events = _apply_tradier_quotes(all_events, _tq)
 
     ms = int((time.monotonic() - t0) * 1000)
     # Summary logging for earnings calendar

@@ -770,20 +770,102 @@ async def _fetch_unusual_options_live(
 # ── Batch-quote helper ─────────────────────────────────────────────────────
 
 async def _batch_quotes(tickers: list[str], data_service) -> dict[str, dict]:
+    """Tradier batch quote with LKG cache + FMP fallback.
+
+    Precedence per symbol:
+      1. Tradier live (batch)
+      2. LKG Tradier (from previous successful call, TTL 72 h)
+      3. FMP /stable/quote cached response (up to 30 min stale)
+      4. Missing → absent from returned dict
+
+    Returns a dict keyed by UPPERCASE symbol.
+    Non-US tickers (containing ":") are filtered out before calling Tradier.
+    Each returned quote dict contains Tradier-compatible field names plus
+    quote_source, quote_cached_at, quote_is_stale, quote_fallback_reason.
     """
-    One Tradier batch-quote call for the given tickers (cached at _QUOTE_TTL).
-    Returns a dict keyed by uppercase symbol. Filters out non-US tickers
-    (those containing ":") before calling Tradier.
-    """
+    import time as _time_mod
+    _now_ts = _time_mod.time()
+    _LKG_TTL = 72 * 3600
+    _LKG_PFX = "home:wl_tradier_lkg:"
+
     us_tickers = [t for t in tickers if ":" not in t]
-    if not us_tickers or not data_service or not getattr(data_service, "tradier", None):
+    if not us_tickers:
         return {}
-    try:
-        quotes = await data_service.tradier.get_quotes(us_tickers)
-        return {(q.get("symbol") or "").upper(): q for q in (quotes or [])}
-    except Exception as exc:
-        print(f"[HOME] batch_quotes error (non-fatal): {exc}")
-        return {}
+
+    out: dict[str, dict] = {}
+
+    # ── Step 1: Tradier live batch ────────────────────────────────────────
+    if data_service and getattr(data_service, "tradier", None):
+        try:
+            quotes = await data_service.tradier.get_quotes(us_tickers)
+            for q in (quotes or []):
+                sym = (q.get("symbol") or "").upper()
+                last = q.get("last")
+                if not sym or not last or last == 0:
+                    continue
+                row = {
+                    **q,
+                    "quote_source": "tradier",
+                    "quote_cached_at": _now_ts,
+                    "quote_is_stale": False,
+                    "quote_fallback_reason": None,
+                }
+                out[sym] = row
+                cache.set(f"{_LKG_PFX}{sym}", row, _LKG_TTL)
+            print(f"[HOME] Tradier live: {len(out)} of {len(us_tickers)} covered")
+        except Exception as exc:
+            print(f"[HOME] batch_quotes Tradier error (non-fatal): {exc}")
+
+    # ── Step 2: LKG Tradier for tickers Tradier missed ────────────────────
+    for sym in us_tickers:
+        sym_upper = sym.upper()
+        if sym_upper in out:
+            continue
+        lkg = cache.get(f"{_LKG_PFX}{sym_upper}")
+        if lkg and lkg.get("last"):
+            out[sym_upper] = {
+                **lkg,
+                "quote_is_stale": True,
+                "quote_fallback_reason": "tradier_lkg",
+                "quote_cached_at": _now_ts,
+            }
+
+    # ── Step 3: FMP cached quote for tickers still missing ────────────────
+    still_missing = [t for t in us_tickers if t.upper() not in out]
+    if still_missing:
+        import os, httpx as _httpx
+        fmp_key = os.getenv("FMP_API_KEY", "")
+        if fmp_key:
+            try:
+                async with _httpx.AsyncClient(timeout=6.0) as _c:
+                    resp = await _c.get(
+                        "https://financialmodelingprep.com/stable/quote",
+                        params={"symbol": ",".join(still_missing), "apikey": fmp_key},
+                    )
+                if resp.status_code == 200:
+                    for item in resp.json():
+                        fsym = (item.get("symbol") or "").upper()
+                        price = item.get("price")
+                        if not fsym or not price:
+                            continue
+                        out[fsym] = {
+                            "symbol": fsym,
+                            "last": price,
+                            "change": item.get("change"),
+                            "change_percentage": item.get("changesPercentage"),
+                            "volume": item.get("volume"),
+                            "average_volume": item.get("avgVolume"),
+                            "high": item.get("dayHigh"),
+                            "low": item.get("dayLow"),
+                            "quote_source": "fmp",
+                            "quote_cached_at": _now_ts,
+                            "quote_is_stale": False,
+                            "quote_fallback_reason": "tradier_miss",
+                        }
+            except Exception as exc:
+                print(f"[HOME] batch_quotes FMP fallback error (non-fatal): {exc}")
+
+    return out
 
 
 def _snapshot_row(

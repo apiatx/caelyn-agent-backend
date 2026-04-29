@@ -1,0 +1,197 @@
+Implement the provider-source fixes from backend/docs/provider_source_map.md with resilient fallback behavior.
+
+Core rule:
+Tradier = live market tape (price, volume, bid/ask, 1D move)
+FMP = fundamentals, profiles, ratios, statements, calendars, earnings/IPOs/dividends/splits, historical returns
+Finnhub = fallback only (quotes/estimates where needed)
+
+No single provider can be a point of failure.
+
+--------------------------------------------------
+PRIORITY 1 — PORTFOLIO
+--------------------------------------------------
+
+Replace Finnhub as primary quote source.
+
+Use ONE Tradier batch quote call for all holdings.
+
+Fields:
+- current price
+- volume
+- 1D %
+- bid / ask
+- last trade time
+
+Fallback chain:
+1. Tradier live
+2. last-known-good Tradier cache
+3. FMP cached quote
+4. Finnhub quote
+5. null/"—" only if all fail
+
+Fix null volume issue.
+
+--------------------------------------------------
+PRIORITY 2 — SOCIAL SCREENER
+--------------------------------------------------
+
+Replace FMP quote usage with Tradier for:
+- current price
+- volume
+- 1D %
+
+Keep FMP for:
+- fundamentals
+- ratios
+- profile
+- 5D / 30D / YTD / 1Y returns
+
+Fallback chain:
+1. Tradier live
+2. last-known-good Tradier
+3. cached FMP quote
+4. fresh FMP quote (only if needed)
+5. null/"—"
+
+Never blank rows due to quote failure.
+
+--------------------------------------------------
+PRIORITY 3 — WATCHLIST
+--------------------------------------------------
+
+Watchlist should behave like a mini trading dashboard.
+
+Use Tradier batch quote call for ALL watchlist tickers.
+
+Fields:
+- price
+- volume
+- 1D %
+- bid/ask (optional)
+
+Fallback chain:
+1. Tradier
+2. last-known-good Tradier cache
+3. cached FMP quote
+4. Finnhub fallback
+5. null/"—"
+
+Important:
+- Watchlist must NEVER trigger per-ticker FMP quote calls
+- One batch call only
+- Do not refetch all tickers on every navigation if cache is warm
+
+--------------------------------------------------
+PRIORITY 4 — CALENDAR
+--------------------------------------------------
+
+Calendar = hybrid page (events + light market context)
+
+DO NOT enrich every ticker with FMP quotes.
+
+Use:
+- FMP for:
+  - earnings calendar
+  - IPOs
+  - dividends
+  - splits
+  - company profile
+  - estimates
+
+- Tradier ONLY for:
+  - current price
+  - volume
+  - 1D %
+
+Critical rules:
+- Do NOT run N_symbols × quote calls
+- Use ONE batch Tradier call for visible tickers only (top 20–30 max)
+- Do NOT enrich entire month datasets (can be hundreds of symbols)
+- Always return event data even if quote enrichment fails
+
+Fallback chain (Calendar quote fields):
+1. Tradier
+2. last-known-good Tradier cache
+3. cached FMP quote
+4. null/"—"
+
+--------------------------------------------------
+PRIORITY 5 — FUNDAMENTALS (LOW PRIORITY)
+--------------------------------------------------
+
+Optional:
+- Use Tradier for current price header
+- Keep FMP for everything else
+
+--------------------------------------------------
+MARKET HOURS BEHAVIOR
+--------------------------------------------------
+
+- Market open:
+  Prefer fresh Tradier (short TTL)
+
+- Extended hours:
+  Use Tradier if valid, otherwise fallback to cache
+
+- Nights/weekends:
+  DO NOT spam providers
+  Use:
+    - last-known-good cache
+    - FMP cached quote
+
+--------------------------------------------------
+CACHING RULES
+--------------------------------------------------
+
+Tradier quote TTL:
+- market hours: 15–60s
+- extended: 60–180s
+- closed: 15–60m
+
+Last-known-good quote:
+- keep 24–72h
+
+FMP quote fallback:
+- 15–60m
+
+Fundamentals/profile:
+- 24h–7d
+
+Calendar events:
+- 15–60m
+
+--------------------------------------------------
+IMPLEMENTATION REQUIREMENTS
+--------------------------------------------------
+
+- Deduplicate symbols per request
+- Use batch quote calls wherever possible
+- Never do per-ticker quote loops
+- Never block response on quote enrichment
+- Never fail entire response due to one ticker failure
+- Always return rows even if quotes missing
+- Never hammer fallback providers repeatedly
+
+--------------------------------------------------
+RESPONSE METADATA
+--------------------------------------------------
+
+Add per-symbol:
+- quote_source
+- quote_cached_at
+- quote_is_stale
+- quote_fallback_reason
+
+--------------------------------------------------
+ACCEPTANCE TESTS
+--------------------------------------------------
+
+1. Portfolio shows price + volume
+2. Watchlist updates via single Tradier batch call
+3. Social uses Tradier for current price/volume
+4. Calendar loads WITHOUT large FMP call spikes
+5. Calendar only enriches visible subset of tickers
+6. App still works if Tradier fails
+7. Weekend behavior uses cached data (no API spam)
+8. FMP call volume drops significantly
+9. No blank tables anywhere due to quote failures

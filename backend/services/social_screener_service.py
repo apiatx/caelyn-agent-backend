@@ -898,6 +898,87 @@ def _build_fundamental_row(
     }
 
 
+# ── Tradier batch quote helper (for social screener) ─────────────────────────
+
+async def _tradier_batch_live(
+    tickers: list[str],
+    api_key: str,
+    sandbox: bool = False,
+) -> dict[str, dict]:
+    """Batch-fetch Tradier quotes, return {SYMBOL: normalised-quote-dict}.
+
+    Returns empty dict on any failure so the caller can fall back to FMP.
+    Result is also written to per-symbol LKG cache (TTL 72 h).
+    """
+    if not api_key or not tickers:
+        return {}
+    _base = "https://sandbox.tradier.com/v1" if sandbox else "https://api.tradier.com/v1"
+    _LKG_TTL = 72 * 3600
+    import time as _time_mod
+    _now_ts = _time_mod.time()
+    try:
+        syms_str = ",".join(s.upper() for s in tickers[:200])
+        async with httpx.AsyncClient(timeout=8.0) as _c:
+            resp = await _c.get(
+                f"{_base}/markets/quotes",
+                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                params={"symbols": syms_str, "greeks": "false"},
+            )
+        if resp.status_code != 200:
+            print(f"[SOCIAL_TRADIER] batch quotes HTTP {resp.status_code}")
+            return {}
+        raw = resp.json()
+        quotes_block = raw.get("quotes", {})
+        quote_list = quotes_block.get("quote", []) if isinstance(quotes_block, dict) else []
+        if isinstance(quote_list, dict):
+            quote_list = [quote_list]
+        out: dict[str, dict] = {}
+        for q in quote_list:
+            sym = (q.get("symbol") or "").upper()
+            last = q.get("last")
+            if not sym:
+                continue
+            try:
+                last = float(last) if last not in (None, "", "-") else None
+            except (TypeError, ValueError):
+                last = None
+            try:
+                chg_pct = float(q.get("change_percentage")) if q.get("change_percentage") not in (None, "", "-") else None
+            except (TypeError, ValueError):
+                chg_pct = None
+            try:
+                vol = int(float(q.get("volume"))) if q.get("volume") not in (None, "", "-") else None
+            except (TypeError, ValueError):
+                vol = None
+            row = {
+                "price":       last,
+                "volume":      vol,
+                "change_1d":   chg_pct,
+                "market_cap":  None,
+                "bid":         q.get("bid"),
+                "ask":         q.get("ask"),
+                "quote_source":         "tradier",
+                "quote_cached_at":      _now_ts,
+                "quote_is_stale":       False,
+                "quote_fallback_reason": None,
+            }
+            out[sym] = row
+            cache.set(f"social:tradier_lkg:{sym}", row, _LKG_TTL)
+        print(f"[SOCIAL_TRADIER] batch returned {len(out)} quotes for {len(tickers)} tickers")
+        return out
+    except Exception as exc:
+        print(f"[SOCIAL_TRADIER] batch live error: {exc}")
+        return {}
+
+
+def _tradier_lkg_for_symbol(sym: str) -> dict:
+    """Return LKG Tradier quote from cache (stale-flagged) or empty dict."""
+    lkg = cache.get(f"social:tradier_lkg:{sym}")
+    if lkg and lkg.get("price"):
+        return {**lkg, "quote_is_stale": True, "quote_fallback_reason": "tradier_lkg"}
+    return {}
+
+
 # ── Top-level enrichment orchestration ───────────────────────────────────────
 
 async def fetch_enrichment_for_symbols(
@@ -961,21 +1042,59 @@ async def fetch_enrichment_for_symbols(
     successes_fund = 0
     failures_fund  = 0
 
+    # ── Tradier batch quote (primary for price/vol/1D%) ───────────────────
+    # Done outside the FMP httpx session so it gets a fresh connection pool
+    # and doesn't block FMP enrichment if Tradier is slow.
+    _tradier_key = os.getenv("TRADIER_API_KEY", "")
+    _tradier_sandbox = os.getenv("TRADIER_SANDBOX", "false").lower() == "true"
+    _tradier_quotes: dict[str, dict] = {}
+    if _tradier_key and symbols:
+        try:
+            _tradier_quotes = await asyncio.wait_for(
+                _tradier_batch_live(list(symbols), _tradier_key, _tradier_sandbox),
+                timeout=8.0,
+            )
+        except Exception as _te:
+            print(f"[SOCIAL_SCREENER] Tradier batch timeout/error: {_te}")
+    # For tickers Tradier missed, fall back to LKG Tradier from a previous call
+    for _sym in symbols:
+        if _sym not in _tradier_quotes:
+            _lkg = _tradier_lkg_for_symbol(_sym)
+            if _lkg:
+                _tradier_quotes[_sym] = _lkg
+
     try:
         async with httpx.AsyncClient(timeout=12.0) as client:
             # Light social enrichment: profile + quote + price_change per ticker
+            # quote: Tradier primary (price/vol/1D%), FMP cached quote as fallback
             async def enrich_social(sym: str) -> None:
                 nonlocal successes_social, failures_social, served_from_lkg
                 try:
-                    profile, quote, pchg = await asyncio.gather(
-                        _fetch_profile(client, sym, fmp_api_key),
-                        _fetch_quote(client, sym, fmp_api_key),
-                        _fetch_price_change(client, sym, fmp_api_key),
-                        return_exceptions=True,
-                    )
-                    profile = profile if isinstance(profile, dict) else {}
-                    quote   = quote   if isinstance(quote, dict)   else {}
-                    pchg    = pchg    if isinstance(pchg, dict)    else {}
+                    tradier_q = _tradier_quotes.get(sym, {})
+                    # Always fetch profile + price_change from FMP; only fall back to
+                    # FMP quote if Tradier didn't return a usable price.
+                    if tradier_q and tradier_q.get("price"):
+                        profile, pchg = await asyncio.gather(
+                            _fetch_profile(client, sym, fmp_api_key),
+                            _fetch_price_change(client, sym, fmp_api_key),
+                            return_exceptions=True,
+                        )
+                        profile = profile if isinstance(profile, dict) else {}
+                        pchg    = pchg    if isinstance(pchg, dict)    else {}
+                        quote = tradier_q
+                    else:
+                        profile, quote, pchg = await asyncio.gather(
+                            _fetch_profile(client, sym, fmp_api_key),
+                            _fetch_quote(client, sym, fmp_api_key),
+                            _fetch_price_change(client, sym, fmp_api_key),
+                            return_exceptions=True,
+                        )
+                        profile = profile if isinstance(profile, dict) else {}
+                        quote   = quote   if isinstance(quote, dict)   else {}
+                        pchg    = pchg    if isinstance(pchg, dict)    else {}
+                        if quote:
+                            quote["quote_source"] = "fmp"
+                            quote["quote_fallback_reason"] = "tradier_miss"
                     social_enrichment[sym] = {
                         "profile":      profile,
                         "quote":        quote,

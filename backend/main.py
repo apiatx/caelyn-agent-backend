@@ -4445,22 +4445,12 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
     }
 
     async with httpx.AsyncClient(timeout=10.0) as client:
-        # ---- STOCKS: Finnhub primary → Yahoo fallback → FMP last resort ----
+        # ---- STOCKS: Tradier primary → LKG Tradier → Finnhub → Yahoo → FMP ----
         if stock_tickers:
-            async def _finnhub_quote(sym):
-                try:
-                    r = await client.get(
-                        "https://finnhub.io/api/v1/quote",
-                        params={"symbol": sym, "token": os.getenv("FINNHUB_API_KEY", "")},
-                    )
-                    if r.status_code == 200:
-                        d = r.json()
-                        if d.get("c") and d["c"] > 0:
-                            return sym, d
-                except Exception:
-                    pass
-                return sym, None
+            import time as _time_mod
+            _quote_ts = _time_mod.time()
 
+            # ── Profile helper (sector / company metadata — cached 24 h) ──────
             async def _finnhub_profile(sym):
                 sector_cache_key = f"sector:{sym}"
                 cached = _cache.get(sector_cache_key)
@@ -4478,58 +4468,126 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                 "sector": d.get("finnhubIndustry", ""),
                                 "industry": d.get("finnhubIndustry", ""),
                                 "company_name": d.get("name", ""),
-                                "market_cap": d.get("marketCapitalization", 0),
+                                "market_cap": (d.get("marketCapitalization") or 0) * 1_000_000,
                                 "logo": d.get("logo", ""),
                             }
-                            if profile.get("market_cap"):
-                                profile["market_cap"] = profile["market_cap"] * 1_000_000
                             _cache.set(sector_cache_key, profile, 86400)
                             return sym, profile
                 except Exception:
                     pass
                 return sym, None
 
-            tasks = []
-            for sym in stock_tickers:
-                tasks.append(_finnhub_quote(sym))
-                tasks.append(_finnhub_profile(sym))
-            results = await asyncio.gather(*tasks)
+            # Pre-fetch profiles for all tickers in parallel (mostly cache hits)
+            _prof_results = await asyncio.gather(*[_finnhub_profile(s) for s in stock_tickers])
+            stock_profiles: dict = {}
+            for sym, pd in _prof_results:
+                if pd:
+                    stock_profiles[sym] = pd
 
-            finnhub_quotes = {}
-            finnhub_profiles = {}
-            for i in range(0, len(results) - 1, 2):
-                sym, quote_data = results[i]
-                _, profile_data = results[i + 1]
-                if quote_data:
-                    finnhub_quotes[sym] = quote_data
-                if profile_data:
-                    finnhub_profiles[sym] = profile_data
+            # LKG Tradier helpers
+            def _tradier_lkg_key(sym): return f"portfolio:tradier_lkg:{sym}"
+            def _tradier_lkg_save(sym, row):
+                _cache.set(_tradier_lkg_key(sym), row, 3 * 24 * 3600)
 
-            for sym in stock_tickers:
-                q = finnhub_quotes.get(sym)
-                p = finnhub_profiles.get(sym, {})
-                if q:
+            # ── Step 1: Tradier batch (real-time — includes volume + bid/ask) ─
+            tradier_covered: set = set()
+            if data_service and getattr(data_service, "tradier", None):
+                try:
+                    _tr_results = await asyncio.wait_for(
+                        data_service.tradier.get_quotes(stock_tickers), timeout=8.0
+                    )
+                    for q in (_tr_results or []):
+                        sym = (q.get("symbol") or "").upper()
+                        last = q.get("last")
+                        if not sym or not last or last <= 0:
+                            continue
+                        p = stock_profiles.get(sym, {})
+                        row = {
+                            "price": last,
+                            "change": q.get("change"),
+                            "change_pct": q.get("change_percentage"),
+                            "day_high": q.get("high"),
+                            "day_low": q.get("low"),
+                            "volume": q.get("volume"),
+                            "avg_volume": q.get("average_volume"),
+                            "bid": q.get("bid"),
+                            "ask": q.get("ask"),
+                            "week_52_high": q.get("week_52_high"),
+                            "week_52_low": q.get("week_52_low"),
+                            "sector": p.get("sector", ""),
+                            "industry": p.get("industry", ""),
+                            "company_name": p.get("company_name", ""),
+                            "market_cap": p.get("market_cap"),
+                            "source": "tradier",
+                            "quote_source": "tradier",
+                            "quote_cached_at": _quote_ts,
+                            "quote_is_stale": False,
+                            "quote_fallback_reason": None,
+                        }
+                        quotes[sym] = row
+                        tradier_covered.add(sym)
+                        _tradier_lkg_save(sym, row)
+                    print(f"[PORTFOLIO] Tradier: {len(tradier_covered)} live quotes")
+                except Exception as _te:
+                    print(f"[PORTFOLIO] Tradier batch failed (non-fatal): {_te}")
+
+            # ── Step 2: LKG Tradier for tickers Tradier missed ────────────────
+            tradier_missed = [t for t in stock_tickers if t not in tradier_covered]
+            for sym in tradier_missed:
+                lkg = _cache.get(_tradier_lkg_key(sym))
+                if lkg and lkg.get("price"):
                     quotes[sym] = {
-                        "price": q.get("c"),
-                        "change": q.get("d"),
-                        "change_pct": q.get("dp"),
-                        "day_high": q.get("h"),
-                        "day_low": q.get("l"),
-                        "market_cap": p.get("market_cap"),
-                        "volume": None,
-                        "sector": p.get("sector", ""),
-                        "industry": p.get("industry", ""),
-                        "company_name": p.get("company_name", ""),
-                        "source": "finnhub",
+                        **lkg,
+                        "quote_is_stale": True,
+                        "quote_fallback_reason": "tradier_lkg",
+                        "quote_cached_at": _quote_ts,
                     }
 
-            finnhub_found = [t for t in stock_tickers if t in quotes]
-            finnhub_missing = [t for t in stock_tickers if t not in quotes]
-            print(f"[PORTFOLIO] Finnhub returned {len(finnhub_found)} quotes, missing: {finnhub_missing}")
+            # ── Step 3: Finnhub quote for tickers still not covered ───────────
+            still_missing = [t for t in stock_tickers if t not in quotes]
+            if still_missing:
+                async def _finnhub_quote(sym):
+                    try:
+                        r = await client.get(
+                            "https://finnhub.io/api/v1/quote",
+                            params={"symbol": sym, "token": os.getenv("FINNHUB_API_KEY", "")},
+                        )
+                        if r.status_code == 200:
+                            d = r.json()
+                            if d.get("c") and d["c"] > 0:
+                                return sym, d
+                    except Exception:
+                        pass
+                    return sym, None
 
-            if finnhub_missing:
-                print(f"[PORTFOLIO] Trying Yahoo for: {finnhub_missing}")
-                for sym in finnhub_missing:
+                fh_results = await asyncio.gather(*[_finnhub_quote(s) for s in still_missing])
+                for sym, qd in fh_results:
+                    if qd:
+                        p = stock_profiles.get(sym, {})
+                        quotes[sym] = {
+                            "price": qd.get("c"),
+                            "change": qd.get("d"),
+                            "change_pct": qd.get("dp"),
+                            "day_high": qd.get("h"),
+                            "day_low": qd.get("l"),
+                            "volume": None,
+                            "sector": p.get("sector", ""),
+                            "industry": p.get("industry", ""),
+                            "company_name": p.get("company_name", ""),
+                            "market_cap": p.get("market_cap"),
+                            "source": "finnhub",
+                            "quote_source": "finnhub",
+                            "quote_cached_at": _quote_ts,
+                            "quote_is_stale": False,
+                            "quote_fallback_reason": "tradier_miss",
+                        }
+                print(f"[PORTFOLIO] Finnhub covered: {[t for t in still_missing if t in quotes]}, missing: {[t for t in still_missing if t not in quotes]}")
+
+            # ── Step 4: Yahoo Finance for tickers still missing ───────────────
+            yahoo_need = [t for t in stock_tickers if t not in quotes]
+            if yahoo_need:
+                print(f"[PORTFOLIO] Trying Yahoo for: {yahoo_need}")
+                for sym in yahoo_need:
                     try:
                         resp = await client.get(
                             "https://query1.finance.yahoo.com/v8/finance/chart/" + sym,
@@ -4546,7 +4604,7 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                     prev_close = meta.get("chartPreviousClose", meta.get("previousClose", 0))
                                     change = round(price - prev_close, 2) if prev_close else 0
                                     change_pct = round((change / prev_close) * 100, 2) if prev_close else 0
-                                    p = finnhub_profiles.get(sym, {})
+                                    p = stock_profiles.get(sym, {})
                                     quotes[sym] = {
                                         "price": price,
                                         "change": change,
@@ -4557,16 +4615,22 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                         "sector": p.get("sector", ""),
                                         "industry": p.get("industry", ""),
                                         "company_name": p.get("company_name", ""),
+                                        "market_cap": p.get("market_cap"),
                                         "source": "yahoo",
+                                        "quote_source": "yahoo",
+                                        "quote_cached_at": _quote_ts,
+                                        "quote_is_stale": False,
+                                        "quote_fallback_reason": "tradier_finnhub_miss",
                                     }
                                     print(f"[PORTFOLIO] Yahoo: {sym} = ${price}")
                     except Exception as e:
                         print(f"[PORTFOLIO] Yahoo {sym} error: {e}")
 
-            yahoo_missing = [t for t in stock_tickers if t not in quotes]
-            if yahoo_missing:
-                print(f"[PORTFOLIO] FMP last resort for: {yahoo_missing}")
-                ticker_str = ",".join(yahoo_missing)
+            # ── Step 5: FMP last resort ───────────────────────────────────────
+            fmp_need = [t for t in stock_tickers if t not in quotes]
+            if fmp_need:
+                print(f"[PORTFOLIO] FMP last resort for: {fmp_need}")
+                ticker_str = ",".join(fmp_need)
                 try:
                     full_resp = await client.get(
                         "https://financialmodelingprep.com/stable/quote",
@@ -4575,6 +4639,8 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                     if full_resp.status_code == 200:
                         for item in full_resp.json():
                             symbol = item.get("symbol", "")
+                            if not symbol:
+                                continue
                             quotes[symbol] = {
                                 "price": item.get("price"),
                                 "change": item.get("change"),
@@ -4590,57 +4656,14 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                                 "eps": item.get("eps"),
                                 "sector": item.get("sector", ""),
                                 "source": "fmp",
+                                "quote_source": "fmp",
+                                "quote_cached_at": _quote_ts,
+                                "quote_is_stale": False,
+                                "quote_fallback_reason": "tradier_finnhub_yahoo_miss",
                             }
-                        print(f"[PORTFOLIO] FMP fallback returned {len([t for t in yahoo_missing if t in quotes])} quotes")
+                        print(f"[PORTFOLIO] FMP fallback returned {len([t for t in fmp_need if t in quotes])} quotes")
                 except Exception as e:
                     print(f"[PORTFOLIO] FMP fallback error: {e}")
-
-            stocks_needing_sector = [t for t in stock_tickers if t in quotes and not quotes[t].get("sector")]
-            if stocks_needing_sector:
-                print(f"[PORTFOLIO] Fetching sector via FMP /stable/profile for: {stocks_needing_sector}")
-                # Resolve cached sectors first
-                _uncached_sector_tickers = []
-                for ticker in stocks_needing_sector:
-                    sector_cache_key = f"sector:{ticker}"
-                    cached_sector = _cache.get(sector_cache_key)
-                    if cached_sector is not None:
-                        quotes[ticker]["sector"] = cached_sector.get("sector", "Other")
-                        quotes[ticker]["industry"] = cached_sector.get("industry", "")
-                        quotes[ticker]["company_name"] = cached_sector.get("company_name", "")
-                    else:
-                        _uncached_sector_tickers.append(ticker)
-
-                # Fetch uncached sectors in parallel
-                async def _fetch_sector(t):
-                    try:
-                        profile_resp = await client.get(
-                            "https://financialmodelingprep.com/stable/profile",
-                            params={"symbol": t, "apikey": FMP_API_KEY},
-                        )
-                        if profile_resp.status_code == 200:
-                            profile_data = profile_resp.json()
-                            if isinstance(profile_data, list) and len(profile_data) > 0:
-                                sector = profile_data[0].get("sector", "")
-                                industry = profile_data[0].get("industry", "")
-                                company_name = profile_data[0].get("companyName", "")
-                                return t, sector, industry, company_name
-                        return t, "", "", ""
-                    except Exception as e:
-                        print(f"[PORTFOLIO] FMP profile {t} error: {e}")
-                        return t, "", "", ""
-
-                if _uncached_sector_tickers:
-                    _sector_results = await asyncio.gather(
-                        *[_fetch_sector(t) for t in _uncached_sector_tickers]
-                    )
-                    for t, sector, industry, company_name in _sector_results:
-                        if sector:
-                            quotes[t]["sector"] = sector
-                            quotes[t]["industry"] = industry
-                            quotes[t]["company_name"] = company_name
-                            _cache.set(f"sector:{t}", {"sector": sector, "industry": industry, "company_name": company_name}, 86400)
-                        else:
-                            quotes[t]["sector"] = "Other"
 
         # ---- INDICES: VIX via FRED (actual value), others via Yahoo → unavailable with note ----
         if index_tickers:
