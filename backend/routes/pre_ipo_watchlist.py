@@ -4,10 +4,15 @@ Pre-IPO Watchlist router — GET /api/calendar/pre-ipo-watchlist
 Additive endpoint that aggregates pre-IPO intel for a fixed set of
 high-profile private companies using Perplexity, Polymarket, and
 Finnhub.  Independent of the existing FMP IPO calendar surface.
+
+Always returns HTTP 200 with at minimum a safe-shape JSON payload so
+the frontend never sees a hard failure even when external API keys are
+missing or upstream sources are unavailable.
 """
 from __future__ import annotations
 
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import JSONResponse
@@ -22,19 +27,78 @@ except ImportError:
             return args[0]
         return _noop
 
-from services.pre_ipo_watchlist_service import get_pre_ipo_watchlist
-
 router = APIRouter(tags=["pre_ipo_watchlist"])
 
 _AUTH_HEADER = "X-API-Key"
 
+# Names kept in sync with services.pre_ipo_watchlist_service.TRACKED_COMPANIES
+# so we can emit a safe-shape fallback even if the service module fails to
+# import (e.g. transient dependency issue).
+_FALLBACK_COMPANY_NAMES = (
+    "SpaceX", "OpenAI", "Anthropic", "Databricks", "Anduril", "Stripe",
+)
+
 
 def _check_key(api_key: Optional[str]) -> Optional[JSONResponse]:
     """Return a 401 response if the API key is invalid, else None."""
-    from config import AGENT_API_KEY
+    try:
+        from config import AGENT_API_KEY
+    except Exception:
+        AGENT_API_KEY = None
     if AGENT_API_KEY and api_key != AGENT_API_KEY:
         return JSONResponse(status_code=401, content={"error": "Invalid or missing API key"})
     return None
+
+
+def _safe_empty_company(name: str, rank: int) -> dict[str, Any]:
+    return {
+        "company":             name,
+        "ipo_status":          "Unknown",
+        "estimated_valuation": "Unknown",
+        "valuation_notes":     [],
+        "polymarket": {
+            "ipo_probability_12m": None,
+            "valuation_markets":   [],
+            "summary":             "Data temporarily unavailable.",
+        },
+        "catalysts":           [],
+        "expected_window":     {"earliest": "Unknown", "likely": "Unknown"},
+        "confidence_score":    "Low",
+        "latest_news":         [],
+        "sources":             [],
+        "opportunity_score":   0,
+        "score_breakdown": {
+            "ipo_probability_score":     0,
+            "valuation_momentum_score":  0,
+            "news_recency_score":        0,
+            "source_quality_score":      0,
+            "catalyst_strength_score":   0,
+        },
+        "change_tracking": {
+            "valuation_change":       "Unknown",
+            "ipo_probability_change": "Unknown",
+            "new_catalysts":          [],
+            "previous_score":         None,
+            "score_change":           None,
+            "last_snapshot_at":       None,
+        },
+        "momentum_badge":      "Dormant",
+        "rank":                rank,
+    }
+
+
+def _safe_fallback_payload(reason: Optional[str] = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status":     "ok",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "companies": [
+            _safe_empty_company(name, idx)
+            for idx, name in enumerate(_FALLBACK_COMPANY_NAMES, start=1)
+        ],
+    }
+    if reason:
+        payload["fallback_reason"] = reason
+    return payload
 
 
 @router.get("/api/calendar/pre-ipo-watchlist")
@@ -54,17 +118,32 @@ async def pre_ipo_watchlist(
     Data is cached for ~8 hours.  Stale data is returned if a refresh
     fails so callers always receive a usable response when at least one
     successful fetch has happened previously.
+
+    The endpoint always responds with HTTP 200 and a safe-shape JSON
+    body — even when the underlying service raises or external API
+    keys are missing — so the frontend can render a usable empty state
+    instead of a hard error.
     """
     err = _check_key(api_key)
     if err:
         return err
 
     try:
+        from services.pre_ipo_watchlist_service import get_pre_ipo_watchlist
+    except Exception as e:
+        print(f"[pre_ipo_watchlist] service import failed: {e}")
+        return JSONResponse(content=_safe_fallback_payload(f"service import failed: {e}"))
+
+    try:
         data = await get_pre_ipo_watchlist(refresh=refresh)
+        if not isinstance(data, dict):
+            return JSONResponse(content=_safe_fallback_payload("upstream returned non-dict"))
+        # Defensive: ensure required top-level shape exists.
+        data.setdefault("status", "ok")
+        data.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
+        if not isinstance(data.get("companies"), list):
+            data["companies"] = []
         return JSONResponse(content=data)
     except Exception as e:
         print(f"[pre_ipo_watchlist] unhandled: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e), "status": "error"},
-        )
+        return JSONResponse(content=_safe_fallback_payload(f"unhandled: {e}"))
