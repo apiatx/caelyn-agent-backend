@@ -316,3 +316,119 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
             await asyncio.sleep(max(5, secs_to_next_min))
         except Exception:
             await asyncio.sleep(60)
+
+
+# ── Manual backfill (CLI-only) ───────────────────────────────────────────────
+# Manual-only entrypoint to populate the weekly snapshots NOW for the five
+# non-Earnings target tabs. Reuses refresh_tab — the same function the Sunday
+# scheduler invokes — so there is no duplicate fetch logic. Earnings is NOT in
+# TARGET_TABS and is therefore never touched by this command.
+#
+# This block runs only under `python -m services.calendar_snapshot_service`
+# (or equivalent direct invocation). It is gated by `if __name__ == "__main__"`
+# and is NEVER triggered on import, request, page load, or app startup.
+
+
+async def _manual_backfill(tabs: list[str]) -> int:
+    """
+    Run refresh_tab for each requested tab sequentially. Returns a process
+    exit code: 0 on full success, 1 if any tab failed or returned no events
+    AND no fallback existed.
+    """
+    import os
+    fmp_key = os.getenv("FMP_API_KEY")
+    if not fmp_key:
+        print("[backfill] ERROR: FMP_API_KEY not set in environment; aborting.")
+        return 2
+
+    failures: list[str] = []
+    for tab in tabs:
+        if tab not in TARGET_TABS:
+            print(f"[backfill] skipping unsupported tab: {tab!r}")
+            failures.append(tab)
+            continue
+        print(f"[backfill] → refreshing tab={tab} ...")
+        try:
+            envelope = await refresh_tab(tab, fmp_key)
+            cw = len(envelope.get("current_week") or [])
+            pw = len(envelope.get("previous_week") or [])
+            status = envelope.get("status")
+            last = envelope.get("last_updated")
+            print(
+                f"[backfill] ✓ tab={tab} status={status} "
+                f"current_week={cw} previous_week={pw} last_updated={last}"
+            )
+            if status == "empty":
+                failures.append(tab)
+        except Exception as e:
+            print(f"[backfill] ✗ tab={tab} ERROR: {e}")
+            failures.append(tab)
+
+    if failures:
+        print(f"[backfill] DONE with failures: {failures}")
+        return 1
+    print(f"[backfill] DONE — all {len(tabs)} tabs refreshed successfully.")
+    return 0
+
+
+def _cli_main() -> int:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="python -m services.calendar_snapshot_service",
+        description=(
+            "Manual-only backfill for weekly catalyst calendar snapshots. "
+            "Refreshes Dividends, IPOs, Splits, Economic Releases, and "
+            "Treasury/Macro by calling the same refresh_tab() function the "
+            "Sunday ET scheduler uses. Earnings is never touched. Requires "
+            "FMP_API_KEY in the environment. Safe to re-run; idempotent."
+        ),
+    )
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Run a manual backfill for the five target tabs.",
+    )
+    parser.add_argument(
+        "--tabs",
+        type=str,
+        default=",".join(TARGET_TABS),
+        help=(
+            "Comma-separated subset of target tabs to backfill. "
+            f"Default: {','.join(TARGET_TABS)}. "
+            "Earnings is NOT a valid tab here and will never be touched."
+        ),
+    )
+    parser.add_argument(
+        "--list-tabs",
+        action="store_true",
+        help="Print the supported target tabs and exit (no fetches).",
+    )
+    args = parser.parse_args()
+
+    if args.list_tabs:
+        print("Target tabs (Earnings is intentionally excluded):")
+        for t in TARGET_TABS:
+            print(f"  - {t}")
+        return 0
+
+    if not args.backfill:
+        parser.print_help()
+        return 0
+
+    requested = [t.strip() for t in args.tabs.split(",") if t.strip()]
+    print(f"[backfill] manual run starting; tabs={requested}")
+    return asyncio.run(_manual_backfill(requested))
+
+
+if __name__ == "__main__":
+    import sys, os
+    # Ensure backend/ is on sys.path when invoked from project root
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    while os.path.basename(backend_dir) != "backend" and backend_dir != "/":
+        backend_dir = os.path.dirname(backend_dir)
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+
+    sys.exit(_cli_main())
