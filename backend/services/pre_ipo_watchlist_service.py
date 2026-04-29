@@ -103,6 +103,189 @@ TRACKED_COMPANIES: list[dict[str, Any]] = [
 _FALLBACK_COMPANY_NAMES: tuple[str, ...] = tuple(c["company"] for c in TRACKED_COMPANIES)
 
 
+# ── Static fallback baselines ───────────────────────────────────────────────
+#
+# Conservative, widely-reported baselines used when live intelligence is
+# unavailable.  These are NOT live data — they are best-effort static
+# placeholders so the watchlist still feels useful in limited-data mode.
+# Wording is intentionally cautious ("widely reported", "fallback estimate")
+# and confidence stays Low at the route layer.  Polymarket/news fields are
+# left empty here — we never fabricate prediction-market odds or news.
+
+FALLBACK_BASELINES: dict[str, dict[str, Any]] = {
+    "OpenAI": {
+        "ipo_status":          "Not announced",
+        "estimated_valuation": "Widely reported private-market range around $80B–$150B+",
+        "valuation_notes": [
+            "Fallback estimate based on widely reported recent private funding and secondary-market context.",
+            "Live valuation intelligence unavailable; refresh when Perplexity/RSS sources are available.",
+        ],
+        "catalysts": [
+            "Enterprise AI revenue scale",
+            "Microsoft partnership and infrastructure needs",
+            "Investor liquidity pressure",
+            "Regulatory scrutiny",
+        ],
+        "expected_window": {"earliest": "Late 2026", "likely": "2027+"},
+        "opportunity_score":   45,
+        "momentum_badge":      "Watch",
+        "score_breakdown": {
+            "ipo_probability_score":     12,
+            "valuation_momentum_score":  13,
+            "news_recency_score":        4,
+            "source_quality_score":      8,
+            "catalyst_strength_score":   8,
+        },
+    },
+    "SpaceX": {
+        "ipo_status":          "Not announced",
+        "estimated_valuation": "Widely reported private-market range around $180B–$350B+",
+        "valuation_notes": [
+            "Fallback estimate based on widely reported private valuation and secondary-market context.",
+            "Starlink spinout remains the most realistic public-market path if leadership chooses to list.",
+        ],
+        "catalysts": [
+            "Starlink revenue scale",
+            "Secondary-market liquidity demand",
+            "Satellite broadband expansion",
+            "Defense and launch cadence",
+        ],
+        "expected_window": {
+            "earliest": "2026",
+            "likely":   "Starlink spinout more likely than full SpaceX IPO",
+        },
+        "opportunity_score":   50,
+        "momentum_badge":      "Watch",
+        "score_breakdown": {
+            "ipo_probability_score":     13,
+            "valuation_momentum_score":  15,
+            "news_recency_score":        5,
+            "source_quality_score":      8,
+            "catalyst_strength_score":   9,
+        },
+    },
+    "Anthropic": {
+        "ipo_status":          "Not announced",
+        "estimated_valuation": "Widely reported private-market range around $60B–$100B+",
+        "valuation_notes": [
+            "Fallback estimate based on recent AI funding-round reports and strategic investor demand.",
+            "Live valuation intelligence unavailable; treat this as a baseline only.",
+        ],
+        "catalysts": [
+            "Enterprise Claude adoption",
+            "Strategic cloud partnerships",
+            "AI infrastructure funding needs",
+            "Competitive pressure from OpenAI and Google",
+        ],
+        "expected_window": {"earliest": "Late 2026", "likely": "2027+"},
+        "opportunity_score":   42,
+        "momentum_badge":      "Watch",
+        "score_breakdown": {
+            "ipo_probability_score":     11,
+            "valuation_momentum_score":  12,
+            "news_recency_score":        4,
+            "source_quality_score":      7,
+            "catalyst_strength_score":   8,
+        },
+    },
+    "Databricks": {
+        "ipo_status":          "Not announced",
+        "estimated_valuation": "Widely reported private-market range around $40B–$60B+",
+        "valuation_notes": [
+            "Fallback estimate based on mature late-stage private-company valuation context.",
+            "Databricks is one of the more IPO-ready private software companies, but timing remains unconfirmed.",
+        ],
+        "catalysts": [
+            "AI data platform demand",
+            "Lakehouse adoption",
+            "Enterprise revenue maturity",
+            "Public software market reopening",
+        ],
+        "expected_window": {
+            "earliest": "2026",
+            "likely":   "2026–2027 if IPO window improves",
+        },
+        "opportunity_score":   55,
+        "momentum_badge":      "Watch",
+        "score_breakdown": {
+            "ipo_probability_score":     15,
+            "valuation_momentum_score":  15,
+            "news_recency_score":        6,
+            "source_quality_score":      9,
+            "catalyst_strength_score":   10,
+        },
+    },
+    "Anduril": {
+        "ipo_status":          "Not announced",
+        "estimated_valuation": "Widely reported private-market range around $25B–$35B+",
+        "valuation_notes": [
+            "Fallback estimate based on defense-tech funding and private-market momentum.",
+            "IPO timing depends heavily on defense spending backdrop and company readiness.",
+        ],
+        "catalysts": [
+            "Defense-tech demand",
+            "Autonomous systems adoption",
+            "Government contract momentum",
+            "Investor demand for defense AI exposure",
+        ],
+        "expected_window": {"earliest": "2026", "likely": "2027+"},
+        "opportunity_score":   48,
+        "momentum_badge":      "Watch",
+        "score_breakdown": {
+            "ipo_probability_score":     12,
+            "valuation_momentum_score":  14,
+            "news_recency_score":        5,
+            "source_quality_score":      8,
+            "catalyst_strength_score":   9,
+        },
+    },
+    "Stripe": {
+        "ipo_status":          "Not announced",
+        "estimated_valuation": "Widely reported private-market range around $50B–$70B+",
+        "valuation_notes": [
+            "Fallback estimate based on late-stage fintech valuation and secondary-market context.",
+            "Stripe has long been IPO-ready, but timing remains a management decision.",
+        ],
+        "catalysts": [
+            "Payments volume growth",
+            "Fintech IPO window reopening",
+            "Employee/investor liquidity demand",
+            "Profitability and public-market readiness",
+        ],
+        "expected_window": {
+            "earliest": "2026",
+            "likely":   "2026–2027 if fintech IPO market improves",
+        },
+        "opportunity_score":   52,
+        "momentum_badge":      "Watch",
+        "score_breakdown": {
+            "ipo_probability_score":     14,
+            "valuation_momentum_score":  14,
+            "news_recency_score":        5,
+            "source_quality_score":      9,
+            "catalyst_strength_score":   10,
+        },
+    },
+}
+
+
+def _baseline_for(company_name: str) -> dict[str, Any]:
+    """Return a deep-ish copy of the baseline for a tracked company, or {}."""
+    base = FALLBACK_BASELINES.get(company_name)
+    if not base:
+        return {}
+    return {
+        "ipo_status":          base["ipo_status"],
+        "estimated_valuation": base["estimated_valuation"],
+        "valuation_notes":     list(base.get("valuation_notes") or []),
+        "catalysts":           list(base.get("catalysts") or []),
+        "expected_window":     dict(base.get("expected_window") or {}),
+        "opportunity_score":   int(base.get("opportunity_score") or 0),
+        "momentum_badge":      base.get("momentum_badge") or "Dormant",
+        "score_breakdown":     dict(base.get("score_breakdown") or {}),
+    }
+
+
 # ── Cache ────────────────────────────────────────────────────────────────────
 
 # 8 hours fresh window; stale data is still kept for fallback.
@@ -1198,6 +1381,44 @@ async def _build_company_payload(spec: dict[str, Any]) -> dict[str, Any]:
         }
         news_items = []
 
+    # If no live signal at all (no Perplexity sources, no Polymarket markets,
+    # no RSS news), fall back to the static baseline so the card still shows
+    # useful context instead of all Unknown / 0.  Polymarket and news stay
+    # empty — we never fabricate prediction-market odds or news.
+    has_perplexity = bool(perplexity_data.get("sources")) or (
+        perplexity_data.get("ipo_status") not in (None, "", "Unknown")
+        or perplexity_data.get("estimated_valuation") not in (None, "", "Unknown")
+    )
+    has_market = (
+        polymarket_data.get("ipo_probability_12m") is not None
+        or bool(polymarket_data.get("valuation_markets"))
+    )
+    has_news = bool(news_items)
+
+    if not (has_perplexity or has_market or has_news):
+        baseline = _baseline_for(company)
+        if baseline:
+            return {
+                "company":             company,
+                "ipo_status":          baseline["ipo_status"],
+                "estimated_valuation": baseline["estimated_valuation"],
+                "valuation_notes":     baseline["valuation_notes"],
+                "polymarket": {
+                    "ipo_probability_12m": None,
+                    "valuation_markets":   [],
+                    "summary":             polymarket_data.get("summary")
+                    or "No direct prediction market found.",
+                },
+                "catalysts":           baseline["catalysts"],
+                "expected_window":     baseline["expected_window"],
+                "confidence_score":    "Low",
+                "latest_news":         [],
+                "sources":             [],
+                "opportunity_score":   baseline["opportunity_score"],
+                "score_breakdown":     baseline["score_breakdown"],
+                "_fallback_baseline":  True,
+            }
+
     confidence = _confidence_score(perplexity_data, polymarket_data, news_items)
     score_breakdown = _compute_score_breakdown(perplexity_data, polymarket_data, news_items)
     opportunity_score = _opportunity_score_from_breakdown(score_breakdown)
@@ -1226,13 +1447,33 @@ async def _build_company_payload(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _empty_company_entry(company_name: str) -> dict[str, Any]:
-    breakdown = {
-        "ipo_probability_score":     0,
-        "valuation_momentum_score":  0,
-        "news_recency_score":        0,
-        "source_quality_score":      0,
-        "catalyst_strength_score":   0,
-    }
+    """
+    Build a fallback entry for one company.  Uses the static baseline if the
+    company has one (the six tracked names), otherwise returns a fully
+    "Unknown" skeleton.  Polymarket / news / sources are intentionally left
+    empty — we never fabricate prediction-market odds or news.
+    """
+    baseline = _baseline_for(company_name)
+    if baseline:
+        return {
+            "company":             company_name,
+            "ipo_status":          baseline["ipo_status"],
+            "estimated_valuation": baseline["estimated_valuation"],
+            "valuation_notes":     baseline["valuation_notes"],
+            "polymarket": {
+                "ipo_probability_12m": None,
+                "valuation_markets":   [],
+                "summary":             "No direct prediction market found.",
+            },
+            "catalysts":           baseline["catalysts"],
+            "expected_window":     baseline["expected_window"],
+            "confidence_score":    "Low",
+            "latest_news":         [],
+            "sources":             [],
+            "opportunity_score":   baseline["opportunity_score"],
+            "score_breakdown":     baseline["score_breakdown"],
+        }
+
     return {
         "company":             company_name,
         "ipo_status":          "Unknown",
@@ -1249,26 +1490,55 @@ def _empty_company_entry(company_name: str) -> dict[str, Any]:
         "latest_news":         [],
         "sources":             [],
         "opportunity_score":   0,
-        "score_breakdown":     breakdown,
+        "score_breakdown": {
+            "ipo_probability_score":     0,
+            "valuation_momentum_score":  0,
+            "news_recency_score":        0,
+            "source_quality_score":      0,
+            "catalyst_strength_score":   0,
+        },
     }
 
 
 def _safe_six_fallback() -> list[dict[str, Any]]:
-    """Build the six tracked companies as fully-shaped fallback entries, ranked 1-6."""
+    """
+    Build the six tracked companies as fully-shaped fallback entries.
+
+    Applies the static baselines (catalysts, valuation range, modest
+    opportunity_score, Watch badge) so limited-data mode still surfaces
+    useful context.  Ranks are assigned by opportunity_score descending,
+    matching the live build's ordering.  Change-tracking is left as
+    null/Unknown unless a prior snapshot exists.
+    """
     out: list[dict[str, Any]] = []
-    for idx, name in enumerate(_FALLBACK_COMPANY_NAMES, start=1):
+    try:
+        prior_snapshots = _load_snapshots()
+    except Exception as e:
+        print(f"[PRE_IPO] snapshot load wrapper failed (fallback): {e}")
+        prior_snapshots = {}
+
+    for name in _FALLBACK_COMPANY_NAMES:
         entry = _empty_company_entry(name)
-        entry["rank"] = idx
-        entry["momentum_badge"] = "Dormant"
-        entry["change_tracking"] = {
-            "valuation_change":       "Unknown",
-            "ipo_probability_change": "Unknown",
-            "new_catalysts":          [],
-            "previous_score":         None,
-            "score_change":           None,
-            "last_snapshot_at":       None,
-        }
+        baseline = _baseline_for(name)
+        entry["momentum_badge"] = baseline.get("momentum_badge") or "Dormant"
+        try:
+            entry["change_tracking"] = _diff_change_tracking(
+                name, entry, prior_snapshots,
+            )
+        except Exception:
+            entry["change_tracking"] = {
+                "valuation_change":       "Unknown",
+                "ipo_probability_change": "Unknown",
+                "new_catalysts":          [],
+                "previous_score":         None,
+                "score_change":           None,
+                "last_snapshot_at":       None,
+            }
         out.append(entry)
+
+    out.sort(key=lambda x: int(x.get("opportunity_score") or 0), reverse=True)
+    for idx, entry in enumerate(out, start=1):
+        entry["rank"] = idx
     return out
 
 
@@ -1348,11 +1618,18 @@ async def _build_full_payload() -> dict[str, Any]:
     except Exception as e:
         print(f"[PRE_IPO] snapshot persist wrapper failed: {e}")
 
-    return {
+    flags = [bool(c.pop("_fallback_baseline", False)) for c in companies]
+    all_baseline = bool(flags) and all(flags)
+    payload: dict[str, Any] = {
         "status":     "ok",
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "companies":  companies,
     }
+    if all_baseline:
+        payload["fallback_reason"] = (
+            "live sources unavailable; serving static fallback baselines"
+        )
+    return payload
 
 
 def _payload_has_companies(p: Any) -> bool:
