@@ -285,6 +285,14 @@ async def lifespan(app):
     except Exception as _e:
         print(f"[STARTUP] Options snapshot state load error: {_e}")
     asyncio.create_task(_earnings_calendar_warmup())
+    # Weekly calendar snapshots (Dividends, IPOs, Splits, Economic, Treasury).
+    # Reads only from disk on request; refreshes Sunday in ET per per-tab hour.
+    try:
+        from services.calendar_snapshot_service import weekly_scheduler_loop as _calendar_snap_loop
+        from config import FMP_API_KEY as _fmp_key_for_snap
+        asyncio.create_task(_calendar_snap_loop(lambda: _fmp_key_for_snap))
+    except Exception as _e:
+        print(f"[STARTUP] calendar snapshot scheduler init error: {_e}")
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)
