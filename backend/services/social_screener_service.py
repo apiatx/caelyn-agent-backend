@@ -852,6 +852,12 @@ def _build_fundamental_row(
             gross_margin = round(gross_profit / revenue * 100, 2)
         except ZeroDivisionError:
             gross_margin = None
+    # Fallback: ratios-ttm exposes grossProfitMarginTTM (0-1 decimal) which is
+    # always available even when the income-statement call was rate-limited.
+    if gross_margin is None:
+        _gpm = _safe_float((ratios_ttm or {}).get("grossProfitMarginTTM"))
+        if _gpm is not None:
+            gross_margin = round(_gpm * 100, 2)
 
     fcf_margin: Optional[float] = None
     if free_cash_flow is not None and revenue not in (None, 0):
@@ -872,7 +878,7 @@ def _build_fundamental_row(
 
     current_ratio = _safe_float((ratios_ttm or {}).get("currentRatioTTM"))
     ps_ratio      = _safe_float((ratios_ttm or {}).get("priceToSalesRatioTTM"))
-    pe_ratio      = _safe_float((ratios_ttm or {}).get("priceEarningsRatioTTM"))
+    pe_ratio      = _safe_float((ratios_ttm or {}).get("priceToEarningsRatioTTM"))
 
     fiscal_period = "TTM" if (ratios_ttm or metrics_ttm) else (
         income_latest.get("calendarYear") or income_latest.get("date") or "latest"
@@ -1057,6 +1063,11 @@ async def fetch_enrichment_for_symbols(
     successes_fund = 0
     failures_fund  = 0
 
+    # Limit concurrent FMP calls: 50 symbols × 6 endpoints = 300 potential
+    # simultaneous HTTP requests → rate-limit errors for some symbols.
+    # Semaphore caps at 12 simultaneous enrich_fund coroutines (72 FMP calls).
+    _fund_sem = asyncio.Semaphore(12)
+
     # ── Tradier batch quote (primary for price/vol/1D%) ───────────────────
     # Done outside the FMP httpx session so it gets a fresh connection pool
     # and doesn't block FMP enrichment if Tradier is slow.
@@ -1138,50 +1149,53 @@ async def fetch_enrichment_for_symbols(
             # Heavy fundamental enrichment for the capped subset
             async def enrich_fund(sym: str) -> None:
                 nonlocal successes_fund, failures_fund
-                try:
-                    profile, ratios, metrics, income, balance, cashflow = await asyncio.gather(
-                        _fetch_profile(client, sym, fmp_api_key),
-                        _fetch_ratios_ttm(client, sym, fmp_api_key),
-                        _fetch_key_metrics_ttm(client, sym, fmp_api_key),
-                        _fetch_income_annual(client, sym, fmp_api_key),
-                        _fetch_balance_annual(client, sym, fmp_api_key),
-                        _fetch_cashflow_annual(client, sym, fmp_api_key),
-                        return_exceptions=True,
-                    )
-                    profile  = profile  if isinstance(profile, dict)  else {}
-                    ratios   = ratios   if isinstance(ratios, dict)   else {}
-                    metrics  = metrics  if isinstance(metrics, dict)  else {}
-                    income   = income   if isinstance(income, dict)   else {}
-                    balance  = balance  if isinstance(balance, dict)  else {}
-                    cashflow = cashflow if isinstance(cashflow, dict) else {}
+                # Semaphore limits concurrent coroutines to avoid FMP rate limits:
+                # 50 symbols × 6 calls = 300 potential simultaneous reqs → capped at 72.
+                async with _fund_sem:
+                    try:
+                        profile, ratios, metrics, income, balance, cashflow = await asyncio.gather(
+                            _fetch_profile(client, sym, fmp_api_key),
+                            _fetch_ratios_ttm(client, sym, fmp_api_key),
+                            _fetch_key_metrics_ttm(client, sym, fmp_api_key),
+                            _fetch_income_annual(client, sym, fmp_api_key),
+                            _fetch_balance_annual(client, sym, fmp_api_key),
+                            _fetch_cashflow_annual(client, sym, fmp_api_key),
+                            return_exceptions=True,
+                        )
+                        profile  = profile  if isinstance(profile, dict)  else {}
+                        ratios   = ratios   if isinstance(ratios, dict)   else {}
+                        metrics  = metrics  if isinstance(metrics, dict)  else {}
+                        income   = income   if isinstance(income, dict)   else {}
+                        balance  = balance  if isinstance(balance, dict)  else {}
+                        cashflow = cashflow if isinstance(cashflow, dict) else {}
 
-                    row = _build_fundamental_row(
-                        sym, profile, ratios, metrics, income, balance, cashflow,
-                    )
-                    fundamental_enrichment[sym] = row
-                    quality = row.get("data_quality", "missing")
-                    if quality != "missing":
-                        successes_fund += 1
-                    else:
+                        row = _build_fundamental_row(
+                            sym, profile, ratios, metrics, income, balance, cashflow,
+                        )
+                        fundamental_enrichment[sym] = row
+                        quality = row.get("data_quality", "missing")
+                        if quality != "missing":
+                            successes_fund += 1
+                        else:
+                            failures_fund += 1
+                        if quality == "missing":
+                            print(
+                                f"[FUND_DEBUG] enrich_fund sym={sym} quality=missing "
+                                f"profile_ok={bool(profile)} ratios_ok={bool(ratios)} "
+                                f"metrics_ok={bool(metrics)} income_ok={bool(income)} "
+                                f"balance_ok={bool(balance)} cashflow_ok={bool(cashflow)}"
+                            )
+                        else:
+                            print(
+                                f"[FUND_DEBUG] enrich_fund sym={sym} quality={quality} "
+                                f"mktcap={row.get('market_cap')} pe={row.get('pe_ratio')}"
+                            )
+                    except Exception as exc:
                         failures_fund += 1
-                    if quality == "missing":
-                        print(
-                            f"[FUND_DEBUG] enrich_fund sym={sym} quality=missing "
-                            f"profile_ok={bool(profile)} ratios_ok={bool(ratios)} "
-                            f"metrics_ok={bool(metrics)} income_ok={bool(income)} "
-                            f"balance_ok={bool(balance)} cashflow_ok={bool(cashflow)}"
+                        print(f"[SOCIAL_SCREENER] enrich_fund {sym}: {exc}")
+                        fundamental_enrichment[sym] = _build_fundamental_row(
+                            sym, {}, {}, {}, {}, {}, {},
                         )
-                    else:
-                        print(
-                            f"[FUND_DEBUG] enrich_fund sym={sym} quality={quality} "
-                            f"mktcap={row.get('market_cap')} pe={row.get('pe_ratio_ttm')}"
-                        )
-                except Exception as exc:
-                    failures_fund += 1
-                    print(f"[SOCIAL_SCREENER] enrich_fund {sym}: {exc}")
-                    fundamental_enrichment[sym] = _build_fundamental_row(
-                        sym, {}, {}, {}, {}, {}, {},
-                    )
 
             await asyncio.gather(*(enrich_fund(s) for s in fund_targets),
                                  return_exceptions=True)

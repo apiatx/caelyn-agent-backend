@@ -1,0 +1,91 @@
+We need to prove where the populated data is being lost.
+
+Current state:
+- Social tab shows tickers but market/price/fundamental fields are blank.
+- Fundamentals tab now shows tickers but all metrics are blank.
+- Backend previously claimed:
+  - Social volume populated 51/57
+  - Fundamentals rows 50
+- Frontend still shows blanks.
+
+This likely means one of:
+1. Backend response contains populated values but frontend is reading wrong fields.
+2. Backend response contains populated values under a different nested object.
+3. Frontend is rendering fallback ticker-universe rows instead of enriched rows.
+4. Backend test checked internal service output, but actual HTTP endpoint returns different/empty payload.
+5. Cache contains blank fallback rows and is overriding enriched rows.
+
+Do a wire-level audit only.
+
+Tasks:
+
+1. Hit the exact HTTP endpoints the frontend calls.
+Do not test only internal service functions.
+
+Find the actual frontend endpoint(s):
+- x-dashboard endpoint
+- social screener endpoint
+- fundamental screener endpoint
+
+For each endpoint, capture real JSON response.
+
+2. For first 10 rows, print:
+- ticker
+- market_cap
+- price
+- volume
+- change_1d_pct
+- change_7d_pct
+- revenue
+- gross_margin
+- pe_ratio
+- data_quality
+
+Also print all keys on row[0].
+
+3. Compare actual backend JSON keys to frontend render keys.
+Find mismatch like:
+- marketCap vs market_cap
+- changesPercentage vs change_1d_pct
+- change_1d vs change_1d_pct
+- peRatio vs pe_ratio
+- rows nested under fundamental_screener.rows but frontend reads fundamentals.rows
+- enriched rows in one object but table maps another object
+
+4. Check whether frontend is using fallback rows.
+Search for logic like:
+- if fundamentalRows empty, build rows from socialRows
+- fallbackFundamentalRows
+- tickerUniverseRows
+- showing ticker universe with available metrics
+- “Fundamental enrichment is warming up”
+
+If this fallback is active even when enriched backend rows exist, fix that.
+
+5. Check cache pollution.
+Determine whether cache contains blank fallback payload:
+- social_screener:fs_payload
+- x-dashboard cache
+- social screener cache keys
+
+If blank fallback rows were cached, clear/rebuild cache.
+Do not serve blank fallback cache over live enriched data.
+
+6. Add one temporary frontend console log:
+When rendering Fundamentals table, log:
+- source used: fundamental_screener.rows / fallback social rows / cached fallback
+- row count
+- row[0] keys
+- row[0] sample values
+
+7. Acceptance:
+- If backend JSON has populated values, frontend must render those exact values.
+- If backend JSON does not have populated values, fix backend endpoint/cache.
+- Do not redesign endpoint until this audit proves it is necessary.
+
+Deliver:
+A. Actual endpoint URL used by frontend
+B. Actual first row JSON from backend
+C. Actual first row object used by frontend table
+D. Exact mismatch or cache issue
+E. Minimal fix
