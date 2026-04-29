@@ -148,7 +148,9 @@ except Exception:
                 "likely":   "2026–2027 if IPO window improves",
             },
             "opportunity_score": 55,
-            "momentum_badge":    "Watch",
+            # Strongest fallback IPO-readiness candidate (mature business +
+            # plausible 2026–2027 window) → "Heating Up" not "Watch".
+            "momentum_badge":    "Heating Up",
             "score_breakdown": {
                 "ipo_probability_score":    15,
                 "valuation_momentum_score": 15,
@@ -199,7 +201,9 @@ except Exception:
                 "likely":   "2026–2027 if fintech IPO market improves",
             },
             "opportunity_score": 52,
-            "momentum_badge":    "Watch",
+            # Strongest fallback IPO-readiness candidate (mature business +
+            # plausible 2026–2027 window) → "Heating Up" not "Watch".
+            "momentum_badge":    "Heating Up",
             "score_breakdown": {
                 "ipo_probability_score":    14,
                 "valuation_momentum_score": 14,

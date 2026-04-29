@@ -206,7 +206,10 @@ FALLBACK_BASELINES: dict[str, dict[str, Any]] = {
             "likely":   "2026–2027 if IPO window improves",
         },
         "opportunity_score":   55,
-        "momentum_badge":      "Watch",
+        # Mature business model + long-running public-market readiness
+        # narrative + plausible 2026–2027 IPO window → strongest fallback
+        # IPO-readiness candidate, so badge bumps to "Heating Up".
+        "momentum_badge":      "Heating Up",
         "score_breakdown": {
             "ipo_probability_score":     15,
             "valuation_momentum_score":  15,
@@ -257,7 +260,10 @@ FALLBACK_BASELINES: dict[str, dict[str, Any]] = {
             "likely":   "2026–2027 if fintech IPO market improves",
         },
         "opportunity_score":   52,
-        "momentum_badge":      "Watch",
+        # Mature business model + long-running public-market readiness
+        # narrative + plausible 2026–2027 IPO window → strongest fallback
+        # IPO-readiness candidate, so badge bumps to "Heating Up".
+        "momentum_badge":      "Heating Up",
         "score_breakdown": {
             "ipo_probability_score":     14,
             "valuation_momentum_score":  14,
@@ -1595,6 +1601,15 @@ async def _build_full_payload() -> dict[str, Any]:
 
     for c in companies:
         try:
+            # Preserve the baseline-provided badge for fallback entries so
+            # curated calls like Databricks/Stripe → "Heating Up" survive
+            # the score-based recompute, which would otherwise force them
+            # back to "Watch" given their modest fallback scores.
+            if c.get("_fallback_baseline"):
+                baseline = _baseline_for(c.get("company") or "")
+                if baseline.get("momentum_badge"):
+                    c["momentum_badge"] = baseline["momentum_badge"]
+                    continue
             sc = int(c.get("opportunity_score") or 0)
             ch = c.get("change_tracking") or {}
             score_change = ch.get("score_change") if isinstance(ch, dict) else None
