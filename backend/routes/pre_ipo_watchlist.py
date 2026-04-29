@@ -3,11 +3,13 @@ Pre-IPO Watchlist router — GET /api/calendar/pre-ipo-watchlist
 
 Additive endpoint that aggregates pre-IPO intel for a fixed set of
 high-profile private companies using Perplexity, Polymarket, and
-Finnhub.  Independent of the existing FMP IPO calendar surface.
+lightweight RSS news filtering.  Independent of the existing FMP IPO
+calendar surface.
 
-Always returns HTTP 200 with at minimum a safe-shape JSON payload so
-the frontend never sees a hard failure even when external API keys are
-missing or upstream sources are unavailable.
+Always returns HTTP 200 with the six tracked companies.  If any path
+would produce an empty / missing / non-list `companies`, the response
+is normalized at the very end to the six fallback companies so the
+frontend never sees `companies: []`.
 """
 from __future__ import annotations
 
@@ -38,6 +40,12 @@ _FALLBACK_COMPANY_NAMES = (
     "SpaceX", "OpenAI", "Anthropic", "Databricks", "Anduril", "Stripe",
 )
 
+_FALLBACK_DATA_CONFIDENCE = {
+    "status": "limited",
+    "label":  "Limited data available",
+    "reason": "Live intelligence unavailable; showing tracked pre-IPO companies with safe fallback fields.",
+}
+
 
 def _check_key(api_key: Optional[str]) -> Optional[JSONResponse]:
     """Return a 401 response if the API key is invalid, else None."""
@@ -59,7 +67,7 @@ def _safe_empty_company(name: str, rank: int) -> dict[str, Any]:
         "polymarket": {
             "ipo_probability_12m": None,
             "valuation_markets":   [],
-            "summary":             "Data temporarily unavailable.",
+            "summary":             "No direct prediction market found.",
         },
         "catalysts":           [],
         "expected_window":     {"earliest": "Unknown", "likely": "Unknown"},
@@ -67,6 +75,8 @@ def _safe_empty_company(name: str, rank: int) -> dict[str, Any]:
         "latest_news":         [],
         "sources":             [],
         "opportunity_score":   0,
+        "rank":                rank,
+        "momentum_badge":      "Dormant",
         "score_breakdown": {
             "ipo_probability_score":     0,
             "valuation_momentum_score":  0,
@@ -82,19 +92,21 @@ def _safe_empty_company(name: str, rank: int) -> dict[str, Any]:
             "score_change":           None,
             "last_snapshot_at":       None,
         },
-        "momentum_badge":      "Dormant",
-        "rank":                rank,
     }
+
+
+def _fallback_companies() -> list[dict[str, Any]]:
+    return [
+        _safe_empty_company(name, idx)
+        for idx, name in enumerate(_FALLBACK_COMPANY_NAMES, start=1)
+    ]
 
 
 def _safe_fallback_payload(reason: Optional[str] = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "status":     "ok",
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "companies": [
-            _safe_empty_company(name, idx)
-            for idx, name in enumerate(_FALLBACK_COMPANY_NAMES, start=1)
-        ],
+        "companies":  _fallback_companies(),
     }
     if reason:
         payload["fallback_reason"] = reason
@@ -110,15 +122,8 @@ _CONFIDENCE_LABELS = {
 
 def _derive_data_confidence(data: dict[str, Any]) -> dict[str, Any]:
     """
-    Map the existing service-level status / metadata onto a machine-readable
-    top-level signal for the frontend.
-
-      - live    → fresh successful fetch with normal data
-      - cached  → stale cached data served because refresh failed
-      - limited → safe fallback / hard error / empty companies list
-
-    Reuses existing fields on the payload (`status`, `stale_reason`,
-    `fallback_reason`, `error`) — does not require service changes.
+    Map service-level status / metadata onto a top-level signal for the
+    frontend.  Reuses existing fields on the payload.
     """
     status_str = str(data.get("status") or "").lower()
     fallback_reason = data.get("fallback_reason")
@@ -150,6 +155,52 @@ def _derive_data_confidence(data: dict[str, Any]) -> dict[str, Any]:
     return block
 
 
+def _normalize_response(payload: Any) -> dict[str, Any]:
+    """
+    Final guard applied immediately before returning the response.
+
+    Rules:
+      - If `payload` is not a dict, replace with a fresh fallback payload.
+      - If `companies` is missing, null, not a list, or empty, replace with
+        the six tracked fallback companies and force `data_confidence` to
+        the "limited" block.
+      - Otherwise, leave companies untouched and (re)derive data_confidence
+        from the service-level fields.
+    """
+    if not isinstance(payload, dict):
+        print("[pre_ipo_watchlist] normalization: payload not a dict, using fallback six")
+        out = _safe_fallback_payload("payload not a dict")
+        out["data_confidence"] = dict(_FALLBACK_DATA_CONFIDENCE)
+        return out
+
+    out: dict[str, Any] = dict(payload)
+    out.setdefault("status", "ok")
+    out.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
+
+    companies = out.get("companies")
+    if not isinstance(companies, list) or len(companies) == 0:
+        print(
+            "[pre_ipo_watchlist] normalization: empty/missing companies "
+            f"(status={out.get('status')!r}, "
+            f"fallback_reason={out.get('fallback_reason')!r}); "
+            "replacing with tracked fallback six"
+        )
+        out["companies"] = _fallback_companies()
+        out.setdefault("fallback_reason", "empty companies list normalized to tracked six")
+        out["data_confidence"] = dict(_FALLBACK_DATA_CONFIDENCE)
+        return out
+
+    # If the service signalled a fallback (e.g. live build returned empty
+    # and the service substituted the safe six), force the canonical
+    # "limited" data_confidence block — we are serving fallback data.
+    if out.get("fallback_reason"):
+        out["data_confidence"] = dict(_FALLBACK_DATA_CONFIDENCE)
+        return out
+
+    out["data_confidence"] = _derive_data_confidence(out)
+    return out
+
+
 @router.get("/api/calendar/pre-ipo-watchlist")
 @traceable(name="pre_ipo_watchlist.endpoint")
 async def pre_ipo_watchlist(
@@ -164,42 +215,24 @@ async def pre_ipo_watchlist(
     Return pre-IPO watchlist data for a fixed set of high-profile private
     companies (SpaceX, OpenAI, Anthropic, Databricks, Anduril, Stripe).
 
-    Data is cached for ~8 hours.  Stale data is returned if a refresh
-    fails so callers always receive a usable response when at least one
-    successful fetch has happened previously.
-
-    The endpoint always responds with HTTP 200 and a safe-shape JSON
-    body — even when the underlying service raises or external API
-    keys are missing — so the frontend can render a usable empty state
-    instead of a hard error.
+    Always returns HTTP 200 with exactly the six tracked companies.
     """
     err = _check_key(api_key)
     if err:
         return err
 
+    payload: Any
     try:
         from services.pre_ipo_watchlist_service import get_pre_ipo_watchlist
     except Exception as e:
         print(f"[pre_ipo_watchlist] service import failed: {e}")
         payload = _safe_fallback_payload(f"service import failed: {e}")
-        payload["data_confidence"] = _derive_data_confidence(payload)
-        return JSONResponse(content=payload)
+        return JSONResponse(content=_normalize_response(payload))
 
     try:
-        data = await get_pre_ipo_watchlist(refresh=refresh)
-        if not isinstance(data, dict):
-            payload = _safe_fallback_payload("upstream returned non-dict")
-            payload["data_confidence"] = _derive_data_confidence(payload)
-            return JSONResponse(content=payload)
-        # Defensive: ensure required top-level shape exists.
-        data.setdefault("status", "ok")
-        data.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
-        if not isinstance(data.get("companies"), list):
-            data["companies"] = []
-        data["data_confidence"] = _derive_data_confidence(data)
-        return JSONResponse(content=data)
+        payload = await get_pre_ipo_watchlist(refresh=refresh)
     except Exception as e:
         print(f"[pre_ipo_watchlist] unhandled: {e}")
         payload = _safe_fallback_payload(f"unhandled: {e}")
-        payload["data_confidence"] = _derive_data_confidence(payload)
-        return JSONResponse(content=payload)
+
+    return JSONResponse(content=_normalize_response(payload))
