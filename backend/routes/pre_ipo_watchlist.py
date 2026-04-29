@@ -47,6 +47,170 @@ _FALLBACK_DATA_CONFIDENCE = {
 }
 
 
+# Try to share the static baselines with the service module.  If the import
+# fails (the same failure mode this file's last-resort fallback exists for),
+# fall back to a small inline copy so the six fallback companies still get
+# meaningful values.
+try:
+    from services.pre_ipo_watchlist_service import FALLBACK_BASELINES as _ROUTE_BASELINES  # type: ignore
+except Exception:
+    _ROUTE_BASELINES = {
+        "OpenAI": {
+            "ipo_status":          "Not announced",
+            "estimated_valuation": "Widely reported private-market range around $80B–$150B+",
+            "valuation_notes": [
+                "Fallback estimate based on widely reported recent private funding and secondary-market context.",
+                "Live valuation intelligence unavailable; refresh when Perplexity/RSS sources are available.",
+            ],
+            "catalysts": [
+                "Enterprise AI revenue scale",
+                "Microsoft partnership and infrastructure needs",
+                "Investor liquidity pressure",
+                "Regulatory scrutiny",
+            ],
+            "expected_window": {"earliest": "Late 2026", "likely": "2027+"},
+            "opportunity_score": 45,
+            "momentum_badge":    "Watch",
+            "score_breakdown": {
+                "ipo_probability_score":    12,
+                "valuation_momentum_score": 13,
+                "news_recency_score":       4,
+                "source_quality_score":     8,
+                "catalyst_strength_score":  8,
+            },
+        },
+        "SpaceX": {
+            "ipo_status":          "Not announced",
+            "estimated_valuation": "Widely reported private-market range around $180B–$350B+",
+            "valuation_notes": [
+                "Fallback estimate based on widely reported private valuation and secondary-market context.",
+                "Starlink spinout remains the most realistic public-market path if leadership chooses to list.",
+            ],
+            "catalysts": [
+                "Starlink revenue scale",
+                "Secondary-market liquidity demand",
+                "Satellite broadband expansion",
+                "Defense and launch cadence",
+            ],
+            "expected_window": {
+                "earliest": "2026",
+                "likely":   "Starlink spinout more likely than full SpaceX IPO",
+            },
+            "opportunity_score": 50,
+            "momentum_badge":    "Watch",
+            "score_breakdown": {
+                "ipo_probability_score":    13,
+                "valuation_momentum_score": 15,
+                "news_recency_score":       5,
+                "source_quality_score":     8,
+                "catalyst_strength_score":  9,
+            },
+        },
+        "Anthropic": {
+            "ipo_status":          "Not announced",
+            "estimated_valuation": "Widely reported private-market range around $60B–$100B+",
+            "valuation_notes": [
+                "Fallback estimate based on recent AI funding-round reports and strategic investor demand.",
+                "Live valuation intelligence unavailable; treat this as a baseline only.",
+            ],
+            "catalysts": [
+                "Enterprise Claude adoption",
+                "Strategic cloud partnerships",
+                "AI infrastructure funding needs",
+                "Competitive pressure from OpenAI and Google",
+            ],
+            "expected_window": {"earliest": "Late 2026", "likely": "2027+"},
+            "opportunity_score": 42,
+            "momentum_badge":    "Watch",
+            "score_breakdown": {
+                "ipo_probability_score":    11,
+                "valuation_momentum_score": 12,
+                "news_recency_score":       4,
+                "source_quality_score":     7,
+                "catalyst_strength_score":  8,
+            },
+        },
+        "Databricks": {
+            "ipo_status":          "Not announced",
+            "estimated_valuation": "Widely reported private-market range around $40B–$60B+",
+            "valuation_notes": [
+                "Fallback estimate based on mature late-stage private-company valuation context.",
+                "Databricks is one of the more IPO-ready private software companies, but timing remains unconfirmed.",
+            ],
+            "catalysts": [
+                "AI data platform demand",
+                "Lakehouse adoption",
+                "Enterprise revenue maturity",
+                "Public software market reopening",
+            ],
+            "expected_window": {
+                "earliest": "2026",
+                "likely":   "2026–2027 if IPO window improves",
+            },
+            "opportunity_score": 55,
+            "momentum_badge":    "Watch",
+            "score_breakdown": {
+                "ipo_probability_score":    15,
+                "valuation_momentum_score": 15,
+                "news_recency_score":       6,
+                "source_quality_score":     9,
+                "catalyst_strength_score":  10,
+            },
+        },
+        "Anduril": {
+            "ipo_status":          "Not announced",
+            "estimated_valuation": "Widely reported private-market range around $25B–$35B+",
+            "valuation_notes": [
+                "Fallback estimate based on defense-tech funding and private-market momentum.",
+                "IPO timing depends heavily on defense spending backdrop and company readiness.",
+            ],
+            "catalysts": [
+                "Defense-tech demand",
+                "Autonomous systems adoption",
+                "Government contract momentum",
+                "Investor demand for defense AI exposure",
+            ],
+            "expected_window": {"earliest": "2026", "likely": "2027+"},
+            "opportunity_score": 48,
+            "momentum_badge":    "Watch",
+            "score_breakdown": {
+                "ipo_probability_score":    12,
+                "valuation_momentum_score": 14,
+                "news_recency_score":       5,
+                "source_quality_score":     8,
+                "catalyst_strength_score":  9,
+            },
+        },
+        "Stripe": {
+            "ipo_status":          "Not announced",
+            "estimated_valuation": "Widely reported private-market range around $50B–$70B+",
+            "valuation_notes": [
+                "Fallback estimate based on late-stage fintech valuation and secondary-market context.",
+                "Stripe has long been IPO-ready, but timing remains a management decision.",
+            ],
+            "catalysts": [
+                "Payments volume growth",
+                "Fintech IPO window reopening",
+                "Employee/investor liquidity demand",
+                "Profitability and public-market readiness",
+            ],
+            "expected_window": {
+                "earliest": "2026",
+                "likely":   "2026–2027 if fintech IPO market improves",
+            },
+            "opportunity_score": 52,
+            "momentum_badge":    "Watch",
+            "score_breakdown": {
+                "ipo_probability_score":    14,
+                "valuation_momentum_score": 14,
+                "news_recency_score":       5,
+                "source_quality_score":     9,
+                "catalyst_strength_score":  10,
+            },
+        },
+    }
+
+
 def _check_key(api_key: Optional[str]) -> Optional[JSONResponse]:
     """Return a 401 response if the API key is invalid, else None."""
     try:
@@ -59,31 +223,40 @@ def _check_key(api_key: Optional[str]) -> Optional[JSONResponse]:
 
 
 def _safe_empty_company(name: str, rank: int) -> dict[str, Any]:
+    """
+    Last-resort per-company fallback used only when the service module
+    itself fails to import.  Mirrors the baselines defined in
+    services.pre_ipo_watchlist_service so this layer also avoids the
+    all-Unknown/zero shape.
+    """
+    baseline = _ROUTE_BASELINES.get(name) or {}
     return {
         "company":             name,
-        "ipo_status":          "Unknown",
-        "estimated_valuation": "Unknown",
-        "valuation_notes":     [],
+        "ipo_status":          baseline.get("ipo_status") or "Unknown",
+        "estimated_valuation": baseline.get("estimated_valuation") or "Unknown",
+        "valuation_notes":     list(baseline.get("valuation_notes") or []),
         "polymarket": {
             "ipo_probability_12m": None,
             "valuation_markets":   [],
             "summary":             "No direct prediction market found.",
         },
-        "catalysts":           [],
-        "expected_window":     {"earliest": "Unknown", "likely": "Unknown"},
+        "catalysts":           list(baseline.get("catalysts") or []),
+        "expected_window":     dict(baseline.get("expected_window") or {
+            "earliest": "Unknown", "likely": "Unknown",
+        }),
         "confidence_score":    "Low",
         "latest_news":         [],
         "sources":             [],
-        "opportunity_score":   0,
+        "opportunity_score":   int(baseline.get("opportunity_score") or 0),
         "rank":                rank,
-        "momentum_badge":      "Dormant",
-        "score_breakdown": {
+        "momentum_badge":      baseline.get("momentum_badge") or "Dormant",
+        "score_breakdown":     dict(baseline.get("score_breakdown") or {
             "ipo_probability_score":     0,
             "valuation_momentum_score":  0,
             "news_recency_score":        0,
             "source_quality_score":      0,
             "catalyst_strength_score":   0,
-        },
+        }),
         "change_tracking": {
             "valuation_change":       "Unknown",
             "ipo_probability_change": "Unknown",
@@ -96,10 +269,19 @@ def _safe_empty_company(name: str, rank: int) -> dict[str, Any]:
 
 
 def _fallback_companies() -> list[dict[str, Any]]:
-    return [
+    """
+    Build the fallback six.  Tries to mirror the service-module ranking
+    (by opportunity_score desc) so the response shape matches what the
+    service layer would have produced.
+    """
+    entries = [
         _safe_empty_company(name, idx)
         for idx, name in enumerate(_FALLBACK_COMPANY_NAMES, start=1)
     ]
+    entries.sort(key=lambda x: int(x.get("opportunity_score") or 0), reverse=True)
+    for idx, entry in enumerate(entries, start=1):
+        entry["rank"] = idx
+    return entries
 
 
 def _safe_fallback_payload(reason: Optional[str] = None) -> dict[str, Any]:
