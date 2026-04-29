@@ -101,6 +101,55 @@ def _safe_fallback_payload(reason: Optional[str] = None) -> dict[str, Any]:
     return payload
 
 
+_CONFIDENCE_LABELS = {
+    "live":    "Live intelligence",
+    "cached":  "Using cached intelligence",
+    "limited": "Limited data available",
+}
+
+
+def _derive_data_confidence(data: dict[str, Any]) -> dict[str, Any]:
+    """
+    Map the existing service-level status / metadata onto a machine-readable
+    top-level signal for the frontend.
+
+      - live    → fresh successful fetch with normal data
+      - cached  → stale cached data served because refresh failed
+      - limited → safe fallback / hard error / empty companies list
+
+    Reuses existing fields on the payload (`status`, `stale_reason`,
+    `fallback_reason`, `error`) — does not require service changes.
+    """
+    status_str = str(data.get("status") or "").lower()
+    fallback_reason = data.get("fallback_reason")
+    stale_reason = data.get("stale_reason")
+    error_msg = data.get("error")
+    companies = data.get("companies")
+    has_companies = isinstance(companies, list) and len(companies) > 0
+
+    if status_str == "stale":
+        confidence = "cached"
+        reason = stale_reason or "Serving cached intelligence; live refresh failed."
+    elif status_str == "error" or fallback_reason or not has_companies:
+        confidence = "limited"
+        reason = (
+            error_msg
+            or fallback_reason
+            or "Live sources unavailable; serving safe fallback data."
+        )
+    else:
+        confidence = "live"
+        reason = None
+
+    block: dict[str, Any] = {
+        "status": confidence,
+        "label":  _CONFIDENCE_LABELS[confidence],
+    }
+    if reason:
+        block["reason"] = str(reason)
+    return block
+
+
 @router.get("/api/calendar/pre-ipo-watchlist")
 @traceable(name="pre_ipo_watchlist.endpoint")
 async def pre_ipo_watchlist(
@@ -132,18 +181,25 @@ async def pre_ipo_watchlist(
         from services.pre_ipo_watchlist_service import get_pre_ipo_watchlist
     except Exception as e:
         print(f"[pre_ipo_watchlist] service import failed: {e}")
-        return JSONResponse(content=_safe_fallback_payload(f"service import failed: {e}"))
+        payload = _safe_fallback_payload(f"service import failed: {e}")
+        payload["data_confidence"] = _derive_data_confidence(payload)
+        return JSONResponse(content=payload)
 
     try:
         data = await get_pre_ipo_watchlist(refresh=refresh)
         if not isinstance(data, dict):
-            return JSONResponse(content=_safe_fallback_payload("upstream returned non-dict"))
+            payload = _safe_fallback_payload("upstream returned non-dict")
+            payload["data_confidence"] = _derive_data_confidence(payload)
+            return JSONResponse(content=payload)
         # Defensive: ensure required top-level shape exists.
         data.setdefault("status", "ok")
         data.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
         if not isinstance(data.get("companies"), list):
             data["companies"] = []
+        data["data_confidence"] = _derive_data_confidence(data)
         return JSONResponse(content=data)
     except Exception as e:
         print(f"[pre_ipo_watchlist] unhandled: {e}")
-        return JSONResponse(content=_safe_fallback_payload(f"unhandled: {e}"))
+        payload = _safe_fallback_payload(f"unhandled: {e}")
+        payload["data_confidence"] = _derive_data_confidence(payload)
+        return JSONResponse(content=payload)
