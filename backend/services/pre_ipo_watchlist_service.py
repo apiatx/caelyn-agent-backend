@@ -3,21 +3,24 @@ Pre-IPO Watchlist service.
 
 Aggregates pre-IPO intel for a small fixed set of high-profile private
 companies (SpaceX, OpenAI, Anthropic, Databricks, Anduril, Stripe) using
-three external data sources:
+two external data sources plus lightweight RSS news filtering:
 
   - Perplexity (sonar)         → IPO rumors, valuation estimates, funding
                                   context, secondary-market signals,
                                   expected timing.  Citations preserved.
   - Polymarket (Gamma API)     → Prediction markets relevant to IPO
                                   timing or valuation thresholds.
-  - Finnhub (general news)     → Best-effort news confirmations.  These
-                                  are private companies, so symbol-level
-                                  data is not expected to exist.
+  - RSS feeds (TechCrunch,     → Lightweight name-filtered news
+    Reuters, CNBC, Axios, ...)    confirmations.  Replaces the prior
+                                  Finnhub general-news path so this
+                                  feature does not consume Finnhub
+                                  quota.
 
 The full response is cached for ~8 hours.  Stale cache is served if any
 of the upstream calls fail.  Per-company failures never break the
 endpoint — the affected company simply returns nulls / empty arrays /
-"Unknown".
+"Unknown".  Empty company lists are never returned: the route layer
+applies a final fallback-six guard.
 
 This module is additive and shares no code paths with the existing
 FMP-based IPO calendar (services.catalyst_calendar_service).
@@ -28,13 +31,15 @@ import asyncio
 import json
 import re
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional
 
 import httpx
 
-from config import FINNHUB_API_KEY, PERPLEXITY_API_KEY
+from config import PERPLEXITY_API_KEY
 
 try:
     from agent.model_policy import MODEL_SONAR
@@ -59,33 +64,43 @@ TRACKED_COMPANIES: list[dict[str, Any]] = [
         "company": "SpaceX",
         "polymarket_keywords": ["spacex", "starlink"],
         "ipo_keywords":       ["spacex ipo", "starlink ipo"],
+        "news_aliases":       ["spacex", "starlink"],
     },
     {
         "company": "OpenAI",
         "polymarket_keywords": ["openai"],
         "ipo_keywords":       ["openai ipo"],
+        "news_aliases":       ["openai"],
     },
     {
         "company": "Anthropic",
         "polymarket_keywords": ["anthropic"],
         "ipo_keywords":       ["anthropic ipo"],
+        "news_aliases":       ["anthropic"],
     },
     {
         "company": "Databricks",
         "polymarket_keywords": ["databricks"],
         "ipo_keywords":       ["databricks ipo"],
+        "news_aliases":       ["databricks"],
     },
     {
         "company": "Anduril",
         "polymarket_keywords": ["anduril"],
         "ipo_keywords":       ["anduril ipo"],
+        "news_aliases":       ["anduril"],
     },
     {
         "company": "Stripe",
         "polymarket_keywords": ["stripe"],
         "ipo_keywords":       ["stripe ipo"],
+        # Avoid generic word "stripe" matching unrelated articles by
+        # requiring "stripe" alongside fintech/payments cues at filter time.
+        "news_aliases":       ["stripe"],
     },
 ]
+
+_FALLBACK_COMPANY_NAMES: tuple[str, ...] = tuple(c["company"] for c in TRACKED_COMPANIES)
 
 
 # ── Cache ────────────────────────────────────────────────────────────────────
@@ -121,7 +136,7 @@ async def _fetch_polymarket_for_company(company: str, keywords: list[str]) -> di
     empty = {
         "ipo_probability_12m": None,
         "valuation_markets":   [],
-        "summary":             "No relevant Polymarket markets found.",
+        "summary":             "No direct prediction market found.",
     }
     try:
         markets: list[dict] = []
@@ -188,12 +203,9 @@ async def _fetch_polymarket_for_company(company: str, keywords: list[str]) -> di
             is_valuation_market = ("valuation" in ql or "valued" in ql or "worth" in ql) and cl in ql
 
             if is_ipo_market and prob is not None:
-                # Take the highest-probability "IPO within 12 months" style
-                # market we find as the canonical 12m signal.
                 if "12" in ql or "2026" in ql or "by end of" in ql or "next year" in ql:
                     if ipo_prob is None or prob > ipo_prob:
                         ipo_prob = prob
-                # Also surface as a valuation/IPO market entry
                 valuation_rows.append({
                     "question":    question,
                     "probability": prob,
@@ -243,9 +255,7 @@ def _coerce_yes_probability(market: dict) -> Optional[float]:
             for o, p in zip(outcomes, prices):
                 if str(o).strip().lower() == "yes":
                     return float(p)
-            # Fallback: first outcome
             return float(prices[0])
-        # Some endpoints expose lastTradePrice directly
         ltp = market.get("lastTradePrice") or market.get("bestBid")
         if ltp is not None:
             return float(ltp)
@@ -351,7 +361,6 @@ async def _fetch_perplexity_for_company(company: str) -> dict[str, Any]:
     try:
         parsed = json.loads(content)
     except Exception:
-        # Best-effort: extract first {...} block
         m = re.search(r"\{[\s\S]*\}", content)
         if m:
             try:
@@ -372,7 +381,6 @@ async def _fetch_perplexity_for_company(company: str) -> dict[str, Any]:
             continue
         sources_out.append({"title": title, "url": url, "source": "Perplexity"})
 
-    # Augment with Perplexity's own citations array if present
     for c in citations:
         try:
             url = str(c).strip() if isinstance(c, str) else str(c.get("url") or "").strip()
@@ -398,77 +406,242 @@ async def _fetch_perplexity_for_company(company: str) -> dict[str, Any]:
     }
 
 
-# ── Finnhub ──────────────────────────────────────────────────────────────────
+# ── RSS news (replaces Finnhub for this feature) ─────────────────────────────
 
-_FINNHUB_NEWS_URL = "https://finnhub.io/api/v1/news"
+# Lightweight, public RSS feeds.  We never crawl aggressively — we fetch each
+# feed at most once per build and cache the parsed item list for an hour.
+# Failures on any individual feed are swallowed; an empty news list is a
+# valid, safe outcome.
+_RSS_FEEDS: tuple[tuple[str, str], ...] = (
+    ("TechCrunch", "https://techcrunch.com/feed/"),
+    ("Reuters Business", "https://feeds.reuters.com/reuters/businessNews"),
+    ("CNBC Top News", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"),
+    ("CNBC Tech", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910"),
+    ("Axios", "https://api.axios.com/feed/"),
+    # Bloomberg + WSJ + The Information generally don't expose open RSS;
+    # if any of these become accessible they can be added here without
+    # changing the parsing logic.
+)
+
+_RSS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; CaelynAI-PreIPO/1.0; +https://caelyn.ai)",
+    "Accept":     "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5",
+}
+
+_RSS_CACHE: dict[str, Any] = {
+    "items":     [],     # list of normalized items
+    "fetched_at": 0.0,
+}
+_RSS_CACHE_TTL_SECONDS = 60 * 60  # 1 hour
+_RSS_CACHE_LOCK = asyncio.Lock()
 
 
-async def _fetch_finnhub_news_for_company(company: str) -> list[dict[str, Any]]:
-    """
-    Best-effort: pull recent general/business news from Finnhub and filter
-    by company name.  These targets are private companies so symbol-level
-    company-news endpoints will not find them — we use the general feed.
-    Never raises; returns [] on any failure.
-    """
-    if not FINNHUB_API_KEY:
-        return []
+def _parse_rss_datetime(text: str) -> Optional[datetime]:
+    """Parse an RSS/Atom datetime; return tz-aware UTC, or None."""
+    if not text:
+        return None
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            results: list[dict] = []
-            for category in ("general", "merger"):
-                try:
-                    resp = await client.get(
-                        _FINNHUB_NEWS_URL,
-                        params={"category": category, "token": FINNHUB_API_KEY},
-                    )
-                    if resp.status_code != 200:
-                        continue
-                    page = resp.json()
-                    if isinstance(page, list):
-                        results.extend(page)
-                except Exception:
-                    continue
+        dt = parsedate_to_datetime(text)
+        if dt is None:
+            raise ValueError("empty")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        pass
+    try:
+        t = text.strip()
+        if t.endswith("Z"):
+            t = t[:-1] + "+00:00"
+        dt = datetime.fromisoformat(t)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
 
-        if not results:
-            return []
 
-        cl = company.lower()
-        matched: list[dict[str, Any]] = []
-        seen_urls: set[str] = set()
-        for n in results:
-            if not isinstance(n, dict):
+def _strip_xml_namespace(tag: str) -> str:
+    if "}" in tag:
+        return tag.split("}", 1)[1]
+    return tag
+
+
+def _parse_rss_xml(source_name: str, xml_text: str) -> list[dict[str, Any]]:
+    """Parse RSS 2.0 or Atom feeds into a normalized list of items."""
+    out: list[dict[str, Any]] = []
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return out
+
+    # Try RSS 2.0 (channel/item) first.
+    channel = root.find("channel")
+    if channel is not None:
+        for item in channel.findall("item"):
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            description = (item.findtext("description") or "").strip()
+            pub = item.findtext("pubDate") or ""
+            if not title or not link:
                 continue
-            head = (n.get("headline") or "").strip()
-            summary = (n.get("summary") or "").strip()
-            url = (n.get("url") or "").strip()
-            if not head or not url:
-                continue
-            blob = f"{head} {summary}".lower()
-            if cl not in blob:
-                continue
-            if url in seen_urls:
-                continue
-            seen_urls.add(url)
-            ts = n.get("datetime")
-            published = None
-            try:
-                if ts:
-                    published = datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
-            except Exception:
-                published = None
-            matched.append({
-                "title":        head,
-                "source":       n.get("source") or "Finnhub",
-                "url":          url,
-                "published_at": published,
+            out.append({
+                "title":        title,
+                "url":          link,
+                "summary":      description,
+                "source":       source_name,
+                "published_at": (_parse_rss_datetime(pub).isoformat() if _parse_rss_datetime(pub) else None),
             })
+        if out:
+            return out
 
-        # Most recent first, cap at 5
-        matched.sort(key=lambda x: x.get("published_at") or "", reverse=True)
-        return matched[:5]
+    # Atom: feed/entry, with <link href="..."/> and <updated>/<published>.
+    for entry in root.iter():
+        if _strip_xml_namespace(entry.tag) != "entry":
+            continue
+        title = ""
+        link = ""
+        summary = ""
+        pub = ""
+        for child in list(entry):
+            tag = _strip_xml_namespace(child.tag)
+            if tag == "title":
+                title = (child.text or "").strip()
+            elif tag == "link":
+                href = child.attrib.get("href")
+                if href and not link:
+                    link = href.strip()
+            elif tag == "summary":
+                summary = (child.text or "").strip()
+            elif tag in ("updated", "published") and not pub:
+                pub = (child.text or "").strip()
+        if title and link:
+            out.append({
+                "title":        title,
+                "url":          link,
+                "summary":      summary,
+                "source":       source_name,
+                "published_at": (_parse_rss_datetime(pub).isoformat() if _parse_rss_datetime(pub) else None),
+            })
+    return out
+
+
+async def _get_rss_corpus() -> list[dict[str, Any]]:
+    """
+    Fetch + parse RSS feeds with a 1-hour in-process cache.  Returns the
+    union of all items we could parse.  Never raises.
+    """
+    now = time.time()
+    cached_items = _RSS_CACHE.get("items") or []
+    fetched_at = float(_RSS_CACHE.get("fetched_at") or 0.0)
+    if cached_items and (now - fetched_at) < _RSS_CACHE_TTL_SECONDS:
+        return cached_items
+
+    async with _RSS_CACHE_LOCK:
+        now = time.time()
+        cached_items = _RSS_CACHE.get("items") or []
+        fetched_at = float(_RSS_CACHE.get("fetched_at") or 0.0)
+        if cached_items and (now - fetched_at) < _RSS_CACHE_TTL_SECONDS:
+            return cached_items
+
+        all_items: list[dict[str, Any]] = []
+        try:
+            async with httpx.AsyncClient(
+                timeout=12.0, follow_redirects=True, headers=_RSS_HEADERS,
+            ) as client:
+                async def fetch(name: str, url: str) -> list[dict[str, Any]]:
+                    try:
+                        resp = await client.get(url)
+                        if resp.status_code != 200 or not resp.text:
+                            return []
+                        return _parse_rss_xml(name, resp.text)
+                    except Exception as e:
+                        print(f"[PRE_IPO] rss fetch {name} error: {e}")
+                        return []
+
+                results = await asyncio.gather(
+                    *[fetch(name, url) for name, url in _RSS_FEEDS],
+                    return_exceptions=True,
+                )
+                for r in results:
+                    if isinstance(r, list):
+                        all_items.extend(r)
+        except Exception as e:
+            print(f"[PRE_IPO] rss corpus error: {e}")
+            all_items = list(cached_items)  # fall back to last good corpus
+
+        # Deduplicate by URL.
+        seen: set[str] = set()
+        deduped: list[dict[str, Any]] = []
+        for it in all_items:
+            url = str(it.get("url") or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            deduped.append(it)
+
+        _RSS_CACHE["items"] = deduped
+        _RSS_CACHE["fetched_at"] = time.time()
+        return deduped
+
+
+# Stripe is a generic English word; require an extra payments/fintech cue
+# alongside it to keep the filter precise.
+_STRIPE_CONTEXT_TERMS = (
+    "payments", "payment", "fintech", "checkout", "stripe inc",
+    "patrick collison", "john collison", "stripe.com", "valuation", "ipo",
+    "tender", "secondary",
+)
+
+
+def _company_match(item: dict[str, Any], aliases: list[str], company: str) -> bool:
+    blob = f"{item.get('title') or ''} {item.get('summary') or ''}".lower()
+    if not blob.strip():
+        return False
+    if company.lower() == "stripe":
+        if "stripe" not in blob:
+            return False
+        return any(term in blob for term in _STRIPE_CONTEXT_TERMS)
+    return any(a.lower() in blob for a in aliases if a)
+
+
+async def _fetch_rss_news_for_company(
+    company: str,
+    aliases: Optional[list[str]] = None,
+) -> list[dict[str, Any]]:
+    """
+    Lightweight RSS-based news lookup. Filters the cached RSS corpus by
+    company name/aliases and returns the most recent matches.  Returns []
+    on any failure — never raises.
+    """
+    try:
+        corpus = await _get_rss_corpus()
     except Exception as e:
-        print(f"[PRE_IPO] finnhub {company} error: {e}")
+        print(f"[PRE_IPO] rss corpus failed for {company}: {e}")
         return []
+
+    if not corpus:
+        return []
+
+    matches: list[dict[str, Any]] = []
+    name_aliases = [a for a in (aliases or [company]) if a]
+    if company not in name_aliases:
+        name_aliases.insert(0, company)
+
+    for item in corpus:
+        if not isinstance(item, dict):
+            continue
+        if not _company_match(item, name_aliases, company):
+            continue
+        matches.append({
+            "title":        str(item.get("title") or "").strip(),
+            "source":       str(item.get("source") or "RSS").strip() or "RSS",
+            "url":          str(item.get("url") or "").strip(),
+            "published_at": item.get("published_at"),
+        })
+
+    matches.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+    return matches[:5]
 
 
 # ── Synthesis ────────────────────────────────────────────────────────────────
@@ -476,7 +649,7 @@ async def _fetch_finnhub_news_for_company(company: str) -> list[dict[str, Any]]:
 def _confidence_score(
     perplexity_data: dict[str, Any],
     polymarket_data: dict[str, Any],
-    finnhub_news:    list[dict[str, Any]],
+    news_items:      list[dict[str, Any]],
 ) -> str:
     """
     High   = recent credible source + multiple confirmations + prediction market
@@ -492,7 +665,7 @@ def _confidence_score(
         polymarket_data.get("ipo_probability_12m") is not None
         or bool(polymarket_data.get("valuation_markets"))
     )
-    has_news = bool(finnhub_news)
+    has_news = bool(news_items)
 
     confirmations = sum([perplexity_strong, has_market, has_news])
 
@@ -507,9 +680,7 @@ def _confidence_score(
 
 # ── Scoring ─────────────────────────────────────────────────────────────────
 
-# Strong/heating phrases imply formal IPO progress.
 _PHRASE_TIERS: list[tuple[tuple[str, ...], tuple[int, int]]] = [
-    # (phrases, (low, high)) — score within range based on how decisive the language is.
     (
         (
             "confidential filing", "confidentially filed", "filed s-1", "filed s1",
@@ -552,21 +723,13 @@ def _ipo_probability_score(
     polymarket_data: dict[str, Any],
     perplexity_data: dict[str, Any],
 ) -> int:
-    """
-    Returns IPO probability sub-score (0-30).
-
-    Prefers Polymarket implied probability when present; otherwise derives
-    from Perplexity language tier mapping.
-    """
     try:
         pm_prob = polymarket_data.get("ipo_probability_12m")
         if isinstance(pm_prob, (int, float)) and 0.0 <= pm_prob <= 1.0:
-            # Map 0..1 to 0..30 directly.
             return int(round(float(pm_prob) * 30.0))
     except Exception:
         pass
 
-    # Fall back to Perplexity language inspection.
     blob_parts: list[str] = []
     try:
         blob_parts.append(str(perplexity_data.get("ipo_status") or ""))
@@ -581,17 +744,14 @@ def _ipo_probability_score(
     blob = " ".join(blob_parts).lower()
 
     if not blob.strip():
-        # No usable Perplexity content.
-        return 8  # neutral-low, treat as "unknown"
+        return 8
 
     for phrases, (low, high) in _PHRASE_TIERS:
         for p in phrases:
             if p in blob:
-                # Map within tier to 0-30 by scaling tier midpoint.
                 pct = (low + high) / 2.0 / 100.0
                 return int(round(pct * 30.0))
 
-    # Generic Perplexity content but nothing matched: treat as low/neutral.
     return 8
 
 
@@ -601,7 +761,6 @@ _VALUATION_RANGE_RE = re.compile(
 
 
 def _largest_valuation_billions(text: str) -> Optional[float]:
-    """Return the largest dollar figure in `text` expressed in billions."""
     if not text:
         return None
     best: Optional[float] = None
@@ -625,17 +784,10 @@ def _largest_valuation_billions(text: str) -> Optional[float]:
 
 
 def _valuation_momentum_score(perplexity_data: dict[str, Any]) -> int:
-    """
-    Returns valuation momentum sub-score (0-25).
-
-    Heuristic: compare the largest dollar figure in the headline valuation
-    against any prior figure mentioned in valuation_notes.
-    """
     headline = str(perplexity_data.get("estimated_valuation") or "")
     notes_blob = " ".join(str(x) for x in (perplexity_data.get("valuation_notes") or []))
 
     if not headline or headline.strip().lower() in {"unknown", ""}:
-        # No headline valuation at all — give a small base if notes exist.
         return 5 if notes_blob.strip() else 0
 
     headline_v = _largest_valuation_billions(headline)
@@ -680,14 +832,12 @@ def _valuation_momentum_score(perplexity_data: dict[str, Any]) -> int:
         return 20
 
     if headline_v is not None:
-        # Has a concrete headline figure but no historical anchor.
         if headline_v >= 100.0:
             return 18
         if headline_v >= 25.0:
             return 15
         return 12
 
-    # Headline exists but is unparseable.
     return 8
 
 
@@ -707,15 +857,12 @@ def _parse_published_dt(s: Any) -> Optional[datetime]:
         return None
 
 
-def _news_recency_score(finnhub_news: list[dict[str, Any]]) -> int:
-    """
-    Returns news recency sub-score (0-20).
-    """
-    if not finnhub_news:
+def _news_recency_score(news_items: list[dict[str, Any]]) -> int:
+    if not news_items:
         return 0
     now = datetime.now(timezone.utc)
     best_age_days: Optional[float] = None
-    for n in finnhub_news:
+    for n in news_items:
         if not isinstance(n, dict):
             continue
         dt = _parse_published_dt(n.get("published_at"))
@@ -731,10 +878,9 @@ def _news_recency_score(finnhub_news: list[dict[str, Any]]) -> int:
             best_age_days = age
 
     if best_age_days is None:
-        # We have items but no parseable timestamps — count as old.
-        return 6 if len(finnhub_news) >= 2 else 4
+        return 6 if len(news_items) >= 2 else 4
 
-    count = len(finnhub_news)
+    count = len(news_items)
     if best_age_days <= 7:
         base = 18
     elif best_age_days <= 30:
@@ -760,13 +906,10 @@ _OFFICIAL_DOMAINS = ("sec.gov", "investor.gov")
 
 def _source_quality_score(
     perplexity_data: dict[str, Any],
-    finnhub_news: list[dict[str, Any]],
+    news_items: list[dict[str, Any]],
 ) -> int:
-    """
-    Returns source quality sub-score (0-15).
-    """
     sources = perplexity_data.get("sources") or []
-    news = finnhub_news or []
+    news = news_items or []
 
     credible = 0
     official = 0
@@ -801,7 +944,6 @@ def _source_quality_score(
     score += min(6, credible * 2)
     if official > 0:
         score += min(5, 2 + official)
-    # Quantity bonus
     if total >= 5:
         score += 3
     elif total >= 3:
@@ -828,9 +970,6 @@ _CATALYST_KEYWORDS: list[tuple[tuple[str, ...], int]] = [
 
 
 def _catalyst_strength_score(perplexity_data: dict[str, Any]) -> int:
-    """
-    Returns catalyst strength sub-score (0-10).
-    """
     catalysts = perplexity_data.get("catalysts") or []
     notes = perplexity_data.get("valuation_notes") or []
     if not catalysts and not notes:
@@ -848,7 +987,6 @@ def _catalyst_strength_score(perplexity_data: dict[str, Any]) -> int:
                     matched_keys.add(idx)
                 break
 
-    # Modest bonus for raw catalyst count
     n = len([c for c in catalysts if str(c).strip()])
     if n >= 4:
         score += 2
@@ -861,9 +999,8 @@ def _catalyst_strength_score(perplexity_data: dict[str, Any]) -> int:
 def _compute_score_breakdown(
     perplexity_data: dict[str, Any],
     polymarket_data: dict[str, Any],
-    finnhub_news: list[dict[str, Any]],
+    news_items: list[dict[str, Any]],
 ) -> dict[str, int]:
-    """Compute the 5 sub-scores; never raises."""
     try:
         ipo_prob = _ipo_probability_score(polymarket_data, perplexity_data)
     except Exception:
@@ -873,11 +1010,11 @@ def _compute_score_breakdown(
     except Exception:
         val_mom = 0
     try:
-        recency = _news_recency_score(finnhub_news)
+        recency = _news_recency_score(news_items)
     except Exception:
         recency = 0
     try:
-        src_q = _source_quality_score(perplexity_data, finnhub_news)
+        src_q = _source_quality_score(perplexity_data, news_items)
     except Exception:
         src_q = 0
     try:
@@ -913,7 +1050,6 @@ _SNAPSHOT_PATH = Path(__file__).parent.parent / "data" / "pre_ipo_snapshots.json
 
 
 def _load_snapshots() -> dict[str, Any]:
-    """Load prior snapshot map keyed by company name. Never raises."""
     try:
         if not _SNAPSHOT_PATH.exists():
             return {}
@@ -930,7 +1066,6 @@ def _load_snapshots() -> dict[str, Any]:
 
 
 def _write_snapshots(snapshots: dict[str, Any]) -> None:
-    """Persist snapshot map to disk. Never raises."""
     try:
         _SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = _SNAPSHOT_PATH.with_suffix(".json.tmp")
@@ -945,10 +1080,6 @@ def _diff_change_tracking(
     current: dict[str, Any],
     prior_snapshots: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    Build the change_tracking block for `company` by comparing `current`
-    against the prior snapshot, if any. Always returns a safely shaped dict.
-    """
     block: dict[str, Any] = {
         "valuation_change":       "Unknown",
         "ipo_probability_change": "Unknown",
@@ -971,7 +1102,6 @@ def _diff_change_tracking(
             if isinstance(cur_score, (int, float)):
                 block["score_change"] = int(cur_score) - int(prev_score)
 
-        # Valuation comparison
         prev_val = str(prior.get("estimated_valuation") or "").strip()
         cur_val = str(current.get("estimated_valuation") or "").strip()
         if prev_val and cur_val and prev_val.lower() != "unknown" and cur_val.lower() != "unknown":
@@ -990,7 +1120,6 @@ def _diff_change_tracking(
                 else:
                     block["valuation_change"] = f"{prev_val} → {cur_val}"
 
-        # IPO probability comparison
         prev_pm = prior.get("polymarket_ipo_probability_12m")
         cur_pm = current.get("polymarket", {}).get("ipo_probability_12m")
         if isinstance(prev_pm, (int, float)) and isinstance(cur_pm, (int, float)):
@@ -1011,7 +1140,6 @@ def _diff_change_tracking(
                 else:
                     block["ipo_probability_change"] = f"{prev_status} → {cur_status}"
 
-        # New catalysts
         prev_catalysts = {str(x).strip().lower() for x in (prior.get("catalysts") or []) if str(x).strip()}
         new_catalysts: list[str] = []
         for c in (current.get("catalysts") or []):
@@ -1025,7 +1153,6 @@ def _diff_change_tracking(
 
 
 def _build_snapshot_record(company: dict[str, Any]) -> dict[str, Any]:
-    """Reduce a fully-built company entry to the fields we need to persist."""
     pm = company.get("polymarket") or {}
     return {
         "company":                          company.get("company"),
@@ -1046,10 +1173,12 @@ async def _build_company_payload(spec: dict[str, Any]) -> dict[str, Any]:
         polymarket_task = asyncio.create_task(
             _fetch_polymarket_for_company(company, spec["polymarket_keywords"])
         )
-        finnhub_task = asyncio.create_task(_fetch_finnhub_news_for_company(company))
+        rss_task = asyncio.create_task(
+            _fetch_rss_news_for_company(company, spec.get("news_aliases") or [company])
+        )
 
-        perplexity_data, polymarket_data, finnhub_news = await asyncio.gather(
-            perplexity_task, polymarket_task, finnhub_task,
+        perplexity_data, polymarket_data, news_items = await asyncio.gather(
+            perplexity_task, polymarket_task, rss_task,
             return_exceptions=False,
         )
     except Exception as e:
@@ -1067,11 +1196,10 @@ async def _build_company_payload(spec: dict[str, Any]) -> dict[str, Any]:
             "valuation_markets":   [],
             "summary":             "Polymarket lookup failed.",
         }
-        finnhub_news = []
+        news_items = []
 
-    confidence = _confidence_score(perplexity_data, polymarket_data, finnhub_news)
-
-    score_breakdown = _compute_score_breakdown(perplexity_data, polymarket_data, finnhub_news)
+    confidence = _confidence_score(perplexity_data, polymarket_data, news_items)
+    score_breakdown = _compute_score_breakdown(perplexity_data, polymarket_data, news_items)
     opportunity_score = _opportunity_score_from_breakdown(score_breakdown)
 
     return {
@@ -1090,12 +1218,10 @@ async def _build_company_payload(spec: dict[str, Any]) -> dict[str, Any]:
             "likely":   "Unknown",
         },
         "confidence_score":    confidence,
-        "latest_news":         finnhub_news or [],
+        "latest_news":         news_items or [],
         "sources":             perplexity_data.get("sources") or [],
         "opportunity_score":   opportunity_score,
         "score_breakdown":     score_breakdown,
-        # rank, momentum_badge, change_tracking are filled in at the
-        # full-payload assembly stage where ordering/snapshots are known.
     }
 
 
@@ -1115,7 +1241,7 @@ def _empty_company_entry(company_name: str) -> dict[str, Any]:
         "polymarket": {
             "ipo_probability_12m": None,
             "valuation_markets":   [],
-            "summary":             "Data temporarily unavailable.",
+            "summary":             "No direct prediction market found.",
         },
         "catalysts":           [],
         "expected_window":     {"earliest": "Unknown", "likely": "Unknown"},
@@ -1125,6 +1251,25 @@ def _empty_company_entry(company_name: str) -> dict[str, Any]:
         "opportunity_score":   0,
         "score_breakdown":     breakdown,
     }
+
+
+def _safe_six_fallback() -> list[dict[str, Any]]:
+    """Build the six tracked companies as fully-shaped fallback entries, ranked 1-6."""
+    out: list[dict[str, Any]] = []
+    for idx, name in enumerate(_FALLBACK_COMPANY_NAMES, start=1):
+        entry = _empty_company_entry(name)
+        entry["rank"] = idx
+        entry["momentum_badge"] = "Dormant"
+        entry["change_tracking"] = {
+            "valuation_change":       "Unknown",
+            "ipo_probability_change": "Unknown",
+            "new_catalysts":          [],
+            "previous_score":         None,
+            "score_change":           None,
+            "last_snapshot_at":       None,
+        }
+        out.append(entry)
+    return out
 
 
 async def _build_full_payload() -> dict[str, Any]:
@@ -1138,8 +1283,6 @@ async def _build_full_payload() -> dict[str, Any]:
             print(f"[PRE_IPO] {spec['company']} task error: {res}")
             companies.append(_empty_company_entry(spec["company"]))
         else:
-            # Defensive: ensure required scoring fields exist even if
-            # _build_company_payload unexpectedly returned a partial dict.
             if "opportunity_score" not in res:
                 res["opportunity_score"] = 0
             if "score_breakdown" not in res:
@@ -1152,14 +1295,18 @@ async def _build_full_payload() -> dict[str, Any]:
                 }
             companies.append(res)
 
-    # Load prior snapshots for change tracking; never break on failure.
+    # Belt-and-suspenders: never let _build_full_payload return [].
+    if not companies:
+        print("[PRE_IPO] _build_full_payload produced no companies; using fallback six")
+        companies = _safe_six_fallback()
+
+    # Snapshots
     try:
         prior_snapshots = _load_snapshots()
     except Exception as e:
         print(f"[PRE_IPO] snapshot load wrapper failed: {e}")
         prior_snapshots = {}
 
-    # Compute change_tracking BEFORE sorting so we have stable references.
     for c in companies:
         try:
             c["change_tracking"] = _diff_change_tracking(
@@ -1176,7 +1323,6 @@ async def _build_full_payload() -> dict[str, Any]:
                 "last_snapshot_at":       None,
             }
 
-    # Compute momentum_badge using current score and score_change.
     for c in companies:
         try:
             sc = int(c.get("opportunity_score") or 0)
@@ -1186,14 +1332,11 @@ async def _build_full_payload() -> dict[str, Any]:
         except Exception:
             c["momentum_badge"] = "Dormant"
 
-    # Sort by opportunity_score desc, stable within ties.
     companies.sort(key=lambda x: int(x.get("opportunity_score") or 0), reverse=True)
 
-    # Assign rank.
     for idx, c in enumerate(companies, start=1):
         c["rank"] = idx
 
-    # Persist new snapshot map (best-effort).
     try:
         new_snapshots: dict[str, Any] = {}
         for c in companies:
@@ -1212,6 +1355,14 @@ async def _build_full_payload() -> dict[str, Any]:
     }
 
 
+def _payload_has_companies(p: Any) -> bool:
+    return (
+        isinstance(p, dict)
+        and isinstance(p.get("companies"), list)
+        and len(p.get("companies") or []) > 0
+    )
+
+
 # ── Public entry point ──────────────────────────────────────────────────────
 
 @traceable(name="pre_ipo_watchlist.get")
@@ -1222,40 +1373,62 @@ async def get_pre_ipo_watchlist(refresh: bool = False) -> dict[str, Any]:
     On refresh failure, returns the most recent stale payload (with
     `status` flipped to "stale") so consumers always get usable data
     when at least one successful fetch has happened previously.
+
+    A stale cache that has an empty `companies` list is ignored — the
+    caller will see a fallback-six payload instead.  The route layer
+    additionally enforces a final fallback-six guard so this endpoint
+    can never return `companies: []`.
     """
     now = time.time()
     cached = _state["value"]
     fresh_at = _state["fresh_at"]
-    is_fresh = cached is not None and (now - fresh_at) < _FRESH_TTL_SECONDS
+    is_fresh = (
+        cached is not None
+        and (now - fresh_at) < _FRESH_TTL_SECONDS
+        and _payload_has_companies(cached)
+    )
 
-    if cached is not None and is_fresh and not refresh:
+    if is_fresh and not refresh:
         return cached
 
     async with _state["lock"]:
-        # Re-check inside the lock — another caller may have refreshed.
         now = time.time()
         cached = _state["value"]
         fresh_at = _state["fresh_at"]
-        is_fresh = cached is not None and (now - fresh_at) < _FRESH_TTL_SECONDS
-        if cached is not None and is_fresh and not refresh:
+        is_fresh = (
+            cached is not None
+            and (now - fresh_at) < _FRESH_TTL_SECONDS
+            and _payload_has_companies(cached)
+        )
+        if is_fresh and not refresh:
             return cached
 
         try:
             payload = await _build_full_payload()
-            _state["value"] = payload
-            _state["fresh_at"] = time.time()
-            return payload
+            # Don't cache an empty result — we'd rather treat the next
+            # call as cold and try again than serve `[]` for 8 hours.
+            if _payload_has_companies(payload):
+                _state["value"] = payload
+                _state["fresh_at"] = time.time()
+                return payload
+            print("[PRE_IPO] live build returned no companies; degraded fallback")
+            return {
+                "status":          "ok",
+                "updated_at":      datetime.now(timezone.utc).isoformat(),
+                "fallback_reason": "live build returned empty companies",
+                "companies":       _safe_six_fallback(),
+            }
         except Exception as e:
             print(f"[PRE_IPO] full build failed: {e}")
-            if cached is not None:
+            if cached is not None and _payload_has_companies(cached):
                 stale = dict(cached)
                 stale["status"] = "stale"
                 stale["stale_reason"] = f"refresh failed: {e}"
                 return stale
-            # No cache to fall back on
+            # No usable cache — return shaped fallback six.
             return {
-                "status":     "error",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-                "error":      f"upstream fetch failed: {e}",
-                "companies":  [],
+                "status":          "ok",
+                "updated_at":      datetime.now(timezone.utc).isoformat(),
+                "fallback_reason": f"upstream fetch failed: {e}",
+                "companies":       _safe_six_fallback(),
             }
