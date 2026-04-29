@@ -100,6 +100,84 @@ def _get_lkg(key: str) -> Any:
     return cache.get(_LKG_PREFIX + key)
 
 
+def _fmp_cache_lookup(endpoint: str, params: dict) -> Any:
+    """Read hot-cache → LKG without any HTTP call. Returns None on total miss."""
+    cache_key = f"social_screener:fmp:{endpoint}:{sorted(params.items())}"
+    val = cache.get(cache_key)
+    if val is not None:
+        return val
+    return _get_lkg(cache_key)
+
+
+def _social_enrich_from_cache(ticker: str, fmp_api_key: str) -> dict:
+    """Cache-only social enrichment (profile + quote + price_change).
+
+    Checks hot cache then LKG for each data type.  Never opens an HTTP
+    connection.  Returns a dict with at least empty sub-dicts so callers
+    can read .get() without KeyError.
+    """
+    profile_raw = _fmp_cache_lookup("profile",
+                                    {"symbol": ticker, "apikey": fmp_api_key})
+    quote_raw   = _fmp_cache_lookup("quote",
+                                    {"symbol": ticker, "apikey": fmp_api_key})
+    pchg_raw    = _fmp_cache_lookup("stock-price-change",
+                                    {"symbol": ticker, "apikey": fmp_api_key})
+
+    # ── Parse profile ──────────────────────────────────────────────────────
+    if isinstance(profile_raw, list) and profile_raw:
+        item = profile_raw[0] if isinstance(profile_raw[0], dict) else {}
+        profile = {
+            "company_name": item.get("companyName") or "",
+            "sector":       item.get("sector") or "",
+            "industry":     item.get("industry") or "",
+            "market_cap":   item.get("marketCap"),
+        }
+    else:
+        profile = {}
+
+    # ── Parse quote ────────────────────────────────────────────────────────
+    if isinstance(quote_raw, list) and quote_raw:
+        item = quote_raw[0] if isinstance(quote_raw[0], dict) else {}
+        quote = {
+            "price":      item.get("price"),
+            "volume":     item.get("volume"),
+            "market_cap": item.get("marketCap"),
+            "change_1d":  item.get("changePercentage"),
+        }
+    else:
+        quote = {}
+
+    # ── Parse price-change ─────────────────────────────────────────────────
+    if isinstance(pchg_raw, list) and pchg_raw:
+        item = pchg_raw[0] if isinstance(pchg_raw[0], dict) else {}
+    elif isinstance(pchg_raw, dict):
+        item = pchg_raw
+    else:
+        item = {}
+
+    if item:
+        def _f(*keys: str) -> Optional[float]:
+            for k in keys:
+                v = item.get(k)
+                if v is not None:
+                    try:
+                        return round(float(v), 2)
+                    except (TypeError, ValueError):
+                        continue
+            return None
+        pchg = {
+            "price_change_1d":  _f("1D", "1d", "oneDay"),
+            "price_change_7d":  _f("5D", "5d", "1W", "fiveDays"),
+            "price_change_30d": _f("1M", "1m", "oneMonth"),
+            "price_change_ytd": _f("ytd", "YTD", "ytd1Y"),
+            "price_change_1y":  _f("1Y", "1y", "oneYear"),
+        }
+    else:
+        pchg = {}
+
+    return {"profile": profile, "quote": quote, "price_change": pchg}
+
+
 # ── FMP enrichment fetchers (per-symbol, with caching) ────────────────────────
 
 async def _fmp_get(client: httpx.AsyncClient, endpoint: str, params: dict, ttl: int) -> Any:
@@ -773,6 +851,7 @@ async def fetch_enrichment_for_symbols(
     fmp_api_key: Optional[str],
     *,
     fundamental_symbols: Optional[list[str]] = None,
+    allow_live_fmp: bool = True,
 ) -> tuple[dict[str, dict], dict[str, dict], str, str]:
     """Enrich a list of tickers from FMP.
 
@@ -781,8 +860,14 @@ async def fetch_enrichment_for_symbols(
 
       social_enrichment      — per-symbol {profile, quote, price_change}
       fundamental_enrichment — per-symbol full FMP fundamentals snapshot
-      enrichment_status      — ok | partial | stale | unavailable
+      enrichment_status      — ok | partial | unavailable
+                               (refers to enrichment fields only — rows still
+                                exist regardless of this value)
       fund_status            — fresh | partial | stale | unavailable
+
+    When allow_live_fmp=False (used by the main dashboard route), only the
+    hot-cache and last-known-good values are used.  No HTTP connections are
+    opened, so the dashboard response is never delayed by FMP latency.
 
     Never raises — failures degrade to nulls + downgraded status.
     """
@@ -791,6 +876,23 @@ async def fetch_enrichment_for_symbols(
 
     if not fmp_api_key:
         return social_enrichment, fundamental_enrichment, "unavailable", "unavailable"
+
+    # ── Cache-only mode (main dashboard path) ─────────────────────────────
+    if not allow_live_fmp:
+        hits = 0
+        for sym in symbols:
+            enr = _social_enrich_from_cache(sym, fmp_api_key)
+            social_enrichment[sym] = enr
+            if enr.get("profile") or enr.get("quote") or enr.get("price_change"):
+                hits += 1
+        if hits == 0:
+            enrich_status = "unavailable"
+        elif hits == len(symbols):
+            enrich_status = "ok"
+        else:
+            enrich_status = "partial"
+        # fundamental_enrichment stays empty — lazy endpoint handles live fetch
+        return social_enrichment, fundamental_enrichment, enrich_status, "unavailable"
 
     fund_targets = list(fundamental_symbols or [])[:_MAX_FUND_ENRICH_ROWS]
 
@@ -875,15 +977,15 @@ async def fetch_enrichment_for_symbols(
         print(f"[SOCIAL_SCREENER] FMP enrichment session failed: {exc}")
         return social_enrichment, fundamental_enrichment, "unavailable", "unavailable"
 
-    # Status determination
+    # Status determination — enrichment_status: ok | partial | unavailable only.
+    # "stale" is not used; minority-hit scenarios degrade to "partial" (rows still
+    # exist and have partial enrichment) rather than implying they are unusable.
     if successes_social == 0 and len(symbols) > 0:
         enrichment_status = "unavailable"
     elif failures_social == 0:
         enrichment_status = "ok"
-    elif successes_social >= failures_social:
-        enrichment_status = "partial"
     else:
-        enrichment_status = "stale"
+        enrichment_status = "partial"
 
     if not fund_targets:
         fund_status = "unavailable"
@@ -927,8 +1029,15 @@ async def build_screeners(
     freshest_alpha: dict,
     theme_leadership: dict,
     fmp_api_key: Optional[str] = None,
+    *,
+    allow_live_fmp: bool = True,
 ) -> tuple[dict, dict]:
     """Build (social_screener, fundamental_screener) from existing Social data.
+
+    When allow_live_fmp=False the FMP enrichment step reads from cache only —
+    no HTTP connections are opened.  Missing cache entries produce null fields
+    with enrichment_status="partial" or "unavailable", but the screener rows
+    are always returned.
 
     Never raises.  On total FMP failure both screeners are still returned with
     enrichment_status / cache_status = "unavailable" — the page never 500s.
@@ -964,7 +1073,9 @@ async def build_screeners(
         key = fmp_api_key or os.getenv("FMP_API_KEY", "")
         social_enrichment, fund_enrichment, enrich_status, fund_status = (
             await fetch_enrichment_for_symbols(
-                all_symbols, key, fundamental_symbols=fund_targets,
+                all_symbols, key,
+                fundamental_symbols=fund_targets,
+                allow_live_fmp=allow_live_fmp,
             )
         )
 

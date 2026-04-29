@@ -2912,6 +2912,9 @@ async def social_x_dashboard(
         payload = build_x_dashboard()
 
         # Additive screeners — derived from the SAME snapshot, zero extra Grok calls.
+        # allow_live_fmp=False: FMP enrichment uses cache-only — no HTTP calls are
+        # made here, so top sections are never delayed by FMP latency.  Live FMP
+        # enrichment is deferred to GET /api/social/fundamental-screener.
         try:
             snapshot = _load_disk_cache()
             social_screener, fundamental_screener = await build_screeners(
@@ -2921,6 +2924,7 @@ async def social_x_dashboard(
                 freshest_alpha=payload.get("freshest_alpha") or {},
                 theme_leadership=payload.get("theme_leadership") or {},
                 fmp_api_key=FMP_API_KEY,
+                allow_live_fmp=False,
             )
             payload["social_screener"]      = social_screener
             payload["fundamental_screener"] = fundamental_screener

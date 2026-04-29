@@ -1,0 +1,114 @@
+Backend-only fix.
+
+Problem:
+The Social page top sections should not be held up by Social Screener enrichment, price changes, FMP data, or fundamentals.
+
+Current desired architecture:
+GET /api/social/x-dashboard should return fast with:
+- x_consensus
+- freshest_alpha
+- theme_leadership
+- sentiment_acceleration
+- social_screener rows derived from cached Social/Grok data if available
+- FMP enrichment fields as cached/null/partial only
+- fundamental_screener as cached/null/partial only
+
+Heavy FMP work must not block the initial dashboard response.
+
+Do not change:
+- Grok/XAI prompt
+- Grok/XAI refresh schedule
+- Existing top-section response shapes
+- Existing Social dashboard route path
+- Frontend
+
+Audit first:
+1. Inspect GET /api/social/x-dashboard in backend/main.py.
+2. Inspect backend/services/social_screener_service.py.
+3. Identify whether build_screeners, build_social_screener, or build_fundamental_screener performs live FMP HTTP calls during the main /api/social/x-dashboard request.
+4. Measure/estimate whether FMP enrichment can delay the dashboard route.
+5. Confirm whether top sections are built before or after screener/fundamental enrichment.
+
+Real fix requirements:
+
+1. The main dashboard endpoint must prioritize top sections.
+   - Call/build existing dashboard sections first.
+   - Never let screener/fundamental failure break the route.
+   - Never let FMP failure block/500 the route.
+
+2. Social Screener rows must be built from cached Social/Grok data first:
+   - _mention_data
+   - _backend_ranked / ticker_history
+   - final visible dashboard sections fallback:
+     - x_consensus
+     - freshest_alpha
+     - sentiment_acceleration
+     - theme_leadership ticker data if available
+
+3. FMP enrichment for Social Screener must be non-blocking for the main dashboard route.
+   Acceptable behavior:
+   - Use cached FMP values if already present and fresh.
+   - Use last-known-good FMP values if present.
+   - If no cached FMP values exist, return nulls and enrichment_status="unavailable" or "partial".
+   - Do not perform slow live FMP fanout inside /api/social/x-dashboard.
+
+4. Fundamental Screener must not block /api/social/x-dashboard.
+   Acceptable behavior:
+   - Include cached fundamental_screener rows if already available.
+   - If not cached, return rows with social symbols and null fundamental fields, or return empty rows with cache_status="unavailable".
+   - Heavy live FMP fundamental enrichment should happen only through the lazy endpoint:
+     GET /api/social/fundamental-screener
+   - The lazy endpoint can do the heavier enrichment, but it must still fail gracefully.
+
+5. Keep or improve the lazy fundamentals endpoint:
+   GET /api/social/fundamental-screener
+   This endpoint may fetch/enrich fundamentals, but it should:
+   - be capped
+   - have timeouts
+   - use cache
+   - return partial/nulls instead of 500s
+
+6. If there is currently no cache-only mode, add one.
+   Suggested pattern:
+   - build_screeners(..., allow_live_fmp=False) for /api/social/x-dashboard
+   - build_screeners(..., allow_live_fmp=True) or build_fundamental_screener(..., allow_live_fmp=True) for the lazy endpoint only
+
+7. Add strict status semantics:
+   social_screener.meta.enrichment_status:
+   - "ok" = social rows exist and FMP enrichment mostly populated
+   - "partial" = social rows exist, some FMP fields missing
+   - "unavailable" = social rows exist but FMP enrichment unavailable, OR no social rows available
+
+   Important:
+   enrichment_status must refer to enrichment only. It should not imply social_screener.rows are unusable.
+
+   fundamental_screener.meta.cache_status:
+   - "fresh"
+   - "partial"
+   - "stale"
+   - "unavailable"
+
+8. Validation:
+   Run GET /api/social/x-dashboard and report:
+   - response time
+   - x_consensus count
+   - freshest_alpha count
+   - theme_leadership count
+   - sentiment_acceleration count
+   - social_screener.rows.length
+   - social_screener.meta.enrichment_status
+   - fundamental_screener.rows.length
+   - fundamental_screener.meta.cache_status
+
+9. Verify:
+   - No Grok/XAI call is made on page load.
+   - No Grok/XAI prompt changed.
+   - No schedule changed.
+   - Top section shapes unchanged.
+   - /api/social/x-dashboard does not perform slow FMP fanout.
+   - FMP missing/slow does not delay top sections.
+   - Lazy fundamentals endpoint still works or degrades gracefully.
+
+Do not touch frontend.
+Do not add a frontend refresh button.
+Do not change API route names.
