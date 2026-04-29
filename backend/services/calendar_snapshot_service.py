@@ -163,12 +163,16 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
         print(f"[calendar_snapshot] refresh_tab({tab}) skipped: missing FMP key")
         return get_snapshot(tab)
 
-    # Import lazily to avoid circular imports during module load
+    # Import lazily to avoid circular imports during module load.
+    # NOTE: We intentionally do NOT import _enrich_profiles / _apply_enrichment.
+    # Snapshot refresh (scheduler + manual backfill) must skip per-symbol FMP
+    # profile calls — those caused 429 rate-limit storms (e.g. dividends with
+    # hundreds of symbols) that prevented other tabs from refreshing. The base
+    # tab fetchers already supply the visible fields the frontend needs
+    # (symbol, date, dividend amount, IPO price range, split ratio, etc.).
     from services.catalyst_calendar_service import (
         CatalystFMP,
         _fetch_tab,
-        _enrich_profiles,
-        _apply_enrichment,
         _load_watchlist_symbols,
         _load_portfolio_symbols,
     )
@@ -187,17 +191,6 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
     except Exception as e:
         print(f"[calendar_snapshot] refresh_tab({tab}) fetch error: {e}")
         events, err = [], str(e)
-
-    # Enrich symbols (mirrors get_events standard path) so cached rows have
-    # logo/sector/marketCap fields ready for the frontend.
-    if events:
-        try:
-            syms = list({ev["symbol"] for ev in events if ev.get("symbol")})
-            if syms:
-                enriched = await _enrich_profiles(syms, fmp)
-                events = _apply_enrichment(events, enriched)
-        except Exception as e:
-            print(f"[calendar_snapshot] enrichment warning ({tab}): {e}")
 
     ms = int((time.monotonic() - t0) * 1000)
     print(
