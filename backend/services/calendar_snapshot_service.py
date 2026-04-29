@@ -20,17 +20,26 @@ Fallback rules:
   • only previous_week      → return previous_week as current_week, status="stale"
   • neither                 → empty arrays, status="empty"
 
-Write path (scheduler)
-──────────────────────
-refresh_tab(tab, fmp_key) is called by the weekly scheduler in lifespan.
+Write path (scheduler / manual backfill)
+────────────────────────────────────────
+refresh_tab(tab, fmp_key) is called by the weekly scheduler in lifespan, or
+manually via `python -m services.calendar_snapshot_service --backfill`.
 It uses the EXISTING fetchers in services.catalyst_calendar_service (no new
 FMP code), promotes current_week → previous_week, stores fresh events as
-current_week, writes meta.last_updated, and persists to disk.
+current_week, writes meta.last_updated, and persists to Neon Postgres.
 
 Persistence
 ───────────
-File: data/calendar_snapshots.json (follows smart_earnings_scanner.CACHE_FILE
-precedent — single JSON dict, atomic-ish overwrite, corrupt/missing safe).
+Source of truth: Neon Postgres table `public.calendar_snapshots`, accessed via
+`data.pg_storage` (the same module used by chat history, watchlists, etc.).
+This is required because the deployed backend's filesystem is ephemeral —
+disk JSON written by a manual backfill does NOT persist into the API
+container that serves /api/catalysts/events.
+
+Disk JSON at backend/data/calendar_snapshots.json is an emergency-only
+fallback: read if Neon is unreachable, written best-effort alongside Neon
+writes so a local-dev process without DB credentials can still serve a
+recent snapshot. Never the source of truth.
 """
 from __future__ import annotations
 
@@ -41,11 +50,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-# Anchor the snapshot file to an absolute path derived from this module's
-# location so the write path (manual backfill, scheduler) and read path (API
-# request handler) cannot diverge based on the process's current working
-# directory. backend/services/calendar_snapshot_service.py → backend/ →
-# backend/data/calendar_snapshots.json.
+# Disk fallback path. Anchored to backend/ so writer and reader cannot diverge
+# based on cwd. Used only as an emergency cache when Neon is unreachable.
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 SNAPSHOT_PATH: Path = _BACKEND_DIR / "data" / "calendar_snapshots.json"
 # Backwards-compatible alias for any external reference.
@@ -53,7 +59,7 @@ CACHE_FILE = SNAPSHOT_PATH
 
 
 def get_snapshot_path() -> Path:
-    """Single source of truth for the snapshot file location (absolute)."""
+    """Disk fallback file location (absolute). Neon is the source of truth."""
     return SNAPSHOT_PATH
 
 TARGET_TABS: list[str] = [
@@ -67,21 +73,85 @@ TARGET_TABS: list[str] = [
 _lock = asyncio.Lock()
 
 
+# ── Neon-backed primary persistence ─────────────────────────────────────────
+
+def _neon_read(tab: str) -> Optional[dict]:
+    """Read a snapshot row from Neon. Returns None if Neon unavailable or empty."""
+    try:
+        from data.pg_storage import calendar_snapshot_read
+    except Exception as e:
+        print(f"[calendar_snapshot] pg_storage import failed: {e}")
+        return None
+    snap = calendar_snapshot_read(tab)
+    if snap is None:
+        return None
+    cw = snap.get("current_week") or []
+    pw = snap.get("previous_week") or []
+    print(
+        f"[calendar_snapshot] neon read tab={tab} status={snap.get('status')} "
+        f"current_week={len(cw)} previous_week={len(pw)} "
+        f"last_updated={snap.get('last_updated')}"
+    )
+    return {
+        "current_week": cw,
+        "previous_week": pw,
+        "meta": {
+            "last_updated": snap.get("last_updated"),
+            "status": snap.get("status") or "empty",
+            **(snap.get("meta") or {}),
+        },
+    }
+
+
+def _neon_write(tab: str, slot: dict) -> bool:
+    """Persist a tab slot dict to Neon. Returns True on success."""
+    try:
+        from data.pg_storage import calendar_snapshot_write
+    except Exception as e:
+        print(f"[calendar_snapshot] pg_storage import failed: {e}")
+        return False
+    meta = slot.get("meta") or {}
+    cw = slot.get("current_week") or []
+    pw = slot.get("previous_week") or []
+    status = meta.get("status") or "empty"
+    last_updated = meta.get("last_updated")
+    # Pass non-status meta fields through so window/fetch_error/last_run_week persist.
+    extra_meta = {k: v for k, v in meta.items() if k not in ("last_updated", "status")}
+    ok = calendar_snapshot_write(
+        tab=tab,
+        current_week=cw,
+        previous_week=pw,
+        last_updated=last_updated,
+        status=status,
+        meta=extra_meta,
+    )
+    print(
+        f"[calendar_snapshot] neon write tab={tab} ok={ok} status={status} "
+        f"current_week={len(cw)} previous_week={len(pw)}"
+    )
+    return ok
+
+
+# ── Disk emergency fallback (NEVER source of truth) ─────────────────────────
+
 def _read_disk() -> dict:
     path = get_snapshot_path()
-    print(f"[calendar_snapshot] read path={path} exists={path.exists()}")
     if path.exists():
         try:
             with open(path, "r") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
+                    print(f"[calendar_snapshot] disk fallback read path={path} keys={list(data.keys())}")
                     return data
         except Exception as e:
-            print(f"[calendar_snapshot] read error: {e} — starting empty")
+            print(f"[calendar_snapshot] disk read error: {e} — starting empty")
+    else:
+        print(f"[calendar_snapshot] disk fallback miss path={path}")
     return {}
 
 
 def _write_disk(data: dict) -> None:
+    """Best-effort emergency cache write. Does not raise on failure."""
     path = get_snapshot_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,78 +159,85 @@ def _write_disk(data: dict) -> None:
         with open(tmp, "w") as f:
             json.dump(data, f, separators=(",", ":"))
         tmp.replace(path)
-        print(f"[calendar_snapshot] write path={path} bytes={path.stat().st_size}")
+        print(f"[calendar_snapshot] disk fallback write path={path} bytes={path.stat().st_size}")
     except Exception as e:
-        print(f"[calendar_snapshot] write error path={path}: {e}")
+        print(f"[calendar_snapshot] disk fallback write error path={path}: {e}")
 
 
-def _empty_tab() -> dict:
+def _empty_slot() -> dict:
     return {"current_week": [], "previous_week": [], "meta": {"last_updated": None, "status": "empty"}}
 
 
-def _ensure_tab(store: dict, tab: str) -> dict:
-    if tab not in store or not isinstance(store.get(tab), dict):
-        store[tab] = _empty_tab()
-    else:
-        slot = store[tab]
-        slot.setdefault("current_week", [])
-        slot.setdefault("previous_week", [])
-        meta = slot.setdefault("meta", {})
-        meta.setdefault("last_updated", None)
-        meta.setdefault("status", "empty")
-    return store[tab]
+def _normalize_slot(slot: Any) -> dict:
+    if not isinstance(slot, dict):
+        return _empty_slot()
+    slot.setdefault("current_week", [])
+    slot.setdefault("previous_week", [])
+    meta = slot.setdefault("meta", {})
+    meta.setdefault("last_updated", None)
+    meta.setdefault("status", "empty")
+    return slot
 
+
+# ── Public read API ─────────────────────────────────────────────────────────
 
 def get_snapshot(tab: str) -> dict:
     """
     Return the response envelope for a target tab. Never triggers FMP.
+    Reads Neon first; falls back to disk JSON if Neon is unavailable.
     """
-    store = _read_disk()
-    slot = _ensure_tab(store, tab)
+    slot: Optional[dict] = _neon_read(tab)
+    source = "neon"
+    if slot is None:
+        # Neon unreachable or row missing — try disk emergency fallback.
+        store = _read_disk()
+        slot = _normalize_slot(store.get(tab))
+        source = "disk"
+
     cw = slot.get("current_week") or []
     pw = slot.get("previous_week") or []
     last_updated = (slot.get("meta") or {}).get("last_updated")
 
     if cw:
-        return {
+        envelope = {
             "current_week":  cw,
             "previous_week": pw,
             "last_updated":  last_updated,
             "status":        "ready",
         }
-    if pw:
-        # Expose previous_week data as current_week for graceful display,
-        # mark stale so the frontend can warn.
-        return {
+    elif pw:
+        envelope = {
             "current_week":  pw,
             "previous_week": pw,
             "last_updated":  last_updated,
             "status":        "stale",
         }
-    return {
-        "current_week":  [],
-        "previous_week": [],
-        "last_updated":  last_updated,
-        "status":        "empty",
-    }
+    else:
+        envelope = {
+            "current_week":  [],
+            "previous_week": [],
+            "last_updated":  last_updated,
+            "status":        "empty",
+        }
+    print(
+        f"[calendar_snapshot] get_snapshot tab={tab} source={source} "
+        f"status={envelope['status']} current_week={len(envelope['current_week'])} "
+        f"previous_week={len(envelope['previous_week'])}"
+    )
+    return envelope
 
+
+# ── Refresh / write path ────────────────────────────────────────────────────
 
 def _week_window_for(tab: str) -> tuple[str, str]:
     """
     Date range for a single week's worth of fresh data for the given tab.
-
-    Uses Sunday→Saturday for tabs that align to a calendar week. For
-    economic_releases and treasury_macro we use a wider centred window
-    (existing service default) so the snapshot still contains meaningful
-    rows even when the calendar week itself is sparse.
     """
     today = datetime.now(timezone.utc).date()
     days_since_sunday = (today.weekday() + 1) % 7  # Sun=0 in this scheme
     sunday = today - timedelta(days=days_since_sunday)
     saturday = sunday + timedelta(days=6)
     if tab in ("economic_releases", "treasury_macro"):
-        # Fetch a bit either side so the snapshot includes adjacent releases
-        # the user expects to see in the current-week view.
         start = sunday - timedelta(days=7)
         end   = saturday + timedelta(days=14)
     else:
@@ -172,7 +249,8 @@ def _week_window_for(tab: str) -> tuple[str, str]:
 async def refresh_tab(tab: str, fmp_key: str) -> dict:
     """
     Run the existing FMP fetcher for `tab`, promote current→previous,
-    save the new current_week and meta. Returns the new envelope.
+    save the new current_week and meta. Persists to Neon (source of truth)
+    and best-effort to disk (emergency fallback). Returns the new envelope.
     """
     if tab not in TARGET_TABS:
         raise ValueError(f"refresh_tab: unsupported tab {tab!r}")
@@ -180,13 +258,9 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
         print(f"[calendar_snapshot] refresh_tab({tab}) skipped: missing FMP key")
         return get_snapshot(tab)
 
-    # Import lazily to avoid circular imports during module load.
     # NOTE: We intentionally do NOT import _enrich_profiles / _apply_enrichment.
-    # Snapshot refresh (scheduler + manual backfill) must skip per-symbol FMP
-    # profile calls — those caused 429 rate-limit storms (e.g. dividends with
-    # hundreds of symbols) that prevented other tabs from refreshing. The base
-    # tab fetchers already supply the visible fields the frontend needs
-    # (symbol, date, dividend amount, IPO price range, split ratio, etc.).
+    # Snapshot refresh must skip per-symbol FMP profile calls — those caused
+    # 429 rate-limit storms (e.g. dividends with hundreds of symbols).
     from services.catalyst_calendar_service import (
         CatalystFMP,
         _fetch_tab,
@@ -216,31 +290,57 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
     )
 
     async with _lock:
-        store = _read_disk()
-        slot = _ensure_tab(store, tab)
-        # Promote: current_week → previous_week, then write new current.
-        slot["previous_week"] = slot.get("current_week") or slot.get("previous_week") or []
-        slot["current_week"]  = events or []
-        slot["meta"] = {
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "status":       "ready" if events else ("stale" if slot["previous_week"] else "empty"),
-            "window":       {"from": from_date, "to": to_date},
-            "fetch_error":  err,
+        # Read current row from Neon to figure out what to promote into previous_week.
+        prior = _neon_read(tab)
+        if prior is None:
+            # No DB row yet (or Neon unreachable for read) — fall back to disk
+            # for the prior, so we don't lose previous_week if Neon was just
+            # transiently down.
+            store = _read_disk()
+            prior = _normalize_slot(store.get(tab))
+
+        prior_current = prior.get("current_week") or []
+        prior_previous = prior.get("previous_week") or []
+
+        new_slot = {
+            "current_week": events or [],
+            "previous_week": prior_current or prior_previous or [],
+            "meta": {
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "status":       "ready" if events else (
+                    "stale" if (prior_current or prior_previous) else "empty"
+                ),
+                "window":       {"from": from_date, "to": to_date},
+                "fetch_error":  err,
+                # Preserve schedule marker if it was set previously.
+                **{k: v for k, v in (prior.get("meta") or {}).items()
+                   if k in ("last_run_week",)},
+            },
         }
-        store[tab] = slot
-        _write_disk(store)
+
+        # Primary persistence: Neon.
+        neon_ok = _neon_write(tab, new_slot)
+
+        # Best-effort disk mirror so a local dev process can still serve a
+        # snapshot if Neon is unavailable. NEVER source of truth.
+        try:
+            store = _read_disk()
+            store[tab] = new_slot
+            _write_disk(store)
+        except Exception as e:
+            print(f"[calendar_snapshot] disk mirror failed tab={tab}: {e}")
+
+        if not neon_ok:
+            print(
+                f"[calendar_snapshot] WARN tab={tab} Neon write FAILED — "
+                f"deployed API will not see this refresh until Neon is back"
+            )
 
     return get_snapshot(tab)
 
 
 # ── Scheduler ────────────────────────────────────────────────────────────────
-# Simple background loop. Avoids new infra (no APScheduler dep). Wakes hourly
-# and runs a refresh job for any (Sunday, hour) slot that hasn't run yet this
-# week. Schedule (America/New_York):
-#   01:00 dividends, 02:00 ipos, 03:00 splits,
-#   04:00 economic_releases, 05:00 treasury_macro
 
-# (tab, hour_local_et, minute) — minute=0 keeps the spec; hour is ET.
 _SCHEDULE: list[tuple[str, int, int]] = [
     ("dividends",         1, 0),
     ("ipos",              2, 0),
@@ -264,31 +364,41 @@ def _iso_year_week(dt: datetime) -> str:
 
 
 def _last_run_marker(tab: str) -> Optional[str]:
+    """Read schedule marker from Neon; fall back to disk if Neon unavailable."""
+    try:
+        from data.pg_storage import calendar_snapshot_get_meta_field
+        marker = calendar_snapshot_get_meta_field(tab, "last_run_week")
+        if marker is not None:
+            return marker
+    except Exception as e:
+        print(f"[calendar_snapshot] last_run_marker neon read failed tab={tab}: {e}")
     store = _read_disk()
     slot = store.get(tab) or {}
     return ((slot.get("meta") or {}).get("last_run_week"))
 
 
 def _set_last_run_marker(tab: str, week_marker: str) -> None:
-    store = _read_disk()
-    slot = _ensure_tab(store, tab)
-    meta = slot.setdefault("meta", {})
-    meta["last_run_week"] = week_marker
-    store[tab] = slot
-    _write_disk(store)
+    """Persist schedule marker to Neon and best-effort disk."""
+    try:
+        from data.pg_storage import calendar_snapshot_set_meta_field
+        calendar_snapshot_set_meta_field(tab, "last_run_week", week_marker)
+    except Exception as e:
+        print(f"[calendar_snapshot] last_run_marker neon write failed tab={tab}: {e}")
+    try:
+        store = _read_disk()
+        slot = _normalize_slot(store.get(tab))
+        meta = slot.setdefault("meta", {})
+        meta["last_run_week"] = week_marker
+        store[tab] = slot
+        _write_disk(store)
+    except Exception:
+        pass
 
 
 async def weekly_scheduler_loop(fmp_key_provider) -> None:
     """
     Background loop. Pass a callable returning the FMP key (so a missing key
     at startup can still recover later without restart).
-
-    Runs every Sunday in America/New_York at the per-tab hour from _SCHEDULE.
-    Uses a per-tab `last_run_week` marker (ISO yr-week) so a process restart
-    won't double-fetch and a missed slot will be picked up on the next loop.
-
-    Important: this loop does NOT fetch on startup for these target tabs.
-    It only fires inside the Sunday window.
     """
     print(f"[calendar_snapshot] scheduler loop started; tabs={TARGET_TABS}")
 
@@ -296,7 +406,6 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
         try:
             now_et = _et_now()
             week_marker = _iso_year_week(now_et)
-            # Only fire on Sunday (weekday()==6) and only inside each tab's hour
             if now_et.weekday() == 6:
                 for tab, hour, minute in _SCHEDULE:
                     if now_et.hour != hour:
@@ -318,8 +427,6 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
         except Exception as e:
             print(f"[calendar_snapshot] scheduler loop error: {e}")
 
-        # Sleep until the top of the next minute. Cheap polling — the heavy
-        # work only happens when an hour slot matches.
         try:
             now_et = _et_now()
             secs_to_next_min = 60 - now_et.second
@@ -329,27 +436,28 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
 
 
 # ── Manual backfill (CLI-only) ───────────────────────────────────────────────
-# Manual-only entrypoint to populate the weekly snapshots NOW for the five
-# non-Earnings target tabs. Reuses refresh_tab — the same function the Sunday
-# scheduler invokes — so there is no duplicate fetch logic. Earnings is NOT in
-# TARGET_TABS and is therefore never touched by this command.
-#
-# This block runs only under `python -m services.calendar_snapshot_service`
-# (or equivalent direct invocation). It is gated by `if __name__ == "__main__"`
-# and is NEVER triggered on import, request, page load, or app startup.
-
 
 async def _manual_backfill(tabs: list[str]) -> int:
-    """
-    Run refresh_tab for each requested tab sequentially. Returns a process
-    exit code: 0 on full success, 1 if any tab failed or returned no events
-    AND no fallback existed.
-    """
     import os
     fmp_key = os.getenv("FMP_API_KEY")
     if not fmp_key:
         print("[backfill] ERROR: FMP_API_KEY not set in environment; aborting.")
         return 2
+
+    # Best-effort: ensure the Neon table exists before we start, so the first
+    # write isn't fighting an undefined-table self-heal under contention.
+    try:
+        from data.pg_storage import init_tables, is_available, get_last_conn_error
+        if is_available():
+            init_tables()
+            print("[backfill] Neon connectivity OK; calendar_snapshots table ensured.")
+        else:
+            print(
+                f"[backfill] WARN: Neon not available — backfill will only "
+                f"update disk fallback. last_conn_error={get_last_conn_error()!r}"
+            )
+    except Exception as e:
+        print(f"[backfill] WARN: Neon init check failed: {e}")
 
     failures: list[str] = []
     for tab in tabs:
@@ -383,7 +491,6 @@ async def _manual_backfill(tabs: list[str]) -> int:
 
 def _cli_main() -> int:
     import argparse
-    import sys
 
     parser = argparse.ArgumentParser(
         prog="python -m services.calendar_snapshot_service",
@@ -392,7 +499,8 @@ def _cli_main() -> int:
             "Refreshes Dividends, IPOs, Splits, Economic Releases, and "
             "Treasury/Macro by calling the same refresh_tab() function the "
             "Sunday ET scheduler uses. Earnings is never touched. Requires "
-            "FMP_API_KEY in the environment. Safe to re-run; idempotent."
+            "FMP_API_KEY in the environment. Snapshots are persisted to Neon "
+            "(NEON_DATABASE_URL); disk JSON is an emergency-only fallback."
         ),
     )
     parser.add_argument(
@@ -434,7 +542,6 @@ def _cli_main() -> int:
 
 if __name__ == "__main__":
     import sys, os
-    # Ensure backend/ is on sys.path when invoked from project root
     backend_dir = os.path.dirname(os.path.abspath(__file__))
     while os.path.basename(backend_dir) != "backend" and backend_dir != "/":
         backend_dir = os.path.dirname(backend_dir)

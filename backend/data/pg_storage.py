@@ -442,6 +442,19 @@ def init_tables():
                 ON CONFLICT (table_name) DO NOTHING
             """, (tbl, ts_col, days, enabled, desc))
 
+        # ── Calendar snapshot persistence (non-Earnings catalyst tabs) ──
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.calendar_snapshots (
+                tab            TEXT PRIMARY KEY,
+                current_week   JSONB NOT NULL DEFAULT '[]'::jsonb,
+                previous_week  JSONB NOT NULL DEFAULT '[]'::jsonb,
+                last_updated   TIMESTAMPTZ NULL,
+                status         TEXT NOT NULL DEFAULT 'empty',
+                meta           JSONB NOT NULL DEFAULT '{}'::jsonb,
+                updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
@@ -1149,5 +1162,219 @@ def watchlist_list() -> list:
     except Exception as e:
         print(f"[PG_STORAGE] watchlist_list error: {e}")
         return []
+    finally:
+        _put_conn(conn)
+
+
+# ── Calendar Snapshots (non-Earnings catalyst tabs) ─────────────────
+
+def _ensure_calendar_snapshots_table(cur) -> None:
+    """Idempotent table creation for emergency self-heal if init_tables didn't run."""
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS public.calendar_snapshots (
+            tab            TEXT PRIMARY KEY,
+            current_week   JSONB NOT NULL DEFAULT '[]'::jsonb,
+            previous_week  JSONB NOT NULL DEFAULT '[]'::jsonb,
+            last_updated   TIMESTAMPTZ NULL,
+            status         TEXT NOT NULL DEFAULT 'empty',
+            meta           JSONB NOT NULL DEFAULT '{}'::jsonb,
+            updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+
+
+@traceable(name="pg_storage.calendar_snapshot_read")
+def calendar_snapshot_read(tab: str) -> dict | None:
+    """Read a single tab's snapshot row. Returns None if Neon unavailable or row missing."""
+    conn = _get_conn()
+    if conn is None:
+        print(f"[PG_STORAGE] calendar_snapshot_read({tab}) skipped: no DB connection")
+        return None
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                SELECT tab, current_week, previous_week, last_updated, status, meta
+                FROM public.calendar_snapshots
+                WHERE tab = %s
+                """,
+                (tab,),
+            )
+            row = cur.fetchone()
+        except Exception as inner_e:
+            # Likely undefined table — self-heal once and retry.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            print(f"[PG_STORAGE] calendar_snapshot_read self-heal triggered: {inner_e}")
+            _ensure_calendar_snapshots_table(cur)
+            conn.commit()
+            cur.execute(
+                """
+                SELECT tab, current_week, previous_week, last_updated, status, meta
+                FROM public.calendar_snapshots
+                WHERE tab = %s
+                """,
+                (tab,),
+            )
+            row = cur.fetchone()
+        cur.close()
+        if row is None:
+            return None
+        cw = row[1] or []
+        pw = row[2] or []
+        last_updated = row[3].isoformat() if row[3] else None
+        return {
+            "tab": row[0],
+            "current_week": cw if isinstance(cw, list) else (json.loads(cw) if isinstance(cw, str) else []),
+            "previous_week": pw if isinstance(pw, list) else (json.loads(pw) if isinstance(pw, str) else []),
+            "last_updated": last_updated,
+            "status": row[4] or "empty",
+            "meta": row[5] or {},
+        }
+    except Exception as e:
+        print(f"[PG_STORAGE] calendar_snapshot_read error tab={tab}: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        _put_conn(conn)
+
+
+@traceable(name="pg_storage.calendar_snapshot_write")
+def calendar_snapshot_write(
+    tab: str,
+    current_week: list,
+    previous_week: list,
+    last_updated: str | None,
+    status: str,
+    meta: dict | None = None,
+) -> bool:
+    """Upsert a tab's snapshot row. Returns True on success."""
+    conn = _get_conn()
+    if conn is None:
+        print(f"[PG_STORAGE] calendar_snapshot_write({tab}) skipped: no DB connection")
+        return False
+    try:
+        from psycopg2.extras import Json
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT INTO public.calendar_snapshots
+                    (tab, current_week, previous_week, last_updated, status, meta, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (tab) DO UPDATE SET
+                    current_week  = EXCLUDED.current_week,
+                    previous_week = EXCLUDED.previous_week,
+                    last_updated  = EXCLUDED.last_updated,
+                    status        = EXCLUDED.status,
+                    meta          = EXCLUDED.meta,
+                    updated_at    = NOW()
+                """,
+                (tab, Json(current_week or []), Json(previous_week or []),
+                 last_updated, status, Json(meta or {})),
+            )
+        except Exception as inner_e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            print(f"[PG_STORAGE] calendar_snapshot_write self-heal triggered: {inner_e}")
+            _ensure_calendar_snapshots_table(cur)
+            conn.commit()
+            cur.execute(
+                """
+                INSERT INTO public.calendar_snapshots
+                    (tab, current_week, previous_week, last_updated, status, meta, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (tab) DO UPDATE SET
+                    current_week  = EXCLUDED.current_week,
+                    previous_week = EXCLUDED.previous_week,
+                    last_updated  = EXCLUDED.last_updated,
+                    status        = EXCLUDED.status,
+                    meta          = EXCLUDED.meta,
+                    updated_at    = NOW()
+                """,
+                (tab, Json(current_week or []), Json(previous_week or []),
+                 last_updated, status, Json(meta or {})),
+            )
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"[PG_STORAGE] calendar_snapshot_write error tab={tab}: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+@traceable(name="pg_storage.calendar_snapshot_get_meta_field")
+def calendar_snapshot_get_meta_field(tab: str, field: str) -> str | None:
+    """Read a single field from the meta JSON (e.g. 'last_run_week'). None if missing."""
+    snap = calendar_snapshot_read(tab)
+    if not snap:
+        return None
+    meta = snap.get("meta") or {}
+    val = meta.get(field)
+    return val if isinstance(val, str) or val is None else str(val)
+
+
+@traceable(name="pg_storage.calendar_snapshot_set_meta_field")
+def calendar_snapshot_set_meta_field(tab: str, field: str, value) -> bool:
+    """Merge a single field into meta without rewriting current/previous_week."""
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        from psycopg2.extras import Json
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT INTO public.calendar_snapshots (tab, meta, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (tab) DO UPDATE SET
+                    meta = COALESCE(public.calendar_snapshots.meta, '{}'::jsonb) || EXCLUDED.meta,
+                    updated_at = NOW()
+                """,
+                (tab, Json({field: value})),
+            )
+        except Exception as inner_e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            print(f"[PG_STORAGE] calendar_snapshot_set_meta_field self-heal: {inner_e}")
+            _ensure_calendar_snapshots_table(cur)
+            conn.commit()
+            cur.execute(
+                """
+                INSERT INTO public.calendar_snapshots (tab, meta, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (tab) DO UPDATE SET
+                    meta = COALESCE(public.calendar_snapshots.meta, '{}'::jsonb) || EXCLUDED.meta,
+                    updated_at = NOW()
+                """,
+                (tab, Json({field: value})),
+            )
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"[PG_STORAGE] calendar_snapshot_set_meta_field error tab={tab}: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
     finally:
         _put_conn(conn)
