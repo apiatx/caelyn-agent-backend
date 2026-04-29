@@ -370,6 +370,16 @@ try:
     print("[EARNINGS_CLEAN] Router registered at /api/catalysts/earnings/*")
 except Exception as _earn_err:
     print(f"[EARNINGS_CLEAN] Router unavailable (non-fatal): {_earn_err}")
+
+# ── Pre-IPO Watchlist router (/api/calendar/pre-ipo-watchlist) ───────────────
+# Additive: Perplexity + Polymarket + Finnhub aggregation for high-profile
+# private companies.  Does NOT touch existing FMP IPO calendar behavior.
+try:
+    from routes.pre_ipo_watchlist import router as _pre_ipo_router
+    app.include_router(_pre_ipo_router)
+    print("[PRE_IPO_WATCHLIST] Router registered at /api/calendar/pre-ipo-watchlist")
+except Exception as _pre_ipo_err:
+    print(f"[PRE_IPO_WATCHLIST] Router unavailable (non-fatal): {_pre_ipo_err}")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────
