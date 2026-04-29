@@ -29,6 +29,7 @@ import json
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
@@ -504,6 +505,539 @@ def _confidence_score(
     return "Low"
 
 
+# ── Scoring ─────────────────────────────────────────────────────────────────
+
+# Strong/heating phrases imply formal IPO progress.
+_PHRASE_TIERS: list[tuple[tuple[str, ...], tuple[int, int]]] = [
+    # (phrases, (low, high)) — score within range based on how decisive the language is.
+    (
+        (
+            "confidential filing", "confidentially filed", "filed s-1", "filed s1",
+            "files for ipo", "filed for ipo", "filing for ipo", "registration statement",
+            "ipo filed", "draft registration", "drs",
+        ),
+        (70, 90),
+    ),
+    (
+        (
+            "expected to ipo", "preparing for ipo", "preparing to ipo",
+            "selected banks", "hired banks", "hired underwriters", "tapped banks",
+            "ipo filing likely", "filing likely", "plans to file", "plans to ipo",
+            "ipo as soon as", "targeting ipo", "ipo target", "could file",
+            "moving toward ipo",
+        ),
+        (40, 70),
+    ),
+    (
+        (
+            "rumored", "considering ipo", "considering an ipo", "weighing ipo",
+            "exploring ipo", "exploring an ipo", "watching market", "watching the market",
+            "could ipo", "may ipo", "might ipo", "potential ipo",
+        ),
+        (20, 35),
+    ),
+    (
+        (
+            "no ipo plans", "not planning to ipo", "no plans to ipo",
+            "no plans for an ipo", "no announcement", "ceo denies",
+            "denies ipo", "ruled out", "no immediate plans",
+            "remain private", "stay private", "staying private",
+        ),
+        (5, 15),
+    ),
+]
+
+
+def _ipo_probability_score(
+    polymarket_data: dict[str, Any],
+    perplexity_data: dict[str, Any],
+) -> int:
+    """
+    Returns IPO probability sub-score (0-30).
+
+    Prefers Polymarket implied probability when present; otherwise derives
+    from Perplexity language tier mapping.
+    """
+    try:
+        pm_prob = polymarket_data.get("ipo_probability_12m")
+        if isinstance(pm_prob, (int, float)) and 0.0 <= pm_prob <= 1.0:
+            # Map 0..1 to 0..30 directly.
+            return int(round(float(pm_prob) * 30.0))
+    except Exception:
+        pass
+
+    # Fall back to Perplexity language inspection.
+    blob_parts: list[str] = []
+    try:
+        blob_parts.append(str(perplexity_data.get("ipo_status") or ""))
+        blob_parts.extend(str(x) for x in (perplexity_data.get("catalysts") or []))
+        blob_parts.extend(str(x) for x in (perplexity_data.get("valuation_notes") or []))
+        ew = perplexity_data.get("expected_window") or {}
+        if isinstance(ew, dict):
+            blob_parts.append(str(ew.get("earliest") or ""))
+            blob_parts.append(str(ew.get("likely") or ""))
+    except Exception:
+        pass
+    blob = " ".join(blob_parts).lower()
+
+    if not blob.strip():
+        # No usable Perplexity content.
+        return 8  # neutral-low, treat as "unknown"
+
+    for phrases, (low, high) in _PHRASE_TIERS:
+        for p in phrases:
+            if p in blob:
+                # Map within tier to 0-30 by scaling tier midpoint.
+                pct = (low + high) / 2.0 / 100.0
+                return int(round(pct * 30.0))
+
+    # Generic Perplexity content but nothing matched: treat as low/neutral.
+    return 8
+
+
+_VALUATION_RANGE_RE = re.compile(
+    r"\$?\s*(\d+(?:\.\d+)?)\s*([bmtBMT])"
+)
+
+
+def _largest_valuation_billions(text: str) -> Optional[float]:
+    """Return the largest dollar figure in `text` expressed in billions."""
+    if not text:
+        return None
+    best: Optional[float] = None
+    try:
+        for num_str, unit in _VALUATION_RANGE_RE.findall(text):
+            n = float(num_str)
+            u = unit.lower()
+            if u == "t":
+                v = n * 1000.0
+            elif u == "b":
+                v = n
+            elif u == "m":
+                v = n / 1000.0
+            else:
+                continue
+            if best is None or v > best:
+                best = v
+    except Exception:
+        return best
+    return best
+
+
+def _valuation_momentum_score(perplexity_data: dict[str, Any]) -> int:
+    """
+    Returns valuation momentum sub-score (0-25).
+
+    Heuristic: compare the largest dollar figure in the headline valuation
+    against any prior figure mentioned in valuation_notes.
+    """
+    headline = str(perplexity_data.get("estimated_valuation") or "")
+    notes_blob = " ".join(str(x) for x in (perplexity_data.get("valuation_notes") or []))
+
+    if not headline or headline.strip().lower() in {"unknown", ""}:
+        # No headline valuation at all — give a small base if notes exist.
+        return 5 if notes_blob.strip() else 0
+
+    headline_v = _largest_valuation_billions(headline)
+    notes_v = _largest_valuation_billions(notes_blob)
+
+    blob = (headline + " " + notes_blob).lower()
+    has_up_language = any(
+        p in blob for p in (
+            "up from", "increased from", "doubled", "tripled",
+            "raise at", "raising at", "secondary at higher", "tender at higher",
+            "boosted valuation", "higher valuation",
+        )
+    )
+    has_down_language = any(
+        p in blob for p in (
+            "down from", "down round", "markdown", "lower valuation",
+            "cut valuation", "valuation cut", "reduced valuation",
+        )
+    )
+    has_flat_language = any(
+        p in blob for p in ("flat valuation", "unchanged valuation", "no change in valuation")
+    )
+
+    if has_down_language:
+        return 5
+    if has_flat_language:
+        return 10
+
+    if headline_v is not None and notes_v is not None and notes_v > 0:
+        ratio = headline_v / notes_v
+        if ratio >= 1.5:
+            return 25
+        if ratio >= 1.15:
+            return 20
+        if ratio >= 1.0:
+            return 15
+        if ratio >= 0.85:
+            return 10
+        return 5
+
+    if has_up_language:
+        return 20
+
+    if headline_v is not None:
+        # Has a concrete headline figure but no historical anchor.
+        if headline_v >= 100.0:
+            return 18
+        if headline_v >= 25.0:
+            return 15
+        return 12
+
+    # Headline exists but is unparseable.
+    return 8
+
+
+def _parse_published_dt(s: Any) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        if isinstance(s, datetime):
+            return s if s.tzinfo else s.replace(tzinfo=timezone.utc)
+        text = str(s).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _news_recency_score(finnhub_news: list[dict[str, Any]]) -> int:
+    """
+    Returns news recency sub-score (0-20).
+    """
+    if not finnhub_news:
+        return 0
+    now = datetime.now(timezone.utc)
+    best_age_days: Optional[float] = None
+    for n in finnhub_news:
+        if not isinstance(n, dict):
+            continue
+        dt = _parse_published_dt(n.get("published_at"))
+        if dt is None:
+            continue
+        try:
+            age = (now - dt).total_seconds() / 86400.0
+        except Exception:
+            continue
+        if age < 0:
+            age = 0
+        if best_age_days is None or age < best_age_days:
+            best_age_days = age
+
+    if best_age_days is None:
+        # We have items but no parseable timestamps — count as old.
+        return 6 if len(finnhub_news) >= 2 else 4
+
+    count = len(finnhub_news)
+    if best_age_days <= 7:
+        base = 18
+    elif best_age_days <= 30:
+        base = 15
+    elif best_age_days <= 90:
+        base = 10
+    elif best_age_days <= 180:
+        base = 5
+    else:
+        base = 2
+    bonus = 2 if count >= 3 else (1 if count >= 2 else 0)
+    return min(20, base + bonus)
+
+
+_CREDIBLE_DOMAINS = (
+    "bloomberg.com", "reuters.com", "wsj.com", "ft.com", "nytimes.com",
+    "cnbc.com", "theinformation.com", "axios.com", "techcrunch.com",
+    "businesswire.com", "prnewswire.com", "barrons.com", "economist.com",
+    "sec.gov", "investor.gov", "forbes.com",
+)
+_OFFICIAL_DOMAINS = ("sec.gov", "investor.gov")
+
+
+def _source_quality_score(
+    perplexity_data: dict[str, Any],
+    finnhub_news: list[dict[str, Any]],
+) -> int:
+    """
+    Returns source quality sub-score (0-15).
+    """
+    sources = perplexity_data.get("sources") or []
+    news = finnhub_news or []
+
+    credible = 0
+    official = 0
+    total = 0
+    for s in sources:
+        if not isinstance(s, dict):
+            continue
+        url = str(s.get("url") or "").lower()
+        if not url:
+            continue
+        total += 1
+        if any(d in url for d in _OFFICIAL_DOMAINS):
+            official += 1
+        if any(d in url for d in _CREDIBLE_DOMAINS):
+            credible += 1
+    for n in news:
+        if not isinstance(n, dict):
+            continue
+        url = str(n.get("url") or "").lower()
+        if not url:
+            continue
+        total += 1
+        if any(d in url for d in _OFFICIAL_DOMAINS):
+            official += 1
+        if any(d in url for d in _CREDIBLE_DOMAINS):
+            credible += 1
+
+    if total == 0:
+        return 0
+
+    score = 0
+    score += min(6, credible * 2)
+    if official > 0:
+        score += min(5, 2 + official)
+    # Quantity bonus
+    if total >= 5:
+        score += 3
+    elif total >= 3:
+        score += 2
+    elif total >= 1:
+        score += 1
+    return min(15, score)
+
+
+_CATALYST_KEYWORDS: list[tuple[tuple[str, ...], int]] = [
+    (("revenue run rate", "annual recurring revenue", "arr ", "revenue scale",
+      "$1b revenue", "billion in revenue", "revenue billion"), 3),
+    (("funding round", "series ", "raised $", "raising $", "tender offer",
+      "secondary offering", "secondary sale"), 3),
+    (("hired banks", "selected banks", "tapped banks", "hired underwriters",
+      "goldman", "morgan stanley", "jpmorgan", "advisor"), 3),
+    (("regulatory pressure", "antitrust", "ftc", "doj investigation",
+      "compliance pressure"), 2),
+    (("liquidity", "employee liquidity", "investor liquidity", "cap table pressure",
+      "investor pressure", "shareholder pressure"), 2),
+    (("strategic partnership", "partnership with", "joint venture",
+      "major contract", "government contract"), 2),
+]
+
+
+def _catalyst_strength_score(perplexity_data: dict[str, Any]) -> int:
+    """
+    Returns catalyst strength sub-score (0-10).
+    """
+    catalysts = perplexity_data.get("catalysts") or []
+    notes = perplexity_data.get("valuation_notes") or []
+    if not catalysts and not notes:
+        return 0
+    blob = " ".join(str(x).lower() for x in catalysts) + " " + \
+        " ".join(str(x).lower() for x in notes)
+
+    score = 0
+    matched_keys: set[int] = set()
+    for idx, (phrases, weight) in enumerate(_CATALYST_KEYWORDS):
+        for p in phrases:
+            if p.strip() and p in blob:
+                if idx not in matched_keys:
+                    score += weight
+                    matched_keys.add(idx)
+                break
+
+    # Modest bonus for raw catalyst count
+    n = len([c for c in catalysts if str(c).strip()])
+    if n >= 4:
+        score += 2
+    elif n >= 2:
+        score += 1
+
+    return min(10, score)
+
+
+def _compute_score_breakdown(
+    perplexity_data: dict[str, Any],
+    polymarket_data: dict[str, Any],
+    finnhub_news: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Compute the 5 sub-scores; never raises."""
+    try:
+        ipo_prob = _ipo_probability_score(polymarket_data, perplexity_data)
+    except Exception:
+        ipo_prob = 0
+    try:
+        val_mom = _valuation_momentum_score(perplexity_data)
+    except Exception:
+        val_mom = 0
+    try:
+        recency = _news_recency_score(finnhub_news)
+    except Exception:
+        recency = 0
+    try:
+        src_q = _source_quality_score(perplexity_data, finnhub_news)
+    except Exception:
+        src_q = 0
+    try:
+        catalyst = _catalyst_strength_score(perplexity_data)
+    except Exception:
+        catalyst = 0
+
+    return {
+        "ipo_probability_score":     max(0, min(30, int(ipo_prob))),
+        "valuation_momentum_score":  max(0, min(25, int(val_mom))),
+        "news_recency_score":        max(0, min(20, int(recency))),
+        "source_quality_score":      max(0, min(15, int(src_q))),
+        "catalyst_strength_score":   max(0, min(10, int(catalyst))),
+    }
+
+
+def _opportunity_score_from_breakdown(breakdown: dict[str, int]) -> int:
+    total = sum(int(v) for v in breakdown.values())
+    return max(0, min(100, total))
+
+
+def _momentum_badge(score: int, score_change: Optional[int]) -> str:
+    if score >= 70 or (score_change is not None and score_change >= 10):
+        return "Heating Up"
+    if score >= 40:
+        return "Watch"
+    return "Dormant"
+
+
+# ── Snapshot persistence ────────────────────────────────────────────────────
+
+_SNAPSHOT_PATH = Path(__file__).parent.parent / "data" / "pre_ipo_snapshots.json"
+
+
+def _load_snapshots() -> dict[str, Any]:
+    """Load prior snapshot map keyed by company name. Never raises."""
+    try:
+        if not _SNAPSHOT_PATH.exists():
+            return {}
+        raw = _SNAPSHOT_PATH.read_text()
+        if not raw.strip():
+            return {}
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except Exception as e:
+        print(f"[PRE_IPO] snapshot load failed: {e}")
+        return {}
+
+
+def _write_snapshots(snapshots: dict[str, Any]) -> None:
+    """Persist snapshot map to disk. Never raises."""
+    try:
+        _SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _SNAPSHOT_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(snapshots, indent=2))
+        tmp.replace(_SNAPSHOT_PATH)
+    except Exception as e:
+        print(f"[PRE_IPO] snapshot write failed: {e}")
+
+
+def _diff_change_tracking(
+    company: str,
+    current: dict[str, Any],
+    prior_snapshots: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Build the change_tracking block for `company` by comparing `current`
+    against the prior snapshot, if any. Always returns a safely shaped dict.
+    """
+    block: dict[str, Any] = {
+        "valuation_change":       "Unknown",
+        "ipo_probability_change": "Unknown",
+        "new_catalysts":          [],
+        "previous_score":         None,
+        "score_change":           None,
+        "last_snapshot_at":       None,
+    }
+    try:
+        prior = prior_snapshots.get(company)
+        if not isinstance(prior, dict):
+            return block
+
+        block["last_snapshot_at"] = prior.get("snapshot_at")
+
+        prev_score = prior.get("opportunity_score")
+        if isinstance(prev_score, (int, float)):
+            block["previous_score"] = int(prev_score)
+            cur_score = current.get("opportunity_score")
+            if isinstance(cur_score, (int, float)):
+                block["score_change"] = int(cur_score) - int(prev_score)
+
+        # Valuation comparison
+        prev_val = str(prior.get("estimated_valuation") or "").strip()
+        cur_val = str(current.get("estimated_valuation") or "").strip()
+        if prev_val and cur_val and prev_val.lower() != "unknown" and cur_val.lower() != "unknown":
+            if prev_val == cur_val:
+                block["valuation_change"] = "Unchanged"
+            else:
+                pv = _largest_valuation_billions(prev_val)
+                cv = _largest_valuation_billions(cur_val)
+                if pv is not None and cv is not None and pv > 0:
+                    if cv > pv * 1.02:
+                        block["valuation_change"] = f"Up: {prev_val} → {cur_val}"
+                    elif cv < pv * 0.98:
+                        block["valuation_change"] = f"Down: {prev_val} → {cur_val}"
+                    else:
+                        block["valuation_change"] = "Unchanged"
+                else:
+                    block["valuation_change"] = f"{prev_val} → {cur_val}"
+
+        # IPO probability comparison
+        prev_pm = prior.get("polymarket_ipo_probability_12m")
+        cur_pm = current.get("polymarket", {}).get("ipo_probability_12m")
+        if isinstance(prev_pm, (int, float)) and isinstance(cur_pm, (int, float)):
+            delta = float(cur_pm) - float(prev_pm)
+            if abs(delta) < 0.01:
+                block["ipo_probability_change"] = "Unchanged"
+            else:
+                sign = "+" if delta > 0 else ""
+                block["ipo_probability_change"] = (
+                    f"{sign}{delta * 100:.1f}pp ({prev_pm * 100:.0f}% → {cur_pm * 100:.0f}%)"
+                )
+        else:
+            prev_status = str(prior.get("ipo_status") or "").strip()
+            cur_status = str(current.get("ipo_status") or "").strip()
+            if prev_status and cur_status:
+                if prev_status == cur_status:
+                    block["ipo_probability_change"] = "Unchanged"
+                else:
+                    block["ipo_probability_change"] = f"{prev_status} → {cur_status}"
+
+        # New catalysts
+        prev_catalysts = {str(x).strip().lower() for x in (prior.get("catalysts") or []) if str(x).strip()}
+        new_catalysts: list[str] = []
+        for c in (current.get("catalysts") or []):
+            cs = str(c).strip()
+            if cs and cs.lower() not in prev_catalysts:
+                new_catalysts.append(cs)
+        block["new_catalysts"] = new_catalysts[:6]
+    except Exception as e:
+        print(f"[PRE_IPO] diff change_tracking failed for {company}: {e}")
+    return block
+
+
+def _build_snapshot_record(company: dict[str, Any]) -> dict[str, Any]:
+    """Reduce a fully-built company entry to the fields we need to persist."""
+    pm = company.get("polymarket") or {}
+    return {
+        "company":                          company.get("company"),
+        "snapshot_at":                      datetime.now(timezone.utc).isoformat(),
+        "opportunity_score":                company.get("opportunity_score"),
+        "estimated_valuation":              company.get("estimated_valuation"),
+        "ipo_status":                       company.get("ipo_status"),
+        "polymarket_ipo_probability_12m":   pm.get("ipo_probability_12m"),
+        "catalysts":                        list(company.get("catalysts") or []),
+    }
+
+
 async def _build_company_payload(spec: dict[str, Any]) -> dict[str, Any]:
     """Build a single company entry; isolated so one failure can't kill others."""
     company = spec["company"]
@@ -537,6 +1071,9 @@ async def _build_company_payload(spec: dict[str, Any]) -> dict[str, Any]:
 
     confidence = _confidence_score(perplexity_data, polymarket_data, finnhub_news)
 
+    score_breakdown = _compute_score_breakdown(perplexity_data, polymarket_data, finnhub_news)
+    opportunity_score = _opportunity_score_from_breakdown(score_breakdown)
+
     return {
         "company":             company,
         "ipo_status":          perplexity_data.get("ipo_status") or "Unknown",
@@ -555,6 +1092,38 @@ async def _build_company_payload(spec: dict[str, Any]) -> dict[str, Any]:
         "confidence_score":    confidence,
         "latest_news":         finnhub_news or [],
         "sources":             perplexity_data.get("sources") or [],
+        "opportunity_score":   opportunity_score,
+        "score_breakdown":     score_breakdown,
+        # rank, momentum_badge, change_tracking are filled in at the
+        # full-payload assembly stage where ordering/snapshots are known.
+    }
+
+
+def _empty_company_entry(company_name: str) -> dict[str, Any]:
+    breakdown = {
+        "ipo_probability_score":     0,
+        "valuation_momentum_score":  0,
+        "news_recency_score":        0,
+        "source_quality_score":      0,
+        "catalyst_strength_score":   0,
+    }
+    return {
+        "company":             company_name,
+        "ipo_status":          "Unknown",
+        "estimated_valuation": "Unknown",
+        "valuation_notes":     [],
+        "polymarket": {
+            "ipo_probability_12m": None,
+            "valuation_markets":   [],
+            "summary":             "Data temporarily unavailable.",
+        },
+        "catalysts":           [],
+        "expected_window":     {"earliest": "Unknown", "likely": "Unknown"},
+        "confidence_score":    "Low",
+        "latest_news":         [],
+        "sources":             [],
+        "opportunity_score":   0,
+        "score_breakdown":     breakdown,
     }
 
 
@@ -567,24 +1136,74 @@ async def _build_full_payload() -> dict[str, Any]:
     for spec, res in zip(TRACKED_COMPANIES, results):
         if isinstance(res, Exception):
             print(f"[PRE_IPO] {spec['company']} task error: {res}")
-            companies.append({
-                "company":             spec["company"],
-                "ipo_status":          "Unknown",
-                "estimated_valuation": "Unknown",
-                "valuation_notes":     [],
-                "polymarket": {
-                    "ipo_probability_12m": None,
-                    "valuation_markets":   [],
-                    "summary":             "Data temporarily unavailable.",
-                },
-                "catalysts":           [],
-                "expected_window":     {"earliest": "Unknown", "likely": "Unknown"},
-                "confidence_score":    "Low",
-                "latest_news":         [],
-                "sources":             [],
-            })
+            companies.append(_empty_company_entry(spec["company"]))
         else:
+            # Defensive: ensure required scoring fields exist even if
+            # _build_company_payload unexpectedly returned a partial dict.
+            if "opportunity_score" not in res:
+                res["opportunity_score"] = 0
+            if "score_breakdown" not in res:
+                res["score_breakdown"] = {
+                    "ipo_probability_score":     0,
+                    "valuation_momentum_score":  0,
+                    "news_recency_score":        0,
+                    "source_quality_score":      0,
+                    "catalyst_strength_score":   0,
+                }
             companies.append(res)
+
+    # Load prior snapshots for change tracking; never break on failure.
+    try:
+        prior_snapshots = _load_snapshots()
+    except Exception as e:
+        print(f"[PRE_IPO] snapshot load wrapper failed: {e}")
+        prior_snapshots = {}
+
+    # Compute change_tracking BEFORE sorting so we have stable references.
+    for c in companies:
+        try:
+            c["change_tracking"] = _diff_change_tracking(
+                c.get("company") or "", c, prior_snapshots,
+            )
+        except Exception as e:
+            print(f"[PRE_IPO] change_tracking failed for {c.get('company')}: {e}")
+            c["change_tracking"] = {
+                "valuation_change":       "Unknown",
+                "ipo_probability_change": "Unknown",
+                "new_catalysts":          [],
+                "previous_score":         None,
+                "score_change":           None,
+                "last_snapshot_at":       None,
+            }
+
+    # Compute momentum_badge using current score and score_change.
+    for c in companies:
+        try:
+            sc = int(c.get("opportunity_score") or 0)
+            ch = c.get("change_tracking") or {}
+            score_change = ch.get("score_change") if isinstance(ch, dict) else None
+            c["momentum_badge"] = _momentum_badge(sc, score_change)
+        except Exception:
+            c["momentum_badge"] = "Dormant"
+
+    # Sort by opportunity_score desc, stable within ties.
+    companies.sort(key=lambda x: int(x.get("opportunity_score") or 0), reverse=True)
+
+    # Assign rank.
+    for idx, c in enumerate(companies, start=1):
+        c["rank"] = idx
+
+    # Persist new snapshot map (best-effort).
+    try:
+        new_snapshots: dict[str, Any] = {}
+        for c in companies:
+            name = c.get("company")
+            if not name:
+                continue
+            new_snapshots[name] = _build_snapshot_record(c)
+        _write_snapshots(new_snapshots)
+    except Exception as e:
+        print(f"[PRE_IPO] snapshot persist wrapper failed: {e}")
 
     return {
         "status":     "ok",
