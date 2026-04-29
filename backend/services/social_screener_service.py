@@ -34,6 +34,12 @@ from typing import Any, Optional
 
 import httpx
 
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+    _ET = _ZoneInfo("America/New_York")
+except Exception:
+    _ET = None  # type: ignore[assignment]
+
 from data.cache import cache
 from services.api_audit import (
     fmp_force_429, record_call, record_request,
@@ -55,6 +61,33 @@ _FMP_BASE = "https://financialmodelingprep.com/stable"
 
 # Cache key prefixes (so we can also serve last-known-good after expiry)
 _LKG_PREFIX = "social_screener:lkg:"
+
+
+# ── Market-hours guard ────────────────────────────────────────────────────────
+
+def _is_us_market_open() -> bool:
+    """Return True only during core NYSE trading hours.
+
+    Hours: Monday–Friday, 09:30–16:00 America/New_York (DST-aware).
+    Basic weekday guard only; no holiday calendar (documented limitation).
+    Uses zoneinfo (stdlib ≥ 3.9) for proper DST handling; falls back to a
+    fixed UTC-5 offset when zoneinfo is unavailable.
+    """
+    try:
+        if _ET is not None:
+            now_et = datetime.now(_ET)
+        else:
+            from datetime import timedelta
+            now_et = datetime.now(timezone(timedelta(hours=-5)))
+    except Exception:
+        return False  # safe default: treat as closed
+
+    if now_et.weekday() >= 5:   # Saturday=5, Sunday=6
+        return False
+    open_hm  = (9, 30)
+    close_hm = (16, 0)
+    cur_hm   = (now_et.hour, now_et.minute)
+    return open_hm <= cur_hm < close_hm
 
 
 # ── Display formatters ───────────────────────────────────────────────────────
@@ -1008,22 +1041,31 @@ async def fetch_enrichment_for_symbols(
     *,
     fundamental_symbols: Optional[list[str]] = None,
     allow_live_fmp: bool = True,
-) -> tuple[dict[str, dict], dict[str, dict], str, str]:
+) -> tuple[dict[str, dict], dict[str, dict], str, str, bool]:
     """Enrich a list of tickers from FMP.
 
     Returns:
-        (social_enrichment, fundamental_enrichment, enrichment_status, fund_status)
+        (social_enrichment, fundamental_enrichment, enrichment_status,
+         fund_status, market_hours_open)
 
       social_enrichment      — per-symbol {profile, quote, price_change}
       fundamental_enrichment — per-symbol full FMP fundamentals snapshot
       enrichment_status      — ok | partial | unavailable
-                               (refers to enrichment fields only — rows still
-                                exist regardless of this value)
       fund_status            — fresh | partial | stale | unavailable
+      market_hours_open      — True if called during core NYSE hours
 
-    When allow_live_fmp=False (used by the main dashboard route), only the
-    hot-cache and last-known-good values are used.  No HTTP connections are
-    opened, so the dashboard response is never delayed by FMP latency.
+    Market-hours behaviour
+    ──────────────────────
+    • During core NYSE hours (Mon-Fri 09:30-16:00 ET):
+        Live Tradier + FMP quote/price-change refresh runs as normal.
+    • Outside core hours:
+        Tradier live call is skipped; FMP quote/price-change live calls are
+        skipped.  Cache/LKG values are returned for those fields so the UI
+        always shows the last known close price rather than going blank.
+        Profile (24 h TTL) and fundamentals (12 h TTL) are unaffected.
+
+    When allow_live_fmp=False (main dashboard route) the market-hours flag
+    is computed but no live calls are made regardless.
 
     Never raises — failures degrade to nulls + downgraded status.
     """
@@ -1031,11 +1073,14 @@ async def fetch_enrichment_for_symbols(
     _hits_before, _misses_before = get_cache_counts()
     _t0 = time.monotonic()
 
+    # Determine market status once for this enrichment run.
+    _mkt_open: bool = _is_us_market_open()
+
     social_enrichment: dict[str, dict]      = {s: {} for s in symbols}
     fundamental_enrichment: dict[str, dict] = {}
 
     if not fmp_api_key:
-        return social_enrichment, fundamental_enrichment, "unavailable", "unavailable"
+        return social_enrichment, fundamental_enrichment, "unavailable", "unavailable", _mkt_open
 
     # ── Cache-only mode (main dashboard path) ─────────────────────────────
     if not allow_live_fmp:
@@ -1052,7 +1097,7 @@ async def fetch_enrichment_for_symbols(
         else:
             enrich_status = "partial"
         # fundamental_enrichment stays empty — lazy endpoint handles live fetch
-        return social_enrichment, fundamental_enrichment, enrich_status, "unavailable"
+        return social_enrichment, fundamental_enrichment, enrich_status, "unavailable", _mkt_open
 
     fund_targets = list(fundamental_symbols or [])[:_MAX_FUND_ENRICH_ROWS]
 
@@ -1069,12 +1114,12 @@ async def fetch_enrichment_for_symbols(
     _fund_sem = asyncio.Semaphore(12)
 
     # ── Tradier batch quote (primary for price/vol/1D%) ───────────────────
-    # Done outside the FMP httpx session so it gets a fresh connection pool
-    # and doesn't block FMP enrichment if Tradier is slow.
+    # Live Tradier call is skipped outside core market hours (09:30-16:00 ET).
+    # Prices don't change after close, so LKG from the last session is used.
     _tradier_key = os.getenv("TRADIER_API_KEY", "")
     _tradier_sandbox = os.getenv("TRADIER_SANDBOX", "false").lower() == "true"
     _tradier_quotes: dict[str, dict] = {}
-    if _tradier_key and symbols:
+    if _mkt_open and _tradier_key and symbols:
         try:
             _tradier_quotes = await asyncio.wait_for(
                 _tradier_batch_live(list(symbols), _tradier_key, _tradier_sandbox),
@@ -1082,7 +1127,9 @@ async def fetch_enrichment_for_symbols(
             )
         except Exception as _te:
             print(f"[SOCIAL_SCREENER] Tradier batch timeout/error: {_te}")
-    # For tickers Tradier missed, fall back to LKG Tradier from a previous call
+    elif not _mkt_open:
+        print("[SOCIAL_SCREENER] Market closed — skipping live Tradier call, using LKG")
+    # For tickers Tradier missed (or when market is closed), use LKG Tradier
     for _sym in symbols:
         if _sym not in _tradier_quotes:
             _lkg = _tradier_lkg_for_symbol(_sym)

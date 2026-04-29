@@ -1,0 +1,79 @@
+Backend-only fix.
+
+Goal:
+Make the Social toggle market data in social_screener.rows cache and display last-known price/volume/price-change data correctly, especially outside market hours.
+
+Fields involved:
+- market_cap
+- volume
+- price_change_1d
+- price_change_7d
+- price_change_30d
+- price_change_ytd
+- price_change_1y
+
+Important behavior:
+1. During US market hours:
+   - Refresh FMP quote/price-change data using existing cache/rate-limit controls.
+   - Update cache / last-known-good values.
+
+2. Outside US market hours:
+   - Do NOT refresh quote/price-change data.
+   - Do NOT waste FMP API calls for market data that will not meaningfully change.
+   - Return the most recent cached / last-known-good values.
+   - These values should represent the last known market close or latest cached market data.
+   - If no cached value exists, return null and let frontend show "—".
+
+3. This must not affect Grok/XAI:
+   - Do not call Grok/XAI.
+   - Do not change the Grok prompt.
+   - Do not change the social refresh schedule.
+
+4. This must not slow down /api/social/x-dashboard:
+   - The main dashboard endpoint should remain cache-only / non-blocking for FMP.
+   - It should read cached/LKG market data only.
+   - No live FMP fanout from /api/social/x-dashboard.
+
+5. Reuse existing market-hours logic if it exists:
+   - Search for existing market hours helpers in the backend.
+   - Reuse any existing US market open/closed detection if available.
+   - If none exists, add a small centralized helper using America/New_York time:
+     - Market open Monday-Friday
+     - 9:30am–4:00pm ET
+     - Basic holiday handling only if an existing FMP market-hours/holiday helper already exists.
+     - Otherwise implement weekday/time guard and document holiday limitation.
+
+6. Add clear cache semantics:
+   - price/volume cache TTL during market hours: 15–30 minutes
+   - outside market hours: do not expire the last-known-good market fields just because TTL passed
+   - LKG should be usable after close and overnight until next valid market-hours refresh
+   - avoid returning stale empty/null responses over older non-null LKG values
+
+7. Fix blank fields for US tickers:
+   - Audit social_screener_service.py market enrichment path.
+   - Confirm it reads FMP stable API field names correctly.
+   - Confirm market_cap, volume, and price_change fields are saved into cache/LKG.
+   - Confirm cache-only x-dashboard reads those exact cached/LKG fields.
+   - If quote/price-change cache keys do not match between writer and reader, fix that.
+
+8. Expected social_screener behavior:
+   - US tickers like NVDA, AMZN, AMD, INTC, TSLA, etc. should show market_cap, volume, and available price-change fields once warmed.
+   - Foreign/non-covered tickers can show "—".
+   - social_screener.rows should still render ticker/theme/mention/score fields even if market data is null.
+
+9. Validation:
+   - Call the existing lazy/warmup path that is allowed to perform FMP enrichment, if one exists.
+   - Then call GET /api/social/x-dashboard.
+   - Report:
+     - response time
+     - social_screener.rows.length
+     - count of rows with market_cap populated
+     - count of rows with volume populated
+     - count of rows with price_change_1d populated
+     - count of US tickers still missing all market data
+     - list of symbols still fully blank for market fields
+     - whether /api/social/x-dashboard made any live FMP calls
+     - whether market was considered open or closed by the helper
+     - whether outside-market-hours path uses cache/LKG only
+
+10. Do not touch frontend.
