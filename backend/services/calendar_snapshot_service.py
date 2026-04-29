@@ -41,7 +41,20 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-CACHE_FILE = Path("data/calendar_snapshots.json")
+# Anchor the snapshot file to an absolute path derived from this module's
+# location so the write path (manual backfill, scheduler) and read path (API
+# request handler) cannot diverge based on the process's current working
+# directory. backend/services/calendar_snapshot_service.py → backend/ →
+# backend/data/calendar_snapshots.json.
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+SNAPSHOT_PATH: Path = _BACKEND_DIR / "data" / "calendar_snapshots.json"
+# Backwards-compatible alias for any external reference.
+CACHE_FILE = SNAPSHOT_PATH
+
+
+def get_snapshot_path() -> Path:
+    """Single source of truth for the snapshot file location (absolute)."""
+    return SNAPSHOT_PATH
 
 TARGET_TABS: list[str] = [
     "dividends",
@@ -55,9 +68,11 @@ _lock = asyncio.Lock()
 
 
 def _read_disk() -> dict:
-    if CACHE_FILE.exists():
+    path = get_snapshot_path()
+    print(f"[calendar_snapshot] read path={path} exists={path.exists()}")
+    if path.exists():
         try:
-            with open(CACHE_FILE, "r") as f:
+            with open(path, "r") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
                     return data
@@ -67,14 +82,16 @@ def _read_disk() -> dict:
 
 
 def _write_disk(data: dict) -> None:
+    path = get_snapshot_path()
     try:
-        CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = CACHE_FILE.with_suffix(".json.tmp")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
         with open(tmp, "w") as f:
             json.dump(data, f, separators=(",", ":"))
-        tmp.replace(CACHE_FILE)
+        tmp.replace(path)
+        print(f"[calendar_snapshot] write path={path} bytes={path.stat().st_size}")
     except Exception as e:
-        print(f"[calendar_snapshot] write error: {e}")
+        print(f"[calendar_snapshot] write error path={path}: {e}")
 
 
 def _empty_tab() -> dict:
