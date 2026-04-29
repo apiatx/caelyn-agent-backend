@@ -2949,9 +2949,10 @@ async def social_x_dashboard(
         payload = build_x_dashboard()
 
         # Additive screeners — derived from the SAME snapshot, zero extra Grok calls.
-        # allow_live_fmp=False: FMP enrichment uses cache-only — no HTTP calls are
-        # made here, so top sections are never delayed by FMP latency.  Live FMP
-        # enrichment is deferred to GET /api/social/fundamental-screener.
+        # allow_live_fmp=True: social enrichment is always live (Tradier + FMP
+        # profile/price-change) so market_cap/price/volume are never blank.
+        # background_fund=True: fundamentals served from 7-day cache; if the
+        # cache is cold a background task warms it without blocking this response.
         try:
             snapshot = _load_disk_cache()
             social_screener, fundamental_screener = await build_screeners(
@@ -2961,7 +2962,8 @@ async def social_x_dashboard(
                 freshest_alpha=payload.get("freshest_alpha") or {},
                 theme_leadership=payload.get("theme_leadership") or {},
                 fmp_api_key=FMP_API_KEY,
-                allow_live_fmp=False,
+                allow_live_fmp=True,
+                background_fund=True,
             )
             payload["social_screener"]      = social_screener
             payload["fundamental_screener"] = fundamental_screener
@@ -3023,10 +3025,29 @@ async def social_fundamental_screener(
     """
     try:
         from services.social_x_service import build_x_dashboard
-        from services.social_screener_service import build_screeners
+        from services.social_screener_service import (
+            build_screeners, _is_us_market_open,
+        )
         from services.x_consensus_cache import _load_disk_cache
+        from data.cache import cache
         from config import FMP_API_KEY
 
+        # ── Fast path: serve from 7-day fundamental cache ─────────────────────
+        # This endpoint is called frequently; avoid running live social enrichment
+        # when the fundamental payload is still within its 7-day TTL.
+        _cached_fs = cache.get("social_screener:fs_payload")
+        if _cached_fs and isinstance(_cached_fs, dict) and _cached_fs.get("rows"):
+            mkt_open = _is_us_market_open()
+            print(
+                f"[SOCIAL_FUND_SCREENER] served from 7-day cache "
+                f"rows={len(_cached_fs.get('rows', []))}"
+            )
+            return JSONResponse(content={
+                **_cached_fs,
+                "meta": {**(_cached_fs.get("meta") or {}), "market_hours_open": mkt_open},
+            })
+
+        # ── Cache expired or cold: run full inline fund enrichment ─────────────
         payload   = build_x_dashboard()
         snapshot  = _load_disk_cache()
         _social, fundamental_screener = await build_screeners(

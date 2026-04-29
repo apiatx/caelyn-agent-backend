@@ -55,12 +55,17 @@ _MAX_FUND_ENRICH_ROWS:   int = 50
 _TTL_PROFILE:            int = 24 * 3600     # 24 h
 _TTL_QUOTE:              int = 30 * 60       # 30 min
 _TTL_PRICE_CHANGE:       int = 30 * 60       # 30 min
-_TTL_FUNDAMENTALS:       int = 12 * 3600     # 12 h
+_TTL_FUNDAMENTALS:       int = 7 * 24 * 3600 # 7 days — FMP fundamental data
+_TTL_FUND_CACHE:         int = 7 * 24 * 3600 # 7 days — fs_payload compiled payload
 
 _FMP_BASE = "https://financialmodelingprep.com/stable"
 
 # Cache key prefixes (so we can also serve last-known-good after expiry)
 _LKG_PREFIX = "social_screener:lkg:"
+
+
+# Guard against concurrent background fundamental warmup tasks
+_fund_bg_running: bool = False
 
 
 # ── Market-hours guard ────────────────────────────────────────────────────────
@@ -1111,10 +1116,12 @@ async def fetch_enrichment_for_symbols(
     successes_fund = 0
     failures_fund  = 0
 
-    # Limit concurrent FMP calls: 50 symbols × 6 endpoints = 300 potential
-    # simultaneous HTTP requests → rate-limit errors for some symbols.
-    # Semaphore caps at 12 simultaneous enrich_fund coroutines (72 FMP calls).
-    _fund_sem = asyncio.Semaphore(12)
+    # Limit concurrent FMP calls:
+    #   Social: 57 symbols × 2 endpoints  = 114 potential simultaneous calls.
+    #   Fund:   50 symbols × 6 endpoints  = 300 potential simultaneous calls.
+    # Semaphores cap concurrent coroutines to avoid FMP 429s on cold start.
+    _social_sem = asyncio.Semaphore(15)  # caps simultaneous profile+pchg fetches
+    _fund_sem   = asyncio.Semaphore(12)  # caps simultaneous 6-call fund enrichments
 
     # ── Tradier batch quote (primary for price/vol/1D%) ───────────────────
     # Live Tradier call is skipped outside core market hours (09:30-16:00 ET).
@@ -1147,84 +1154,85 @@ async def fetch_enrichment_for_symbols(
             # hot-cache / LKG only (no live FMP or Tradier calls for those fields).
             async def enrich_social(sym: str) -> None:
                 nonlocal successes_social, failures_social, served_from_lkg
-                try:
-                    tradier_q = _tradier_quotes.get(sym, {})
+                async with _social_sem:
+                    try:
+                        tradier_q = _tradier_quotes.get(sym, {})
 
-                    if not _mkt_open:
-                        # ── Market closed: use cache/LKG for quote+pchg ──────
-                        # _tradier_quotes is already populated from LKG only.
-                        # For FMP price_change, read cache/LKG via _fmp_cache_lookup.
-                        cached_enr = _social_enrich_from_cache(sym, fmp_api_key)
-                        cached_pchg = cached_enr.get("price_change") or {}
-                        cached_quote = cached_enr.get("quote") or {}
+                        if not _mkt_open:
+                            # ── Market closed: use cache/LKG for quote+pchg ──────
+                            # _tradier_quotes is already populated from LKG only.
+                            # For FMP price_change, read cache/LKG via _fmp_cache_lookup.
+                            cached_enr = _social_enrich_from_cache(sym, fmp_api_key)
+                            cached_pchg = cached_enr.get("price_change") or {}
+                            cached_quote = cached_enr.get("quote") or {}
 
-                        # Tradier LKG wins for quote if available; else FMP LKG
-                        if tradier_q and tradier_q.get("price"):
-                            quote = {**tradier_q, "quote_is_stale": True,
-                                     "quote_fallback_reason": "market_closed_lkg"}
-                        elif cached_quote:
-                            quote = {**cached_quote, "quote_is_stale": True,
-                                     "quote_fallback_reason": "market_closed_lkg"}
-                        else:
-                            quote = {}
+                            # Tradier LKG wins for quote if available; else FMP LKG
+                            if tradier_q and tradier_q.get("price"):
+                                quote = {**tradier_q, "quote_is_stale": True,
+                                         "quote_fallback_reason": "market_closed_lkg"}
+                            elif cached_quote:
+                                quote = {**cached_quote, "quote_is_stale": True,
+                                         "quote_fallback_reason": "market_closed_lkg"}
+                            else:
+                                quote = {}
 
-                        # Profile: try hot-cache first via _social_enrich_from_cache,
-                        # then fall back to live (24 h TTL so almost always cached).
-                        profile = cached_enr.get("profile") or {}
-                        if not profile:
-                            try:
-                                profile = await asyncio.wait_for(
-                                    _fetch_profile(client, sym, fmp_api_key),
-                                    timeout=5.0,
-                                )
-                                if not isinstance(profile, dict):
+                            # Profile: try hot-cache first via _social_enrich_from_cache,
+                            # then fall back to live (24 h TTL so almost always cached).
+                            profile = cached_enr.get("profile") or {}
+                            if not profile:
+                                try:
+                                    profile = await asyncio.wait_for(
+                                        _fetch_profile(client, sym, fmp_api_key),
+                                        timeout=5.0,
+                                    )
+                                    if not isinstance(profile, dict):
+                                        profile = {}
+                                except Exception:
                                     profile = {}
-                            except Exception:
-                                profile = {}
 
-                        pchg = cached_pchg
-                        served_from_lkg = True
+                            pchg = cached_pchg
+                            served_from_lkg = True
 
-                    elif tradier_q and tradier_q.get("price"):
-                        # ── Market open, Tradier covered this ticker ──────────
-                        profile, pchg = await asyncio.gather(
-                            _fetch_profile(client, sym, fmp_api_key),
-                            _fetch_price_change(client, sym, fmp_api_key),
-                            return_exceptions=True,
-                        )
-                        profile = profile if isinstance(profile, dict) else {}
-                        pchg    = pchg    if isinstance(pchg, dict)    else {}
-                        quote = tradier_q
+                        elif tradier_q and tradier_q.get("price"):
+                            # ── Market open, Tradier covered this ticker ──────────
+                            profile, pchg = await asyncio.gather(
+                                _fetch_profile(client, sym, fmp_api_key),
+                                _fetch_price_change(client, sym, fmp_api_key),
+                                return_exceptions=True,
+                            )
+                            profile = profile if isinstance(profile, dict) else {}
+                            pchg    = pchg    if isinstance(pchg, dict)    else {}
+                            quote = tradier_q
 
-                    else:
-                        # ── Market open, Tradier missed — fall back to FMP ───
-                        profile, quote, pchg = await asyncio.gather(
-                            _fetch_profile(client, sym, fmp_api_key),
-                            _fetch_quote(client, sym, fmp_api_key),
-                            _fetch_price_change(client, sym, fmp_api_key),
-                            return_exceptions=True,
-                        )
-                        profile = profile if isinstance(profile, dict) else {}
-                        quote   = quote   if isinstance(quote, dict)   else {}
-                        pchg    = pchg    if isinstance(pchg, dict)    else {}
-                        if quote:
-                            quote["quote_source"] = "fmp"
-                            quote["quote_fallback_reason"] = "tradier_miss"
+                        else:
+                            # ── Market open, Tradier missed — fall back to FMP ───
+                            profile, quote, pchg = await asyncio.gather(
+                                _fetch_profile(client, sym, fmp_api_key),
+                                _fetch_quote(client, sym, fmp_api_key),
+                                _fetch_price_change(client, sym, fmp_api_key),
+                                return_exceptions=True,
+                            )
+                            profile = profile if isinstance(profile, dict) else {}
+                            quote   = quote   if isinstance(quote, dict)   else {}
+                            pchg    = pchg    if isinstance(pchg, dict)    else {}
+                            if quote:
+                                quote["quote_source"] = "fmp"
+                                quote["quote_fallback_reason"] = "tradier_miss"
 
-                    social_enrichment[sym] = {
-                        "profile":      profile,
-                        "quote":        quote,
-                        "price_change": pchg,
-                    }
-                    has_data = bool(profile or quote or pchg)
-                    if has_data:
-                        successes_social += 1
-                    else:
+                        social_enrichment[sym] = {
+                            "profile":      profile,
+                            "quote":        quote,
+                            "price_change": pchg,
+                        }
+                        has_data = bool(profile or quote or pchg)
+                        if has_data:
+                            successes_social += 1
+                        else:
+                            failures_social += 1
+                    except Exception as exc:
                         failures_social += 1
-                except Exception as exc:
-                    failures_social += 1
-                    print(f"[SOCIAL_SCREENER] enrich_social {sym}: {exc}")
-                    social_enrichment[sym] = {}
+                        print(f"[SOCIAL_SCREENER] enrich_social {sym}: {exc}")
+                        social_enrichment[sym] = {}
 
             await asyncio.gather(*(enrich_social(s) for s in symbols),
                                  return_exceptions=True)
@@ -1355,6 +1363,46 @@ def build_fundamental_screener(
     }
 
 
+# ── Background fundamental-cache warmer ──────────────────────────────────────
+
+async def _bg_warm_fundamentals(
+    all_symbols: list[str],
+    fund_targets: list[str],
+    fmp_api_key: str,
+) -> None:
+    """Background task: populate the 7-day fundamental cache without blocking.
+
+    Fired by x-dashboard on cold start (cache empty).  Subsequent x-dashboard
+    calls serve from the populated cache — no further FMP calls for 7 days.
+    """
+    global _fund_bg_running
+    if _fund_bg_running:
+        return
+    _fund_bg_running = True
+    try:
+        print("[SOCIAL_SCREENER] BG-FUND: starting fundamental cache warmup …")
+        _, fund_enrichment, _, fund_status, mkt_open = await fetch_enrichment_for_symbols(
+            all_symbols, fmp_api_key,
+            fundamental_symbols=fund_targets,
+            allow_live_fmp=True,
+        )
+        if fund_enrichment:
+            fs = build_fundamental_screener(
+                fund_enrichment, fund_status, market_hours_open=mkt_open,
+            )
+            cache.set("social_screener:fs_payload", fs, _TTL_FUND_CACHE)
+            print(
+                f"[SOCIAL_SCREENER] BG-FUND: cache warmed "
+                f"rows={len(fs.get('rows', []))} ttl={_TTL_FUND_CACHE}s"
+            )
+        else:
+            print("[SOCIAL_SCREENER] BG-FUND: got 0 enrichment rows — cache not updated")
+    except Exception as exc:
+        print(f"[SOCIAL_SCREENER] BG-FUND: warmup failed: {exc}")
+    finally:
+        _fund_bg_running = False
+
+
 # ── Public top-level builder ─────────────────────────────────────────────────
 
 async def build_screeners(
@@ -1366,13 +1414,23 @@ async def build_screeners(
     fmp_api_key: Optional[str] = None,
     *,
     allow_live_fmp: bool = True,
+    background_fund: bool = False,
 ) -> tuple[dict, dict]:
     """Build (social_screener, fundamental_screener) from existing Social data.
 
-    When allow_live_fmp=False the FMP enrichment step reads from cache only —
-    no HTTP connections are opened.  Missing cache entries produce null fields
-    with enrichment_status="partial" or "unavailable", but the screener rows
-    are always returned.
+    allow_live_fmp
+        True  — live Tradier + FMP social enrichment (always real-time market data).
+        False — cache-only social enrichment (legacy; no HTTP calls).
+
+    background_fund  (used by x-dashboard)
+        True  — fundamental cache check first; if cold, fire a background task and
+                return empty fund rows for this request.  Next request will serve
+                from the populated 7-day cache.
+        False — fundamental enrichment runs inline if the cache is expired
+                (lazy endpoint behaviour; accepts slower response on first call).
+
+    Fundamental data is cached for 7 days (_TTL_FUND_CACHE).  When the cache is
+    valid neither path makes additional FMP calls for fundamentals.
 
     Never raises.  On total FMP failure both screeners are still returned with
     enrichment_status / cache_status = "unavailable" — the page never 500s.
@@ -1406,10 +1464,26 @@ async def build_screeners(
         fund_targets = [r[0] for r in ranking_rows[:_MAX_FUND_ENRICH_ROWS]]
 
         key = fmp_api_key or os.getenv("FMP_API_KEY", "")
+
+        # ── Fundamental cache check ───────────────────────────────────────────
+        # Fundamentals are expensive (50 tickers × 6 FMP calls).  We cache the
+        # compiled payload for 7 days (_TTL_FUND_CACHE) so most calls skip all
+        # FMP fundamental requests entirely.
+        _cached_fs = cache.get("social_screener:fs_payload")
+        _fund_cache_valid = bool(_cached_fs and isinstance(_cached_fs, dict)
+                                 and _cached_fs.get("rows"))
+
+        # Fund symbols to enrich inline:
+        #   - skip if cache is still valid (< 7 days)
+        #   - skip if background_fund=True (will fire bg task on cold start)
+        _fund_symbols_live: list[str] = (
+            [] if (_fund_cache_valid or background_fund) else fund_targets
+        )
+
         social_enrichment, fund_enrichment, enrich_status, fund_status, mkt_open = (
             await fetch_enrichment_for_symbols(
                 all_symbols, key,
-                fundamental_symbols=fund_targets,
+                fundamental_symbols=_fund_symbols_live,
                 allow_live_fmp=allow_live_fmp,
             )
         )
@@ -1420,35 +1494,41 @@ async def build_screeners(
             social_enrichment, enrich_status,
             market_hours_open=mkt_open,
         )
-        fundamental_screener = build_fundamental_screener(
-            fund_enrichment, fund_status, market_hours_open=mkt_open,
-        )
 
-        # ── Persist a fresh copy so the fast dashboard path can serve it ──────
-        if allow_live_fmp and fund_enrichment:
-            cache.set("social_screener:fs_payload", fundamental_screener, _TTL_FUNDAMENTALS)
+        # ── Resolve fundamental screener ──────────────────────────────────────
+        if fund_enrichment:
+            # Fresh live enrichment (lazy endpoint, or x-dashboard on cache expiry)
+            fundamental_screener = build_fundamental_screener(
+                fund_enrichment, fund_status, market_hours_open=mkt_open,
+            )
+            cache.set("social_screener:fs_payload", fundamental_screener, _TTL_FUND_CACHE)
             print(
                 f"[SOCIAL_SCREENER] build_screeners: cached fundamental_screener "
-                f"rows={len(fundamental_screener.get('rows', []))} ttl={_TTL_FUNDAMENTALS}s"
+                f"rows={len(fundamental_screener.get('rows', []))} ttl={_TTL_FUND_CACHE}s"
             )
 
-        # ── Fast path substitute ───────────────────────────────────────────────
-        # allow_live_fmp=False always yields fund_enrichment={} (by design).
-        # If the lazy endpoint already ran and cached a payload, serve that so
-        # the x-dashboard fundamentals tab shows real rows instead of nothing.
-        if not allow_live_fmp and not fund_enrichment:
-            _cached_fs = cache.get("social_screener:fs_payload")
-            if _cached_fs and isinstance(_cached_fs, dict) and _cached_fs.get("rows"):
-                # Inject current market_hours_open into the cached payload meta
-                # so the dashboard always reflects the live market status.
-                fundamental_screener = {
-                    **_cached_fs,
-                    "meta": {**(_cached_fs.get("meta") or {}), "market_hours_open": mkt_open},
-                }
-                print(
-                    f"[SOCIAL_SCREENER] build_screeners: fast-path served cached "
-                    f"fundamental_screener rows={len(_cached_fs['rows'])}"
+        elif _fund_cache_valid:
+            # Serve from 7-day cache (normal fast path for x-dashboard)
+            fundamental_screener = {
+                **_cached_fs,
+                "meta": {**(_cached_fs.get("meta") or {}), "market_hours_open": mkt_open},
+            }
+            print(
+                f"[SOCIAL_SCREENER] build_screeners: served fundamental_screener "
+                f"from 7-day cache rows={len(_cached_fs.get('rows', []))}"
+            )
+
+        else:
+            # Cold start: cache is empty and no inline enrichment ran
+            if background_fund and not _fund_bg_running:
+                # Fire background task — next x-dashboard call will have data
+                asyncio.create_task(
+                    _bg_warm_fundamentals(all_symbols, fund_targets, key)
                 )
+                print("[SOCIAL_SCREENER] build_screeners: fired BG-FUND warmup task")
+            fundamental_screener = build_fundamental_screener(
+                {}, "unavailable", market_hours_open=mkt_open,
+            )
 
         return social_screener, fundamental_screener
 
