@@ -36,6 +36,10 @@ from services.catalyst_calendar_service import (
     get_filters,
     get_overview,
 )
+from services.calendar_snapshot_service import (
+    TARGET_TABS as _SNAPSHOT_TABS,
+    get_snapshot as _get_snapshot,
+)
 
 try:
     from langsmith import traceable
@@ -184,6 +188,21 @@ async def catalyst_events(
             status_code=400,
             content={"error": f"Invalid mode {mode!r}. Valid: upcoming, recent"},
         )
+
+    # ── Snapshot short-circuit for weekly-cached tabs ──────────────────────
+    # Dividends, IPOs, Splits, Economic Releases, Treasury/Macro are served
+    # exclusively from the persistent weekly snapshot. They MUST NOT trigger
+    # a live FMP fetch on request, regardless of mode. Earnings is excluded.
+    if tab in _SNAPSHOT_TABS:
+        snap = _get_snapshot(tab)
+        return JSONResponse(content={
+            "tab":           tab,
+            "mode":          mode,
+            "current_week":  snap["current_week"],
+            "previous_week": snap["previous_week"],
+            "last_updated":  snap["last_updated"],
+            "status":        snap["status"],
+        })
 
     # Parse comma-separated symbols
     sym_set: Optional[set] = None
