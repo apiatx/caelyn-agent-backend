@@ -1,0 +1,85 @@
+Fix the Social page data issue. Do not focus on Tradier. The quote-provider swap did not fix the root issue.
+
+Current UI evidence:
+- Social tab shows 57 ticker rows, so base social screener rows exist.
+- But enrichment fields are blank/dashes: market cap, volume, 1D, 7D, 30D, YTD, 1Y.
+- Fundamentals tab shows 0 rows and message: “Could not load fundamentals — please try again later.”
+- This happened before and after making Tradier primary for quotes.
+
+Audit and fix the actual Social/Fundamentals data path.
+
+Tasks:
+
+1. Identify every endpoint used by Social page:
+   - Social screener/social tab
+   - Fundamentals tab
+   - enrichment endpoint
+   - x-dashboard endpoint if relevant
+
+2. Log exact response shape for each endpoint:
+   - top-level keys
+   - rows count
+   - data count
+   - entries count
+   - errors
+   - warnings
+   - provider_call_summary
+
+3. Verify ticker normalization:
+   - UI displays tickers like "$LPKF"
+   - backend must call FMP/Tradier/Finnhub using "LPKF", not "$LPKF"
+   - strip leading "$"
+   - uppercase
+   - dedupe
+   - preserve display ticker separately if needed
+
+4. Check fundamentals endpoint:
+   - Why does it return 0 rows?
+   - Is it using social rows as input?
+   - Is it failing because symbols include "$"?
+   - Is it filtering out rows with missing fundamentals?
+   - Is it throwing then returning empty?
+   - Is it using response.rows vs response.data mismatch?
+
+5. Fix partial failure behavior:
+   - Fundamentals tab must still return one row per ticker even if enrichment metrics are missing.
+   - Do not drop a ticker just because FMP ratios/profile/balance/income failed.
+   - Missing metric fields should be null, not reason to remove row.
+   - Response should include rows with ticker/theme/mentions at minimum.
+
+6. Fix Social enrichment behavior:
+   - Social tab should keep base rows and attach enrichment where available.
+   - If price/volume/market cap fails, row stays.
+   - Never return blank enrichment fields because of ticker-format bug.
+
+7. Add debug logs specifically for this flow:
+   For each symbol:
+   - raw_symbol
+   - normalized_symbol
+   - profile_status
+   - quote_status
+   - fundamentals_status
+   - row_kept_or_dropped
+   - drop_reason if dropped
+
+8. Test these exact symbols:
+   - LPKF
+   - LPK
+   - SIVE
+   - NBIS
+   - BE
+   - INTC
+   - POET
+   - CGEH
+   - AMD
+   - SANM
+
+9. Test with force_429 on/off:
+   - With FMP working: fundamentals should return rows.
+   - With FMP forced failing: fundamentals should still return ticker rows with null metrics and warning.
+
+10. Return exact findings:
+   - endpoint causing 0 rows
+   - file/function responsible
+   - whether bug was ticker normalization, endpoint failure, frontend response mismatch, filtering, or cache pollution
+   - files changed

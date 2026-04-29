@@ -147,9 +147,24 @@ def _social_enrich_from_cache(ticker: str, fmp_api_key: str) -> dict:
             "volume":     item.get("volume"),
             "market_cap": item.get("marketCap"),
             "change_1d":  item.get("changePercentage"),
+            "quote_source": "fmp_cache",
         }
     else:
-        quote = {}
+        # FMP quote not cached — Tradier is primary, so _fetch_quote was skipped
+        # for this symbol.  Fall back to Tradier LKG which enrich_social writes
+        # on every live run.  Gives price/volume to the fast cache-only path.
+        _trad_lkg = cache.get(f"social:tradier_lkg:{ticker}")
+        if _trad_lkg and _trad_lkg.get("price"):
+            quote = {
+                "price":      _trad_lkg.get("price"),
+                "volume":     _trad_lkg.get("volume"),
+                "market_cap": _trad_lkg.get("market_cap"),
+                "change_1d":  _trad_lkg.get("change_1d"),
+                "quote_source": _trad_lkg.get("quote_source", "tradier_lkg"),
+                "quote_is_stale": True,
+            }
+        else:
+            quote = {}
 
     # ── Parse price-change ─────────────────────────────────────────────────
     if isinstance(pchg_raw, list) and pchg_raw:
@@ -1100,10 +1115,18 @@ async def fetch_enrichment_for_symbols(
                         "quote":        quote,
                         "price_change": pchg,
                     }
-                    if profile or quote or pchg:
+                    has_data = bool(profile or quote or pchg)
+                    if has_data:
                         successes_social += 1
                     else:
                         failures_social += 1
+                    print(
+                        f"[SOCIAL_DEBUG] enrich_social sym={sym} "
+                        f"tradier_covered={bool(tradier_q.get('price'))} "
+                        f"profile_ok={bool(profile)} quote_ok={bool(quote)} "
+                        f"pchg_ok={bool(pchg)} vol={quote.get('volume') if quote else None} "
+                        f"mktcap={profile.get('market_cap') if profile else None}"
+                    )
                 except Exception as exc:
                     failures_social += 1
                     print(f"[SOCIAL_SCREENER] enrich_social {sym}: {exc}")
@@ -1136,10 +1159,23 @@ async def fetch_enrichment_for_symbols(
                         sym, profile, ratios, metrics, income, balance, cashflow,
                     )
                     fundamental_enrichment[sym] = row
-                    if row["data_quality"] != "missing":
+                    quality = row.get("data_quality", "missing")
+                    if quality != "missing":
                         successes_fund += 1
                     else:
                         failures_fund += 1
+                    if quality == "missing":
+                        print(
+                            f"[FUND_DEBUG] enrich_fund sym={sym} quality=missing "
+                            f"profile_ok={bool(profile)} ratios_ok={bool(ratios)} "
+                            f"metrics_ok={bool(metrics)} income_ok={bool(income)} "
+                            f"balance_ok={bool(balance)} cashflow_ok={bool(cashflow)}"
+                        )
+                    else:
+                        print(
+                            f"[FUND_DEBUG] enrich_fund sym={sym} quality={quality} "
+                            f"mktcap={row.get('market_cap')} pe={row.get('pe_ratio_ttm')}"
+                        )
                 except Exception as exc:
                     failures_fund += 1
                     print(f"[SOCIAL_SCREENER] enrich_fund {sym}: {exc}")
@@ -1284,6 +1320,28 @@ async def build_screeners(
             social_enrichment, enrich_status,
         )
         fundamental_screener = build_fundamental_screener(fund_enrichment, fund_status)
+
+        # ── Persist a fresh copy so the fast dashboard path can serve it ──────
+        if allow_live_fmp and fund_enrichment:
+            cache.set("social_screener:fs_payload", fundamental_screener, _TTL_FUNDAMENTALS)
+            print(
+                f"[SOCIAL_SCREENER] build_screeners: cached fundamental_screener "
+                f"rows={len(fundamental_screener.get('rows', []))} ttl={_TTL_FUNDAMENTALS}s"
+            )
+
+        # ── Fast path substitute ───────────────────────────────────────────────
+        # allow_live_fmp=False always yields fund_enrichment={} (by design).
+        # If the lazy endpoint already ran and cached a payload, serve that so
+        # the x-dashboard fundamentals tab shows real rows instead of nothing.
+        if not allow_live_fmp and not fund_enrichment:
+            _cached_fs = cache.get("social_screener:fs_payload")
+            if _cached_fs and isinstance(_cached_fs, dict) and _cached_fs.get("rows"):
+                fundamental_screener = _cached_fs
+                print(
+                    f"[SOCIAL_SCREENER] build_screeners: fast-path served cached "
+                    f"fundamental_screener rows={len(_cached_fs['rows'])}"
+                )
+
         return social_screener, fundamental_screener
 
     except Exception as exc:
