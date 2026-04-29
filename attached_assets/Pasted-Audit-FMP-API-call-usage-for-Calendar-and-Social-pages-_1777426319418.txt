@@ -1,0 +1,218 @@
+Audit FMP/API call usage for Calendar and Social pages. Do not change behavior yet unless needed for logging only.
+
+Goal:
+I need exact numbers showing how many FMP calls happen:
+1. When the Calendar page first loads.
+2. When each Calendar tab/toggle is loaded:
+   - earnings
+   - IPOs
+   - dividends
+   - splits
+   - economic/calendar if present
+   - any other Calendar tab
+3. When the Social page first loads.
+4. When the Social page Social Screener loads.
+5. When the Social page fundamentals toggle loads.
+6. When users navigate away and back to those pages.
+
+Also identify non-FMP providers being hit:
+- Finnhub
+- Finviz scraper
+- Polygon/Massive
+- Alpha Vantage
+- TwelveData
+- SEC Edgar
+- Tradier
+- any other market data provider
+
+Context:
+FMP Starter plan allows 300 calls/minute and includes earnings report/calendar, IPOs, dividends, splits, news, profiles, fundamentals, ratios, historical price data, etc. But there are no bulk endpoints, so repeated per-ticker calls can get expensive fast. Other APIs have much lower limits, so identify those too.
+
+Tasks:
+
+1. Search the backend for every Calendar route.
+Look for:
+- /api/calendar
+- /api/earnings
+- /api/ipos
+- /api/dividends
+- /api/splits
+- calendar router files
+- earnings calendar helpers
+- FMP calendar helpers
+- Finnhub calendar helpers
+
+2. Search the backend for every Social route.
+Look for:
+- /api/social
+- social screener
+- x consensus
+- social fundamentals
+- social enrichment
+- tracked X accounts
+- Grok/XAI social logic
+- FMP enrichment inside Social
+
+3. Search for every direct provider call wrapper.
+Find all code that calls:
+- FMP_API_KEY
+- financialmodelingprep
+- fmp
+- Finnhub
+- finnhub
+- finviz
+- polygon
+- alphavantage
+- alpha_vantage
+- twelvedata
+- tradier
+
+4. Add temporary provider-call telemetry.
+Create a lightweight centralized API call counter/log wrapper if one does not already exist.
+
+For every outbound provider request, log:
+- provider: FMP / Finnhub / Finviz / Polygon / AlphaVantage / TwelveData / SEC / Tradier
+- endpoint/path
+- page_context: calendar/social/unknown
+- feature_context: earnings/ipo/dividends/splits/social_screener/fundamentals/etc.
+- ticker or symbol if applicable
+- cache_status before call: hit/miss/stale/none
+- HTTP status code
+- success/failure
+- elapsed_ms
+- timestamp
+- request_count_increment: 1
+
+Do not log API keys.
+
+5. Add request-level summary telemetry.
+For each frontend-triggered backend request, log one summary line like:
+
+[API_AUDIT] route=/api/calendar/earnings page=calendar feature=earnings provider_calls={"fmp":3,"finnhub":0,"finviz":0,"polygon":0,"alpha_vantage":0,"tradier":0} cache_hits=12 cache_misses=3 elapsed_ms=1240 status=200
+
+And for Social:
+
+[API_AUDIT] route=/api/social/screener page=social feature=social_screener provider_calls={"fmp":42,"finnhub":0,"finviz":0,"polygon":0,"alpha_vantage":0,"tradier":0} cache_hits=10 cache_misses=42 elapsed_ms=8210 status=200 rows=57
+
+6. Add a debug endpoint or admin-only route.
+Create a temporary endpoint:
+
+GET /api/debug/provider-call-audit
+
+It should return recent call summaries grouped by:
+- route
+- page
+- feature
+- provider
+- endpoint
+- count
+- last_status
+- last_error
+- avg_elapsed_ms
+- cache_hit_count
+- cache_miss_count
+
+Also include totals since server start:
+- total FMP calls
+- total Finnhub calls
+- total Finviz calls
+- total Polygon calls
+- total AlphaVantage calls
+- total TwelveData calls
+- total Tradier calls
+
+7. Audit Calendar load behavior.
+Determine if Calendar page initial load calls:
+- all tabs at once
+- only default tab
+- background preloads other tabs
+- re-calls every time tab changes
+- re-calls every time user navigates away and back
+
+Return exact findings.
+
+8. Audit Social load behavior.
+Determine if Social page initial load calls:
+- X/Grok/social consensus only
+- FMP fundamentals immediately
+- FMP price changes immediately
+- fundamentals only when toggle clicked
+- all ticker enrichments one-by-one
+- same calls repeated when navigating away and back
+
+Return exact findings.
+
+9. Simulate FMP limit failure.
+Do not burn real FMP calls if avoidable.
+Add a safe env flag or local mock mode:
+FMP_FORCE_429=true
+
+Then test:
+- Calendar load
+- Calendar toggles
+- Social load
+- Social fundamentals toggle
+
+Document exactly what happens:
+- Does backend return 429?
+- Does backend return 500?
+- Does backend return partial data?
+- Does it erase cached rows?
+- Does frontend receive empty arrays?
+- Does error handling preserve last-known-good data?
+
+10. Identify blank-data root cause.
+Determine whether blanks are caused by:
+- backend returning empty arrays on provider failure
+- frontend replacing old data with empty response
+- React component unmounting and losing state
+- query cache gcTime/cacheTime too short
+- missing persistent frontend cache
+- backend in-memory cache wiped on restart
+- failed enrichment causing whole response to fail
+- FMP/Finnhub/Finviz limit errors
+- weekend Finviz blocking
+- schema mismatch, e.g. frontend expects rows but backend returns data/entries
+- cache key mismatch
+- toggle state causing a fresh empty fetch
+- loading state clearing table before new data arrives
+
+11. Do not implement the big fix yet.
+Only add telemetry/logging/debug endpoint and produce findings.
+
+Deliverables:
+A. Calendar API call table:
+- page action
+- backend route called
+- providers hit
+- FMP calls
+- Finnhub calls
+- Finviz calls
+- other calls
+- cache hits
+- cache misses
+- notes
+
+B. Social API call table:
+- page action
+- backend route called
+- providers hit
+- FMP calls
+- Finnhub calls
+- Finviz calls
+- other calls
+- cache hits
+- cache misses
+- notes
+
+C. FMP limit behavior:
+- what happens on 429
+- whether cached data survives
+- whether frontend gets blanks/errors
+
+D. Blank-data root cause:
+- exact file/function causing the blanking
+- whether backend or frontend is responsible
+- recommended fix order
+
+E. Files changed for telemetry only.

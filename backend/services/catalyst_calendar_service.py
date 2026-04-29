@@ -29,6 +29,25 @@ from typing import Any, Optional
 import httpx
 
 from data.cache import cache
+from services.api_audit import (
+    fmp_force_429, record_call, record_request,
+    get_total_calls, get_cache_counts,
+)
+
+# ── Endpoint → feature label map (used for audit telemetry) ──────────────────
+_ENDPOINT_FEATURE: dict[str, str] = {
+    "earnings-calendar":    "earnings",
+    "dividends-calendar":   "dividends",
+    "ipos-calendar":        "ipos",
+    "splits-calendar":      "splits",
+    "economic-calendar":    "economic",
+    "treasury-rates":       "treasury",
+    "economic-indicators":  "economic",
+    "sec-filings":          "sec_filings",
+    "ratings-snapshot":     "analyst_ratings",
+    "insider-trading":      "insider",
+    "profile":              "profile_enrichment",
+}
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -123,10 +142,31 @@ class CatalystFMP:
         params: dict,
         cache_key: str,
         ttl: int,
+        ticker: Optional[str] = None,
     ) -> Any:
+        feature = _ENDPOINT_FEATURE.get(endpoint, endpoint)
+
         hit = cache.get(cache_key)
         if hit is not None:
+            record_call(
+                provider="fmp", endpoint=endpoint,
+                page="calendar", feature=feature,
+                cache_status="hit", http_status=None,
+                elapsed_ms=0.0, ticker=ticker,
+            )
             return hit
+
+        # ── FMP_FORCE_429 simulation ──────────────────────────────────────
+        if fmp_force_429():
+            record_call(
+                provider="fmp", endpoint=endpoint,
+                page="calendar", feature=feature,
+                cache_status="miss", http_status=429,
+                elapsed_ms=0.0, ticker=ticker,
+                success=False, error="FMP_FORCE_429 simulation",
+            )
+            print(f"[catalyst] FMP_FORCE_429 — simulating 429 for {endpoint}")
+            return []
 
         p = dict(params)
         p["apikey"] = self._key
@@ -138,16 +178,36 @@ class CatalystFMP:
             status = resp.status_code
             if status not in (200, 201):
                 print(f"[catalyst] FMP {endpoint} status={status} ms={ms}")
+                record_call(
+                    provider="fmp", endpoint=endpoint,
+                    page="calendar", feature=feature,
+                    cache_status="miss", http_status=status,
+                    elapsed_ms=ms, ticker=ticker,
+                    success=False, error=f"HTTP {status}",
+                )
                 return []
             result = resp.json()
             rows = len(result) if isinstance(result, list) else (1 if result else 0)
             print(f"[catalyst] FMP {endpoint} status={status} rows={rows} ms={ms}")
             if result:
                 cache.set(cache_key, result, ttl)
+            record_call(
+                provider="fmp", endpoint=endpoint,
+                page="calendar", feature=feature,
+                cache_status="miss", http_status=status,
+                elapsed_ms=ms, ticker=ticker,
+            )
             return result
         except Exception as e:
             ms = int((time.monotonic() - t0) * 1000)
             print(f"[catalyst] FMP {endpoint} error={e} ms={ms}")
+            record_call(
+                provider="fmp", endpoint=endpoint,
+                page="calendar", feature=feature,
+                cache_status="miss", http_status=None,
+                elapsed_ms=ms, ticker=ticker,
+                success=False, error=str(e)[:120],
+            )
             return []
 
     # ── Calendar endpoints ─────────────────────────────────────────────────
@@ -1696,6 +1756,8 @@ async def get_overview(fmp_key: str) -> dict:
     Caps each tab at 20 events for the overview.
     """
     t0 = time.monotonic()
+    _fmp_before = get_total_calls("fmp")
+    _hits_before, _misses_before = get_cache_counts()
     fmp = CatalystFMP(fmp_key)
 
     watchlist = _load_watchlist_symbols()
@@ -1762,6 +1824,21 @@ async def get_overview(fmp_key: str) -> dict:
     ms = int((time.monotonic() - t0) * 1000)
     print(f"[catalyst] overview tabs={len(ALL_TABS)} events={len(all_events)} errors={len(errors)} ms={ms}")
 
+    _fmp_this = get_total_calls("fmp") - _fmp_before
+    _hits_now, _misses_now = get_cache_counts()
+    record_request(
+        route="/api/catalysts/overview",
+        page="calendar",
+        feature="overview",
+        provider_calls={"fmp": _fmp_this, "finnhub": 0, "finviz": 0,
+                        "polygon": 0, "alpha_vantage": 0, "tradier": 0},
+        cache_hits=_hits_now - _hits_before,
+        cache_misses=_misses_now - _misses_before,
+        elapsed_ms=ms,
+        http_status=200 if not errors else 207,
+        extra={"tabs": len(ALL_TABS), "events": len(all_events)},
+    )
+
     status = "ok" if not errors else ("partial" if tabs_out else "error")
     return {
         "asOf":   datetime.now(timezone.utc).isoformat(),
@@ -1803,6 +1880,8 @@ async def get_events(
         mode = "upcoming"
 
     t0  = time.monotonic()
+    _fmp_before = get_total_calls("fmp")
+    _hits_before, _misses_before = get_cache_counts()
     fmp = CatalystFMP(fmp_key)
 
     watchlist = _load_watchlist_symbols()
@@ -1914,6 +1993,22 @@ async def get_events(
         )
     else:
         print(f"[catalyst] get_events tab={tab} mode={mode} events={len(all_events)} errors={len(errors)} ms={ms}")
+
+    _fmp_this = get_total_calls("fmp") - _fmp_before
+    _hits_now, _misses_now = get_cache_counts()
+    record_request(
+        route=f"/api/catalysts/events?tab={tab}",
+        page="calendar",
+        feature=tab,
+        provider_calls={"fmp": _fmp_this, "finnhub": 0, "finviz": 0,
+                        "polygon": 0, "alpha_vantage": 0, "tradier": 0},
+        cache_hits=_hits_now - _hits_before,
+        cache_misses=_misses_now - _misses_before,
+        elapsed_ms=ms,
+        http_status=200,
+        extra={"tab": tab, "mode": mode, "events": len(all_events)},
+    )
+
     status = "ok" if not errors else "partial"
     return {
         "asOf":    datetime.now(timezone.utc).isoformat(),

@@ -1131,6 +1131,33 @@ async def debug_langsmith(
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.get("/api/debug/provider-call-audit")
+async def debug_provider_call_audit(
+    request: Request,
+    reset: bool = False,
+    force_429: Optional[bool] = None,
+):
+    """
+    Provider-call telemetry report.
+
+    Query params:
+      - reset=true        Clear all counters and ring buffers (dev/audit use only)
+      - force_429=true    Enable FMP_FORCE_429 simulation (all FMP calls return 429)
+      - force_429=false   Disable FMP_FORCE_429 simulation
+    """
+    from services.api_audit import get_report, reset_stats, set_force_429
+
+    if force_429 is not None:
+        set_force_429(force_429)
+
+    if reset:
+        reset_stats()
+        return {"status": "reset", "force_429": force_429}
+
+    report = get_report()
+    return report
+
+
 @app.get("/api/presets")
 @traceable(name="main.list_presets")
 async def list_presets(request: Request):

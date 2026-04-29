@@ -35,6 +35,10 @@ from typing import Any, Optional
 import httpx
 
 from data.cache import cache
+from services.api_audit import (
+    fmp_force_429, record_call, record_request,
+    get_total_calls, get_cache_counts,
+)
 
 
 # ── Caps & TTLs ──────────────────────────────────────────────────────────────
@@ -180,26 +184,76 @@ def _social_enrich_from_cache(ticker: str, fmp_api_key: str) -> dict:
 
 # ── FMP enrichment fetchers (per-symbol, with caching) ────────────────────────
 
-async def _fmp_get(client: httpx.AsyncClient, endpoint: str, params: dict, ttl: int) -> Any:
+async def _fmp_get(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    params: dict,
+    ttl: int,
+    feature: str = "enrichment",
+) -> Any:
     """Cached GET wrapper.  Returns [] on any error; never raises."""
+    ticker: Optional[str] = params.get("symbol") or params.get("ticker")
     cache_key = f"social_screener:fmp:{endpoint}:{sorted(params.items())}"
+
     cached = cache.get(cache_key)
     if cached is not None:
+        record_call(
+            provider="fmp", endpoint=endpoint,
+            page="social", feature=feature,
+            cache_status="hit", http_status=None,
+            elapsed_ms=0.0, ticker=ticker,
+        )
         return cached
+
+    # ── FMP_FORCE_429 simulation ──────────────────────────────────────────────
+    if fmp_force_429():
+        record_call(
+            provider="fmp", endpoint=endpoint,
+            page="social", feature=feature,
+            cache_status="miss", http_status=429,
+            elapsed_ms=0.0, ticker=ticker,
+            success=False, error="FMP_FORCE_429 simulation",
+        )
+        print(f"[SOCIAL_SCREENER] FMP_FORCE_429 — simulating 429 for {endpoint}")
+        return []
+
+    t0 = time.monotonic()
     try:
         resp = await client.get(f"{_FMP_BASE}/{endpoint}", params=params, timeout=10.0)
+        ms = int((time.monotonic() - t0) * 1000)
         if resp.status_code == 200:
             data = resp.json()
             if data:
                 cache.set(cache_key, data, ttl)
                 _set_lkg(cache_key, data)
+            record_call(
+                provider="fmp", endpoint=endpoint,
+                page="social", feature=feature,
+                cache_status="miss", http_status=200,
+                elapsed_ms=ms, ticker=ticker,
+            )
             return data
         # 4xx/5xx — fall back to last known good
         lkg = _get_lkg(cache_key)
+        record_call(
+            provider="fmp", endpoint=endpoint,
+            page="social", feature=feature,
+            cache_status="miss", http_status=resp.status_code,
+            elapsed_ms=ms, ticker=ticker,
+            success=False, error=f"HTTP {resp.status_code} (lkg={'yes' if lkg else 'no'})",
+        )
         return lkg if lkg is not None else []
     except Exception as exc:
+        ms = int((time.monotonic() - t0) * 1000)
         print(f"[SOCIAL_SCREENER] FMP {endpoint} {params}: {exc}")
         lkg = _get_lkg(cache_key)
+        record_call(
+            provider="fmp", endpoint=endpoint,
+            page="social", feature=feature,
+            cache_status="miss", http_status=None,
+            elapsed_ms=ms, ticker=ticker,
+            success=False, error=str(exc)[:120],
+        )
         return lkg if lkg is not None else []
 
 
@@ -207,7 +261,7 @@ async def _fetch_profile(client: httpx.AsyncClient, ticker: str, key: str) -> di
     data = await _fmp_get(
         client, "profile",
         {"symbol": ticker, "apikey": key},
-        _TTL_PROFILE,
+        _TTL_PROFILE, feature="social_profile",
     )
     if isinstance(data, list) and data:
         item = data[0] if isinstance(data[0], dict) else {}
@@ -224,7 +278,7 @@ async def _fetch_quote(client: httpx.AsyncClient, ticker: str, key: str) -> dict
     data = await _fmp_get(
         client, "quote",
         {"symbol": ticker, "apikey": key},
-        _TTL_QUOTE,
+        _TTL_QUOTE, feature="social_quote",
     )
     if isinstance(data, list) and data:
         item = data[0] if isinstance(data[0], dict) else {}
@@ -242,7 +296,7 @@ async def _fetch_price_change(client: httpx.AsyncClient, ticker: str, key: str) 
     data = await _fmp_get(
         client, "stock-price-change",
         {"symbol": ticker, "apikey": key},
-        _TTL_PRICE_CHANGE,
+        _TTL_PRICE_CHANGE, feature="social_price_change",
     )
     if isinstance(data, list) and data:
         item = data[0] if isinstance(data[0], dict) else {}
@@ -276,7 +330,7 @@ async def _fetch_ratios_ttm(client: httpx.AsyncClient, ticker: str, key: str) ->
     data = await _fmp_get(
         client, "ratios-ttm",
         {"symbol": ticker, "apikey": key},
-        _TTL_FUNDAMENTALS,
+        _TTL_FUNDAMENTALS, feature="fundamental_ratios",
     )
     if isinstance(data, list) and data:
         item = data[0] if isinstance(data[0], dict) else {}
@@ -289,7 +343,7 @@ async def _fetch_key_metrics_ttm(client: httpx.AsyncClient, ticker: str, key: st
     data = await _fmp_get(
         client, "key-metrics-ttm",
         {"symbol": ticker, "apikey": key},
-        _TTL_FUNDAMENTALS,
+        _TTL_FUNDAMENTALS, feature="fundamental_key_metrics",
     )
     if isinstance(data, list) and data:
         item = data[0] if isinstance(data[0], dict) else {}
@@ -302,7 +356,7 @@ async def _fetch_income_annual(client: httpx.AsyncClient, ticker: str, key: str)
     data = await _fmp_get(
         client, "income-statement",
         {"symbol": ticker, "limit": 2, "period": "annual", "apikey": key},
-        _TTL_FUNDAMENTALS,
+        _TTL_FUNDAMENTALS, feature="fundamental_income",
     )
     if isinstance(data, list) and data:
         return {"latest": data[0] if isinstance(data[0], dict) else {},
@@ -314,7 +368,7 @@ async def _fetch_balance_annual(client: httpx.AsyncClient, ticker: str, key: str
     data = await _fmp_get(
         client, "balance-sheet-statement",
         {"symbol": ticker, "limit": 1, "period": "annual", "apikey": key},
-        _TTL_FUNDAMENTALS,
+        _TTL_FUNDAMENTALS, feature="fundamental_balance",
     )
     if isinstance(data, list) and data:
         return data[0] if isinstance(data[0], dict) else {}
@@ -325,7 +379,7 @@ async def _fetch_cashflow_annual(client: httpx.AsyncClient, ticker: str, key: st
     data = await _fmp_get(
         client, "cash-flow-statement",
         {"symbol": ticker, "limit": 1, "period": "annual", "apikey": key},
-        _TTL_FUNDAMENTALS,
+        _TTL_FUNDAMENTALS, feature="fundamental_cashflow",
     )
     if isinstance(data, list) and data:
         return data[0] if isinstance(data[0], dict) else {}
@@ -871,6 +925,10 @@ async def fetch_enrichment_for_symbols(
 
     Never raises — failures degrade to nulls + downgraded status.
     """
+    _fmp_before = get_total_calls("fmp")
+    _hits_before, _misses_before = get_cache_counts()
+    _t0 = time.monotonic()
+
     social_enrichment: dict[str, dict]      = {s: {} for s in symbols}
     fundamental_enrichment: dict[str, dict] = {}
 
@@ -997,6 +1055,28 @@ async def fetch_enrichment_for_symbols(
         fund_status = "partial"
     else:
         fund_status = "stale"
+
+    _fmp_this = get_total_calls("fmp") - _fmp_before
+    _hits_now, _misses_now = get_cache_counts()
+    _ms = int((time.monotonic() - _t0) * 1000)
+    record_request(
+        route="/api/social/fundamental-screener (enrichment)",
+        page="social",
+        feature="fundamental_enrichment",
+        provider_calls={"fmp": _fmp_this, "finnhub": 0, "finviz": 0,
+                        "polygon": 0, "alpha_vantage": 0, "tradier": 0},
+        cache_hits=_hits_now - _hits_before,
+        cache_misses=_misses_now - _misses_before,
+        elapsed_ms=_ms,
+        http_status=200,
+        extra={
+            "symbols": len(symbols),
+            "fund_targets": len(fundamental_symbols or []),
+            "enrichment_status": enrichment_status,
+            "fund_status": fund_status,
+            "allow_live_fmp": allow_live_fmp,
+        },
+    )
 
     return social_enrichment, fundamental_enrichment, enrichment_status, fund_status
 
