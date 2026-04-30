@@ -6073,17 +6073,18 @@ class MarketDataService:
             for _row in final_rows:
                 _sym = (_row.get("ticker") or "").upper()
                 _dtu_entry = _dtu_theme_map.get(_sym)
+                _align = _get_tta(_sym, _stc_active, _stc_emerging, _stc_dead)
                 if _dtu_entry:
                     _row["theme_name"]             = _dtu_entry.get("theme_name")
                     _row["theme_state"]            = _dtu_entry.get("theme_state")
                     _row["regime_alignment_score"] = _dtu_entry.get("regime_alignment_score", 0)
                     _row["discovery_sources"]      = _dtu_entry.get("discovery_sources", [])
                 else:
-                    _align = _get_tta(_sym, _stc_active, _stc_emerging, _stc_dead)
                     _row["theme_name"]             = _align.get("theme_name")
                     _row["theme_state"]            = _align.get("theme_state")
                     _row["regime_alignment_score"] = _align.get("regime_alignment_score", 0)
                     _row["discovery_sources"]      = []
+                _row["regime_alignment_label"] = _align.get("regime_alignment_label")
         except Exception as _ta_err:
             print(f"[SCREENER] Thematic annotation error (non-fatal): {_ta_err}")
         # ── end thematic annotation ───────────────────────────────────────────

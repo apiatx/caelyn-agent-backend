@@ -6614,6 +6614,54 @@ async def _master_screener_loop():
                 enrich_ticker_rows(screener_data.get("tickers", []))
             except Exception as _enrich_exc:
                 print(f"[MASTER_SCREENER] Enrichment error (non-fatal): {_enrich_exc}")
+
+            # ── Bake thematic annotation into cached tickers (additive) ──────
+            # Annotates tickers with theme_name, theme_state, regime_alignment_score,
+            # regime_alignment_label, thematic_badges, dead_zone_warning,
+            # base_composite_score, final_composite_score, discovery_sources.
+            # Also propagates theme fields to all_contracts by underlying ticker.
+            # No LLM calls. Never raises. Cache miss = silent skip.
+            try:
+                from services.thematic_context_provider import get_shared_thematic_context as _get_stc_ms
+                from services.theme_ticker_mapper import get_ticker_theme_alignment as _get_tta_ms
+                from services.dynamic_thematic_universe import get_cached_thematic_universe as _get_dtu_ms
+                _tc_ms    = _get_stc_ms()
+                _dtu_ms   = _get_dtu_ms()
+                _active_ms   = _tc_ms.get("active_themes", [])
+                _emerging_ms = _tc_ms.get("emerging_themes", [])
+                _dead_ms     = _tc_ms.get("dead_zones", [])
+                _dtu_src_ms  = _dtu_ms.get("sources_by_ticker", {})
+                _theme_by_sym: dict = {}
+                for _tk in screener_data.get("tickers", []):
+                    _sym_ms = (_tk.get("ticker") or "").upper()
+                    _base_ms = float(_tk.get("composite_score") or 0)
+                    _align_ms = _get_tta_ms(_sym_ms, _active_ms, _emerging_ms, _dead_ms)
+                    _boost_ms = _align_ms["regime_alignment_score"]
+                    _tk["theme_name"]             = _align_ms["theme_name"]
+                    _tk["theme_state"]            = _align_ms["theme_state"]
+                    _tk["regime_alignment_score"] = _boost_ms
+                    _tk["regime_alignment_label"] = _align_ms["regime_alignment_label"]
+                    _tk["thematic_badges"]        = _align_ms["thematic_badges"]
+                    _tk["dead_zone_warning"]      = _align_ms["dead_zone_warning"]
+                    _tk["base_composite_score"]   = _base_ms
+                    _tk["final_composite_score"]  = round(_base_ms + _boost_ms, 2)
+                    _tk["discovery_sources"]      = _dtu_src_ms.get(_sym_ms, [])
+                    _theme_by_sym[_sym_ms] = {
+                        "theme_name":             _align_ms["theme_name"],
+                        "theme_state":            _align_ms["theme_state"],
+                        "regime_alignment_score": _boost_ms,
+                        "regime_alignment_label": _align_ms["regime_alignment_label"],
+                        "thematic_badges":        _align_ms["thematic_badges"],
+                    }
+                for _ct in screener_data.get("all_contracts", []):
+                    _ct_sym = (_ct.get("ticker") or "").upper()
+                    if _ct_sym in _theme_by_sym:
+                        _ct.update(_theme_by_sym[_ct_sym])
+                print(f"[MASTER_SCREENER] Thematic overlay applied to {len(_theme_by_sym)} tickers")
+            except Exception as _theme_exc_ms:
+                print(f"[MASTER_SCREENER] Thematic overlay error (non-fatal): {_theme_exc_ms}")
+            # ── end thematic overlay ──────────────────────────────────────────
+
             from datetime import datetime as _dt_ms, timezone as _tz_ms
             now_ts = _time.time()
             now_iso = _dt_ms.now(_tz_ms.utc).isoformat()
