@@ -41,6 +41,11 @@ from services.calendar_snapshot_service import (
     get_read_source as _get_read_source,
     get_snapshot as _get_snapshot,
 )
+from services.calendar_curation import (
+    CURATED_TABS as _CURATED_TABS,
+    DEFAULT_CAP_PER_SLICE as _CURATION_CAP,
+    curate_envelope as _curate_envelope,
+)
 
 try:
     from langsmith import traceable
@@ -196,6 +201,24 @@ async def catalyst_events(
     # a live FMP fetch on request, regardless of mode. Earnings is excluded.
     if tab in _SNAPSHOT_TABS:
         snap = _get_snapshot(tab)
+        # Display-layer curation. Raw Neon storage is unchanged; this only
+        # trims/dedupes/re-ranks the response payload. Uses already-cached
+        # event fields only — no FMP, no profile enrichment, no DB lookups
+        # beyond watchlist/portfolio symbol sets.
+        if tab in _CURATED_TABS:
+            try:
+                from services.catalyst_calendar_service import (
+                    _load_watchlist_symbols,
+                    _load_portfolio_symbols,
+                )
+                wl = _load_watchlist_symbols()
+                pf = _load_portfolio_symbols()
+            except Exception as e:
+                print(f"[catalyst] curation watchlist load failed: {e}")
+                wl, pf = set(), set()
+            snap = _curate_envelope(
+                tab, snap, cap=_CURATION_CAP, watchlist=wl, portfolio=pf,
+            )
         return JSONResponse(content={
             "tab":           tab,
             "mode":          mode,
