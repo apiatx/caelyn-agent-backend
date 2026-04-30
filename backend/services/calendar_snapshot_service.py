@@ -300,6 +300,29 @@ def _week_window_for(tab: str) -> tuple[str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
+def _previous_week_window_for(tab: str) -> tuple[str, str]:
+    """
+    Date range for the prior week (Recent view seed). Used by refresh_tab to
+    seed previous_week directly when there is no prior snapshot to promote.
+
+    Securities tabs (dividends/ipos/splits): Sun..Sat one week before the
+    current week. Economic releases: a 7-day backward window relative to last
+    Sunday. Treasury_macro is excluded — its FMP feed is point-in-time.
+    """
+    today = datetime.now(timezone.utc).date()
+    days_since_sunday = (today.weekday() + 1) % 7
+    this_sunday = today - timedelta(days=days_since_sunday)
+    last_sunday = this_sunday - timedelta(days=7)
+    last_saturday = this_sunday - timedelta(days=1)
+    if tab == "economic_releases":
+        start = last_sunday - timedelta(days=7)
+        end   = last_saturday
+    else:
+        start = last_sunday
+        end   = last_saturday
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+
 async def refresh_tab(tab: str, fmp_key: str) -> dict:
     """
     Run the existing FMP fetcher for `tab`, promote current→previous,
@@ -343,26 +366,52 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
         f"events={len(events)} err={err} ms={ms}"
     )
 
+    # Read current row from Neon to figure out what to promote into previous_week.
+    prior = _neon_read(tab)
+    if prior is None:
+        # No DB row yet (or Neon unreachable for read) — fall back to disk
+        # for the prior, so we don't lose previous_week if Neon was just
+        # transiently down.
+        store = _read_disk()
+        prior = _normalize_slot(store.get(tab))
+
+    prior_current = prior.get("current_week") or []
+    prior_previous = prior.get("previous_week") or []
+    promoted_previous = prior_current or prior_previous or []
+
+    # Seed previous_week directly when there is nothing to promote. This
+    # handles the first refresh ever (and any subsequent refresh that lost
+    # both slots) so the Recent tab is non-empty without waiting an extra
+    # week. Treasury_macro is intentionally skipped — its feed is
+    # point-in-time and a prior-week range is meaningless. Done outside the
+    # lock to avoid holding it across an HTTP fetch.
+    prev_events: list[dict] = []
+    if not promoted_previous and tab != "treasury_macro":
+        pw_from, pw_to = _previous_week_window_for(tab)
+        t1 = time.monotonic()
+        try:
+            prev_events, prev_err = await _fetch_tab(
+                fmp, tab, pw_from, pw_to, watchlist, portfolio,
+                limit=1000, mode="upcoming",
+            )
+        except Exception as e:
+            print(f"[calendar_snapshot] previous_week seed fetch error tab={tab}: {e}")
+            prev_events, prev_err = [], str(e)
+        print(
+            f"[calendar_snapshot] seed previous_week tab={tab} "
+            f"window={pw_from}→{pw_to} events={len(prev_events)} "
+            f"err={prev_err} ms={int((time.monotonic() - t1) * 1000)}"
+        )
+
     async with _lock:
-        # Read current row from Neon to figure out what to promote into previous_week.
-        prior = _neon_read(tab)
-        if prior is None:
-            # No DB row yet (or Neon unreachable for read) — fall back to disk
-            # for the prior, so we don't lose previous_week if Neon was just
-            # transiently down.
-            store = _read_disk()
-            prior = _normalize_slot(store.get(tab))
-
-        prior_current = prior.get("current_week") or []
-        prior_previous = prior.get("previous_week") or []
-
+        new_previous = promoted_previous or prev_events or []
         new_slot = {
             "current_week": events or [],
-            "previous_week": prior_current or prior_previous or [],
+            "previous_week": new_previous,
             "meta": {
                 "last_updated": datetime.now(timezone.utc).isoformat(),
                 "status":       "ready" if events else (
-                    "stale" if (prior_current or prior_previous) else "empty"
+                    "stale" if new_previous else "empty"
                 ),
                 "window":       {"from": from_date, "to": to_date},
                 "fetch_error":  err,
