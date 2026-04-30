@@ -370,6 +370,47 @@ try:
 except Exception as _cat_err:
     print(f"[CATALYST_CALENDAR] Router unavailable (non-fatal): {_cat_err}")
 
+# ── Calendar-snapshot diagnostics fallback (/api/debug/calendar-snapshots) ────
+# Mounted directly on `app` so the diagnostics endpoint is reachable even if
+# the catalyst_calendar router fails to import on a given deploy. The route
+# remains 404 unless CALENDAR_DIAGNOSTICS_TOKEN/DIAGNOSTICS_TOKEN is set.
+try:
+    from routes.catalyst_calendar import (
+        debug_calendar_snapshots as _diag_calendar_snapshots,
+    )
+    if not any(
+        getattr(r, "path", None) == "/api/debug/calendar-snapshots"
+        for r in app.routes
+    ):
+        app.add_api_route(
+            "/api/debug/calendar-snapshots",
+            _diag_calendar_snapshots,
+            methods=["GET"],
+        )
+        print("[CALENDAR_DIAG] Fallback route registered at /api/debug/calendar-snapshots")
+except Exception as _diag_err:
+    print(f"[CALENDAR_DIAG] Fallback handler unavailable, registering inline: {_diag_err}")
+
+    @app.get("/api/debug/calendar-snapshots")
+    async def _calendar_snapshots_inline_diag(
+        request: Request,
+        x_diagnostics_token: Optional[str] = Header(None, alias="X-Diagnostics-Token"),
+    ):
+        expected = (
+            os.getenv("CALENDAR_DIAGNOSTICS_TOKEN")
+            or os.getenv("DIAGNOSTICS_TOKEN")
+            or None
+        )
+        if not expected:
+            return JSONResponse(status_code=404, content={"error": "Not Found"})
+        if not x_diagnostics_token or x_diagnostics_token != expected:
+            return JSONResponse(status_code=403, content={"error": "Forbidden"})
+        return JSONResponse(content={
+            "status": "degraded",
+            "reason": "catalyst_calendar router failed to import",
+            "import_error": str(_diag_err),
+        })
+
 # ── Clean Earnings Upcoming router (/api/catalysts/earnings/*) ───────────────
 # v2 safe architecture: sequential chunks, max 2 FMP calls, circuit breaker.
 try:
