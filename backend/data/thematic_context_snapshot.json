@@ -1,0 +1,222 @@
+{
+  "macro_regime": "inflationary",
+  "active_themes": [
+    {
+      "name": "AI Networking",
+      "score": 0.0,
+      "source": "lkg",
+      "evidence": [
+        "Static fallback \u2014 live theme scores unavailable"
+      ],
+      "related_etfs": [],
+      "related_tickers": [
+        "ALAB",
+        "ANET",
+        "CIEN",
+        "CRDO",
+        "MRVL",
+        "SMCI",
+        "VIAV",
+        "COHR",
+        "APH",
+        "NOK"
+      ]
+    },
+    {
+      "name": "Photonics / Lasers",
+      "score": 0.0,
+      "source": "lkg",
+      "evidence": [
+        "Static fallback \u2014 live theme scores unavailable"
+      ],
+      "related_etfs": [],
+      "related_tickers": [
+        "AAOI",
+        "COHR",
+        "IPGP",
+        "LASR",
+        "LITE",
+        "LPTH",
+        "LWLG",
+        "POET",
+        "GLW",
+        "XTIA"
+      ]
+    },
+    {
+      "name": "Substrates / Packaging",
+      "score": 0.0,
+      "source": "lkg",
+      "evidence": [
+        "Static fallback \u2014 live theme scores unavailable"
+      ],
+      "related_etfs": [],
+      "related_tickers": [
+        "AMKR",
+        "AXTI",
+        "CAMT",
+        "FN",
+        "FORM",
+        "GFS",
+        "ICHR",
+        "INTT",
+        "KLIC",
+        "ONTO"
+      ]
+    },
+    {
+      "name": "Memory / Storage",
+      "score": 0.0,
+      "source": "lkg",
+      "evidence": [
+        "Static fallback \u2014 live theme scores unavailable"
+      ],
+      "related_etfs": [],
+      "related_tickers": [
+        "MU",
+        "WDC",
+        "STX",
+        "SNDK",
+        "PSTG",
+        "SIMO",
+        "NTAP"
+      ]
+    },
+    {
+      "name": "Datacenter / Compute",
+      "score": 0.0,
+      "source": "lkg",
+      "evidence": [
+        "Static fallback \u2014 live theme scores unavailable"
+      ],
+      "related_etfs": [],
+      "related_tickers": [
+        "APLD",
+        "ARM",
+        "EQIX",
+        "IREN",
+        "SMCI",
+        "TSM",
+        "NVDA",
+        "AMD",
+        "INTC",
+        "WULF"
+      ]
+    }
+  ],
+  "emerging_themes": [
+    {
+      "name": "Semi Materials",
+      "score": 0.0,
+      "source": "lkg",
+      "evidence": [
+        "Static fallback \u2014 live theme scores unavailable"
+      ],
+      "related_etfs": [],
+      "related_tickers": [
+        "AXTI",
+        "FORM",
+        "ICHR",
+        "KLAC",
+        "KLIC",
+        "MCHP",
+        "ON",
+        "SLAB",
+        "TE",
+        "UCTT"
+      ]
+    },
+    {
+      "name": "Power / Cooling",
+      "score": 0.0,
+      "source": "lkg",
+      "evidence": [
+        "Static fallback \u2014 live theme scores unavailable"
+      ],
+      "related_etfs": [],
+      "related_tickers": [
+        "ETN",
+        "POWL",
+        "VRT",
+        "VICR",
+        "SMTC",
+        "HUBB",
+        "AMPX"
+      ]
+    },
+    {
+      "name": "Nuclear / Grid",
+      "score": 0.0,
+      "source": "lkg",
+      "evidence": [
+        "Static fallback \u2014 live theme scores unavailable"
+      ],
+      "related_etfs": [],
+      "related_tickers": [
+        "BE",
+        "CEG",
+        "EQT",
+        "FSLR",
+        "TPL",
+        "CCJ",
+        "NNE",
+        "SMR"
+      ]
+    },
+    {
+      "name": "Aerospace / Defense",
+      "score": 0.0,
+      "source": "lkg",
+      "evidence": [
+        "Static fallback \u2014 live theme scores unavailable"
+      ],
+      "related_etfs": [],
+      "related_tickers": [
+        "AVAV",
+        "DRS",
+        "ESLT",
+        "KTOS",
+        "LUNR",
+        "RKLB",
+        "ASTS",
+        "MDA",
+        "BKSY",
+        "PL"
+      ]
+    },
+    {
+      "name": "Robotics / Automation",
+      "score": 0.0,
+      "source": "lkg",
+      "evidence": [
+        "Static fallback \u2014 live theme scores unavailable"
+      ],
+      "related_etfs": [],
+      "related_tickers": [
+        "AEVA",
+        "IONQ",
+        "JOBY",
+        "OUST",
+        "OSS",
+        "TER",
+        "ISRG",
+        "PATH"
+      ]
+    }
+  ],
+  "dead_zones": [],
+  "sector_leaders": [],
+  "sector_laggards": [],
+  "risk_notes": [],
+  "last_updated": "2026-04-30T14:37:21.097457+00:00",
+  "snapshot_status": "stale_lkg",
+  "snapshot_age_minutes": 0,
+  "source_health": {
+    "regime": "fallback",
+    "sector_rotation": "fallback",
+    "theme_rotation": "fallback",
+    "x_consensus": "ok",
+    "polymarket": "fallback"
+  },
+  "_saved_at": 1777559841.0975895
+}

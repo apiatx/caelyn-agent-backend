@@ -279,6 +279,14 @@ async def lifespan(app):
     except Exception as _e:
         print(f"[STARTUP] Bittensor refresh task error: {_e}")
     asyncio.create_task(_x_consensus_loop())
+    # Thematic context warmup: load LKG from disk immediately, then rebuild from caches.
+    # Runs after a 5s delay so sector rotation loop has a head start.
+    # No LLM calls, no API calls — pure cache/disk reads + static registry.
+    try:
+        from services.thematic_context_provider import warmup_thematic_context as _thematic_warmup
+        asyncio.create_task(_thematic_warmup())
+    except Exception as _e:
+        print(f"[STARTUP] Thematic context warmup task error: {_e}")
     try:
         from data.options_screener_snapshot import load_state as _load_opt_snapshot
         _load_opt_snapshot()
@@ -835,6 +843,29 @@ async def _briefing_precompute_loop():
                     if ticker not in screener_sources:
                         screener_sources[ticker] = []
                     screener_sources[ticker].append("social_trending")
+
+            # ── Thematic prefilter source (TA Screener priority universe) ──────
+            # Active/emerging theme tickers are registered as a "thematic_priority"
+            # source so they count toward multi-signal even if Finviz misses them.
+            # Does NOT call any API — uses LKG / static registry.
+            try:
+                from services.thematic_context_provider import get_thematic_prefilter_universe as _tc_pf
+                _tc_uni = _tc_pf(max_tickers=60)
+                _tc_active   = _tc_uni.get("active_theme_tickers", [])[:20]
+                _tc_emerging = _tc_uni.get("emerging_theme_tickers", [])[:15]
+                for _sym in dict.fromkeys([*_tc_active, *_tc_emerging]):
+                    if not _sym or len(_sym) > 5 or not _sym.replace("-", "").isalpha():
+                        continue
+                    all_tickers.add(_sym)
+                    screener_sources.setdefault(_sym, []).append("thematic_priority")
+                    if _sym not in raw_screener_data:
+                        raw_screener_data[_sym] = {
+                            "ticker": _sym,
+                            "source": "thematic_priority",
+                            "thematic_state": "active" if _sym in _tc_active else "emerging",
+                        }
+            except Exception as _tce:
+                print(f"[BRIEFING_PRECOMPUTE] Thematic source skipped: {_tce}")
 
             multi_signal = {t: sources for t, sources in screener_sources.items() if len(sources) >= 2}
             priority_tickers = list(multi_signal.keys())[:15]
@@ -6504,8 +6535,30 @@ async def _master_screener_loop():
             else:
                 print("[MASTER_SCREENER] Prefilter cold — building from Finviz/Finnhub/FMP (all universes)...")
                 t_pf = _time.time()
+
+                # ── Thematic prefilter injection ───────────────────────────────
+                # Prepend regime-aligned theme tickers so they enter Stage 1 with
+                # priority. Deduplication preserves original seed ordering after
+                # the priority block.  Uses LKG/static fallback — no API call.
+                _cycle_seeds = _master_seeds
+                try:
+                    from services.thematic_context_provider import get_thematic_prefilter_universe as _get_pf_uni
+                    _pf_uni = _get_pf_uni(max_tickers=50)
+                    _thematic_priority = list(dict.fromkeys(
+                        [*_pf_uni.get("active_theme_tickers", [])[:20],
+                         *_pf_uni.get("emerging_theme_tickers", [])[:15]]
+                    ))
+                    if _thematic_priority:
+                        _cycle_seeds = list(dict.fromkeys([*_thematic_priority, *_master_seeds]))
+                        print(f"[MASTER_SCREENER] Thematic injection: "
+                              f"+{len(_thematic_priority)} priority tickers "
+                              f"(status={_pf_uni.get('snapshot_status','?')}) "
+                              f"→ {len(_cycle_seeds)} total seeds")
+                except Exception as _te:
+                    print(f"[MASTER_SCREENER] Thematic injection skipped: {_te}")
+
                 prefilter_data = await engine.build_prefilter_snapshot(
-                    _master_seeds, tab="master",
+                    _cycle_seeds, tab="master",
                 )
                 cache.set(_OPTIONS_MASTER_PREFILTER_KEY, prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
                 _save_master_prefilter_to_disk(prefilter_data)

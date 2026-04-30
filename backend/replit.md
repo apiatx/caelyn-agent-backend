@@ -220,6 +220,19 @@ $20B - $100B  → "mid_cap"
 **GET /api/strategy-screener/config** now includes dropdown metadata:
 - `market_cap_buckets`, `layer_filters`, `sort_options` — all with `id` + `label` for frontend dropdowns
 
+### Thematic Context Provider (v2 — Upstream Prefilter)
+- **File**: `backend/services/thematic_context_provider.py`
+- **Role**: Shared read-only adapter upgraded to upstream prefilter source (not just annotation layer).
+- **Endpoints**: `GET /api/thematic-context/snapshot`, `POST /api/thematic-context/refresh`
+- **Prefilter API**: `get_thematic_prefilter_universe()` — returns prioritized ticker universe (active → emerging → watchlist → megacap fallback, max 150 tickers) with theme_map per ticker.
+- **LKG Disk Persistence**: Snapshot persisted to `data/thematic_context_snapshot.json`. Never empty on cold start — loaded into in-memory cache before any live cache warms up.
+- **Static Fallback Registry**: Built from `home_service.THEME_MAP` + `THEME_ETF_UNIVERSE` (31 themes, 126 tickers). Activated when live scores AND LKG are unavailable.
+- **snapshot_status**: `"fresh"` (live ETF RS scores) | `"stale_lkg"` (disk LKG) | `"fallback_static"` (static registry)
+- **Options Flow injection**: Active/emerging theme tickers prepended to `_master_seeds` in `_master_screener_loop()` when prefilter is cold — thematic candidates scanned with priority before non-thematic seeds.
+- **Briefing precompute integration**: Active/emerging theme tickers registered as `"thematic_priority"` source in `_briefing_precompute_loop()` — tickers appearing in both Finviz and thematic universe counted as multi-signal.
+- **Startup warmup**: `warmup_thematic_context()` coroutine launched in lifespan handler — loads LKG immediately, then force-rebuilds after 5s.
+- **Guarantees**: Never raises. Never calls LLM/Tradier/FMP. Never overwrites good LKG with static fallback.
+
 ### Tests
 851 tests (0 failures) in `services/playbook/factor_tests.py`. Phase 8 adds 77 filter/sort tests covering market cap classification, bucket filtering, layer filtering, combined filters, all 4 sort modes, tiebreak logic, limit, backwards compatibility, config dropdown metadata, and isolation from /api/query.
 
