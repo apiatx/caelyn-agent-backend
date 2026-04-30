@@ -1,0 +1,51 @@
+Audit whether CaelynAI already has a website-wide Thematic Intelligence Engine / regime relevance layer.
+
+Goal:
+Determine if we already have a true backend thematic intelligence layer that:
+1. Runs weekly and/or rolling scans across macro, sectors, prediction markets, news/web, social, earnings/options context.
+2. Produces structured outputs:
+   - active_themes_this_week
+   - emerging_themes
+   - dead_zones_to_avoid
+   - sector/theme momentum
+   - regime relevance scores
+   - confidence / evidence / timestamps
+3. Is consumed by multiple site features, not just displayed on one page:
+   - AI Terminal / /api/query
+   - TA screener
+   - Earnings calendar/report logic
+   - Options Flow
+   - Social signals
+   - Watchlist
+   - Portfolio
+   - Home page
+   - Sectors page
+4. Filters or ranks downstream outputs by current theme/sector/regime relevance.
+
+Important:
+This should be website-wide. A Sectors page analysis, Home theme performance card, or isolated “agent analysis” does NOT count unless its output is reused by other endpoints/features.
+
+Audit these areas:
+- Search backend for: theme, thematic, regime, rotation, sector, macro, polymarket, fred, relative_strength, rs_score, dead_zone, emerging_theme, active_theme, context, ranking, enrichment, relevance.
+- Inspect main API routes and service files.
+- Specifically trace POST /api/query and TradingAgent.handle_query / _handle_query_inner to see whether prompts are injected with thematic/regime context.
+- Check whether screeners, options flow, earnings, watchlist, portfolio, social, and home endpoints call a shared theme/regime provider.
+- Check cache/database/storage for existing theme or regime snapshots.
+- Check whether FRED, sector ETFs, Polymarket, FMP news, Gemini/Grok/Claude/Perplexity are already orchestrated into one normalized signal.
+
+Deliverables:
+1. Verdict:
+   - Built website-wide
+   - Partially built / isolated
+   - Not built
+2. Exact existing files/functions/endpoints involved.
+3. What currently generates theme/regime intelligence.
+4. What currently consumes it.
+5. Missing gaps.
+6. Minimal implementation plan if missing.
+7. Recommended backend architecture:
+   - shared service, likely ThematicIntelligenceProvider
+   - cached snapshot endpoint, e.g. GET /api/thematic-intelligence/snapshot
+   - manual refresh endpoint, e.g. POST /api/thematic-intelligence/refresh
+   - injection function used by all major ranking/prompt flows
+8. Do not change code yet. Audit only.
