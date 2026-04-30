@@ -579,10 +579,18 @@ async def catalyst_top(
     ),
 ):
     """
-    Top Catalysts This Week — read-only aggregation across already-cached
-    calendar data (earnings week-clean cache + 5 snapshot tabs).
+    Top Catalysts This Week — high-signal weekly intelligence layer.
 
-    No request-time FMP calls. No profile enrichment. No new external APIs.
+    Grouped by day:
+      days[].earnings — top earnings ranked on options flow + watchlist + sector
+      days[].macro    — whitelisted macro events (CPI/PPI/NFP/FOMC/GDP/Treasury)
+      days[].other    — rare IPO/dividend/split (cap 2-3/week, large-cap or hot theme)
+
+    `current_week` is also returned as a flat ranked list for backward compat
+    with previous clients.
+
+    Pure read across already-cached services. No request-time FMP / Finnhub /
+    profile-enrichment / external calls.
     """
     err = _check_key(api_key)
     if err:
@@ -598,6 +606,8 @@ async def catalyst_top(
             content={
                 "tab":           "top_catalysts",
                 "mode":          "weekly",
+                "week":          "",
+                "days":          [],
                 "current_week":  [],
                 "previous_week": [],
                 "last_updated":  None,

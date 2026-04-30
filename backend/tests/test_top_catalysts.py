@@ -1,8 +1,9 @@
 """
 Unit tests for services/top_catalysts_service.py.
 
-Mocked-data-only — no FMP, no network, no DB. Snapshot reads are
-monkey-patched and the earnings cache is seeded directly.
+Mocked-data-only — no FMP, no network, no DB. Snapshot reads, watchlist
+loaders, and the options/sector caches are monkey-patched; the earnings
+cache is seeded directly via data.cache.cache.
 """
 from __future__ import annotations
 
@@ -19,13 +20,22 @@ from data.cache import cache
 from services.top_catalysts_service import (
     DEFAULT_CAP,
     MAX_CAP,
+    MAX_EARNINGS_PER_DAY,
+    MAX_OTHER_PER_DAY,
+    MAX_OTHER_PER_WEEK,
     MIN_CAP,
-    _merge_dedup,
-    _normalize_event,
+    _classify_macro,
+    _options_strength,
     _passes_garbage_filter,
-    _score_event,
+    _score_earnings,
     get_top_catalysts,
 )
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+_MONDAY = date(2026, 4, 27)
+_FRIDAY = date(2026, 5, 1)
 
 
 def _seed_snapshots(monkeypatch, mapping: dict):
@@ -39,30 +49,191 @@ def _seed_snapshots(monkeypatch, mapping: dict):
     monkeypatch.setattr(top_svc, "_get_snapshot", fake)
 
 
-def _seed_earnings_cache(monday: date, friday: date, top_events: list[dict],
-                        as_of: str = "2026-04-30T12:00:00Z"):
-    ck = f"earnings:curated:week:{monday}:{friday}"
+def _seed_watchlist(monkeypatch, syms: set[str], pf: set[str] | None = None):
+    monkeypatch.setattr(top_svc, "_load_watchlist_set", lambda: set(syms))
+    monkeypatch.setattr(top_svc, "_load_portfolio_set", lambda: set(pf or set()))
+
+
+def _seed_options(monkeypatch, mapping: dict[str, dict]):
+    monkeypatch.setattr(top_svc, "_read_options_master", lambda: dict(mapping))
+
+
+def _seed_sectors(monkeypatch, mapping: dict[str, dict]):
+    monkeypatch.setattr(top_svc, "_read_sector_dashboard", lambda: dict(mapping))
+
+
+def _seed_week(monkeypatch):
+    monkeypatch.setattr(top_svc, "_week_bounds", lambda *_: (_MONDAY, _FRIDAY))
+
+
+def _seed_earnings_cache(top_events: list[dict], as_of: str = "2026-04-30T12:00:00Z"):
+    ck = f"earnings:curated:week:{_MONDAY}:{_FRIDAY}"
     cache.set(ck, {"asOf": as_of, "topEvents": top_events}, 600)
     return ck
 
 
+def _clear_earnings_cache():
+    cache.set(f"earnings:curated:week:{_MONDAY}:{_FRIDAY}", None, 1)
+
+
+# ── Envelope shape ──────────────────────────────────────────────────────────
+
 def test_envelope_shape_when_empty(monkeypatch):
+    _seed_week(monkeypatch)
     _seed_snapshots(monkeypatch, {})
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+
     env = get_top_catalysts(cap=30)
     assert env["tab"] == "top_catalysts"
     assert env["mode"] == "weekly"
+    assert env["week"] == "2026-04-27/2026-05-01"
+    # days[] must be 5 weekday entries Mon-Fri.
+    assert len(env["days"]) == 5
+    assert [d["date"] for d in env["days"]] == [
+        "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-01"
+    ]
+    for d in env["days"]:
+        assert d["earnings"] == []
+        assert d["macro"]    == []
+        assert d["other"]    == []
     assert env["current_week"] == []
     assert env["previous_week"] == []
     assert env["status"] == "empty"
-    assert env["last_updated"] is None
 
 
-def test_cap_clamped_to_min_max(monkeypatch):
+def test_grouped_days_have_required_keys(monkeypatch):
+    _seed_week(monkeypatch)
     _seed_snapshots(monkeypatch, {})
-    assert get_top_catalysts(cap=1)["current_week"] == []
-    # Too-large cap clamps silently — checked through _score path.
-    assert MIN_CAP <= DEFAULT_CAP <= MAX_CAP
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    env = get_top_catalysts()
+    for d in env["days"]:
+        assert set(d.keys()) >= {"date", "weekday", "earnings", "macro", "other"}
 
+
+# ── Macro whitelist ─────────────────────────────────────────────────────────
+
+def test_macro_whitelist_classifies_canonical_events():
+    assert _classify_macro({"eventName": "CPI YoY"}) == "CPI"
+    assert _classify_macro({"eventName": "Core PPI MoM"}) == "PPI"
+    assert _classify_macro({"eventName": "Nonfarm Payrolls"}) == "NFP"
+    assert _classify_macro({"eventName": "FOMC Meeting Minutes"}) == "FOMC"
+    assert _classify_macro({"indicatorName": "GDP Growth Rate"}) == "GDP"
+    assert _classify_macro({"indicatorName": "10-Year Treasury Auction"}) == "Treasury Auctions"
+
+
+def test_macro_whitelist_drops_low_signal_events():
+    # These are NOT in the whitelist and must be excluded.
+    for ev in [
+        {"eventName": "Retail Sales"},
+        {"eventName": "ISM Manufacturing PMI"},
+        {"eventName": "Initial Jobless Claims"},
+        {"eventName": "Building Permits"},
+        {"eventName": "Trade Balance"},
+    ]:
+        assert _classify_macro(ev) is None
+
+
+def test_macro_only_whitelist_in_response(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                {"eventName": "CPI YoY", "date": "2026-04-29",
+                 "country": "US", "importance": "high"},
+                {"eventName": "Retail Sales", "date": "2026-04-29",
+                 "country": "US", "importance": "medium"},
+                {"eventName": "ISM Manufacturing", "date": "2026-04-30",
+                 "country": "US", "importance": "medium"},
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+        "treasury_macro": {
+            "current_week": [
+                {"indicatorName": "10-Year Treasury Auction",
+                 "date": "2026-04-30", "country": "US"},
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+
+    env = get_top_catalysts()
+    macro_titles = [m["macroType"] for d in env["days"] for m in d["macro"]]
+    assert "CPI" in macro_titles
+    assert "Treasury Auctions" in macro_titles
+    # Non-whitelist must be absent.
+    assert all("Retail" not in str(m.get("title", "")) for d in env["days"] for m in d["macro"])
+    assert all("ISM" not in str(m.get("title", "")) for d in env["days"] for m in d["macro"])
+
+
+# ── IPO/Dividend/Split exclusion + caps ────────────────────────────────────
+
+def test_ipos_excluded_unless_large_or_hot_theme(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "ipos": {
+            "current_week": [
+                # Small IPO without theme — excluded.
+                {"symbol": "TINY", "eventType": "ipo", "date": "2026-04-29",
+                 "companyName": "Tiny Co", "marketCap": 200_000_000},
+                # Large IPO — allowed.
+                {"symbol": "BIGCO", "eventType": "ipo", "date": "2026-04-29",
+                 "companyName": "Big Co", "marketCap": 80_000_000_000},
+                # Theme IPO — allowed.
+                {"symbol": "AICHIP", "eventType": "ipo", "date": "2026-04-30",
+                 "companyName": "AI Chip Co", "marketCap": 1_000_000_000,
+                 "themeTags": ["semiconductors"]},
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    other_syms = [o.get("symbol") for d in env["days"] for o in d["other"]]
+    assert "TINY" not in other_syms
+    assert "BIGCO" in other_syms
+    assert "AICHIP" in other_syms
+
+
+def test_other_capped_per_week(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    rows = [
+        {"symbol": f"BIG{i}", "eventType": "ipo",
+         "date": "2026-04-29" if i % 2 else "2026-04-30",
+         "companyName": f"Big {i}", "marketCap": 80_000_000_000}
+        for i in range(10)
+    ]
+    _seed_snapshots(monkeypatch, {
+        "ipos": {"current_week": rows, "previous_week": [],
+                 "last_updated": "2026-04-28T10:00:00Z", "status": "ready"},
+    })
+    env = get_top_catalysts()
+    total_other = sum(len(d["other"]) for d in env["days"])
+    assert total_other <= MAX_OTHER_PER_WEEK
+    for d in env["days"]:
+        assert len(d["other"]) <= MAX_OTHER_PER_DAY
+
+
+# ── Garbage filter ──────────────────────────────────────────────────────────
 
 def test_garbage_filter_drops_preferred_and_warrants():
     bad = {"symbol": "BAC-PA", "companyName": "BAC Pref", "eventType": "dividends"}
@@ -74,132 +245,165 @@ def test_garbage_filter_drops_preferred_and_warrants():
     assert _passes_garbage_filter(good) is True
 
 
-def test_garbage_filter_drops_microcap_when_known():
-    tiny = {"symbol": "TINY", "eventType": "dividends", "marketCap": 5_000_000}
-    assert _passes_garbage_filter(tiny) is False
-    # Missing market cap is permitted (do not over-filter on missing metadata).
-    no_mc = {"symbol": "OKAY", "eventType": "dividends"}
-    assert _passes_garbage_filter(no_mc) is True
+# ── Options strength classification (existing fields only) ──────────────────
+
+def test_options_strength_unusual_high_normal_none():
+    assert _options_strength(None)[0] == "none"
+    assert _options_strength({})[0] == "none"
+    # composite_score >= 75 → unusual
+    assert _options_strength({"composite_score": 82})[0] == "unusual"
+    # heat_score 70+ → unusual
+    assert _options_strength({"heat_score": 71})[0] == "unusual"
+    # uvr 3.0+ → unusual
+    assert _options_strength({"unusual_volume_ratio": 3.5})[0] == "unusual"
+    # mid range → high
+    assert _options_strength({"composite_score": 55})[0] == "high"
+    # tiny but present → normal
+    assert _options_strength({"composite_score": 5})[0] == "normal"
 
 
-def test_garbage_filter_drops_delisted_canonical():
-    # TWTR is mapped to None in CANONICAL_SYMBOL_MAP → drop.
-    twtr = {"symbol": "TWTR", "eventType": "earnings_dates",
-            "marketCap": 50_000_000_000}
-    assert _passes_garbage_filter(twtr) is False
+# ── Earnings ranking driven by 3 signals only (no marketCap) ────────────────
 
-
-def test_normalize_preserves_required_fields():
-    raw = {"symbol": "FB", "companyName": "Facebook (legacy)",
-           "eventType": "earnings_dates", "date": "2026-04-30",
-           "time": "amc", "sector": "Technology", "importance": "high"}
-    norm = _normalize_event(raw, source_tab="earnings")
-    assert norm["symbol"] == "META"  # canonical remap applied
-    assert norm["sourceTab"] == "earnings"
-    assert norm["eventType"] == "earnings_dates"
-    assert norm["time"] == "amc"
-    assert norm["importance"] == "high"
-    assert "raw" in norm
-
-
-def test_score_earnings_outranks_dividends():
-    earn = _normalize_event(
-        {"symbol": "NVDA", "eventType": "earnings_dates", "date": "2026-04-30",
-         "marketCap": 3e12, "importance": "high", "importanceScore": 90,
-         "themeTags": ["ai_infra"], "sector": "Technology"},
-        "earnings",
+def test_score_ranks_unusual_options_above_market_cap(monkeypatch):
+    sectors: dict[str, dict] = {}
+    # A: mega cap, no options activity, no watchlist.
+    a = {"symbol": "A", "eventType": "earnings_dates", "date": "2026-04-30",
+         "marketCap": 3_000_000_000_000}
+    # B: small cap but UNUSUAL options activity.
+    b = {"symbol": "B", "eventType": "earnings_dates", "date": "2026-04-30",
+         "marketCap": 1_500_000_000}
+    a_score, _ = _score_earnings(a, None, sectors, set(), set())
+    b_score, _ = _score_earnings(
+        b,
+        {"composite_score": 90, "heat_score": 80, "unusual_volume_ratio": 4.5},
+        sectors, set(), set(),
     )
-    div = _normalize_event(
-        {"symbol": "AAPL", "eventType": "dividends", "date": "2026-04-30",
-         "marketCap": 3e12, "dividend": 1.0, "importance": "low"},
-        "dividends",
-    )
-    e_score, _, _ = _score_event(earn, set(), set())
-    d_score, _, _ = _score_event(div, set(), set())
-    assert e_score > d_score
+    assert b_score > a_score, "Unusual options activity must outrank market cap"
 
 
-def test_merge_dedup_earnings_dominates():
-    e1 = {"symbol": "AAPL", "eventType": "earnings_dates", "date": "2026-04-30",
-          "score": 18.0, "scoreReasons": ["earnings event"], "sourceTab": "earnings"}
-    e2 = {"symbol": "AAPL", "eventType": "dividends", "date": "2026-04-30",
-          "score": 22.0, "scoreReasons": ["dividends event"], "sourceTab": "dividends"}
-    merged = _merge_dedup([e1, e2])
-    assert len(merged) == 1
-    out = merged[0]
-    # Earnings is the dominant primary even if its score was lower.
-    assert out["eventType"] == "earnings_dates"
-    # Multi-catalyst boost added.
-    assert any("multiple catalysts" in r for r in out["scoreReasons"])
-    # Score was bumped above the original earnings score.
-    assert out["score"] > 18.0
-    # Secondary catalyst preserved in raw.
-    assert isinstance(out.get("raw"), dict)
-    assert out["raw"].get("secondaryCatalysts")
+def test_score_watchlist_boost_binary():
+    a = {"symbol": "X", "eventType": "earnings_dates", "date": "2026-04-30"}
+    s_no, sig_no = _score_earnings(a, None, {}, set(), set())
+    s_yes, sig_yes = _score_earnings(a, None, {}, {"X"}, set())
+    assert s_yes > s_no
+    assert sig_yes["watchlist_boost"] is True
+    assert sig_no["watchlist_boost"] is False
 
 
-def test_full_pipeline_ready_status(monkeypatch):
-    monday = date(2026, 4, 27)
-    friday = date(2026, 5, 1)
-    monkeypatch.setattr(top_svc, "_week_bounds", lambda *_: (monday, friday))
+def test_score_sector_alignment_uses_sector_dashboard():
+    ev = {"symbol": "SOMECO", "eventType": "earnings_dates",
+          "date": "2026-04-30", "sector": "Technology"}
+    sectors_hot = {"XLK": {"ticker": "XLK", "rotation_score": 88,
+                           "regime_tag": "Leadership"}}
+    sectors_cold = {"XLK": {"ticker": "XLK", "rotation_score": 10,
+                            "regime_tag": "Lagging"}}
+    s_hot, sig_hot = _score_earnings(ev, None, sectors_hot, set(), set())
+    s_cold, sig_cold = _score_earnings(ev, None, sectors_cold, set(), set())
+    assert s_hot > s_cold
+    assert sig_hot["sector_alignment_strength"] == "hot"
+    assert sig_cold["sector_alignment_strength"] in ("none", "neutral")
 
+
+def test_no_market_cap_in_score_signals():
+    """Score signals dict must not contain marketCap-derived fields."""
+    ev = {"symbol": "Z", "eventType": "earnings_dates",
+          "date": "2026-04-30", "marketCap": 2e12}
+    _, sig = _score_earnings(ev, None, {}, set(), set())
+    assert "marketCap" not in sig
+    assert "marketCapBucket" not in sig
+
+
+# ── Per-day caps ────────────────────────────────────────────────────────────
+
+def test_earnings_per_day_capped(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _seed_snapshots(monkeypatch, {})
+    rows = [
+        {"symbol": f"S{i:03d}", "eventType": "earnings_dates",
+         "date": "2026-04-30", "companyName": f"Co {i}",
+         "marketCap": 1e10, "importanceScore": 80 - i}
+        for i in range(20)
+    ]
+    _seed_earnings_cache(rows)
+    env = get_top_catalysts()
+    thursday = next(d for d in env["days"] if d["date"] == "2026-04-30")
+    assert len(thursday["earnings"]) <= MAX_EARNINGS_PER_DAY
+
+
+# ── Earnings dominance over IPO/div/split ───────────────────────────────────
+
+def test_earnings_dominates_other(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
     _seed_snapshots(monkeypatch, {
         "ipos": {
-            "current_week": [{
-                "symbol": "NEWCO", "eventType": "ipo", "date": "2026-04-29",
-                "companyName": "New Co", "exchange": "NASDAQ",
-                "marketCap": 6_000_000_000,
-            }],
-            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
-            "status": "ready",
-        },
-        "dividends": {
-            "current_week": [{
-                "symbol": "AAPL", "eventType": "dividends", "date": "2026-04-30",
-                "companyName": "Apple Inc.", "marketCap": 3e12,
-                "dividend": 1.0, "importance": "medium",
-            }],
+            "current_week": [
+                {"symbol": "BIGCO", "eventType": "ipo", "date": "2026-04-30",
+                 "companyName": "Big Co", "marketCap": 80_000_000_000},
+            ],
             "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
             "status": "ready",
         },
     })
-    _seed_earnings_cache(monday, friday, [
+    _seed_earnings_cache([
         {"symbol": "AAPL", "eventType": "earnings_dates", "date": "2026-04-30",
-         "companyName": "Apple Inc.", "marketCap": 3e12, "importance": "high",
-         "importanceScore": 80},
-        {"symbol": "BAC-PA", "eventType": "earnings_dates", "date": "2026-04-30"},
+         "companyName": "Apple", "marketCap": 3e12, "importanceScore": 90},
     ])
 
-    env = get_top_catalysts(cap=DEFAULT_CAP)
-    assert env["status"] == "ready"
-    assert env["last_updated"] is not None
-    syms = [(e.get("symbol"), e["eventType"]) for e in env["current_week"]]
-    # AAPL appears once (earnings dominant), with dividend merged.
-    aapl_rows = [s for s in syms if s[0] == "AAPL"]
-    assert len(aapl_rows) == 1
-    assert aapl_rows[0][1] == "earnings_dates"
-    # NEWCO IPO present.
-    assert any(s[0] == "NEWCO" for s in syms)
-    # BAC-PA preferred junk filtered.
-    assert not any(s[0] == "BAC-PA" for s in syms)
-    # Cap respected.
-    assert len(env["current_week"]) <= DEFAULT_CAP
+    env = get_top_catalysts()
+    # The flat current_week list should lead with earnings, not IPO.
+    assert env["current_week"], "expected at least one entry"
+    assert env["current_week"][0]["eventType"] == "earnings"
 
 
-def test_response_cap_bounds(monkeypatch):
-    monday = date(2026, 4, 27)
-    friday = date(2026, 5, 1)
-    monkeypatch.setattr(top_svc, "_week_bounds", lambda *_: (monday, friday))
-    # Synthesize 80 distinct earnings rows.
+# ── No request-time external calls (smoke) ──────────────────────────────────
+
+def test_no_request_time_fmp_or_profile_calls(monkeypatch):
+    """
+    The service must not import or call any request-time fetch helpers.
+    We assert by patching httpx/_enrich_profiles to raise if called.
+    """
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _seed_snapshots(monkeypatch, {})
+    _seed_earnings_cache([
+        {"symbol": "AAPL", "eventType": "earnings_dates", "date": "2026-04-30",
+         "companyName": "Apple", "importanceScore": 80},
+    ])
+
+    import httpx
+    def boom(*a, **k):
+        raise AssertionError("network call attempted at request time")
+    monkeypatch.setattr(httpx, "AsyncClient", boom)
+    monkeypatch.setattr(httpx, "Client", boom)
+
+    env = get_top_catalysts()
+    assert env["status"] in ("ready", "stale", "empty")
+
+
+# ── Backward-compat flat current_week cap ──────────────────────────────────
+
+def test_flat_current_week_capped(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _seed_snapshots(monkeypatch, {})
     rows = [
         {"symbol": f"SYM{i:03d}", "eventType": "earnings_dates",
-         "date": "2026-04-30", "companyName": f"Co {i}",
-         "marketCap": 1e10, "importance": "high"}
+         "date": ["2026-04-27", "2026-04-28", "2026-04-29",
+                  "2026-04-30", "2026-05-01"][i % 5],
+         "companyName": f"Co {i}", "importanceScore": 50}
         for i in range(80)
     ]
-    _seed_earnings_cache(monday, friday, rows)
-    _seed_snapshots(monkeypatch, {})
+    _seed_earnings_cache(rows)
     env = get_top_catalysts(cap=MAX_CAP)
-    assert len(env["current_week"]) == MAX_CAP
-    env_min = get_top_catalysts(cap=MIN_CAP)
-    assert len(env_min["current_week"]) == MIN_CAP
+    assert len(env["current_week"]) <= MAX_CAP
+    assert MIN_CAP <= DEFAULT_CAP <= MAX_CAP

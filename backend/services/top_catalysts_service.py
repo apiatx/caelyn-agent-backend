@@ -1,42 +1,48 @@
 """
-Top Catalysts aggregation — read-only, lightweight.
+Top Catalysts This Week — high-signal weekly intelligence layer.
 
-Aggregates already-cached calendar data into a single weekly "Top Catalysts"
-view. Reads ONLY:
-  • The 5 calendar snapshot tabs persisted in Neon/disk via
-    calendar_snapshot_service (dividends, ipos, splits, economic_releases,
-    treasury_macro).
-  • The in-memory earnings cache populated by services.earnings_clean_service
-    (key: ``earnings:curated:week:{from}:{to}``). Read-only — if the entry
-    is missing, earnings are simply absent from the response.
+Answers: "What actually matters this week to trade?"
 
-NO request-time FMP / Finnhub / network calls.
-NO profile enrichment.
-NO new external APIs.
-NO scheduler changes.
-NO mutations of existing snapshot rows.
+Read-only aggregation. Reuses ONLY existing cached services / snapshots:
+  • Earnings — services.earnings_clean_service week-clean cache
+        key: ``earnings:curated:week:{from}:{to}``
+  • Options Flow — main.py master screener cache
+        keys: ``options_master_screener_v1`` / ``options_master_lkg_v1``
+  • Watchlist / Portfolio — services.earnings_clean_service loaders
+  • Sector Rotation — services.sector_rotation cached dashboard
+        key: ``sr:dashboard:v1``
+  • Macro — services.calendar_snapshot_service economic_releases
+    + treasury_macro snapshots (whitelist filtered).
 
-Garbage filtering, theme detection, watchlist/portfolio loading, and microcap
-floor logic are reused from services.calendar_curation. Earnings rows already
-carry their own importanceScore from the curated week-clean engine and are
-NOT re-curated through calendar_curation (which would discard earnings rows
-because that module intentionally excludes the earnings tab).
+NEVER does at request time: FMP fetch, Finnhub fetch, profile enrichment,
+new external API calls, scheduler mutation, or snapshot writes.
 
-Response envelope (matches required spec):
-
+Output (grouped-by-day):
     {
       "tab": "top_catalysts",
       "mode": "weekly",
-      "current_week": [...normalized events, sorted by score desc...],
+      "week": "YYYY-MM-DD/YYYY-MM-DD",
+      "days": [
+        {
+          "date": "YYYY-MM-DD",
+          "weekday": "Monday",
+          "earnings": [...top events scored by options/watchlist/sector...],
+          "macro":    [...whitelisted macro events (CPI/PPI/NFP/FOMC/GDP/Treasury)...],
+          "other":    [...rare cap-2-3/week IPO/dividend/split entries...]
+        },
+        ...
+      ],
+      "current_week": [...flat ranked list (backward compat)...],
       "previous_week": [],
-      "last_updated": "<iso8601>" | null,
+      "last_updated": "...",
       "status": "ready" | "stale" | "empty"
     }
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from data.cache import cache
 from services.calendar_curation import (
@@ -44,45 +50,75 @@ from services.calendar_curation import (
     MC_FLOOR,
     _canonical_symbol,
     _is_preferred_or_junk,
-    _theme_score,
-    _THEMES,
 )
 from services.calendar_snapshot_service import (
-    TARGET_TABS as _SNAPSHOT_TABS,
     get_snapshot as _get_snapshot,
 )
 
-# Import lazily inside functions where appropriate to avoid heavy import-time work.
 
-# ── Tunables ────────────────────────────────────────────────────────────────
+# ── Cache keys for shared services we read from ─────────────────────────────
 
-# Hard cap on returned events. Spec says 25–50. Default 40.
+_OPTIONS_MASTER_CACHE_KEY = "options_master_screener_v1"
+_OPTIONS_MASTER_LKG_KEY   = "options_master_lkg_v1"
+_SECTOR_DASHBOARD_KEY     = "sr:dashboard:v1"
+
+# Per-day caps
+MAX_EARNINGS_PER_DAY = 6
+MAX_OTHER_PER_DAY    = 1
+MAX_OTHER_PER_WEEK   = 3
+
+# Backward-compat flat current_week cap (kept for clients on old shape)
 DEFAULT_CAP: int = 40
 MAX_CAP: int = 50
 MIN_CAP: int = 25
 
-# Importance ordering: earnings > IPO > macro > splits > dividends.
-# Higher number = higher base weight.
-_EVENT_TYPE_BASE: dict[str, float] = {
-    "earnings_dates":     12.0,
-    "earnings":           12.0,
-    "ipo":                 9.0,
-    "ipos":                9.0,
-    "economic_release":    7.0,
-    "economic_releases":   7.0,
-    "treasury_rate":       6.0,
-    "treasury_macro":      6.0,
-    "stock_split":         5.0,
-    "splits":              5.0,
-    "dividend":            3.0,
-    "dividends":           3.0,
-}
-
-# Importance string → bonus.
-_IMPORTANCE_BONUS: dict[str, float] = {"high": 6.0, "medium": 3.0, "low": 0.0}
+# Weekday names
+_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+             "Saturday", "Sunday"]
 
 
-# ── Watchlist / portfolio (best-effort, no network) ─────────────────────────
+# ── Macro whitelist ─────────────────────────────────────────────────────────
+#
+# Only these high-signal macro events are surfaced. Everything else from
+# economic_releases / treasury_macro is dropped.
+#
+# Match is case-insensitive against eventName / indicatorName / title fields.
+
+_MACRO_WHITELIST_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("CPI",
+     re.compile(r"\b(?:cpi|consumer\s+price\s+index|inflation\s+rate)\b", re.I)),
+    ("PPI",
+     re.compile(r"\b(?:ppi|producer\s+price\s+index)\b", re.I)),
+    ("NFP",
+     re.compile(r"(?:\bnfp\b|non[-\s]?farm\s+payroll|nonfarm\s+payroll|"
+                r"employment\s+change|payrolls?\s+report)", re.I)),
+    ("FOMC",
+     re.compile(r"\b(?:fomc|federal\s+reserve|fed(?:\s+funds)?(?:\s+rate)?\s+"
+                r"decision|interest\s+rate\s+decision|fed\s+chair|"
+                r"fed\s+minutes)\b", re.I)),
+    ("GDP",
+     re.compile(r"\bgdp\b", re.I)),
+    ("Treasury Auctions",
+     re.compile(r"\btreasury\s+(?:auction|bill|note|bond|yield)\b", re.I)),
+]
+
+
+def _classify_macro(ev: dict) -> Optional[str]:
+    """Return canonical macro tag (CPI/PPI/NFP/FOMC/GDP/Treasury Auctions)
+    if event matches whitelist, else None."""
+    bag = " ".join(
+        str(ev.get(k) or "") for k in
+        ("eventName", "indicatorName", "title", "event", "name")
+    )
+    if not bag.strip():
+        return None
+    for tag, pat in _MACRO_WHITELIST_PATTERNS:
+        if pat.search(bag):
+            return tag
+    return None
+
+
+# ── Watchlist / portfolio ───────────────────────────────────────────────────
 
 def _load_watchlist_set() -> set[str]:
     try:
@@ -109,24 +145,18 @@ def _week_bounds(today: Optional[date] = None) -> tuple[date, date]:
     return monday, friday
 
 
-def _in_current_week(ev_date: Optional[str], monday: date, friday: date) -> bool:
-    if not ev_date:
-        return True  # Don't drop on missing date — let downstream sort handle it.
+def _parse_date(s: Optional[str]) -> Optional[date]:
+    if not s:
+        return None
     try:
-        d = datetime.strptime(ev_date[:10], "%Y-%m-%d").date()
+        return datetime.strptime(s[:10], "%Y-%m-%d").date()
     except (ValueError, TypeError):
-        return True
-    return monday <= d <= friday
+        return None
 
 
-# ── Earnings cache read (no fetch) ──────────────────────────────────────────
+# ── Earnings cache read ─────────────────────────────────────────────────────
 
 def _read_earnings_week_cache(monday: date, friday: date) -> Optional[dict]:
-    """
-    Read the week-clean earnings result from the in-memory cache. Returns
-    None if no cached entry — the route NEVER triggers a fresh fetch.
-    Cache key mirrors services.earnings_clean_service.get_week_clean.
-    """
     ck = f"earnings:curated:week:{monday.strftime('%Y-%m-%d')}:{friday.strftime('%Y-%m-%d')}"
     hit = cache.get(ck)
     if isinstance(hit, dict):
@@ -134,82 +164,241 @@ def _read_earnings_week_cache(monday: date, friday: date) -> Optional[dict]:
     return None
 
 
-# ── Normalization ───────────────────────────────────────────────────────────
+# ── Options flow cache read ─────────────────────────────────────────────────
 
-def _is_earnings_event(ev: dict) -> bool:
-    et = (ev.get("eventType") or "").lower()
-    return et in ("earnings", "earnings_dates")
-
-
-def _source_tab_for(et: str) -> str:
-    et = (et or "").lower()
-    if et in ("earnings", "earnings_dates"):
-        return "earnings"
-    if et in ("ipo", "ipos"):
-        return "ipos"
-    if et in ("dividend", "dividends"):
-        return "dividends"
-    if et in ("stock_split", "splits"):
-        return "splits"
-    if et in ("economic_release", "economic_releases"):
-        return "economic_releases"
-    if et in ("treasury_rate", "treasury_macro"):
-        return "treasury_macro"
-    return et or "unknown"
-
-
-def _normalize_event(ev: dict, source_tab: str) -> dict:
+def _read_options_master() -> dict[str, dict]:
     """
-    Project an event from any source onto the common Top-Catalysts shape.
-    All fields are best-effort — missing keys remain absent rather than null
-    so the caller can rely on `in` checks.
+    Return {SYMBOL: row} from the existing master options screener cache.
+    No fetch. Empty dict if cache cold.
     """
-    if not isinstance(ev, dict):
+    snap = cache.get(_OPTIONS_MASTER_CACHE_KEY) or cache.get(_OPTIONS_MASTER_LKG_KEY)
+    if not isinstance(snap, dict):
         return {}
-    sym_raw = ev.get("symbol")
-    canon = _canonical_symbol(sym_raw) if sym_raw else None
-    sym = canon if canon else sym_raw
-
-    et = ev.get("eventType") or source_tab
-    out: dict[str, Any] = {
-        "symbol":      sym,
-        "title":       ev.get("title") or ev.get("companyName") or ev.get("eventName") or sym or "",
-        "date":        ev.get("date") or "",
-        "eventType":   et,
-        "sourceTab":   source_tab,
-    }
-    # Optional pass-through fields — only include when present.
-    for k in ("time", "subtitle", "keyDetails", "details", "companyName",
-              "sector", "industry", "marketCap", "marketCapBucket",
-              "importance", "exchange", "country", "session",
-              "epsEstimated", "epsActual", "revenueEstimated", "revenueActual",
-              "surprise", "surprisePercent", "priceRange", "shares",
-              "dividend", "splitRatio", "numerator", "denominator",
-              "maturity", "indicatorName", "eventName", "themeTags",
-              "isThemeAnchor", "isBottleneck", "scoreBreakdown",
-              "relativeVolume"):
-        if ev.get(k) is not None and ev.get(k) != "":
-            out[k] = ev[k]
-    # Always keep the raw payload for debugging / downstream consumers.
-    out["raw"] = ev.get("raw") if isinstance(ev.get("raw"), dict) else {
-        kk: vv for kk, vv in ev.items() if kk not in out
-    }
+    rows = snap.get("tickers") or []
+    out: dict[str, dict] = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        sym = (r.get("ticker") or "").upper().strip()
+        if sym:
+            out[sym] = r
     return out
+
+
+def _options_strength(opt_row: Optional[dict]) -> tuple[str, float]:
+    """
+    Classify per-ticker options activity from existing cached fields.
+    Returns (label, numeric_strength) where label ∈ {none, normal, high, unusual}.
+
+    Inputs (read existing fields only):
+      composite_score   — top-level rank (higher = more unusual)
+      heat_score        — engine heat metric (0-100ish)
+      unusual_volume_ratio — vol / avg vol multiple
+      call_put_premium_ratio
+    """
+    if not opt_row:
+        return "none", 0.0
+
+    cs   = float(opt_row.get("composite_score") or 0)
+    hs   = float(opt_row.get("heat_score") or 0)
+    uvr  = float(opt_row.get("unusual_volume_ratio") or 0)
+
+    # "unusual": top-tier composite OR very high heat OR >3x volume
+    if cs >= 75 or hs >= 70 or uvr >= 3.0:
+        return "unusual", max(cs, hs, uvr * 25.0)
+    # "high": noticeable abnormality
+    if cs >= 50 or hs >= 45 or uvr >= 1.5:
+        return "high", max(cs, hs, uvr * 25.0)
+    # In master cache at all = at least normal activity
+    if cs > 0 or hs > 0 or uvr > 0:
+        return "normal", max(cs, hs, uvr * 25.0)
+    return "none", 0.0
+
+
+# ── Sector momentum read ────────────────────────────────────────────────────
+
+# Map FMP/profile sector strings → SPDR sector ETF used by sector rotation.
+_SECTOR_NAME_TO_ETF: dict[str, str] = {
+    "communication services": "XLC",
+    "communications":         "XLC",
+    "consumer discretionary": "XLY",
+    "consumer cyclical":      "XLY",
+    "consumer staples":       "XLP",
+    "consumer defensive":     "XLP",
+    "energy":                 "XLE",
+    "financials":             "XLF",
+    "financial services":     "XLF",
+    "financial":              "XLF",
+    "health care":            "XLV",
+    "healthcare":             "XLV",
+    "industrials":            "XLI",
+    "industrial":             "XLI",
+    "materials":              "XLB",
+    "basic materials":        "XLB",
+    "real estate":            "XLRE",
+    "technology":             "XLK",
+    "information technology": "XLK",
+    "utilities":              "XLU",
+}
+
+
+def _read_sector_dashboard() -> dict[str, dict]:
+    """
+    Return {ETF: snapshot_dict} for sector rotation. Empty dict if cold.
+    Reads the same cache the /api/sectors dashboard serves.
+    """
+    snap = cache.get(_SECTOR_DASHBOARD_KEY)
+    if not isinstance(snap, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for s in (snap.get("sectors") or []):
+        if not isinstance(s, dict):
+            continue
+        t = (s.get("ticker") or "").upper()
+        if t:
+            out[t] = s
+    return out
+
+
+def _sector_alignment(sector: Optional[str], theme_tags: list[str],
+                      sectors_by_etf: dict[str, dict]) -> tuple[str, float, Optional[str]]:
+    """
+    Determine sector/theme momentum strength using existing sector dashboard.
+    Returns (label, numeric, etf) — label ∈ {hot, winning, neutral, none}.
+
+    Strategy:
+      1. Resolve event sector → SPDR ETF using local map.
+      2. Look up cached SectorSnapshot for that ETF.
+      3. Map regime_tag / rotation_score to label.
+
+    No new pipeline; pure read of cached fields.
+    """
+    if not sectors_by_etf:
+        return "none", 0.0, None
+
+    etf: Optional[str] = None
+    if sector:
+        etf = _SECTOR_NAME_TO_ETF.get(sector.strip().lower())
+    # Theme-based fallback for AI / semis / energy / industrials / materials
+    if not etf and theme_tags:
+        for tag in theme_tags:
+            t = tag.lower()
+            if t in ("semiconductors", "ai_infra", "software_cloud", "cybersecurity"):
+                etf = "XLK"
+                break
+            if t == "energy":
+                etf = "XLE"; break
+            if t == "industrials":
+                etf = "XLI"; break
+            if t == "materials":
+                etf = "XLB"; break
+    if not etf:
+        return "none", 0.0, None
+
+    snap = sectors_by_etf.get(etf)
+    if not snap:
+        return "none", 0.0, etf
+
+    rscore = float(snap.get("rotation_score") or 0)
+    tag = (snap.get("regime_tag") or "").lower()
+
+    if "leader" in tag or rscore >= 70:
+        return "hot", rscore, etf
+    if "improving" in tag or rscore >= 50:
+        return "winning", rscore, etf
+    if rscore >= 30:
+        return "neutral", rscore, etf
+    return "none", rscore, etf
+
+
+# ── Earnings event scoring ──────────────────────────────────────────────────
+
+# Numeric strengths for ranking
+_OPTIONS_NUM = {"unusual": 100.0, "high": 60.0, "normal": 20.0, "none": 0.0}
+_SECTOR_NUM  = {"hot": 30.0, "winning": 18.0, "neutral": 5.0, "none": 0.0}
+_WATCHLIST_BOOST = 25.0
+
+
+def _score_earnings(ev: dict, opt_row: Optional[dict],
+                    sectors_by_etf: dict[str, dict],
+                    watchlist: set[str], portfolio: set[str]
+                    ) -> tuple[float, dict]:
+    """
+    Rank an earnings event by:
+      1. options_activity_strength (HIGH weight, top priority)
+      2. watchlist_boost (binary)
+      3. sector_alignment_strength (sector/theme momentum)
+
+    NO market-cap usage. NO importanceScore-of-event-engine reuse for ranking
+    (kept only as a tiny tie-breaker so curated importance doesn't dominate).
+
+    Returns (rank_score, signal_dict) where signal_dict carries the per-event
+    fields needed in the response payload.
+    """
+    sym = (ev.get("symbol") or "").upper()
+
+    opt_label, opt_num = _options_strength(opt_row)
+
+    in_wl = bool(sym and sym in watchlist)
+    in_pf = bool(sym and sym in portfolio)
+    # Watchlist OR portfolio match → boost.
+    watchlist_boost = in_wl or in_pf
+
+    sect_label, sect_num, sect_etf = _sector_alignment(
+        ev.get("sector"),
+        ev.get("themeTags") or [],
+        sectors_by_etf,
+    )
+
+    score = (
+        _OPTIONS_NUM[opt_label]
+        + (_WATCHLIST_BOOST if watchlist_boost else 0.0)
+        + _SECTOR_NUM[sect_label]
+    )
+    # Use options numeric as a secondary nudge so two "high" rows stay ordered.
+    score += min(opt_num, 100.0) * 0.05
+
+    # Mild tie-breaker only: pre-existing curated importanceScore (capped tiny).
+    iscore = ev.get("importanceScore")
+    if isinstance(iscore, (int, float)):
+        score += min(float(iscore) / 50.0, 1.5)
+
+    reasons: list[str] = []
+    if opt_label == "unusual":
+        reasons.append("Unusual options activity")
+    elif opt_label == "high":
+        reasons.append("High options activity")
+    if watchlist_boost:
+        reasons.append("Watchlist Boost" if in_wl else "Portfolio Boost")
+    if sect_label == "hot":
+        reasons.append(
+            f"{(ev.get('sector') or sect_etf or 'Sector')} sector momentum"
+        )
+    elif sect_label == "winning":
+        reasons.append(
+            f"{(ev.get('sector') or sect_etf or 'Sector')} improving"
+        )
+    # Theme tags as secondary reason (e.g. AI, semis)
+    for t in (ev.get("themeTags") or [])[:2]:
+        if isinstance(t, str) and t:
+            pretty = t.replace("_", " ").title()
+            reasons.append(f"{pretty} theme")
+
+    return score, {
+        "options_activity_strength": opt_label,
+        "watchlist_boost":           bool(watchlist_boost),
+        "sector_alignment_strength": sect_label,
+        "sector_etf":                sect_etf,
+        "scoreReasons":              reasons,
+    }
 
 
 # ── Garbage filter ──────────────────────────────────────────────────────────
 
 def _passes_garbage_filter(ev: dict) -> bool:
-    """
-    Drop preferreds, warrants, units, rights, delisted symbols, and stale
-    canonical aliases (FB→META). Mirrors services.calendar_curation rules
-    but is permissive on missing metadata so we don't over-filter.
-    """
     et = (ev.get("eventType") or "").lower()
     sym = ev.get("symbol") or ""
     name = ev.get("companyName") or ev.get("title") or ""
-
-    # Symbol-bearing rows: enforce share-class / preferred / warrant rules.
     if et in ("earnings", "earnings_dates", "dividend", "dividends",
               "ipo", "ipos", "stock_split", "splits"):
         if _is_preferred_or_junk(sym, name):
@@ -218,7 +407,6 @@ def _passes_garbage_filter(ev: dict) -> bool:
             up = sym.strip().upper()
             if up in CANONICAL_SYMBOL_MAP and CANONICAL_SYMBOL_MAP[up] is None:
                 return False
-        # Microcap floor: only when marketCap is present.
         mc = ev.get("marketCap")
         try:
             mc_f = float(mc) if mc is not None else None
@@ -226,292 +414,111 @@ def _passes_garbage_filter(ev: dict) -> bool:
             mc_f = None
         if mc_f is not None and mc_f < MC_FLOOR:
             return False
-
     return True
 
 
-# ── Scoring ─────────────────────────────────────────────────────────────────
+# ── Normalization for the response ──────────────────────────────────────────
 
-def _surprise_bonus(ev: dict) -> tuple[float, list[str]]:
-    """Earnings & IPO surprise/abnormal signals from existing fields only."""
-    score = 0.0
-    reasons: list[str] = []
-    # Earnings surprise.
-    sp = ev.get("surprisePercent")
-    try:
-        spf = float(sp) if sp is not None else None
-    except (TypeError, ValueError):
-        spf = None
-    if spf is not None:
-        if abs(spf) >= 10:
-            score += 4
-            reasons.append(f"large eps surprise {spf:+.1f}%")
-        elif abs(spf) >= 3:
-            score += 2
-            reasons.append(f"eps surprise {spf:+.1f}%")
-
-    # Earnings actuals already published (post-event).
-    if ev.get("epsActual") is not None and ev.get("epsEstimated") is not None:
-        try:
-            beat = float(ev["epsActual"]) - float(ev["epsEstimated"])
-            if abs(beat) > 0:
-                # Only add if not already covered by surprisePercent.
-                if spf is None:
-                    score += 1
-                    reasons.append("eps actual vs estimate available")
-        except (TypeError, ValueError):
-            pass
-
-    # IPO notable bonus.
-    et = (ev.get("eventType") or "").lower()
-    if et in ("ipo", "ipos"):
-        try:
-            mc = float(ev.get("marketCap") or 0)
-            if mc >= 5_000_000_000:
-                score += 3
-                reasons.append("notable IPO size")
-            elif mc >= 1_000_000_000:
-                score += 2
-                reasons.append("sizeable IPO")
-        except (TypeError, ValueError):
-            pass
-        if (ev.get("priceRange") or "").strip():
-            score += 0.5
-
-    # Splits ratio sign.
-    if et in ("stock_split", "splits"):
-        try:
-            num = float(ev.get("numerator") or 0)
-            den = float(ev.get("denominator") or 0)
-            if num and den:
-                if num > den:
-                    score += 1.5
-                    reasons.append("forward split")
-                elif num < den:
-                    score -= 1.5
-                    reasons.append("reverse split")
-        except (TypeError, ValueError):
-            pass
-
-    # Dividends — high yield hint (raw amount only; no price lookup).
-    if et in ("dividend", "dividends"):
-        try:
-            d = float(ev.get("dividend") or 0)
-            if d > 1.0:
-                score += 0.5
-                reasons.append("notable dividend amount")
-        except (TypeError, ValueError):
-            pass
-
-    # Macro releases — high-impact bonus.
-    if et in ("economic_release", "economic_releases"):
-        # If importance already labeled high, _importance_bonus covers it; add
-        # a small extra so high-impact macro outranks splits/dividends overall.
-        if (ev.get("importance") or "").lower() == "high":
-            score += 2
-            reasons.append("high-impact macro")
-
-    # Treasury — already covered by event-type base; nothing more here.
-
-    return score, reasons
-
-
-def _liquidity_bonus(ev: dict) -> tuple[float, list[str]]:
-    """Use only fields already on the event — no fetch."""
-    rel = ev.get("relativeVolume")
-    if rel is None and isinstance(ev.get("raw"), dict):
-        rel = ev["raw"].get("relativeVolume")
-    try:
-        rf = float(rel) if rel is not None else None
-    except (TypeError, ValueError):
-        rf = None
-    if rf is None:
-        return 0.0, []
-    if rf >= 2.0:
-        return 3.0, [f"relVol {rf:.1f}x"]
-    if rf >= 1.3:
-        return 1.0, [f"relVol {rf:.1f}x"]
-    return 0.0, []
-
-
-def _theme_bonus(ev: dict, watchlist: set[str]) -> tuple[float, list[str]]:
-    """
-    Score themes against existing fields. Returns score and reasons listing
-    each theme that hit. Mirrors calendar_curation._theme_score but reports
-    which themes matched.
-    """
-    sym = (ev.get("symbol") or "").upper()
-    bag_parts = [
-        sym,
-        ev.get("companyName") or "",
-        ev.get("title") or "",
-        ev.get("sector") or "",
-        ev.get("industry") or "",
-        ev.get("eventName") or "",
-    ]
-    bag = " ".join(p for p in bag_parts if p).lower()
-    if not bag.strip():
-        return 0.0, []
-    score = 0.0
-    hits: list[str] = []
-    for theme, kws in _THEMES.items():
-        for kw in kws:
-            if kw in bag:
-                score += 1
-                hits.append(theme)
-                break
-    return score, hits
-
-
-def _score_event(ev: dict, watchlist: set[str], portfolio: set[str]) -> tuple[float, list[str], list[str]]:
-    """
-    Compute (score, scoreReasons, themeTags) using existing fields only.
-    No network. No profile lookup.
-    """
-    et = (ev.get("eventType") or "").lower()
-    score = float(_EVENT_TYPE_BASE.get(et, 1.0))
-    reasons: list[str] = [f"{_source_tab_for(et)} event"]
-
-    # Importance-string bonus (high/medium/low).
-    imp = (ev.get("importance") or "").lower()
-    score += _IMPORTANCE_BONUS.get(imp, 0.0)
-    if imp == "high":
-        reasons.append("high importance")
-    elif imp == "medium":
-        reasons.append("medium importance")
-
-    # Earnings curated importanceScore — fold in if already present.
-    iscore = ev.get("importanceScore")
-    if isinstance(iscore, (int, float)):
-        # Cap contribution so earnings doesn't sweep the whole list.
-        score += min(float(iscore) / 4.0, 8.0)
-        if iscore >= 60:
-            reasons.append("earnings high importanceScore")
-
-    # Watchlist / portfolio relevance.
-    sym = (ev.get("symbol") or "").upper()
-    if sym and sym in watchlist:
-        score += 4
-        reasons.append("watchlist hit")
-    if sym and sym in portfolio:
-        score += 6
-        reasons.append("portfolio hit")
-
-    # Theme tags.
-    th_score, th_tags = _theme_bonus(ev, watchlist)
-    if th_score:
-        score += th_score
-        if th_tags:
-            reasons.append(f"themes: {', '.join(th_tags[:3])}")
-
-    # Existing themeTags from earnings curation.
-    pre_tags = ev.get("themeTags") or []
-    if isinstance(pre_tags, list):
-        for t in pre_tags:
-            if isinstance(t, str) and t and t not in th_tags:
-                th_tags.append(t)
-        if pre_tags:
-            score += 1.0  # small confidence bonus
-
-    # Surprise / abnormal potential.
-    sp_score, sp_reasons = _surprise_bonus(ev)
-    score += sp_score
-    reasons.extend(sp_reasons)
-
-    # Liquidity if fields present.
-    lq_score, lq_reasons = _liquidity_bonus(ev)
-    score += lq_score
-    reasons.extend(lq_reasons)
-
-    # Mild market-cap log-bucket bonus (do not let it dominate).
+def _is_large_cap(ev: dict) -> bool:
     try:
         mc = float(ev.get("marketCap") or 0)
-        if mc >= 200_000_000_000:
-            score += 1.5
-        elif mc >= 50_000_000_000:
-            score += 1.0
-        elif mc >= 10_000_000_000:
-            score += 0.5
     except (TypeError, ValueError):
-        pass
+        return False
+    return mc >= 50_000_000_000
 
-    return score, reasons, th_tags
+
+_HOT_THEME_TAGS = {
+    "semiconductors", "ai_infra", "software_cloud", "cybersecurity",
+    "energy", "industrials", "materials",
+}
 
 
-# ── Dedup / merge by symbol ─────────────────────────────────────────────────
+def _has_hot_theme(ev: dict) -> bool:
+    tags = ev.get("themeTags") or []
+    if not isinstance(tags, list):
+        return False
+    return any(isinstance(t, str) and t.lower() in _HOT_THEME_TAGS for t in tags)
 
-def _merge_dedup(events: list[dict]) -> list[dict]:
-    """
-    Merge multiple catalysts for the same symbol within the week.
-    - Earnings dominates as the main event when present.
-    - Otherwise the highest-scoring catalyst wins as the main event.
-    - All secondary catalysts kept under raw['secondaryCatalysts'].
-    - Score gets a multi-catalyst boost.
-    """
-    by_symbol: dict[str, list[dict]] = {}
-    no_symbol: list[dict] = []
 
-    for ev in events:
-        sym = (ev.get("symbol") or "").upper()
-        if not sym:
-            no_symbol.append(ev)
-        else:
-            by_symbol.setdefault(sym, []).append(ev)
+def _normalize_earnings_event(ev: dict, signals: dict, score: float) -> dict:
+    sym_raw = ev.get("symbol")
+    canon = _canonical_symbol(sym_raw) if sym_raw else None
+    sym = canon or sym_raw
+    out: dict[str, Any] = {
+        "symbol":                    sym,
+        "title":                     ev.get("companyName") or ev.get("title") or sym or "",
+        "companyName":               ev.get("companyName") or sym or "",
+        "date":                      (ev.get("date") or "")[:10],
+        "eventType":                 "earnings",
+        "sourceTab":                 "earnings",
+        "rankScore":                 round(score, 3),
+        "options_activity_strength": signals["options_activity_strength"],
+        "watchlist_boost":           signals["watchlist_boost"],
+        "sector_alignment_strength": signals["sector_alignment_strength"],
+        "whyThisMatters":            signals["scoreReasons"],
+        "scoreReasons":              signals["scoreReasons"],
+    }
+    # Optional pass-through if present
+    for k in ("time", "session", "sector", "industry", "themeTags",
+              "epsEstimated", "revenueEstimated", "importanceScore"):
+        v = ev.get(k)
+        if v is not None and v != "":
+            out[k] = v
+    if signals.get("sector_etf"):
+        out["sector_etf"] = signals["sector_etf"]
+    out["raw"] = ev
+    return out
 
-    merged: list[dict] = []
-    for sym, group in by_symbol.items():
-        if len(group) == 1:
-            merged.append(group[0])
-            continue
 
-        # Pick the dominant event: earnings first, else highest score.
-        earnings = [e for e in group if _is_earnings_event(e)]
-        if earnings:
-            primary = max(earnings, key=lambda e: e.get("score", 0.0))
-        else:
-            primary = max(group, key=lambda e: e.get("score", 0.0))
+def _normalize_macro_event(ev: dict, tag: str) -> dict:
+    out: dict[str, Any] = {
+        "title":         ev.get("eventName") or ev.get("indicatorName") or ev.get("title") or tag,
+        "date":          (ev.get("date") or "")[:10],
+        "eventType":     "macro",
+        "macroType":     tag,
+        "sourceTab":     "macro",
+        "whyThisMatters": [f"{tag} release"],
+    }
+    for k in ("time", "country", "importance", "actual", "estimate", "previous",
+              "indicatorName", "eventName", "maturity"):
+        v = ev.get(k)
+        if v is not None and v != "":
+            out[k] = v
+    out["raw"] = ev
+    return out
 
-        secondaries = [e for e in group if e is not primary]
-        new_ev = dict(primary)
-        # Boost score for multiple catalysts.
-        boost = 2.0 + min(len(secondaries) * 0.5, 2.5)
-        new_ev["score"] = float(new_ev.get("score", 0.0)) + boost
-        reasons = list(new_ev.get("scoreReasons") or [])
-        reasons.append(f"multiple catalysts this week ({len(group)})")
-        new_ev["scoreReasons"] = reasons
 
-        # Stash the secondaries under raw, keeping the rest of raw intact.
-        raw = dict(new_ev.get("raw") or {})
-        raw["secondaryCatalysts"] = [
-            {
-                "eventType": e.get("eventType"),
-                "sourceTab": e.get("sourceTab"),
-                "date":      e.get("date"),
-                "title":     e.get("title"),
-                "score":     e.get("score"),
-            }
-            for e in secondaries
-        ]
-        new_ev["raw"] = raw
-        merged.append(new_ev)
-
-    # Symbol-less events (macro, treasury) kept individually — dedup by
-    # (eventType, country, eventName/title, date) so that a single FOMC
-    # appearing in both economic_releases and treasury_macro merges.
-    seen: dict[tuple, dict] = {}
-    for ev in no_symbol:
-        key = (
-            (ev.get("eventType") or "").lower(),
-            (ev.get("country") or "").upper(),
-            (ev.get("eventName") or ev.get("title") or "").lower(),
-            ev.get("date") or "",
-        )
-        prev = seen.get(key)
-        if prev is None or float(ev.get("score", 0.0)) > float(prev.get("score", 0.0)):
-            seen[key] = ev
-    merged.extend(seen.values())
-
-    return merged
+def _normalize_other_event(ev: dict, source_tab: str) -> dict:
+    sym_raw = ev.get("symbol")
+    canon = _canonical_symbol(sym_raw) if sym_raw else None
+    sym = canon or sym_raw
+    et = (ev.get("eventType") or source_tab)
+    label = "IPO" if source_tab in ("ipo", "ipos") else (
+        "Dividend" if source_tab in ("dividend", "dividends") else (
+        "Stock Split" if source_tab in ("stock_split", "splits") else et
+    ))
+    reasons = [f"{label}"]
+    if _is_large_cap(ev):
+        reasons.append("Large cap")
+    if _has_hot_theme(ev):
+        reasons.append("Thematic relevance")
+    out: dict[str, Any] = {
+        "symbol":        sym,
+        "title":         ev.get("companyName") or ev.get("title") or sym or label,
+        "companyName":   ev.get("companyName") or sym or "",
+        "date":          (ev.get("date") or "")[:10],
+        "eventType":     et,
+        "sourceTab":     source_tab,
+        "whyThisMatters": reasons,
+    }
+    for k in ("time", "exchange", "priceRange", "shares", "marketCap",
+              "dividend", "splitRatio", "numerator", "denominator", "sector",
+              "industry", "themeTags"):
+        v = ev.get(k)
+        if v is not None and v != "":
+            out[k] = v
+    out["raw"] = ev
+    return out
 
 
 # ── Public entry point ──────────────────────────────────────────────────────
@@ -522,86 +529,172 @@ def get_top_catalysts(
     today: Optional[date] = None,
 ) -> dict:
     """
-    Build the Top Catalysts envelope from already-cached data only.
+    Build the high-signal Top Catalysts response, grouped by day.
 
-    No network calls. No FMP. No profile enrichment.
+    Pure read across already-cached services. No request-time external calls.
     """
     cap = max(MIN_CAP, min(int(cap or DEFAULT_CAP), MAX_CAP))
-
     monday, friday = _week_bounds(today)
+    week_label = f"{monday.isoformat()}/{friday.isoformat()}"
+
     watchlist = _load_watchlist_set()
     portfolio = _load_portfolio_set()
+    options_by_sym = _read_options_master()
+    sectors_by_etf = _read_sector_dashboard()
 
-    pool: list[dict] = []
     last_updated_candidates: list[str] = []
-    sources_seen: dict[str, int] = {}
 
-    # 1. Snapshot tabs (dividends, ipos, splits, economic_releases, treasury_macro).
-    for tab in _SNAPSHOT_TABS:
+    # ── 1. Earnings (dominant signal) ──────────────────────────────────────
+    earnings_per_day: dict[str, list[dict]] = {}
+    earnings_flat: list[tuple[float, dict]] = []
+    earn_envelope = _read_earnings_week_cache(monday, friday)
+    if earn_envelope:
+        as_of = earn_envelope.get("asOf")
+        if as_of:
+            last_updated_candidates.append(str(as_of))
+        scored: list[tuple[float, dict, dict, str]] = []
+        for ev in (earn_envelope.get("topEvents") or []):
+            if not isinstance(ev, dict):
+                continue
+            if not _passes_garbage_filter(ev):
+                continue
+            d = _parse_date(ev.get("date"))
+            if not d or d < monday or d > friday:
+                continue
+            sym = (ev.get("symbol") or "").upper()
+            opt_row = options_by_sym.get(sym)
+            score, signals = _score_earnings(
+                ev, opt_row, sectors_by_etf, watchlist, portfolio,
+            )
+            scored.append((score, ev, signals, d.isoformat()))
+
+        # Sort overall: unusual options first (handled by score), then
+        # sort_by score desc; per-day cap enforced after grouping.
+        scored.sort(key=lambda t: -t[0])
+        seen_per_day_sym: dict[tuple[str, str], bool] = {}
+        for score, ev, signals, day in scored:
+            sym = (ev.get("symbol") or "").upper()
+            key = (day, sym)
+            if key in seen_per_day_sym:
+                continue
+            day_list = earnings_per_day.setdefault(day, [])
+            if len(day_list) >= MAX_EARNINGS_PER_DAY:
+                continue
+            normalized = _normalize_earnings_event(ev, signals, score)
+            day_list.append(normalized)
+            earnings_flat.append((score, normalized))
+            seen_per_day_sym[key] = True
+
+    # ── 2. Macro (whitelist only, not scored) ──────────────────────────────
+    macro_per_day: dict[str, list[dict]] = {}
+    for tab in ("economic_releases", "treasury_macro"):
         try:
             env = _get_snapshot(tab) or {}
         except Exception as e:
             print(f"[top_catalysts] snapshot read failed tab={tab}: {e}")
             continue
-        cw = env.get("current_week") or []
         if env.get("last_updated"):
-            last_updated_candidates.append(env["last_updated"])
-        n_added = 0
-        for ev in cw:
+            last_updated_candidates.append(str(env["last_updated"]))
+        for ev in (env.get("current_week") or []):
             if not isinstance(ev, dict):
                 continue
-            if not _in_current_week(ev.get("date"), monday, friday):
+            d = _parse_date(ev.get("date"))
+            if not d or d < monday or d > friday:
+                continue
+            tag = _classify_macro(ev)
+            if not tag:
+                continue
+            day = d.isoformat()
+            day_list = macro_per_day.setdefault(day, [])
+            # Dedup by (tag, country, date)
+            country = (ev.get("country") or "").upper()
+            if any(m.get("macroType") == tag and (m.get("country") or "").upper() == country
+                   for m in day_list):
+                continue
+            day_list.append(_normalize_macro_event(ev, tag))
+
+    # ── 3. Other (IPO/dividend/split) — default exclude, max 2-3 / week ────
+    other_pool: list[tuple[float, dict]] = []
+    for tab in ("ipos", "dividends", "splits"):
+        try:
+            env = _get_snapshot(tab) or {}
+        except Exception:
+            continue
+        if env.get("last_updated"):
+            last_updated_candidates.append(str(env["last_updated"]))
+        for ev in (env.get("current_week") or []):
+            if not isinstance(ev, dict):
+                continue
+            d = _parse_date(ev.get("date"))
+            if not d or d < monday or d > friday:
                 continue
             if not _passes_garbage_filter(ev):
                 continue
-            norm = _normalize_event(ev, source_tab=tab)
-            if not norm:
+            # Only allow if cached fields clearly show large cap OR hot theme.
+            large = _is_large_cap(ev)
+            hot   = _has_hot_theme(ev)
+            if not (large or hot):
                 continue
-            pool.append(norm)
-            n_added += 1
-        sources_seen[tab] = n_added
+            sym = (ev.get("symbol") or "").upper()
+            # Watchlist match also adds value.
+            score = 0.0
+            if large: score += 50.0
+            if hot:   score += 30.0
+            if sym and (sym in watchlist or sym in portfolio):
+                score += 20.0
+            if tab == "ipos": score += 5.0
+            normalized = _normalize_other_event(ev, source_tab=tab)
+            other_pool.append((score, normalized))
 
-    # 2. Earnings — read-only cache lookup.
-    earnings_added = 0
-    earn = _read_earnings_week_cache(monday, friday)
-    if earn:
-        as_of = earn.get("asOf")
-        if as_of:
-            last_updated_candidates.append(as_of)
-        # Prefer topEvents (already de-duped by week-clean engine).
-        top_events = earn.get("topEvents") or []
-        for ev in top_events:
-            if not isinstance(ev, dict):
-                continue
-            if not _passes_garbage_filter(ev):
-                continue
-            norm = _normalize_event(ev, source_tab="earnings")
-            pool.append(norm)
-            earnings_added += 1
-    sources_seen["earnings"] = earnings_added
+    other_pool.sort(key=lambda t: -t[0])
 
-    # 3. Score every pooled event (single pass, no network).
-    for ev in pool:
-        score, reasons, themes = _score_event(ev, watchlist, portfolio)
-        ev["score"] = round(score, 3)
-        ev["scoreReasons"] = reasons
-        ev["themeTags"] = themes
-        ev["sourceTab"] = ev.get("sourceTab") or _source_tab_for(ev.get("eventType") or "")
+    other_per_day: dict[str, list[dict]] = {}
+    other_used_total = 0
+    for score, ev in other_pool:
+        if other_used_total >= MAX_OTHER_PER_WEEK:
+            break
+        day = ev.get("date") or ""
+        if not day:
+            continue
+        day_list = other_per_day.setdefault(day, [])
+        if len(day_list) >= MAX_OTHER_PER_DAY:
+            continue
+        day_list.append(ev)
+        other_used_total += 1
 
-    # 4. Dedup + merge per-symbol (with earnings dominance).
-    merged = _merge_dedup(pool)
+    # ── 4. Build days[] ────────────────────────────────────────────────────
+    days_out: list[dict] = []
+    cur = monday
+    while cur <= friday:
+        ds = cur.isoformat()
+        days_out.append({
+            "date":     ds,
+            "weekday":  _WEEKDAYS[cur.weekday()],
+            "earnings": earnings_per_day.get(ds, []),
+            "macro":    macro_per_day.get(ds, []),
+            "other":    other_per_day.get(ds, []),
+        })
+        cur += timedelta(days=1)
 
-    # 5. Sort by score desc, then date asc as tiebreak.
-    merged.sort(
-        key=lambda e: (-float(e.get("score") or 0.0), e.get("date") or "9999-12-31"),
-    )
+    # ── 5. Backward-compat flat current_week (top earnings + macro + other) ─
+    earnings_flat.sort(key=lambda t: -t[0])
+    flat: list[dict] = [ev for _s, ev in earnings_flat[:cap]]
+    # Append macro entries (date-sorted) without exceeding cap.
+    macro_flat = [m for d in days_out for m in d["macro"]]
+    other_flat = [o for d in days_out for o in d["other"]]
+    for m in macro_flat:
+        if len(flat) >= cap:
+            break
+        flat.append(m)
+    for o in other_flat:
+        if len(flat) >= cap:
+            break
+        flat.append(o)
 
-    # 6. Cap.
-    final = merged[:cap]
-
-    # 7. Status / last_updated.
+    # ── 6. Status / last_updated ───────────────────────────────────────────
     last_updated = max(last_updated_candidates) if last_updated_candidates else None
-    if final:
+    has_any = any(d["earnings"] or d["macro"] or d["other"] for d in days_out)
+    if has_any:
         status = "ready"
     elif last_updated:
         status = "stale"
@@ -609,15 +702,19 @@ def get_top_catalysts(
         status = "empty"
 
     print(
-        f"[top_catalysts] week={monday}→{friday} pool={len(pool)} "
-        f"merged={len(merged)} returned={len(final)} status={status} "
-        f"sources={sources_seen}"
+        f"[top_catalysts] week={week_label} "
+        f"earnings={sum(len(d['earnings']) for d in days_out)} "
+        f"macro={sum(len(d['macro']) for d in days_out)} "
+        f"other={sum(len(d['other']) for d in days_out)} "
+        f"status={status}"
     )
 
     return {
         "tab":           "top_catalysts",
         "mode":          "weekly",
-        "current_week":  final,
+        "week":          week_label,
+        "days":          days_out,
+        "current_week":  flat,
         "previous_week": [],
         "last_updated":  last_updated,
         "status":        status,
