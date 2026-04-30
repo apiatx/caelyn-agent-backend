@@ -38,6 +38,7 @@ from services.catalyst_calendar_service import (
 )
 from services.calendar_snapshot_service import (
     TARGET_TABS as _SNAPSHOT_TABS,
+    get_read_source as _get_read_source,
     get_snapshot as _get_snapshot,
 )
 
@@ -395,3 +396,137 @@ async def catalyst_by_symbol(
             status_code=500,
             content={"error": str(e), "status": "error"},
         )
+
+
+# ── GET /api/debug/calendar-snapshots ─────────────────────────────────────────
+#
+# Lightweight authenticated diagnostics for verifying that the deployed API is
+# running the latest code AND can see the same Neon snapshots that the manual
+# CLI backfill writes. Does NOT trigger FMP. Does NOT expose secrets.
+#
+# Auth: requires header X-Diagnostics-Token matching env var
+# CALENDAR_DIAGNOSTICS_TOKEN (preferred) or DIAGNOSTICS_TOKEN. If neither env
+# var is set, the endpoint returns 404 so it is invisible by default.
+
+_DIAG_HEADER = "X-Diagnostics-Token"
+
+
+def _resolve_diagnostics_token() -> Optional[str]:
+    import os
+    return (
+        os.getenv("CALENDAR_DIAGNOSTICS_TOKEN")
+        or os.getenv("DIAGNOSTICS_TOKEN")
+        or None
+    )
+
+
+def _resolve_git_commit() -> str:
+    """Best-effort commit/version resolver. Never raises."""
+    import os
+    for var in (
+        "GIT_SHA",
+        "GIT_COMMIT",
+        "COMMIT_SHA",
+        "SOURCE_VERSION",
+        "RENDER_GIT_COMMIT",
+        "VERCEL_GIT_COMMIT_SHA",
+        "REPL_SLUG",
+    ):
+        val = os.getenv(var)
+        if val:
+            return f"{var}={val}"
+    try:
+        import subprocess
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        out = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _neon_url_fingerprint() -> dict:
+    """
+    Return a SAFE summary of the Neon URL: presence boolean and (if present)
+    a short host hash so two environments can be compared without leaking
+    credentials. Never returns the raw URL or any password.
+    """
+    import os
+    raw = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not raw:
+        return {"neon_database_url_present": False}
+    info: dict = {"neon_database_url_present": True}
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(raw)
+        host = parsed.hostname or ""
+        if host:
+            import hashlib
+            info["neon_host_sha256_prefix"] = hashlib.sha256(
+                host.encode("utf-8")
+            ).hexdigest()[:12]
+    except Exception:
+        pass
+    return info
+
+
+@router.get("/api/debug/calendar-snapshots")
+async def debug_calendar_snapshots(
+    request: Request,
+    token: str = Header(None, alias=_DIAG_HEADER),
+):
+    """
+    Authenticated diagnostics for the calendar snapshot pipeline.
+
+    Reports the loaded git commit, Neon URL presence (no secret leakage),
+    per-tab snapshot row counts, and which backing store the read path
+    actually resolves to (neon vs disk_fallback vs empty).
+    """
+    expected = _resolve_diagnostics_token()
+    if not expected:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Not Found"},
+        )
+    if not token or token != expected:
+        return JSONResponse(
+            status_code=403,
+            content={"error": "Forbidden"},
+        )
+
+    payload: dict = {
+        "git_commit": _resolve_git_commit(),
+        **_neon_url_fingerprint(),
+        "target_tabs": list(_SNAPSHOT_TABS),
+    }
+
+    # Neon connectivity probe (safe, no secrets returned).
+    try:
+        from data.pg_storage import is_available, get_last_conn_error
+        payload["neon_connected"] = bool(is_available())
+        if not payload["neon_connected"]:
+            payload["neon_last_conn_error"] = get_last_conn_error()
+    except Exception as e:
+        payload["neon_connected"] = False
+        payload["neon_probe_error"] = str(e)
+
+    # Per-tab read-source + counts. Each tab call is best-effort; on error we
+    # record the error and continue so the endpoint never 500s.
+    tabs: dict = {}
+    for tab in _SNAPSHOT_TABS:
+        try:
+            tabs[tab] = _get_read_source(tab)
+        except Exception as e:
+            tabs[tab] = {"source": "error", "error": str(e)}
+    payload["tabs"] = tabs
+
+    # Convenience: confirm the read path /api/catalysts/events would use for
+    # snapshot tabs. It is always the snapshot service for these tabs.
+    payload["events_read_path"] = "calendar_snapshot_service.get_snapshot"
+
+    return JSONResponse(content=payload)

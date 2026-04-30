@@ -227,6 +227,60 @@ def get_snapshot(tab: str) -> dict:
     return envelope
 
 
+def get_read_source(tab: str) -> dict:
+    """
+    Diagnostic helper: report which backing store the read path resolves to
+    for a given tab, without mutating state. Used by the debug endpoint.
+
+    Returns a dict with:
+      - source: "neon" | "disk_fallback" | "empty"
+      - status: snapshot status if known
+      - current_week_count / previous_week_count
+      - last_updated
+      - neon_error: optional string if Neon read raised
+    """
+    info: dict[str, Any] = {
+        "source": "empty",
+        "status": "empty",
+        "current_week_count": 0,
+        "previous_week_count": 0,
+        "last_updated": None,
+    }
+    slot: Optional[dict] = None
+    try:
+        slot = _neon_read(tab)
+    except Exception as e:
+        info["neon_error"] = str(e)
+        slot = None
+
+    if slot is not None:
+        info["source"] = "neon"
+    else:
+        try:
+            store = _read_disk()
+            disk_slot = store.get(tab)
+            if disk_slot:
+                slot = _normalize_slot(disk_slot)
+                info["source"] = "disk_fallback"
+        except Exception as e:
+            info["disk_error"] = str(e)
+
+    if slot is not None:
+        cw = slot.get("current_week") or []
+        pw = slot.get("previous_week") or []
+        meta = slot.get("meta") or {}
+        info["current_week_count"] = len(cw)
+        info["previous_week_count"] = len(pw)
+        info["last_updated"] = meta.get("last_updated")
+        if cw:
+            info["status"] = "ready"
+        elif pw:
+            info["status"] = "stale"
+        else:
+            info["status"] = meta.get("status") or "empty"
+    return info
+
+
 # ── Refresh / write path ────────────────────────────────────────────────────
 
 def _week_window_for(tab: str) -> tuple[str, str]:
