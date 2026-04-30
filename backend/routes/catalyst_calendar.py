@@ -46,6 +46,12 @@ from services.calendar_curation import (
     DEFAULT_CAP_PER_SLICE as _CURATION_CAP,
     curate_envelope as _curate_envelope,
 )
+from services.top_catalysts_service import (
+    DEFAULT_CAP as _TOP_DEFAULT_CAP,
+    MAX_CAP as _TOP_MAX_CAP,
+    MIN_CAP as _TOP_MIN_CAP,
+    get_top_catalysts as _get_top_catalysts,
+)
 
 try:
     from langsmith import traceable
@@ -553,3 +559,49 @@ async def debug_calendar_snapshots(
     payload["events_read_path"] = "calendar_snapshot_service.get_snapshot"
 
     return JSONResponse(content=payload)
+
+
+# ── GET /api/catalysts/top ────────────────────────────────────────────────────
+
+@router.get("/api/catalysts/top")
+@traceable(name="catalyst_calendar.top")
+async def catalyst_top(
+    request: Request,
+    api_key: str = Header(None, alias=_AUTH_HEADER),
+    cap: int = Query(
+        default=_TOP_DEFAULT_CAP,
+        ge=_TOP_MIN_CAP,
+        le=_TOP_MAX_CAP,
+        description=(
+            f"Max events returned in current_week. "
+            f"Clamped to [{_TOP_MIN_CAP}, {_TOP_MAX_CAP}]."
+        ),
+    ),
+):
+    """
+    Top Catalysts This Week — read-only aggregation across already-cached
+    calendar data (earnings week-clean cache + 5 snapshot tabs).
+
+    No request-time FMP calls. No profile enrichment. No new external APIs.
+    """
+    err = _check_key(api_key)
+    if err:
+        return err
+
+    try:
+        data = _get_top_catalysts(cap=cap)
+        return JSONResponse(content=data)
+    except Exception as e:
+        print(f"[catalyst] top unhandled: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "tab":           "top_catalysts",
+                "mode":          "weekly",
+                "current_week":  [],
+                "previous_week": [],
+                "last_updated":  None,
+                "status":        "empty",
+                "error":         str(e),
+            },
+        )
