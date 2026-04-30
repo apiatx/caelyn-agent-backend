@@ -72,6 +72,37 @@ A shared read-only thematic/regime/sector context layer was added to make the sa
 
 **Earnings: untouched.**
 
+## Dynamic Thematic Universe Builder (Apr 2026)
+
+Replaces hardcoded ticker lists in TA Screener and Options Flow with a dynamically built, multi-source ticker universe driven by ThematicContextProvider active/emerging themes.
+
+**New File:**
+- `backend/services/dynamic_thematic_universe.py` — Core builder.
+  - `get_dynamic_thematic_universe(active_only, include_emerging, max_tickers, force_refresh)` — async, builds or returns from 15-min in-memory cache.
+  - `get_cached_thematic_universe()` — sync, non-blocking read from cache. Used in hot paths.
+  - Discovery sources per theme: (1) ETF holdings via `etf_holdings_service` using keyword-augmented proxy ETFs, (2) FMP company peers via `stable/stock-peers` from anchor tickers, (3) X/Grok consensus from `x_consensus_weekly.json`, (4) static `related_tickers` fallback.
+  - `_KEYWORD_ETF_MAP` — maps granular sub-theme names (e.g. "AI Networking", "Datacenter / Compute") to ETF proxies so ETF holdings can be fetched even when theme data has empty `related_etfs`.
+  - Returns: `{tickers, sources_by_ticker, theme_map, snapshot_status, source_health, built_at, ticker_count}`.
+
+**TA Screener Integration** (`backend/data/market_data_service.py`):
+- After Phase A Finviz discovery: injects up to 15 thematic tickers (`_THEMATIC_ENRICH_CAP`) not already in the Finviz pool. These go through Phase B (enrichment) and Phase C (filter/rank) identically to Finviz candidates. Non-blocking (sync cache read only).
+- After Phase C scoring: annotates all `final_rows` with `theme_name`, `theme_state`, `regime_alignment_score`, `discovery_sources`. Uses dynamic universe `theme_map` first; falls back to `get_ticker_theme_alignment()` for Finviz-only tickers.
+
+**Options Flow Integration** (`backend/main.py`):
+- Cold prefilter path: replaces old `get_thematic_prefilter_universe()` call with `get_cached_thematic_universe()`. Dynamic universe tickers (up to 80) are prepended to `_master_seeds` before `engine.build_prefilter_snapshot()`.
+- Static `_master_seeds` remain as liquid options fallback after dynamic tickers.
+
+**Background Loop** (`backend/main.py`):
+- `_dynamic_thematic_universe_loop()` — refreshes every 15 minutes. 30-second initial delay for sector-rotation and X-consensus loops to warm first.
+- Started via `asyncio.create_task()` in the lifespan startup.
+
+**Guardrails:**
+- No LLM calls. No Tradier calls. No Earnings data touched.
+- All vendor calls time-bounded with asyncio.wait_for / httpx timeouts.
+- Never raises. Degrades gracefully if individual sources (ETF holdings, FMP peers) are unavailable.
+- Finviz broad discovery unchanged — thematic candidates are additive, not replacement.
+- Theme annotation is additive, not a filter.
+
 ## External Dependencies
 
 The Caelyn AI platform integrates with several external services and APIs to gather and process financial data:

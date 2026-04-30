@@ -1,0 +1,282 @@
+{
+  "symbol": "CIBR",
+  "as_of": "2026-04-29",
+  "source": "fmp",
+  "holding_count": 44,
+  "holdings": [
+    {
+      "ticker": "AVGO",
+      "name": "Broadcom Inc.",
+      "weight": 9.214
+    },
+    {
+      "ticker": "CRWD",
+      "name": "CrowdStrike Holdings, Inc. (Class A)",
+      "weight": 9.007
+    },
+    {
+      "ticker": "PANW",
+      "name": "Palo Alto Networks, Inc.",
+      "weight": 8.95
+    },
+    {
+      "ticker": "CSCO",
+      "name": "Cisco Systems, Inc.",
+      "weight": 8.05
+    },
+    {
+      "ticker": "FTNT",
+      "name": "Fortinet, Inc.",
+      "weight": 7.272
+    },
+    {
+      "ticker": "NET",
+      "name": "Cloudflare, Inc. (Class A)",
+      "weight": 4.458
+    },
+    {
+      "ticker": "ZS",
+      "name": "Zscaler, Inc.",
+      "weight": 3.316
+    },
+    {
+      "ticker": "FFIV",
+      "name": "F5, Inc.",
+      "weight": 3.036
+    },
+    {
+      "ticker": "CHKP",
+      "name": "Check Point Software Technologies Ltd.",
+      "weight": 2.909
+    },
+    {
+      "ticker": "AKAM",
+      "name": "Akamai Technologies, Inc.",
+      "weight": 2.864
+    },
+    {
+      "ticker": "OKTA",
+      "name": "Okta, Inc.",
+      "weight": 2.446
+    },
+    {
+      "ticker": "ANET",
+      "name": "Arista Networks, Inc.",
+      "weight": 2.279
+    },
+    {
+      "ticker": "GEN",
+      "name": "Gen Digital Inc.",
+      "weight": 2.179
+    },
+    {
+      "ticker": "DDOG",
+      "name": "Datadog, Inc. (Class A)",
+      "weight": 2.163
+    },
+    {
+      "ticker": "GOOGL",
+      "name": "Alphabet Inc. (Class A)",
+      "weight": 2.065
+    },
+    {
+      "ticker": "NTAP",
+      "name": "NetApp, Inc.",
+      "weight": 2.013
+    },
+    {
+      "ticker": "MSFT",
+      "name": "Microsoft Corporation",
+      "weight": 2.012
+    },
+    {
+      "ticker": "DT",
+      "name": "Dynatrace, Inc.",
+      "weight": 1.845
+    },
+    {
+      "ticker": "RBRK",
+      "name": "Rubrik, Inc. (Class A)",
+      "weight": 1.817
+    },
+    {
+      "ticker": "IBM",
+      "name": "International Business Machines Corporation",
+      "weight": 1.786
+    },
+    {
+      "ticker": "BAH",
+      "name": "Booz Allen Hamilton Holding Corporation",
+      "weight": 1.754
+    },
+    {
+      "ticker": "HO.FP",
+      "name": "Thales S.A.",
+      "weight": 1.655
+    },
+    {
+      "ticker": "ACN",
+      "name": "Accenture plc",
+      "weight": 1.568
+    },
+    {
+      "ticker": "INFY",
+      "name": "Infosys Limited (ADR)",
+      "weight": 1.562
+    },
+    {
+      "ticker": "LDOS",
+      "name": "Leidos Holdings, Inc.",
+      "weight": 1.537
+    },
+    {
+      "ticker": "FROG",
+      "name": "JFrog Ltd.",
+      "weight": 1.291
+    },
+    {
+      "ticker": "OTEX.CN",
+      "name": "Open Text Corporation",
+      "weight": 1.191
+    },
+    {
+      "ticker": "4704.JP",
+      "name": "Trend Micro Incorporated",
+      "weight": 1.149
+    },
+    {
+      "ticker": "S",
+      "name": "SentinelOne, Inc. (Class A)",
+      "weight": 1.058
+    },
+    {
+      "ticker": "ESTC",
+      "name": "Elastic N.V.",
+      "weight": 0.924
+    },
+    {
+      "ticker": "SAIC",
+      "name": "Science Applications International Corporation",
+      "weight": 0.894
+    },
+    {
+      "ticker": "CVLT",
+      "name": "Commvault Systems, Inc.",
+      "weight": 0.833
+    },
+    {
+      "ticker": "FSLY",
+      "name": "Fastly, Inc. (Class A)",
+      "weight": 0.79
+    },
+    {
+      "ticker": "BB",
+      "name": "BlackBerry Ltd.",
+      "weight": 0.735
+    },
+    {
+      "ticker": "VRNS",
+      "name": "Varonis Systems, Inc.",
+      "weight": 0.616
+    },
+    {
+      "ticker": "QLYS",
+      "name": "Qualys, Inc.",
+      "weight": 0.591
+    },
+    {
+      "ticker": "TENB",
+      "name": "Tenable Holdings, Inc.",
+      "weight": 0.472
+    },
+    {
+      "ticker": "NTCT",
+      "name": "NetScout Systems, Inc.",
+      "weight": 0.451
+    },
+    {
+      "ticker": "ATEN",
+      "name": "A10 Networks, Inc.",
+      "weight": 0.354
+    },
+    {
+      "ticker": "ZD",
+      "name": "Ziff Davis, Inc.",
+      "weight": 0.339
+    },
+    {
+      "ticker": "RDWR",
+      "name": "Radware Ltd.",
+      "weight": 0.229
+    },
+    {
+      "ticker": "ATO.FP",
+      "name": "Atos SE",
+      "weight": 0.188
+    },
+    {
+      "ticker": "$USD",
+      "name": "US Dollar",
+      "weight": 0.135
+    },
+    {
+      "ticker": "$CAD",
+      "name": "Canadian Dollar",
+      "weight": 0.0
+    }
+  ],
+  "updated_at": "2026-04-30T22:07:12+00:00",
+  "_fetched_at": 1777586832.283097,
+  "top_holdings": [
+    {
+      "ticker": "AVGO",
+      "name": "Broadcom Inc.",
+      "weight": 9.214
+    },
+    {
+      "ticker": "CRWD",
+      "name": "CrowdStrike Holdings, Inc. (Class A)",
+      "weight": 9.007
+    },
+    {
+      "ticker": "PANW",
+      "name": "Palo Alto Networks, Inc.",
+      "weight": 8.95
+    },
+    {
+      "ticker": "CSCO",
+      "name": "Cisco Systems, Inc.",
+      "weight": 8.05
+    },
+    {
+      "ticker": "FTNT",
+      "name": "Fortinet, Inc.",
+      "weight": 7.272
+    },
+    {
+      "ticker": "NET",
+      "name": "Cloudflare, Inc. (Class A)",
+      "weight": 4.458
+    },
+    {
+      "ticker": "ZS",
+      "name": "Zscaler, Inc.",
+      "weight": 3.316
+    },
+    {
+      "ticker": "FFIV",
+      "name": "F5, Inc.",
+      "weight": 3.036
+    },
+    {
+      "ticker": "CHKP",
+      "name": "Check Point Software Technologies Ltd.",
+      "weight": 2.909
+    },
+    {
+      "ticker": "AKAM",
+      "name": "Akamai Technologies, Inc.",
+      "weight": 2.864
+    }
+  ]
+}

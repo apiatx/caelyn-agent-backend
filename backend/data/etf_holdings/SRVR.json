@@ -1,0 +1,402 @@
+{
+  "symbol": "SRVR",
+  "as_of": "2026-01-20",
+  "source": "fmp",
+  "holding_count": 68,
+  "holdings": [
+    {
+      "ticker": "EQIX",
+      "name": "Equinix Inc",
+      "weight": 15.027
+    },
+    {
+      "ticker": "DLR",
+      "name": "Digital Realty Trust Inc",
+      "weight": 14.976
+    },
+    {
+      "ticker": "AMT",
+      "name": "AMERICAN TOWER CORP",
+      "weight": 14.287
+    },
+    {
+      "ticker": "IRM",
+      "name": "Iron Mountain Inc",
+      "weight": 4.856
+    },
+    {
+      "ticker": "SBAC",
+      "name": "SBA Communications Corp",
+      "weight": 4.273
+    },
+    {
+      "ticker": "CLNX.MC",
+      "name": "Cellnex Telecom SA",
+      "weight": 4.241
+    },
+    {
+      "ticker": "CCI",
+      "name": "Crown Castle Inc",
+      "weight": 4.215
+    },
+    {
+      "ticker": "0788.HK",
+      "name": "China Tower Corp Ltd",
+      "weight": 2.702
+    },
+    {
+      "ticker": "NXT.AX",
+      "name": "NEXTDC Ltd",
+      "weight": 2.179
+    },
+    {
+      "ticker": "GDS",
+      "name": "GDS Holdings Ltd",
+      "weight": 2.159
+    },
+    {
+      "ticker": "KDCREIT.SI",
+      "name": "Keppel DC REIT",
+      "weight": 1.364
+    },
+    {
+      "ticker": "INW.MI",
+      "name": "Infrastrutture Wireless Italiane SpA",
+      "weight": 1.154
+    },
+    {
+      "ticker": "000720.KS",
+      "name": "Hyundai Engineering & Construction Co Ltd",
+      "weight": 1.143
+    },
+    {
+      "ticker": "SESG.PA",
+      "name": "SES SA",
+      "weight": 1.126
+    },
+    {
+      "ticker": "052690.KS",
+      "name": "KEPCO Engineering & Construction Co Inc",
+      "weight": 1.077
+    },
+    {
+      "ticker": "CCO.TO",
+      "name": "Cameco Corp",
+      "weight": 1.074
+    },
+    {
+      "ticker": "RR.L",
+      "name": "Rolls-Royce Holdings PLC",
+      "weight": 1.0
+    },
+    {
+      "ticker": "DBRG",
+      "name": "DigitalBridge Group Inc",
+      "weight": 0.993
+    },
+    {
+      "ticker": "CNU.AX",
+      "name": "Chorus Ltd",
+      "weight": 0.899
+    },
+    {
+      "ticker": "NEE",
+      "name": "NextEra Energy Inc",
+      "weight": 0.869
+    },
+    {
+      "ticker": "UEC",
+      "name": "Uranium Energy Corp",
+      "weight": 0.853
+    },
+    {
+      "ticker": "CW",
+      "name": "Curtiss-Wright Corp",
+      "weight": 0.852
+    },
+    {
+      "ticker": "LEU",
+      "name": "Centrus Energy Corp",
+      "weight": 0.839
+    },
+    {
+      "ticker": "BWXT",
+      "name": "BWX Technologies Inc",
+      "weight": 0.823
+    },
+    {
+      "ticker": "ASPI",
+      "name": "ASP Isotopes Inc",
+      "weight": 0.797
+    },
+    {
+      "ticker": "EU",
+      "name": "Encore Energy Corp",
+      "weight": 0.757
+    },
+    {
+      "ticker": "VRT",
+      "name": "Vertiv Holdings Co",
+      "weight": 0.733
+    },
+    {
+      "ticker": "EFR.TO",
+      "name": "Energy Fuels Inc/Canada",
+      "weight": 0.721
+    },
+    {
+      "ticker": "NNE",
+      "name": "NANO Nuclear Energy Inc",
+      "weight": 0.705
+    },
+    {
+      "ticker": "UNIT",
+      "name": "Uniti Group Inc",
+      "weight": 0.696
+    },
+    {
+      "ticker": "IRDM",
+      "name": "Iridium Communications Inc",
+      "weight": 0.695
+    },
+    {
+      "ticker": "GEV",
+      "name": "GE Vernova Inc",
+      "weight": 0.665
+    },
+    {
+      "ticker": "OKLO",
+      "name": "Oklo Inc",
+      "weight": 0.661
+    },
+    {
+      "ticker": "HTWS.L",
+      "name": "Helios Towers PLC",
+      "weight": 0.659
+    },
+    {
+      "ticker": "LTBR",
+      "name": "Lightbridge Corp",
+      "weight": 0.626
+    },
+    {
+      "ticker": "034020.KS",
+      "name": "Doosan Enerbility Co Ltd",
+      "weight": 0.572
+    },
+    {
+      "ticker": "URG",
+      "name": "Ur-Energy Inc",
+      "weight": 0.568
+    },
+    {
+      "ticker": "015760.KS",
+      "name": "Korea Electric Power Corp",
+      "weight": 0.562
+    },
+    {
+      "ticker": "MIR",
+      "name": "Mirion Technologies Inc",
+      "weight": 0.55
+    },
+    {
+      "ticker": "D",
+      "name": "Dominion Energy Inc",
+      "weight": 0.512
+    },
+    {
+      "ticker": "SMR",
+      "name": "NuScale Power Corp",
+      "weight": 0.5
+    },
+    {
+      "ticker": "7013.T",
+      "name": "IHI Corp",
+      "weight": 0.497
+    },
+    {
+      "ticker": "VNET",
+      "name": "Vnet Group Inc",
+      "weight": 0.474
+    },
+    {
+      "ticker": "CEG",
+      "name": "Constellation Energy Corp",
+      "weight": 0.443
+    },
+    {
+      "ticker": "FLR",
+      "name": "Fluor Corp",
+      "weight": 0.439
+    },
+    {
+      "ticker": "ABBN.SW",
+      "name": "ABB Ltd",
+      "weight": 0.378
+    },
+    {
+      "ticker": "SLX.AX",
+      "name": "Silex Systems Ltd",
+      "weight": 0.317
+    },
+    {
+      "ticker": "7011.T",
+      "name": "Mitsubishi Heavy Industries Ltd",
+      "weight": 0.302
+    },
+    {
+      "ticker": "ETN",
+      "name": "Eaton Corp PLC",
+      "weight": 0.284
+    },
+    {
+      "ticker": "SLC.AX",
+      "name": "Superloop Ltd",
+      "weight": 0.257
+    },
+    {
+      "ticker": "2308.TW",
+      "name": "Delta Electronics Inc",
+      "weight": 0.255
+    },
+    {
+      "ticker": "1310.HK",
+      "name": "HKBN Ltd",
+      "weight": 0.246
+    },
+    {
+      "ticker": "NTTDCR.SI",
+      "name": "NTT DC REIT",
+      "weight": 0.24
+    },
+    {
+      "ticker": "ETL.PA",
+      "name": "Eutelsat Communications SACA",
+      "weight": 0.239
+    },
+    {
+      "ticker": "LOTDB.AX",
+      "name": "LOTUS RESOURCES LTD",
+      "weight": 0.234
+    },
+    {
+      "ticker": "ENGI.PA",
+      "name": "Engie SA",
+      "weight": 0.233
+    },
+    {
+      "ticker": "2768.T",
+      "name": "Sojitz Corp",
+      "weight": 0.226
+    },
+    {
+      "ticker": "006360.KS",
+      "name": "GS Engineering & Construction Corp",
+      "weight": 0.202
+    },
+    {
+      "ticker": "1686.HK",
+      "name": "SUNeVision Holdings Ltd",
+      "weight": 0.164
+    },
+    {
+      "ticker": "USBFS03",
+      "name": "U.S. Bank Money Market Deposit Account 06/01/2031",
+      "weight": 0.161
+    },
+    {
+      "ticker": "LR.PA",
+      "name": "Legrand SA",
+      "weight": 0.113
+    },
+    {
+      "ticker": "6367.T",
+      "name": "Daikin Industries Ltd",
+      "weight": 0.085
+    },
+    {
+      "ticker": "EUR",
+      "name": "EURO",
+      "weight": 0.085
+    },
+    {
+      "ticker": "BOE.AX",
+      "name": "Boss Energy Ltd",
+      "weight": 0.083
+    },
+    {
+      "ticker": "VST",
+      "name": "Vistra Corp",
+      "weight": 0.042
+    },
+    {
+      "ticker": "6458.T",
+      "name": "Sinko Industries Ltd",
+      "weight": 0.029
+    },
+    {
+      "ticker": "CAD",
+      "name": "CANADIAN DOLLAR",
+      "weight": 0.009
+    },
+    {
+      "ticker": "GBP",
+      "name": "BRITISH POUNDS",
+      "weight": 0.0
+    }
+  ],
+  "updated_at": "2026-04-30T22:07:12+00:00",
+  "_fetched_at": 1777586832.287337,
+  "top_holdings": [
+    {
+      "ticker": "EQIX",
+      "name": "Equinix Inc",
+      "weight": 15.027
+    },
+    {
+      "ticker": "DLR",
+      "name": "Digital Realty Trust Inc",
+      "weight": 14.976
+    },
+    {
+      "ticker": "AMT",
+      "name": "AMERICAN TOWER CORP",
+      "weight": 14.287
+    },
+    {
+      "ticker": "IRM",
+      "name": "Iron Mountain Inc",
+      "weight": 4.856
+    },
+    {
+      "ticker": "SBAC",
+      "name": "SBA Communications Corp",
+      "weight": 4.273
+    },
+    {
+      "ticker": "CLNX.MC",
+      "name": "Cellnex Telecom SA",
+      "weight": 4.241
+    },
+    {
+      "ticker": "CCI",
+      "name": "Crown Castle Inc",
+      "weight": 4.215
+    },
+    {
+      "ticker": "0788.HK",
+      "name": "China Tower Corp Ltd",
+      "weight": 2.702
+    },
+    {
+      "ticker": "NXT.AX",
+      "name": "NEXTDC Ltd",
+      "weight": 2.179
+    },
+    {
+      "ticker": "GDS",
+      "name": "GDS Holdings Ltd",
+      "weight": 2.159
+    }
+  ]
+}

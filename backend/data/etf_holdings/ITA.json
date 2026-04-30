@@ -1,0 +1,282 @@
+{
+  "symbol": "ITA",
+  "as_of": "2026-04-30",
+  "source": "fmp",
+  "holding_count": 44,
+  "holdings": [
+    {
+      "ticker": "GE",
+      "name": "GE AEROSPACE",
+      "weight": 19.507
+    },
+    {
+      "ticker": "RTX",
+      "name": "RTX CORP",
+      "weight": 15.212
+    },
+    {
+      "ticker": "BA",
+      "name": "BOEING",
+      "weight": 10.296
+    },
+    {
+      "ticker": "GD",
+      "name": "GENERAL DYNAMICS CORP",
+      "weight": 4.829
+    },
+    {
+      "ticker": "HWM",
+      "name": "HOWMET AEROSPACE INC",
+      "weight": 4.742
+    },
+    {
+      "ticker": "TDG",
+      "name": "TRANSDIGM GROUP INC",
+      "weight": 4.582
+    },
+    {
+      "ticker": "LHX",
+      "name": "L3HARRIS TECHNOLOGIES INC",
+      "weight": 4.451
+    },
+    {
+      "ticker": "LMT",
+      "name": "LOCKHEED MARTIN CORP",
+      "weight": 3.96
+    },
+    {
+      "ticker": "NOC",
+      "name": "NORTHROP GRUMMAN CORP",
+      "weight": 3.939
+    },
+    {
+      "ticker": "RKLB",
+      "name": "ROCKET LAB CORP",
+      "weight": 3.132
+    },
+    {
+      "ticker": "AXON",
+      "name": "AXON ENTERPRISE INC",
+      "weight": 2.735
+    },
+    {
+      "ticker": "CW",
+      "name": "CURTISS WRIGHT CORP",
+      "weight": 2.221
+    },
+    {
+      "ticker": "FTAI",
+      "name": "FTAI AVIATION LTD",
+      "weight": 1.891
+    },
+    {
+      "ticker": "WWD",
+      "name": "WOODWARD INC",
+      "weight": 1.862
+    },
+    {
+      "ticker": "CRS",
+      "name": "CARPENTER TECHNOLOGY CORP",
+      "weight": 1.752
+    },
+    {
+      "ticker": "ATI",
+      "name": "ATI INC",
+      "weight": 1.719
+    },
+    {
+      "ticker": "BWXT",
+      "name": "BWX TECHNOLOGIES INC",
+      "weight": 1.646
+    },
+    {
+      "ticker": "TXT",
+      "name": "TEXTRON INC",
+      "weight": 1.353
+    },
+    {
+      "ticker": "HEI-A",
+      "name": "HEICO CORP CLASS A",
+      "weight": 1.35
+    },
+    {
+      "ticker": "HII",
+      "name": "HUNTINGTON INGALLS INDUSTRIES INC",
+      "weight": 1.23
+    },
+    {
+      "ticker": "KTOS",
+      "name": "KRATOS DEFENSE AND SECURITY SOLUTI",
+      "weight": 0.951
+    },
+    {
+      "ticker": "HEI",
+      "name": "HEICO CORP",
+      "weight": 0.909
+    },
+    {
+      "ticker": "MOG-A",
+      "name": "MOOG INC CLASS A",
+      "weight": 0.743
+    },
+    {
+      "ticker": "HXL",
+      "name": "HEXCEL CORP",
+      "weight": 0.595
+    },
+    {
+      "ticker": "AVAV",
+      "name": "AEROVIRONMENT INC",
+      "weight": 0.505
+    },
+    {
+      "ticker": "KRMN",
+      "name": "KARMAN HOLDINGS INC",
+      "weight": 0.438
+    },
+    {
+      "ticker": "SARO",
+      "name": "STANDARDAERO",
+      "weight": 0.401
+    },
+    {
+      "ticker": "VSEC",
+      "name": "VSE CORP",
+      "weight": 0.399
+    },
+    {
+      "ticker": "AIR",
+      "name": "AAR CORP",
+      "weight": 0.357
+    },
+    {
+      "ticker": "MRCY",
+      "name": "MERCURY SYSTEMS INC",
+      "weight": 0.341
+    },
+    {
+      "ticker": "ACHR",
+      "name": "ARCHER AVIATION INC CLASS A",
+      "weight": 0.298
+    },
+    {
+      "ticker": "DRS",
+      "name": "LEONARDO DRS INC",
+      "weight": 0.263
+    },
+    {
+      "ticker": "LUNR",
+      "name": "INTUITIVE MACHINES INC CLASS A",
+      "weight": 0.241
+    },
+    {
+      "ticker": "ATRO",
+      "name": "ASTRONICS CORP",
+      "weight": 0.183
+    },
+    {
+      "ticker": "DCO",
+      "name": "DUCOMMUN INC",
+      "weight": 0.165
+    },
+    {
+      "ticker": "LOAR",
+      "name": "LOAR HOLDINGS INC",
+      "weight": 0.165
+    },
+    {
+      "ticker": "VVX",
+      "name": "V2X INC",
+      "weight": 0.116
+    },
+    {
+      "ticker": "RCAT",
+      "name": "RED CAT HOLDINGS INC",
+      "weight": 0.101
+    },
+    {
+      "ticker": "CDRE",
+      "name": "CADRE HOLDINGS INC",
+      "weight": 0.068
+    },
+    {
+      "ticker": "NPK",
+      "name": "NATIONAL PRESTO INDUSTRIES INC",
+      "weight": 0.064
+    },
+    {
+      "ticker": "RGR",
+      "name": "STURM RUGER INC",
+      "weight": 0.059
+    },
+    {
+      "ticker": "SWBI",
+      "name": "SMITH WESSON BRANDS INC",
+      "weight": 0.059
+    },
+    {
+      "ticker": "RDW",
+      "name": "REDWIRE CORP",
+      "weight": 0.058
+    },
+    {
+      "ticker": "BETA",
+      "name": "BETA TECHNOLOGIES INC CLASS A",
+      "weight": 0.039
+    }
+  ],
+  "updated_at": "2026-04-30T22:07:13+00:00",
+  "_fetched_at": 1777586833.1609726,
+  "top_holdings": [
+    {
+      "ticker": "GE",
+      "name": "GE AEROSPACE",
+      "weight": 19.507
+    },
+    {
+      "ticker": "RTX",
+      "name": "RTX CORP",
+      "weight": 15.212
+    },
+    {
+      "ticker": "BA",
+      "name": "BOEING",
+      "weight": 10.296
+    },
+    {
+      "ticker": "GD",
+      "name": "GENERAL DYNAMICS CORP",
+      "weight": 4.829
+    },
+    {
+      "ticker": "HWM",
+      "name": "HOWMET AEROSPACE INC",
+      "weight": 4.742
+    },
+    {
+      "ticker": "TDG",
+      "name": "TRANSDIGM GROUP INC",
+      "weight": 4.582
+    },
+    {
+      "ticker": "LHX",
+      "name": "L3HARRIS TECHNOLOGIES INC",
+      "weight": 4.451
+    },
+    {
+      "ticker": "LMT",
+      "name": "LOCKHEED MARTIN CORP",
+      "weight": 3.96
+    },
+    {
+      "ticker": "NOC",
+      "name": "NORTHROP GRUMMAN CORP",
+      "weight": 3.939
+    },
+    {
+      "ticker": "RKLB",
+      "name": "ROCKET LAB CORP",
+      "weight": 3.132
+    }
+  ]
+}

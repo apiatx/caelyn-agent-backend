@@ -1,0 +1,74 @@
+Important clarification:
+The TA Screener is for asset discovery. Do not turn it into a TA scan over a hardcoded thematic watchlist.
+
+ThematicContextProvider should guide discovery, not replace discovery.
+
+Audit/implement a Dynamic Thematic Universe Builder that converts active/emerging themes into ticker candidates using dynamic sources, not just hardcoded tickers.
+
+Requirements:
+
+1. Keep Finviz broad discovery.
+For TA Screener, continue running the existing broad Finviz technical screens. Do not restrict Finviz to preselected theme tickers.
+
+2. Add a theme-priority discovery lane.
+For each active/emerging theme from ThematicContextProvider, build candidate tickers dynamically from:
+- ETF/proxy holdings where available through Finnhub or existing cached ETF data
+- FMP stock screener by sector/industry filters
+- FMP company peers from a small set of theme proxy/anchor names
+- FMP/search stock news ticker extraction using theme keywords
+- X/Grok consensus tickers if cached
+- existing broad Finviz candidates that map to the theme
+
+3. Theme registry should define discovery rules, not final tickers.
+Each theme may have:
+- proxy_etfs
+- keywords
+- sectors
+- industries
+- optional seed anchors for peer expansion
+But seed anchors are only for expansion, not the final universe.
+
+4. Build:
+get_dynamic_thematic_universe(
+  active_only=False,
+  include_emerging=True,
+  max_tickers=150
+)
+
+Return:
+{
+  "tickers": [...],
+  "sources_by_ticker": {
+    "CCJ": ["etf_holding:URA", "news:uranium", "peer:LEU"]
+  },
+  "theme_map": {
+    "CCJ": {
+      "theme_name": "Uranium & Nuclear",
+      "theme_state": "active",
+      "discovery_sources": [...]
+    }
+  },
+  "snapshot_status": "...",
+  "source_health": {...}
+}
+
+5. TA Screener integration:
+- Keep Finviz broad candidates.
+- Add a capped number of dynamic thematic universe candidates before enrichment/scoring.
+- Dedupe.
+- Let existing TA scoring decide.
+- Add theme/regime fields after scoring.
+- Do not hard-filter unless user explicitly requests regime-aligned only.
+
+6. Options Flow integration:
+- Use dynamic thematic universe as the first-priority ticker source for Tradier scans.
+- Then add liquid options fallback universe and watchlist.
+- Do not rely only on hardcoded options seeds.
+
+7. Guardrails:
+- Do not touch Earnings.
+- Do not add LLM calls to screeners.
+- Do not break current Finviz screener.
+- Do not hardcode final ticker universes.
+- Cache dynamic universe results with TTL.
+- Never 500 if one vendor fails.

@@ -287,6 +287,9 @@ async def lifespan(app):
         asyncio.create_task(_thematic_warmup())
     except Exception as _e:
         print(f"[STARTUP] Thematic context warmup task error: {_e}")
+    # Dynamic thematic universe: build and refresh every 15 min.
+    # Provides ETF-holdings + FMP-peers + X-consensus tickers to TA Screener and Options Flow.
+    asyncio.create_task(_dynamic_thematic_universe_loop())
     try:
         from data.options_screener_snapshot import load_state as _load_opt_snapshot
         _load_opt_snapshot()
@@ -6462,6 +6465,36 @@ async def _home_options_fast_loop():
         await asyncio.sleep(_HOME_OPTIONS_FAST_LOOP_INTERVAL)
 
 
+async def _dynamic_thematic_universe_loop():
+    """
+    Background refresh loop for the dynamic thematic universe.
+
+    Builds the universe from ETF holdings + FMP peers + X consensus and caches
+    it for 15 minutes.  Runs every 15 minutes so the cache never goes cold during
+    normal operation.  The initial build runs after a 30-second startup delay
+    (giving sector-rotation and X-consensus loops time to warm first).
+
+    Never raises — all errors are caught and logged.
+    """
+    await asyncio.sleep(30)   # Let thematic context + X-consensus warm up first
+    while True:
+        try:
+            from services.dynamic_thematic_universe import get_dynamic_thematic_universe as _build_dtu
+            result = await _build_dtu(force_refresh=True)
+            n = result.get("ticker_count", 0)
+            status = result.get("snapshot_status", "?")
+            health = result.get("source_health", {})
+            print(
+                f"[DTU_LOOP] Refresh complete: {n} tickers | status={status} | "
+                f"etf={health.get('etf_holdings','?')} "
+                f"peers={health.get('fmp_peers','?')} "
+                f"xc={health.get('x_consensus','?')}"
+            )
+        except Exception as _exc:
+            print(f"[DTU_LOOP] Refresh error (non-fatal): {_exc}")
+        await asyncio.sleep(15 * 60)   # 15 minutes
+
+
 async def _master_screener_loop():
     """
     Unified master unusual-options screener background loop (Phase 5 + speed).
@@ -6536,26 +6569,28 @@ async def _master_screener_loop():
                 print("[MASTER_SCREENER] Prefilter cold — building from Finviz/Finnhub/FMP (all universes)...")
                 t_pf = _time.time()
 
-                # ── Thematic prefilter injection ───────────────────────────────
-                # Prepend regime-aligned theme tickers so they enter Stage 1 with
-                # priority. Deduplication preserves original seed ordering after
-                # the priority block.  Uses LKG/static fallback — no API call.
+                # ── Dynamic thematic seed injection ───────────────────────────
+                # First-priority tickers come from the dynamic thematic universe:
+                # ETF holdings + FMP peers + X consensus (15-min cached, sync read).
+                # Static _master_seeds follow as the liquid options fallback.
+                # Deduplication preserves dynamic-first ordering.
                 _cycle_seeds = _master_seeds
                 try:
-                    from services.thematic_context_provider import get_thematic_prefilter_universe as _get_pf_uni
-                    _pf_uni = _get_pf_uni(max_tickers=50)
-                    _thematic_priority = list(dict.fromkeys(
-                        [*_pf_uni.get("active_theme_tickers", [])[:20],
-                         *_pf_uni.get("emerging_theme_tickers", [])[:15]]
-                    ))
+                    from services.dynamic_thematic_universe import get_cached_thematic_universe as _get_dtu_c
+                    _dtu_snap = _get_dtu_c()
+                    _thematic_priority = _dtu_snap.get("tickers", [])[:80]
                     if _thematic_priority:
                         _cycle_seeds = list(dict.fromkeys([*_thematic_priority, *_master_seeds]))
-                        print(f"[MASTER_SCREENER] Thematic injection: "
-                              f"+{len(_thematic_priority)} priority tickers "
-                              f"(status={_pf_uni.get('snapshot_status','?')}) "
-                              f"→ {len(_cycle_seeds)} total seeds")
+                        print(
+                            f"[MASTER_SCREENER] Dynamic thematic seeds: "
+                            f"+{len(_thematic_priority)} priority tickers "
+                            f"(status={_dtu_snap.get('snapshot_status', '?')}) "
+                            f"→ {len(_cycle_seeds)} total seeds"
+                        )
+                    else:
+                        print("[MASTER_SCREENER] Dynamic thematic universe cold — using static seeds only")
                 except Exception as _te:
-                    print(f"[MASTER_SCREENER] Thematic injection skipped: {_te}")
+                    print(f"[MASTER_SCREENER] Dynamic thematic injection skipped: {_te}")
 
                 prefilter_data = await engine.build_prefilter_snapshot(
                     _cycle_seeds, tab="master",

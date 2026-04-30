@@ -5622,6 +5622,32 @@ class MarketDataService:
 
         to_enrich = candidates[:ENRICHMENT_LIMIT]
 
+        # ── Thematic universe supplement (additive, non-blocking) ─────────────
+        # Reads the 15-min cached dynamic universe — never blocks on API calls.
+        # Adds up to THEMATIC_ENRICH_CAP tickers not already in the Finviz pool.
+        # Phase B + C evaluate them identically to Finviz candidates.
+        _THEMATIC_ENRICH_CAP = 15
+        _dtu_theme_map: dict = {}
+        try:
+            from services.dynamic_thematic_universe import get_cached_thematic_universe as _get_dtu
+            _dtu = _get_dtu()
+            _dtu_theme_map = _dtu.get("theme_map", {})
+            _existing_syms = {r.get("ticker", "").upper() for r in to_enrich if r.get("ticker")}
+            _additions: list[dict] = []
+            for _sym in _dtu.get("tickers", []):
+                if _sym not in _existing_syms and len(_additions) < _THEMATIC_ENRICH_CAP:
+                    _additions.append({"ticker": _sym, "source": "thematic_priority"})
+                    _existing_syms.add(_sym)
+            if _additions:
+                print(
+                    f"[SCREENER] Thematic supplement: +{len(_additions)} tickers "
+                    f"(status={_dtu.get('snapshot_status', '?')})"
+                )
+                to_enrich = to_enrich + _additions
+        except Exception as _dtu_err:
+            print(f"[SCREENER] Thematic supplement skipped (non-fatal): {_dtu_err}")
+        # ── end thematic supplement ───────────────────────────────────────────
+
         # --- Phase B: Enrichment ---
         candle_budget = CandleBudget(max_calls=8)
         enriched_rows = []
@@ -6031,6 +6057,36 @@ class MarketDataService:
             reverse=True)
         qualified = [r for r in scored_rows if r["composite_score"] > 20]
         final_rows = qualified[:25]
+
+        # ── Thematic annotation (post-scoring, additive) ──────────────────────
+        # Annotates each qualified row with theme_name, theme_state,
+        # regime_alignment_score, and discovery_sources.
+        # Uses dynamic universe theme_map first (richer), falls back to live
+        # context alignment for tickers not in the dynamic universe.
+        try:
+            from services.thematic_context_provider import get_shared_thematic_context as _get_stc
+            from services.theme_ticker_mapper import get_ticker_theme_alignment as _get_tta
+            _stc = _get_stc()
+            _stc_active   = _stc.get("active_themes", [])
+            _stc_emerging = _stc.get("emerging_themes", [])
+            _stc_dead     = _stc.get("dead_zones", [])
+            for _row in final_rows:
+                _sym = (_row.get("ticker") or "").upper()
+                _dtu_entry = _dtu_theme_map.get(_sym)
+                if _dtu_entry:
+                    _row["theme_name"]             = _dtu_entry.get("theme_name")
+                    _row["theme_state"]            = _dtu_entry.get("theme_state")
+                    _row["regime_alignment_score"] = _dtu_entry.get("regime_alignment_score", 0)
+                    _row["discovery_sources"]      = _dtu_entry.get("discovery_sources", [])
+                else:
+                    _align = _get_tta(_sym, _stc_active, _stc_emerging, _stc_dead)
+                    _row["theme_name"]             = _align.get("theme_name")
+                    _row["theme_state"]            = _align.get("theme_state")
+                    _row["regime_alignment_score"] = _align.get("regime_alignment_score", 0)
+                    _row["discovery_sources"]      = []
+        except Exception as _ta_err:
+            print(f"[SCREENER] Thematic annotation error (non-fatal): {_ta_err}")
+        # ── end thematic annotation ───────────────────────────────────────────
 
         top_picks = []
         for r in final_rows[:5]:
