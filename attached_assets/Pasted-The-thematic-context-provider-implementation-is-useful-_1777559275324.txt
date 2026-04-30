@@ -1,0 +1,101 @@
+The thematic context provider implementation is useful, but it currently behaves like a post-fetch annotation layer. I need it to become a reliable upstream prefilter source for API scans.
+
+Problem:
+sr:theme_data:v2 only warms after the sector rotation background loop. That means active_themes can be empty on cold start, which breaks the entire purpose of using thematic context to pre-filter Tradier/FMP/TA scans.
+
+Do not remove the current provider. Upgrade it.
+
+Goals:
+1. Thematic context must be available immediately after backend startup.
+2. active_themes / emerging_themes / dead_zones must never be empty just because an in-memory cache is cold.
+3. The provider must load a last-known-good snapshot from disk or database before relying on in-memory cache.
+4. The provider must persist every valid snapshot to disk/db.
+5. Options Flow and TA Screener should be able to call a prefilter function before fetching expensive API data.
+
+Implement:
+
+A) Last-known-good persistence
+- Persist normalized thematic snapshot to something like:
+  backend/data/thematic_context_snapshot.json
+- On startup or first read, load this file if in-memory cache is empty.
+- Mark response with:
+  snapshot_status: "fresh" | "stale_lkg" | "fallback_static"
+  snapshot_age_minutes
+- Do not overwrite a good LKG snapshot with an empty/bad snapshot.
+
+B) Static fallback theme registry
+Create or extend a registry that maps themes to proxy ETFs and tickers.
+This should provide a fallback universe even when live theme scores are unavailable.
+
+Example output:
+{
+  "theme": "Memory & Storage",
+  "tickers": ["MU", "WDC", "STX"],
+  "proxies": ["SMH"],
+  "sector_tags": ["semiconductors", "hardware"]
+}
+
+C) Prefilter function
+Add a function like:
+
+get_thematic_prefilter_universe(
+    include_active=True,
+    include_emerging=True,
+    include_watchlist=True,
+    include_megacap_fallback=True,
+    max_tickers=150
+) -> dict
+
+Return:
+{
+  "tickers": [...],
+  "active_theme_tickers": [...],
+  "emerging_theme_tickers": [...],
+  "dead_zone_tickers": [...],
+  "theme_map": {
+    "MU": {
+      "theme_name": "Memory & Storage",
+      "theme_state": "active",
+      "regime_alignment_score": 0.87
+    }
+  },
+  "snapshot_status": "...",
+  "source_health": {...}
+}
+
+D) Options Flow integration
+Before fetching Tradier option chains / quotes, use the prefilter universe as a priority universe.
+Do not hard-restrict only to active themes.
+Use priority order:
+1. active theme tickers
+2. emerging theme tickers
+3. watchlist tickers if available
+4. high-liquidity fallback universe
+5. existing category fallback if needed
+
+Keep current unusual-flow scoring.
+Use theme context to prioritize fetch order and final sorting.
+Do not add LLM calls.
+
+E) TA Screener integration
+Before broad TA scanning, use the prefilter universe as a priority scan universe.
+If too few results, expand to existing universe.
+Add a toggle/parameter if one exists, but default should prefer regime-aligned candidates first.
+
+F) Cache warm
+On app startup, schedule a cheap non-LLM thematic snapshot warm:
+- load LKG immediately
+- refresh from existing sector/theme/regime caches when available
+- do not wait for user to visit Sectors page
+- do not require /api/query to run first
+
+Validation:
+1. Restart backend.
+2. Immediately call GET /api/thematic-context/snapshot.
+3. Confirm active_themes is not empty unless no LKG/static fallback exists.
+4. Confirm snapshot_status is fresh/stale_lkg/fallback_static.
+5. Confirm get_thematic_prefilter_universe returns tickers immediately after restart.
+6. Confirm Options Flow uses the prefilter universe before Tradier fetches.
+7. Confirm TA Screener uses the prefilter universe before broad scans.
+8. Confirm no Earnings files/routes changed.
+9. Confirm no Claude/Gemini/Grok calls added to screeners.
