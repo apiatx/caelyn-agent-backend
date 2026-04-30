@@ -291,6 +291,48 @@ async def get_latest_screener(
             if c.get("market_cap_usd") is None or c.get("market_cap_usd", 0) < 1_000_000
         )
 
+    # ── Additive thematic overlay: regime_alignment per row + regime_context ──
+    # Reads pre-populated caches only. Never raises. Does not modify base scores.
+    # Reused sources: regime:current_v1, sr:dashboard:v1, sr:theme_data:v2,
+    # x_consensus_weekly.json (same caches as main agent context_broker).
+    try:
+        from services.thematic_context_provider import get_shared_thematic_context
+        from services.theme_ticker_mapper import get_ticker_theme_alignment
+        _tc       = get_shared_thematic_context()
+        _active   = _tc.get("active_themes", [])
+        _emerging = _tc.get("emerging_themes", [])
+        _dead     = _tc.get("dead_zones", [])
+        _sec_lead = {e["ticker"] for e in _tc.get("sector_leaders", []) if e.get("ticker")}
+        _mac_reg  = _tc.get("macro_regime")
+
+        # Populate the regime_context top-level field (was always None)
+        result["regime_context"] = {
+            "macro_regime":   _mac_reg,
+            "sector_leaders": list(_sec_lead),
+            "active_themes":  [t["name"] for t in _active[:3]],
+            "emerging_themes":[t["name"] for t in _emerging[:2]],
+            "dead_zones":     [t["name"] for t in _dead[:3]],
+            "source_health":  _tc.get("source_health", {}),
+        }
+
+        # Annotate each result row
+        for row in (result.get("results") or []):
+            sym   = (row.get("ticker") or "").upper()
+            base  = float(row.get("score") or row.get("fit_score") or row.get("best_fit_score") or 0)
+            align = get_ticker_theme_alignment(sym, _active, _emerging, _dead)
+            boost = align["regime_alignment_score"]
+            row["theme_name"]             = align["theme_name"]
+            row["theme_state"]            = align["theme_state"]
+            row["regime_alignment_score"] = boost
+            row["regime_alignment_label"] = align["regime_alignment_label"]
+            row["thematic_badges"]        = align["thematic_badges"]
+            row["dead_zone_warning"]      = align["dead_zone_warning"]
+            row["base_score"]             = base
+            row["final_score"]            = round(base + boost, 2)
+    except Exception as _tc_err:
+        print(f"[SCREENER_ROUTER] thematic overlay error: {_tc_err}")
+    # ── end thematic overlay ─────────────────────────────────────────────────
+
     http_status = 202 if status == "generating" and not snapshot.get("results") else 200
     if http_status == 202:
         return JSONResponse(status_code=202, content=result)

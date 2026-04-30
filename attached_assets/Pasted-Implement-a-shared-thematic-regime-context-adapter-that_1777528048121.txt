@@ -1,0 +1,265 @@
+Implement a shared thematic/regime context adapter that reuses the existing main agent / Home prompt thematic context instead of creating a second competing thematic engine.
+
+Context:
+The backend is the source of truth. Do NOT change frontend yet. Do NOT change Earnings at all. Earnings already has its own thematic screener and is working well.
+
+Goal:
+Make the same thematic/regime intelligence currently used by the main agent / Home prompt buttons available to non-chat backend features, especially:
+1. TA Screener / Terminal TA prompt path
+2. Options Flow page
+
+Important:
+Do not build a brand-new thematic engine from scratch unless absolutely necessary. First find and reuse the existing context builders/caches that the main agent already uses.
+
+Step 1 — Audit exact existing path
+Trace the Home prompt button / preset prompt path into the backend.
+
+Find:
+- the endpoint called by Home prompt buttons, likely POST /api/query
+- TradingAgent.handle_query()
+- _handle_query_inner()
+- any shared context / market context / regime / theme / sector / Grok / FRED builder functions used before the model responds
+
+Identify the exact existing functions and caches that provide:
+- macro_regime
+- shared_market_regime
+- sector leadership / sector posture
+- FRED macro context
+- theme leadership / theme rotation
+- Grok/X consensus thematic ideas
+- Polymarket context, if currently included
+- any institutional / market context used by main prompts
+
+Print/log a short implementation note in comments or final summary showing exactly what was reused.
+
+Step 2 — Create a shared cached adapter
+Create a reusable read-only provider, preferably:
+
+backend/services/thematic_context_provider.py
+
+Expose a function/class like:
+
+get_shared_thematic_context(force_refresh: bool = False) -> dict
+
+or:
+
+class ThematicContextProvider:
+    async def get_snapshot(force_refresh: bool = False) -> dict
+
+This provider should reuse existing context/caches from the main agent path. It should NOT trigger expensive LLM calls during normal reads.
+
+Normal behavior:
+- Read existing cached regime / sector / theme / X consensus / macro data where available
+- Normalize into one simple structured snapshot
+- Cache the normalized snapshot with a short TTL, around 10–15 minutes
+- Return a safe fallback snapshot if any source fails
+
+Required output shape:
+
+{
+  "macro_regime": "...",
+  "active_themes": [
+    {
+      "name": "...",
+      "score": 0.0,
+      "source": "...",
+      "evidence": ["..."],
+      "related_etfs": ["..."],
+      "related_tickers": ["..."]
+    }
+  ],
+  "emerging_themes": [
+    {
+      "name": "...",
+      "score": 0.0,
+      "source": "...",
+      "evidence": ["..."],
+      "related_etfs": ["..."],
+      "related_tickers": ["..."]
+    }
+  ],
+  "dead_zones": [
+    {
+      "name": "...",
+      "score": 0.0,
+      "source": "...",
+      "evidence": ["..."],
+      "related_etfs": ["..."],
+      "related_tickers": ["..."]
+    }
+  ],
+  "sector_leaders": [
+    {
+      "sector": "...",
+      "ticker": "...",
+      "score": 0.0,
+      "posture": "leading/improving/neutral/weakening/lagging"
+    }
+  ],
+  "sector_laggards": [
+    {
+      "sector": "...",
+      "ticker": "...",
+      "score": 0.0,
+      "posture": "leading/improving/neutral/weakening/lagging"
+    }
+  ],
+  "risk_notes": [],
+  "last_updated": "...",
+  "source_health": {
+    "regime": "ok/fallback/error",
+    "sector_rotation": "ok/fallback/error",
+    "theme_rotation": "ok/fallback/error",
+    "x_consensus": "ok/fallback/error",
+    "polymarket": "ok/fallback/error"
+  }
+}
+
+Rules:
+- No hard dependency on every source being available.
+- Never 500 because one cache/source fails.
+- Do not call Claude/Gemini/Grok just to generate this snapshot during normal endpoint calls.
+- If existing LLM-generated cached summaries exist, they can be read.
+- If Polymarket is not already included in the main prompt context, include it only if there is already a cheap cached function. Otherwise mark polymarket as fallback/missing and do not add expensive work yet.
+- Keep this provider additive and read-only.
+
+Step 3 — Add backend endpoint for validation
+Add:
+
+GET /api/thematic-context/snapshot
+
+Optional:
+POST /api/thematic-context/refresh
+
+The GET endpoint should return the normalized cached snapshot instantly.
+The POST refresh endpoint can force-refresh non-expensive cached data only. It must not trigger costly multi-agent scans.
+
+Step 4 — Reuse in AI Terminal / main agent path
+Update the main agent context injection only if safe and minimal.
+
+Goal:
+The main /api/query path should call the shared provider, or the provider should wrap exactly the same logic the main path already used.
+
+Do not degrade current prompt response quality.
+Keep injected context concise:
+- macro regime
+- top 3 active themes
+- top 2 emerging themes
+- top 3 dead zones
+- top sector leaders/laggards
+
+Do not flood the LLM context window.
+
+Step 5 — Reuse in TA Screener path
+Find the backend TA Screener / Terminal TA prompt path.
+
+Add thematic context as an additive ranking/filter overlay:
+- Do not rewrite the TA screener
+- Do not remove current TA scoring
+- Add fields to each result where possible:
+  - theme_name
+  - theme_state: active/emerging/dead_zone/neutral/unknown
+  - regime_alignment_score
+  - regime_alignment_label
+  - thematic_badges
+  - dead_zone_warning
+  - base_score
+  - final_score
+
+If a ticker cannot be mapped to a theme, leave it neutral/unknown and do not penalize heavily.
+
+Default behavior:
+- Keep current results visible
+- Apply a modest boost for active/emerging theme alignment
+- Apply a modest penalty or warning for dead zones
+- Prefer “regime-aligned first” sorting if it does not break existing UX
+- Do not hard-filter unless there is already an explicit user toggle/request
+
+Step 6 — Reuse in Options Flow page
+Find the backend Options Flow page endpoints/scoring.
+
+Add thematic context as an additive overlay:
+- Do not rewrite unusual options scoring
+- Do not remove current composite_score logic
+- Do not add LLM calls to Options Flow
+- Use the shared thematic snapshot only
+
+Add fields to each option flow result:
+- theme_name
+- theme_state: active/emerging/dead_zone/neutral/unknown
+- sector_alignment
+- macro_fit
+- regime_alignment_score
+- thematic_badges
+- dead_zone_warning
+- base_composite_score
+- final_composite_score
+
+Scoring:
+- Active theme alignment: modest boost
+- Emerging theme alignment: smaller boost
+- Dead zone: modest penalty or warning
+- Strong unusual flow should still show even if theme is weak
+- Do not hide contrarian flow
+
+Step 7 — Ticker/theme mapping
+Use existing mappings first. Do not create a giant new taxonomy if one already exists.
+
+Search and reuse:
+- existing theme maps
+- sector_rotation theme universe
+- Home THEME_MAP
+- Strategy Screener / playbook taxonomy
+- X consensus theme leadership mappings
+- ETF/theme mapping files
+
+If mapping is incomplete, create a small helper:
+
+backend/services/theme_ticker_mapper.py
+
+It should:
+- map ticker → theme(s)
+- map ETF proxy → theme
+- map sector ETF → sector posture
+- support unknown safely
+
+Keep this minimal for now. Do not overbuild.
+
+Step 8 — Tests / validation
+After implementation, run backend validation:
+
+1. Start backend.
+2. Hit:
+   - GET /api/thematic-context/snapshot
+3. Verify it returns:
+   - macro_regime
+   - active_themes
+   - emerging_themes
+   - dead_zones
+   - sector_leaders
+   - source_health
+4. Hit the main /api/query path with a Home-style prompt and confirm no regression.
+5. Hit TA Screener path and confirm added fields exist.
+6. Hit Options Flow endpoint and confirm added fields exist.
+7. Confirm Earnings endpoints/files were not modified.
+
+Step 9 — Output summary
+At the end, report:
+- Files changed
+- Existing functions/caches reused
+- New endpoint(s)
+- Whether any expensive LLM calls are avoided
+- TA Screener fields added
+- Options Flow fields added
+- Confirmation Earnings was untouched
+- Any source gaps/fallbacks found
+
+Guardrails:
+- Do not change Earnings.
+- Do not change frontend.
+- Do not introduce a second competing thematic engine.
+- Do not add expensive LLM calls to screeners.
+- Do not break existing response shapes; only add optional fields.
+- Never let missing thematic context cause a 500.
+- Prefer additive overlays over hard filters.
+- Keep the implementation simple and reversible.

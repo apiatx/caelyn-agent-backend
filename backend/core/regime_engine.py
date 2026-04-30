@@ -70,6 +70,15 @@ async def detect_market_regime(market_data_service) -> dict:
     _regime_cache["expires"] = now + REGIME_CACHE_TTL
     if not result.get("reused_cache"):
         _last_known_regime = {"regime": result["regime"], "confidence": result["confidence"]}
+
+    # Write-through: make regime available to any endpoint without data_service dependency.
+    # Reused by thematic_context_provider.get_shared_thematic_context() and context_broker.
+    try:
+        from data.cache import cache as _cache
+        _cache.set("regime:current_v1", result, REGIME_CACHE_TTL)
+    except Exception:
+        pass
+
     return result
 
 

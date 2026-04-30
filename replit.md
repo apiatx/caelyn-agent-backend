@@ -47,6 +47,31 @@ The Caelyn AI platform is built on a FastAPI Python backend, running on port 500
 - **Caching:** Redis or an in-memory dictionary-based cache is used for transient data (e.g., Finnhub quotes, FMP API responses) with defined TTLs.
 - **Universe Filtering:** Implemented with strict rules for Hyperliquid assets to ensure data quality, including volume gates for spot markets and allowlists.
 
+## Thematic Context Adapter (Apr 2025)
+
+A shared read-only thematic/regime/sector context layer was added to make the same intelligence used by the main agent available to non-chat endpoints — without creating a competing engine and without adding LLM calls to screeners.
+
+**New Files:**
+- `backend/services/thematic_context_provider.py` — Normalized snapshot aggregating regime, sector rotation, theme ETF RS scores, and X consensus. Cached as `thematic_context:snapshot:v1` (10 min TTL). Never raises.
+- `backend/services/theme_ticker_mapper.py` — Ticker→theme index built from `home_service.THEME_MAP` + `THEME_ETF_UNIVERSE`. O(1) lookups. Provides `get_ticker_theme_alignment()` for per-row annotation.
+
+**Modified Files:**
+- `backend/core/regime_engine.py` — Added write-through: `detect_market_regime()` now also writes result to `cache.set("regime:current_v1", ...)` so any endpoint can read it without `data_service`.
+- `backend/agent/context_broker.py` — `read_shared_context()` now also reads `regime:current_v1` and `thematic_context:snapshot:v1` (if pre-warmed). `build_context_overlay()` injects `shared_macro_regime`, `shared_active_themes`, `shared_emerging_themes` into LLM context.
+- `backend/main.py` — Added `GET /api/thematic-context/snapshot` and `POST /api/thematic-context/refresh`. Options screener adds 9 additive `theme_*` fields per ticker row.
+- `backend/services/playbook/strategy_screener/screener_router.py` — Populates `regime_context` (was always `null`); adds `theme_name`, `theme_state`, `regime_alignment_score`, `regime_alignment_label`, `thematic_badges`, `dead_zone_warning`, `base_score`, `final_score` per result row.
+
+**Cache sources reused (no new engines):**
+- `regime:current_v1` (new write-through from regime_engine)
+- `sr:dashboard:v1` (sector rotation background loop)
+- `sr:theme_data:v2` (sector rotation theme service)
+- `thematic_context:snapshot:v1` (self-populated, 10 min)
+- `data/x_consensus_weekly.json` (X consensus daily snapshot)
+- `data/sector_rotation_analysis.json` (Gemini disk fallback)
+- `notifai_weekly_summary_v2`, `fred:quick_macro` (existing)
+
+**Earnings: untouched.**
+
 ## External Dependencies
 
 The Caelyn AI platform integrates with several external services and APIs to gather and process financial data:

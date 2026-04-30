@@ -100,6 +100,32 @@ def read_shared_context() -> dict:
             if isinstance(fed, dict) and "current_rate" in fed:
                 ctx["_macro_fed_rate"] = str(fed["current_rate"])
 
+        # ── 5. Macro regime tag (regime_engine write-through) ─────────────────
+        # Written by core/regime_engine.detect_market_regime after any /api/query.
+        # Safe to read here: no API call, no LLM call.
+        regime_snap = cache.get("regime:current_v1")
+        if regime_snap and isinstance(regime_snap, dict):
+            tag = (regime_snap.get("regime") or "")[:40]
+            if tag:
+                ctx["_macro_regime_tag"] = tag
+
+        # ── 6. Thematic snapshot — active/emerging themes (if already cached) ─
+        # Read thematic_context:snapshot:v1 only if it already exists in cache.
+        # We do NOT call get_shared_thematic_context() here to avoid circular
+        # dependency; the snapshot is built lazily by /api/thematic-context/* or
+        # by the options/screener/strategy-screener overlays.
+        theme_snap = cache.get("thematic_context:snapshot:v1")
+        if theme_snap and isinstance(theme_snap, dict):
+            active   = [t.get("name", "") for t in theme_snap.get("active_themes",   [])[:3] if t.get("name")]
+            emerging = [t.get("name", "") for t in theme_snap.get("emerging_themes", [])[:2] if t.get("name")]
+            dead     = [t.get("name", "") for t in theme_snap.get("dead_zones",      [])[:2] if t.get("name")]
+            if active:
+                ctx["_active_themes"]   = ", ".join(active)[:180]
+            if emerging:
+                ctx["_emerging_themes"] = ", ".join(emerging)[:120]
+            if dead:
+                ctx["_dead_zone_themes"] = ", ".join(dead)[:120]
+
     except Exception as e:
         print(f"[CONTEXT_BROKER] read_shared_context error (non-fatal): {e}")
 
@@ -155,6 +181,29 @@ def build_context_overlay(category: str, ctx: dict) -> Optional[dict]:
     fed_rate = ctx.get("_macro_fed_rate", "")
     if fed_rate:
         overlay["shared_macro_fed_rate"] = f"Fed Funds: {fed_rate}%"[:60]
+
+    # ── Macro regime tag (from regime_engine write-through) ───────────────────
+    regime_tag = ctx.get("_macro_regime_tag", "")
+    if regime_tag and "shared_market_regime" not in overlay:
+        # Only inject if sector rotation posture not already set
+        overlay["shared_macro_regime"] = regime_tag[:40]
+    elif regime_tag:
+        # Append tag to existing regime string (e.g. "Defensive | risk_off")
+        existing = overlay.get("shared_market_regime", "")
+        if regime_tag not in existing:
+            overlay["shared_market_regime"] = f"{existing} [{regime_tag}]"[:190]
+
+    # ── Active themes (top 3 from thematic snapshot, if cached) ──────────────
+    # Only included when snapshot has already been built by a prior request.
+    # Concise: "AI Networking, Semiconductors, Datacenter" (≤180 chars).
+    active_themes = ctx.get("_active_themes", "")
+    if active_themes:
+        overlay["shared_active_themes"] = f"Active: {active_themes}"[:190]
+
+    # ── Emerging themes (top 2) ───────────────────────────────────────────────
+    emerging_themes = ctx.get("_emerging_themes", "")
+    if emerging_themes:
+        overlay["shared_emerging_themes"] = f"Emerging: {emerging_themes}"[:140]
 
     return overlay if overlay else None
 

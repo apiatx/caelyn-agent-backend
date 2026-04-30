@@ -6615,6 +6615,40 @@ def _filter_master_snapshot(snapshot: dict, tab: str | None) -> dict:
     }
 
 
+# ── /api/thematic-context — shared thematic/regime snapshot endpoints ─────────
+
+@app.get("/api/thematic-context/snapshot")
+@limiter.limit("60/minute")
+async def thematic_context_snapshot(request: Request):
+    """
+    Return the normalized thematic/regime/sector snapshot.
+
+    Sources reused (no LLM calls during this endpoint):
+      regime:current_v1, sr:dashboard:v1, sr:theme_data:v2,
+      x_consensus_weekly.json, sector_rotation_analysis.json
+
+    Schema:
+      macro_regime, active_themes, emerging_themes, dead_zones,
+      sector_leaders, sector_laggards, risk_notes, source_health
+    """
+    from services.thematic_context_provider import get_shared_thematic_context
+    snap = get_shared_thematic_context(force_refresh=False)
+    return {"ok": True, "snapshot": snap}
+
+
+@app.post("/api/thematic-context/refresh")
+@limiter.limit("10/minute")
+async def thematic_context_refresh(request: Request):
+    """
+    Force-rebuild the thematic snapshot from existing caches.
+    Does NOT trigger Claude/Gemini/Grok or any multi-API scan.
+    Safe to call manually to flush the 10-minute cache.
+    """
+    from services.thematic_context_provider import get_shared_thematic_context
+    snap = get_shared_thematic_context(force_refresh=True)
+    return {"ok": True, "refreshed": True, "snapshot": snap}
+
+
 # ── /api/options/screener — master unified leaderboard endpoint ──────────────
 
 @app.get("/api/options/screener")
@@ -6726,6 +6760,38 @@ async def options_screener(
         c for c in snap.get("all_contracts", [])
         if c.get("ticker") in filtered_syms
     ]
+
+    # ── Additive thematic overlay (no LLM calls, no score changes) ───────────
+    # Reads pre-populated caches only: regime:current_v1, sr:dashboard:v1,
+    # sr:theme_data:v2, x_consensus_weekly.json.  Never raises, never 500.
+    try:
+        from services.thematic_context_provider import get_shared_thematic_context
+        from services.theme_ticker_mapper import get_ticker_theme_alignment
+        _tc = get_shared_thematic_context()
+        _active    = _tc.get("active_themes", [])
+        _emerging  = _tc.get("emerging_themes", [])
+        _dead      = _tc.get("dead_zones", [])
+        _macro_reg = _tc.get("macro_regime")
+        _sec_lead  = {e["ticker"] for e in _tc.get("sector_leaders", []) if e.get("ticker")}
+
+        for row in tickers:
+            sym  = (row.get("ticker") or "").upper()
+            base = float(row.get("composite_score") or 0)
+            align = get_ticker_theme_alignment(sym, _active, _emerging, _dead)
+            boost = align["regime_alignment_score"]
+            final = round(base + boost, 2)
+            row["theme_name"]             = align["theme_name"]
+            row["theme_state"]            = align["theme_state"]
+            row["sector_alignment"]       = sym in _sec_lead
+            row["macro_fit"]              = _macro_reg
+            row["regime_alignment_score"] = boost
+            row["thematic_badges"]        = align["thematic_badges"]
+            row["dead_zone_warning"]      = align["dead_zone_warning"]
+            row["base_composite_score"]   = base
+            row["final_composite_score"]  = final
+    except Exception as _tc_err:
+        print(f"[OPTIONS_SCREENER] thematic overlay error: {_tc_err}")
+    # ── end thematic overlay ─────────────────────────────────────────────────
 
     meta = _snap_meta_master(snap, stale)
     return {
