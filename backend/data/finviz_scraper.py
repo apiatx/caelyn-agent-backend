@@ -44,9 +44,9 @@ class FinvizScraper:
         if cached is not None:
             return cached
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(follow_redirects=True) as client:
                 resp = await client.get(
-                    f"https://finviz.com/screener.ashx?v=111&s={filters}",
+                    f"https://finviz.com/screener?v=111&s={filters}",
                     headers=self.HEADERS,
                     timeout=10,
                 )
@@ -181,22 +181,22 @@ class FinvizScraper:
             return cached
         try:
             if isinstance(params, str):
-                url = f"https://finviz.com/screener.ashx?{params}"
+                url = f"https://finviz.com/screener?{params}"
                 print(f"[Finviz] Custom screen URL: {url}")
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(follow_redirects=True) as client:
                     resp = await client.get(
                         url,
                         headers=self.HEADERS,
                         timeout=10,
                     )
             else:
-                url = "https://finviz.com/screener.ashx"
+                url = "https://finviz.com/screener"
                 all_params = {
                     "v": "111",
                     **params,
                 }
                 print(f"[Finviz] Custom screen params: {all_params}")
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(follow_redirects=True) as client:
                     resp = await client.get(
                         url,
                         params=all_params,
