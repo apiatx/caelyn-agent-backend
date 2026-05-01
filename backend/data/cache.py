@@ -38,6 +38,10 @@ class TTLCache:
         """Store a value with a TTL in seconds."""
         self._store[key] = (value, time.time() + ttl_seconds)
 
+    def delete(self, key: str) -> None:
+        """Remove a single key unconditionally."""
+        self._store.pop(key, None)
+
     @traceable(name="clear")
     def clear(self):
         """Clear all cached values."""

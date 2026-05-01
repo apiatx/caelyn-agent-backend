@@ -1,0 +1,80 @@
+Add 5Y support to the canonical Themes by Relative Strength backend.
+
+Context:
+The frontend Themes page now uses the canonical endpoint:
+
+GET /api/themes/relative-strength?timeframe=1D|7D|30D|YTD|1Y&classification=all|sector|theme|sub_theme
+
+We need to add 5Y as a supported timeframe everywhere in this service.
+
+Do not change frontend.
+Do not change Earnings.
+Do not change Options Flow.
+Do not change TA Screener.
+Do not change Watchlist.
+Do not change Portfolio.
+Do not change Chain Reaction.
+Do not add LLM calls.
+
+Goal:
+Support:
+GET /api/themes/relative-strength?timeframe=5Y
+
+And include 5Y return data wherever multi-timeframe performance fields are returned.
+
+Provider rules:
+- 5Y should use FMP historical price data as primary.
+- Tradier historical can be fallback if already supported.
+- yfinance emergency fallback only.
+- Do not use FMP for 1D unless Tradier quote/change is unavailable.
+- Do not refetch ETF holdings for 5Y unless ETF holdings cache is expired.
+
+Cache/refresh policy:
+- 5Y should follow the historical timeframe policy.
+- Market hours TTL: 15 minutes.
+- Off-hours/weekends TTL: 60 minutes.
+- Add cache key:
+  themes:relative_strength:v1:5Y
+- Add 5Y to background warmup loop with 7D/30D/YTD/1Y.
+- Do not refresh 5Y every 1 minute.
+- Keep refresh-in-progress guard per timeframe.
+
+Implementation requirements:
+1. Add 5Y to supported timeframe validation.
+2. Add 5Y to all timeframe lists/constants.
+3. Add 5Y return calculation using approximately 5 years of daily historical prices.
+4. Add 5Y to each row’s performance object if such object exists.
+5. Add 5Y to endpoint response where 1D/7D/30D/YTD/1Y are already included.
+6. Add 5Y to leaders/laggards logic:
+   - If timeframe=5Y, leaders/laggards should rank by 5Y return.
+7. Add 5Y to LKG persistence.
+8. Add 5Y to source_health/cache metadata.
+
+Validation:
+Run:
+- GET /api/themes/relative-strength?timeframe=5Y
+- GET /api/themes/relative-strength?timeframe=1D
+- GET /api/themes/relative-strength?timeframe=7D
+- GET /api/themes/relative-strength?timeframe=30D
+- GET /api/themes/relative-strength?timeframe=YTD
+- GET /api/themes/relative-strength?timeframe=1Y
+
+Confirm:
+- 5Y returns 55 rows.
+- 5Y rows include return_pct, rs_score, state, state_reason, leaders, laggards.
+- 5Y uses FMP historical primary where available.
+- 5Y cache_ttl_s is 900 seconds during market hours.
+- 5Y background warmup is included with historical timeframes.
+- 1D still uses Tradier quote/change primary.
+- No LLM calls.
+- No unrelated pages changed.
+
+Delivery report:
+Return:
+1. Files changed.
+2. 5Y provider path.
+3. 5Y cache/TTL behavior.
+4. 5Y warmup behavior.
+5. Sample 5Y row.
+6. Validation results.
+7. Confirmation no unrelated pages changed.

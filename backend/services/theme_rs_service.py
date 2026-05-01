@@ -7,7 +7,7 @@ Exposes:
 
 Provider hierarchy (no LLM calls):
   1D quote:        Tradier batch → Finnhub individual fallback
-  7D/30D/YTD/1Y:  FMP stable historical-price-eod primary
+  7D/30D/YTD/1Y/5Y: FMP stable historical-price-eod primary (full history)
                    → Tradier daily history fallback
                    → yfinance emergency fallback
 
@@ -25,15 +25,15 @@ State:
 
 Cache & freshness:
   key:  themes:relative_strength:v1:{tf}
-  TTL:  1D  → 60s market hours / 3600s off-hours
-        7D+ → 900s market hours / 3600s off-hours
+  TTL:  1D       → 60s market hours / 3600s off-hours
+        7D/5Y+ → 900s market hours / 3600s off-hours
   disk: backend/data/themes_rs_lkg.json (atomic write, never overwrite with bad data)
 
 Refresh safety:
   - Per-timeframe asyncio.Lock prevents duplicate concurrent refreshes.
   - Stale-while-revalidate: cache miss with valid LKG → serve LKG immediately,
     kick background refresh. No user-facing cold wait after first load.
-  - Background warmup loop: 1D every ~60s, 7D/30D/YTD/1Y every ~15min.
+  - Background warmup loop: 1D every ~60s, 7D/30D/YTD/1Y/5Y every ~15min.
 """
 from __future__ import annotations
 
@@ -66,8 +66,11 @@ from services.sector_rotation.providers import (
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-_CACHE_KEY   = "themes:relative_strength:v1"
-_LKG_PATH    = Path(__file__).parent.parent / "data" / "themes_rs_lkg.json"
+_CACHE_KEY       = "themes:relative_strength:v1"
+_LKG_PATH        = Path(__file__).parent.parent / "data" / "themes_rs_lkg.json"
+# Bump this whenever a new timeframe or field is added to theme rows.
+# warmup_theme_rs() uses it to skip seeding new TF caches from old LKG rows.
+_LKG_SCHEMA_VER  = "v2_5y"
 _XC_PATH     = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
 _HIST_TTL    = 3600       # 1h — daily bars don't change intraday
 _BENCHMARKS  = ["SPY", "QQQ"]
@@ -76,8 +79,9 @@ _TIMEFRAME_BARS: dict[str, int] = {
     "1D":  1,
     "7D":  5,
     "30D": 22,
-    "YTD": 0,   # special: _ytd_change()
+    "YTD": 0,    # special: _ytd_change()
     "1Y":  252,
+    "5Y":  1250, # ~5Y trading days; FMP full-history returns ~1256 bars (need n+1)
 }
 
 # Top N holdings to pull from primary proxy ETF for leader/laggard universe
@@ -95,7 +99,7 @@ _TTL_OFF_HOURS   = 3600    # 60 minutes — all timeframes off-hours/weekends
 # asyncio.Lock per timeframe: only one concurrent refresh per timeframe allowed.
 _refresh_locks: dict[str, asyncio.Lock] = {}
 # When each timeframe was last successfully computed (unix ts).
-_last_computed: dict[str, float] = {tf: 0.0 for tf in ("1D", "7D", "30D", "YTD", "1Y")}
+_last_computed: dict[str, float] = {tf: 0.0 for tf in ("1D", "7D", "30D", "YTD", "1Y", "5Y")}
 
 
 def _get_lock(tf: str) -> asyncio.Lock:
@@ -126,6 +130,11 @@ def _ttl_for_timeframe(tf: str) -> int:
 
 # ── LKG helpers ────────────────────────────────────────────────────────────────
 
+def _lkg_has_5y(rows: list[dict]) -> bool:
+    """Return True if any row has a non-null performance["5Y"] value."""
+    return any(r.get("performance", {}).get("5Y") is not None for r in rows)
+
+
 def _load_lkg() -> Optional[list[dict]]:
     try:
         if not _LKG_PATH.exists():
@@ -133,6 +142,9 @@ def _load_lkg() -> Optional[list[dict]]:
         raw = json.loads(_LKG_PATH.read_text())
         if isinstance(raw, list) and raw:
             return raw
+        # v2_5y format: {"_schema": ..., "rows": [...]}
+        if isinstance(raw, dict) and isinstance(raw.get("rows"), list) and raw["rows"]:
+            return raw["rows"]
     except Exception as e:
         print(f"[THEME_RS] LKG load error: {e}")
     return None
@@ -165,10 +177,18 @@ def _save_lkg(data: list[dict]) -> None:
     if not data:
         print("[THEME_RS] LKG save skipped — empty result")
         return
+    # Only save if the new data improves on the existing LKG.
+    # Specifically: do NOT overwrite a 5Y-capable LKG with a 5Y-null one.
+    if not _lkg_has_5y(data):
+        existing = _load_lkg()
+        if existing and _lkg_has_5y(existing):
+            print("[THEME_RS] LKG save skipped — new data lacks 5Y, existing LKG has it")
+            return
     try:
         _LKG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"_schema": _LKG_SCHEMA_VER, "rows": data}
         tmp = _LKG_PATH.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=2, default=str))
+        tmp.write_text(json.dumps(payload, indent=2, default=str))
         tmp.replace(_LKG_PATH)
     except Exception as e:
         print(f"[THEME_RS] LKG save error: {e}")
@@ -797,6 +817,7 @@ async def _build_theme_row(
             "30D": all_perf["30D"],
             "YTD": all_perf["YTD"],
             "1Y":  all_perf["1Y"],
+            "5Y":  all_perf["5Y"],
         },
         "breadth_pct":           breadth,
         "pct_from_50d":          pct_from_50d,
@@ -949,8 +970,11 @@ async def _compute(tf: str) -> list[dict]:
         for sym in all_dynamic_stocks_list:
             histories.setdefault(sym, ([], "unavailable"))
     else:
-        print(f"[THEME_RS] {tf}: yfinance history for {len(all_dynamic_stocks_list)} dynamic stocks …")
-        yf_tasks = [fetch_etf_history(s, days=400) for s in all_dynamic_stocks_list]
+        # 5Y needs ~5 years of per-stock history for leader/laggard ranking;
+        # all other historical timeframes need ~400 days (covers 30D/YTD/1Y easily).
+        yf_days = 1350 if tf == "5Y" else 400
+        print(f"[THEME_RS] {tf}: yfinance history ({yf_days}d) for {len(all_dynamic_stocks_list)} dynamic stocks …")
+        yf_tasks = [fetch_etf_history(s, days=yf_days) for s in all_dynamic_stocks_list]
         yf_results = await asyncio.gather(*yf_tasks, return_exceptions=True)
         for sym, result in zip(all_dynamic_stocks_list, yf_results):
             if isinstance(result, list) and result:
@@ -1062,7 +1086,7 @@ async def _warmup_loop() -> None:
             asyncio.create_task(_locked_refresh("1D"))
 
         # Historical: target 900s since last successful compute
-        for tf in ("7D", "30D", "YTD", "1Y"):
+        for tf in ("7D", "30D", "YTD", "1Y", "5Y"):
             if now - _last_computed.get(tf, 0) >= _TTL_HIST_MARKET:
                 asyncio.create_task(_locked_refresh(tf))
 
@@ -1072,20 +1096,43 @@ async def warmup_theme_rs() -> None:
     Called once at startup (non-blocking).
     Loads LKG into all timeframe caches immediately so the first user request
     is always fast, then starts the background refresh loop.
+
+    Schema guard: if the on-disk LKG predates 5Y support (all performance["5Y"]
+    values are None), we skip seeding the 5Y cache slot.  This forces the
+    warmup loop to compute a fresh 5Y result with the correct bar threshold
+    instead of poisoning the cache with all-None 5Y data.
     """
     lkg = _load_lkg()
+    has_5y_lkg = _lkg_has_5y(lkg) if lkg else False
+
     if lkg:
-        print(f"[THEME_RS] Startup: LKG loaded ({len(lkg)} themes) — seeding all caches")
+        print(
+            f"[THEME_RS] Startup: LKG loaded ({len(lkg)} themes, "
+            f"5Y_capable={has_5y_lkg}) — seeding caches"
+        )
         for tf in list(_TIMEFRAME_BARS.keys()):
             cache_key = f"{_CACHE_KEY}:{tf}"
+            # Schema guard: skip 5Y seed if LKG predates 5Y support.
+            if tf == "5Y" and not has_5y_lkg:
+                print("[THEME_RS] Startup: skipping 5Y cache seed (pre-5Y LKG)")
+                continue
             if cache.get(cache_key) is None:
-                # Seed with LKG so first request returns instantly
                 seed = _lkg_payload(lkg, tf, source="lkg_startup")
                 seed["_cache_set_at"] = time.time()
-                # Short TTL so the background refresh replaces it quickly
                 cache.set(cache_key, seed, 120)
     else:
         print("[THEME_RS] Startup: no LKG found — cold start, background warmup will populate")
+
+    # Invalidate any stale 5Y in-memory entry that has all-None 5Y values.
+    # This handles the case where a previous session cached a pre-fix 5Y result
+    # (computed with threshold=1260) that survived via the LKG seed path.
+    _5y_key = f"{_CACHE_KEY}:5Y"
+    stale = cache.get(_5y_key)
+    if stale is not None:
+        themes_in_cache = stale.get("themes", [])
+        if themes_in_cache and not _lkg_has_5y(themes_in_cache):
+            print("[THEME_RS] Startup: stale 5Y cache (all-None 5Y perf) — invalidating")
+            cache.delete(_5y_key)
 
     asyncio.create_task(_warmup_loop())
     print("[THEME_RS] Warmup task created (non-blocking)")

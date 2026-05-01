@@ -1,7 +1,7 @@
 """
 Themes by Relative Strength — HTTP endpoints.
 
-GET  /api/themes/relative-strength?timeframe=1D|7D|30D|YTD|1Y[&classification=all|sector|theme|sub_theme]
+GET  /api/themes/relative-strength?timeframe=1D|7D|30D|YTD|1Y|5Y[&classification=all|sector|theme|sub_theme]
 GET  /api/themes/relative-strength/refresh  (force-refresh cache, same params)
 GET  /api/themes/list                        (static theme registry)
 """
@@ -13,7 +13,7 @@ from services.theme_rs_universe import THEME_RS_UNIVERSE
 
 router = APIRouter(prefix="/api/themes", tags=["themes"])
 
-_VALID_TIMEFRAMES      = {"1D", "7D", "30D", "YTD", "1Y"}
+_VALID_TIMEFRAMES      = {"1D", "7D", "30D", "YTD", "1Y", "5Y"}
 _VALID_CLASSIFICATIONS = {"all", "sector", "theme", "sub_theme"}
 
 
@@ -21,7 +21,7 @@ _VALID_CLASSIFICATIONS = {"all", "sector", "theme", "sub_theme"}
 async def themes_relative_strength(
     timeframe: str = Query(
         "30D",
-        description="Return timeframe: 1D | 7D | 30D | YTD | 1Y",
+        description="Return timeframe: 1D | 7D | 30D | YTD | 1Y | 5Y",
     ),
     classification: str = Query(
         "all",
@@ -73,7 +73,7 @@ async def themes_relative_strength(
 
 @router.get("/relative-strength/refresh")
 async def themes_relative_strength_refresh(
-    timeframe: str = Query("30D", description="Timeframe to recompute"),
+    timeframe: str = Query("30D", description="Timeframe to recompute: 1D | 7D | 30D | YTD | 1Y | 5Y"),
     classification: str = Query(
         "all",
         description="Filter by classification: all | sector | theme | sub_theme",

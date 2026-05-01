@@ -1,0 +1,94 @@
+Stop waiting on the current 5Y warmup loop. Apply a surgical fix and validate 5Y deterministically.
+
+Current problem:
+The 5Y implementation is mostly done, but validation is stuck because:
+1. Old in-memory/LKG cache was computed before 5Y existed, so performance.5Y is None.
+2. _TIMEFRAME_BARS["5Y"] was initially too strict at 1260 and required 1261 bars.
+3. FMP returns around 1256–1257 daily bars for many symbols, so the correct threshold should be around 1250.
+4. The warmup loop keeps recomputing slowly and old cache can persist for ttl=3600.
+
+Goal:
+Finish 5Y support cleanly without waiting forever and without changing unrelated systems.
+
+Do not change frontend.
+Do not change Earnings.
+Do not change Options Flow.
+Do not change TA Screener.
+Do not change Watchlist.
+Do not change Portfolio.
+Do not change Chain Reaction.
+Do not add LLM calls.
+
+Required fixes:
+
+1. Keep 5Y bar threshold at 1250
+- _TIMEFRAME_BARS["5Y"] = 1250
+- This is acceptable because FMP returns about 1256–1257 bars for ~5 years.
+- Do not revert to 1260.
+
+2. Clear old 5Y cache/LKG pollution
+Add a small schema/version guard to the theme RS LKG/cache handling.
+
+If LKG payload rows do not contain:
+- performance["5Y"]
+or performance["5Y"] is missing entirely,
+then treat that LKG as stale schema for 5Y and do not use it to validate 5Y.
+
+Do not delete all LKG safety globally.
+Only prevent stale pre-5Y LKG from masking the new 5Y result.
+
+Options:
+- bump a THEME_RS_SCHEMA_VERSION constant
+- or add a simple lkg_has_5y check before seeding 5Y cache
+- or force invalidate only themes:relative_strength:v1:5Y cache key on startup if missing 5Y values
+
+3. Add force refresh path for 5Y
+Implement or use an existing force path:
+- get_theme_rs_data(timeframe="5Y", force=True)
+or equivalent
+
+This must bypass old cached 5Y data and recompute with the new 1250 threshold.
+
+4. Do not let 5Y warmup block validation
+Warmup can remain in background, but validation should explicitly force-refresh 5Y once and then read the result.
+
+5. Validation should be targeted
+Run:
+- GET /api/themes/relative-strength?timeframe=5Y&classification=all
+
+Confirm:
+- status 200
+- theme_count = 55
+- source = live or force_refresh/live equivalent
+- cache_ttl_s = 900 during market hours or 3600 off-hours
+- every returned row has performance.5Y key
+- at least most rows have non-null 5Y values
+- top-level return_pct is non-null for timeframe=5Y for most rows
+- leaders/laggards for timeframe=5Y use 5Y returns
+- no old pre-5Y LKG is being served as the 5Y result
+
+6. Validate all regular timeframes still work
+Run:
+- GET /api/themes/relative-strength?timeframe=1D
+- GET /api/themes/relative-strength?timeframe=7D
+- GET /api/themes/relative-strength?timeframe=30D
+- GET /api/themes/relative-strength?timeframe=YTD
+- GET /api/themes/relative-strength?timeframe=1Y
+- GET /api/themes/relative-strength?timeframe=5Y
+
+Confirm all return 55 rows.
+
+7. Do not refetch ETF holdings for this task
+This is price-history support only.
+Do not touch ETF holdings, DTU, ThematicContextProvider, or theme_ticker_mapper.
+
+8. Delivery report
+Return:
+- files changed
+- final _TIMEFRAME_BARS values
+- whether LKG/schema guard was added
+- how stale pre-5Y cache is invalidated
+- 5Y validation result
+- sample 5Y row
+- count of rows with non-null performance.5Y
+- confirmation no unrelated files changed
