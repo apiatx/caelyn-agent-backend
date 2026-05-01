@@ -1,0 +1,259 @@
+Merge the existing Sectors page Themes tab theme universe into the new Themes by Relative Strength backend engine.
+
+Goal:
+Create ONE canonical backend theme registry that includes:
+1. All themes currently displayed in the existing Sectors page Themes tab
+2. All new themes from the new theme relative-strength engine
+3. No duplicate/overlapping theme rows
+
+Do not change frontend yet.
+Do not change Chain Reaction.
+Do not change Earnings.
+Do not change Options Flow.
+Do not change TA Screener.
+Do not add LLM calls.
+
+Current new theme RS files:
+- backend/services/theme_rs_universe.py
+- backend/services/theme_rs_service.py
+- backend/routes/themes.py
+- GET /api/themes/relative-strength?timeframe=1D|7D|30D|YTD|1Y
+- GET /api/themes/list
+
+Task:
+Audit the existing Sectors page Themes tab backend source and merge its themes into theme_rs_universe.py.
+
+Step 1 — Identify old Sectors Themes source
+Find exactly what backend endpoint/service powers the existing Sectors page Themes tab.
+
+Search for:
+- Theme ETFs
+- Theme ETF Baskets
+- sector rotation themes
+- theme_service
+- THEME_ETF_UNIVERSE
+- /api/sectors/relative-strength
+- mode=themes
+- SMH
+- SOXX
+- QTUM
+- LIT
+- SRVR
+- BLOK
+- OIH
+- BOTZ
+- KRE
+- ARKX
+- CIBR
+- SKYY
+- FINX
+- COPX
+- URA
+- XBI
+- ITA
+- XHB
+- FCG
+- IHI
+
+Deliver:
+- old endpoint path
+- old service/file
+- full old theme list
+- old proxy ETF list
+- old display names
+
+Step 2 — Merge old + new theme universe
+Update the canonical theme registry so /api/themes/relative-strength returns the combined universe.
+
+Preserve useful existing Sectors themes, including but not limited to:
+- Semiconductors
+- Semiconductor Equipment
+- Quantum Computing
+- Lithium & Batteries
+- Data Center Infrastructure
+- Crypto Equities / Blockchain
+- Oil Services
+- Robotics & Automation
+- Regional Banks
+- Space Economy
+- Cybersecurity
+- Cloud Software
+- Fintech
+- Copper & Industrial Metals / Copper Miners
+- Nuclear & Uranium / Uranium & Nuclear Energy
+- Biotech
+- Aerospace & Defense / Defense
+- Homebuilders
+- LNG & Natural Gas
+- Medical Devices
+
+Also preserve all new themes from the new theme RS engine:
+- Memory & Storage
+- Rare Earth Metals
+- Uranium & Nuclear Energy
+- Metals & Mining
+- Regional Banks
+- Banks
+- Cybersecurity
+- Robotics & Automation
+- Oil & Gas
+- Tech Mega Caps
+- Lithium & Battery Tech
+- Solar
+- Financials
+- Clean Energy
+- Defense
+- Industrials
+- Utilities
+- Speculative Tech
+- Growth Stocks
+- Small Caps
+- Insurance
+- Chemicals & Materials
+- Agribusiness
+- Equal-Weighted S&P 500
+- Microcaps
+- Travel & Transportation
+- Energy
+- IBD 50
+- Biotech
+- Homebuilders
+- Software
+- Healthcare
+- Drones
+- Tech Equal-Weight
+- Consumer Retail
+- Fintech
+- Silver
+- Gold
+- Copper Miners
+
+Step 3 — Dedupe rules
+Do not remove useful old themes. Only merge true duplicates.
+
+Use this logic:
+- If old and new themes are the same concept, merge into one theme_id.
+- Preserve all proxy ETFs from both old and new versions.
+- Preserve better display names where possible.
+- Preserve candidate/dynamic discovery behavior.
+- Do not show duplicate rows for the same concept.
+
+Examples:
+- “Uranium & Nuclear Energy” and “Nuclear & Uranium” should become one theme.
+  Proxies: URA, URNM, NLR.
+- “Defense” and “Aerospace & Defense” should become one theme unless there is a strong reason to keep both.
+  Proxies: ITA, XAR, PPA.
+- “Copper & Industrial Metals” and “Copper Miners” may be merged only if they are truly the same. If one is broader industrial metals and one is miners, keep both or make one parent/subtheme if the schema supports it.
+- “Lithium & Batteries” and “Lithium & Battery Tech” should become one theme.
+  Proxies: LIT, BATT.
+- “Cybersecurity” should be one theme.
+  Proxies: CIBR, HACK, BUG, IHAK.
+- “Robotics & Automation” should be one theme.
+  Proxies: BOTZ, ROBO, IRBO.
+- “Regional Banks” should be one theme.
+  Proxies: KRE, KBE.
+- “Biotech” should be one theme.
+  Proxies: XBI, IBB, ARKG.
+- “Homebuilders” should be one theme.
+  Proxies: ITB, XHB.
+- “Fintech” should be one theme.
+  Proxies: FINX, ARKF, IPAY.
+- “Oil Services” should remain separate from broad “Oil & Gas” and “Energy.”
+  OIH should stay its own theme.
+- “Cloud Software” should remain separate from broader “Software.”
+  SKYY and IGV/WCLD should not be blindly collapsed.
+- “Data Center Infrastructure” should remain separate from Tech Mega Caps and Memory & Storage.
+  SRVR should stay its own theme.
+- “Quantum Computing” should remain separate.
+  QTUM should stay.
+- “Space Economy” should remain separate.
+  ARKX should stay.
+- “LNG & Natural Gas” should remain separate from broad Energy/Oil & Gas if FCG is the proxy.
+- “Medical Devices” should remain separate from broad Healthcare if IHI is the proxy.
+- “Semiconductors” and “Memory & Storage” should remain separate.
+  Semiconductors can use SMH/SOXX.
+  Memory & Storage should keep DRAM primary, SMH/SOXX fallback only if needed.
+- “Semiconductor Equipment” can remain separate if the old Sectors page had a specific SOXX/semicap theme, but do not duplicate it with broad Semiconductors unless the proxies/meaning differ clearly.
+
+Step 4 — Schema requirements
+Each canonical theme should have:
+- theme_id
+- display_name
+- proxy_type
+- proxy_symbols
+- candidate_symbols / fallback seeds only
+- sector_tags
+- keywords
+- macro_sensitivities
+- duplicate_aliases or aliases if useful
+- parent_theme or category if schema already supports it, otherwise skip
+
+Static candidate_symbols are fallback seeds only.
+Leaders/laggards should still use dynamic sources wherever possible:
+- ETF holdings
+- FMP peers
+- cached X/Grok consensus
+- Dynamic Thematic Universe attribution
+- static fallback only if dynamic sources fail
+
+Step 5 — Endpoint behavior
+After the merge:
+GET /api/themes/list
+should return the merged canonical theme list.
+
+GET /api/themes/relative-strength?timeframe=1D|7D|30D|YTD|1Y
+should return all canonical themes from the merged registry.
+
+Each row should still include:
+- theme_id
+- display_name
+- timeframe
+- return_pct
+- rs_score
+- state
+- state_reason
+- rs_vs_spy
+- rs_vs_qqq
+- breadth
+- proxy_symbols
+- proxy_symbols_used
+- proxy_source_health
+- leader_universe_source
+- leaders
+- laggards
+- last_updated
+
+Step 6 — Validation
+Run:
+- GET /api/themes/list
+- GET /api/themes/relative-strength?timeframe=1D
+- GET /api/themes/relative-strength?timeframe=7D
+- GET /api/themes/relative-strength?timeframe=30D
+- GET /api/themes/relative-strength?timeframe=YTD
+- GET /api/themes/relative-strength?timeframe=1Y
+
+Confirm:
+- old Sectors page Themes tab themes are included in the canonical backend registry
+- new theme RS themes are included
+- duplicate concepts are merged
+- no duplicate rows for the same theme_id
+- useful old themes like QTUM, SRVR, BLOK, ARKX, SKYY, FCG, IHI, OIH are preserved
+- Memory & Storage still attempts DRAM first
+- leaders/laggards still use dynamic sources where available
+- no LLM calls
+- no Chain Reaction changes
+- no Earnings changes
+- no Options Flow changes
+- no TA Screener changes
+
+Delivery report:
+Return:
+1. Old Sectors theme source endpoint/service.
+2. Old theme list found.
+3. New theme list before merge.
+4. Final merged theme count.
+5. Dedupe/alias table.
+6. Preserved old themes.
+7. Confirmed endpoint examples.
+8. Files changed.
+9. Confirmation no unrelated pages changed.

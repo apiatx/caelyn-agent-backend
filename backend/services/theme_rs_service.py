@@ -538,7 +538,7 @@ def _state_reason(
 
     if state == "dead_zone":
         return (
-            f"Bottom-quartile RS ({rs_score:.0f}/100) vs 39-theme universe. "
+            f"Bottom-quartile RS ({rs_score:.0f}/100) vs {len(THEME_RS_UNIVERSE)}-theme universe. "
             f"SPY delta {spy_str}, QQQ delta {qqq_str}. "
             f"Breadth {brd_str} — minimal buying pressure."
         )

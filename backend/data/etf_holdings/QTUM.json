@@ -1,0 +1,487 @@
+{
+  "symbol": "QTUM",
+  "as_of": "2026-05-01",
+  "source": "fmp",
+  "holding_count": 85,
+  "holdings": [
+    {
+      "ticker": "INTC",
+      "name": "Intel Corp",
+      "weight": 2.391
+    },
+    {
+      "ticker": "STM",
+      "name": "STMicroelectronics NV",
+      "weight": 2.162
+    },
+    {
+      "ticker": "NOK",
+      "name": "Nokia Oyj",
+      "weight": 2.142
+    },
+    {
+      "ticker": "MU",
+      "name": "Micron Technology Inc",
+      "weight": 2.024
+    },
+    {
+      "ticker": "3443.TW",
+      "name": "Global Unichip Corp",
+      "weight": 2.006
+    },
+    {
+      "ticker": "ON",
+      "name": "ON Semiconductor Corp",
+      "weight": 1.888
+    },
+    {
+      "ticker": "MRVL",
+      "name": "MARVELL TECHNOLOGY INC",
+      "weight": 1.843
+    },
+    {
+      "ticker": "ONTO",
+      "name": "Onto Innovation Inc",
+      "weight": 1.808
+    },
+    {
+      "ticker": "TSEM",
+      "name": "Tower Semiconductor Ltd",
+      "weight": 1.803
+    },
+    {
+      "ticker": "COHR",
+      "name": "Coherent Corp",
+      "weight": 1.77
+    },
+    {
+      "ticker": "2454.TW",
+      "name": "MediaTek Inc",
+      "weight": 1.753
+    },
+    {
+      "ticker": "MKSI",
+      "name": "MKS Inc",
+      "weight": 1.744
+    },
+    {
+      "ticker": "TER",
+      "name": "Teradyne Inc",
+      "weight": 1.737
+    },
+    {
+      "ticker": "AMD",
+      "name": "Advanced Micro Devices Inc",
+      "weight": 1.652
+    },
+    {
+      "ticker": "IFX.DE",
+      "name": "Infineon Technologies AG",
+      "weight": 1.618
+    },
+    {
+      "ticker": "LSCC",
+      "name": "Lattice Semiconductor Corp",
+      "weight": 1.61
+    },
+    {
+      "ticker": "TXN",
+      "name": "Texas Instruments Inc",
+      "weight": 1.597
+    },
+    {
+      "ticker": "LRCX",
+      "name": "Lam Research Corp",
+      "weight": 1.582
+    },
+    {
+      "ticker": "ASM.AS",
+      "name": "ASM International NV",
+      "weight": 1.573
+    },
+    {
+      "ticker": "ARM",
+      "name": "ARM Holdings PLC",
+      "weight": 1.534
+    },
+    {
+      "ticker": "6723.T",
+      "name": "Renesas Electronics Corp",
+      "weight": 1.511
+    },
+    {
+      "ticker": "AMAT",
+      "name": "Applied Materials Inc",
+      "weight": 1.48
+    },
+    {
+      "ticker": "ADI",
+      "name": "Analog Devices Inc",
+      "weight": 1.474
+    },
+    {
+      "ticker": "KLAC",
+      "name": "KLA CORP",
+      "weight": 1.457
+    },
+    {
+      "ticker": "ABBN.SW",
+      "name": "ABB Ltd",
+      "weight": 1.412
+    },
+    {
+      "ticker": "MCHP",
+      "name": "Microchip Technology Inc",
+      "weight": 1.412
+    },
+    {
+      "ticker": "6503.T",
+      "name": "Mitsubishi Electric Corp",
+      "weight": 1.383
+    },
+    {
+      "ticker": "8035.T",
+      "name": "Tokyo Electron Ltd",
+      "weight": 1.373
+    },
+    {
+      "ticker": "QNC.TO",
+      "name": "Quantum Emotion Corp",
+      "weight": 1.369
+    },
+    {
+      "ticker": "ORA.PA",
+      "name": "ORANGE S.A.",
+      "weight": 1.352
+    },
+    {
+      "ticker": "CRUS",
+      "name": "Cirrus Logic Inc",
+      "weight": 1.332
+    },
+    {
+      "ticker": "ASML",
+      "name": "ASML Holding NV",
+      "weight": 1.326
+    },
+    {
+      "ticker": "TSM",
+      "name": "Taiwan Semiconductor Manufacturing Co Ltd",
+      "weight": 1.318
+    },
+    {
+      "ticker": "NXPI",
+      "name": "NXP Semiconductors NV",
+      "weight": 1.313
+    },
+    {
+      "ticker": "CRWV",
+      "name": "CoreWeave Inc",
+      "weight": 1.307
+    },
+    {
+      "ticker": "GOOGL",
+      "name": "Alphabet Inc",
+      "weight": 1.24
+    },
+    {
+      "ticker": "ALAB",
+      "name": "Astera Labs Inc",
+      "weight": 1.223
+    },
+    {
+      "ticker": "KPN.AS",
+      "name": "Koninklijke KPN NV",
+      "weight": 1.221
+    },
+    {
+      "ticker": "NVEC",
+      "name": "NVE Corp",
+      "weight": 1.179
+    },
+    {
+      "ticker": "CSCO",
+      "name": "Cisco Systems Inc",
+      "weight": 1.177
+    },
+    {
+      "ticker": "HPE",
+      "name": "Hewlett Packard Enterprise Co",
+      "weight": 1.176
+    },
+    {
+      "ticker": "HON",
+      "name": "Honeywell International Inc",
+      "weight": 1.152
+    },
+    {
+      "ticker": "LMT",
+      "name": "Lockheed Martin Corp",
+      "weight": 1.142
+    },
+    {
+      "ticker": "NVDA",
+      "name": "NVIDIA Corp",
+      "weight": 1.121
+    },
+    {
+      "ticker": "3661.TW",
+      "name": "Alchip Technologies Ltd",
+      "weight": 1.109
+    },
+    {
+      "ticker": "NOC",
+      "name": "Northrop Grumman Corp",
+      "weight": 1.076
+    },
+    {
+      "ticker": "SNPS",
+      "name": "Synopsys Inc",
+      "weight": 1.046
+    },
+    {
+      "ticker": "AVGO",
+      "name": "Broadcom Inc",
+      "weight": 1.043
+    },
+    {
+      "ticker": "RTX",
+      "name": "RTX Corp",
+      "weight": 1.04
+    },
+    {
+      "ticker": "BIDU",
+      "name": "Baidu Inc",
+      "weight": 1.036
+    },
+    {
+      "ticker": "6501.T",
+      "name": "Hitachi Ltd",
+      "weight": 1.029
+    },
+    {
+      "ticker": "QCOM",
+      "name": "QUALCOMM Inc",
+      "weight": 1.017
+    },
+    {
+      "ticker": "9432.T",
+      "name": "NTT Inc",
+      "weight": 1.009
+    },
+    {
+      "ticker": "CDNS",
+      "name": "Cadence Design Systems Inc",
+      "weight": 1.006
+    },
+    {
+      "ticker": "NET",
+      "name": "Cloudflare Inc",
+      "weight": 0.991
+    },
+    {
+      "ticker": "2357.TW",
+      "name": "Asustek Computer Inc",
+      "weight": 0.974
+    },
+    {
+      "ticker": "2317.TW",
+      "name": "Hon Hai Precision Industry Co Ltd",
+      "weight": 0.953
+    },
+    {
+      "ticker": "AIR.PA",
+      "name": "AIRBUS GROUP SE",
+      "weight": 0.937
+    },
+    {
+      "ticker": "IONQ",
+      "name": "IonQ Inc",
+      "weight": 0.901
+    },
+    {
+      "ticker": "NTNX",
+      "name": "Nutanix Inc",
+      "weight": 0.881
+    },
+    {
+      "ticker": "MSFT",
+      "name": "Microsoft Corp",
+      "weight": 0.879
+    },
+    {
+      "ticker": "BAH",
+      "name": "Booz Allen Hamilton Holding Corp",
+      "weight": 0.863
+    },
+    {
+      "ticker": "TDC",
+      "name": "Teradata Corp",
+      "weight": 0.859
+    },
+    {
+      "ticker": "BABA",
+      "name": "Alibaba Group Holding Ltd",
+      "weight": 0.857
+    },
+    {
+      "ticker": "REY.MI",
+      "name": "Reply SpA",
+      "weight": 0.835
+    },
+    {
+      "ticker": "6702.T",
+      "name": "Fujitsu Ltd",
+      "weight": 0.798
+    },
+    {
+      "ticker": "QBTS",
+      "name": "D-Wave Quantum Inc",
+      "weight": 0.781
+    },
+    {
+      "ticker": "PLTR",
+      "name": "Palantir Technologies Inc",
+      "weight": 0.764
+    },
+    {
+      "ticker": "IBM",
+      "name": "International Business Machines Corp",
+      "weight": 0.762
+    },
+    {
+      "ticker": "RDNT",
+      "name": "RadNet Inc",
+      "weight": 0.757
+    },
+    {
+      "ticker": "6701.T",
+      "name": "NEC Corp",
+      "weight": 0.756
+    },
+    {
+      "ticker": "ORCL",
+      "name": "Oracle Corp",
+      "weight": 0.747
+    },
+    {
+      "ticker": "QUBT",
+      "name": "Quantum Computing Inc",
+      "weight": 0.741
+    },
+    {
+      "ticker": "WIT",
+      "name": "Wipro Ltd",
+      "weight": 0.729
+    },
+    {
+      "ticker": "RGTI",
+      "name": "Rigetti Computing Inc",
+      "weight": 0.69
+    },
+    {
+      "ticker": "CRM",
+      "name": "Salesforce Inc",
+      "weight": 0.689
+    },
+    {
+      "ticker": "ACN",
+      "name": "Accenture PLC",
+      "weight": 0.677
+    },
+    {
+      "ticker": "SNOW",
+      "name": "Snowflake Inc",
+      "weight": 0.65
+    },
+    {
+      "ticker": "ESTC",
+      "name": "Elastic NV",
+      "weight": 0.608
+    },
+    {
+      "ticker": "MDB",
+      "name": "MongoDB Inc",
+      "weight": 0.606
+    },
+    {
+      "ticker": "ARQQ",
+      "name": "Arqit Quantum Inc",
+      "weight": 0.512
+    },
+    {
+      "ticker": "BTQ",
+      "name": "BTQ Technologies Corp",
+      "weight": 0.443
+    },
+    {
+      "ticker": "FGXXX",
+      "name": "First American Government Obligations Fund 12/01/2031",
+      "weight": 0.195
+    },
+    {
+      "ticker": "EUR",
+      "name": "EURO",
+      "weight": 0.038
+    },
+    {
+      "ticker": "TWD",
+      "name": "NEW TAIWAN DOLLAR",
+      "weight": 0.0
+    }
+  ],
+  "updated_at": "2026-05-01T17:00:14+00:00",
+  "_fetched_at": 1777654814.3295143,
+  "top_holdings": [
+    {
+      "ticker": "INTC",
+      "name": "Intel Corp",
+      "weight": 2.391
+    },
+    {
+      "ticker": "STM",
+      "name": "STMicroelectronics NV",
+      "weight": 2.162
+    },
+    {
+      "ticker": "NOK",
+      "name": "Nokia Oyj",
+      "weight": 2.142
+    },
+    {
+      "ticker": "MU",
+      "name": "Micron Technology Inc",
+      "weight": 2.024
+    },
+    {
+      "ticker": "3443.TW",
+      "name": "Global Unichip Corp",
+      "weight": 2.006
+    },
+    {
+      "ticker": "ON",
+      "name": "ON Semiconductor Corp",
+      "weight": 1.888
+    },
+    {
+      "ticker": "MRVL",
+      "name": "MARVELL TECHNOLOGY INC",
+      "weight": 1.843
+    },
+    {
+      "ticker": "ONTO",
+      "name": "Onto Innovation Inc",
+      "weight": 1.808
+    },
+    {
+      "ticker": "TSEM",
+      "name": "Tower Semiconductor Ltd",
+      "weight": 1.803
+    },
+    {
+      "ticker": "COHR",
+      "name": "Coherent Corp",
+      "weight": 1.77
+    }
+  ]
+}

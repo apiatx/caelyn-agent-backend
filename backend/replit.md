@@ -85,17 +85,20 @@ The platform's backend is built on FastAPI, designed for robustness and scalabil
 - **Cache**: 150s TTL, reuses existing scored-market cache (no extra Polymarket API calls)
 - **Gambler endpoints**: ALL unchanged — /api/predict/recommendations, /signals, /scored, etc. fully intact
 
-## Themes by Relative Strength (Canonical Theme RS Layer — v2 hardened)
-- **Purpose**: 39-theme canonical performance + relative-strength service. Designed as the live input source for Chain Reaction (not yet wired). No LLM calls — pure price math.
+## Themes by Relative Strength (Canonical Theme RS Layer — v3 merged)
+- **Purpose**: 49-theme canonical performance + relative-strength service (merged from old Sectors Themes tab + original 39 RS themes). No LLM calls — pure price math.
 - **Files**:
-  - `backend/services/theme_rs_universe.py` — static registry: 39 themes, proxy ETFs (DRAM primary for Memory & Storage), candidate stocks, sector_tags, keywords, macro_sensitivities
-  - `backend/services/theme_rs_service.py` — production-hardened computation engine (v2)
+  - `backend/services/theme_rs_universe.py` — canonical registry: 49 themes, proxy ETFs (DRAM primary for Memory & Storage), candidate stocks, sector_tags, keywords, macro_sensitivities, aliases
+  - `backend/services/theme_rs_service.py` — production-hardened computation engine (v3)
   - `backend/routes/themes.py` — HTTP endpoints
 - **Endpoints**:
   - `GET /api/themes/relative-strength?timeframe=1D|7D|30D|YTD|1Y` — sorted theme list (RS score desc)
   - `GET /api/themes/relative-strength/refresh?timeframe=...` — force-refresh (bypass cache TTL)
   - `GET /api/themes/list` — static registry (no price data, instant)
-- **39 Themes**: Agribusiness, Banks, Biotech, Chemicals & Materials, Clean Energy, Consumer Retail, Copper Miners, Cybersecurity, Defense, Drones, Energy, Equal-Weighted S&P 500, Financials, Fintech, Gold, Growth Stocks, Healthcare, Homebuilders, IBD 50, Industrials, Insurance, Lithium & Battery Tech, Memory & Storage, Metals & Mining, Microcaps, Oil & Gas, Rare Earth Metals, Regional Banks, Robotics & Automation, Silver, Small Caps, Software, Solar, Speculative Tech, Tech Equal-Weight, Tech Mega Caps, Travel & Transportation, Uranium & Nuclear Energy, Utilities
+- **49 Themes** (original 39 + 10 merged from old Sectors Themes tab):
+  - Original 39: Agribusiness, Banks, Biotech, Chemicals & Materials, Clean Energy, Consumer Retail, Copper Miners, Cybersecurity, Defense, Drones, Energy, Equal-Weighted S&P 500, Financials, Fintech, Gold, Growth Stocks, Healthcare, Homebuilders, IBD 50, Industrials, Insurance, Lithium & Battery Tech, Memory & Storage, Metals & Mining, Microcaps, Oil & Gas, Rare Earth Metals, Regional Banks, Robotics & Automation, Silver, Small Caps, Software, Solar, Speculative Tech, Tech Equal-Weight, Tech Mega Caps, Travel & Transportation, Uranium & Nuclear Energy, Utilities
+  - Added from old Sectors Themes: Semiconductors (SMH/SOXX/XSD/PSI), Semiconductor Equipment (SOXX/SMH), Data Center Infrastructure (SRVR/VPN/DTCR), Cloud Software (SKYY/CLOU), Oil Services (OIH/XES/IEZ), LNG & Natural Gas (FCG/UNG), Medical Devices (IHI), Crypto Equities / Blockchain (BLOK/BITQ/WGMI), Quantum Computing (QTUM), Space Economy (ARKX/UFO)
+  - Old Sectors themes merged into existing: aerospace_defense→defense (ITA/XAR/PPA); nuclear_uranium→uranium_nuclear; lithium_batteries→lithium_battery; copper_metals ETF added to copper_miners; regional_banks got IAT; robotics_automation got ARKQ back
 - **Provider hierarchy**:
   - 1D quote: Tradier batch → Finnhub individual fallback
   - 7D/30D/YTD/1Y proxy ETFs: FMP stable/historical-price-eod (primary) → Tradier daily history → yfinance (emergency fallback)

@@ -1,21 +1,22 @@
 """
 Canonical Theme Registry for Themes by Relative Strength.
 
-39 themes — proxies match the attached spec table exactly.
+49 themes — original 39 new RS themes + 10 merged from old Sectors > Themes tab.
+The 10 additions are: semiconductors, semicap_equipment, datacenter_infra,
+cloud_software, oil_services, lng_gas, medical_devices, crypto_equities,
+quantum, space.
 
 Structure per entry
 -------------------
 proxy_type        "etf" | "basket" | "hybrid"
 proxy_symbols     ETF/index tickers used for price-history performance
-                  (primary ETF first, then backup ETFs only — no individual stocks)
+                  (primary ETF first, then backup ETFs — no individual stocks)
 candidate_symbols Individual stocks used ONLY for per-theme leaders/laggards
-                  (Tradier intraday quotes; no full history fetch needed)
+                  (dynamic ETF-holdings discovery runs first; these are
+                   last-resort static fallback seeds only)
 sector_tags       broad sector labels
 keywords          NLP/search tags
 macro_sensitivities macro drivers
-
-Performance is computed as the median across proxy_symbols.
-Leaders/laggards are ranked from candidate_symbols by their 1D change_pct.
 """
 from __future__ import annotations
 
@@ -74,6 +75,18 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["IRA policy", "interest rates", "power demand", "carbon prices"],
     },
 
+    "cloud_software": {
+        "display_name": "Cloud Software",
+        "proxy_type": "etf",
+        # SKYY = First Trust Cloud Computing ETF (primary); CLOU = Global X Cloud Computing ETF
+        "proxy_symbols": ["SKYY", "CLOU"],
+        "candidate_symbols": ["SNOW", "DDOG", "MDB", "NET", "AMZN", "MSFT", "GOOGL"],
+        "sector_tags": ["Technology"],
+        "keywords": ["cloud", "SaaS", "cloud computing", "hyperscaler", "AWS", "Azure"],
+        "macro_sensitivities": ["enterprise IT budgets", "AI adoption", "interest rates (multiples)"],
+        "aliases": ["cloud_computing"],
+    },
+
     "consumer_retail": {
         "display_name": "Consumer Retail",
         "proxy_type": "etf",
@@ -88,10 +101,22 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "display_name": "Copper Miners",
         "proxy_type": "etf",
         "proxy_symbols": ["COPX", "CPER"],
-        "candidate_symbols": ["FCX", "SCCO", "TECK"],
+        "candidate_symbols": ["FCX", "SCCO", "TECK", "HBM"],
         "sector_tags": ["Materials", "Mining"],
         "keywords": ["copper", "mining", "electrification", "EV infrastructure"],
         "macro_sensitivities": ["China manufacturing", "electrification demand", "USD", "global growth"],
+    },
+
+    "crypto_equities": {
+        "display_name": "Crypto Equities / Blockchain",
+        "proxy_type": "etf",
+        # BLOK = Amplify Transformational Data Sharing ETF (primary crypto equity basket)
+        "proxy_symbols": ["BLOK", "BITQ", "WGMI"],
+        "candidate_symbols": ["MSTR", "COIN", "MARA", "CLSK", "HUT", "RIOT"],
+        "sector_tags": ["Technology", "Financials"],
+        "keywords": ["crypto", "blockchain", "bitcoin proxy", "mining", "digital assets"],
+        "macro_sensitivities": ["bitcoin price", "regulatory risk", "risk appetite", "liquidity"],
+        "aliases": ["blockchain", "crypto_equity"],
     },
 
     "cybersecurity": {
@@ -105,14 +130,29 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     # ── D ──────────────────────────────────────────────────────────────────────
+    "datacenter_infra": {
+        "display_name": "Data Center Infrastructure",
+        "proxy_type": "etf",
+        # SRVR = Pacer Data & Infrastructure Real Estate ETF (primary)
+        "proxy_symbols": ["SRVR", "VPN", "DTCR"],
+        "candidate_symbols": ["EQIX", "DLR", "VRT", "ETN", "PWR", "CEG"],
+        "sector_tags": ["Technology", "Utilities", "Real Estate"],
+        "keywords": ["data center", "REIT", "power", "colocation", "hyperscaler infrastructure"],
+        "macro_sensitivities": ["AI capex", "power demand", "interest rates", "cloud growth"],
+        "aliases": ["datacenter_infrastructure", "data_center"],
+    },
+
     "defense": {
         "display_name": "Defense",
         "proxy_type": "etf",
+        # ITA = iShares U.S. Aerospace & Defense ETF (primary)
+        # DFEN (3× leveraged) excluded from proxies to avoid distorting performance median
         "proxy_symbols": ["ITA", "XAR", "PPA"],
         "candidate_symbols": ["LMT", "RTX", "NOC", "KTOS", "AVAV"],
         "sector_tags": ["Industrials", "Defense"],
         "keywords": ["defense", "aerospace", "military", "government contracts", "NATO"],
         "macro_sensitivities": ["geopolitical risk", "defense budgets", "NATO spending"],
+        "aliases": ["aerospace_defense"],
     },
 
     "drones": {
@@ -249,14 +289,37 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Materials", "Industrials"],
         "keywords": ["lithium", "batteries", "EV", "energy storage", "solid-state"],
         "macro_sensitivities": ["EV adoption", "China supply", "critical minerals policy"],
+        "aliases": ["lithium_batteries"],
+    },
+
+    "lng_gas": {
+        "display_name": "LNG & Natural Gas",
+        "proxy_type": "etf",
+        # FCG = First Trust Natural Gas ETF (E&P + midstream); UNG = commodity front-month
+        "proxy_symbols": ["FCG", "UNG"],
+        "candidate_symbols": ["LNG", "WMB", "KMI", "FLNG", "NEXT"],
+        "sector_tags": ["Energy"],
+        "keywords": ["LNG", "natural gas", "liquefied natural gas", "midstream", "pipeline"],
+        "macro_sensitivities": ["nat gas prices", "export demand", "Europe energy", "winter demand"],
     },
 
     # ── M ──────────────────────────────────────────────────────────────────────
+    "medical_devices": {
+        "display_name": "Medical Devices",
+        "proxy_type": "etf",
+        # IHI = iShares U.S. Medical Devices ETF (primary; no liquid alternatives)
+        "proxy_symbols": ["IHI"],
+        "candidate_symbols": ["MDT", "ABT", "SYK", "EW", "ISRG", "BDX", "GEHC"],
+        "sector_tags": ["Healthcare"],
+        "keywords": ["medical devices", "surgical robots", "MedTech", "diagnostics", "implants"],
+        "macro_sensitivities": ["procedure volumes", "hospital budgets", "FDA approvals", "M&A"],
+    },
+
     "memory_storage": {
         "display_name": "Memory & Storage",
         "proxy_type": "basket",
         # DRAM (Defiance DRAM Memory, Storage, and AI ETF) is primary per spec.
-        # Service tries DRAM first; if unavailable, uses SMH/SOXX median.
+        # Service tries DRAM first; if unavailable or insufficient bars, uses SMH/SOXX median.
         "proxy_symbols": ["DRAM", "SMH", "SOXX"],
         "candidate_symbols": ["MU", "WDC", "STX", "SIMO"],
         "sector_tags": ["Technology", "Semiconductors"],
@@ -295,6 +358,30 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["crude oil price", "OPEC+ decisions", "global demand", "USD"],
     },
 
+    "oil_services": {
+        "display_name": "Oil Services",
+        "proxy_type": "etf",
+        # OIH = VanEck Oil Services ETF (primary; dedicated oil-field services basket)
+        "proxy_symbols": ["OIH", "XES", "IEZ"],
+        "candidate_symbols": ["SLB", "HAL", "BKR", "WTTR", "NRDY", "NE"],
+        "sector_tags": ["Energy"],
+        "keywords": ["oil services", "oilfield services", "drilling", "completion", "fracking"],
+        "macro_sensitivities": ["oil price", "rig count", "E&P capex", "OPEC production levels"],
+    },
+
+    # ── Q ──────────────────────────────────────────────────────────────────────
+    "quantum": {
+        "display_name": "Quantum Computing",
+        "proxy_type": "etf",
+        # QTUM = Defiance Quantum ETF (only liquid ETF proxy for quantum + quantum-adjacent)
+        "proxy_symbols": ["QTUM"],
+        "candidate_symbols": ["IONQ", "RGTI", "QUBT", "QBTS", "IBM"],
+        "sector_tags": ["Technology"],
+        "keywords": ["quantum computing", "quantum hardware", "quantum software", "qubit"],
+        "macro_sensitivities": ["R&D spending", "government grants", "AI adjacency"],
+        "aliases": ["quantum_computing"],
+    },
+
     # ── R ──────────────────────────────────────────────────────────────────────
     "rare_earth": {
         "display_name": "Rare Earth Metals",
@@ -309,7 +396,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     "regional_banks": {
         "display_name": "Regional Banks",
         "proxy_type": "etf",
-        "proxy_symbols": ["KRE", "KBE"],
+        "proxy_symbols": ["KRE", "KBE", "IAT"],
         "candidate_symbols": ["WAL", "ZION", "CMA", "KEY"],
         "sector_tags": ["Financials"],
         "keywords": ["regional banks", "community banking", "CRE", "deposits", "NIM"],
@@ -319,7 +406,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     "robotics_automation": {
         "display_name": "Robotics & Automation",
         "proxy_type": "etf",
-        "proxy_symbols": ["BOTZ", "ROBO", "IRBO"],
+        "proxy_symbols": ["BOTZ", "ROBO", "IRBO", "ARKQ"],
         "candidate_symbols": ["SYM", "ISRG", "TER", "ABBNY"],
         "sector_tags": ["Technology", "Industrials"],
         "keywords": ["robotics", "automation", "AI robotics", "industrial robots", "cobots"],
@@ -327,6 +414,31 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     # ── S ──────────────────────────────────────────────────────────────────────
+    "semicap_equipment": {
+        "display_name": "Semiconductor Equipment",
+        "proxy_type": "etf",
+        # SOXX has ~20% weight in equipment makers (AMAT, LRCX, KLAC, ASML via ADR)
+        # SMH is more fab-weighted; SOXX is closer to equipment.
+        "proxy_symbols": ["SOXX", "SMH"],
+        "candidate_symbols": ["ASML", "AMAT", "LRCX", "KLAC", "TER", "ACLS", "ONTO"],
+        "sector_tags": ["Technology"],
+        "keywords": ["semiconductor equipment", "lithography", "etch", "deposition", "ASML", "AMAT"],
+        "macro_sensitivities": ["fab capex cycles", "leading-edge node ramp", "China restrictions"],
+        "aliases": ["semicap", "semiconductor_equipment"],
+    },
+
+    "semiconductors": {
+        "display_name": "Semiconductors",
+        "proxy_type": "etf",
+        # SMH = VanEck Semiconductor ETF (primary; broadest, most liquid)
+        "proxy_symbols": ["SMH", "SOXX", "XSD", "PSI"],
+        "candidate_symbols": ["NVDA", "AMD", "INTC", "QCOM", "TSM", "AVGO", "ASML", "AMAT", "LRCX"],
+        "sector_tags": ["Technology"],
+        "keywords": ["semiconductors", "chips", "fab", "GPU", "CPU", "AI chips", "fabless"],
+        "macro_sensitivities": ["AI capex", "PC/mobile cycle", "China restrictions", "leading-edge node"],
+        "aliases": ["chips", "chip_stocks"],
+    },
+
     "silver": {
         "display_name": "Silver",
         "proxy_type": "etf",
@@ -365,6 +477,19 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Energy", "Utilities", "Clean Tech"],
         "keywords": ["solar", "photovoltaic", "rooftop solar", "utility-scale", "panels"],
         "macro_sensitivities": ["IRA/solar policy", "China competition", "interest rates", "power demand"],
+    },
+
+    "space": {
+        "display_name": "Space Economy",
+        "proxy_type": "etf",
+        # ARKX = ARK Space Exploration & Innovation ETF (primary)
+        # UFO = Procure Space ETF (pure-play satellite/launch)
+        "proxy_symbols": ["ARKX", "UFO"],
+        "candidate_symbols": ["RKLB", "ASTS", "LUNR", "SPIR", "SATL"],
+        "sector_tags": ["Technology", "Industrials"],
+        "keywords": ["space", "satellites", "launch vehicles", "orbital economy", "defense space"],
+        "macro_sensitivities": ["government space contracts", "Starlink competition", "constellation buildout"],
+        "aliases": ["space_economy"],
     },
 
     "speculative_tech": {
@@ -420,6 +545,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Energy", "Utilities"],
         "keywords": ["uranium", "nuclear", "small modular reactors", "SMR", "clean power"],
         "macro_sensitivities": ["AI power demand", "energy policy", "carbon neutrality"],
+        "aliases": ["nuclear_uranium"],
     },
 
     "utilities": {
