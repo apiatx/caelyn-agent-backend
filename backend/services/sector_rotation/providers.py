@@ -22,7 +22,7 @@ ALL_TICKERS    = SECTOR_TICKERS + BENCH_TICKERS
 
 _HIST_TTL = 3600   # 1h — history doesn't change intraday
 _QUOTE_TTL = 120
-_executor  = ThreadPoolExecutor(max_workers=13)  # one worker per ticker for max parallelism
+_executor  = ThreadPoolExecutor(max_workers=40)  # large pool for theme RS dynamic stock universe
 
 
 def _tradier_key() -> str:

@@ -1,0 +1,32 @@
+{
+  "symbol": "DBA",
+  "as_of": "2026-05-01",
+  "source": "fmp",
+  "holding_count": 2,
+  "holdings": [
+    {
+      "ticker": "AGPXX",
+      "name": "Invesco Government & Agency Portfolio",
+      "weight": 36.777
+    },
+    {
+      "ticker": "TBLL",
+      "name": "Invesco Short Term Treasury ETF",
+      "weight": 4.241
+    }
+  ],
+  "updated_at": "2026-05-01T14:48:31+00:00",
+  "_fetched_at": 1777646911.671858,
+  "top_holdings": [
+    {
+      "ticker": "AGPXX",
+      "name": "Invesco Government & Agency Portfolio",
+      "weight": 36.777
+    },
+    {
+      "ticker": "TBLL",
+      "name": "Invesco Short Term Treasury ETF",
+      "weight": 4.241
+    }
+  ]
+}

@@ -1,0 +1,332 @@
+{
+  "symbol": "BATT",
+  "as_of": "2026-04-30",
+  "source": "fmp",
+  "holding_count": 54,
+  "holdings": [
+    {
+      "ticker": "300750.SZ",
+      "name": "Contemporary Amperex Technology Co Ltd",
+      "weight": 7.9
+    },
+    {
+      "ticker": "BHP.AX",
+      "name": "BHP Group Ltd",
+      "weight": 6.814
+    },
+    {
+      "ticker": "TSLA",
+      "name": "Tesla Inc",
+      "weight": 5.867
+    },
+    {
+      "ticker": "1211.HK",
+      "name": "BYD Co Ltd",
+      "weight": 5.831
+    },
+    {
+      "ticker": "BE",
+      "name": "Bloom Energy Corp",
+      "weight": 4.586
+    },
+    {
+      "ticker": "FCX",
+      "name": "Freeport-McMoRan Inc",
+      "weight": 4.46
+    },
+    {
+      "ticker": "006400.KS",
+      "name": "Samsung SDI Co Ltd",
+      "weight": 2.942
+    },
+    {
+      "ticker": "6762.T",
+      "name": "TDK Corp",
+      "weight": 2.541
+    },
+    {
+      "ticker": "GMEXICOB.MX",
+      "name": "Grupo Mexico SAB de CV",
+      "weight": 2.346
+    },
+    {
+      "ticker": "TECK",
+      "name": "Teck Resources Ltd",
+      "weight": 2.099
+    },
+    {
+      "ticker": "4004.T",
+      "name": "Resonac Holdings Corp",
+      "weight": 2.092
+    },
+    {
+      "ticker": "1772.HK",
+      "name": "Ganfeng Lithium Group Co Ltd",
+      "weight": 2.091
+    },
+    {
+      "ticker": "002709.SZ",
+      "name": "Guangzhou Tinci Materials Technology Co Ltd",
+      "weight": 2.076
+    },
+    {
+      "ticker": "ALB",
+      "name": "Albemarle Corp",
+      "weight": 2.026
+    },
+    {
+      "ticker": "PLS.AX",
+      "name": "PLS Group Ltd",
+      "weight": 1.895
+    },
+    {
+      "ticker": "NIO",
+      "name": "NIO Inc",
+      "weight": 1.775
+    },
+    {
+      "ticker": "373220.KS",
+      "name": "LG Energy Solution Ltd",
+      "weight": 1.721
+    },
+    {
+      "ticker": "SQM",
+      "name": "Sociedad Quimica y Minera de Chile SA",
+      "weight": 1.712
+    },
+    {
+      "ticker": "LUN.TO",
+      "name": "Lundin Mining Corp",
+      "weight": 1.686
+    },
+    {
+      "ticker": "9696.HK",
+      "name": "Tianqi Lithium Corp",
+      "weight": 1.644
+    },
+    {
+      "ticker": "5713.T",
+      "name": "Sumitomo Metal Mining Co Ltd",
+      "weight": 1.582
+    },
+    {
+      "ticker": "RIVN",
+      "name": "Rivian Automotive Inc",
+      "weight": 1.582
+    },
+    {
+      "ticker": "603799.SS",
+      "name": "Zhejiang Huayou Cobalt Co Ltd",
+      "weight": 1.543
+    },
+    {
+      "ticker": "ANTO.L",
+      "name": "Antofagasta PLC",
+      "weight": 1.524
+    },
+    {
+      "ticker": "FM.TO",
+      "name": "First Quantum Minerals Ltd",
+      "weight": 1.515
+    },
+    {
+      "ticker": "S32.AX",
+      "name": "South32 Ltd",
+      "weight": 1.445
+    },
+    {
+      "ticker": "2015.HK",
+      "name": "Li Auto Inc",
+      "weight": 1.412
+    },
+    {
+      "ticker": "MIN.AX",
+      "name": "Mineral Resources Ltd",
+      "weight": 1.383
+    },
+    {
+      "ticker": "ENS",
+      "name": "EnerSys",
+      "weight": 1.35
+    },
+    {
+      "ticker": "600549.SS",
+      "name": "Xiamen Tungsten Co Ltd",
+      "weight": 1.337
+    },
+    {
+      "ticker": "MP",
+      "name": "MP Materials Corp",
+      "weight": 1.319
+    },
+    {
+      "ticker": "2579.HK",
+      "name": "CNGR Advanced Material Co Ltd",
+      "weight": 1.317
+    },
+    {
+      "ticker": "9863.HK",
+      "name": "Zhejiang Leapmotor Technology Co Ltd",
+      "weight": 1.239
+    },
+    {
+      "ticker": "247540.KS",
+      "name": "Ecopro BM Co Ltd",
+      "weight": 1.192
+    },
+    {
+      "ticker": "HBM",
+      "name": "Hudbay Minerals Inc",
+      "weight": 1.189
+    },
+    {
+      "ticker": "600362.SS",
+      "name": "Jiangxi Copper Co Ltd",
+      "weight": 1.177
+    },
+    {
+      "ticker": "601168.SS",
+      "name": "Western Mining Co Ltd",
+      "weight": 1.166
+    },
+    {
+      "ticker": "VFS",
+      "name": "Vinfast Auto Ltd",
+      "weight": 1.132
+    },
+    {
+      "ticker": "1585.HK",
+      "name": "Yadea Group Holdings Ltd",
+      "weight": 1.048
+    },
+    {
+      "ticker": "SFR.AX",
+      "name": "Sandfire Resources Ltd",
+      "weight": 1.027
+    },
+    {
+      "ticker": "INCO.JK",
+      "name": "Vale Indonesia Tbk PT",
+      "weight": 0.968
+    },
+    {
+      "ticker": "IGO.AX",
+      "name": "IGO LTD",
+      "weight": 0.957
+    },
+    {
+      "ticker": "1208.HK",
+      "name": "MMG Ltd",
+      "weight": 0.954
+    },
+    {
+      "ticker": "MBMA.JK",
+      "name": "Merdeka Battery Materials Tbk PT",
+      "weight": 0.945
+    },
+    {
+      "ticker": "UMI.BR",
+      "name": "Umicore SA",
+      "weight": 0.944
+    },
+    {
+      "ticker": "1258.HK",
+      "name": "China Nonferrous Mining Corp Ltd",
+      "weight": 0.889
+    },
+    {
+      "ticker": "QS",
+      "name": "QuantumScape Corp",
+      "weight": 0.877
+    },
+    {
+      "ticker": "CS.TO",
+      "name": "Capstone Copper Corp",
+      "weight": 0.864
+    },
+    {
+      "ticker": "NCKL.JK",
+      "name": "Trimegah Bangun Persada Tbk PT",
+      "weight": 0.744
+    },
+    {
+      "ticker": "601212.SS",
+      "name": "Baiyin Nonferrous Group Co Ltd",
+      "weight": 0.74
+    },
+    {
+      "ticker": "AGPXX",
+      "name": "Invesco Government & Agency Portfolio 12/31/2031",
+      "weight": 0.507
+    },
+    {
+      "ticker": "CNY",
+      "name": "CHINESE YUAN",
+      "weight": 0.022
+    },
+    {
+      "ticker": "LLL.AX",
+      "name": "Leo Lithium Ltd",
+      "weight": 0.0
+    },
+    {
+      "ticker": "MNOD.IL",
+      "name": "GMK Norilskiy Nickel PAO",
+      "weight": 0.0
+    }
+  ],
+  "updated_at": "2026-05-01T14:47:13+00:00",
+  "_fetched_at": 1777646833.5085497,
+  "top_holdings": [
+    {
+      "ticker": "300750.SZ",
+      "name": "Contemporary Amperex Technology Co Ltd",
+      "weight": 7.9
+    },
+    {
+      "ticker": "BHP.AX",
+      "name": "BHP Group Ltd",
+      "weight": 6.814
+    },
+    {
+      "ticker": "TSLA",
+      "name": "Tesla Inc",
+      "weight": 5.867
+    },
+    {
+      "ticker": "1211.HK",
+      "name": "BYD Co Ltd",
+      "weight": 5.831
+    },
+    {
+      "ticker": "BE",
+      "name": "Bloom Energy Corp",
+      "weight": 4.586
+    },
+    {
+      "ticker": "FCX",
+      "name": "Freeport-McMoRan Inc",
+      "weight": 4.46
+    },
+    {
+      "ticker": "006400.KS",
+      "name": "Samsung SDI Co Ltd",
+      "weight": 2.942
+    },
+    {
+      "ticker": "6762.T",
+      "name": "TDK Corp",
+      "weight": 2.541
+    },
+    {
+      "ticker": "GMEXICOB.MX",
+      "name": "Grupo Mexico SAB de CV",
+      "weight": 2.346
+    },
+    {
+      "ticker": "TECK",
+      "name": "Teck Resources Ltd",
+      "weight": 2.099
+    }
+  ]
+}

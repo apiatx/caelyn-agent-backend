@@ -1,0 +1,352 @@
+{
+  "symbol": "XLV",
+  "as_of": "2026-04-20",
+  "source": "fmp",
+  "holding_count": 58,
+  "holdings": [
+    {
+      "ticker": "LLY",
+      "name": "ELI LILLY + CO",
+      "weight": 13.571
+    },
+    {
+      "ticker": "JNJ",
+      "name": "JOHNSON + JOHNSON",
+      "weight": 10.708
+    },
+    {
+      "ticker": "ABBV",
+      "name": "ABBVIE INC",
+      "weight": 6.998
+    },
+    {
+      "ticker": "UNH",
+      "name": "UNITEDHEALTH GROUP INC",
+      "weight": 5.43
+    },
+    {
+      "ticker": "MRK",
+      "name": "MERCK + CO. INC.",
+      "weight": 5.429
+    },
+    {
+      "ticker": "TMO",
+      "name": "THERMO FISHER SCIENTIFIC INC",
+      "weight": 3.673
+    },
+    {
+      "ticker": "AMGN",
+      "name": "AMGEN INC",
+      "weight": 3.564
+    },
+    {
+      "ticker": "GILD",
+      "name": "GILEAD SCIENCES INC",
+      "weight": 3.257
+    },
+    {
+      "ticker": "ABT",
+      "name": "ABBOTT LABORATORIES",
+      "weight": 3.145
+    },
+    {
+      "ticker": "ISRG",
+      "name": "INTUITIVE SURGICAL INC",
+      "weight": 3.082
+    },
+    {
+      "ticker": "PFE",
+      "name": "PFIZER INC",
+      "weight": 2.932
+    },
+    {
+      "ticker": "DHR",
+      "name": "DANAHER CORP",
+      "weight": 2.31
+    },
+    {
+      "ticker": "BMY",
+      "name": "BRISTOL MYERS SQUIBB CO",
+      "weight": 2.275
+    },
+    {
+      "ticker": "SYK",
+      "name": "STRYKER CORP",
+      "weight": 2.208
+    },
+    {
+      "ticker": "VRTX",
+      "name": "VERTEX PHARMACEUTICALS INC",
+      "weight": 2.096
+    },
+    {
+      "ticker": "MDT",
+      "name": "MEDTRONIC PLC",
+      "weight": 2.08
+    },
+    {
+      "ticker": "MCK",
+      "name": "MCKESSON CORP",
+      "weight": 2.013
+    },
+    {
+      "ticker": "CVS",
+      "name": "CVS HEALTH CORP",
+      "weight": 1.851
+    },
+    {
+      "ticker": "BSX",
+      "name": "BOSTON SCIENTIFIC CORP",
+      "weight": 1.782
+    },
+    {
+      "ticker": "HCA",
+      "name": "HCA HEALTHCARE INC",
+      "weight": 1.432
+    },
+    {
+      "ticker": "REGN",
+      "name": "REGENERON PHARMACEUTICALS",
+      "weight": 1.425
+    },
+    {
+      "ticker": "CI",
+      "name": "THE CIGNA GROUP",
+      "weight": 1.379
+    },
+    {
+      "ticker": "ELV",
+      "name": "ELEVANCE HEALTH INC",
+      "weight": 1.321
+    },
+    {
+      "ticker": "COR",
+      "name": "CENCORA INC",
+      "weight": 1.188
+    },
+    {
+      "ticker": "ZTS",
+      "name": "ZOETIS INC",
+      "weight": 0.952
+    },
+    {
+      "ticker": "CAH",
+      "name": "CARDINAL HEALTH INC",
+      "weight": 0.95
+    },
+    {
+      "ticker": "EW",
+      "name": "EDWARDS LIFESCIENCES CORP",
+      "weight": 0.869
+    },
+    {
+      "ticker": "IDXX",
+      "name": "IDEXX LABORATORIES INC",
+      "weight": 0.862
+    },
+    {
+      "ticker": "BDX",
+      "name": "BECTON DICKINSON AND CO",
+      "weight": 0.835
+    },
+    {
+      "ticker": "A",
+      "name": "AGILENT TECHNOLOGIES INC",
+      "weight": 0.634
+    },
+    {
+      "ticker": "GEHC",
+      "name": "GE HEALTHCARE TECHNOLOGY",
+      "weight": 0.632
+    },
+    {
+      "ticker": "RMD",
+      "name": "RESMED INC",
+      "weight": 0.62
+    },
+    {
+      "ticker": "WAT",
+      "name": "WATERS CORP",
+      "weight": 0.593
+    },
+    {
+      "ticker": "IQV",
+      "name": "IQVIA HOLDINGS INC",
+      "weight": 0.553
+    },
+    {
+      "ticker": "MTD",
+      "name": "METTLER TOLEDO INTERNATIONAL",
+      "weight": 0.497
+    },
+    {
+      "ticker": "BIIB",
+      "name": "BIOGEN INC",
+      "weight": 0.489
+    },
+    {
+      "ticker": "HUM",
+      "name": "HUMANA INC",
+      "weight": 0.459
+    },
+    {
+      "ticker": "DXCM",
+      "name": "DEXCOM INC",
+      "weight": 0.446
+    },
+    {
+      "ticker": "LH",
+      "name": "LABCORP HOLDINGS INC",
+      "weight": 0.418
+    },
+    {
+      "ticker": "STE",
+      "name": "STERIS PLC",
+      "weight": 0.409
+    },
+    {
+      "ticker": "DGX",
+      "name": "QUEST DIAGNOSTICS INC",
+      "weight": 0.399
+    },
+    {
+      "ticker": "WST",
+      "name": "WEST PHARMACEUTICAL SERVICES",
+      "weight": 0.368
+    },
+    {
+      "ticker": "MRNA",
+      "name": "MODERNA INC",
+      "weight": 0.36
+    },
+    {
+      "ticker": "ZBH",
+      "name": "ZIMMER BIOMET HOLDINGS INC",
+      "weight": 0.356
+    },
+    {
+      "ticker": "CNC",
+      "name": "CENTENE CORP",
+      "weight": 0.345
+    },
+    {
+      "ticker": "VTRS",
+      "name": "VIATRIS INC",
+      "weight": 0.306
+    },
+    {
+      "ticker": "INCY",
+      "name": "INCYTE CORP",
+      "weight": 0.302
+    },
+    {
+      "ticker": "PODD",
+      "name": "INSULET CORP",
+      "weight": 0.269
+    },
+    {
+      "ticker": "COO",
+      "name": "COOPER COS INC/THE",
+      "weight": 0.258
+    },
+    {
+      "ticker": "ALGN",
+      "name": "ALIGN TECHNOLOGY INC",
+      "weight": 0.234
+    },
+    {
+      "ticker": "SOLV",
+      "name": "SOLVENTUM CORP",
+      "weight": 0.192
+    },
+    {
+      "ticker": "RVTY",
+      "name": "REVVITY INC",
+      "weight": 0.192
+    },
+    {
+      "ticker": "UHS",
+      "name": "UNIVERSAL HEALTH SERVICES B",
+      "weight": 0.187
+    },
+    {
+      "ticker": "BAX",
+      "name": "BAXTER INTERNATIONAL INC",
+      "weight": 0.177
+    },
+    {
+      "ticker": "TECH",
+      "name": "BIO TECHNE CORP",
+      "weight": 0.17
+    },
+    {
+      "ticker": "CRL",
+      "name": "CHARLES RIVER LABORATORIES",
+      "weight": 0.165
+    },
+    {
+      "ticker": "HSIC",
+      "name": "HENRY SCHEIN INC",
+      "weight": 0.146
+    },
+    {
+      "ticker": "DVA",
+      "name": "DAVITA INC",
+      "weight": 0.094
+    }
+  ],
+  "updated_at": "2026-05-01T14:47:10+00:00",
+  "_fetched_at": 1777646830.6508615,
+  "top_holdings": [
+    {
+      "ticker": "LLY",
+      "name": "ELI LILLY + CO",
+      "weight": 13.571
+    },
+    {
+      "ticker": "JNJ",
+      "name": "JOHNSON + JOHNSON",
+      "weight": 10.708
+    },
+    {
+      "ticker": "ABBV",
+      "name": "ABBVIE INC",
+      "weight": 6.998
+    },
+    {
+      "ticker": "UNH",
+      "name": "UNITEDHEALTH GROUP INC",
+      "weight": 5.43
+    },
+    {
+      "ticker": "MRK",
+      "name": "MERCK + CO. INC.",
+      "weight": 5.429
+    },
+    {
+      "ticker": "TMO",
+      "name": "THERMO FISHER SCIENTIFIC INC",
+      "weight": 3.673
+    },
+    {
+      "ticker": "AMGN",
+      "name": "AMGEN INC",
+      "weight": 3.564
+    },
+    {
+      "ticker": "GILD",
+      "name": "GILEAD SCIENCES INC",
+      "weight": 3.257
+    },
+    {
+      "ticker": "ABT",
+      "name": "ABBOTT LABORATORIES",
+      "weight": 3.145
+    },
+    {
+      "ticker": "ISRG",
+      "name": "INTUITIVE SURGICAL INC",
+      "weight": 3.082
+    }
+  ]
+}

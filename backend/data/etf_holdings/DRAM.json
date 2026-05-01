@@ -1,0 +1,132 @@
+{
+  "symbol": "DRAM",
+  "as_of": "2026-04-30",
+  "source": "fmp",
+  "holding_count": 14,
+  "holdings": [
+    {
+      "ticker": "000660.KS",
+      "name": "SK hynix Inc",
+      "weight": 18.418
+    },
+    {
+      "ticker": "005930.KS",
+      "name": "Samsung Electronics Co Ltd",
+      "weight": 15.35
+    },
+    {
+      "ticker": "FGXXX",
+      "name": "First American Government Obligations Fund 12/01/2031",
+      "weight": 9.106
+    },
+    {
+      "ticker": "595112103 TRS 050427 NM",
+      "name": "MICRON TECHNOLOGY INC SWAP NM",
+      "weight": 9.004
+    },
+    {
+      "ticker": "912797TS6",
+      "name": "United States Treasury Bill 05/19/2026",
+      "weight": 6.29
+    },
+    {
+      "ticker": "595112103 TRS 052427 GS",
+      "name": "MICRON TECHNOLOGY, INC.-SWAP-GOLD-L",
+      "weight": 6.242
+    },
+    {
+      "ticker": "285A.T",
+      "name": "Kioxia Holdings Corp",
+      "weight": 4.427
+    },
+    {
+      "ticker": "SNDK",
+      "name": "Sandisk Corp/DE",
+      "weight": 3.848
+    },
+    {
+      "ticker": "STX",
+      "name": "Seagate Technology Holdings PLC",
+      "weight": 3.733
+    },
+    {
+      "ticker": "WDC",
+      "name": "Western Digital Corp",
+      "weight": 3.531
+    },
+    {
+      "ticker": "MU",
+      "name": "Micron Technology Inc",
+      "weight": 2.235
+    },
+    {
+      "ticker": "2408.TW",
+      "name": "Nanya Technology Corp",
+      "weight": 2.124
+    },
+    {
+      "ticker": "2344.TW",
+      "name": "Winbond Electronics Corp",
+      "weight": 1.193
+    },
+    {
+      "ticker": "TWD",
+      "name": "NEW TAIWAN DOLLAR",
+      "weight": 0.0
+    }
+  ],
+  "updated_at": "2026-05-01T14:47:13+00:00",
+  "_fetched_at": 1777646833.6423664,
+  "top_holdings": [
+    {
+      "ticker": "000660.KS",
+      "name": "SK hynix Inc",
+      "weight": 18.418
+    },
+    {
+      "ticker": "005930.KS",
+      "name": "Samsung Electronics Co Ltd",
+      "weight": 15.35
+    },
+    {
+      "ticker": "FGXXX",
+      "name": "First American Government Obligations Fund 12/01/2031",
+      "weight": 9.106
+    },
+    {
+      "ticker": "595112103 TRS 050427 NM",
+      "name": "MICRON TECHNOLOGY INC SWAP NM",
+      "weight": 9.004
+    },
+    {
+      "ticker": "912797TS6",
+      "name": "United States Treasury Bill 05/19/2026",
+      "weight": 6.29
+    },
+    {
+      "ticker": "595112103 TRS 052427 GS",
+      "name": "MICRON TECHNOLOGY, INC.-SWAP-GOLD-L",
+      "weight": 6.242
+    },
+    {
+      "ticker": "285A.T",
+      "name": "Kioxia Holdings Corp",
+      "weight": 4.427
+    },
+    {
+      "ticker": "SNDK",
+      "name": "Sandisk Corp/DE",
+      "weight": 3.848
+    },
+    {
+      "ticker": "STX",
+      "name": "Seagate Technology Holdings PLC",
+      "weight": 3.733
+    },
+    {
+      "ticker": "WDC",
+      "name": "Western Digital Corp",
+      "weight": 3.531
+    }
+  ]
+}

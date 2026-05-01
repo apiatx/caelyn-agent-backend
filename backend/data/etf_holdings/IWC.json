@@ -1,0 +1,6487 @@
+{
+  "symbol": "IWC",
+  "as_of": "2026-05-01",
+  "source": "fmp",
+  "holding_count": 1285,
+  "holdings": [
+    {
+      "ticker": "AAOI",
+      "name": "APPLIED OPTOELECTRONICS INC",
+      "weight": 1.926
+    },
+    {
+      "ticker": "PRAX",
+      "name": "PRAXIS PRECISION MEDICINES INC",
+      "weight": 1.591
+    },
+    {
+      "ticker": "APLD",
+      "name": "APPLIED DIGITAL CORP",
+      "weight": 1.482
+    },
+    {
+      "ticker": "WULF",
+      "name": "TERAWULF INC",
+      "weight": 1.316
+    },
+    {
+      "ticker": "CIFR",
+      "name": "CIPHER DIGITAL INC",
+      "weight": 1.047
+    },
+    {
+      "ticker": "COGT",
+      "name": "COGENT BIOSCIENCES INC",
+      "weight": 0.978
+    },
+    {
+      "ticker": "TERN",
+      "name": "TERNS PHARMACEUTICALS INC",
+      "weight": 0.967
+    },
+    {
+      "ticker": "EFR.TO",
+      "name": "ENERGY FUELS INC",
+      "weight": 0.877
+    },
+    {
+      "ticker": "AXTI",
+      "name": "AXT INC",
+      "weight": 0.815
+    },
+    {
+      "ticker": "CELC",
+      "name": "CELCUITY INC",
+      "weight": 0.796
+    },
+    {
+      "ticker": "TPC",
+      "name": "TUTOR PERINI CORP",
+      "weight": 0.73
+    },
+    {
+      "ticker": "LEU",
+      "name": "CENTRUS ENERGY CORP CLASS A",
+      "weight": 0.617
+    },
+    {
+      "ticker": "NVTS",
+      "name": "NAVITAS SEMICONDUCTOR CORP",
+      "weight": 0.6
+    },
+    {
+      "ticker": "LASR",
+      "name": "NLIGHT INC",
+      "weight": 0.59
+    },
+    {
+      "ticker": "DNTH",
+      "name": "DIANTHUS THERAPEUTICS INC",
+      "weight": 0.571
+    },
+    {
+      "ticker": "BELFB",
+      "name": "BEL FUSE INC CLASS B",
+      "weight": 0.512
+    },
+    {
+      "ticker": "DAVE",
+      "name": "DAVE INC CLASS A",
+      "weight": 0.508
+    },
+    {
+      "ticker": "ORKA",
+      "name": "ORUKA THERAPEUTICS INC",
+      "weight": 0.501
+    },
+    {
+      "ticker": "GPGI",
+      "name": "GPGI INC CLASS A",
+      "weight": 0.488
+    },
+    {
+      "ticker": "LQDA",
+      "name": "LIQUIDIA CORP",
+      "weight": 0.476
+    },
+    {
+      "ticker": "TNGX",
+      "name": "TANGO THERAPEUTICS INC",
+      "weight": 0.467
+    },
+    {
+      "ticker": "AEHR",
+      "name": "AEHR TEST SYSTEMS",
+      "weight": 0.457
+    },
+    {
+      "ticker": "IMNM",
+      "name": "IMMUNOME INC",
+      "weight": 0.447
+    },
+    {
+      "ticker": "AMPX",
+      "name": "AMPRIUS TECHNOLOGIES INC",
+      "weight": 0.446
+    },
+    {
+      "ticker": "COMM",
+      "name": "VISTANCE NETWORKS INC",
+      "weight": 0.436
+    },
+    {
+      "ticker": "PPTA.TO",
+      "name": "PERPETUA RESOURCES CORP",
+      "weight": 0.434
+    },
+    {
+      "ticker": "AMSC",
+      "name": "AMERICAN SUPERCONDUCTOR CORP",
+      "weight": 0.419
+    },
+    {
+      "ticker": "0Z0F.L",
+      "name": "ICHOR HOLDINGS LTD",
+      "weight": 0.413
+    },
+    {
+      "ticker": "CECO",
+      "name": "CECO ENVIRONMENTAL CORP",
+      "weight": 0.407
+    },
+    {
+      "ticker": "ATRO",
+      "name": "ASTRONICS CORP",
+      "weight": 0.399
+    },
+    {
+      "ticker": "DGII",
+      "name": "DIGI INTERNATIONAL INC",
+      "weight": 0.387
+    },
+    {
+      "ticker": "ADPT",
+      "name": "ADAPTIVE BIOTECHNOLOGIES CORP",
+      "weight": 0.385
+    },
+    {
+      "ticker": "AXGN",
+      "name": "AXOGEN INC",
+      "weight": 0.384
+    },
+    {
+      "ticker": "DFTX",
+      "name": "DEFINIUM THERAPEUTICS INC",
+      "weight": 0.384
+    },
+    {
+      "ticker": "BLBD",
+      "name": "BLUE BIRD CORP",
+      "weight": 0.371
+    },
+    {
+      "ticker": "THR",
+      "name": "THERMON GROUP HOLDINGS INC",
+      "weight": 0.367
+    },
+    {
+      "ticker": "ATEN",
+      "name": "A10 NETWORKS INC",
+      "weight": 0.365
+    },
+    {
+      "ticker": "DCO",
+      "name": "DUCOMMUN INC",
+      "weight": 0.364
+    },
+    {
+      "ticker": "HYMC",
+      "name": "HYCROFT MINING HOLDING CLASS A",
+      "weight": 0.36
+    },
+    {
+      "ticker": "ERAS",
+      "name": "ERASCA INC",
+      "weight": 0.329
+    },
+    {
+      "ticker": "NRIX",
+      "name": "NURIX THERAPEUTICS INC",
+      "weight": 0.322
+    },
+    {
+      "ticker": "ELVN",
+      "name": "ENLIVEN THERAPEUTICS INC",
+      "weight": 0.318
+    },
+    {
+      "ticker": "DHC",
+      "name": "DIVERSIFIED HEALTHCARE TRUST",
+      "weight": 0.317
+    },
+    {
+      "ticker": "BBAI",
+      "name": "BIGBEAR.AI HOLDINGS INC",
+      "weight": 0.316
+    },
+    {
+      "ticker": "KOD",
+      "name": "KODIAK SCIENCES INC",
+      "weight": 0.315
+    },
+    {
+      "ticker": "NESR",
+      "name": "NATIONAL ENERGY SERVICES REUNITED",
+      "weight": 0.311
+    },
+    {
+      "ticker": "WTTR",
+      "name": "SELECT WATER SOLUTIONS INC CLASS A",
+      "weight": 0.307
+    },
+    {
+      "ticker": "EFC",
+      "name": "ELLINGTON FINANCIAL INC",
+      "weight": 0.306
+    },
+    {
+      "ticker": "STOK",
+      "name": "STOKE THERAPEUTICS INC",
+      "weight": 0.303
+    },
+    {
+      "ticker": "TILE",
+      "name": "INTERFACE INC",
+      "weight": 0.303
+    },
+    {
+      "ticker": "ALMS",
+      "name": "ALUMIS INC",
+      "weight": 0.299
+    },
+    {
+      "ticker": "AORT",
+      "name": "ARTIVION INC",
+      "weight": 0.289
+    },
+    {
+      "ticker": "BFC",
+      "name": "BANK FIRST CORP",
+      "weight": 0.285
+    },
+    {
+      "ticker": "PENG",
+      "name": "PENGUIN SOLUTIONS INC",
+      "weight": 0.283
+    },
+    {
+      "ticker": "QCRH",
+      "name": "QCR HOLDINGS INC",
+      "weight": 0.281
+    },
+    {
+      "ticker": "NVRI",
+      "name": "ENVIRI CORP",
+      "weight": 0.279
+    },
+    {
+      "ticker": "OUST",
+      "name": "OUSTER INC",
+      "weight": 0.276
+    },
+    {
+      "ticker": "AMLX",
+      "name": "AMYLYX PHARMACEUTICALS INC",
+      "weight": 0.272
+    },
+    {
+      "ticker": "ARLO",
+      "name": "ARLO TECHNOLOGIES INC",
+      "weight": 0.272
+    },
+    {
+      "ticker": "CAPR",
+      "name": "CAPRICOR THERAPEUTICS INC",
+      "weight": 0.27
+    },
+    {
+      "ticker": "DCOM",
+      "name": "DIME COMMUNITY BANCSHARES INC",
+      "weight": 0.27
+    },
+    {
+      "ticker": "TPB",
+      "name": "TURNING POINT BRANDS INC",
+      "weight": 0.27
+    },
+    {
+      "ticker": "OBK",
+      "name": "ORIGIN BANCORP INC",
+      "weight": 0.266
+    },
+    {
+      "ticker": "REX",
+      "name": "REX AMERICAN RESOURCES CORP",
+      "weight": 0.266
+    },
+    {
+      "ticker": "VTOL",
+      "name": "BRISTOW GROUP INC",
+      "weight": 0.266
+    },
+    {
+      "ticker": "CNOB",
+      "name": "CONNECTONE BANCORP INC",
+      "weight": 0.264
+    },
+    {
+      "ticker": "TSHA",
+      "name": "TAYSHA GENE THERAPIES INC",
+      "weight": 0.264
+    },
+    {
+      "ticker": "ZYME",
+      "name": "ZYMEWORKS INC",
+      "weight": 0.264
+    },
+    {
+      "ticker": "TRVI",
+      "name": "TREVI THERAPEUTICS INC",
+      "weight": 0.252
+    },
+    {
+      "ticker": "IE",
+      "name": "IVANHOE ELECTRIC INC",
+      "weight": 0.25
+    },
+    {
+      "ticker": "ORC",
+      "name": "ORCHID ISLAND CAPITAL INC",
+      "weight": 0.248
+    },
+    {
+      "ticker": "NPKI",
+      "name": "NPK INTERNATIONAL INC",
+      "weight": 0.245
+    },
+    {
+      "ticker": "HROW",
+      "name": "HARROW INC",
+      "weight": 0.242
+    },
+    {
+      "ticker": "REAL",
+      "name": "THE REALREAL INC",
+      "weight": 0.239
+    },
+    {
+      "ticker": "ADTN",
+      "name": "ADTRAN HOLDINGS INC",
+      "weight": 0.238
+    },
+    {
+      "ticker": "TTI",
+      "name": "TETRA TECHNOLOGIES INC",
+      "weight": 0.235
+    },
+    {
+      "ticker": "INOD",
+      "name": "INNODATA INC",
+      "weight": 0.234
+    },
+    {
+      "ticker": "MLYS",
+      "name": "MINERALYS THERAPEUTICS INC",
+      "weight": 0.233
+    },
+    {
+      "ticker": "LINC",
+      "name": "LINCOLN EDUCATIONAL SERVICES CORP",
+      "weight": 0.228
+    },
+    {
+      "ticker": "PEBO",
+      "name": "PEOPLES BANCORP INC",
+      "weight": 0.227
+    },
+    {
+      "ticker": "GPRE",
+      "name": "GREEN PLAINS INC",
+      "weight": 0.226
+    },
+    {
+      "ticker": "UAMY",
+      "name": "UNITED STATES ANTIMONY CORP",
+      "weight": 0.226
+    },
+    {
+      "ticker": "RCAT",
+      "name": "RED CAT HOLDINGS INC",
+      "weight": 0.219
+    },
+    {
+      "ticker": "ANAB",
+      "name": "ANAPTYSBIO INC",
+      "weight": 0.218
+    },
+    {
+      "ticker": "0UC0.L",
+      "name": "NORDIC AMERICAN TANKERS LTD",
+      "weight": 0.216
+    },
+    {
+      "ticker": "GLUE",
+      "name": "MONTE ROSA THERAPEUTICS INC",
+      "weight": 0.216
+    },
+    {
+      "ticker": "INBX",
+      "name": "INHIBRX BIOSCIENCES INC",
+      "weight": 0.216
+    },
+    {
+      "ticker": "WINA",
+      "name": "WINMARK CORP",
+      "weight": 0.213
+    },
+    {
+      "ticker": "EVLV",
+      "name": "EVOLV TECHNOLOGIES HOLDINGS INC CL",
+      "weight": 0.208
+    },
+    {
+      "ticker": "SKYT",
+      "name": "SKYWATER TECHNOLOGY INC",
+      "weight": 0.207
+    },
+    {
+      "ticker": "VRDN",
+      "name": "VIRIDIAN THERAPEUTICS ORS INC",
+      "weight": 0.207
+    },
+    {
+      "ticker": "PAHC",
+      "name": "PHIBRO ANIMAL HEALTH CORP CLASS A",
+      "weight": 0.205
+    },
+    {
+      "ticker": "ALNT",
+      "name": "ALLIENT INC",
+      "weight": 0.203
+    },
+    {
+      "ticker": "COLL",
+      "name": "COLLEGIUM PHARMACEUTICAL INC",
+      "weight": 0.202
+    },
+    {
+      "ticker": "UVSP",
+      "name": "UNIVEST FINANCIAL CORP",
+      "weight": 0.202
+    },
+    {
+      "ticker": "CDNA",
+      "name": "CAREDX INC",
+      "weight": 0.2
+    },
+    {
+      "ticker": "NUVB",
+      "name": "NUVATION BIO INC CLASS A",
+      "weight": 0.2
+    },
+    {
+      "ticker": "CTBI",
+      "name": "COMMUNITY TRUST BANCORP INC",
+      "weight": 0.199
+    },
+    {
+      "ticker": "PNTG",
+      "name": "PENNANT GROUP INC",
+      "weight": 0.198
+    },
+    {
+      "ticker": "DEC",
+      "name": "DIVERSIFIED ENERGY COMPANY",
+      "weight": 0.197
+    },
+    {
+      "ticker": "OSBC",
+      "name": "OLD SECOND BANCORP INC",
+      "weight": 0.197
+    },
+    {
+      "ticker": "KALV",
+      "name": "KALVISTA PHARMACEUTICALS INC",
+      "weight": 0.196
+    },
+    {
+      "ticker": "TDAY",
+      "name": "USA TODAY INC",
+      "weight": 0.196
+    },
+    {
+      "ticker": "WLDN",
+      "name": "WILLDAN GROUP INC",
+      "weight": 0.195
+    },
+    {
+      "ticker": "AOSL",
+      "name": "ALPHA AND OMEGA SEMICONDUCTOR LTD",
+      "weight": 0.194
+    },
+    {
+      "ticker": "BKSY",
+      "name": "BLACKSKY TECHNOLOGY INC CLASS A",
+      "weight": 0.192
+    },
+    {
+      "ticker": "APEI",
+      "name": "AMERICAN PUBLIC EDUCATION INC",
+      "weight": 0.191
+    },
+    {
+      "ticker": "BY",
+      "name": "BYLINE BANCORP INC",
+      "weight": 0.191
+    },
+    {
+      "ticker": "OMER",
+      "name": "OMEROS CORP",
+      "weight": 0.191
+    },
+    {
+      "ticker": "PLOW",
+      "name": "DOUGLAS DYNAMICS INC",
+      "weight": 0.191
+    },
+    {
+      "ticker": "EYPT",
+      "name": "EYEPOINT INC",
+      "weight": 0.19
+    },
+    {
+      "ticker": "TE",
+      "name": "T1 ENERGY INC",
+      "weight": 0.19
+    },
+    {
+      "ticker": "UVE",
+      "name": "UNIVERSAL INSURANCE HOLDINGS INC",
+      "weight": 0.19
+    },
+    {
+      "ticker": "CRAI",
+      "name": "CRA INTERNATIONAL INC",
+      "weight": 0.188
+    },
+    {
+      "ticker": "OLMA",
+      "name": "OLEMA PHARMACEUTICALS INC",
+      "weight": 0.188
+    },
+    {
+      "ticker": "WVE",
+      "name": "WAVE LIFE SCIENCES LTD",
+      "weight": 0.188
+    },
+    {
+      "ticker": "CCB",
+      "name": "COASTAL FINANCIAL CORP",
+      "weight": 0.186
+    },
+    {
+      "ticker": "AVBP",
+      "name": "ARRIVENT BIOPHARMA INC",
+      "weight": 0.185
+    },
+    {
+      "ticker": "LMB",
+      "name": "LIMBACH HOLDINGS INC",
+      "weight": 0.185
+    },
+    {
+      "ticker": "RAPP",
+      "name": "RAPPORT THERAPEUTICS INC",
+      "weight": 0.185
+    },
+    {
+      "ticker": "BFLY",
+      "name": "BUTTERFLY NETWORK INC CLASS A",
+      "weight": 0.184
+    },
+    {
+      "ticker": "XERS",
+      "name": "XERIS BIOPHARMA HOLDINGS INC",
+      "weight": 0.183
+    },
+    {
+      "ticker": "PVLA",
+      "name": "PALVELLA THERAPEUTICS INC",
+      "weight": 0.181
+    },
+    {
+      "ticker": "GHM",
+      "name": "GRAHAM CORP",
+      "weight": 0.18
+    },
+    {
+      "ticker": "URGN",
+      "name": "UROGEN PHARMA LTD",
+      "weight": 0.179
+    },
+    {
+      "ticker": "FMBH",
+      "name": "FIRST MID BANCSHARES INC",
+      "weight": 0.178
+    },
+    {
+      "ticker": "AMAL",
+      "name": "AMALGAMATED FINANCIAL CORP",
+      "weight": 0.177
+    },
+    {
+      "ticker": "CRVS",
+      "name": "CORVUS PHARMACEUTICALS INC",
+      "weight": 0.177
+    },
+    {
+      "ticker": "NBN",
+      "name": "NORTHEAST BANK",
+      "weight": 0.176
+    },
+    {
+      "ticker": "UTL",
+      "name": "UNITIL CORP",
+      "weight": 0.176
+    },
+    {
+      "ticker": "RDW",
+      "name": "REDWIRE CORP",
+      "weight": 0.174
+    },
+    {
+      "ticker": "HBNC",
+      "name": "HORIZON BANCORP INC",
+      "weight": 0.172
+    },
+    {
+      "ticker": "NNE",
+      "name": "NANO NUCLEAR ENERGY INC",
+      "weight": 0.171
+    },
+    {
+      "ticker": "NX",
+      "name": "QUANEX BUILDING PRODUCTS CORP",
+      "weight": 0.171
+    },
+    {
+      "ticker": "CCNE",
+      "name": "CNB FINANCIAL CORP",
+      "weight": 0.17
+    },
+    {
+      "ticker": "PRCH",
+      "name": "PORCH GROUP INC",
+      "weight": 0.169
+    },
+    {
+      "ticker": "SCSC",
+      "name": "SCANSOURCE INC",
+      "weight": 0.168
+    },
+    {
+      "ticker": "TYRA",
+      "name": "TYRA BIOSCIENCES INC",
+      "weight": 0.167
+    },
+    {
+      "ticker": "HAFC",
+      "name": "HANMI FINANCIAL CORP",
+      "weight": 0.166
+    },
+    {
+      "ticker": "PLPC",
+      "name": "PREFORMED LINE PRODUCTS",
+      "weight": 0.166
+    },
+    {
+      "ticker": "BHRB",
+      "name": "BURKE HERBERT FINANCIAL SERVICES C",
+      "weight": 0.165
+    },
+    {
+      "ticker": "VVI",
+      "name": "PURSUIT ATTRACTIONS AND HOSPITALIT",
+      "weight": 0.165
+    },
+    {
+      "ticker": "GOLD",
+      "name": "GOLD INC",
+      "weight": 0.164
+    },
+    {
+      "ticker": "MBWM",
+      "name": "MERCANTILE BANK CORP",
+      "weight": 0.163
+    },
+    {
+      "ticker": "PFBC",
+      "name": "PREFERRED BANK",
+      "weight": 0.163
+    },
+    {
+      "ticker": "WSR",
+      "name": "WHITESTONE REIT",
+      "weight": 0.163
+    },
+    {
+      "ticker": "BFST",
+      "name": "BUSINESS FIRST BANCSHARES INC",
+      "weight": 0.162
+    },
+    {
+      "ticker": "KODK",
+      "name": "EASTMAN KODAK",
+      "weight": 0.161
+    },
+    {
+      "ticker": "AIP",
+      "name": "ARTERIS INC",
+      "weight": 0.16
+    },
+    {
+      "ticker": "AMTB",
+      "name": "AMERANT BANCORP INC CLASS A",
+      "weight": 0.16
+    },
+    {
+      "ticker": "UFCS",
+      "name": "UNITED FIRE GROUP INC",
+      "weight": 0.16
+    },
+    {
+      "ticker": "BLFS",
+      "name": "BIOLIFE SOLUTIONS INC",
+      "weight": 0.159
+    },
+    {
+      "ticker": "CPF",
+      "name": "CENTRAL PACIFIC FINANCIAL CORP",
+      "weight": 0.157
+    },
+    {
+      "ticker": "IDT",
+      "name": "IDT CORP CLASS B",
+      "weight": 0.157
+    },
+    {
+      "ticker": "LQDT",
+      "name": "LIQUIDITY SERVICES INC",
+      "weight": 0.157
+    },
+    {
+      "ticker": "CBL",
+      "name": "CBL ASSOCIATES PROPERTIES INC",
+      "weight": 0.156
+    },
+    {
+      "ticker": "INDI",
+      "name": "INDIE SEMICONDUCTOR INC CLASS A",
+      "weight": 0.156
+    },
+    {
+      "ticker": "NWPX",
+      "name": "NWPX INFRASTRUCTURE INC",
+      "weight": 0.156
+    },
+    {
+      "ticker": "MBX",
+      "name": "MBX BIOSCIENCES INC",
+      "weight": 0.155
+    },
+    {
+      "ticker": "TRST",
+      "name": "TRUSTCO BANK CORP",
+      "weight": 0.155
+    },
+    {
+      "ticker": "CAC",
+      "name": "CAMDEN NATIONAL CORP",
+      "weight": 0.153
+    },
+    {
+      "ticker": "SLS",
+      "name": "SELLAS LIFE SCIENCES GROUP INC",
+      "weight": 0.153
+    },
+    {
+      "ticker": "MCB",
+      "name": "METROPOLITAN BANK HOLDING CORP",
+      "weight": 0.151
+    },
+    {
+      "ticker": "BBSI",
+      "name": "BARRETT BUSINESS SERVICES INC",
+      "weight": 0.149
+    },
+    {
+      "ticker": "CDRE",
+      "name": "CADRE HOLDINGS INC",
+      "weight": 0.149
+    },
+    {
+      "ticker": "EQBK",
+      "name": "EQUITY BANCSHARES INC CLASS A",
+      "weight": 0.149
+    },
+    {
+      "ticker": "NBBK",
+      "name": "NB BANCORP INC",
+      "weight": 0.149
+    },
+    {
+      "ticker": "ANNX",
+      "name": "ANNEXON INC",
+      "weight": 0.148
+    },
+    {
+      "ticker": "FMNB",
+      "name": "FARMERS NATIONAL BANC CORP",
+      "weight": 0.148
+    },
+    {
+      "ticker": "PGY",
+      "name": "PAGAYA TECHNOLOGIES LTD CLASS A",
+      "weight": 0.148
+    },
+    {
+      "ticker": "PKST",
+      "name": "PEAKSTONE REALTY TRUST CLASS E",
+      "weight": 0.148
+    },
+    {
+      "ticker": "GNK",
+      "name": "GENCO SHIPPING AND TRADING LTD",
+      "weight": 0.147
+    },
+    {
+      "ticker": "ESQ",
+      "name": "ESQUIRE FINANCIAL HOLDINGS INC",
+      "weight": 0.146
+    },
+    {
+      "ticker": "DAKT",
+      "name": "DAKTRONICS INC",
+      "weight": 0.144
+    },
+    {
+      "ticker": "KOP",
+      "name": "KOPPERS HOLDINGS INC",
+      "weight": 0.144
+    },
+    {
+      "ticker": "ASST",
+      "name": "STRIVE INC CLASS A",
+      "weight": 0.143
+    },
+    {
+      "ticker": "THFF",
+      "name": "FIRST FINANCIAL CORPORATION CORP",
+      "weight": 0.142
+    },
+    {
+      "ticker": "MCHB",
+      "name": "MECHANICS BANCORP CLASS A",
+      "weight": 0.141
+    },
+    {
+      "ticker": "MYE",
+      "name": "MYERS INDUSTRIES INC",
+      "weight": 0.141
+    },
+    {
+      "ticker": "PGEN",
+      "name": "PRECIGEN INC",
+      "weight": 0.141
+    },
+    {
+      "ticker": "TALK",
+      "name": "TALKSPACE INC",
+      "weight": 0.141
+    },
+    {
+      "ticker": "FBRT",
+      "name": "FRANKLIN BSP REALTY TRUST INC",
+      "weight": 0.14
+    },
+    {
+      "ticker": "NPK",
+      "name": "NATIONAL PRESTO INDUSTRIES INC",
+      "weight": 0.139
+    },
+    {
+      "ticker": "CEVA",
+      "name": "CEVA INC",
+      "weight": 0.138
+    },
+    {
+      "ticker": "HRTG",
+      "name": "HERITAGE INSURANCE HOLDINGS INC",
+      "weight": 0.138
+    },
+    {
+      "ticker": "HTB",
+      "name": "HOMETRUST BANCSHARES INC",
+      "weight": 0.138
+    },
+    {
+      "ticker": "BJRI",
+      "name": "BJS RESTAURANTS INC",
+      "weight": 0.137
+    },
+    {
+      "ticker": "ODC",
+      "name": "OIL DRI CORPORATION OF AMERICA",
+      "weight": 0.137
+    },
+    {
+      "ticker": "SVRA",
+      "name": "SAVARA INC",
+      "weight": 0.136
+    },
+    {
+      "ticker": "FCBC",
+      "name": "FIRST COMMUNITY BANKSHARES INC",
+      "weight": 0.135
+    },
+    {
+      "ticker": "JBIO",
+      "name": "JADE BIOSCIENCES INC",
+      "weight": 0.135
+    },
+    {
+      "ticker": "MCBS",
+      "name": "METROCITY BANKSHARES INC",
+      "weight": 0.135
+    },
+    {
+      "ticker": "NTGR",
+      "name": "NETGEAR INC",
+      "weight": 0.135
+    },
+    {
+      "ticker": "QNST",
+      "name": "QUINSTREET INC",
+      "weight": 0.135
+    },
+    {
+      "ticker": "CSV",
+      "name": "CARRIAGE SERVICES INC",
+      "weight": 0.133
+    },
+    {
+      "ticker": "TK",
+      "name": "TEEKAY CORPORATION CORP LTD",
+      "weight": 0.133
+    },
+    {
+      "ticker": "CGEM",
+      "name": "CULLINAN THERAPEUTICS INC",
+      "weight": 0.132
+    },
+    {
+      "ticker": "CSTL",
+      "name": "CASTLE BIOSCIENCES INC",
+      "weight": 0.132
+    },
+    {
+      "ticker": "EGY",
+      "name": "VAALCO ENERGY INC",
+      "weight": 0.131
+    },
+    {
+      "ticker": "FET",
+      "name": "FORUM ENERGY TECHNOLOGIES INC",
+      "weight": 0.131
+    },
+    {
+      "ticker": "TMST",
+      "name": "METALLUS INC",
+      "weight": 0.131
+    },
+    {
+      "ticker": "IRMD",
+      "name": "IRADIMED CORP",
+      "weight": 0.13
+    },
+    {
+      "ticker": "ORRF",
+      "name": "ORRSTOWN FINANCIAL SERVICES INC",
+      "weight": 0.13
+    },
+    {
+      "ticker": "SWBI",
+      "name": "SMITH WESSON BRANDS INC",
+      "weight": 0.13
+    },
+    {
+      "ticker": "TRNS",
+      "name": "TRANSCAT INC",
+      "weight": 0.13
+    },
+    {
+      "ticker": "LIND",
+      "name": "LINDBLAD EXPEDITIONS HOLDINGS INC",
+      "weight": 0.129
+    },
+    {
+      "ticker": "LPTH",
+      "name": "LIGHTPATH TECHNOLOGIES INC CLASS A",
+      "weight": 0.129
+    },
+    {
+      "ticker": "MAZE",
+      "name": "MAZE THERAPEUTICS INC",
+      "weight": 0.129
+    },
+    {
+      "ticker": "BAND",
+      "name": "BANDWIDTH INC CLASS A",
+      "weight": 0.128
+    },
+    {
+      "ticker": "KOPN",
+      "name": "KOPIN CORP",
+      "weight": 0.128
+    },
+    {
+      "ticker": "VPG",
+      "name": "VISHAY PRECISION GROUP INC",
+      "weight": 0.128
+    },
+    {
+      "ticker": "CRML",
+      "name": "CRITICAL METALS CORP",
+      "weight": 0.127
+    },
+    {
+      "ticker": "DJCO",
+      "name": "DAILY JOURNAL CORP",
+      "weight": 0.127
+    },
+    {
+      "ticker": "FISI",
+      "name": "FINANCIAL INSTITUTIONS INC",
+      "weight": 0.127
+    },
+    {
+      "ticker": "IBCP",
+      "name": "INDEPENDENT BANK CORP",
+      "weight": 0.127
+    },
+    {
+      "ticker": "PGC",
+      "name": "PEAPACK GLADSTONE FINANCIAL CORP",
+      "weight": 0.127
+    },
+    {
+      "ticker": "IRWD",
+      "name": "IRONWOOD PHARMA INC CLASS A",
+      "weight": 0.126
+    },
+    {
+      "ticker": "OIS",
+      "name": "OIL STATES INTERNATIONAL INC",
+      "weight": 0.126
+    },
+    {
+      "ticker": "SMBC",
+      "name": "SOUTHERN MISSOURI BANCORP INC",
+      "weight": 0.126
+    },
+    {
+      "ticker": "FCEL",
+      "name": "FUELCELL ENERGY INC",
+      "weight": 0.125
+    },
+    {
+      "ticker": "NB.TO",
+      "name": "NIOCORP DEVELOPMENTS LTD",
+      "weight": 0.125
+    },
+    {
+      "ticker": "MPB",
+      "name": "MID PENN BANCORP INC",
+      "weight": 0.124
+    },
+    {
+      "ticker": "ABSI",
+      "name": "ABSCI CORP",
+      "weight": 0.122
+    },
+    {
+      "ticker": "ASIX",
+      "name": "ADVANSIX INC",
+      "weight": 0.122
+    },
+    {
+      "ticker": "CCBG",
+      "name": "CAPITAL CITY BANK INC",
+      "weight": 0.122
+    },
+    {
+      "ticker": "CTO",
+      "name": "CTO REALTY GROWTH INC",
+      "weight": 0.122
+    },
+    {
+      "ticker": "TBPH",
+      "name": "THERAVANCE BIOPHARMA INC",
+      "weight": 0.122
+    },
+    {
+      "ticker": "FSBC",
+      "name": "FIVE STAR BANCORP",
+      "weight": 0.121
+    },
+    {
+      "ticker": "LYTS",
+      "name": "LSI INDUSTRIES INC",
+      "weight": 0.121
+    },
+    {
+      "ticker": "SMBK",
+      "name": "SMARTFINANCIAL INC",
+      "weight": 0.121
+    },
+    {
+      "ticker": "AMBQ",
+      "name": "AMBIQ MICRO INC",
+      "weight": 0.12
+    },
+    {
+      "ticker": "KE",
+      "name": "KIMBALL ELECTRONICS INC",
+      "weight": 0.12
+    },
+    {
+      "ticker": "ABUS",
+      "name": "ARBUTUS BIOPHARMA CORP",
+      "weight": 0.119
+    },
+    {
+      "ticker": "IVR",
+      "name": "INVESCO MORTGAGE CAPITAL REIT INC",
+      "weight": 0.119
+    },
+    {
+      "ticker": "ORIC",
+      "name": "ORIC PHARMACEUTICALS INC",
+      "weight": 0.119
+    },
+    {
+      "ticker": "SENEA",
+      "name": "SENECA FOODS CORP CLASS A",
+      "weight": 0.119
+    },
+    {
+      "ticker": "DRUG.CN",
+      "name": "BRIGHT MINDS BIOSCIENCES INC",
+      "weight": 0.118
+    },
+    {
+      "ticker": "FIP",
+      "name": "FTAI INFRASTRUCTURE INC",
+      "weight": 0.118
+    },
+    {
+      "ticker": "IHRT",
+      "name": "IHEARTMEDIA INC CLASS A",
+      "weight": 0.118
+    },
+    {
+      "ticker": "SOY.TO",
+      "name": "SUNOPTA INC",
+      "weight": 0.118
+    },
+    {
+      "ticker": "ASC",
+      "name": "ARDMORE SHIPPING CORP",
+      "weight": 0.117
+    },
+    {
+      "ticker": "SION",
+      "name": "SIONNA THERAPEUTICS INC",
+      "weight": 0.116
+    },
+    {
+      "ticker": "ALRS",
+      "name": "ALERUS FINANCIAL CORP",
+      "weight": 0.115
+    },
+    {
+      "ticker": "CTLP",
+      "name": "CANTALOUPE INC",
+      "weight": 0.115
+    },
+    {
+      "ticker": "ETON",
+      "name": "ETON PHARMACEUTCIALS INC",
+      "weight": 0.115
+    },
+    {
+      "ticker": "GOOD",
+      "name": "GLADSTONE COMMERCIAL REIT CORP",
+      "weight": 0.115
+    },
+    {
+      "ticker": "METC",
+      "name": "RAMACO RESOURCES INC CLASS A",
+      "weight": 0.115
+    },
+    {
+      "ticker": "MITK",
+      "name": "MITEK SYSTEMS INC",
+      "weight": 0.115
+    },
+    {
+      "ticker": "RYAM",
+      "name": "RAYONIER ADVANCED MATERIALS INC",
+      "weight": 0.115
+    },
+    {
+      "ticker": "PKE",
+      "name": "PARK AEROSPACE CORP",
+      "weight": 0.114
+    },
+    {
+      "ticker": "IDR",
+      "name": "IDAHO STRATEGIC RESOURCES INC",
+      "weight": 0.113
+    },
+    {
+      "ticker": "SERV",
+      "name": "SERVE ROBOTICS INC",
+      "weight": 0.113
+    },
+    {
+      "ticker": "SHBI",
+      "name": "SHORE BANCSHARES INC",
+      "weight": 0.113
+    },
+    {
+      "ticker": "WASH",
+      "name": "WASHINGTON TRUST BANCORP INC",
+      "weight": 0.113
+    },
+    {
+      "ticker": "AEVA",
+      "name": "AEVA TECHNOLOGIES INC",
+      "weight": 0.112
+    },
+    {
+      "ticker": "AROW",
+      "name": "ARROW FINANCIAL CORP",
+      "weight": 0.112
+    },
+    {
+      "ticker": "BZH",
+      "name": "BEAZER HOMES INC",
+      "weight": 0.112
+    },
+    {
+      "ticker": "LBRX",
+      "name": "LB PHARMACEUTICALS INC",
+      "weight": 0.112
+    },
+    {
+      "ticker": "MPLT",
+      "name": "MAPLIGHT THERAPEUTICS INC",
+      "weight": 0.112
+    },
+    {
+      "ticker": "SLDP",
+      "name": "SOLID POWER INC CLASS A",
+      "weight": 0.112
+    },
+    {
+      "ticker": "NUTX",
+      "name": "NUTEX HEALTH INC",
+      "weight": 0.11
+    },
+    {
+      "ticker": "BHB",
+      "name": "BAR HARBOR BANKSHARES",
+      "weight": 0.109
+    },
+    {
+      "ticker": "PSIX",
+      "name": "POWER SOLUTIONS INTERNATIONAL INC",
+      "weight": 0.109
+    },
+    {
+      "ticker": "ANRO",
+      "name": "ALTO NEUROSCIENCE INC",
+      "weight": 0.108
+    },
+    {
+      "ticker": "SXC",
+      "name": "SUNCOKE ENERGY INC",
+      "weight": 0.108
+    },
+    {
+      "ticker": "ASPI",
+      "name": "ASP ISOTOPES INC",
+      "weight": 0.107
+    },
+    {
+      "ticker": "RHLD",
+      "name": "RESOLUTE HOLDINGS MANAGEMENT INC",
+      "weight": 0.107
+    },
+    {
+      "ticker": "CRMD",
+      "name": "CORMEDIX INC",
+      "weight": 0.106
+    },
+    {
+      "ticker": "GSBC",
+      "name": "GREAT SOUTHERN BANCORP INC",
+      "weight": 0.106
+    },
+    {
+      "ticker": "HZO",
+      "name": "MARINEMAX INC",
+      "weight": 0.106
+    },
+    {
+      "ticker": "CARE",
+      "name": "CARTER BANKSHARES INC",
+      "weight": 0.105
+    },
+    {
+      "ticker": "CWBC",
+      "name": "COMMUNITY WEST BANCSHARES",
+      "weight": 0.104
+    },
+    {
+      "ticker": "PHAT",
+      "name": "PHATHOM PHARMACEUTICALS INC",
+      "weight": 0.104
+    },
+    {
+      "ticker": "RZLV",
+      "name": "REZOLVE AI PLC",
+      "weight": 0.104
+    },
+    {
+      "ticker": "CASS",
+      "name": "CASS INFORMATION SYSTEMS INC",
+      "weight": 0.103
+    },
+    {
+      "ticker": "REPX",
+      "name": "RILEY EXPLORATION PERMIAN INC",
+      "weight": 0.103
+    },
+    {
+      "ticker": "TREE",
+      "name": "LENDINGTREE INC",
+      "weight": 0.103
+    },
+    {
+      "ticker": "ZVRA",
+      "name": "ZEVRA THERAPEUTICS INC",
+      "weight": 0.103
+    },
+    {
+      "ticker": "GSM",
+      "name": "FERROGLOBE PLC",
+      "weight": 0.102
+    },
+    {
+      "ticker": "HOV",
+      "name": "HOVNANIAN ENTERPRISES INC CLASS A",
+      "weight": 0.102
+    },
+    {
+      "ticker": "NRIM",
+      "name": "NORTHRIM BANCORP INC",
+      "weight": 0.102
+    },
+    {
+      "ticker": "CVLG",
+      "name": "COVENANT LOGISTICS GROUP INC CLASS",
+      "weight": 0.101
+    },
+    {
+      "ticker": "PFIS",
+      "name": "PEOPLES FINANCIAL SERVICES CORP",
+      "weight": 0.101
+    },
+    {
+      "ticker": "MSBI",
+      "name": "MIDLAND STATES BANCORP INC",
+      "weight": 0.1
+    },
+    {
+      "ticker": "PSTL",
+      "name": "POSTAL REALTY TRUST INC CLASS A",
+      "weight": 0.1
+    },
+    {
+      "ticker": "RIGL",
+      "name": "RIGEL PHARMACEUTICALS INC",
+      "weight": 0.1
+    },
+    {
+      "ticker": "UHT",
+      "name": "UNIVERSAL HEALTH REALTY INCOME TRU",
+      "weight": 0.1
+    },
+    {
+      "ticker": "CBLL",
+      "name": "CERIBELL INC",
+      "weight": 0.099
+    },
+    {
+      "ticker": "FFIC",
+      "name": "FLUSHING FINANCIAL CORP",
+      "weight": 0.099
+    },
+    {
+      "ticker": "NFBK",
+      "name": "NORTHFIELD BANCORP INC",
+      "weight": 0.099
+    },
+    {
+      "ticker": "WLFC",
+      "name": "WILLIS LEASE FINANCE CORP",
+      "weight": 0.099
+    },
+    {
+      "ticker": "ACNB",
+      "name": "ACNB CORP",
+      "weight": 0.098
+    },
+    {
+      "ticker": "ATEX",
+      "name": "ANTERIX INC",
+      "weight": 0.098
+    },
+    {
+      "ticker": "ETD",
+      "name": "ETHAN ALLEN INTERIORS INC",
+      "weight": 0.098
+    },
+    {
+      "ticker": "HNRG",
+      "name": "HALLADOR ENERGY",
+      "weight": 0.098
+    },
+    {
+      "ticker": "MLR",
+      "name": "MILLER INDUSTRIES INC",
+      "weight": 0.098
+    },
+    {
+      "ticker": "BIOA",
+      "name": "BIOAGE LABS INC",
+      "weight": 0.097
+    },
+    {
+      "ticker": "CIVB",
+      "name": "CIVISTA BANCSHARES INC",
+      "weight": 0.097
+    },
+    {
+      "ticker": "SATL",
+      "name": "SATELLOGIC INC CLASS A",
+      "weight": 0.097
+    },
+    {
+      "ticker": "HIPO",
+      "name": "HIPPO HOLDINGS INC",
+      "weight": 0.096
+    },
+    {
+      "ticker": "HSTM",
+      "name": "HEALTHSTREAM INC",
+      "weight": 0.096
+    },
+    {
+      "ticker": "SPFI",
+      "name": "SOUTH PLAINS FINANCIAL INC",
+      "weight": 0.096
+    },
+    {
+      "ticker": "EBF",
+      "name": "ENNIS INC",
+      "weight": 0.095
+    },
+    {
+      "ticker": "IIIV",
+      "name": "I3 VERTICALS INC CLASS A",
+      "weight": 0.095
+    },
+    {
+      "ticker": "MAMA",
+      "name": "MAMAS CREATIONS INC",
+      "weight": 0.095
+    },
+    {
+      "ticker": "TCMD",
+      "name": "TACTILE SYSTEMS TECHNOLOGY INC",
+      "weight": 0.095
+    },
+    {
+      "ticker": "SD",
+      "name": "SANDRIDGE ENERGY INC",
+      "weight": 0.094
+    },
+    {
+      "ticker": "CPS",
+      "name": "COOPER STANDARD HOLDINGS INC",
+      "weight": 0.093
+    },
+    {
+      "ticker": "CWCO",
+      "name": "CONSOLIDATED WATER LTD",
+      "weight": 0.093
+    },
+    {
+      "ticker": "TCBX",
+      "name": "THIRD COAST BANCSHARES INC",
+      "weight": 0.092
+    },
+    {
+      "ticker": "CCSI",
+      "name": "CONSENSUS CLOUD SOLUTIONS INC",
+      "weight": 0.091
+    },
+    {
+      "ticker": "DC",
+      "name": "DAKOTA GOLD CORP",
+      "weight": 0.091
+    },
+    {
+      "ticker": "GLRE",
+      "name": "GREENLIGHT CAPITAL LTD CLASS A",
+      "weight": 0.091
+    },
+    {
+      "ticker": "HIFS",
+      "name": "HINGHAM INSTITUTION FOR SAVINGS",
+      "weight": 0.091
+    },
+    {
+      "ticker": "IIIN",
+      "name": "INSTEEL INDUSTRIES INC",
+      "weight": 0.091
+    },
+    {
+      "ticker": "RRBI",
+      "name": "RED RIVER BANCSHARES INC",
+      "weight": 0.091
+    },
+    {
+      "ticker": "UMAC",
+      "name": "UNUSUAL MACHINES INC",
+      "weight": 0.091
+    },
+    {
+      "ticker": "AVR",
+      "name": "ANTERIS TECHNOLOGIES GLOBAL CORP",
+      "weight": 0.09
+    },
+    {
+      "ticker": "CVGW",
+      "name": "CALAVO GROWERS INC",
+      "weight": 0.09
+    },
+    {
+      "ticker": "HY",
+      "name": "HYSTER YALE INC CLASS A",
+      "weight": 0.09
+    },
+    {
+      "ticker": "BTBT",
+      "name": "BIT DIGITAL INC",
+      "weight": 0.089
+    },
+    {
+      "ticker": "CTGO",
+      "name": "CONTANGO SILVER AND GOLD INC",
+      "weight": 0.088
+    },
+    {
+      "ticker": "ESPR",
+      "name": "ESPERION THERAPEUTICS INC",
+      "weight": 0.088
+    },
+    {
+      "ticker": "KRNY",
+      "name": "KEARNY FINANCIAL CORP",
+      "weight": 0.088
+    },
+    {
+      "ticker": "SIBN",
+      "name": "SI BONE INC",
+      "weight": 0.088
+    },
+    {
+      "ticker": "SPIR",
+      "name": "SPIRE GLOBAL INC CLASS A",
+      "weight": 0.088
+    },
+    {
+      "ticker": "BBW",
+      "name": "BUILD A BEAR WORKSHOP INC",
+      "weight": 0.086
+    },
+    {
+      "ticker": "BVS",
+      "name": "BIOVENTUS CLASS A INC",
+      "weight": 0.086
+    },
+    {
+      "ticker": "EVER",
+      "name": "EVERQUOTE INC CLASS A",
+      "weight": 0.086
+    },
+    {
+      "ticker": "MTW",
+      "name": "MANITOWOC INC",
+      "weight": 0.086
+    },
+    {
+      "ticker": "NATR",
+      "name": "NATURES SUNSHINE PRODUCTS INC",
+      "weight": 0.086
+    },
+    {
+      "ticker": "OFIX",
+      "name": "ORTHOFIX MEDICAL INC",
+      "weight": 0.086
+    },
+    {
+      "ticker": "ORN",
+      "name": "ORION GROUP INC",
+      "weight": 0.086
+    },
+    {
+      "ticker": "FBIZ",
+      "name": "FIRST BUSINESS FINANCIAL SERVICES",
+      "weight": 0.085
+    },
+    {
+      "ticker": "FPI",
+      "name": "FARMLAND PARTNERS INC",
+      "weight": 0.085
+    },
+    {
+      "ticker": "GEVO",
+      "name": "GEVO INC",
+      "weight": 0.085
+    },
+    {
+      "ticker": "GMRE",
+      "name": "CHIRON REAL ESTATE INC",
+      "weight": 0.085
+    },
+    {
+      "ticker": "RJET",
+      "name": "REPUBLIC AIRWAYS HOLDINGS INC",
+      "weight": 0.085
+    },
+    {
+      "ticker": "WTI",
+      "name": "W AND T OFFSHORE INC",
+      "weight": 0.085
+    },
+    {
+      "ticker": "CAL",
+      "name": "CALERES INC",
+      "weight": 0.083
+    },
+    {
+      "ticker": "IMXI",
+      "name": "INTERNATIONAL MONEY EXPRESS INC",
+      "weight": 0.083
+    },
+    {
+      "ticker": "MCS",
+      "name": "THE MARCUS CORP",
+      "weight": 0.083
+    },
+    {
+      "ticker": "OSPN",
+      "name": "ONESPAN INC",
+      "weight": 0.083
+    },
+    {
+      "ticker": "SFST",
+      "name": "SOUTHERN FIRST BANCSHARES INC",
+      "weight": 0.083
+    },
+    {
+      "ticker": "TDUP",
+      "name": "THREDUP INC CLASS A",
+      "weight": 0.083
+    },
+    {
+      "ticker": "TRAX",
+      "name": "FIRST TRACKS BIOTHERAPEUTICS INC",
+      "weight": 0.083
+    },
+    {
+      "ticker": "BWMN",
+      "name": "BOWMAN CONSULTING GROUP LTD",
+      "weight": 0.082
+    },
+    {
+      "ticker": "COFS",
+      "name": "CHOICEONE FINANCIAL SERVICES INC",
+      "weight": 0.082
+    },
+    {
+      "ticker": "FULC",
+      "name": "FULCRUM THERAPEUTICS INC",
+      "weight": 0.082
+    },
+    {
+      "ticker": "HBCP",
+      "name": "HOME BANCORP INC",
+      "weight": 0.082
+    },
+    {
+      "ticker": "NRDS",
+      "name": "NERDWALLET INC CLASS A",
+      "weight": 0.082
+    },
+    {
+      "ticker": "RDVT",
+      "name": "RED VIOLET INC",
+      "weight": 0.082
+    },
+    {
+      "ticker": "TITN",
+      "name": "TITAN MACHINERY INC",
+      "weight": 0.082
+    },
+    {
+      "ticker": "BSRR",
+      "name": "SIERRA BANCORP",
+      "weight": 0.081
+    },
+    {
+      "ticker": "BCAL",
+      "name": "CALIFORNIA BANCORP",
+      "weight": 0.08
+    },
+    {
+      "ticker": "CMCO",
+      "name": "COLUMBUS MCKINNON CORP",
+      "weight": 0.08
+    },
+    {
+      "ticker": "ILPT",
+      "name": "INDUSTRIAL LOGISTICS PROPERTIES TR",
+      "weight": 0.08
+    },
+    {
+      "ticker": "NPCE",
+      "name": "NEUROPACE INC",
+      "weight": 0.08
+    },
+    {
+      "ticker": "OLP",
+      "name": "ONE LIBERTY PROPERTIES REIT INC",
+      "weight": 0.08
+    },
+    {
+      "ticker": "YORW",
+      "name": "YORK WATER",
+      "weight": 0.08
+    },
+    {
+      "ticker": "AQST",
+      "name": "AQUESTIVE THERAPEUTICS INC",
+      "weight": 0.079
+    },
+    {
+      "ticker": "EBS",
+      "name": "EMERGENT BIOSOLUTIONS INC",
+      "weight": 0.079
+    },
+    {
+      "ticker": "IPI",
+      "name": "INTREPID POTASH INC",
+      "weight": 0.079
+    },
+    {
+      "ticker": "MOV",
+      "name": "MOVADO GROUP INC",
+      "weight": 0.079
+    },
+    {
+      "ticker": "NGS",
+      "name": "NATURAL GAS SERVICES GROUP INC",
+      "weight": 0.079
+    },
+    {
+      "ticker": "SLDB",
+      "name": "SOLID BIOSCIENCES INC",
+      "weight": 0.079
+    },
+    {
+      "ticker": "TRC",
+      "name": "TEJON RANCH",
+      "weight": 0.079
+    },
+    {
+      "ticker": "ZBIO",
+      "name": "ZENAS BIOPHARMA INC",
+      "weight": 0.079
+    },
+    {
+      "ticker": "ACRS",
+      "name": "ACLARIS THERAPEUTICS INC",
+      "weight": 0.078
+    },
+    {
+      "ticker": "AEBI",
+      "name": "AEBI SCHMIDT HOLDING AG",
+      "weight": 0.078
+    },
+    {
+      "ticker": "ATLC",
+      "name": "ATLANTICUS HOLDINGS CORP",
+      "weight": 0.078
+    },
+    {
+      "ticker": "CLDT",
+      "name": "CHATHAM LODGING TRUST REIT",
+      "weight": 0.078
+    },
+    {
+      "ticker": "OOMA",
+      "name": "OOMA INC",
+      "weight": 0.078
+    },
+    {
+      "ticker": "SFIX",
+      "name": "STITCH FIX INC CLASS A",
+      "weight": 0.078
+    },
+    {
+      "ticker": "BXC",
+      "name": "BLUELINX HOLDINGS INC",
+      "weight": 0.077
+    },
+    {
+      "ticker": "CBAN",
+      "name": "COLONY BANKCORP INC",
+      "weight": 0.077
+    },
+    {
+      "ticker": "MGTX",
+      "name": "MEIRAGTX HOLDINGS PLC",
+      "weight": 0.077
+    },
+    {
+      "ticker": "RR",
+      "name": "RICHTECH ROBOTICS INC CLASS B",
+      "weight": 0.077
+    },
+    {
+      "ticker": "TIPT",
+      "name": "TIPTREE INC",
+      "weight": 0.077
+    },
+    {
+      "ticker": "ANGO",
+      "name": "ANGIODYNAMICS INC",
+      "weight": 0.076
+    },
+    {
+      "ticker": "OBT",
+      "name": "ORANGE COUNTY BANCORP INC",
+      "weight": 0.076
+    },
+    {
+      "ticker": "XOMA",
+      "name": "XOMA ROYALTY CORP",
+      "weight": 0.076
+    },
+    {
+      "ticker": "CZNC",
+      "name": "CITIZENS AND NORTHERN CORP",
+      "weight": 0.075
+    },
+    {
+      "ticker": "VNDA",
+      "name": "VANDA PHARMACEUTICALS INC",
+      "weight": 0.075
+    },
+    {
+      "ticker": "YEXT",
+      "name": "YEXT INC",
+      "weight": 0.075
+    },
+    {
+      "ticker": "ADCT",
+      "name": "ADC THERAPEUTICS SA",
+      "weight": 0.074
+    },
+    {
+      "ticker": "FDMT",
+      "name": "4D MOLECULAR THERAPEUTICS INC",
+      "weight": 0.074
+    },
+    {
+      "ticker": "RBB",
+      "name": "RBB BANCORP",
+      "weight": 0.074
+    },
+    {
+      "ticker": "TWI",
+      "name": "TITAN INTERNATIONAL INC",
+      "weight": 0.074
+    },
+    {
+      "ticker": "VLGEA",
+      "name": "VILLAGE SUPER MARKET INC CLASS A",
+      "weight": 0.074
+    },
+    {
+      "ticker": "ABAT",
+      "name": "AMERICAN BATTERY TECHNOLOGY COMPAN",
+      "weight": 0.073
+    },
+    {
+      "ticker": "AVIR",
+      "name": "ATEA PHARMACEUTICALS INC",
+      "weight": 0.073
+    },
+    {
+      "ticker": "BWB",
+      "name": "BRIDGEWATER BANCSHARES INC",
+      "weight": 0.073
+    },
+    {
+      "ticker": "LOCO",
+      "name": "EL POLLO LOCO INC",
+      "weight": 0.073
+    },
+    {
+      "ticker": "LXFR",
+      "name": "LUXFER HOLDINGS PLC",
+      "weight": 0.073
+    },
+    {
+      "ticker": "RNGR",
+      "name": "RANGER ENERGY SERVICES INC CLASS A",
+      "weight": 0.073
+    },
+    {
+      "ticker": "UNTY",
+      "name": "UNITY BANCORP INC",
+      "weight": 0.073
+    },
+    {
+      "ticker": "ABX",
+      "name": "ABACUS GLOBAL MANAGEMENT INC CLASS",
+      "weight": 0.072
+    },
+    {
+      "ticker": "BMRC",
+      "name": "BANK OF MARIN BANCORP",
+      "weight": 0.072
+    },
+    {
+      "ticker": "CRNC",
+      "name": "CERENCE INC",
+      "weight": 0.072
+    },
+    {
+      "ticker": "DSGN",
+      "name": "DESIGN THERAPEUTICS INC",
+      "weight": 0.072
+    },
+    {
+      "ticker": "ENTA",
+      "name": "ENANTA PHARMACEUTICALS INC",
+      "weight": 0.072
+    },
+    {
+      "ticker": "GDYN",
+      "name": "GRID DYNAMICS HOLDINGS INC CLASS A",
+      "weight": 0.072
+    },
+    {
+      "ticker": "HSHPO.XD",
+      "name": "HIMALAYA SHIPPING LTD",
+      "weight": 0.072
+    },
+    {
+      "ticker": "NVEC",
+      "name": "NVE CORP",
+      "weight": 0.072
+    },
+    {
+      "ticker": "PWFL",
+      "name": "POWERFLEET INC",
+      "weight": 0.072
+    },
+    {
+      "ticker": "BELFA",
+      "name": "BEL FUSE INC CLASS A",
+      "weight": 0.071
+    },
+    {
+      "ticker": "CMCL.L",
+      "name": "CALEDONIA MINING PLC",
+      "weight": 0.071
+    },
+    {
+      "ticker": "LXEO",
+      "name": "LEXEO THERAPEUTICS INC",
+      "weight": 0.071
+    },
+    {
+      "ticker": "APPS",
+      "name": "DIGITAL TURBINE INC",
+      "weight": 0.07
+    },
+    {
+      "ticker": "FVR",
+      "name": "FRONTVIEW REIT INC",
+      "weight": 0.07
+    },
+    {
+      "ticker": "KRUS",
+      "name": "KURA SUSHI USA INC",
+      "weight": 0.07
+    },
+    {
+      "ticker": "MDXG",
+      "name": "MIMEDX GROUP INC",
+      "weight": 0.07
+    },
+    {
+      "ticker": "GRPN",
+      "name": "GROUPON INC",
+      "weight": 0.069
+    },
+    {
+      "ticker": "MCFT",
+      "name": "MASTERCRAFT BOAT HOLDINGS INC",
+      "weight": 0.069
+    },
+    {
+      "ticker": "MVST",
+      "name": "MICROVAST HOLDINGS INC",
+      "weight": 0.069
+    },
+    {
+      "ticker": "PLSE",
+      "name": "PULSE BIOSCIENCES INC",
+      "weight": 0.069
+    },
+    {
+      "ticker": "PRME",
+      "name": "PRIME MEDICINE INC",
+      "weight": 0.069
+    },
+    {
+      "ticker": "TRDA",
+      "name": "ENTRADA THERAPEUTICS INC",
+      "weight": 0.069
+    },
+    {
+      "ticker": "VSTM",
+      "name": "VERASTEM INC",
+      "weight": 0.069
+    },
+    {
+      "ticker": "WRLD",
+      "name": "WORLD ACCEPTANCE CORP",
+      "weight": 0.069
+    },
+    {
+      "ticker": "WTBA",
+      "name": "WEST BANCORPORATION INC",
+      "weight": 0.069
+    },
+    {
+      "ticker": "AVAH",
+      "name": "AVEANNA HEALTHCARE HOLDINGS INC",
+      "weight": 0.068
+    },
+    {
+      "ticker": "BWFG",
+      "name": "BANKWELL FINANCIAL GROUP INC",
+      "weight": 0.068
+    },
+    {
+      "ticker": "CBNK",
+      "name": "CAPITAL BANCORP INC",
+      "weight": 0.068
+    },
+    {
+      "ticker": "CERS",
+      "name": "CERUS CORP",
+      "weight": 0.068
+    },
+    {
+      "ticker": "ISTR",
+      "name": "INVESTAR HOLDING CORP",
+      "weight": 0.068
+    },
+    {
+      "ticker": "KIND",
+      "name": "NEXTDOOR HOLDINGS INC CLASS A",
+      "weight": 0.068
+    },
+    {
+      "ticker": "NGVC",
+      "name": "NATURAL GROCERS BY VITAMIN COTTAGE",
+      "weight": 0.068
+    },
+    {
+      "ticker": "NPB",
+      "name": "NORTHPOINTE BANCSHARES INC",
+      "weight": 0.068
+    },
+    {
+      "ticker": "MTRX",
+      "name": "MATRIX SERVICE",
+      "weight": 0.067
+    },
+    {
+      "ticker": "RM",
+      "name": "REGIONAL MANAGEMENT CORP",
+      "weight": 0.067
+    },
+    {
+      "ticker": "AKBA",
+      "name": "AKEBIA THERAPEUTICS INC",
+      "weight": 0.066
+    },
+    {
+      "ticker": "ALT",
+      "name": "ALTIMMUNE INC",
+      "weight": 0.066
+    },
+    {
+      "ticker": "GCO",
+      "name": "GENESCO INC",
+      "weight": 0.066
+    },
+    {
+      "ticker": "PDLB",
+      "name": "PONCE FINANCIAL GROUP INC",
+      "weight": 0.066
+    },
+    {
+      "ticker": "BYND",
+      "name": "BEYOND MEAT INC",
+      "weight": 0.065
+    },
+    {
+      "ticker": "EU.V",
+      "name": "ENCORE ENERGY CORP",
+      "weight": 0.065
+    },
+    {
+      "ticker": "FMAO",
+      "name": "FARMERS AND MERCHANTS BANCORP INC",
+      "weight": 0.065
+    },
+    {
+      "ticker": "FUBO",
+      "name": "FUBOTV INC CLASS A",
+      "weight": 0.065
+    },
+    {
+      "ticker": "ITIC",
+      "name": "INVESTORS TITLE",
+      "weight": 0.065
+    },
+    {
+      "ticker": "LAND",
+      "name": "GLADSTONE LAND REIT CORP",
+      "weight": 0.065
+    },
+    {
+      "ticker": "MAX",
+      "name": "MEDIAALPHA INC CLASS A",
+      "weight": 0.065
+    },
+    {
+      "ticker": "SRTA",
+      "name": "STRATA CRITICAL MEDICAL INC CLASS",
+      "weight": 0.065
+    },
+    {
+      "ticker": "LTBR",
+      "name": "LIGHTBRIDGE CORP",
+      "weight": 0.064
+    },
+    {
+      "ticker": "SB",
+      "name": "SAFE BULKERS INC",
+      "weight": 0.064
+    },
+    {
+      "ticker": "SCVL",
+      "name": "SHOE CARNIVAL INC",
+      "weight": 0.064
+    },
+    {
+      "ticker": "VMD.TO",
+      "name": "VIEMED HEALTHCARE INC",
+      "weight": 0.064
+    },
+    {
+      "ticker": "CLMB",
+      "name": "CLIMB GLOBAL SOLUTIONS INC",
+      "weight": 0.063
+    },
+    {
+      "ticker": "OSTK",
+      "name": "BED BATH AND BEYOND INC",
+      "weight": 0.063
+    },
+    {
+      "ticker": "PLBC",
+      "name": "PLUMAS BANCORP",
+      "weight": 0.063
+    },
+    {
+      "ticker": "WNC",
+      "name": "WABASH NATIONAL CORP",
+      "weight": 0.063
+    },
+    {
+      "ticker": "CCRN",
+      "name": "CROSS COUNTRY HEALTHCARE INC",
+      "weight": 0.062
+    },
+    {
+      "ticker": "CLFD",
+      "name": "CLEARFIELD INC",
+      "weight": 0.062
+    },
+    {
+      "ticker": "FRBA",
+      "name": "FIRST BANK",
+      "weight": 0.062
+    },
+    {
+      "ticker": "HCKT",
+      "name": "HACKETT GROUP INC",
+      "weight": 0.062
+    },
+    {
+      "ticker": "INV",
+      "name": "INNVENTURE INC",
+      "weight": 0.062
+    },
+    {
+      "ticker": "KYTX",
+      "name": "KYVERNA THERAPEUTICS INC",
+      "weight": 0.062
+    },
+    {
+      "ticker": "ONIT",
+      "name": "ONITY GROUP INC",
+      "weight": 0.062
+    },
+    {
+      "ticker": "PBYI",
+      "name": "PUMA BIOTECHNOLOGY INC",
+      "weight": 0.062
+    },
+    {
+      "ticker": "DNA",
+      "name": "GINKGO BIOWORKS HOLDINGS INC CLASS",
+      "weight": 0.061
+    },
+    {
+      "ticker": "GRNT",
+      "name": "GRANITE RIDGE RESOURCES INC",
+      "weight": 0.061
+    },
+    {
+      "ticker": "HBT",
+      "name": "HBT FINANCIAL INC",
+      "weight": 0.061
+    },
+    {
+      "ticker": "MAGN",
+      "name": "MAGNERA CORP",
+      "weight": 0.061
+    },
+    {
+      "ticker": "WEAV",
+      "name": "WEAVE COMMUNICATIONS INC",
+      "weight": 0.061
+    },
+    {
+      "ticker": "FEIM",
+      "name": "FREQUENCY ELECTRONICS INC",
+      "weight": 0.06
+    },
+    {
+      "ticker": "HNST",
+      "name": "THE HONEST COMPANY INC",
+      "weight": 0.06
+    },
+    {
+      "ticker": "NEWT",
+      "name": "NEWTEKONE INC",
+      "weight": 0.06
+    },
+    {
+      "ticker": "TSSI",
+      "name": "TSS INC",
+      "weight": 0.06
+    },
+    {
+      "ticker": "ZUMZ",
+      "name": "ZUMIEZ INC",
+      "weight": 0.06
+    },
+    {
+      "ticker": "DCTH",
+      "name": "DELCATH SYS INC",
+      "weight": 0.059
+    },
+    {
+      "ticker": "DDD",
+      "name": "3D SYSTEMS CORP",
+      "weight": 0.059
+    },
+    {
+      "ticker": "FNLC",
+      "name": "FIRST BANCORP INC",
+      "weight": 0.059
+    },
+    {
+      "ticker": "FRST",
+      "name": "PRIMIS FINANCIAL CORP",
+      "weight": 0.059
+    },
+    {
+      "ticker": "JOUT",
+      "name": "JOHNSON OUTDOORS INC CLASS A",
+      "weight": 0.059
+    },
+    {
+      "ticker": "AURA",
+      "name": "AURA BIOSCIENCES INC",
+      "weight": 0.058
+    },
+    {
+      "ticker": "ISSC",
+      "name": "INNOVATIVE SOLUTIONS AND SUPPORT I",
+      "weight": 0.058
+    },
+    {
+      "ticker": "NECB",
+      "name": "NORTHEAST COMMUNITY BANCORP INC",
+      "weight": 0.058
+    },
+    {
+      "ticker": "REAX",
+      "name": "REAL BROKERAGE INC",
+      "weight": 0.058
+    },
+    {
+      "ticker": "RLGT",
+      "name": "RADIANT LOGISTIC INC",
+      "weight": 0.058
+    },
+    {
+      "ticker": "STRT",
+      "name": "STRATTEC SECURITY CORP",
+      "weight": 0.058
+    },
+    {
+      "ticker": "TSBK",
+      "name": "TIMBERLAND BANCORP INC",
+      "weight": 0.058
+    },
+    {
+      "ticker": "VOXR.TO",
+      "name": "VOX ROYALTY CORP",
+      "weight": 0.058
+    },
+    {
+      "ticker": "XPER",
+      "name": "XPERI INC",
+      "weight": 0.058
+    },
+    {
+      "ticker": "BCML",
+      "name": "BAYCOM CORP",
+      "weight": 0.057
+    },
+    {
+      "ticker": "CTNM",
+      "name": "CONTINEUM THERAPEUTICS INC CLASS A",
+      "weight": 0.057
+    },
+    {
+      "ticker": "CZFS",
+      "name": "CITIZENS FINANCIAL SERVICES INC",
+      "weight": 0.057
+    },
+    {
+      "ticker": "DGICA",
+      "name": "DONEGAL GROUP INC CLASS A",
+      "weight": 0.057
+    },
+    {
+      "ticker": "FBRX",
+      "name": "FORTE BIOSCIENCES INC",
+      "weight": 0.057
+    },
+    {
+      "ticker": "FSTR",
+      "name": "LB FOSTER",
+      "weight": 0.057
+    },
+    {
+      "ticker": "KELYA",
+      "name": "KELLY SERVICES INC CLASS A",
+      "weight": 0.057
+    },
+    {
+      "ticker": "NGNE",
+      "name": "NEUROGENE INC",
+      "weight": 0.057
+    },
+    {
+      "ticker": "TECX",
+      "name": "TECTONIC THERAPEUTIC INC",
+      "weight": 0.057
+    },
+    {
+      "ticker": "TOI",
+      "name": "ONCOLOGY INSTITUTE INC",
+      "weight": 0.057
+    },
+    {
+      "ticker": "ACIC",
+      "name": "AMERICAN COASTAL INSURANCE CORP",
+      "weight": 0.056
+    },
+    {
+      "ticker": "EOLS",
+      "name": "EVOLUS INC",
+      "weight": 0.056
+    },
+    {
+      "ticker": "HVT",
+      "name": "HAVERTY FURNITURE COMPANIES INC",
+      "weight": 0.056
+    },
+    {
+      "ticker": "IMMX",
+      "name": "IMMIX BIOPHARMA INC",
+      "weight": 0.056
+    },
+    {
+      "ticker": "MVBF",
+      "name": "MVB FINANCIAL CORP",
+      "weight": 0.056
+    },
+    {
+      "ticker": "NATH",
+      "name": "NATHANS FAMOUS INC",
+      "weight": 0.056
+    },
+    {
+      "ticker": "PKBK",
+      "name": "PARKE BANCORP INC",
+      "weight": 0.056
+    },
+    {
+      "ticker": "SSP",
+      "name": "EW SCRIPPS CLASS A",
+      "weight": 0.056
+    },
+    {
+      "ticker": "SWIM",
+      "name": "LATHAM GROUP INC",
+      "weight": 0.056
+    },
+    {
+      "ticker": "MEC",
+      "name": "MAYVILLE ENGINEERING COMPANY INC",
+      "weight": 0.055
+    },
+    {
+      "ticker": "NWFL",
+      "name": "NORWOOD FINANCIAL CORP",
+      "weight": 0.055
+    },
+    {
+      "ticker": "PKOH",
+      "name": "PARK OHIO HOLDINGS CORP",
+      "weight": 0.055
+    },
+    {
+      "ticker": "STRO",
+      "name": "SUTRO BIOPHARMA INC",
+      "weight": 0.055
+    },
+    {
+      "ticker": "ACCO",
+      "name": "ACCO BRANDS CORP",
+      "weight": 0.054
+    },
+    {
+      "ticker": "AVXL",
+      "name": "ANAVEX LIFE SCIENCES CORP",
+      "weight": 0.054
+    },
+    {
+      "ticker": "CADL",
+      "name": "CANDEL THERAPEUTICS INC",
+      "weight": 0.054
+    },
+    {
+      "ticker": "CHMG",
+      "name": "CHEMUNG FINANCIAL CORP",
+      "weight": 0.054
+    },
+    {
+      "ticker": "CLPT",
+      "name": "CLEARPOINT NEURO INC",
+      "weight": 0.054
+    },
+    {
+      "ticker": "GNE",
+      "name": "GENIE ENERGY LTD CLASS B",
+      "weight": 0.054
+    },
+    {
+      "ticker": "BLND",
+      "name": "BLEND LABS INC CLASS A",
+      "weight": 0.053
+    },
+    {
+      "ticker": "EDIT",
+      "name": "EDITAS MEDICINE INC",
+      "weight": 0.053
+    },
+    {
+      "ticker": "IBEX",
+      "name": "IBEX LTD",
+      "weight": 0.053
+    },
+    {
+      "ticker": "IMRX",
+      "name": "IMMUNEERING CORP CLASS A",
+      "weight": 0.053
+    },
+    {
+      "ticker": "ACRE",
+      "name": "ARES COMMERCIAL REAL ESTATE REIT C",
+      "weight": 0.052
+    },
+    {
+      "ticker": "ATNI",
+      "name": "ATN INTERNATIONAL INC",
+      "weight": 0.052
+    },
+    {
+      "ticker": "WSBF",
+      "name": "WATERSTONE FINANCIAL INC",
+      "weight": 0.052
+    },
+    {
+      "ticker": "BOMN",
+      "name": "BOSTON OMAHA CORP CLASS A",
+      "weight": 0.051
+    },
+    {
+      "ticker": "CLYM",
+      "name": "CLIMB BIO INC",
+      "weight": 0.051
+    },
+    {
+      "ticker": "FSBW",
+      "name": "FS BANCORP INC",
+      "weight": 0.051
+    },
+    {
+      "ticker": "JMSB",
+      "name": "JOHN MARSHALL BANCORP INC",
+      "weight": 0.051
+    },
+    {
+      "ticker": "MBI",
+      "name": "MBIA INC",
+      "weight": 0.051
+    },
+    {
+      "ticker": "SMC",
+      "name": "SUMMIT MIDSTREAM CORP",
+      "weight": 0.051
+    },
+    {
+      "ticker": "TARA",
+      "name": "PROTARA THERAPEUTICS INC",
+      "weight": 0.051
+    },
+    {
+      "ticker": "94E.F",
+      "name": "ZURA BIO LTD CLASS A",
+      "weight": 0.05
+    },
+    {
+      "ticker": "CABA",
+      "name": "CABALETTA BIO INC",
+      "weight": 0.05
+    },
+    {
+      "ticker": "PCB",
+      "name": "PCB BANCORP",
+      "weight": 0.05
+    },
+    {
+      "ticker": "BKTI",
+      "name": "BK TECHNOLOGIES CORP",
+      "weight": 0.049
+    },
+    {
+      "ticker": "GBFH",
+      "name": "GBANK FINL HLDGS INC",
+      "weight": 0.049
+    },
+    {
+      "ticker": "MEI",
+      "name": "METHODE ELECTRONICS INC",
+      "weight": 0.049
+    },
+    {
+      "ticker": "PSNL",
+      "name": "PERSONALIS INC",
+      "weight": 0.049
+    },
+    {
+      "ticker": "RCKY",
+      "name": "ROCKY BRANDS INC",
+      "weight": 0.049
+    },
+    {
+      "ticker": "WNEB",
+      "name": "WESTERN NEW ENGLAND BANCORP INC",
+      "weight": 0.049
+    },
+    {
+      "ticker": "ATLO",
+      "name": "AMES NATIONAL CORP",
+      "weight": 0.048
+    },
+    {
+      "ticker": "AVNW",
+      "name": "AVIAT NETWORKS INC",
+      "weight": 0.048
+    },
+    {
+      "ticker": "CDXS",
+      "name": "CODEXIS INC",
+      "weight": 0.048
+    },
+    {
+      "ticker": "EGHT",
+      "name": "8X8 INC",
+      "weight": 0.048
+    },
+    {
+      "ticker": "LAB",
+      "name": "STANDARD BIOTOOLS INC",
+      "weight": 0.048
+    },
+    {
+      "ticker": "MRAM",
+      "name": "EVERSPIN TECHNOLOGIES INC",
+      "weight": 0.048
+    },
+    {
+      "ticker": "PINE",
+      "name": "ALPINE INCOME PROPERTY TRUST INC",
+      "weight": 0.048
+    },
+    {
+      "ticker": "TG",
+      "name": "TREDEGAR CORP",
+      "weight": 0.048
+    },
+    {
+      "ticker": "ABEO",
+      "name": "ABEONA THERAPEUTICS INC",
+      "weight": 0.047
+    },
+    {
+      "ticker": "ALMU",
+      "name": "AELUMA INC",
+      "weight": 0.047
+    },
+    {
+      "ticker": "ANGIV",
+      "name": "ANGI INC CLASS A",
+      "weight": 0.047
+    },
+    {
+      "ticker": "CATX",
+      "name": "PERSPECTIVE THERAPEUTICS INC",
+      "weight": 0.047
+    },
+    {
+      "ticker": "CDXC",
+      "name": "NIAGEN BIOSCIENCE INC",
+      "weight": 0.047
+    },
+    {
+      "ticker": "CIA",
+      "name": "CITIZENS INC CLASS A",
+      "weight": 0.047
+    },
+    {
+      "ticker": "ELDN",
+      "name": "ELEDON PHARMACEUTICALS INC",
+      "weight": 0.047
+    },
+    {
+      "ticker": "EVMN",
+      "name": "EVOMMUNE INC",
+      "weight": 0.047
+    },
+    {
+      "ticker": "FVCB",
+      "name": "FVCBANKCORP INC",
+      "weight": 0.047
+    },
+    {
+      "ticker": "KIDS",
+      "name": "ORTHOPEDIATRICS CORP",
+      "weight": 0.047
+    },
+    {
+      "ticker": "SGMT",
+      "name": "SAGIMET BIOSCIENCES INC SERIES A",
+      "weight": 0.047
+    },
+    {
+      "ticker": "ZNTL",
+      "name": "ZENTALIS PHARMACEUTICALS INC",
+      "weight": 0.047
+    },
+    {
+      "ticker": "ASLE",
+      "name": "AERSALE CORP",
+      "weight": 0.046
+    },
+    {
+      "ticker": "ASMB",
+      "name": "ASSEMBLY BIOSCIENCES INC",
+      "weight": 0.046
+    },
+    {
+      "ticker": "DBI",
+      "name": "DESIGNER BRANDS INC CLASS A",
+      "weight": 0.046
+    },
+    {
+      "ticker": "FRPH",
+      "name": "FRP HOLDINGS INC",
+      "weight": 0.046
+    },
+    {
+      "ticker": "FTK",
+      "name": "FLOTEK INDUSTRIES INC",
+      "weight": 0.046
+    },
+    {
+      "ticker": "HLLY",
+      "name": "HOLLEY INC",
+      "weight": 0.046
+    },
+    {
+      "ticker": "KRT",
+      "name": "KARAT PACKAGING INC",
+      "weight": 0.046
+    },
+    {
+      "ticker": "TBRG",
+      "name": "TRUBRIDGE INC",
+      "weight": 0.046
+    },
+    {
+      "ticker": "AII",
+      "name": "AMERICAN INTEGRITY INSURANCE GROUP",
+      "weight": 0.045
+    },
+    {
+      "ticker": "ALCO",
+      "name": "ALICO INC",
+      "weight": 0.045
+    },
+    {
+      "ticker": "ASPN",
+      "name": "ASPEN AEROGELS INC",
+      "weight": 0.045
+    },
+    {
+      "ticker": "BETR",
+      "name": "BETTER HOME FINANCE HOLDING CLASS",
+      "weight": 0.045
+    },
+    {
+      "ticker": "BLZE",
+      "name": "BACKBLAZE INC CLASS A",
+      "weight": 0.045
+    },
+    {
+      "ticker": "BNTC",
+      "name": "BENITEC BIOPHARMA INC",
+      "weight": 0.045
+    },
+    {
+      "ticker": "CFFI",
+      "name": "C AND F FINANCIAL CORP",
+      "weight": 0.045
+    },
+    {
+      "ticker": "COSO",
+      "name": "COASTALSOUTH BANCSHARES INC",
+      "weight": 0.045
+    },
+    {
+      "ticker": "FRAF",
+      "name": "FRANKLIN FINANCIAL SERVICES CORP",
+      "weight": 0.045
+    },
+    {
+      "ticker": "HDSN",
+      "name": "HUDSON TECHNOLOGIES INC",
+      "weight": 0.045
+    },
+    {
+      "ticker": "NCMI",
+      "name": "NATIONAL CINEMEDIA INC",
+      "weight": 0.045
+    },
+    {
+      "ticker": "OPFI",
+      "name": "OPPFI INC CLASS A",
+      "weight": 0.045
+    },
+    {
+      "ticker": "OPRT",
+      "name": "OPORTUN FINANCIAL CORP",
+      "weight": 0.045
+    },
+    {
+      "ticker": "BRBS",
+      "name": "BLUE RIDGE BANKSHARES INC",
+      "weight": 0.044
+    },
+    {
+      "ticker": "CDZI",
+      "name": "CADIZ INC",
+      "weight": 0.044
+    },
+    {
+      "ticker": "EVC",
+      "name": "ENTRAVISION COMMUNICATIONS CORP CL",
+      "weight": 0.044
+    },
+    {
+      "ticker": "KFS",
+      "name": "KINGSWAY FINANCIAL SERVICES INC",
+      "weight": 0.044
+    },
+    {
+      "ticker": "MYFW",
+      "name": "FIRST WESTERN FINANCIAL INC",
+      "weight": 0.044
+    },
+    {
+      "ticker": "OVLY",
+      "name": "OAK VALLEY BANCORP",
+      "weight": 0.044
+    },
+    {
+      "ticker": "PAYS",
+      "name": "PAYSIGN INC",
+      "weight": 0.044
+    },
+    {
+      "ticker": "PCYO",
+      "name": "PURE CYCLE CORP",
+      "weight": 0.044
+    },
+    {
+      "ticker": "PPIH",
+      "name": "PERMA PIPE INTERNATIONAL HOLDINGS",
+      "weight": 0.044
+    },
+    {
+      "ticker": "SLP",
+      "name": "SIMULATIONS PLUS INC",
+      "weight": 0.044
+    },
+    {
+      "ticker": "ASYS",
+      "name": "AMTECH SYSTEMS INC",
+      "weight": 0.043
+    },
+    {
+      "ticker": "CTRN",
+      "name": "CITI TRENDS INC",
+      "weight": 0.043
+    },
+    {
+      "ticker": "FBLA",
+      "name": "FB BANCORP INC",
+      "weight": 0.043
+    },
+    {
+      "ticker": "FUNC",
+      "name": "FIRST UNITED CORP",
+      "weight": 0.043
+    },
+    {
+      "ticker": "JRVR",
+      "name": "JAMES RIVER GROUP HOLDINGS INC",
+      "weight": 0.043
+    },
+    {
+      "ticker": "NEXN",
+      "name": "NEXXEN INTERNATIONAL LTD",
+      "weight": 0.043
+    },
+    {
+      "ticker": "PANL",
+      "name": "PANGAEA LOGISTICS SOLUTIONS LTD",
+      "weight": 0.043
+    },
+    {
+      "ticker": "QUIK",
+      "name": "QUICKLOGIC CORP",
+      "weight": 0.043
+    },
+    {
+      "ticker": "RZLT",
+      "name": "REZOLUTE INC",
+      "weight": 0.043
+    },
+    {
+      "ticker": "ARCT",
+      "name": "ARCTURUS THERAPEUTICS HOLDINGS INC",
+      "weight": 0.042
+    },
+    {
+      "ticker": "CMT",
+      "name": "CORE MOLDING TECHNOLOGIES INC",
+      "weight": 0.042
+    },
+    {
+      "ticker": "FOSL",
+      "name": "FOSSIL GROUP INC",
+      "weight": 0.042
+    },
+    {
+      "ticker": "FXNC",
+      "name": "FIRST NATIONAL CORP",
+      "weight": 0.042
+    },
+    {
+      "ticker": "HYLN",
+      "name": "HYLIION HOLDINGS CORP",
+      "weight": 0.042
+    },
+    {
+      "ticker": "LCNB",
+      "name": "LCNB CORP",
+      "weight": 0.042
+    },
+    {
+      "ticker": "MITT",
+      "name": "TPG MORTGAGE INVESTMENT TRUST INC",
+      "weight": 0.042
+    },
+    {
+      "ticker": "MNPR",
+      "name": "MONOPAR THERAPEUTICS INC",
+      "weight": 0.042
+    },
+    {
+      "ticker": "NKSH",
+      "name": "NATIONAL BANKSHARES INC",
+      "weight": 0.042
+    },
+    {
+      "ticker": "RBBN",
+      "name": "RIBBON COMMUNICATIONS INC",
+      "weight": 0.042
+    },
+    {
+      "ticker": "SKYH",
+      "name": "SKY HARBOUR GROUP CORP CLASS A",
+      "weight": 0.042
+    },
+    {
+      "ticker": "SPOK",
+      "name": "SPOK HOLDINGS INC",
+      "weight": 0.042
+    },
+    {
+      "ticker": "TLS",
+      "name": "TELOS CORPORATION CORP",
+      "weight": 0.042
+    },
+    {
+      "ticker": "USCB",
+      "name": "USCB FINANCIAL HOLDINGS INC CLASS",
+      "weight": 0.042
+    },
+    {
+      "ticker": "VEL",
+      "name": "VELOCITY FINANCIAL INC",
+      "weight": 0.042
+    },
+    {
+      "ticker": "AMPY",
+      "name": "AMPLIFY ENERGY CORP",
+      "weight": 0.041
+    },
+    {
+      "ticker": "ASUR",
+      "name": "ASURE SOFTWARE INC",
+      "weight": 0.041
+    },
+    {
+      "ticker": "ATOM",
+      "name": "ATOMERA INC",
+      "weight": 0.041
+    },
+    {
+      "ticker": "CMPX",
+      "name": "COMPASS THERAPEUTICS",
+      "weight": 0.041
+    },
+    {
+      "ticker": "CTEV",
+      "name": "CLARITEV CORP CLASS A",
+      "weight": 0.041
+    },
+    {
+      "ticker": "FC",
+      "name": "FRANKLIN COVEY",
+      "weight": 0.041
+    },
+    {
+      "ticker": "LODE",
+      "name": "COMSTOCK INC",
+      "weight": 0.041
+    },
+    {
+      "ticker": "PRE",
+      "name": "PRENETICS GLOBAL LTD CLASS A",
+      "weight": 0.041
+    },
+    {
+      "ticker": "REFI",
+      "name": "CHICAGO ATLANTIC REAL ESTATE FINAN",
+      "weight": 0.041
+    },
+    {
+      "ticker": "FCCO",
+      "name": "FIRST COMMUNITY CORP",
+      "weight": 0.04
+    },
+    {
+      "ticker": "FDBC",
+      "name": "FIDELITY D AND D BANCORP INC",
+      "weight": 0.04
+    },
+    {
+      "ticker": "GSIT",
+      "name": "GSI TECHNOLOGY INC",
+      "weight": 0.04
+    },
+    {
+      "ticker": "LMNR",
+      "name": "LIMONEIRA",
+      "weight": 0.04
+    },
+    {
+      "ticker": "MPTI",
+      "name": "M TRON INDUSTRIES INC",
+      "weight": 0.04
+    },
+    {
+      "ticker": "PESI",
+      "name": "PERMA FIX ENVIRONMENTAL SERVICES I",
+      "weight": 0.04
+    },
+    {
+      "ticker": "POWW",
+      "name": "OUTDOOR HOLDING",
+      "weight": 0.04
+    },
+    {
+      "ticker": "USAU",
+      "name": "US GOLD CORP",
+      "weight": 0.04
+    },
+    {
+      "ticker": "ALEC",
+      "name": "ALECTOR INC",
+      "weight": 0.039
+    },
+    {
+      "ticker": "AVTX",
+      "name": "AVALO THERAPEUTICS INC",
+      "weight": 0.039
+    },
+    {
+      "ticker": "DMAC",
+      "name": "DIAMEDICA THERAPEUTICS INC",
+      "weight": 0.039
+    },
+    {
+      "ticker": "LOVE",
+      "name": "LOVESAC COMPANY",
+      "weight": 0.039
+    },
+    {
+      "ticker": "LRMR",
+      "name": "LARIMAR THERAPEUTICS INC",
+      "weight": 0.039
+    },
+    {
+      "ticker": "OSUR",
+      "name": "ORASURE TECHNOLOGIES INC",
+      "weight": 0.039
+    },
+    {
+      "ticker": "RMAX",
+      "name": "RE MAX HOLDINGS INC CLASS A",
+      "weight": 0.039
+    },
+    {
+      "ticker": "SNDA",
+      "name": "SONIDA SENIOR LIVING INC",
+      "weight": 0.039
+    },
+    {
+      "ticker": "VABK",
+      "name": "VIRGINIA NATIONAL BANKSHARES CORP",
+      "weight": 0.039
+    },
+    {
+      "ticker": "WEYS",
+      "name": "WEYCO GROUP INC",
+      "weight": 0.039
+    },
+    {
+      "ticker": "BH",
+      "name": "BIGLARI HOLDINGS INCINARY CLASS B",
+      "weight": 0.038
+    },
+    {
+      "ticker": "CLW",
+      "name": "CLEARWATER PAPER CORP",
+      "weight": 0.038
+    },
+    {
+      "ticker": "FLXS",
+      "name": "FLEXSTEEL INDUSTRIES INC",
+      "weight": 0.038
+    },
+    {
+      "ticker": "IKT",
+      "name": "INHIBIKASE THERAPEUTICS INC",
+      "weight": 0.038
+    },
+    {
+      "ticker": "MG",
+      "name": "MISTRAS GROUP INC",
+      "weight": 0.038
+    },
+    {
+      "ticker": "RSVR",
+      "name": "RESERVOIR MEDIA INC",
+      "weight": 0.038
+    },
+    {
+      "ticker": "STRS",
+      "name": "STRATUS PROPERTIES INC",
+      "weight": 0.038
+    },
+    {
+      "ticker": "STRZ",
+      "name": "STARZ ENTERTAINMENT CORP",
+      "weight": 0.038
+    },
+    {
+      "ticker": "ACHV",
+      "name": "ACHIEVE LIFE SCIENCES INC",
+      "weight": 0.037
+    },
+    {
+      "ticker": "CBK",
+      "name": "COMMERCIAL BANCGROUP INC",
+      "weight": 0.037
+    },
+    {
+      "ticker": "CD",
+      "name": "CHAINCE DIGITAL HOLDINGS INC",
+      "weight": 0.037
+    },
+    {
+      "ticker": "CZWI",
+      "name": "CITIZENS COMMUNITY BANCORP INC",
+      "weight": 0.037
+    },
+    {
+      "ticker": "ESOA",
+      "name": "ENERGY SERVICES OF AMERICA CORP",
+      "weight": 0.037
+    },
+    {
+      "ticker": "HWBK",
+      "name": "HAWTHORN BANCSHARES INC",
+      "weight": 0.037
+    },
+    {
+      "ticker": "INSG",
+      "name": "INSEEGO CORP",
+      "weight": 0.037
+    },
+    {
+      "ticker": "JAKK",
+      "name": "JAKKS PACIFIC INC",
+      "weight": 0.037
+    },
+    {
+      "ticker": "MVIS",
+      "name": "MICROVISION INC",
+      "weight": 0.037
+    },
+    {
+      "ticker": "NC",
+      "name": "NACCO INDUSTRIES INC CLASS A",
+      "weight": 0.037
+    },
+    {
+      "ticker": "NLOP",
+      "name": "NET LEASE OFFICE PROPERTIES",
+      "weight": 0.037
+    },
+    {
+      "ticker": "NRC",
+      "name": "NRC HEALTH CORP",
+      "weight": 0.037
+    },
+    {
+      "ticker": "QUAD",
+      "name": "QUAD GRAPHICS INC CLASS A",
+      "weight": 0.037
+    },
+    {
+      "ticker": "UTMD",
+      "name": "UTAH MEDICAL PRODUCTS INC",
+      "weight": 0.037
+    },
+    {
+      "ticker": "BSVN",
+      "name": "BANK7 CORP",
+      "weight": 0.036
+    },
+    {
+      "ticker": "CCCC",
+      "name": "C4 THERAPEUTICS INC",
+      "weight": 0.036
+    },
+    {
+      "ticker": "INFU",
+      "name": "INFUSYSTEM HOLDINGS INC",
+      "weight": 0.036
+    },
+    {
+      "ticker": "LTRX",
+      "name": "LANTRONIX INC",
+      "weight": 0.036
+    },
+    {
+      "ticker": "NXDT",
+      "name": "NEXPOINT DIVERSIFIED REAL ESTATE T",
+      "weight": 0.036
+    },
+    {
+      "ticker": "BPRN",
+      "name": "PRINCETON BANCORP INC",
+      "weight": 0.035
+    },
+    {
+      "ticker": "FRX.TO",
+      "name": "FENNEC PHARMACEUTICALS INC",
+      "weight": 0.035
+    },
+    {
+      "ticker": "INTT",
+      "name": "INTEST CORP",
+      "weight": 0.035
+    },
+    {
+      "ticker": "KINS",
+      "name": "KINGSTONE COMPANIES INC",
+      "weight": 0.035
+    },
+    {
+      "ticker": "LNKB",
+      "name": "LINKBANCORP INC",
+      "weight": 0.035
+    },
+    {
+      "ticker": "PACK",
+      "name": "RANPAK HOLDINGS CORP CLASS A",
+      "weight": 0.035
+    },
+    {
+      "ticker": "RGCO",
+      "name": "RGC RESOURCES INC",
+      "weight": 0.035
+    },
+    {
+      "ticker": "RICK",
+      "name": "RCI HOSPITALITY HOLDINGS INC",
+      "weight": 0.035
+    },
+    {
+      "ticker": "SEVN",
+      "name": "SEVEN HILLS REALTY TRUST",
+      "weight": 0.035
+    },
+    {
+      "ticker": "SIGA",
+      "name": "SIGA TECHNOLOGIES INC",
+      "weight": 0.035
+    },
+    {
+      "ticker": "TWIN",
+      "name": "TWIN DISC INC",
+      "weight": 0.035
+    },
+    {
+      "ticker": "AMTX",
+      "name": "AEMETIS INC",
+      "weight": 0.034
+    },
+    {
+      "ticker": "CHRS",
+      "name": "COHERUS ONCOLOGY INC",
+      "weight": 0.034
+    },
+    {
+      "ticker": "CV",
+      "name": "CAPSOVISION INC",
+      "weight": 0.034
+    },
+    {
+      "ticker": "ESCA",
+      "name": "ESCALADE INC",
+      "weight": 0.034
+    },
+    {
+      "ticker": "FCAP",
+      "name": "FIRST CAPITAL INC",
+      "weight": 0.034
+    },
+    {
+      "ticker": "HRTX",
+      "name": "HERON THERAPEUTICS INC",
+      "weight": 0.034
+    },
+    {
+      "ticker": "INBK",
+      "name": "FIRST INTERNET BANCORP",
+      "weight": 0.034
+    },
+    {
+      "ticker": "LEGH",
+      "name": "LEGACY HOUSING",
+      "weight": 0.034
+    },
+    {
+      "ticker": "LENZ",
+      "name": "LENZ THERAPEUTICS INC",
+      "weight": 0.034
+    },
+    {
+      "ticker": "LFMD",
+      "name": "LIFEMD INC",
+      "weight": 0.034
+    },
+    {
+      "ticker": "LPRO",
+      "name": "OPEN LENDING CORP",
+      "weight": 0.034
+    },
+    {
+      "ticker": "MASS",
+      "name": "908 DEVICES INC",
+      "weight": 0.034
+    },
+    {
+      "ticker": "OSS",
+      "name": "ONE STOP SYSTEMS INC",
+      "weight": 0.034
+    },
+    {
+      "ticker": "UIS",
+      "name": "UNISYS CORP",
+      "weight": 0.034
+    },
+    {
+      "ticker": "ACTG",
+      "name": "ACACIA RESEARCH CORP",
+      "weight": 0.033
+    },
+    {
+      "ticker": "CRD-A",
+      "name": "CRAWFORD CLASS A",
+      "weight": 0.033
+    },
+    {
+      "ticker": "EFSI",
+      "name": "EAGLE FINANCIAL SERVICES INC",
+      "weight": 0.033
+    },
+    {
+      "ticker": "FNKO",
+      "name": "FUNKO INC CLASS A",
+      "weight": 0.033
+    },
+    {
+      "ticker": "HEAR",
+      "name": "TURTLE BEACH CORP",
+      "weight": 0.033
+    },
+    {
+      "ticker": "INSE",
+      "name": "INSPIRED ENTERTAINMENT INC",
+      "weight": 0.033
+    },
+    {
+      "ticker": "KEI.TO",
+      "name": "KOLIBRI GLOBAL ENERGY INC",
+      "weight": 0.033
+    },
+    {
+      "ticker": "MGNX",
+      "name": "MACROGENICS INC",
+      "weight": 0.033
+    },
+    {
+      "ticker": "OPBK",
+      "name": "OP BANCORP",
+      "weight": 0.033
+    },
+    {
+      "ticker": "OVBC",
+      "name": "OHIO VALLEY BANC CORP",
+      "weight": 0.033
+    },
+    {
+      "ticker": "PAL",
+      "name": "PROFICIENT AUTO LOGISTICS INC",
+      "weight": 0.033
+    },
+    {
+      "ticker": "PDYN",
+      "name": "PALLADYNE AI CORP",
+      "weight": 0.033
+    },
+    {
+      "ticker": "SRI",
+      "name": "STONERIDGE INC",
+      "weight": 0.033
+    },
+    {
+      "ticker": "AMBC",
+      "name": "OCTAVE SPECIALTY GROUP INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "BBCP",
+      "name": "CONCRETE PUMPING HOLDINGS INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "CBFV",
+      "name": "CB FINANCIAL SERVICES INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "EBMT",
+      "name": "EAGLE BANCORP MONTANA INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "ELMD",
+      "name": "ELECTROMED INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "EWCZ",
+      "name": "EUROPEAN WAX CENTER INC CLASS A",
+      "weight": 0.032
+    },
+    {
+      "ticker": "INGN",
+      "name": "INOGEN INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "KRMD",
+      "name": "KORU MEDICAL SYSTEMS INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "MNSB",
+      "name": "MAINSTREET BANCSHARES INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "MRBK",
+      "name": "MERIDIAN CORP",
+      "weight": 0.032
+    },
+    {
+      "ticker": "REPL",
+      "name": "REPLIMUNE GROUP INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "SPCE",
+      "name": "VIRGIN GALACTIC HOLDINGS INC SHS C",
+      "weight": 0.032
+    },
+    {
+      "ticker": "TAYD",
+      "name": "TAYLOR DEVICES INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "TNXP",
+      "name": "TONIX PHARMACEUTICALS HOLDING CORP",
+      "weight": 0.032
+    },
+    {
+      "ticker": "ULH",
+      "name": "UNIVERSAL LOGISTICS HOLDINGS INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "VYGR",
+      "name": "VOYAGER THERAPEUTICS INC",
+      "weight": 0.032
+    },
+    {
+      "ticker": "BCBP",
+      "name": "BCB BANCORP INC",
+      "weight": 0.031
+    },
+    {
+      "ticker": "BZAI",
+      "name": "BLAIZE HOLDINGS INC",
+      "weight": 0.031
+    },
+    {
+      "ticker": "FHTX",
+      "name": "FOGHORN THERAPEUTICS INC",
+      "weight": 0.031
+    },
+    {
+      "ticker": "GCBC",
+      "name": "GREENE COUNTY BANCORP INC",
+      "weight": 0.031
+    },
+    {
+      "ticker": "IMMR",
+      "name": "IMMERSION CORP",
+      "weight": 0.031
+    },
+    {
+      "ticker": "PEBK",
+      "name": "PEOPLES BANCORP OF NORTH CAROLINA",
+      "weight": 0.031
+    },
+    {
+      "ticker": "RDNW",
+      "name": "RIDENOW GROUP INC CLASS B",
+      "weight": 0.031
+    },
+    {
+      "ticker": "RELL",
+      "name": "RICHARDSON ELECTRONICS LTD",
+      "weight": 0.031
+    },
+    {
+      "ticker": "RMNI",
+      "name": "RIMINI STREET INC",
+      "weight": 0.031
+    },
+    {
+      "ticker": "SEG",
+      "name": "SEAPORT ENTERTAINMENT GROUP INC",
+      "weight": 0.031
+    },
+    {
+      "ticker": "SGHT",
+      "name": "SIGHT SCIENCES INC",
+      "weight": 0.031
+    },
+    {
+      "ticker": "SMHI",
+      "name": "SEACOR MARINE HOLDINGS INC",
+      "weight": 0.031
+    },
+    {
+      "ticker": "VERI",
+      "name": "VERITONE INC",
+      "weight": 0.031
+    },
+    {
+      "ticker": "BNED",
+      "name": "BARNES AND NOBLE EDUCATION INC",
+      "weight": 0.03
+    },
+    {
+      "ticker": "BRT",
+      "name": "BRT APARTMENTS CORP",
+      "weight": 0.03
+    },
+    {
+      "ticker": "CRBP",
+      "name": "CORBUS PHARMACEUTICALS HOLDINGS IN",
+      "weight": 0.03
+    },
+    {
+      "ticker": "DSP",
+      "name": "VIANT TECHNOLOGY INC CLASS A",
+      "weight": 0.03
+    },
+    {
+      "ticker": "MDWD",
+      "name": "MEDIWOUND LTD",
+      "weight": 0.03
+    },
+    {
+      "ticker": "MFIN",
+      "name": "MEDALLION FINANCIAL CORP",
+      "weight": 0.03
+    },
+    {
+      "ticker": "ORGO",
+      "name": "ORGANOGENESIS HOLDINGS INC CLASS A",
+      "weight": 0.03
+    },
+    {
+      "ticker": "PBFS",
+      "name": "PIONEER BANCORP INC",
+      "weight": 0.03
+    },
+    {
+      "ticker": "RCMT",
+      "name": "RCM TECHNOLOGIES INC",
+      "weight": 0.03
+    },
+    {
+      "ticker": "RILY",
+      "name": "BRC GROUP HOLDINGS INC",
+      "weight": 0.03
+    },
+    {
+      "ticker": "SNFCA",
+      "name": "SECURITY NATIONAL FINANCIAL CORP C",
+      "weight": 0.03
+    },
+    {
+      "ticker": "VUZI",
+      "name": "VUZIX CORP",
+      "weight": 0.03
+    },
+    {
+      "ticker": "AIRO",
+      "name": "AIRO GROUP HOLDINGS INC",
+      "weight": 0.029
+    },
+    {
+      "ticker": "ANIK",
+      "name": "ANIKA THERAPEUTICS INC",
+      "weight": 0.029
+    },
+    {
+      "ticker": "AP",
+      "name": "AMPCO PITTSBURGH CORP",
+      "weight": 0.029
+    },
+    {
+      "ticker": "GENC",
+      "name": "GENCOR INDUSTRIES INC",
+      "weight": 0.029
+    },
+    {
+      "ticker": "IDN",
+      "name": "INTELLICHECK INC",
+      "weight": 0.029
+    },
+    {
+      "ticker": "LZM",
+      "name": "LIFEZONE METALS LTD",
+      "weight": 0.029
+    },
+    {
+      "ticker": "MDV",
+      "name": "MODIV INDUSTRIAL INC CLASS C",
+      "weight": 0.029
+    },
+    {
+      "ticker": "OABI",
+      "name": "OMNIAB INC",
+      "weight": 0.029
+    },
+    {
+      "ticker": "OBIO",
+      "name": "ORCHESTRA BIOMED HOLDINGS INC",
+      "weight": 0.029
+    },
+    {
+      "ticker": "PLX",
+      "name": "PROTALIX BIOTHERAPEUTICS INC",
+      "weight": 0.029
+    },
+    {
+      "ticker": "SND",
+      "name": "SMART SAND INC",
+      "weight": 0.029
+    },
+    {
+      "ticker": "SRZN",
+      "name": "SURROZEN INC",
+      "weight": 0.029
+    },
+    {
+      "ticker": "WHWK",
+      "name": "WHITEHAWK THERAPEUTICS INC",
+      "weight": 0.029
+    },
+    {
+      "ticker": "ALTG",
+      "name": "ALTA EQUIPMENT GROUP INC CLASS A",
+      "weight": 0.028
+    },
+    {
+      "ticker": "ALTI",
+      "name": "ALTI GLOBAL INC CLASS A",
+      "weight": 0.028
+    },
+    {
+      "ticker": "CFBK",
+      "name": "CF BANKSHARES INC",
+      "weight": 0.028
+    },
+    {
+      "ticker": "CMDB",
+      "name": "COSTAMARE BULKERS HOLDINGS LTD",
+      "weight": 0.028
+    },
+    {
+      "ticker": "EPM",
+      "name": "EVOLUTION PETROLEUM CORP",
+      "weight": 0.028
+    },
+    {
+      "ticker": "ESP",
+      "name": "ESPEY MANUFACTURING AND ELECTRONIC",
+      "weight": 0.028
+    },
+    {
+      "ticker": "FINW",
+      "name": "FINWISE BANCORP",
+      "weight": 0.028
+    },
+    {
+      "ticker": "LDI",
+      "name": "LOANDEPOT INC CLASS A",
+      "weight": 0.028
+    },
+    {
+      "ticker": "MPAA",
+      "name": "MOTORCAR PARTS OF AMERICA INC",
+      "weight": 0.028
+    },
+    {
+      "ticker": "ONL",
+      "name": "ORION PROPERTIES INC",
+      "weight": 0.028
+    },
+    {
+      "ticker": "PRTH",
+      "name": "PRIORITY TECHNOLOGY HOLDINGS INC",
+      "weight": 0.028
+    },
+    {
+      "ticker": "DOUG",
+      "name": "DOUGLAS ELLIMAN INC",
+      "weight": 0.027
+    },
+    {
+      "ticker": "DTIL",
+      "name": "PRECISION BIOSCIENCES INC",
+      "weight": 0.027
+    },
+    {
+      "ticker": "DUOT",
+      "name": "DUOS TECHNOLOGIES GROUP INC",
+      "weight": 0.027
+    },
+    {
+      "ticker": "HBB",
+      "name": "HAMILTON BEACH BRANDS HOLDING COMP",
+      "weight": 0.027
+    },
+    {
+      "ticker": "III",
+      "name": "INFORMATION SERVICES GROUP INC",
+      "weight": 0.027
+    },
+    {
+      "ticker": "KPTI",
+      "name": "KARYOPHARM THERAPEUTICS INC",
+      "weight": 0.027
+    },
+    {
+      "ticker": "QSI",
+      "name": "QUANTUM SI INC CLASS A",
+      "weight": 0.027
+    },
+    {
+      "ticker": "TBI",
+      "name": "TRUEBLUE INC",
+      "weight": 0.027
+    },
+    {
+      "ticker": "ACU",
+      "name": "ACME UNITED CORP",
+      "weight": 0.026
+    },
+    {
+      "ticker": "BVFL",
+      "name": "BV FINANCIAL INC",
+      "weight": 0.026
+    },
+    {
+      "ticker": "ECBK",
+      "name": "ECB BANCORP INC",
+      "weight": 0.026
+    },
+    {
+      "ticker": "EPSN",
+      "name": "EPSILON ENERGY LTD",
+      "weight": 0.026
+    },
+    {
+      "ticker": "FATE",
+      "name": "FATE THERAPEUTICS INC",
+      "weight": 0.026
+    },
+    {
+      "ticker": "GLSI",
+      "name": "GREENWICH LIFESCIENCES INC",
+      "weight": 0.026
+    },
+    {
+      "ticker": "LNDC",
+      "name": "LIFECORE BIOMEDICAL INC",
+      "weight": 0.026
+    },
+    {
+      "ticker": "LWAY",
+      "name": "LIFEWAY FOODS INC",
+      "weight": 0.026
+    },
+    {
+      "ticker": "MBOT",
+      "name": "MICROBOT MEDICAL INC",
+      "weight": 0.026
+    },
+    {
+      "ticker": "SLQT",
+      "name": "SELECTQUOTE INC",
+      "weight": 0.026
+    },
+    {
+      "ticker": "SRBK",
+      "name": "SR BANCORP INC",
+      "weight": 0.026
+    },
+    {
+      "ticker": "AOMR",
+      "name": "ANGEL OAK MORTGAGE REIT INC",
+      "weight": 0.025
+    },
+    {
+      "ticker": "FRD",
+      "name": "FRIEDMAN INDUSTRIES INC",
+      "weight": 0.025
+    },
+    {
+      "ticker": "HUMA",
+      "name": "HUMACYTE INC",
+      "weight": 0.025
+    },
+    {
+      "ticker": "LARK",
+      "name": "LANDMARK BANCORP INC",
+      "weight": 0.025
+    },
+    {
+      "ticker": "NVCT",
+      "name": "NUVECTIS PHARMA INC",
+      "weight": 0.025
+    },
+    {
+      "ticker": "PMTS",
+      "name": "CPI CARD GROUP INC",
+      "weight": 0.025
+    },
+    {
+      "ticker": "RMBI",
+      "name": "RICHMOND MUTUAL BANCORPORATION INC",
+      "weight": 0.025
+    },
+    {
+      "ticker": "ACR",
+      "name": "ACRES COMMERCIAL REALTY CORP",
+      "weight": 0.024
+    },
+    {
+      "ticker": "APYX",
+      "name": "APYX MEDICAL INC",
+      "weight": 0.024
+    },
+    {
+      "ticker": "BHR",
+      "name": "BRAEMAR HOTELS RESORTS INC",
+      "weight": 0.024
+    },
+    {
+      "ticker": "BKKT",
+      "name": "BAKKT INC CLASS A",
+      "weight": 0.024
+    },
+    {
+      "ticker": "CURI",
+      "name": "CURIOSITYSTREAM INC CLASS A",
+      "weight": 0.024
+    },
+    {
+      "ticker": "EML",
+      "name": "EASTERN",
+      "weight": 0.024
+    },
+    {
+      "ticker": "HOFT",
+      "name": "HOOKER FURNISHINGS CORP",
+      "weight": 0.024
+    },
+    {
+      "ticker": "NKTX",
+      "name": "NKARTA INC",
+      "weight": 0.024
+    },
+    {
+      "ticker": "ORMP",
+      "name": "ORAMED PHARMACEUTICALS INC",
+      "weight": 0.024
+    },
+    {
+      "ticker": "QTRX",
+      "name": "QUANTERIX CORP",
+      "weight": 0.024
+    },
+    {
+      "ticker": "RXT",
+      "name": "RACKSPACE TECHNOLOGY INC",
+      "weight": 0.024
+    },
+    {
+      "ticker": "SGC",
+      "name": "SUPERIOR GROUP OF COMPANIES INC",
+      "weight": 0.024
+    },
+    {
+      "ticker": "SI",
+      "name": "SHOULDER INNOVATIONS INC",
+      "weight": 0.024
+    },
+    {
+      "ticker": "WHG",
+      "name": "WESTWOOD HOLDINGS GROUP INC",
+      "weight": 0.024
+    },
+    {
+      "ticker": "AGEN",
+      "name": "AGENUS INC",
+      "weight": 0.023
+    },
+    {
+      "ticker": "BALY",
+      "name": "BALLY S CORP",
+      "weight": 0.023
+    },
+    {
+      "ticker": "BDTX",
+      "name": "BLACK DIAMOND THERAPEUTICS INC",
+      "weight": 0.023
+    },
+    {
+      "ticker": "BOOM",
+      "name": "DMC GLOBAL INC",
+      "weight": 0.023
+    },
+    {
+      "ticker": "CVGI",
+      "name": "COMMERCIAL VEHICLE GROUP INC",
+      "weight": 0.023
+    },
+    {
+      "ticker": "DOMO",
+      "name": "DOMO INC CLASS B",
+      "weight": 0.023
+    },
+    {
+      "ticker": "EVI",
+      "name": "EVI INDUSTRIES INC",
+      "weight": 0.023
+    },
+    {
+      "ticker": "IMUX",
+      "name": "IMMUNIC INC",
+      "weight": 0.023
+    },
+    {
+      "ticker": "LAW",
+      "name": "CS DISCO INC",
+      "weight": 0.023
+    },
+    {
+      "ticker": "MED",
+      "name": "MEDIFAST INC",
+      "weight": 0.023
+    },
+    {
+      "ticker": "RGP",
+      "name": "RESOURCES CONNECTION INC",
+      "weight": 0.023
+    },
+    {
+      "ticker": "SBFG",
+      "name": "SB FINANCIAL GROUP INC",
+      "weight": 0.023
+    },
+    {
+      "ticker": "SNWV",
+      "name": "SANUWAVE HEALTH INC",
+      "weight": 0.023
+    },
+    {
+      "ticker": "TLSI",
+      "name": "TRISALUS LF SC CM A",
+      "weight": 0.023
+    },
+    {
+      "ticker": "AOUT",
+      "name": "AMERICAN OUTDOOR BRANDS INC",
+      "weight": 0.022
+    },
+    {
+      "ticker": "BSET",
+      "name": "BASSETT FURNITURE INDUSTRIES INC",
+      "weight": 0.022
+    },
+    {
+      "ticker": "CAMP",
+      "name": "CAMP4 THERAPEUTICS CORP",
+      "weight": 0.022
+    },
+    {
+      "ticker": "CXDO",
+      "name": "CREXENDO INC",
+      "weight": 0.022
+    },
+    {
+      "ticker": "DMRC",
+      "name": "DIGIMARC CORP",
+      "weight": 0.022
+    },
+    {
+      "ticker": "EGAN",
+      "name": "EGAIN CORP",
+      "weight": 0.022
+    },
+    {
+      "ticker": "ELA",
+      "name": "ENVELA CORP",
+      "weight": 0.022
+    },
+    {
+      "ticker": "ELTX",
+      "name": "ELICIO THERAPEUTICS INC",
+      "weight": 0.022
+    },
+    {
+      "ticker": "GEOS",
+      "name": "GEOSPACE TECHNOLOGIES CORP",
+      "weight": 0.022
+    },
+    {
+      "ticker": "KVHI",
+      "name": "KVH INDUSTRIES INC",
+      "weight": 0.022
+    },
+    {
+      "ticker": "NNOX",
+      "name": "NANO X IMAGING LTD",
+      "weight": 0.022
+    },
+    {
+      "ticker": "ONEW",
+      "name": "ONEWATER MARINE CLASS A INC",
+      "weight": 0.022
+    },
+    {
+      "ticker": "RAIL",
+      "name": "FREIGHTCAR AMERICA INC",
+      "weight": 0.022
+    },
+    {
+      "ticker": "SYNL",
+      "name": "ASCENT INDUSTRIES",
+      "weight": 0.022
+    },
+    {
+      "ticker": "THRY",
+      "name": "THRYV HOLDINGS INC",
+      "weight": 0.022
+    },
+    {
+      "ticker": "CCLD",
+      "name": "CARECLOUD INC",
+      "weight": 0.021
+    },
+    {
+      "ticker": "CVRX",
+      "name": "CVRX INC",
+      "weight": 0.021
+    },
+    {
+      "ticker": "DIBS",
+      "name": "1STDIBS COM INC",
+      "weight": 0.021
+    },
+    {
+      "ticker": "FF",
+      "name": "FUTUREFUEL CORP",
+      "weight": 0.021
+    },
+    {
+      "ticker": "FNWD",
+      "name": "FINWARD BANCORP",
+      "weight": 0.021
+    },
+    {
+      "ticker": "KLTR",
+      "name": "KALTURA INC",
+      "weight": 0.021
+    },
+    {
+      "ticker": "PLBY",
+      "name": "PLAYBOY INC",
+      "weight": 0.021
+    },
+    {
+      "ticker": "RFIL",
+      "name": "RF INDUSTRIES LTD",
+      "weight": 0.021
+    },
+    {
+      "ticker": "STXS",
+      "name": "STEREOTAXIS INC",
+      "weight": 0.021
+    },
+    {
+      "ticker": "ARMP",
+      "name": "ARMATA PHARMACEUTICALS INC",
+      "weight": 0.02
+    },
+    {
+      "ticker": "FONR",
+      "name": "FONAR CORP",
+      "weight": 0.02
+    },
+    {
+      "ticker": "GWRS",
+      "name": "GLOBAL WATER RESOURCES INC",
+      "weight": 0.02
+    },
+    {
+      "ticker": "HNVR",
+      "name": "HANOVER BANCORP INC",
+      "weight": 0.02
+    },
+    {
+      "ticker": "LGCY",
+      "name": "LEGACY EDUCATION INC",
+      "weight": 0.02
+    },
+    {
+      "ticker": "MLP",
+      "name": "MAUI LAND AND PINEAPPLE INC",
+      "weight": 0.02
+    },
+    {
+      "ticker": "NNBR",
+      "name": "NN INC",
+      "weight": 0.02
+    },
+    {
+      "ticker": "PCYG",
+      "name": "REPOSITRAK INC",
+      "weight": 0.02
+    },
+    {
+      "ticker": "PDEX",
+      "name": "PRO DEX INC",
+      "weight": 0.02
+    },
+    {
+      "ticker": "PNRG",
+      "name": "PRIMEENERGY RESOURCES CORP",
+      "weight": 0.02
+    },
+    {
+      "ticker": "REKR",
+      "name": "REKOR SYSTEMS INC",
+      "weight": 0.02
+    },
+    {
+      "ticker": "RVSB",
+      "name": "RIVERVIEW BANCORP INC",
+      "weight": 0.02
+    },
+    {
+      "ticker": "AFBI",
+      "name": "AFFINITY BANCSHARES INC",
+      "weight": 0.019
+    },
+    {
+      "ticker": "ANTX",
+      "name": "AN2 THERAPEUTICS INC",
+      "weight": 0.019
+    },
+    {
+      "ticker": "BYRN",
+      "name": "BYRNA TECHNOLOGIES INC",
+      "weight": 0.019
+    },
+    {
+      "ticker": "CRDF",
+      "name": "CARDIFF ONCOLOGY INC",
+      "weight": 0.019
+    },
+    {
+      "ticker": "DERM",
+      "name": "JOURNEY MEDICAL CORP",
+      "weight": 0.019
+    },
+    {
+      "ticker": "DHX",
+      "name": "DHI GROUP INC",
+      "weight": 0.019
+    },
+    {
+      "ticker": "GALT",
+      "name": "GALECTIN THERAPEUTICS INC",
+      "weight": 0.019
+    },
+    {
+      "ticker": "GNLX",
+      "name": "GENELUX CORP",
+      "weight": 0.019
+    },
+    {
+      "ticker": "HURC",
+      "name": "HURCO COMPANIES INC",
+      "weight": 0.019
+    },
+    {
+      "ticker": "KULR",
+      "name": "KULR TECHNOLOGY GROUP INC",
+      "weight": 0.019
+    },
+    {
+      "ticker": "LE",
+      "name": "LAND END INC",
+      "weight": 0.019
+    },
+    {
+      "ticker": "PNBK",
+      "name": "PATRIOT NATIONAL BANCORP INC",
+      "weight": 0.019
+    },
+    {
+      "ticker": "RPT",
+      "name": "RITHM PROPERTY INC TRUST",
+      "weight": 0.019
+    },
+    {
+      "ticker": "STHO",
+      "name": "STAR HOLDINGS SHARES OF BENEFICIAL",
+      "weight": 0.019
+    },
+    {
+      "ticker": "TCX",
+      "name": "TUCOWS INC",
+      "weight": 0.019
+    },
+    {
+      "ticker": "AIRJ",
+      "name": "AIRJOULE TECHNOLOGIES CORP CLASS A",
+      "weight": 0.018
+    },
+    {
+      "ticker": "ALTS",
+      "name": "AI FINANCIAL CORP",
+      "weight": 0.018
+    },
+    {
+      "ticker": "BMEA",
+      "name": "BIOMEA FUSION INC",
+      "weight": 0.018
+    },
+    {
+      "ticker": "BOTJ",
+      "name": "BANK OF THE JAMES FINANCIAL GROUP",
+      "weight": 0.018
+    },
+    {
+      "ticker": "CHMI",
+      "name": "CHERRY HILL MORTGAGE INVESTMENT RE",
+      "weight": 0.018
+    },
+    {
+      "ticker": "CMTL",
+      "name": "COMTECH TELECOMMUNICATIONS CORP",
+      "weight": 0.018
+    },
+    {
+      "ticker": "INVE",
+      "name": "IDENTIV INC",
+      "weight": 0.018
+    },
+    {
+      "ticker": "LUCD",
+      "name": "LUCID DIAGNOSTICS INC",
+      "weight": 0.018
+    },
+    {
+      "ticker": "MGYR",
+      "name": "MAGYAR BANCORP INC",
+      "weight": 0.018
+    },
+    {
+      "ticker": "NREF",
+      "name": "NEXPOINT REAL ESTATE FINANCE INC",
+      "weight": 0.018
+    },
+    {
+      "ticker": "OPRX",
+      "name": "OPTIMIZERX CORP",
+      "weight": 0.018
+    },
+    {
+      "ticker": "PROV",
+      "name": "PROVIDENT FINANCIAL HOLDINGS INC",
+      "weight": 0.018
+    },
+    {
+      "ticker": "SKIN",
+      "name": "SKINHEALTH SYSTEMS INC CLASS A",
+      "weight": 0.018
+    },
+    {
+      "ticker": "STRW",
+      "name": "STRAWBERRY FIELDS REIT INC",
+      "weight": 0.018
+    },
+    {
+      "ticker": "ABOS",
+      "name": "ACUMEN PHARMACEUTICALS INC",
+      "weight": 0.017
+    },
+    {
+      "ticker": "ALOT",
+      "name": "ASTRO MED INC",
+      "weight": 0.017
+    },
+    {
+      "ticker": "ANIX",
+      "name": "ANIXA BIOSCIENCES INC",
+      "weight": 0.017
+    },
+    {
+      "ticker": "AVBH",
+      "name": "AVIDBANK HOLDINGS INC",
+      "weight": 0.017
+    },
+    {
+      "ticker": "CPSS",
+      "name": "CONSUMER PORTFOLIO SERVICES INC",
+      "weight": 0.017
+    },
+    {
+      "ticker": "DFDV",
+      "name": "DEFI DEVELOPMENT CORP",
+      "weight": 0.017
+    },
+    {
+      "ticker": "HURA",
+      "name": "TUHURA BIOSCIENCES INC",
+      "weight": 0.017
+    },
+    {
+      "ticker": "JILL",
+      "name": "J JILL INC",
+      "weight": 0.017
+    },
+    {
+      "ticker": "NODK",
+      "name": "NI HOLDINGS INC",
+      "weight": 0.017
+    },
+    {
+      "ticker": "SAMG",
+      "name": "SILVERCREST ASSET MANAGEMENT GROUP",
+      "weight": 0.017
+    },
+    {
+      "ticker": "SFBC",
+      "name": "SOUND FINANCIAL BANCORP INC",
+      "weight": 0.017
+    },
+    {
+      "ticker": "SKYX",
+      "name": "SKYX PLATFORMS CORP",
+      "weight": 0.017
+    },
+    {
+      "ticker": "SMID",
+      "name": "SMITH MIDLAND CORP",
+      "weight": 0.017
+    },
+    {
+      "ticker": "UNB",
+      "name": "UNION BANKSHARES INC",
+      "weight": 0.017
+    },
+    {
+      "ticker": "ALDX",
+      "name": "ALDEYRA THERAPEUTICS INC",
+      "weight": 0.016
+    },
+    {
+      "ticker": "AXR",
+      "name": "AMREP CORP",
+      "weight": 0.016
+    },
+    {
+      "ticker": "CRMT",
+      "name": "AMERICAS CAR MART INC",
+      "weight": 0.016
+    },
+    {
+      "ticker": "FLL",
+      "name": "FULL HOUSE RESORTS INC",
+      "weight": 0.016
+    },
+    {
+      "ticker": "FOA",
+      "name": "FINANCE OF AMERICA COMPANIES INC C",
+      "weight": 0.016
+    },
+    {
+      "ticker": "KEQU",
+      "name": "KEWAUNEE SCIENTIFIC CORP",
+      "weight": 0.016
+    },
+    {
+      "ticker": "KRRO",
+      "name": "KORRO BIO INC",
+      "weight": 0.016
+    },
+    {
+      "ticker": "LAKE",
+      "name": "LAKELAND INDUSTRIES INC",
+      "weight": 0.016
+    },
+    {
+      "ticker": "LCUT",
+      "name": "LIFETIME BRANDS INC",
+      "weight": 0.016
+    },
+    {
+      "ticker": "MXCT",
+      "name": "MAXCYTE INC",
+      "weight": 0.016
+    },
+    {
+      "ticker": "NEOV",
+      "name": "NEOVOLTA INC",
+      "weight": 0.016
+    },
+    {
+      "ticker": "SEER",
+      "name": "SEER INC CLASS A",
+      "weight": 0.016
+    },
+    {
+      "ticker": "AIRG",
+      "name": "AIRGAIN INC",
+      "weight": 0.015
+    },
+    {
+      "ticker": "CBNA",
+      "name": "CHAIN BRIDGE BANCORP INC CLASS A",
+      "weight": 0.015
+    },
+    {
+      "ticker": "FDSB",
+      "name": "FIFTH DISTRICT BANCORP INC",
+      "weight": 0.015
+    },
+    {
+      "ticker": "FLWS",
+      "name": "1-800 FLOWERS.COM INC CLASS A",
+      "weight": 0.015
+    },
+    {
+      "ticker": "FNWB",
+      "name": "FIRST NORTHWEST BAN",
+      "weight": 0.015
+    },
+    {
+      "ticker": "FUSB",
+      "name": "FIRST US BANCSHARES INC",
+      "weight": 0.015
+    },
+    {
+      "ticker": "GNSS",
+      "name": "GENASYS INC",
+      "weight": 0.015
+    },
+    {
+      "ticker": "HCAT",
+      "name": "HEALTH CATALYST INC",
+      "weight": 0.015
+    },
+    {
+      "ticker": "HFFG",
+      "name": "HF FOODS GROUP INC",
+      "weight": 0.015
+    },
+    {
+      "ticker": "JYNT",
+      "name": "JOINT CORP",
+      "weight": 0.015
+    },
+    {
+      "ticker": "OWLT",
+      "name": "OWLET INC CLASS A",
+      "weight": 0.015
+    },
+    {
+      "ticker": "PYXS",
+      "name": "PYXIS ONCOLOGY INC",
+      "weight": 0.015
+    },
+    {
+      "ticker": "SVCO",
+      "name": "SILVACO GROUP INC",
+      "weight": 0.015
+    },
+    {
+      "ticker": "UBCP",
+      "name": "UNITED BANCORP INC",
+      "weight": 0.015
+    },
+    {
+      "ticker": "ADES",
+      "name": "ARQ INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "ATYR",
+      "name": "ATYR PHARMA INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "AVD",
+      "name": "AMER VANGUARD CORP",
+      "weight": 0.014
+    },
+    {
+      "ticker": "CLAR",
+      "name": "CLARUS CORP",
+      "weight": 0.014
+    },
+    {
+      "ticker": "COYA",
+      "name": "COYA THERAPEUTICS INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "FFIE",
+      "name": "FARADAY FUTURE INTELLIGENT ELECTRI",
+      "weight": 0.014
+    },
+    {
+      "ticker": "FORR",
+      "name": "FORRESTER RESEARCH INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "GAMB",
+      "name": "GAMBLING COM GROUP LTD",
+      "weight": 0.014
+    },
+    {
+      "ticker": "GRWG",
+      "name": "GROWGENERATION CORP",
+      "weight": 0.014
+    },
+    {
+      "ticker": "GUTS",
+      "name": "FRACTYL HEALTH INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "INO",
+      "name": "INOVIO PHARMACEUTICALS INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "MDXH.BR",
+      "name": "MDXHEALTH SA",
+      "weight": 0.014
+    },
+    {
+      "ticker": "MPX",
+      "name": "MARINE PRODUCTS CORP",
+      "weight": 0.014
+    },
+    {
+      "ticker": "NRXP",
+      "name": "NRX PHARMACEUTICALS INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "OM",
+      "name": "OUTSET MEDICAL INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "PLRX",
+      "name": "PLIANT THERAPEUTICS INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "QMCO",
+      "name": "QUANTUM CORPORATION",
+      "weight": 0.014
+    },
+    {
+      "ticker": "RBKB",
+      "name": "RHINEBECK BANCORP INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "RPID",
+      "name": "RAPID MICRO BIOSYSTEMS INC CLASS A",
+      "weight": 0.014
+    },
+    {
+      "ticker": "SUNS",
+      "name": "SUNRISE REALTY TRUST INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "TSQ",
+      "name": "TOWNSQUARE MEDIA INC CLASS A",
+      "weight": 0.014
+    },
+    {
+      "ticker": "TUSK",
+      "name": "MAMMOTH ENERGY SERVICES INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "VRA",
+      "name": "VERA BRADLEY INC",
+      "weight": 0.014
+    },
+    {
+      "ticker": "AARD",
+      "name": "AARDVARK THERAPEUTICS INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "AUBN",
+      "name": "AUBURN NATIONAL BANCORPORATION INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "BAER",
+      "name": "BRIDGER AEROSPACE GROUP INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "CARL",
+      "name": "CARLSMED INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "CRGO",
+      "name": "FREIGHTOS LTD",
+      "weight": 0.013
+    },
+    {
+      "ticker": "CSLR",
+      "name": "SUNPOWER INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "CSPI",
+      "name": "CSP INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "DLHC",
+      "name": "DLH HOLDINGS CORP",
+      "weight": 0.013
+    },
+    {
+      "ticker": "GANX",
+      "name": "GAIN THERAPEUTICS INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "GOSS",
+      "name": "GOSSAMER BIO INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "GPMT",
+      "name": "GRANITE POINT MORTGAGE TRUST INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "HQI",
+      "name": "HIREQUEST INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "RANI",
+      "name": "RANI THERAPEUTICS HOLDINGS INC CLA",
+      "weight": 0.013
+    },
+    {
+      "ticker": "RNAC",
+      "name": "CARTESIAN THERAPEUTICS INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "RSSS",
+      "name": "RESEARCH SOLUTIONS INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "SSBI",
+      "name": "SUMMIT STATE BANK",
+      "weight": 0.013
+    },
+    {
+      "ticker": "ULBI",
+      "name": "ULTRALIFE CORP",
+      "weight": 0.013
+    },
+    {
+      "ticker": "VANI",
+      "name": "VIVANI MEDICAL INC",
+      "weight": 0.013
+    },
+    {
+      "ticker": "VATE",
+      "name": "INNOVATE CORP",
+      "weight": 0.013
+    },
+    {
+      "ticker": "VIRC",
+      "name": "VIRCO MANUFACTURING CORP",
+      "weight": 0.013
+    },
+    {
+      "ticker": "ZVIA",
+      "name": "ZEVIA CLASS A",
+      "weight": 0.013
+    },
+    {
+      "ticker": "BGSF",
+      "name": "BGSF INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "BTMD",
+      "name": "BIOTE CORP CLASS A",
+      "weight": 0.012
+    },
+    {
+      "ticker": "CBUS",
+      "name": "CIBUS INC CLASS A",
+      "weight": 0.012
+    },
+    {
+      "ticker": "DCGO",
+      "name": "DOCGO INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "EEX",
+      "name": "EMERALD HOLDING INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "EXFY",
+      "name": "EXPENSIFY INC CLASS A",
+      "weight": 0.012
+    },
+    {
+      "ticker": "FGBI",
+      "name": "FIRST GUARANTY BANCSHARES INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "MNOV",
+      "name": "MEDICINOVA INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "NTIC",
+      "name": "NORTHERN TECHNOLOGIES INTERNATIONA",
+      "weight": 0.012
+    },
+    {
+      "ticker": "PEPG",
+      "name": "PEPGEN INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "PEW",
+      "name": "GRABAGUN DIGITAL HOLDINGS INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "PMVP",
+      "name": "PMV PHARMACEUTICALS INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "RDZN",
+      "name": "ROADZEN INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "SAVA",
+      "name": "FILANA THERAPEUTICS INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "SERA",
+      "name": "SERA PROGNOSTICS INC CLASS A",
+      "weight": 0.012
+    },
+    {
+      "ticker": "SSTI",
+      "name": "SOUNDTHINKING INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "STIM",
+      "name": "NEURONETICS INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "TTEC",
+      "name": "TTEC HOLDINGS INC",
+      "weight": 0.012
+    },
+    {
+      "ticker": "VTVT",
+      "name": "VTV THERAPEUTICS INC CLASS A",
+      "weight": 0.012
+    },
+    {
+      "ticker": "AEYE",
+      "name": "AUDIOEYE INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "AFRI",
+      "name": "FORAFRIC GLOBAL PLC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "BTCS",
+      "name": "BTCS INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "CHCI",
+      "name": "COMSTOCK HOLDING COMPANIES INC CLA",
+      "weight": 0.011
+    },
+    {
+      "ticker": "CLST",
+      "name": "CATALYST BANCORP INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "CODA",
+      "name": "CODA OCTOPUS GROUP INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "CPBI",
+      "name": "CENTRAL PLAINS BANCSHARES INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "CURV",
+      "name": "TORRID HOLDINGS INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "DTI",
+      "name": "DRILLING TOOLS INTERNATIONAL CORP",
+      "weight": 0.011
+    },
+    {
+      "ticker": "EHTH",
+      "name": "EHEALTH INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "FSP",
+      "name": "FRANKLIN STREET PROPERTIES REIT CO",
+      "weight": 0.011
+    },
+    {
+      "ticker": "ICCC",
+      "name": "IMMUCELL CORP",
+      "weight": 0.011
+    },
+    {
+      "ticker": "IZEA",
+      "name": "IZEA WORLDWIDE INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "KLXE",
+      "name": "KLX ENERGY SERVICES HOLDINGS INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "MIND",
+      "name": "MIND TECHNOLOGY INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "NCSM",
+      "name": "NCS MULTISTAGE HOLDINGS INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "OKUR",
+      "name": "ONKURE THERAPEUTICS INC CLASS A",
+      "weight": 0.011
+    },
+    {
+      "ticker": "PPHC",
+      "name": "PUBLIC POLICY HOLDING INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "RCEL",
+      "name": "AVITA MEDICAL INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "RGS",
+      "name": "REGIS CORP",
+      "weight": 0.011
+    },
+    {
+      "ticker": "SCLX",
+      "name": "SCILEX HOLDING",
+      "weight": 0.011
+    },
+    {
+      "ticker": "SELF",
+      "name": "GLOBAL SELF STORAGE INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "SMTI",
+      "name": "SANARA MEDTECH INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "SNBR",
+      "name": "SLEEP NUMBER CORP",
+      "weight": 0.011
+    },
+    {
+      "ticker": "SPRU",
+      "name": "SPRUCE POWER HOLDING CORP",
+      "weight": 0.011
+    },
+    {
+      "ticker": "SRTS",
+      "name": "SENSUS HEALTHCARE INC",
+      "weight": 0.011
+    },
+    {
+      "ticker": "TLYS",
+      "name": "TILLYS INC CLASS A",
+      "weight": 0.011
+    },
+    {
+      "ticker": "TZOO",
+      "name": "TRAVELZOO",
+      "weight": 0.011
+    },
+    {
+      "ticker": "WYY",
+      "name": "WIDEPOINT CORP",
+      "weight": 0.011
+    },
+    {
+      "ticker": "AISP",
+      "name": "AIRSHIP AI HOLDINGS INC CLASS A",
+      "weight": 0.01
+    },
+    {
+      "ticker": "CSBR",
+      "name": "CHAMPIONS ONCOLOGY INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "FBIO",
+      "name": "FORTRESS BIOTECH INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "FLNT",
+      "name": "FLUENT INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "GAIA",
+      "name": "GAIA INC CLASS A",
+      "weight": 0.01
+    },
+    {
+      "ticker": "GCTS",
+      "name": "GCT SEMICONDUCTOR HOLDING INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "KORE",
+      "name": "KORE GROUP HOLDINGS INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "LFT",
+      "name": "LUMENT FINANCE TRUST INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "LFVN",
+      "name": "LIFEVANTAGE CORP",
+      "weight": 0.01
+    },
+    {
+      "ticker": "LNSR",
+      "name": "LENSAR INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "LSBK",
+      "name": "LAKE SHORE BANCORP INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "NL",
+      "name": "NL INDUSTRIES INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "NRDY",
+      "name": "NERDY INC CLASS A",
+      "weight": 0.01
+    },
+    {
+      "ticker": "NSTS",
+      "name": "NSTS BANCORP INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "ODYS",
+      "name": "ODYSIGHT AI INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "OPHC",
+      "name": "OPTIMUMBANK HOLDINGS INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "OPXS",
+      "name": "OPTEX SYSTEMS HOLDINGS INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "PDSB",
+      "name": "PDS BIOTECHNOLOGY CORP",
+      "weight": 0.01
+    },
+    {
+      "ticker": "SGA",
+      "name": "SAGA COMMUNICATIONS INC CLASS A",
+      "weight": 0.01
+    },
+    {
+      "ticker": "SPAI",
+      "name": "SAFE PRO GROUP INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "SPWH",
+      "name": "SPORTSMANS WAREHOUSE HOLDINGS INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "SRFM",
+      "name": "SURF AIR MOBILITY INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "TCRX",
+      "name": "TSCAN THERAPEUTICS INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "UEIC",
+      "name": "UNIVERSAL ELECTRONICS INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "UFI",
+      "name": "UNIFI INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "VHC",
+      "name": "VIRNETX HOLDING CORP",
+      "weight": 0.01
+    },
+    {
+      "ticker": "VTSI",
+      "name": "VIRTRA INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "WRAP",
+      "name": "WRAP TECHNOLOGIES INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "XBIT",
+      "name": "XBIOTECH INC",
+      "weight": 0.01
+    },
+    {
+      "ticker": "ASRV",
+      "name": "AMERISERV FINANCIAL INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "BWEN",
+      "name": "BROADWIND INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "BYSI",
+      "name": "BEYONDSPRING INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "CDLX",
+      "name": "CARDLYTICS INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "CLPR",
+      "name": "CLIPPER REALTY INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "DTCX",
+      "name": "DATACENTREX INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "EP",
+      "name": "EMPIRE PETROLEUM CORP",
+      "weight": 0.009
+    },
+    {
+      "ticker": "FSI",
+      "name": "FLEXIBLE SOLUTIONS INTERNATIONAL I",
+      "weight": 0.009
+    },
+    {
+      "ticker": "FTCI",
+      "name": "FTC SOLAR INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "HGBL",
+      "name": "HERITAGE GLOBAL INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "HNNA",
+      "name": "HENNESSY ADVISORS INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "IMA",
+      "name": "IMAGENEBIO INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "KZR",
+      "name": "KEZAR LIFE SCIENCES INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "MCRB",
+      "name": "SERES THERAPEUTICS INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "NEGG",
+      "name": "NEWEGG COMMERCE INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "OMEX",
+      "name": "ODYSSEY MARINE EXPLORATION INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "PHUN",
+      "name": "PHUNWARE INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "PTSI",
+      "name": "PAMT CORP",
+      "weight": 0.009
+    },
+    {
+      "ticker": "RRGB",
+      "name": "RED ROBIN GOURMET BURGERS INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "SACH",
+      "name": "SACHEM CAPITAL CORP",
+      "weight": 0.009
+    },
+    {
+      "ticker": "SKLZ",
+      "name": "SKILLZ INC CLASS A",
+      "weight": 0.009
+    },
+    {
+      "ticker": "TISI",
+      "name": "TEAM INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "ZENA",
+      "name": "ZENATECH INC",
+      "weight": 0.009
+    },
+    {
+      "ticker": "AMPG",
+      "name": "AMPLITECH GROUP INC",
+      "weight": 0.008
+    },
+    {
+      "ticker": "APT",
+      "name": "ALPHA PRO TECH LTD",
+      "weight": 0.008
+    },
+    {
+      "ticker": "ARAY",
+      "name": "ACCURAY INC",
+      "weight": 0.008
+    },
+    {
+      "ticker": "BARK",
+      "name": "BARK INC CLASS A",
+      "weight": 0.008
+    },
+    {
+      "ticker": "CATO",
+      "name": "CATO CORP CLASS A",
+      "weight": 0.008
+    },
+    {
+      "ticker": "CNVS",
+      "name": "CINEVERSE CORP CLASS A",
+      "weight": 0.008
+    },
+    {
+      "ticker": "DLTH",
+      "name": "DULUTH HOLDINGS INC CLASS B",
+      "weight": 0.008
+    },
+    {
+      "ticker": "FSEA",
+      "name": "FIRST SEACOAST BANCORP INC",
+      "weight": 0.008
+    },
+    {
+      "ticker": "FTLF",
+      "name": "FITLIFE BRANDS INC",
+      "weight": 0.008
+    },
+    {
+      "ticker": "IMDX",
+      "name": "INSIGHT MOLECULAR DIAGNOSTICS INC",
+      "weight": 0.008
+    },
+    {
+      "ticker": "LOAN",
+      "name": "MANHATTAN BRIDGE CAPITAL INC",
+      "weight": 0.008
+    },
+    {
+      "ticker": "LUNG",
+      "name": "PULMONX CORP",
+      "weight": 0.008
+    },
+    {
+      "ticker": "MDAI",
+      "name": "SPECTRAL AI INC CLASS A",
+      "weight": 0.008
+    },
+    {
+      "ticker": "OPAL",
+      "name": "OPAL FUELS INC CLASS A",
+      "weight": 0.008
+    },
+    {
+      "ticker": "OPTX",
+      "name": "SYNTEC OPTICS HOLDINGS INC CLASS A",
+      "weight": 0.008
+    },
+    {
+      "ticker": "PBHC",
+      "name": "PATHFINDER BANCORP INC",
+      "weight": 0.008
+    },
+    {
+      "ticker": "PROP",
+      "name": "PRAIRIE OPERATING",
+      "weight": 0.008
+    },
+    {
+      "ticker": "RFL",
+      "name": "RAFAEL HOLDINGS INC CLASS B",
+      "weight": 0.008
+    },
+    {
+      "ticker": "SBC",
+      "name": "SBC MEDICAL GROUP HOLDINGS INC",
+      "weight": 0.008
+    },
+    {
+      "ticker": "STKS",
+      "name": "ONE GROUP HOSPITALITY INC",
+      "weight": 0.008
+    },
+    {
+      "ticker": "SYPR",
+      "name": "SYPRIS SOLUTIONS INC",
+      "weight": 0.008
+    },
+    {
+      "ticker": "TCI",
+      "name": "TRANSCONTINENTAL REALTY INVESTORS",
+      "weight": 0.008
+    },
+    {
+      "ticker": "XGN",
+      "name": "EXAGEN INC",
+      "weight": 0.008
+    },
+    {
+      "ticker": "ATNM",
+      "name": "ACTINIUM PHARMACEUTICALS INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "BHM",
+      "name": "BLUEROCK HOMES TRUST INC CLASS A",
+      "weight": 0.007
+    },
+    {
+      "ticker": "BIRD",
+      "name": "ALLBIRDS INC CLASS A",
+      "weight": 0.007
+    },
+    {
+      "ticker": "BSBK",
+      "name": "BOGOTA FINANCIAL CORP",
+      "weight": 0.007
+    },
+    {
+      "ticker": "CIX",
+      "name": "COMPX INTERNATIONAL INC CLASS A",
+      "weight": 0.007
+    },
+    {
+      "ticker": "CPHC",
+      "name": "CANTERBURY PARK HOLDING CORP",
+      "weight": 0.007
+    },
+    {
+      "ticker": "CPIX",
+      "name": "CUMBERLAND PHARMACEUTICALS INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "CTSO",
+      "name": "CYTOSORBENTS CORP",
+      "weight": 0.007
+    },
+    {
+      "ticker": "CULP",
+      "name": "CULP INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "CVU",
+      "name": "CPI AEROSTRUCTURES INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "FKWL",
+      "name": "FRANKLIN WIRELESS CORP",
+      "weight": 0.007
+    },
+    {
+      "ticker": "LEE",
+      "name": "LEE ENTERPRISES INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "MAIA",
+      "name": "MAIA BIOTECHNOLOGY INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "MCHX",
+      "name": "MARCHEX INC CLASS B",
+      "weight": 0.007
+    },
+    {
+      "ticker": "MGX",
+      "name": "METAGENOMI THERAPEUTICS INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "MYPS",
+      "name": "PLAYSTUDIOS INC CLASS A",
+      "weight": 0.007
+    },
+    {
+      "ticker": "OSTX",
+      "name": "OS THERAPIES INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "SKIL",
+      "name": "SKILLSOFT CORP CLASS A",
+      "weight": 0.007
+    },
+    {
+      "ticker": "SOTK",
+      "name": "SONO TEK CORP",
+      "weight": 0.007
+    },
+    {
+      "ticker": "TCBS",
+      "name": "TEXAS COMMUNITY BANCSHARES INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "TKNO",
+      "name": "ALPHA TEKNOVA INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "USGO",
+      "name": "US GOLDMINING INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "VHI",
+      "name": "VALHI INC",
+      "weight": 0.007
+    },
+    {
+      "ticker": "ACRV",
+      "name": "ACRIVON THERAPEUTICS INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "ACTU",
+      "name": "ACTUATE THERAPEUTICS INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "AIRS",
+      "name": "AIRSCULPT TECHNOLOGIES INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "ALRN",
+      "name": "REIN THERAPEUTICS INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "AREN",
+      "name": "ARENA GROUP HLDGS INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "ARTV",
+      "name": "ARTIVA BIOTHERAPEUTICS INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "BAFN",
+      "name": "BAYFIRST FINL CORP",
+      "weight": 0.006
+    },
+    {
+      "ticker": "BUDA",
+      "name": "BUDA JUICE INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "BYFC",
+      "name": "BROADWAY FINANCIAL CORP CLASS A",
+      "weight": 0.006
+    },
+    {
+      "ticker": "CNTY",
+      "name": "CENTURY CASINOS INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "CRWS",
+      "name": "CROWN CRAFTS INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "DXLG",
+      "name": "DESTINATION XL GROUP INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "ECOR",
+      "name": "ELECTROCORE",
+      "weight": 0.006
+    },
+    {
+      "ticker": "HFBL",
+      "name": "HOME FEDERAL BANCORP INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "INMB",
+      "name": "INMUNE BIO INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "IPWR",
+      "name": "IDEAL POWER INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "KSCP",
+      "name": "KNIGHTSCOPE INC CLASS A",
+      "weight": 0.006
+    },
+    {
+      "ticker": "MKTW",
+      "name": "MARKETWISE INC CLASS A",
+      "weight": 0.006
+    },
+    {
+      "ticker": "MYO",
+      "name": "MYOMO INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "NSPR",
+      "name": "INSPIREMD INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "OB",
+      "name": "TEADS HOLDING",
+      "weight": 0.006
+    },
+    {
+      "ticker": "OPAD",
+      "name": "OFFERPAD SOLUTIONS INC CLASS A",
+      "weight": 0.006
+    },
+    {
+      "ticker": "PETS",
+      "name": "PETMED EXPRESS INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "RAVE",
+      "name": "RAVE RESTAURANT GROUP INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "RMTI",
+      "name": "ROCKWELL MEDICAL INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "TACT",
+      "name": "TRANSACT TECHNOLOGIES INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "TELA",
+      "name": "TELA BIO INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "TIL",
+      "name": "INSTIL BIO INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "WFCF",
+      "name": "WHERE FOOD COMES FROM INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "ZDGE",
+      "name": "ZEDGE INC CLASS B",
+      "weight": 0.006
+    },
+    {
+      "ticker": "AIFF",
+      "name": "FIREFLY NEUROSCIENCE INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "AIRT",
+      "name": "AIR T INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "AXIL",
+      "name": "AXIL BRANDS INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "BEEP",
+      "name": "MOBILE INFRASTRUCTURE CORP",
+      "weight": 0.005
+    },
+    {
+      "ticker": "BOLD",
+      "name": "BOUNDLESS BIO INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "CLBR-WT",
+      "name": "PSQ HOLDINGS INC CLASS A",
+      "weight": 0.005
+    },
+    {
+      "ticker": "COOK",
+      "name": "TRAEGER INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "CRVO",
+      "name": "CERVOMED INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "CSTE",
+      "name": "CAESARSTONE LTD",
+      "weight": 0.005
+    },
+    {
+      "ticker": "DOMH",
+      "name": "DOMINARI HOLDINGS INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "ELUT",
+      "name": "ELUTIA INC CLASS A",
+      "weight": 0.005
+    },
+    {
+      "ticker": "ESLA",
+      "name": "ESTRELLA IMMUNOPHARMA INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "GEG",
+      "name": "GREAT ELM GROUP INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "GROV",
+      "name": "GROVE COLLABORATIVE HOLDINGS INC C",
+      "weight": 0.005
+    },
+    {
+      "ticker": "ISDR",
+      "name": "ACCESS NEWSWIRE INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "ISPR",
+      "name": "ISPIRE TECHNOLOGY INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "IZTC",
+      "name": "EXOZYMES INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "JSPR",
+      "name": "JASPER THERAPEUTICS INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "KG",
+      "name": "KESTREL GROUP LTD",
+      "weight": 0.005
+    },
+    {
+      "ticker": "LSF",
+      "name": "LAIRD SUPERFOOD INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "MHH",
+      "name": "MASTECH DIGITAL INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "NANX",
+      "name": "SOLESENCE INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "PLCE",
+      "name": "CHILDRENS PLACE INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "POCI",
+      "name": "PRECISION OPTICS INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "REFR",
+      "name": "RESEARCH FRONT INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "RSTN",
+      "name": "GIFTIFY INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "SIEB",
+      "name": "SIEBERT FINANCIAL CORP",
+      "weight": 0.005
+    },
+    {
+      "ticker": "TELO",
+      "name": "TELOMIR PHARMACEUTICALS INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "VALU",
+      "name": "VALUE LINE INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "XBP",
+      "name": "XBP GLOBAL HOLDINGS INC",
+      "weight": 0.005
+    },
+    {
+      "ticker": "AHT",
+      "name": "ASHFORD HOSPITALITY TRUST REIT INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "ARL",
+      "name": "AMERICAN REALTY INVESTORS INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "ATRA",
+      "name": "ATARA BIOTHERAPEUTICS INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "BEAT",
+      "name": "HEARTBEAM INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "CELU",
+      "name": "CELULARITY INC CLASS A",
+      "weight": 0.004
+    },
+    {
+      "ticker": "DIT",
+      "name": "AMCON DISTRIBUTING",
+      "weight": 0.004
+    },
+    {
+      "ticker": "DWSN",
+      "name": "DAWSON GEOPHYSICAL",
+      "weight": 0.004
+    },
+    {
+      "ticker": "DYAI",
+      "name": "DYADIC INTERNATIONAL INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "FARM",
+      "name": "FARMER BROTHERS",
+      "weight": 0.004
+    },
+    {
+      "ticker": "FATN",
+      "name": "FATPIPE INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "FEMY",
+      "name": "FEMASYS INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "FORA",
+      "name": "FORIAN",
+      "weight": 0.004
+    },
+    {
+      "ticker": "INLX",
+      "name": "INTELLINETICS INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "JFB",
+      "name": "JFB CONSTRUCTION HOLDINGS CLASS A",
+      "weight": 0.004
+    },
+    {
+      "ticker": "JRSH",
+      "name": "JERASH HOLDINGS US INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "KLRS",
+      "name": "KALARIS THERAPEUTICS INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "KOSS",
+      "name": "KOSS CORP",
+      "weight": 0.004
+    },
+    {
+      "ticker": "LGL",
+      "name": "LGL GROUP INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "NEON",
+      "name": "NEONODE INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "NHTC",
+      "name": "NATURAL HEALTH TRENDS CORP",
+      "weight": 0.004
+    },
+    {
+      "ticker": "NTHI",
+      "name": "NEONC TECHNOLOGIES HOLDINGS INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "PARK",
+      "name": "PARK DENTAL PARTNERS INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "SHIM",
+      "name": "SHIMMICK CORP",
+      "weight": 0.004
+    },
+    {
+      "ticker": "SMXT",
+      "name": "SOLARMAX TECHNOLOGY INC SHS",
+      "weight": 0.004
+    },
+    {
+      "ticker": "TVRD",
+      "name": "TVARDI THERAPEUTICS INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "UG",
+      "name": "UNITED GUARDIAN INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "USIO",
+      "name": "USIO INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "VTGN",
+      "name": "VISTAGEN THERAPEUTICS INC",
+      "weight": 0.004
+    },
+    {
+      "ticker": "ZEO",
+      "name": "ZEO ENERGY CORP CLASS A",
+      "weight": 0.004
+    },
+    {
+      "ticker": "ATHR",
+      "name": "AETHER HOLDINGS INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "AUID",
+      "name": "AUTHID INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "AWRE",
+      "name": "AWARE INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "BRFH",
+      "name": "BARFRESH FOOD GROUP INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "BZFD",
+      "name": "BUZZFEED INC CLASS A",
+      "weight": 0.003
+    },
+    {
+      "ticker": "CCEL",
+      "name": "CRYO CELL INTERNATIONAL INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "CTOR",
+      "name": "CITIUS ONCOLOGY INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "FLYX",
+      "name": "FLYEXCLUSIVE INC CLASS A",
+      "weight": 0.003
+    },
+    {
+      "ticker": "LPA",
+      "name": "LOGISTIC PROPERTIES OF THE AMERICA",
+      "weight": 0.003
+    },
+    {
+      "ticker": "LTRN",
+      "name": "LANTERN PHARMA INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "MRDN",
+      "name": "MERIDIAN HOLDINGS INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "NXXT",
+      "name": "NEXTNRG INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "OTLK",
+      "name": "OUTLOOK THERAPEUTICS INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "PODC",
+      "name": "PODCASTONE INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "QRHC",
+      "name": "QUEST RESOURCE HOLDING CORP",
+      "weight": 0.003
+    },
+    {
+      "ticker": "SAFX",
+      "name": "XCF GLOBAL INC CLASS A",
+      "weight": 0.003
+    },
+    {
+      "ticker": "SKYE",
+      "name": "SKYE BIOSCIENCE INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "SLND",
+      "name": "SOUTHLAND HOLDINGS INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "SLNG",
+      "name": "STABILIS SOLUTIONS INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "UPLD",
+      "name": "UPLAND SOFTWARE INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "VRM",
+      "name": "VROOM INC",
+      "weight": 0.003
+    },
+    {
+      "ticker": "AAME",
+      "name": "ATLANTIC AMERICAN CORP",
+      "weight": 0.002
+    },
+    {
+      "ticker": "AKA",
+      "name": "A K A BRANDS HOLDING CORP",
+      "weight": 0.002
+    },
+    {
+      "ticker": "ARKR",
+      "name": "ARK RESTAURANTS CORP",
+      "weight": 0.002
+    },
+    {
+      "ticker": "ATLN",
+      "name": "ATLANTIC INTERNATIONAL CORP",
+      "weight": 0.002
+    },
+    {
+      "ticker": "BCG",
+      "name": "BINAH CAPITAL GROUP INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "BDL",
+      "name": "FLANIGANS ENTERPRISES INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "BRID",
+      "name": "BRIDGFORD FOODS CORP",
+      "weight": 0.002
+    },
+    {
+      "ticker": "COCH",
+      "name": "ENVOY MEDICAL INC CLASS A",
+      "weight": 0.002
+    },
+    {
+      "ticker": "CSAI",
+      "name": "CLOUDASTRUCTURE CLASS A INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "CVKD",
+      "name": "CADRENAL THERAPEUTICS INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "ELWT",
+      "name": "ELAUWIT CONNECTION INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "EMLD",
+      "name": "FOLD HOLDINGS INC CLASS A",
+      "weight": 0.002
+    },
+    {
+      "ticker": "FEAM",
+      "name": "5E ADVANCED MATERIALS INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "GOCO",
+      "name": "GOHEALTH INC CLASS A",
+      "weight": 0.002
+    },
+    {
+      "ticker": "HHS",
+      "name": "HARTE HANKS INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "LASE",
+      "name": "LASER PHOTONICS CORP",
+      "weight": 0.002
+    },
+    {
+      "ticker": "LIVE",
+      "name": "LIVE VENTURES INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "MAXN",
+      "name": "MAXEON SOLAR TECHNOLOGIES LTD",
+      "weight": 0.002
+    },
+    {
+      "ticker": "MAYS",
+      "name": "J W MAYS INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "MODD",
+      "name": "MODULAR MEDICAL INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "NIXX",
+      "name": "NIXXY INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "NOTV",
+      "name": "INOTIV INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "NTRB",
+      "name": "NUTRIBAND INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "NUKK",
+      "name": "T3 DEFENSE INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "OTH",
+      "name": "OFF THE HOOK YS INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "SER",
+      "name": "SERINA THERAPEUTICS INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "SURG",
+      "name": "SURGEPAYS INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "UHG",
+      "name": "UNITED HOMES INC CLASS A",
+      "weight": 0.002
+    },
+    {
+      "ticker": "USEG",
+      "name": "US ENERGY CORP",
+      "weight": 0.002
+    },
+    {
+      "ticker": "VEEA",
+      "name": "VEEA INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "WVVI",
+      "name": "WILLAMETTE VALLEY VINEYARDS INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "XCUR",
+      "name": "EXICURE INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "XOS",
+      "name": "XOS INC",
+      "weight": 0.002
+    },
+    {
+      "ticker": "AGAE",
+      "name": "ALLIED GAMING AND ENTERTAINMENT IN",
+      "weight": 0.001
+    },
+    {
+      "ticker": "ARAI",
+      "name": "ARRIVE AI INC",
+      "weight": 0.001
+    },
+    {
+      "ticker": "BTOC",
+      "name": "ARMLOGI HOLDING CORP",
+      "weight": 0.001
+    },
+    {
+      "ticker": "FBLG",
+      "name": "FIBROBIOLOGICS INC",
+      "weight": 0.001
+    },
+    {
+      "ticker": "FOXX",
+      "name": "FOXX DEVELOPMENT HOLDINGS INC",
+      "weight": 0.001
+    },
+    {
+      "ticker": "KITT",
+      "name": "NAUTICUS ROBOTICS INC",
+      "weight": 0.001
+    },
+    {
+      "ticker": "LHAI",
+      "name": "LINKHOME HOLDINGS INC",
+      "weight": 0.001
+    },
+    {
+      "ticker": "MAMO",
+      "name": "MASSIMO GROUP",
+      "weight": 0.001
+    },
+    {
+      "ticker": "MDCX",
+      "name": "MEDICUS PHARMA LTD",
+      "weight": 0.001
+    },
+    {
+      "ticker": "MWYN",
+      "name": "MARWYNN HOLDINGS INC",
+      "weight": 0.001
+    },
+    {
+      "ticker": "NVNO",
+      "name": "ENVVENO MEDICAL CORP",
+      "weight": 0.001
+    },
+    {
+      "ticker": "PIII",
+      "name": "P3 HEALTH PARTNERS INC CLASS A",
+      "weight": 0.001
+    },
+    {
+      "ticker": "QNCX",
+      "name": "QUINCE THERAPEUTICS INC",
+      "weight": 0.001
+    },
+    {
+      "ticker": "RAIN",
+      "name": "RAIN ENHANCEMENT TECHNOLOGIES HOLD",
+      "weight": 0.001
+    },
+    {
+      "ticker": "SNTI",
+      "name": "SENTI BIOSCIENCES INC",
+      "weight": 0.001
+    },
+    {
+      "ticker": "TVGN",
+      "name": "TEVOGEN BIO HOLDINGS INC",
+      "weight": 0.001
+    },
+    {
+      "ticker": "UONE",
+      "name": "URBAN ONE INC CLASS A",
+      "weight": 0.001
+    },
+    {
+      "ticker": "VGAS",
+      "name": "VERDE CLEAN FUELS INC CLASS A",
+      "weight": 0.001
+    },
+    {
+      "ticker": "FCUV",
+      "name": "FOCUS UNIVERSAL INC",
+      "weight": 0.0
+    },
+    {
+      "ticker": "NTRB",
+      "name": "NUTRIBAND INC SERIES A",
+      "weight": 0.0
+    },
+    {
+      "ticker": "PMI",
+      "name": "PICARD MEDICAL INC",
+      "weight": 0.0
+    },
+    {
+      "ticker": "SBT",
+      "name": "STERLING BANCORP INC",
+      "weight": 0.0
+    },
+    {
+      "ticker": "SOC",
+      "name": "SRAX INC",
+      "weight": 0.0
+    },
+    {
+      "ticker": "THRD",
+      "name": "THIRD HARMONIC BIO INC",
+      "weight": 0.0
+    },
+    {
+      "ticker": "ZSPC",
+      "name": "ZSPACE",
+      "weight": 0.0
+    }
+  ],
+  "updated_at": "2026-05-01T14:47:14+00:00",
+  "_fetched_at": 1777646834.7766068,
+  "top_holdings": [
+    {
+      "ticker": "AAOI",
+      "name": "APPLIED OPTOELECTRONICS INC",
+      "weight": 1.926
+    },
+    {
+      "ticker": "PRAX",
+      "name": "PRAXIS PRECISION MEDICINES INC",
+      "weight": 1.591
+    },
+    {
+      "ticker": "APLD",
+      "name": "APPLIED DIGITAL CORP",
+      "weight": 1.482
+    },
+    {
+      "ticker": "WULF",
+      "name": "TERAWULF INC",
+      "weight": 1.316
+    },
+    {
+      "ticker": "CIFR",
+      "name": "CIPHER DIGITAL INC",
+      "weight": 1.047
+    },
+    {
+      "ticker": "COGT",
+      "name": "COGENT BIOSCIENCES INC",
+      "weight": 0.978
+    },
+    {
+      "ticker": "TERN",
+      "name": "TERNS PHARMACEUTICALS INC",
+      "weight": 0.967
+    },
+    {
+      "ticker": "EFR.TO",
+      "name": "ENERGY FUELS INC",
+      "weight": 0.877
+    },
+    {
+      "ticker": "AXTI",
+      "name": "AXT INC",
+      "weight": 0.815
+    },
+    {
+      "ticker": "CELC",
+      "name": "CELCUITY INC",
+      "weight": 0.796
+    }
+  ]
+}

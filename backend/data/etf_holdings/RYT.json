@@ -1,0 +1,432 @@
+{
+  "symbol": "RYT",
+  "as_of": "2026-05-01",
+  "source": "fmp",
+  "holding_count": 74,
+  "holdings": [
+    {
+      "ticker": "INTC",
+      "name": "Intel Corp",
+      "weight": 2.397
+    },
+    {
+      "ticker": "ON",
+      "name": "ON Semiconductor Corp",
+      "weight": 2.028
+    },
+    {
+      "ticker": "STX",
+      "name": "Seagate Technology Holdings PLC",
+      "weight": 2.027
+    },
+    {
+      "ticker": "AMD",
+      "name": "Advanced Micro Devices Inc",
+      "weight": 2.0
+    },
+    {
+      "ticker": "SNDK",
+      "name": "Sandisk Corp/DE",
+      "weight": 1.971
+    },
+    {
+      "ticker": "WDC",
+      "name": "Western Digital Corp",
+      "weight": 1.867
+    },
+    {
+      "ticker": "NXPI",
+      "name": "NXP Semiconductors NV",
+      "weight": 1.759
+    },
+    {
+      "ticker": "MPWR",
+      "name": "Monolithic Power Systems Inc",
+      "weight": 1.734
+    },
+    {
+      "ticker": "CIEN",
+      "name": "Ciena Corp",
+      "weight": 1.697
+    },
+    {
+      "ticker": "DELL",
+      "name": "Dell Technologies Inc",
+      "weight": 1.697
+    },
+    {
+      "ticker": "MCHP",
+      "name": "Microchip Technology Inc",
+      "weight": 1.666
+    },
+    {
+      "ticker": "TXN",
+      "name": "Texas Instruments Inc",
+      "weight": 1.648
+    },
+    {
+      "ticker": "HPE",
+      "name": "Hewlett Packard Enterprise Co",
+      "weight": 1.605
+    },
+    {
+      "ticker": "JBL",
+      "name": "Jabil Inc",
+      "weight": 1.588
+    },
+    {
+      "ticker": "LITE",
+      "name": "Lumentum Holdings Inc",
+      "weight": 1.55
+    },
+    {
+      "ticker": "KLAC",
+      "name": "KLA Corp",
+      "weight": 1.51
+    },
+    {
+      "ticker": "MU",
+      "name": "Micron Technology Inc",
+      "weight": 1.506
+    },
+    {
+      "ticker": "ADI",
+      "name": "Analog Devices Inc",
+      "weight": 1.483
+    },
+    {
+      "ticker": "ANET",
+      "name": "Arista Networks Inc",
+      "weight": 1.483
+    },
+    {
+      "ticker": "Q",
+      "name": "Qnity Electronics Inc",
+      "weight": 1.475
+    },
+    {
+      "ticker": "COHR",
+      "name": "Coherent Corp",
+      "weight": 1.474
+    },
+    {
+      "ticker": "AVGO",
+      "name": "Broadcom Inc",
+      "weight": 1.443
+    },
+    {
+      "ticker": "KEYS",
+      "name": "Keysight Technologies Inc",
+      "weight": 1.433
+    },
+    {
+      "ticker": "QCOM",
+      "name": "QUALCOMM Inc",
+      "weight": 1.414
+    },
+    {
+      "ticker": "VRSN",
+      "name": "VeriSign Inc",
+      "weight": 1.405
+    },
+    {
+      "ticker": "GLW",
+      "name": "Corning Inc",
+      "weight": 1.401
+    },
+    {
+      "ticker": "CSCO",
+      "name": "Cisco Systems Inc",
+      "weight": 1.394
+    },
+    {
+      "ticker": "CDW",
+      "name": "CDW Corp/DE",
+      "weight": 1.385
+    },
+    {
+      "ticker": "LRCX",
+      "name": "Lam Research Corp",
+      "weight": 1.382
+    },
+    {
+      "ticker": "FFIV",
+      "name": "F5 Inc",
+      "weight": 1.379
+    },
+    {
+      "ticker": "SWKS",
+      "name": "Skyworks Solutions Inc",
+      "weight": 1.376
+    },
+    {
+      "ticker": "NVDA",
+      "name": "NVIDIA Corp",
+      "weight": 1.368
+    },
+    {
+      "ticker": "CDNS",
+      "name": "Cadence Design Systems Inc",
+      "weight": 1.363
+    },
+    {
+      "ticker": "NTAP",
+      "name": "NetApp Inc",
+      "weight": 1.353
+    },
+    {
+      "ticker": "SNPS",
+      "name": "Synopsys Inc",
+      "weight": 1.35
+    },
+    {
+      "ticker": "APH",
+      "name": "Amphenol Corp",
+      "weight": 1.341
+    },
+    {
+      "ticker": "PANW",
+      "name": "Palo Alto Networks Inc",
+      "weight": 1.338
+    },
+    {
+      "ticker": "HPQ",
+      "name": "HP Inc",
+      "weight": 1.326
+    },
+    {
+      "ticker": "AMAT",
+      "name": "Applied Materials Inc",
+      "weight": 1.323
+    },
+    {
+      "ticker": "DDOG",
+      "name": "Datadog Inc",
+      "weight": 1.277
+    },
+    {
+      "ticker": "MSFT",
+      "name": "Microsoft Corp",
+      "weight": 1.274
+    },
+    {
+      "ticker": "AAPL",
+      "name": "Apple Inc",
+      "weight": 1.26
+    },
+    {
+      "ticker": "FTNT",
+      "name": "Fortinet Inc",
+      "weight": 1.253
+    },
+    {
+      "ticker": "CRWD",
+      "name": "Crowdstrike Holdings Inc",
+      "weight": 1.242
+    },
+    {
+      "ticker": "TYL",
+      "name": "Tyler Technologies Inc",
+      "weight": 1.242
+    },
+    {
+      "ticker": "TER",
+      "name": "Teradyne Inc",
+      "weight": 1.234
+    },
+    {
+      "ticker": "ROP",
+      "name": "Roper Technologies Inc",
+      "weight": 1.228
+    },
+    {
+      "ticker": "ZBRA",
+      "name": "Zebra Technologies Corp",
+      "weight": 1.226
+    },
+    {
+      "ticker": "ORCL",
+      "name": "Oracle Corp",
+      "weight": 1.221
+    },
+    {
+      "ticker": "TEL",
+      "name": "TE Connectivity PLC",
+      "weight": 1.216
+    },
+    {
+      "ticker": "GDDY",
+      "name": "GoDaddy Inc",
+      "weight": 1.204
+    },
+    {
+      "ticker": "TRMB",
+      "name": "Trimble Inc",
+      "weight": 1.192
+    },
+    {
+      "ticker": "TDY",
+      "name": "Teledyne Technologies Inc",
+      "weight": 1.17
+    },
+    {
+      "ticker": "APP",
+      "name": "AppLovin Corp",
+      "weight": 1.168
+    },
+    {
+      "ticker": "FSLR",
+      "name": "First Solar Inc",
+      "weight": 1.157
+    },
+    {
+      "ticker": "ADSK",
+      "name": "Autodesk Inc",
+      "weight": 1.138
+    },
+    {
+      "ticker": "AKAM",
+      "name": "Akamai Technologies Inc",
+      "weight": 1.138
+    },
+    {
+      "ticker": "IT",
+      "name": "Gartner Inc",
+      "weight": 1.138
+    },
+    {
+      "ticker": "CRM",
+      "name": "Salesforce Inc",
+      "weight": 1.134
+    },
+    {
+      "ticker": "MSI",
+      "name": "Motorola Solutions Inc",
+      "weight": 1.128
+    },
+    {
+      "ticker": "IBM",
+      "name": "International Business Machines Corp",
+      "weight": 1.109
+    },
+    {
+      "ticker": "PLTR",
+      "name": "Palantir Technologies Inc",
+      "weight": 1.106
+    },
+    {
+      "ticker": "NLOK",
+      "name": "Gen Digital Inc",
+      "weight": 1.095
+    },
+    {
+      "ticker": "INTU",
+      "name": "Intuit Inc",
+      "weight": 1.091
+    },
+    {
+      "ticker": "FICO",
+      "name": "Fair Isaac Corp",
+      "weight": 1.088
+    },
+    {
+      "ticker": "ACN",
+      "name": "Accenture PLC",
+      "weight": 1.087
+    },
+    {
+      "ticker": "ADBE",
+      "name": "Adobe Inc",
+      "weight": 1.082
+    },
+    {
+      "ticker": "WDAY",
+      "name": "Workday Inc",
+      "weight": 1.08
+    },
+    {
+      "ticker": "CTSH",
+      "name": "Cognizant Technology Solutions Corp",
+      "weight": 1.065
+    },
+    {
+      "ticker": "PTC",
+      "name": "PTC Inc",
+      "weight": 1.05
+    },
+    {
+      "ticker": "SMCI",
+      "name": "Super Micro Computer Inc",
+      "weight": 1.004
+    },
+    {
+      "ticker": "EPAM",
+      "name": "EPAM Systems Inc",
+      "weight": 0.966
+    },
+    {
+      "ticker": "NOW",
+      "name": "ServiceNow Inc",
+      "weight": 0.934
+    },
+    {
+      "ticker": "AGPXX",
+      "name": "Invesco Government & Agency Portfolio",
+      "weight": 0.066
+    }
+  ],
+  "updated_at": "2026-05-01T14:47:16+00:00",
+  "_fetched_at": 1777646836.8521528,
+  "top_holdings": [
+    {
+      "ticker": "INTC",
+      "name": "Intel Corp",
+      "weight": 2.397
+    },
+    {
+      "ticker": "ON",
+      "name": "ON Semiconductor Corp",
+      "weight": 2.028
+    },
+    {
+      "ticker": "STX",
+      "name": "Seagate Technology Holdings PLC",
+      "weight": 2.027
+    },
+    {
+      "ticker": "AMD",
+      "name": "Advanced Micro Devices Inc",
+      "weight": 2.0
+    },
+    {
+      "ticker": "SNDK",
+      "name": "Sandisk Corp/DE",
+      "weight": 1.971
+    },
+    {
+      "ticker": "WDC",
+      "name": "Western Digital Corp",
+      "weight": 1.867
+    },
+    {
+      "ticker": "NXPI",
+      "name": "NXP Semiconductors NV",
+      "weight": 1.759
+    },
+    {
+      "ticker": "MPWR",
+      "name": "Monolithic Power Systems Inc",
+      "weight": 1.734
+    },
+    {
+      "ticker": "CIEN",
+      "name": "Ciena Corp",
+      "weight": 1.697
+    },
+    {
+      "ticker": "DELL",
+      "name": "Dell Technologies Inc",
+      "weight": 1.697
+    }
+  ]
+}

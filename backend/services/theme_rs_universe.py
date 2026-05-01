@@ -255,9 +255,9 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     "memory_storage": {
         "display_name": "Memory & Storage",
         "proxy_type": "basket",
-        # DRAM ETF (Direxion/Syntax) may not be available everywhere;
-        # SMH & SOXX are reliable backup proxies that include memory names heavily.
-        "proxy_symbols": ["SMH", "SOXX"],
+        # DRAM (Defiance DRAM Memory, Storage, and AI ETF) is primary per spec.
+        # Service tries DRAM first; if unavailable, uses SMH/SOXX median.
+        "proxy_symbols": ["DRAM", "SMH", "SOXX"],
         "candidate_symbols": ["MU", "WDC", "STX", "SIMO"],
         "sector_tags": ["Technology", "Semiconductors"],
         "keywords": ["DRAM", "NAND", "HBM", "memory", "data storage", "flash"],

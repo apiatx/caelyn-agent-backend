@@ -85,26 +85,36 @@ The platform's backend is built on FastAPI, designed for robustness and scalabil
 - **Cache**: 150s TTL, reuses existing scored-market cache (no extra Polymarket API calls)
 - **Gambler endpoints**: ALL unchanged — /api/predict/recommendations, /signals, /scored, etc. fully intact
 
-## Themes by Relative Strength (Canonical Theme RS Layer)
+## Themes by Relative Strength (Canonical Theme RS Layer — v2 hardened)
 - **Purpose**: 39-theme canonical performance + relative-strength service. Designed as the live input source for Chain Reaction (not yet wired). No LLM calls — pure price math.
 - **Files**:
-  - `backend/services/theme_rs_universe.py` — static registry: 39 themes, proxy ETFs, candidate stocks, sector_tags, keywords, macro_sensitivities
-  - `backend/services/theme_rs_service.py` — computation engine: Tradier quotes + yfinance history → RS scores, returns, state labels, leaders/laggards, disk LKG
+  - `backend/services/theme_rs_universe.py` — static registry: 39 themes, proxy ETFs (DRAM primary for Memory & Storage), candidate stocks, sector_tags, keywords, macro_sensitivities
+  - `backend/services/theme_rs_service.py` — production-hardened computation engine (v2)
   - `backend/routes/themes.py` — HTTP endpoints
 - **Endpoints**:
   - `GET /api/themes/relative-strength?timeframe=1D|7D|30D|YTD|1Y` — sorted theme list (RS score desc)
   - `GET /api/themes/relative-strength/refresh?timeframe=...` — force-refresh (bypass cache TTL)
   - `GET /api/themes/list` — static registry (no price data, instant)
 - **39 Themes**: Agribusiness, Banks, Biotech, Chemicals & Materials, Clean Energy, Consumer Retail, Copper Miners, Cybersecurity, Defense, Drones, Energy, Equal-Weighted S&P 500, Financials, Fintech, Gold, Growth Stocks, Healthcare, Homebuilders, IBD 50, Industrials, Insurance, Lithium & Battery Tech, Memory & Storage, Metals & Mining, Microcaps, Oil & Gas, Rare Earth Metals, Regional Banks, Robotics & Automation, Silver, Small Caps, Software, Solar, Speculative Tech, Tech Equal-Weight, Tech Mega Caps, Travel & Transportation, Uranium & Nuclear Energy, Utilities
-- **Performance fields per theme**: 1D, 7D (5 bars), 30D (22 bars), YTD, 1Y (252 bars) — median across proxy ETFs
+- **Provider hierarchy**:
+  - 1D quote: Tradier batch → Finnhub individual fallback
+  - 7D/30D/YTD/1Y proxy ETFs: FMP stable/historical-price-eod (primary) → Tradier daily history → yfinance (emergency fallback)
+  - 7D/30D/YTD/1Y individual stocks (leaders/laggards): yfinance via thread pool (40 workers)
+- **Leader/laggard universe (dynamic, per theme)**:
+  1. ETF holdings from primary proxy ETF via `etf_holdings_service` (7-day cache)
+  2. ETF holdings from secondary proxy ETFs (if primary < 3 results)
+  3. X/Grok consensus tickers from disk snapshot (read-only, no new calls)
+  4. Static `candidate_symbols` as last-resort fallback seeds
+- **Leaders/laggards match selected timeframe** — 1D request gets 1D leaders; 30D request gets 30D leaders
+- **New response fields**: `return_pct`, `timeframe`, `state_reason`, `proxy_symbols_used`, `proxy_source_health`, `leader_universe_source`, `discovery_sources` (per leader/laggard)
+- **Memory & Storage**: DRAM primary (FMP → Tradier → yfinance); falls back to SMH/SOXX if DRAM unavailable or insufficient bars
+- **state_reason**: human-readable explanation for every theme state (active/emerging/neutral/weakening/dead_zone)
 - **RS fields**: rs_score (0–100 cross-theme percentile), rs_vs_spy (excess return), rs_vs_qqq (excess return)
-- **State labels**: active (RS≥70) / emerging (RS 55–69 + accel≥0) / neutral / weakening (RS 25–45 + accel<0) / dead_zone (RS<30)
-- **Leaders/Laggards**: from candidate_symbols (individual stocks), ranked by 1D change_pct from Tradier live quotes
-- **Breadth**: % of candidate_symbols with positive 1D change (where Tradier data available)
-- **Data providers**: Tradier batch quotes (quotes + 1D change) + yfinance history (daily bars, executor-threaded, cached 1h)
-- **Cache**: `themes:relative_strength:v1:{tf}` — 15 min TTL (market hours) / 60 min (off-hours)
-- **LKG disk**: `backend/data/themes_rs_lkg.json` — atomic write (`.tmp` → rename); loaded on compute failure
+- **Return sanity cap**: ±500% cap on individual stock returns to filter yfinance adjusted-price anomalies
+- **Cache**: `themes:relative_strength:v1:{tf}` — 15 min TTL (market hours) / 60 min (off-hours); LKG only saved when result is non-empty
+- **LKG disk**: `backend/data/themes_rs_lkg.json` — atomic write (`.tmp` → rename); loaded on compute failure; never overwrites valid data with empty/bad result
 - **No LLM calls, no Chain Reaction changes, no Earnings changes, no Options Flow/TA Screener changes**
+- **Thread pool**: `_executor` increased to 40 workers (providers.py) for concurrent yfinance dynamic stock fetches
 
 ## Hyperliquid Screener Service
 - **Module**: `backend/services/hyperliquid/` (dedicated service layer)

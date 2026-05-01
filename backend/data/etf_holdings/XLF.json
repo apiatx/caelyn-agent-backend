@@ -1,0 +1,442 @@
+{
+  "symbol": "XLF",
+  "as_of": "2026-04-20",
+  "source": "fmp",
+  "holding_count": 76,
+  "holdings": [
+    {
+      "ticker": "BRK-B",
+      "name": "BERKSHIRE HATHAWAY INC CL B",
+      "weight": 11.737
+    },
+    {
+      "ticker": "JPM",
+      "name": "JPMORGAN CHASE + CO",
+      "weight": 11.258
+    },
+    {
+      "ticker": "V",
+      "name": "VISA INC CLASS A SHARES",
+      "weight": 7.136
+    },
+    {
+      "ticker": "MA",
+      "name": "MASTERCARD INC   A",
+      "weight": 5.689
+    },
+    {
+      "ticker": "BAC",
+      "name": "BANK OF AMERICA CORP",
+      "weight": 4.783
+    },
+    {
+      "ticker": "GS",
+      "name": "GOLDMAN SACHS GROUP INC",
+      "weight": 3.637
+    },
+    {
+      "ticker": "WFC",
+      "name": "WELLS FARGO + CO",
+      "weight": 3.385
+    },
+    {
+      "ticker": "C",
+      "name": "CITIGROUP INC",
+      "weight": 3.045
+    },
+    {
+      "ticker": "MS",
+      "name": "MORGAN STANLEY",
+      "weight": 3.036
+    },
+    {
+      "ticker": "AXP",
+      "name": "AMERICAN EXPRESS CO",
+      "weight": 2.35
+    },
+    {
+      "ticker": "SCHW",
+      "name": "SCHWAB (CHARLES) CORP",
+      "weight": 2.084
+    },
+    {
+      "ticker": "BLK",
+      "name": "BLACKROCK INC",
+      "weight": 1.992
+    },
+    {
+      "ticker": "SPGI",
+      "name": "S+P GLOBAL INC",
+      "weight": 1.801
+    },
+    {
+      "ticker": "COF",
+      "name": "CAPITAL ONE FINANCIAL CORP",
+      "weight": 1.69
+    },
+    {
+      "ticker": "CB",
+      "name": "CHUBB LTD",
+      "weight": 1.609
+    },
+    {
+      "ticker": "PGR",
+      "name": "PROGRESSIVE CORP",
+      "weight": 1.607
+    },
+    {
+      "ticker": "CME",
+      "name": "CME GROUP INC",
+      "weight": 1.439
+    },
+    {
+      "ticker": "BX",
+      "name": "BLACKSTONE INC",
+      "weight": 1.292
+    },
+    {
+      "ticker": "ICE",
+      "name": "INTERCONTINENTAL EXCHANGE IN",
+      "weight": 1.253
+    },
+    {
+      "ticker": "BK",
+      "name": "BANK OF NEW YORK MELLON CORP",
+      "weight": 1.25
+    },
+    {
+      "ticker": "PNC",
+      "name": "PNC FINANCIAL SERVICES GROUP",
+      "weight": 1.197
+    },
+    {
+      "ticker": "MRSH",
+      "name": "MARSH + MCLENNAN COS",
+      "weight": 1.191
+    },
+    {
+      "ticker": "USB",
+      "name": "US BANCORP",
+      "weight": 1.162
+    },
+    {
+      "ticker": "AON",
+      "name": "AON PLC CLASS A",
+      "weight": 0.969
+    },
+    {
+      "ticker": "KKR",
+      "name": "KKR + CO INC",
+      "weight": 0.943
+    },
+    {
+      "ticker": "MCO",
+      "name": "MOODY S CORP",
+      "weight": 0.927
+    },
+    {
+      "ticker": "HOOD",
+      "name": "ROBINHOOD MARKETS INC   A",
+      "weight": 0.925
+    },
+    {
+      "ticker": "TRV",
+      "name": "TRAVELERS COS INC/THE",
+      "weight": 0.871
+    },
+    {
+      "ticker": "TFC",
+      "name": "TRUIST FINANCIAL CORP",
+      "weight": 0.841
+    },
+    {
+      "ticker": "AJG",
+      "name": "ARTHUR J GALLAGHER + CO",
+      "weight": 0.776
+    },
+    {
+      "ticker": "APO",
+      "name": "APOLLO GLOBAL MANAGEMENT INC",
+      "weight": 0.756
+    },
+    {
+      "ticker": "ALL",
+      "name": "ALLSTATE CORP",
+      "weight": 0.749
+    },
+    {
+      "ticker": "AFL",
+      "name": "AFLAC INC",
+      "weight": 0.715
+    },
+    {
+      "ticker": "PYPL",
+      "name": "PAYPAL HOLDINGS INC",
+      "weight": 0.618
+    },
+    {
+      "ticker": "FITB",
+      "name": "FIFTH THIRD BANCORP",
+      "weight": 0.6
+    },
+    {
+      "ticker": "COIN",
+      "name": "COINBASE GLOBAL INC  CLASS A",
+      "weight": 0.6
+    },
+    {
+      "ticker": "MET",
+      "name": "METLIFE INC",
+      "weight": 0.572
+    },
+    {
+      "ticker": "AMP",
+      "name": "AMERIPRISE FINANCIAL INC",
+      "weight": 0.565
+    },
+    {
+      "ticker": "AIG",
+      "name": "AMERICAN INTERNATIONAL GROUP",
+      "weight": 0.565
+    },
+    {
+      "ticker": "MSCI",
+      "name": "MSCI INC",
+      "weight": 0.559
+    },
+    {
+      "ticker": "NDAQ",
+      "name": "NASDAQ INC",
+      "weight": 0.538
+    },
+    {
+      "ticker": "STT",
+      "name": "STATE STREET CORP",
+      "weight": 0.534
+    },
+    {
+      "ticker": "HIG",
+      "name": "HARTFORD INSURANCE GROUP INC",
+      "weight": 0.52
+    },
+    {
+      "ticker": "XYZ",
+      "name": "BLOCK INC",
+      "weight": 0.507
+    },
+    {
+      "ticker": "IBKR",
+      "name": "INTERACTIVE BROKERS GRO CL A",
+      "weight": 0.476
+    },
+    {
+      "ticker": "ACGL",
+      "name": "ARCH CAPITAL GROUP LTD",
+      "weight": 0.468
+    },
+    {
+      "ticker": "PRU",
+      "name": "PRUDENTIAL FINANCIAL INC",
+      "weight": 0.468
+    },
+    {
+      "ticker": "HBAN",
+      "name": "HUNTINGTON BANCSHARES INC",
+      "weight": 0.453
+    },
+    {
+      "ticker": "FISV",
+      "name": "FISERV INC",
+      "weight": 0.452
+    },
+    {
+      "ticker": "MTB",
+      "name": "M + T BANK CORP",
+      "weight": 0.444
+    },
+    {
+      "ticker": "CBOE",
+      "name": "CBOE GLOBAL MARKETS INC",
+      "weight": 0.436
+    },
+    {
+      "ticker": "NTRS",
+      "name": "NORTHERN TRUST CORP",
+      "weight": 0.394
+    },
+    {
+      "ticker": "WTW",
+      "name": "WILLIS TOWERS WATSON PLC",
+      "weight": 0.379
+    },
+    {
+      "ticker": "CFG",
+      "name": "CITIZENS FINANCIAL GROUP",
+      "weight": 0.369
+    },
+    {
+      "ticker": "RJF",
+      "name": "RAYMOND JAMES FINANCIAL INC",
+      "weight": 0.356
+    },
+    {
+      "ticker": "SYF",
+      "name": "SYNCHRONY FINANCIAL",
+      "weight": 0.352
+    },
+    {
+      "ticker": "CINF",
+      "name": "CINCINNATI FINANCIAL CORP",
+      "weight": 0.343
+    },
+    {
+      "ticker": "FIS",
+      "name": "FIDELITY NATIONAL INFO SERV",
+      "weight": 0.339
+    },
+    {
+      "ticker": "RF",
+      "name": "REGIONS FINANCIAL CORP",
+      "weight": 0.326
+    },
+    {
+      "ticker": "ARES",
+      "name": "ARES MANAGEMENT CORP   A",
+      "weight": 0.323
+    },
+    {
+      "ticker": "CPAY",
+      "name": "CORPAY INC",
+      "weight": 0.313
+    },
+    {
+      "ticker": "TROW",
+      "name": "T ROWE PRICE GROUP INC",
+      "weight": 0.282
+    },
+    {
+      "ticker": "KEY",
+      "name": "KEYCORP",
+      "weight": 0.274
+    },
+    {
+      "ticker": "BRO",
+      "name": "BROWN + BROWN INC",
+      "weight": 0.271
+    },
+    {
+      "ticker": "WRB",
+      "name": "WR BERKLEY CORP",
+      "weight": 0.266
+    },
+    {
+      "ticker": "PFG",
+      "name": "PRINCIPAL FINANCIAL GROUP",
+      "weight": 0.25
+    },
+    {
+      "ticker": "L",
+      "name": "LOEWS CORP",
+      "weight": 0.25
+    },
+    {
+      "ticker": "GPN",
+      "name": "GLOBAL PAYMENTS INC",
+      "weight": 0.227
+    },
+    {
+      "ticker": "EG",
+      "name": "EVEREST GROUP LTD",
+      "weight": 0.189
+    },
+    {
+      "ticker": "GL",
+      "name": "GLOBE LIFE INC",
+      "weight": 0.161
+    },
+    {
+      "ticker": "AIZ",
+      "name": "ASSURANT INC",
+      "weight": 0.152
+    },
+    {
+      "ticker": "JKHY",
+      "name": "JACK HENRY + ASSOCIATES INC",
+      "weight": 0.15
+    },
+    {
+      "ticker": "IVZ",
+      "name": "INVESCO LTD",
+      "weight": 0.144
+    },
+    {
+      "ticker": "FDS",
+      "name": "FACTSET RESEARCH SYSTEMS INC",
+      "weight": 0.116
+    },
+    {
+      "ticker": "BEN",
+      "name": "FRANKLIN RESOURCES INC",
+      "weight": 0.11
+    },
+    {
+      "ticker": "ERIE",
+      "name": "ERIE INDEMNITY COMPANY CL A",
+      "weight": 0.083
+    }
+  ],
+  "updated_at": "2026-05-01T14:47:07+00:00",
+  "_fetched_at": 1777646827.0700796,
+  "top_holdings": [
+    {
+      "ticker": "BRK-B",
+      "name": "BERKSHIRE HATHAWAY INC CL B",
+      "weight": 11.737
+    },
+    {
+      "ticker": "JPM",
+      "name": "JPMORGAN CHASE + CO",
+      "weight": 11.258
+    },
+    {
+      "ticker": "V",
+      "name": "VISA INC CLASS A SHARES",
+      "weight": 7.136
+    },
+    {
+      "ticker": "MA",
+      "name": "MASTERCARD INC   A",
+      "weight": 5.689
+    },
+    {
+      "ticker": "BAC",
+      "name": "BANK OF AMERICA CORP",
+      "weight": 4.783
+    },
+    {
+      "ticker": "GS",
+      "name": "GOLDMAN SACHS GROUP INC",
+      "weight": 3.637
+    },
+    {
+      "ticker": "WFC",
+      "name": "WELLS FARGO + CO",
+      "weight": 3.385
+    },
+    {
+      "ticker": "C",
+      "name": "CITIGROUP INC",
+      "weight": 3.045
+    },
+    {
+      "ticker": "MS",
+      "name": "MORGAN STANLEY",
+      "weight": 3.036
+    },
+    {
+      "ticker": "AXP",
+      "name": "AMERICAN EXPRESS CO",
+      "weight": 2.35
+    }
+  ]
+}

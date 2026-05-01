@@ -1,0 +1,262 @@
+Fix and harden the Themes by Relative Strength backend implementation.
+
+Goal:
+Create a canonical, production-ready theme relative strength backend that:
+1. Tracks all 39 screenshot themes.
+2. Uses ETFs/proxies to measure theme performance.
+3. Uses dynamic holdings/discovery for leaders and laggards wherever possible.
+4. Does NOT hardcode final leader/laggard stocks except as last-resort fallback.
+5. Does NOT touch Chain Reaction yet.
+6. Does NOT touch Earnings.
+7. Does NOT touch Options Flow.
+8. Does NOT touch TA Screener.
+9. Uses no LLM calls for core calculations.
+
+Current state:
+A first version exists with:
+- backend/services/theme_rs_universe.py
+- backend/services/theme_rs_service.py
+- backend/routes/themes.py
+- GET /api/themes/relative-strength?timeframe=1D|7D|30D|YTD|1Y
+- GET /api/themes/list
+- cache key themes:relative_strength:v1:{tf}
+- LKG disk backend/data/themes_rs_lkg.json
+
+Now make the implementation correct.
+
+Core principle:
+Theme proxy symbols can be configured.
+Final leaders/laggards should be dynamically discovered wherever possible.
+
+Do NOT treat candidate_symbols/static representatives as the final leader/laggard universe unless all dynamic sources fail.
+
+Provider roles:
+1D / current quote:
+- Tradier quote/change primary
+- FMP daily history fallback
+- yfinance emergency fallback only
+
+7D / 30D / YTD / 1Y historical returns:
+- FMP historical daily prices primary
+- Tradier historical daily prices fallback
+- yfinance emergency fallback only
+
+Do not use yfinance as the normal primary historical engine.
+
+Theme performance:
+For each theme:
+- Use proxy_symbols / ETFs to calculate the theme return.
+- For clean ETF themes, use the primary ETF/proxy return or median of proxy ETFs.
+- For hybrid themes, use proxy ETFs first, then basket fallback only if ETF data is unavailable.
+- Calculate:
+  - 1D return
+  - 7D return
+  - 30D return
+  - YTD return
+  - 1Y return
+  - RS vs SPY
+  - RS vs QQQ
+  - rs_score
+  - breadth
+  - state: active / emerging / neutral / weakening / dead_zone
+
+Leader/laggard universe:
+For each theme, build the leaders/laggards universe dynamically in this order:
+1. ETF holdings from existing ETF holdings service for proxy_symbols_used.
+2. FMP peers from top ETF holdings / anchor proxy names.
+3. Cached X/Grok consensus tickers if already mapped to that theme.
+4. Existing Dynamic Thematic Universe source attribution if available.
+5. Static candidate_symbols only as last-resort fallback seeds.
+
+Important:
+- candidate_symbols/static representatives are allowed as fallback seeds.
+- They are not allowed to be the only/default leaders/laggards universe when ETF holdings or dynamic sources are available.
+- Do not add new X/Grok calls. Only read existing cached X/Grok consensus if already available.
+- Do not add LLM calls.
+- Do not rely on unsupported FMP bulk endpoints.
+
+Memory & Storage special handling:
+- Use DRAM as the primary proxy if any provider can return valid data.
+- Provider order for DRAM:
+  1. FMP historical / daily data
+  2. Tradier historical / quote data
+  3. yfinance emergency fallback
+- If DRAM is unavailable or invalid, fall back to SMH/SOXX.
+- Leaders/laggards should come from DRAM holdings if available.
+- If DRAM holdings are unavailable, use SMH/SOXX holdings, then FMP peers, then cached X/Grok, then static fallback.
+- Do NOT hardcode MU/WDC/STX/SIMO as the only Memory & Storage leader/laggard universe.
+
+Theme registry:
+Keep all 39 themes:
+- Memory & Storage
+- Rare Earth Metals
+- Uranium & Nuclear Energy
+- Metals & Mining
+- Regional Banks
+- Banks
+- Cybersecurity
+- Robotics & Automation
+- Oil & Gas
+- Tech Mega Caps
+- Lithium & Battery Tech
+- Solar
+- Financials
+- Clean Energy
+- Defense
+- Industrials
+- Utilities
+- Speculative Tech
+- Growth Stocks
+- Small Caps
+- Insurance
+- Chemicals & Materials
+- Agribusiness
+- Equal-Weighted S&P 500
+- Microcaps
+- Travel & Transportation
+- Energy
+- IBD 50
+- Biotech
+- Homebuilders
+- Software
+- Healthcare
+- Drones
+- Tech Equal-Weight
+- Consumer Retail
+- Fintech
+- Silver
+- Gold
+- Copper Miners
+
+Use ETFs where possible:
+- Memory & Storage: DRAM primary; SMH/SOXX fallback
+- Rare Earth Metals: REMX
+- Uranium & Nuclear Energy: URA, URNM, NLR
+- Metals & Mining: XME, PICK, SLX
+- Regional Banks: KRE, KBE
+- Banks: KBE, XLF
+- Cybersecurity: CIBR, HACK, BUG, IHAK
+- Robotics & Automation: BOTZ, ROBO, IRBO
+- Oil & Gas: XOP, XLE, OIH
+- Tech Mega Caps: MAGS, QQQ
+- Lithium & Battery Tech: LIT, BATT
+- Solar: TAN
+- Financials: XLF, VFH
+- Clean Energy: ICLN, PBW, QCLN, CNRG
+- Defense: ITA, XAR, PPA
+- Industrials: XLI, VIS
+- Utilities: XLU, VPU
+- Speculative Tech: ARKK, ARKW, ARKQ
+- Growth Stocks: IWF, IVW, VUG, QQQ
+- Small Caps: IWM, IJR, VB
+- Insurance: KIE, IAK
+- Chemicals & Materials: XLB, IYM
+- Agribusiness: MOO, DBA, VEGI
+- Equal-Weighted S&P 500: RSP
+- Microcaps: IWC, FDM
+- Travel & Transportation: IYT, JETS, XTN
+- Energy: XLE, VDE, XOP
+- IBD 50: FFTY
+- Biotech: XBI, IBB, ARKG
+- Homebuilders: ITB, XHB
+- Software: IGV, WCLD
+- Healthcare: XLV, VHT, IYH
+- Drones: XAR, ITA as proxy; dynamic leaders from holdings/peers/consensus
+- Tech Equal-Weight: RYT, QQEW
+- Consumer Retail: XRT, RTH
+- Fintech: FINX, ARKF, IPAY
+- Silver: SLV, SIL, SILJ
+- Gold: GLD, IAU, GDX, GDXJ
+- Copper Miners: COPX, CPER
+
+Endpoint response:
+GET /api/themes/relative-strength?timeframe=1D|7D|30D|YTD|1Y
+
+Each theme must include:
+- theme_id
+- display_name
+- timeframe
+- return_pct
+- rs_score
+- state
+- state_reason
+- rs_vs_spy
+- rs_vs_qqq
+- breadth
+- proxy_symbols
+- proxy_symbols_used
+- proxy_source_health
+- leader_universe_source
+- leaders
+- laggards
+- last_updated
+
+Each leader/laggard must include:
+- symbol
+- return_pct
+- timeframe
+- source
+- discovery_sources if available
+
+Leaders/laggards must match the selected timeframe:
+- 1D endpoint → 1D leaders/laggards
+- 7D endpoint → 7D leaders/laggards
+- 30D endpoint → 30D leaders/laggards
+- YTD endpoint → YTD leaders/laggards
+- 1Y endpoint → 1Y leaders/laggards
+
+Do not always use 1D change for leaders/laggards.
+
+State explanation:
+Add state_reason for every theme.
+Examples:
+- “Top-percentile RS vs theme universe with positive breadth”
+- “Positive return but lagging stronger themes on relative strength”
+- “Weak breadth and negative excess return vs SPY/QQQ”
+- “Improving short-term return but longer-term RS still neutral”
+
+Caching:
+Keep:
+- themes:relative_strength:v1:{tf}
+- 15 min TTL during market hours
+- 60 min TTL off-hours/weekends
+- LKG disk fallback backend/data/themes_rs_lkg.json
+Make sure LKG does not overwrite a valid prior snapshot with an empty/bad result.
+
+Validation:
+Run and report:
+- GET /api/themes/list
+- GET /api/themes/relative-strength?timeframe=1D
+- GET /api/themes/relative-strength?timeframe=7D
+- GET /api/themes/relative-strength?timeframe=30D
+- GET /api/themes/relative-strength?timeframe=YTD
+- GET /api/themes/relative-strength?timeframe=1Y
+
+Confirm:
+- all 39 themes return
+- values sort correctly by selected timeframe
+- Memory & Storage attempts DRAM first
+- Memory & Storage reports proxy_symbols_used
+- Memory & Storage reports leader_universe_source
+- leaders/laggards are not limited to static candidate_symbols when dynamic sources are available
+- leaders/laggards match selected timeframe
+- state_reason exists for every theme
+- source_health reports provider usage
+- no LLM calls
+- no Earnings changes
+- no Chain Reaction changes
+- no Options Flow changes
+- no TA Screener changes
+
+Delivery report:
+At the end, report:
+1. Files changed.
+2. Provider roles implemented.
+3. Full 39-theme count validation.
+4. Memory & Storage proxy result.
+5. Historical provider usage by timeframe.
+6. Leader/laggard universe source examples.
+7. Sample response for Memory & Storage.
+8. Sample response for one green-but-lagging/dead-zone theme if present.
+9. Validation results for all five timeframes.
+10. Confirmation no unrelated pages were changed.
