@@ -1,0 +1,50 @@
+Audit only. Do not change code.
+
+We have now consolidated the Sectors/Themes backend into the canonical Themes by Relative Strength engine:
+- /api/themes/relative-strength
+- 55 total rows
+- classification=sector/theme/sub_theme
+- old /api/sectors/performance and /api/sectors/relative-strength are compatibility wrappers
+
+Now I need to confirm whether the shared thematic intelligence layer used by other pages is consuming this new canonical universe.
+
+Audit these systems:
+1. ThematicContextProvider
+2. DynamicThematicUniverse
+3. theme_ticker_mapper
+4. Options Flow thematic overlay
+5. TA Screener thematic overlay
+6. Terminal /api/query thematic context injection
+7. Watchlist thematic analysis if any
+8. Portfolio thematic analysis if any
+9. Home page theme/highlight sections if any
+10. Earnings thematic filtering, audit only — do not change
+
+Questions:
+1. Does ThematicContextProvider read from /api/themes/relative-strength or theme_rs_service?
+2. Does DynamicThematicUniverse use the new 55-theme registry?
+3. Does theme_ticker_mapper know about all 55 themes?
+4. Are Options Flow and TA Screener using old theme maps, the DTU, or the new theme RS universe?
+5. Are Watchlist and Portfolio using any structured thematic context, or only AI-generated commentary?
+6. Does Home use the old static THEME_MAP, the old sector rotation theme service, or the new theme RS engine?
+7. Does Earnings use its own separate thematic filter? Confirm exact files/functions, but do not modify.
+
+Deliver:
+- table of each page/system
+- current thematic source
+- whether it uses new 55-theme universe
+- whether it uses old static maps
+- whether it uses old sector_rotation/theme_service
+- whether it calls LLMs
+- recommended migration path
+
+Goal:
+Eventually, all generic thematic overlays should use the canonical 55-theme universe through ThematicContextProvider/DTU.
+
+Guardrails:
+- Do not change code.
+- Do not touch Earnings.
+- Do not touch Options Flow.
+- Do not touch TA Screener.
+- Do not touch Watchlist/Portfolio/Home yet.
+- Audit only.
