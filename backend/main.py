@@ -290,6 +290,13 @@ async def lifespan(app):
     # Dynamic thematic universe: build and refresh every 15 min.
     # Provides ETF-holdings + FMP-peers + X-consensus tickers to TA Screener and Options Flow.
     asyncio.create_task(_dynamic_thematic_universe_loop())
+    # Themes by Relative Strength warmup: load LKG → seed caches → start background loop.
+    # Non-blocking. 1D refreshes every ~60s market hours, historical every ~15min.
+    try:
+        from services.theme_rs_service import warmup_theme_rs as _theme_rs_warmup
+        asyncio.create_task(_theme_rs_warmup())
+    except Exception as _e:
+        print(f"[STARTUP] Theme RS warmup error: {_e}")
     try:
         from data.options_screener_snapshot import load_state as _load_opt_snapshot
         _load_opt_snapshot()

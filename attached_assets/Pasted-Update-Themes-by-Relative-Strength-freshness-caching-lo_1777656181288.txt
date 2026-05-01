@@ -1,0 +1,165 @@
+Update Themes by Relative Strength freshness/caching logic with API-safety safeguards.
+
+Goal:
+Keep the 49-theme board fresh enough for market use without crushing FMP/Tradier or forcing users to wait through cold recomputes.
+
+Do not change frontend.
+Do not change Chain Reaction.
+Do not change Earnings.
+Do not change Options Flow.
+Do not change TA Screener.
+Do not add LLM calls.
+
+Required refresh policy:
+
+During market hours:
+- 1D theme board: refresh every 1 minute using Tradier quote/change as the primary data source.
+- 7D / 30D / YTD / 1Y: refresh every 15 minutes using FMP historical price data as the primary data source.
+- ETF holdings: keep existing longer cache, daily/weekly refresh only. Do not refetch ETF holdings every theme board refresh unless the holdings cache is expired.
+
+Off-hours/weekends:
+- Keep current slower/off-hours cache behavior or set 60-minute TTL for all timeframes.
+
+Provider roles:
+- 1D/current quote: Tradier quote/change primary, FMP daily history fallback only if Tradier quote/change is missing/invalid.
+- 7D/30D/YTD/1Y proxy ETF historical returns: FMP historical price primary, Tradier history fallback if needed, yfinance emergency fallback only.
+- Individual stock leaders/laggards: keep current optimized/cached implementation unless a safer internal helper already exists.
+- ETF holdings: use existing ETF holdings cache. Do not refresh holdings on every theme refresh.
+
+Implementation requirements:
+
+1. Split cache TTL by timeframe
+Use separate TTL behavior for:
+- themes:relative_strength:v1:1D → 60 seconds during market hours
+- themes:relative_strength:v1:7D → 15 minutes during market hours
+- themes:relative_strength:v1:30D → 15 minutes during market hours
+- themes:relative_strength:v1:YTD → 15 minutes during market hours
+- themes:relative_strength:v1:1Y → 15 minutes during market hours
+
+2. Add or update background warmup
+Add a non-blocking background refresh loop for theme RS.
+
+During market hours:
+- refresh 1D every 1 minute
+- refresh 7D / 30D / YTD / 1Y every 15 minutes
+- do not recompute all timeframes every 1 minute
+
+On backend startup:
+- load LKG immediately if available
+- do not block startup
+- start warmup in the background
+- endpoint should serve cache/LKG while refresh is running
+
+3. Add refresh-in-progress safeguards
+Prevent duplicate concurrent refreshes.
+
+Required:
+- Add an in-memory refresh lock/guard per timeframe.
+- If 1D refresh is already running, another request/background tick must not start a second 1D refresh.
+- If 30D refresh is already running, another request/background tick must not start a second 30D refresh.
+- Same for 7D/YTD/1Y.
+- Serve the existing cache/LKG while a refresh is in progress.
+- Do not let multiple frontend requests trigger duplicate FMP historical refreshes or duplicate Tradier quote refreshes.
+
+4. Avoid request-triggered API stampedes
+If a frontend request arrives and the cache is stale:
+- Return stale-but-valid cache/LKG if available.
+- Kick off one background refresh if not already running.
+- Do not block the user request for a full cold recompute unless there is no valid cache/LKG at all.
+- If no valid cache/LKG exists, compute once with the refresh lock and make other concurrent requests wait or return a safe loading/stale response — but do not launch duplicate computes.
+
+5. Fast 1D path
+For 1D:
+- use Tradier quote/change primary
+- refresh every 1 minute during market hours
+- use FMP daily history fallback only if Tradier quote/change is unavailable/invalid
+- avoid historical fetches for 1D when Tradier quote/change is valid
+- do not use FMP historical calls for all 1D proxies unless needed as fallback
+
+6. Historical FMP call discipline
+For 7D/30D/YTD/1Y:
+- Use FMP historical price data for proxy ETF historical returns.
+- Refresh every 15 minutes during market hours.
+- Use Tradier historical only as fallback if FMP is unavailable/invalid.
+- Use yfinance only as emergency fallback.
+- Do not use unsupported FMP bulk endpoints.
+- Reuse existing cached history where possible.
+- Do not refetch the same symbol/timeframe repeatedly inside one refresh cycle.
+- Deduplicate proxy symbols before fetching history.
+
+7. ETF holdings cache discipline
+ETF holdings should remain on existing longer TTL:
+- daily or weekly cache
+- do not refetch ETF holdings every 1 minute
+- do not refetch ETF holdings every 15 minutes unless the holdings cache itself is expired
+- report holdings source/cache status in source_health if easy
+
+8. Preserve LKG safety
+- Keep backend/data/themes_rs_lkg.json
+- Do not overwrite a valid LKG with empty/bad results
+- If refresh fails, keep serving the previous valid cache/LKG
+- Mark source/status appropriately when serving stale/LKG
+
+9. Response freshness fields
+Ensure GET /api/themes/relative-strength responses include:
+- timeframe
+- last_updated
+- cache_age_seconds
+- source
+- source_health
+
+If cache_age_seconds already exists, preserve it.
+
+10. Logging
+Add concise logs:
+- theme_rs warmup started
+- timeframe refresh started
+- timeframe refresh skipped because already in progress
+- timeframe refresh completed with duration
+- timeframe served from cache/LKG/stale while refresh in progress
+- Tradier quote symbol count per 1D refresh
+- FMP historical proxy symbol count per historical refresh
+- ETF holdings cache used vs refreshed if available
+
+Do not log secrets.
+
+11. Validation
+Run:
+- GET /api/themes/relative-strength?timeframe=1D
+- GET /api/themes/relative-strength?timeframe=7D
+- GET /api/themes/relative-strength?timeframe=30D
+- GET /api/themes/relative-strength?timeframe=YTD
+- GET /api/themes/relative-strength?timeframe=1Y
+
+Confirm:
+- all 49 themes return
+- 1D TTL is 60 seconds during market hours
+- 7D/30D/YTD/1Y TTL is 15 minutes during market hours
+- 1D uses Tradier quote/change primary and does not rely on FMP history unless needed
+- FMP historical price data is primary for 7D/30D/YTD/1Y
+- ETF holdings are not refetched every 1D refresh
+- ETF holdings are not refetched every 15-minute historical refresh unless their own cache expired
+- background warmup does not block startup
+- endpoint can return cache/LKG while refresh is running
+- refresh-in-progress guard prevents duplicate refreshes per timeframe
+- concurrent requests do not trigger duplicate FMP historical refreshes or duplicate Tradier quote refreshes
+- FMP historical calls are deduped by proxy symbol
+- no LLM calls
+- no Chain Reaction changes
+- no Earnings changes
+- no Options Flow changes
+- no TA Screener changes
+
+Delivery report:
+Return:
+1. Files changed
+2. Exact TTLs implemented
+3. Background warmup behavior
+4. Startup behavior
+5. Refresh lock/guard behavior
+6. What happens when a stale request arrives during refresh
+7. Tradier quote call-safety / dedupe behavior for 1D
+8. FMP historical call-safety / dedupe behavior for 7D/30D/YTD/1Y
+9. ETF holdings cache behavior
+10. Validation results for all five timeframes
+11. Confirmation no unrelated pages changed

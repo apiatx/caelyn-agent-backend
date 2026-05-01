@@ -1,8 +1,9 @@
 """
-Themes by Relative Strength — production-hardened canonical service.
+Themes by Relative Strength — production-hardened canonical service (v3).
 
 Exposes:
     get_theme_rs_data(timeframe, force) → dict
+    warmup_theme_rs()                  → call once at startup (non-blocking)
 
 Provider hierarchy (no LLM calls):
   1D quote:        Tradier batch → Finnhub individual fallback
@@ -22,10 +23,17 @@ State:
   active / emerging / neutral / weakening / dead_zone
   + state_reason human-readable text for every theme.
 
-Cache:
+Cache & freshness:
   key:  themes:relative_strength:v1:{tf}
-  TTL:  900s market hours / 3600s off-hours
+  TTL:  1D  → 60s market hours / 3600s off-hours
+        7D+ → 900s market hours / 3600s off-hours
   disk: backend/data/themes_rs_lkg.json (atomic write, never overwrite with bad data)
+
+Refresh safety:
+  - Per-timeframe asyncio.Lock prevents duplicate concurrent refreshes.
+  - Stale-while-revalidate: cache miss with valid LKG → serve LKG immediately,
+    kick background refresh. No user-facing cold wait after first load.
+  - Background warmup loop: 1D every ~60s, 7D/30D/YTD/1Y every ~15min.
 """
 from __future__ import annotations
 
@@ -78,20 +86,42 @@ _ETF_HOLDINGS_TOP_N = 10
 # Semaphore for FMP history calls (parallel bursting within rate-limit)
 _FMP_HIST_SEM = asyncio.Semaphore(25)
 
+# ── Per-timeframe TTL constants ────────────────────────────────────────────────
+_TTL_1D_MARKET   = 60      # 1 minute  — 1D during market hours
+_TTL_HIST_MARKET = 900     # 15 minutes — 7D/30D/YTD/1Y during market hours
+_TTL_OFF_HOURS   = 3600    # 60 minutes — all timeframes off-hours/weekends
+
+# ── Per-timeframe refresh locks & schedule trackers ───────────────────────────
+# asyncio.Lock per timeframe: only one concurrent refresh per timeframe allowed.
+_refresh_locks: dict[str, asyncio.Lock] = {}
+# When each timeframe was last successfully computed (unix ts).
+_last_computed: dict[str, float] = {tf: 0.0 for tf in ("1D", "7D", "30D", "YTD", "1Y")}
+
+
+def _get_lock(tf: str) -> asyncio.Lock:
+    """Return (or lazily create) the asyncio.Lock for a timeframe."""
+    if tf not in _refresh_locks:
+        _refresh_locks[tf] = asyncio.Lock()
+    return _refresh_locks[tf]
+
+
 # ── TTL helpers ────────────────────────────────────────────────────────────────
 
-def _market_hours_ttl() -> int:
+def _is_market_hours() -> bool:
     now = datetime.now(tz=timezone.utc)
     if now.weekday() >= 5:
-        return 3600
+        return False
     month = now.month
     utc_offset = 4 if 4 <= month <= 10 else 5
     et_min = (now.hour - utc_offset) % 24 * 60 + now.minute
-    return 900 if 570 <= et_min <= 960 else 3600
+    return 570 <= et_min <= 960   # 09:30–16:00 ET
 
 
-def _is_market_hours() -> bool:
-    return _market_hours_ttl() == 900
+def _ttl_for_timeframe(tf: str) -> int:
+    """Return cache TTL seconds for the given timeframe."""
+    if not _is_market_hours():
+        return _TTL_OFF_HOURS
+    return _TTL_1D_MARKET if tf == "1D" else _TTL_HIST_MARKET
 
 
 # ── LKG helpers ────────────────────────────────────────────────────────────────
@@ -120,6 +150,64 @@ def _save_lkg(data: list[dict]) -> None:
         tmp.replace(_LKG_PATH)
     except Exception as e:
         print(f"[THEME_RS] LKG save error: {e}")
+
+
+# ── Payload builders ───────────────────────────────────────────────────────────
+
+def _make_payload(rows: list[dict], tf: str) -> dict:
+    """Build a fresh live response payload from computed rows."""
+    fmp_used     = any(s == "fmp"          for r in rows for s in r.get("proxy_source_health", {}).values())
+    tradier_used = any(s == "tradier_hist" for r in rows for s in r.get("proxy_source_health", {}).values())
+    yf_used      = any(s == "yfinance"     for r in rows for s in r.get("proxy_source_health", {}).values())
+    ttl          = _ttl_for_timeframe(tf)
+    now_ts       = time.time()
+    return {
+        "themes":            rows,
+        "timeframe":         tf,
+        "theme_count":       len(rows),
+        "generated_at":      datetime.now(timezone.utc).isoformat(),
+        "last_updated":      datetime.now(timezone.utc).isoformat(),
+        "cache_ttl_s":       ttl,
+        "cache_age_seconds": 0,
+        "_cache_set_at":     now_ts,
+        "is_market_hours":   _is_market_hours(),
+        "source":            "live",
+        "source_health": {
+            "tradier_quotes":  any(r["performance"].get("1D") is not None for r in rows),
+            "fmp_history":     fmp_used,
+            "tradier_history": tradier_used,
+            "yfinance":        yf_used,
+        },
+    }
+
+
+def _lkg_payload(rows: list[dict], tf: str, source: str = "lkg") -> dict:
+    """Build a stale/LKG response payload."""
+    return {
+        "themes":            rows,
+        "timeframe":         tf,
+        "theme_count":       len(rows),
+        "generated_at":      None,
+        "last_updated":      None,
+        "cache_ttl_s":       None,
+        "cache_age_seconds": None,
+        "_cache_set_at":     None,
+        "is_market_hours":   _is_market_hours(),
+        "source":            source,
+        "source_health": {
+            "tradier_quotes":  False,
+            "fmp_history":     False,
+            "tradier_history": False,
+            "yfinance":        False,
+        },
+    }
+
+
+def _add_freshness(payload: dict) -> dict:
+    """Inject cache_age_seconds into a cached payload (mutates in-place)."""
+    set_at = payload.get("_cache_set_at")
+    payload["cache_age_seconds"] = round(time.time() - set_at) if set_at else None
+    return payload
 
 
 # ── FMP historical price provider ──────────────────────────────────────────────
@@ -887,6 +975,97 @@ async def _compute(tf: str) -> list[dict]:
     return rows
 
 
+# ── Background refresh (lock-guarded) ──────────────────────────────────────────
+
+async def _locked_refresh(tf: str) -> None:
+    """
+    Acquire the per-timeframe lock and run a full compute pass.
+    Safe to call concurrently — the lock ensures only one refresh per timeframe
+    runs at a time.  In asyncio (single-threaded) the lock.locked() check is
+    atomic with the subsequent async-with acquisition.
+    """
+    lock = _get_lock(tf)
+    if lock.locked():
+        print(f"[THEME_RS] {tf} refresh skipped — already in progress")
+        return
+
+    async with lock:
+        t0 = time.time()
+        print(f"[THEME_RS] {tf} refresh started")
+        try:
+            rows = await _compute(tf)
+            if rows:
+                payload = _make_payload(rows, tf)
+                cache.set(f"{_CACHE_KEY}:{tf}", payload, _ttl_for_timeframe(tf))
+                _save_lkg(rows)
+                _last_computed[tf] = time.time()
+                print(
+                    f"[THEME_RS] {tf} refresh done in {time.time()-t0:.1f}s "
+                    f"({len(rows)} themes)"
+                )
+            else:
+                print(f"[THEME_RS] {tf} refresh returned no rows — LKG/cache preserved")
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            print(f"[THEME_RS] {tf} refresh error: {exc}")
+
+
+# ── Warmup & background loop ───────────────────────────────────────────────────
+
+async def _warmup_loop() -> None:
+    """
+    Background loop that keeps theme RS caches fresh.
+    - Market hours: 1D every ~60s, 7D/30D/YTD/1Y every ~15min.
+    - Off-hours: loop idles (cache TTL of 60min covers off-hours naturally).
+    """
+    print("[THEME_RS] Warmup loop started")
+
+    # Initial kick: compute all timeframes in background
+    for tf in list(_TIMEFRAME_BARS.keys()):
+        asyncio.create_task(_locked_refresh(tf))
+
+    while True:
+        await asyncio.sleep(15)   # check every 15s — lightweight
+        now = time.time()
+
+        if not _is_market_hours():
+            continue   # rely on long off-hours TTL
+
+        # 1D: target 60s since last successful compute
+        if now - _last_computed.get("1D", 0) >= _TTL_1D_MARKET:
+            asyncio.create_task(_locked_refresh("1D"))
+
+        # Historical: target 900s since last successful compute
+        for tf in ("7D", "30D", "YTD", "1Y"):
+            if now - _last_computed.get(tf, 0) >= _TTL_HIST_MARKET:
+                asyncio.create_task(_locked_refresh(tf))
+
+
+async def warmup_theme_rs() -> None:
+    """
+    Called once at startup (non-blocking).
+    Loads LKG into all timeframe caches immediately so the first user request
+    is always fast, then starts the background refresh loop.
+    """
+    lkg = _load_lkg()
+    if lkg:
+        print(f"[THEME_RS] Startup: LKG loaded ({len(lkg)} themes) — seeding all caches")
+        for tf in list(_TIMEFRAME_BARS.keys()):
+            cache_key = f"{_CACHE_KEY}:{tf}"
+            if cache.get(cache_key) is None:
+                # Seed with LKG so first request returns instantly
+                seed = _lkg_payload(lkg, tf, source="lkg_startup")
+                seed["_cache_set_at"] = time.time()
+                # Short TTL so the background refresh replaces it quickly
+                cache.set(cache_key, seed, 120)
+    else:
+        print("[THEME_RS] Startup: no LKG found — cold start, background warmup will populate")
+
+    asyncio.create_task(_warmup_loop())
+    print("[THEME_RS] Warmup task created (non-blocking)")
+
+
 # ── Public entry point ─────────────────────────────────────────────────────────
 
 async def get_theme_rs_data(
@@ -894,83 +1073,81 @@ async def get_theme_rs_data(
     force: bool = False,
 ) -> dict:
     """
-    Returns full themes-RS payload dict (cached, LKG disk fallback).
+    Returns full themes-RS payload dict.
+
+    Freshness flow:
+      1. Cache hit → return immediately (with cache_age_seconds injected).
+      2. Cache miss, refresh in progress → return stale LKG immediately.
+      3. Cache miss, refresh NOT in progress, LKG available →
+           return LKG immediately + kick background refresh.
+      4. Cache miss, no LKG (cold start) → run compute synchronously
+           (with lock, so concurrent cold requests wait rather than stampede).
+      5. Force → skip cache, run compute now (bypasses stale-while-revalidate).
     """
     tf = timeframe.upper()
     if tf not in _TIMEFRAME_BARS:
         tf = "30D"
 
     cache_key = f"{_CACHE_KEY}:{tf}"
-    ttl = _market_hours_ttl()
 
+    # ── 1. Cache hit ──────────────────────────────────────────────────────────
     if not force:
         hit = cache.get(cache_key)
         if hit is not None:
-            return hit
+            return _add_freshness(hit)
 
-    # Track which providers were actually used
-    fmp_used      = False
-    tradier_used  = False
-    yf_used       = False
+    # ── 2/3. Cache miss — check if refresh already in progress ────────────────
+    lock = _get_lock(tf)
+    lkg_rows = _load_lkg()
 
-    try:
-        rows = await _compute(tf)
+    if lock.locked():
+        # Someone is already computing — serve stale immediately
+        if lkg_rows:
+            print(f"[THEME_RS] {tf} served from LKG — refresh already in progress")
+            return _lkg_payload(lkg_rows, tf, source="lkg_refresh_in_progress")
+        # No stale available — wait for the active refresh to finish
+        print(f"[THEME_RS] {tf} waiting for in-progress refresh (no LKG available)")
+        async with lock:
+            hit = cache.get(cache_key)
+            if hit is not None:
+                return _add_freshness(hit)
+            # Refresh failed or produced no data — return error-safe empty
+            return _lkg_payload([], tf, source="no_data")
 
-        # Determine provider health from rows
-        for row in rows:
-            ph = row.get("proxy_source_health", {})
-            for src in ph.values():
-                if src == "fmp":
-                    fmp_used = True
-                elif src == "tradier_hist":
-                    tradier_used = True
-                elif src == "yfinance":
-                    yf_used = True
+    # ── 3. Stale-while-revalidate (LKG exists, not forced) ───────────────────
+    if lkg_rows and not force:
+        asyncio.create_task(_locked_refresh(tf))
+        print(f"[THEME_RS] {tf} kicked background refresh — returning LKG immediately")
+        return _lkg_payload(lkg_rows, tf, source="lkg_stale_revalidating")
 
-        ts = datetime.now(timezone.utc).isoformat()
-        payload = {
-            "themes":            rows,
-            "timeframe":         tf,
-            "theme_count":       len(rows),
-            "generated_at":      ts,
-            "cache_ttl_s":       ttl,
-            "is_market_hours":   _is_market_hours(),
-            "source":            "live" if rows else "lkg",
-            "source_health": {
-                "tradier_quotes": any(
-                    r["performance"].get("1D") is not None for r in rows
-                ),
-                "fmp_history":    fmp_used,
-                "tradier_history": tradier_used,
-                "yfinance":       yf_used,
-            },
-        }
+    # ── 4/5. Cold start or forced — compute synchronously ────────────────────
+    async with lock:
+        # Double-check after acquiring (another coroutine may have finished)
+        if not force:
+            hit = cache.get(cache_key)
+            if hit is not None:
+                return _add_freshness(hit)
 
-        if rows:
-            cache.set(cache_key, payload, ttl)
-            _save_lkg(rows)
+        print(f"[THEME_RS] {tf} cold compute (force={force})")
+        try:
+            rows = await _compute(tf)
+            if rows:
+                payload = _make_payload(rows, tf)
+                cache.set(cache_key, payload, _ttl_for_timeframe(tf))
+                _save_lkg(rows)
+                _last_computed[tf] = time.time()
+                return _add_freshness(payload)
 
-        return payload
+            # Empty result — return LKG or empty
+            if lkg_rows:
+                return _lkg_payload(lkg_rows, tf, source="lkg_compute_empty")
+            return _lkg_payload([], tf, source="no_data")
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"[THEME_RS] Compute error ({e}), falling back to LKG")
-        lkg = _load_lkg()
-        if lkg:
-            return {
-                "themes":          lkg,
-                "timeframe":       tf,
-                "theme_count":     len(lkg),
-                "generated_at":    None,
-                "cache_ttl_s":     None,
-                "is_market_hours": _is_market_hours(),
-                "source":          "lkg",
-                "source_health":   {
-                    "tradier_quotes":  False,
-                    "fmp_history":     False,
-                    "tradier_history": False,
-                    "yfinance":        False,
-                },
-            }
-        raise
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            print(f"[THEME_RS] {tf} compute error: {exc} — falling back to LKG")
+            lkg_rows2 = _load_lkg()
+            if lkg_rows2:
+                return _lkg_payload(lkg_rows2, tf, source="lkg_compute_error")
+            raise
