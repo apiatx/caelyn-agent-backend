@@ -1,0 +1,81 @@
+Audit only. Do not change code yet.
+
+We just consolidated the 11 SPDR sectors into the canonical Themes by Relative Strength engine using classification=sector/theme/sub_theme.
+
+Now I need to confirm whether we are still wasting API calls through the old sector rotation backend process.
+
+Goal:
+Prove whether there is now only one backend process/source for sector + theme relative strength data, or whether the old /api/sectors engine still runs/calls APIs separately.
+
+Questions to answer:
+
+1. Old sector endpoints
+Find all backend routes matching:
+- /api/sectors
+- /api/sectors/quotes
+- /api/sectors/relative-strength
+- mode=sectors
+- mode=themes
+
+For each endpoint, report:
+- file/function
+- what service it calls
+- what providers/API calls it triggers
+- whether it uses cache
+- whether it is still active
+
+2. Old sector background jobs
+Search startup/lifespan/background loops for:
+- sector_rotation
+- theme_service
+- sector rotation precompute
+- sr:dashboard:v1
+- sr:theme_data:v2
+- /api/sectors warmup
+
+Report:
+- which jobs still run on startup
+- refresh cadence / TTL
+- whether they call external APIs
+- whether they overlap with the new theme_rs_service
+- whether they are still needed after classification=sector was added to /api/themes/relative-strength
+
+3. New canonical engine
+Confirm the new endpoint can fully replace old sectors display:
+- /api/themes/relative-strength?classification=sector returns all 11 SPDR sectors
+- /api/themes/relative-strength?classification=theme returns broad themes
+- /api/themes/relative-strength?classification=sub_theme returns narrow themes
+- /api/themes/relative-strength?classification=all returns 55 rows
+
+4. API-call duplication
+Compare old vs new:
+- Does old sector service fetch the same SPDR ETFs that new theme_rs_service now fetches?
+- Does old theme service fetch the same ETFs that new theme_rs_service now fetches?
+- Are both systems calling Tradier/FMP/Finnhub/yfinance for overlapping symbols?
+- Are both systems warming caches independently?
+
+5. Frontend dependency risk
+Identify whether any current frontend route still needs old /api/sectors endpoints.
+Do not inspect frontend repo unless available in this backend environment; just list backend endpoints and whether they are safe to deprecate after frontend migrates.
+
+6. Recommendation
+Give a direct verdict:
+A) Fully consolidated — only new theme_rs_service is used
+B) Data model consolidated, but old sector service still active and may duplicate API calls
+C) Frontend likely still calls both
+D) Unknown — needs frontend audit
+
+7. Safe deprecation plan
+If old sector service is still active, recommend a safe plan:
+- keep old endpoints temporarily as compatibility wrappers
+- have old /api/sectors/relative-strength call /api/themes/relative-strength?classification=sector or theme instead of doing its own provider calls
+- disable old background refresh if no longer needed
+- preserve response shape if frontend still expects old fields
+- add logs to prove old provider calls stopped
+
+Do not change code yet.
+Do not touch Earnings.
+Do not touch Options Flow.
+Do not touch TA Screener.
+Do not touch Chain Reaction.
+Audit only.
