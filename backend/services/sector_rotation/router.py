@@ -244,30 +244,197 @@ async def etf_detail_endpoint(symbol: str):
     }
 
 
+# ── Helpers for compatibility wrappers ───────────────────────────────────────
+
+# Sectors that are economically cyclical (used to preserve is_cyclical flag)
+_CYCLICAL_SECTOR_IDS = frozenset({
+    "technology", "industrials", "materials", "energy",
+    "consumer_discretionary", "financials", "communication_services",
+})
+
+# Map new theme_rs state → old SectorSnapshot regime_tag
+_STATE_TO_REGIME: dict[str, str] = {
+    "active":    "Leading",
+    "emerging":  "Leading",
+    "neutral":   "Neutral",
+    "weakening": "Weakening",
+    "dead_zone": "Lagging",
+}
+
+# Map new theme_rs state → old theme_service trend_state
+_STATE_TO_TREND: dict[str, str] = {
+    "active":    "Leadership",
+    "emerging":  "Improving",
+    "neutral":   "Neutral",
+    "weakening": "Weakening",
+    "dead_zone": "Lagging",
+}
+
+
+def _rs_row_to_sector_snapshot(row: dict) -> dict:
+    """
+    Map a new theme_rs sector row onto the SectorSnapshot field contract so
+    the frontend receives an identical shape to what get_dashboard() produced.
+    Additive fields (rs_score, state, rs_vs_spy, compatibility_source) are appended
+    and do not conflict with existing field names.
+    """
+    perf  = row.get("performance") or {}
+    state = row.get("state") or "neutral"
+    return {
+        # ── Legacy SectorSnapshot fields ─────────────────────────────────────
+        "ticker":                 row.get("lead_proxy") or (row["proxy_symbols"][0] if row.get("proxy_symbols") else ""),
+        "name":                   row.get("display_name", ""),
+        "price":                  row.get("price"),
+        "change_1d":              perf.get("1D"),
+        "change_7d":              perf.get("7D"),
+        "change_30d":             perf.get("30D"),
+        "change_ytd":             perf.get("YTD"),
+        "change_1y":              perf.get("1Y"),
+        "ma_50d":                 None,
+        "ma_200d":                None,
+        "pct_from_50d":           row.get("pct_from_50d"),
+        "pct_from_200d":          None,
+        "rotation_score":         row.get("rs_score"),         # rs_score ≈ rotation_score
+        "relative_strength_rank": row.get("momentum_rank"),
+        "regime_tag":             _STATE_TO_REGIME.get(state, "Neutral"),
+        "is_cyclical":            row.get("theme_id") in _CYCLICAL_SECTOR_IDS,
+        "series":                 {},
+        # ── Additive fields (non-breaking) ────────────────────────────────────
+        "rs_score":               row.get("rs_score"),
+        "rs_vs_spy":              row.get("rs_vs_spy"),
+        "rs_vs_qqq":              row.get("rs_vs_qqq"),
+        "state":                  state,
+        "state_reason":           row.get("state_reason"),
+        "breadth_pct":            row.get("breadth_pct"),
+        "classification":         row.get("classification"),
+        "proxy_symbols":          row.get("proxy_symbols", []),
+        "compatibility_source":   "theme_rs_service",
+    }
+
+
+def _accel_to_rotation_state(accel) -> str:
+    if accel is None:
+        return "Stabilizing"
+    if accel > 1.5:
+        return "Accelerating"
+    if accel > 0:
+        return "Stabilizing"
+    if accel > -1.5:
+        return "Fading"
+    return "Reversing"
+
+
+def _rs_row_to_theme_snapshot(row: dict) -> dict:
+    """
+    Map a new theme_rs row onto the old theme_service ThemeSnapshot field contract.
+    Performance keys are translated (1D→1d, 7D→5d, 30D→1m, YTD→ytd, 1Y→1y).
+    3m/6m are unavailable in the new RS engine — set to None.
+    Additive fields appended.
+    """
+    perf  = row.get("performance") or {}
+    state = row.get("state") or "neutral"
+    return {
+        # ── Legacy ThemeSnapshot fields ───────────────────────────────────────
+        "id":                      row.get("theme_id"),
+        "label":                   row.get("display_name", ""),
+        "parent_sector":           row.get("parent_sector"),
+        "theme_type":              row.get("classification"),
+        "symbols":                 row.get("proxy_symbols", []),
+        "leader_symbol":           row.get("lead_proxy"),
+        "ticker":                  row.get("lead_proxy"),
+        "price":                   row.get("price"),
+        "leader_price":            row.get("price"),
+        "current_price":           row.get("price"),
+        "performance": {
+            "1d":  perf.get("1D"),
+            "5d":  perf.get("7D"),   # closest available (7D ≈ 5 trading days)
+            "1m":  perf.get("30D"),
+            "3m":  None,             # not computed by theme_rs_service
+            "6m":  None,             # not computed by theme_rs_service
+            "ytd": perf.get("YTD"),
+            "1y":  perf.get("1Y"),
+        },
+        "perf_5d":                 perf.get("7D"),
+        "perf_1m":                 perf.get("30D"),
+        "perf_3m":                 None,
+        "pct_from_50d":            row.get("pct_from_50d"),
+        "trend_accel_20d":         row.get("trend_accel_20d"),
+        "relative_strength_score": row.get("rs_score"),
+        "momentum_rank":           row.get("momentum_rank"),
+        "trend_state":             _STATE_TO_TREND.get(state, "Neutral"),
+        "rotation_state":          _accel_to_rotation_state(row.get("trend_accel_20d")),
+        # ── Additive fields (non-breaking) ────────────────────────────────────
+        "rs_score":                row.get("rs_score"),
+        "rs_vs_spy":               row.get("rs_vs_spy"),
+        "rs_vs_qqq":               row.get("rs_vs_qqq"),
+        "state":                   state,
+        "state_reason":            row.get("state_reason"),
+        "breadth_pct":             row.get("breadth_pct"),
+        "classification":          row.get("classification"),
+        "proxy_symbols_used":      row.get("proxy_symbols_used", []),
+        "compatibility_source":    "theme_rs_service",
+    }
+
+
+async def _get_rs_payload_all(timeframe: str = "30D") -> dict:
+    """
+    Fetch the full 55-row RS payload once and return it.
+    Calling with classification='all' avoids a second cache/compute hit vs
+    calling sector + theme separately.
+    """
+    from services.theme_rs_service import get_theme_rs_data
+    return await get_theme_rs_data(timeframe=timeframe, force=False, classification="all")
+
+
 @sectors_router.get("/performance")
 async def sectors_performance_endpoint(
     mode: str = Query("sectors", description="Mode: sectors | themes"),
+    timeframe: str = Query("30D", description="Timeframe: 1D | 7D | 30D | YTD | 1Y"),
 ):
     """
-    Sector or Theme performance data.
-    mode=sectors → all 11 broad SPDR ETF snapshots (unchanged)
-    mode=themes  → all theme ETF baskets, scored and ranked
-    No AI calls are made here — data-only, cached aggressively.
-    """
-    now = __import__("datetime").datetime.utcnow().isoformat() + "Z"
-    if mode == "themes":
-        from services.sector_rotation.theme_service import get_theme_data
-        items = await get_theme_data()
-        return {"mode": "themes", "updated_at": now, "items": items}
+    Sector or Theme performance data — compatibility wrapper.
 
-    # Default: sectors
+    mode=sectors → 11 SPDR sector rows from /api/themes/relative-strength?classification=sector
+    mode=themes  → theme + sub_theme rows from /api/themes/relative-strength (non-sector rows)
+
+    No AI calls. No old get_dashboard() or get_theme_data() provider calls.
+    Data sourced entirely from theme_rs_service (FMP→Tradier→yfinance, cached per TF).
+    Response shape is identical to the previous contract plus additive compatibility_source field.
+    """
+    import datetime as _dt
+    now = _dt.datetime.utcnow().isoformat() + "Z"
+    tf  = timeframe.upper()
+
+    print(f"[COMPAT_WRAPPER] /api/sectors/performance mode={mode} tf={tf} → theme_rs_service classification={'sector' if mode == 'sectors' else 'non-sector'}")
+
     try:
-        dashboard = await get_dashboard(include_analysis=False)
+        payload = await _get_rs_payload_all(timeframe=tf)
+        all_rows = payload.get("themes", [])
+
+        if mode == "themes":
+            rows   = [r for r in all_rows if r.get("classification") != "sector"]
+            items  = [_rs_row_to_theme_snapshot(r) for r in rows]
+            return {
+                "mode":                 "themes",
+                "updated_at":          now,
+                "items":               items,
+                "compatibility_source": "theme_rs_service",
+                "classification_used":  "theme+sub_theme",
+                "cache_age_seconds":    payload.get("cache_age_seconds"),
+            }
+
+        # mode=sectors (default)
+        rows  = [r for r in all_rows if r.get("classification") == "sector"]
+        items = [_rs_row_to_sector_snapshot(r) for r in rows]
         return {
-            "mode": "sectors",
-            "updated_at": now,
-            "items": [s.model_dump() for s in dashboard.sectors],
+            "mode":                 "sectors",
+            "updated_at":          now,
+            "items":               items,
+            "compatibility_source": "theme_rs_service",
+            "classification_used":  "sector",
+            "cache_age_seconds":    payload.get("cache_age_seconds"),
         }
+
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Sector performance error: {e}")
@@ -276,33 +443,54 @@ async def sectors_performance_endpoint(
 @sectors_router.get("/relative-strength")
 async def sectors_relative_strength_endpoint(
     mode: str = Query("sectors", description="Mode: sectors | themes"),
+    timeframe: str = Query("30D", description="Timeframe: 1D | 7D | 30D | YTD | 1Y"),
 ):
     """
-    Sector or Theme relative-strength rankings.
-    mode=sectors → broad SPDR ETFs ranked by rotation_score (unchanged)
-    mode=themes  → theme ETFs ranked by relative_strength_score
-    No AI calls.
-    """
-    now = __import__("datetime").datetime.utcnow().isoformat() + "Z"
-    if mode == "themes":
-        from services.sector_rotation.theme_service import get_theme_data
-        items = await get_theme_data()
-        ranked = sorted(items, key=lambda r: r.get("relative_strength_score") or 0, reverse=True)
-        return {"mode": "themes", "updated_at": now, "ranked": ranked}
+    Sector or Theme relative-strength rankings — compatibility wrapper.
 
-    # Default: sectors — sort by rotation_score desc (already sorted from build_sector_snapshots)
+    mode=sectors → 11 SPDR sectors ranked by rs_score desc
+    mode=themes  → theme + sub_theme rows ranked by rs_score desc
+
+    No AI calls. No old get_dashboard() or get_theme_data() provider calls.
+    Data sourced entirely from theme_rs_service (FMP→Tradier→yfinance, cached per TF).
+    Response shape is identical to the previous contract plus additive compatibility_source field.
+    """
+    import datetime as _dt
+    now = _dt.datetime.utcnow().isoformat() + "Z"
+    tf  = timeframe.upper()
+
+    print(f"[COMPAT_WRAPPER] /api/sectors/relative-strength mode={mode} tf={tf} → theme_rs_service classification={'sector' if mode == 'sectors' else 'non-sector'}")
+
     try:
-        dashboard = await get_dashboard(include_analysis=False)
-        ranked = sorted(
-            dashboard.sectors,
-            key=lambda s: (s.rotation_score or 0),
-            reverse=True,
-        )
+        payload = await _get_rs_payload_all(timeframe=tf)
+        all_rows = payload.get("themes", [])
+
+        if mode == "themes":
+            rows   = [r for r in all_rows if r.get("classification") != "sector"]
+            mapped = [_rs_row_to_theme_snapshot(r) for r in rows]
+            ranked = sorted(mapped, key=lambda r: r.get("relative_strength_score") or 0, reverse=True)
+            return {
+                "mode":                 "themes",
+                "updated_at":          now,
+                "ranked":              ranked,
+                "compatibility_source": "theme_rs_service",
+                "classification_used":  "theme+sub_theme",
+                "cache_age_seconds":    payload.get("cache_age_seconds"),
+            }
+
+        # mode=sectors (default) — already sorted by rs_score desc in theme_rs_service
+        rows   = [r for r in all_rows if r.get("classification") == "sector"]
+        mapped = [_rs_row_to_sector_snapshot(r) for r in rows]
+        ranked = sorted(mapped, key=lambda r: r.get("rotation_score") or 0, reverse=True)
         return {
-            "mode": "sectors",
-            "updated_at": now,
-            "ranked": [s.model_dump() for s in ranked],
+            "mode":                 "sectors",
+            "updated_at":          now,
+            "ranked":              ranked,
+            "compatibility_source": "theme_rs_service",
+            "classification_used":  "sector",
+            "cache_age_seconds":    payload.get("cache_age_seconds"),
         }
+
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Sector RS error: {e}")

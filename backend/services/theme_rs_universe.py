@@ -172,10 +172,12 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "parent_sector":  "materials",
         "display_name": "Copper Miners",
         "proxy_type": "etf",
-        "proxy_symbols": ["COPX", "CPER"],
+        # DBB = Invesco DB Base Metals Fund (broad base metals incl. copper, zinc, aluminum)
+        # Added as secondary proxy to preserve coverage previously in old theme_service
+        "proxy_symbols": ["COPX", "CPER", "DBB"],
         "candidate_symbols": ["FCX", "SCCO", "TECK", "HBM"],
         "sector_tags": ["Materials", "Mining"],
-        "keywords": ["copper", "mining", "electrification", "EV infrastructure"],
+        "keywords": ["copper", "mining", "electrification", "EV infrastructure", "base metals"],
         "macro_sensitivities": ["China manufacturing", "electrification demand", "USD", "global growth"],
     },
 
@@ -185,7 +187,9 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "display_name": "Crypto Equities / Blockchain",
         "proxy_type": "etf",
         # BLOK = Amplify Transformational Data Sharing ETF (primary crypto equity basket)
-        "proxy_symbols": ["BLOK", "BITQ", "WGMI"],
+        # BKCH = Global X Blockchain ETF — added as secondary proxy to preserve coverage
+        #        previously tracked in old theme_service (was unique to that universe)
+        "proxy_symbols": ["BLOK", "BITQ", "WGMI", "BKCH"],
         "candidate_symbols": ["MSTR", "COIN", "MARA", "CLSK", "HUT", "RIOT"],
         "sector_tags": ["Technology", "Financials"],
         "keywords": ["crypto", "blockchain", "bitcoin proxy", "mining", "digital assets"],

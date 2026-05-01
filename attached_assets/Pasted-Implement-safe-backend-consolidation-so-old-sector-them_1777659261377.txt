@@ -1,0 +1,113 @@
+Implement safe backend consolidation so old sector/theme RS endpoints no longer duplicate API calls.
+
+Context:
+Audit confirmed the data model is consolidated into the new Themes by Relative Strength engine, but old sector/theme backend processes are still active and duplicating provider calls.
+
+Current problem:
+1. _sector_rotation_precompute_loop still runs every 15 minutes and fetches 11 SPDR sectors + SPY + QQQ via Tradier/yfinance.
+2. Old /api/sectors/performance and /api/sectors/relative-strength endpoints can still call the old theme_service and sector_rotation service.
+3. Old theme_service fetches 52 symbols, 48 overlapping with the new /api/themes/relative-strength universe.
+4. New canonical endpoint already supports:
+   - /api/themes/relative-strength?classification=sector
+   - /api/themes/relative-strength?classification=theme
+   - /api/themes/relative-strength?classification=sub_theme
+   - /api/themes/relative-strength?classification=all
+
+Goal:
+Stop duplicate API calls while preserving frontend compatibility.
+
+Do not change frontend.
+Do not change Earnings.
+Do not change Options Flow.
+Do not change TA Screener.
+Do not change Chain Reaction.
+Do not add LLM calls.
+Do not remove old endpoints yet.
+
+Step 1 — Disable recurring old sector precompute loop
+- Remove or guard the startup call to _sector_rotation_precompute_loop.
+- Do not delete the function.
+- Leave old dashboard endpoints available for lazy use if still called.
+- Add a clear comment explaining this was disabled because /api/themes/relative-strength now covers sector RS data.
+- Confirm no recurring 15-minute Tradier/yfinance calls happen from the old sector precompute loop.
+
+Step 2 — Convert old RS/performance endpoints to compatibility wrappers
+For these endpoints:
+- GET /api/sectors/relative-strength?mode=sectors
+- GET /api/sectors/relative-strength?mode=themes
+- GET /api/sectors/performance?mode=sectors
+- GET /api/sectors/performance?mode=themes
+
+Do not call old get_dashboard() or old get_theme_data() for RS/performance if the new theme_rs_service can provide equivalent data.
+
+Instead:
+- mode=sectors should call get_theme_rs_data(classification="sector")
+- mode=themes should call get_theme_rs_data(classification="theme") or classification="all" depending on which preserves the current frontend expectation best.
+- Prefer classification="all" for Themes mode if the UI now expects sectors + themes/subthemes together; otherwise use theme/sub_theme and document choice.
+- Reshape the new response into the old response contract so existing frontend does not break.
+- Add a lightweight field/header if useful, e.g. source="theme_rs_compat_wrapper".
+
+Step 3 — Keep non-equivalent endpoints unchanged
+Do not change:
+- /api/sector-rotation/dashboard
+- /api/sectors/page-data
+- /api/sectors/etf/{symbol}
+- /api/sectors/generate-analysis
+- /api/sector-rotation/history
+
+These have different purposes like AI analysis, winning sectors, stock scans, ETF detail, or sparklines.
+
+Step 4 — Handle old-only symbols carefully
+Old theme service had BKCH, BOIL, DBB, DFEN that are not in the new RS universe.
+
+Do not add leveraged ETFs as primary proxies.
+- Do not add BOIL as a primary proxy.
+- Do not add DFEN as a primary proxy.
+
+If low-risk:
+- Add BKCH as a secondary proxy to Crypto Equities / Blockchain.
+- Add DBB as a secondary proxy to Metals/Copper if appropriate.
+Otherwise just document them.
+
+Step 5 — Add observability
+Add logs when compatibility wrappers are used:
+- endpoint path
+- mode
+- classification used
+- no old provider call made
+
+If easy, add response field:
+- compatibility_source: "theme_rs_service"
+
+Step 6 — Validation
+Run:
+- GET /api/themes/relative-strength?classification=sector
+- GET /api/themes/relative-strength?classification=all
+- GET /api/sectors/relative-strength?mode=sectors
+- GET /api/sectors/relative-strength?mode=themes
+- GET /api/sectors/performance?mode=sectors
+- GET /api/sectors/performance?mode=themes
+
+Confirm:
+- old RS/performance endpoints return 200
+- old RS/performance endpoints do not trigger old get_dashboard/get_theme_data provider calls
+- new theme_rs_service is the underlying data source
+- old sector precompute loop no longer starts on boot
+- no recurring duplicate Tradier/yfinance calls from old sector precompute
+- no frontend-breaking response shape changes
+- no LLM calls
+- no Earnings changes
+- no Options Flow changes
+- no TA Screener changes
+- no Chain Reaction changes
+
+Delivery report:
+Return:
+1. Files changed
+2. Whether _sector_rotation_precompute_loop was disabled
+3. Which endpoints are now compatibility wrappers
+4. Which classification each wrapper uses
+5. Whether old provider calls were eliminated for RS/performance
+6. What happened to BKCH/BOIL/DBB/DFEN
+7. Validation results
+8. Confirmation unrelated pages were untouched

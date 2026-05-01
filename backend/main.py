@@ -263,7 +263,13 @@ async def lifespan(app):
     # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
     asyncio.create_task(_polygon_options_ingestion_loop())
     asyncio.create_task(_macro_precompute_loop())
-    asyncio.create_task(_sector_rotation_precompute_loop())
+    # _sector_rotation_precompute_loop DISABLED (2025-05):
+    # /api/themes/relative-strength?classification=sector now covers all 11 SPDR sector RS data
+    # via theme_rs_service (warmup_theme_rs loop). Running both loops duplicated Tradier + yfinance
+    # calls for the same 11 SPDR ETFs + QQQ every 15 minutes into separate cache namespaces.
+    # The function is preserved below for reference.  Old /api/sector-rotation/dashboard and
+    # /api/sectors/page-data endpoints still work lazily (populated on first request via sr:dashboard:v1).
+    # asyncio.create_task(_sector_rotation_precompute_loop())
     asyncio.create_task(_insider_bg_loop())
     asyncio.create_task(_cong_bg_loop())
     asyncio.create_task(_hl_boot_and_run(_hl_state))
