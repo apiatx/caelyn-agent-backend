@@ -1,0 +1,2809 @@
+[
+  {
+    "theme_id": "memory_storage",
+    "display_name": "Memory & Storage",
+    "proxy_type": "basket",
+    "proxy_symbols": [
+      "SMH",
+      "SOXX"
+    ],
+    "candidate_symbols": [
+      "MU",
+      "WDC",
+      "STX",
+      "SIMO"
+    ],
+    "sector_tags": [
+      "Technology",
+      "Semiconductors"
+    ],
+    "keywords": [
+      "DRAM",
+      "NAND",
+      "HBM",
+      "memory",
+      "data storage",
+      "flash"
+    ],
+    "macro_sensitivities": [
+      "AI demand",
+      "data center capex",
+      "PC/mobile upgrade cycle"
+    ],
+    "price": 506.72,
+    "lead_proxy": "SMH",
+    "performance": {
+      "1D": 1.99,
+      "7D": 4.9,
+      "30D": 44.36,
+      "YTD": 47.01,
+      "1Y": 148.08
+    },
+    "breadth_pct": 75.0,
+    "pct_from_50d": 23.01,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "WDC",
+        "change_1d_pct": 5.28
+      },
+      {
+        "symbol": "STX",
+        "change_1d_pct": 4.72
+      },
+      {
+        "symbol": "SIMO",
+        "change_1d_pct": 0.59
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "STX",
+        "change_1d_pct": 4.72
+      },
+      {
+        "symbol": "SIMO",
+        "change_1d_pct": 0.59
+      },
+      {
+        "symbol": "MU",
+        "change_1d_pct": -0.26
+      }
+    ],
+    "rs_score": 90.5,
+    "rs_vs_spy": 116.95,
+    "rs_vs_qqq": 106.98,
+    "state": "active",
+    "momentum_rank": 1
+  },
+  {
+    "theme_id": "rare_earth",
+    "display_name": "Rare Earth Metals",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "REMX"
+    ],
+    "candidate_symbols": [
+      "MP",
+      "UUUU",
+      "TMRC",
+      "LYSDY"
+    ],
+    "sector_tags": [
+      "Materials",
+      "Mining"
+    ],
+    "keywords": [
+      "rare earth",
+      "critical minerals",
+      "magnets",
+      "defense supply chain"
+    ],
+    "macro_sensitivities": [
+      "China export controls",
+      "EV demand",
+      "defense spending"
+    ],
+    "price": 105.43,
+    "lead_proxy": "REMX",
+    "performance": {
+      "1D": 4.35,
+      "7D": 7.32,
+      "30D": 23.34,
+      "YTD": 42.63,
+      "1Y": 180.01
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 12.39,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "UUUU",
+        "change_1d_pct": 10.53
+      },
+      {
+        "symbol": "TMRC",
+        "change_1d_pct": 9.68
+      },
+      {
+        "symbol": "MP",
+        "change_1d_pct": 7.74
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "TMRC",
+        "change_1d_pct": 9.68
+      },
+      {
+        "symbol": "MP",
+        "change_1d_pct": 7.74
+      },
+      {
+        "symbol": "LYSDY",
+        "change_1d_pct": 3.86
+      }
+    ],
+    "rs_score": 89.3,
+    "rs_vs_spy": 148.88,
+    "rs_vs_qqq": 138.91,
+    "state": "active",
+    "momentum_rank": 2
+  },
+  {
+    "theme_id": "lithium_battery",
+    "display_name": "Lithium & Battery Tech",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "LIT",
+      "BATT"
+    ],
+    "candidate_symbols": [
+      "ALB",
+      "SQM",
+      "LAC",
+      "ENVX",
+      "QS"
+    ],
+    "sector_tags": [
+      "Materials",
+      "Industrials"
+    ],
+    "keywords": [
+      "lithium",
+      "batteries",
+      "EV",
+      "energy storage",
+      "solid-state"
+    ],
+    "macro_sensitivities": [
+      "EV adoption",
+      "China supply",
+      "critical minerals policy"
+    ],
+    "price": 88.24,
+    "lead_proxy": "LIT",
+    "performance": {
+      "1D": 2.83,
+      "7D": 5.01,
+      "30D": 20.19,
+      "YTD": 29.47,
+      "1Y": 124.89
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 12.87,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "LAC",
+        "change_1d_pct": 15.76
+      },
+      {
+        "symbol": "QS",
+        "change_1d_pct": 6.58
+      },
+      {
+        "symbol": "ENVX",
+        "change_1d_pct": 4.22
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "ENVX",
+        "change_1d_pct": 4.22
+      },
+      {
+        "symbol": "ALB",
+        "change_1d_pct": 3.05
+      },
+      {
+        "symbol": "SQM",
+        "change_1d_pct": 1.28
+      }
+    ],
+    "rs_score": 85.3,
+    "rs_vs_spy": 93.76,
+    "rs_vs_qqq": 83.79,
+    "state": "active",
+    "momentum_rank": 3
+  },
+  {
+    "theme_id": "clean_energy",
+    "display_name": "Clean Energy",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "ICLN",
+      "PBW",
+      "QCLN",
+      "CNRG"
+    ],
+    "candidate_symbols": [
+      "ENPH",
+      "RUN",
+      "PLUG",
+      "FSLR",
+      "NEE",
+      "CWEN",
+      "BE"
+    ],
+    "sector_tags": [
+      "Energy",
+      "Utilities",
+      "Industrials"
+    ],
+    "keywords": [
+      "clean energy",
+      "renewable",
+      "wind",
+      "solar",
+      "hydrogen",
+      "ESG"
+    ],
+    "macro_sensitivities": [
+      "IRA policy",
+      "interest rates",
+      "power demand",
+      "carbon prices"
+    ],
+    "price": 20.77,
+    "lead_proxy": "ICLN",
+    "performance": {
+      "1D": 3.45,
+      "7D": 2.69,
+      "30D": 22.86,
+      "YTD": 25.86,
+      "1Y": 107.55
+    },
+    "breadth_pct": 71.4,
+    "pct_from_50d": 12.67,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "RUN",
+        "change_1d_pct": 6.71
+      },
+      {
+        "symbol": "FSLR",
+        "change_1d_pct": 5.92
+      },
+      {
+        "symbol": "CWEN",
+        "change_1d_pct": 5.69
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "NEE",
+        "change_1d_pct": 3.94
+      },
+      {
+        "symbol": "BE",
+        "change_1d_pct": -1.61
+      },
+      {
+        "symbol": "PLUG",
+        "change_1d_pct": -8.22
+      }
+    ],
+    "rs_score": 82.5,
+    "rs_vs_spy": 76.42,
+    "rs_vs_qqq": 66.45,
+    "state": "active",
+    "momentum_rank": 4
+  },
+  {
+    "theme_id": "robotics_automation",
+    "display_name": "Robotics & Automation",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "BOTZ",
+      "ROBO",
+      "IRBO"
+    ],
+    "candidate_symbols": [
+      "SYM",
+      "ISRG",
+      "TER",
+      "ABBNY"
+    ],
+    "sector_tags": [
+      "Technology",
+      "Industrials"
+    ],
+    "keywords": [
+      "robotics",
+      "automation",
+      "AI robotics",
+      "industrial robots",
+      "cobots"
+    ],
+    "macro_sensitivities": [
+      "labor costs",
+      "AI adoption",
+      "capex",
+      "manufacturing reshoring"
+    ],
+    "price": 38.45,
+    "lead_proxy": "BOTZ",
+    "performance": {
+      "1D": 3.0,
+      "7D": 3.6,
+      "30D": 24.14,
+      "YTD": 17.8,
+      "1Y": 61.28
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 9.88,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "TER",
+        "change_1d_pct": 12.13
+      },
+      {
+        "symbol": "ABBNY",
+        "change_1d_pct": 3.91
+      },
+      {
+        "symbol": "SYM",
+        "change_1d_pct": 3.06
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "ABBNY",
+        "change_1d_pct": 3.91
+      },
+      {
+        "symbol": "SYM",
+        "change_1d_pct": 3.06
+      },
+      {
+        "symbol": "ISRG",
+        "change_1d_pct": 0.84
+      }
+    ],
+    "rs_score": 81.7,
+    "rs_vs_spy": 30.15,
+    "rs_vs_qqq": 20.18,
+    "state": "active",
+    "momentum_rank": 5
+  },
+  {
+    "theme_id": "tech_mega_caps",
+    "display_name": "Tech Mega Caps",
+    "proxy_type": "basket",
+    "proxy_symbols": [
+      "MAGS",
+      "QQQ"
+    ],
+    "candidate_symbols": [
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "AMZN",
+      "META",
+      "GOOGL",
+      "TSLA"
+    ],
+    "sector_tags": [
+      "Technology",
+      "Consumer Discretionary"
+    ],
+    "keywords": [
+      "mega cap",
+      "Magnificent 7",
+      "FAANG",
+      "big tech"
+    ],
+    "macro_sensitivities": [
+      "AI capex",
+      "antitrust risk",
+      "interest rates",
+      "ad market"
+    ],
+    "price": 66.24,
+    "lead_proxy": "MAGS",
+    "performance": {
+      "1D": 0.21,
+      "7D": 1.95,
+      "30D": 19.6,
+      "YTD": 4.63,
+      "1Y": 42.68
+    },
+    "breadth_pct": 57.1,
+    "pct_from_50d": 8.3,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "GOOGL",
+        "change_1d_pct": 9.97
+      },
+      {
+        "symbol": "TSLA",
+        "change_1d_pct": 2.37
+      },
+      {
+        "symbol": "AMZN",
+        "change_1d_pct": 0.77
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "MSFT",
+        "change_1d_pct": -3.93
+      },
+      {
+        "symbol": "NVDA",
+        "change_1d_pct": -4.63
+      },
+      {
+        "symbol": "META",
+        "change_1d_pct": -8.55
+      }
+    ],
+    "rs_score": 71.0,
+    "rs_vs_spy": 11.55,
+    "rs_vs_qqq": 1.58,
+    "state": "active",
+    "momentum_rank": 6
+  },
+  {
+    "theme_id": "ibd50",
+    "display_name": "IBD 50",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "FFTY"
+    ],
+    "candidate_symbols": [],
+    "sector_tags": [
+      "Growth",
+      "Momentum"
+    ],
+    "keywords": [
+      "IBD 50",
+      "momentum",
+      "growth leaders",
+      "breakouts",
+      "CAN SLIM"
+    ],
+    "macro_sensitivities": [
+      "risk appetite",
+      "earnings growth",
+      "market breadth"
+    ],
+    "price": 38.11,
+    "lead_proxy": "FFTY",
+    "performance": {
+      "1D": 4.62,
+      "7D": 1.9,
+      "30D": 19.77,
+      "YTD": 9.48,
+      "1Y": 41.3
+    },
+    "breadth_pct": null,
+    "pct_from_50d": 3.86,
+    "trend_accel_20d": 0.0,
+    "leaders": [],
+    "laggards": [],
+    "rs_score": 70.6,
+    "rs_vs_spy": 10.17,
+    "rs_vs_qqq": 0.2,
+    "state": "active",
+    "momentum_rank": 7
+  },
+  {
+    "theme_id": "metals_mining",
+    "display_name": "Metals & Mining",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "XME",
+      "PICK",
+      "SLX"
+    ],
+    "candidate_symbols": [
+      "FCX",
+      "CLF",
+      "AA",
+      "NUE",
+      "STLD"
+    ],
+    "sector_tags": [
+      "Materials",
+      "Mining"
+    ],
+    "keywords": [
+      "metals",
+      "mining",
+      "steel",
+      "iron ore",
+      "diversified miners"
+    ],
+    "macro_sensitivities": [
+      "China infrastructure",
+      "global growth",
+      "commodity cycle"
+    ],
+    "price": 118.73,
+    "lead_proxy": "XME",
+    "performance": {
+      "1D": 2.57,
+      "7D": 0.93,
+      "30D": 14.76,
+      "YTD": 19.98,
+      "1Y": 77.68
+    },
+    "breadth_pct": 80.0,
+    "pct_from_50d": 4.65,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "AA",
+        "change_1d_pct": 2.13
+      },
+      {
+        "symbol": "STLD",
+        "change_1d_pct": 1.92
+      },
+      {
+        "symbol": "FCX",
+        "change_1d_pct": 1.5
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "FCX",
+        "change_1d_pct": 1.5
+      },
+      {
+        "symbol": "NUE",
+        "change_1d_pct": 1.31
+      },
+      {
+        "symbol": "CLF",
+        "change_1d_pct": -0.49
+      }
+    ],
+    "rs_score": 66.7,
+    "rs_vs_spy": 46.55,
+    "rs_vs_qqq": 36.58,
+    "state": "emerging",
+    "momentum_rank": 8
+  },
+  {
+    "theme_id": "tech_equal_weight",
+    "display_name": "Tech Equal-Weight",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "RYT",
+      "QQEW"
+    ],
+    "candidate_symbols": [],
+    "sector_tags": [
+      "Technology"
+    ],
+    "keywords": [
+      "tech equal weight",
+      "equal weight",
+      "diversified tech"
+    ],
+    "macro_sensitivities": [
+      "interest rates",
+      "AI adoption",
+      "earnings breadth"
+    ],
+    "price": 137.39,
+    "lead_proxy": "QQEW",
+    "performance": {
+      "1D": 1.25,
+      "7D": 1.85,
+      "30D": 17.39,
+      "YTD": 7.25,
+      "1Y": 35.23
+    },
+    "breadth_pct": null,
+    "pct_from_50d": 7.92,
+    "trend_accel_20d": 0.0,
+    "leaders": [],
+    "laggards": [],
+    "rs_score": 64.3,
+    "rs_vs_spy": 4.1,
+    "rs_vs_qqq": -5.87,
+    "state": "emerging",
+    "momentum_rank": 9
+  },
+  {
+    "theme_id": "growth_stocks",
+    "display_name": "Growth Stocks",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "IWF",
+      "IVW",
+      "VUG",
+      "QQQ"
+    ],
+    "candidate_symbols": [],
+    "sector_tags": [
+      "Technology",
+      "Consumer Discretionary"
+    ],
+    "keywords": [
+      "growth",
+      "high growth",
+      "momentum",
+      "tech growth",
+      "expansion"
+    ],
+    "macro_sensitivities": [
+      "real rates",
+      "risk appetite",
+      "EPS growth",
+      "multiple expansion"
+    ],
+    "price": 119.27,
+    "lead_proxy": "IWF",
+    "performance": {
+      "1D": 0.68,
+      "7D": 1.49,
+      "30D": 19.12,
+      "YTD": 3.91,
+      "1Y": 35.01
+    },
+    "breadth_pct": null,
+    "pct_from_50d": 7.85,
+    "trend_accel_20d": 0.0,
+    "leaders": [],
+    "laggards": [],
+    "rs_score": 62.7,
+    "rs_vs_spy": 3.88,
+    "rs_vs_qqq": -6.09,
+    "state": "emerging",
+    "momentum_rank": 10
+  },
+  {
+    "theme_id": "speculative_tech",
+    "display_name": "Speculative Tech",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "ARKK",
+      "ARKW",
+      "ARKQ"
+    ],
+    "candidate_symbols": [
+      "PLTR",
+      "COIN",
+      "TSLA",
+      "ROKU"
+    ],
+    "sector_tags": [
+      "Technology",
+      "Innovation"
+    ],
+    "keywords": [
+      "speculative",
+      "disruptive",
+      "high-beta",
+      "innovation",
+      "ARK"
+    ],
+    "macro_sensitivities": [
+      "risk appetite",
+      "interest rates",
+      "AI hype cycle",
+      "liquidity"
+    ],
+    "price": 75.84,
+    "lead_proxy": "ARKK",
+    "performance": {
+      "1D": 3.15,
+      "7D": 0.05,
+      "30D": 19.69,
+      "YTD": -1.4,
+      "1Y": 47.18
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 6.06,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "ROKU",
+        "change_1d_pct": 3.5
+      },
+      {
+        "symbol": "COIN",
+        "change_1d_pct": 3.33
+      },
+      {
+        "symbol": "TSLA",
+        "change_1d_pct": 2.37
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "COIN",
+        "change_1d_pct": 3.33
+      },
+      {
+        "symbol": "TSLA",
+        "change_1d_pct": 2.37
+      },
+      {
+        "symbol": "PLTR",
+        "change_1d_pct": 0.83
+      }
+    ],
+    "rs_score": 62.2,
+    "rs_vs_spy": 16.05,
+    "rs_vs_qqq": 6.08,
+    "state": "emerging",
+    "momentum_rank": 11
+  },
+  {
+    "theme_id": "uranium_nuclear",
+    "display_name": "Uranium & Nuclear Energy",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "URA",
+      "URNM",
+      "NLR"
+    ],
+    "candidate_symbols": [
+      "CCJ",
+      "LEU",
+      "BWXT",
+      "SMR",
+      "OKLO"
+    ],
+    "sector_tags": [
+      "Energy",
+      "Utilities"
+    ],
+    "keywords": [
+      "uranium",
+      "nuclear",
+      "small modular reactors",
+      "SMR",
+      "clean power"
+    ],
+    "macro_sensitivities": [
+      "AI power demand",
+      "energy policy",
+      "carbon neutrality"
+    ],
+    "price": 56.42,
+    "lead_proxy": "URA",
+    "performance": {
+      "1D": 6.43,
+      "7D": -0.26,
+      "30D": 17.3,
+      "YTD": 24.89,
+      "1Y": 103.19
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 4.04,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "OKLO",
+        "change_1d_pct": 11.58
+      },
+      {
+        "symbol": "SMR",
+        "change_1d_pct": 10.08
+      },
+      {
+        "symbol": "LEU",
+        "change_1d_pct": 9.89
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "LEU",
+        "change_1d_pct": 9.89
+      },
+      {
+        "symbol": "CCJ",
+        "change_1d_pct": 7.66
+      },
+      {
+        "symbol": "BWXT",
+        "change_1d_pct": 4.0
+      }
+    ],
+    "rs_score": 60.8,
+    "rs_vs_spy": 72.06,
+    "rs_vs_qqq": 62.09,
+    "state": "emerging",
+    "momentum_rank": 12
+  },
+  {
+    "theme_id": "small_caps",
+    "display_name": "Small Caps",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "IWM",
+      "IJR",
+      "VB"
+    ],
+    "candidate_symbols": [],
+    "sector_tags": [
+      "Broad Market"
+    ],
+    "keywords": [
+      "small cap",
+      "Russell 2000",
+      "domestic economy",
+      "risk-on"
+    ],
+    "macro_sensitivities": [
+      "domestic growth",
+      "credit conditions",
+      "risk appetite",
+      "USD"
+    ],
+    "price": 277.97,
+    "lead_proxy": "IWM",
+    "performance": {
+      "1D": 1.85,
+      "7D": 0.89,
+      "30D": 13.43,
+      "YTD": 13.12,
+      "1Y": 37.82
+    },
+    "breadth_pct": null,
+    "pct_from_50d": 6.66,
+    "trend_accel_20d": 0.0,
+    "leaders": [],
+    "laggards": [],
+    "rs_score": 58.6,
+    "rs_vs_spy": 6.69,
+    "rs_vs_qqq": -3.28,
+    "state": "emerging",
+    "momentum_rank": 13
+  },
+  {
+    "theme_id": "microcaps",
+    "display_name": "Microcaps",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "IWC",
+      "FDM"
+    ],
+    "candidate_symbols": [],
+    "sector_tags": [
+      "Broad Market",
+      "Small Cap"
+    ],
+    "keywords": [
+      "microcap",
+      "small company",
+      "speculative",
+      "illiquid"
+    ],
+    "macro_sensitivities": [
+      "risk appetite",
+      "liquidity conditions",
+      "M&A activity"
+    ],
+    "price": 179.12,
+    "lead_proxy": "IWC",
+    "performance": {
+      "1D": 1.99,
+      "7D": 0.29,
+      "30D": 12.84,
+      "YTD": 12.41,
+      "1Y": 53.83
+    },
+    "breadth_pct": null,
+    "pct_from_50d": 5.61,
+    "trend_accel_20d": 0.0,
+    "leaders": [],
+    "laggards": [],
+    "rs_score": 57.8,
+    "rs_vs_spy": 22.7,
+    "rs_vs_qqq": 12.73,
+    "state": "emerging",
+    "momentum_rank": 14
+  },
+  {
+    "theme_id": "industrials",
+    "display_name": "Industrials",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "XLI",
+      "VIS"
+    ],
+    "candidate_symbols": [
+      "GE",
+      "ETN",
+      "PH",
+      "CAT",
+      "DE"
+    ],
+    "sector_tags": [
+      "Industrials"
+    ],
+    "keywords": [
+      "industrials",
+      "manufacturing",
+      "transportation",
+      "capital goods"
+    ],
+    "macro_sensitivities": [
+      "PMI",
+      "capex cycle",
+      "global trade",
+      "infrastructure"
+    ],
+    "price": 174.58,
+    "lead_proxy": "XLI",
+    "performance": {
+      "1D": 2.77,
+      "7D": 0.31,
+      "30D": 12.05,
+      "YTD": 13.55,
+      "1Y": 37.61
+    },
+    "breadth_pct": 80.0,
+    "pct_from_50d": 3.34,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "CAT",
+        "change_1d_pct": 9.89
+      },
+      {
+        "symbol": "ETN",
+        "change_1d_pct": 5.42
+      },
+      {
+        "symbol": "DE",
+        "change_1d_pct": 5.33
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "DE",
+        "change_1d_pct": 5.33
+      },
+      {
+        "symbol": "GE",
+        "change_1d_pct": 2.25
+      },
+      {
+        "symbol": "PH",
+        "change_1d_pct": -4.02
+      }
+    ],
+    "rs_score": 52.0,
+    "rs_vs_spy": 6.48,
+    "rs_vs_qqq": -3.49,
+    "state": "neutral",
+    "momentum_rank": 15
+  },
+  {
+    "theme_id": "solar",
+    "display_name": "Solar",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "TAN"
+    ],
+    "candidate_symbols": [
+      "FSLR",
+      "ENPH",
+      "SEDG",
+      "ARRY"
+    ],
+    "sector_tags": [
+      "Energy",
+      "Utilities",
+      "Clean Tech"
+    ],
+    "keywords": [
+      "solar",
+      "photovoltaic",
+      "rooftop solar",
+      "utility-scale",
+      "panels"
+    ],
+    "macro_sensitivities": [
+      "IRA/solar policy",
+      "China competition",
+      "interest rates",
+      "power demand"
+    ],
+    "price": 58.41,
+    "lead_proxy": "TAN",
+    "performance": {
+      "1D": 4.09,
+      "7D": -0.32,
+      "30D": 10.44,
+      "YTD": 18.91,
+      "1Y": 97.26
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 4.23,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "FSLR",
+        "change_1d_pct": 5.92
+      },
+      {
+        "symbol": "ENPH",
+        "change_1d_pct": 5.68
+      },
+      {
+        "symbol": "ARRY",
+        "change_1d_pct": 3.48
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "ENPH",
+        "change_1d_pct": 5.68
+      },
+      {
+        "symbol": "ARRY",
+        "change_1d_pct": 3.48
+      },
+      {
+        "symbol": "SEDG",
+        "change_1d_pct": 3.08
+      }
+    ],
+    "rs_score": 51.6,
+    "rs_vs_spy": 66.13,
+    "rs_vs_qqq": 56.16,
+    "state": "neutral",
+    "momentum_rank": 16
+  },
+  {
+    "theme_id": "oil_gas",
+    "display_name": "Oil & Gas",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "XOP",
+      "XLE",
+      "OIH"
+    ],
+    "candidate_symbols": [
+      "XOM",
+      "CVX",
+      "COP",
+      "SLB",
+      "EOG"
+    ],
+    "sector_tags": [
+      "Energy"
+    ],
+    "keywords": [
+      "oil",
+      "natural gas",
+      "E&P",
+      "upstream",
+      "OPEC",
+      "crude"
+    ],
+    "macro_sensitivities": [
+      "crude oil price",
+      "OPEC+ decisions",
+      "global demand",
+      "USD"
+    ],
+    "price": 178.21,
+    "lead_proxy": "XOP",
+    "performance": {
+      "1D": 0.56,
+      "7D": 5.1,
+      "30D": -3.73,
+      "YTD": 41.71,
+      "1Y": 60.2
+    },
+    "breadth_pct": 60.0,
+    "pct_from_50d": 6.32,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "SLB",
+        "change_1d_pct": 2.12
+      },
+      {
+        "symbol": "EOG",
+        "change_1d_pct": 1.05
+      },
+      {
+        "symbol": "CVX",
+        "change_1d_pct": 0.57
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "CVX",
+        "change_1d_pct": 0.57
+      },
+      {
+        "symbol": "XOM",
+        "change_1d_pct": -0.22
+      },
+      {
+        "symbol": "COP",
+        "change_1d_pct": -1.93
+      }
+    ],
+    "rs_score": 49.1,
+    "rs_vs_spy": 29.07,
+    "rs_vs_qqq": 19.1,
+    "state": "neutral",
+    "momentum_rank": 17
+  },
+  {
+    "theme_id": "copper_miners",
+    "display_name": "Copper Miners",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "COPX",
+      "CPER"
+    ],
+    "candidate_symbols": [
+      "FCX",
+      "SCCO",
+      "TECK"
+    ],
+    "sector_tags": [
+      "Materials",
+      "Mining"
+    ],
+    "keywords": [
+      "copper",
+      "mining",
+      "electrification",
+      "EV infrastructure"
+    ],
+    "macro_sensitivities": [
+      "China manufacturing",
+      "electrification demand",
+      "USD",
+      "global growth"
+    ],
+    "price": 79.61,
+    "lead_proxy": "COPX",
+    "performance": {
+      "1D": 1.99,
+      "7D": -2.31,
+      "30D": 10.64,
+      "YTD": 7.69,
+      "1Y": 65.61
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 0.09,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "TECK",
+        "change_1d_pct": 3.9
+      },
+      {
+        "symbol": "SCCO",
+        "change_1d_pct": 1.94
+      },
+      {
+        "symbol": "FCX",
+        "change_1d_pct": 1.5
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "TECK",
+        "change_1d_pct": 3.9
+      },
+      {
+        "symbol": "SCCO",
+        "change_1d_pct": 1.94
+      },
+      {
+        "symbol": "FCX",
+        "change_1d_pct": 1.5
+      }
+    ],
+    "rs_score": 46.2,
+    "rs_vs_spy": 34.48,
+    "rs_vs_qqq": 24.51,
+    "state": "neutral",
+    "momentum_rank": 18
+  },
+  {
+    "theme_id": "energy",
+    "display_name": "Energy",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "XLE",
+      "VDE",
+      "XOP"
+    ],
+    "candidate_symbols": [
+      "XOM",
+      "CVX",
+      "COP"
+    ],
+    "sector_tags": [
+      "Energy"
+    ],
+    "keywords": [
+      "energy",
+      "oil",
+      "gas",
+      "petroleum",
+      "upstream",
+      "downstream"
+    ],
+    "macro_sensitivities": [
+      "crude oil price",
+      "OPEC",
+      "global growth",
+      "USD"
+    ],
+    "price": 59.65,
+    "lead_proxy": "XLE",
+    "performance": {
+      "1D": 0.87,
+      "7D": 4.69,
+      "30D": -3.73,
+      "YTD": 35.45,
+      "1Y": 51.94
+    },
+    "breadth_pct": 33.3,
+    "pct_from_50d": 4.26,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "CVX",
+        "change_1d_pct": 0.57
+      },
+      {
+        "symbol": "XOM",
+        "change_1d_pct": -0.22
+      },
+      {
+        "symbol": "COP",
+        "change_1d_pct": -1.93
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "CVX",
+        "change_1d_pct": 0.57
+      },
+      {
+        "symbol": "XOM",
+        "change_1d_pct": -0.22
+      },
+      {
+        "symbol": "COP",
+        "change_1d_pct": -1.93
+      }
+    ],
+    "rs_score": 45.7,
+    "rs_vs_spy": 20.81,
+    "rs_vs_qqq": 10.84,
+    "state": "neutral",
+    "momentum_rank": 19
+  },
+  {
+    "theme_id": "travel_transportation",
+    "display_name": "Travel & Transportation",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "IYT",
+      "JETS",
+      "XTN"
+    ],
+    "candidate_symbols": [
+      "UAL",
+      "DAL",
+      "UPS",
+      "FDX"
+    ],
+    "sector_tags": [
+      "Industrials",
+      "Consumer Discretionary"
+    ],
+    "keywords": [
+      "travel",
+      "airlines",
+      "hotels",
+      "cruise",
+      "transportation",
+      "logistics"
+    ],
+    "macro_sensitivities": [
+      "consumer spending",
+      "fuel costs",
+      "post-COVID recovery"
+    ],
+    "price": 81.27,
+    "lead_proxy": "IYT",
+    "performance": {
+      "1D": 1.74,
+      "7D": -0.91,
+      "30D": 12.59,
+      "YTD": 9.47,
+      "1Y": 36.23
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 4.48,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "FDX",
+        "change_1d_pct": 3.79
+      },
+      {
+        "symbol": "DAL",
+        "change_1d_pct": 2.6
+      },
+      {
+        "symbol": "UPS",
+        "change_1d_pct": 2.06
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "DAL",
+        "change_1d_pct": 2.6
+      },
+      {
+        "symbol": "UPS",
+        "change_1d_pct": 2.06
+      },
+      {
+        "symbol": "UAL",
+        "change_1d_pct": 1.56
+      }
+    ],
+    "rs_score": 45.0,
+    "rs_vs_spy": 5.1,
+    "rs_vs_qqq": -4.87,
+    "state": "neutral",
+    "momentum_rank": 20
+  },
+  {
+    "theme_id": "cybersecurity",
+    "display_name": "Cybersecurity",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "CIBR",
+      "HACK",
+      "BUG",
+      "IHAK"
+    ],
+    "candidate_symbols": [
+      "PANW",
+      "CRWD",
+      "FTNT",
+      "ZS",
+      "CYBR"
+    ],
+    "sector_tags": [
+      "Technology"
+    ],
+    "keywords": [
+      "cybersecurity",
+      "network security",
+      "identity",
+      "SIEM",
+      "zero-trust"
+    ],
+    "macro_sensitivities": [
+      "threat landscape",
+      "enterprise IT budgets",
+      "AI adoption"
+    ],
+    "price": 67.45,
+    "lead_proxy": "CIBR",
+    "performance": {
+      "1D": -1.09,
+      "7D": 1.43,
+      "30D": 9.5,
+      "YTD": -3.8,
+      "1Y": -1.43
+    },
+    "breadth_pct": 0.0,
+    "pct_from_50d": 3.97,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "PANW",
+        "change_1d_pct": -1.23
+      },
+      {
+        "symbol": "CRWD",
+        "change_1d_pct": -1.47
+      },
+      {
+        "symbol": "FTNT",
+        "change_1d_pct": -2.09
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "CRWD",
+        "change_1d_pct": -1.47
+      },
+      {
+        "symbol": "FTNT",
+        "change_1d_pct": -2.09
+      },
+      {
+        "symbol": "ZS",
+        "change_1d_pct": -3.01
+      }
+    ],
+    "rs_score": 41.5,
+    "rs_vs_spy": -32.56,
+    "rs_vs_qqq": -42.53,
+    "state": "neutral",
+    "momentum_rank": 21
+  },
+  {
+    "theme_id": "regional_banks",
+    "display_name": "Regional Banks",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "KRE",
+      "KBE"
+    ],
+    "candidate_symbols": [
+      "WAL",
+      "ZION",
+      "CMA",
+      "KEY"
+    ],
+    "sector_tags": [
+      "Financials"
+    ],
+    "keywords": [
+      "regional banks",
+      "community banking",
+      "CRE",
+      "deposits",
+      "NIM"
+    ],
+    "macro_sensitivities": [
+      "Fed rates",
+      "CRE exposure",
+      "deposit stability",
+      "yield curve"
+    ],
+    "price": 69.85,
+    "lead_proxy": "KRE",
+    "performance": {
+      "1D": 1.05,
+      "7D": -0.22,
+      "30D": 10.16,
+      "YTD": 7.39,
+      "1Y": 29.9
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 4.58,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "WAL",
+        "change_1d_pct": 2.35
+      },
+      {
+        "symbol": "KEY",
+        "change_1d_pct": 2.03
+      },
+      {
+        "symbol": "ZION",
+        "change_1d_pct": 1.35
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "WAL",
+        "change_1d_pct": 2.35
+      },
+      {
+        "symbol": "KEY",
+        "change_1d_pct": 2.03
+      },
+      {
+        "symbol": "ZION",
+        "change_1d_pct": 1.35
+      }
+    ],
+    "rs_score": 40.9,
+    "rs_vs_spy": -1.23,
+    "rs_vs_qqq": -11.2,
+    "state": "neutral",
+    "momentum_rank": 22
+  },
+  {
+    "theme_id": "consumer_retail",
+    "display_name": "Consumer Retail",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "XRT",
+      "RTH"
+    ],
+    "candidate_symbols": [
+      "WMT",
+      "COST",
+      "TGT",
+      "TJX",
+      "AMZN"
+    ],
+    "sector_tags": [
+      "Consumer Discretionary",
+      "Consumer Staples"
+    ],
+    "keywords": [
+      "retail",
+      "consumer spending",
+      "e-commerce",
+      "discretionary"
+    ],
+    "macro_sensitivities": [
+      "consumer confidence",
+      "wages",
+      "inflation",
+      "credit"
+    ],
+    "price": 85.78,
+    "lead_proxy": "XRT",
+    "performance": {
+      "1D": 1.87,
+      "7D": 0.14,
+      "30D": 9.59,
+      "YTD": 4.53,
+      "1Y": 22.94
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 3.58,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "WMT",
+        "change_1d_pct": 3.07
+      },
+      {
+        "symbol": "COST",
+        "change_1d_pct": 1.59
+      },
+      {
+        "symbol": "TGT",
+        "change_1d_pct": 1.47
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "TGT",
+        "change_1d_pct": 1.47
+      },
+      {
+        "symbol": "AMZN",
+        "change_1d_pct": 0.77
+      },
+      {
+        "symbol": "TJX",
+        "change_1d_pct": 0.44
+      }
+    ],
+    "rs_score": 40.6,
+    "rs_vs_spy": -8.19,
+    "rs_vs_qqq": -18.16,
+    "state": "neutral",
+    "momentum_rank": 23
+  },
+  {
+    "theme_id": "equal_weight_sp500",
+    "display_name": "Equal-Weighted S&P 500",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "RSP"
+    ],
+    "candidate_symbols": [],
+    "sector_tags": [
+      "Broad Market"
+    ],
+    "keywords": [
+      "S&P 500",
+      "equal weight",
+      "diversified",
+      "broad market"
+    ],
+    "macro_sensitivities": [
+      "interest rates",
+      "earnings growth",
+      "economic cycle"
+    ],
+    "price": 203.44,
+    "lead_proxy": "RSP",
+    "performance": {
+      "1D": 1.52,
+      "7D": 0.49,
+      "30D": 8.17,
+      "YTD": 6.66,
+      "1Y": 22.47
+    },
+    "breadth_pct": null,
+    "pct_from_50d": 2.89,
+    "trend_accel_20d": 0.0,
+    "leaders": [],
+    "laggards": [],
+    "rs_score": 39.8,
+    "rs_vs_spy": -8.66,
+    "rs_vs_qqq": -18.63,
+    "state": "neutral",
+    "momentum_rank": 24
+  },
+  {
+    "theme_id": "biotech",
+    "display_name": "Biotech",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "XBI",
+      "IBB",
+      "ARKG"
+    ],
+    "candidate_symbols": [
+      "MRNA",
+      "REGN",
+      "VRTX",
+      "BIIB",
+      "GILD",
+      "ALNY"
+    ],
+    "sector_tags": [
+      "Healthcare"
+    ],
+    "keywords": [
+      "biotech",
+      "biopharma",
+      "clinical trials",
+      "FDA",
+      "drug development"
+    ],
+    "macro_sensitivities": [
+      "FDA approvals",
+      "risk appetite",
+      "M&A activity"
+    ],
+    "price": 131.33,
+    "lead_proxy": "XBI",
+    "performance": {
+      "1D": 2.01,
+      "7D": -1.66,
+      "30D": 10.57,
+      "YTD": 3.11,
+      "1Y": 35.55
+    },
+    "breadth_pct": 83.3,
+    "pct_from_50d": 2.65,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "REGN",
+        "change_1d_pct": 3.02
+      },
+      {
+        "symbol": "ALNY",
+        "change_1d_pct": 2.76
+      },
+      {
+        "symbol": "GILD",
+        "change_1d_pct": 1.56
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "VRTX",
+        "change_1d_pct": 0.98
+      },
+      {
+        "symbol": "MRNA",
+        "change_1d_pct": 0.49
+      },
+      {
+        "symbol": "BIIB",
+        "change_1d_pct": -2.63
+      }
+    ],
+    "rs_score": 39.4,
+    "rs_vs_spy": 4.42,
+    "rs_vs_qqq": -5.55,
+    "state": "neutral",
+    "momentum_rank": 25
+  },
+  {
+    "theme_id": "banks",
+    "display_name": "Banks",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "KBE",
+      "XLF"
+    ],
+    "candidate_symbols": [
+      "JPM",
+      "BAC",
+      "WFC",
+      "GS",
+      "MS"
+    ],
+    "sector_tags": [
+      "Financials"
+    ],
+    "keywords": [
+      "banking",
+      "credit",
+      "lending",
+      "deposits",
+      "interest rates"
+    ],
+    "macro_sensitivities": [
+      "Fed rates",
+      "yield curve",
+      "credit spreads",
+      "GDP"
+    ],
+    "price": 64.19,
+    "lead_proxy": "KBE",
+    "performance": {
+      "1D": 0.67,
+      "7D": 0.21,
+      "30D": 9.15,
+      "YTD": 1.03,
+      "1Y": 18.89
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 3.92,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "MS",
+        "change_1d_pct": 2.43
+      },
+      {
+        "symbol": "GS",
+        "change_1d_pct": 2.01
+      },
+      {
+        "symbol": "JPM",
+        "change_1d_pct": 1.29
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "JPM",
+        "change_1d_pct": 1.29
+      },
+      {
+        "symbol": "BAC",
+        "change_1d_pct": 1.1
+      },
+      {
+        "symbol": "WFC",
+        "change_1d_pct": 0.89
+      }
+    ],
+    "rs_score": 38.0,
+    "rs_vs_spy": -12.24,
+    "rs_vs_qqq": -22.21,
+    "state": "neutral",
+    "momentum_rank": 26
+  },
+  {
+    "theme_id": "fintech",
+    "display_name": "Fintech",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "FINX",
+      "ARKF",
+      "IPAY"
+    ],
+    "candidate_symbols": [
+      "SQ",
+      "PYPL",
+      "SOFI",
+      "HOOD",
+      "AFRM"
+    ],
+    "sector_tags": [
+      "Technology",
+      "Financials"
+    ],
+    "keywords": [
+      "fintech",
+      "payments",
+      "digital banking",
+      "crypto",
+      "BNPL"
+    ],
+    "macro_sensitivities": [
+      "consumer spending",
+      "interest rates",
+      "regulatory risk"
+    ],
+    "price": 25.25,
+    "lead_proxy": "FINX",
+    "performance": {
+      "1D": 0.74,
+      "7D": -1.25,
+      "30D": 13.48,
+      "YTD": -13.5,
+      "1Y": -11.15
+    },
+    "breadth_pct": 75.0,
+    "pct_from_50d": 3.37,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "SOFI",
+        "change_1d_pct": 3.71
+      },
+      {
+        "symbol": "HOOD",
+        "change_1d_pct": 2.38
+      },
+      {
+        "symbol": "AFRM",
+        "change_1d_pct": 1.26
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "HOOD",
+        "change_1d_pct": 2.38
+      },
+      {
+        "symbol": "AFRM",
+        "change_1d_pct": 1.26
+      },
+      {
+        "symbol": "PYPL",
+        "change_1d_pct": -1.57
+      }
+    ],
+    "rs_score": 37.9,
+    "rs_vs_spy": -42.28,
+    "rs_vs_qqq": -52.25,
+    "state": "neutral",
+    "momentum_rank": 27
+  },
+  {
+    "theme_id": "financials",
+    "display_name": "Financials",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "XLF",
+      "VFH"
+    ],
+    "candidate_symbols": [
+      "JPM",
+      "BAC",
+      "GS",
+      "MS",
+      "BRK-B"
+    ],
+    "sector_tags": [
+      "Financials"
+    ],
+    "keywords": [
+      "financials",
+      "banks",
+      "insurance",
+      "asset managers",
+      "brokers"
+    ],
+    "macro_sensitivities": [
+      "Fed rates",
+      "credit conditions",
+      "economic cycle"
+    ],
+    "price": 52.13,
+    "lead_proxy": "XLF",
+    "performance": {
+      "1D": 0.46,
+      "7D": 0.62,
+      "30D": 8.11,
+      "YTD": -4.0,
+      "1Y": 10.12
+    },
+    "breadth_pct": 80.0,
+    "pct_from_50d": 3.25,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "MS",
+        "change_1d_pct": 2.43
+      },
+      {
+        "symbol": "GS",
+        "change_1d_pct": 2.01
+      },
+      {
+        "symbol": "JPM",
+        "change_1d_pct": 1.29
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "JPM",
+        "change_1d_pct": 1.29
+      },
+      {
+        "symbol": "BAC",
+        "change_1d_pct": 1.1
+      },
+      {
+        "symbol": "BRK-B",
+        "change_1d_pct": -0.37
+      }
+    ],
+    "rs_score": 37.6,
+    "rs_vs_spy": -21.01,
+    "rs_vs_qqq": -30.98,
+    "state": "neutral",
+    "momentum_rank": 28
+  },
+  {
+    "theme_id": "silver",
+    "display_name": "Silver",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "SLV",
+      "SIL",
+      "SILJ"
+    ],
+    "candidate_symbols": [
+      "PAAS",
+      "AG",
+      "MAG"
+    ],
+    "sector_tags": [
+      "Materials",
+      "Commodities"
+    ],
+    "keywords": [
+      "silver",
+      "precious metals",
+      "industrial metal",
+      "solar demand"
+    ],
+    "macro_sensitivities": [
+      "gold price",
+      "industrial demand",
+      "real yields",
+      "solar growth"
+    ],
+    "price": 66.66,
+    "lead_proxy": "SLV",
+    "performance": {
+      "1D": 2.81,
+      "7D": -4.37,
+      "30D": 6.02,
+      "YTD": 5.96,
+      "1Y": 123.47
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": -8.47,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "AG",
+        "change_1d_pct": 4.02
+      },
+      {
+        "symbol": "PAAS",
+        "change_1d_pct": 1.97
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "AG",
+        "change_1d_pct": 4.02
+      },
+      {
+        "symbol": "PAAS",
+        "change_1d_pct": 1.97
+      }
+    ],
+    "rs_score": 35.7,
+    "rs_vs_spy": 92.34,
+    "rs_vs_qqq": 82.37,
+    "state": "neutral",
+    "momentum_rank": 29
+  },
+  {
+    "theme_id": "drones",
+    "display_name": "Drones",
+    "proxy_type": "hybrid",
+    "proxy_symbols": [
+      "XAR",
+      "ITA"
+    ],
+    "candidate_symbols": [
+      "AVAV",
+      "KTOS",
+      "RCAT",
+      "JOBY",
+      "ACHR",
+      "EH"
+    ],
+    "sector_tags": [
+      "Technology",
+      "Industrials",
+      "Defense"
+    ],
+    "keywords": [
+      "drones",
+      "UAV",
+      "eVTOL",
+      "autonomous flight",
+      "air taxi"
+    ],
+    "macro_sensitivities": [
+      "FAA regulation",
+      "defense budgets",
+      "AI automation"
+    ],
+    "price": 259.14,
+    "lead_proxy": "XAR",
+    "performance": {
+      "1D": 3.15,
+      "7D": -0.59,
+      "30D": 5.33,
+      "YTD": 4.67,
+      "1Y": 45.93
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": -4.45,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "AVAV",
+        "change_1d_pct": 6.28
+      },
+      {
+        "symbol": "RCAT",
+        "change_1d_pct": 5.88
+      },
+      {
+        "symbol": "KTOS",
+        "change_1d_pct": 5.86
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "JOBY",
+        "change_1d_pct": 5.64
+      },
+      {
+        "symbol": "EH",
+        "change_1d_pct": 5.18
+      },
+      {
+        "symbol": "ACHR",
+        "change_1d_pct": 2.5
+      }
+    ],
+    "rs_score": 35.2,
+    "rs_vs_spy": 14.8,
+    "rs_vs_qqq": 4.83,
+    "state": "neutral",
+    "momentum_rank": 30
+  },
+  {
+    "theme_id": "software",
+    "display_name": "Software",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "IGV",
+      "WCLD"
+    ],
+    "candidate_symbols": [
+      "CRM",
+      "NOW",
+      "DDOG",
+      "SNOW",
+      "MDB"
+    ],
+    "sector_tags": [
+      "Technology"
+    ],
+    "keywords": [
+      "software",
+      "SaaS",
+      "cloud software",
+      "enterprise software",
+      "AI software"
+    ],
+    "macro_sensitivities": [
+      "enterprise IT budgets",
+      "AI adoption",
+      "interest rates (multiples)"
+    ],
+    "price": 83.91,
+    "lead_proxy": "IGV",
+    "performance": {
+      "1D": -0.79,
+      "7D": 1.55,
+      "30D": 5.07,
+      "YTD": -21.6,
+      "1Y": -15.5
+    },
+    "breadth_pct": 0.0,
+    "pct_from_50d": 0.12,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "NOW",
+        "change_1d_pct": -0.66
+      },
+      {
+        "symbol": "DDOG",
+        "change_1d_pct": -1.34
+      },
+      {
+        "symbol": "CRM",
+        "change_1d_pct": -2.59
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "CRM",
+        "change_1d_pct": -2.59
+      },
+      {
+        "symbol": "MDB",
+        "change_1d_pct": -2.89
+      },
+      {
+        "symbol": "SNOW",
+        "change_1d_pct": -3.37
+      }
+    ],
+    "rs_score": 35.2,
+    "rs_vs_spy": -46.63,
+    "rs_vs_qqq": -56.6,
+    "state": "neutral",
+    "momentum_rank": 31
+  },
+  {
+    "theme_id": "utilities",
+    "display_name": "Utilities",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "XLU",
+      "VPU"
+    ],
+    "candidate_symbols": [
+      "NEE",
+      "CEG",
+      "VST",
+      "SO",
+      "DUK"
+    ],
+    "sector_tags": [
+      "Utilities"
+    ],
+    "keywords": [
+      "utilities",
+      "electric",
+      "regulated",
+      "dividend",
+      "defensive"
+    ],
+    "macro_sensitivities": [
+      "interest rates",
+      "power demand",
+      "regulatory environment"
+    ],
+    "price": 46.85,
+    "lead_proxy": "XLU",
+    "performance": {
+      "1D": 2.52,
+      "7D": 1.53,
+      "30D": 2.12,
+      "YTD": 10.33,
+      "1Y": 21.35
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 1.42,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "CEG",
+        "change_1d_pct": 5.39
+      },
+      {
+        "symbol": "NEE",
+        "change_1d_pct": 3.94
+      },
+      {
+        "symbol": "SO",
+        "change_1d_pct": 3.42
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "SO",
+        "change_1d_pct": 3.42
+      },
+      {
+        "symbol": "VST",
+        "change_1d_pct": 2.64
+      },
+      {
+        "symbol": "DUK",
+        "change_1d_pct": 2.41
+      }
+    ],
+    "rs_score": 34.5,
+    "rs_vs_spy": -9.78,
+    "rs_vs_qqq": -19.75,
+    "state": "neutral",
+    "momentum_rank": 32
+  },
+  {
+    "theme_id": "agribusiness",
+    "display_name": "Agribusiness",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "MOO",
+      "DBA",
+      "VEGI"
+    ],
+    "candidate_symbols": [
+      "DE",
+      "MOS",
+      "ADM",
+      "BG",
+      "CF"
+    ],
+    "sector_tags": [
+      "Materials",
+      "Consumer Staples"
+    ],
+    "keywords": [
+      "agriculture",
+      "fertilizer",
+      "crop",
+      "farming",
+      "food supply"
+    ],
+    "macro_sensitivities": [
+      "commodity prices",
+      "weather",
+      "food inflation",
+      "USD"
+    ],
+    "price": 83.85,
+    "lead_proxy": "MOO",
+    "performance": {
+      "1D": 2.35,
+      "7D": 0.87,
+      "30D": 2.32,
+      "YTD": 15.19,
+      "1Y": 24.52
+    },
+    "breadth_pct": 80.0,
+    "pct_from_50d": 0.66,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "DE",
+        "change_1d_pct": 5.33
+      },
+      {
+        "symbol": "MOS",
+        "change_1d_pct": 1.05
+      },
+      {
+        "symbol": "BG",
+        "change_1d_pct": 0.61
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "BG",
+        "change_1d_pct": 0.61
+      },
+      {
+        "symbol": "ADM",
+        "change_1d_pct": 0.37
+      },
+      {
+        "symbol": "CF",
+        "change_1d_pct": -2.04
+      }
+    ],
+    "rs_score": 33.5,
+    "rs_vs_spy": -6.61,
+    "rs_vs_qqq": -16.58,
+    "state": "neutral",
+    "momentum_rank": 33
+  },
+  {
+    "theme_id": "chemicals_materials",
+    "display_name": "Chemicals & Materials",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "XLB",
+      "IYM"
+    ],
+    "candidate_symbols": [
+      "LIN",
+      "APD",
+      "DD",
+      "ECL",
+      "SHW"
+    ],
+    "sector_tags": [
+      "Materials"
+    ],
+    "keywords": [
+      "chemicals",
+      "specialty materials",
+      "polymers",
+      "industrial chemicals"
+    ],
+    "macro_sensitivities": [
+      "energy costs",
+      "China demand",
+      "construction activity"
+    ],
+    "price": 51.47,
+    "lead_proxy": "XLB",
+    "performance": {
+      "1D": 1.2,
+      "7D": -0.78,
+      "30D": 5.41,
+      "YTD": 16.12,
+      "1Y": 33.24
+    },
+    "breadth_pct": 60.0,
+    "pct_from_50d": 1.28,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "DD",
+        "change_1d_pct": 2.34
+      },
+      {
+        "symbol": "ECL",
+        "change_1d_pct": 1.56
+      },
+      {
+        "symbol": "SHW",
+        "change_1d_pct": 1.19
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "SHW",
+        "change_1d_pct": 1.19
+      },
+      {
+        "symbol": "LIN",
+        "change_1d_pct": -0.71
+      },
+      {
+        "symbol": "APD",
+        "change_1d_pct": -0.81
+      }
+    ],
+    "rs_score": 31.1,
+    "rs_vs_spy": 2.11,
+    "rs_vs_qqq": -7.86,
+    "state": "neutral",
+    "momentum_rank": 34
+  },
+  {
+    "theme_id": "defense",
+    "display_name": "Defense",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "ITA",
+      "XAR",
+      "PPA"
+    ],
+    "candidate_symbols": [
+      "LMT",
+      "RTX",
+      "NOC",
+      "KTOS",
+      "AVAV"
+    ],
+    "sector_tags": [
+      "Industrials",
+      "Defense"
+    ],
+    "keywords": [
+      "defense",
+      "aerospace",
+      "military",
+      "government contracts",
+      "NATO"
+    ],
+    "macro_sensitivities": [
+      "geopolitical risk",
+      "defense budgets",
+      "NATO spending"
+    ],
+    "price": 218.56,
+    "lead_proxy": "ITA",
+    "performance": {
+      "1D": 2.55,
+      "7D": -0.72,
+      "30D": 4.58,
+      "YTD": 6.94,
+      "1Y": 40.46
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": -3.85,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "AVAV",
+        "change_1d_pct": 6.28
+      },
+      {
+        "symbol": "KTOS",
+        "change_1d_pct": 5.86
+      },
+      {
+        "symbol": "RTX",
+        "change_1d_pct": 1.9
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "RTX",
+        "change_1d_pct": 1.9
+      },
+      {
+        "symbol": "LMT",
+        "change_1d_pct": 1.61
+      },
+      {
+        "symbol": "NOC",
+        "change_1d_pct": 1.24
+      }
+    ],
+    "rs_score": 30.4,
+    "rs_vs_spy": 9.33,
+    "rs_vs_qqq": -0.64,
+    "state": "neutral",
+    "momentum_rank": 35
+  },
+  {
+    "theme_id": "homebuilders",
+    "display_name": "Homebuilders",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "ITB",
+      "XHB"
+    ],
+    "candidate_symbols": [
+      "DHI",
+      "LEN",
+      "PHM",
+      "TOL"
+    ],
+    "sector_tags": [
+      "Consumer Discretionary",
+      "Real Estate"
+    ],
+    "keywords": [
+      "homebuilders",
+      "housing",
+      "mortgage",
+      "construction",
+      "real estate"
+    ],
+    "macro_sensitivities": [
+      "mortgage rates",
+      "housing starts",
+      "consumer confidence"
+    ],
+    "price": 96.36,
+    "lead_proxy": "ITB",
+    "performance": {
+      "1D": 1.6,
+      "7D": -3.79,
+      "30D": 10.16,
+      "YTD": 1.76,
+      "1Y": 10.12
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 0.14,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "TOL",
+        "change_1d_pct": 1.85
+      },
+      {
+        "symbol": "LEN",
+        "change_1d_pct": 1.8
+      },
+      {
+        "symbol": "DHI",
+        "change_1d_pct": 1.46
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "LEN",
+        "change_1d_pct": 1.8
+      },
+      {
+        "symbol": "DHI",
+        "change_1d_pct": 1.46
+      },
+      {
+        "symbol": "PHM",
+        "change_1d_pct": 1.37
+      }
+    ],
+    "rs_score": 28.5,
+    "rs_vs_spy": -21.01,
+    "rs_vs_qqq": -30.98,
+    "state": "dead_zone",
+    "momentum_rank": 36
+  },
+  {
+    "theme_id": "gold",
+    "display_name": "Gold",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "GLD",
+      "IAU",
+      "GDX",
+      "GDXJ"
+    ],
+    "candidate_symbols": [
+      "NEM",
+      "GOLD",
+      "AEM"
+    ],
+    "sector_tags": [
+      "Materials",
+      "Commodities"
+    ],
+    "keywords": [
+      "gold",
+      "precious metals",
+      "safe haven",
+      "miners",
+      "royalties"
+    ],
+    "macro_sensitivities": [
+      "real yields",
+      "USD",
+      "inflation",
+      "geopolitical risk"
+    ],
+    "price": 423.66,
+    "lead_proxy": "GLD",
+    "performance": {
+      "1D": 1.97,
+      "7D": -2.97,
+      "30D": 2.59,
+      "YTD": 4.92,
+      "1Y": 61.04
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": -6.77,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "NEM",
+        "change_1d_pct": 3.24
+      },
+      {
+        "symbol": "AEM",
+        "change_1d_pct": 2.54
+      },
+      {
+        "symbol": "GOLD",
+        "change_1d_pct": 0.05
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "NEM",
+        "change_1d_pct": 3.24
+      },
+      {
+        "symbol": "AEM",
+        "change_1d_pct": 2.54
+      },
+      {
+        "symbol": "GOLD",
+        "change_1d_pct": 0.05
+      }
+    ],
+    "rs_score": 28.4,
+    "rs_vs_spy": 29.91,
+    "rs_vs_qqq": 19.94,
+    "state": "dead_zone",
+    "momentum_rank": 37
+  },
+  {
+    "theme_id": "healthcare",
+    "display_name": "Healthcare",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "XLV",
+      "VHT",
+      "IYH"
+    ],
+    "candidate_symbols": [
+      "LLY",
+      "UNH",
+      "JNJ",
+      "ABBV"
+    ],
+    "sector_tags": [
+      "Healthcare"
+    ],
+    "keywords": [
+      "healthcare",
+      "pharma",
+      "medical",
+      "drug",
+      "hospital",
+      "managed care"
+    ],
+    "macro_sensitivities": [
+      "drug pricing policy",
+      "aging demographics",
+      "M&A"
+    ],
+    "price": 145.99,
+    "lead_proxy": "XLV",
+    "performance": {
+      "1D": 2.17,
+      "7D": -0.2,
+      "30D": 1.54,
+      "YTD": -5.3,
+      "1Y": 6.82
+    },
+    "breadth_pct": 75.0,
+    "pct_from_50d": -2.12,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "LLY",
+        "change_1d_pct": 9.8
+      },
+      {
+        "symbol": "ABBV",
+        "change_1d_pct": 3.65
+      },
+      {
+        "symbol": "JNJ",
+        "change_1d_pct": 1.1
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "ABBV",
+        "change_1d_pct": 3.65
+      },
+      {
+        "symbol": "JNJ",
+        "change_1d_pct": 1.1
+      },
+      {
+        "symbol": "UNH",
+        "change_1d_pct": -0.07
+      }
+    ],
+    "rs_score": 22.3,
+    "rs_vs_spy": -24.31,
+    "rs_vs_qqq": -34.28,
+    "state": "dead_zone",
+    "momentum_rank": 38
+  },
+  {
+    "theme_id": "insurance",
+    "display_name": "Insurance",
+    "proxy_type": "etf",
+    "proxy_symbols": [
+      "KIE",
+      "IAK"
+    ],
+    "candidate_symbols": [
+      "PGR",
+      "CB",
+      "ACGL",
+      "ALL"
+    ],
+    "sector_tags": [
+      "Financials"
+    ],
+    "keywords": [
+      "insurance",
+      "P&C",
+      "life insurance",
+      "reinsurance",
+      "underwriting"
+    ],
+    "macro_sensitivities": [
+      "interest rates",
+      "catastrophe risk",
+      "claims trends"
+    ],
+    "price": 57.33,
+    "lead_proxy": "KIE",
+    "performance": {
+      "1D": 0.44,
+      "7D": -1.21,
+      "30D": 4.58,
+      "YTD": -2.76,
+      "1Y": 2.15
+    },
+    "breadth_pct": 100.0,
+    "pct_from_50d": 1.34,
+    "trend_accel_20d": 0.0,
+    "leaders": [
+      {
+        "symbol": "ALL",
+        "change_1d_pct": 2.33
+      },
+      {
+        "symbol": "ACGL",
+        "change_1d_pct": 1.88
+      },
+      {
+        "symbol": "CB",
+        "change_1d_pct": 0.39
+      }
+    ],
+    "laggards": [
+      {
+        "symbol": "ACGL",
+        "change_1d_pct": 1.88
+      },
+      {
+        "symbol": "CB",
+        "change_1d_pct": 0.39
+      },
+      {
+        "symbol": "PGR",
+        "change_1d_pct": 0.31
+      }
+    ],
+    "rs_score": 21.1,
+    "rs_vs_spy": -28.98,
+    "rs_vs_qqq": -38.95,
+    "state": "dead_zone",
+    "momentum_rank": 39
+  }
+]

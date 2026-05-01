@@ -1,0 +1,106 @@
+Build a Themes by Relative Strength backend first. This should become the live input source for Chain Reaction.
+
+Goal:
+Create a canonical theme performance/relative-strength service that tracks the same themes shown in the attached screenshot and exposes active/emerging/dead themes plus leaders/laggards per theme.
+
+Do not change Chain Reaction yet.
+Do not change Earnings.
+Do not change Options Flow or TA Screener.
+
+Requirements:
+1. Create/extend a canonical theme registry with all themes from the screenshot:
+- Memory & Storage
+- Rare Earth Metals
+- Uranium & Nuclear Energy
+- Metals & Mining
+- Regional Banks
+- Banks
+- Cybersecurity
+- Robotics & Automation
+- Oil & Gas
+- Tech Mega Caps
+- Lithium & Battery Tech
+- Solar
+- Financials
+- Clean Energy
+- Defense
+- Industrials
+- Utilities
+- Speculative Tech
+- Growth Stocks
+- Small Caps
+- Insurance
+- Chemicals & Materials
+- Agribusiness
+- Equal-Weighted S&P 500
+- Microcaps
+- Travel & Transportation
+- Energy
+- IBD 50
+- Biotech
+- Homebuilders
+- Software
+- Healthcare
+- Drones
+- Tech Equal-Weight
+- Consumer Retail
+- Fintech
+- Silver
+- Gold
+- Copper Miners
+
+2. Each theme should have:
+- theme_id
+- display_name
+- proxy_type: ETF / basket / hybrid
+- proxy_symbols
+- candidate_symbols / known representatives
+- sector_tags
+- keywords
+- macro_sensitivities
+
+3. Calculate:
+- 1D return
+- 7D return
+- 30D return
+- YTD return
+- 1Y return
+- relative strength vs SPY and QQQ
+- breadth if basket-based
+- top leaders
+- top laggards
+- state: active / emerging / neutral / weakening / dead_zone
+
+4. Use existing data providers where possible:
+- FMP historical prices/quotes where available
+- existing quote/cache services
+- ETF/theme universe if already implemented
+- no LLM calls for the core calculation
+
+5. Add endpoint:
+GET /api/themes/relative-strength?timeframe=1D|7D|30D|YTD|1Y
+
+6. Response should support the screenshot UI:
+- sorted list of themes
+- return_pct
+- rs_score
+- state
+- leaders
+- laggards
+- proxy_symbols
+- last_updated
+- source_health
+
+7. Add a cached snapshot:
+themes:relative_strength:v1
+TTL around 15 minutes during market hours
+Persist LKG to disk so page works after restart.
+
+8. Validation:
+- endpoint returns all themes
+- values sorted correctly
+- no LLM calls
+- no Earnings changes
+- no Chain Reaction changes yet
+
+After this is working, we will modify Chain Reaction so it consumes the top active/emerging themes and top leaders as dynamic anchors before supply-chain bottleneck discovery.

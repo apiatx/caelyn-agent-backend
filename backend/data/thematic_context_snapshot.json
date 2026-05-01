@@ -208,9 +208,9 @@
   "sector_leaders": [],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-05-01T04:56:24.369952+00:00",
+  "last_updated": "2026-05-01T05:16:17.913262+00:00",
   "snapshot_status": "stale_lkg",
-  "snapshot_age_minutes": 7,
+  "snapshot_age_minutes": 4,
   "source_health": {
     "regime": "fallback",
     "sector_rotation": "fallback",
@@ -218,5 +218,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1777611384.3700185
+  "_saved_at": 1777612577.9133089
 }

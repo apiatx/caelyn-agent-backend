@@ -454,6 +454,18 @@ except Exception as _rtq_err:
     print(f"[REALTIME_QUOTES] Router unavailable (non-fatal): {_rtq_err}")
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Themes by Relative Strength router (/api/themes) ─────────────────────────
+# 39-theme canonical RS service: Tradier quotes + yfinance history.
+# No LLM calls. Cached 15 min (market hours) / 60 min (off-hours).
+# LKG persisted to disk (backend/data/themes_rs_lkg.json).
+try:
+    from routes.themes import router as _themes_router
+    app.include_router(_themes_router)
+    print("[THEMES_RS] Router registered at /api/themes")
+except Exception as _themes_err:
+    print(f"[THEMES_RS] Router unavailable (non-fatal): {_themes_err}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Static file serving ───────────────────────────────────────────────────────
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.exists():
