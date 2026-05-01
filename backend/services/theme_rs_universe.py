@@ -1,13 +1,27 @@
 """
-Canonical Theme Registry for Themes by Relative Strength.
+Canonical Theme & Sector Registry for Themes by Relative Strength.
 
-49 themes — original 39 new RS themes + 10 merged from old Sectors > Themes tab.
-The 10 additions are: semiconductors, semicap_equipment, datacenter_infra,
-cloud_software, oil_services, lng_gas, medical_devices, crypto_equities,
-quantum, space.
+60 entries — 11 SPDR broad sectors + 49 canonical themes/sub-themes.
+
+Sector consolidation (v4)
+-------------------------
+11 SPDR sectors added as classification="sector":
+  technology, materials, consumer_discretionary, consumer_staples,
+  communication_services, real_estate   (6 new entries)
+  energy, financials, healthcare, industrials, utilities             (5 existing, reclassified)
+
+All remaining 49 entries tagged classification="theme" or "sub_theme"
+with parent_sector pointing to the sector they belong under.
+
+Dedup rules applied
+  - No duplicate broad-sector concept kept as a separate theme.
+  - Broad SPDR sector ETF is the parent sector row.
+  - Narrower themes/sub-themes coexist alongside the sector.
 
 Structure per entry
 -------------------
+classification    "sector" | "theme" | "sub_theme"
+parent_sector     sector theme_id this entry belongs under (None for sectors & market-wide themes)
 proxy_type        "etf" | "basket" | "hybrid"
 proxy_symbols     ETF/index tickers used for price-history performance
                   (primary ETF first, then backup ETFs — no individual stocks)
@@ -24,6 +38,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── A ──────────────────────────────────────────────────────────────────────
     "agribusiness": {
+        "classification": "theme",
+        "parent_sector":  "consumer_staples",
         "display_name": "Agribusiness",
         "proxy_type": "etf",
         "proxy_symbols": ["MOO", "DBA", "VEGI"],
@@ -35,6 +51,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── B ──────────────────────────────────────────────────────────────────────
     "banks": {
+        "classification": "sub_theme",
+        "parent_sector":  "financials",
         "display_name": "Banks",
         "proxy_type": "etf",
         "proxy_symbols": ["KBE", "XLF"],
@@ -45,6 +63,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "biotech": {
+        "classification": "sub_theme",
+        "parent_sector":  "healthcare",
         "display_name": "Biotech",
         "proxy_type": "etf",
         "proxy_symbols": ["XBI", "IBB", "ARKG"],
@@ -56,6 +76,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── C ──────────────────────────────────────────────────────────────────────
     "chemicals_materials": {
+        "classification": "sub_theme",
+        "parent_sector":  "materials",
         "display_name": "Chemicals & Materials",
         "proxy_type": "etf",
         "proxy_symbols": ["XLB", "IYM"],
@@ -66,6 +88,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "clean_energy": {
+        "classification": "theme",
+        "parent_sector":  "utilities",
         "display_name": "Clean Energy",
         "proxy_type": "etf",
         "proxy_symbols": ["ICLN", "PBW", "QCLN", "CNRG"],
@@ -76,6 +100,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "cloud_software": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
         "display_name": "Cloud Software",
         "proxy_type": "etf",
         # SKYY = First Trust Cloud Computing ETF (primary); CLOU = Global X Cloud Computing ETF
@@ -87,7 +113,37 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "aliases": ["cloud_computing"],
     },
 
+    # ── SECTOR: Communication Services ─────────────────────────────────────────
+    "communication_services": {
+        "classification": "sector",
+        "parent_sector":  None,
+        "display_name": "Communication Services",
+        "proxy_type": "etf",
+        # XLC = SPDR Communication Services ETF (primary SPDR sector ETF)
+        "proxy_symbols": ["XLC", "VOX"],
+        "candidate_symbols": ["META", "GOOGL", "NFLX", "DIS", "T", "VZ", "CMCSA"],
+        "sector_tags": ["Communication Services"],
+        "keywords": ["communication", "social media", "streaming", "telecom", "advertising"],
+        "macro_sensitivities": ["ad market", "subscriber growth", "interest rates", "regulation"],
+    },
+
+    # ── SECTOR: Consumer Discretionary ────────────────────────────────────────
+    "consumer_discretionary": {
+        "classification": "sector",
+        "parent_sector":  None,
+        "display_name": "Consumer Discretionary",
+        "proxy_type": "etf",
+        # XLY = SPDR Consumer Discretionary ETF (primary SPDR sector ETF)
+        "proxy_symbols": ["XLY", "VCR"],
+        "candidate_symbols": ["AMZN", "TSLA", "HD", "MCD", "NKE", "LOW", "SBUX"],
+        "sector_tags": ["Consumer Discretionary"],
+        "keywords": ["consumer discretionary", "retail", "autos", "restaurants", "leisure"],
+        "macro_sensitivities": ["consumer confidence", "wages", "credit conditions", "gasoline prices"],
+    },
+
     "consumer_retail": {
+        "classification": "sub_theme",
+        "parent_sector":  "consumer_discretionary",
         "display_name": "Consumer Retail",
         "proxy_type": "etf",
         "proxy_symbols": ["XRT", "RTH"],
@@ -97,7 +153,23 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["consumer confidence", "wages", "inflation", "credit"],
     },
 
+    # ── SECTOR: Consumer Staples ───────────────────────────────────────────────
+    "consumer_staples": {
+        "classification": "sector",
+        "parent_sector":  None,
+        "display_name": "Consumer Staples",
+        "proxy_type": "etf",
+        # XLP = SPDR Consumer Staples ETF (primary SPDR sector ETF)
+        "proxy_symbols": ["XLP", "VDC"],
+        "candidate_symbols": ["PG", "KO", "PEP", "WMT", "COST", "PM", "MDLZ"],
+        "sector_tags": ["Consumer Staples"],
+        "keywords": ["consumer staples", "defensive", "food", "beverages", "household products"],
+        "macro_sensitivities": ["inflation", "consumer spending", "USD", "commodity costs"],
+    },
+
     "copper_miners": {
+        "classification": "sub_theme",
+        "parent_sector":  "materials",
         "display_name": "Copper Miners",
         "proxy_type": "etf",
         "proxy_symbols": ["COPX", "CPER"],
@@ -108,6 +180,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "crypto_equities": {
+        "classification": "theme",
+        "parent_sector":  "financials",
         "display_name": "Crypto Equities / Blockchain",
         "proxy_type": "etf",
         # BLOK = Amplify Transformational Data Sharing ETF (primary crypto equity basket)
@@ -120,6 +194,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "cybersecurity": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
         "display_name": "Cybersecurity",
         "proxy_type": "etf",
         "proxy_symbols": ["CIBR", "HACK", "BUG", "IHAK"],
@@ -131,6 +207,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── D ──────────────────────────────────────────────────────────────────────
     "datacenter_infra": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
         "display_name": "Data Center Infrastructure",
         "proxy_type": "etf",
         # SRVR = Pacer Data & Infrastructure Real Estate ETF (primary)
@@ -143,6 +221,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "defense": {
+        "classification": "sub_theme",
+        "parent_sector":  "industrials",
         "display_name": "Defense",
         "proxy_type": "etf",
         # ITA = iShares U.S. Aerospace & Defense ETF (primary)
@@ -156,6 +236,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "drones": {
+        "classification": "sub_theme",
+        "parent_sector":  "industrials",
         "display_name": "Drones",
         "proxy_type": "hybrid",
         "proxy_symbols": ["XAR", "ITA"],
@@ -166,9 +248,13 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     # ── E ──────────────────────────────────────────────────────────────────────
+    # SECTOR: Energy (existing entry reclassified)
     "energy": {
+        "classification": "sector",
+        "parent_sector":  None,
         "display_name": "Energy",
         "proxy_type": "etf",
+        # XLE = SPDR Energy ETF (primary SPDR sector ETF)
         "proxy_symbols": ["XLE", "VDE", "XOP"],
         "candidate_symbols": ["XOM", "CVX", "COP"],
         "sector_tags": ["Energy"],
@@ -177,6 +263,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "equal_weight_sp500": {
+        "classification": "theme",
+        "parent_sector":  None,
         "display_name": "Equal-Weighted S&P 500",
         "proxy_type": "etf",
         "proxy_symbols": ["RSP"],
@@ -187,9 +275,13 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     # ── F ──────────────────────────────────────────────────────────────────────
+    # SECTOR: Financials (existing entry reclassified)
     "financials": {
+        "classification": "sector",
+        "parent_sector":  None,
         "display_name": "Financials",
         "proxy_type": "etf",
+        # XLF = SPDR Financial ETF (primary SPDR sector ETF)
         "proxy_symbols": ["XLF", "VFH"],
         "candidate_symbols": ["JPM", "BAC", "GS", "MS", "BRK-B"],
         "sector_tags": ["Financials"],
@@ -198,6 +290,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "fintech": {
+        "classification": "sub_theme",
+        "parent_sector":  "financials",
         "display_name": "Fintech",
         "proxy_type": "etf",
         "proxy_symbols": ["FINX", "ARKF", "IPAY"],
@@ -209,6 +303,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── G ──────────────────────────────────────────────────────────────────────
     "gold": {
+        "classification": "theme",
+        "parent_sector":  "materials",
         "display_name": "Gold",
         "proxy_type": "etf",
         "proxy_symbols": ["GLD", "IAU", "GDX", "GDXJ"],
@@ -219,6 +315,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "growth_stocks": {
+        "classification": "theme",
+        "parent_sector":  None,
         "display_name": "Growth Stocks",
         "proxy_type": "etf",
         "proxy_symbols": ["IWF", "IVW", "VUG", "QQQ"],
@@ -229,9 +327,13 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     # ── H ──────────────────────────────────────────────────────────────────────
+    # SECTOR: Healthcare (existing entry reclassified)
     "healthcare": {
-        "display_name": "Healthcare",
+        "classification": "sector",
+        "parent_sector":  None,
+        "display_name": "Health Care",
         "proxy_type": "etf",
+        # XLV = SPDR Health Care ETF (primary SPDR sector ETF)
         "proxy_symbols": ["XLV", "VHT", "IYH"],
         "candidate_symbols": ["LLY", "UNH", "JNJ", "ABBV"],
         "sector_tags": ["Healthcare"],
@@ -240,6 +342,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "homebuilders": {
+        "classification": "sub_theme",
+        "parent_sector":  "consumer_discretionary",
         "display_name": "Homebuilders",
         "proxy_type": "etf",
         "proxy_symbols": ["ITB", "XHB"],
@@ -251,6 +355,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── I ──────────────────────────────────────────────────────────────────────
     "ibd50": {
+        "classification": "theme",
+        "parent_sector":  None,
         "display_name": "IBD 50",
         "proxy_type": "etf",
         "proxy_symbols": ["FFTY"],
@@ -260,9 +366,13 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["risk appetite", "earnings growth", "market breadth"],
     },
 
+    # SECTOR: Industrials (existing entry reclassified)
     "industrials": {
+        "classification": "sector",
+        "parent_sector":  None,
         "display_name": "Industrials",
         "proxy_type": "etf",
+        # XLI = SPDR Industrials ETF (primary SPDR sector ETF)
         "proxy_symbols": ["XLI", "VIS"],
         "candidate_symbols": ["GE", "ETN", "PH", "CAT", "DE"],
         "sector_tags": ["Industrials"],
@@ -271,6 +381,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "insurance": {
+        "classification": "sub_theme",
+        "parent_sector":  "financials",
         "display_name": "Insurance",
         "proxy_type": "etf",
         "proxy_symbols": ["KIE", "IAK"],
@@ -282,6 +394,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── L ──────────────────────────────────────────────────────────────────────
     "lithium_battery": {
+        "classification": "theme",
+        "parent_sector":  "materials",
         "display_name": "Lithium & Battery Tech",
         "proxy_type": "etf",
         "proxy_symbols": ["LIT", "BATT"],
@@ -293,6 +407,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "lng_gas": {
+        "classification": "sub_theme",
+        "parent_sector":  "energy",
         "display_name": "LNG & Natural Gas",
         "proxy_type": "etf",
         # FCG = First Trust Natural Gas ETF (E&P + midstream); UNG = commodity front-month
@@ -304,7 +420,23 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     # ── M ──────────────────────────────────────────────────────────────────────
+    # SECTOR: Materials (new entry)
+    "materials": {
+        "classification": "sector",
+        "parent_sector":  None,
+        "display_name": "Materials",
+        "proxy_type": "etf",
+        # XLB = SPDR Materials ETF (primary SPDR sector ETF)
+        "proxy_symbols": ["XLB", "VAW"],
+        "candidate_symbols": ["LIN", "APD", "ECL", "SHW", "FCX", "NEM", "NUE", "AA"],
+        "sector_tags": ["Materials"],
+        "keywords": ["materials", "chemicals", "metals", "mining", "construction materials"],
+        "macro_sensitivities": ["global growth", "China demand", "commodity cycle", "USD"],
+    },
+
     "medical_devices": {
+        "classification": "sub_theme",
+        "parent_sector":  "healthcare",
         "display_name": "Medical Devices",
         "proxy_type": "etf",
         # IHI = iShares U.S. Medical Devices ETF (primary; no liquid alternatives)
@@ -316,6 +448,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "memory_storage": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
         "display_name": "Memory & Storage",
         "proxy_type": "basket",
         # DRAM (Defiance DRAM Memory, Storage, and AI ETF) is primary per spec.
@@ -328,6 +462,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "metals_mining": {
+        "classification": "sub_theme",
+        "parent_sector":  "materials",
         "display_name": "Metals & Mining",
         "proxy_type": "etf",
         "proxy_symbols": ["XME", "PICK", "SLX"],
@@ -338,6 +474,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "microcaps": {
+        "classification": "theme",
+        "parent_sector":  None,
         "display_name": "Microcaps",
         "proxy_type": "etf",
         "proxy_symbols": ["IWC", "FDM"],
@@ -349,6 +487,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── O ──────────────────────────────────────────────────────────────────────
     "oil_gas": {
+        "classification": "sub_theme",
+        "parent_sector":  "energy",
         "display_name": "Oil & Gas",
         "proxy_type": "etf",
         "proxy_symbols": ["XOP", "XLE", "OIH"],
@@ -359,6 +499,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "oil_services": {
+        "classification": "sub_theme",
+        "parent_sector":  "energy",
         "display_name": "Oil Services",
         "proxy_type": "etf",
         # OIH = VanEck Oil Services ETF (primary; dedicated oil-field services basket)
@@ -371,6 +513,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── Q ──────────────────────────────────────────────────────────────────────
     "quantum": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
         "display_name": "Quantum Computing",
         "proxy_type": "etf",
         # QTUM = Defiance Quantum ETF (only liquid ETF proxy for quantum + quantum-adjacent)
@@ -384,6 +528,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── R ──────────────────────────────────────────────────────────────────────
     "rare_earth": {
+        "classification": "sub_theme",
+        "parent_sector":  "materials",
         "display_name": "Rare Earth Metals",
         "proxy_type": "etf",
         "proxy_symbols": ["REMX"],
@@ -393,7 +539,23 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["China export controls", "EV demand", "defense spending"],
     },
 
+    # SECTOR: Real Estate (new entry)
+    "real_estate": {
+        "classification": "sector",
+        "parent_sector":  None,
+        "display_name": "Real Estate",
+        "proxy_type": "etf",
+        # XLRE = SPDR Real Estate ETF (primary SPDR sector ETF)
+        "proxy_symbols": ["XLRE", "VNQ"],
+        "candidate_symbols": ["PLD", "AMT", "EQIX", "SPG", "CCI", "PSA", "DLR"],
+        "sector_tags": ["Real Estate"],
+        "keywords": ["real estate", "REIT", "commercial property", "residential", "industrial REIT"],
+        "macro_sensitivities": ["interest rates", "cap rates", "property valuations", "occupancy"],
+    },
+
     "regional_banks": {
+        "classification": "sub_theme",
+        "parent_sector":  "financials",
         "display_name": "Regional Banks",
         "proxy_type": "etf",
         "proxy_symbols": ["KRE", "KBE", "IAT"],
@@ -404,6 +566,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "robotics_automation": {
+        "classification": "sub_theme",
+        "parent_sector":  "industrials",
         "display_name": "Robotics & Automation",
         "proxy_type": "etf",
         "proxy_symbols": ["BOTZ", "ROBO", "IRBO", "ARKQ"],
@@ -415,6 +579,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── S ──────────────────────────────────────────────────────────────────────
     "semicap_equipment": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
         "display_name": "Semiconductor Equipment",
         "proxy_type": "etf",
         # SOXX has ~20% weight in equipment makers (AMAT, LRCX, KLAC, ASML via ADR)
@@ -428,6 +594,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "semiconductors": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
         "display_name": "Semiconductors",
         "proxy_type": "etf",
         # SMH = VanEck Semiconductor ETF (primary; broadest, most liquid)
@@ -440,6 +608,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "silver": {
+        "classification": "theme",
+        "parent_sector":  "materials",
         "display_name": "Silver",
         "proxy_type": "etf",
         "proxy_symbols": ["SLV", "SIL", "SILJ"],
@@ -450,6 +620,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "small_caps": {
+        "classification": "theme",
+        "parent_sector":  None,
         "display_name": "Small Caps",
         "proxy_type": "etf",
         "proxy_symbols": ["IWM", "IJR", "VB"],
@@ -460,6 +632,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "software": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
         "display_name": "Software",
         "proxy_type": "etf",
         "proxy_symbols": ["IGV", "WCLD"],
@@ -470,6 +644,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "solar": {
+        "classification": "sub_theme",
+        "parent_sector":  "utilities",
         "display_name": "Solar",
         "proxy_type": "etf",
         "proxy_symbols": ["TAN"],
@@ -480,6 +656,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "space": {
+        "classification": "sub_theme",
+        "parent_sector":  "industrials",
         "display_name": "Space Economy",
         "proxy_type": "etf",
         # ARKX = ARK Space Exploration & Innovation ETF (primary)
@@ -493,6 +671,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "speculative_tech": {
+        "classification": "theme",
+        "parent_sector":  "technology",
         "display_name": "Speculative Tech",
         "proxy_type": "etf",
         "proxy_symbols": ["ARKK", "ARKW", "ARKQ"],
@@ -504,6 +684,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── T ──────────────────────────────────────────────────────────────────────
     "tech_equal_weight": {
+        "classification": "theme",
+        "parent_sector":  "technology",
         "display_name": "Tech Equal-Weight",
         "proxy_type": "etf",
         # RYT = Invesco S&P 500 Equal Weight Technology ETF (primary per spec)
@@ -516,6 +698,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "tech_mega_caps": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
         "display_name": "Tech Mega Caps",
         "proxy_type": "basket",
         # MAGS = Roundhill Magnificent Seven ETF (primary per spec)
@@ -526,7 +710,23 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["AI capex", "antitrust risk", "interest rates", "ad market"],
     },
 
+    # SECTOR: Technology (new entry)
+    "technology": {
+        "classification": "sector",
+        "parent_sector":  None,
+        "display_name": "Technology",
+        "proxy_type": "etf",
+        # XLK = SPDR Technology ETF (primary SPDR sector ETF)
+        "proxy_symbols": ["XLK", "VGT"],
+        "candidate_symbols": ["AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "CRM", "AMD"],
+        "sector_tags": ["Technology"],
+        "keywords": ["technology", "software", "hardware", "semiconductors", "AI", "cloud"],
+        "macro_sensitivities": ["AI capex", "enterprise IT spending", "interest rates", "antitrust"],
+    },
+
     "travel_transportation": {
+        "classification": "sub_theme",
+        "parent_sector":  "industrials",
         "display_name": "Travel & Transportation",
         "proxy_type": "etf",
         "proxy_symbols": ["IYT", "JETS", "XTN"],
@@ -538,6 +738,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     # ── U ──────────────────────────────────────────────────────────────────────
     "uranium_nuclear": {
+        "classification": "sub_theme",
+        "parent_sector":  "utilities",
         "display_name": "Uranium & Nuclear Energy",
         "proxy_type": "etf",
         "proxy_symbols": ["URA", "URNM", "NLR"],
@@ -548,9 +750,13 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "aliases": ["nuclear_uranium"],
     },
 
+    # SECTOR: Utilities (existing entry reclassified)
     "utilities": {
+        "classification": "sector",
+        "parent_sector":  None,
         "display_name": "Utilities",
         "proxy_type": "etf",
+        # XLU = SPDR Utilities ETF (primary SPDR sector ETF)
         "proxy_symbols": ["XLU", "VPU"],
         "candidate_symbols": ["NEE", "CEG", "VST", "SO", "DUK"],
         "sector_tags": ["Utilities"],

@@ -758,6 +758,9 @@ async def _build_theme_row(
     return {
         "theme_id":              theme_id,
         "display_name":          meta["display_name"],
+        "classification":        meta.get("classification", "theme"),
+        "parent_sector":         meta.get("parent_sector"),
+        "sector_tags":           meta.get("sector_tags", []),
         "proxy_type":            meta["proxy_type"],
         "proxy_symbols":         proxy_syms,
         "proxy_symbols_used":    used_proxies,
@@ -1068,12 +1071,42 @@ async def warmup_theme_rs() -> None:
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
+def _apply_classification_filter(payload: dict, classification: str) -> dict:
+    """
+    Return a shallow copy of *payload* with themes filtered by classification.
+    classification must be one of: "all", "sector", "theme", "sub_theme".
+    Invalid / unknown values fall back to "all".
+    The cache always stores the full unfiltered payload; filtering is applied
+    at response time so we never need separate cache keys per classification.
+    """
+    clf = classification.lower() if classification else "all"
+    if clf == "all":
+        return payload
+    valid = {"sector", "theme", "sub_theme"}
+    if clf not in valid:
+        return payload
+    filtered_themes = [r for r in payload.get("themes", []) if r.get("classification") == clf]
+    return {
+        **payload,
+        "themes":       filtered_themes,
+        "theme_count":  len(filtered_themes),
+        "classification_filter": clf,
+    }
+
+
 async def get_theme_rs_data(
     timeframe: str = "30D",
     force: bool = False,
+    classification: str = "all",
 ) -> dict:
     """
-    Returns full themes-RS payload dict.
+    Returns full themes-RS payload dict (optionally filtered by classification).
+
+    classification: "all" | "sector" | "theme" | "sub_theme"
+      - "all"       → all 60 rows (default, backward-compatible)
+      - "sector"    → exactly 11 SPDR sector rows
+      - "theme"     → broad theme rows
+      - "sub_theme" → narrow sub-theme rows
 
     Freshness flow:
       1. Cache hit → return immediately (with cache_age_seconds injected).
@@ -1083,6 +1116,9 @@ async def get_theme_rs_data(
       4. Cache miss, no LKG (cold start) → run compute synchronously
            (with lock, so concurrent cold requests wait rather than stampede).
       5. Force → skip cache, run compute now (bypasses stale-while-revalidate).
+
+    Classification filter is always applied AFTER fetching from cache so the
+    cache always stores the full set regardless of which filter is requested.
     """
     tf = timeframe.upper()
     if tf not in _TIMEFRAME_BARS:
@@ -1094,7 +1130,7 @@ async def get_theme_rs_data(
     if not force:
         hit = cache.get(cache_key)
         if hit is not None:
-            return _add_freshness(hit)
+            return _apply_classification_filter(_add_freshness(hit), classification)
 
     # ── 2/3. Cache miss — check if refresh already in progress ────────────────
     lock = _get_lock(tf)
@@ -1104,21 +1140,29 @@ async def get_theme_rs_data(
         # Someone is already computing — serve stale immediately
         if lkg_rows:
             print(f"[THEME_RS] {tf} served from LKG — refresh already in progress")
-            return _lkg_payload(lkg_rows, tf, source="lkg_refresh_in_progress")
+            return _apply_classification_filter(
+                _lkg_payload(lkg_rows, tf, source="lkg_refresh_in_progress"),
+                classification,
+            )
         # No stale available — wait for the active refresh to finish
         print(f"[THEME_RS] {tf} waiting for in-progress refresh (no LKG available)")
         async with lock:
             hit = cache.get(cache_key)
             if hit is not None:
-                return _add_freshness(hit)
+                return _apply_classification_filter(_add_freshness(hit), classification)
             # Refresh failed or produced no data — return error-safe empty
-            return _lkg_payload([], tf, source="no_data")
+            return _apply_classification_filter(
+                _lkg_payload([], tf, source="no_data"), classification
+            )
 
     # ── 3. Stale-while-revalidate (LKG exists, not forced) ───────────────────
     if lkg_rows and not force:
         asyncio.create_task(_locked_refresh(tf))
         print(f"[THEME_RS] {tf} kicked background refresh — returning LKG immediately")
-        return _lkg_payload(lkg_rows, tf, source="lkg_stale_revalidating")
+        return _apply_classification_filter(
+            _lkg_payload(lkg_rows, tf, source="lkg_stale_revalidating"),
+            classification,
+        )
 
     # ── 4/5. Cold start or forced — compute synchronously ────────────────────
     async with lock:
@@ -1126,7 +1170,7 @@ async def get_theme_rs_data(
         if not force:
             hit = cache.get(cache_key)
             if hit is not None:
-                return _add_freshness(hit)
+                return _apply_classification_filter(_add_freshness(hit), classification)
 
         print(f"[THEME_RS] {tf} cold compute (force={force})")
         try:
@@ -1136,12 +1180,17 @@ async def get_theme_rs_data(
                 cache.set(cache_key, payload, _ttl_for_timeframe(tf))
                 _save_lkg(rows)
                 _last_computed[tf] = time.time()
-                return _add_freshness(payload)
+                return _apply_classification_filter(_add_freshness(payload), classification)
 
             # Empty result — return LKG or empty
             if lkg_rows:
-                return _lkg_payload(lkg_rows, tf, source="lkg_compute_empty")
-            return _lkg_payload([], tf, source="no_data")
+                return _apply_classification_filter(
+                    _lkg_payload(lkg_rows, tf, source="lkg_compute_empty"),
+                    classification,
+                )
+            return _apply_classification_filter(
+                _lkg_payload([], tf, source="no_data"), classification
+            )
 
         except Exception as exc:
             import traceback
@@ -1149,5 +1198,8 @@ async def get_theme_rs_data(
             print(f"[THEME_RS] {tf} compute error: {exc} — falling back to LKG")
             lkg_rows2 = _load_lkg()
             if lkg_rows2:
-                return _lkg_payload(lkg_rows2, tf, source="lkg_compute_error")
+                return _apply_classification_filter(
+                    _lkg_payload(lkg_rows2, tf, source="lkg_compute_error"),
+                    classification,
+                )
             raise

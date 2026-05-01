@@ -1,0 +1,83 @@
+Audit/plan first, then implement if low-risk.
+
+Goal:
+Fold the existing 11 SPDR sector ETFs into the canonical Themes by Relative Strength backend engine so there is one market leadership universe.
+
+Do not change Chain Reaction yet.
+Do not change Earnings.
+Do not change Options Flow.
+Do not change TA Screener.
+Do not add LLM calls.
+
+Current situation:
+The Sectors page has two overlapping systems:
+1. Sectors mode powered by SPDR sector ETFs
+2. Themes mode powered by /api/themes/relative-strength
+
+I want one backend universe that includes:
+- 11 broad SPDR sectors
+- all 49 canonical themes/sub-themes
+- no duplicate concepts
+- clear classification/category fields
+
+Add the 11 sectors into the canonical theme RS universe as classification="sector":
+- XLK Technology
+- XLE Energy
+- XLF Financials
+- XLI Industrials
+- XLU Utilities
+- XLV Health Care
+- XLB Materials
+- XLY Consumer Discretionary
+- XLP Consumer Staples
+- XLC Communication Services
+- XLRE Real Estate
+
+For all existing themes, add classification="theme" or "sub_theme".
+If useful, add parent_sector:
+- Oil & Gas, Oil Services, LNG & Natural Gas, Uranium & Nuclear, Solar, Clean Energy → Energy or Utilities depending on best fit
+- Semiconductors, Memory & Storage, Cloud Software, Cybersecurity, Data Center Infrastructure, Quantum Computing, Tech Mega Caps → Technology
+- Banks, Regional Banks, Insurance, Fintech → Financials
+- Biotech, Medical Devices → Health Care
+- Metals & Mining, Copper Miners, Gold, Silver, Rare Earth Metals, Chemicals & Materials → Materials
+- Homebuilders, Consumer Retail, Travel & Transportation → Consumer Discretionary / Industrials as appropriate
+
+Dedupe rules:
+- Do not keep duplicate broad sector concepts as separate themes.
+- Keep broad sector ETF as the parent sector row.
+- Keep narrower themes/sub-themes as separate rows.
+Examples:
+- Keep XLV Health Care as sector and Medical Devices/Biotech as themes.
+- Keep XLE Energy as sector and Oil & Gas/Oil Services/LNG/Uranium as themes.
+- Keep XLK Technology as sector and Semiconductors/Memory/Cloud/Cybersecurity/Data Center as themes.
+- Keep XLF Financials as sector and Banks/Regional Banks/Fintech/Insurance as themes.
+
+Endpoint requirements:
+Update /api/themes/relative-strength to support optional filter:
+- ?classification=all
+- ?classification=sector
+- ?classification=theme
+
+Default can remain all themes if current frontend expects that, or all if safe.
+
+Each row should include:
+- classification
+- parent_sector if applicable
+- theme_id
+- display_name
+- proxy_symbols
+- proxy_symbols_used
+- return_pct
+- rs_score
+- state
+- state_reason
+- leaders
+- laggards
+
+Validation:
+- /api/themes/relative-strength?classification=sector returns exactly 11 sector rows.
+- /api/themes/relative-strength?classification=theme returns canonical themes/sub-themes.
+- /api/themes/relative-strength?classification=all returns sectors + themes without duplicate broad concepts.
+- No duplicate theme_id.
+- No LLM calls.
+- No Chain Reaction/Earnings/Options/TA changes.
