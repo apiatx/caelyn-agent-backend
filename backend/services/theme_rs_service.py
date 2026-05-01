@@ -138,6 +138,28 @@ def _load_lkg() -> Optional[list[dict]]:
     return None
 
 
+def get_rs_payload_sync(tf: str = "1D") -> Optional[dict]:
+    """
+    Synchronous helper for callers that cannot await get_theme_rs_data().
+
+    Returns the cached payload for *tf* if warm, otherwise wraps the LKG disk
+    rows as a stale payload.  Returns None only when both cache and LKG are
+    unavailable (cold start with no disk file).
+
+    Used by ThematicContextProvider._build_snapshot() so it always gets RS data
+    even when the 60-second 1D cache has just expired between refresh cycles.
+    """
+    from data.cache import cache as _c
+    key = f"{_CACHE_KEY}:{tf.upper()}"
+    cached = _c.get(key)
+    if cached and isinstance(cached, dict):
+        return cached
+    lkg = _load_lkg()
+    if lkg:
+        return _lkg_payload(lkg, tf.upper(), source="lkg_tcp_fallback")
+    return None
+
+
 def _save_lkg(data: list[dict]) -> None:
     """Atomic write — never overwrites valid snapshot with bad data."""
     if not data:

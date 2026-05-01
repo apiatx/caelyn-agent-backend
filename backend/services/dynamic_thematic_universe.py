@@ -376,42 +376,72 @@ _KEYWORD_ETF_MAP: dict[str, list[str]] = {
 
 def _augment_etfs_from_universe(theme_name: str, rel_etfs: list[str]) -> list[str]:
     """
-    Augment rel_etfs with ETF symbols from THEME_ETF_UNIVERSE (label match) and
-    a keyword lookup table.  Keeps caller's list as priority.
-    Works on sub-theme names like 'AI Networking' or 'Datacenter / Compute'
-    that don't exactly match THEME_ETF_UNIVERSE labels.
+    Augment rel_etfs with ETF proxy symbols from THEME_RS_UNIVERSE (canonical 60-entry
+    registry) using display_name / alias word-overlap matching, plus a keyword lookup table.
+
+    Falls back to old THEME_ETF_UNIVERSE if THEME_RS_UNIVERSE is unavailable.
+    Keeps caller's list as priority; _KEYWORD_ETF_MAP is supplemental fallback.
     """
     import re as _re
+
+    def _words(s: str) -> set:
+        return set(_re.sub(r'[^a-z0-9]', ' ', s).split()) - {'and', 'or', 'the', 'of', 'a'}
+
+    name_lower = theme_name.lower()
+    name_words = _words(name_lower)
+    augmented  = list(rel_etfs)
+
+    # ── Primary: THEME_RS_UNIVERSE (canonical 60-entry registry) ──────────────
     try:
-        from services.sector_rotation.theme_universe import THEME_ETF_UNIVERSE
-        name_lower = theme_name.lower()
+        from services.theme_rs_universe import THEME_RS_UNIVERSE
 
-        def _words(s: str) -> set:
-            return set(_re.sub(r'[^a-z0-9]', ' ', s).split()) - {'and', 'or', 'the', 'of', 'a'}
+        for theme_id, meta in THEME_RS_UNIVERSE.items():
+            display      = meta.get("display_name") or theme_id
+            alias_list   = [a.replace("_", " ") for a in (meta.get("aliases") or [])]
+            label_words  = _words(display.lower())
 
-        name_words = _words(name_lower)
-        augmented = list(rel_etfs)
-
-        # 1. Label overlap in THEME_ETF_UNIVERSE (need ≥1 non-trivial word match)
-        for meta in THEME_ETF_UNIVERSE.values():
-            label_words = _words((meta.get("label") or "").lower())
+            # Check display_name overlap
             overlap = name_words & label_words
+
+            # Also check aliases if no direct overlap yet
+            if not overlap:
+                for alias in alias_list:
+                    if name_words & _words(alias.lower()):
+                        overlap = True  # type: ignore[assignment]
+                        break
+
+            # Also check theme_id itself (e.g. "datacenter_infra" → "datacenter")
+            if not overlap:
+                tid_words = _words(theme_id.replace("_", " "))
+                if name_words & tid_words:
+                    overlap = True  # type: ignore[assignment]
+
             if overlap:
-                for sym in meta.get("symbols", []):
+                for sym in meta.get("proxy_symbols", []):
                     if sym.upper() not in augmented:
                         augmented.append(sym.upper())
-                # Don't break — multiple universe entries may match (e.g. "semiconductors" + "semicap")
 
-        # 2. Keyword map fallback for granular sub-theme names
-        for kw, etf_list in _KEYWORD_ETF_MAP.items():
-            if kw in name_lower:
-                for sym in etf_list:
-                    if sym not in augmented:
-                        augmented.append(sym)
-
-        return list(dict.fromkeys(augmented))[:_MAX_ETF_PER_THEME + 3]
     except Exception:
-        return rel_etfs
+        # Fallback to old THEME_ETF_UNIVERSE
+        try:
+            from services.sector_rotation.theme_universe import THEME_ETF_UNIVERSE
+            for meta in THEME_ETF_UNIVERSE.values():
+                label_words = _words((meta.get("label") or "").lower())
+                if name_words & label_words:
+                    for sym in meta.get("symbols", []):
+                        if sym.upper() not in augmented:
+                            augmented.append(sym.upper())
+        except Exception:
+            pass
+
+    # ── Supplemental: keyword map for fine-grained sub-theme names ────────────
+    for kw, etf_list in _KEYWORD_ETF_MAP.items():
+        if kw in name_lower:
+            for sym in etf_list:
+                if sym not in augmented:
+                    augmented.append(sym)
+
+    return list(dict.fromkeys(augmented))[:_MAX_ETF_PER_THEME + 3]
 
 
 async def _etf_holdings_tickers(

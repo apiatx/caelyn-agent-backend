@@ -1,0 +1,362 @@
+{
+  "symbol": "IRBO",
+  "as_of": "2024-08-11",
+  "source": "fmp",
+  "holding_count": 60,
+  "holdings": [
+    {
+      "ticker": "AVGO",
+      "name": "BROADCOM INC",
+      "weight": 3.679
+    },
+    {
+      "ticker": "AMD",
+      "name": "ADVANCED MICRO DEVICES INC",
+      "weight": 3.109
+    },
+    {
+      "ticker": "NVDA",
+      "name": "NVIDIA CORP",
+      "weight": 3.105
+    },
+    {
+      "ticker": "SMCI",
+      "name": "SUPER MICRO COMPUTER INC",
+      "weight": 2.437
+    },
+    {
+      "ticker": "PLTR",
+      "name": "PALANTIR TECHNOLOGIES INC CLASS A",
+      "weight": 2.369
+    },
+    {
+      "ticker": "FTNT",
+      "name": "FORTINET INC",
+      "weight": 2.157
+    },
+    {
+      "ticker": "IBM",
+      "name": "INTERNATIONAL BUSINESS MACHINES CO",
+      "weight": 2.128
+    },
+    {
+      "ticker": "CTSH",
+      "name": "COGNIZANT TECHNOLOGY SOLUTIONS COR",
+      "weight": 2.106
+    },
+    {
+      "ticker": "ACN",
+      "name": "ACCENTURE PLC CLASS A",
+      "weight": 2.077
+    },
+    {
+      "ticker": "ANET",
+      "name": "ARISTA NETWORKS INC",
+      "weight": 2.025
+    },
+    {
+      "ticker": "ADSK",
+      "name": "AUTODESK INC",
+      "weight": 2.023
+    },
+    {
+      "ticker": "META",
+      "name": "META PLATFORMS INC CLASS A",
+      "weight": 2.014
+    },
+    {
+      "ticker": "PANW",
+      "name": "PALO ALTO NETWORKS INC",
+      "weight": 1.946
+    },
+    {
+      "ticker": "SNOW",
+      "name": "SNOWFLAKE INC CLASS A",
+      "weight": 1.791
+    },
+    {
+      "ticker": "MSFT",
+      "name": "MICROSOFT CORP",
+      "weight": 1.775
+    },
+    {
+      "ticker": "GOOGL",
+      "name": "ALPHABET INC CLASS A",
+      "weight": 1.743
+    },
+    {
+      "ticker": "CAPMF",
+      "name": "CAPGEMINI",
+      "weight": 1.72
+    },
+    {
+      "ticker": "AMZN",
+      "name": "AMAZON COM INC",
+      "weight": 1.701
+    },
+    {
+      "ticker": "2330.TW",
+      "name": "TAIWAN SEMICONDUCTOR MANUFACTURING",
+      "weight": 1.646
+    },
+    {
+      "ticker": "ANSS",
+      "name": "ANSYS INC",
+      "weight": 1.61
+    },
+    {
+      "ticker": "DSY.PA",
+      "name": "DASSAULT SYSTEMES",
+      "weight": 1.57
+    },
+    {
+      "ticker": "GIB",
+      "name": "CGI INC",
+      "weight": 1.528
+    },
+    {
+      "ticker": "NET",
+      "name": "CLOUDFLARE INC CLASS A",
+      "weight": 1.491
+    },
+    {
+      "ticker": "PTC",
+      "name": "PTC INC",
+      "weight": 1.437
+    },
+    {
+      "ticker": "MDB",
+      "name": "MONGODB INC CLASS A",
+      "weight": 1.359
+    },
+    {
+      "ticker": "OKTA",
+      "name": "OKTA INC CLASS A",
+      "weight": 1.258
+    },
+    {
+      "ticker": "INTC",
+      "name": "INTEL CORPORATION CORP",
+      "weight": 1.203
+    },
+    {
+      "ticker": "ZS",
+      "name": "ZSCALER INC",
+      "weight": 1.189
+    },
+    {
+      "ticker": "CRWD",
+      "name": "CROWDSTRIKE HOLDINGS INC CLASS A",
+      "weight": 1.167
+    },
+    {
+      "ticker": "S",
+      "name": "SENTINELONE INC CLASS A",
+      "weight": 1.104
+    },
+    {
+      "ticker": "PATH",
+      "name": "UIPATH INC CLASS A",
+      "weight": 0.911
+    },
+    {
+      "ticker": "BILL",
+      "name": "BILL HOLDINGS INC",
+      "weight": 0.859
+    },
+    {
+      "ticker": "3661.TW",
+      "name": "ALCHIP TECHNOLOGIES LTD",
+      "weight": 0.812
+    },
+    {
+      "ticker": "CRM",
+      "name": "SALESFORCE INC",
+      "weight": 0.617
+    },
+    {
+      "ticker": "ADBE",
+      "name": "ADOBE INC",
+      "weight": 0.607
+    },
+    {
+      "ticker": "DRKTF",
+      "name": "DARKTRACE PLC",
+      "weight": 0.596
+    },
+    {
+      "ticker": "ORCL",
+      "name": "ORACLE CORP",
+      "weight": 0.459
+    },
+    {
+      "ticker": "QCOM",
+      "name": "QUALCOMM INC",
+      "weight": 0.455
+    },
+    {
+      "ticker": "NOW",
+      "name": "SERVICENOW INC",
+      "weight": 0.396
+    },
+    {
+      "ticker": "POLICYBZR.NS",
+      "name": "PB FINTECH LTD",
+      "weight": 0.332
+    },
+    {
+      "ticker": "277810.KQ",
+      "name": "RAINBOW ROBOTICS",
+      "weight": 0.291
+    },
+    {
+      "ticker": "2498.TW",
+      "name": "HTC CORP",
+      "weight": 0.259
+    },
+    {
+      "ticker": "DUERF",
+      "name": "DUERR AG",
+      "weight": 0.234
+    },
+    {
+      "ticker": "1357.HK",
+      "name": "MEITU INC",
+      "weight": 0.2
+    },
+    {
+      "ticker": "2388.TW",
+      "name": "VIA TECHNOLOGIES INC",
+      "weight": 0.192
+    },
+    {
+      "ticker": "018260.KS",
+      "name": "SAMSUNG SDS LTD",
+      "weight": 0.183
+    },
+    {
+      "ticker": "2049.TW",
+      "name": "HIWIN TECHNOLOGIES CORP",
+      "weight": 0.181
+    },
+    {
+      "ticker": "2344.TW",
+      "name": "WINBOND ELECTRONICS CORP",
+      "weight": 0.173
+    },
+    {
+      "ticker": "AUTO",
+      "name": "AUTOSTORE HOLDINGS LTD",
+      "weight": 0.163
+    },
+    {
+      "ticker": "000660.KS",
+      "name": "SK HYNIX INC",
+      "weight": 0.156
+    },
+    {
+      "ticker": "MRVL",
+      "name": "MARVELL TECHNOLOGY INC",
+      "weight": 0.128
+    },
+    {
+      "ticker": "XTSLA",
+      "name": "BLK CSH FND TREASURY SL AGENCY",
+      "weight": 0.066
+    },
+    {
+      "ticker": "035420.KS",
+      "name": "NAVER CORP",
+      "weight": 0.045
+    },
+    {
+      "ticker": "DT",
+      "name": "DYNATRACE INC",
+      "weight": 0.033
+    },
+    {
+      "ticker": "ESTC",
+      "name": "ELASTIC NV",
+      "weight": 0.021
+    },
+    {
+      "ticker": "G",
+      "name": "GENPACT LTD",
+      "weight": 0.015
+    },
+    {
+      "ticker": "0136.HK",
+      "name": "CHINA RUYI HOLDINGS LTD",
+      "weight": 0.013
+    },
+    {
+      "ticker": "HBCFT",
+      "name": "CASH COLLATERAL USD HBCFT",
+      "weight": 0.008
+    },
+    {
+      "ticker": "NCNO",
+      "name": "NCINO INC",
+      "weight": 0.006
+    },
+    {
+      "ticker": "ZI",
+      "name": "ZOOMINFO TECHNOLOGIES INC",
+      "weight": 0.006
+    }
+  ],
+  "updated_at": "2026-05-01T18:42:05+00:00",
+  "_fetched_at": 1777660925.1675198,
+  "top_holdings": [
+    {
+      "ticker": "AVGO",
+      "name": "BROADCOM INC",
+      "weight": 3.679
+    },
+    {
+      "ticker": "AMD",
+      "name": "ADVANCED MICRO DEVICES INC",
+      "weight": 3.109
+    },
+    {
+      "ticker": "NVDA",
+      "name": "NVIDIA CORP",
+      "weight": 3.105
+    },
+    {
+      "ticker": "SMCI",
+      "name": "SUPER MICRO COMPUTER INC",
+      "weight": 2.437
+    },
+    {
+      "ticker": "PLTR",
+      "name": "PALANTIR TECHNOLOGIES INC CLASS A",
+      "weight": 2.369
+    },
+    {
+      "ticker": "FTNT",
+      "name": "FORTINET INC",
+      "weight": 2.157
+    },
+    {
+      "ticker": "IBM",
+      "name": "INTERNATIONAL BUSINESS MACHINES CO",
+      "weight": 2.128
+    },
+    {
+      "ticker": "CTSH",
+      "name": "COGNIZANT TECHNOLOGY SOLUTIONS COR",
+      "weight": 2.106
+    },
+    {
+      "ticker": "ACN",
+      "name": "ACCENTURE PLC CLASS A",
+      "weight": 2.077
+    },
+    {
+      "ticker": "ANET",
+      "name": "ARISTA NETWORKS INC",
+      "weight": 2.025
+    }
+  ]
+}

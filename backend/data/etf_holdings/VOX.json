@@ -1,0 +1,632 @@
+{
+  "symbol": "VOX",
+  "as_of": "2026-05-01",
+  "source": "fmp",
+  "holding_count": 114,
+  "holdings": [
+    {
+      "ticker": "META",
+      "name": "Meta Platforms Inc",
+      "weight": 20.414
+    },
+    {
+      "ticker": "GOOGL",
+      "name": "Alphabet Inc",
+      "weight": 13.031
+    },
+    {
+      "ticker": "GOOG",
+      "name": "Alphabet Inc",
+      "weight": 8.643
+    },
+    {
+      "ticker": "NFLX",
+      "name": "Netflix Inc",
+      "weight": 5.697
+    },
+    {
+      "ticker": "VZ",
+      "name": "Verizon Communications Inc",
+      "weight": 4.68
+    },
+    {
+      "ticker": "T",
+      "name": "AT&T Inc",
+      "weight": 4.611
+    },
+    {
+      "ticker": "DIS",
+      "name": "Walt Disney Co/The",
+      "weight": 4.003
+    },
+    {
+      "ticker": "TMUS",
+      "name": "T-Mobile US Inc",
+      "weight": 2.994
+    },
+    {
+      "ticker": "WBD",
+      "name": "Warner Bros Discovery Inc",
+      "weight": 2.978
+    },
+    {
+      "ticker": "CMCSA",
+      "name": "Comcast Corp",
+      "weight": 2.909
+    },
+    {
+      "ticker": "EA",
+      "name": "Electronic Arts Inc",
+      "weight": 2.162
+    },
+    {
+      "ticker": "TTWO",
+      "name": "Take-Two Interactive Software Inc",
+      "weight": 1.965
+    },
+    {
+      "ticker": "RBLX",
+      "name": "ROBLOX Corp",
+      "weight": 1.751
+    },
+    {
+      "ticker": "LYV",
+      "name": "Live Nation Entertainment Inc",
+      "weight": 1.594
+    },
+    {
+      "ticker": "OMC",
+      "name": "Omnicom Group Inc",
+      "weight": 1.523
+    },
+    {
+      "ticker": "CHTR",
+      "name": "Charter Communications Inc",
+      "weight": 1.167
+    },
+    {
+      "ticker": "FWONK",
+      "name": "Liberty Media Corp-Liberty Formula One",
+      "weight": 1.161
+    },
+    {
+      "ticker": "ASTS",
+      "name": "AST SpaceMobile Inc",
+      "weight": 1.107
+    },
+    {
+      "ticker": "SATS",
+      "name": "EchoStar Corp",
+      "weight": 1.059
+    },
+    {
+      "ticker": "RDDT",
+      "name": "Reddit Inc",
+      "weight": 0.875
+    },
+    {
+      "ticker": "TKO",
+      "name": "TKO Group Holdings Inc",
+      "weight": 0.87
+    },
+    {
+      "ticker": "NYT",
+      "name": "New York Times Co/The",
+      "weight": 0.829
+    },
+    {
+      "ticker": "ROKU",
+      "name": "Roku Inc",
+      "weight": 0.796
+    },
+    {
+      "ticker": "PINS",
+      "name": "Pinterest Inc",
+      "weight": 0.703
+    },
+    {
+      "ticker": "TTD",
+      "name": "Trade Desk Inc/The",
+      "weight": 0.642
+    },
+    {
+      "ticker": "NWSA",
+      "name": "News Corp",
+      "weight": 0.601
+    },
+    {
+      "ticker": "FOXA",
+      "name": "Fox Corp",
+      "weight": 0.581
+    },
+    {
+      "ticker": "FOX",
+      "name": "Fox Corp",
+      "weight": 0.52
+    },
+    {
+      "ticker": "MTCH",
+      "name": "Match Group Inc",
+      "weight": 0.443
+    },
+    {
+      "ticker": "LUMN",
+      "name": "Lumen Technologies Inc",
+      "weight": 0.435
+    },
+    {
+      "ticker": "LBRDK",
+      "name": "Liberty Broadband Corp",
+      "weight": 0.389
+    },
+    {
+      "ticker": "VSNT",
+      "name": "Versant Media Group Inc",
+      "weight": 0.343
+    },
+    {
+      "ticker": "NXST",
+      "name": "Nexstar Media Group Inc",
+      "weight": 0.335
+    },
+    {
+      "ticker": "MSGS",
+      "name": "Madison Square Garden Sports Corp",
+      "weight": 0.323
+    },
+    {
+      "ticker": "SNAP",
+      "name": "Snap Inc",
+      "weight": 0.318
+    },
+    {
+      "ticker": "TDS",
+      "name": "Telephone and Data Systems Inc",
+      "weight": 0.278
+    },
+    {
+      "ticker": "SIRI",
+      "name": "Sirius XM Holdings Inc",
+      "weight": 0.275
+    },
+    {
+      "ticker": "NWS",
+      "name": "News Corp",
+      "weight": 0.221
+    },
+    {
+      "ticker": "GSAT",
+      "name": "Globalstar Inc",
+      "weight": 0.217
+    },
+    {
+      "ticker": "WMG",
+      "name": "Warner Music Group Corp",
+      "weight": 0.217
+    },
+    {
+      "ticker": "CNK",
+      "name": "Cinemark Holdings Inc",
+      "weight": 0.194
+    },
+    {
+      "ticker": "SPHR",
+      "name": "Sphere Entertainment Co",
+      "weight": 0.193
+    },
+    {
+      "ticker": "PSKY",
+      "name": "Paramount Skydance Corp",
+      "weight": 0.187
+    },
+    {
+      "ticker": "CARG",
+      "name": "Cargurus Inc",
+      "weight": 0.178
+    },
+    {
+      "ticker": "IAC",
+      "name": "IAC Inc",
+      "weight": 0.175
+    },
+    {
+      "ticker": "IRDM",
+      "name": "Iridium Communications Inc",
+      "weight": 0.168
+    },
+    {
+      "ticker": "MSGE",
+      "name": "Madison Square Garden Entertainment Corp",
+      "weight": 0.145
+    },
+    {
+      "ticker": "BATRK",
+      "name": "Atlanta Braves Holdings Inc",
+      "weight": 0.128
+    },
+    {
+      "ticker": "LBTYA",
+      "name": "Liberty Global Ltd",
+      "weight": 0.128
+    },
+    {
+      "ticker": "LION",
+      "name": "Lionsgate Studios Corp",
+      "weight": 0.125
+    },
+    {
+      "ticker": "IMAX",
+      "name": "IMAX Corp",
+      "weight": 0.112
+    },
+    {
+      "ticker": "MGNI",
+      "name": "Magnite Inc",
+      "weight": 0.11
+    },
+    {
+      "ticker": "ZD",
+      "name": "Ziff Davis Inc",
+      "weight": 0.106
+    },
+    {
+      "ticker": "GTM",
+      "name": "ZoomInfo Technologies Inc",
+      "weight": 0.102
+    },
+    {
+      "ticker": "LBTYK",
+      "name": "Liberty Global Ltd",
+      "weight": 0.102
+    },
+    {
+      "ticker": "WLY",
+      "name": "John Wiley & Sons Inc",
+      "weight": 0.102
+    },
+    {
+      "ticker": "DJT",
+      "name": "Trump Media & Technology Group Corp",
+      "weight": 0.099
+    },
+    {
+      "ticker": "UNIT",
+      "name": "Uniti Group Inc",
+      "weight": 0.093
+    },
+    {
+      "ticker": "YELP",
+      "name": "Yelp Inc",
+      "weight": 0.093
+    },
+    {
+      "ticker": "DV",
+      "name": "DoubleVerify Holdings Inc",
+      "weight": 0.085
+    },
+    {
+      "ticker": "GLIBK",
+      "name": "GCI LIBERTY INC-CL C",
+      "weight": 0.081
+    },
+    {
+      "ticker": "LILAK",
+      "name": "Liberty Latin America Ltd",
+      "weight": 0.076
+    },
+    {
+      "ticker": "TRIP",
+      "name": "TripAdvisor Inc",
+      "weight": 0.068
+    },
+    {
+      "ticker": "IDT",
+      "name": "IDT Corp",
+      "weight": 0.066
+    },
+    {
+      "ticker": "TDAY",
+      "name": "USA TODAY Co Inc",
+      "weight": 0.064
+    },
+    {
+      "ticker": "CCOI",
+      "name": "Cogent Communications Holdings Inc",
+      "weight": 0.06
+    },
+    {
+      "ticker": "SCHL",
+      "name": "Scholastic Corp",
+      "weight": 0.053
+    },
+    {
+      "ticker": "AD",
+      "name": "Array Digital Infrastructure Inc",
+      "weight": 0.048
+    },
+    {
+      "ticker": "LBRDA",
+      "name": "Liberty Broadband Corp",
+      "weight": 0.048
+    },
+    {
+      "ticker": "STGW",
+      "name": "Stagwell Inc",
+      "weight": 0.047
+    },
+    {
+      "ticker": "SHEN",
+      "name": "Shenandoah Telecommunications Co",
+      "weight": 0.046
+    },
+    {
+      "ticker": "QNST",
+      "name": "QuinStreet Inc",
+      "weight": 0.042
+    },
+    {
+      "ticker": "CCO",
+      "name": "Clear Channel Outdoor Holdings Inc",
+      "weight": 0.038
+    },
+    {
+      "ticker": "BAND",
+      "name": "Bandwidth Inc",
+      "weight": 0.033
+    },
+    {
+      "ticker": "AMC",
+      "name": "AMC Entertainment Holdings Inc",
+      "weight": 0.032
+    },
+    {
+      "ticker": "SBGI",
+      "name": "Sinclair Inc",
+      "weight": 0.031
+    },
+    {
+      "ticker": "CARS",
+      "name": "Cars.com Inc",
+      "weight": 0.03
+    },
+    {
+      "ticker": "EVER",
+      "name": "EverQuote Inc",
+      "weight": 0.029
+    },
+    {
+      "ticker": "GRND",
+      "name": "Grindr Inc",
+      "weight": 0.029
+    },
+    {
+      "ticker": "IBTA",
+      "name": "Ibotta Inc",
+      "weight": 0.029
+    },
+    {
+      "ticker": "CABO",
+      "name": "Cable One Inc",
+      "weight": 0.028
+    },
+    {
+      "ticker": "TBLA",
+      "name": "Taboola.com Ltd",
+      "weight": 0.028
+    },
+    {
+      "ticker": "SSTK",
+      "name": "Shutterstock Inc",
+      "weight": 0.027
+    },
+    {
+      "ticker": "MCS",
+      "name": "Marcus Corp/The",
+      "weight": 0.026
+    },
+    {
+      "ticker": "ATEX",
+      "name": "Anterix Inc",
+      "weight": 0.025
+    },
+    {
+      "ticker": "GTN",
+      "name": "Gray Media Inc",
+      "weight": 0.025
+    },
+    {
+      "ticker": "RUM",
+      "name": "Rumble Inc",
+      "weight": 0.025
+    },
+    {
+      "ticker": "NXDR",
+      "name": "Nextdoor Holdings Inc",
+      "weight": 0.02
+    },
+    {
+      "ticker": "OPTU",
+      "name": "Optimum Communications Inc",
+      "weight": 0.02
+    },
+    {
+      "ticker": "BATRA",
+      "name": "Atlanta Braves Holdings Inc",
+      "weight": 0.019
+    },
+    {
+      "ticker": "BMBL",
+      "name": "Bumble Inc",
+      "weight": 0.019
+    },
+    {
+      "ticker": "BOC",
+      "name": "Boston Omaha Corp",
+      "weight": 0.019
+    },
+    {
+      "ticker": "GOGO",
+      "name": "Gogo Inc",
+      "weight": 0.019
+    },
+    {
+      "ticker": "IHRT",
+      "name": "iHeartMedia Inc",
+      "weight": 0.019
+    },
+    {
+      "ticker": "PUBM",
+      "name": "PubMatic Inc",
+      "weight": 0.019
+    },
+    {
+      "ticker": "MAX",
+      "name": "MediaAlpha Inc",
+      "weight": 0.018
+    },
+    {
+      "ticker": "ATNI",
+      "name": "ATN International Inc",
+      "weight": 0.017
+    },
+    {
+      "ticker": "FUBO",
+      "name": "fuboTV Inc",
+      "weight": 0.017
+    },
+    {
+      "ticker": "LILA",
+      "name": "Liberty Latin America Ltd",
+      "weight": 0.017
+    },
+    {
+      "ticker": "ANGI",
+      "name": "Angi Inc",
+      "weight": 0.016
+    },
+    {
+      "ticker": "SSP",
+      "name": "EW Scripps Co/The",
+      "weight": 0.015
+    },
+    {
+      "ticker": "AMCX",
+      "name": "AMC Networks Inc",
+      "weight": 0.014
+    },
+    {
+      "ticker": "SPOK",
+      "name": "Spok Holdings Inc",
+      "weight": 0.014
+    },
+    {
+      "ticker": "NCMI",
+      "name": "National CineMedia Inc",
+      "weight": 0.013
+    },
+    {
+      "ticker": "PLTK",
+      "name": "Playtika Holding Corp",
+      "weight": 0.013
+    },
+    {
+      "ticker": "GLIBA",
+      "name": "GCI LIBERTY INC-CL A",
+      "weight": 0.008
+    },
+    {
+      "ticker": "THRY",
+      "name": "Thryv Holdings Inc",
+      "weight": 0.007
+    },
+    {
+      "ticker": "TTGT",
+      "name": "TechTarget Inc",
+      "weight": 0.007
+    },
+    {
+      "ticker": "ZIP",
+      "name": "ZipRecruiter Inc",
+      "weight": 0.007
+    },
+    {
+      "ticker": "MNTN",
+      "name": "MNTN Inc",
+      "weight": 0.006
+    },
+    {
+      "ticker": "ADV",
+      "name": "Advantage Solutions Inc",
+      "weight": 0.005
+    },
+    {
+      "ticker": "CDLX",
+      "name": "Cardlytics Inc",
+      "weight": 0.003
+    },
+    {
+      "ticker": "MYPS",
+      "name": "Playstudios Inc",
+      "weight": 0.003
+    },
+    {
+      "ticker": "SEAT",
+      "name": "Vivid Seats Inc",
+      "weight": 0.001
+    }
+  ],
+  "updated_at": "2026-05-01T18:42:05+00:00",
+  "_fetched_at": 1777660925.2735982,
+  "top_holdings": [
+    {
+      "ticker": "META",
+      "name": "Meta Platforms Inc",
+      "weight": 20.414
+    },
+    {
+      "ticker": "GOOGL",
+      "name": "Alphabet Inc",
+      "weight": 13.031
+    },
+    {
+      "ticker": "GOOG",
+      "name": "Alphabet Inc",
+      "weight": 8.643
+    },
+    {
+      "ticker": "NFLX",
+      "name": "Netflix Inc",
+      "weight": 5.697
+    },
+    {
+      "ticker": "VZ",
+      "name": "Verizon Communications Inc",
+      "weight": 4.68
+    },
+    {
+      "ticker": "T",
+      "name": "AT&T Inc",
+      "weight": 4.611
+    },
+    {
+      "ticker": "DIS",
+      "name": "Walt Disney Co/The",
+      "weight": 4.003
+    },
+    {
+      "ticker": "TMUS",
+      "name": "T-Mobile US Inc",
+      "weight": 2.994
+    },
+    {
+      "ticker": "WBD",
+      "name": "Warner Bros Discovery Inc",
+      "weight": 2.978
+    },
+    {
+      "ticker": "CMCSA",
+      "name": "Comcast Corp",
+      "weight": 2.909
+    }
+  ]
+}

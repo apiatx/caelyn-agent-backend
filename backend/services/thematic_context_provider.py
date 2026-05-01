@@ -110,6 +110,46 @@ def _build_static_registry() -> None:
     except Exception as e:
         print(f"[THEMATIC_CTX] Static registry: THEME_ETF_UNIVERSE unavailable: {e}")
 
+    # Source 3: THEME_RS_UNIVERSE (new canonical 60-entry universe — primary)
+    try:
+        from services.theme_rs_universe import THEME_RS_UNIVERSE
+        for theme_id, meta in THEME_RS_UNIVERSE.items():
+            display = meta.get("display_name") or theme_id
+            proxies = [s.upper() for s in (meta.get("proxy_symbols") or [])]
+            cands   = [s.upper() for s in (meta.get("candidate_symbols") or [])]
+            parent  = meta.get("parent_sector") or ""
+
+            if display not in registry:
+                registry[display] = {"name": display, "tickers": [], "proxies": [], "sector_tags": []}
+
+            for sym in proxies:
+                if sym not in registry[display]["proxies"]:
+                    registry[display]["proxies"].append(sym)
+
+            for sym in cands:
+                if sym not in registry[display]["tickers"]:
+                    registry[display]["tickers"].append(sym)
+                _STATIC_TICKER_TO_THEMES.setdefault(sym, [])
+                if display not in _STATIC_TICKER_TO_THEMES[sym]:
+                    _STATIC_TICKER_TO_THEMES[sym].append(display)
+
+            if parent and parent not in registry[display]["sector_tags"]:
+                registry[display]["sector_tags"].append(parent)
+
+            # Also index proxies → theme (ETFs map to their theme name)
+            for sym in proxies:
+                _STATIC_TICKER_TO_THEMES.setdefault(sym, [])
+                if display not in _STATIC_TICKER_TO_THEMES[sym]:
+                    _STATIC_TICKER_TO_THEMES[sym].append(display)
+
+            # Index aliases
+            for alias in (meta.get("aliases") or []):
+                alias_clean = alias.replace("_", " ").title()
+                if alias_clean not in registry[display]["sector_tags"]:
+                    registry[display]["sector_tags"].append(alias_clean)
+    except Exception as e:
+        print(f"[THEMATIC_CTX] Static registry: THEME_RS_UNIVERSE unavailable: {e}")
+
     _STATIC_THEMES = list(registry.values())
     print(f"[THEMATIC_CTX] Static registry built: {len(_STATIC_THEMES)} themes, "
           f"{len(_STATIC_TICKER_TO_THEMES)} tickers indexed")
@@ -441,11 +481,12 @@ def _build_snapshot(lkg_on_disk: Optional[dict] = None) -> dict:
     Never raises.
     """
     health: dict[str, str] = {
-        "regime":          "fallback",
-        "sector_rotation": "fallback",
-        "theme_rotation":  "fallback",
-        "x_consensus":     "fallback",
-        "polymarket":      "fallback",
+        "regime":            "fallback",
+        "sector_rotation":   "fallback",
+        "theme_rs_service":  "fallback",   # new canonical source (theme_rs_service)
+        "theme_rotation":    "fallback",   # old sr:theme_data:v2 (kept as fallback label)
+        "x_consensus":       "fallback",
+        "polymarket":        "fallback",
     }
     macro_regime:    Optional[str] = None
     active_themes:   list          = []
@@ -506,8 +547,76 @@ def _build_snapshot(lkg_on_disk: Optional[dict] = None) -> dict:
                 except Exception:
                     pass
 
-        # ── 3. Theme ETF RS scores → active / emerging / dead_zones ──────────
-        theme_data = cache.get("sr:theme_data:v2")
+        # ── 3. theme_rs_service canonical snapshot (PRIMARY theme source) ────
+        # Uses get_rs_payload_sync() which returns in-memory cache first, then
+        # falls back to the RS LKG disk file.  This avoids false-cold misses
+        # that occur between the 60-second 1D cache refresh cycles.
+        try:
+            from services.theme_rs_service import get_rs_payload_sync as _get_rs
+            _rs_raw = _get_rs("1D")
+        except Exception:
+            _rs_raw = cache.get("themes:relative_strength:v1:1D")
+        if _rs_raw and isinstance(_rs_raw, dict):
+            _rs_themes = _rs_raw.get("themes") or []
+            _rs_sector_leaders: list = []
+            _rs_sector_laggards: list = []
+            for _t in _rs_themes:
+                if not isinstance(_t, dict):
+                    continue
+                _name       = (_t.get("display_name") or _t.get("theme_id") or "").strip()
+                _cls        = _t.get("classification", "theme")
+                _rs_score   = float(_t.get("rs_score") or 0)
+                _state      = (_t.get("state") or "").strip()
+                _state_rsn  = (_t.get("state_reason") or "")[:120]
+                _proxy_used = _t.get("proxy_symbols_used") or _t.get("proxy_symbols") or []
+                _ldr_syms   = [_l["symbol"] for _l in (_t.get("leaders") or []) if _l.get("symbol")]
+                _entry = {
+                    "name":            _name,
+                    "score":           round(_rs_score, 1),
+                    "source":          "theme_rs_service",
+                    "evidence":        [_state_rsn] if _state_rsn else [],
+                    "related_etfs":    _proxy_used[:4],
+                    "related_tickers": _ldr_syms[:8],
+                }
+                # Sector rows → sector_leaders / sector_laggards
+                if _cls == "sector":
+                    _lead_prx = _t.get("lead_proxy") or (_proxy_used[0] if _proxy_used else _name)
+                    _sec = {
+                        "sector":  _name,
+                        "ticker":  _lead_prx,
+                        "score":   round(_rs_score, 1),
+                        "posture": _rs_state_to_posture(_state),
+                    }
+                    if _state in ("active", "emerging"):
+                        _rs_sector_leaders.append(_sec)
+                    elif _state in ("dead_zone", "weakening"):
+                        _rs_sector_laggards.append(_sec)
+                # Theme / sub_theme rows → active / emerging / dead_zones
+                if _state == "active":
+                    active_themes.append(_entry)
+                elif _state == "emerging":
+                    emerging_themes.append(_entry)
+                elif _state in ("dead_zone", "weakening"):
+                    dead_zones.append(_entry)
+            if _rs_themes:
+                active_themes.sort(key=lambda x: -x["score"])
+                emerging_themes.sort(key=lambda x: -x["score"])
+                dead_zones.sort(key=lambda x: x["score"])
+                health["theme_rs_service"] = "ok"
+                health["theme_rotation"]   = "ok"
+                # RS service provides canonical sector leaders — replace SR dashboard data
+                if _rs_sector_leaders or _rs_sector_laggards:
+                    sector_leaders  = _rs_sector_leaders
+                    sector_laggards = _rs_sector_laggards
+                    health["sector_rotation"] = "ok"
+                if active_themes or emerging_themes:
+                    snapshot_status = "fresh"
+            else:
+                health["theme_rs_service"] = "empty"
+
+        # ── 4. Old sr:theme_data:v2 (FALLBACK — only used if RS cache is cold) ─
+        # Demoted: theme_rs_service is now the primary live source.
+        theme_data = cache.get("sr:theme_data:v2") if not (active_themes or emerging_themes) else None
         if theme_data and isinstance(theme_data, dict):
             raw_themes = theme_data.get("themes") or []
             if not raw_themes and isinstance(theme_data, list):
@@ -743,6 +852,17 @@ def _trend_to_posture(trend: str) -> str:
         "Unknown":   "neutral",
     }
     return mapping.get(trend, trend.lower() if trend else "neutral")
+
+
+def _rs_state_to_posture(state: str) -> str:
+    """Map theme_rs_service state values to ThematicContextProvider posture strings."""
+    return {
+        "active":    "leading",
+        "emerging":  "improving",
+        "neutral":   "neutral",
+        "weakening": "weakening",
+        "dead_zone": "lagging",
+    }.get(state, "neutral")
 
 
 def _empty_snapshot() -> dict:

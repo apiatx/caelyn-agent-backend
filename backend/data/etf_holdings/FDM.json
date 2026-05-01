@@ -1,0 +1,812 @@
+{
+  "symbol": "FDM",
+  "as_of": "2026-05-01",
+  "source": "fmp",
+  "holding_count": 150,
+  "holdings": [
+    {
+      "ticker": "STOK",
+      "name": "Stoke Therapeutics, Inc.",
+      "weight": 2.213
+    },
+    {
+      "ticker": "DLX",
+      "name": "Deluxe Corporation",
+      "weight": 1.845
+    },
+    {
+      "ticker": "DCH",
+      "name": "Dauch Corporation",
+      "weight": 1.773
+    },
+    {
+      "ticker": "TTI",
+      "name": "TETRA Technologies, Inc.",
+      "weight": 1.675
+    },
+    {
+      "ticker": "GCT",
+      "name": "GigaCloud Technology Inc (Class A)",
+      "weight": 1.51
+    },
+    {
+      "ticker": "PLOW",
+      "name": "Douglas Dynamics, Inc.",
+      "weight": 1.399
+    },
+    {
+      "ticker": "APEI",
+      "name": "American Public Education, Inc.",
+      "weight": 1.384
+    },
+    {
+      "ticker": "UVE",
+      "name": "Universal Insurance Holdings, Inc.",
+      "weight": 1.316
+    },
+    {
+      "ticker": "NWPX",
+      "name": "NWPX Infrastructure, Inc.",
+      "weight": 1.244
+    },
+    {
+      "ticker": "KODK",
+      "name": "Eastman Kodak Company",
+      "weight": 1.234
+    },
+    {
+      "ticker": "GNK",
+      "name": "Genco Shipping & Trading Limited",
+      "weight": 1.214
+    },
+    {
+      "ticker": "HBNC",
+      "name": "Horizon Bancorp, Inc.",
+      "weight": 1.214
+    },
+    {
+      "ticker": "GOLD",
+      "name": "Gold.com Inc.",
+      "weight": 1.205
+    },
+    {
+      "ticker": "AMRC",
+      "name": "Ameresco, Inc. (Class A)",
+      "weight": 1.192
+    },
+    {
+      "ticker": "TDAY",
+      "name": "USA TODAY Co., Inc.",
+      "weight": 1.183
+    },
+    {
+      "ticker": "BFST",
+      "name": "Business First Bancshares, Inc.",
+      "weight": 1.178
+    },
+    {
+      "ticker": "CCNE",
+      "name": "CNB Financial Corporation",
+      "weight": 1.168
+    },
+    {
+      "ticker": "HAFC",
+      "name": "Hanmi Financial Corporation",
+      "weight": 1.166
+    },
+    {
+      "ticker": "UFCS",
+      "name": "United Fire Group, Inc.",
+      "weight": 1.164
+    },
+    {
+      "ticker": "CPF",
+      "name": "Central Pacific Financial Corp.",
+      "weight": 1.155
+    },
+    {
+      "ticker": "TRST",
+      "name": "TrustCo Bank Corp NY",
+      "weight": 1.129
+    },
+    {
+      "ticker": "PRAA",
+      "name": "PRA Group, Inc.",
+      "weight": 1.119
+    },
+    {
+      "ticker": "WSR",
+      "name": "Whitestone REIT",
+      "weight": 1.119
+    },
+    {
+      "ticker": "SNCY",
+      "name": "Sun Country Airlines Holdings, Inc.",
+      "weight": 1.111
+    },
+    {
+      "ticker": "CAC",
+      "name": "Camden National Corporation",
+      "weight": 1.073
+    },
+    {
+      "ticker": "KOP",
+      "name": "Koppers Holdings Inc.",
+      "weight": 1.054
+    },
+    {
+      "ticker": "FMNB",
+      "name": "Farmers National Banc Corp.",
+      "weight": 1.043
+    },
+    {
+      "ticker": "SMP",
+      "name": "Standard Motor Products, Inc.",
+      "weight": 1.028
+    },
+    {
+      "ticker": "THFF",
+      "name": "First Financial Corporation",
+      "weight": 1.027
+    },
+    {
+      "ticker": "CSV",
+      "name": "Carriage Services, Inc.",
+      "weight": 1.017
+    },
+    {
+      "ticker": "NBBK",
+      "name": "NB Bancorp, Inc.",
+      "weight": 1.005
+    },
+    {
+      "ticker": "LYTS",
+      "name": "LSI Industries Inc.",
+      "weight": 0.996
+    },
+    {
+      "ticker": "CTMX",
+      "name": "CytomX Therapeutics, Inc.",
+      "weight": 0.993
+    },
+    {
+      "ticker": "ODC",
+      "name": "Oil-Dri Corporation of America",
+      "weight": 0.993
+    },
+    {
+      "ticker": "FLOC",
+      "name": "Flowco Holdings Inc. (Class A)",
+      "weight": 0.989
+    },
+    {
+      "ticker": "JBSS",
+      "name": "John B. Sanfilippo & Son, Inc.",
+      "weight": 0.978
+    },
+    {
+      "ticker": "NPK",
+      "name": "National Presto Industries, Inc.",
+      "weight": 0.974
+    },
+    {
+      "ticker": "ORRF",
+      "name": "Orrstown Financial Services, Inc.",
+      "weight": 0.943
+    },
+    {
+      "ticker": "EQBK",
+      "name": "Equity Bancshares, Inc. (Class A)",
+      "weight": 0.91
+    },
+    {
+      "ticker": "SWBI",
+      "name": "Smith & Wesson Brands Inc.",
+      "weight": 0.91
+    },
+    {
+      "ticker": "ALRS",
+      "name": "Alerus Financial Corporation",
+      "weight": 0.901
+    },
+    {
+      "ticker": "EGY",
+      "name": "VAALCO Energy, Inc.",
+      "weight": 0.901
+    },
+    {
+      "ticker": "SENEA",
+      "name": "Seneca Foods Corporation",
+      "weight": 0.891
+    },
+    {
+      "ticker": "PGC",
+      "name": "Peapack-Gladstone Financial Corporation",
+      "weight": 0.871
+    },
+    {
+      "ticker": "KE",
+      "name": "Kimball Electronics, Inc.",
+      "weight": 0.861
+    },
+    {
+      "ticker": "HRTG",
+      "name": "Heritage Insurance Holdings, Inc.",
+      "weight": 0.857
+    },
+    {
+      "ticker": "CCBG",
+      "name": "Capital City Bank Group, Inc.",
+      "weight": 0.84
+    },
+    {
+      "ticker": "SMBC",
+      "name": "Southern Missouri Bancorp, Inc.",
+      "weight": 0.838
+    },
+    {
+      "ticker": "NUTX",
+      "name": "Nutex Health Inc.",
+      "weight": 0.81
+    },
+    {
+      "ticker": "SBGI",
+      "name": "Sinclair, Inc.",
+      "weight": 0.808
+    },
+    {
+      "ticker": "SMBK",
+      "name": "SmartFinancial, Inc.",
+      "weight": 0.808
+    },
+    {
+      "ticker": "HTB",
+      "name": "HomeTrust Bancshares, Inc.",
+      "weight": 0.803
+    },
+    {
+      "ticker": "SHBI",
+      "name": "Shore Bancshares, Inc.",
+      "weight": 0.781
+    },
+    {
+      "ticker": "CARE",
+      "name": "Carter Bankshares, Inc.",
+      "weight": 0.744
+    },
+    {
+      "ticker": "GSBC",
+      "name": "Great Southern Bancorp, Inc.",
+      "weight": 0.735
+    },
+    {
+      "ticker": "CWBC",
+      "name": "Community West Bancshares",
+      "weight": 0.728
+    },
+    {
+      "ticker": "NRIM",
+      "name": "Northrim BanCorp, Inc.",
+      "weight": 0.714
+    },
+    {
+      "ticker": "CASS",
+      "name": "Cass Information Systems, Inc.",
+      "weight": 0.713
+    },
+    {
+      "ticker": "RIGL",
+      "name": "Rigel Pharmaceuticals, Inc.",
+      "weight": 0.69
+    },
+    {
+      "ticker": "PFIS",
+      "name": "Peoples Financial Services Corp.",
+      "weight": 0.689
+    },
+    {
+      "ticker": "HOV",
+      "name": "Hovnanian Enterprises, Inc. (Class A)",
+      "weight": 0.688
+    },
+    {
+      "ticker": "CIVB",
+      "name": "Civista Bancshares, Inc.",
+      "weight": 0.679
+    },
+    {
+      "ticker": "ORN",
+      "name": "Orion Group Holdings, Inc.",
+      "weight": 0.679
+    },
+    {
+      "ticker": "IIIN",
+      "name": "Insteel Industries, Inc.",
+      "weight": 0.668
+    },
+    {
+      "ticker": "NFBK",
+      "name": "Northfield Bancorp, Inc.",
+      "weight": 0.667
+    },
+    {
+      "ticker": "SPFI",
+      "name": "South Plains Financial, Inc.",
+      "weight": 0.661
+    },
+    {
+      "ticker": "RHLD",
+      "name": "Resolute Holdings Management, Inc.",
+      "weight": 0.655
+    },
+    {
+      "ticker": "CCSI",
+      "name": "Consensus Cloud Solutions, Inc.",
+      "weight": 0.646
+    },
+    {
+      "ticker": "SD",
+      "name": "SandRidge Energy, Inc.",
+      "weight": 0.646
+    },
+    {
+      "ticker": "MTW",
+      "name": "The Manitowoc Company, Inc.",
+      "weight": 0.634
+    },
+    {
+      "ticker": "CWCO",
+      "name": "Consolidated Water Co. Ltd.",
+      "weight": 0.632
+    },
+    {
+      "ticker": "TCBX",
+      "name": "Third Coast Bancshares, Inc.",
+      "weight": 0.621
+    },
+    {
+      "ticker": "GTN",
+      "name": "Gray Media, Inc.",
+      "weight": 0.617
+    },
+    {
+      "ticker": "FBIZ",
+      "name": "First Business Financial Services, Inc.",
+      "weight": 0.616
+    },
+    {
+      "ticker": "KRNY",
+      "name": "Kearny Financial Corp.",
+      "weight": 0.61
+    },
+    {
+      "ticker": "PTLO",
+      "name": "Portillo's Inc. (Class A)",
+      "weight": 0.592
+    },
+    {
+      "ticker": "NGS",
+      "name": "Natural Gas Services Group, Inc.",
+      "weight": 0.585
+    },
+    {
+      "ticker": "BBW",
+      "name": "Build-A-Bear Workshop, Inc.",
+      "weight": 0.58
+    },
+    {
+      "ticker": "OSPN",
+      "name": "OneSpan Inc.",
+      "weight": 0.579
+    },
+    {
+      "ticker": "HBCP",
+      "name": "Home Bancorp, Inc.",
+      "weight": 0.564
+    },
+    {
+      "ticker": "MOV",
+      "name": "Movado Group, Inc.",
+      "weight": 0.562
+    },
+    {
+      "ticker": "OEC",
+      "name": "Orion S.A.",
+      "weight": 0.556
+    },
+    {
+      "ticker": "BCAL",
+      "name": "California BanCorp",
+      "weight": 0.55
+    },
+    {
+      "ticker": "COFS",
+      "name": "ChoiceOne Financial Services, Inc.",
+      "weight": 0.545
+    },
+    {
+      "ticker": "VLGEA",
+      "name": "Village Super Market, Inc.",
+      "weight": 0.53
+    },
+    {
+      "ticker": "LXFR",
+      "name": "Luxfer Holdings Plc",
+      "weight": 0.529
+    },
+    {
+      "ticker": "ARHS",
+      "name": "Arhaus, Inc. (Class A)",
+      "weight": 0.525
+    },
+    {
+      "ticker": "BWB",
+      "name": "Bridgewater Bancshares, Inc.",
+      "weight": 0.523
+    },
+    {
+      "ticker": "NATR",
+      "name": "Nature's Sunshine Products, Inc.",
+      "weight": 0.506
+    },
+    {
+      "ticker": "NRDS",
+      "name": "NerdWallet, Inc. (Class A)",
+      "weight": 0.492
+    },
+    {
+      "ticker": "ITIC",
+      "name": "Investors Title Company",
+      "weight": 0.488
+    },
+    {
+      "ticker": "REPX",
+      "name": "Riley Exploration Permian, Inc.",
+      "weight": 0.481
+    },
+    {
+      "ticker": "BKTI",
+      "name": "BK Technologies Corporation",
+      "weight": 0.473
+    },
+    {
+      "ticker": "CBNK",
+      "name": "Capital Bancorp, Inc.",
+      "weight": 0.472
+    },
+    {
+      "ticker": "OBT",
+      "name": "Orange County Bancorp, Inc.",
+      "weight": 0.468
+    },
+    {
+      "ticker": "NEWT",
+      "name": "NewtekOne, Inc.",
+      "weight": 0.463
+    },
+    {
+      "ticker": "FEIM",
+      "name": "Frequency Electronics, Inc.",
+      "weight": 0.452
+    },
+    {
+      "ticker": "MG",
+      "name": "Mistras Group, Inc.",
+      "weight": 0.447
+    },
+    {
+      "ticker": "VMD",
+      "name": "Viemed Healthcare, Inc.",
+      "weight": 0.433
+    },
+    {
+      "ticker": "SSP",
+      "name": "The E.W. Scripps Company",
+      "weight": 0.431
+    },
+    {
+      "ticker": "RM",
+      "name": "Regional Management Corp.",
+      "weight": 0.427
+    },
+    {
+      "ticker": "STRT",
+      "name": "Strattec Security Corporation",
+      "weight": 0.414
+    },
+    {
+      "ticker": "ONIT",
+      "name": "Onity Group Inc.",
+      "weight": 0.408
+    },
+    {
+      "ticker": "CENT",
+      "name": "Central Garden & Pet Company",
+      "weight": 0.395
+    },
+    {
+      "ticker": "RBB",
+      "name": "RBB Bancorp",
+      "weight": 0.395
+    },
+    {
+      "ticker": "ACIC",
+      "name": "American Coastal Insurance Corporation",
+      "weight": 0.389
+    },
+    {
+      "ticker": "GNE",
+      "name": "Genie Energy Ltd. (Class B)",
+      "weight": 0.385
+    },
+    {
+      "ticker": "PBYI",
+      "name": "Puma Biotechnology, Inc.",
+      "weight": 0.383
+    },
+    {
+      "ticker": "DGICA",
+      "name": "Donegal Group Inc. (Class A)",
+      "weight": 0.371
+    },
+    {
+      "ticker": "RCKY",
+      "name": "Rocky Brands, Inc.",
+      "weight": 0.362
+    },
+    {
+      "ticker": "CLMB",
+      "name": "Climb Global Solutions, Inc.",
+      "weight": 0.358
+    },
+    {
+      "ticker": "RNGR",
+      "name": "Ranger Energy Services, Inc.",
+      "weight": 0.352
+    },
+    {
+      "ticker": "NATH",
+      "name": "Nathan's Famous, Inc.",
+      "weight": 0.346
+    },
+    {
+      "ticker": "OPFI",
+      "name": "OppFi, Inc.",
+      "weight": 0.346
+    },
+    {
+      "ticker": "PANL",
+      "name": "Pangaea Logistics Solutions Ltd.",
+      "weight": 0.341
+    },
+    {
+      "ticker": "MPTI",
+      "name": "M-Tron Industries, Inc.",
+      "weight": 0.33
+    },
+    {
+      "ticker": "KRT",
+      "name": "Karat Packaging Inc.",
+      "weight": 0.326
+    },
+    {
+      "ticker": "HDSN",
+      "name": "Hudson Technologies, Inc.",
+      "weight": 0.312
+    },
+    {
+      "ticker": "FRAF",
+      "name": "Franklin Financial Services Corporation",
+      "weight": 0.309
+    },
+    {
+      "ticker": "FTK",
+      "name": "Flotek Industries, Inc.",
+      "weight": 0.306
+    },
+    {
+      "ticker": "CFFI",
+      "name": "C&F Financial Corporation",
+      "weight": 0.3
+    },
+    {
+      "ticker": "WNEB",
+      "name": "Western New England Bancorp Inc.",
+      "weight": 0.295
+    },
+    {
+      "ticker": "AMPY",
+      "name": "Amplify Energy Corporation",
+      "weight": 0.29
+    },
+    {
+      "ticker": "SPOK",
+      "name": "Spok Holdings, Inc.",
+      "weight": 0.29
+    },
+    {
+      "ticker": "MYFW",
+      "name": "First Western Financial, Inc.",
+      "weight": 0.286
+    },
+    {
+      "ticker": "RMAX",
+      "name": "RE/MAX Holdings, Inc. (Class A)",
+      "weight": 0.282
+    },
+    {
+      "ticker": "ESOA",
+      "name": "Energy Services of America Corporation",
+      "weight": 0.276
+    },
+    {
+      "ticker": "CRCT",
+      "name": "Cricut, Inc. (Class A)",
+      "weight": 0.272
+    },
+    {
+      "ticker": "LEGH",
+      "name": "Legacy Housing Corporation",
+      "weight": 0.26
+    },
+    {
+      "ticker": "KINS",
+      "name": "Kingstone Companies, Inc.",
+      "weight": 0.258
+    },
+    {
+      "ticker": "SIGA",
+      "name": "SIGA Technologies, Inc.",
+      "weight": 0.251
+    },
+    {
+      "ticker": "VEL",
+      "name": "Velocity Financial, Inc.",
+      "weight": 0.247
+    },
+    {
+      "ticker": "NPB",
+      "name": "Northpointe Bancshares, Inc.",
+      "weight": 0.243
+    },
+    {
+      "ticker": "IMMR",
+      "name": "Immersion Corporation",
+      "weight": 0.223
+    },
+    {
+      "ticker": "OPBK",
+      "name": "OP Bancorp",
+      "weight": 0.219
+    },
+    {
+      "ticker": "EPSN",
+      "name": "Epsilon Energy Ltd.",
+      "weight": 0.218
+    },
+    {
+      "ticker": "TBCH",
+      "name": "Turtle Beach Corporation",
+      "weight": 0.208
+    },
+    {
+      "ticker": "ESP",
+      "name": "Espey Mfg. & Electronics Corp.",
+      "weight": 0.204
+    },
+    {
+      "ticker": "RCMT",
+      "name": "RCM Technologies, Inc.",
+      "weight": 0.198
+    },
+    {
+      "ticker": "PNRG",
+      "name": "PrimeEnergy Resources Corporation",
+      "weight": 0.191
+    },
+    {
+      "ticker": "$USD",
+      "name": "US Dollar",
+      "weight": 0.182
+    },
+    {
+      "ticker": "AII",
+      "name": "American Integrity Insurance Group, Inc.",
+      "weight": 0.177
+    },
+    {
+      "ticker": "GLIBA",
+      "name": "GCI Liberty, Inc. (Class A)",
+      "weight": 0.152
+    },
+    {
+      "ticker": "PMTS",
+      "name": "CPI Card Group Inc.",
+      "weight": 0.146
+    },
+    {
+      "ticker": "TASK",
+      "name": "TaskUs, Inc. (Class A)",
+      "weight": 0.145
+    },
+    {
+      "ticker": "FOA",
+      "name": "Finance of America Companies Inc. (Class A)",
+      "weight": 0.141
+    },
+    {
+      "ticker": "RVSB",
+      "name": "Riverview Bancorp, Inc.",
+      "weight": 0.141
+    },
+    {
+      "ticker": "CRMT",
+      "name": "America's Car-Mart, Inc.",
+      "weight": 0.127
+    },
+    {
+      "ticker": "PDEX",
+      "name": "Pro-Dex, Inc.",
+      "weight": 0.118
+    },
+    {
+      "ticker": "AREN",
+      "name": "The Arena Group Holdings, Inc.",
+      "weight": 0.039
+    }
+  ],
+  "updated_at": "2026-05-01T18:42:05+00:00",
+  "_fetched_at": 1777660925.2560444,
+  "top_holdings": [
+    {
+      "ticker": "STOK",
+      "name": "Stoke Therapeutics, Inc.",
+      "weight": 2.213
+    },
+    {
+      "ticker": "DLX",
+      "name": "Deluxe Corporation",
+      "weight": 1.845
+    },
+    {
+      "ticker": "DCH",
+      "name": "Dauch Corporation",
+      "weight": 1.773
+    },
+    {
+      "ticker": "TTI",
+      "name": "TETRA Technologies, Inc.",
+      "weight": 1.675
+    },
+    {
+      "ticker": "GCT",
+      "name": "GigaCloud Technology Inc (Class A)",
+      "weight": 1.51
+    },
+    {
+      "ticker": "PLOW",
+      "name": "Douglas Dynamics, Inc.",
+      "weight": 1.399
+    },
+    {
+      "ticker": "APEI",
+      "name": "American Public Education, Inc.",
+      "weight": 1.384
+    },
+    {
+      "ticker": "UVE",
+      "name": "Universal Insurance Holdings, Inc.",
+      "weight": 1.316
+    },
+    {
+      "ticker": "NWPX",
+      "name": "NWPX Infrastructure, Inc.",
+      "weight": 1.244
+    },
+    {
+      "ticker": "KODK",
+      "name": "Eastman Kodak Company",
+      "weight": 1.234
+    }
+  ]
+}

@@ -1,0 +1,592 @@
+{
+  "symbol": "VDE",
+  "as_of": "2026-05-01",
+  "source": "fmp",
+  "holding_count": 106,
+  "holdings": [
+    {
+      "ticker": "XOM",
+      "name": "Exxon Mobil Corp",
+      "weight": 22.492
+    },
+    {
+      "ticker": "CVX",
+      "name": "Chevron Corp",
+      "weight": 14.846
+    },
+    {
+      "ticker": "COP",
+      "name": "ConocoPhillips",
+      "weight": 6.044
+    },
+    {
+      "ticker": "WMB",
+      "name": "Williams Cos Inc/The",
+      "weight": 3.352
+    },
+    {
+      "ticker": "EOG",
+      "name": "EOG Resources Inc",
+      "weight": 2.989
+    },
+    {
+      "ticker": "MPC",
+      "name": "Marathon Petroleum Corp",
+      "weight": 2.906
+    },
+    {
+      "ticker": "VLO",
+      "name": "Valero Energy Corp",
+      "weight": 2.901
+    },
+    {
+      "ticker": "PSX",
+      "name": "Phillips 66",
+      "weight": 2.785
+    },
+    {
+      "ticker": "SLB",
+      "name": "SLB Ltd",
+      "weight": 2.59
+    },
+    {
+      "ticker": "KMI",
+      "name": "Kinder Morgan Inc",
+      "weight": 2.541
+    },
+    {
+      "ticker": "LNG",
+      "name": "Cheniere Energy Inc",
+      "weight": 2.359
+    },
+    {
+      "ticker": "BKR",
+      "name": "Baker Hughes Co",
+      "weight": 2.282
+    },
+    {
+      "ticker": "OKE",
+      "name": "ONEOK Inc",
+      "weight": 2.158
+    },
+    {
+      "ticker": "TRGP",
+      "name": "Targa Resources Corp",
+      "weight": 2.046
+    },
+    {
+      "ticker": "OXY",
+      "name": "Occidental Petroleum Corp",
+      "weight": 1.642
+    },
+    {
+      "ticker": "EQT",
+      "name": "EQT Corp",
+      "weight": 1.518
+    },
+    {
+      "ticker": "FANG",
+      "name": "Diamondback Energy Inc",
+      "weight": 1.413
+    },
+    {
+      "ticker": "HAL",
+      "name": "Halliburton Co",
+      "weight": 1.276
+    },
+    {
+      "ticker": "DVN",
+      "name": "Devon Energy Corp",
+      "weight": 1.175
+    },
+    {
+      "ticker": "FTI",
+      "name": "TechnipFMC PLC",
+      "weight": 1.119
+    },
+    {
+      "ticker": "TPL",
+      "name": "Texas Pacific Land Corp",
+      "weight": 1.074
+    },
+    {
+      "ticker": "CTRA",
+      "name": "Coterra Energy Inc",
+      "weight": 1.035
+    },
+    {
+      "ticker": "EXE",
+      "name": "Expand Energy Corp",
+      "weight": 1.01
+    },
+    {
+      "ticker": "OVV",
+      "name": "Ovintiv Inc",
+      "weight": 0.669
+    },
+    {
+      "ticker": "APA",
+      "name": "Apa Corp",
+      "weight": 0.611
+    },
+    {
+      "ticker": "PR",
+      "name": "Permian Resources Corp",
+      "weight": 0.602
+    },
+    {
+      "ticker": "DTM",
+      "name": "DT Midstream Inc",
+      "weight": 0.543
+    },
+    {
+      "ticker": "AR",
+      "name": "Antero Resources Corp",
+      "weight": 0.504
+    },
+    {
+      "ticker": "RRC",
+      "name": "Range Resources Corp",
+      "weight": 0.438
+    },
+    {
+      "ticker": "DINO",
+      "name": "HF Sinclair Corp",
+      "weight": 0.404
+    },
+    {
+      "ticker": "VNOM",
+      "name": "Viper Energy Inc",
+      "weight": 0.37
+    },
+    {
+      "ticker": "CHRD",
+      "name": "Chord Energy Corp",
+      "weight": 0.347
+    },
+    {
+      "ticker": "AM",
+      "name": "Antero Midstream Corp",
+      "weight": 0.338
+    },
+    {
+      "ticker": "MTDR",
+      "name": "Matador Resources Co",
+      "weight": 0.32
+    },
+    {
+      "ticker": "SM",
+      "name": "SM Energy Co",
+      "weight": 0.304
+    },
+    {
+      "ticker": "NOV",
+      "name": "NOV Inc",
+      "weight": 0.29
+    },
+    {
+      "ticker": "WFRD",
+      "name": "Weatherford International PLC",
+      "weight": 0.282
+    },
+    {
+      "ticker": "RIG",
+      "name": "Transocean Ltd",
+      "weight": 0.28
+    },
+    {
+      "ticker": "UEC",
+      "name": "Uranium Energy Corp",
+      "weight": 0.271
+    },
+    {
+      "ticker": "VAL",
+      "name": "Valaris Ltd",
+      "weight": 0.27
+    },
+    {
+      "ticker": "NE",
+      "name": "Noble Corp PLC",
+      "weight": 0.268
+    },
+    {
+      "ticker": "AROC",
+      "name": "Archrock Inc",
+      "weight": 0.25
+    },
+    {
+      "ticker": "MUR",
+      "name": "Murphy Oil Corp",
+      "weight": 0.249
+    },
+    {
+      "ticker": "MGY",
+      "name": "Magnolia Oil & Gas Corp",
+      "weight": 0.245
+    },
+    {
+      "ticker": "CNR",
+      "name": "Core Natural Resources Inc",
+      "weight": 0.238
+    },
+    {
+      "ticker": "CNX",
+      "name": "CNX Resources Corp",
+      "weight": 0.234
+    },
+    {
+      "ticker": "KGS",
+      "name": "Kodiak Gas Services Inc",
+      "weight": 0.223
+    },
+    {
+      "ticker": "CRC",
+      "name": "California Resources Corp",
+      "weight": 0.222
+    },
+    {
+      "ticker": "PAGP",
+      "name": "Plains GP Holdings LP",
+      "weight": 0.214
+    },
+    {
+      "ticker": "HESM",
+      "name": "Hess Midstream LP",
+      "weight": 0.211
+    },
+    {
+      "ticker": "LBRT",
+      "name": "Liberty Energy Inc",
+      "weight": 0.208
+    },
+    {
+      "ticker": "PBF",
+      "name": "PBF Energy Inc",
+      "weight": 0.198
+    },
+    {
+      "ticker": "PARR",
+      "name": "Par Pacific Holdings Inc",
+      "weight": 0.189
+    },
+    {
+      "ticker": "PTEN",
+      "name": "Patterson-UTI Energy Inc",
+      "weight": 0.188
+    },
+    {
+      "ticker": "TDW",
+      "name": "Tidewater Inc",
+      "weight": 0.184
+    },
+    {
+      "ticker": "BTU",
+      "name": "Peabody Energy Corp",
+      "weight": 0.182
+    },
+    {
+      "ticker": "CRGY",
+      "name": "Crescent Energy Co",
+      "weight": 0.175
+    },
+    {
+      "ticker": "HP",
+      "name": "Helmerich & Payne Inc",
+      "weight": 0.166
+    },
+    {
+      "ticker": "OII",
+      "name": "Oceaneering International Inc",
+      "weight": 0.166
+    },
+    {
+      "ticker": "GPOR",
+      "name": "Gulfport Energy Corp",
+      "weight": 0.158
+    },
+    {
+      "ticker": "INSW",
+      "name": "International Seaways Inc",
+      "weight": 0.15
+    },
+    {
+      "ticker": "DK",
+      "name": "Delek US Holdings Inc",
+      "weight": 0.149
+    },
+    {
+      "ticker": "WHD",
+      "name": "Cactus Inc. Class A",
+      "weight": 0.148
+    },
+    {
+      "ticker": "LEU",
+      "name": "Centrus Energy Corp",
+      "weight": 0.141
+    },
+    {
+      "ticker": "NOG",
+      "name": "Northern Oil & Gas Inc",
+      "weight": 0.137
+    },
+    {
+      "ticker": "SDRL",
+      "name": "Seadrill Ltd",
+      "weight": 0.134
+    },
+    {
+      "ticker": "CLMT",
+      "name": "Calumet Inc",
+      "weight": 0.132
+    },
+    {
+      "ticker": "SEI",
+      "name": "Solaris Energy Infrastructure Inc",
+      "weight": 0.126
+    },
+    {
+      "ticker": "KOS",
+      "name": "Kosmos Energy Ltd",
+      "weight": 0.123
+    },
+    {
+      "ticker": "SOC",
+      "name": "Sable Offshore Corp",
+      "weight": 0.122
+    },
+    {
+      "ticker": "KNTK",
+      "name": "Kinetik Holdings Inc",
+      "weight": 0.12
+    },
+    {
+      "ticker": "TALO",
+      "name": "Talos Energy Inc",
+      "weight": 0.114
+    },
+    {
+      "ticker": "WTTR",
+      "name": "Select Water Solutions Inc",
+      "weight": 0.107
+    },
+    {
+      "ticker": "CRK",
+      "name": "Comstock Resources Inc",
+      "weight": 0.105
+    },
+    {
+      "ticker": "XPRO",
+      "name": "Expro Group Holdings NV",
+      "weight": 0.1
+    },
+    {
+      "ticker": "PUMP",
+      "name": "ProPetro Holding Corp",
+      "weight": 0.094
+    },
+    {
+      "ticker": "REX",
+      "name": "REX American Resources Corp",
+      "weight": 0.094
+    },
+    {
+      "ticker": "CVI",
+      "name": "CVR Energy Inc",
+      "weight": 0.091
+    },
+    {
+      "ticker": "HLX",
+      "name": "Helix Energy Solutions Group Inc",
+      "weight": 0.088
+    },
+    {
+      "ticker": "LPG",
+      "name": "Dorian LPG Ltd",
+      "weight": 0.083
+    },
+    {
+      "ticker": "NEXT",
+      "name": "NextDecade Corp",
+      "weight": 0.081
+    },
+    {
+      "ticker": "GPRE",
+      "name": "Green Plains Inc",
+      "weight": 0.08
+    },
+    {
+      "ticker": "KRP",
+      "name": "Kimbell Royalty Partners LP",
+      "weight": 0.08
+    },
+    {
+      "ticker": "WKC",
+      "name": "World Kinect Corp",
+      "weight": 0.075
+    },
+    {
+      "ticker": "TTI",
+      "name": "TETRA Technologies Inc",
+      "weight": 0.074
+    },
+    {
+      "ticker": "NBR",
+      "name": "Nabors Industries Ltd",
+      "weight": 0.071
+    },
+    {
+      "ticker": "GEVO",
+      "name": "Gevo Inc",
+      "weight": 0.07
+    },
+    {
+      "ticker": "VTOL",
+      "name": "Bristow Group Inc",
+      "weight": 0.068
+    },
+    {
+      "ticker": "EGY",
+      "name": "VAALCO Energy Inc",
+      "weight": 0.065
+    },
+    {
+      "ticker": "INVX",
+      "name": "Innovex International Inc",
+      "weight": 0.065
+    },
+    {
+      "ticker": "OIS",
+      "name": "Oil States International Inc",
+      "weight": 0.064
+    },
+    {
+      "ticker": "RES",
+      "name": "RPC Inc",
+      "weight": 0.062
+    },
+    {
+      "ticker": "AESI",
+      "name": "Atlas Energy Solutions Inc",
+      "weight": 0.059
+    },
+    {
+      "ticker": "CLB",
+      "name": "Core Laboratories Inc",
+      "weight": 0.057
+    },
+    {
+      "ticker": "EE",
+      "name": "Excelerate Energy Inc",
+      "weight": 0.057
+    },
+    {
+      "ticker": "REPX",
+      "name": "Riley Exploration Permian Inc",
+      "weight": 0.056
+    },
+    {
+      "ticker": "WTI",
+      "name": "W&T Offshore Inc",
+      "weight": 0.053
+    },
+    {
+      "ticker": "SD",
+      "name": "SandRidge Energy Inc",
+      "weight": 0.05
+    },
+    {
+      "ticker": "GRNT",
+      "name": "Granite Ridge Resources Inc",
+      "weight": 0.049
+    },
+    {
+      "ticker": "BKV",
+      "name": "BKV Corp",
+      "weight": 0.048
+    },
+    {
+      "ticker": "VTS",
+      "name": "Vitesse Energy Inc",
+      "weight": 0.046
+    },
+    {
+      "ticker": "CLNE",
+      "name": "Clean Energy Fuels Corp",
+      "weight": 0.045
+    },
+    {
+      "ticker": "REI",
+      "name": "Ring Energy Inc",
+      "weight": 0.04
+    },
+    {
+      "ticker": "HPK",
+      "name": "HighPeak Energy Inc",
+      "weight": 0.026
+    },
+    {
+      "ticker": "BOOM",
+      "name": "DMC Global Inc",
+      "weight": 0.014
+    },
+    {
+      "ticker": "NFE",
+      "name": "New Fortress Energy Inc",
+      "weight": 0.011
+    }
+  ],
+  "updated_at": "2026-05-01T18:41:56+00:00",
+  "_fetched_at": 1777660916.9588494,
+  "top_holdings": [
+    {
+      "ticker": "XOM",
+      "name": "Exxon Mobil Corp",
+      "weight": 22.492
+    },
+    {
+      "ticker": "CVX",
+      "name": "Chevron Corp",
+      "weight": 14.846
+    },
+    {
+      "ticker": "COP",
+      "name": "ConocoPhillips",
+      "weight": 6.044
+    },
+    {
+      "ticker": "WMB",
+      "name": "Williams Cos Inc/The",
+      "weight": 3.352
+    },
+    {
+      "ticker": "EOG",
+      "name": "EOG Resources Inc",
+      "weight": 2.989
+    },
+    {
+      "ticker": "MPC",
+      "name": "Marathon Petroleum Corp",
+      "weight": 2.906
+    },
+    {
+      "ticker": "VLO",
+      "name": "Valero Energy Corp",
+      "weight": 2.901
+    },
+    {
+      "ticker": "PSX",
+      "name": "Phillips 66",
+      "weight": 2.785
+    },
+    {
+      "ticker": "SLB",
+      "name": "SLB Ltd",
+      "weight": 2.59
+    },
+    {
+      "ticker": "KMI",
+      "name": "Kinder Morgan Inc",
+      "weight": 2.541
+    }
+  ]
+}
