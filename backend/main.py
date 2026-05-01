@@ -442,6 +442,18 @@ except Exception as _pre_ipo_err:
     print(f"[PRE_IPO_WATCHLIST] Router unavailable (non-fatal): {_pre_ipo_err}")
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Realtime Quotes router (/api/market/realtime-quotes) ─────────────────────
+# Centralized real-time equity quotes with vendor priority:
+# Tradier -> Public.com -> FMP -> Twelve Data -> LKG.  Additive only —
+# does not change FMP usage for fundamentals/historical/enrichment/news.
+try:
+    from routes.realtime_quotes import router as _realtime_quotes_router
+    app.include_router(_realtime_quotes_router)
+    print("[REALTIME_QUOTES] Router registered at /api/market/realtime-quotes")
+except Exception as _rtq_err:
+    print(f"[REALTIME_QUOTES] Router unavailable (non-fatal): {_rtq_err}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Static file serving ───────────────────────────────────────────────────────
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.exists():

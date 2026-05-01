@@ -5391,7 +5391,43 @@ class MarketDataService:
 
     @traceable(name="get_quotes_batch")
     async def get_quotes_batch(self, symbols: list[str]) -> dict:
-        results = {}
+        results: dict = {}
+        if not symbols:
+            return results
+
+        # Phase 1: prefer the centralized realtime quote service
+        # (Tradier -> Public.com -> FMP -> Twelve -> LKG) and attach
+        # freshness metadata. Falls back to legacy finnhub/fmp path for
+        # any symbol the realtime service couldn't resolve, so existing
+        # consumers never lose coverage during rollout.
+        rtq_map: dict = {}
+        try:
+            from services.realtime_quotes_service import (
+                get_realtime_quotes as _rtq_get,
+                freshness_metadata as _rtq_meta,
+            )
+            rtq_map = await _rtq_get(symbols, allow_fallback=True)
+        except Exception as _rtq_err:
+            print(f"[QUOTES_BATCH] realtime service unavailable: {_rtq_err}")
+            rtq_map = {}
+
+        unresolved: list[str] = []
+        for sym in symbols:
+            q = rtq_map.get(sym)
+            if q is not None and q.price is not None:
+                meta = _rtq_meta(q) if rtq_map else {}
+                results[sym] = {
+                    "price": q.price,
+                    "change_pct": q.change_percent,
+                    "prev_close": q.prev_close,
+                    **meta,
+                }
+            else:
+                unresolved.append(sym)
+
+        if not unresolved:
+            return results
+
         quote_semaphore = asyncio.Semaphore(5)
 
         async def _fetch_one(ticker):
@@ -5406,6 +5442,13 @@ class MarketDataService:
                                 "price": quote["price"],
                                 "change_pct": quote.get("change_pct"),
                                 "prev_close": quote.get("prev_close"),
+                                "price_source": "finnhub_legacy",
+                                "price_is_realtime": False,
+                                "price_is_live_backup": False,
+                                "price_is_stale": True,
+                                "price_updated_at": None,
+                                "quote_timestamp": None,
+                                "staleness_seconds": None,
                             }
                             return
                     except Exception:
@@ -5422,11 +5465,18 @@ class MarketDataService:
                                 "change_pct":
                                 fmp_quote.get("changesPercentage"),
                                 "prev_close": fmp_quote.get("previousClose"),
+                                "price_source": "fmp_legacy",
+                                "price_is_realtime": False,
+                                "price_is_live_backup": False,
+                                "price_is_stale": True,
+                                "price_updated_at": None,
+                                "quote_timestamp": None,
+                                "staleness_seconds": None,
                             }
                     except Exception:
                         pass
 
-        tasks = [_fetch_one(t) for t in symbols]
+        tasks = [_fetch_one(t) for t in unresolved]
         await asyncio.gather(*tasks, return_exceptions=True)
         return results
 
