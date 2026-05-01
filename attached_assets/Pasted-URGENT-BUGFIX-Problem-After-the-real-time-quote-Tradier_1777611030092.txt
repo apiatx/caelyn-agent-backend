@@ -1,0 +1,65 @@
+URGENT BUGFIX. 
+
+Problem:
+After the real-time quote/Tradier update, pages that previously worked are now returning blank results / “not found.” Tradier API itself works and is working on other pages. This is likely an integration/response-shape/regression bug, not a vendor outage.
+
+Goal:
+Restore previously working pages before latest git pull while keeping the new realtime quote endpoint/service.
+
+Hard constraints:
+- Do not rewrite architecture.
+- Do not do a repo-wide audit.
+- Do not touch unrelated pages.
+- Do not remove the new realtime quote service.
+- Do not remove FMP fundamentals/historical/enrichment.
+- Minimum-file surgical fix.
+- Test in the running app.
+
+Start with the pages that broke after the Tradier update. For each broken page:
+1. Reproduce the blank/not found state.
+2. Check browser/network response and backend logs.
+3. Identify whether the break is:
+   - backend returns empty array
+   - backend returns data but frontend filters it out
+   - frontend expects old field names
+   - quote merge overwrites existing data with null
+   - symbol normalization issue
+   - MarketDataService.get_quotes_batch response-shape mismatch
+4. Fix the smallest cause.
+
+Specific likely suspects:
+- backend MarketDataService.get_quotes_batch was rewired to return normalized realtime quotes but older consumers still expect the old quote shape.
+- frontend mergeRealtimeQuote may overwrite existing price/change/volume with null/undefined.
+- components may expect changePercent/currentPrice/price while new quotes return change_percent/last.
+- new quote service may treat valid Tradier partial quote responses as invalid and drop them.
+- batch quote failure may return no rows instead of per-symbol fallback.
+
+Required behavior:
+- Existing pages must continue rendering old/enriched data even if realtime quote hydration fails.
+- Realtime quote data should enhance/overwrite price fields only when valid.
+- One missing/invalid symbol must not blank the whole page.
+- If quote data is missing, keep prior page data and mark stale/fallback where possible.
+- Preserve backward-compatible fields for legacy consumers:
+  price
+  last
+  currentPrice
+  current_price
+  change
+  changePercent
+  change_percent
+  percent_change
+  volume
+  source/freshness metadata
+
+Validation:
+- Test the broken pages manually in Replit.
+- Test /api/market/realtime-quotes?symbols=NVDA,TSLA,AAPL.
+- Test at least one symbol/page that was returning not found.
+- Confirm pages that were wired previously still work:
+  Watchlist
+  Portfolio
+  Stock Detail Modal
+  Stock Compare
+- Confirm no page goes blank when realtime quote is unavailable.
+- Show git diff summary before committing.
+- Commit only the surgical fix.
