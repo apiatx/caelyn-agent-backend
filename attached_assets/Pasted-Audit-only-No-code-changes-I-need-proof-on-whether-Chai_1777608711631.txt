@@ -1,0 +1,50 @@
+Audit only. No code changes.
+
+I need proof on whether Chain Reaction / Serenity bottleneck stocks are actually hardcoded/static or dynamically discovered.
+
+Please inspect the actual definition and construction of NODE_REGISTRY.
+
+Answer these exact questions:
+
+1. Where is NODE_REGISTRY defined?
+   - file path
+   - import path
+   - whether it is a literal static dict/list or built dynamically at runtime
+
+2. Does NODE_REGISTRY directly contain stock tickers?
+   - Show 5 sample entries with field names only / sanitized if needed:
+     ticker, name, theme_ids, giant_anchors, bottleneck_score, layer, evidence, etc.
+
+3. Are Chain Reaction candidate tickers selected directly from NODE_REGISTRY?
+   - Trace from NODE_REGISTRY → _mode_theme_scan() → candidate → final result.
+   - Does any function dynamically discover new tickers not already in NODE_REGISTRY?
+
+4. Is any external API used to create new candidates?
+   - FMP peers?
+   - ETF holdings?
+   - Finnhub?
+   - Grok/X?
+   - Perplexity/web validation?
+   - Claude/Gemini?
+   - news/entity extraction?
+
+5. Does enrich_candidates() only enrich existing candidates, or can it add new tickers?
+   - Confirm whether FMP/Finnhub enrichment can create new candidate rows or only fill fields like market_cap_usd.
+
+6. If I run refresh twice with the same code/data/cache state, can it return different bottleneck stocks?
+   - If yes, what source of variability causes that?
+   - If no, confirm it is deterministic over the current registry.
+
+7. Does the page always choose the same top themes?
+   - If compute_serenity_regime() is deterministic over NODE_REGISTRY and THEME_TAXONOMY, will top_themes stay the same until those files change?
+
+8. Is use_web_validation=False currently preventing dynamic web validation/discovery?
+   - If enabled, would it discover new candidates or only validate/shortlist existing ones?
+
+Deliver a direct verdict:
+A) Final ticker candidates are static/pre-mapped in NODE_REGISTRY
+B) NODE_REGISTRY is static but final tickers can be dynamically expanded
+C) NODE_REGISTRY is only abstract nodes and tickers are dynamically resolved
+D) Something else
+
+Do not modify code.
