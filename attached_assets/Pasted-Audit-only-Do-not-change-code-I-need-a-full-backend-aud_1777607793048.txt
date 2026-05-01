@@ -1,0 +1,186 @@
+Audit only. Do not change code.
+
+I need a full backend audit of the Chain Reaction page, previously Serenity / Strategy Screener.
+
+Context:
+The Chain Reaction page appears to have its own logic. I need to understand whether it is using the new Dynamic Thematic Universe / ThematicContextProvider, or whether it is running a separate hardcoded Serenity-style logic path.
+
+Current issue:
+When I click refresh on the Chain Reaction page, it is not working correctly. Do not fix yet — audit first.
+
+Primary questions:
+1. Is Chain Reaction using the shared ThematicContextProvider or Dynamic Thematic Universe at all?
+2. Or is it using its own isolated Serenity / playbook / supply-chain regime logic?
+3. Is it hardcoded to search for specific themes like photonics, AI networking, datacenter, nuclear, etc.?
+4. Or is it dynamically deciding themes from:
+   - macro regime
+   - anchor giants / thematic giants
+   - supply-chain bottlenecks
+   - hidden dependency chains
+   - related supplier / bottleneck stocks
+5. How does it decide which “giants” to anchor to?
+6. How does it decide which bottleneck themes to surface?
+7. Why does refresh currently fail or not return expected results?
+
+Audit scope:
+Trace all frontend-called backend endpoints used by Chain Reaction / Serenity / Strategy Screener.
+
+Search for:
+- chain reaction
+- serenity
+- strategy screener
+- playbook
+- bottleneck
+- supply chain
+- regime_service
+- giant
+- anchor
+- thematic giants
+- hiddenness
+- bottleneck density
+- photonics
+- AI networking
+- datacenter
+- compute
+- semiconductor equipment
+- nuclear
+- grid
+- memory
+- packaging
+
+Files likely relevant:
+- backend/services/playbook/*
+- backend/services/playbook/regime_service.py
+- backend/services/playbook/strategy_screener/*
+- backend/main.py
+- any route/router exposing /api/strategy-screener, /api/playbook, /api/chain-reaction, /api/serenity, or similar
+- any frontend-facing API response schema used by this page
+
+Deliverables:
+
+1. Endpoint map
+List every backend endpoint the Chain Reaction page uses:
+- method
+- path
+- request body/params
+- response shape
+- cache behavior
+- refresh behavior
+
+2. Execution flow
+Trace what happens when the page loads and when the user clicks refresh:
+Frontend request → backend route → service/function → data sources → scoring → response.
+
+3. Theme decision logic
+Explain exactly how Chain Reaction chooses themes:
+- hardcoded theme taxonomy?
+- dynamic macro regime?
+- active/emerging themes from ThematicContextProvider?
+- SerenityRegime?
+- bottleneck density?
+- X/Grok consensus?
+- FMP/Finnhub?
+- static YAML/JSON maps?
+- LLM-generated output?
+
+4. Giant / anchor logic
+Explain exactly how it chooses anchor giants:
+- Are giants hardcoded?
+- Are they from THEME_MAP?
+- Are they from market cap / leadership / FMP?
+- Are they based on current active themes?
+- Are they the same every run?
+- Are they refreshed?
+
+5. Supply-chain bottleneck logic
+Explain exactly how bottleneck candidates are discovered:
+- static mapping
+- peer expansion
+- ETF holdings
+- FMP peers
+- vendor/supplier graph
+- X consensus
+- news
+- financial data
+- LLM reasoning
+- other
+
+6. Relationship to new thematic infrastructure
+Answer clearly:
+- Does Chain Reaction call ThematicContextProvider?
+- Does it call get_dynamic_thematic_universe()?
+- Does it use the same active_themes / emerging_themes / dead_zones as Options Flow and TA Screener?
+- Does it use the same theme_ticker_mapper?
+- Or is it fully separate?
+
+7. Refresh bug audit
+Find why clicking refresh currently does not work.
+Check:
+- frontend endpoint mismatch
+- missing route
+- auth issue
+- stale cache
+- wrong payload
+- exception in logs
+- response shape mismatch
+- route returns 200 but frontend cannot parse
+- background job not running
+- cached empty result
+- LLM/API failure
+- import error
+- rate limit
+
+Do not fix yet. Just identify root cause with exact file/function/line references where possible.
+
+8. Data source audit
+List all external/internal data sources used:
+- FMP
+- Finnhub
+- Tradier
+- X/Grok
+- Claude/Gemini
+- local JSON
+- cached DB/disk files
+- static dictionaries
+- ETF holdings service
+- Dynamic Thematic Universe
+- ThematicContextProvider
+
+9. Caching audit
+List all cache keys / disk files involved:
+- key names
+- TTL
+- when warmed
+- when invalidated
+- whether refresh bypasses cache or not
+- whether LKG fallback exists
+
+10. Verdict
+Give a direct verdict:
+
+A) Fully uses shared thematic universe
+B) Partially uses shared thematic universe
+C) Fully isolated Serenity logic
+D) Broken / not currently reaching backend correctly
+
+11. Recommendation only
+After audit, recommend whether Chain Reaction should:
+- remain separate because it is a specialized supply-chain bottleneck engine
+- consume ThematicContextProvider only as macro/theme context
+- consume Dynamic Thematic Universe for candidate discovery
+- replace any hardcoded theme logic
+- keep hardcoded anchors but use dynamic scoring
+- become a downstream consumer of active/emerging/dead themes
+
+Do not implement. Audit only.
+
+Guardrails:
+- Do not change code.
+- Do not touch Earnings.
+- Do not touch Options Flow.
+- Do not touch TA Screener.
+- Do not touch frontend.
+- Do not add API calls.
+- Do not modify caches.
+- Do not run destructive commands.
+- Only inspect, trace, and report.

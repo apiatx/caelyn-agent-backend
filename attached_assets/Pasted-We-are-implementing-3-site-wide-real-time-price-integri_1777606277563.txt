@@ -1,0 +1,187 @@
+We are implementing #3: site-wide real-time price integrity.
+
+Goal:
+Create a centralized real-time quote layer where Tradier is the primary source for all current equity prices across the app. FMP should no longer be treated as real-time price truth. FMP remains for fundamentals, historical data, enrichment, news, earnings, SEC, profiles, etc. Twelve Data is only a second fallback if Tradier fails and FMP is stale/unusable.
+
+Important project rule:
+Do not rip out FMP globally. Only change current/live quote behavior.
+
+Desired source priority for current equity quote data:
+1. Tradier = primary live quote source
+2. FMP = fallback only
+3. Twelve Data = second fallback only
+4. Existing stale/cache value = last-known-good display only, clearly marked stale
+
+Implement this in the backend:
+
+1. Audit all backend places that fetch or return current equity price fields:
+   - quote
+   - price
+   - last
+   - change
+   - changePercent
+   - percent_change
+   - day change
+   - volume
+   - avg volume
+   - bid/ask if present
+   - market cap should remain FMP/fundamental/enrichment, not Tradier-dependent
+   - Home page cards
+   - Watchlist
+   - Portfolio
+   - AI Terminal context payloads
+   - Fundamentals / Stock Compare current price fields
+   - Screening / Strategy Screener
+   - Social consensus ticker enrichment
+   - Options Flow underlier prices if applicable
+   - Calendar earnings ticker cards if applicable
+   - any shared market overview cache
+
+2. Create one centralized service/module, preferably:
+   backend/services/realtime_quotes_service.py
+   or matching existing project style.
+
+3. The service should expose:
+   async get_realtime_quotes(symbols: list[str], *, allow_fallback: bool = True) -> dict[str, RealtimeQuote]
+
+4. RealtimeQuote normalized shape:
+   {
+     "symbol": "NVDA",
+     "price": float | null,
+     "last": float | null,
+     "bid": float | null,
+     "ask": float | null,
+     "open": float | null,
+     "high": float | null,
+     "low": float | null,
+     "close": float | null,
+     "prev_close": float | null,
+     "change": float | null,
+     "change_percent": float | null,
+     "volume": int | null,
+     "trade_timestamp": string | null,
+     "quote_timestamp": string | null,
+     "source": "tradier" | "fmp_fallback" | "twelvedata_fallback" | "lkg",
+     "is_realtime": boolean,
+     "is_stale": boolean,
+     "staleness_seconds": int | null,
+     "market_session": "pre" | "regular" | "post" | "closed" | "unknown",
+     "error": string | null
+   }
+
+5. Tradier implementation:
+   - Use TRADIER_API_KEY from secrets.
+   - Use production base URL for live data:
+     https://api.tradier.com/v1
+   - Endpoint:
+     GET /markets/quotes?symbols=AAPL,MSFT,NVDA
+   - Headers:
+     Authorization: Bearer <TRADIER_API_KEY>
+     Accept: application/json
+   - Support batching symbols.
+   - Normalize both single-object and list responses.
+   - Do not request greeks for stock quotes.
+   - Add defensive parsing because Tradier may return one quote object instead of an array for one symbol.
+   - Uppercase and dedupe symbols before calling.
+   - Chunk large symbol lists. Use chunks of 100 symbols unless the existing project has a lower safer standard.
+   - Enforce backend-side rate safety. Do not blast Tradier. Use async semaphore / limiter compatible with existing app style.
+   - Respect 120 market-data requests/minute. Target under ~90/minute for safety.
+
+6. Cache policy:
+   - Add short TTL cache for successful Tradier quotes:
+     - regular market hours: 10-20 seconds
+     - pre/post market: 30 seconds
+     - closed market: 2-5 minutes
+   - Add last-known-good cache:
+     - keep successful quote values for 4-24 hours
+     - but mark source as "lkg" and is_stale=true if used
+   - Cache key:
+     realtime_quote:{SYMBOL}
+   - If project has Redis/Neon/disk cache abstraction, use existing cache style. If not, use in-memory + optional disk persistence following existing cache conventions.
+   - Do not let stale quote cache masquerade as live data.
+
+7. Fallback policy:
+   - If Tradier succeeds for a symbol, do not call fallback for that symbol.
+   - If Tradier fails for only some symbols, fallback only those failed symbols.
+   - FMP fallback should set:
+     source="fmp_fallback"
+     is_realtime=false
+     is_stale=true unless timestamp proves fresh
+   - Twelve Data fallback should set:
+     source="twelvedata_fallback"
+     is_realtime=false unless endpoint response proves real-time/fresh
+   - If all vendors fail, return LKG if available:
+     source="lkg"
+     is_realtime=false
+     is_stale=true
+   - If no LKG, return null quote with error but do not 500 the whole request.
+
+8. Add a new backend endpoint:
+   GET /api/market/realtime-quotes?symbols=NVDA,TSLA,MRVL
+
+   Response shape:
+   {
+     "status": "ok",
+     "requested": 3,
+     "returned": 3,
+     "quotes": {
+       "NVDA": {...normalized RealtimeQuote...},
+       "TSLA": {...},
+       "MRVL": {...}
+     },
+     "source_priority": ["tradier", "fmp_fallback", "twelvedata_fallback", "lkg"],
+     "generated_at": "...",
+     "cache_policy": {
+       "regular_ttl_seconds": 15,
+       "extended_ttl_seconds": 30,
+       "closed_ttl_seconds": 300
+     }
+   }
+
+9. Add optional POST endpoint if easier for large batches:
+   POST /api/market/realtime-quotes
+   body:
+   { "symbols": ["NVDA", "TSLA", "MRVL"] }
+
+10. Wire this quote service into existing response builders:
+   - Do not duplicate Tradier fetch logic in each feature.
+   - Replace current live/current price lookups with the central service.
+   - Leave FMP historical/fundamental/enrichment paths alone.
+   - Any page that displays a current price should either:
+     a) call the centralized quote service directly server-side, or
+     b) expose enough symbol list for frontend to hydrate via the new endpoint.
+
+11. Add freshness metadata anywhere current prices are included:
+   - price_source
+   - price_is_realtime
+   - price_is_stale
+   - price_updated_at or quote_timestamp
+   - staleness_seconds
+
+12. Important:
+   Existing AI/signal logic should not use stale FMP quote values for real-time setups.
+   If a strategy/signal needs live/current price, it must use the centralized quote service.
+   If only stale data is available, downgrade confidence or mark setup as stale_data=true.
+   Never let stale data silently trigger a buy/sell/alert-style recommendation.
+
+13. Add validation script or route test:
+   - Call /api/market/realtime-quotes?symbols=NVDA,TSLA,AAPL
+   - Verify source is tradier during successful path.
+   - Verify timestamps/freshness fields exist.
+   - Temporarily simulate Tradier failure and verify fallback does not 500.
+   - Verify FMP fallback is clearly marked non-realtime/stale.
+   - Verify invalid symbols return per-symbol errors without killing valid symbols.
+
+14. Add logging:
+   - quote batch size
+   - symbols requested
+   - number served from cache
+   - number fetched from Tradier
+   - number from FMP fallback
+   - number from Twelve Data fallback
+   - number from LKG
+   - vendor errors
+   - rate limit / 429 handling
+
+15. Do not change trading/order functionality.
+This is market-data only.
