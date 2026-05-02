@@ -55,6 +55,24 @@ _SNAP_MAX_AGE_S     = 9 * 24 * 3600   # 9 days  — reject disk snapshots older 
 # On startup, _load_all_earn_snaps_from_disk() pre-warms the in-memory cache from disk.
 _SNAP_DIR = Path(__file__).resolve().parent.parent / "data"
 
+# ── Per-week build state (used by precompute loop + status endpoint) ──────────
+# Keyed by mon_str (e.g. "2026-05-11"). Updated by the precompute loop.
+_week_states: dict[str, dict] = {}
+
+def _init_week_state(mon: str) -> dict:
+    return {
+        "status":       "missing",  # fresh | lkg | missing | building | failed
+        "last_built":   None,       # unix timestamp (float)
+        "last_error":   None,       # str | None
+        "last_attempt": None,       # unix timestamp (float)
+        "next_retry_at": None,      # monotonic timestamp (float) for backoff
+        "retry_count":  0,
+    }
+
+def get_week_state(mon: str) -> dict:
+    """Return tracked precompute state for a week (by Monday date string)."""
+    return _week_states.get(mon, _init_week_state(mon))
+
 _DEFAULT_DAYS       = 14            # default upcoming window (2 weeks)
 _MAX_RANGE_DAYS     = 30            # hard cap on date range (30 days)
 _MAX_CHUNKS         = 5             # max sequential FMP calendar calls (5 × 7d = 35d covers 30d)
@@ -2484,16 +2502,21 @@ async def get_month_curated(
     total_curated = sum(len(v) for v in curated_by_date.values())
 
     _mc_result = {
-        "asOf":        _today(),
-        "source":      "fmp",
-        "year":        year,
-        "month":       month,
-        "monthLabel":  month_label,
-        "monthStart":  month_start,
-        "monthEnd":    month_end,
-        "days":        days,
-        "status":      "partial" if any_partial else "ok",
-        "errors":      all_errors,
+        "asOf":          _today(),
+        "source":        "fmp",
+        "year":          year,
+        "month":         month,
+        "monthLabel":    month_label,
+        "monthStart":    month_start,
+        "monthEnd":      month_end,
+        "days":          days,
+        "status":        "partial" if any_partial else "ok",
+        "partial":       any_partial,
+        "missing_weeks": [
+            {"week_start": w_from, "week_end": w_to}
+            for w_from, w_to in missing_weeks
+        ],
+        "errors":        all_errors,
     }
 
     if not any_partial and not scope and not search:
@@ -2584,12 +2607,14 @@ async def _earnings_curated_precompute_loop() -> None:
     live FMP enrichment.
 
     Schedule:
-      • Startup: builds any missing snapshots for the current week + next 5 weeks.
-      • Every 6 hours: scans upcoming weeks and rebuilds any that are missing or stale.
+      • Startup: waits 3 minutes (lets Theme RS / Sectors / Macro finish FMP warmup),
+        then builds any missing snapshots for the current week + next 5 weeks.
+      • Every 6 hours (or 5 minutes if weeks are still missing): rescan and build.
       • Saturdays (ET): force-rebuilds all upcoming 6 weeks (full Saturday-night batch).
-      • 5-second stagger between weeks to avoid FMP rate limits.
+      • 30-second stagger between week builds to avoid FMP burst.
+      • Exponential backoff on 429 / failure: 5 min → 10 min → 20 min … capped 60 min.
 
-    This is the ONLY place where enrichment should trigger during normal operation.
+    State tracking (_week_states dict) is consumed by the admin snapshot-status endpoint.
     """
     try:
         from config import FMP_API_KEY as _api_key
@@ -2601,20 +2626,25 @@ async def _earnings_curated_precompute_loop() -> None:
         print("[earn_precompute] FMP_API_KEY empty — precompute loop disabled")
         return
 
-    # Initial delay: let the server fully start and warm disk snapshots first
-    await asyncio.sleep(20)
+    # Initial delay: let Theme RS, Sectors, Macro, and other startup FMP jobs finish
+    # before earnings precompute starts hammering the same API key.
+    _STARTUP_DELAY_S = 180   # 3 minutes
+    print(f"[earn_precompute] Waiting {_STARTUP_DELAY_S}s before first build cycle…")
+    await asyncio.sleep(_STARTUP_DELAY_S)
     print("[earn_precompute] Starting earnings curated precompute loop")
 
     while True:
+        still_missing = 0
         try:
-            now        = datetime.now(timezone.utc)
-            today      = now.date()
+            now         = datetime.now(timezone.utc)
+            today       = now.date()
             is_saturday = today.weekday() == 5
+            mono_now    = time.monotonic()
 
-            # Determine canonical Monday of current week
+            # Canonical Monday of current week
             mon0 = today - timedelta(days=today.weekday())
 
-            # Build current week + next 5 weeks (6 weeks total)
+            # Current week + next 5 (6 total, priority order)
             weeks_to_check = [
                 (
                     (mon0 + timedelta(weeks=i)).strftime("%Y-%m-%d"),
@@ -2624,36 +2654,99 @@ async def _earnings_curated_precompute_loop() -> None:
             ]
 
             built = 0
+
             for mon_str, fri_str in weeks_to_check:
-                needs_build = False
+                # Ensure state entry exists
+                if mon_str not in _week_states:
+                    _week_states[mon_str] = _init_week_state(mon_str)
+                state = _week_states[mon_str]
 
                 if is_saturday:
-                    # Saturday night: force-rebuild everything (full batch)
+                    # Saturday night full-batch: always rebuild
                     needs_build = True
                 else:
-                    # Check if snapshot exists in memory or on disk
-                    if cache.get(_snap_ck(mon_str, fri_str)) is None:
-                        if _read_earn_snap_from_disk(_snap_disk_path(mon_str, fri_str)) is None:
-                            needs_build = True
+                    # Skip if a fresh snapshot already exists
+                    if cache.get(_snap_ck(mon_str, fri_str)) is not None:
+                        state["status"] = "fresh"
+                        continue
+                    if _read_earn_snap_from_disk(_snap_disk_path(mon_str, fri_str)) is not None:
+                        state["status"] = "fresh"
+                        continue
 
-                if needs_build:
-                    try:
-                        await build_curated_week_snapshot(
-                            _api_key, mon_str, fri_str, force=is_saturday
+                    # Respect exponential backoff — don't retry too soon after failure
+                    nr = state.get("next_retry_at")
+                    if nr is not None and mono_now < nr:
+                        wait_s = round(nr - mono_now)
+                        print(f"[earn_precompute] {mon_str} backoff: retry in {wait_s}s")
+                        still_missing += 1
+                        continue
+
+                    needs_build = True
+
+                if not needs_build:
+                    continue
+
+                state["status"]       = "building"
+                state["last_attempt"] = time.time()
+
+                try:
+                    result = await build_curated_week_snapshot(
+                        _api_key, mon_str, fri_str, force=is_saturday
+                    )
+                    built += 1
+
+                    if result.get("rateLimited"):
+                        # Build partially completed but was rate-limited —
+                        # treat as LKG + schedule a retry with exponential backoff
+                        rc      = state.get("retry_count", 0) + 1
+                        backoff = min(300 * (2 ** (rc - 1)), 3600)  # 5m→10m→20m… ≤60m
+                        state["status"]        = "lkg"
+                        state["last_error"]    = "rate_limited"
+                        state["retry_count"]   = rc
+                        state["next_retry_at"] = time.monotonic() + backoff
+                        print(
+                            f"[earn_precompute] {mon_str} rate-limited "
+                            f"(attempt {rc}) → retry in {backoff//60}min"
                         )
-                        built += 1
-                        await asyncio.sleep(5)   # stagger — avoid FMP rate limits
-                    except Exception as e:
-                        print(f"[earn_precompute] build failed {mon_str}: {e}")
-                        await asyncio.sleep(15)
+                        still_missing += 1
+                    else:
+                        state["status"]        = "fresh"
+                        state["last_built"]    = time.time()
+                        state["last_error"]    = None
+                        state["retry_count"]   = 0
+                        state["next_retry_at"] = None
 
-            if built:
-                print(f"[earn_precompute] cycle done: built {built} week(s)")
+                    # 30-second stagger between week builds
+                    await asyncio.sleep(30)
+
+                except Exception as exc:
+                    rc      = state.get("retry_count", 0) + 1
+                    backoff = min(300 * (2 ** (rc - 1)), 3600)
+                    state["status"]        = "failed"
+                    state["last_error"]    = str(exc)
+                    state["retry_count"]   = rc
+                    state["next_retry_at"] = time.monotonic() + backoff
+                    print(
+                        f"[earn_precompute] build failed {mon_str}: {exc} "
+                        f"(attempt {rc}) → retry in {backoff//60}min"
+                    )
+                    still_missing += 1
+                    await asyncio.sleep(30)
+
+            if built or still_missing:
+                print(
+                    f"[earn_precompute] cycle done: built={built} still_pending={still_missing}"
+                )
             else:
-                print(f"[earn_precompute] cycle done: all {len(weeks_to_check)} weeks already cached")
+                print(
+                    f"[earn_precompute] cycle done: all {len(weeks_to_check)} weeks already cached"
+                )
 
         except Exception as e:
             print(f"[earn_precompute] loop error: {e}")
 
-        # Sleep 6 hours between cycles (Saturday night cycle immediately rebuilds all)
-        await asyncio.sleep(6 * 3600)
+        # If weeks are still pending, retry soon; otherwise full 6-hour cycle
+        if still_missing:
+            await asyncio.sleep(5 * 60)   # 5 minutes — quick retry
+        else:
+            await asyncio.sleep(6 * 3600)

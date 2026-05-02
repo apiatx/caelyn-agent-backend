@@ -594,14 +594,18 @@ async def admin_rebuild_week(
 @router.get("/api/catalysts/earnings/admin/snapshot-status")
 @traceable(name="earnings_clean.admin_snapshot_status")
 async def admin_snapshot_status(
-    request:    Request,
-    api_key:    str           = Header(None, alias=_AUTH_HEADER),
-    weeks_ahead: int          = Query(6, ge=1, le=12,
-                                      description="Number of upcoming weeks to check (default 6)"),
+    request:     Request,
+    api_key:     str = Header(None, alias=_AUTH_HEADER),
+    weeks_ahead: int = Query(6, ge=1, le=12,
+                             description="Number of upcoming weeks to check (default 6)"),
 ):
     """
     Admin diagnostic: report snapshot status for upcoming weeks.
-    Shows which weeks have fresh snapshots, LKG snapshots, or need building.
+
+    Returns per-week:
+      week_start, week_end, status (fresh/lkg/missing/building/failed),
+      rows, focus, last_built, last_error, last_attempt, next_retry_at,
+      memFresh, memLKG, diskFresh, diskLKG, memAgeS, diskAgeS.
     """
     err = _check_key(api_key)
     if err:
@@ -609,14 +613,16 @@ async def admin_snapshot_status(
 
     from services.earnings_clean_service import (
         _snap_ck, _snap_lkg_ck, _snap_disk_path, _snap_lkg_disk_path,
-        _read_earn_snap_from_disk,
+        _read_earn_snap_from_disk, get_week_state,
     )
     from data.cache import cache
     from datetime import date as _date
     import time as _time
 
+    _now = datetime.utcnow()
     today = _date.today()
     mon0  = today - timedelta(days=today.weekday())
+    wall_now = _time.time()
 
     report = []
     for i in range(weeks_ahead):
@@ -628,23 +634,161 @@ async def admin_snapshot_status(
         disk_snap = _read_earn_snap_from_disk(_snap_disk_path(mon, fri))
         disk_lkg  = _read_earn_snap_from_disk(_snap_lkg_disk_path(mon, fri))
 
-        mem_age  = None
-        disk_age = None
-        if mem_snap and mem_snap.get("cached_at"):
-            mem_age = int(_time.time() - mem_snap["cached_at"])
-        if disk_snap and disk_snap.get("cached_at"):
-            disk_age = int(_time.time() - disk_snap["cached_at"])
+        best = mem_snap or disk_snap or mem_lkg or disk_lkg or {}
+
+        mem_age  = int(wall_now - mem_snap["cached_at"])  if mem_snap  and mem_snap.get("cached_at")  else None
+        disk_age = int(wall_now - disk_snap["cached_at"]) if disk_snap and disk_snap.get("cached_at") else None
+
+        rows  = len(best.get("allEvents", []))
+        focus = sum(1 for e in best.get("allEvents", []) if e.get("isFocus"))
+
+        loop_state = get_week_state(mon)
+
+        # Derive display status (loop state overrides if building/failed)
+        if loop_state["status"] in ("building", "failed"):
+            display_status = loop_state["status"]
+        elif mem_snap is not None or disk_snap is not None:
+            display_status = "fresh"
+        elif mem_lkg is not None or disk_lkg is not None:
+            display_status = "lkg"
+        else:
+            display_status = "missing"
+
+        # Convert monotonic next_retry_at → wall-clock ISO string
+        nr_mono = loop_state.get("next_retry_at")
+        if nr_mono is not None:
+            delta_s = nr_mono - _time.monotonic()
+            nr_iso  = datetime.utcfromtimestamp(wall_now + delta_s).strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            nr_iso  = None
+
+        last_built = loop_state.get("last_built")
+        last_attempt = loop_state.get("last_attempt")
 
         report.append({
-            "week":        f"{mon}→{fri}",
-            "memFresh":    mem_snap is not None,
-            "memLKG":      mem_lkg is not None,
-            "diskFresh":   disk_snap is not None,
-            "diskLKG":     disk_lkg is not None,
-            "memAgeS":     mem_age,
-            "diskAgeS":    disk_age,
-            "events":      len((mem_snap or disk_snap or {}).get("allEvents", [])),
-            "needsBuild":  (mem_snap is None and disk_snap is None),
+            "week_start":    mon,
+            "week_end":      fri,
+            "week":          f"{mon}→{fri}",
+            "status":        display_status,
+            "rows":          rows,
+            "focus":         focus,
+            "last_built":    datetime.utcfromtimestamp(last_built).strftime("%Y-%m-%dT%H:%M:%SZ")
+                             if last_built else None,
+            "last_error":    loop_state.get("last_error"),
+            "last_attempt":  datetime.utcfromtimestamp(last_attempt).strftime("%Y-%m-%dT%H:%M:%SZ")
+                             if last_attempt else None,
+            "next_retry_at": nr_iso,
+            "retry_count":   loop_state.get("retry_count", 0),
+            "memFresh":      mem_snap  is not None,
+            "memLKG":        mem_lkg   is not None,
+            "diskFresh":     disk_snap is not None,
+            "diskLKG":       disk_lkg  is not None,
+            "memAgeS":       mem_age,
+            "diskAgeS":      disk_age,
+            "needsBuild":    display_status in ("missing", "failed"),
         })
 
-    return JSONResponse(content={"asOf": now.isoformat(), "weeks": report})
+    return JSONResponse(content={"asOf": _now.isoformat(), "weeks": report})
+
+
+# ── POST /api/catalysts/earnings/admin/rebuild-missing ─────────────────────────
+# Admin-only: sequential staggered build for any weeks that are currently missing.
+# Skips weeks that already have valid fresh snapshots (unless force=true).
+
+@router.post("/api/catalysts/earnings/admin/rebuild-missing")
+@traceable(name="earnings_clean.admin_rebuild_missing")
+async def admin_rebuild_missing(
+    request:     Request,
+    api_key:     str  = Header(None, alias=_AUTH_HEADER),
+    weeks_ahead: int  = Query(5, ge=1, le=8,
+                              description="How many weeks ahead to check/build (default 5)"),
+    force:       bool = Query(False,
+                              description="Rebuild even if fresh snapshot exists (default false)"),
+    stagger_s:   int  = Query(30, ge=5, le=120,
+                              description="Seconds to sleep between week builds (default 30)"),
+):
+    """
+    Sequential staggered rebuild for weeks that are missing (or all if force=true).
+
+    Processes current week + next N in priority order.
+    Skips weeks with a valid fresh snapshot unless force=true.
+    Returns per-week: built / skipped / failed / rate_limited.
+
+    NOTE: This endpoint runs synchronously and may take several minutes
+    (stagger_s × missing_weeks). Use the admin UI or call from a background script.
+    """
+    err = _check_key(api_key)
+    if err:
+        return err
+
+    fmp_key = _get_fmp_key()
+    if not fmp_key:
+        return JSONResponse(status_code=503, content={"error": "FMP API key not configured"})
+
+    from services.earnings_clean_service import (
+        build_curated_week_snapshot,
+        _snap_ck, _snap_disk_path, _read_earn_snap_from_disk,
+    )
+    from data.cache import cache
+    import asyncio as _asyncio
+    from datetime import date as _date
+
+    today = _date.today()
+    mon0  = today - timedelta(days=today.weekday())
+
+    results = []
+    for i in range(weeks_ahead):
+        mon = (mon0 + timedelta(weeks=i)).strftime("%Y-%m-%d")
+        fri = (mon0 + timedelta(weeks=i) + timedelta(days=4)).strftime("%Y-%m-%d")
+
+        # Skip if fresh snapshot exists (unless force=true)
+        if not force:
+            if cache.get(_snap_ck(mon, fri)) is not None:
+                results.append({"week": f"{mon}→{fri}", "status": "skipped", "reason": "fresh_snap_exists"})
+                continue
+            if _read_earn_snap_from_disk(_snap_disk_path(mon, fri)) is not None:
+                results.append({"week": f"{mon}→{fri}", "status": "skipped", "reason": "fresh_disk_exists"})
+                continue
+
+        try:
+            result = await build_curated_week_snapshot(fmp_key, mon, fri, force=force)
+            if result.get("rateLimited"):
+                results.append({
+                    "week":        f"{mon}→{fri}",
+                    "status":      "rate_limited",
+                    "events":      len(result.get("allEvents", [])),
+                    "focus":       sum(1 for e in result.get("allEvents", []) if e.get("isFocus")),
+                    "calHttp":     result.get("calHttpCalls", 0),
+                    "enrichHttp":  result.get("enrichHttpCalls", 0),
+                })
+            else:
+                results.append({
+                    "week":        f"{mon}→{fri}",
+                    "status":      "built",
+                    "events":      len(result.get("allEvents", [])),
+                    "focus":       sum(1 for e in result.get("allEvents", []) if e.get("isFocus")),
+                    "calHttp":     result.get("calHttpCalls", 0),
+                    "enrichHttp":  result.get("enrichHttpCalls", 0),
+                })
+        except Exception as exc:
+            results.append({"week": f"{mon}→{fri}", "status": "failed", "error": str(exc)})
+
+        # Stagger between builds — avoid FMP rate limits
+        if i < weeks_ahead - 1:
+            await _asyncio.sleep(stagger_s)
+
+    built_count    = sum(1 for r in results if r["status"] == "built")
+    skipped_count  = sum(1 for r in results if r["status"] == "skipped")
+    rl_count       = sum(1 for r in results if r["status"] == "rate_limited")
+    failed_count   = sum(1 for r in results if r["status"] == "failed")
+
+    return JSONResponse(content={
+        "summary": {
+            "built":        built_count,
+            "skipped":      skipped_count,
+            "rate_limited": rl_count,
+            "failed":       failed_count,
+            "total":        len(results),
+        },
+        "weeks": results,
+    })
