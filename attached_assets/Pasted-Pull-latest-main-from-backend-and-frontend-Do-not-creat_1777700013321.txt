@@ -1,0 +1,62 @@
+Pull latest main from backend and frontend.
+
+Do not create branches.
+Do not modify unrelated functionality.
+
+Backend:
+1. Inspect the new Screener Hub migration.
+2. Apply the migration to Neon using the existing NEON_DATABASE_URL environment.
+3. Confirm these tables exist:
+   - screener_fundamentals_cache
+   - screener_universe_snapshots
+   - screener_quote_cache
+   - screener_job_runs
+4. Restart the backend.
+5. Validate the new endpoints:
+   - GET /api/screener-hub/themes
+   - GET /api/screener-hub?tab=thematic&theme=Clean%20Energy
+   - GET /api/screener-hub?tab=social
+   - GET /api/screener-hub?tab=bottlenecks
+   - GET /api/screener-hub?tab=watchlist_portfolio
+   - GET /api/admin/screener-hub/status with existing AGENT_API_KEY auth
+6. Confirm the endpoints return JSON and do not crash if caches are empty.
+7. Confirm stale-but-valid cached data is preserved and not overwritten by empty failed refreshes.
+8. Confirm fundamentals jobs are staggered:
+   - Thematic universe rebuild: Sunday 12:30 AM ET
+   - Thematic fundamentals warm: Sunday 1:15 AM ET
+   - Bottlenecks fundamentals warm: Sunday 3:15 AM ET
+   - Social scan: Monday-Friday 12:00 AM ET
+   - Social fundamentals warm: Monday-Friday 12:45 AM ET
+   - Watchlist+Portfolio fundamentals warm: Friday 2:00 AM ET
+9. Confirm FMP fundamentals fetches are throttled:
+   - dedupe symbols first
+   - skip symbols fetched within last 7 days
+   - fetch one symbol at a time or very small batches
+   - sleep 5–15 seconds between FMP calls
+   - record job runs in screener_job_runs
+10. Confirm Tradier quotes are page-aware:
+   - only active Screener Hub tab symbols are refreshed
+   - quote cache is used
+   - quote failures do not blank the table
+
+Frontend:
+1. Pull latest main.
+2. Run build.
+3. Confirm the Screener page renders the new Screener Hub between the TradingView ticker tape and the TradingView screener widget.
+4. Confirm default tab is Thematic.
+5. Confirm tab switching works for:
+   - Thematic
+   - Social
+   - Bottlenecks
+   - Watchlist+Portfolio
+6. Confirm the theme dropdown works.
+7. Confirm category filters work.
+8. Confirm score sorting works.
+9. Confirm missing fields do not crash or blank the component.
+
+Return:
+- migration applied yes/no
+- tables confirmed yes/no
+- endpoint validation results
+- frontend build result
+- any remaining issues
