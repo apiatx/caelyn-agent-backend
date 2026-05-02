@@ -1,0 +1,109 @@
+Pull latest main for both repos.
+
+Backend repo:
+https://github.com/apiatx/caelyn-agent-backend.git
+
+Frontend repo:
+https://github.com/apiatx/caelyn-agent-frontend.git
+
+Do not create branches.
+Do not open PRs.
+Do not modify unrelated functionality.
+This is only to apply/validate the Screener Hub implementation that was already pushed.
+
+Latest commits expected:
+Backend: 9310def066d70628c7d5b083a38acbf4186bfd32
+Frontend: 12f1c233c4568aa2e6601367d2a7fb352b03d76a
+
+Backend tasks:
+
+1. Pull latest main.
+
+2. Confirm the migration exists:
+backend/migrations/0001_screener_hub.sql
+
+3. Apply the migration to Neon using the existing Replit NEON_DATABASE_URL secret.
+
+Preferred command:
+psql "$NEON_DATABASE_URL" -f backend/migrations/0001_screener_hub.sql
+
+If psql is unavailable, print the SQL from:
+backend/migrations/0001_screener_hub.sql
+
+Then I will paste it into Neon SQL Editor manually.
+
+4. Confirm these tables exist:
+- screener_fundamentals_cache
+- screener_universe_snapshots
+- screener_quote_cache
+- screener_job_runs
+
+5. Restart the backend.
+
+6. Validate these public endpoints:
+curl -s "$BASE/api/screener-hub/themes" | jq .
+curl -s "$BASE/api/screener-hub?tab=thematic&theme=Clean%20Energy" | jq .
+curl -s "$BASE/api/screener-hub?tab=social" | jq .
+curl -s "$BASE/api/screener-hub?tab=bottlenecks" | jq .
+curl -s "$BASE/api/screener-hub?tab=watchlist_portfolio" | jq .
+
+7. Validate admin endpoint using existing AGENT_API_KEY:
+curl -s -H "X-API-Key: $AGENT_API_KEY" "$BASE/api/admin/screener-hub/status" | jq .
+
+8. Optional rebuild smoke test:
+curl -s -X POST "$BASE/api/admin/screener-hub/rebuild" \
+  -H "X-API-Key: $AGENT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"tab":"all","force":false}' | jq .
+
+Important backend validation:
+- Endpoints should return JSON, not crash.
+- Empty caches should not crash.
+- Stale-but-valid cached data should be preserved.
+- Valid cached rows should not be overwritten by empty failed refreshes.
+- Fundamentals refresh jobs should be staggered and throttled:
+  - Thematic universe rebuild: Sunday 12:30 AM ET
+  - Thematic fundamentals warm: Sunday 1:15 AM ET
+  - Bottlenecks fundamentals warm: Sunday 3:15 AM ET
+  - Social scan: Monday-Friday 12:00 AM ET
+  - Social fundamentals warm: Monday-Friday 12:45 AM ET
+  - Watchlist+Portfolio fundamentals warm: Friday 2:00 AM ET
+  - FMP calls should dedupe first, skip fundamentals fetched within 7 days, and sleep 5–15 seconds between individual/small-batch fetches.
+
+Frontend tasks:
+
+1. Pull latest main.
+
+2. Run build.
+
+3. Confirm the Screener page renders the new Caelyn Screener Hub between:
+- the top TradingView ticker tape / market summary area
+- the existing TradingView screener widget
+
+4. Confirm the existing TradingView widgets still render.
+
+5. Confirm Screener Hub UI behavior:
+- Default tab is Thematic.
+- Theme dropdown works.
+- Category filters work.
+- Tabs work:
+  - Thematic
+  - Social
+  - Bottlenecks
+  - Watchlist+Portfolio
+- Score sorting works.
+- Copy to clipboard works if implemented.
+- Missing/null row fields do not crash or blank the component.
+
+6. Confirm the frontend only calls backend Screener Hub endpoints and does not call FMP or Tradier directly.
+
+Return:
+- Backend pull status
+- Frontend pull status
+- Migration applied yes/no
+- Tables confirmed yes/no
+- Backend endpoint validation results
+- Admin endpoint validation result
+- Frontend build result
+- Screener page render result
+- Any errors or remaining issues

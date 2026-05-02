@@ -93,9 +93,13 @@ def _theme_metadata() -> list[dict]:
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE
         for key, meta in THEME_RS_UNIVERSE.items():
+            label = meta.get("display_name") or key
             out.append({
-                "theme_key": key,
-                "display_name":   meta.get("display_name") or key,
+                "theme_key":      key,
+                "display_name":   label,
+                # Aliases expected by the ScreenerHub frontend component
+                "id":             key,
+                "label":          label,
                 "classification": meta.get("classification") or "theme",
                 "parent_sector":  meta.get("parent_sector"),
                 "proxy_symbols":  list(meta.get("proxy_symbols") or [])[:5],
