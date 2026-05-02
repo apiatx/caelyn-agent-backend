@@ -1,0 +1,99 @@
+Fix the Earnings Calendar snapshot precompute so next 4–5 weeks are reliably built despite FMP 429s.
+
+Current status:
+Backend snapshot architecture is correct and week/day/month endpoints are now fast from snapshots.
+
+Remaining problem:
+Snapshot status shows:
+- Apr 27–May 1: fresh
+- May 4–May 8: fresh
+- May 11–May 15: missing
+- May 18–May 22: missing
+- May 25–May 29: missing
+
+The missing weeks failed because FMP hit 429 during concurrent startup warmup from other services. Waiting 6 hours for retry is not acceptable.
+
+Goal:
+Ensure current week + next 4 or 5 weeks are built reliably without hammering FMP and without blocking page loads.
+
+Do not change frontend.
+Do not change Themes page.
+Do not change Options Flow.
+Do not change TA Screener.
+Do not change Watchlist.
+Do not change Portfolio.
+Do not change Chain Reaction.
+Do not add LLM calls.
+
+Requirements:
+
+1. Stagger earnings precompute
+The earnings precompute loop should not launch all future weeks in a way that competes with Theme RS warmup and other FMP-heavy startup jobs.
+
+Implement:
+- initial delay after startup before earnings precompute begins, e.g. 2–5 minutes
+- process weeks sequentially, not all at once
+- sleep between week builds, e.g. 30–90 seconds
+- if FMP 429 occurs, exponential backoff and retry that week
+- do not mark a week permanently missing just because one startup pass hit 429
+
+2. Prioritize required weeks
+Build in this priority order:
+- current week
+- next week
+- week +2
+- week +3
+- week +4
+- week +5 if configured
+
+3. Manual catch-up endpoint
+Add or use an existing admin endpoint to rebuild missing weeks only:
+- current + next 4 weeks
+- skip weeks that already have valid fresh snapshots unless force=true
+- use sequential/staggered processing
+- return per-week result: built/skipped/failed/rate_limited
+
+4. Snapshot status should expose missing reasons
+Update /api/catalysts/earnings/admin/snapshot-status if needed to show:
+- week_start
+- week_end
+- status: fresh/lkg/missing/building/failed
+- rows
+- focus
+- last_built
+- last_error
+- last_attempt
+- next_retry_at
+
+5. Month view should be honest but fast
+Month endpoint should:
+- return immediately from available snapshots
+- include partial=true if weeks are missing
+- include missing_weeks list
+- never block on live enrichment
+- never run month-wide live rebuild
+
+6. Validation
+Run:
+- GET /api/catalysts/earnings/admin/snapshot-status
+- admin rebuild missing weeks for current + next 4
+- GET snapshot-status again
+- GET month-curated endpoint
+- GET week-clean for each current + next 4 weeks
+- GET day-curated for dates inside those weeks
+
+Confirm:
+- current + next 4 weeks have fresh or valid LKG snapshots
+- missing weeks are either built or clearly queued with retry
+- no normal page-load endpoint triggers live FMP enrichment
+- month endpoint returns quickly
+- month endpoint includes available rows and missing_weeks metadata if partial
+- no unrelated pages changed
+
+Delivery report:
+1. Files changed.
+2. Startup precompute delay/stagger settings.
+3. Retry/backoff behavior.
+4. Current + next 4 week snapshot status table.
+5. Month endpoint timing and partial/missing metadata.
+6. Confirmation no frontend/unrelated page changes.
