@@ -979,14 +979,19 @@ _QL_PREF_SYM_HIT    = -25   # high-confidence preferred / warrant from symbol pa
 _QL_PREF_NAME_HIT   = -20   # preferred / warrant detected in company name
 _QL_ADR_PENALTY     =  -8   # ADR (softer — often legitimate large-cap instruments)
 
-_WEEK_CAND_MAX      = 150  # max raw candidates forwarded to enrichment
-_MAX_WEEK_ENRICH    = 120  # max events passed to _enrich_events (cache-first; live cap = 40)
+_WEEK_CAND_MAX      = 250  # max raw candidates forwarded to enrichment (raised from 150 for better day coverage)
+_MAX_WEEK_ENRICH    = 180  # max events passed to _enrich_events (raised from 120)
 _WEEK_MAX_LIVE      = 40   # hard cap on live FMP profile/quote calls for week-clean
+_WEEK_PER_DAY_FLOOR = 30   # guaranteed candidate slots per trading day (prevents blank days)
 _WEEK_CONCURRENCY   = 2    # semaphore for week-clean enrichment
 _WEEK_LIMIT_DEFAULT = 8    # default per-session cap
 _WEEK_TOTAL_DEFAULT = 60   # default topEvents cap
 _WEEK_LIMIT_MAX     = 15   # hard ceiling for limit_per_session
 _WEEK_TOTAL_MAX     = 100  # hard ceiling for max_total
+
+# importanceScore threshold above which an event is flagged isFocus=True.
+# Anchors/bottlenecks typically score 60-110; well-covered mid-caps ~45-55.
+_FOCUS_SCORE_THRESHOLD = 65
 
 # ── Day-curated caps ───────────────────────────────────────────────────────────
 _DAY_CAND_MAX      = 80   # max raw candidates after pre-filter
@@ -1187,6 +1192,7 @@ def _decorate_event(ev: dict, pre: dict, score: int, breakdown: dict) -> dict:
         "isThemeAnchor":   pre.get("isAnchor", False),
         "isBottleneck":    pre.get("isBottleneck", False),
         "importanceScore": score,
+        "isFocus":         score >= _FOCUS_SCORE_THRESHOLD,
         "scoreBreakdown":  breakdown,
         "source":          "fmp",
     }
@@ -1274,9 +1280,17 @@ def _is_eligible(ev: dict, pre: dict, watchlist: set[str], portfolio: set[str]) 
 
     # ── Hard exclusions (for everything not in theme / watchlist / portfolio) ──
 
-    # Missing or trivial company name (enrichment didn't resolve it)
+    # Missing or trivial company name (enrichment didn't resolve it).
+    # Exception: if it's on a major US exchange with both estimates, allow through —
+    # FMP sometimes returns no companyName for legitimate listed companies.
     if not cname or cname.upper() == sym:
-        return False
+        _exc_exchange = (ev.get("_exchange") or "").upper()
+        _has_both_est = (
+            ev.get("epsEstimated") is not None
+            and ev.get("revenueEstimated") is not None
+        )
+        if not (_exc_exchange in _US_MAJOR and _has_both_est):
+            return False
 
     # Preferred/warrant pattern guard (belt-and-suspenders after pre-filter)
     if _QUAL_PREF_RE.search(sym) or _QUAL_NAME_PREF_RE.search(cname):
@@ -1365,8 +1379,37 @@ async def _run_curated_pipeline(
             0 if has_rev else 1,
             len(sym),
         )
-    candidates.sort(key=_cand_key)
-    candidates = candidates[:max_candidates]
+
+    # Per-day floor: guarantee each trading day gets at least _WEEK_PER_DAY_FLOOR
+    # candidate slots before the global max_candidates cap is applied.
+    # Without this, days with no theme symbols can end up with zero candidates
+    # when other days' theme/estimates events fill all global slots → blank days.
+    _by_date: dict[str, list[dict]] = {}
+    for ev in candidates:
+        d = ev.get("date", "")
+        _by_date.setdefault(d, []).append(ev)
+    for d in _by_date:
+        _by_date[d].sort(key=_cand_key)
+
+    _floor     = _WEEK_PER_DAY_FLOOR
+    guaranteed: list[dict] = []
+    overflow:   list[dict] = []
+    for d in sorted(_by_date):
+        day_evs = _by_date[d]
+        guaranteed.extend(day_evs[:_floor])
+        overflow.extend(day_evs[_floor:])
+
+    overflow.sort(key=_cand_key)
+    _remaining = max(0, max_candidates - len(guaranteed))
+
+    # Deduplicate by symbol across guaranteed + overflow fill
+    _seen_syms: set[str] = set()
+    candidates = []
+    for ev in guaranteed + overflow[:_remaining]:
+        sym = ev.get("symbol", "")
+        if sym and sym not in _seen_syms:
+            _seen_syms.add(sym)
+            candidates.append(ev)
 
     # Phase 2 — pre-score
     pre_scores: dict[str, dict] = {}
@@ -1417,12 +1460,29 @@ async def _run_curated_pipeline(
         score, breakdown = _apply_full_score(ev, pre)
         decorated.append(_decorate_event(ev, pre, score, breakdown))
 
-    # Not-enriched: only include explicit theme / watchlist / portfolio
+    # Not-enriched: include explicit theme / watchlist / portfolio AND
+    # high-signal unknowns: ≤4-char ticker + both estimates present + not preferred/junk.
+    # These get a partial score (no mc/exchange boost) but prevent blank days for
+    # non-theme weeks where all enrichment slots were consumed by other days.
     for ev in not_enriched:
         sym = ev.get("symbol", "")
         pre = pre_scores.get(sym, _empty_pre)
-        if not (pre.get("isAnchor") or pre.get("isBottleneck") or pre.get("themes")
-                or sym in watchlist or sym in portfolio):
+        is_theme_wl = (
+            pre.get("isAnchor") or pre.get("isBottleneck") or pre.get("themes")
+            or sym in watchlist or sym in portfolio
+        )
+        has_both_est  = (ev.get("epsEstimated") is not None
+                         and ev.get("revenueEstimated") is not None)
+        short_ticker  = len(sym) <= 4
+        not_preferred = not _QUAL_PREF_RE.search(sym)
+        cname_ne      = (ev.get("companyName") or "").strip()
+        not_junk_name = not (
+            _QUAL_NAME_PREF_RE.search(cname_ne) or _JUNK_NAME_RE.search(cname_ne)
+        )
+        high_signal_unknown = (
+            has_both_est and short_ticker and not_preferred and not_junk_name
+        )
+        if not (is_theme_wl or high_signal_unknown):
             continue
         decorated.append(_decorate_event(ev, pre, pre["score"], pre["breakdown"]))
 
@@ -1444,7 +1504,7 @@ async def get_curated_earnings_range(
     Core curated earnings engine — THE single source of truth for all curated views.
 
     Always uses week-clean parameters:
-      max_candidates=_WEEK_CAND_MAX (150), max_enrich=_MAX_WEEK_ENRICH (120),
+      max_candidates=_WEEK_CAND_MAX (250), max_enrich=_MAX_WEEK_ENRICH (180),
       max_live=_WEEK_MAX_LIVE (40),        concurrency=_WEEK_CONCURRENCY (2)
 
     All curated endpoints (week-clean, day-curated, month-curated) MUST call

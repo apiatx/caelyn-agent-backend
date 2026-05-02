@@ -1,187 +1,187 @@
 {
   "symbol": "SMH",
-  "as_of": "2026-04-23",
+  "as_of": "2026-05-01",
   "source": "fmp",
   "holding_count": 25,
   "holdings": [
     {
       "ticker": "NVDA",
       "name": "Nvidia Corp",
-      "weight": 18.315
+      "weight": 17.001
     },
     {
       "ticker": "TSM",
       "name": "Taiwan Semiconductor Manufacturing Co L",
-      "weight": 10.897
+      "weight": 10.492
     },
     {
       "ticker": "AVGO",
       "name": "Broadcom Inc",
-      "weight": 8.545
-    },
-    {
-      "ticker": "AMD",
-      "name": "Advanced Micro Devices Inc",
-      "weight": 5.609
+      "weight": 7.948
     },
     {
       "ticker": "INTC",
       "name": "Intel Corp",
-      "weight": 5.15
+      "weight": 7.021
     },
     {
-      "ticker": "MU",
-      "name": "Micron Technology Inc",
-      "weight": 4.897
-    },
-    {
-      "ticker": "KLAC",
-      "name": "Kla Corp",
-      "weight": 4.683
-    },
-    {
-      "ticker": "LRCX",
-      "name": "Lam Research Corp",
-      "weight": 4.593
-    },
-    {
-      "ticker": "ADI",
-      "name": "Analog Devices Inc",
-      "weight": 4.523
+      "ticker": "AMD",
+      "name": "Advanced Micro Devices Inc",
+      "weight": 6.171
     },
     {
       "ticker": "TXN",
       "name": "Texas Instruments Inc",
-      "weight": 4.503
+      "weight": 5.045
     },
     {
-      "ticker": "ASML",
-      "name": "Asml Holding Nv",
-      "weight": 4.379
+      "ticker": "MU",
+      "name": "Micron Technology Inc",
+      "weight": 4.893
     },
     {
-      "ticker": "AMAT",
-      "name": "Applied Materials Inc",
-      "weight": 4.351
+      "ticker": "ADI",
+      "name": "Analog Devices Inc",
+      "weight": 4.493
     },
     {
       "ticker": "QCOM",
       "name": "Qualcomm Inc",
-      "weight": 3.468
-    },
-    {
-      "ticker": "MRVL",
-      "name": "Marvell Technology Inc",
-      "weight": 3.003
-    },
-    {
-      "ticker": "SNPS",
-      "name": "Synopsys Inc",
-      "weight": 2.417
-    },
-    {
-      "ticker": "CDNS",
-      "name": "Cadence Design Systems Inc",
-      "weight": 2.331
-    },
-    {
-      "ticker": "TER",
-      "name": "Teradyne Inc",
-      "weight": 1.474
-    },
-    {
-      "ticker": "MPWR",
-      "name": "Monolithic Power Systems Inc",
-      "weight": 1.377
-    },
-    {
-      "ticker": "NXPI",
-      "name": "Nxp Semiconductors Nv",
-      "weight": 1.141
-    },
-    {
-      "ticker": "MCHP",
-      "name": "Microchip Technology Inc",
-      "weight": 1.024
-    },
-    {
-      "ticker": "STM",
-      "name": "Stmicroelectronics Nv",
-      "weight": 0.935
-    },
-    {
-      "ticker": "ARM",
-      "name": "Arm Holdings Plc",
-      "weight": 0.798
-    },
-    {
-      "ticker": "ON",
-      "name": "On Semiconductor Corp",
-      "weight": 0.69
-    },
-    {
-      "ticker": "ALAB",
-      "name": "Astera Labs Inc",
-      "weight": 0.631
-    },
-    {
-      "ticker": "SWKS",
-      "name": "Skyworks Solutions Inc",
-      "weight": 0.195
-    }
-  ],
-  "updated_at": "2026-04-25T01:51:14+00:00",
-  "_fetched_at": 1777081874.7234094,
-  "top_holdings": [
-    {
-      "ticker": "NVDA",
-      "name": "Nvidia Corp",
-      "weight": 18.315
-    },
-    {
-      "ticker": "TSM",
-      "name": "Taiwan Semiconductor Manufacturing Co L",
-      "weight": 10.897
-    },
-    {
-      "ticker": "AVGO",
-      "name": "Broadcom Inc",
-      "weight": 8.545
-    },
-    {
-      "ticker": "AMD",
-      "name": "Advanced Micro Devices Inc",
-      "weight": 5.609
-    },
-    {
-      "ticker": "INTC",
-      "name": "Intel Corp",
-      "weight": 5.15
-    },
-    {
-      "ticker": "MU",
-      "name": "Micron Technology Inc",
-      "weight": 4.897
+      "weight": 4.311
     },
     {
       "ticker": "KLAC",
       "name": "Kla Corp",
-      "weight": 4.683
+      "weight": 4.26
     },
     {
       "ticker": "LRCX",
       "name": "Lam Research Corp",
-      "weight": 4.593
+      "weight": 4.201
     },
     {
-      "ticker": "ADI",
-      "name": "Analog Devices Inc",
-      "weight": 4.523
+      "ticker": "ASML",
+      "name": "Asml Holding Nv",
+      "weight": 4.111
+    },
+    {
+      "ticker": "AMAT",
+      "name": "Applied Materials Inc",
+      "weight": 4.007
+    },
+    {
+      "ticker": "MRVL",
+      "name": "Marvell Technology Inc",
+      "weight": 2.969
+    },
+    {
+      "ticker": "SNPS",
+      "name": "Synopsys Inc",
+      "weight": 2.302
+    },
+    {
+      "ticker": "CDNS",
+      "name": "Cadence Design Systems Inc",
+      "weight": 2.182
+    },
+    {
+      "ticker": "NXPI",
+      "name": "Nxp Semiconductors Nv",
+      "weight": 1.398
+    },
+    {
+      "ticker": "MPWR",
+      "name": "Monolithic Power Systems Inc",
+      "weight": 1.375
+    },
+    {
+      "ticker": "TER",
+      "name": "Teradyne Inc",
+      "weight": 1.238
+    },
+    {
+      "ticker": "MCHP",
+      "name": "Microchip Technology Inc",
+      "weight": 1.086
+    },
+    {
+      "ticker": "STM",
+      "name": "Stmicroelectronics Nv",
+      "weight": 1.082
+    },
+    {
+      "ticker": "ARM",
+      "name": "Arm Holdings Plc",
+      "weight": 0.804
+    },
+    {
+      "ticker": "ON",
+      "name": "On Semiconductor Corp",
+      "weight": 0.736
+    },
+    {
+      "ticker": "ALAB",
+      "name": "Astera Labs Inc",
+      "weight": 0.597
+    },
+    {
+      "ticker": "SWKS",
+      "name": "Skyworks Solutions Inc",
+      "weight": 0.208
+    }
+  ],
+  "updated_at": "2026-05-02T02:20:55+00:00",
+  "_fetched_at": 1777688455.2741973,
+  "top_holdings": [
+    {
+      "ticker": "NVDA",
+      "name": "Nvidia Corp",
+      "weight": 17.001
+    },
+    {
+      "ticker": "TSM",
+      "name": "Taiwan Semiconductor Manufacturing Co L",
+      "weight": 10.492
+    },
+    {
+      "ticker": "AVGO",
+      "name": "Broadcom Inc",
+      "weight": 7.948
+    },
+    {
+      "ticker": "INTC",
+      "name": "Intel Corp",
+      "weight": 7.021
+    },
+    {
+      "ticker": "AMD",
+      "name": "Advanced Micro Devices Inc",
+      "weight": 6.171
     },
     {
       "ticker": "TXN",
       "name": "Texas Instruments Inc",
-      "weight": 4.503
+      "weight": 5.045
+    },
+    {
+      "ticker": "MU",
+      "name": "Micron Technology Inc",
+      "weight": 4.893
+    },
+    {
+      "ticker": "ADI",
+      "name": "Analog Devices Inc",
+      "weight": 4.493
+    },
+    {
+      "ticker": "QCOM",
+      "name": "Qualcomm Inc",
+      "weight": 4.311
+    },
+    {
+      "ticker": "KLAC",
+      "name": "Kla Corp",
+      "weight": 4.26
     }
   ]
 }

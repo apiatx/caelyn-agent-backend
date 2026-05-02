@@ -1,0 +1,267 @@
+URGENT: Restore the Earnings Calendar curated thematic behavior. Audit first, then fix only after finding the root cause.
+
+Context:
+The Earnings Calendar page used to work correctly.
+
+Historical intended behavior:
+- The page originally had a Curated / All toggle.
+- “All” was removed because it caused too many FMP calls / rate-limit issues.
+- The page was intentionally changed to Curated-only.
+- Curated did NOT mean megacaps only.
+- Curated meant the highest-quality, most relevant earnings for each day based on the app’s custom thematic / relevance logic.
+- Rows were marked “Focus” for top-priority earnings.
+- The calendar showed meaningful curated earnings across days.
+- It did not leave entire days blank if there were relevant curated earnings.
+- It did not restrict earnings candidates to ETF holdings / theme proxy baskets.
+
+Current regression:
+After recent theme universe / thematic context work, the Earnings Calendar is much weaker:
+- mostly megacaps
+- fewer earnings events
+- some days blank
+- “Focus” behavior appears degraded or missing
+- it appears the candidate universe may be restricted to theme ETF basket/proxy names
+
+This must be fixed.
+
+Important distinction:
+Do NOT restore the old “All earnings” view.
+Do NOT show every FMP earnings event.
+Do NOT re-add the Curated / All toggle unless absolutely necessary.
+Restore the old curated-only behavior.
+
+Core rule:
+Thematic universe / ETF baskets may help score or label earnings, but must NOT be the only candidate universe.
+
+Correct flow should be:
+FMP earnings calendar / existing earnings snapshot source
+→ broad earnings event candidates for the requested date range
+→ old curated thematic/relevance scoring
+→ return strongest curated events per day
+→ mark top names as Focus
+→ optional theme/regime annotations
+
+Incorrect flow:
+THEME_RS_UNIVERSE / ETF holdings / proxy_symbols
+→ only earnings for those tickers
+→ mostly megacaps / blank days
+
+Do not change frontend yet unless backend confirms frontend filtering is the root cause.
+Do not touch Options Flow.
+Do not touch TA Screener.
+Do not touch Themes page.
+Do not touch Chain Reaction.
+Do not add LLM calls unless the original curated earnings path already used them.
+
+Step 1 — Find the original curated earnings implementation
+Search the backend history/current code for the old curated earnings logic.
+
+Search terms:
+- curated
+- curated earnings
+- curated_earnings
+- earnings curated
+- Curated
+- Focus
+- focus
+- focus_score
+- focus_reason
+- thematic fit
+- theme fit
+- theme relevance
+- earnings relevance
+- earnings calendar
+- earnings snapshot
+- calendar snapshot
+- FMP earnings
+- get_curated_earnings
+- curated-range
+- curated range
+- top earnings
+- top thematic earnings
+- relevant earnings
+- catalyst calendar
+- catalyst earnings
+- top catalysts
+- earnings_week
+- earnings_day
+- earnings cache
+- Neon
+- snapshot
+- calendar-snapshots
+
+Likely files/areas:
+- backend/routes/earnings_upcoming.py
+- backend/services/top_catalysts_service.py
+- backend/services/earnings*
+- backend/services/calendar*
+- backend/main.py earnings/calendar routes
+- any Catalyst Calendar snapshot builder
+- any Neon table/model used for calendar snapshots
+- any disk JSON cache used for earnings/calendar
+- any old route still serving Calendar/Earnings frontend data
+
+Deliver:
+1. Exact endpoint(s) the Earnings Calendar frontend calls.
+2. Exact backend function/service used.
+3. Raw event source: FMP live, Neon snapshot, disk snapshot, other cache.
+4. Where the old Curated / All toggle was handled.
+5. Where “All” was removed or disabled.
+6. Where curated-only behavior was implemented.
+7. Where “Focus” was assigned.
+8. What scoring fields existed before, e.g. focus_score, thematic_fit, relevance_score, catalyst_score.
+9. Whether the old curated logic still exists but is bypassed.
+10. Whether a bad snapshot/cache is being served instead of the curated pipeline.
+
+Step 2 — Find what changed
+Audit recent changes touching:
+- earnings/calendar route paths
+- calendar snapshot build/read logic
+- top catalysts
+- ThematicContextProvider
+- DynamicThematicUniverse
+- theme_ticker_mapper
+- THEME_RS_UNIVERSE
+- frontend proxy routes if relevant
+
+Find whether any of these now affect Earnings Calendar:
+- get_shared_thematic_context()
+- get_ticker_theme_alignment()
+- get_thematic_prefilter_universe()
+- DynamicThematicUniverse
+- THEME_RS_UNIVERSE
+- proxy_symbols
+- ETF holdings
+- leaders/laggards
+- active_themes only
+- dead_zone filtering
+- unknown theme exclusion
+
+Deliver:
+- exact file/function where current earnings universe is narrowed
+- whether narrowing happens before or after FMP earnings events are loaded
+- whether non-theme-mapped tickers are dropped
+- whether only ETF/proxy basket tickers survive
+- whether a cap/top-N is too aggressive
+- whether dates are blank because the curated filter is now too restrictive
+
+Step 3 — Restore correct candidate universe
+The earnings candidate universe must start from:
+- FMP earnings calendar events OR the existing broad earnings snapshot source for the requested date range
+
+It must NOT start from:
+- THEME_RS_UNIVERSE
+- ETF holdings
+- proxy_symbols
+- theme leaders only
+- megacap list
+- watchlist only
+
+The curated filter should then rank/select from the broad earnings event source.
+
+Step 4 — Restore curated-only behavior
+Do NOT re-add All by default.
+
+Restore the old curated-only page behavior:
+- show curated relevant earnings per day
+- preserve day grouping
+- preserve prior relevance scoring
+- preserve “Focus” labels
+- include high-quality smaller/midcap thematic names when relevant
+- avoid blank days if relevant curated earnings exist
+- keep FMP calls controlled using the existing snapshot/cache approach
+
+If the old code exists:
+- reconnect the Calendar endpoint to it
+- do not rewrite from scratch
+
+If a bad recent replacement exists:
+- revert/disable only the bad hard-filter logic
+
+Step 5 — Thematic universe usage rules for Earnings
+Allowed:
+- theme_name annotation
+- theme_state annotation
+- regime_alignment_label
+- small relevance boost
+- Focus reason text
+- sorting within already-discovered earnings candidates
+
+Not allowed:
+- using THEME_RS_UNIVERSE as the candidate list
+- using ETF holdings as the candidate list
+- dropping unknown-theme tickers
+- dropping tickers not in theme_ticker_mapper
+- dropping tickers not in proxy_symbols
+- dropping all dead_zone names
+- limiting to megacaps
+- limiting to active theme basket constituents
+
+Step 6 — Cache/snapshot cleanup
+Check whether a bad filtered earnings/calendar snapshot was written.
+
+Search:
+- Neon calendar snapshot tables
+- disk JSON calendar caches
+- earnings snapshot rows
+- curated earnings snapshots
+- top catalysts snapshots
+
+If polluted:
+- invalidate/rebuild only the affected earnings/calendar snapshot
+- rebuild from broad earnings source + old curated scoring
+- do not wipe unrelated caches
+
+Step 7 — Validation
+Use a recent/known week where the calendar is now weak or blank.
+
+Before/after validation:
+1. Raw FMP/existing earnings source count by day.
+2. Current broken Calendar endpoint count by day.
+3. Restored curated endpoint count by day.
+4. Confirm days that were blank now have curated earnings if raw/relevant events exist.
+5. Confirm “Focus” labels are back.
+6. Confirm non-megacap curated names appear.
+7. Confirm non-ETF-basket names can appear.
+8. Confirm unknown-theme tickers are not automatically dropped.
+9. Confirm FMP calls remain controlled and the old All behavior is not restored by default.
+10. Confirm no Themes page changes.
+11. Confirm no Options Flow / TA Screener / Chain Reaction changes.
+
+Step 8 — Site-wide discovery damage audit
+After Earnings is restored, audit other discovery pages for the same hard-filter risk.
+
+Pages:
+- Earnings Calendar
+- Top Catalysts
+- TA Screener
+- Options Flow
+- Strategy Screener / Chain Reaction
+- Social Screener
+- Fundamentals
+- Watchlist
+- Portfolio
+- Home
+
+For each, report:
+A) broad discovery source
+B) whether THEME_RS_UNIVERSE is used
+C) whether themes are annotation/boost only
+D) whether themes hard-filter candidates
+E) whether unknown-theme tickers are dropped
+F) risk level
+
+Critical rule:
+Discovery pages should discover broadly first, then use themes to annotate/boost/rank — not replace the candidate universe.
+
+Delivery report:
+1. Root cause of Earnings regression.
+2. Original curated earnings path found.
+3. Exact files/functions changed.
+4. What hard filter/bypass was removed.
+5. Whether old curated scoring was restored.
+6. Whether Focus labels were restored.
+7. Cache/snapshot invalidation/rebuild steps.
+8. Before/after counts for affected week.
+9. Proof non-megacap and non-ETF-basket names appear again.
+10. Site-wide discovery audit table.
