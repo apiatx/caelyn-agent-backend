@@ -1893,8 +1893,20 @@ async def get_week_clean(
             _log_telemetry("week-curated", f"{from_str}→{to_str}", cache_hit=True)
             return _wk_cached
 
-    # -- Canonical curated range (same engine, same params as every curated view)
-    rng = await get_curated_earnings_range(api_key, from_str, to_str, scope, search)
+    # -- Snapshot-first: serve pre-built weekly snapshot without live enrichment.
+    # Scope/search filtered views bypass snapshots (filtered results must not
+    # replace the shared unfiltered snapshot).
+    if not scope and not search:
+        _snap = _get_snap_or_lkg_fast(from_str, to_str)
+        if _snap is not None:
+            if _snap.get("staleLKG") and api_key:
+                asyncio.create_task(_background_build_week(api_key, from_str, to_str))
+            rng = _snap
+        else:
+            # No snapshot — run live once; get_curated_earnings_range will write disk on success
+            rng = await get_curated_earnings_range(api_key, from_str, to_str)
+    else:
+        rng = await get_curated_earnings_range(api_key, from_str, to_str, scope, search)
 
     all_events = rng["allEvents"]
     errors     = list(rng["errors"])
@@ -2289,8 +2301,19 @@ async def get_day_curated(
     from_str = mon.strftime("%Y-%m-%d")
     to_str   = fri.strftime("%Y-%m-%d")
 
-    # Canonical engine — same function, same parameters as week-clean
-    rng    = await get_curated_earnings_range(api_key, from_str, to_str, scope, search)
+    # Snapshot-first: read pre-built weekly snapshot, then filter to the requested day.
+    # Avoids running live enrichment on every day-view click.
+    # Scope/search filtered views bypass snapshots.
+    if not scope and not search:
+        _snap = _get_snap_or_lkg_fast(from_str, to_str)
+        if _snap is not None:
+            if _snap.get("staleLKG") and api_key:
+                asyncio.create_task(_background_build_week(api_key, from_str, to_str))
+            rng = _snap
+        else:
+            rng = await get_curated_earnings_range(api_key, from_str, to_str)
+    else:
+        rng = await get_curated_earnings_range(api_key, from_str, to_str, scope, search)
     events = rng["eventsByDate"].get(date, [])[:limit]
 
     print(
@@ -2476,13 +2499,14 @@ async def get_month_curated(
     if not any_partial and not scope and not search:
         cache.set(_mc_ck, _mc_result, _TTL_RESULT)
 
+    # Month view reads from snapshots — no live FMP HTTP calls are made here
     _log_telemetry(
         "month-curated", f"{month_start}→{month_end}",
-        raw_hits=total_raw_hits,
-        raw_misses=total_raw_misses,
-        fmp_calendar_http_calls=total_cal_http,
-        raw_events_count=0,          # month-curated reads from snapshots — no raw FMP call
-        live_profile_calls=total_enrich_http,
+        raw_hits=0,
+        raw_misses=0,
+        fmp_calendar_http_calls=0,
+        raw_events_count=0,
+        live_profile_calls=0,
         stale_lkg=any_partial,
         rate_limited=any_partial,
     )

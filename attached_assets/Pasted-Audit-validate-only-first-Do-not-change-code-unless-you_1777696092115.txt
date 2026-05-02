@@ -1,0 +1,128 @@
+Audit/validate only first. Do not change code unless you find a clear bug.
+
+I need to confirm the Earnings Calendar snapshot architecture is actually serving the frontend fast for month/week/day views.
+
+Context:
+Backend recently added:
+- disk-backed curated weekly snapshots
+- startup snapshot loading
+- _earnings_curated_precompute_loop
+- current + 5 future week builds
+- Saturday force rebuild
+- month view composed from weekly snapshots
+- admin endpoints:
+  POST /api/catalysts/earnings/admin/rebuild-week
+  GET /api/catalysts/earnings/admin/snapshot-status
+
+Problem:
+Frontend month and day toggles are still very slow. They should be fast if they are reading the same curated weekly snapshots.
+
+Goal:
+Confirm the next 4 weeks of snapshots exist, are valid, and are used by month/week/day endpoints without live FMP enrichment on normal page load.
+
+Do not touch Themes page.
+Do not touch Options Flow.
+Do not touch TA Screener.
+Do not touch Watchlist.
+Do not touch Portfolio.
+Do not touch Chain Reaction.
+Do not add LLM calls.
+
+Tasks:
+
+1. Snapshot status
+Call:
+GET /api/catalysts/earnings/admin/snapshot-status
+
+Report for:
+- current week
+- next week
+- week +2
+- week +3
+- week +4
+
+For each week report:
+- week_start
+- week_end
+- in_memory exists?
+- disk exists?
+- row count
+- focus count
+- last_built / updated_at
+- source/status
+- file path or cache key
+- whether snapshot is valid
+
+2. Validate endpoints are snapshot-first
+Call the normal frontend-facing endpoints for:
+- week view
+- day view
+- month view
+
+For each endpoint, report:
+- endpoint path
+- date/range requested
+- duration_ms
+- source = memory/disk/lkg/live
+- whether it triggered FMP earnings-calendar call
+- whether it triggered FMP profile/enrichment calls
+- rows returned
+- focus count
+
+Normal page loads should NOT trigger live FMP profile/enrichment calls.
+
+3. Month view behavior
+Confirm month view does this:
+- reads weekly curated snapshots
+- combines them
+- groups by calendar day
+- returns quickly
+- queues background rebuild only for missing/stale weeks
+- does not run full live month-wide enrichment inline
+
+4. Day view behavior
+Confirm day view does this:
+- reads the relevant weekly snapshot
+- filters rows to selected day
+- returns quickly
+- does not run live enrichment inline
+
+5. Week view behavior
+Confirm week view does this:
+- reads weekly snapshot
+- returns quickly
+- does not rebuild inline unless explicitly forced/admin refresh
+
+6. If snapshots are missing
+If any of next 4 weeks are missing:
+- run the manual/admin rebuild for those weeks
+- verify snapshot files are written
+- verify status endpoint shows them
+- do not wipe unrelated caches
+
+7. Add or verify diagnostic flags
+If not already present, make sure responses include enough metadata to debug:
+- source
+- snapshot_source
+- snapshot_week_start
+- snapshot_week_end
+- duration_ms
+- live_profile_calls_used
+- cache_hit
+- stale_lkg_used
+
+Do not make a large refactor.
+
+8. Validation output
+Return a table:
+Week | Memory | Disk | Rows | Focus | Last Built | Valid
+
+Then return endpoint timing:
+Endpoint | Range | Duration | Source | Live FMP calls? | Rows
+
+Required outcome:
+- next 4 weeks have valid snapshots
+- month endpoint returns under 10s, ideally under 1s if snapshots exist
+- day endpoint returns under 2s
+- week endpoint returns under 2s
+- normal page loads do not run live enrichment
