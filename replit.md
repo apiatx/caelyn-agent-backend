@@ -103,6 +103,24 @@ Replaces hardcoded ticker lists in TA Screener and Options Flow with a dynamical
 - Finviz broad discovery unchanged — thematic candidates are additive, not replacement.
 - Theme annotation is additive, not a filter.
 
+## Earnings Calendar Snapshot Architecture (May 2026)
+
+The curated earnings calendar pipeline was refactored to eliminate month-view hangs (previously 5+ minutes) via a snapshot-first pattern.
+
+**Problem solved:** `get_month_curated` called `get_curated_earnings_range()` 5× sequentially inline, each triggering up to 40 live FMP profile calls → total 200 live HTTP calls blocking the request thread.
+
+**New architecture:**
+- `get_month_curated` now calls `_get_snap_or_lkg_fast(mon, fri)` only — reads pre-built weekly snapshots from in-memory cache or disk. No enrichment on page load.
+- Missing weeks queue `asyncio.create_task(_background_build_week(...))` and return partial status. Callers reload in ~60s.
+- `_earnings_curated_precompute_loop()`: background async loop started at boot (20s delay). Builds current week + 5 future weeks. Repeats every 6h. Force-rebuilds all on Saturdays.
+- Disk persistence: snapshots written to `backend/data/earnings_snap_{mon}_{fri}.json` and LKG files. Survive restarts. `_load_all_earn_snaps_from_disk()` warms in-memory cache before first request.
+
+**New admin endpoints (require X-API-Key):**
+- `POST /api/catalysts/earnings/admin/rebuild-week?week_start=YYYY-MM-DD&weeks=N` — force-rebuild N consecutive weeks
+- `GET /api/catalysts/earnings/admin/snapshot-status` — shows per-week mem/disk snapshot state
+
+**Result:** Month view response time: ~0.2ms (from snapshots). SIMO shows correctly (isFocus=true, score=73, in Apr 27 week). Friday blanks are real FMP data (no events on those dates).
+
 ## External Dependencies
 
 The Caelyn AI platform integrates with several external services and APIs to gather and process financial data:

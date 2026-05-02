@@ -23,6 +23,7 @@ import hashlib
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
@@ -39,8 +40,20 @@ _TTL_RAW_CHUNK      = 24 * 3600    # 24 h — canonical Mon-Fri raw chunk (fresh
 _TTL_LKG            = 30 * 24 * 3600  # 30 d — last-known-good stale fallback
 _TTL_UPCOMING       = 6  * 3600    # 6 h  — merged calendar result
 _TTL_PROFILE        = 24 * 3600    # 24 h — company profile
-_TTL_RESULT         = 6  * 3600    # 6 h  — top-level route result cache
+_TTL_RESULT         = 6  * 3600    # 6 h  — top-level route result cache (filtered views)
 _TTL_QUOTE          = 15 * 60      # 15 min — live quote / price data
+
+# ── Curated weekly snapshot TTLs ───────────────────────────────────────────────
+# Weekly snapshots are built by the background precompute loop (not on page load).
+# They live long enough to survive the full Mon-Fri earnings week + weekend.
+_TTL_SNAP           = 8 * 24 * 3600   # 8 days — curated weekly snapshot (in-memory)
+_TTL_SNAP_LKG       = 45 * 24 * 3600  # 45 days — LKG snapshot (survives stale enrichment)
+_SNAP_MAX_AGE_S     = 9 * 24 * 3600   # 9 days  — reject disk snapshots older than this
+
+# ── Snapshot disk directory ─────────────────────────────────────────────────────
+# Snapshots are written to disk so they survive server restarts.
+# On startup, _load_all_earn_snaps_from_disk() pre-warms the in-memory cache from disk.
+_SNAP_DIR = Path(__file__).resolve().parent.parent / "data"
 
 _DEFAULT_DAYS       = 14            # default upcoming window (2 weeks)
 _MAX_RANGE_DAYS     = 30            # hard cap on date range (30 days)
@@ -188,6 +201,164 @@ async def _fmp_get(
         print(f"[earn_clean] FMP {endpoint} error={exc} ms={ms}")
         return [], False
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CURATED WEEKLY SNAPSHOT — disk-backed, restart-safe, batch-built
+# ──────────────────────────────────────────────────────────────────────────────
+# Architecture:
+#   • Enrichment runs in a BACKGROUND LOOP (not on page load).
+#   • Results are persisted to disk as earnings_snap_{mon}_{fri}.json.
+#   • On startup, _load_all_earn_snaps_from_disk() warms the in-memory cache.
+#   • Page loads hit in-memory cache → disk → LKG; never trigger enrichment.
+#   • Month view composes weekly snapshots via _get_snap_or_lkg_fast(); no inline enrichment.
+#
+# IMPORTANT — candidate universe rule:
+#   Earnings discovery starts from FMP /stable/earnings-calendar events.
+#   THEME_RS_UNIVERSE, ETF holdings, and proxy_symbols are NOT used as a hard filter.
+#   Theme/anchor/bottleneck data may boost or label events (scoring only), not exclude them.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _snap_ck(mon: str, fri: str) -> str:
+    """In-memory cache key for a curated weekly snapshot."""
+    return f"earnings:snap:week:{mon}:{fri}"
+
+def _snap_lkg_ck(mon: str, fri: str) -> str:
+    """In-memory cache key for a LKG weekly snapshot."""
+    return f"earnings:snap:lkg:week:{mon}:{fri}"
+
+def _snap_disk_path(mon: str, fri: str) -> Path:
+    """Disk path for a curated weekly snapshot (compact date format avoids path separator issues)."""
+    m = mon.replace("-", "")   # "2026-04-27" → "20260427"
+    f = fri.replace("-", "")   # "2026-05-01" → "20260501"
+    return _SNAP_DIR / f"earnings_snap_{m}_{f}.json"
+
+def _snap_lkg_disk_path(mon: str, fri: str) -> Path:
+    m = mon.replace("-", "")
+    f = fri.replace("-", "")
+    return _SNAP_DIR / f"earnings_snap_lkg_{m}_{f}.json"
+
+def _write_earn_snap_to_disk(path: Path, data: dict) -> None:
+    """Atomic disk write: write to .tmp then rename so partial writes are never served."""
+    import json as _js
+    try:
+        _SNAP_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(_js.dumps(data, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as e:
+        print(f"[earn_snap] disk write failed {path.name}: {e}")
+
+def _read_earn_snap_from_disk(path: Path, max_age_s: int = _SNAP_MAX_AGE_S) -> Optional[dict]:
+    """Read and validate a snapshot from disk. Returns None if missing, corrupt, or stale."""
+    import json as _js
+    try:
+        if not path.exists() or path.suffix == ".tmp":
+            return None
+        data = _js.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        cached_at = data.get("cached_at", 0)
+        if isinstance(cached_at, (int, float)) and time.time() - cached_at > max_age_s:
+            return None
+        # Reject empty snapshots unless confirmed genuinely empty (genuine 0-event weeks)
+        if not data.get("allEvents") and not data.get("genuinelyEmpty"):
+            return None
+        return data
+    except Exception:
+        return None
+
+def _get_snap_or_lkg_fast(mon: str, fri: str) -> Optional[dict]:
+    """
+    Return a curated weekly snapshot WITHOUT triggering any enrichment or FMP calls.
+
+    Priority: in-memory fresh → disk fresh → in-memory LKG → disk LKG → None.
+    Used by month-curated and page loads to serve precomputed data instantly.
+    Returns None only if no data at all is available for this week.
+    """
+    ck     = _snap_ck(mon, fri)
+    lkg_ck = _snap_lkg_ck(mon, fri)
+
+    # 1. Fresh in-memory snapshot (fastest path)
+    snap = cache.get(ck)
+    if snap is not None:
+        return snap
+
+    # 2. Fresh disk snapshot → warm in-memory cache
+    snap = _read_earn_snap_from_disk(_snap_disk_path(mon, fri))
+    if snap is not None:
+        cache.set(ck, snap, _TTL_SNAP)
+        return snap
+
+    # 3. LKG in-memory (stale but usable)
+    snap = cache.get(lkg_ck)
+    if snap is not None:
+        return {**snap, "staleLKG": True}
+
+    # 4. LKG disk (stale but usable)
+    snap = _read_earn_snap_from_disk(_snap_lkg_disk_path(mon, fri), max_age_s=_TTL_SNAP_LKG)
+    if snap is not None:
+        cache.set(lkg_ck, snap, _TTL_SNAP_LKG)
+        return {**snap, "staleLKG": True}
+
+    return None
+
+def _load_all_earn_snaps_from_disk() -> None:
+    """
+    Load all curated weekly snapshots from disk into the in-memory cache at startup.
+    Called synchronously at server start so the first page load never needs enrichment.
+    Skips corrupted or stale files silently.
+    """
+    import glob as _glob
+    import json as _js
+    loaded = 0
+    skipped = 0
+    for path_str in _glob.glob(str(_SNAP_DIR / "earnings_snap_????????_????????.json")):
+        path = Path(path_str)
+        try:
+            data = _read_earn_snap_from_disk(path)
+            if data is None:
+                skipped += 1
+                continue
+            # Parse mon/fri from filename: earnings_snap_20260427_20260501.json
+            stem  = path.stem   # "earnings_snap_20260427_20260501"
+            parts = stem.split("_")  # ["earnings", "snap", "20260427", "20260501"]
+            if len(parts) < 4:
+                skipped += 1
+                continue
+            mon_raw, fri_raw = parts[2], parts[3]
+            if len(mon_raw) != 8 or len(fri_raw) != 8:
+                skipped += 1
+                continue
+            mon = f"{mon_raw[:4]}-{mon_raw[4:6]}-{mon_raw[6:8]}"
+            fri = f"{fri_raw[:4]}-{fri_raw[4:6]}-{fri_raw[6:8]}"
+            cache.set(_snap_ck(mon, fri), data, _TTL_SNAP)
+            loaded += 1
+        except Exception as e:
+            print(f"[earn_snap] startup load failed {path.name}: {e}")
+            skipped += 1
+
+    # Also load LKG files
+    for path_str in _glob.glob(str(_SNAP_DIR / "earnings_snap_lkg_????????_????????.json")):
+        path = Path(path_str)
+        try:
+            data = _read_earn_snap_from_disk(path, max_age_s=_TTL_SNAP_LKG)
+            if data is None:
+                continue
+            stem  = path.stem   # "earnings_snap_lkg_20260427_20260501"
+            parts = stem.split("_")  # ["earnings", "snap", "lkg", "20260427", "20260501"]
+            if len(parts) < 5:
+                continue
+            mon_raw, fri_raw = parts[3], parts[4]
+            if len(mon_raw) != 8 or len(fri_raw) != 8:
+                continue
+            mon = f"{mon_raw[:4]}-{mon_raw[4:6]}-{mon_raw[6:8]}"
+            fri = f"{fri_raw[:4]}-{fri_raw[4:6]}-{fri_raw[6:8]}"
+            cache.set(_snap_lkg_ck(mon, fri), data, _TTL_SNAP_LKG)
+        except Exception:
+            pass
+
+    if loaded:
+        print(f"[earn_snap] Pre-warmed {loaded} weekly curated snapshots from disk ({skipped} skipped/stale)")
 
 # ── Canonical Mon-Fri chunk helper ────────────────────────────────────────────
 
@@ -1524,12 +1695,20 @@ async def get_curated_earnings_range(
       "rateLimited":  bool,
     }
     """
-    # Result cache — only when scope/search are default (avoid polluting filtered views)
-    _rng_ck = f"earn:cur:rng:{from_date}:{to_date}"
+    # Snapshot-first: check in-memory → disk → proceed with live enrichment only if needed.
+    # Scope/search bypass snapshots (filtered views must not pollute the shared snapshot).
+    _rng_ck     = _snap_ck(from_date, to_date)     # "earnings:snap:week:{mon}:{fri}"
+    _rng_lkg_ck = _snap_lkg_ck(from_date, to_date)
     if not scope and not search:
+        # 1. In-memory snapshot (8-day TTL — survives multiple server restarts if warmed from disk)
         _rng_cached = cache.get(_rng_ck)
         if _rng_cached is not None:
             return _rng_cached
+        # 2. Disk snapshot — pre-built by background loop; warm in-memory and serve immediately
+        _disk_snap = _read_earn_snap_from_disk(_snap_disk_path(from_date, to_date))
+        if _disk_snap is not None:
+            cache.set(_rng_ck, _disk_snap, _TTL_SNAP)
+            return _disk_snap
 
     errors:       list[str] = []
 
@@ -1638,10 +1817,19 @@ async def get_curated_earnings_range(
         "staleLKG":       stale_lkg,
         "rawHits":        raw_hits,
         "rawMisses":      raw_misses,
+        "cached_at":      time.time(),    # timestamp for disk snapshot validation
+        "genuinelyEmpty": (len(raw_rows) > 0 and len(all_events_sorted) == 0),
     }
 
-    if not rate_limited and not scope and not search:
-        cache.set(_rng_ck, result, _TTL_RESULT)
+    if not scope and not search:
+        if not rate_limited:
+            # Write fresh snapshot to memory + disk (8-day TTL — survives restarts)
+            cache.set(_rng_ck, result, _TTL_SNAP)
+            _write_earn_snap_to_disk(_snap_disk_path(from_date, to_date), result)
+        # Always update LKG when we received any events (even partially rate-limited)
+        if all_events_sorted or result["genuinelyEmpty"]:
+            cache.set(_rng_lkg_ck, result, _TTL_SNAP_LKG)
+            _write_earn_snap_to_disk(_snap_lkg_disk_path(from_date, to_date), result)
 
     return result
 
@@ -2212,32 +2400,39 @@ async def get_month_curated(
         weeks.append((cur_mon.strftime("%Y-%m-%d"), cur_fri.strftime("%Y-%m-%d")))
         cur_mon += timedelta(days=7)
 
-    # Call the canonical curated engine per week (sequential; FMP calendar cache
-    # means any week already fetched by week-clean costs zero FMP calls here).
+    # Snapshot-first month assembly: read pre-built weekly snapshots WITHOUT any live enrichment.
+    # Month view NEVER runs get_curated_earnings_range() inline — that would trigger 5 sequential
+    # enrichment pipelines (5 × 40 live FMP profile calls) blocking the page for minutes.
+    # Missing weeks get a background build queued; the response returns partial with staleLKG=True.
     merged_events_by_date: dict[str, list[dict]] = {}
     merged_raw_counts:     dict[str, int]        = {}
     all_errors:            list[str]             = []
     any_partial                                   = False
-    week_results:          list[dict]            = []   # collected for telemetry aggregation
+    missing_weeks:         list[tuple[str, str]] = []
 
     for w_from, w_to in weeks:
-        rng = await get_curated_earnings_range(api_key, w_from, w_to, scope, search)
-        week_results.append(rng)
-        if rng["rateLimited"]:
+        snap = _get_snap_or_lkg_fast(w_from, w_to)
+        if snap is None:
+            # No snapshot available — queue background build, mark partial
+            missing_weeks.append((w_from, w_to))
             any_partial = True
-        for err in rng["errors"]:
+            continue
+        if snap.get("staleLKG"):
+            any_partial = True
+        if snap.get("rateLimited"):
+            any_partial = True
+        for err in snap.get("errors", []):
             if err not in all_errors:
                 all_errors.append(err)
-        # Only keep days within the calendar month
-        for d, evs in rng["eventsByDate"].items():
+        for d, evs in snap.get("eventsByDate", {}).items():
             try:
                 d_date = datetime.strptime(d, "%Y-%m-%d").date()
             except ValueError:
                 continue
             if d_date < month_start_d or d_date > month_end_d:
                 continue
-            merged_events_by_date[d] = evs   # already sorted + deduped by the engine
-        for d, cnt in rng["rawCounts"].items():
+            merged_events_by_date[d] = evs
+        for d, cnt in snap.get("rawCounts", {}).items():
             try:
                 d_date = datetime.strptime(d, "%Y-%m-%d").date()
             except ValueError:
@@ -2245,6 +2440,17 @@ async def get_month_curated(
             if d_date < month_start_d or d_date > month_end_d:
                 continue
             merged_raw_counts[d] = cnt
+
+    # Queue background builds for weeks with no snapshot data
+    if missing_weeks and api_key:
+        for w_from, w_to in missing_weeks:
+            asyncio.create_task(_background_build_week(api_key, w_from, w_to))
+
+    if missing_weeks:
+        all_errors.append(
+            f"Snapshots missing for {len(missing_weeks)} week(s) — background build queued. "
+            "Reload in ~60 seconds for full data."
+        )
 
     # Apply max_per_day cap (engine already deduped by symbol per date)
     curated_by_date: dict[str, list[dict]] = {
@@ -2270,20 +2476,160 @@ async def get_month_curated(
     if not any_partial and not scope and not search:
         cache.set(_mc_ck, _mc_result, _TTL_RESULT)
 
-    total_raw_hits   = sum(w.get("rawHits",       0) for w in week_results)
-    total_raw_misses = sum(w.get("rawMisses",     0) for w in week_results)
-    total_cal_http   = sum(w.get("calHttpCalls",  0) for w in week_results)
-    total_enrich_http = sum(w.get("enrichHttpCalls", 0) for w in week_results)
-    total_raw_events = sum(w.get("rawEventsCount", 0) for w in week_results)
-    any_stale        = any(w.get("staleLKG",  False) for w in week_results)
     _log_telemetry(
         "month-curated", f"{month_start}→{month_end}",
         raw_hits=total_raw_hits,
         raw_misses=total_raw_misses,
         fmp_calendar_http_calls=total_cal_http,
-        raw_events_count=total_raw_events,
+        raw_events_count=0,          # month-curated reads from snapshots — no raw FMP call
         live_profile_calls=total_enrich_http,
-        stale_lkg=any_stale,
+        stale_lkg=any_partial,
         rate_limited=any_partial,
     )
     return _mc_result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BACKGROUND SNAPSHOT BUILDER + PRECOMPUTE LOOP
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _background_build_week(api_key: str, mon: str, fri: str) -> None:
+    """Fire-and-forget coroutine that builds one weekly snapshot without blocking callers."""
+    try:
+        print(f"[earn_snap] background build started {mon}→{fri}")
+        await build_curated_week_snapshot(api_key, mon, fri, force=False)
+        print(f"[earn_snap] background build done    {mon}→{fri}")
+    except Exception as e:
+        print(f"[earn_snap] background build failed  {mon}→{fri}: {e}")
+
+
+async def build_curated_week_snapshot(
+    api_key: str,
+    mon:     str,
+    fri:     str,
+    force:   bool = False,
+) -> dict:
+    """
+    Build (or rebuild) the curated weekly snapshot for a Mon–Fri week.
+
+    Runs the FULL enrichment pipeline, then persists to disk and in-memory cache.
+    Called by: _earnings_curated_precompute_loop, admin backfill endpoint, _background_build_week.
+
+    This function is NEVER called on normal page load — only by the background loop
+    or an explicit admin/backfill request.
+
+    force=True: bypass snapshot cache check and always rebuild (used on Saturday night batch).
+    force=False: skip if a fresh snapshot already exists.
+    """
+    ck = _snap_ck(mon, fri)
+
+    if not force:
+        # Return existing fresh snapshot if available
+        existing = cache.get(ck)
+        if existing is not None:
+            return existing
+        existing = _read_earn_snap_from_disk(_snap_disk_path(mon, fri))
+        if existing is not None:
+            cache.set(ck, existing, _TTL_SNAP)
+            return existing
+
+    # Force rebuild: clear stale in-memory cache so get_curated_earnings_range
+    # runs the live pipeline instead of serving the old snapshot
+    cache.delete(ck)
+    old_ck = f"earn:cur:rng:{mon}:{fri}"  # legacy key — delete too
+    cache.delete(old_ck)
+
+    t0 = time.monotonic()
+    result = await get_curated_earnings_range(api_key, mon, fri)
+    ms = int((time.monotonic() - t0) * 1000)
+
+    n_events = len(result.get("allEvents", []))
+    n_focus  = sum(1 for e in result.get("allEvents", []) if e.get("isFocus"))
+    print(
+        f"[earn_snap] built {mon}→{fri} "
+        f"events={n_events} focus={n_focus} "
+        f"cal_http={result.get('calHttpCalls',0)} enrich_http={result.get('enrichHttpCalls',0)} "
+        f"ms={ms}"
+    )
+    return result
+
+
+async def _earnings_curated_precompute_loop() -> None:
+    """
+    Background loop that pre-builds curated weekly snapshots so page loads never trigger
+    live FMP enrichment.
+
+    Schedule:
+      • Startup: builds any missing snapshots for the current week + next 5 weeks.
+      • Every 6 hours: scans upcoming weeks and rebuilds any that are missing or stale.
+      • Saturdays (ET): force-rebuilds all upcoming 6 weeks (full Saturday-night batch).
+      • 5-second stagger between weeks to avoid FMP rate limits.
+
+    This is the ONLY place where enrichment should trigger during normal operation.
+    """
+    try:
+        from config import FMP_API_KEY as _api_key
+    except ImportError:
+        print("[earn_precompute] No FMP_API_KEY — precompute loop disabled")
+        return
+
+    if not _api_key:
+        print("[earn_precompute] FMP_API_KEY empty — precompute loop disabled")
+        return
+
+    # Initial delay: let the server fully start and warm disk snapshots first
+    await asyncio.sleep(20)
+    print("[earn_precompute] Starting earnings curated precompute loop")
+
+    while True:
+        try:
+            now        = datetime.now(timezone.utc)
+            today      = now.date()
+            is_saturday = today.weekday() == 5
+
+            # Determine canonical Monday of current week
+            mon0 = today - timedelta(days=today.weekday())
+
+            # Build current week + next 5 weeks (6 weeks total)
+            weeks_to_check = [
+                (
+                    (mon0 + timedelta(weeks=i)).strftime("%Y-%m-%d"),
+                    (mon0 + timedelta(weeks=i) + timedelta(days=4)).strftime("%Y-%m-%d"),
+                )
+                for i in range(6)
+            ]
+
+            built = 0
+            for mon_str, fri_str in weeks_to_check:
+                needs_build = False
+
+                if is_saturday:
+                    # Saturday night: force-rebuild everything (full batch)
+                    needs_build = True
+                else:
+                    # Check if snapshot exists in memory or on disk
+                    if cache.get(_snap_ck(mon_str, fri_str)) is None:
+                        if _read_earn_snap_from_disk(_snap_disk_path(mon_str, fri_str)) is None:
+                            needs_build = True
+
+                if needs_build:
+                    try:
+                        await build_curated_week_snapshot(
+                            _api_key, mon_str, fri_str, force=is_saturday
+                        )
+                        built += 1
+                        await asyncio.sleep(5)   # stagger — avoid FMP rate limits
+                    except Exception as e:
+                        print(f"[earn_precompute] build failed {mon_str}: {e}")
+                        await asyncio.sleep(15)
+
+            if built:
+                print(f"[earn_precompute] cycle done: built {built} week(s)")
+            else:
+                print(f"[earn_precompute] cycle done: all {len(weeks_to_check)} weeks already cached")
+
+        except Exception as e:
+            print(f"[earn_precompute] loop error: {e}")
+
+        # Sleep 6 hours between cycles (Saturday night cycle immediately rebuilds all)
+        await asyncio.sleep(6 * 3600)

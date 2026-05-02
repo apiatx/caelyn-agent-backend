@@ -309,6 +309,18 @@ async def lifespan(app):
     except Exception as _e:
         print(f"[STARTUP] Options snapshot state load error: {_e}")
     asyncio.create_task(_earnings_calendar_warmup())
+    # Curated earnings snapshot precompute loop.
+    # Loads disk snapshots into memory first (so page loads are instant after restart),
+    # then starts the background loop that builds/refreshes weekly curated snapshots.
+    try:
+        from services.earnings_clean_service import (
+            _load_all_earn_snaps_from_disk as _load_earn_snaps,
+            _earnings_curated_precompute_loop as _earn_precompute_loop,
+        )
+        _load_earn_snaps()   # synchronous — warm in-memory cache from disk before any request
+        asyncio.create_task(_earn_precompute_loop())
+    except Exception as _e:
+        print(f"[STARTUP] Earnings curated precompute init error: {_e}")
     # Weekly calendar snapshots (Dividends, IPOs, Splits, Economic, Treasury).
     # Reads only from disk on request; refreshes Sunday in ET per per-tab hour.
     try:

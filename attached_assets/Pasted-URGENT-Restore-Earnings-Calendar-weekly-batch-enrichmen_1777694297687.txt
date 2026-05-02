@@ -1,0 +1,238 @@
+URGENT: Restore Earnings Calendar weekly batch enrichment architecture and fix current curated output issues.
+
+Current problems:
+1. Earnings Calendar is very slow to load.
+2. Month view hangs / does not load after 5+ minutes.
+3. SIMO is missing from Tuesday even though the scoring audit showed it as a Focus event with score 73.
+4. Friday appears blank for this week and the next two weeks.
+5. The page no longer feels like the old curated earnings calendar.
+
+Important clarification:
+I DO want enrichment.
+I do NOT want live/on-demand enrichment blocking the page load.
+
+Original intended architecture:
+- Earnings Calendar enrichment should run once per week, in the middle of the night, in a few batches on Saturday night.
+- The frontend should read precomputed/persisted curated weekly snapshots.
+- The page should not run expensive FMP profile/enrichment calls live every time the user opens week/month view.
+- Month view should compose already-built weekly snapshots.
+- Manual refresh/backfill can exist, but normal page load should be snapshot-first.
+
+Do not change frontend yet unless backend proves the frontend is filtering returned rows.
+Do not change Themes page.
+Do not change Options Flow.
+Do not change TA Screener.
+Do not change Watchlist.
+Do not change Portfolio.
+Do not change Chain Reaction.
+Do not add LLM calls.
+
+Core rules:
+- Do NOT restore “All earnings” as the default.
+- Keep curated-only behavior.
+- Keep Focus labels.
+- Do NOT restrict earnings to THEME_RS_UNIVERSE / ETF holdings / proxy symbols.
+- Start from broad FMP earnings calendar events or the existing raw earnings snapshot.
+- Then apply the old curated scoring/enrichment logic.
+- Enrichment is allowed and desired, but should happen in scheduled weekly batches, not synchronously on page load.
+
+Target architecture:
+Raw FMP earnings events for upcoming weeks
+→ Saturday night scheduled batch enrichment
+→ curated scoring
+→ Focus labels
+→ persisted weekly curated snapshots
+→ frontend week/day/month reads snapshots quickly
+
+Task 1 — Audit current live-vs-snapshot behavior
+Find exactly what happens when the Earnings Calendar page loads.
+
+Report:
+- endpoint(s) called by week view
+- endpoint(s) called by day view
+- endpoint(s) called by month view
+- whether each endpoint reads a persisted curated snapshot first
+- whether each endpoint triggers live FMP earnings-calendar calls
+- whether each endpoint triggers live FMP profile/enrichment calls
+- cache keys / Neon tables / disk files used
+- TTLs
+- whether Saturday-night batch job exists
+- whether scheduled batch job is currently wired and running
+
+Search:
+- week-clean
+- day-clean
+- month
+- curated earnings
+- curated snapshot
+- calendar snapshot
+- Neon
+- earnings:raw:week
+- earnings:raw:lkg
+- _run_curated_pipeline
+- get_curated_earnings_range
+- _MAX_WEEK_ENRICH
+- _WEEK_MAX_LIVE
+- cron
+- scheduler
+- Saturday
+- weekly
+- backfill
+- refresh
+- snapshot
+
+Task 2 — Restore snapshot-first page reads
+Normal page reads must be fast.
+
+For week/day/month endpoints:
+1. Try persisted curated weekly snapshot first.
+2. If valid snapshot exists, return it immediately.
+3. Do not run live enrichment inline.
+4. If snapshot is missing/stale:
+   - return LKG/partial snapshot if available
+   - optionally kick off background refresh
+   - do not block month/week page load for live enrichment
+5. Manual/admin refresh endpoint may run enrichment, but page load should not.
+
+Month view:
+- Must compose weekly snapshots.
+- Must not run one giant month-wide live enrichment pipeline.
+- Must not do live profile enrichment for an entire month request.
+- Should return in under 10 seconds from snapshots/LKG.
+
+Task 3 — Restore Saturday night batch enrichment
+Implement or repair scheduled batch job.
+
+Schedule:
+- Saturday night / early Sunday morning ET.
+- Run in a few staggered batches to avoid FMP rate limits.
+- Build at least the next 3–6 weeks of curated earnings snapshots.
+- Use broad FMP earnings calendar source for each week.
+- Apply full enrichment/scoring pipeline.
+- Persist results.
+- Do not overwrite a valid prior snapshot with empty/bad data.
+
+Batch behavior:
+- process one week at a time
+- small sleep/stagger between weeks
+- respect FMP rate limits
+- log raw_count, candidate_count, enriched_count, final_count, focus_count, duration
+- preserve LKG if provider fails
+
+Task 4 — Manual rebuild/backfill
+Add or verify a manual/admin endpoint or CLI function that can rebuild selected weeks.
+
+Needed for debugging:
+- rebuild week containing 2026-04-28
+- rebuild current week
+- rebuild next two weeks
+- rebuild next 6 weeks
+
+This should:
+- run the full enrichment/scoring pipeline
+- write the curated weekly snapshot
+- not require frontend changes
+- not trigger on normal page load
+
+Task 5 — Trace SIMO end-to-end
+For week containing Tuesday 2026-04-28, trace SIMO.
+
+Report:
+- raw FMP source includes SIMO? yes/no
+- date/session
+- pre-score
+- enrichment status
+- final score
+- isFocus
+- written into weekly curated snapshot? yes/no
+- returned by week-clean endpoint? yes/no
+- returned by month endpoint? yes/no
+
+If SIMO is in raw source and scores like the prior audit showed, it must appear in the curated snapshot and endpoint output.
+
+Task 6 — Diagnose Friday blanks
+Check this week and next two weeks Friday by Friday.
+
+For each Friday:
+- raw FMP earnings count
+- curated snapshot count
+- Focus count
+- final endpoint count
+- reason if final endpoint count is 0
+
+Do not accept “Friday blank” unless raw source and curated snapshot both genuinely have no relevant events.
+
+Check:
+- date inclusivity
+- timezone normalization
+- Mon–Fri week bounds
+- month aggregation logic
+- frontend date matching if backend returns rows but UI blank
+- final display caps
+
+Task 7 — Fix cache/snapshot pollution
+If bad snapshots were written after the regression:
+- invalidate only affected earnings/calendar snapshots
+- rebuild from broad raw FMP earnings source + full curated scoring
+- preserve unrelated caches
+
+Do not globally wipe all caches unless absolutely necessary.
+
+Task 8 — Preserve curated scoring
+Keep current curated scoring improvements:
+- per-day floor
+- raised candidate cap
+- raised enrichment cap
+- relaxed legitimate company name gate
+- not-enriched high-confidence survival
+- isFocus = score >= 65
+
+But make sure these run during scheduled/manual snapshot build, not normal page load.
+
+Task 9 — Site-wide guardrail
+Add clear code comments near earnings pipeline:
+- Theme RS universe is not a candidate universe for earnings.
+- Earnings discovery starts from FMP earnings calendar events.
+- Theme/tag/watchlist data may boost or label events, not hard-filter them.
+
+Task 10 — Validation
+Run after fix:
+
+A. Page speed
+- week endpoint returns from snapshot quickly
+- month endpoint returns under 10 seconds
+- no live profile enrichment happens during normal page load
+
+B. Snapshot build
+- manual rebuild for current week works
+- manual rebuild for next two weeks works
+- Saturday scheduled batch function can be invoked/tested safely
+
+C. SIMO
+- if raw FMP source includes SIMO on Tuesday 2026-04-28, SIMO appears in curated snapshot and endpoint output
+- isFocus is true if score >= 65
+
+D. Fridays
+- report raw count, curated count, Focus count for each of next 3 Fridays
+- no unexplained blank Fridays
+
+E. Quality
+- non-megacap names appear
+- non-ETF-basket names appear
+- Focus labels present
+- curated-only behavior preserved
+- All view not restored by default
+
+Delivery report:
+1. Current live-vs-snapshot behavior before fix.
+2. Root cause of slow week/month loading.
+3. Root cause of SIMO missing.
+4. Root cause of Friday blanks.
+5. Files changed.
+6. Snapshot storage location / cache keys / Neon tables.
+7. Saturday-night batch schedule implemented or restored.
+8. Manual rebuild/backfill command or endpoint.
+9. Before/after counts by day for current week and next two weeks.
+10. Proof page reads do not run live enrichment inline.
+11. Proof curated snapshots contain SIMO if raw source includes it.
+12. Confirmation no unrelated pages changed.

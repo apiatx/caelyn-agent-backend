@@ -504,3 +504,147 @@ async def month_curated(
         max_per_day=max_per_day,
     )
     return JSONResponse(content=result)
+
+
+# ── POST /api/catalysts/earnings/admin/rebuild-week ────────────────────────────
+# Admin-only: rebuild the curated weekly snapshot for a specific week.
+# Normal page loads NEVER call this — it triggers the full enrichment pipeline.
+
+@router.post("/api/catalysts/earnings/admin/rebuild-week")
+@traceable(name="earnings_clean.admin_rebuild_week")
+async def admin_rebuild_week(
+    request:    Request,
+    api_key:    str           = Header(None, alias=_AUTH_HEADER),
+    week_start: Optional[str] = Query(None,
+                                       description="Monday YYYY-MM-DD (default: current week Mon)"),
+    force:      bool          = Query(True,
+                                       description="Force rebuild even if snapshot is fresh (default true)"),
+    weeks:      int           = Query(1, ge=1, le=8,
+                                       description="Number of consecutive weeks to rebuild (default 1)"),
+):
+    """
+    Admin endpoint: rebuild curated weekly snapshot(s) via full enrichment pipeline.
+
+    Use for:
+      • Forcing a rebuild after scoring changes
+      • Recovering from a bad snapshot
+      • Pre-seeding snapshots for upcoming weeks
+
+    Requires valid X-API-Key. Runs synchronously — may take 30-60s per week.
+    Normal page load endpoints are NOT affected during rebuild (LKG still served).
+
+    Returns per-week build results.
+    """
+    err = _check_key(api_key)
+    if err:
+        return err
+
+    fmp_key = _get_fmp_key()
+    if not fmp_key:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "FMP API key not configured"},
+        )
+
+    from services.earnings_clean_service import build_curated_week_snapshot
+    import asyncio as _asyncio
+
+    now = datetime.utcnow()
+    if week_start:
+        _validate_date(week_start, "week_start")
+        try:
+            ws = datetime.strptime(week_start, "%Y-%m-%d").date()
+        except ValueError:
+            ws = now.date()
+    else:
+        from datetime import date as _date
+        today = _date.today()
+        ws = today - timedelta(days=today.weekday())  # Monday
+
+    results = []
+    for i in range(weeks):
+        mon = (ws + timedelta(weeks=i)).strftime("%Y-%m-%d")
+        fri = (ws + timedelta(weeks=i) + timedelta(days=4)).strftime("%Y-%m-%d")
+        try:
+            result = await build_curated_week_snapshot(fmp_key, mon, fri, force=force)
+            results.append({
+                "week":          f"{mon}→{fri}",
+                "status":        "ok",
+                "events":        len(result.get("allEvents", [])),
+                "focus":         sum(1 for e in result.get("allEvents", []) if e.get("isFocus")),
+                "rawEvents":     result.get("rawEventsCount", 0),
+                "calHttpCalls":  result.get("calHttpCalls", 0),
+                "enrichHttpCalls": result.get("enrichHttpCalls", 0),
+                "rateLimited":   result.get("rateLimited", False),
+            })
+            if i < weeks - 1:
+                await _asyncio.sleep(3)   # stagger between weeks
+        except Exception as e:
+            results.append({
+                "week":   f"{mon}→{fri}",
+                "status": "error",
+                "error":  str(e),
+            })
+
+    return JSONResponse(content={"rebuilt": results, "totalWeeks": weeks})
+
+
+# ── GET /api/catalysts/earnings/admin/snapshot-status ─────────────────────────
+
+@router.get("/api/catalysts/earnings/admin/snapshot-status")
+@traceable(name="earnings_clean.admin_snapshot_status")
+async def admin_snapshot_status(
+    request:    Request,
+    api_key:    str           = Header(None, alias=_AUTH_HEADER),
+    weeks_ahead: int          = Query(6, ge=1, le=12,
+                                      description="Number of upcoming weeks to check (default 6)"),
+):
+    """
+    Admin diagnostic: report snapshot status for upcoming weeks.
+    Shows which weeks have fresh snapshots, LKG snapshots, or need building.
+    """
+    err = _check_key(api_key)
+    if err:
+        return err
+
+    from services.earnings_clean_service import (
+        _snap_ck, _snap_lkg_ck, _snap_disk_path, _snap_lkg_disk_path,
+        _read_earn_snap_from_disk,
+    )
+    from data.cache import cache
+    from datetime import date as _date
+    import time as _time
+
+    today = _date.today()
+    mon0  = today - timedelta(days=today.weekday())
+
+    report = []
+    for i in range(weeks_ahead):
+        mon = (mon0 + timedelta(weeks=i)).strftime("%Y-%m-%d")
+        fri = (mon0 + timedelta(weeks=i) + timedelta(days=4)).strftime("%Y-%m-%d")
+
+        mem_snap  = cache.get(_snap_ck(mon, fri))
+        mem_lkg   = cache.get(_snap_lkg_ck(mon, fri))
+        disk_snap = _read_earn_snap_from_disk(_snap_disk_path(mon, fri))
+        disk_lkg  = _read_earn_snap_from_disk(_snap_lkg_disk_path(mon, fri))
+
+        mem_age  = None
+        disk_age = None
+        if mem_snap and mem_snap.get("cached_at"):
+            mem_age = int(_time.time() - mem_snap["cached_at"])
+        if disk_snap and disk_snap.get("cached_at"):
+            disk_age = int(_time.time() - disk_snap["cached_at"])
+
+        report.append({
+            "week":        f"{mon}→{fri}",
+            "memFresh":    mem_snap is not None,
+            "memLKG":      mem_lkg is not None,
+            "diskFresh":   disk_snap is not None,
+            "diskLKG":     disk_lkg is not None,
+            "memAgeS":     mem_age,
+            "diskAgeS":    disk_age,
+            "events":      len((mem_snap or disk_snap or {}).get("allEvents", [])),
+            "needsBuild":  (mem_snap is None and disk_snap is None),
+        })
+
+    return JSONResponse(content={"asOf": now.isoformat(), "weeks": report})

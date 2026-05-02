@@ -1,0 +1,181 @@
+URGENT: Earnings Calendar is still not restored. Audit + fix targeted issues.
+
+Current problems:
+1. Earnings Calendar is very slow to load.
+2. Month calendar view does not load after 5+ minutes.
+3. SIMO is not showing on Tuesday, even though the prior scoring audit used SIMO as a live Focus example with score 73.
+4. Friday shows no earnings this week and appears to show no earnings for the next two weeks.
+5. The page does not feel like the prior working curated calendar.
+
+Do not change Themes page.
+Do not change Options Flow.
+Do not change TA Screener.
+Do not change Watchlist.
+Do not change Portfolio.
+Do not change Chain Reaction.
+Do not add LLM calls.
+
+Important:
+Do NOT restore “All earnings.”
+Do NOT remove curated-only behavior.
+Do NOT restrict to theme ETF baskets.
+Do restore the prior curated calendar behavior: strong curated names by day, Focus labels, and no unexplained blank days.
+
+Known facts from the prior audit:
+- Raw source is FMP /stable/earnings-calendar?from=YYYY-MM-DD&to=YYYY-MM-DD.
+- Frontend curated route is GET /api/catalysts/earnings/week-clean.
+- Curated source of truth is get_curated_earnings_range() → _run_curated_pipeline() in earnings_clean_service.py.
+- Week/day/month all funnel through the same function.
+- Live enrichment is capped at 40 profile calls per request with concurrency=2.
+- SIMO was validated as a Focus example on Tuesday 2026-04-28 with importanceScore 73.
+
+Task 1 — Trace SIMO end-to-end
+For the week containing Tuesday 2026-04-28, trace SIMO through every phase.
+
+Report:
+- Is SIMO in raw FMP earnings source?
+- Raw date/session from FMP.
+- Does SIMO pass _is_raw_candidate?
+- SIMO pre_score and breakdown.
+- Does SIMO make Phase 1 candidate pool?
+- Does SIMO make the per-day floor?
+- Does SIMO make top 180 enrichment?
+- Is SIMO enriched or not_enriched?
+- Does SIMO pass _is_eligible?
+- Final importanceScore.
+- isFocus value.
+- Does backend endpoint return SIMO?
+- Does the frontend receive SIMO?
+- If backend returns SIMO but UI does not show it, identify the frontend/client filter or display cap.
+
+Expected:
+If SIMO is in raw FMP for Tuesday and previously scored 73, it should appear in curated Tuesday output and be marked Focus unless the source data changed.
+
+Task 2 — Diagnose Friday blank days
+Check the next 3 Fridays.
+
+For each Friday:
+- raw FMP earnings count
+- count after _is_raw_candidate
+- count after per-day floor/global cap
+- enriched count
+- not_enriched survival count
+- final curated count
+- final frontend payload count
+
+If raw FMP has events but final curated count is 0, identify the exact phase that drops them.
+
+Specifically check:
+- from/to date inclusivity
+- whether Friday is excluded by the canonical week range
+- whether Friday is accidentally treated as holiday
+- timezone/date normalization
+- frontend calendar cell date matching
+- session filters
+- scope filters
+- final display caps
+
+Do not accept “Friday has no events” unless raw FMP count is truly 0.
+
+Task 3 — Fix month view performance
+The audit says week/day/month all funnel through get_curated_earnings_range() → _run_curated_pipeline().
+
+That likely makes month view too slow.
+
+Fix month view so it does NOT run one huge live curated/enrichment pipeline across the whole month.
+
+Preferred behavior:
+- Month view should compose existing weekly curated snapshots/caches.
+- It should call/build week-sized chunks.
+- It should serve cache/LKG immediately where available.
+- It should not do 40 live FMP profile calls per week synchronously in one month request.
+- It should not block the UI for 5+ minutes.
+- It should return partial cached results if some weeks are still refreshing.
+- It should kick background refreshes for missing/stale weeks.
+
+If there is already a weekly cache:
+- reuse it.
+- do not create duplicate FMP calls.
+
+If there is a month endpoint:
+- make it aggregate weekly cached outputs.
+- do not run month-wide enrichment inline.
+
+Task 4 — Add performance diagnostics
+Add concise logs or temporary diagnostic response fields for earnings calendar requests:
+- route
+- requested range
+- raw_count
+- candidate_count
+- enriched_count
+- not_enriched_count
+- final_count
+- duration_ms
+- live_profile_calls_used
+- cache_hits
+- cache_misses
+- days included
+
+Do not log secrets.
+
+Task 5 — Cache/snapshot cleanup
+Check if stale or bad curated snapshots are being served.
+
+Search:
+- earnings:raw:week
+- earnings:raw:lkg
+- curated earnings cache
+- calendar snapshot cache
+- Neon earnings/calendar tables
+- disk JSON calendar snapshots
+
+If bad cache caused SIMO missing or Friday blanks:
+- invalidate only affected earnings/calendar cache keys.
+- rebuild affected weeks.
+- do not wipe unrelated caches.
+
+Task 6 — Preserve curated discovery rules
+Make sure:
+- Curated-only remains.
+- All view stays removed.
+- Focus labels remain.
+- SIMO-like watchlist/midcap names can appear.
+- Non-megacap names can appear.
+- Non-theme-basket names can appear.
+- Unknown-theme names are not auto-dropped.
+- No THEME_RS_UNIVERSE hard filter is used.
+
+Task 7 — Validation
+Validate these exact things:
+
+A. SIMO
+- SIMO appears on Tuesday 2026-04-28 if raw source includes it.
+- SIMO has importanceScore around the expected value if source fields are similar.
+- SIMO has isFocus=true if score >= 65.
+
+B. Next 3 Fridays
+For each Friday:
+- raw FMP count
+- final curated count
+- reason if final count is 0
+
+C. Month view
+- Month endpoint returns in under 10 seconds with cached/LKG data.
+- Month endpoint does not block on full live enrichment.
+- Month calendar populates rows for days with curated events.
+
+D. Week view
+- Week endpoint remains fast.
+- Week endpoint still returns curated events and Focus labels.
+
+Delivery report:
+1. Exact root cause for SIMO missing.
+2. Exact root cause for Friday blank days.
+3. Exact root cause for month view slow/hanging.
+4. Files changed.
+5. Cache keys invalidated, if any.
+6. Before/after counts by day for current week and next two weeks.
+7. Proof SIMO is back if raw source includes it.
+8. Proof Friday behavior is correct.
+9. Proof month view loads quickly.
+10. Confirmation no unrelated pages changed.
