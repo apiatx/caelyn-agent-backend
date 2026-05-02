@@ -329,6 +329,20 @@ async def lifespan(app):
         asyncio.create_task(_calendar_snap_loop(lambda: _fmp_key_for_snap))
     except Exception as _e:
         print(f"[STARTUP] calendar snapshot scheduler init error: {_e}")
+    # ── Screener Hub scheduler ──────────────────────────────────────────────
+    # Eastern-time recurring jobs (>= 30 min spacing):
+    #   Sun 00:30 ET  thematic universe rebuild
+    #   Sun 01:15 ET  thematic fundamentals warm
+    #   Sun 03:15 ET  bottlenecks fundamentals warm
+    #   Mon-Fri 00:00 ET  social Grok/X scan
+    #   Mon-Fri 00:45 ET  social fundamentals warm
+    #   Fri 02:00 ET  watchlist+portfolio fundamentals warm
+    try:
+        from services.screener_hub_scheduler import scheduler_loop as _screener_hub_loop
+        asyncio.create_task(_screener_hub_loop())
+        print("[SCREENER_HUB] Scheduler task registered")
+    except Exception as _e:
+        print(f"[STARTUP] Screener Hub scheduler init error: {_e}")
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)
@@ -489,6 +503,18 @@ try:
     print("[THEMES_RS] Router registered at /api/themes")
 except Exception as _themes_err:
     print(f"[THEMES_RS] Router unavailable (non-fatal): {_themes_err}")
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Screener Hub router (/api/screener-hub, /api/admin/screener-hub/*) ───────
+# Page-aware screener that aggregates Thematic / Social / Bottlenecks /
+# Watchlist+Portfolio universes. FMP fundamentals warmed weekly; Tradier
+# quotes refreshed only for the active page's symbols.
+try:
+    from routes.screener_hub import router as _screener_hub_router
+    app.include_router(_screener_hub_router)
+    print("[SCREENER_HUB] Router registered at /api/screener-hub & /api/admin/screener-hub/*")
+except Exception as _sh_err:
+    print(f"[SCREENER_HUB] Router unavailable (non-fatal): {_sh_err}")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Static file serving ───────────────────────────────────────────────────────
