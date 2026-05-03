@@ -102,6 +102,34 @@ def _ddl_sql() -> str:
         ON public.screener_job_runs (job_name, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_screener_job_runs_started
         ON public.screener_job_runs (started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS public.chain_reaction_weekly_outputs (
+        id              BIGSERIAL PRIMARY KEY,
+        generated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        week_start      DATE NOT NULL,
+        source_version  TEXT NOT NULL DEFAULT 'v1',
+        status          TEXT NOT NULL DEFAULT 'ok',
+        symbols_json    JSONB NOT NULL DEFAULT '[]'::jsonb,
+        rows_json       JSONB NOT NULL DEFAULT '[]'::jsonb,
+        metadata_json   JSONB NOT NULL DEFAULT '{}'::jsonb
+    );
+    CREATE INDEX IF NOT EXISTS idx_cr_weekly_generated
+        ON public.chain_reaction_weekly_outputs (generated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS public.screener_returns_cache (
+        symbol      TEXT PRIMARY KEY,
+        return_2w   NUMERIC(12,4) NULL,
+        return_4w   NUMERIC(12,4) NULL,
+        return_10w  NUMERIC(12,4) NULL,
+        rs_accel    NUMERIC(12,4) NULL,
+        bars_count  INTEGER NOT NULL DEFAULT 0,
+        fetched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at  TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '7 days')
+    );
+    CREATE INDEX IF NOT EXISTS idx_screener_returns_fetched
+        ON public.screener_returns_cache (fetched_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_screener_returns_expires
+        ON public.screener_returns_cache (expires_at);
     """
 
 
@@ -711,3 +739,238 @@ def job_runs_stats() -> dict:
         return {"available": False, "error": str(e)}
     finally:
         _put_conn(conn)
+
+
+# ── chain_reaction_weekly_outputs ─────────────────────────────────────────────
+
+def insert_chain_reaction_weekly_output(
+    *,
+    week_start: str,
+    symbols: list,
+    rows: list,
+    metadata: Optional[dict] = None,
+    source_version: str = "v1",
+    status: str = "ok",
+) -> bool:
+    """Insert a new weekly Chain Reaction output row. Returns True on success."""
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO public.chain_reaction_weekly_outputs
+                (generated_at, week_start, source_version, status,
+                 symbols_json, rows_json, metadata_json)
+            VALUES (NOW(), %s::date, %s, %s,
+                    %s::jsonb, %s::jsonb, %s::jsonb)
+            """,
+            (week_start, source_version, status,
+             _jsonb(symbols), _jsonb(rows), _jsonb(metadata or {})),
+        )
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"[SCREENER_HUB_STORE] insert_chain_reaction_weekly_output error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def get_latest_chain_reaction_weekly(max_age_days: int = 10) -> Optional[dict]:
+    """
+    Return the most recent chain_reaction_weekly_outputs row if it exists
+    and is within max_age_days. Returns None otherwise.
+    """
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, generated_at, week_start, source_version, status,
+                   symbols_json, rows_json, metadata_json
+            FROM public.chain_reaction_weekly_outputs
+            WHERE status = 'ok'
+              AND generated_at > NOW() - (%s || ' days')::interval
+            ORDER BY generated_at DESC
+            LIMIT 1
+            """,
+            (str(int(max_age_days)),),
+        )
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            return None
+        (rid, gen_at, week_start, src_ver, status,
+         symbols, rows, meta) = row
+        return {
+            "id":             rid,
+            "generated_at":   gen_at.isoformat() if gen_at else None,
+            "week_start":     str(week_start) if week_start else None,
+            "source_version": src_ver,
+            "status":         status,
+            "symbols":        symbols if isinstance(symbols, list) else (json.loads(symbols) if symbols else []),
+            "rows":           rows    if isinstance(rows, list)    else (json.loads(rows)    if rows    else []),
+            "metadata":       meta    if isinstance(meta, dict)    else (json.loads(meta)    if meta    else {}),
+        }
+    except Exception as e:
+        print(f"[SCREENER_HUB_STORE] get_latest_chain_reaction_weekly error: {e}")
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def chain_reaction_weekly_stats() -> dict:
+    """Diagnostic: total rows, latest generated_at for chain_reaction_weekly_outputs."""
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return {"available": False}
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*), MAX(generated_at) FROM public.chain_reaction_weekly_outputs"
+        )
+        r = cur.fetchone()
+        total = int(r[0] or 0)
+        latest = r[1].isoformat() if r and r[1] else None
+        cur.close()
+        return {"available": True, "total_rows": total, "latest_generated_at": latest}
+    except Exception as e:
+        return {"available": False, "error": str(e)}
+    finally:
+        _put_conn(conn)
+
+
+# ── screener_returns_cache ────────────────────────────────────────────────────
+
+def upsert_returns(
+    symbol: str,
+    *,
+    return_2w: Optional[float],
+    return_4w: Optional[float],
+    return_10w: Optional[float],
+    rs_accel: Optional[float],
+    bars_count: int = 0,
+    ttl_days: int = 7,
+) -> bool:
+    """Upsert a symbol's computed trailing returns. Returns True on success."""
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO public.screener_returns_cache
+                (symbol, return_2w, return_4w, return_10w, rs_accel,
+                 bars_count, fetched_at, expires_at)
+            VALUES (%s, %s, %s, %s, %s,
+                    %s, NOW(), NOW() + (%s || ' days')::interval)
+            ON CONFLICT (symbol) DO UPDATE SET
+                return_2w  = EXCLUDED.return_2w,
+                return_4w  = EXCLUDED.return_4w,
+                return_10w = EXCLUDED.return_10w,
+                rs_accel   = EXCLUDED.rs_accel,
+                bars_count = EXCLUDED.bars_count,
+                fetched_at = EXCLUDED.fetched_at,
+                expires_at = EXCLUDED.expires_at
+            """,
+            (symbol.upper(), return_2w, return_4w, return_10w, rs_accel,
+             int(bars_count), str(int(ttl_days))),
+        )
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"[SCREENER_HUB_STORE] upsert_returns {symbol} error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def get_returns(symbols: Iterable[str]) -> dict[str, dict]:
+    """
+    Bulk fetch returns rows. Returns {symbol: {return_2w, return_4w, return_10w,
+    rs_accel, bars_count, fetched_at}} with no expiry filter.
+    """
+    ensure_tables()
+    syms = sorted({s.upper() for s in symbols if s})
+    if not syms:
+        return {}
+    conn = _get_conn()
+    if conn is None:
+        return {}
+    out: dict[str, dict] = {}
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT symbol, return_2w, return_4w, return_10w, rs_accel,
+                   bars_count, fetched_at
+            FROM public.screener_returns_cache
+            WHERE symbol = ANY(%s)
+            """,
+            (syms,),
+        )
+        for row in cur.fetchall():
+            (sym, r2, r4, r10, accel, bars, fetched) = row
+            out[sym] = {
+                "symbol":     sym,
+                "return_2w":  float(r2)    if r2    is not None else None,
+                "return_4w":  float(r4)    if r4    is not None else None,
+                "return_10w": float(r10)   if r10   is not None else None,
+                "rs_accel":   float(accel) if accel is not None else None,
+                "bars_count": int(bars or 0),
+                "fetched_at": fetched.isoformat() if fetched else None,
+            }
+        cur.close()
+    except Exception as e:
+        print(f"[SCREENER_HUB_STORE] get_returns error: {e}")
+    finally:
+        _put_conn(conn)
+    return out
+
+
+def returns_fresh_symbols(symbols: Iterable[str], max_age_days: int = 7) -> set[str]:
+    """Return subset of symbols whose returns rows are still fresh."""
+    ensure_tables()
+    syms = sorted({s.upper() for s in symbols if s})
+    if not syms:
+        return set()
+    conn = _get_conn()
+    if conn is None:
+        return set()
+    fresh: set[str] = set()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT symbol FROM public.screener_returns_cache
+            WHERE symbol = ANY(%s)
+              AND fetched_at > NOW() - (%s || ' days')::interval
+            """,
+            (syms, str(int(max_age_days))),
+        )
+        fresh = {r[0] for r in cur.fetchall()}
+        cur.close()
+    except Exception as e:
+        print(f"[SCREENER_HUB_STORE] returns_fresh_symbols error: {e}")
+    finally:
+        _put_conn(conn)
+    return fresh

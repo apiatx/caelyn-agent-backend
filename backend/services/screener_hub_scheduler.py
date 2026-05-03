@@ -9,14 +9,12 @@ firing twice on the same calendar day.
 Schedule (ET, all >=30 min apart):
     Sun 00:30 ET   thematic universe rebuild
     Sun 01:15 ET   thematic fundamentals warm
-    Sun 03:15 ET   bottlenecks fundamentals warm
+    Sun 01:45 ET   historical returns warm (2w/4w/10w for thematic universe)
+    Sun 02:15 ET   chain reaction dynamic weekly output generation
+    Sun 03:15 ET   bottlenecks fundamentals warm (uses dynamic CR output if available)
     Mon-Fri 00:00 ET   social X/Grok scan trigger (rebuild social universe)
     Mon-Fri 00:45 ET   social fundamentals warm
     Fri 02:00 ET   watchlist+portfolio fundamentals warm
-
-Chain Reaction's existing weekly source job is left alone — bottlenecks_warm
-re-uses whatever Chain Reaction (NODE_REGISTRY) has already published. The
-3:15 ET slot ensures Chain Reaction has finished any earlier weekly work.
 """
 from __future__ import annotations
 
@@ -52,11 +50,81 @@ async def _run_thematic_warm() -> None:
     print(f"[SCREENER_HUB][SCHED] thematic fundamentals warm done: {out}")
 
 
+async def _run_returns_warm() -> None:
+    """Fetch real 2w/4w/10w historical returns for the thematic universe."""
+    print("[SCREENER_HUB][SCHED] returns warm starting")
+    try:
+        from services.screener_hub_service import _build_thematic_universe
+        symbols_map, _ = await _build_thematic_universe(None, with_fmp_peers=False)
+        all_syms: list[str] = []
+        seen: set[str] = set()
+        for syms in symbols_map.values():
+            for s in syms:
+                if s not in seen:
+                    seen.add(s)
+                    all_syms.append(s)
+        from services.screener_returns_service import fetch_and_cache_returns
+        out = await fetch_and_cache_returns(
+            all_syms, force=False, sleep_between_s=2.0,
+            max_calls=200, job_name="returns_warm_thematic",
+        )
+        print(f"[SCREENER_HUB][SCHED] returns warm done: {out}")
+    except Exception as e:
+        print(f"[SCREENER_HUB][SCHED] returns warm error: {e}")
+
+
+async def _run_chain_reaction_dynamic() -> None:
+    """Generate weekly dynamic Chain Reaction scoring output and write to DB."""
+    print("[SCREENER_HUB][SCHED] chain_reaction_dynamic starting")
+    try:
+        from services.chain_reaction_weekly_service import generate_chain_reaction_weekly
+        import json
+        from pathlib import Path
+
+        # Load social + options overlap sets for enrichment
+        social_set: set[str] = set()
+        options_set: set[str] = set()
+        try:
+            sp = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
+            if sp.exists():
+                d = json.loads(sp.read_text())
+                for item in (d.get("top_tickers") or []):
+                    sym = item.get("symbol") if isinstance(item, dict) else None
+                    if sym:
+                        social_set.add(str(sym).upper())
+        except Exception as se:
+            print(f"[SCREENER_HUB][SCHED] cr_dynamic social load error: {se}")
+
+        try:
+            for fname in [
+                "options_master_lkg_v1.json",
+                "options_lkg_v1_large_cap.json",
+                "options_lkg_v1_small_cap.json",
+            ]:
+                op = Path(__file__).parent.parent / "data" / fname
+                if op.exists():
+                    d = json.loads(op.read_text())
+                    for t in (d.get("tickers") or []):
+                        sym = t.get("ticker") if isinstance(t, dict) else None
+                        if sym:
+                            options_set.add(str(sym).upper())
+        except Exception as oe:
+            print(f"[SCREENER_HUB][SCHED] cr_dynamic options load error: {oe}")
+
+        out = generate_chain_reaction_weekly(
+            social_symbols=social_set,
+            options_symbols=options_set,
+        )
+        print(f"[SCREENER_HUB][SCHED] chain_reaction_dynamic done: {out}")
+    except Exception as e:
+        print(f"[SCREENER_HUB][SCHED] chain_reaction_dynamic error: {e}")
+
+
 async def _run_bottlenecks_warm() -> None:
     from services.screener_hub_service import (
         rebuild_universe, warm_tab_fundamentals,
     )
-    # Refresh the universe snapshot first so any NODE_REGISTRY changes flow in.
+    # Refresh the universe snapshot first so any dynamic CR output or NODE_REGISTRY changes flow in.
     await rebuild_universe("bottlenecks", force=False)
     print("[SCREENER_HUB][SCHED] bottlenecks fundamentals warm starting")
     out = await warm_tab_fundamentals("bottlenecks", force=False, max_calls=200)
@@ -89,12 +157,14 @@ async def _run_watchlist_portfolio_warm() -> None:
 
 
 _SLOTS: list[tuple[Callable[[int], bool], int, int, str, Callable[[], Awaitable[None]]]] = [
-    (_is_sunday,  0, 30, "thematic_rebuild",   _run_thematic_rebuild),
-    (_is_sunday,  1, 15, "thematic_warm",      _run_thematic_warm),
-    (_is_sunday,  3, 15, "bottlenecks_warm",   _run_bottlenecks_warm),
-    (_is_weekday, 0,  0, "social_scan",        _run_social_scan),
-    (_is_weekday, 0, 45, "social_warm",        _run_social_warm),
-    (_is_friday,  2,  0, "watchlist_portfolio_warm", _run_watchlist_portfolio_warm),
+    (_is_sunday,  0, 30, "thematic_rebuild",          _run_thematic_rebuild),
+    (_is_sunday,  1, 15, "thematic_warm",             _run_thematic_warm),
+    (_is_sunday,  1, 45, "returns_warm",              _run_returns_warm),
+    (_is_sunday,  2, 15, "chain_reaction_dynamic",    _run_chain_reaction_dynamic),
+    (_is_sunday,  3, 15, "bottlenecks_warm",          _run_bottlenecks_warm),
+    (_is_weekday, 0,  0, "social_scan",               _run_social_scan),
+    (_is_weekday, 0, 45, "social_warm",               _run_social_warm),
+    (_is_friday,  2,  0, "watchlist_portfolio_warm",  _run_watchlist_portfolio_warm),
 ]
 
 

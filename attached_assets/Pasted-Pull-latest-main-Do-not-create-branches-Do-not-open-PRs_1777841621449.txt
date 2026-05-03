@@ -1,0 +1,192 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not modify unrelated functionality.
+Keep this scoped to:
+1. improving Screener Hub Thematic discovery
+2. making Chain Reaction produce a weekly dynamic output for the Screener Hub Bottlenecks tab
+
+Do not touch frontend unless absolutely required by endpoint contract. Preserve existing endpoints and UI compatibility.
+
+Context:
+The current Screener Hub works, but Thematic discovery needs to become smarter and find hidden gems. Current Thematic now uses ETF holdings + LKG + FMP peers + static fallback, which is better, but we need stronger discovery/ranking. Also Bottlenecks currently uses static NODE_REGISTRY because no dynamic Chain Reaction output exists. We need Chain Reaction to produce a weekly durable output and Screener Hub Bottlenecks should use it first.
+
+Part 1 — Improve Thematic Screener discovery
+
+Goal:
+For each selected theme, dynamically discover and rank a broad stock universe, with emphasis on hidden gems, not just obvious mega-cap anchors.
+
+Requirements:
+1. Keep ETF/fund symbols excluded from final rows by default.
+2. Keep THEME_RS_UNIVERSE.candidate_symbols only as fallback/seed, not primary.
+3. Preserve existing ETF holdings disk source.
+4. Add or improve dynamic discovery from available sources:
+   - existing ETF holdings files in backend/data/etf_holdings/
+   - themes_rs_lkg.json leaders/laggards
+   - FMP stock screener endpoint if available
+   - FMP available sectors / industries / company profile / reference data if already supported
+   - FMP stock peers for theme anchor stocks
+   - existing Social Screener overlap if cached
+   - existing Options Flow overlap if cached/available
+   - Watchlist/Portfolio overlap if available
+5. Add a discovery_source_breakdown that clearly shows where symbols came from:
+   - etf_holdings
+   - themes_lkg
+   - fmp_screener
+   - fmp_industry_sector
+   - fmp_peers
+   - social_overlap
+   - options_overlap
+   - watchlist_portfolio_overlap
+   - static_seed
+6. Add source tags per row if practical:
+   row.discovery_sources = [...]
+7. Hidden gem ranking:
+   Add a hidden_gem_score per row using available data:
+   - positive RS over 2w/4w/10w once real historical returns are implemented
+   - RS acceleration
+   - volume surge
+   - accumulation
+   - close enough to 52w high but not extremely extended
+   - small/mid-cap boost
+   - social overlap boost
+   - options flow overlap boost
+   - watchlist/portfolio overlap boost
+   - theme alignment boost
+8. Do not let mega-caps dominate the hidden-gem sort.
+   - Keep mega-caps visible as anchors.
+   - Add row role if possible:
+     anchor | emerging | hidden_gem | watchlist_overlap | social_confirmed | options_confirmed
+9. Preserve normal score and category fields.
+10. Add response metadata:
+   - discovery_mode: "dynamic"
+   - universe_source_breakdown
+   - dynamic_symbols_count
+   - static_fallback_symbols_count
+   - used_static_fallback
+   - hidden_gem_method_version
+11. Do not blank the response if one discovery source fails.
+12. Never overwrite good snapshots with empty failed output.
+
+Part 2 — Replace placeholder RS with real historical returns
+
+Current limitation:
+rs_0_2w / rs_0_4w / rs_0_10w are still placeholders using 1D price change.
+
+Fix:
+1. Implement real return calculations using available historical price source.
+2. Preferred:
+   - use existing historical bars/cache if already present
+   - otherwise use FMP historical chart endpoints because current FMP plan supports historical stock price data
+   - use Tradier only for current quote/1D price, not historical batch
+3. Calculate:
+   - performance_2w
+   - performance_4w
+   - performance_10w
+   - rs_0_2w
+   - rs_0_4w
+   - rs_0_10w
+   - rs_accel = shorter-term RS minus longer-term RS or similar reasonable formula
+4. Cache these historical-return calculations so this does not hit FMP on every request.
+5. Use weekly/daily refresh cadence, not request-time heavy calls.
+6. If historical data is missing, return null and partial status instead of fake values.
+
+Part 3 — Make Chain Reaction produce weekly dynamic output
+
+Goal:
+Chain Reaction should produce a weekly dynamic output that the Screener Hub Bottlenecks tab uses first.
+
+Current state:
+Bottlenecks currently uses static NODE_REGISTRY from supply_chain_graph.py. Keep that as fallback only.
+
+Implement:
+1. Find existing Chain Reaction backend logic/service/page data.
+2. Add a weekly dynamic Chain Reaction output writer.
+3. Output should be saved to Neon or durable JSON, preferably DB if Screener Hub snapshots are already in Neon.
+4. Suggested table or snapshot:
+   - screener_universe_snapshots with universe_type='chain_reaction_dynamic' or 'bottlenecks_dynamic'
+   OR a new table if cleaner:
+   chain_reaction_weekly_outputs
+
+Recommended fields:
+   - id
+   - generated_at
+   - week_start
+   - source_version
+   - status
+   - symbols_json
+   - rows_json
+   - metadata_json
+
+Each row should include as many as possible:
+   - bottleneck_ticker
+   - company_name
+   - anchor_ticker
+   - anchor_theme
+   - supply_chain_role
+   - bottleneck_type
+   - theme_alignment_score
+   - bottleneck_score
+   - momentum_score
+   - volume_score
+   - fundamental_score
+   - social_score
+   - options_score
+   - final_score
+   - evidence
+   - discovery_sources
+
+5. Weekly schedule:
+   - Run dynamic Chain Reaction output generation before Bottlenecks fundamentals warm.
+   - Use Sunday 2:15 AM ET for Chain Reaction dynamic generation.
+   - Use Sunday 3:15 AM ET for Bottlenecks fundamentals warm.
+6. Screener Hub Bottlenecks tab should use dynamic Chain Reaction output first.
+7. If dynamic output is missing, stale, empty, or failed:
+   - fallback to NODE_REGISTRY
+   - return metadata:
+     is_dynamic=false
+     source_registry=NODE_REGISTRY
+     fallback_reason=...
+8. If dynamic output exists:
+   - return metadata:
+     is_dynamic=true
+     source_registry=chain_reaction_weekly_output
+     last_dynamic_chain_reaction_run=...
+     dynamic_rows_count=...
+9. Never break existing Chain Reaction page behavior.
+10. Do not remove NODE_REGISTRY. It remains fallback.
+
+Part 4 — Validation
+
+Run backend validation:
+1. GET /api/screener-hub?tab=thematic&theme=semiconductors
+2. GET /api/screener-hub?tab=thematic&theme=clean_energy
+3. GET /api/screener-hub?tab=bottlenecks
+4. GET /api/admin/screener-hub/status with X-API-Key
+5. Trigger/admin rebuild if safe:
+   POST /api/admin/screener-hub/rebuild with tab=thematic and force=false
+   POST /api/admin/screener-hub/rebuild with tab=bottlenecks and force=false
+
+Validation requirements:
+- Semiconductors should return a broad set of stocks, not ETFs.
+- Clean Energy should return a broad set of stocks, not ETFs.
+- Thematic response should show discovery_source_breakdown.
+- Thematic rows should include hidden_gem_score or equivalent.
+- RS 2w/4w/10w should not be fake 1D placeholders if historical data is available.
+- Bottlenecks should clearly report whether it is using dynamic weekly Chain Reaction output or static NODE_REGISTRY fallback.
+- Existing Social and Watchlist+Portfolio tabs should still work.
+
+Return:
+- files changed
+- whether any migration/table was added
+- whether Thematic still depends on static candidate_symbols
+- discovery source breakdown for Semiconductors
+- discovery source breakdown for Clean Energy
+- sample hidden-gem rows for Semiconductors
+- sample hidden-gem rows for Clean Energy
+- whether real 2w/4w/10w RS is implemented
+- where Chain Reaction weekly output is stored
+- whether Bottlenecks is dynamic now or still fallback
+- endpoint validation results
+- remaining limitations

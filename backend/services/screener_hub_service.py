@@ -52,6 +52,8 @@ from data.screener_hub_store import (
     start_job_run,
     finish_job_run,
     latest_job_runs,
+    get_returns,
+    get_latest_chain_reaction_weekly,
 )
 
 
@@ -294,6 +296,212 @@ async def _fmp_peers_for_anchors(
         return [], []
 
 
+# ── Overlap loaders (social / options / watchlist) ────────────────────────────
+
+def _load_social_overlap() -> set[str]:
+    """Top tickers from x_consensus_weekly.json (social screener)."""
+    syms: set[str] = set()
+    try:
+        import json
+        p = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
+        if p.exists():
+            d = json.loads(p.read_text())
+            for item in (d.get("top_tickers") or []):
+                sym = item.get("symbol") if isinstance(item, dict) else (item if isinstance(item, str) else None)
+                if sym:
+                    syms.add(str(sym).upper())
+    except Exception as e:
+        print(f"[SCREENER_HUB] _load_social_overlap error: {e}")
+    return syms
+
+
+def _load_options_overlap() -> set[str]:
+    """Tickers with notable options flow from all LKG files."""
+    syms: set[str] = set()
+    try:
+        import json
+        data_dir = Path(__file__).parent.parent / "data"
+        for fname in [
+            "options_master_lkg_v1.json",
+            "options_lkg_v1_large_cap.json",
+            "options_lkg_v1_small_cap.json",
+            "options_lkg_v1_megacap.json",
+        ]:
+            p = data_dir / fname
+            if not p.exists():
+                continue
+            d = json.loads(p.read_text())
+            for t in (d.get("tickers") or []):
+                sym = t.get("ticker") if isinstance(t, dict) else (t if isinstance(t, str) else None)
+                if sym:
+                    syms.add(str(sym).upper())
+    except Exception as e:
+        print(f"[SCREENER_HUB] _load_options_overlap error: {e}")
+    return syms
+
+
+def _load_watchlist_set() -> set[str]:
+    """All tickers from user watchlists and portfolio holdings."""
+    syms: set[str] = set()
+    try:
+        from services.watchlist_service import list_watchlists, load_watchlist
+        for wl in (list_watchlists() or [])[:10]:
+            wl_id = wl.get("id") if isinstance(wl, dict) else None
+            if not wl_id:
+                continue
+            store = load_watchlist(wl_id)
+            if isinstance(store, dict):
+                for t in (store.get("tickers") or []):
+                    if isinstance(t, str):
+                        syms.add(t.upper())
+                    elif isinstance(t, dict) and t.get("symbol"):
+                        syms.add(str(t["symbol"]).upper())
+    except Exception as e:
+        print(f"[SCREENER_HUB] _load_watchlist_set error: {e}")
+    try:
+        import json
+        for p in Path(__file__).parent.parent.joinpath("data").glob("portfolio_holdings*.json"):
+            try:
+                data = json.loads(p.read_text())
+                holdings = data.get("holdings", data) if isinstance(data, dict) else data
+                if isinstance(holdings, list):
+                    for h in holdings:
+                        if isinstance(h, dict):
+                            s = h.get("symbol") or h.get("ticker")
+                            if s:
+                                syms.add(str(s).upper())
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[SCREENER_HUB] _load_watchlist_set portfolio error: {e}")
+    return syms
+
+
+def _compute_hidden_gem_score(
+    *,
+    distance_52w_high: Optional[float],
+    volume_surge: Optional[float],
+    accumulation: Optional[bool],
+    chg_1d: Optional[float],
+    return_2w: Optional[float],
+    return_4w: Optional[float],
+    return_10w: Optional[float],
+    market_cap: Optional[float],
+    is_social: bool,
+    is_options: bool,
+    is_watchlist: bool,
+) -> float:
+    """
+    Score 0–10 rating how "hidden gem"-like a stock is.
+
+    Key signals: RS acceleration, volume surge, near-52w-high setup,
+    small/mid-cap size, multi-source confirmation.
+
+    Mega-caps are soft-penalized (they're anchors, not hidden gems).
+    """
+    score = 0.0
+
+    # RS / momentum signals — prefer real multi-week returns over 1D proxy
+    rs_for_signal = return_4w if return_4w is not None else chg_1d
+    if rs_for_signal is not None:
+        if rs_for_signal > 10:
+            score += 1.5
+        elif rs_for_signal > 3:
+            score += 1.0
+        elif rs_for_signal > 0:
+            score += 0.5
+        elif rs_for_signal < -10:
+            score -= 0.5
+
+    # RS acceleration (shorter outperforming longer = momentum building)
+    if return_2w is not None and return_4w is not None:
+        accel = return_2w - return_4w
+        if accel > 5:
+            score += 1.5
+        elif accel > 1:
+            score += 0.75
+
+    # Volume surge — smart money buying interest
+    if volume_surge is not None:
+        if volume_surge >= 3.0:
+            score += 1.5
+        elif volume_surge >= 2.0:
+            score += 1.0
+        elif volume_surge >= 1.5:
+            score += 0.5
+
+    # Accumulation: meaningful price + volume combo
+    if accumulation:
+        score += 0.75
+
+    # Distance from 52w high:
+    #   -30% to -5% = sweet spot (breakout setup, not broken stock)
+    #   very extended (>-2%) = overcrowded
+    #   free-fall (<-50%) = negative
+    if distance_52w_high is not None:
+        if -30 <= distance_52w_high <= -5:
+            score += 1.5
+        elif -5 < distance_52w_high <= 0:
+            score += 0.25  # near ATH — still valid but less "hidden"
+        elif distance_52w_high < -50:
+            score -= 0.5
+
+    # Market cap: smaller → less discovered → bigger hidden-gem premium
+    if market_cap is not None:
+        if market_cap < 1e9:          # micro cap < $1B
+            score += 2.0
+        elif market_cap < 5e9:        # small cap < $5B
+            score += 1.5
+        elif market_cap < 20e9:       # mid cap < $20B
+            score += 0.75
+        elif market_cap > 100e9:      # mega cap > $100B — anchor, not hidden gem
+            score -= 1.0
+
+    # Multi-source confirmation boosts
+    if is_social:
+        score += 0.5
+    if is_options:
+        score += 0.5
+    if is_watchlist:
+        score += 0.25
+
+    return round(max(0.0, min(10.0, score)), 2)
+
+
+def _assign_row_role(
+    *,
+    market_cap: Optional[float],
+    hidden_gem_score: float,
+    is_social: bool,
+    is_options: bool,
+    is_watchlist: bool,
+    discovery_sources: list,
+) -> str:
+    """
+    Assign a display role to each row.
+
+    Roles (priority order):
+      anchor          — mega-cap or well-known large-cap
+      social_confirmed — in X/Grok social screener consensus
+      options_confirmed — in options flow screener
+      watchlist_overlap — in user watchlists / portfolio
+      hidden_gem       — strong hidden-gem score + small/mid-cap
+      emerging         — default
+    """
+    mcap = market_cap or 0
+    if mcap > 100e9:
+        return "anchor"
+    if is_social:
+        return "social_confirmed"
+    if is_options:
+        return "options_confirmed"
+    if is_watchlist:
+        return "watchlist_overlap"
+    if hidden_gem_score >= 4.0 and mcap < 20e9:
+        return "hidden_gem"
+    return "emerging"
+
+
 # ── Universe builders ─────────────────────────────────────────────────────────
 
 def _theme_keys() -> list[str]:
@@ -375,12 +583,13 @@ async def _build_thematic_universe(
         proxy_etfs:     list[str] = [s.upper() for s in (meta.get("proxy_symbols") or []) if s]
         candidate_syms: list[str] = [s.upper() for s in (meta.get("candidate_symbols") or []) if s]
 
-        etf_holdings_syms: list[str] = []   # Source A
-        lkg_syms:          list[str] = []   # Source B
-        fmp_peer_syms:     list[str] = []   # Source C
-        static_syms:       list[str] = []   # Source D
-        etf_files_found:   list[str] = []
-        fmp_peer_anchors:  list[str] = []
+        etf_holdings_syms:  list[str] = []   # Source A
+        lkg_syms:           list[str] = []   # Source B
+        fmp_peer_syms:      list[str] = []   # Source C
+        static_syms:        list[str] = []   # Source D
+        etf_files_found:    list[str] = []
+        fmp_peer_anchors:   list[str] = []
+        sources_by_symbol:  dict[str, list[str]] = {}  # per-symbol source tags
 
         seen_dynamic: set[str] = set()
 
@@ -393,6 +602,7 @@ async def _build_thematic_universe(
                 if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
                     seen_dynamic.add(sym)
                     etf_holdings_syms.append(sym)
+                    sources_by_symbol.setdefault(sym, []).append(f"etf:{etf}")
 
         # ── Source B: LKG leaders / laggards (dynamic, refreshed by theme_rs_service) ──
         for sym in lkg_map.get(key) or []:
@@ -400,6 +610,7 @@ async def _build_thematic_universe(
             if su and su not in _ALL_PROXY_ETFS and su not in seen_dynamic:
                 seen_dynamic.add(su)
                 lkg_syms.append(su)
+                sources_by_symbol.setdefault(su, []).append("lkg_leaders")
 
         # ── Source C: FMP peers (async API, only when A+B coverage is thin) ───
         if with_fmp_peers and len(seen_dynamic) < _MIN_DYN_BEFORE_PEERS and candidate_syms:
@@ -408,6 +619,7 @@ async def _build_thematic_universe(
                 if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
                     seen_dynamic.add(sym)
                     fmp_peer_syms.append(sym)
+                    sources_by_symbol.setdefault(sym, []).append("fmp_peers")
 
         # ── Source D: candidate_symbols — static fallback ─────────────────────
         # Added only when the symbol wasn't found by any dynamic source above.
@@ -415,6 +627,7 @@ async def _build_thematic_universe(
             if sym not in seen_dynamic:
                 # Don't add to seen_dynamic — static symbols tracked separately
                 static_syms.append(sym)
+                sources_by_symbol.setdefault(sym, []).append("static_seed")
 
         # Combine: dynamic first, static at end, ETF proxies only as last resort
         combined = etf_holdings_syms + lkg_syms + fmp_peer_syms + static_syms
@@ -436,6 +649,7 @@ async def _build_thematic_universe(
             "static_fallback_symbols_count": n_static,
             "used_static_fallback": n_static > 0,
             "etf_files_found":      etf_files_found,
+            "sources_by_symbol":    sources_by_symbol,
         }
 
         if cleaned:
@@ -496,7 +710,39 @@ def _build_bottlenecks_universe() -> tuple[list[str], dict]:
     source_registry = "NODE_REGISTRY"
     symbols: list[str] = []
 
-    # ── Try dynamic Chain Reaction output first ───────────────────────────────
+    # ── Try DB dynamic Chain Reaction weekly output first (primary) ──────────
+    try:
+        cr_row = get_latest_chain_reaction_weekly(max_age_days=10)
+        if cr_row and cr_row.get("symbols"):
+            raw = cr_row["symbols"]
+            symbols = _dedupe_filter([str(s).upper() for s in raw if s])[:_GLOBAL_TICKER_CAP]
+            if symbols:
+                is_dynamic = True
+                source_registry = "chain_reaction_weekly_output"
+                last_dynamic_run = cr_row.get("generated_at")
+                dynamic_rows_count = len(symbols)
+                cr_meta = cr_row.get("metadata") or {}
+                metadata = {
+                    "is_dynamic":    True,
+                    "source_registry": "chain_reaction_weekly_output",
+                    "last_dynamic_chain_reaction_run": last_dynamic_run,
+                    "dynamic_rows_count": dynamic_rows_count,
+                    "symbol_count":  len(symbols),
+                    "week_start":    cr_row.get("week_start"),
+                    "source_version": cr_row.get("source_version"),
+                    "note": (
+                        f"Dynamic Chain Reaction weekly output from DB "
+                        f"(week {cr_row.get('week_start','?')}, "
+                        f"generated {str(last_dynamic_run or '')[:10]}). "
+                        f"Scored {cr_meta.get('scored_count', len(symbols))} nodes."
+                    ),
+                }
+                print(f"[SCREENER_HUB] bottlenecks: loaded {len(symbols)} from DB weekly output")
+                return symbols, metadata
+    except Exception as e:
+        print(f"[SCREENER_HUB] bottlenecks DB check error: {e}")
+
+    # ── Try local JSON file (legacy dynamic output) ───────────────────────────
     if _CHAIN_REACTION_OUTPUT.exists():
         try:
             import json
@@ -866,9 +1112,25 @@ async def refresh_quotes_for_page(symbols: Iterable[str]) -> dict:
 
 # ── Classification (Leading / Improving / Weakening / Lagging) ────────────────
 
-def _classify_row(metrics: dict, quote: dict, *, score_mode: bool, coc_filter: bool) -> dict:
-    """Compute screener category + score using whatever signals we have."""
-    # Pull whatever metrics happen to be present in profile/metrics/quote.
+def _classify_row(
+    metrics: dict,
+    quote: dict,
+    *,
+    score_mode: bool,
+    coc_filter: bool,
+    return_2w: Optional[float] = None,
+    return_4w: Optional[float] = None,
+    return_10w: Optional[float] = None,
+) -> dict:
+    """
+    Compute screener category + score using whatever signals we have.
+
+    Parameters
+    ----------
+    return_2w/4w/10w : Real historical trailing returns from screener_returns_cache.
+                       Pass None when the cache is cold — we never substitute fake
+                       1D change for multi-week RS fields.
+    """
     distance_52w_high: Optional[float] = None
     week_52_high = quote.get("week_52_high") if isinstance(quote, dict) else None
     last = quote.get("last") if isinstance(quote, dict) else None
@@ -888,31 +1150,28 @@ def _classify_row(metrics: dict, quote: dict, *, score_mode: bool, coc_filter: b
     if vol and avg_vol and avg_vol > 0:
         volume_surge = round(vol / avg_vol, 3)
 
-    # Relative strength placeholders — we don't have multi-week history here,
-    # so we expose the cheapest proxy (1D change) so the frontend can render
-    # *something*; the heavier RS rebuild lives in theme_rs_service.
-    rs_0_2w = chg_1d
-    rs_0_4w = chg_1d
-    rs_0_10w = chg_1d
+    # Real multi-week returns from historical cache.
+    # If not cached yet → None (never substitute fake 1D change for RS fields).
+    rs_0_2w  = return_2w
+    rs_0_4w  = return_4w
+    rs_0_10w = return_10w
     rs_accel: Optional[float] = None
+    if rs_0_2w is not None and rs_0_4w is not None:
+        rs_accel = round(rs_0_2w - rs_0_4w, 4)
 
     # Accumulation: meaningful positive day (>0.5%) on elevated volume (≥1.5×).
-    # Threshold raised from the original (>0 / ≥1.2) to avoid flagging tiny
-    # fractional moves with minor vol as accumulation — which was cascading
-    # into inflated Leading counts.
     accumulation: Optional[bool] = None
     if volume_surge is not None and chg_1d is not None:
         accumulation = bool(volume_surge >= 1.5 and chg_1d > 0.5)
 
-    coc: Optional[bool] = None  # CoC filter not implemented; safe-null
+    coc: Optional[bool] = None
 
-    # Signal scoring
-    # rs_positive threshold raised to >0.5% — using 1D change as an RS proxy
-    # means that any fractional positive day would fire this signal, biasing
-    # almost every stock toward Leading when the day is slightly green.
-    # A >0.5% move is a more meaningful signal while still being accessible.
+    # Signal scoring — use real 4w return if available, else 1D change as proxy.
+    # This prevents the "whole screener is Leading when the day is slightly green"
+    # artifact that occurred when rs_0_4w was always equal to chg_1d.
+    rs_signal = rs_0_4w if rs_0_4w is not None else chg_1d
     signals = {
-        "rs_positive":   bool(rs_0_4w is not None and rs_0_4w > 0.5),
+        "rs_positive":   bool(rs_signal is not None and rs_signal > 0.5),
         "near_52w_high": bool(distance_52w_high is not None and distance_52w_high > -10),
         "vol_surge":     bool(volume_surge is not None and volume_surge >= 1.5),
         "accumulation":  bool(accumulation),
@@ -994,6 +1253,12 @@ async def get_screener_hub(
     theme_state_meta: dict = {}
     thematic_breakdown: dict = {}
     bottlenecks_meta: dict = {}
+
+    # ── Load overlap sets (fast disk reads; used for per-row tagging) ──────────
+    # These are loaded once per request and passed through to row building.
+    social_overlap:   set[str] = _load_social_overlap()
+    options_overlap:  set[str] = _load_options_overlap()
+    watchlist_set:    set[str] = _load_watchlist_set()
 
     # ── Resolve universe ──
     if tab == "thematic":
@@ -1094,6 +1359,14 @@ async def get_screener_hub(
 
     symbols = _dedupe_filter(symbols)[:_GLOBAL_TICKER_CAP]
 
+    # ── Per-symbol source map (thematic only; populated by live build) ─────────
+    # Used below to build row.discovery_sources from ETF/LKG/peer/static tags.
+    sources_by_symbol: dict[str, list[str]] = thematic_breakdown.get("sources_by_symbol") or {}
+
+    # ── Load real historical returns from cache (never blocks on FMP API) ──────
+    returns_cache: dict[str, dict] = get_returns(symbols) if symbols else {}
+    returns_cached_count = sum(1 for r in returns_cache.values() if r.get("return_4w") is not None)
+
     # ── Refresh page-aware quotes ──
     quote_cache_status = "skipped"
     if symbols:
@@ -1123,8 +1396,61 @@ async def get_screener_hub(
         metrics = f.get("metrics") or {}
         ratios  = f.get("ratios")  or {}
 
+        # Real historical returns from cache (None when cache is cold)
+        ret = returns_cache.get(sym) or {}
+        r2w  = ret.get("return_2w")
+        r4w  = ret.get("return_4w")
+        r10w = ret.get("return_10w")
+
         classification = _classify_row(
-            metrics, q, score_mode=score_mode, coc_filter=coc_filter,
+            metrics, q,
+            score_mode=score_mode,
+            coc_filter=coc_filter,
+            return_2w=r2w,
+            return_4w=r4w,
+            return_10w=r10w,
+        )
+
+        # ── Overlap / confirmation flags ──
+        is_social   = sym in social_overlap
+        is_options  = sym in options_overlap
+        is_watchlist = sym in watchlist_set
+
+        # ── Per-row discovery sources ──
+        # Merge universe-build source tags with request-time overlap sets.
+        disc_src: list[str] = list(sources_by_symbol.get(sym) or [])
+        if is_social and "social_overlap" not in disc_src:
+            disc_src.append("social_overlap")
+        if is_options and "options_overlap" not in disc_src:
+            disc_src.append("options_overlap")
+        if is_watchlist and "watchlist_portfolio" not in disc_src:
+            disc_src.append("watchlist_portfolio")
+        if not disc_src:
+            disc_src = ["unknown"]
+
+        # ── Hidden gem score + role ──
+        mcap = _to_float(f.get("market_cap") or profile.get("marketCap"))
+        chg_1d = _to_float(q_row.get("change_percent_1d")) if q_row else None
+        hg_score = _compute_hidden_gem_score(
+            distance_52w_high=classification.get("distance_52w_high"),
+            volume_surge=classification.get("volume_surge"),
+            accumulation=classification.get("accumulation"),
+            chg_1d=chg_1d,
+            return_2w=r2w,
+            return_4w=r4w,
+            return_10w=r10w,
+            market_cap=mcap,
+            is_social=is_social,
+            is_options=is_options,
+            is_watchlist=is_watchlist,
+        )
+        role = _assign_row_role(
+            market_cap=mcap,
+            hidden_gem_score=hg_score,
+            is_social=is_social,
+            is_options=is_options,
+            is_watchlist=is_watchlist,
+            discovery_sources=disc_src,
         )
 
         row = {
@@ -1136,12 +1462,18 @@ async def get_screener_hub(
             "rs_0_4w":  classification["rs_0_4w"],
             "rs_0_10w": classification["rs_0_10w"],
             "rs_accel": classification["rs_accel"],
+            "performance_2w":  r2w,
+            "performance_4w":  r4w,
+            "performance_10w": r10w,
             "distance_52w_high": classification["distance_52w_high"],
             "volume_surge":      classification["volume_surge"],
             "accumulation":      classification["accumulation"],
             "coc":               classification["coc"],
             "score":             classification["score"],
-            "market_cap": f.get("market_cap") or profile.get("marketCap"),
+            "hidden_gem_score":  hg_score,
+            "role":              role,
+            "discovery_sources": disc_src,
+            "market_cap": mcap,
             "sector":     f.get("sector"),
             "industry":   f.get("industry"),
             "price":      q_row.get("price"),
@@ -1161,6 +1493,8 @@ async def get_screener_hub(
                 "ratios_ps":               ratios.get("priceToSalesRatioTTM"),
                 "key_metric_roe":          metrics.get("roeTTM"),
                 "signals":                 classification.get("_signals"),
+                "returns_fetched_at":      ret.get("fetched_at"),
+                "bars_count":              ret.get("bars_count"),
             },
         }
         if not _row_passes_filters(row, category_filter=category, coc_filter=coc_filter):
@@ -1180,34 +1514,59 @@ async def get_screener_hub(
         "rows": rows,
     }
 
-    # Inject thematic source breakdown metadata (only for thematic tab).
-    # universe_source_breakdown: per-source symbol counts (ETF holdings, LKG, FMP peers, static seed).
-    # theme_state:               overall theme momentum from Themes page LKG — NOT the per-row category.
-    # per-row category (Leading/Improving/Weakening/Lagging) is stock-level, never overwritten by theme_state.
+    # ── Thematic tab metadata ───────────────────────────────────────────────────
     if tab == "thematic":
+        # discovery_mode + hidden_gem_method_version always present on thematic tab
+        payload["discovery_mode"]            = "dynamic"
+        payload["hidden_gem_method_version"] = "v1"
+        payload["returns_cached_count"]      = returns_cached_count
+        payload["rs_data_status"] = (
+            "real_historical" if returns_cached_count > 0 else "no_historical_cache"
+        )
+
         if thematic_breakdown:
+            # Expanded 8-source breakdown (was 4 sources before)
             payload["universe_source_breakdown"] = {
-                "etf_holdings":       thematic_breakdown.get("etf_holdings_count", 0),
-                "lkg_leaders":        thematic_breakdown.get("lkg_leaders_count", 0),
-                "fmp_peers":          thematic_breakdown.get("fmp_peers_count", 0),
-                "static_seed":        thematic_breakdown.get("static_seed_count", 0),
+                "etf_holdings":              thematic_breakdown.get("etf_holdings_count", 0),
+                "lkg_leaders":               thematic_breakdown.get("lkg_leaders_count", 0),
+                "fmp_peers":                 thematic_breakdown.get("fmp_peers_count", 0),
+                "fmp_screener":              0,  # reserved — not yet implemented
+                "social_overlap":            len(social_overlap),
+                "options_overlap":           len(options_overlap),
+                "watchlist_portfolio_overlap": len(watchlist_set),
+                "static_seed":               thematic_breakdown.get("static_seed_count", 0),
             }
             payload["dynamic_symbols_count"]          = thematic_breakdown.get("dynamic_symbols_count", 0)
             payload["static_fallback_symbols_count"]  = thematic_breakdown.get("static_fallback_symbols_count", 0)
             payload["used_static_fallback"]           = thematic_breakdown.get("used_static_fallback", False)
             if thematic_breakdown.get("etf_files_found"):
                 payload["etf_files_used"] = thematic_breakdown["etf_files_found"]
+        else:
+            # Snapshot hit — overlaps still available for disclosure
+            payload["universe_source_breakdown"] = {
+                "etf_holdings": 0, "lkg_leaders": 0, "fmp_peers": 0,
+                "fmp_screener": 0,
+                "social_overlap": len(social_overlap),
+                "options_overlap": len(options_overlap),
+                "watchlist_portfolio_overlap": len(watchlist_set),
+                "static_seed": 0,
+            }
+
         if theme_state_meta:
             payload["theme_state"]        = theme_state_meta.get("state")
             payload["theme_state_reason"] = theme_state_meta.get("state_reason")
             payload["theme_rs_score"]     = theme_state_meta.get("rs_score")
 
-    # Inject bottlenecks source metadata (only for bottlenecks tab).
+    # ── Bottlenecks tab metadata ────────────────────────────────────────────────
     if tab == "bottlenecks" and bottlenecks_meta:
         payload["is_dynamic"]    = bottlenecks_meta.get("is_dynamic", False)
         payload["source_registry"] = bottlenecks_meta.get("source_registry", "NODE_REGISTRY")
         payload["last_dynamic_chain_reaction_run"] = bottlenecks_meta.get("last_dynamic_chain_reaction_run")
         payload["bottlenecks_source_note"] = bottlenecks_meta.get("note")
+        if bottlenecks_meta.get("dynamic_rows_count") is not None:
+            payload["dynamic_rows_count"] = bottlenecks_meta["dynamic_rows_count"]
+        if bottlenecks_meta.get("week_start"):
+            payload["chain_reaction_week_start"] = bottlenecks_meta["week_start"]
 
     return payload
 
