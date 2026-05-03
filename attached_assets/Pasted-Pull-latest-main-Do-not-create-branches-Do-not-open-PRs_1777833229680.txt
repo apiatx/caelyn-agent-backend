@@ -1,0 +1,59 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not modify unrelated functionality.
+Keep this scoped only to Screener Hub backend universe generation.
+
+Current state:
+The Thematic Screener now excludes ETFs and returns stocks, but it appears to rely on THEME_RS_UNIVERSE.candidate_symbols, which is a predefined/static candidate list. That is not the final intended behavior.
+
+Goal:
+Remove hardcoded stock dependency from the Thematic Screener as much as practical.
+
+Requirements:
+1. Do not remove THEME_RS_UNIVERSE entirely if other pages need it.
+2. For Screener Hub Thematic tab, treat THEME_RS_UNIVERSE candidate_symbols only as a fallback/seed, not the primary source.
+3. Build each selected theme universe dynamically using available backend data sources:
+   - existing Themes page/thematic intelligence cache
+   - FMP available sectors
+   - FMP available industries
+   - FMP stock screener endpoint if available
+   - FMP company profile/reference data
+   - existing sector/theme caches if already present
+4. Do not use ETFs as final rows. ETFs may only be used as proxy/reference inputs.
+5. Add source metadata to the response:
+   - universe_source
+   - universe_source_breakdown
+   - used_static_fallback: true/false
+   - static_fallback_symbols_count
+   - dynamic_symbols_count
+6. If dynamic discovery fails, then fall back to candidate_symbols, but make that explicit in metadata.
+7. For Semiconductors and Clean Energy, validate that the returned symbols are mostly dynamically discovered stocks, not only predefined candidate_symbols.
+8. Preserve weekly caching and self-healing snapshots.
+9. Do not break Social, Bottlenecks, Watchlist+Portfolio, Themes page, or Chain Reaction page.
+
+Also clarify Bottlenecks:
+1. Keep current NODE_REGISTRY bottlenecks working as fallback.
+2. Add metadata to /api/screener-hub?tab=bottlenecks:
+   - universe_source
+   - is_dynamic
+   - source_registry
+   - last_dynamic_chain_reaction_run if available
+3. If there is an existing dynamic Chain Reaction output/cache, use that as primary.
+4. If no dynamic Chain Reaction output exists, keep NODE_REGISTRY but report clearly that it is static curated fallback.
+
+Validation:
+- GET /api/screener-hub?tab=thematic&theme=semiconductors
+- GET /api/screener-hub?tab=thematic&theme=clean_energy
+- GET /api/screener-hub?tab=bottlenecks
+- GET /api/admin/screener-hub/status
+
+Return:
+- files changed
+- whether Thematic still relies on static candidate_symbols
+- dynamic source breakdown for semiconductors
+- dynamic source breakdown for clean_energy
+- bottlenecks source metadata
+- endpoint validation results
+- remaining limitations
