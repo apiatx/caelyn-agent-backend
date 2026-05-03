@@ -1,0 +1,470 @@
+{
+  "industry_map_version": "v1",
+  "notes": "Config-driven theme → FMP company-screener industry mappings. One FMP call per industry during scheduled/admin rebuilds only. market_cap_upper_default applied client-side (FMP ignores the param).",
+  "themes": {
+    "semiconductors": {
+      "fmp_industries": [
+        "Semiconductors",
+        "Semiconductor Equipment & Materials",
+        "Electronic Components",
+        "Hardware, Equipment & Parts",
+        "Computer Hardware",
+        "Communication Equipment",
+        "Electrical Equipment & Parts",
+        "Technology Distributors"
+      ],
+      "fmp_sectors": ["Technology"],
+      "exclude_industries": [
+        "Software - Application",
+        "Software - Infrastructure",
+        "Consumer Electronics"
+      ],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Small/mid-cap semis + supply chain. Excludes pure software and consumer electronics."
+    },
+    "semicap_equipment": {
+      "fmp_industries": [
+        "Semiconductor Equipment & Materials",
+        "Electronic Components",
+        "Electrical Equipment & Parts",
+        "Hardware, Equipment & Parts",
+        "Industrial - Machinery"
+      ],
+      "fmp_sectors": ["Technology", "Industrials"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Semicap equipment, etch, deposition, inspection, materials."
+    },
+    "memory_storage": {
+      "fmp_industries": [
+        "Semiconductors",
+        "Electronic Components",
+        "Computer Hardware",
+        "Hardware, Equipment & Parts"
+      ],
+      "fmp_sectors": ["Technology"],
+      "exclude_industries": ["Software - Application", "Software - Infrastructure"],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "DRAM, NAND, storage controllers."
+    },
+    "clean_energy": {
+      "fmp_industries": [
+        "Solar",
+        "Renewable Utilities",
+        "Electrical Equipment & Parts",
+        "Independent Power Producers",
+        "Environmental Services",
+        "Industrial - Pollution & Treatment Controls",
+        "Utilities - Renewable",
+        "Engineering & Construction"
+      ],
+      "fmp_sectors": ["Energy", "Utilities", "Industrials", "Technology"],
+      "exclude_industries": ["Oil & Gas E&P", "Oil & Gas Integrated", "Coal"],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Solar, wind, hydro, storage, grid infrastructure."
+    },
+    "solar": {
+      "fmp_industries": [
+        "Solar",
+        "Electrical Equipment & Parts",
+        "Independent Power Producers",
+        "Renewable Utilities"
+      ],
+      "fmp_sectors": ["Energy", "Utilities", "Technology"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Pure solar play — panels, inverters, installers, project devs."
+    },
+    "drones": {
+      "fmp_industries": [
+        "Aerospace & Defense",
+        "Communication Equipment",
+        "Computer Hardware",
+        "Hardware, Equipment & Parts",
+        "Electrical Equipment & Parts",
+        "Software - Infrastructure",
+        "Scientific & Technical Instruments"
+      ],
+      "fmp_sectors": ["Industrials", "Technology"],
+      "exclude_industries": ["Airlines", "Airport Operations"],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "UAV hardware, autonomy software, defense drones, counter-drone systems."
+    },
+    "defense": {
+      "fmp_industries": [
+        "Aerospace & Defense",
+        "Security & Protection Services",
+        "Communication Equipment",
+        "Electronic Components",
+        "Computer Hardware",
+        "Hardware, Equipment & Parts",
+        "Scientific & Technical Instruments"
+      ],
+      "fmp_sectors": ["Industrials", "Technology"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 100000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["small", "mid", "large"],
+      "notes": "Defense primes and tier-2 suppliers. Higher cap ceiling for primes."
+    },
+    "uranium_nuclear": {
+      "fmp_industries": [
+        "Uranium",
+        "Independent Power Producers",
+        "Diversified Utilities",
+        "Regulated Electric",
+        "Electrical Equipment & Parts",
+        "Industrial - Machinery",
+        "Engineering & Construction"
+      ],
+      "fmp_sectors": ["Energy", "Utilities", "Industrials"],
+      "exclude_industries": ["Oil & Gas E&P", "Oil & Gas Integrated"],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Uranium miners, enrichers, nuclear utilities, SMR developers."
+    },
+    "rare_earth": {
+      "fmp_industries": [
+        "Other Industrial Metals & Mining",
+        "Specialty Chemicals",
+        "Electronic Components",
+        "Industrial - Machinery",
+        "Steel",
+        "Copper"
+      ],
+      "fmp_sectors": ["Basic Materials", "Industrials"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "REE miners, processors, magnet manufacturers."
+    },
+    "regional_banks": {
+      "fmp_industries": [
+        "Banks - Regional",
+        "Banks - Diversified",
+        "Financial - Mortgages",
+        "Financial - Credit Services"
+      ],
+      "fmp_sectors": ["Financial Services"],
+      "exclude_industries": ["Insurance - Life", "Insurance - Property & Casualty"],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Community and regional banks, S&Ls."
+    },
+    "crypto_equities": {
+      "fmp_industries": [
+        "Capital Markets",
+        "Software - Application",
+        "Software - Infrastructure",
+        "Financial - Credit Services",
+        "Electronic Components"
+      ],
+      "fmp_sectors": ["Financial Services", "Technology"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Bitcoin miners, crypto exchanges, blockchain infrastructure."
+    },
+    "datacenter_infra": {
+      "fmp_industries": [
+        "Computer Hardware",
+        "Electrical Equipment & Parts",
+        "Communication Equipment",
+        "REIT - Specialty",
+        "Semiconductors",
+        "Electronic Components",
+        "Hardware, Equipment & Parts"
+      ],
+      "fmp_sectors": ["Technology", "Real Estate", "Industrials"],
+      "exclude_industries": ["Software - Application"],
+      "market_cap_upper_default": 100000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["small", "mid", "large"],
+      "notes": "Data center REITs, power systems, cooling, networking hardware."
+    },
+    "cybersecurity": {
+      "fmp_industries": [
+        "Software - Infrastructure",
+        "Software - Application",
+        "Communication Equipment",
+        "Scientific & Technical Instruments"
+      ],
+      "fmp_sectors": ["Technology"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Network security, identity, endpoint, SIEM, zero-trust."
+    },
+    "robotics_automation": {
+      "fmp_industries": [
+        "Specialty Industrial Machinery",
+        "Industrial - Machinery",
+        "Electronic Components",
+        "Electrical Equipment & Parts",
+        "Scientific & Technical Instruments",
+        "Communication Equipment",
+        "Hardware, Equipment & Parts"
+      ],
+      "fmp_sectors": ["Industrials", "Technology"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Industrial robots, cobots, AMRs, machine vision, motion control."
+    },
+    "industrials": {
+      "fmp_industries": [
+        "Specialty Industrial Machinery",
+        "Industrial - Machinery",
+        "Electrical Equipment & Parts",
+        "Engineering & Construction",
+        "Tools & Accessories",
+        "Business Equipment & Supplies"
+      ],
+      "fmp_sectors": ["Industrials"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Broad industrial machinery and automation."
+    },
+    "biotech": {
+      "fmp_industries": [
+        "Biotechnology",
+        "Drug Manufacturers - Specialty & Generic",
+        "Medical - Devices",
+        "Diagnostics & Research"
+      ],
+      "fmp_sectors": ["Healthcare"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Small/mid-cap biotech. Lower cap ceiling to surface clinical-stage names."
+    },
+    "medical_devices": {
+      "fmp_industries": [
+        "Medical - Devices",
+        "Medical - Instruments & Supplies",
+        "Diagnostics & Research",
+        "Scientific & Technical Instruments"
+      ],
+      "fmp_sectors": ["Healthcare"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Medtech devices, diagnostics, imaging."
+    },
+    "lithium_battery": {
+      "fmp_industries": [
+        "Specialty Chemicals",
+        "Electrical Equipment & Parts",
+        "Other Industrial Metals & Mining",
+        "Electronic Components"
+      ],
+      "fmp_sectors": ["Basic Materials", "Industrials", "Technology"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Lithium miners, battery materials, cell manufacturers."
+    },
+    "copper_miners": {
+      "fmp_industries": [
+        "Copper",
+        "Other Industrial Metals & Mining",
+        "Gold",
+        "Silver"
+      ],
+      "fmp_sectors": ["Basic Materials"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Copper miners and base metals."
+    },
+    "gold": {
+      "fmp_industries": [
+        "Gold",
+        "Silver",
+        "Other Precious Metals & Mining"
+      ],
+      "fmp_sectors": ["Basic Materials"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Gold miners, explorers, royalty companies."
+    },
+    "fintech": {
+      "fmp_industries": [
+        "Software - Application",
+        "Financial - Credit Services",
+        "Capital Markets",
+        "Financial - Mortgages",
+        "Insurance - Diversified"
+      ],
+      "fmp_sectors": ["Financial Services", "Technology"],
+      "exclude_industries": ["Banks - Regional", "Banks - Diversified"],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Payments, lending, insurtech, neobanks, wealth tech."
+    },
+    "quantum": {
+      "fmp_industries": [
+        "Scientific & Technical Instruments",
+        "Computer Hardware",
+        "Semiconductors",
+        "Software - Infrastructure",
+        "Electronic Components"
+      ],
+      "fmp_sectors": ["Technology"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 20000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small"],
+      "notes": "Quantum computing hardware, software, error correction."
+    },
+    "space": {
+      "fmp_industries": [
+        "Aerospace & Defense",
+        "Communication Equipment",
+        "Scientific & Technical Instruments",
+        "Hardware, Equipment & Parts"
+      ],
+      "fmp_sectors": ["Industrials", "Technology"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Launch, satellite, ground systems, space services."
+    },
+    "agribusiness": {
+      "fmp_industries": [
+        "Farm Products",
+        "Agricultural Inputs",
+        "Specialty Chemicals",
+        "Farm & Heavy Construction Machinery"
+      ],
+      "fmp_sectors": ["Consumer Defensive", "Basic Materials", "Industrials"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["small", "mid"],
+      "notes": "Seeds, fertilizers, ag equipment, crop processing."
+    },
+    "lng_gas": {
+      "fmp_industries": [
+        "Oil & Gas Midstream",
+        "Oil & Gas E&P",
+        "Oil & Gas Integrated",
+        "Utilities - Regulated Gas"
+      ],
+      "fmp_sectors": ["Energy", "Utilities"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 100000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["small", "mid", "large"],
+      "notes": "LNG exporters, natural gas pipelines, storage."
+    },
+    "homebuilders": {
+      "fmp_industries": [
+        "Residential Construction",
+        "Real Estate - Development",
+        "Building Products & Equipment",
+        "Lumber & Wood Production"
+      ],
+      "fmp_sectors": ["Consumer Cyclical", "Real Estate", "Industrials"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["small", "mid"],
+      "notes": "Homebuilders, building materials, lumber."
+    },
+    "metals_mining": {
+      "fmp_industries": [
+        "Steel",
+        "Other Industrial Metals & Mining",
+        "Copper",
+        "Aluminum",
+        "Coal"
+      ],
+      "fmp_sectors": ["Basic Materials"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Steel, aluminum, specialty metals, miners."
+    },
+    "oil_gas": {
+      "fmp_industries": [
+        "Oil & Gas E&P",
+        "Oil & Gas Integrated",
+        "Oil & Gas Refining & Marketing"
+      ],
+      "fmp_sectors": ["Energy"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 100000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["small", "mid"],
+      "notes": "E&P, refiners, integrateds."
+    },
+    "oil_services": {
+      "fmp_industries": [
+        "Oil & Gas Equipment & Services",
+        "Industrial - Machinery",
+        "Engineering & Construction"
+      ],
+      "fmp_sectors": ["Energy", "Industrials"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 50000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Oilfield services and equipment."
+    },
+    "cloud_software": {
+      "fmp_industries": [
+        "Software - Infrastructure",
+        "Software - Application",
+        "Communication Equipment"
+      ],
+      "fmp_sectors": ["Technology"],
+      "exclude_industries": ["Hardware, Equipment & Parts", "Semiconductors"],
+      "market_cap_upper_default": 20000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "SaaS and cloud-native software, smaller names."
+    },
+    "software": {
+      "fmp_industries": [
+        "Software - Infrastructure",
+        "Software - Application"
+      ],
+      "fmp_sectors": ["Technology"],
+      "exclude_industries": [],
+      "market_cap_upper_default": 20000000000,
+      "market_cap_lower_default": null,
+      "prefer_market_cap_buckets": ["micro", "small", "mid"],
+      "notes": "Broad enterprise and consumer software, smaller names."
+    }
+  }
+}

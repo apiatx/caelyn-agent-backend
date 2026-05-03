@@ -61,8 +61,9 @@ from data.screener_hub_store import (
 
 FMP_BASE = "https://financialmodelingprep.com/stable"
 _FMP_TIMEOUT = 10.0
-_PER_THEME_CAP = 60
-_GLOBAL_TICKER_CAP = 400  # safety net per request
+_PER_THEME_CAP = 75           # raised from 60 — gives screener candidates room
+_SCREENER_RESERVE = 25        # slots reserved for FMP screener small/mid-cap names
+_GLOBAL_TICKER_CAP = 400      # safety net per request
 _FUNDAMENTALS_TTL_DAYS = 7
 _QUOTE_TTL_OPEN_S = 90        # ~90s during US market open
 _QUOTE_TTL_CLOSED_S = 30 * 60 # 30min when market closed
@@ -77,17 +78,9 @@ _MIN_DYN_BEFORE_PEERS = 8
 # If exceeded, return a safe 200 partial/empty instead of letting the proxy 502.
 _THEMATIC_BUILD_TIMEOUT_S = 18.0
 
-# FMP sector screener: theme_key → FMP industry list (used in rebuild jobs only).
-# Adds Source E (sector screener) for themes where ETF holdings + LKG may miss
-# small/mid-cap names.
-_THEME_SECTOR_SCREENER_INDUSTRIES: dict[str, list[str]] = {
-    "semiconductors": ["Semiconductors", "Semiconductor Equipment & Materials"],
-    "semicap":        ["Semiconductor Equipment & Materials"],
-    "memory":         ["Semiconductors"],
-    "electronic_components": ["Electronic Components & Equipment"],
-    "networking": ["Communication Equipment"],
-    "ai_infrastructure": ["Semiconductors", "Electronic Components & Equipment"],
-}
+# Path to the config-driven theme → FMP industry mapping.
+# Loaded lazily by _load_industry_map_config().
+_INDUSTRY_MAP_PATH = Path(__file__).parent.parent / "data" / "theme_fmp_industry_map.json"
 
 # ETF holdings disk cache directory
 _ETF_HOLDINGS_DIR = Path(__file__).parent.parent / "data" / "etf_holdings"
@@ -531,9 +524,9 @@ def _assign_row_role(
         return "watchlist_overlap"
     if hidden_gem_score >= 4.0 and mcap < 20e9:
         return "hidden_gem"
-    # supply_chain_player: came from ETF holdings or sector screener, mid/small-cap
+    # supply_chain_player: came from ETF holdings or FMP industry screener, mid/small-cap
     src_str = " ".join(str(s) for s in (discovery_sources or []))
-    if ("etf:" in src_str or "sector_screener" in src_str) and mcap < 50e9:
+    if ("etf:" in src_str or "fmp_screener:" in src_str or "sector_screener" in src_str) and mcap < 50e9:
         return "supply_chain_player"
     return "emerging"
 
@@ -571,82 +564,153 @@ def _theme_metadata() -> list[dict]:
     return out
 
 
-async def _fmp_sector_screener(
+def _load_industry_map_config() -> dict:
+    """
+    Load theme_fmp_industry_map.json.  Returns {} on any failure.
+    Called at rebuild time only — not on page loads.
+    """
+    import json
+    try:
+        if _INDUSTRY_MAP_PATH.exists():
+            return json.loads(_INDUSTRY_MAP_PATH.read_text())
+    except Exception as e:
+        print(f"[SCREENER_HUB] _load_industry_map_config error: {e}")
+    return {}
+
+
+async def _fmp_industry_screener(
     industries: list[str],
     *,
-    max_market_cap: int = 50_000_000_000,   # $50B — excludes most mega-caps in major ETFs
-    min_market_cap: int = 50_000_000,        # $50M floor
-    limit: int = 150,
-    timeout: float = 10.0,
-) -> list[str]:
+    market_cap_upper: Optional[int] = 50_000_000_000,
+    market_cap_lower: Optional[int] = None,
+    screener_limit: int = 500,
+    timeout: float = 12.0,
+) -> tuple[list[dict], list[str], list[str]]:
     """
-    FMP stock screener by industry — discovers small/mid-cap names
-    not typically found in the major ETF holdings for a theme.
+    FMP company-screener — ONE call per mapped industry.
 
-    ONLY called from rebuild_universe / scheduled job paths (with_fmp_screener=True).
-    Never called on page loads — would block the request.
+    ONLY called from rebuild_universe / admin rebuild paths (with_fmp_screener=True).
+    Never called on page loads.
 
-    Returns a list of ticker symbols (deduped, US exchange only).
-    Empty list on any failure or missing API key.
+    Returns:
+        candidates           : list of candidate metadata dicts (rich, not just symbols)
+        industries_attempted : list of industries whose API call was made
+        industries_errored   : list of industries that failed or returned HTTP error
+
+    Each candidate dict:
+        symbol, company_name, market_cap, sector, industry,
+        beta, price, volume, exchange, country, is_etf, is_fund,
+        discovery_source  (e.g. "fmp_screener:Semiconductors")
+
+    market_cap_upper/lower are applied client-side because FMP ignores those params.
+    Candidates are returned sorted by market_cap ascending (smallest-cap first)
+    so they fill the per-theme cap ahead of larger names.
     """
     api_key = os.getenv("FMP_API_KEY") or ""
     if not api_key or not industries:
-        return []
-
-    found: list[str] = []
-    seen: set[str] = set()
+        return [], [], []
 
     try:
         from services.fmp_governor import fmp_governor as _gov
     except Exception:
         _gov = None
 
-    async def _screen_one(industry: str) -> list[str]:
-        ok = True
+    candidates:            list[dict] = []
+    seen_syms:             set[str]   = set()
+    industries_attempted:  list[str]  = []
+    industries_errored:    list[str]  = []
+
+    async def _screen_one(industry: str) -> tuple[str, list[dict], bool]:
+        """Returns (industry, candidate_dicts, had_error)."""
         if _gov is not None:
-            ok = await _gov.acquire(job_name="sector_screener")
-        if not ok:
-            return []
+            slot_ok = await _gov.acquire(job_name="fmp_industry_screener")
+            if not slot_ok:
+                return industry, [], True
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.get(
                     f"{FMP_BASE}/company-screener",
                     params={
-                        "industry": industry,
-                        "marketCapMoreThan": min_market_cap,
-                        "marketCapLessThan": max_market_cap,
-                        "isEtf": "false",
+                        "industry":          industry,
+                        "isEtf":             "false",
+                        "isFund":            "false",
                         "isActivelyTrading": "true",
-                        "limit": limit,
-                        "apikey": api_key,
+                        "limit":             screener_limit,
+                        "apikey":            api_key,
                     },
                 )
             if _gov is not None:
                 _gov.record_call()
             if resp.status_code != 200:
-                return []
+                print(f"[SCREENER_HUB] company-screener {industry!r} HTTP {resp.status_code}")
+                return industry, [], True
             raw = resp.json()
-            result: list[str] = []
+            hits: list[dict] = []
             for item in (raw if isinstance(raw, list) else []):
                 sym = (item.get("symbol") or "").strip().upper()
-                if sym and len(sym) <= 5 and sym.isalpha():
-                    result.append(sym)
-            return result
+                if not sym or len(sym) > 5:
+                    continue
+                if not sym.replace("-", "").isalpha():
+                    continue
+                if item.get("isEtf") or item.get("isFund"):
+                    continue
+                mcap = float(item.get("marketCap") or 0)
+                # Client-side market-cap filtering (FMP ignores the query params)
+                if market_cap_upper and mcap and mcap > market_cap_upper:
+                    continue
+                if market_cap_lower and mcap and mcap < market_cap_lower:
+                    continue
+                beta_raw  = item.get("beta")
+                price_raw = item.get("price")
+                vol_raw   = item.get("volume")
+                hits.append({
+                    "symbol":           sym,
+                    "company_name":     (item.get("companyName") or "").strip(),
+                    "market_cap":       mcap if mcap else None,
+                    "sector":           (item.get("sector") or "").strip(),
+                    "industry":         (item.get("industry") or industry).strip(),
+                    "beta":             float(beta_raw)  if beta_raw  is not None else None,
+                    "price":            float(price_raw) if price_raw is not None else None,
+                    "volume":           float(vol_raw)   if vol_raw   is not None else None,
+                    "exchange":         (item.get("exchangeShortName") or item.get("exchange") or "").strip(),
+                    "country":          (item.get("country") or "").strip(),
+                    "is_etf":           bool(item.get("isEtf")),
+                    "is_fund":          bool(item.get("isFund")),
+                    "discovery_source": f"fmp_screener:{industry}",
+                })
+            return industry, hits, False
         except Exception as e:
-            print(f"[SCREENER_HUB] sector_screener {industry} error: {e}")
-            return []
+            print(f"[SCREENER_HUB] company-screener {industry!r} error: {e}")
+            return industry, [], True
 
-    results = await asyncio.gather(*[_screen_one(ind) for ind in industries],
-                                   return_exceptions=True)
+    results = await asyncio.gather(
+        *[_screen_one(ind) for ind in industries],
+        return_exceptions=True,
+    )
     for res in results:
-        if isinstance(res, list):
-            for sym in res:
-                if sym not in seen:
-                    seen.add(sym)
-                    found.append(sym)
+        if isinstance(res, Exception):
+            industries_errored.append("unknown")
+            continue
+        industry, hits, had_error = res
+        industries_attempted.append(industry)
+        if had_error:
+            industries_errored.append(industry)
+            continue
+        for item in hits:
+            sym = item["symbol"]
+            if sym not in seen_syms:
+                seen_syms.add(sym)
+                candidates.append(item)
 
-    print(f"[SCREENER_HUB] sector_screener: {industries} → {len(found)} symbols")
-    return found
+    # Sort smallest-cap first so they fill the per-theme cap ahead of larger names.
+    candidates.sort(key=lambda c: c.get("market_cap") or float("inf"))
+
+    print(
+        f"[SCREENER_HUB] fmp_industry_screener: {len(industries)} industries → "
+        f"{len(candidates)} candidates "
+        f"(errors: {industries_errored or 'none'})"
+    )
+    return candidates, industries_attempted, industries_errored
 
 
 async def _build_thematic_universe(
@@ -658,22 +722,26 @@ async def _build_thematic_universe(
     """
     Build per-theme stock universes using a dynamic-first, static-fallback strategy.
 
-    Source priority per theme
-    ─────────────────────────
-    A. ETF holdings       — disk read from data/etf_holdings/{ETF}.json (fast)
-    B. LKG leaders        — leaders + laggards from themes_rs_lkg.json
-    C. FMP peers          — stable/stock-peers (only when A+B < threshold)
-    D. candidate_symbols  — static seed list (fallback; used_static_fallback=True)
-    E. FMP sector screener— stable/stock-screener by industry (rebuild jobs only,
-                            when with_fmp_screener=True)
-    F. proxy_symbols      — ETF tickers, absolute last resort only
+    Source priority per theme (spec order)
+    ───────────────────────────────────────
+    A. ETF holdings          — disk read from data/etf_holdings/{ETF}.json (fast)
+    B. LKG leaders           — leaders + laggards from themes_rs_lkg.json
+    C. FMP screener          — company-screener by mapped industry (rebuild only)
+    D. FMP peers             — stable/stock-peers (thin themes only, budget-guarded)
+    F. candidate_symbols     — static seed list (fallback; used_static_fallback=True)
+    G. proxy_symbols         — ETF tickers, absolute last resort only
+
+    Source C (FMP screener) candidates are sorted smallest-cap first and placed
+    before static seeds so hidden-gem names get slots within _PER_THEME_CAP.
+    _SCREENER_RESERVE ensures screener symbols are included even when ETF holdings
+    fill most of the cap.
 
     Parameters
     ──────────
     theme_key            : single theme key, or None to build all themes.
     with_fmp_peers       : False for bulk/page-load builds (saves API calls).
-    with_fmp_screener    : True only for scheduled rebuild jobs. Calls
-                           FMP stock-screener to find small/mid-cap names.
+    with_fmp_screener    : True only for scheduled/admin rebuild jobs. Calls
+                           FMP company-screener to find small/mid-cap names.
 
     Returns
     ───────
@@ -686,6 +754,12 @@ async def _build_thematic_universe(
 
     lkg_map = _load_lkg_leaders_map()
 
+    # Load config-driven industry map once for all themes.
+    # Only needed when with_fmp_screener=True, but cheap to load always.
+    industry_map_cfg = _load_industry_map_config() if with_fmp_screener else {}
+    industry_map_version = industry_map_cfg.get("industry_map_version", "none")
+    themes_cfg = industry_map_cfg.get("themes") or {}
+
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE
     except Exception:
@@ -696,16 +770,23 @@ async def _build_thematic_universe(
         proxy_etfs:     list[str] = [s.upper() for s in (meta.get("proxy_symbols") or []) if s]
         candidate_syms: list[str] = [s.upper() for s in (meta.get("candidate_symbols") or []) if s]
 
-        etf_holdings_syms:   list[str] = []   # Source A
-        lkg_syms:            list[str] = []   # Source B
-        fmp_peer_syms:       list[str] = []   # Source C
-        static_syms:         list[str] = []   # Source D
-        sector_screener_syms: list[str] = []  # Source E
-        etf_files_found:     list[str] = []
-        fmp_peer_anchors:    list[str] = []
-        sources_by_symbol:   dict[str, list[str]] = {}
-        sources_attempted:   list[str] = ["etf_holdings", "lkg_leaders", "static_seed"]
-        sources_failed:      list[str] = []
+        etf_holdings_syms:    list[str]  = []   # Source A
+        lkg_syms:             list[str]  = []   # Source B
+        screener_syms:        list[str]  = []   # Source C (FMP industry screener)
+        fmp_peer_syms:        list[str]  = []   # Source D (FMP peers, thin only)
+        static_syms:          list[str]  = []   # Source F (static candidate seed)
+        etf_files_found:      list[str]  = []
+        fmp_peer_anchors:     list[str]  = []
+        # screener_meta_by_symbol: rich metadata from FMP screener per symbol
+        screener_meta_by_symbol: dict[str, dict] = {}
+        sources_by_symbol:    dict[str, list[str]] = {}
+        sources_attempted:    list[str]  = ["etf_holdings", "lkg_leaders", "static_seed"]
+        sources_failed:       list[str]  = []
+
+        # Screener tracking
+        fmp_screener_industries_attempted: list[str] = []
+        fmp_screener_industries_errored:   list[str] = []
+        fmp_screener_calls_used:           int       = 0
 
         seen_dynamic: set[str] = set()
 
@@ -731,7 +812,45 @@ async def _build_thematic_universe(
                 lkg_syms.append(su)
                 sources_by_symbol.setdefault(su, []).append("lkg_leaders")
 
-        # ── Source C: FMP peers (async API, only when A+B coverage is thin) ───
+        # ── Source C: FMP industry screener (rebuild jobs only) ───────────────
+        # Uses config-driven theme → industry mapping from theme_fmp_industry_map.json.
+        # Candidates are sorted smallest-cap first (done inside _fmp_industry_screener).
+        # They get RESERVED slots in the final cap so ETF overflow doesn't crowd them out.
+        theme_cfg  = themes_cfg.get(key) or {}
+        industries = theme_cfg.get("fmp_industries") or []
+        cap_upper  = theme_cfg.get("market_cap_upper_default") or 50_000_000_000
+        cap_lower  = theme_cfg.get("market_cap_lower_default")
+
+        if with_fmp_screener and industries:
+            sources_attempted.append("fmp_screener")
+            try:
+                cands, ind_attempted, ind_errored = await _fmp_industry_screener(
+                    industries,
+                    market_cap_upper=int(cap_upper) if cap_upper else None,
+                    market_cap_lower=int(cap_lower) if cap_lower else None,
+                )
+                fmp_screener_industries_attempted = ind_attempted
+                fmp_screener_industries_errored   = ind_errored
+                fmp_screener_calls_used           = len(ind_attempted)
+
+                if ind_errored:
+                    sources_failed.append(f"fmp_screener_partial({','.join(ind_errored[:3])})")
+
+                for cand in cands:
+                    sym = cand["symbol"]
+                    if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
+                        seen_dynamic.add(sym)
+                        screener_syms.append(sym)
+                        screener_meta_by_symbol[sym] = cand
+                        src_tag = cand.get("discovery_source") or "fmp_screener"
+                        sources_by_symbol.setdefault(sym, []).append(src_tag)
+            except Exception as se:
+                print(f"[SCREENER_HUB] fmp_screener {key} error: {se}")
+                sources_failed.append("fmp_screener")
+        elif with_fmp_screener and not industries:
+            print(f"[SCREENER_HUB] fmp_screener: no industry mapping for theme={key!r}")
+
+        # ── Source D: FMP peers (thin themes, budget-guarded) ─────────────────
         if with_fmp_peers:
             sources_attempted.append("fmp_peers")
             if len(seen_dynamic) < _MIN_DYN_BEFORE_PEERS and candidate_syms:
@@ -746,53 +865,57 @@ async def _build_thematic_universe(
                     print(f"[SCREENER_HUB] fmp_peers {key} error: {pe}")
                     sources_failed.append("fmp_peers")
 
-        # ── Source D: candidate_symbols — static fallback ─────────────────────
+        # ── Source F: candidate_symbols — static fallback ─────────────────────
         for sym in candidate_syms:
             if sym not in seen_dynamic:
                 static_syms.append(sym)
                 sources_by_symbol.setdefault(sym, []).append("static_seed")
 
-        # ── Source E: FMP sector screener (rebuild jobs only) ─────────────────
-        screener_industries = _THEME_SECTOR_SCREENER_INDUSTRIES.get(key) or []
-        if with_fmp_screener and screener_industries:
-            sources_attempted.append("sector_screener")
-            try:
-                screener_hits = await _fmp_sector_screener(screener_industries)
-                for sym in screener_hits:
-                    if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
-                        seen_dynamic.add(sym)
-                        sector_screener_syms.append(sym)
-                        sources_by_symbol.setdefault(sym, []).append("sector_screener")
-            except Exception as se:
-                print(f"[SCREENER_HUB] sector_screener {key} error: {se}")
-                sources_failed.append("sector_screener")
+        # ── Combine with SCREENER_RESERVE guarantee ───────────────────────────
+        # ETF+LKG fill the base; screener candidates get guaranteed slots so they
+        # aren't entirely crowded out when ETF holdings exceed the cap alone.
+        etf_lkg_base    = etf_holdings_syms + lkg_syms
+        etf_lkg_capped  = etf_lkg_base[: max(_PER_THEME_CAP - _SCREENER_RESERVE, 30)]
+        screener_capped = screener_syms[:_SCREENER_RESERVE]
 
-        # Combine: dynamic first, static + screener at end; ETF proxies last resort
-        combined = (etf_holdings_syms + lkg_syms + fmp_peer_syms
-                    + static_syms + sector_screener_syms)
+        # Include overflow ETF+LKG names after reserved screener slots
+        etf_lkg_overflow = [
+            s for s in etf_lkg_base[max(_PER_THEME_CAP - _SCREENER_RESERVE, 30):]
+            if s not in set(etf_lkg_capped) and s not in set(screener_capped)
+        ]
+
+        combined = (etf_lkg_capped + screener_capped + fmp_peer_syms
+                    + etf_lkg_overflow + static_syms)
         if not combined:
-            combined = proxy_etfs  # absolute last resort
+            combined = proxy_etfs  # absolute last resort (Source G)
 
         cleaned = _dedupe_filter(combined)[:_PER_THEME_CAP]
 
         n_dynamic = (len(etf_holdings_syms) + len(lkg_syms)
-                     + len(fmp_peer_syms) + len(sector_screener_syms))
+                     + len(fmp_peer_syms) + len(screener_syms))
         n_static  = len(static_syms)
 
         breakdown = {
-            "etf_holdings_count":          len(etf_holdings_syms),
-            "lkg_leaders_count":           len(lkg_syms),
-            "fmp_peers_count":             len(fmp_peer_syms),
-            "fmp_peer_anchors":            fmp_peer_anchors,
-            "sector_screener_count":       len(sector_screener_syms),
-            "static_seed_count":           n_static,
-            "dynamic_symbols_count":       n_dynamic,
-            "static_fallback_symbols_count": n_static,
-            "used_static_fallback":        n_static > 0,
-            "etf_files_found":             etf_files_found,
-            "sources_by_symbol":           sources_by_symbol,
-            "sources_attempted":           sources_attempted,
-            "sources_failed":              sources_failed,
+            "etf_holdings_count":                  len(etf_holdings_syms),
+            "lkg_leaders_count":                   len(lkg_syms),
+            "fmp_peers_count":                     len(fmp_peer_syms),
+            "fmp_peer_anchors":                    fmp_peer_anchors,
+            "sector_screener_count":               len(screener_syms),  # compat key
+            "fmp_screener_count":                  len(screener_syms),
+            "fmp_screener_industries_attempted":   fmp_screener_industries_attempted,
+            "fmp_screener_industries_errored":     fmp_screener_industries_errored,
+            "fmp_screener_calls_used":             fmp_screener_calls_used,
+            "fmp_screener_symbols_added":          len(screener_syms),
+            "industry_map_version":                industry_map_version,
+            "static_seed_count":                   n_static,
+            "dynamic_symbols_count":               n_dynamic,
+            "static_fallback_symbols_count":       n_static,
+            "used_static_fallback":                n_static > 0,
+            "etf_files_found":                     etf_files_found,
+            "sources_by_symbol":                   sources_by_symbol,
+            "screener_meta_by_symbol":             screener_meta_by_symbol,
+            "sources_attempted":                   sources_attempted,
+            "sources_failed":                      sources_failed,
         }
 
         if cleaned:
@@ -1568,6 +1691,12 @@ async def get_screener_hub(
     # Used below to build row.discovery_sources from ETF/LKG/peer/static tags.
     sources_by_symbol: dict[str, list[str]] = thematic_breakdown.get("sources_by_symbol") or {}
 
+    # ── FMP screener metadata — used to enrich rows when FMP cache is cold ────
+    # Populated during rebuild; stored in snapshot metadata_json. Provides
+    # company_name, market_cap, sector, industry, beta, volume, exchange, country
+    # without additional FMP profile calls.
+    screener_meta_by_symbol: dict[str, dict] = thematic_breakdown.get("screener_meta_by_symbol") or {}
+
     # ── Chain Reaction detail map (bottlenecks only) ────────────────────────────
     # Per-symbol scored node data from chain_reaction_weekly_outputs.rows_json.
     cr_details: dict[str, dict] = bottlenecks_meta.get("details_by_symbol") or {}
@@ -1605,11 +1734,20 @@ async def get_screener_hub(
         metrics = f.get("metrics") or {}
         ratios  = f.get("ratios")  or {}
 
+        # FMP screener metadata — available immediately after rebuild even when
+        # the FMP profile cache has not been warmed yet.
+        scr_meta = screener_meta_by_symbol.get(sym) or {}
+
         # Real historical returns from cache (None when cache is cold)
-        ret = returns_cache.get(sym) or {}
+        ret  = returns_cache.get(sym) or {}
         r2w  = ret.get("return_2w")
         r4w  = ret.get("return_4w")
         r10w = ret.get("return_10w")
+        rs_status = (
+            "real_historical" if r4w is not None else
+            "partial"         if (r2w is not None or r10w is not None) else
+            "cache_cold"
+        )
 
         classification = _classify_row(
             metrics, q,
@@ -1637,9 +1775,29 @@ async def get_screener_hub(
         if not disc_src:
             disc_src = ["unknown"]
 
-        # ── Hidden gem score + role ──
-        mcap = _to_float(f.get("market_cap") or profile.get("marketCap"))
+        # ── Market cap: FMP cache first, screener meta fallback ──
+        mcap = _to_float(f.get("market_cap") or profile.get("marketCap")
+                         or scr_meta.get("market_cap"))
         chg_1d = _to_float(q_row.get("change_percent_1d")) if q_row else None
+
+        # ── Sector / industry: FMP cache first, screener meta fallback ──
+        row_sector   = f.get("sector")   or scr_meta.get("sector")   or None
+        row_industry = f.get("industry") or scr_meta.get("industry") or None
+        row_country  = f.get("country")  or scr_meta.get("country")  or None
+        row_exchange = f.get("exchange") or scr_meta.get("exchange") or None
+
+        # ── Company name: FMP profile first, screener meta fallback ──
+        row_name = (profile.get("companyName") or profile.get("name")
+                    or scr_meta.get("company_name") or sym)
+
+        # ── ETF / fund flags from screener meta (always false for our universe) ──
+        row_is_etf  = bool(scr_meta.get("is_etf",  False))
+        row_is_fund = bool(scr_meta.get("is_fund",  False))
+
+        # ── Beta / volume from screener meta (FMP metrics preferred when warm) ──
+        row_beta   = _to_float(metrics.get("betaTTM") or scr_meta.get("beta"))
+        row_volume = _to_float(scr_meta.get("volume"))
+
         hg_score = _compute_hidden_gem_score(
             distance_52w_high=classification.get("distance_52w_high"),
             volume_surge=classification.get("volume_surge"),
@@ -1663,17 +1821,19 @@ async def get_screener_hub(
         )
 
         row = {
-            "symbol": sym,
-            "name":     profile.get("companyName") or profile.get("name") or sym,
-            "history":  None,  # populated by frontend chart endpoint, if any
-            "category": classification["category"],
-            "rs_0_2w":  classification["rs_0_2w"],
-            "rs_0_4w":  classification["rs_0_4w"],
-            "rs_0_10w": classification["rs_0_10w"],
-            "rs_accel": classification["rs_accel"],
-            "performance_2w":  r2w,
-            "performance_4w":  r4w,
-            "performance_10w": r10w,
+            "symbol":       sym,
+            "name":         row_name,
+            "company_name": row_name,
+            "history":      None,  # populated by frontend chart endpoint
+            "category":          classification["category"],
+            "rs_0_2w":           classification["rs_0_2w"],
+            "rs_0_4w":           classification["rs_0_4w"],
+            "rs_0_10w":          classification["rs_0_10w"],
+            "rs_accel":          classification["rs_accel"],
+            "performance_2w":    r2w,
+            "performance_4w":    r4w,
+            "performance_10w":   r10w,
+            "rs_data_status":    rs_status,
             "distance_52w_high": classification["distance_52w_high"],
             "volume_surge":      classification["volume_surge"],
             "accumulation":      classification["accumulation"],
@@ -1683,18 +1843,22 @@ async def get_screener_hub(
             "role":              role,
             "market_cap_bucket": _market_cap_bucket(mcap),
             "discovery_sources": disc_src,
-            "market_cap": mcap,
-            "sector":     f.get("sector"),
-            "industry":   f.get("industry"),
-            "price":      q_row.get("price"),
+            "market_cap":  mcap,
+            "sector":      row_sector,
+            "industry":    row_industry,
+            "is_etf":      row_is_etf,
+            "is_fund":     row_is_fund,
+            "price":       q_row.get("price"),
             "change_percent_1d": q_row.get("change_percent_1d"),
             "performance_7d":  None,
             "performance_30d": None,
             "performance_ytd": None,
             "performance_1y":  None,
             "_meta": {
-                "country":  f.get("country"),
-                "exchange": f.get("exchange"),
+                "country":                 row_country,
+                "exchange":                row_exchange,
+                "beta":                    row_beta,
+                "volume":                  row_volume,
                 "fundamentals_fetched_at": f.get("fetched_at"),
                 "quote_fetched_at":        q_row.get("fetched_at"),
                 "fundamentals_provider":   f.get("provider"),
@@ -1705,6 +1869,7 @@ async def get_screener_hub(
                 "signals":                 classification.get("_signals"),
                 "returns_fetched_at":      ret.get("fetched_at"),
                 "bars_count":              ret.get("bars_count"),
+                "screener_meta_source":    scr_meta.get("discovery_source"),
             },
         }
 
@@ -1774,16 +1939,18 @@ async def get_screener_hub(
         )
 
         if thematic_breakdown:
-            # Expanded 8-source breakdown
+            # Expanded source breakdown — fmp_screener uses both keys for compatibility
+            fmp_scr_count = thematic_breakdown.get("fmp_screener_count",
+                            thematic_breakdown.get("sector_screener_count", 0))
             payload["universe_source_breakdown"] = {
-                "etf_holdings":              thematic_breakdown.get("etf_holdings_count", 0),
-                "lkg_leaders":               thematic_breakdown.get("lkg_leaders_count", 0),
-                "fmp_peers":                 thematic_breakdown.get("fmp_peers_count", 0),
-                "fmp_screener":              thematic_breakdown.get("sector_screener_count", 0),
-                "social_overlap":            len(social_overlap),
-                "options_overlap":           len(options_overlap),
+                "etf_holdings":               thematic_breakdown.get("etf_holdings_count", 0),
+                "lkg_leaders":                thematic_breakdown.get("lkg_leaders_count", 0),
+                "fmp_peers":                  thematic_breakdown.get("fmp_peers_count", 0),
+                "fmp_screener":               fmp_scr_count,
+                "social_overlap":             len(social_overlap),
+                "options_overlap":            len(options_overlap),
                 "watchlist_portfolio_overlap": len(watchlist_set),
-                "static_seed":               thematic_breakdown.get("static_seed_count", 0),
+                "static_seed":                thematic_breakdown.get("static_seed_count", 0),
             }
             if thematic_breakdown.get("sources_attempted"):
                 payload["sources_attempted"] = thematic_breakdown["sources_attempted"]
@@ -1794,16 +1961,39 @@ async def get_screener_hub(
             payload["used_static_fallback"]           = thematic_breakdown.get("used_static_fallback", False)
             if thematic_breakdown.get("etf_files_found"):
                 payload["etf_files_used"] = thematic_breakdown["etf_files_found"]
+            # FMP screener provenance fields
+            if thematic_breakdown.get("fmp_screener_industries_attempted") is not None:
+                payload["fmp_screener_industries_attempted"] = thematic_breakdown["fmp_screener_industries_attempted"]
+                payload["fmp_screener_symbols_added"]        = thematic_breakdown.get("fmp_screener_symbols_added", 0)
+                payload["fmp_screener_calls_used"]           = thematic_breakdown.get("fmp_screener_calls_used", 0)
+                payload["fmp_screener_errors"]               = thematic_breakdown.get("fmp_screener_industries_errored", [])
+                payload["industry_map_version"]              = thematic_breakdown.get("industry_map_version", "none")
         else:
-            # Snapshot hit — overlaps still available for disclosure
+            # Snapshot hit — overlaps still available for disclosure; counts from snapshot metadata
+            snap_bd = thematic_breakdown  # may be {} but that's fine
             payload["universe_source_breakdown"] = {
-                "etf_holdings": 0, "lkg_leaders": 0, "fmp_peers": 0,
-                "fmp_screener": 0,
-                "social_overlap": len(social_overlap),
-                "options_overlap": len(options_overlap),
+                "etf_holdings": snap_bd.get("etf_holdings_count", 0),
+                "lkg_leaders":  snap_bd.get("lkg_leaders_count", 0),
+                "fmp_peers":    snap_bd.get("fmp_peers_count", 0),
+                "fmp_screener": snap_bd.get("fmp_screener_count",
+                                snap_bd.get("sector_screener_count", 0)),
+                "social_overlap":             len(social_overlap),
+                "options_overlap":            len(options_overlap),
                 "watchlist_portfolio_overlap": len(watchlist_set),
-                "static_seed": 0,
+                "static_seed": snap_bd.get("static_seed_count", 0),
             }
+
+        # For empty/thin themes, add informational error_code + message
+        if not rows and tab == "thematic":
+            payload["status"]     = "partial" if symbols else "empty"
+            payload["error_code"] = "NO_ROWS_AFTER_FILTERS" if symbols else "EMPTY_UNIVERSE"
+            payload["message"]    = (
+                "No rows matched active filters for this theme. "
+                "Try removing category or CoC filters, or run an admin rebuild."
+            ) if symbols else (
+                "No universe found for this theme. "
+                "Run an admin rebuild to populate it via ETF holdings and FMP screener."
+            )
 
         if theme_state_meta:
             payload["theme_state"]        = theme_state_meta.get("state")
@@ -1858,12 +2048,17 @@ async def rebuild_universe(
                 metadata=bd,
             )
             out["themes_built"].append({
-                "theme": k,
-                "symbols_count": len(syms),
-                "ok": ok,
-                "dynamic_count": bd.get("dynamic_symbols_count", 0),
-                "static_count":  bd.get("static_seed_count", 0),
+                "theme":               k,
+                "symbols_count":       len(syms),
+                "ok":                  ok,
+                "dynamic_count":       bd.get("dynamic_symbols_count", 0),
+                "static_count":        bd.get("static_seed_count", 0),
                 "used_static_fallback": bd.get("used_static_fallback", False),
+                "fmp_screener_industries_attempted": bd.get("fmp_screener_industries_attempted", []),
+                "fmp_screener_symbols_added":        bd.get("fmp_screener_symbols_added", 0),
+                "fmp_screener_calls_used":           bd.get("fmp_screener_calls_used", 0),
+                "fmp_screener_errors":               bd.get("fmp_screener_industries_errored", []),
+                "industry_map_version":              bd.get("industry_map_version", "none"),
             })
     elif tab == "social":
         syms = _build_social_universe()
