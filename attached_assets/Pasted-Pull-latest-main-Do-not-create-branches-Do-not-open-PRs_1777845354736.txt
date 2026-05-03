@@ -1,0 +1,184 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not modify unrelated functionality.
+
+This is an urgent backend stabilization and cost-control pass for Screener Hub + FMP usage.
+
+Main problems:
+1. FMP usage is spiking badly. The FMP dashboard shows /stable/historical-price-eod/full is one of the biggest consumers by bandwidth and requests, with large over-limit percentage. We are already over halfway through the 30-day bandwidth limit after only a few days.
+2. Screener Hub thematic dropdowns can fail with 502, example:
+   /api/screener-hub?tab=thematic&theme=drones&scoreMode=true&cocFilter=false
+3. Semiconductors Thematic Screener is still too mega-cap/leader-heavy and is weak for hidden-gem discovery, but fix cost/stability first.
+
+Scope:
+Backend only.
+Do not touch frontend unless absolutely necessary.
+Do not redesign Screener Hub.
+Do not build a global Smart API Router.
+Do not add more hand-curated hardcoded stock lists as the main fix.
+
+Part 1 — Stop FMP historical overuse immediately
+
+Find every backend path currently calling:
+- /stable/historical-price-eod/full
+- any FMP full historical endpoint
+- any FMP historical endpoint inside Screener Hub, theme RS, returns warm, or related jobs
+
+Requirements:
+1. Normal page loads and dropdown changes must not trigger heavy FMP historical fetches.
+2. Screener Hub requests must use cached returns from screener_returns_cache.
+3. If cache is cold, return null RS/performance fields with rs_data_status="cache_cold" or "partial", not a live full-history fetch.
+4. Historical return warm jobs should fetch only the minimum range needed:
+   - max 120 trading days / about 180 calendar days
+   - enough for 2w, 4w, 10w returns plus buffer
+5. Do not use /stable/historical-price-eod/full for Screener Hub RS.
+6. Prefer a lighter/ranged FMP historical endpoint already supported in the codebase. Use from/to date params if available.
+7. Cache by symbol and as_of_date so each symbol's returns are fetched once per day/week, not per request.
+8. Dedupe symbols across all Screener Hub tabs before fetching returns.
+9. Never overwrite good cached returns with empty/failed responses.
+10. Add logging/metadata showing endpoint_group="historical_returns" and symbols fetched/skipped.
+
+Part 2 — Add/finish FMP governor
+
+Implement or complete a lightweight FMP budget governor.
+
+Requirements:
+1. Per-minute RPM limit:
+   - env FMP_RPM_LIMIT default 120 for now, not 240
+   - We are conserving bandwidth, not stress-testing FMP.
+2. Call spacing:
+   - env FMP_CALL_SPACING_SECONDS default 0.75
+3. Per-job soft limit:
+   - env FMP_JOB_SOFT_LIMIT default 500
+4. Daily soft limit:
+   - env FMP_DAILY_SOFT_LIMIT default 2500
+5. Monthly/bandwidth awareness:
+   - Add env FMP_MONTHLY_SOFT_CALL_LIMIT if easy, default 50000
+   - Add metadata hooks for bandwidth-sensitive endpoints, especially historical.
+6. If job budget is hit:
+   - stop gracefully
+   - mark job partial_budget_limit
+   - preserve completed rows
+   - serve stale cache
+   - do not crash endpoints
+7. Add admin status output:
+   fmp_budget: {
+     enabled,
+     rpm_limit,
+     call_spacing_seconds,
+     job_soft_limit,
+     daily_soft_limit,
+     latest_jobs,
+     budget_limited_jobs,
+     historical_calls_today_estimate
+   }
+
+Part 3 — Fix 502s for missing/thin themes
+
+Example failing request:
+GET /api/screener-hub?tab=thematic&theme=drones&scoreMode=true&cocFilter=false
+
+Requirements:
+1. This endpoint should never return 502 because a theme universe is missing/thin or one provider failed.
+2. Wrap theme universe building in safe error handling.
+3. If a theme has no ETF holdings files, no LKG rows, no FMP peers, and no cached snapshot:
+   - return HTTP 200 with status="partial" or "empty"
+   - rows=[]
+   - error_code="theme_universe_unavailable"
+   - message explaining no universe sources found
+   - universe_source_breakdown with zeros
+4. If some sources fail, return partial rows from successful sources.
+5. Add theme-level diagnostics:
+   - theme
+   - universe_source
+   - sources_attempted
+   - sources_failed
+   - used_static_fallback
+   - dynamic_symbols_count
+   - static_fallback_symbols_count
+
+Part 4 — Improve hidden-gem discovery for Semiconductors, but do not create a hardcoded list
+
+After cost/stability is fixed, improve Semiconductors discovery.
+
+Issue:
+Semiconductors is still too concentrated in obvious market leaders. I want hidden gems and supply-chain players with momentum, not just NVDA/AVGO/AMD/TSM/ASML.
+
+Do not solve this by hardcoding a manual list.
+
+Improve discovery by using dynamic sources:
+1. ETF holdings, including equal-weight/small-cap semiconductor ETFs if cached.
+2. FMP stock screener by relevant industries/sectors if available:
+   - Semiconductors
+   - Semiconductor Equipment & Materials
+   - Electronic Components
+   - Computer Hardware / Memory / Storage if mapped
+3. FMP peers from anchors and mid-cap nodes.
+4. Existing Theme RS/LKG leaders and laggards.
+5. Existing Options/Social overlaps if cached.
+6. Market-cap aware ranking:
+   - keep mega-cap anchors visible
+   - but boost small/mid-cap names for hidden_gem_score
+   - do not let mega-caps dominate hidden_gem sort
+7. Add role values:
+   - anchor
+   - hidden_gem
+   - emerging
+   - supply_chain_player
+   - social_confirmed
+   - options_confirmed
+8. Add/keep market_cap_bucket if available:
+   - mega
+   - large
+   - mid
+   - small
+   - micro
+   - unknown
+
+Important:
+Names like SIMO, NVTS, SOI, AXTI, LPK, AOSL, MXL, COHU, KLIC, HIMX, SITM, ACLS, AEHR, INDI are examples of the type of names the engine should discover if they appear in dynamic sources. Do not simply hardcode this list as the universe.
+
+Part 5 — Validation
+
+Run these validations:
+
+A. Cost safety:
+- Confirm /api/screener-hub?tab=thematic&theme=semiconductors does not call FMP historical full endpoint.
+- Confirm /api/screener-hub?tab=thematic&theme=drones does not call FMP historical full endpoint.
+- Confirm page request uses returns cache only.
+- Confirm cache-cold RS fields return null, not live full-history fetch.
+
+B. 502 fix:
+- GET /api/screener-hub?tab=thematic&theme=drones&scoreMode=true&cocFilter=false
+- Must return JSON 200 or controlled 4xx if theme id invalid, but not 502.
+- Prefer JSON 200 partial/empty with diagnostics.
+
+C. Semiconductors discovery:
+- GET /api/screener-hub?tab=thematic&theme=semiconductors
+- Return:
+  - row count
+  - top 25 rows by hidden_gem_score
+  - top 25 symbols
+  - role
+  - market_cap_bucket
+  - discovery_sources
+  - hidden_gem_score
+  - final score if present
+  - whether each is ETF=false
+
+D. Admin status:
+- GET /api/admin/screener-hub/status with X-API-Key
+- Confirm fmp_budget appears.
+
+Return:
+- files changed
+- exact FMP historical endpoints found and changed
+- whether /stable/historical-price-eod/full is still used anywhere in Screener Hub path
+- FMP governor defaults
+- admin status fmp_budget sample
+- drones endpoint result
+- semiconductors top hidden-gem sample
+- whether any example small/mid-cap semiconductor names were discovered dynamically
+- remaining limitations

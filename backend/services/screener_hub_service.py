@@ -66,12 +66,28 @@ _GLOBAL_TICKER_CAP = 400  # safety net per request
 _FUNDAMENTALS_TTL_DAYS = 7
 _QUOTE_TTL_OPEN_S = 90        # ~90s during US market open
 _QUOTE_TTL_CLOSED_S = 30 * 60 # 30min when market closed
-_FMP_SLEEP_BETWEEN_S = 6.0   # 5-15s between FMP calls during warm jobs
+_FMP_SLEEP_BETWEEN_S = 0.75   # governed by fmp_governor; keep small
 
 # Minimum dynamic-source symbols before FMP peers are tried.
 # If ETF holdings + LKG leaders already give ≥ this many stocks for a theme,
 # we skip the FMP peers API call (saves latency and rate-limit budget).
 _MIN_DYN_BEFORE_PEERS = 8
+
+# Max seconds for a live thematic universe build during a page-load request.
+# If exceeded, return a safe 200 partial/empty instead of letting the proxy 502.
+_THEMATIC_BUILD_TIMEOUT_S = 18.0
+
+# FMP sector screener: theme_key → FMP industry list (used in rebuild jobs only).
+# Adds Source E (sector screener) for themes where ETF holdings + LKG may miss
+# small/mid-cap names.
+_THEME_SECTOR_SCREENER_INDUSTRIES: dict[str, list[str]] = {
+    "semiconductors": ["Semiconductors", "Semiconductor Equipment & Materials"],
+    "semicap":        ["Semiconductor Equipment & Materials"],
+    "memory":         ["Semiconductors"],
+    "electronic_components": ["Electronic Components & Equipment"],
+    "networking": ["Communication Equipment"],
+    "ai_infrastructure": ["Semiconductors", "Electronic Components & Equipment"],
+}
 
 # ETF holdings disk cache directory
 _ETF_HOLDINGS_DIR = Path(__file__).parent.parent / "data" / "etf_holdings"
@@ -468,6 +484,21 @@ def _compute_hidden_gem_score(
     return round(max(0.0, min(10.0, score)), 2)
 
 
+def _market_cap_bucket(market_cap: Optional[float]) -> str:
+    """Return size bucket string for a market cap value."""
+    if market_cap is None:
+        return "unknown"
+    if market_cap >= 200e9:
+        return "mega"
+    if market_cap >= 10e9:
+        return "large"
+    if market_cap >= 2e9:
+        return "mid"
+    if market_cap >= 300e6:
+        return "small"
+    return "micro"
+
+
 def _assign_row_role(
     *,
     market_cap: Optional[float],
@@ -481,12 +512,13 @@ def _assign_row_role(
     Assign a display role to each row.
 
     Roles (priority order):
-      anchor          — mega-cap or well-known large-cap
-      social_confirmed — in X/Grok social screener consensus
-      options_confirmed — in options flow screener
-      watchlist_overlap — in user watchlists / portfolio
-      hidden_gem       — strong hidden-gem score + small/mid-cap
-      emerging         — default
+      anchor               — mega-cap or well-known large-cap
+      social_confirmed     — in X/Grok social screener consensus
+      options_confirmed    — in options flow screener
+      watchlist_overlap    — in user watchlists / portfolio
+      supply_chain_player  — supply-chain / ETF sourced, not mega
+      hidden_gem           — strong hidden-gem score + small/mid-cap
+      emerging             — default
     """
     mcap = market_cap or 0
     if mcap > 100e9:
@@ -499,6 +531,10 @@ def _assign_row_role(
         return "watchlist_overlap"
     if hidden_gem_score >= 4.0 and mcap < 20e9:
         return "hidden_gem"
+    # supply_chain_player: came from ETF holdings or sector screener, mid/small-cap
+    src_str = " ".join(str(s) for s in (discovery_sources or []))
+    if ("etf:" in src_str or "sector_screener" in src_str) and mcap < 50e9:
+        return "supply_chain_player"
     return "emerging"
 
 
@@ -535,37 +571,113 @@ def _theme_metadata() -> list[dict]:
     return out
 
 
+async def _fmp_sector_screener(
+    industries: list[str],
+    *,
+    max_market_cap: int = 50_000_000_000,   # $50B — excludes most mega-caps in major ETFs
+    min_market_cap: int = 50_000_000,        # $50M floor
+    limit: int = 150,
+    timeout: float = 10.0,
+) -> list[str]:
+    """
+    FMP stock screener by industry — discovers small/mid-cap names
+    not typically found in the major ETF holdings for a theme.
+
+    ONLY called from rebuild_universe / scheduled job paths (with_fmp_screener=True).
+    Never called on page loads — would block the request.
+
+    Returns a list of ticker symbols (deduped, US exchange only).
+    Empty list on any failure or missing API key.
+    """
+    api_key = os.getenv("FMP_API_KEY") or ""
+    if not api_key or not industries:
+        return []
+
+    found: list[str] = []
+    seen: set[str] = set()
+
+    try:
+        from services.fmp_governor import fmp_governor as _gov
+    except Exception:
+        _gov = None
+
+    async def _screen_one(industry: str) -> list[str]:
+        ok = True
+        if _gov is not None:
+            ok = await _gov.acquire(job_name="sector_screener")
+        if not ok:
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(
+                    f"{FMP_BASE}/stock-screener",
+                    params={
+                        "industry": industry,
+                        "exchange": "NASDAQ,NYSE,AMEX",
+                        "marketCapMoreThan": min_market_cap,
+                        "marketCapLessThan": max_market_cap,
+                        "limit": limit,
+                        "apikey": api_key,
+                    },
+                )
+            if _gov is not None:
+                _gov.record_call()
+            if resp.status_code != 200:
+                return []
+            raw = resp.json()
+            result: list[str] = []
+            for item in (raw if isinstance(raw, list) else []):
+                sym = (item.get("symbol") or "").strip().upper()
+                if sym and len(sym) <= 5 and sym.isalpha():
+                    result.append(sym)
+            return result
+        except Exception as e:
+            print(f"[SCREENER_HUB] sector_screener {industry} error: {e}")
+            return []
+
+    results = await asyncio.gather(*[_screen_one(ind) for ind in industries],
+                                   return_exceptions=True)
+    for res in results:
+        if isinstance(res, list):
+            for sym in res:
+                if sym not in seen:
+                    seen.add(sym)
+                    found.append(sym)
+
+    print(f"[SCREENER_HUB] sector_screener: {industries} → {len(found)} symbols")
+    return found
+
+
 async def _build_thematic_universe(
     theme_key: Optional[str],
     *,
     with_fmp_peers: bool = True,
+    with_fmp_screener: bool = False,
 ) -> tuple[dict[str, list[str]], dict[str, dict]]:
     """
     Build per-theme stock universes using a dynamic-first, static-fallback strategy.
 
     Source priority per theme
     ─────────────────────────
-    A. ETF holdings   — direct disk read from data/etf_holdings/{ETF}.json
-                        (fast; 7-day rolling cache produced by etf_holdings_service)
-    B. LKG leaders    — leaders + laggards from themes_rs_lkg.json
-                        (stocks discovered by theme_rs_service via ETF holdings expansion)
-    C. FMP peers      — async stable/stock-peers seeded from candidate_symbols anchors
-                        (only attempted when A + B yield < _MIN_DYN_BEFORE_PEERS stocks)
-    D. candidate_symbols — static seed list in THEME_RS_UNIVERSE
-                        (fallback; used_static_fallback=True when this is reached)
-    E. proxy_symbols  — ETF tickers, absolute last resort only (empty result from A-D)
+    A. ETF holdings       — disk read from data/etf_holdings/{ETF}.json (fast)
+    B. LKG leaders        — leaders + laggards from themes_rs_lkg.json
+    C. FMP peers          — stable/stock-peers (only when A+B < threshold)
+    D. candidate_symbols  — static seed list (fallback; used_static_fallback=True)
+    E. FMP sector screener— stable/stock-screener by industry (rebuild jobs only,
+                            when with_fmp_screener=True)
+    F. proxy_symbols      — ETF tickers, absolute last resort only
 
     Parameters
     ──────────
-    theme_key       : single theme key, or None to build all themes.
-    with_fmp_peers  : set False for bulk builds to avoid 55 × 3 API calls.
+    theme_key            : single theme key, or None to build all themes.
+    with_fmp_peers       : False for bulk/page-load builds (saves API calls).
+    with_fmp_screener    : True only for scheduled rebuild jobs. Calls
+                           FMP stock-screener to find small/mid-cap names.
 
     Returns
     ───────
     symbols_map   : {theme_key: [symbol, ...]}
-    breakdown_map : {theme_key: {etf_holdings_count, lkg_leaders_count, fmp_peers_count,
-                                  static_seed_count, dynamic_symbols_count,
-                                  used_static_fallback, etf_files_found, ...}}
+    breakdown_map : {theme_key: breakdown_dict}
     """
     keys = [theme_key] if theme_key else _theme_keys()
     symbols_map:   dict[str, list[str]] = {}
@@ -583,13 +695,16 @@ async def _build_thematic_universe(
         proxy_etfs:     list[str] = [s.upper() for s in (meta.get("proxy_symbols") or []) if s]
         candidate_syms: list[str] = [s.upper() for s in (meta.get("candidate_symbols") or []) if s]
 
-        etf_holdings_syms:  list[str] = []   # Source A
-        lkg_syms:           list[str] = []   # Source B
-        fmp_peer_syms:      list[str] = []   # Source C
-        static_syms:        list[str] = []   # Source D
-        etf_files_found:    list[str] = []
-        fmp_peer_anchors:   list[str] = []
-        sources_by_symbol:  dict[str, list[str]] = {}  # per-symbol source tags
+        etf_holdings_syms:   list[str] = []   # Source A
+        lkg_syms:            list[str] = []   # Source B
+        fmp_peer_syms:       list[str] = []   # Source C
+        static_syms:         list[str] = []   # Source D
+        sector_screener_syms: list[str] = []  # Source E
+        etf_files_found:     list[str] = []
+        fmp_peer_anchors:    list[str] = []
+        sources_by_symbol:   dict[str, list[str]] = {}
+        sources_attempted:   list[str] = ["etf_holdings", "lkg_leaders", "static_seed"]
+        sources_failed:      list[str] = []
 
         seen_dynamic: set[str] = set()
 
@@ -604,7 +719,10 @@ async def _build_thematic_universe(
                     etf_holdings_syms.append(sym)
                     sources_by_symbol.setdefault(sym, []).append(f"etf:{etf}")
 
-        # ── Source B: LKG leaders / laggards (dynamic, refreshed by theme_rs_service) ──
+        if not etf_files_found and proxy_etfs:
+            sources_failed.append("etf_holdings")
+
+        # ── Source B: LKG leaders / laggards ──────────────────────────────────
         for sym in lkg_map.get(key) or []:
             su = sym.upper() if isinstance(sym, str) else ""
             if su and su not in _ALL_PROXY_ETFS and su not in seen_dynamic:
@@ -613,43 +731,67 @@ async def _build_thematic_universe(
                 sources_by_symbol.setdefault(su, []).append("lkg_leaders")
 
         # ── Source C: FMP peers (async API, only when A+B coverage is thin) ───
-        if with_fmp_peers and len(seen_dynamic) < _MIN_DYN_BEFORE_PEERS and candidate_syms:
-            peers, fmp_peer_anchors = await _fmp_peers_for_anchors(candidate_syms[:3])
-            for sym in peers:
-                if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
-                    seen_dynamic.add(sym)
-                    fmp_peer_syms.append(sym)
-                    sources_by_symbol.setdefault(sym, []).append("fmp_peers")
+        if with_fmp_peers:
+            sources_attempted.append("fmp_peers")
+            if len(seen_dynamic) < _MIN_DYN_BEFORE_PEERS and candidate_syms:
+                try:
+                    peers, fmp_peer_anchors = await _fmp_peers_for_anchors(candidate_syms[:3])
+                    for sym in peers:
+                        if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
+                            seen_dynamic.add(sym)
+                            fmp_peer_syms.append(sym)
+                            sources_by_symbol.setdefault(sym, []).append("fmp_peers")
+                except Exception as pe:
+                    print(f"[SCREENER_HUB] fmp_peers {key} error: {pe}")
+                    sources_failed.append("fmp_peers")
 
         # ── Source D: candidate_symbols — static fallback ─────────────────────
-        # Added only when the symbol wasn't found by any dynamic source above.
         for sym in candidate_syms:
             if sym not in seen_dynamic:
-                # Don't add to seen_dynamic — static symbols tracked separately
                 static_syms.append(sym)
                 sources_by_symbol.setdefault(sym, []).append("static_seed")
 
-        # Combine: dynamic first, static at end, ETF proxies only as last resort
-        combined = etf_holdings_syms + lkg_syms + fmp_peer_syms + static_syms
+        # ── Source E: FMP sector screener (rebuild jobs only) ─────────────────
+        screener_industries = _THEME_SECTOR_SCREENER_INDUSTRIES.get(key) or []
+        if with_fmp_screener and screener_industries:
+            sources_attempted.append("sector_screener")
+            try:
+                screener_hits = await _fmp_sector_screener(screener_industries)
+                for sym in screener_hits:
+                    if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
+                        seen_dynamic.add(sym)
+                        sector_screener_syms.append(sym)
+                        sources_by_symbol.setdefault(sym, []).append("sector_screener")
+            except Exception as se:
+                print(f"[SCREENER_HUB] sector_screener {key} error: {se}")
+                sources_failed.append("sector_screener")
+
+        # Combine: dynamic first, static + screener at end; ETF proxies last resort
+        combined = (etf_holdings_syms + lkg_syms + fmp_peer_syms
+                    + static_syms + sector_screener_syms)
         if not combined:
             combined = proxy_etfs  # absolute last resort
 
         cleaned = _dedupe_filter(combined)[:_PER_THEME_CAP]
 
-        n_dynamic = len(etf_holdings_syms) + len(lkg_syms) + len(fmp_peer_syms)
+        n_dynamic = (len(etf_holdings_syms) + len(lkg_syms)
+                     + len(fmp_peer_syms) + len(sector_screener_syms))
         n_static  = len(static_syms)
 
         breakdown = {
-            "etf_holdings_count":   len(etf_holdings_syms),
-            "lkg_leaders_count":    len(lkg_syms),
-            "fmp_peers_count":      len(fmp_peer_syms),
-            "fmp_peer_anchors":     fmp_peer_anchors,
-            "static_seed_count":    n_static,
-            "dynamic_symbols_count":  n_dynamic,
+            "etf_holdings_count":          len(etf_holdings_syms),
+            "lkg_leaders_count":           len(lkg_syms),
+            "fmp_peers_count":             len(fmp_peer_syms),
+            "fmp_peer_anchors":            fmp_peer_anchors,
+            "sector_screener_count":       len(sector_screener_syms),
+            "static_seed_count":           n_static,
+            "dynamic_symbols_count":       n_dynamic,
             "static_fallback_symbols_count": n_static,
-            "used_static_fallback": n_static > 0,
-            "etf_files_found":      etf_files_found,
-            "sources_by_symbol":    sources_by_symbol,
+            "used_static_fallback":        n_static > 0,
+            "etf_files_found":             etf_files_found,
+            "sources_by_symbol":           sources_by_symbol,
+            "sources_attempted":           sources_attempted,
+            "sources_failed":              sources_failed,
         }
 
         if cleaned:
@@ -956,13 +1098,22 @@ async def warm_fundamentals(
 
     Returns a summary dict. Records a row in screener_job_runs.
     """
+    try:
+        from services.fmp_governor import fmp_governor as _gov
+    except Exception:
+        _gov = None
+
     deduped = _dedupe_filter(symbols)
     run_id = start_job_run(job_name, symbols_count=len(deduped),
                            metadata={"force": bool(force)})
+    if _gov is not None:
+        _gov.start_job(job_name)
+
     completed = 0
     failed = 0
     api_calls = 0
     error_msg: Optional[str] = None
+    budget_limited = False
 
     try:
         if not force:
@@ -978,8 +1129,17 @@ async def warm_fundamentals(
                 if api_calls >= max_calls:
                     print(f"[SCREENER_HUB] {job_name}: max_calls={max_calls} reached, stopping")
                     break
+                # ── Governor check ──
+                if _gov is not None:
+                    slot_ok = await _gov.acquire(job_name=job_name)
+                    if not slot_ok:
+                        budget_limited = True
+                        print(f"[SCREENER_HUB] {job_name}: governor budget hit at symbol={symbol}")
+                        break
                 try:
                     record = await _fetch_fundamentals_for_symbol(client, symbol)
+                    if _gov is not None:
+                        _gov.record_call()  # count profile+metrics+ratios as 1 batch
                     api_calls += 3  # profile + metrics + ratios
                     if record is None:
                         failed += 1
@@ -1005,17 +1165,23 @@ async def warm_fundamentals(
                     print(f"[SCREENER_HUB] {job_name} {symbol} error: {e}")
 
                 # Polite delay between calls (skip after the last one)
-                if idx < len(queue) - 1 and sleep_between_s > 0:
+                # Governor handles minimum spacing; extra sleep only if explicitly set.
+                if sleep_between_s > 0 and _gov is None and idx < len(queue) - 1:
                     await asyncio.sleep(sleep_between_s)
 
-        status = "ok" if failed == 0 else ("partial" if completed > 0 else "failed")
+        status = (
+            "partial_budget_limit" if budget_limited
+            else ("ok" if failed == 0 else ("partial" if completed > 0 else "failed"))
+        )
         finish_job_run(
             run_id, status=status,
             symbols_completed=completed, symbols_failed=failed,
             api_calls_used=api_calls,
             error=None,
-            metadata={"queue_size": len(queue)},
+            metadata={"queue_size": len(queue), "budget_limited": budget_limited},
         )
+        if _gov is not None:
+            _gov.finish_job(job_name, budget_limited=budget_limited)
         return {
             "job_name": job_name,
             "status": status,
@@ -1023,6 +1189,7 @@ async def warm_fundamentals(
             "symbols_completed": completed,
             "symbols_failed": failed,
             "api_calls_used": api_calls,
+            "budget_limited": budget_limited,
         }
     except Exception as e:
         error_msg = str(e)
@@ -1031,6 +1198,8 @@ async def warm_fundamentals(
             symbols_completed=completed, symbols_failed=failed,
             api_calls_used=api_calls, error=error_msg,
         )
+        if _gov is not None:
+            _gov.finish_job(job_name, budget_limited=False)
         return {
             "job_name": job_name,
             "status": "failed",
@@ -1302,11 +1471,18 @@ async def get_screener_hub(
                             "used_static_fallback": False,
                         }
                 else:
-                    # Snapshot contained only ETF proxies → rebuild live right now
-                    # and persist the corrected stock-universe so the next request
-                    # can use the snapshot directly instead of rebuilding again.
-                    print(f"[SCREENER_HUB] snapshot for {theme} is ETF-only — rebuilding live")
-                    symbols_map, breakdowns = await _build_thematic_universe(theme)
+                    # Snapshot contained only ETF proxies → rebuild live right now.
+                    # Never call FMP peers on page load (with_fmp_peers=False) to
+                    # avoid slow/blocking API calls that can cause proxy 502s.
+                    print(f"[SCREENER_HUB] snapshot for {theme} is ETF-only — rebuilding live (no peers)")
+                    try:
+                        symbols_map, breakdowns = await asyncio.wait_for(
+                            _build_thematic_universe(theme, with_fmp_peers=False),
+                            timeout=_THEMATIC_BUILD_TIMEOUT_S,
+                        )
+                    except asyncio.TimeoutError:
+                        print(f"[SCREENER_HUB] live build timed out for {theme}, returning empty")
+                        symbols_map, breakdowns = {}, {}
                     symbols = symbols_map.get(theme, [])
                     thematic_breakdown = breakdowns.get(theme, {})
                     snap_status = "live_fallback"
@@ -1320,7 +1496,16 @@ async def get_screener_hub(
                         )
             else:
                 # No snapshot yet — build one live from dynamic sources.
-                symbols_map, breakdowns = await _build_thematic_universe(theme)
+                # Never call FMP peers on page load (with_fmp_peers=False) to avoid
+                # slow blocking API calls. Peers are fetched by the rebuild job instead.
+                try:
+                    symbols_map, breakdowns = await asyncio.wait_for(
+                        _build_thematic_universe(theme, with_fmp_peers=False),
+                        timeout=_THEMATIC_BUILD_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    print(f"[SCREENER_HUB] live build timed out for {theme}, returning empty")
+                    symbols_map, breakdowns = {}, {}
                 symbols = symbols_map.get(theme, [])
                 thematic_breakdown = breakdowns.get(theme, {})
                 snap_status = "live_fallback"
@@ -1435,8 +1620,8 @@ async def get_screener_hub(
         )
 
         # ── Overlap / confirmation flags ──
-        is_social   = sym in social_overlap
-        is_options  = sym in options_overlap
+        is_social    = sym in social_overlap
+        is_options   = sym in options_overlap
         is_watchlist = sym in watchlist_set
 
         # ── Per-row discovery sources ──
@@ -1495,6 +1680,7 @@ async def get_screener_hub(
             "score":             classification["score"],
             "hidden_gem_score":  hg_score,
             "role":              role,
+            "market_cap_bucket": _market_cap_bucket(mcap),
             "discovery_sources": disc_src,
             "market_cap": mcap,
             "sector":     f.get("sector"),
@@ -1587,17 +1773,21 @@ async def get_screener_hub(
         )
 
         if thematic_breakdown:
-            # Expanded 8-source breakdown (was 4 sources before)
+            # Expanded 8-source breakdown
             payload["universe_source_breakdown"] = {
                 "etf_holdings":              thematic_breakdown.get("etf_holdings_count", 0),
                 "lkg_leaders":               thematic_breakdown.get("lkg_leaders_count", 0),
                 "fmp_peers":                 thematic_breakdown.get("fmp_peers_count", 0),
-                "fmp_screener":              0,  # reserved — not yet implemented
+                "fmp_screener":              thematic_breakdown.get("sector_screener_count", 0),
                 "social_overlap":            len(social_overlap),
                 "options_overlap":           len(options_overlap),
                 "watchlist_portfolio_overlap": len(watchlist_set),
                 "static_seed":               thematic_breakdown.get("static_seed_count", 0),
             }
+            if thematic_breakdown.get("sources_attempted"):
+                payload["sources_attempted"] = thematic_breakdown["sources_attempted"]
+            if thematic_breakdown.get("sources_failed"):
+                payload["sources_failed"] = thematic_breakdown["sources_failed"]
             payload["dynamic_symbols_count"]          = thematic_breakdown.get("dynamic_symbols_count", 0)
             payload["static_fallback_symbols_count"]  = thematic_breakdown.get("static_fallback_symbols_count", 0)
             payload["used_static_fallback"]           = thematic_breakdown.get("used_static_fallback", False)
@@ -1649,10 +1839,13 @@ async def rebuild_universe(
     out: dict[str, Any] = {"tab": tab, "theme": theme, "force": bool(force)}
 
     if tab == "thematic":
-        # with_fmp_peers=True only when rebuilding a single theme.
-        # For full rebuild (theme=None), skip FMP peers to avoid 55 × 3 API calls.
+        # with_fmp_peers=True only for single-theme rebuilds (not bulk).
+        # with_fmp_screener=True here — rebuild jobs are the right place to call
+        # the sector screener (FMP stock-screener by industry) for hidden-gem discovery.
         symbols_map, breakdowns = await _build_thematic_universe(
-            theme, with_fmp_peers=(theme is not None)
+            theme,
+            with_fmp_peers=(theme is not None),
+            with_fmp_screener=True,
         )
         out["themes_built"] = []
         for k, syms in symbols_map.items():
@@ -1768,6 +1961,11 @@ async def warm_tab_fundamentals(
 # ── Status / diagnostics ──────────────────────────────────────────────────────
 
 def get_admin_status() -> dict:
+    try:
+        from services.fmp_governor import fmp_governor as _gov
+        fmp_budget = _gov.status()
+    except Exception:
+        fmp_budget = None
     return {
         "as_of": _now_iso(),
         "status": "ok",
@@ -1775,4 +1973,5 @@ def get_admin_status() -> dict:
         "universe_snapshots": universe_table_stats(),
         "quote_cache":        quote_table_stats(),
         "latest_job_runs":    latest_job_runs(limit=20),
+        "fmp_budget":         fmp_budget,
     }

@@ -1,9 +1,9 @@
 """
 Screener Returns Service — real 2w/4w/10w historical return calculations.
 
-Fetches FMP stable/historical-price-eod/full for each symbol, computes
-trailing returns at 10/20/50 trading-day lookbacks (≈ 2w/4w/10w), and
-caches results in screener_returns_cache (Neon).
+Fetches FMP stable/historical-price-eod (date-ranged, ~180 cal days) for each
+symbol, computes trailing returns at 10/20/50 trading-day lookbacks (≈ 2w/4w/10w),
+and caches results in screener_returns_cache (Neon).
 
 Design rules:
 - Only writes to DB; never returns fake values.
@@ -11,11 +11,15 @@ Design rules:
 - Request path reads from cache only (get_cached_returns). No live API calls
   at request time — warm jobs populate the cache on a weekly cadence.
 - Never raises; always returns partial data on partial failure.
+- Uses /stable/historical-price-eod with from/to params (NOT /full) to limit
+  bandwidth to ~180 calendar days per symbol.
+- All FMP calls flow through the FMP Governor (opt-in, Screener Hub only).
 """
 from __future__ import annotations
 
 import asyncio
 import os
+from datetime import date, timedelta
 from typing import Iterable, Optional
 
 import httpx
@@ -37,37 +41,79 @@ except Exception:
     start_job_run = lambda *a, **kw: None  # type: ignore
     finish_job_run = lambda *a, **kw: None  # type: ignore
 
+try:
+    from services.fmp_governor import fmp_governor
+except Exception:
+    fmp_governor = None  # type: ignore
+
 
 FMP_BASE = "https://financialmodelingprep.com/stable"
 _FMP_TIMEOUT = 12.0
-_HIST_SEM = asyncio.Semaphore(3)
+
+# Semaphore caps concurrent in-flight FMP calls regardless of governor
+_HIST_SEM = asyncio.Semaphore(2)
+
+# How many calendar days of history to fetch (enough for 10w=50 bars + generous buffer)
+_HISTORY_DAYS = 180
 
 
 def _fmp_key() -> str:
     return os.getenv("FMP_API_KEY") or ""
 
 
-async def _fetch_fmp_bars(symbol: str) -> list[dict]:
+def _date_range() -> tuple[str, str]:
+    """Return (from_date, to_date) as ISO strings covering _HISTORY_DAYS calendar days."""
+    today = date.today()
+    from_dt = today - timedelta(days=_HISTORY_DAYS)
+    return from_dt.isoformat(), today.isoformat()
+
+
+async def _fetch_fmp_bars(symbol: str, *, job_name: str = "returns_warm") -> list[dict]:
     """
-    Fetch daily OHLCV bars from FMP stable/historical-price-eod/full.
+    Fetch daily OHLCV bars from FMP stable/historical-price-eod (date-ranged).
+
+    Uses from/to params to fetch only the last _HISTORY_DAYS calendar days —
+    avoids the /full endpoint which returns complete multi-year history and
+    generates most of FMP bandwidth consumption.
+
     Returns sorted list of {date, close} newest-last.
-    Empty list on any failure.
+    Empty list on any failure or governor budget exceeded.
     """
     key = _fmp_key()
     if not key:
         return []
+
+    # ── Governor check (Screener Hub opt-in only) ─────────────────────────────
+    if fmp_governor is not None:
+        ok = await fmp_governor.acquire(job_name=job_name)
+        if not ok:
+            print(f"[RETURNS] FMP governor budget exceeded — skipping {symbol}")
+            return []
+
     sym = symbol.upper()
+    from_date, to_date = _date_range()
+
     async with _HIST_SEM:
         try:
             async with httpx.AsyncClient(timeout=_FMP_TIMEOUT) as client:
                 resp = await client.get(
-                    f"{FMP_BASE}/historical-price-eod/full",
-                    params={"symbol": sym, "apikey": key},
+                    f"{FMP_BASE}/historical-price-eod",
+                    params={
+                        "symbol": sym,
+                        "from": from_date,
+                        "to": to_date,
+                        "apikey": key,
+                    },
                 )
+            if fmp_governor is not None:
+                fmp_governor.record_call()
+
             if resp.status_code not in (200, 201):
                 if resp.status_code not in (402, 403, 404):
-                    print(f"[RETURNS] FMP {sym} HTTP {resp.status_code}")
+                    print(f"[RETURNS] FMP {sym} HTTP {resp.status_code} "
+                          f"(endpoint_group=historical_returns)")
                 return []
+
             raw = resp.json()
             bars_raw = raw if isinstance(raw, list) else (raw.get("historical") or [])
             bars: list[dict] = []
@@ -84,7 +130,9 @@ async def _fetch_fmp_bars(symbol: str) -> list[dict]:
             bars.sort(key=lambda r: r["date"])
             return bars
         except Exception as e:
-            print(f"[RETURNS] FMP bars {sym}: {e}")
+            if fmp_governor is not None:
+                fmp_governor.record_call()  # still counts even on exception
+            print(f"[RETURNS] FMP bars {sym} error (endpoint_group=historical_returns): {e}")
             return []
 
 
@@ -127,7 +175,7 @@ async def fetch_and_cache_returns(
     symbols: Iterable[str],
     *,
     force: bool = False,
-    sleep_between_s: float = 2.0,
+    sleep_between_s: float = 0.0,   # Governor handles pacing; extra sleep is redundant
     max_calls: int = 200,
     job_name: str = "returns_warm",
 ) -> dict:
@@ -137,46 +185,70 @@ async def fetch_and_cache_returns(
 
     Parameters
     ----------
-    symbols          : Iterable of ticker strings.
+    symbols          : Iterable of ticker strings (automatically deduped).
     force            : If True, re-fetch even when cache is fresh.
-    sleep_between_s  : Polite delay between FMP calls.
-    max_calls        : Hard cap on FMP API calls this run.
-    job_name         : Label for screener_job_runs tracking.
+    sleep_between_s  : Legacy param — governor handles spacing; set 0 here.
+    max_calls        : Hard cap on FMP API calls this run (also gated by governor).
+    job_name         : Label for screener_job_runs tracking + governor job context.
 
     Returns
     -------
-    Summary dict: {status, symbols_count, completed, failed, api_calls_used}
+    Summary dict: {status, symbols_count, completed, failed, api_calls_used, endpoint_group}
     """
     ensure_tables()
 
     from services.screener_hub_service import _dedupe_filter
     deduped = _dedupe_filter(symbols)
     if not deduped:
-        return {"job_name": job_name, "status": "ok", "symbols_count": 0,
-                "completed": 0, "failed": 0, "api_calls_used": 0}
+        return {
+            "job_name": job_name, "status": "ok", "symbols_count": 0,
+            "completed": 0, "failed": 0, "api_calls_used": 0,
+            "endpoint_group": "historical_returns",
+        }
 
-    run_id = start_job_run(job_name, symbols_count=len(deduped),
-                           metadata={"force": force})
+    # ── Register job with governor ─────────────────────────────────────────────
+    if fmp_governor is not None:
+        fmp_governor.start_job(job_name)
+
+    run_id = start_job_run(
+        job_name, symbols_count=len(deduped),
+        metadata={"force": force, "endpoint_group": "historical_returns",
+                  "history_days": _HISTORY_DAYS},
+    )
 
     if not force:
         fresh = returns_fresh_symbols(deduped, max_age_days=7)
         queue = [s for s in deduped if s not in fresh]
-        print(f"[RETURNS] {job_name}: {len(deduped)} total, {len(queue)} stale, {len(fresh)} fresh")
+        skipped_fresh = len(fresh)
+        print(f"[RETURNS] {job_name}: {len(deduped)} total, "
+              f"{len(queue)} stale, {skipped_fresh} fresh — "
+              f"endpoint_group=historical_returns from={_date_range()[0]}")
     else:
         queue = list(deduped)
-        print(f"[RETURNS] {job_name}: force=True, processing {len(queue)}")
+        skipped_fresh = 0
+        print(f"[RETURNS] {job_name}: force=True, processing {len(queue)} — "
+              f"endpoint_group=historical_returns")
 
     completed = 0
     failed = 0
     api_calls = 0
+    budget_limited = False
 
     try:
         for idx, sym in enumerate(queue):
             if api_calls >= max_calls:
-                print(f"[RETURNS] {job_name}: max_calls={max_calls} reached")
+                print(f"[RETURNS] {job_name}: max_calls={max_calls} reached, stopping")
                 break
+
             try:
-                bars = await _fetch_fmp_bars(sym)
+                bars = await _fetch_fmp_bars(sym, job_name=job_name)
+
+                # Governor returned empty due to budget → treat as soft stop
+                if not bars and fmp_governor is not None and fmp_governor._job_budget_hit:
+                    budget_limited = True
+                    print(f"[RETURNS] {job_name}: governor budget hit after {api_calls} calls")
+                    break
+
                 api_calls += 1
                 rets = _compute_returns(bars)
                 ok = upsert_returns(
@@ -190,7 +262,8 @@ async def fetch_and_cache_returns(
                 )
                 if ok:
                     completed += 1
-                    print(f"[RETURNS] {sym}: 2w={rets['return_2w']} 4w={rets['return_4w']} "
+                    print(f"[RETURNS] {sym}: bars={len(bars)} "
+                          f"2w={rets['return_2w']} 4w={rets['return_4w']} "
                           f"10w={rets['return_10w']} accel={rets['rs_accel']}")
                 else:
                     failed += 1
@@ -198,28 +271,46 @@ async def fetch_and_cache_returns(
                 failed += 1
                 print(f"[RETURNS] {sym} error: {e}")
 
-            if idx < len(queue) - 1 and sleep_between_s > 0:
+            # Legacy sleep param (ignored when governor is active)
+            if sleep_between_s > 0 and fmp_governor is None and idx < len(queue) - 1:
                 await asyncio.sleep(sleep_between_s)
 
-        status = "ok" if failed == 0 else ("partial" if completed > 0 else "failed")
-        finish_job_run(run_id, status=status,
-                       symbols_completed=completed, symbols_failed=failed,
-                       api_calls_used=api_calls)
+        status = (
+            "partial_budget_limit" if budget_limited
+            else ("ok" if failed == 0 else ("partial" if completed > 0 else "failed"))
+        )
+        finish_job_run(
+            run_id, status=status,
+            symbols_completed=completed, symbols_failed=failed,
+            api_calls_used=api_calls,
+        )
+        if fmp_governor is not None:
+            fmp_governor.finish_job(job_name, budget_limited=budget_limited)
+
         return {
             "job_name": job_name, "status": status,
             "symbols_count": len(deduped),
             "completed": completed, "failed": failed,
             "api_calls_used": api_calls,
+            "skipped_fresh": skipped_fresh,
+            "budget_limited": budget_limited,
+            "endpoint_group": "historical_returns",
+            "history_days": _HISTORY_DAYS,
         }
     except Exception as e:
-        finish_job_run(run_id, status="failed",
-                       symbols_completed=completed, symbols_failed=failed,
-                       api_calls_used=api_calls, error=str(e))
+        finish_job_run(
+            run_id, status="failed",
+            symbols_completed=completed, symbols_failed=failed,
+            api_calls_used=api_calls, error=str(e),
+        )
+        if fmp_governor is not None:
+            fmp_governor.finish_job(job_name, budget_limited=False)
         return {
             "job_name": job_name, "status": "failed",
             "symbols_count": len(deduped),
             "completed": completed, "failed": failed,
             "api_calls_used": api_calls, "error": str(e),
+            "endpoint_group": "historical_returns",
         }
 
 
