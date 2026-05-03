@@ -12,6 +12,13 @@ Layered cache design:
   - Fundamentals are persisted to screener_fundamentals_cache (weekly TTL, FMP)
   - Live quotes are persisted to screener_quote_cache (Tradier; short TTL)
 
+Thematic universe source priority (per theme):
+  A. ETF holdings   — direct disk read from data/etf_holdings/{ETF}.json (fast, 7-day cache)
+  B. LKG leaders    — stocks from themes_rs_lkg.json (refreshed by theme_rs_service)
+  C. FMP peers      — async stable/stock-peers from candidate anchors (only when A+B < threshold)
+  D. candidate_symbols — static seed from THEME_RS_UNIVERSE (used_static_fallback=true when hit)
+  E. proxy_symbols  — ETF tickers, absolute last resort only (no stocks found in A-D)
+
 Guardrails enforced here (see CLAUDE.md):
   - Never overwrite a valid cached row with an empty/failed API response.
   - Never blank the whole table because one row failed enrichment.
@@ -25,6 +32,7 @@ import asyncio
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 import httpx
@@ -57,6 +65,17 @@ _FUNDAMENTALS_TTL_DAYS = 7
 _QUOTE_TTL_OPEN_S = 90        # ~90s during US market open
 _QUOTE_TTL_CLOSED_S = 30 * 60 # 30min when market closed
 _FMP_SLEEP_BETWEEN_S = 6.0   # 5-15s between FMP calls during warm jobs
+
+# Minimum dynamic-source symbols before FMP peers are tried.
+# If ETF holdings + LKG leaders already give ≥ this many stocks for a theme,
+# we skip the FMP peers API call (saves latency and rate-limit budget).
+_MIN_DYN_BEFORE_PEERS = 8
+
+# ETF holdings disk cache directory
+_ETF_HOLDINGS_DIR = Path(__file__).parent.parent / "data" / "etf_holdings"
+
+# Dynamic Chain Reaction output file (written by Chain Reaction service if/when available)
+_CHAIN_REACTION_OUTPUT = Path(__file__).parent.parent / "data" / "chain_reaction_output.json"
 
 
 def _now_iso() -> str:
@@ -110,7 +129,6 @@ def _get_theme_state_from_lkg(theme_key: str) -> dict:
     """
     try:
         import json
-        from pathlib import Path
         lkg_path = Path(__file__).parent.parent / "data" / "themes_rs_lkg.json"
         if not lkg_path.exists():
             return {}
@@ -128,6 +146,152 @@ def _get_theme_state_from_lkg(theme_key: str) -> dict:
     except Exception as e:
         print(f"[SCREENER_HUB] _get_theme_state_from_lkg {theme_key} error: {e}")
     return {}
+
+
+# ── ETF holdings disk reader ───────────────────────────────────────────────────
+
+def _read_etf_holdings_from_disk(etf_sym: str) -> list[str]:
+    """
+    Read top holdings for an ETF from the 7-day disk cache.
+
+    Filters out cross-listed non-US tickers (e.g. "LAR.TO", "600900.SS") and
+    bond/cash entries. Returns an empty list on cache miss or parse error.
+    """
+    import json
+    path = _ETF_HOLDINGS_DIR / f"{etf_sym.upper()}.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        holdings = data.get("holdings") or data.get("top_holdings") or []
+        result: list[str] = []
+        for h in holdings:
+            if not isinstance(h, dict):
+                continue
+            raw = (h.get("ticker") or "").strip().upper()
+            if not raw:
+                continue
+            # Skip cross-listed / non-US tickers (contain a dot with exchange suffix)
+            if "." in raw:
+                continue
+            # Skip bond/cash placeholders
+            if raw in ("CASH", "USD", "EUR", "TBD", "OTHER"):
+                continue
+            # Standard US equity ticker: 1–5 alpha chars, optionally followed by
+            # one special char + alpha (e.g. BRK-B, BF-B).  Max 6 chars total.
+            if len(raw) > 6:
+                continue
+            result.append(raw)
+        return result
+    except Exception as e:
+        print(f"[SCREENER_HUB] ETF holdings disk read {etf_sym}: {e}")
+        return []
+
+
+# ── LKG leaders/laggards loader ────────────────────────────────────────────────
+
+def _load_lkg_leaders_map() -> dict[str, list[str]]:
+    """
+    Load leaders + laggards lists from themes_rs_lkg.json, keyed by theme_id.
+
+    These are stocks discovered dynamically by theme_rs_service (via ETF holdings
+    expansion + RS scoring) — not static seeds.  Refreshed whenever the Themes
+    page is recomputed.
+    """
+    out: dict[str, list[str]] = {}
+    try:
+        import json
+        path = Path(__file__).parent.parent / "data" / "themes_rs_lkg.json"
+        if not path.exists():
+            return out
+        raw = json.loads(path.read_text())
+        rows: list[dict] = raw.get("rows", raw) if isinstance(raw, dict) else raw
+        if not isinstance(rows, list):
+            return out
+        for row in rows:
+            tid = (row.get("theme_id") or "").strip()
+            if not tid:
+                continue
+            leaders = [
+                l.get("symbol") for l in (row.get("leaders") or [])
+                if isinstance(l, dict) and l.get("symbol")
+            ]
+            laggards = [
+                l.get("symbol") for l in (row.get("laggards") or [])
+                if isinstance(l, dict) and l.get("symbol")
+            ]
+            out[tid] = leaders + laggards
+    except Exception as e:
+        print(f"[SCREENER_HUB] _load_lkg_leaders_map error: {e}")
+    return out
+
+
+# ── FMP peers (async, used as tertiary dynamic source) ─────────────────────────
+
+async def _fmp_peers_for_anchors(
+    anchors: list[str],
+    max_peers_per_anchor: int = 8,
+    timeout: float = 8.0,
+) -> tuple[list[str], list[str]]:
+    """
+    Fetch FMP stable/stock-peers for each anchor ticker.
+
+    Returns (peer_symbols, anchors_that_returned_results).
+    Never raises; returns empty lists on failure or missing API key.
+    """
+    api_key = os.getenv("FMP_API_KEY") or ""
+    if not api_key or not anchors:
+        return [], []
+
+    async def _one(anchor: str) -> list[str]:
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.get(
+                    f"{FMP_BASE}/stock-peers",
+                    params={"symbol": anchor.upper(), "apikey": api_key},
+                    timeout=timeout,
+                )
+            if r.status_code != 200:
+                return []
+            raw = r.json()
+            peers: list[str] = []
+            if isinstance(raw, list):
+                for item in raw:
+                    if isinstance(item, str):
+                        peers.append(item.upper())
+                    elif isinstance(item, dict):
+                        sym = item.get("symbol") or ""
+                        if isinstance(sym, str) and sym:
+                            peers.append(sym.upper())
+                        pl = item.get("peersList") or []
+                        if isinstance(pl, list):
+                            peers.extend(s.upper() for s in pl if isinstance(s, str) and s)
+            elif isinstance(raw, dict):
+                pl = raw.get("peersList") or raw.get("peers") or []
+                peers.extend(str(s).upper() for s in pl if s)
+            return peers[:max_peers_per_anchor]
+        except Exception as e:
+            print(f"[SCREENER_HUB] FMP peers {anchor}: {e}")
+            return []
+
+    try:
+        to_call = anchors[:3]
+        results = await asyncio.wait_for(
+            asyncio.gather(*[_one(a) for a in to_call], return_exceptions=True),
+            timeout=timeout + 3.0,
+        )
+        found: list[str] = []
+        anchors_used: list[str] = []
+        for anchor, result in zip(to_call, results):
+            if isinstance(result, list) and result:
+                anchors_used.append(anchor)
+                for p in result:
+                    if p and p not in found:
+                        found.append(p)
+        return found, anchors_used
+    except Exception as e:
+        print(f"[SCREENER_HUB] _fmp_peers_for_anchors gather error: {e}")
+        return [], []
 
 
 # ── Universe builders ─────────────────────────────────────────────────────────
@@ -163,60 +327,43 @@ def _theme_metadata() -> list[dict]:
     return out
 
 
-async def _build_thematic_universe(theme_key: Optional[str]) -> dict[str, list[str]]:
-    """Return {theme_key: [symbols]} map.
+async def _build_thematic_universe(
+    theme_key: Optional[str],
+    *,
+    with_fmp_peers: bool = True,
+) -> tuple[dict[str, list[str]], dict[str, dict]]:
+    """
+    Build per-theme stock universes using a dynamic-first, static-fallback strategy.
 
-    Source priority (stocks first, ETF proxies only as absolute last resort):
-      1. dynamic_thematic_universe cache (ETF holdings + FMP peers + X consensus)
-      2. LKG theme leaders from themes_rs_lkg.json (stocks discovered from ETF holdings)
-      3. candidate_symbols from THEME_RS_UNIVERSE registry (static stock seeds)
-      4. proxy_symbols (ETF proxies) — ONLY when no stocks found from 1-3
+    Source priority per theme
+    ─────────────────────────
+    A. ETF holdings   — direct disk read from data/etf_holdings/{ETF}.json
+                        (fast; 7-day rolling cache produced by etf_holdings_service)
+    B. LKG leaders    — leaders + laggards from themes_rs_lkg.json
+                        (stocks discovered by theme_rs_service via ETF holdings expansion)
+    C. FMP peers      — async stable/stock-peers seeded from candidate_symbols anchors
+                        (only attempted when A + B yield < _MIN_DYN_BEFORE_PEERS stocks)
+    D. candidate_symbols — static seed list in THEME_RS_UNIVERSE
+                        (fallback; used_static_fallback=True when this is reached)
+    E. proxy_symbols  — ETF tickers, absolute last resort only (empty result from A-D)
 
-    ETF proxies are intentionally kept out of the stock universe unless there is
-    absolutely no other coverage, because the Thematic Screener should show
-    individual stocks, not the ETFs used as reference instruments.
+    Parameters
+    ──────────
+    theme_key       : single theme key, or None to build all themes.
+    with_fmp_peers  : set False for bulk builds to avoid 55 × 3 API calls.
+
+    Returns
+    ───────
+    symbols_map   : {theme_key: [symbol, ...]}
+    breakdown_map : {theme_key: {etf_holdings_count, lkg_leaders_count, fmp_peers_count,
+                                  static_seed_count, dynamic_symbols_count,
+                                  used_static_fallback, etf_files_found, ...}}
     """
     keys = [theme_key] if theme_key else _theme_keys()
-    out: dict[str, list[str]] = {}
+    symbols_map:   dict[str, list[str]] = {}
+    breakdown_map: dict[str, dict]      = {}
 
-    # ── Source 1: dynamic universe cache ──────────────────────────────────────
-    dyn_map: dict[str, list[str]] = {}
-    try:
-        from services.dynamic_thematic_universe import get_cached_thematic_universe
-        snap = get_cached_thematic_universe()
-        theme_map = (snap or {}).get("theme_map") or {}
-        for ticker, info in theme_map.items():
-            if not isinstance(info, dict):
-                continue
-            theme_name = info.get("theme_name") or ""
-            dyn_map.setdefault(theme_name, []).append(ticker)
-    except Exception as e:
-        print(f"[SCREENER_HUB] dynamic thematic load error: {e}")
-
-    # ── Source 2: LKG leaders (stocks from ETF holdings discovery) ────────────
-    lkg_leaders_map: dict[str, list[str]] = {}
-    try:
-        import json
-        from pathlib import Path
-        lkg_path = Path(__file__).parent.parent / "data" / "themes_rs_lkg.json"
-        if lkg_path.exists():
-            raw = json.loads(lkg_path.read_text())
-            lkg_rows: list[dict] = raw.get("rows", raw) if isinstance(raw, dict) else raw
-            if isinstance(lkg_rows, list):
-                for row in lkg_rows:
-                    tid = row.get("theme_id") or ""
-                    leaders = [
-                        l.get("symbol") for l in (row.get("leaders") or [])
-                        if isinstance(l, dict) and l.get("symbol")
-                    ]
-                    laggards = [
-                        l.get("symbol") for l in (row.get("laggards") or [])
-                        if isinstance(l, dict) and l.get("symbol")
-                    ]
-                    if tid:
-                        lkg_leaders_map[tid] = leaders + laggards
-    except Exception as e:
-        print(f"[SCREENER_HUB] LKG leaders load error: {e}")
+    lkg_map = _load_lkg_leaders_map()
 
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE
@@ -225,42 +372,77 @@ async def _build_thematic_universe(theme_key: Optional[str]) -> dict[str, list[s
 
     for key in keys:
         meta = (THEME_RS_UNIVERSE or {}).get(key) or {}
-        display = (meta.get("display_name") or key).strip()
-        symbols: list[str] = []
+        proxy_etfs:     list[str] = [s.upper() for s in (meta.get("proxy_symbols") or []) if s]
+        candidate_syms: list[str] = [s.upper() for s in (meta.get("candidate_symbols") or []) if s]
 
-        # Source 1: dynamic-universe matches by display_name
-        for cand_name, syms in dyn_map.items():
-            if cand_name and cand_name.lower() == display.lower():
-                for s in syms:
-                    su = s.upper() if isinstance(s, str) else ""
-                    if su and su not in _ALL_PROXY_ETFS and su not in symbols:
-                        symbols.append(su)
+        etf_holdings_syms: list[str] = []   # Source A
+        lkg_syms:          list[str] = []   # Source B
+        fmp_peer_syms:     list[str] = []   # Source C
+        static_syms:       list[str] = []   # Source D
+        etf_files_found:   list[str] = []
+        fmp_peer_anchors:  list[str] = []
 
-        # Source 2: LKG leaders (already stocks — from ETF holdings discovery)
-        for s in lkg_leaders_map.get(key) or []:
-            su = s.upper() if isinstance(s, str) else ""
-            if su and su not in _ALL_PROXY_ETFS and su not in symbols:
-                symbols.append(su)
+        seen_dynamic: set[str] = set()
 
-        # Source 3: candidate_symbols from the registry (static stock seeds)
-        # NOTE: field is candidate_symbols, NOT representative_tickers.
-        for s in (meta.get("candidate_symbols") or []):
-            su = s.upper() if isinstance(s, str) else ""
-            if su and su not in symbols:
-                symbols.append(su)
+        # ── Source A: ETF holdings (disk read, fast) ──────────────────────────
+        for etf in proxy_etfs:
+            holdings = _read_etf_holdings_from_disk(etf)
+            if holdings:
+                etf_files_found.append(etf)
+            for sym in holdings:
+                if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
+                    seen_dynamic.add(sym)
+                    etf_holdings_syms.append(sym)
 
-        # Source 4: proxy ETFs — last resort only (when no stocks found at all)
-        if not symbols:
-            for s in (meta.get("proxy_symbols") or []):
-                su = s.upper() if isinstance(s, str) else ""
-                if su and su not in symbols:
-                    symbols.append(su)
+        # ── Source B: LKG leaders / laggards (dynamic, refreshed by theme_rs_service) ──
+        for sym in lkg_map.get(key) or []:
+            su = sym.upper() if isinstance(sym, str) else ""
+            if su and su not in _ALL_PROXY_ETFS and su not in seen_dynamic:
+                seen_dynamic.add(su)
+                lkg_syms.append(su)
 
-        cleaned = _dedupe_filter(symbols)[:_PER_THEME_CAP]
+        # ── Source C: FMP peers (async API, only when A+B coverage is thin) ───
+        if with_fmp_peers and len(seen_dynamic) < _MIN_DYN_BEFORE_PEERS and candidate_syms:
+            peers, fmp_peer_anchors = await _fmp_peers_for_anchors(candidate_syms[:3])
+            for sym in peers:
+                if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
+                    seen_dynamic.add(sym)
+                    fmp_peer_syms.append(sym)
+
+        # ── Source D: candidate_symbols — static fallback ─────────────────────
+        # Added only when the symbol wasn't found by any dynamic source above.
+        for sym in candidate_syms:
+            if sym not in seen_dynamic:
+                # Don't add to seen_dynamic — static symbols tracked separately
+                static_syms.append(sym)
+
+        # Combine: dynamic first, static at end, ETF proxies only as last resort
+        combined = etf_holdings_syms + lkg_syms + fmp_peer_syms + static_syms
+        if not combined:
+            combined = proxy_etfs  # absolute last resort
+
+        cleaned = _dedupe_filter(combined)[:_PER_THEME_CAP]
+
+        n_dynamic = len(etf_holdings_syms) + len(lkg_syms) + len(fmp_peer_syms)
+        n_static  = len(static_syms)
+
+        breakdown = {
+            "etf_holdings_count":   len(etf_holdings_syms),
+            "lkg_leaders_count":    len(lkg_syms),
+            "fmp_peers_count":      len(fmp_peer_syms),
+            "fmp_peer_anchors":     fmp_peer_anchors,
+            "static_seed_count":    n_static,
+            "dynamic_symbols_count":  n_dynamic,
+            "static_fallback_symbols_count": n_static,
+            "used_static_fallback": n_static > 0,
+            "etf_files_found":      etf_files_found,
+        }
+
         if cleaned:
-            out[key] = cleaned
+            symbols_map[key] = cleaned
+        breakdown_map[key] = breakdown
 
-    return out
+    return symbols_map, breakdown_map
 
 
 def _build_social_universe() -> list[str]:
@@ -268,7 +450,6 @@ def _build_social_universe() -> list[str]:
     syms: list[str] = []
     try:
         import json
-        from pathlib import Path
         path = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
         if path.exists():
             data = json.loads(path.read_text())
@@ -289,30 +470,100 @@ def _build_social_universe() -> list[str]:
     return _dedupe_filter(syms)[:_GLOBAL_TICKER_CAP]
 
 
-def _build_bottlenecks_universe() -> list[str]:
-    """Chain Reaction NODE_REGISTRY — ranked by bottleneck_score."""
-    out: list[tuple[str, int]] = []
-    try:
-        from services.playbook.supply_chain_graph import NODE_REGISTRY
-        for ticker, node in (NODE_REGISTRY or {}).items():
-            if not isinstance(node, dict):
-                continue
-            score = int(node.get("bottleneck_score") or 0)
-            # Prefer the US-listed proxy when the native ticker isn't tradeable here
-            us_proxy = (node.get("us_access_proxy")
-                        or node.get("adr_ticker")
-                        or ticker)
-            out.append((str(us_proxy).upper(), score))
-    except Exception as e:
-        print(f"[SCREENER_HUB] bottlenecks load error: {e}")
-    out.sort(key=lambda r: r[1], reverse=True)
-    seen: set[str] = set()
-    syms: list[str] = []
-    for s, _ in out:
-        if s and s not in seen:
-            seen.add(s)
-            syms.append(s)
-    return syms[:_GLOBAL_TICKER_CAP]
+def _build_bottlenecks_universe() -> tuple[list[str], dict]:
+    """
+    Chain Reaction supply-chain bottleneck universe.
+
+    Dynamic source (primary): backend/data/chain_reaction_output.json
+      — Written by Chain Reaction service when a weekly scoring run completes.
+      — Expected fields: {"bottleneck_symbols": [...], "generated_at": "..."}
+        or {"tickers": [...]} or {"symbols": [...]}.
+
+    Static source (fallback): NODE_REGISTRY in supply_chain_graph.py
+      — Curated dict of ~89 companies ranked by a hand-coded bottleneck_score.
+      — Used when no chain_reaction_output.json exists (current default).
+
+    Returns (symbols, metadata).
+    metadata fields:
+      is_dynamic                    — True if dynamic output was loaded
+      source_registry               — "chain_reaction_dynamic" | "NODE_REGISTRY"
+      last_dynamic_chain_reaction_run — generated_at from dynamic file, or None
+      symbol_count                  — len(symbols)
+      note                          — human-readable source description
+    """
+    is_dynamic = False
+    last_dynamic_run: Optional[str] = None
+    source_registry = "NODE_REGISTRY"
+    symbols: list[str] = []
+
+    # ── Try dynamic Chain Reaction output first ───────────────────────────────
+    if _CHAIN_REACTION_OUTPUT.exists():
+        try:
+            import json
+            data = json.loads(_CHAIN_REACTION_OUTPUT.read_text())
+            raw_syms = (
+                data.get("bottleneck_symbols")
+                or data.get("tickers")
+                or data.get("symbols")
+                or []
+            )
+            last_dynamic_run = (
+                data.get("generated_at")
+                or data.get("built_at")
+                or data.get("as_of")
+            )
+            if raw_syms:
+                symbols = _dedupe_filter(
+                    [str(s).upper() for s in raw_syms if s]
+                )[:_GLOBAL_TICKER_CAP]
+                is_dynamic = True
+                source_registry = "chain_reaction_dynamic"
+                print(f"[SCREENER_HUB] bottlenecks: loaded {len(symbols)} from dynamic output")
+        except Exception as e:
+            print(f"[SCREENER_HUB] chain_reaction_output.json read error: {e}")
+
+    # ── Fall back to static NODE_REGISTRY ────────────────────────────────────
+    if not symbols:
+        out: list[tuple[str, int]] = []
+        try:
+            from services.playbook.supply_chain_graph import NODE_REGISTRY
+            for ticker, node in (NODE_REGISTRY or {}).items():
+                if not isinstance(node, dict):
+                    continue
+                score = int(node.get("bottleneck_score") or 0)
+                # Prefer the US-listed proxy when the native ticker isn't tradeable here
+                us_proxy = (
+                    node.get("us_access_proxy")
+                    or node.get("adr_ticker")
+                    or ticker
+                )
+                out.append((str(us_proxy).upper(), score))
+        except Exception as e:
+            print(f"[SCREENER_HUB] bottlenecks load error: {e}")
+        out.sort(key=lambda r: r[1], reverse=True)
+        seen: set[str] = set()
+        for s, _ in out:
+            if s and s not in seen:
+                seen.add(s)
+                symbols.append(s)
+        symbols = symbols[:_GLOBAL_TICKER_CAP]
+
+    metadata: dict = {
+        "is_dynamic":    is_dynamic,
+        "source_registry": source_registry,
+        "last_dynamic_chain_reaction_run": last_dynamic_run,
+        "symbol_count":  len(symbols),
+        "note": (
+            "Dynamic Chain Reaction scoring output loaded from data/chain_reaction_output.json."
+            if is_dynamic
+            else
+            "Static curated NODE_REGISTRY (supply_chain_graph.py). "
+            "No dynamic Chain Reaction output found at data/chain_reaction_output.json. "
+            "NODE_REGISTRY is the authoritative bottleneck source until a weekly "
+            "chain_reaction_output.json is produced."
+        ),
+    }
+    return symbols, metadata
 
 
 def _build_watchlist_portfolio_universe() -> list[str]:
@@ -334,7 +585,6 @@ def _build_watchlist_portfolio_universe() -> list[str]:
         print(f"[SCREENER_HUB] watchlist load error: {e}")
     try:
         import json
-        from pathlib import Path
         for p in Path(__file__).parent.parent.joinpath("data").glob("portfolio_holdings*.json"):
             try:
                 data = json.loads(p.read_text())
@@ -742,6 +992,8 @@ async def get_screener_hub(
     snap_status = "fresh"
     universe_source = "snapshot"
     theme_state_meta: dict = {}
+    thematic_breakdown: dict = {}
+    bottlenecks_meta: dict = {}
 
     # ── Resolve universe ──
     if tab == "thematic":
@@ -753,19 +1005,28 @@ async def get_screener_hub(
             snap = get_latest_universe("thematic", theme)
             if snap and snap.get("symbols"):
                 raw_syms = list(snap.get("symbols") or [])
-                # If snapshot is ETF-only (built with the old buggy code that
-                # used representative_tickers instead of candidate_symbols),
+                # If snapshot is ETF-only (built before the dynamic universe fix),
                 # discard it and rebuild live so stocks appear immediately.
                 stock_syms = [s for s in raw_syms if s not in _ALL_PROXY_ETFS]
                 if stock_syms:
-                    symbols = raw_syms  # snapshot is good — keep ETFs in universe for warm jobs
+                    symbols = raw_syms  # snapshot is good
+                    # Reconstruct a lightweight breakdown from the snapshot so the
+                    # response still carries source metadata even on a cache hit.
+                    thematic_breakdown = {
+                        "source": "snapshot",
+                        "snapshot_symbol_count": len(raw_syms),
+                        "dynamic_symbols_count": len(stock_syms),
+                        "static_fallback_symbols_count": 0,
+                        "used_static_fallback": False,
+                    }
                 else:
                     # Snapshot contained only ETF proxies → rebuild live right now
                     # and persist the corrected stock-universe so the next request
                     # can use the snapshot directly instead of rebuilding again.
                     print(f"[SCREENER_HUB] snapshot for {theme} is ETF-only — rebuilding live")
-                    built = await _build_thematic_universe(theme)
-                    symbols = built.get(theme, [])
+                    symbols_map, breakdowns = await _build_thematic_universe(theme)
+                    symbols = symbols_map.get(theme, [])
+                    thematic_breakdown = breakdowns.get(theme, {})
                     snap_status = "live_fallback"
                     universe_source = "live"
                     if symbols:
@@ -775,16 +1036,24 @@ async def get_screener_hub(
                             status="ok", ttl_days=7,
                         )
             else:
-                # No snapshot yet — build one synchronously from registries.
-                built = await _build_thematic_universe(theme)
-                symbols = built.get(theme, [])
+                # No snapshot yet — build one live from dynamic sources.
+                symbols_map, breakdowns = await _build_thematic_universe(theme)
+                symbols = symbols_map.get(theme, [])
+                thematic_breakdown = breakdowns.get(theme, {})
                 snap_status = "live_fallback"
                 universe_source = "live"
+                if symbols:
+                    insert_universe_snapshot(
+                        universe_type="thematic", theme_key=theme,
+                        symbols=symbols, source="live_build",
+                        status="ok", ttl_days=7,
+                    )
         else:
             # No theme → flatten symbols across all themes (de-dupe).
-            built = await _build_thematic_universe(None)
+            # with_fmp_peers=False to avoid 55 × peer API calls.
+            symbols_map, breakdowns = await _build_thematic_universe(None, with_fmp_peers=False)
             seen: set[str] = set()
-            for syms in built.values():
+            for syms in symbols_map.values():
                 for s in syms:
                     if s not in seen:
                         seen.add(s)
@@ -796,6 +1065,7 @@ async def get_screener_hub(
         # They may remain in the cached universe for fundamentals warm-job
         # coverage, but the screener table should show stocks only.
         symbols = [s for s in symbols if s not in _ALL_PROXY_ETFS] or symbols
+
     elif tab == "social":
         snap = get_latest_universe("social")
         symbols = list(snap.get("symbols") or []) if snap else []
@@ -803,13 +1073,20 @@ async def get_screener_hub(
             symbols = _build_social_universe()
             snap_status = "live_fallback"
             universe_source = "live"
+
     elif tab == "bottlenecks":
         snap = get_latest_universe("bottlenecks")
-        symbols = list(snap.get("symbols") or []) if snap else []
-        if not symbols:
-            symbols = _build_bottlenecks_universe()
+        if snap and snap.get("symbols"):
+            symbols = list(snap.get("symbols") or [])
+        else:
+            bn_syms, bottlenecks_meta = _build_bottlenecks_universe()
+            symbols = bn_syms
             snap_status = "live_fallback"
             universe_source = "live"
+        # Always compute metadata so it's present in the response
+        if not bottlenecks_meta:
+            _, bottlenecks_meta = _build_bottlenecks_universe()
+
     elif tab == "watchlist_portfolio":
         # Always live — depends on the user's current watchlists.
         symbols = _build_watchlist_portfolio_universe()
@@ -902,14 +1179,36 @@ async def get_screener_hub(
         "row_count":                 len(rows),
         "rows": rows,
     }
-    # Inject theme-level state (from the Themes page LKG) for thematic tab.
-    # theme_state = overall theme momentum (active/emerging/neutral/weakening/dead_zone).
-    # category on each row = stock-level classification within the theme (Leading/Improving/…).
-    # These are separate concepts; theme_state is never written into per-row category.
-    if theme_state_meta:
-        payload["theme_state"]        = theme_state_meta.get("state")
-        payload["theme_state_reason"] = theme_state_meta.get("state_reason")
-        payload["theme_rs_score"]     = theme_state_meta.get("rs_score")
+
+    # Inject thematic source breakdown metadata (only for thematic tab).
+    # universe_source_breakdown: per-source symbol counts (ETF holdings, LKG, FMP peers, static seed).
+    # theme_state:               overall theme momentum from Themes page LKG — NOT the per-row category.
+    # per-row category (Leading/Improving/Weakening/Lagging) is stock-level, never overwritten by theme_state.
+    if tab == "thematic":
+        if thematic_breakdown:
+            payload["universe_source_breakdown"] = {
+                "etf_holdings":       thematic_breakdown.get("etf_holdings_count", 0),
+                "lkg_leaders":        thematic_breakdown.get("lkg_leaders_count", 0),
+                "fmp_peers":          thematic_breakdown.get("fmp_peers_count", 0),
+                "static_seed":        thematic_breakdown.get("static_seed_count", 0),
+            }
+            payload["dynamic_symbols_count"]          = thematic_breakdown.get("dynamic_symbols_count", 0)
+            payload["static_fallback_symbols_count"]  = thematic_breakdown.get("static_fallback_symbols_count", 0)
+            payload["used_static_fallback"]           = thematic_breakdown.get("used_static_fallback", False)
+            if thematic_breakdown.get("etf_files_found"):
+                payload["etf_files_used"] = thematic_breakdown["etf_files_found"]
+        if theme_state_meta:
+            payload["theme_state"]        = theme_state_meta.get("state")
+            payload["theme_state_reason"] = theme_state_meta.get("state_reason")
+            payload["theme_rs_score"]     = theme_state_meta.get("rs_score")
+
+    # Inject bottlenecks source metadata (only for bottlenecks tab).
+    if tab == "bottlenecks" and bottlenecks_meta:
+        payload["is_dynamic"]    = bottlenecks_meta.get("is_dynamic", False)
+        payload["source_registry"] = bottlenecks_meta.get("source_registry", "NODE_REGISTRY")
+        payload["last_dynamic_chain_reaction_run"] = bottlenecks_meta.get("last_dynamic_chain_reaction_run")
+        payload["bottlenecks_source_note"] = bottlenecks_meta.get("note")
+
     return payload
 
 
@@ -929,15 +1228,27 @@ async def rebuild_universe(
     out: dict[str, Any] = {"tab": tab, "theme": theme, "force": bool(force)}
 
     if tab == "thematic":
-        built = await _build_thematic_universe(theme)
+        # with_fmp_peers=True only when rebuilding a single theme.
+        # For full rebuild (theme=None), skip FMP peers to avoid 55 × 3 API calls.
+        symbols_map, breakdowns = await _build_thematic_universe(
+            theme, with_fmp_peers=(theme is not None)
+        )
         out["themes_built"] = []
-        for k, syms in built.items():
+        for k, syms in symbols_map.items():
             ok = insert_universe_snapshot(
                 universe_type="thematic", theme_key=k,
                 symbols=syms, source="thematic_rebuild",
                 status="ok", ttl_days=8,
             )
-            out["themes_built"].append({"theme": k, "symbols_count": len(syms), "ok": ok})
+            bd = breakdowns.get(k, {})
+            out["themes_built"].append({
+                "theme": k,
+                "symbols_count": len(syms),
+                "ok": ok,
+                "dynamic_count": bd.get("dynamic_symbols_count", 0),
+                "static_count":  bd.get("static_seed_count", 0),
+                "used_static_fallback": bd.get("used_static_fallback", False),
+            })
     elif tab == "social":
         syms = _build_social_universe()
         ok = insert_universe_snapshot(
@@ -947,13 +1258,15 @@ async def rebuild_universe(
         out["symbols_count"] = len(syms)
         out["snapshot_ok"]   = ok
     elif tab == "bottlenecks":
-        syms = _build_bottlenecks_universe()
+        syms, meta = _build_bottlenecks_universe()
         ok = insert_universe_snapshot(
             universe_type="bottlenecks", theme_key=None,
-            symbols=syms, source="chain_reaction", status="ok", ttl_days=10,
+            symbols=syms, source=meta.get("source_registry", "chain_reaction"),
+            status="ok", ttl_days=10,
         )
         out["symbols_count"] = len(syms)
         out["snapshot_ok"]   = ok
+        out["bottlenecks_meta"] = meta
     elif tab == "watchlist_portfolio":
         syms = _build_watchlist_portfolio_universe()
         ok = insert_universe_snapshot(
@@ -987,17 +1300,18 @@ async def warm_tab_fundamentals(
             snap = get_latest_universe("thematic", theme)
             symbols = list((snap or {}).get("symbols") or [])
             if not symbols:
-                built = await _build_thematic_universe(theme)
-                symbols = built.get(theme, [])
+                symbols_map, _ = await _build_thematic_universe(theme)
+                symbols = symbols_map.get(theme, [])
             return await warm_fundamentals(
                 symbols, job_name=f"thematic_warm:{theme}", force=force, max_calls=max_calls,
             )
         else:
-            # Aggregate all theme symbols (deduped)
-            built = await _build_thematic_universe(None)
+            # Aggregate all theme symbols (deduped).
+            # with_fmp_peers=False for bulk build.
+            symbols_map, breakdowns = await _build_thematic_universe(None, with_fmp_peers=False)
             agg: list[str] = []
             seen: set[str] = set()
-            for k, syms in built.items():
+            for k, syms in symbols_map.items():
                 # Persist a snapshot per theme too (cheap, idempotent)
                 insert_universe_snapshot(
                     universe_type="thematic", theme_key=k,
@@ -1033,6 +1347,7 @@ async def warm_tab_fundamentals(
 def get_admin_status() -> dict:
     return {
         "as_of": _now_iso(),
+        "status": "ok",
         "fundamentals_cache": fundamentals_table_stats(),
         "universe_snapshots": universe_table_stats(),
         "quote_cache":        quote_table_stats(),
