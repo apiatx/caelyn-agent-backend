@@ -1,0 +1,73 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not modify unrelated functionality.
+Keep this scoped only to Screener Hub backend logic.
+
+Current issue:
+The Screener Hub frontend is rendering, but the Thematic tab is wrong. For theme=semiconductors it is showing ETFs like SOXX and SMH instead of hot underlying stocks in that theme. The Thematic Screener is supposed to identify specific stocks that are hot within the selected theme, not just return ETF/theme proxy symbols.
+
+Also clarify/fix the Bottlenecks source. The Bottlenecks tab currently returns 85 rows from DB snapshot, but I need to know whether those rows are actually coming from the weekly Chain Reaction bottleneck output or from a fallback/static/overlapping universe.
+
+Tasks:
+
+1. Inspect backend/services/screener_hub_service.py, backend/data/screener_hub_store.py, backend/services/screener_hub_scheduler.py, and any Chain Reaction backend service/output/cache files.
+
+2. Determine exactly how /api/screener-hub?tab=bottlenecks is populated:
+   - Which function builds the universe?
+   - Which DB row/source field is used?
+   - Is it using actual Chain Reaction output?
+   - Is it using fallback/static symbols?
+   - Is it overlapping with social/thematic/watchlist by accident?
+   Return a concise explanation in the final report.
+
+3. Fix Thematic Screener universe generation:
+   - The final Thematic Screener rows should be individual stock symbols, not ETFs.
+   - Exclude ETFs/funds from final returned rows by default.
+   - ETFs like SOXX/SMH may be used as reference/proxy inputs, but should not appear as final rows unless there are no stock constituents at all.
+   - For Semiconductors, the final rows should include relevant semiconductor stocks, not just SOXX/SMH.
+   - For Clean Energy, the final rows should include relevant clean energy stocks, not just clean-energy ETFs.
+   - Preserve existing theme dropdown behavior and endpoint contract.
+
+4. Reuse existing Themes page intelligence:
+   - Find the backend logic/cache/source that powers the existing Themes page labels like Leading, Emerging, Neutral, Lagging.
+   - Screener Hub themes should reuse that same theme state if available.
+   - Add theme_state to the /api/screener-hub response metadata and/or row metadata.
+   - Do not create a conflicting theme classification system if one already exists.
+
+5. Separate theme state from stock category:
+   - theme_state = overall selected theme status, such as Leading/Emerging/Neutral/Lagging.
+   - category = stock-level category inside selected theme, such as Leading/Improving/Weakening/Lagging.
+   - Do not overwrite stock category with theme_state.
+
+6. Improve stock-level category/score logic:
+   - Classify each stock within the selected theme using available RS/performance/acceleration/52-week-distance/volume/accumulation fields.
+   - Score should be count of enabled positive signals where possible.
+   - Avoid returning every row as Leading just because accumulation is true.
+   - If data is missing, return null/partial safely instead of fake confidence.
+
+7. Validate with curl:
+   - GET /api/screener-hub/themes
+   - GET /api/screener-hub?tab=thematic&theme=semiconductors
+   - GET /api/screener-hub?tab=thematic&theme=clean_energy
+   - GET /api/screener-hub?tab=bottlenecks
+   - GET /api/admin/screener-hub/status with X-API-Key
+
+8. Validation requirements:
+   - semiconductors should return mostly stocks, not SOXX/SMH-only.
+   - clean_energy should return mostly stocks, not ETF-only.
+   - Thematic response should expose the selected theme state if available.
+   - Bottlenecks final report should clearly state whether it is real Chain Reaction output or fallback/static data.
+   - Do not break Social, Watchlist+Portfolio, or existing Chain Reaction page behavior.
+   - Do not touch frontend unless endpoint response shape absolutely requires it.
+
+Return:
+- files changed
+- whether Thematic now excludes ETFs by default
+- sample semiconductor symbols returned
+- sample clean energy symbols returned
+- source of Bottlenecks universe
+- whether theme_state is reused from the Themes page
+- endpoint validation results
+- remaining limitations

@@ -77,6 +77,59 @@ def _is_market_open() -> bool:
     return 9 * 60 + 30 <= minutes < 16 * 60
 
 
+# ── Module-level ETF proxy set (all proxy_symbols across every theme entry) ────
+# Built once at import time; used to exclude ETFs from thematic screener rows.
+
+def _build_all_proxy_etfs() -> frozenset[str]:
+    try:
+        from services.theme_rs_universe import THEME_RS_UNIVERSE
+        s: set[str] = set()
+        for meta in THEME_RS_UNIVERSE.values():
+            for sym in (meta.get("proxy_symbols") or []):
+                if sym:
+                    s.add(sym.upper())
+        return frozenset(s)
+    except Exception:
+        return frozenset()
+
+
+_ALL_PROXY_ETFS: frozenset[str] = _build_all_proxy_etfs()
+
+
+# ── LKG theme-state helper ─────────────────────────────────────────────────────
+
+def _get_theme_state_from_lkg(theme_key: str) -> dict:
+    """Return {state, state_reason, rs_score} for *theme_key* from the themes LKG disk file.
+
+    The Themes page (theme_rs_service) writes backend/data/themes_rs_lkg.json with a
+    ``state`` field per row (active / emerging / neutral / weakening / dead_zone) and an
+    ``rs_score`` (0–100).  Screener Hub reuses that data instead of computing a
+    conflicting second system.
+
+    Returns an empty dict when the LKG is unavailable or the key is not found.
+    """
+    try:
+        import json
+        from pathlib import Path
+        lkg_path = Path(__file__).parent.parent / "data" / "themes_rs_lkg.json"
+        if not lkg_path.exists():
+            return {}
+        raw = json.loads(lkg_path.read_text())
+        rows: list[dict] = raw.get("rows", raw) if isinstance(raw, dict) else raw
+        if not isinstance(rows, list):
+            return {}
+        for row in rows:
+            if row.get("theme_id") == theme_key:
+                return {
+                    "state":        row.get("state"),
+                    "state_reason": row.get("state_reason"),
+                    "rs_score":     row.get("rs_score"),
+                }
+    except Exception as e:
+        print(f"[SCREENER_HUB] _get_theme_state_from_lkg {theme_key} error: {e}")
+    return {}
+
+
 # ── Universe builders ─────────────────────────────────────────────────────────
 
 def _theme_keys() -> list[str]:
@@ -113,14 +166,20 @@ def _theme_metadata() -> list[dict]:
 async def _build_thematic_universe(theme_key: Optional[str]) -> dict[str, list[str]]:
     """Return {theme_key: [symbols]} map.
 
-    Uses the dynamic_thematic_universe service (ETF holdings + FMP peers + X
-    consensus + static anchors). Fall back to THEME_RS_UNIVERSE
-    representative tickers if the dynamic service is cold or fails.
+    Source priority (stocks first, ETF proxies only as absolute last resort):
+      1. dynamic_thematic_universe cache (ETF holdings + FMP peers + X consensus)
+      2. LKG theme leaders from themes_rs_lkg.json (stocks discovered from ETF holdings)
+      3. candidate_symbols from THEME_RS_UNIVERSE registry (static stock seeds)
+      4. proxy_symbols (ETF proxies) — ONLY when no stocks found from 1-3
+
+    ETF proxies are intentionally kept out of the stock universe unless there is
+    absolutely no other coverage, because the Thematic Screener should show
+    individual stocks, not the ETFs used as reference instruments.
     """
     keys = [theme_key] if theme_key else _theme_keys()
     out: dict[str, list[str]] = {}
 
-    # Try dynamic universe first — already cached/refreshed by main.py loop.
+    # ── Source 1: dynamic universe cache ──────────────────────────────────────
     dyn_map: dict[str, list[str]] = {}
     try:
         from services.dynamic_thematic_universe import get_cached_thematic_universe
@@ -130,10 +189,34 @@ async def _build_thematic_universe(theme_key: Optional[str]) -> dict[str, list[s
             if not isinstance(info, dict):
                 continue
             theme_name = info.get("theme_name") or ""
-            # We don't always have a stable key; use display_name lookup below.
             dyn_map.setdefault(theme_name, []).append(ticker)
     except Exception as e:
         print(f"[SCREENER_HUB] dynamic thematic load error: {e}")
+
+    # ── Source 2: LKG leaders (stocks from ETF holdings discovery) ────────────
+    lkg_leaders_map: dict[str, list[str]] = {}
+    try:
+        import json
+        from pathlib import Path
+        lkg_path = Path(__file__).parent.parent / "data" / "themes_rs_lkg.json"
+        if lkg_path.exists():
+            raw = json.loads(lkg_path.read_text())
+            lkg_rows: list[dict] = raw.get("rows", raw) if isinstance(raw, dict) else raw
+            if isinstance(lkg_rows, list):
+                for row in lkg_rows:
+                    tid = row.get("theme_id") or ""
+                    leaders = [
+                        l.get("symbol") for l in (row.get("leaders") or [])
+                        if isinstance(l, dict) and l.get("symbol")
+                    ]
+                    laggards = [
+                        l.get("symbol") for l in (row.get("laggards") or [])
+                        if isinstance(l, dict) and l.get("symbol")
+                    ]
+                    if tid:
+                        lkg_leaders_map[tid] = leaders + laggards
+    except Exception as e:
+        print(f"[SCREENER_HUB] LKG leaders load error: {e}")
 
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE
@@ -145,20 +228,33 @@ async def _build_thematic_universe(theme_key: Optional[str]) -> dict[str, list[s
         display = (meta.get("display_name") or key).strip()
         symbols: list[str] = []
 
-        # Dynamic-universe matches by display_name first
+        # Source 1: dynamic-universe matches by display_name
         for cand_name, syms in dyn_map.items():
             if cand_name and cand_name.lower() == display.lower():
-                symbols.extend(syms)
+                for s in syms:
+                    su = s.upper() if isinstance(s, str) else ""
+                    if su and su not in _ALL_PROXY_ETFS and su not in symbols:
+                        symbols.append(su)
 
-        # Augment / fall back to representative tickers from the registry.
-        for s in (meta.get("representative_tickers") or []):
-            if s and s.upper() not in symbols:
-                symbols.append(s.upper())
+        # Source 2: LKG leaders (already stocks — from ETF holdings discovery)
+        for s in lkg_leaders_map.get(key) or []:
+            su = s.upper() if isinstance(s, str) else ""
+            if su and su not in _ALL_PROXY_ETFS and su not in symbols:
+                symbols.append(su)
 
-        # Always include proxy ETFs at the bottom — useful for theme leaders.
-        for s in (meta.get("proxy_symbols") or []):
-            if s and s.upper() not in symbols:
-                symbols.append(s.upper())
+        # Source 3: candidate_symbols from the registry (static stock seeds)
+        # NOTE: field is candidate_symbols, NOT representative_tickers.
+        for s in (meta.get("candidate_symbols") or []):
+            su = s.upper() if isinstance(s, str) else ""
+            if su and su not in symbols:
+                symbols.append(su)
+
+        # Source 4: proxy ETFs — last resort only (when no stocks found at all)
+        if not symbols:
+            for s in (meta.get("proxy_symbols") or []):
+                su = s.upper() if isinstance(s, str) else ""
+                if su and su not in symbols:
+                    symbols.append(su)
 
         cleaned = _dedupe_filter(symbols)[:_PER_THEME_CAP]
         if cleaned:
@@ -550,15 +646,23 @@ def _classify_row(metrics: dict, quote: dict, *, score_mode: bool, coc_filter: b
     rs_0_10w = chg_1d
     rs_accel: Optional[float] = None
 
+    # Accumulation: meaningful positive day (>0.5%) on elevated volume (≥1.5×).
+    # Threshold raised from the original (>0 / ≥1.2) to avoid flagging tiny
+    # fractional moves with minor vol as accumulation — which was cascading
+    # into inflated Leading counts.
     accumulation: Optional[bool] = None
     if volume_surge is not None and chg_1d is not None:
-        accumulation = bool(volume_surge >= 1.2 and chg_1d > 0)
+        accumulation = bool(volume_surge >= 1.5 and chg_1d > 0.5)
 
     coc: Optional[bool] = None  # CoC filter not implemented; safe-null
 
     # Signal scoring
+    # rs_positive threshold raised to >0.5% — using 1D change as an RS proxy
+    # means that any fractional positive day would fire this signal, biasing
+    # almost every stock toward Leading when the day is slightly green.
+    # A >0.5% move is a more meaningful signal while still being accessible.
     signals = {
-        "rs_positive":   bool(rs_0_4w is not None and rs_0_4w > 0),
+        "rs_positive":   bool(rs_0_4w is not None and rs_0_4w > 0.5),
         "near_52w_high": bool(distance_52w_high is not None and distance_52w_high > -10),
         "vol_surge":     bool(volume_surge is not None and volume_surge >= 1.5),
         "accumulation":  bool(accumulation),
@@ -637,13 +741,39 @@ async def get_screener_hub(
     symbols: list[str] = []
     snap_status = "fresh"
     universe_source = "snapshot"
+    theme_state_meta: dict = {}
 
     # ── Resolve universe ──
     if tab == "thematic":
+        # Pull theme state from Themes page LKG (reuse, don't duplicate).
+        if theme:
+            theme_state_meta = _get_theme_state_from_lkg(theme)
+
         if theme:
             snap = get_latest_universe("thematic", theme)
             if snap and snap.get("symbols"):
-                symbols = list(snap.get("symbols") or [])
+                raw_syms = list(snap.get("symbols") or [])
+                # If snapshot is ETF-only (built with the old buggy code that
+                # used representative_tickers instead of candidate_symbols),
+                # discard it and rebuild live so stocks appear immediately.
+                stock_syms = [s for s in raw_syms if s not in _ALL_PROXY_ETFS]
+                if stock_syms:
+                    symbols = raw_syms  # snapshot is good — keep ETFs in universe for warm jobs
+                else:
+                    # Snapshot contained only ETF proxies → rebuild live right now
+                    # and persist the corrected stock-universe so the next request
+                    # can use the snapshot directly instead of rebuilding again.
+                    print(f"[SCREENER_HUB] snapshot for {theme} is ETF-only — rebuilding live")
+                    built = await _build_thematic_universe(theme)
+                    symbols = built.get(theme, [])
+                    snap_status = "live_fallback"
+                    universe_source = "live"
+                    if symbols:
+                        insert_universe_snapshot(
+                            universe_type="thematic", theme_key=theme,
+                            symbols=symbols, source="etf_only_refresh",
+                            status="ok", ttl_days=7,
+                        )
             else:
                 # No snapshot yet — build one synchronously from registries.
                 built = await _build_thematic_universe(theme)
@@ -661,6 +791,11 @@ async def get_screener_hub(
                         symbols.append(s)
             snap_status = "live_aggregated"
             universe_source = "live"
+
+        # Strip ETF proxies from the final rows list for thematic tab.
+        # They may remain in the cached universe for fundamentals warm-job
+        # coverage, but the screener table should show stocks only.
+        symbols = [s for s in symbols if s not in _ALL_PROXY_ETFS] or symbols
     elif tab == "social":
         snap = get_latest_universe("social")
         symbols = list(snap.get("symbols") or []) if snap else []
@@ -755,7 +890,7 @@ async def get_screener_hub(
             continue
         rows.append(row)
 
-    return {
+    payload: dict[str, Any] = {
         "status": "ok",
         "tab": tab,
         "theme": theme,
@@ -767,6 +902,15 @@ async def get_screener_hub(
         "row_count":                 len(rows),
         "rows": rows,
     }
+    # Inject theme-level state (from the Themes page LKG) for thematic tab.
+    # theme_state = overall theme momentum (active/emerging/neutral/weakening/dead_zone).
+    # category on each row = stock-level classification within the theme (Leading/Improving/…).
+    # These are separate concepts; theme_state is never written into per-row category.
+    if theme_state_meta:
+        payload["theme_state"]        = theme_state_meta.get("state")
+        payload["theme_state_reason"] = theme_state_meta.get("state_reason")
+        payload["theme_rs_score"]     = theme_state_meta.get("rs_score")
+    return payload
 
 
 # ── Rebuild orchestration (universes + warm jobs) ─────────────────────────────
