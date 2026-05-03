@@ -610,12 +610,13 @@ async def _fmp_sector_screener(
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.get(
-                    f"{FMP_BASE}/stock-screener",
+                    f"{FMP_BASE}/company-screener",
                     params={
                         "industry": industry,
-                        "exchange": "NASDAQ,NYSE,AMEX",
                         "marketCapMoreThan": min_market_cap,
                         "marketCapLessThan": max_market_cap,
+                        "isEtf": "false",
+                        "isActivelyTrading": "true",
                         "limit": limit,
                         "apikey": api_key,
                     },
