@@ -722,6 +722,15 @@ def _build_bottlenecks_universe() -> tuple[list[str], dict]:
                 last_dynamic_run = cr_row.get("generated_at")
                 dynamic_rows_count = len(symbols)
                 cr_meta = cr_row.get("metadata") or {}
+
+                # Build per-symbol detail map from rows_json so the screener can
+                # enrich each Bottlenecks row with CR scoring fields.
+                details_by_symbol: dict[str, dict] = {}
+                for rd in (cr_row.get("rows") or []):
+                    sym = rd.get("bottleneck_ticker")
+                    if sym:
+                        details_by_symbol[str(sym).upper()] = rd
+
                 metadata = {
                     "is_dynamic":    True,
                     "source_registry": "chain_reaction_weekly_output",
@@ -730,6 +739,7 @@ def _build_bottlenecks_universe() -> tuple[list[str], dict]:
                     "symbol_count":  len(symbols),
                     "week_start":    cr_row.get("week_start"),
                     "source_version": cr_row.get("source_version"),
+                    "details_by_symbol": details_by_symbol,
                     "note": (
                         f"Dynamic Chain Reaction weekly output from DB "
                         f"(week {cr_row.get('week_start','?')}, "
@@ -737,7 +747,8 @@ def _build_bottlenecks_universe() -> tuple[list[str], dict]:
                         f"Scored {cr_meta.get('scored_count', len(symbols))} nodes."
                     ),
                 }
-                print(f"[SCREENER_HUB] bottlenecks: loaded {len(symbols)} from DB weekly output")
+                print(f"[SCREENER_HUB] bottlenecks: loaded {len(symbols)} symbols + "
+                      f"{len(details_by_symbol)} detail rows from DB weekly output")
                 return symbols, metadata
     except Exception as e:
         print(f"[SCREENER_HUB] bottlenecks DB check error: {e}")
@@ -1275,15 +1286,21 @@ async def get_screener_hub(
                 stock_syms = [s for s in raw_syms if s not in _ALL_PROXY_ETFS]
                 if stock_syms:
                     symbols = raw_syms  # snapshot is good
-                    # Reconstruct a lightweight breakdown from the snapshot so the
-                    # response still carries source metadata even on a cache hit.
-                    thematic_breakdown = {
-                        "source": "snapshot",
-                        "snapshot_symbol_count": len(raw_syms),
-                        "dynamic_symbols_count": len(stock_syms),
-                        "static_fallback_symbols_count": 0,
-                        "used_static_fallback": False,
-                    }
+                    # Hydrate full breakdown (including sources_by_symbol) from
+                    # persisted snapshot metadata. Falls back gracefully for old
+                    # snapshots that predate the metadata_json column.
+                    snap_meta = snap.get("metadata") or {}
+                    if snap_meta and isinstance(snap_meta, dict):
+                        thematic_breakdown = snap_meta
+                    else:
+                        # Old snapshot — lightweight fallback, no provenance tags
+                        thematic_breakdown = {
+                            "source": "snapshot",
+                            "snapshot_symbol_count": len(raw_syms),
+                            "dynamic_symbols_count": len(stock_syms),
+                            "static_fallback_symbols_count": 0,
+                            "used_static_fallback": False,
+                        }
                 else:
                     # Snapshot contained only ETF proxies → rebuild live right now
                     # and persist the corrected stock-universe so the next request
@@ -1299,6 +1316,7 @@ async def get_screener_hub(
                             universe_type="thematic", theme_key=theme,
                             symbols=symbols, source="etf_only_refresh",
                             status="ok", ttl_days=7,
+                            metadata=thematic_breakdown,
                         )
             else:
                 # No snapshot yet — build one live from dynamic sources.
@@ -1312,6 +1330,7 @@ async def get_screener_hub(
                         universe_type="thematic", theme_key=theme,
                         symbols=symbols, source="live_build",
                         status="ok", ttl_days=7,
+                        metadata=thematic_breakdown,
                     )
         else:
             # No theme → flatten symbols across all themes (de-dupe).
@@ -1362,6 +1381,10 @@ async def get_screener_hub(
     # ── Per-symbol source map (thematic only; populated by live build) ─────────
     # Used below to build row.discovery_sources from ETF/LKG/peer/static tags.
     sources_by_symbol: dict[str, list[str]] = thematic_breakdown.get("sources_by_symbol") or {}
+
+    # ── Chain Reaction detail map (bottlenecks only) ────────────────────────────
+    # Per-symbol scored node data from chain_reaction_weekly_outputs.rows_json.
+    cr_details: dict[str, dict] = bottlenecks_meta.get("details_by_symbol") or {}
 
     # ── Load real historical returns from cache (never blocks on FMP API) ──────
     returns_cache: dict[str, dict] = get_returns(symbols) if symbols else {}
@@ -1497,9 +1520,48 @@ async def get_screener_hub(
                 "bars_count":              ret.get("bars_count"),
             },
         }
+
+        # ── Bottlenecks: enrich with Chain Reaction scored node detail ──────────
+        if tab == "bottlenecks" and cr_details:
+            cr = cr_details.get(sym) or {}
+            if cr:
+                row["bottleneck_ticker"]      = cr.get("bottleneck_ticker") or sym
+                row["company_name"]           = cr.get("company_name") or row.get("name")
+                row["anchor_ticker"]          = cr.get("anchor_ticker")
+                row["anchor_theme"]           = cr.get("anchor_theme")
+                row["supply_chain_role"]      = cr.get("supply_chain_role")
+                row["bottleneck_type"]        = cr.get("bottleneck_type")
+                row["layer"]                  = cr.get("layer")
+                row["themes"]                 = cr.get("themes") or []
+                row["theme_alignment_score"]  = cr.get("theme_alignment_score")
+                row["bottleneck_score"]       = cr.get("bottleneck_score")
+                row["momentum_score"]         = cr.get("momentum_score")
+                row["volume_score"]           = cr.get("volume_score")
+                row["fundamental_score"]      = cr.get("fundamental_score")
+                row["social_score"]           = cr.get("social_score")
+                row["options_score"]          = cr.get("options_score")
+                row["final_score"]            = cr.get("final_score")
+                row["evidence"]               = cr.get("evidence") or []
+                # Merge CR discovery_sources with overlap-set tags already in disc_src
+                cr_sources = cr.get("discovery_sources") or []
+                for src in cr_sources:
+                    if src and src not in row["discovery_sources"]:
+                        row["discovery_sources"].append(src)
+
         if not _row_passes_filters(row, category_filter=category, coc_filter=coc_filter):
             continue
         rows.append(row)
+
+    # ── Sort bottlenecks by final_score → bottleneck_score → hidden_gem_score ──
+    if tab == "bottlenecks" and cr_details:
+        rows.sort(
+            key=lambda r: (
+                r.get("final_score") or 0,
+                r.get("bottleneck_score") or 0,
+                r.get("hidden_gem_score") or 0,
+            ),
+            reverse=True,
+        )
 
     payload: dict[str, Any] = {
         "status": "ok",
@@ -1594,12 +1656,13 @@ async def rebuild_universe(
         )
         out["themes_built"] = []
         for k, syms in symbols_map.items():
+            bd = breakdowns.get(k, {})
             ok = insert_universe_snapshot(
                 universe_type="thematic", theme_key=k,
                 symbols=syms, source="thematic_rebuild",
                 status="ok", ttl_days=8,
+                metadata=bd,
             )
-            bd = breakdowns.get(k, {})
             out["themes_built"].append({
                 "theme": k,
                 "symbols_count": len(syms),
@@ -1675,6 +1738,7 @@ async def warm_tab_fundamentals(
                 insert_universe_snapshot(
                     universe_type="thematic", theme_key=k,
                     symbols=syms, source="warm_job", ttl_days=8,
+                    metadata=breakdowns.get(k, {}),
                 )
                 for s in syms:
                     if s not in seen:

@@ -1,0 +1,88 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not modify unrelated functionality.
+Keep this scoped only to Screener Hub backend snapshot metadata and Bottlenecks row enrichment.
+
+Current validation passed the core behavior:
+- No ETFs in thematic rows
+- RS fields are real cached returns when available
+- RS fields are null when cache is cold
+- hidden_gem_score, role, discovery_sources exist on every row
+- chain_reaction_weekly_outputs table exists and stores dynamic Chain Reaction output
+- Bottlenecks can report is_dynamic=true from chain_reaction_weekly_output
+- Scheduler order is correct
+
+Remaining issues to fix:
+
+Issue 1 — Snapshot-hit rows lose discovery provenance
+When Thematic uses a cached universe snapshot, discovery_sources becomes ["unknown"] and universe_source_breakdown shows zeros because the snapshot stores symbols but not discovery metadata.
+
+Fix:
+1. When building a live thematic universe, persist discovery metadata into the snapshot.
+2. Store sources_by_symbol and universe_source_breakdown either inside symbols_json or metadata_json, depending on existing snapshot schema.
+3. On snapshot reads, hydrate:
+   - row.discovery_sources
+   - universe_source_breakdown
+   - dynamic_symbols_count
+   - static_fallback_symbols_count
+   - used_static_fallback
+   - etf_files_used if available
+4. Do not recalculate the full universe on every request just to get provenance.
+5. Preserve backward compatibility with old snapshots that only contain symbols.
+6. If old snapshot has no metadata, return ["unknown"] safely, but new snapshots should not.
+
+Issue 2 — Bottlenecks dynamic row details are stored but not surfaced
+chain_reaction_weekly_outputs.rows_json stores scored node data, but /api/screener-hub?tab=bottlenecks currently only extracts the symbol list. This leaves bottleneck_ticker, anchor_ticker, anchor_theme, supply_chain_role, bottleneck_type, momentum_score, social_score, options_score, final_score, and evidence as null.
+
+Fix:
+1. When Screener Hub Bottlenecks uses chain_reaction_weekly_output, load rows_json, not only symbols.
+2. Build a details_by_symbol map from rows_json.
+3. Enrich each Bottlenecks screener row with Chain Reaction detail fields:
+   - bottleneck_ticker
+   - company_name if available
+   - anchor_ticker
+   - anchor_theme
+   - supply_chain_role
+   - bottleneck_type
+   - theme_alignment_score
+   - bottleneck_score
+   - momentum_score
+   - volume_score
+   - fundamental_score
+   - social_score
+   - options_score
+   - final_score
+   - evidence
+   - chain_reaction_sources or discovery_sources
+4. Sort Bottlenecks by final_score if present, otherwise bottleneck_score, otherwise existing score.
+5. Preserve fallback behavior:
+   - If weekly output missing/stale/failed, fallback to JSON, then NODE_REGISTRY.
+   - In fallback mode, clearly return is_dynamic=false and source_registry=NODE_REGISTRY or JSON fallback.
+6. Do not break existing Social, Watchlist+Portfolio, or Thematic tabs.
+
+Validation:
+Run:
+1. GET /api/screener-hub?tab=thematic&theme=semiconductors
+2. Force or trigger a live thematic rebuild if safe, then call the same endpoint again from snapshot.
+3. Confirm snapshot-hit rows retain real discovery_sources, not ["unknown"].
+4. Confirm universe_source_breakdown is non-zero on snapshot hit if the live build stored metadata.
+5. GET /api/screener-hub?tab=bottlenecks
+6. Confirm Bottlenecks rows include non-null dynamic Chain Reaction fields when is_dynamic=true:
+   - anchor_ticker or anchor_theme
+   - supply_chain_role or bottleneck_type
+   - final_score or bottleneck_score
+   - evidence or discovery_sources
+7. Confirm Bottlenecks row count matches the active dynamic output after rebuild/warm, or clearly explain if it is still using an older snapshot.
+8. GET /api/admin/screener-hub/status with X-API-Key if available.
+
+Return:
+- files changed
+- snapshot metadata storage approach
+- sample thematic snapshot row showing discovery_sources
+- snapshot universe_source_breakdown
+- sample bottlenecks dynamic row with Chain Reaction fields populated
+- whether Bottlenecks is using dynamic DB output or fallback
+- endpoint validation results
+- remaining limitations

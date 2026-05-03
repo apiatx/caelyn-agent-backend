@@ -65,6 +65,7 @@ def _ddl_sql() -> str:
         theme_key      TEXT NULL,
         source         TEXT NOT NULL DEFAULT 'auto',
         symbols_json   JSONB NOT NULL DEFAULT '[]'::jsonb,
+        metadata_json  JSONB NULL,
         generated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         expires_at     TIMESTAMPTZ NULL,
         status         TEXT NOT NULL DEFAULT 'ok'
@@ -73,6 +74,8 @@ def _ddl_sql() -> str:
         ON public.screener_universe_snapshots (universe_type, theme_key, generated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_screener_universe_generated
         ON public.screener_universe_snapshots (generated_at DESC);
+    ALTER TABLE public.screener_universe_snapshots
+        ADD COLUMN IF NOT EXISTS metadata_json JSONB NULL;
 
     CREATE TABLE IF NOT EXISTS public.screener_quote_cache (
         symbol            TEXT PRIMARY KEY,
@@ -352,34 +355,43 @@ def insert_universe_snapshot(
     source: str = "auto",
     status: str = "ok",
     ttl_days: Optional[int] = None,
+    metadata: Optional[dict] = None,
 ) -> bool:
+    """
+    Insert a universe snapshot row.
+
+    metadata: optional dict of discovery provenance (sources_by_symbol,
+    etf_holdings_count, lkg_leaders_count, …). Stored in metadata_json so
+    snapshot-hit reads can hydrate discovery_sources without a live rebuild.
+    """
     ensure_tables()
     conn = _get_conn()
     if conn is None:
         return False
     try:
         cur = conn.cursor()
+        meta_jsonb = _jsonb(metadata) if metadata else None
         if ttl_days is not None:
             cur.execute(
                 """
                 INSERT INTO public.screener_universe_snapshots
-                    (universe_type, theme_key, source, symbols_json,
+                    (universe_type, theme_key, source, symbols_json, metadata_json,
                      generated_at, expires_at, status)
-                VALUES (%s, %s, %s, %s::jsonb,
+                VALUES (%s, %s, %s, %s::jsonb, %s::jsonb,
                         NOW(), NOW() + (%s || ' days')::interval, %s)
                 """,
-                (universe_type, theme_key, source, _jsonb(symbols),
+                (universe_type, theme_key, source, _jsonb(symbols), meta_jsonb,
                  str(int(ttl_days)), status),
             )
         else:
             cur.execute(
                 """
                 INSERT INTO public.screener_universe_snapshots
-                    (universe_type, theme_key, source, symbols_json,
+                    (universe_type, theme_key, source, symbols_json, metadata_json,
                      generated_at, status)
-                VALUES (%s, %s, %s, %s::jsonb, NOW(), %s)
+                VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, NOW(), %s)
                 """,
-                (universe_type, theme_key, source, _jsonb(symbols), status),
+                (universe_type, theme_key, source, _jsonb(symbols), meta_jsonb, status),
             )
         conn.commit()
         cur.close()
@@ -399,7 +411,12 @@ def get_latest_universe(
     universe_type: str,
     theme_key: Optional[str] = None,
 ) -> Optional[dict]:
-    """Latest snapshot for (universe_type, theme_key). Returns dict or None."""
+    """
+    Latest snapshot for (universe_type, theme_key). Returns dict or None.
+
+    Returned dict always includes a 'metadata' key (may be None for old rows
+    that predate the metadata_json column).
+    """
     ensure_tables()
     conn = _get_conn()
     if conn is None:
@@ -410,7 +427,7 @@ def get_latest_universe(
             cur.execute(
                 """
                 SELECT id, universe_type, theme_key, source, symbols_json,
-                       generated_at, expires_at, status
+                       generated_at, expires_at, status, metadata_json
                 FROM public.screener_universe_snapshots
                 WHERE universe_type = %s AND theme_key IS NULL
                 ORDER BY generated_at DESC
@@ -422,7 +439,7 @@ def get_latest_universe(
             cur.execute(
                 """
                 SELECT id, universe_type, theme_key, source, symbols_json,
-                       generated_at, expires_at, status
+                       generated_at, expires_at, status, metadata_json
                 FROM public.screener_universe_snapshots
                 WHERE universe_type = %s AND theme_key = %s
                 ORDER BY generated_at DESC
@@ -434,7 +451,10 @@ def get_latest_universe(
         cur.close()
         if not row:
             return None
-        (rid, utype, tkey, source, symbols, gen, expires, status) = row
+        (rid, utype, tkey, source, symbols, gen, expires, status, meta) = row
+        meta_parsed: Optional[dict] = None
+        if meta is not None:
+            meta_parsed = meta if isinstance(meta, dict) else (json.loads(meta) if meta else None)
         return {
             "id": rid,
             "universe_type": utype,
@@ -444,6 +464,7 @@ def get_latest_universe(
             "generated_at": gen.isoformat() if gen else None,
             "expires_at":   expires.isoformat() if expires else None,
             "status": status,
+            "metadata": meta_parsed,
         }
     except Exception as e:
         print(f"[SCREENER_HUB_STORE] get_latest_universe {universe_type}/{theme_key} error: {e}")
