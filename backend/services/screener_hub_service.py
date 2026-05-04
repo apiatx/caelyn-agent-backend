@@ -1867,7 +1867,9 @@ async def get_screener_hub(
     # These are loaded once per request and passed through to row building.
     social_overlap:     set[str]        = _load_social_overlap()
     options_overlap:    set[str]        = _load_options_overlap()
-    watchlist_set:      set[str]        = _load_watchlist_set()
+    # Watchlist NOT loaded for thematic tab — watchlist/portfolio is its own
+    # separate tab and must not influence thematic discovery, scoring, or roles.
+    watchlist_set:      set[str]        = set() if tab == "thematic" else _load_watchlist_set()
     options_detail_map: dict[str, dict] = _load_options_detail_map()
 
     # ── Resolve universe ──
@@ -2002,6 +2004,15 @@ async def get_screener_hub(
     # company_name, market_cap, sector, industry, beta, volume, exchange, country
     # without additional FMP profile calls.
     screener_meta_by_symbol: dict[str, dict] = thematic_breakdown.get("screener_meta_by_symbol") or {}
+
+    # ── Thematic: load allowed industries for the selected theme (leakage filter) ──
+    # Read once from disk (no live FMP call). Used to filter rows whose known
+    # industry does not belong to the selected theme (e.g. Solar in Semiconductors).
+    _thematic_allowed_industries: set[str] = set()
+    if tab == "thematic" and theme:
+        _tind_cfg   = _load_industry_map_config()
+        _tind_entry = (_tind_cfg.get("themes") or {}).get(theme) or {}
+        _thematic_allowed_industries = set(_tind_entry.get("fmp_industries") or [])
 
     # ── Chain Reaction detail map (bottlenecks only) ────────────────────────────
     # Per-symbol scored node data from chain_reaction_weekly_outputs.rows_json.
@@ -2257,6 +2268,22 @@ async def get_screener_hub(
                 for src in cr_sources:
                     if src and src not in row["discovery_sources"]:
                         row["discovery_sources"].append(src)
+
+        # ── Thematic-only: wrong-theme industry leakage filter (Part 2) ──────
+        # Exclude rows whose known industry is outside this theme's allowed set.
+        # Rows with no industry (fundamentals cache cold / ETF-sourced) pass through
+        # so we don't over-filter un-enriched but legitimate symbols.
+        if tab == "thematic" and _thematic_allowed_industries and row_industry:
+            if row_industry not in _thematic_allowed_industries:
+                continue
+
+        # ── Thematic-only: market cap range filter (Part 3) ───────────────────
+        # Default: $50M–$10B for hidden-gem discovery. Mega-caps (NVDA, AVGO …)
+        # and sub-$50M shells are excluded. Rows without a known market cap
+        # (fundamentals cache cold) pass through.
+        if tab == "thematic" and mcap is not None:
+            if mcap < 50_000_000 or mcap > 10_000_000_000:
+                continue
 
         if not _row_passes_filters(row, category_filter=category, coc_filter=coc_filter):
             continue

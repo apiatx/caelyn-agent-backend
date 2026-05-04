@@ -1,0 +1,157 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not worry about git commits.
+Do not modify unrelated functionality.
+
+Backend only.
+Do not touch frontend.
+Do not redesign Screener Hub.
+Do not break Social, Bottlenecks, Watchlist+Portfolio, Options Flow, Chain Reaction, Fundamentals, or existing routes.
+
+This is a correction pass for Thematic Screener behavior.
+
+Current problems:
+1. Thematic Screener is using watchlist/portfolio overlap in roles/scoring. That is wrong. Watchlist+Portfolio has its own separate tab.
+2. Semiconductors includes wrong-theme leakage like FSLR/Solar. That is wrong.
+3. Thematic hidden-gem results are still showing market caps above $10B. The FMP hidden-gem discovery screen should be $50M min to $10B max.
+4. Thematic should be clean and based on selected theme relevance, FMP screener fields, cached Vol Surge/Accumulation, Tradier 1D quote data, and cached options data only.
+
+Rules to enforce:
+
+Part 1 — Remove Watchlist/Portfolio influence from Thematic
+
+For tab=thematic:
+- Do not load watchlist_portfolio_overlap.
+- Do not use watchlist/portfolio overlap in discovery_sources.
+- Do not use watchlist/portfolio overlap in hidden_gem_score.
+- Do not assign role=watchlist_overlap.
+- Do not boost Thematic rows because a ticker is in the user's watchlist or portfolio.
+- Do not include watchlist/portfolio metadata in Thematic response.
+
+Keep Watchlist+Portfolio behavior unchanged in its own tab.
+
+Part 2 — Remove wrong-theme leakage
+
+For Thematic:
+- Final rows must match the selected theme’s mapped FMP industries or validated theme sources.
+- If theme=semiconductors, Solar/Renewable Utilities/Clean Energy names must not appear in final rows.
+- If a symbol comes from ETF/LKG/options/social but its industry is not in the selected theme’s allowed mapped industries and it is not explicitly validated by the selected theme source, exclude it from Thematic final rows.
+- Do not use broad watchlist/options/social overlap to override wrong industry.
+- FSLR must not appear in Semiconductors final rows.
+- Similar wrong-theme leakage should be filtered generically for all themes.
+
+Use the theme_fmp_industry_map.json as the source of allowed industries:
+- fmp_industries
+- core_industries
+- adjacent_industries
+- weak_adjacent_industries
+
+Part 3 — Enforce market cap range for Thematic hidden-gem rows
+
+For tab=thematic final rows:
+- Default min market cap = $50M
+- Default max market cap = $10B
+- Exclude rows below $50M.
+- Exclude rows above $10B from the default Thematic hidden-gem display.
+
+Do not allow mega-cap ETF anchors like NVDA/AVGO/MU/MCHP/ALAB to dominate or appear in the Thematic final hidden-gem table when the product goal is $50M–$10B discovery.
+
+If you need anchor metadata internally, keep it in metadata only, not final displayed rows.
+
+Part 4 — Keep Thematic scoring clean
+
+Thematic hidden_gem_score should use:
+- mapped industry relevance
+- market cap within $50M–$10B
+- volume above 100k
+- dollar_volume
+- volume_to_market_cap
+- beta as context
+- change_percent_1d from Tradier quote cache if available
+- volume_surge if cached
+- accumulation if cached
+- options_oi / options_oi_change / options_activity_score if cached
+- social/options confirmation only if it does not violate theme industry relevance
+
+Do not use:
+- watchlist/portfolio confirmation
+- historical 7D/30D/YTD/1Y
+- 2W/4W/10W/RS Accel as required fields
+- page-load FMP calls
+
+Part 5 — Preserve cost controls
+
+Confirm:
+- No FMP calls on Thematic page load.
+- No FMP historical calls on Thematic page load.
+- No /stable/historical-price-eod/full in Screener Hub path.
+- FMP screener calls only during scheduled/admin rebuilds.
+- One FMP screener call returns many tickers for a mapped industry.
+- No per-ticker FMP enrichment for every screener result.
+
+Part 6 — Validation
+
+Run admin rebuild for semiconductors with force=true if needed so the corrected filters actually apply.
+
+Then call:
+GET /api/screener-hub?tab=thematic&theme=semiconductors&scoreMode=true&cocFilter=false
+
+Return:
+- total row count
+- top 40 by hidden_gem_score/score with:
+  - symbol
+  - company_name
+  - market_cap
+  - sector
+  - industry
+  - beta
+  - price
+  - volume
+  - dollar_volume
+  - volume_to_market_cap
+  - exchange
+  - change_percent_1d
+  - volume_surge
+  - accumulation
+  - options_oi
+  - options_oi_change
+  - options_activity_score
+  - role
+  - score/hidden_gem_score
+  - discovery_sources
+
+Confirm:
+- no watchlist_overlap role
+- no watchlist_portfolio discovery source
+- no FSLR or Solar industry rows in Semiconductors
+- no rows above $10B market cap
+- no rows below $50M market cap
+- no ETFs/funds
+- no inactive stocks
+- no rights/warrants/units/SPAC-like names
+- no volume under 100k for FMP screener discovered rows
+
+Also validate:
+GET /api/screener-hub?tab=thematic&theme=clean_energy&scoreMode=true&cocFilter=false
+GET /api/screener-hub?tab=thematic&theme=drones&scoreMode=true&cocFilter=false
+GET /api/screener-hub?tab=watchlist_portfolio
+
+Confirm:
+- Clean Energy still can include Solar names.
+- Drones returns 200, not 502.
+- Watchlist+Portfolio tab still works separately.
+- Fundamentals compare still works.
+
+Final report:
+- files changed
+- exactly where watchlist/portfolio was removed from Thematic
+- exactly how wrong-theme leakage is filtered
+- whether $50M–$10B cap is enforced on final Thematic rows
+- semiconductors top 40 sample
+- clean_energy result
+- drones result
+- watchlist_portfolio tab result
+- cost-control confirmation
+- remaining limitations
