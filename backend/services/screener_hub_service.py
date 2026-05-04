@@ -368,6 +368,52 @@ def _load_options_overlap() -> set[str]:
     return syms
 
 
+def _load_options_detail_map() -> dict[str, dict]:
+    """
+    Build per-ticker options detail from all LKG files.
+
+    Returns {sym: {options_oi, options_oi_change, options_activity_score}}.
+    Loaded once per request — never blocks on API calls.
+
+    options_oi             : total_oi from the LKG snapshot
+    options_oi_change      : None (not tracked across snapshots yet)
+    options_activity_score : vol/OI ratio scaled 0–10 (higher = more active flow)
+    """
+    detail: dict[str, dict] = {}
+    try:
+        import json
+        data_dir = Path(__file__).parent.parent / "data"
+        for fname in [
+            "options_master_lkg_v1.json",
+            "options_lkg_v1_large_cap.json",
+            "options_lkg_v1_small_cap.json",
+            "options_lkg_v1_megacap.json",
+        ]:
+            p = data_dir / fname
+            if not p.exists():
+                continue
+            d = json.loads(p.read_text())
+            for t in (d.get("tickers") or []):
+                if not isinstance(t, dict):
+                    continue
+                sym = (t.get("ticker") or "").upper()
+                if not sym or sym in detail:
+                    continue
+                total_oi  = t.get("total_oi")
+                total_vol = t.get("total_volume")
+                activity_score: Optional[float] = None
+                if total_oi and total_vol and total_oi > 0:
+                    activity_score = round(min(10.0, (total_vol / total_oi) * 2), 2)
+                detail[sym] = {
+                    "options_oi":             int(total_oi) if total_oi is not None else None,
+                    "options_oi_change":      None,   # not tracked across snapshots yet
+                    "options_activity_score": activity_score,
+                }
+    except Exception as e:
+        print(f"[SCREENER_HUB] _load_options_detail_map error: {e}")
+    return detail
+
+
 def _load_watchlist_set() -> set[str]:
     """All tickers from user watchlists and portfolio holdings."""
     syms: set[str] = set()
@@ -421,15 +467,23 @@ def _compute_hidden_gem_score(
     theme_relevance_score: float = 0.5,
     source_confidence: str = "medium",
     liquidity_status: str = "unknown",
+    options_oi: Optional[int] = None,
+    dollar_volume: Optional[float] = None,
 ) -> float:
     """
     Score 0–10 rating how "hidden gem"-like a stock is.
 
-    Combines theme relevance, source confidence, RS momentum, market cap size,
-    liquidity quality, and multi-source confirmation.
+    Spec priorities (Part 7):
+      + theme-mapped industry relevance
+      + $50M–$10B market cap range
+      + volume above 100k
+      + higher volume_to_market_cap (via liquidity tier)
+      + higher dollar_volume (with diminishing returns)
+      + Vol Surge + Accumulation
+      + options OI / activity if available
+      + social / options / watchlist confirmations
 
-    Mega-caps are penalized (anchors, not hidden gems).
-    Micro-caps without theme relevance or liquidity are also penalized.
+    Penalties: ETF-excluded, mega-cap, very low volume, liquidity very_thin.
     """
     score = 0.0
 
@@ -479,28 +533,37 @@ def _compute_hidden_gem_score(
 
     # Distance from 52w high:
     #   -30% to -5% = sweet spot (breakout setup, not broken stock)
-    #   very extended (>-2%) = overcrowded
+    #   very extended (>-2%) = overcrowded / over-discovered
     #   free-fall (<-50%) = negative
     if distance_52w_high is not None:
         if -30 <= distance_52w_high <= -5:
             score += 1.5
         elif -5 < distance_52w_high <= 0:
-            score += 0.25  # near ATH — still valid but less "hidden"
+            score += 0.25  # near ATH — valid but less "hidden"
         elif distance_52w_high < -50:
             score -= 0.5
 
-    # Market cap: smaller = less discovered, but quality must justify
-    # Reduced micro bonus (was +2.0) to prevent junk from dominating via size alone
+    # Market cap: smaller = less discovered, but must justify quality
     if market_cap is not None:
-        if market_cap < 1e9:       score += 1.5   # micro < $1B (was +2.0)
+        if market_cap < 1e9:       score += 1.5   # micro/small < $1B
         elif market_cap < 5e9:     score += 1.5   # small < $5B
         elif market_cap < 20e9:    score += 0.75  # mid < $20B
-        elif market_cap > 200e9:   score -= 1.5   # mega > $200B — strong anchor penalty
+        elif market_cap > 200e9:   score -= 1.5   # mega > $200B — anchor penalty
         elif market_cap > 100e9:   score -= 0.75  # large-mega > $100B
 
-    # Liquidity quality penalty
+    # Dollar volume — higher is better but don't let giant caps dominate
+    if dollar_volume is not None:
+        if dollar_volume >= 5_000_000:     score += 0.25  # solid liquidity
+        elif dollar_volume < 500_000:      score -= 0.25  # very thin
+
+    # Liquidity quality penalty (from volume/mcap ratio tier)
     if liquidity_status == "very_thin":  score -= 1.5
     elif liquidity_status == "thin":     score -= 0.5
+
+    # Options open interest — real institutional interest signal
+    if options_oi is not None:
+        if options_oi >= 5_000:    score += 0.5
+        elif options_oi >= 1_000:  score += 0.25
 
     # Multi-source confirmation boosts
     if is_social:    score += 0.5
@@ -798,6 +861,7 @@ async def _fmp_industry_screener(
                         "isFund":                 "false",
                         "isActivelyTrading":      "true",
                         "marketCapMoreThan":       str(market_cap_lower or 50_000_000),
+                        "marketCapLowerThan":      str(market_cap_upper or 10_000_000_000),
                         "volumeMoreThan":          str(min_volume),
                         "includeAllShareClasses":  "false",
                         "limit":                  screener_limit,
@@ -850,6 +914,7 @@ async def _fmp_industry_screener(
                 mcap_f    = mcap if mcap else None
                 liq_status, dv, vtmc = _compute_liquidity_status(vol_f, mcap_f, price_f)
                 local_fr["total_accepted"] += 1
+                div_raw = item.get("lastAnnualDividend")
                 hits.append({
                     "symbol":               sym,
                     "company_name":         company_name,
@@ -858,6 +923,7 @@ async def _fmp_industry_screener(
                     "industry":             (item.get("industry") or industry).strip(),
                     "beta":                 float(beta_raw) if beta_raw is not None else None,
                     "price":                price_f,
+                    "last_annual_dividend": float(div_raw) if div_raw is not None else None,
                     "volume":               vol_f,
                     "exchange":             (item.get("exchangeShortName") or item.get("exchange") or "").strip(),
                     "country":              (item.get("country") or "").strip(),
@@ -1797,9 +1863,10 @@ async def get_screener_hub(
 
     # ── Load overlap sets (fast disk reads; used for per-row tagging) ──────────
     # These are loaded once per request and passed through to row building.
-    social_overlap:   set[str] = _load_social_overlap()
-    options_overlap:  set[str] = _load_options_overlap()
-    watchlist_set:    set[str] = _load_watchlist_set()
+    social_overlap:     set[str]        = _load_social_overlap()
+    options_overlap:    set[str]        = _load_options_overlap()
+    watchlist_set:      set[str]        = _load_watchlist_set()
+    options_detail_map: dict[str, dict] = _load_options_detail_map()
 
     # ── Resolve universe ──
     if tab == "thematic":
@@ -2031,9 +2098,16 @@ async def get_screener_hub(
         row_is_etf  = bool(scr_meta.get("is_etf",  False))
         row_is_fund = bool(scr_meta.get("is_fund",  False))
 
-        # ── Beta / volume from screener meta (FMP metrics preferred when warm) ──
-        row_beta   = _to_float(metrics.get("betaTTM") or scr_meta.get("beta"))
-        row_volume = _to_float(scr_meta.get("volume"))
+        # ── Beta / volume / exchange from screener meta (FMP metrics preferred when warm) ──
+        row_beta     = _to_float(metrics.get("betaTTM") or scr_meta.get("beta"))
+        row_volume   = _to_float(scr_meta.get("volume"))
+        row_exchange = f.get("exchange") or scr_meta.get("exchange") or None
+
+        # ── Price: Tradier quote first, screener meta fallback ──
+        row_price = q_row.get("price") or _to_float(scr_meta.get("price"))
+
+        # ── Last annual dividend from screener meta ──
+        row_dividend = _to_float(scr_meta.get("last_annual_dividend"))
 
         # ── New quality/relevance fields from screener meta ──
         # For screener-sourced rows: computed at rebuild time and stored in scr_meta.
@@ -2044,6 +2118,12 @@ async def get_screener_hub(
         liq_status   = scr_meta.get("liquidity_status") or "unknown"
         row_dv       = _to_float(scr_meta.get("dollar_volume"))
         row_vtmc     = _to_float(scr_meta.get("volume_to_market_cap"))
+
+        # ── Options enrichment from cached LKG flow data (no live API call) ──
+        opt_detail    = options_detail_map.get(sym) or {}
+        opts_oi       = opt_detail.get("options_oi")
+        opts_oi_chg   = opt_detail.get("options_oi_change")
+        opts_act_scr  = opt_detail.get("options_activity_score")
 
         # ── Source confidence: computed from discovery sources + theme relevance ──
         source_conf = _get_source_confidence(disc_src, theme_relevance_score)
@@ -2063,6 +2143,8 @@ async def get_screener_hub(
             theme_relevance_score=theme_relevance_score,
             source_confidence=source_conf,
             liquidity_status=liq_status,
+            options_oi=opts_oi,
+            dollar_volume=row_dv,
         )
         role = _assign_row_role(
             market_cap=mcap,
@@ -2074,46 +2156,60 @@ async def get_screener_hub(
         )
 
         row = {
-            "symbol":       sym,
-            "name":         row_name,
-            "company_name": row_name,
-            "history":      None,  # populated by frontend chart endpoint
-            "category":          classification["category"],
-            "rs_0_2w":           classification["rs_0_2w"],
-            "rs_0_4w":           classification["rs_0_4w"],
-            "rs_0_10w":          classification["rs_0_10w"],
-            "rs_accel":          classification["rs_accel"],
-            "performance_2w":    r2w,
-            "performance_4w":    r4w,
-            "performance_10w":   r10w,
-            "rs_data_status":    rs_status,
-            "distance_52w_high": classification["distance_52w_high"],
-            "volume_surge":      classification["volume_surge"],
-            "accumulation":      classification["accumulation"],
-            "coc":               classification["coc"],
-            "score":             classification["score"],
-            "hidden_gem_score":  hg_score,
-            "role":              role,
-            "market_cap_bucket": _market_cap_bucket(mcap),
-            "discovery_sources": disc_src,
-            "market_cap":  mcap,
-            "sector":      row_sector,
-            "industry":    row_industry,
-            "is_etf":      row_is_etf,
-            "is_fund":     row_is_fund,
-            "price":       q_row.get("price"),
-            "change_percent_1d": q_row.get("change_percent_1d"),
-            "performance_7d":  None,
-            "performance_30d": None,
-            "performance_ytd": None,
-            "performance_1y":  None,
-            "theme_relevance_score": theme_relevance_score,
-            "industry_tier":         industry_tier,
-            "source_confidence":     source_conf,
-            "quality_flags":         quality_flags,
-            "liquidity_status":      liq_status,
+            # ── Base fields (Part 8 spec) ──
+            "symbol":              sym,
+            "name":                row_name,
+            "company_name":        row_name,
+            "market_cap":          mcap,
+            "sector":              row_sector,
+            "industry":            row_industry,
+            "beta":                row_beta,
+            "price":               row_price,
+            "last_annual_dividend": row_dividend,
+            "volume":              row_volume,
+            "exchange":            row_exchange,
+            # ── Calculated ──
             "dollar_volume":         row_dv,
             "volume_to_market_cap":  row_vtmc,
+            # ── Live/quote ──
+            "change_percent_1d":   q_row.get("change_percent_1d"),
+            # ── Signals ──
+            "volume_surge":        classification["volume_surge"],
+            "accumulation":        classification["accumulation"],
+            "hidden_gem_score":    hg_score,
+            "score":               classification["score"],
+            "role":                role,
+            # ── Options (from cached flow, no live calls) ──
+            "options_oi":            opts_oi,
+            "options_oi_change":     opts_oi_chg,
+            "options_activity_score": opts_act_scr,
+            # ── Metadata/debug ──
+            "discovery_sources":     disc_src,
+            "quality_flags":         quality_flags,
+            "source_confidence":     source_conf,
+            "rs_data_status":        rs_status,
+            # ── Legacy compat fields (kept for non-thematic tabs + existing frontend) ──
+            "history":               None,
+            "category":              classification["category"],
+            "rs_0_2w":               classification["rs_0_2w"],
+            "rs_0_4w":               classification["rs_0_4w"],
+            "rs_0_10w":              classification["rs_0_10w"],
+            "rs_accel":              classification["rs_accel"],
+            "performance_2w":        r2w,
+            "performance_4w":        r4w,
+            "performance_10w":       r10w,
+            "distance_52w_high":     classification["distance_52w_high"],
+            "coc":                   classification["coc"],
+            "market_cap_bucket":     _market_cap_bucket(mcap),
+            "is_etf":                row_is_etf,
+            "is_fund":               row_is_fund,
+            "performance_7d":        None,
+            "performance_30d":       None,
+            "performance_ytd":       None,
+            "performance_1y":        None,
+            "theme_relevance_score": theme_relevance_score,
+            "industry_tier":         industry_tier,
+            "liquidity_status":      liq_status,
             "_meta": {
                 "country":                 row_country,
                 "exchange":                row_exchange,

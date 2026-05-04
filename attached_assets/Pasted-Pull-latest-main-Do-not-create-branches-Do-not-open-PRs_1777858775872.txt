@@ -1,0 +1,367 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not modify unrelated functionality.
+
+Backend only.
+Do not touch frontend unless absolutely required for endpoint compatibility.
+Do not redesign Screener Hub.
+Do not break Fundamentals, Social, Watchlist, Portfolio, Chain Reaction, or existing Screener Hub routes.
+
+Goal:
+Simplify and improve the Screener Hub Thematic discovery engine so it is clean, useful, and cost-safe.
+
+Current product direction:
+The Thematic Screener should be based primarily on FMP Stock Screener fields from one call per mapped industry/filter. It should not waste FMP usage on unnecessary historical return columns.
+
+Important:
+Remove/de-emphasize expensive historical performance fields from the Thematic Screener flow:
+- Do not require 7D / 30D / YTD / 1Y.
+- Do not require 2W / 4W / 10W / RS Accel for the base screener.
+- If historical return fields already exist in cache, they may remain null/optional, but do not fetch them for normal Thematic Screener discovery.
+- Do not call FMP historical endpoints during page load.
+- Do not call FMP historical endpoints during basic FMP screener discovery.
+- Do not use /stable/historical-price-eod/full in any Screener Hub path.
+
+The FMP Stock Screener fields we want to use as the base:
+- symbol
+- companyName
+- marketCap
+- sector
+- industry
+- beta
+- price
+- lastAnnualDividend
+- volume
+- exchange
+- exchangeShortName
+- country
+- isEtf
+- isFund
+- isActivelyTrading
+
+Display/use these from FMP:
+- Symbol
+- Company Name
+- Market Cap
+- Sector
+- Industry
+- Beta
+- Price
+- Last Annual Dividend
+- Volume
+- Exchange
+
+Do not display these as columns:
+- Exchange Short Name, because it is repetitive
+- Country, because FMP Starter is US-focused and this is not useful right now
+- Is ETF, because ETFs should be excluded from final rows
+- Is Fund, because funds should be excluded from final rows
+- Is Actively Trading, because only actively trading names should be included
+
+Part 1 — FMP Screener filters
+
+For Thematic FMP discovery, use:
+- marketCapMoreThan=50000000
+- marketCapLowerThan=10000000000
+- volumeMoreThan=100000
+- isEtf=false
+- isFund=false
+- isActivelyTrading=true
+- limit=500 or a conservative supported value
+- includeAllShareClasses=false if supported
+
+Use:
+theme → mapped industries → one FMP screener call per mapped industry.
+
+Do not use a broad all-market screen as the primary source.
+Do not make one call per ticker.
+Do not make additional per-ticker FMP profile/metrics/historical calls for every screener result.
+
+Part 2 — Derived fields from the single FMP screener call
+
+Calculate these locally without extra FMP calls:
+- dollar_volume = price * volume
+- volume_to_market_cap = dollar_volume / marketCap
+
+Do not display market_cap_bucket. It is repetitive. Use the actual Market Cap value only.
+
+Keep/use:
+- volume_to_market_cap
+- dollar_volume if useful for scoring/validation, but frontend may display only Volume / Market Cap ratio.
+
+Part 3 — Keep the useful existing signal columns
+
+Keep these columns/signals if already working:
+- Vol Surge
+- Accumulation
+
+They should remain in the response and frontend-compatible row object.
+
+Do not make Vol Surge or Accumulation trigger expensive FMP historical calls on page load.
+If these values come from existing cached data or existing quote/volume cache, use that.
+If unavailable, return null or false safely.
+
+Part 4 — Tradier live enrichment
+
+Use Tradier only for active page rows / current Screener Hub page rows, through existing quote cache.
+
+Tradier may enrich:
+- current/real-time price
+- 1D price % change
+- current volume if available
+
+Only keep 1D price % change.
+Remove/de-emphasize unnecessary display/performance fields:
+- 7D %
+- 30D %
+- YTD %
+- 1Y %
+
+These are not needed for this screener right now and are contributing to FMP usage when calculated historically.
+
+Do not refresh every ticker sitewide.
+Only refresh symbols requested by the active Screener Hub tab/page.
+
+Part 5 — Options enrichment
+
+Add or preserve options enrichment from the existing options flow/provider/cache if available.
+
+Desired fields:
+- options_oi
+- options_oi_change
+- options_activity_score or options_flow_score if already available
+
+Important:
+- Do not block the base screener if options enrichment fails or is missing.
+- Do not make expensive options calls for every returned FMP screener result on page load.
+- Prefer existing Options Flow cache/provider output.
+- If options data is unavailable, return null.
+
+Part 6 — Thematic relevance without overengineering
+
+Keep the theme-to-FMP industry map.
+
+Use only the mapped industries per theme as the main relevance filter.
+Do not build giant exclude-industry lists.
+Do not hardcode final stock symbols.
+
+Use simple relevance:
+- if industry is directly mapped to the selected theme, include it
+- if industry is weak/adjacent, include it but score lower unless it has confirmation from ETF/LKG/social/options/watchlist
+- use positive/negative keywords only as small boosts/penalties, not as the primary source of truth
+
+Part 7 — Hidden-gem score simplification
+
+Simplify hidden_gem_score / Score.
+
+Score should favor:
+- theme-mapped industry relevance
+- $50M–$10B market cap range
+- volume above 100k
+- higher volume_to_market_cap
+- higher dollar_volume, but do not let giant caps dominate
+- beta as a volatility/context input, not the main driver
+- Vol Surge
+- Accumulation
+- options OI / OI change if available
+- social/options/watchlist confirmations if cached
+- source diversity if available
+
+Score should penalize/exclude:
+- ETFs
+- funds
+- inactive names
+- market cap below $50M
+- market cap above $10B for FMP hidden-gem discovery rows, unless already present as anchor from ETF/watchlist/options/social source
+- volume below 100k
+- rights/warrants/units/preferreds/SPAC/shell/blank-check names
+
+Part 8 — Row response shape
+
+For Thematic Screener rows, make sure the backend returns these clean fields:
+
+Base:
+- symbol
+- company_name
+- market_cap
+- sector
+- industry
+- beta
+- price
+- last_annual_dividend
+- volume
+- exchange
+
+Calculated:
+- dollar_volume
+- volume_to_market_cap
+
+Live/quote:
+- change_percent_1d
+
+Signals:
+- volume_surge
+- accumulation
+- score or hidden_gem_score
+- role/tag if already available
+
+Options:
+- options_oi
+- options_oi_change
+- options_activity_score if available
+
+Metadata/debug, okay to return but frontend does not need to display:
+- discovery_sources
+- quality_flags
+- source_confidence
+- rs_data_status
+
+Do not require or prioritize:
+- market_cap_bucket
+- 2W return
+- 4W return
+- 10W return
+- RS Accel
+- 7D %
+- 30D %
+- YTD %
+- 1Y %
+
+Part 9 — Thin theme safety
+
+For:
+GET /api/screener-hub?tab=thematic&theme=drones&scoreMode=true&cocFilter=false
+
+Must:
+- never 502
+- return HTTP 200 JSON if theme exists
+- return status ok/partial/empty
+- include rows or empty rows safely
+- include message/error_code if empty
+- include sources_attempted and sources_failed
+- not call FMP on page load
+
+Part 10 — Cost controls
+
+Preserve:
+- no FMP calls on normal page load
+- no FMP Stock Screener calls on page load
+- no FMP historical calls on page load
+- no /stable/historical-price-eod/full in Screener Hub path
+- FMP screener calls only during scheduled/admin rebuilds
+- FMP governor limits:
+  - 120 RPM
+  - 0.75s spacing
+  - 500 calls/job
+  - 2500 daily soft limit
+  - 50000 monthly soft limit
+- never overwrite good snapshots with empty failed output
+
+Part 11 — Fundamentals protection
+
+Do not break the existing Fundamentals page/screener.
+
+If touching shared FMP code:
+- preserve call signatures
+- preserve return shapes
+- do not change /api/fundamentals/compare behavior
+- do not make Fundamentals return null/empty because of Screener Hub budget logic
+
+Run a smoke test:
+POST or GET the existing /api/fundamentals/compare endpoint using the correct method/body.
+Confirm it still returns JSON and response shape is unchanged.
+
+Part 12 — Validation
+
+Run:
+
+1. Admin rebuild for semiconductors only:
+POST /api/admin/screener-hub/rebuild
+body:
+{"tab":"thematic","theme":"semiconductors","force":false}
+
+2. GET:
+GET /api/screener-hub?tab=thematic&theme=semiconductors&scoreMode=true&cocFilter=false
+
+Return top 40 by Score / hidden_gem_score with only these fields:
+- symbol
+- company_name
+- market_cap
+- sector
+- industry
+- beta
+- price
+- last_annual_dividend
+- volume
+- dollar_volume
+- volume_to_market_cap
+- exchange
+- change_percent_1d
+- volume_surge
+- accumulation
+- options_oi
+- options_oi_change
+- options_activity_score
+- role/tag
+- score or hidden_gem_score
+
+Also return:
+- total row count
+- count by industry
+- count by role/tag
+- fmp_screener_industries_attempted
+- fmp_screener_calls_used
+- fmp_screener_symbols_added
+- filtered_reasons_breakdown
+
+Confirm:
+- no ETFs/funds
+- no inactive stocks
+- no rights/warrants/units/SPAC-like names
+- no sub-$50M market caps
+- no volume under 100k
+- no unnecessary historical performance fields required
+- page load made zero FMP calls
+- /stable/historical-price-eod/full is not used in Screener Hub path
+
+3. Validate:
+GET /api/screener-hub?tab=thematic&theme=drones&scoreMode=true&cocFilter=false
+
+Return:
+- HTTP status
+- response status
+- row count
+- no 502 confirmation
+
+4. Validate:
+GET /api/screener-hub?tab=thematic&theme=clean_energy&scoreMode=true&cocFilter=false
+
+Return:
+- row count
+- top 20 by Score
+- quick note if obvious wrong-theme names appear
+
+5. Validate:
+GET /api/admin/screener-hub/status with X-API-Key
+
+Confirm fmp_budget appears.
+
+6. Validate:
+Existing /api/fundamentals/compare still works.
+
+Final report:
+- files changed
+- exact FMP screener endpoint/params used
+- whether one FMP screener call returns many tickers
+- whether page loads make FMP calls
+- whether per-ticker FMP enrichment was added
+- whether /stable/historical-price-eod/full is still used in Screener Hub path
+- FMP calls used for semiconductors rebuild
+- top semiconductor sample
+- filtered reasons breakdown
+- drones endpoint result
+- admin fmp_budget sample
+- fundamentals regression result
+- remaining limitations
