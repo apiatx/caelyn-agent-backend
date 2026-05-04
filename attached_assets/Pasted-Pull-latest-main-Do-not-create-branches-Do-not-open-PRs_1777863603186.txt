@@ -1,0 +1,185 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not worry about git commits.
+Do not modify unrelated functionality.
+
+Backend only.
+Do not touch frontend.
+Do not redesign Screener Hub.
+Do not break Fundamentals, Social, Watchlist+Portfolio, Bottlenecks, Chain Reaction, Options Flow, or existing routes.
+
+Goal:
+Finish the remaining backend cleanup for Thematic Screener after the latest correction pass.
+
+Current good state:
+- Thematic no longer uses watchlist/portfolio overlap.
+- Semiconductors no longer includes FSLR/Solar leakage.
+- Thematic final rows enforce $50M–$10B market cap.
+- ETFs/funds/inactive/junk are filtered.
+- Watchlist+Portfolio tab remains separate and works.
+- No FMP calls on page load.
+- No FMP historical calls on page load.
+- No /stable/historical-price-eod/full in Screener Hub path.
+
+Remaining limitations to fix:
+1. volume, dollar_volume, volume_to_market_cap, and beta are None for many ETF/LKG-sourced rows.
+2. options_oi_change is None because prior OI snapshot comparison is not implemented.
+3. Admin single-theme rebuild force=true can return empty or get blocked by background server load/options-flow jobs.
+
+Part 1 — Fill missing Beta / Volume / Dollar Volume safely
+
+For Thematic rows, these fields should be populated when possible:
+- beta
+- volume
+- dollar_volume
+- volume_to_market_cap
+
+Do not make FMP calls on page load.
+
+Use cache-first sources only on page load:
+1. screener snapshot metadata_json / screener_meta if present
+2. FMP screener metadata saved during rebuild
+3. quote cache / Tradier cache if present
+4. fundamentals cache if present
+
+If missing after cache lookup, return null safely.
+
+During scheduled/admin rebuild:
+- Store FMP screener metadata by symbol in snapshot metadata_json.
+- Make sure ETF/LKG-sourced rows can reuse screener metadata if the same symbol was also discovered from FMP screener.
+- Do not make per-ticker FMP profile/historical/metrics calls for every row.
+- If a lightweight batch/cache already exists, use it; otherwise do not add expensive enrichment.
+
+Part 2 — Implement options_oi_change from cache snapshots
+
+Use existing options flow cache/provider output only.
+Do not make live expensive options calls for every row.
+
+Implement:
+- options_oi
+- previous_options_oi
+- options_oi_change
+
+Approach:
+- Load current options LKG snapshot.
+- Load previous options snapshot if already stored.
+- If previous snapshot does not exist, create/persist a small previous/current OI state file or DB table for future comparisons.
+- options_oi_change can be numeric difference or percent change, whichever is safer with available data.
+- If prior OI unavailable, return null.
+- Do not block base screener if options data is missing.
+
+Part 3 — Make single-theme admin rebuild reliable
+
+Current problem:
+Admin rebuild force=true can return empty or get blocked because background options-flow jobs tie up the single-worker server.
+
+Fix:
+- Ensure POST /api/admin/screener-hub/rebuild with tab=thematic, theme=<theme>, force=true reliably triggers a single-theme rebuild.
+- It should not rebuild all themes when a specific theme is supplied.
+- It should return a JSON response with:
+  - status
+  - theme
+  - rebuild_started or completed
+  - rows_built if completed
+  - fmp_screener_calls_used
+  - fmp_screener_symbols_added
+  - cache_written true/false
+  - message
+- If it cannot finish synchronously within a safe timeout, return accepted/queued JSON instead of empty body.
+- Do not let background options-flow jobs cause empty response.
+- Do not start a costly all-theme rebuild when only one theme was requested.
+
+Part 4 — Keep current Thematic rules intact
+
+Do not regress:
+- no watchlist/portfolio overlap in Thematic
+- no FSLR/Solar in Semiconductors
+- $50M–$10B cap on Thematic final rows
+- no ETFs/funds/inactive/junk
+- no page-load FMP calls
+- no page-load historical calls
+- no /stable/historical-price-eod/full in Screener Hub path
+- Watchlist+Portfolio tab remains separate and unchanged
+- Clean Energy can include Solar
+- Drones returns 200, not 502
+
+Part 5 — Validation
+
+Run:
+
+1. GET /api/screener-hub?tab=thematic&theme=semiconductors&scoreMode=true&cocFilter=false
+
+Return:
+- row count
+- top 25 rows with:
+  - symbol
+  - company_name
+  - market_cap
+  - industry
+  - beta
+  - price
+  - volume
+  - dollar_volume
+  - volume_to_market_cap
+  - change_percent_1d
+  - volume_surge
+  - accumulation
+  - options_oi
+  - options_oi_change
+  - options_activity_score
+  - role
+  - score/hidden_gem_score
+
+Confirm:
+- no watchlist_overlap role/source
+- no Solar/FSLR
+- all rows $50M–$10B
+- no ETFs/funds
+- no page-load FMP calls
+
+2. Test admin single-theme rebuild:
+POST /api/admin/screener-hub/rebuild
+body:
+{"tab":"thematic","theme":"semiconductors","force":true}
+
+Confirm:
+- returns JSON, not empty body
+- rebuild is single-theme only
+- cache_written true or accepted/queued
+- no all-theme rebuild triggered
+
+3. GET Semiconductors again after rebuild/queued completion if possible.
+
+Confirm:
+- FMP screener candidates are reflected
+- beta/volume/dollar_volume improved where cached metadata exists
+
+4. Validate:
+GET /api/screener-hub?tab=thematic&theme=clean_energy&scoreMode=true&cocFilter=false
+GET /api/screener-hub?tab=thematic&theme=drones&scoreMode=true&cocFilter=false
+GET /api/screener-hub?tab=watchlist_portfolio
+
+Confirm:
+- Clean Energy can include Solar
+- Drones returns 200
+- Watchlist+Portfolio still has watchlist overlap
+
+5. Validate:
+GET /api/admin/screener-hub/status with X-API-Key
+
+Confirm:
+- fmp_budget present
+- latest rebuild/job status visible if available
+
+6. Confirm /api/fundamentals/compare still works.
+
+Final report:
+- files changed
+- how beta/volume/dollar_volume are hydrated without page-load FMP calls
+- how options_oi_change is calculated/stored
+- admin rebuild response behavior
+- semiconductors top 25 sample
+- validation results
+- remaining limitations

@@ -89,6 +89,11 @@ _ETF_HOLDINGS_DIR = Path(__file__).parent.parent / "data" / "etf_holdings"
 # Dynamic Chain Reaction output file (written by Chain Reaction service if/when available)
 _CHAIN_REACTION_OUTPUT = Path(__file__).parent.parent / "data" / "chain_reaction_output.json"
 
+# Persisted OI snapshot for options_oi_change tracking (Part 2).
+# Written lazily every _OI_PREV_TTL_H hours; read on every request (fast disk read).
+_OI_PREV_PATH  = Path(__file__).parent.parent / "data" / "options_oi_prev.json"
+_OI_PREV_TTL_H = 6.0   # hours between snapshot rotations
+
 # ── Security junk / warrant / rights / SPAC detection ─────────────────────────
 # Catches rights offerings, warrant stubs, unit offerings, blank-check SPACs.
 # Applied client-side after FMP screener returns raw results.
@@ -374,12 +379,19 @@ def _load_options_detail_map() -> dict[str, dict]:
     """
     Build per-ticker options detail from all LKG files.
 
-    Returns {sym: {options_oi, options_oi_change, options_activity_score}}.
-    Loaded once per request — never blocks on API calls.
+    Returns {sym: {options_oi, previous_options_oi, options_oi_change,
+                   options_activity_score}}.
+    Loaded once per request — never blocks on live API calls.
 
-    options_oi             : total_oi from the LKG snapshot
-    options_oi_change      : None (not tracked across snapshots yet)
+    options_oi             : total_oi from the current LKG snapshot
+    previous_options_oi    : total_oi from the last persisted OI snapshot (if any)
+    options_oi_change      : current_oi − previous_oi (absolute; None on first run)
     options_activity_score : vol/OI ratio scaled 0–10 (higher = more active flow)
+
+    OI change uses a lightweight disk snapshot at _OI_PREV_PATH, refreshed
+    lazily every _OI_PREV_TTL_H hours via a safe temp-file rename.
+    On the very first request the snapshot is seeded and oi_change returns None;
+    subsequent requests return the numeric difference against the prior snapshot.
     """
     detail: dict[str, dict] = {}
     try:
@@ -408,11 +420,59 @@ def _load_options_detail_map() -> dict[str, dict]:
                     activity_score = round(min(10.0, (total_vol / total_oi) * 2), 2)
                 detail[sym] = {
                     "options_oi":             int(total_oi) if total_oi is not None else None,
-                    "options_oi_change":      None,   # not tracked across snapshots yet
+                    "previous_options_oi":    None,
+                    "options_oi_change":      None,
                     "options_activity_score": activity_score,
                 }
     except Exception as e:
         print(f"[SCREENER_HUB] _load_options_detail_map error: {e}")
+
+    # ── OI change: compare current OI against persisted previous snapshot ──────
+    # The snapshot stores {sym: oi, "_as_of_ts": unix_float} on disk.
+    # Safe atomic write (temp + rename) prevents partial reads.
+    try:
+        import json as _json
+        prev_map: dict[str, int] = {}
+        prev_ts:  float          = 0.0
+
+        if _OI_PREV_PATH.exists():
+            raw = _json.loads(_OI_PREV_PATH.read_text())
+            if isinstance(raw, dict):
+                prev_ts  = float(raw.get("_as_of_ts", 0))
+                prev_map = {
+                    k: int(v)
+                    for k, v in raw.items()
+                    if not k.startswith("_") and isinstance(v, (int, float)) and v >= 0
+                }
+
+        # Enrich detail entries with oi_change if a previous snapshot exists.
+        if prev_map:
+            for sym, v in detail.items():
+                cur_oi = v.get("options_oi")
+                p_oi   = prev_map.get(sym)
+                if cur_oi is not None and p_oi is not None:
+                    v["previous_options_oi"] = p_oi
+                    v["options_oi_change"]   = cur_oi - p_oi
+
+        # Refresh snapshot lazily: seed on first run, rotate when stale.
+        now_ts = time.time()
+        if not prev_map or (now_ts - prev_ts) > _OI_PREV_TTL_H * 3600:
+            current_snap: dict = {
+                sym: v["options_oi"]
+                for sym, v in detail.items()
+                if v.get("options_oi") is not None
+            }
+            current_snap["_as_of_ts"] = now_ts
+            try:
+                _tmp = _OI_PREV_PATH.with_suffix(".tmp")
+                _tmp.write_text(_json.dumps(current_snap))
+                _tmp.replace(_OI_PREV_PATH)
+            except Exception as _we:
+                print(f"[SCREENER_HUB] OI snapshot write error: {_we}")
+
+    except Exception as e:
+        print(f"[SCREENER_HUB] OI change tracking error: {e}")
+
     return detail
 
 
@@ -2111,13 +2171,31 @@ async def get_screener_hub(
         row_is_etf  = bool(scr_meta.get("is_etf",  False))
         row_is_fund = bool(scr_meta.get("is_fund",  False))
 
-        # ── Beta / volume / exchange from screener meta (FMP metrics preferred when warm) ──
-        row_beta     = _to_float(metrics.get("betaTTM") or scr_meta.get("beta"))
-        row_volume   = _to_float(scr_meta.get("volume"))
-        row_exchange = f.get("exchange") or scr_meta.get("exchange") or None
+        # ── Beta: FMP key-metrics cache → FMP profile cache → screener meta ──
+        row_beta = (
+            _to_float(metrics.get("betaTTM"))
+            or _to_float(profile.get("beta"))
+            or _to_float(scr_meta.get("beta"))
+        )
 
-        # ── Price: Tradier quote first, screener meta fallback ──
-        row_price = q_row.get("price") or _to_float(scr_meta.get("price"))
+        # ── Price: Tradier last → quote-cache row price → screener meta ──
+        row_price = (
+            _to_float(q.get("last"))
+            or _to_float(q_row.get("price") if q_row else None)
+            or _to_float(scr_meta.get("price"))
+        )
+
+        # ── Volume: Tradier average_volume → Tradier daily volume → screener meta ──
+        # average_volume (30-day) is a stable metric; daily spot volume is noisy.
+        # screener_meta.volume is the FMP-reported daily volume at rebuild time.
+        row_volume = (
+            _to_float(q.get("average_volume"))
+            or _to_float(q.get("volume"))
+            or _to_float(scr_meta.get("volume"))
+        )
+
+        # ── Exchange ──
+        row_exchange = f.get("exchange") or scr_meta.get("exchange") or None
 
         # ── Last annual dividend from screener meta ──
         row_dividend = _to_float(scr_meta.get("last_annual_dividend"))
@@ -2128,15 +2206,26 @@ async def get_screener_hub(
         theme_relevance_score = _to_float(scr_meta.get("theme_relevance_score")) or 0.5
         industry_tier         = scr_meta.get("industry_tier") or "unknown"
         quality_flags: list[str] = list(scr_meta.get("quality_flags") or [])
-        liq_status   = scr_meta.get("liquidity_status") or "unknown"
-        row_dv       = _to_float(scr_meta.get("dollar_volume"))
-        row_vtmc     = _to_float(scr_meta.get("volume_to_market_cap"))
+
+        # ── Dollar volume / volume_to_market_cap / liquidity_status ──
+        # Pre-computed at rebuild (FMP screener) is the preferred source for all three.
+        # For ETF/LKG-sourced rows (no screener_meta), recompute from Tradier volume + price.
+        liq_status = scr_meta.get("liquidity_status") or None
+        row_dv     = _to_float(scr_meta.get("dollar_volume"))
+        row_vtmc   = _to_float(scr_meta.get("volume_to_market_cap"))
+        if liq_status is None or row_dv is None or row_vtmc is None:
+            _liq, _dv, _vtmc = _compute_liquidity_status(row_volume, mcap, row_price)
+            if liq_status is None: liq_status = _liq
+            if row_dv    is None:  row_dv     = _dv
+            if row_vtmc  is None:  row_vtmc   = _vtmc
+        liq_status = liq_status or "unknown"
 
         # ── Options enrichment from cached LKG flow data (no live API call) ──
-        opt_detail    = options_detail_map.get(sym) or {}
-        opts_oi       = opt_detail.get("options_oi")
-        opts_oi_chg   = opt_detail.get("options_oi_change")
-        opts_act_scr  = opt_detail.get("options_activity_score")
+        opt_detail      = options_detail_map.get(sym) or {}
+        opts_oi         = opt_detail.get("options_oi")
+        opts_prev_oi    = opt_detail.get("previous_options_oi")
+        opts_oi_chg     = opt_detail.get("options_oi_change")
+        opts_act_scr    = opt_detail.get("options_activity_score")
 
         # ── Source confidence: computed from discovery sources + theme relevance ──
         source_conf = _get_source_confidence(disc_src, theme_relevance_score)
@@ -2194,6 +2283,7 @@ async def get_screener_hub(
             "role":                role,
             # ── Options (from cached flow, no live calls) ──
             "options_oi":            opts_oi,
+            "previous_options_oi":   opts_prev_oi,
             "options_oi_change":     opts_oi_chg,
             "options_activity_score": opts_act_scr,
             # ── Metadata/debug ──
