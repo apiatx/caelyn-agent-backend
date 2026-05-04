@@ -1,0 +1,398 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not worry about git commits.
+Do not modify unrelated functionality.
+
+Backend only.
+Do not touch frontend.
+Do not redesign Screener Hub.
+Do not break Fundamentals, Social, Watchlist, Portfolio, Chain Reaction, Options Flow, or existing Screener Hub routes.
+
+Goal:
+Finish the Screener Hub backend so the Thematic Screener is a clean, cost-safe hidden-gem discovery tool using FMP Stock Screener fields, existing cached signals, Tradier page-aware quote enrichment, and cached options data.
+
+This is the final backend cleanup before frontend display work.
+
+Product direction:
+The Thematic Screener should show useful small/mid-cap thematic candidates, supply-chain players, and high-volume movers. It should not be a historical performance table. It should not burn FMP with historical calls. It should not show ETFs/funds/inactive/junk securities.
+
+Use the FMP Stock Screener as the main broad discovery source:
+- one FMP screener call per mapped industry/filter
+- many tickers returned per call
+- never one FMP call per ticker for basic discovery
+- never on normal page load
+- only during scheduled/admin rebuilds
+- governed by the existing FMP governor
+
+Use these FMP screener fields:
+- symbol
+- companyName
+- marketCap
+- sector
+- industry
+- beta
+- price
+- lastAnnualDividend
+- volume
+- exchange
+- exchangeShortName
+- country
+- isEtf
+- isFund
+- isActivelyTrading
+
+Base filters for every Thematic FMP screener call:
+- marketCapMoreThan=50000000
+- marketCapLowerThan=10000000000
+- volumeMoreThan=100000
+- isEtf=false
+- isFund=false
+- isActivelyTrading=true
+- limit=500 or conservative supported value
+- includeAllShareClasses=false if supported
+
+Do not use a broad all-market no-industry screen as the primary source.
+Use:
+theme -> mapped industries -> one FMP screener call per mapped industry.
+
+Part 1 — Finish the theme mapping coverage
+
+Use/update:
+backend/data/theme_fmp_industry_map.json
+
+Make sure every theme currently returned by GET /api/screener-hub/themes has a safe mapping behavior.
+
+For every theme:
+- If there is a specific mapping, use it.
+- If there is no specific mapping, return safe partial/empty response or fallback to existing ETF/LKG/static seed behavior.
+- Never 502 because a theme has no FMP industry mapping.
+- Never call FMP on page load to compensate for missing mapping.
+
+For mapped themes, config should support:
+- fmp_industries
+- core_industries
+- adjacent_industries
+- weak_adjacent_industries
+- positive_keywords
+- negative_keywords
+- min_market_cap
+- max_market_cap
+- min_volume
+- preferred_market_cap_buckets
+
+Defaults:
+- min_market_cap: 50000000
+- max_market_cap: 10000000000
+- min_volume: 100000
+
+Do not hardcode final ticker lists.
+Do not build giant exclude-industry lists.
+Prefer using the right included FMP industries and then scoring by relevance/quality.
+
+Part 2 — Clean final row shape
+
+For Thematic rows, return this clean row shape:
+
+Base FMP fields:
+- symbol
+- company_name
+- market_cap
+- sector
+- industry
+- beta
+- price
+- last_annual_dividend
+- volume
+- exchange
+
+Calculated locally from FMP screener fields:
+- dollar_volume = price * volume
+- volume_to_market_cap = dollar_volume / market_cap
+
+Tradier/page-aware quote enrichment:
+- change_percent_1d
+
+Existing/cached signal fields:
+- volume_surge
+- accumulation
+
+Options cache enrichment:
+- options_oi
+- options_oi_change
+- options_activity_score
+
+Score/tag:
+- score
+- hidden_gem_score
+- role
+
+Debug/metadata fields are okay to keep in response but frontend does not need to display:
+- discovery_sources
+- quality_flags
+- source_confidence
+- rs_data_status
+- fmp_screener_industries_attempted
+- fmp_screener_calls_used
+- filtered_reasons_breakdown
+
+Do not require, prioritize, or newly fetch:
+- 2W return
+- 4W return
+- 10W return
+- RS Accel
+- 7D %
+- 30D %
+- YTD %
+- 1Y %
+- 52W High
+
+If historical/RS fields already exist for backward compatibility, leave them nullable but do not use them as required fields for this final Thematic table.
+
+Part 3 — Score simplification
+
+Simplify score / hidden_gem_score so it favors:
+- correct mapped industry / theme fit
+- market cap between $50M and $10B
+- volume above 100k
+- dollar_volume
+- volume_to_market_cap
+- beta as context, not the main driver
+- volume_surge
+- accumulation
+- options_oi / options_oi_change / options_activity_score when cached
+- social/options/watchlist confirmation if cached
+- source diversity if already available
+
+Penalize or exclude:
+- ETFs
+- funds
+- inactive symbols
+- market cap below $50M
+- market cap above $10B for FMP-screener-discovered hidden-gem rows
+- volume below 100k
+- rights
+- warrants
+- units
+- preferreds
+- SPACs / blank-check / shell names
+
+Catch obvious junk from symbol/company name:
+- Right
+- Warrant
+- Unit
+- Acquisition Corp
+- SPAC
+- Blank Check
+- Shell
+
+Roles should remain simple:
+- anchor
+- hidden_gem
+- emerging
+- supply_chain_player
+- social_confirmed
+- options_confirmed
+- watchlist_overlap
+
+For FMP screener rows from mapped industries, role should usually be:
+- hidden_gem
+or
+- supply_chain_player
+
+Mega-cap leaders can remain visible if they come from ETF/watchlist/options/social sources, but they should not dominate hidden_gem ranking.
+
+Part 4 — Options enrichment
+
+Use existing Options Flow cache/provider only.
+Do not make expensive new options calls for every FMP screener result on page load.
+
+Return if available:
+- options_oi
+- options_oi_change
+- options_activity_score
+
+If missing, return null.
+Do not block the screener.
+
+Part 5 — Cost controls
+
+Preserve all cost controls:
+- no FMP calls on normal page load
+- no FMP Stock Screener calls on page load
+- no FMP historical calls on page load
+- no /stable/historical-price-eod/full in Screener Hub path
+- FMP screener only during scheduled/admin rebuild
+- ranged historical endpoints only where still used elsewhere
+- FMP governor:
+  - 120 RPM
+  - 0.75s spacing
+  - 500 calls/job
+  - 2500 daily soft limit
+  - 50000 monthly soft limit
+- never overwrite good snapshots with empty failed output
+- if one FMP industry call fails, continue with remaining industries
+
+Part 6 — Theme dropdown stability
+
+Every theme returned by GET /api/screener-hub/themes must be safe to select.
+
+For any theme:
+GET /api/screener-hub?tab=thematic&theme=<theme>&scoreMode=true&cocFilter=false
+
+Must:
+- never 502
+- return HTTP 200 JSON if theme exists
+- return status ok, partial, or empty
+- include rows or empty rows safely
+- include message/error_code if empty
+- include sources_attempted and sources_failed when relevant
+- not call FMP on page load
+
+Part 7 — Existing tabs
+
+Do not break:
+- Social tab
+- Bottlenecks tab
+- Watchlist + Portfolio tab
+
+They can keep extra fields internally, but Thematic should use the clean final row shape above.
+
+Part 8 — Fundamentals protection
+
+Do not break /api/fundamentals/compare.
+
+Run a smoke test using the correct method/body and confirm it still returns JSON with expected structure.
+
+Part 9 — Validation
+
+Run code/import checks and restart backend.
+
+Then validate:
+
+A. Theme dropdown safety
+Loop over every theme returned by:
+GET /api/screener-hub/themes
+
+For each theme, call:
+GET /api/screener-hub?tab=thematic&theme=<theme>&scoreMode=true&cocFilter=false
+
+Return a compact summary:
+- theme
+- HTTP status
+- response status
+- row count
+- error_code if any
+- whether page-load made FMP calls
+
+Expected:
+- no 502s
+- no crashes
+- no page-load FMP calls
+
+B. Semiconductors admin rebuild
+Run admin rebuild for semiconductors only:
+POST /api/admin/screener-hub/rebuild
+body:
+{"tab":"thematic","theme":"semiconductors","force":false}
+
+Then call:
+GET /api/screener-hub?tab=thematic&theme=semiconductors&scoreMode=true&cocFilter=false
+
+Return top 40 by score/hidden_gem_score with only these fields:
+- symbol
+- company_name
+- market_cap
+- sector
+- industry
+- beta
+- price
+- last_annual_dividend
+- volume
+- dollar_volume
+- volume_to_market_cap
+- exchange
+- change_percent_1d
+- volume_surge
+- accumulation
+- options_oi
+- options_oi_change
+- options_activity_score
+- role
+- score
+- hidden_gem_score
+
+Also return:
+- total row count
+- count by industry
+- count by role
+- fmp_screener_industries_attempted
+- fmp_screener_calls_used
+- fmp_screener_symbols_added
+- filtered_reasons_breakdown
+
+Confirm:
+- no ETFs/funds
+- no inactive stocks
+- no rights/warrants/units/SPAC-like names
+- no sub-$50M market caps
+- no volume under 100k for FMP screener discovered rows
+- no unnecessary historical performance fields required
+- page load made zero FMP calls
+- /stable/historical-price-eod/full is not used in Screener Hub path
+
+C. Clean Energy
+Call:
+GET /api/screener-hub?tab=thematic&theme=clean_energy&scoreMode=true&cocFilter=false
+
+Return:
+- row count
+- top 20 by score/hidden_gem_score
+- quick note if obvious wrong-theme names appear
+
+D. Drones
+Call:
+GET /api/screener-hub?tab=thematic&theme=drones&scoreMode=true&cocFilter=false
+
+Return:
+- HTTP status
+- response status
+- row count
+- no 502 confirmation
+
+E. Other tabs
+Validate:
+GET /api/screener-hub?tab=social
+GET /api/screener-hub?tab=bottlenecks
+GET /api/screener-hub?tab=watchlist_portfolio
+
+Confirm they still return JSON.
+
+F. Admin status
+Call:
+GET /api/admin/screener-hub/status with X-API-Key
+
+Confirm:
+- fmp_budget appears
+
+G. Fundamentals regression
+Confirm:
+- /api/fundamentals/compare still works
+
+Final report:
+- files changed
+- exact FMP screener endpoint/params used
+- whether one FMP screener call returns many tickers
+- whether page loads make FMP calls
+- whether per-ticker FMP enrichment was added
+- whether /stable/historical-price-eod/full is still used in Screener Hub path
+- semiconductors FMP calls used
+- semiconductors top sample
+- all-theme dropdown safety summary
+- clean_energy result
+- drones result
+- social/bottlenecks/watchlist tab status
+- admin fmp_budget sample
+- fundamentals regression result
+- remaining limitations

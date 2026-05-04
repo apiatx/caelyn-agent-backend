@@ -1,0 +1,64 @@
+Stop the long all-theme validation loop. Do not keep burning time on exhaustive endpoint crawling while the server is under background load.
+
+Do not make more code changes unless something is clearly broken.
+
+Based on the work already done, give me a compact final report.
+
+Please run only these final checks:
+
+1. Confirm the two code changes:
+- theme_fmp_industry_map.json updated with the new mappings
+- screener_hub_service.py updated for safe unmapped-theme handling / clean row behavior
+
+2. Run only these endpoint checks with reasonable timeouts:
+- GET /api/screener-hub?tab=thematic&theme=semiconductors&scoreMode=true&cocFilter=false
+- GET /api/screener-hub?tab=thematic&theme=drones&scoreMode=true&cocFilter=false
+- GET /api/screener-hub?tab=thematic&theme=clean_energy&scoreMode=true&cocFilter=false
+- GET /api/screener-hub?tab=social
+- GET /api/screener-hub?tab=bottlenecks
+- GET /api/screener-hub?tab=watchlist_portfolio
+- GET /api/admin/screener-hub/status with X-API-Key
+- /api/fundamentals/compare smoke test
+
+3. For Semiconductors, return the already-confirmed top 15 by Score/hidden_gem_score with:
+- symbol
+- company_name
+- market_cap
+- industry
+- beta
+- price
+- volume
+- dollar_volume
+- volume_to_market_cap
+- exchange
+- change_percent_1d
+- volume_surge
+- accumulation
+- options_oi
+- options_oi_change
+- options_activity_score
+- role
+- score/hidden_gem_score
+
+4. Confirm:
+- no ETFs/funds
+- no inactive stocks
+- no rights/warrants/units/SPAC-like names
+- no sub-$50M market caps
+- no volume under 100k for FMP screener-discovered rows
+- no page-load FMP calls
+- no /stable/historical-price-eod/full in Screener Hub path
+- FMP screener calls only happen during rebuilds
+- unmapped themes return safe partial/empty/fallback behavior, not 502
+
+5. Do not attempt to validate every theme individually anymore. Instead, report:
+- number of mapped themes
+- number of unmapped/index/factor fallback themes
+- whether safe fallback handling is implemented
+
+Return:
+- files changed
+- final endpoint check results
+- semiconductors top 15 sample
+- mapping coverage summary
+- remaining limitations

@@ -103,6 +103,8 @@ _JUNK_NAME_RE = re.compile(
     r"|\bspecial purpose acquisition\b"  # SPAC long form
     r"|\bblank[- ]check\b"              # blank check company
     r"|\bspac\b"                         # SPAC abbreviation
+    r"|\bshell company\b"               # shell company
+    r"|\bshell co\.?\b"                 # "Shell Co" / "Shell Co."
     r")",
     re.IGNORECASE,
 )

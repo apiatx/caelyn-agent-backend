@@ -1007,7 +1007,7 @@
       "positive_keywords": [
         "software", "SaaS", "platform", "enterprise", "developer tools"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
       "min_market_cap": 50000000,
       "max_market_cap": 5000000000,
       "min_volume": 100000,
@@ -1015,6 +1015,517 @@
       "market_cap_upper_default": 5000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Broad enterprise and consumer software, smaller names."
+    },
+    "energy": {
+      "fmp_industries": [
+        "Oil & Gas E&P",
+        "Oil & Gas Midstream",
+        "Oil & Gas Integrated",
+        "Oil & Gas Refining & Marketing",
+        "Oil & Gas Equipment & Services"
+      ],
+      "core_industries": [
+        "Oil & Gas E&P"
+      ],
+      "adjacent_industries": [
+        "Oil & Gas Midstream",
+        "Oil & Gas Integrated"
+      ],
+      "weak_adjacent_industries": [
+        "Oil & Gas Refining & Marketing",
+        "Oil & Gas Equipment & Services"
+      ],
+      "positive_keywords": [
+        "oil", "gas", "energy", "E&P", "exploration", "production",
+        "pipeline", "midstream", "refinery", "upstream", "downstream"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Oil & gas E&P, midstream, and services. Excludes majors via cap ceiling."
+    },
+    "healthcare": {
+      "fmp_industries": [
+        "Biotechnology",
+        "Drug Manufacturers - Specialty & Generic",
+        "Medical - Devices",
+        "Medical - Instruments & Supplies",
+        "Diagnostics & Research",
+        "Medical - Healthcare Plans",
+        "Healthcare Information Services",
+        "Medical - Hospitals"
+      ],
+      "core_industries": [
+        "Biotechnology",
+        "Drug Manufacturers - Specialty & Generic",
+        "Medical - Devices"
+      ],
+      "adjacent_industries": [
+        "Medical - Instruments & Supplies",
+        "Diagnostics & Research"
+      ],
+      "weak_adjacent_industries": [
+        "Medical - Healthcare Plans",
+        "Healthcare Information Services",
+        "Medical - Hospitals"
+      ],
+      "positive_keywords": [
+        "health", "pharma", "biotech", "medical", "therapeutic",
+        "clinical", "diagnostics", "drug", "device", "healthcare"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Broad healthcare — biotech, pharma, medtech, diagnostics, health plans."
+    },
+    "materials": {
+      "fmp_industries": [
+        "Steel",
+        "Specialty Chemicals",
+        "Other Industrial Metals & Mining",
+        "Copper",
+        "Aluminum",
+        "Gold",
+        "Silver",
+        "Agricultural Inputs"
+      ],
+      "core_industries": [
+        "Steel",
+        "Specialty Chemicals",
+        "Other Industrial Metals & Mining"
+      ],
+      "adjacent_industries": [
+        "Copper",
+        "Aluminum"
+      ],
+      "weak_adjacent_industries": [
+        "Gold",
+        "Silver",
+        "Agricultural Inputs"
+      ],
+      "positive_keywords": [
+        "materials", "chemicals", "metals", "mining", "steel",
+        "aluminum", "specialty chemical", "polymer", "alloy"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Broad materials sector — metals, mining, specialty chemicals."
+    },
+    "banks": {
+      "fmp_industries": [
+        "Banks - Regional",
+        "Banks - Diversified",
+        "Financial - Mortgages",
+        "Financial - Credit Services"
+      ],
+      "core_industries": [
+        "Banks - Regional",
+        "Banks - Diversified"
+      ],
+      "adjacent_industries": [
+        "Financial - Mortgages"
+      ],
+      "weak_adjacent_industries": [
+        "Financial - Credit Services"
+      ],
+      "positive_keywords": [
+        "bank", "bancorp", "savings", "financial", "community bank",
+        "thrift", "banshares", "bankshares"
+      ],
+      "negative_keywords": [
+        "investment bank", "hedge fund", "blank check", "acquisition corp",
+        "spac", "shell company"
+      ],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Regional and community banks. Superset of regional_banks."
+    },
+    "chemicals_materials": {
+      "fmp_industries": [
+        "Specialty Chemicals",
+        "Agricultural Inputs",
+        "Other Industrial Metals & Mining"
+      ],
+      "core_industries": [
+        "Specialty Chemicals"
+      ],
+      "adjacent_industries": [
+        "Agricultural Inputs"
+      ],
+      "weak_adjacent_industries": [
+        "Other Industrial Metals & Mining"
+      ],
+      "positive_keywords": [
+        "chemical", "specialty chemical", "polymer", "resin",
+        "adhesive", "coatings", "fertilizer", "materials science"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Specialty and advanced chemicals, materials science."
+    },
+    "consumer_retail": {
+      "fmp_industries": [
+        "Specialty Retail",
+        "Grocery Stores",
+        "Department Stores",
+        "Home Improvement Stores",
+        "Apparel - Retail",
+        "Restaurants",
+        "Auto & Truck Dealerships"
+      ],
+      "core_industries": [
+        "Specialty Retail",
+        "Restaurants"
+      ],
+      "adjacent_industries": [
+        "Grocery Stores",
+        "Apparel - Retail",
+        "Home Improvement Stores"
+      ],
+      "weak_adjacent_industries": [
+        "Department Stores",
+        "Auto & Truck Dealerships"
+      ],
+      "positive_keywords": [
+        "retail", "restaurant", "consumer", "store", "apparel",
+        "food service", "e-commerce", "direct-to-consumer"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Consumer retail — specialty, restaurants, grocery, apparel."
+    },
+    "insurance": {
+      "fmp_industries": [
+        "Insurance - Property & Casualty",
+        "Insurance - Diversified",
+        "Insurance - Life",
+        "Insurance - Specialty"
+      ],
+      "core_industries": [
+        "Insurance - Property & Casualty"
+      ],
+      "adjacent_industries": [
+        "Insurance - Diversified",
+        "Insurance - Specialty"
+      ],
+      "weak_adjacent_industries": [
+        "Insurance - Life"
+      ],
+      "positive_keywords": [
+        "insurance", "insurer", "underwriter", "reinsurance",
+        "casualty", "property", "liability", "surety"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "P&C, specialty, and life insurance carriers and reinsurers."
+    },
+    "silver": {
+      "fmp_industries": [
+        "Silver",
+        "Gold",
+        "Other Precious Metals & Mining",
+        "Other Industrial Metals & Mining"
+      ],
+      "core_industries": [
+        "Silver"
+      ],
+      "adjacent_industries": [
+        "Gold",
+        "Other Precious Metals & Mining"
+      ],
+      "weak_adjacent_industries": [
+        "Other Industrial Metals & Mining"
+      ],
+      "positive_keywords": [
+        "silver", "precious metal", "royalty", "streaming",
+        "miner", "exploration", "junior miner"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Silver and precious metals miners, royalty companies."
+    },
+    "travel_transportation": {
+      "fmp_industries": [
+        "Airlines",
+        "Trucking",
+        "Railroads",
+        "Marine Shipping",
+        "Integrated Freight & Logistics",
+        "Airports & Air Services"
+      ],
+      "core_industries": [
+        "Airlines",
+        "Trucking",
+        "Railroads"
+      ],
+      "adjacent_industries": [
+        "Marine Shipping",
+        "Integrated Freight & Logistics"
+      ],
+      "weak_adjacent_industries": [
+        "Airports & Air Services"
+      ],
+      "positive_keywords": [
+        "travel", "airline", "shipping", "freight", "logistics",
+        "trucking", "rail", "cruise", "transport", "cargo"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 15000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["small", "mid"],
+      "market_cap_upper_default": 15000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Airlines, trucking, rail, maritime, freight and logistics."
+    },
+    "communication_services": {
+      "fmp_industries": [
+        "Telecom Services",
+        "Internet Content & Information",
+        "Entertainment",
+        "Media - Diversified",
+        "Broadcasting"
+      ],
+      "core_industries": [
+        "Telecom Services",
+        "Internet Content & Information"
+      ],
+      "adjacent_industries": [
+        "Entertainment",
+        "Media - Diversified"
+      ],
+      "weak_adjacent_industries": [
+        "Broadcasting"
+      ],
+      "positive_keywords": [
+        "telecom", "communication", "media", "streaming",
+        "broadband", "wireless", "5G", "content", "digital media"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Telecom carriers, internet content, entertainment, media."
+    },
+    "utilities": {
+      "fmp_industries": [
+        "Utilities - Regulated Electric",
+        "Renewable Utilities",
+        "Utilities - Regulated Gas",
+        "Diversified Utilities",
+        "Utilities - Regulated Water",
+        "Independent Power Producers"
+      ],
+      "core_industries": [
+        "Utilities - Regulated Electric",
+        "Renewable Utilities"
+      ],
+      "adjacent_industries": [
+        "Utilities - Regulated Gas",
+        "Diversified Utilities"
+      ],
+      "weak_adjacent_industries": [
+        "Utilities - Regulated Water",
+        "Independent Power Producers"
+      ],
+      "positive_keywords": [
+        "utility", "electric", "power", "grid", "regulated",
+        "renewable", "generation", "transmission", "distribution"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Regulated electric, gas, water utilities and independent power producers."
+    },
+    "real_estate": {
+      "fmp_industries": [
+        "REIT - Residential",
+        "REIT - Office",
+        "REIT - Industrial",
+        "REIT - Retail",
+        "REIT - Healthcare",
+        "REIT - Specialty",
+        "REIT - Diversified",
+        "Real Estate - Development",
+        "Real Estate Services"
+      ],
+      "core_industries": [
+        "REIT - Residential",
+        "REIT - Industrial",
+        "REIT - Office"
+      ],
+      "adjacent_industries": [
+        "REIT - Retail",
+        "REIT - Healthcare",
+        "REIT - Specialty",
+        "REIT - Diversified"
+      ],
+      "weak_adjacent_industries": [
+        "Real Estate - Development",
+        "Real Estate Services"
+      ],
+      "positive_keywords": [
+        "REIT", "real estate", "property", "realty", "trust",
+        "residential", "commercial", "industrial property"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Residential, industrial, office, retail, and specialty REITs."
+    },
+    "consumer_staples": {
+      "fmp_industries": [
+        "Packaged Foods",
+        "Beverages - Non-Alcoholic",
+        "Food Distribution",
+        "Grocery Stores",
+        "Household & Personal Products",
+        "Beverages - Alcoholic",
+        "Tobacco"
+      ],
+      "core_industries": [
+        "Packaged Foods",
+        "Household & Personal Products"
+      ],
+      "adjacent_industries": [
+        "Beverages - Non-Alcoholic",
+        "Food Distribution",
+        "Grocery Stores"
+      ],
+      "weak_adjacent_industries": [
+        "Beverages - Alcoholic",
+        "Tobacco"
+      ],
+      "positive_keywords": [
+        "food", "beverage", "consumer goods", "household",
+        "personal care", "grocery", "packaged", "staples"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Packaged foods, beverages, household products, grocery."
+    },
+    "consumer_discretionary": {
+      "fmp_industries": [
+        "Auto Manufacturers",
+        "Specialty Retail",
+        "Apparel - Retail",
+        "Restaurants",
+        "Leisure",
+        "Hotels & Motels",
+        "Auto & Truck Dealerships",
+        "Furnishings, Fixtures & Appliances"
+      ],
+      "core_industries": [
+        "Auto Manufacturers",
+        "Specialty Retail",
+        "Restaurants"
+      ],
+      "adjacent_industries": [
+        "Apparel - Retail",
+        "Leisure"
+      ],
+      "weak_adjacent_industries": [
+        "Auto & Truck Dealerships",
+        "Hotels & Motels",
+        "Furnishings, Fixtures & Appliances"
+      ],
+      "positive_keywords": [
+        "consumer", "retail", "auto", "restaurant", "leisure",
+        "luxury", "apparel", "discretionary", "entertainment"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Autos, specialty retail, restaurants, leisure, apparel."
+    },
+    "speculative_tech": {
+      "fmp_industries": [
+        "Software - Application",
+        "Electronic Components",
+        "Computer Hardware",
+        "Scientific & Technical Instruments",
+        "Software - Infrastructure"
+      ],
+      "core_industries": [
+        "Software - Application"
+      ],
+      "adjacent_industries": [
+        "Electronic Components",
+        "Computer Hardware",
+        "Software - Infrastructure"
+      ],
+      "weak_adjacent_industries": [
+        "Scientific & Technical Instruments"
+      ],
+      "positive_keywords": [
+        "AI", "machine learning", "autonomous", "platform",
+        "next-gen", "disruptive", "innovation", "deep tech"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 5000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "market_cap_upper_default": 5000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "High-growth disruptive tech, ARK-style names, AI/ML plays."
     }
   }
 }
