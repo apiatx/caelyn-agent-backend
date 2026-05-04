@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,6 +88,24 @@ _ETF_HOLDINGS_DIR = Path(__file__).parent.parent / "data" / "etf_holdings"
 
 # Dynamic Chain Reaction output file (written by Chain Reaction service if/when available)
 _CHAIN_REACTION_OUTPUT = Path(__file__).parent.parent / "data" / "chain_reaction_output.json"
+
+# ── Security junk / warrant / rights / SPAC detection ─────────────────────────
+# Catches rights offerings, warrant stubs, unit offerings, blank-check SPACs.
+# Applied client-side after FMP screener returns raw results.
+_JUNK_NAME_RE = re.compile(
+    r"("
+    r"\bseries [a-z\d]+ right[s]?\b"     # "Series A Rights", "Series 2 Right"
+    r"|[,\s]right[s]?\.?\s*$"            # ends with " Rights" / " Right"
+    r"|\bwarrant[s]?\s*$"                # ends with "Warrant" / "Warrants"
+    r"|\bwts?\s*$"                       # ends with "Wt" / "Wts" (warrant abbrev)
+    r"|\bunits?\s*$"                     # ends with "Unit" / "Units"
+    r"|\bacquisition corp\.?\b"          # "Acquisition Corp" / "Acquisition Corp."
+    r"|\bspecial purpose acquisition\b"  # SPAC long form
+    r"|\bblank[- ]check\b"              # blank check company
+    r"|\bspac\b"                         # SPAC abbreviation
+    r")",
+    re.IGNORECASE,
+)
 
 
 def _now_iso() -> str:
@@ -399,16 +418,31 @@ def _compute_hidden_gem_score(
     is_social: bool,
     is_options: bool,
     is_watchlist: bool,
+    theme_relevance_score: float = 0.5,
+    source_confidence: str = "medium",
+    liquidity_status: str = "unknown",
 ) -> float:
     """
     Score 0–10 rating how "hidden gem"-like a stock is.
 
-    Key signals: RS acceleration, volume surge, near-52w-high setup,
-    small/mid-cap size, multi-source confirmation.
+    Combines theme relevance, source confidence, RS momentum, market cap size,
+    liquidity quality, and multi-source confirmation.
 
-    Mega-caps are soft-penalized (they're anchors, not hidden gems).
+    Mega-caps are penalized (anchors, not hidden gems).
+    Micro-caps without theme relevance or liquidity are also penalized.
     """
     score = 0.0
+
+    # Theme relevance — core-industry names get a meaningful head-start
+    if theme_relevance_score >= 0.85:        score += 1.5   # core industry
+    elif theme_relevance_score >= 0.50:      score += 0.75  # adjacent
+    elif theme_relevance_score >= 0.25:      score += 0.25  # weak adjacent w/ keyword boost
+    # < 0.25 or unknown: no theme bonus
+
+    # Source confidence — multi-source confirmed names rank higher
+    if source_confidence == "high":          score += 0.75
+    elif source_confidence == "medium":      score += 0.25
+    # "low" → no bonus
 
     # RS / momentum signals — prefer real multi-week returns over 1D proxy
     rs_for_signal = return_4w if return_4w is not None else chg_1d
@@ -455,24 +489,23 @@ def _compute_hidden_gem_score(
         elif distance_52w_high < -50:
             score -= 0.5
 
-    # Market cap: smaller → less discovered → bigger hidden-gem premium
+    # Market cap: smaller = less discovered, but quality must justify
+    # Reduced micro bonus (was +2.0) to prevent junk from dominating via size alone
     if market_cap is not None:
-        if market_cap < 1e9:          # micro cap < $1B
-            score += 2.0
-        elif market_cap < 5e9:        # small cap < $5B
-            score += 1.5
-        elif market_cap < 20e9:       # mid cap < $20B
-            score += 0.75
-        elif market_cap > 100e9:      # mega cap > $100B — anchor, not hidden gem
-            score -= 1.0
+        if market_cap < 1e9:       score += 1.5   # micro < $1B (was +2.0)
+        elif market_cap < 5e9:     score += 1.5   # small < $5B
+        elif market_cap < 20e9:    score += 0.75  # mid < $20B
+        elif market_cap > 200e9:   score -= 1.5   # mega > $200B — strong anchor penalty
+        elif market_cap > 100e9:   score -= 0.75  # large-mega > $100B
+
+    # Liquidity quality penalty
+    if liquidity_status == "very_thin":  score -= 1.5
+    elif liquidity_status == "thin":     score -= 0.5
 
     # Multi-source confirmation boosts
-    if is_social:
-        score += 0.5
-    if is_options:
-        score += 0.5
-    if is_watchlist:
-        score += 0.25
+    if is_social:    score += 0.5
+    if is_options:   score += 0.5
+    if is_watchlist: score += 0.25
 
     return round(max(0.0, min(10.0, score)), 2)
 
@@ -578,110 +611,268 @@ def _load_industry_map_config() -> dict:
     return {}
 
 
+# ── Quality / theme-relevance helpers ─────────────────────────────────────────
+
+def _is_junk_security_name(company_name: str) -> bool:
+    """Return True if company name matches junk security patterns (rights, warrants, SPACs)."""
+    if not company_name:
+        return False
+    return bool(_JUNK_NAME_RE.search(company_name))
+
+
+def _compute_theme_relevance_score(
+    industry: str,
+    company_name: str,
+    theme_cfg: dict,
+) -> tuple[float, str]:
+    """
+    Returns (theme_relevance_score 0.0–1.0, industry_tier).
+    industry_tier: "core" | "adjacent" | "weak_adjacent" | "unknown"
+
+    Base score by tier: core=1.0, adjacent=0.6, weak_adjacent=0.3, unknown=0.5.
+    Positive keyword match boosts +0.1 (capped at 1.0).
+    Negative keyword match penalises -0.2 (floored at 0.0).
+    """
+    core_inds     = set(theme_cfg.get("core_industries")          or [])
+    adjacent_inds = set(theme_cfg.get("adjacent_industries")      or [])
+    weak_inds     = set(theme_cfg.get("weak_adjacent_industries")  or [])
+    pos_kws = [k.lower() for k in (theme_cfg.get("positive_keywords") or [])]
+    neg_kws = [k.lower() for k in (theme_cfg.get("negative_keywords") or [])]
+
+    if industry in core_inds:
+        base_score, tier = 1.0, "core"
+    elif industry in adjacent_inds:
+        base_score, tier = 0.6, "adjacent"
+    elif industry in weak_inds:
+        base_score, tier = 0.3, "weak_adjacent"
+    else:
+        base_score, tier = 0.5, "unknown"   # in fmp_industries but untiered → medium
+
+    name_lower = (company_name or "").lower()
+    kw_delta = 0.0
+    for kw in pos_kws:
+        if kw in name_lower:
+            kw_delta += 0.1
+            break   # one positive boost only
+    for kw in neg_kws:
+        if kw in name_lower:
+            kw_delta -= 0.2
+            break   # one negative penalty only
+
+    return round(max(0.0, min(1.0, base_score + kw_delta)), 3), tier
+
+
+def _get_source_confidence(
+    discovery_sources: list[str],
+    theme_relevance_score: float,
+) -> str:
+    """
+    Returns "high" | "medium" | "low" based on source diversity and theme relevance.
+
+    High:   ETF/LKG + any overlap confirmation, OR multiple discovery types + relevant.
+    Low:    Only screener source with weak relevance and no confirmations.
+    Medium: Everything else.
+    """
+    src_str       = " ".join(discovery_sources)
+    has_etf       = "etf:" in src_str
+    has_lkg       = "lkg_leaders" in src_str
+    has_screener  = "fmp_screener:" in src_str
+    has_social    = "social_overlap" in src_str
+    has_options   = "options_overlap" in src_str
+    has_watchlist = "watchlist_portfolio" in src_str
+    has_peers     = "fmp_peers" in src_str
+
+    n_confirmations = sum([has_social, has_options, has_watchlist])
+    n_discovery     = sum([has_etf, has_lkg, has_screener, has_peers])
+
+    if (has_etf or has_lkg) and n_confirmations >= 1:
+        return "high"
+    if n_discovery >= 2 and theme_relevance_score >= 0.5:
+        return "high"
+    if n_confirmations >= 2:
+        return "high"
+    if (has_screener and not has_etf and not has_lkg
+            and n_confirmations == 0 and theme_relevance_score < 0.4):
+        return "low"
+    return "medium"
+
+
+def _compute_liquidity_status(
+    volume: Optional[float],
+    market_cap: Optional[float],
+    price: Optional[float],
+) -> tuple[str, Optional[float], Optional[float]]:
+    """
+    Returns (liquidity_status, dollar_volume, volume_to_market_cap).
+
+    liquidity_status: "adequate" | "thin" | "very_thin" | "unknown"
+    dollar_volume:          price × volume  (None if either is missing)
+    volume_to_market_cap:   volume / market_cap  (None if either is missing)
+    """
+    dollar_volume: Optional[float] = None
+    volume_to_market_cap: Optional[float] = None
+
+    if volume is not None and price is not None:
+        dollar_volume = round(volume * price, 2)
+    if volume is not None and market_cap and market_cap > 0:
+        volume_to_market_cap = round(volume / market_cap, 6)
+
+    if volume is None:
+        return "unknown", dollar_volume, volume_to_market_cap
+    if volume >= 500_000:
+        return "adequate", dollar_volume, volume_to_market_cap
+    if volume >= 100_000:
+        return "thin", dollar_volume, volume_to_market_cap
+    return "very_thin", dollar_volume, volume_to_market_cap
+
+
 async def _fmp_industry_screener(
     industries: list[str],
     *,
-    market_cap_upper: Optional[int] = 50_000_000_000,
-    market_cap_lower: Optional[int] = None,
+    market_cap_upper: Optional[int] = 10_000_000_000,
+    market_cap_lower: Optional[int] = 50_000_000,
+    min_volume: int = 100_000,
     screener_limit: int = 500,
     timeout: float = 12.0,
-) -> tuple[list[dict], list[str], list[str]]:
+) -> tuple[list[dict], list[str], list[str], dict]:
     """
     FMP company-screener — ONE call per mapped industry.
 
     ONLY called from rebuild_universe / admin rebuild paths (with_fmp_screener=True).
     Never called on page loads.
 
+    Quality filters enforced client-side (FMP often ignores query params):
+      - market_cap >= market_cap_lower (default $50M)
+      - market_cap <= market_cap_upper (default $10B)
+      - volume >= min_volume (default 100k)
+      - not ETF / not fund
+      - symbol length ≤ 6, alphanumeric + hyphen only
+      - not junk security name (rights, warrants, units, SPACs)
+
     Returns:
-        candidates           : list of candidate metadata dicts (rich, not just symbols)
+        candidates           : list of candidate metadata dicts
         industries_attempted : list of industries whose API call was made
-        industries_errored   : list of industries that failed or returned HTTP error
-
-    Each candidate dict:
-        symbol, company_name, market_cap, sector, industry,
-        beta, price, volume, exchange, country, is_etf, is_fund,
-        discovery_source  (e.g. "fmp_screener:Semiconductors")
-
-    market_cap_upper/lower are applied client-side because FMP ignores those params.
-    Candidates are returned sorted by market_cap ascending (smallest-cap first)
-    so they fill the per-theme cap ahead of larger names.
+        industries_errored   : list of industries that failed
+        filtered_reasons     : dict of {reason: count} showing exclusion breakdown
     """
     api_key = os.getenv("FMP_API_KEY") or ""
     if not api_key or not industries:
-        return [], [], []
+        return [], [], [], {}
 
     try:
         from services.fmp_governor import fmp_governor as _gov
     except Exception:
         _gov = None
 
-    candidates:            list[dict] = []
-    seen_syms:             set[str]   = set()
-    industries_attempted:  list[str]  = []
-    industries_errored:    list[str]  = []
+    candidates:           list[dict]      = []
+    seen_syms:            set[str]        = set()
+    industries_attempted: list[str]       = []
+    industries_errored:   list[str]       = []
+    filtered_reasons: dict[str, int] = {
+        "total_raw":       0,
+        "total_accepted":  0,
+        "is_etf":          0,
+        "is_fund":         0,
+        "symbol_format":   0,
+        "sub_min_cap":     0,
+        "above_max_cap":   0,
+        "low_volume":      0,
+        "junk_name":       0,
+        "duplicate":       0,
+    }
 
-    async def _screen_one(industry: str) -> tuple[str, list[dict], bool]:
-        """Returns (industry, candidate_dicts, had_error)."""
+    async def _screen_one(industry: str) -> tuple[str, list[dict], bool, dict]:
+        """Returns (industry, candidate_dicts, had_error, local_filtered)."""
+        local_fr: dict[str, int] = {k: 0 for k in filtered_reasons}
         if _gov is not None:
             slot_ok = await _gov.acquire(job_name="fmp_industry_screener")
             if not slot_ok:
-                return industry, [], True
+                return industry, [], True, local_fr
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.get(
                     f"{FMP_BASE}/company-screener",
                     params={
-                        "industry":          industry,
-                        "isEtf":             "false",
-                        "isFund":            "false",
-                        "isActivelyTrading": "true",
-                        "limit":             screener_limit,
-                        "apikey":            api_key,
+                        "industry":               industry,
+                        "isEtf":                  "false",
+                        "isFund":                 "false",
+                        "isActivelyTrading":      "true",
+                        "marketCapMoreThan":       str(market_cap_lower or 50_000_000),
+                        "volumeMoreThan":          str(min_volume),
+                        "includeAllShareClasses":  "false",
+                        "limit":                  screener_limit,
+                        "apikey":                 api_key,
                     },
                 )
             if _gov is not None:
                 _gov.record_call()
             if resp.status_code != 200:
                 print(f"[SCREENER_HUB] company-screener {industry!r} HTTP {resp.status_code}")
-                return industry, [], True
+                return industry, [], True, local_fr
             raw = resp.json()
             hits: list[dict] = []
             for item in (raw if isinstance(raw, list) else []):
+                local_fr["total_raw"] += 1
                 sym = (item.get("symbol") or "").strip().upper()
-                if not sym or len(sym) > 5:
+                if not sym or len(sym) > 6:
+                    local_fr["symbol_format"] += 1
                     continue
                 if not sym.replace("-", "").isalpha():
+                    local_fr["symbol_format"] += 1
                     continue
-                if item.get("isEtf") or item.get("isFund"):
+                if item.get("isEtf"):
+                    local_fr["is_etf"] += 1
+                    continue
+                if item.get("isFund"):
+                    local_fr["is_fund"] += 1
                     continue
                 mcap = float(item.get("marketCap") or 0)
-                # Client-side market-cap filtering (FMP ignores the query params)
-                if market_cap_upper and mcap and mcap > market_cap_upper:
-                    continue
+                vol  = float(item.get("volume") or 0)
+                # Client-side quality filters (FMP may ignore query params)
                 if market_cap_lower and mcap and mcap < market_cap_lower:
+                    local_fr["sub_min_cap"] += 1
                     continue
+                if market_cap_upper and mcap and mcap > market_cap_upper:
+                    local_fr["above_max_cap"] += 1
+                    continue
+                if vol < min_volume:
+                    local_fr["low_volume"] += 1
+                    continue
+                company_name = (item.get("companyName") or "").strip()
+                if _is_junk_security_name(company_name):
+                    local_fr["junk_name"] += 1
+                    continue
+                # Accepted — build enriched metadata dict
                 beta_raw  = item.get("beta")
                 price_raw = item.get("price")
-                vol_raw   = item.get("volume")
+                price_f   = float(price_raw) if price_raw is not None else None
+                vol_f     = vol if vol else None
+                mcap_f    = mcap if mcap else None
+                liq_status, dv, vtmc = _compute_liquidity_status(vol_f, mcap_f, price_f)
+                local_fr["total_accepted"] += 1
                 hits.append({
-                    "symbol":           sym,
-                    "company_name":     (item.get("companyName") or "").strip(),
-                    "market_cap":       mcap if mcap else None,
-                    "sector":           (item.get("sector") or "").strip(),
-                    "industry":         (item.get("industry") or industry).strip(),
-                    "beta":             float(beta_raw)  if beta_raw  is not None else None,
-                    "price":            float(price_raw) if price_raw is not None else None,
-                    "volume":           float(vol_raw)   if vol_raw   is not None else None,
-                    "exchange":         (item.get("exchangeShortName") or item.get("exchange") or "").strip(),
-                    "country":          (item.get("country") or "").strip(),
-                    "is_etf":           bool(item.get("isEtf")),
-                    "is_fund":          bool(item.get("isFund")),
-                    "discovery_source": f"fmp_screener:{industry}",
+                    "symbol":               sym,
+                    "company_name":         company_name,
+                    "market_cap":           mcap_f,
+                    "sector":               (item.get("sector") or "").strip(),
+                    "industry":             (item.get("industry") or industry).strip(),
+                    "beta":                 float(beta_raw) if beta_raw is not None else None,
+                    "price":                price_f,
+                    "volume":               vol_f,
+                    "exchange":             (item.get("exchangeShortName") or item.get("exchange") or "").strip(),
+                    "country":              (item.get("country") or "").strip(),
+                    "is_etf":               bool(item.get("isEtf")),
+                    "is_fund":              bool(item.get("isFund")),
+                    "liquidity_status":     liq_status,
+                    "dollar_volume":        dv,
+                    "volume_to_market_cap": vtmc,
+                    "discovery_source":     f"fmp_screener:{industry}",
+                    # theme_relevance_score and industry_tier computed later in _build_thematic_universe
                 })
-            return industry, hits, False
+            return industry, hits, False, local_fr
         except Exception as e:
             print(f"[SCREENER_HUB] company-screener {industry!r} error: {e}")
-            return industry, [], True
+            return industry, [], True, local_fr
 
     results = await asyncio.gather(
         *[_screen_one(ind) for ind in industries],
@@ -691,8 +882,10 @@ async def _fmp_industry_screener(
         if isinstance(res, Exception):
             industries_errored.append("unknown")
             continue
-        industry, hits, had_error = res
+        industry, hits, had_error, local_fr = res
         industries_attempted.append(industry)
+        for k, v in local_fr.items():
+            filtered_reasons[k] = filtered_reasons.get(k, 0) + v
         if had_error:
             industries_errored.append(industry)
             continue
@@ -701,16 +894,23 @@ async def _fmp_industry_screener(
             if sym not in seen_syms:
                 seen_syms.add(sym)
                 candidates.append(item)
+            else:
+                filtered_reasons["duplicate"] += 1
 
     # Sort smallest-cap first so they fill the per-theme cap ahead of larger names.
+    # (Re-sorted by theme_relevance in _build_thematic_universe after scoring.)
     candidates.sort(key=lambda c: c.get("market_cap") or float("inf"))
 
     print(
         f"[SCREENER_HUB] fmp_industry_screener: {len(industries)} industries → "
-        f"{len(candidates)} candidates "
-        f"(errors: {industries_errored or 'none'})"
+        f"{filtered_reasons['total_raw']} raw → {len(candidates)} accepted "
+        f"(sub_cap={filtered_reasons['sub_min_cap']}, "
+        f"low_vol={filtered_reasons['low_volume']}, "
+        f"junk={filtered_reasons['junk_name']}, "
+        f"etf/fund={filtered_reasons['is_etf'] + filtered_reasons['is_fund']}, "
+        f"errors={industries_errored or 'none'})"
     )
-    return candidates, industries_attempted, industries_errored
+    return candidates, industries_attempted, industries_errored, filtered_reasons
 
 
 async def _build_thematic_universe(
@@ -814,20 +1014,35 @@ async def _build_thematic_universe(
 
         # ── Source C: FMP industry screener (rebuild jobs only) ───────────────
         # Uses config-driven theme → industry mapping from theme_fmp_industry_map.json.
-        # Candidates are sorted smallest-cap first (done inside _fmp_industry_screener).
+        # Quality filters: min_market_cap=$50M, min_volume=100k, no junk names/ETFs.
+        # Candidates sorted by (theme_relevance DESC, market_cap ASC) after scoring.
         # They get RESERVED slots in the final cap so ETF overflow doesn't crowd them out.
         theme_cfg  = themes_cfg.get(key) or {}
         industries = theme_cfg.get("fmp_industries") or []
-        cap_upper  = theme_cfg.get("market_cap_upper_default") or 50_000_000_000
-        cap_lower  = theme_cfg.get("market_cap_lower_default")
+        # v2 schema fields with legacy compat fallbacks
+        max_mcap = int(
+            theme_cfg.get("max_market_cap")
+            or theme_cfg.get("market_cap_upper_default")
+            or 10_000_000_000
+        )
+        min_mcap = int(
+            theme_cfg.get("min_market_cap")
+            or theme_cfg.get("market_cap_lower_default")
+            or 50_000_000
+        )
+        min_vol = int(theme_cfg.get("min_volume") or 100_000)
+        filtered_reasons_breakdown: dict = {}
 
         if with_fmp_screener and industries:
             sources_attempted.append("fmp_screener")
             try:
-                cands, ind_attempted, ind_errored = await _fmp_industry_screener(
-                    industries,
-                    market_cap_upper=int(cap_upper) if cap_upper else None,
-                    market_cap_lower=int(cap_lower) if cap_lower else None,
+                cands, ind_attempted, ind_errored, filtered_reasons_breakdown = (
+                    await _fmp_industry_screener(
+                        industries,
+                        market_cap_upper=max_mcap,
+                        market_cap_lower=min_mcap,
+                        min_volume=min_vol,
+                    )
                 )
                 fmp_screener_industries_attempted = ind_attempted
                 fmp_screener_industries_errored   = ind_errored
@@ -835,6 +1050,27 @@ async def _build_thematic_universe(
 
                 if ind_errored:
                     sources_failed.append(f"fmp_screener_partial({','.join(ind_errored[:3])})")
+
+                # Compute theme_relevance_score per candidate, then re-sort:
+                # highest theme relevance first, smallest-cap within each tier.
+                for cand in cands:
+                    trs, tier = _compute_theme_relevance_score(
+                        cand.get("industry") or "",
+                        cand.get("company_name") or "",
+                        theme_cfg,
+                    )
+                    cand["theme_relevance_score"] = trs
+                    cand["industry_tier"]         = tier
+                    qflags: list[str] = []
+                    beta = cand.get("beta")
+                    if beta is not None and abs(beta) > 5:
+                        qflags.append("very_high_beta")
+                    cand["quality_flags"] = qflags
+
+                cands.sort(
+                    key=lambda c: (-(c.get("theme_relevance_score") or 0),
+                                    c.get("market_cap") or float("inf")),
+                )
 
                 for cand in cands:
                     sym = cand["symbol"]
@@ -906,6 +1142,7 @@ async def _build_thematic_universe(
             "fmp_screener_industries_errored":     fmp_screener_industries_errored,
             "fmp_screener_calls_used":             fmp_screener_calls_used,
             "fmp_screener_symbols_added":          len(screener_syms),
+            "fmp_screener_filtered_reasons":       filtered_reasons_breakdown,
             "industry_map_version":                industry_map_version,
             "static_seed_count":                   n_static,
             "dynamic_symbols_count":               n_dynamic,
@@ -1798,6 +2035,19 @@ async def get_screener_hub(
         row_beta   = _to_float(metrics.get("betaTTM") or scr_meta.get("beta"))
         row_volume = _to_float(scr_meta.get("volume"))
 
+        # ── New quality/relevance fields from screener meta ──
+        # For screener-sourced rows: computed at rebuild time and stored in scr_meta.
+        # For ETF/LKG rows: default to 0.5 (ETF-included → assumed thematically relevant).
+        theme_relevance_score = _to_float(scr_meta.get("theme_relevance_score")) or 0.5
+        industry_tier         = scr_meta.get("industry_tier") or "unknown"
+        quality_flags: list[str] = list(scr_meta.get("quality_flags") or [])
+        liq_status   = scr_meta.get("liquidity_status") or "unknown"
+        row_dv       = _to_float(scr_meta.get("dollar_volume"))
+        row_vtmc     = _to_float(scr_meta.get("volume_to_market_cap"))
+
+        # ── Source confidence: computed from discovery sources + theme relevance ──
+        source_conf = _get_source_confidence(disc_src, theme_relevance_score)
+
         hg_score = _compute_hidden_gem_score(
             distance_52w_high=classification.get("distance_52w_high"),
             volume_surge=classification.get("volume_surge"),
@@ -1810,6 +2060,9 @@ async def get_screener_hub(
             is_social=is_social,
             is_options=is_options,
             is_watchlist=is_watchlist,
+            theme_relevance_score=theme_relevance_score,
+            source_confidence=source_conf,
+            liquidity_status=liq_status,
         )
         role = _assign_row_role(
             market_cap=mcap,
@@ -1854,6 +2107,13 @@ async def get_screener_hub(
             "performance_30d": None,
             "performance_ytd": None,
             "performance_1y":  None,
+            "theme_relevance_score": theme_relevance_score,
+            "industry_tier":         industry_tier,
+            "source_confidence":     source_conf,
+            "quality_flags":         quality_flags,
+            "liquidity_status":      liq_status,
+            "dollar_volume":         row_dv,
+            "volume_to_market_cap":  row_vtmc,
             "_meta": {
                 "country":                 row_country,
                 "exchange":                row_exchange,
@@ -2058,6 +2318,7 @@ async def rebuild_universe(
                 "fmp_screener_symbols_added":        bd.get("fmp_screener_symbols_added", 0),
                 "fmp_screener_calls_used":           bd.get("fmp_screener_calls_used", 0),
                 "fmp_screener_errors":               bd.get("fmp_screener_industries_errored", []),
+                "fmp_screener_filtered_reasons":     bd.get("fmp_screener_filtered_reasons", {}),
                 "industry_map_version":              bd.get("industry_map_version", "none"),
             })
     elif tab == "social":

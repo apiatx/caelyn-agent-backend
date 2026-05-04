@@ -1,0 +1,242 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not modify unrelated functionality.
+
+Backend only.
+Do not touch frontend.
+Do not redesign Screener Hub.
+Do not break Fundamentals, Social, Watchlist, Portfolio, Chain Reaction, or existing Screener Hub routes.
+
+Goal:
+Improve Thematic Screener hidden-gem quality using the FMP Stock Screener without increasing FMP usage on page load.
+
+Current architecture to preserve:
+- FMP screener calls only during scheduled/admin rebuilds.
+- Page loads must be cache-only.
+- One FMP screener call should return many tickers for one mapped industry/filter.
+- Do not make per-ticker FMP enrichment calls for every screener result.
+- Do not use /stable/historical-price-eod/full in the Screener Hub path.
+
+Main issue:
+Thematic discovery is now dynamic, but too noisy. It admits irrelevant ultra-micro names, rights/warrants/units, low-volume junk, and weak adjacent-industry names. The Screener should find real $50M–$10B hidden gems/supply-chain players with liquidity and theme relevance.
+
+Part 1 — Update FMP screener filters
+
+For Thematic FMP discovery, use these default filters:
+
+- marketCapMoreThan=50000000
+- marketCapLowerThan=10000000000
+- volumeMoreThan=100000
+- isEtf=false
+- isFund=false
+- isActivelyTrading=true
+- limit=500 or a conservative supported value
+- includeAllShareClasses=false if supported
+
+Use:
+theme → mapped industries → one FMP screener call per mapped industry.
+
+Do not use one broad all-market screen as the primary source.
+
+Part 2 — Add generic theme relevance framework
+
+Use/update:
+backend/data/theme_fmp_industry_map.json
+
+Do not hardcode final stock lists.
+
+Each theme config should support:
+- fmp_industries
+- core_industries
+- adjacent_industries
+- weak_adjacent_industries
+- positive_keywords
+- negative_keywords
+- min_market_cap
+- max_market_cap
+- min_volume
+- preferred_market_cap_buckets
+
+Defaults:
+- min_market_cap: 50000000
+- max_market_cap: 10000000000
+- min_volume: 100000
+- preferred_market_cap_buckets: ["micro", "small", "mid"]
+
+Do not maintain giant exclude_industries lists. Prefer including the right mapped industries and scoring them as core/adjacent/weak.
+
+At minimum update configs for:
+- semiconductors
+- clean_energy
+- drones
+- uranium or uranium_nuclear
+- defense
+- rare_earths or rare_earth_metals
+- regional_banks
+- ai_infrastructure if present
+- bitcoin_miners or crypto_infrastructure if present
+
+Part 3 — Score theme relevance and quality
+
+For each row add:
+- theme_relevance_score
+- source_confidence: high | medium | low
+- quality_flags[]
+- exclusion_reason if filtered
+- liquidity_status
+- dollar_volume
+- volume_to_market_cap
+
+Rules:
+1. Core industry = high relevance.
+2. Adjacent industry = medium relevance.
+3. Weak adjacent industry = low relevance unless confirmed by ETF/LKG/social/options/watchlist/peer overlap.
+4. Positive keyword match boosts relevance.
+5. Negative keyword match penalizes relevance.
+6. Multiple discovery sources boost confidence.
+7. Micro/small/mid caps can receive hidden-gem boost, but micro-cap status alone must not dominate.
+8. Mega/large names can remain visible as anchors, but should not dominate hidden_gem ranking.
+
+Part 4 — Add quality filters
+
+Exclude or heavily penalize:
+- market cap below $50M
+- volume below 100k
+- ETFs/funds
+- inactive stocks
+- rights
+- warrants
+- units
+- preferreds
+- SPACs / blank-check / shell companies where detectable
+
+Catch symbols/company names containing:
+- Right
+- Warrant
+- Unit
+- Acquisition Corp
+- SPAC
+- Blank Check
+- Shell
+
+Do not include AMPGZ-style rights/warrants/units in final top results.
+
+Part 5 — Tune hidden_gem_score
+
+hidden_gem_score should combine:
+- theme_relevance_score
+- source_confidence
+- market cap bucket
+- liquidity quality
+- dollar_volume
+- volume_to_market_cap
+- RS 2w/4w/10w if cached
+- RS acceleration if cached
+- social/options/watchlist confirmation
+- source diversity
+- industry confidence
+
+Roles:
+- anchor
+- hidden_gem
+- emerging
+- supply_chain_player
+- social_confirmed
+- options_confirmed
+- watchlist_overlap
+
+For FMP screener rows from relevant industries, role should usually be supply_chain_player or hidden_gem, not anchor.
+
+Part 6 — Thin theme safety
+
+For:
+GET /api/screener-hub?tab=thematic&theme=drones&scoreMode=true&cocFilter=false
+
+Must:
+- never 502
+- return HTTP 200 JSON if theme exists
+- return status ok/partial/empty
+- include rows or empty rows safely
+- include message/error_code if empty
+- include sources_attempted and sources_failed
+- not call FMP on page load
+
+Part 7 — Protect cost controls and Fundamentals
+
+Confirm:
+- no FMP Stock Screener calls on page load
+- no FMP historical calls on page load
+- /stable/historical-price-eod/full is not used in Screener Hub path
+- historical returns use ranged from/to requests only
+- existing /api/fundamentals/compare still returns JSON and response shape is unchanged
+
+Part 8 — Validation
+
+Run:
+1. Admin rebuild for semiconductors only:
+POST /api/admin/screener-hub/rebuild
+body:
+{"tab":"thematic","theme":"semiconductors","force":false}
+
+2. GET /api/screener-hub?tab=thematic&theme=semiconductors&scoreMode=true&cocFilter=false
+
+Return top 40 by hidden_gem_score:
+- symbol
+- company_name
+- market_cap
+- market_cap_bucket
+- sector
+- industry
+- role
+- hidden_gem_score
+- theme_relevance_score
+- source_confidence
+- quality_flags
+- liquidity_status
+- dollar_volume
+- volume_to_market_cap
+- discovery_sources
+- rs_data_status
+- is_etf
+- is_fund
+
+Also return:
+- fmp_screener_industries_attempted
+- fmp_screener_calls_used
+- fmp_screener_symbols_added
+- universe_source_breakdown
+- filtered_reasons_breakdown
+- count by market_cap_bucket
+- count by industry
+- count by role
+
+Validate:
+- no ETFs/funds
+- no rights/warrants/units
+- no sub-$50M names
+- no low-volume names under 100k unless clearly explained
+- small/mid-cap semiconductor/supply-chain names appear
+- mega-cap leaders do not dominate hidden_gem ranking
+
+Also validate:
+- GET /api/screener-hub?tab=thematic&theme=drones&scoreMode=true&cocFilter=false
+- GET /api/screener-hub?tab=thematic&theme=clean_energy&scoreMode=true&cocFilter=false
+- GET /api/admin/screener-hub/status with X-API-Key
+- /api/fundamentals/compare still works
+
+Final report:
+- files changed
+- config schema updated
+- exact FMP screener endpoint/params used
+- whether page loads make FMP calls
+- whether per-ticker FMP enrichment was added
+- whether /stable/historical-price-eod/full is still used in Screener Hub path
+- FMP calls used for semiconductors rebuild
+- top semiconductor hidden-gem sample
+- filtered reasons breakdown
+- drones endpoint result
+- admin fmp_budget sample
+- fundamentals regression result
+- remaining limitations
