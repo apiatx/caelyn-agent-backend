@@ -133,6 +133,20 @@ def _ddl_sql() -> str:
         ON public.screener_returns_cache (fetched_at DESC);
     CREATE INDEX IF NOT EXISTS idx_screener_returns_expires
         ON public.screener_returns_cache (expires_at);
+
+    CREATE TABLE IF NOT EXISTS public.screener_options_oi_cache (
+        symbol                 TEXT PRIMARY KEY,
+        options_oi             BIGINT NULL,
+        previous_options_oi    BIGINT NULL,
+        options_oi_change      BIGINT NULL,
+        options_oi_change_pct  NUMERIC(12,4) NULL,
+        options_activity_score NUMERIC(8,4) NULL,
+        total_volume           BIGINT NULL,
+        updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        provider               TEXT NOT NULL DEFAULT 'tradier'
+    );
+    CREATE INDEX IF NOT EXISTS idx_screener_options_oi_updated
+        ON public.screener_options_oi_cache (updated_at DESC);
     """
 
 
@@ -1047,3 +1061,127 @@ def returns_fresh_symbols(symbols: Iterable[str], max_age_days: int = 7) -> set[
     finally:
         _put_conn(conn)
     return fresh
+
+
+# ── screener_options_oi_cache ─────────────────────────────────────────────────
+
+def upsert_screener_options_oi(rows: list[dict]) -> int:
+    """
+    Upsert options OI summary records for screener symbols.
+
+    Each row dict must have: {symbol, options_oi, previous_options_oi,
+    options_oi_change, options_oi_change_pct, options_activity_score,
+    total_volume, provider}.
+
+    ON CONFLICT: overwrites all columns with the caller-supplied values.
+    The caller is responsible for computing previous_options_oi from the
+    old DB value before calling this function.
+
+    Returns number of rows upserted (0 on failure).
+    """
+    if not rows:
+        return 0
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return 0
+    count = 0
+    try:
+        cur = conn.cursor()
+        for row in rows:
+            sym = (row.get("symbol") or "").upper()
+            if not sym:
+                continue
+            cur.execute(
+                """
+                INSERT INTO public.screener_options_oi_cache
+                    (symbol, options_oi, previous_options_oi, options_oi_change,
+                     options_oi_change_pct, options_activity_score, total_volume,
+                     updated_at, provider)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                ON CONFLICT (symbol) DO UPDATE SET
+                    options_oi             = EXCLUDED.options_oi,
+                    previous_options_oi    = EXCLUDED.previous_options_oi,
+                    options_oi_change      = EXCLUDED.options_oi_change,
+                    options_oi_change_pct  = EXCLUDED.options_oi_change_pct,
+                    options_activity_score = EXCLUDED.options_activity_score,
+                    total_volume           = EXCLUDED.total_volume,
+                    updated_at             = NOW(),
+                    provider               = EXCLUDED.provider
+                """,
+                (
+                    sym,
+                    row.get("options_oi"),
+                    row.get("previous_options_oi"),
+                    row.get("options_oi_change"),
+                    row.get("options_oi_change_pct"),
+                    row.get("options_activity_score"),
+                    row.get("total_volume"),
+                    row.get("provider", "tradier"),
+                ),
+            )
+            count += 1
+        conn.commit()
+        cur.close()
+        return count
+    except Exception as e:
+        print(f"[SCREENER_HUB_STORE] upsert_screener_options_oi error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        _put_conn(conn)
+
+
+def get_screener_options_oi(symbols: list[str]) -> dict[str, dict]:
+    """
+    Return {symbol: {options_oi, previous_options_oi, options_oi_change,
+    options_oi_change_pct, options_activity_score, total_volume,
+    updated_at_ts, updated_at_iso, provider}} for the given symbols.
+
+    updated_at_ts is a Unix float for TTL comparisons.
+    Returns {} if DB is unavailable.
+    """
+    syms = sorted({s.upper() for s in symbols if s})
+    if not syms:
+        return {}
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return {}
+    out: dict[str, dict] = {}
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT symbol, options_oi, previous_options_oi, options_oi_change,
+                   options_oi_change_pct, options_activity_score, total_volume,
+                   updated_at, provider
+            FROM public.screener_options_oi_cache
+            WHERE symbol = ANY(%s)
+            """,
+            (syms,),
+        )
+        for row in cur.fetchall():
+            (sym, oi, prev_oi, oi_chg, oi_chg_pct, act_score,
+             total_vol, updated_at, provider) = row
+            out[sym] = {
+                "symbol":                sym,
+                "options_oi":            int(oi)           if oi           is not None else None,
+                "previous_options_oi":   int(prev_oi)      if prev_oi      is not None else None,
+                "options_oi_change":     int(oi_chg)       if oi_chg       is not None else None,
+                "options_oi_change_pct": float(oi_chg_pct) if oi_chg_pct   is not None else None,
+                "options_activity_score": float(act_score) if act_score     is not None else None,
+                "total_volume":          int(total_vol)    if total_vol     is not None else None,
+                "updated_at_ts":         updated_at.timestamp() if updated_at else 0.0,
+                "updated_at_iso":        updated_at.isoformat() if updated_at else None,
+                "provider":              provider or "tradier",
+            }
+        cur.close()
+    except Exception as e:
+        print(f"[SCREENER_HUB_STORE] get_screener_options_oi error: {e}")
+    finally:
+        _put_conn(conn)
+    return out

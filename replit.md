@@ -121,6 +121,37 @@ The curated earnings calendar pipeline was refactored to eliminate month-view ha
 
 **Result:** Month view response time: ~0.2ms (from snapshots). SIMO shows correctly (isFocus=true, score=73, in Apr 27 week). Friday blanks are real FMP data (no events on those dates).
 
+## Screener Hub Options OI Enrichment (May 2026)
+
+Near-real-time options open interest, volume, and activity score columns in Screener Hub are now populated from live Tradier data using a non-blocking, cache-first, background-task pipeline.
+
+**New DB table (`screener_options_oi_cache`):**
+- Columns: `symbol`, `options_oi`, `previous_options_oi`, `options_oi_change`, `options_oi_change_pct`, `options_activity_score`, `total_volume`, `updated_at`, `provider`
+- TTL: 120 s during market hours, 900 s when closed
+- Stored in `screener_hub_store.py` via `upsert_screener_options_oi()` / `get_screener_options_oi()`
+
+**Enrichment flow (non-blocking):**
+1. `_enrich_options_page_aware(rows)` — called at the end of `get_screener_hub()`. Reads DB cache for all tab symbols, merges fresh rows immediately, fires a detached `asyncio.Task` for stale/missing symbols.
+2. `_bg_refresh_options_oi(stale, prev_cached_map)` — background task (no request blocking). Fetches Tradier OI for up to `_OPT_MAX_SYMS=40` symbols with `asyncio.Semaphore(_OPT_CONCURRENCY=3)`. Computes OI change, OI change %, and activity score (`min(10, vol/oi*2)`). Upserts to DB.
+3. `_fetch_tradier_oi_for_symbol(provider, sym)` — sums `openInterest` and `volume` across the 2 nearest expirations (calls + puts). 5 s per-call timeout, returns `{total_oi, total_volume}` or `None`.
+
+**`options_source` annotation:**
+- `"cache"` — served from DB (within TTL)
+- `"lkg"` — no DB entry; fallback to LKG JSON data
+- `"unavailable"` — no data (symbol has no listed options)
+
+**Key config constants** (in `screener_hub_service.py`):
+- `_OPT_REFRESH_ENABLED = True`
+- `_OPT_TTL_OPEN = 120` (seconds, market hours)
+- `_OPT_TTL_CLOSED = 900` (seconds, market closed)
+- `_OPT_MAX_SYMS = 40` (cap per background task)
+- `_OPT_TIMEOUT = 8.0` (seconds, base)
+- `_OPT_CONCURRENCY = 3` (concurrent Tradier fetch semaphore)
+
+**Behavior:** First request for a tab fires a background refresh for all stale symbols and returns immediately with whatever is in the DB cache (LKG fallback if empty). Subsequent requests (within TTL) serve real Tradier OI. No request path is ever blocked by Tradier I/O.
+
+**No FMP calls. Options Flow page untouched.**
+
 ## External Dependencies
 
 The Caelyn AI platform integrates with several external services and APIs to gather and process financial data:

@@ -56,6 +56,8 @@ from data.screener_hub_store import (
     get_returns,
     get_latest_chain_reaction_weekly,
     get_all_thematic_screener_meta,
+    upsert_screener_options_oi,
+    get_screener_options_oi,
 )
 
 
@@ -94,6 +96,15 @@ _CHAIN_REACTION_OUTPUT = Path(__file__).parent.parent / "data" / "chain_reaction
 # Written lazily every _OI_PREV_TTL_H hours; read on every request (fast disk read).
 _OI_PREV_PATH  = Path(__file__).parent.parent / "data" / "options_oi_prev.json"
 _OI_PREV_TTL_H = 6.0   # hours between snapshot rotations
+
+# ── Page-aware Tradier options enrichment config ───────────────────────────────
+# All can be overridden via environment variables at runtime.
+_OPT_REFRESH_ENABLED = os.getenv("OPTIONS_ACTIVE_PAGE_REFRESH_ENABLED", "true").lower() in ("1", "true", "yes")
+_OPT_TTL_OPEN        = int(os.getenv("OPTIONS_ACTIVE_PAGE_TTL_SECONDS",        "120"))
+_OPT_TTL_CLOSED      = int(os.getenv("OPTIONS_ACTIVE_PAGE_TTL_SECONDS_CLOSED", "900"))
+_OPT_MAX_SYMS        = int(os.getenv("OPTIONS_ACTIVE_PAGE_MAX_SYMBOLS",        "40"))
+_OPT_TIMEOUT         = float(os.getenv("OPTIONS_ACTIVE_PAGE_TIMEOUT_SECONDS",  "8"))
+_OPT_CONCURRENCY     = int(os.getenv("OPTIONS_ACTIVE_PAGE_CONCURRENCY",        "3"))
 
 # ── Security junk / warrant / rights / SPAC detection ─────────────────────────
 # Catches rights offerings, warrant stubs, unit offerings, blank-check SPACs.
@@ -475,6 +486,239 @@ def _load_options_detail_map() -> dict[str, dict]:
         print(f"[SCREENER_HUB] OI change tracking error: {e}")
 
     return detail
+
+
+async def _fetch_tradier_oi_for_symbol(
+    provider,
+    symbol: str,
+    *,
+    timeout_per_call: float = 4.0,
+) -> dict | None:
+    """
+    Fetch symbol-level OI summary from Tradier.
+
+    Uses the 2 nearest expirations and sums openInterest + volume across
+    all calls and puts.  Returns {total_oi, total_volume} or None on any
+    failure.  Non-fatal — the caller handles None gracefully.
+
+    Each Tradier call is individually timeout-guarded so a single slow
+    expiration does not stall the whole request.
+    """
+    try:
+        expirations: list[str] = await asyncio.wait_for(
+            provider.get_option_expirations(symbol),
+            timeout=timeout_per_call,
+        )
+    except Exception:
+        return None
+
+    if not expirations:
+        return None
+
+    near_exps = expirations[:2]
+    total_oi  = 0
+    total_vol = 0
+
+    for exp in near_exps:
+        try:
+            chain: dict = await asyncio.wait_for(
+                provider.get_option_chain(symbol, exp),
+                timeout=timeout_per_call,
+            )
+        except Exception:
+            continue
+        for side in ("calls", "puts"):
+            for c in (chain.get(side) or []):
+                oi_val  = c.get("openInterest")
+                vol_val = c.get("volume")
+                try:
+                    if oi_val  is not None: total_oi  += int(oi_val)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    if vol_val is not None: total_vol += int(vol_val)
+                except (TypeError, ValueError):
+                    pass
+
+    return {"total_oi": total_oi, "total_volume": total_vol}
+
+
+async def _bg_refresh_options_oi(
+    stale: list[str],
+    prev_cached_map: dict[str, dict],
+) -> None:
+    """
+    Background task: fetch Tradier OI for stale symbols, persist to DB.
+
+    Runs completely detached from the request path — never mutates response rows.
+    Results are written to screener_options_oi_cache for subsequent requests.
+    """
+    api_key = os.getenv("TRADIER_API_KEY") or ""
+    if not api_key:
+        return
+    try:
+        from data.tradier_provider import TradierProvider
+        provider = TradierProvider(api_key)
+        sem = asyncio.Semaphore(_OPT_CONCURRENCY)
+        timeout_per_call = max(5.0, _OPT_TIMEOUT / 2.0)
+        now_ts = time.time()
+
+        async def _throttled(sym: str):
+            async with sem:
+                return sym, await _fetch_tradier_oi_for_symbol(
+                    provider, sym, timeout_per_call=timeout_per_call,
+                )
+
+        raw_results = await asyncio.gather(
+            *[_throttled(s) for s in stale],
+            return_exceptions=True,
+        )
+
+        to_upsert: list[dict] = []
+        for item in raw_results:
+            if isinstance(item, Exception):
+                continue
+            sym, fetched = item
+            if fetched is None:
+                continue
+
+            new_oi  = fetched["total_oi"]
+            new_vol = fetched["total_volume"]
+            prev_oi = (prev_cached_map.get(sym) or {}).get("options_oi")
+
+            oi_change: int | None = None
+            oi_change_pct: float | None = None
+            if prev_oi is not None and new_oi is not None:
+                oi_change = new_oi - prev_oi
+                if prev_oi > 0:
+                    oi_change_pct = round(oi_change / prev_oi * 100, 4)
+
+            activity_score: float | None = None
+            if new_oi and new_oi > 0 and new_vol is not None:
+                activity_score = round(min(10.0, (new_vol / new_oi) * 2), 4)
+
+            to_upsert.append({
+                "symbol":                sym,
+                "options_oi":            new_oi,
+                "previous_options_oi":   prev_oi,
+                "options_oi_change":     oi_change,
+                "options_oi_change_pct": oi_change_pct,
+                "options_activity_score": activity_score,
+                "total_volume":          new_vol,
+                "provider":              "tradier",
+            })
+
+        if to_upsert:
+            n = upsert_screener_options_oi(to_upsert)
+            print(
+                f"[OPT_ENRICH] bg: upserted {n}/{len(to_upsert)} rows "
+                f"({len(stale)} stale requested)",
+                flush=True,
+            )
+        else:
+            print(
+                f"[OPT_ENRICH] bg: 0/{len(stale)} symbols returned OI data",
+                flush=True,
+            )
+    except Exception as _bge:
+        print(f"[OPT_ENRICH] bg: error — {_bge}", flush=True)
+
+
+async def _enrich_options_page_aware(rows: list[dict]) -> None:
+    """
+    Page-aware options enrichment for Screener Hub rows.
+
+    Mutates each row dict in-place, adding/overriding:
+        options_oi, previous_options_oi, options_oi_change,
+        options_oi_change_pct, options_activity_score,
+        options_updated_at, options_source
+
+    Strategy — non-blocking, cache-first:
+        1. Read all row symbols from the DB cache (screener_options_oi_cache).
+        2. Merge cached entries into rows immediately — zero latency added.
+        3. Identify stale/missing symbols.
+        4. Fire a background asyncio Task to refresh those symbols from Tradier.
+           The task writes results to DB; the NEXT request serves them as "cache".
+        5. Symbols with no DB entry fall back to LKG data or "unavailable".
+
+    options_source annotation:
+        "cache"       — served from DB  (fresh within TTL)
+        "lkg"         — no DB entry, fallback LKG JSON data
+        "unavailable" — no data at all
+
+    Non-fatal: if anything here fails the rows keep their LKG values.
+    """
+    if not _OPT_REFRESH_ENABLED:
+        return
+    if not rows:
+        return
+
+    symbols: list[str] = []
+    sym_to_row: dict[str, dict] = {}
+    for r in rows:
+        sym = (r.get("symbol") or r.get("ticker") or "").upper()
+        if sym and sym not in sym_to_row:
+            sym_to_row[sym] = r
+            symbols.append(sym)
+
+    symbols = symbols[:_OPT_MAX_SYMS]
+    if not symbols:
+        return
+
+    now_ts = time.time()
+    ttl    = _OPT_TTL_OPEN if _is_market_open() else _OPT_TTL_CLOSED
+
+    # ── 1. Load DB cache (fast, synchronous-style I/O) ────────────────────────
+    cached_map: dict[str, dict] = {}
+    try:
+        cached_map = get_screener_options_oi(symbols) or {}
+    except Exception as _ce:
+        print(f"[OPT_ENRICH] DB cache read failed: {_ce}", flush=True)
+
+    # ── 2. Identify stale/missing symbols ─────────────────────────────────────
+    stale: list[str] = []
+    for sym in symbols:
+        entry = cached_map.get(sym)
+        if entry is None:
+            stale.append(sym)
+        elif (now_ts - (entry.get("updated_at_ts") or 0)) > ttl:
+            stale.append(sym)
+
+    print(
+        f"[OPT_ENRICH] {len(symbols)} syms — {len(cached_map)} cached, "
+        f"{len(stale)} stale (ttl={ttl}s) — firing bg refresh",
+        flush=True,
+    )
+
+    # ── 3. Fire background refresh for stale symbols (non-blocking) ───────────
+    if stale and os.getenv("TRADIER_API_KEY"):
+        asyncio.create_task(
+            _bg_refresh_options_oi(stale[:_OPT_MAX_SYMS], dict(cached_map)),
+        )
+
+    # ── 4. Merge cached entries into rows immediately ─────────────────────────
+    for sym in symbols:
+        row = sym_to_row.get(sym)
+        if row is None:
+            continue
+
+        db_entry = cached_map.get(sym)
+        if db_entry is not None:
+            # Serve from DB cache (fresh within TTL or recently stale — still useful)
+            row["options_oi"]             = db_entry.get("options_oi")
+            row["previous_options_oi"]    = db_entry.get("previous_options_oi")
+            row["options_oi_change"]      = db_entry.get("options_oi_change")
+            row["options_oi_change_pct"]  = db_entry.get("options_oi_change_pct")
+            row["options_activity_score"] = db_entry.get("options_activity_score")
+            row["options_updated_at"]     = db_entry.get("updated_at_iso")
+            row["options_source"]         = "cache"
+        else:
+            # Nothing in DB — use whatever LKG provided (may be None)
+            lkg_oi = row.get("options_oi")
+            row["options_updated_at"]    = None
+            row["options_source"]        = "lkg" if lkg_oi is not None else "unavailable"
+            if "options_oi_change_pct" not in row:
+                row["options_oi_change_pct"] = None
 
 
 def _load_watchlist_set() -> set[str]:
@@ -2345,11 +2589,14 @@ async def get_screener_hub(
             "hidden_gem_score":    hg_score,
             "score":               classification["score"],
             "role":                role,
-            # ── Options (from cached flow, no live calls) ──
+            # ── Options (LKG fallback; overridden by _enrich_options_page_aware) ──
             "options_oi":            opts_oi,
             "previous_options_oi":   opts_prev_oi,
             "options_oi_change":     opts_oi_chg,
+            "options_oi_change_pct": None,
             "options_activity_score": opts_act_scr,
+            "options_updated_at":    None,
+            "options_source":        "lkg" if opts_oi is not None else "unavailable",
             # ── Metadata/debug ──
             "discovery_sources":     disc_src,
             "quality_flags":         quality_flags,
@@ -2453,6 +2700,14 @@ async def get_screener_hub(
             ),
             reverse=True,
         )
+
+    # ── Page-aware options enrichment (Tradier, cache-first, non-blocking) ──────
+    # Runs after rows are fully built and filtered so only active page symbols
+    # are refreshed.  Mutates rows in-place; never crashes the endpoint.
+    try:
+        await _enrich_options_page_aware(rows)
+    except Exception as _opt_exc:
+        print(f"[SCREENER_HUB] options enrichment non-fatal error: {_opt_exc}")
 
     payload: dict[str, Any] = {
         "status": "ok",

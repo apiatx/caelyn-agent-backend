@@ -1,0 +1,135 @@
+Do not redesign Screener Hub.
+Do not break Options Flow page, Fundamentals, Social, Watchlist+Portfolio, Bottlenecks, Chain Reaction, or existing routes.
+
+Goal:
+Make the Screener Hub options columns work with near-real-time Tradier options data for the active Screener page/tab symbols.
+
+Current issue:
+The Screener page now has columns:
+- Options OI
+- OI Change
+- Options Activity
+
+But these are mostly blank/null because they only read stale/static LKG options snapshots. For active Screener page rows, these should refresh from Tradier/options infrastructure in a page-aware, rate-limited way.
+
+Important provider rules:
+- Do NOT use FMP for options.
+- Do NOT call FMP for this task.
+- Tradier is allowed for near-real-time options enrichment.
+- Use existing Tradier/options service/cache/provider if available.
+- Do not create a separate duplicate Tradier client if an existing Options Flow service already exists.
+
+Architecture:
+Screener Hub should use a cache-first, page-aware options enrichment path:
+
+1. Receive active tab rows/symbols:
+   - thematic
+   - social
+   - bottlenecks
+   - watchlist_portfolio
+
+2. Load cached options fields first:
+   - options_oi
+   - previous_options_oi
+   - options_oi_change
+   - options_activity_score
+   - options_updated_at
+
+3. Identify stale/missing option symbols for only the current tab/page rows.
+
+4. Refresh stale/missing options via existing Tradier/options provider, but only for active tab symbols.
+
+5. Respect rate limits and do not block the entire page:
+   - Use short timeout.
+   - Use concurrency limit.
+   - Use max symbols per request/page load.
+   - Return partial cached/null fields if Tradier is slow/fails.
+   - Never crash the Screener endpoint because options enrichment fails.
+
+Suggested defaults:
+- OPTIONS_ACTIVE_PAGE_REFRESH_ENABLED=true
+- OPTIONS_ACTIVE_PAGE_TTL_SECONDS=120 during market hours
+- OPTIONS_ACTIVE_PAGE_TTL_SECONDS_CLOSED=900 outside market hours
+- OPTIONS_ACTIVE_PAGE_MAX_SYMBOLS=40 per request
+- OPTIONS_ACTIVE_PAGE_TIMEOUT_SECONDS=8
+- OPTIONS_ACTIVE_PAGE_CONCURRENCY=3
+
+Use env vars where easy.
+
+Expected fields per row:
+- options_oi
+- previous_options_oi
+- options_oi_change
+- options_oi_change_pct if easy
+- options_activity_score
+- options_updated_at
+- options_source = "tradier" or "cache" or "unavailable"
+
+Definition guidance:
+- options_oi = total current open interest across relevant near-dated option contracts, or use existing Options Flow service definition if already implemented.
+- previous_options_oi = prior cached total OI for same symbol.
+- options_oi_change = options_oi - previous_options_oi.
+- options_oi_change_pct = options_oi_change / previous_options_oi when previous > 0.
+- options_activity_score = use existing Options Flow/heat score if available; otherwise derive simple score from OI, OI change, and volume if existing data supports it.
+- Do not overbuild contract-level UI. Screener needs symbol-level summary only.
+
+Cache persistence:
+Use existing options cache if available. If not, add a small durable cache table/file:
+symbol
+options_oi
+previous_options_oi
+options_oi_change
+options_oi_change_pct
+options_activity_score
+raw_json
+updated_at
+provider
+
+Do not overwrite good cached options data with empty failed Tradier responses.
+
+Do not break existing Options Flow page:
+- If sharing its service, preserve existing return shapes.
+- Do not change Options Flow UI contracts.
+- Screener Hub should consume the service/cache, not mutate the Options Flow page behavior.
+
+Integration:
+In Screener Hub row-building:
+- After base rows are built and filtered, run page-aware options enrichment for the final active rows only.
+- Merge options fields into each row.
+- Thematic/Social/Bottlenecks/Watchlist+Portfolio should all get this enrichment.
+- If enrichment is disabled or fails, keep rows and show null options fields.
+
+Validation:
+Do not call FMP.
+Do not run admin rebuilds.
+Do not hit historical endpoints.
+
+Allowed validation:
+1. Inspect code to confirm no FMP calls were added.
+2. GET /api/screener-hub?tab=thematic&theme=semiconductors&scoreMode=true&cocFilter=false
+3. GET /api/screener-hub?tab=social
+4. GET /api/screener-hub?tab=bottlenecks
+5. GET /api/screener-hub?tab=watchlist_portfolio
+
+For each endpoint return:
+- row count
+- number of rows with options_oi non-null
+- number of rows with options_activity_score non-null
+- options_source counts
+- options_updated_at sample
+- response time
+
+Also validate:
+- endpoint still returns if Tradier/options enrichment times out
+- page rows are not blanked by options failure
+- no FMP calls occurred
+- Options Flow page endpoint still works if there is a simple smoke endpoint available
+
+Final report:
+- files changed
+- existing Tradier/options service reused
+- cache/persistence approach
+- TTL/concurrency/max-symbol settings
+- sample rows with options_oi/options_oi_change/options_activity_score populated
+- validation results by tab
+- any remaining limitations
