@@ -1,0 +1,207 @@
+
+Backend only.
+Do not touch frontend.
+Do not redesign Screener Hub.
+Do not break Fundamentals, Social, Watchlist+Portfolio, Bottlenecks, Chain Reaction, Options Flow, or existing routes.
+
+IMPORTANT COST GUARDRAIL:
+Do not hit FMP endpoints while implementing or validating this.
+Do not run admin rebuilds.
+Do not trigger scheduled rebuilds.
+Do not call FMP Stock Screener.
+Do not call FMP historical endpoints.
+Do not call /stable/historical-price-eod/full.
+Do not run tests that consume FMP data.
+Only use existing cached DB/disk data and code inspection.
+
+Goal:
+Normalize Screener Hub backend row shape across all four tabs so Thematic, Social, Bottlenecks, and Watchlist+Portfolio can all use the same clean frontend table columns.
+
+Current problem:
+The Thematic tab has the correct clean row fields/columns.
+The Social, Bottlenecks, and Watchlist+Portfolio tabs still return/display legacy RS/52W/7D/30D/YTD/1Y-style fields and incomplete data for the old table.
+
+Desired behavior:
+All four Screener Hub tabs should return the same clean row contract where possible:
+
+Base:
+- symbol
+- company_name
+- market_cap
+- sector
+- industry
+- beta
+- price
+- last_annual_dividend
+- volume
+- exchange
+
+Calculated/cache-derived:
+- dollar_volume
+- volume_to_market_cap
+
+Live/cache quote:
+- change_percent_1d
+
+Signals:
+- volume_surge
+- accumulation
+
+Options:
+- options_oi
+- options_oi_change
+- options_activity_score
+
+Score/tag:
+- role
+- score
+- hidden_gem_score
+
+Debug/metadata allowed but not required for display:
+- discovery_sources
+- quality_flags
+- source_confidence
+- rs_data_status
+
+Do not require or prioritize these legacy display fields for any tab:
+- RS 0-2W
+- RS 0-4W
+- RS 0-10W
+- RS Accel
+- 52W High
+- 7D %
+- 30D %
+- YTD %
+- 1Y %
+- Market Cap Bucket
+- Country
+- Exchange Short Name
+- Is ETF
+- Is Fund
+- Is Actively Trading
+
+Part 1 — Normalize row enrichment for all tabs
+
+Find the central row-building logic in Screener Hub backend.
+
+Refactor carefully so all tabs pass through a shared row normalization/enrichment helper, for example:
+_normalize_screener_row(...)
+
+The helper should:
+1. Preserve existing tab-specific source/universe logic.
+2. Add/fill the clean row fields listed above where cached data exists.
+3. Never make network calls.
+4. Use only cache-first sources:
+   - screener snapshot metadata
+   - screener fundamentals cache
+   - screener quote cache / Tradier cache
+   - options LKG/cache
+   - Chain Reaction DB rows_json for Bottlenecks
+   - social snapshot metadata for Social
+   - watchlist/portfolio stored symbols for Watchlist+Portfolio
+5. Return null/—-friendly values if missing.
+6. Never drop rows just because optional fields are missing.
+
+Part 2 — Social tab
+
+For tab=social:
+- Keep its social ticker universe unchanged.
+- Add the clean fields from cache where available.
+- role can be social_confirmed or existing equivalent.
+- score/hidden_gem_score can use existing social/consensus/freshness/acceleration score if available, otherwise existing score.
+- Do not use watchlist/portfolio overlap.
+- Do not call FMP.
+- Do not call social/Grok/XAI.
+
+Part 3 — Bottlenecks tab
+
+For tab=bottlenecks:
+- Keep Chain Reaction source logic unchanged.
+- Preserve Chain Reaction fields internally.
+- Map final display row to the clean screener contract.
+- role can be supply_chain_player or bottleneck.
+- score/hidden_gem_score should use final_score, bottleneck_score, or existing score in that priority.
+- Keep bottleneck-specific metadata available but do not require the frontend to display old legacy columns.
+- Do not call FMP.
+
+Part 4 — Watchlist+Portfolio tab
+
+For tab=watchlist_portfolio:
+- Keep the user Watchlist+Portfolio universe unchanged.
+- Add the clean fields from cache where available.
+- role can be watchlist_overlap, portfolio_holding, or existing equivalent.
+- score/hidden_gem_score can use existing score if available.
+- Do not call FMP.
+- Do not call Tradier live directly unless existing page-aware quote cache already does so without FMP. Prefer cache only for this pass.
+
+Part 5 — Preserve Thematic
+
+Do not regress Thematic:
+- no watchlist overlap in Thematic
+- no wrong-theme leakage
+- $50M–$10B cap remains enforced for Thematic hidden-gem rows
+- no ETFs/funds/inactive/junk
+- no FMP calls on page load
+
+Part 6 — Cost controls
+
+Confirm by code inspection only:
+- no FMP calls on page load
+- no FMP Stock Screener calls on page load
+- no FMP historical calls on page load
+- no /stable/historical-price-eod/full in Screener Hub path
+- no admin rebuilds run during this task
+
+Part 7 — Validation without FMP usage
+
+Do not hit FMP endpoints.
+
+Allowed validation:
+- static code inspection
+- import/compile checks
+- local unit-style invocation only if it reads cache and does not call FMP
+- optional GET requests to Screener Hub endpoints only if they are confirmed cache-read-only and will not trigger FMP calls
+
+If using GET requests, only call:
+- GET /api/screener-hub?tab=thematic&theme=semiconductors&scoreMode=true&cocFilter=false
+- GET /api/screener-hub?tab=social
+- GET /api/screener-hub?tab=bottlenecks
+- GET /api/screener-hub?tab=watchlist_portfolio
+
+Do not call admin rebuild.
+Do not force refresh.
+Do not warm fundamentals.
+Do not warm returns.
+
+Validation result should confirm each tab returns rows with the clean fields:
+- symbol
+- company_name
+- market_cap
+- sector
+- industry
+- beta
+- price
+- last_annual_dividend
+- volume
+- dollar_volume
+- volume_to_market_cap
+- exchange
+- change_percent_1d
+- volume_surge
+- accumulation
+- options_oi
+- options_oi_change
+- options_activity_score
+- role
+- score or hidden_gem_score
+
+Final report:
+- files changed
+- whether any FMP endpoint was called: expected no
+- row normalization approach
+- Thematic row shape confirmed
+- Social row shape confirmed
+- Bottlenecks row shape confirmed
+- Watchlist+Portfolio row shape confirmed
+- any fields still null due to missing cache
+- remaining limitations

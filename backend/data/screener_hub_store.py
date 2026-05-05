@@ -511,6 +511,58 @@ def universe_table_stats() -> dict:
         _put_conn(conn)
 
 
+def get_all_thematic_screener_meta() -> dict[str, dict]:
+    """
+    Merge screener_meta_by_symbol from every stored thematic universe snapshot.
+
+    Returns {symbol: scr_meta_dict} covering all themes in a single SQL query.
+    Called by _load_global_screener_meta() in screener_hub_service, which adds a
+    30-min in-memory TTL on top.  Pure DB read — no FMP calls.
+
+    Symbol precedence: first snapshot (by theme_key alphabetically after
+    DISTINCT ON) wins; subsequent themes do not overwrite existing entries.
+    This is intentional — any enriched entry is as good as another.
+    """
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return {}
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT ON (theme_key)
+                metadata_json
+            FROM public.screener_universe_snapshots
+            WHERE universe_type = 'thematic'
+              AND theme_key IS NOT NULL
+              AND status = 'ok'
+              AND metadata_json IS NOT NULL
+            ORDER BY theme_key, generated_at DESC
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        merged: dict[str, dict] = {}
+        for (meta_json,) in rows:
+            try:
+                if meta_json is None:
+                    continue
+                meta = meta_json if isinstance(meta_json, dict) else json.loads(meta_json)
+                sym_map = meta.get("screener_meta_by_symbol") or {}
+                for sym, sm in sym_map.items():
+                    if sym and sym not in merged:
+                        merged[sym] = sm
+            except Exception:
+                continue
+        return merged
+    except Exception as e:
+        print(f"[SCREENER_HUB_STORE] get_all_thematic_screener_meta error: {e}")
+        return {}
+    finally:
+        _put_conn(conn)
+
+
 # ── screener_quote_cache ──────────────────────────────────────────────────────
 
 def upsert_quote(

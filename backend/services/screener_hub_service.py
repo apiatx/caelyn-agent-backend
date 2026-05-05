@@ -55,6 +55,7 @@ from data.screener_hub_store import (
     latest_job_runs,
     get_returns,
     get_latest_chain_reaction_weekly,
+    get_all_thematic_screener_meta,
 )
 
 
@@ -511,6 +512,43 @@ def _load_watchlist_set() -> set[str]:
     except Exception as e:
         print(f"[SCREENER_HUB] _load_watchlist_set portfolio error: {e}")
     return syms
+
+
+# ── Global screener-meta cache (shared across non-thematic tabs) ──────────────
+# Lazily merges screener_meta_by_symbol from all stored thematic universe
+# snapshots so Social / Bottlenecks / Watchlist+Portfolio rows get the same
+# per-symbol enrichment (sector, industry, beta, volume, dollar_volume,
+# last_annual_dividend, exchange …) that Thematic rows get from their own
+# snapshot.  Pure DB read — no FMP calls. Refreshed every 30 min.
+
+_GLOBAL_SCREENER_META_CACHE: tuple[dict, float] = ({}, 0.0)
+_GLOBAL_SCREENER_META_TTL_S = 1800.0  # 30 minutes
+
+
+def _load_global_screener_meta() -> dict[str, dict]:
+    """
+    Merged screener_meta_by_symbol from every stored thematic universe snapshot.
+
+    Returns {symbol: scr_meta_dict} for any symbol that has ever appeared in a
+    rebuilt thematic universe.  Used as screener_meta_by_symbol for Social,
+    Bottlenecks, and Watchlist+Portfolio tabs so they get the same per-symbol
+    enrichment (sector/industry/beta/volume/dollar_volume/dividend/exchange).
+
+    Cache-only — no FMP calls, no network access.
+    """
+    global _GLOBAL_SCREENER_META_CACHE
+    cached_data, cached_ts = _GLOBAL_SCREENER_META_CACHE
+    if cached_data and (time.time() - cached_ts) < _GLOBAL_SCREENER_META_TTL_S:
+        return cached_data
+    try:
+        merged = get_all_thematic_screener_meta()
+    except Exception as e:
+        print(f"[SCREENER_HUB] _load_global_screener_meta error: {e}")
+        merged = cached_data or {}
+    _GLOBAL_SCREENER_META_CACHE = (merged, time.time())
+    if merged:
+        print(f"[SCREENER_HUB] global screener meta refreshed: {len(merged)} symbols")
+    return merged
 
 
 def _compute_hidden_gem_score(
@@ -2055,15 +2093,26 @@ async def get_screener_hub(
 
     symbols = _dedupe_filter(symbols)[:_GLOBAL_TICKER_CAP]
 
-    # ── Per-symbol source map (thematic only; populated by live build) ─────────
-    # Used below to build row.discovery_sources from ETF/LKG/peer/static tags.
+    # ── Per-symbol source map ─────────────────────────────────────────────────
+    # Thematic: populated by the live build / snapshot metadata.
+    # Other tabs: seeded below after cr_details is computed.
     sources_by_symbol: dict[str, list[str]] = thematic_breakdown.get("sources_by_symbol") or {}
 
     # ── FMP screener metadata — used to enrich rows when FMP cache is cold ────
-    # Populated during rebuild; stored in snapshot metadata_json. Provides
-    # company_name, market_cap, sector, industry, beta, volume, exchange, country
-    # without additional FMP profile calls.
-    screener_meta_by_symbol: dict[str, dict] = thematic_breakdown.get("screener_meta_by_symbol") or {}
+    # Thematic: use the snapshot's own screener_meta_by_symbol (most precise —
+    #   built from FMP screener results for this specific theme).
+    # Social / Bottlenecks / Watchlist+Portfolio: use the merged global cache
+    #   built from ALL stored thematic snapshots.  Covers any symbol that has
+    #   ever appeared in a rebuilt thematic universe, giving those tabs the same
+    #   per-symbol enrichment (sector, industry, beta, volume, dollar_volume,
+    #   last_annual_dividend, exchange …) as the Thematic tab.
+    #   Pure DB read — no FMP calls.
+    if tab == "thematic":
+        screener_meta_by_symbol: dict[str, dict] = (
+            thematic_breakdown.get("screener_meta_by_symbol") or {}
+        )
+    else:
+        screener_meta_by_symbol = _load_global_screener_meta()
 
     # ── Thematic: load allowed industries for the selected theme (leakage filter) ──
     # Read once from disk (no live FMP call). Used to filter rows whose known
@@ -2077,6 +2126,21 @@ async def get_screener_hub(
     # ── Chain Reaction detail map (bottlenecks only) ────────────────────────────
     # Per-symbol scored node data from chain_reaction_weekly_outputs.rows_json.
     cr_details: dict[str, dict] = bottlenecks_meta.get("details_by_symbol") or {}
+
+    # ── Seed sources_by_symbol for non-thematic tabs ─────────────────────────
+    # Thematic sources come from the live/snapshot build (already set above).
+    # For other tabs, seed each symbol with the tab's canonical source tag so
+    # discovery_sources is always non-empty and meaningful.
+    if tab == "social":
+        sources_by_symbol = {s: ["social_consensus"] for s in symbols}
+    elif tab == "bottlenecks":
+        # Prefer CR per-row discovery_sources when available; fall back to generic tag.
+        sources_by_symbol = {
+            s: list((cr_details.get(s) or {}).get("discovery_sources") or ["chain_reaction"])
+            for s in symbols
+        }
+    elif tab == "watchlist_portfolio":
+        sources_by_symbol = {s: ["watchlist_portfolio"] for s in symbols}
 
     # ── Load real historical returns from cache (never blocks on FMP API) ──────
     returns_cache: dict[str, dict] = get_returns(symbols) if symbols else {}
