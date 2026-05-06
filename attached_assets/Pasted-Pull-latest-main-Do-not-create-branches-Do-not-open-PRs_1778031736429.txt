@@ -1,0 +1,175 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not worry about git commits.
+Do not modify unrelated functionality.
+
+Backend only.
+Do not touch frontend.
+
+IMPORTANT:
+Do not call FMP during this task.
+Do not run admin rebuilds.
+Do not trigger scheduled jobs.
+Do not call any FMP endpoint.
+Do not validate by hitting FMP.
+Use code inspection, local grep/search, route inspection, logs, and safe no-network instrumentation only.
+
+Goal:
+Find and isolate the exact code path generating excessive /stable/historical-price-eod/full calls.
+
+Context:
+FMP dashboard shows massive usage from:
+/stable/historical-price-eod/full
+
+This is likely one request per ticker returning full historical EOD data, repeated across many tickers/jobs/pages. I do NOT want to ban all FMP. I want to isolate the exact caller(s), then surgically fix only the runaway historical full endpoint.
+
+Important prior work:
+A canonical cache service was added:
+backend/services/fmp_cache_service.py
+
+Social screener now checks screener_fundamentals_cache before FMP and writes successful FMP profile/ratios/metrics into that cache.
+
+Do not duplicate that work. This task is specifically about /stable/historical-price-eod/full.
+
+Part 1 — Find every /full historical caller
+
+Search the backend for:
+- historical-price-eod/full
+- /stable/historical-price-eod/full
+- historical_price_eod_full
+- historical-price-eod
+- full historical
+- FMP historical
+
+Return every match with:
+- file
+- function/class
+- exact endpoint string
+- whether it is /full or ranged from/to
+- whether it is used by page load, scheduled job, admin rebuild, or background job
+- which route/page likely triggers it
+- whether caching exists before the call
+- whether the call loops over tickers
+- whether it uses in-memory cache, disk cache, Neon cache, or no cache
+
+Part 2 — Map callers to pages/jobs
+
+For each /full call site, trace upward and identify likely trigger.
+
+Likely suspects:
+- theme_rs_service.py
+- stock_compare_service.py
+- catalyst_calendar_service.py
+- fundamentals_enricher.py
+- any returns warm job
+- any all-theme/all-symbol job
+- any compare/chart endpoint
+
+Return:
+- route endpoint if any
+- scheduled job name if any
+- frontend page if obvious
+- whether it can run automatically without user action
+- whether it can run repeatedly
+- whether it could be hit by page load
+- whether it could run across hundreds/thousands of symbols
+
+Part 3 — Estimate call explosion risk
+
+For each /full call site, estimate:
+- calls per ticker?
+- approximate ticker universe size?
+- schedule frequency?
+- cache TTL?
+- cache durability?
+- could it plausibly create 1,000+ calls/hour?
+- could it plausibly create 76,000 calls/day?
+
+Mark risk:
+- critical
+- high
+- medium
+- low
+
+Part 4 — Add targeted instrumentation and guard for /full only
+
+Add env-controlled diagnostics/guarding.
+
+Environment variables:
+FMP_DIAGNOSTIC_DRY_RUN=true
+FMP_BLOCK_FULL_HISTORICAL=true
+
+Behavior:
+- Only block /stable/historical-price-eod/full.
+- Do not block company screener.
+- Do not block profile.
+- Do not block ratios/metrics.
+- Do not block calendar endpoints.
+- Do not block non-FMP providers.
+- Do not ban all FMP.
+- If any code attempts /stable/historical-price-eod/full, do not send the request.
+- Return cached/stale/null fallback where possible.
+- Log the blocked attempted call.
+- Do not crash pages.
+
+Log for attempted /full calls:
+- timestamp
+- endpoint
+- symbol
+- caller file/function if possible
+- job_name if available
+- request route context if available
+- short stack trace
+- WOULD_CALL_FULL_HISTORICAL=true
+- blocked=true
+
+Part 5 — Surgical fix plan, not broad rewrite
+
+For each /full caller, propose the minimal fix:
+- replace /full with ranged from/to endpoint
+- use screener_returns_cache or another existing cache
+- add cache-first lookup
+- dedupe symbols before fetch
+- increase TTL
+- move to scheduled-only
+- disable only the runaway job if needed
+- share existing cache with other pages
+
+Do not implement a broad FMP ban.
+Do not rewrite every FMP integration.
+Do not break Fundamentals.
+Do not remove useful FMP company screener/profile/calendar behavior.
+
+Part 6 — Validation without FMP
+
+Do not make any FMP requests.
+
+Run:
+- grep/search report
+- backend import/compile check
+- start backend if safe
+- call only cache-read endpoints if they do not hit FMP:
+  - /api/screener-hub?tab=thematic&theme=semiconductors
+  - /api/screener-hub?tab=social
+  - /api/screener-hub?tab=bottlenecks
+  - /api/screener-hub?tab=watchlist_portfolio
+  - /api/admin/screener-hub/status with X-API-Key if available
+
+Confirm:
+- no FMP network calls were made
+- any attempted /full calls are logged/blocked in dry-run
+- user endpoints return cached/stale/null instead of crashing
+
+Final report:
+- exact files/functions calling /stable/historical-price-eod/full
+- exact page/job likely responsible
+- whether calls are one-per-ticker loops
+- highest-risk culprit
+- estimated reason for 76k calls/day
+- surgical fix plan for each culprit
+- files changed
+- whether FMP_BLOCK_FULL_HISTORICAL was added
+- whether other FMP endpoints remain allowed
+- validation results

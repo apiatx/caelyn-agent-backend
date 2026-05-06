@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -88,7 +88,7 @@ METRIC_DEFINITIONS: dict[str, dict] = {
         "source": "quote_price", "chartable": True, "screener": True,
         "fallback": None,
         "fmpFields": ["price"],
-        "sourceEndpoint": "historical-price-eod/full",
+        "sourceEndpoint": "historical-price-eod",
     },
     "price_change_percent": {
         "label": "Price Change %", "unit": "percent_already",
@@ -465,11 +465,38 @@ class StockCompareFMP:
         return data if isinstance(data, list) else []
 
     async def hist_price(self, symbol: str) -> list:
-        """Historical end-of-day price — daily; sampled annually for chart."""
+        """Historical end-of-day price — daily; sampled annually for chart.
+
+        Uses the date-ranged endpoint instead of /full (which pulled the entire
+        ticker history regardless of how much was needed).  1826 calendar days
+        (5Y) matches the previous limit= behaviour while being a scoped request.
+
+        FMP_BLOCK_FULL_HISTORICAL=true blocks this call and returns cached data
+        or an empty list — the compare page degrades gracefully without it.
+        """
+        from services.fmp_full_guard import log_and_check as _fmp_guard
+
         ck = f"sc:histpx:{symbol}"
+
+        # Guard: block under FMP_BLOCK_FULL_HISTORICAL; log under DRY_RUN
+        if _fmp_guard(
+            symbol,
+            caller_func="hist_price",
+            caller_file="stock_compare_service.py",
+            job_name="user_compare_request",
+        ):
+            # Return whatever is warm in cache; otherwise empty list
+            hit = cache.get(ck)
+            if isinstance(hit, dict):
+                return hit.get("historical") or []
+            return hit if isinstance(hit, list) else []
+
+        from_date = (date.today() - timedelta(days=1826)).isoformat()
+        to_date   = date.today().isoformat()
+
         data = await self._get_cached(
-            ck, "historical-price-eod/full",
-            {"symbol": symbol, "limit": 1826},
+            ck, "historical-price-eod",
+            {"symbol": symbol, "from": from_date, "to": to_date},
             _TTL_HIST_PX, symbol,
         )
         if isinstance(data, dict):

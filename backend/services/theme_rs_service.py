@@ -7,7 +7,7 @@ Exposes:
 
 Provider hierarchy (no LLM calls):
   1D quote:        Tradier batch → Finnhub individual fallback
-  7D/30D/YTD/1Y/5Y: FMP stable historical-price-eod primary (full history)
+  7D/30D/YTD/1Y/5Y: FMP stable historical-price-eod date-ranged (last 1400 days)
                    → Tradier daily history fallback
                    → yfinance emergency fallback
 
@@ -258,39 +258,85 @@ def _fmp_key() -> str:
     return os.getenv("FMP_API_KEY", "")
 
 
+# Maximum calendar days to request; 1400 days ≈ 5.5 years → covers 5Y trading
+# timeframe (needs ~1250 trading days) with a comfortable buffer.
+_FMP_HIST_RANGE_DAYS = 1400
+
+
 async def _fetch_fmp_daily_history(symbol: str) -> list[dict]:
     """
-    FMP stable/historical-price-eod/full — primary historical provider.
-    Returns sorted list of {date, close} bars, newest-last.
-    Cached 1h in-process.
+    FMP stable/historical-price-eod — date-ranged (last _FMP_HIST_RANGE_DAYS
+    calendar days).  Replaces the former /full call which pulled the entire
+    ticker history and caused runaway API-call counts.
+
+    Stampede guard: cache is re-checked INSIDE the semaphore so concurrent
+    requests for the same symbol (e.g. from 5 parallel timeframe computes at
+    startup) only ever issue one HTTP request — the first one writes to cache
+    and all subsequent waiters read from it.
+
+    Returns sorted list of {date, close} bars, oldest-first.
+    Cached 4h in-process (key shared across all timeframes).
     """
+    from services.fmp_full_guard import log_and_check as _fmp_guard
+
     sym = symbol.upper()
     cache_key = f"fmp_hist:{sym}"
+
+    # ── Fast path: cache hit (outside semaphore, no wait) ────────────────────
     hit = cache.get(cache_key)
     if hit is not None:
         return hit
+
+    # ── Guard: env-var emergency shutoff ─────────────────────────────────────
+    # FMP_BLOCK_FULL_HISTORICAL=true  → skip ALL FMP history calls, return []
+    # FMP_DIAGNOSTIC_DRY_RUN=true     → log cache-miss events, still proceed
+    # (This function now calls the date-ranged endpoint, not /full, so the
+    #  guard doubles as a general FMP history shutoff for theme_rs.)
+    if _fmp_guard(
+        sym,
+        caller_func="_fetch_fmp_daily_history",
+        caller_file="theme_rs_service.py",
+        job_name="theme_rs_warmup_loop",
+    ):
+        return []  # FMP_BLOCK_FULL_HISTORICAL=true — no network call
 
     key = _fmp_key()
     if not key:
         return []
 
+    from_date = (date.today() - timedelta(days=_FMP_HIST_RANGE_DAYS)).isoformat()
+    to_date   = date.today().isoformat()
+
     async with _FMP_HIST_SEM:
+        # ── Stampede guard: re-check cache INSIDE the semaphore ──────────────
+        # Multiple concurrent callers (e.g. 5 TF computes at startup) all see
+        # a cache miss before acquiring the semaphore.  Without this re-check
+        # they would ALL issue an FMP request.  With it, only the first caller
+        # hits the network; every subsequent caller finds the freshly written
+        # cache entry and returns immediately.
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return hit
+
         try:
             async with httpx.AsyncClient(timeout=12.0) as client:
                 resp = await client.get(
-                    "https://financialmodelingprep.com/stable/historical-price-eod/full",
-                    params={"symbol": sym, "apikey": key},
+                    "https://financialmodelingprep.com/stable/historical-price-eod",
+                    params={
+                        "symbol": sym,
+                        "from":   from_date,
+                        "to":     to_date,
+                        "apikey": key,
+                    },
                 )
             if resp.status_code not in (200, 201):
                 if resp.status_code not in (403, 402, 404):
                     print(f"[THEME_RS][FMP hist] {sym} HTTP {resp.status_code}")
                 return []
             raw = resp.json()
-            # FMP stable returns: list of {date, open, high, low, close, volume, ...}
             if isinstance(raw, list):
                 bars_raw = raw
             elif isinstance(raw, dict):
-                # Some variants wrap in {"historical": [...]}
                 bars_raw = raw.get("historical") or []
             else:
                 return []
@@ -309,7 +355,10 @@ async def _fetch_fmp_daily_history(symbol: str) -> list[dict]:
 
             bars.sort(key=lambda r: r["date"])
             if bars:
-                print(f"[THEME_RS][FMP hist] {sym}: {len(bars)} bars ✓")
+                print(
+                    f"[THEME_RS][FMP hist] {sym}: {len(bars)} bars"
+                    f" (from={from_date} to={to_date}) ✓"
+                )
                 cache.set(cache_key, bars, _HIST_TTL)
             return bars
 
