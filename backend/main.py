@@ -1326,6 +1326,56 @@ async def debug_provider_call_audit(
     return report
 
 
+@app.get("/api/debug/fmp-cost-status")
+async def fmp_cost_status(request: Request):
+    """
+    FMP API cost control status.
+
+    Reports:
+      - full-historical call guard state (env vars)
+      - theme_rs unique proxy count, last refresh, next eligible refresh per TF
+      - stock_compare historical endpoint mode
+      - screener_returns endpoint mode + governor state
+    No FMP network calls are made.
+    """
+    from services.fmp_full_guard import is_full_historical_blocked, is_diagnostic_dry_run
+
+    theme_rs_status: dict = {}
+    try:
+        from services.theme_rs_service import get_theme_rs_status
+        theme_rs_status = get_theme_rs_status()
+    except Exception as e:
+        theme_rs_status = {"error": str(e)}
+
+    return {
+        "fmp_call_audit": {
+            "full_historical_calls_blocked": is_full_historical_blocked(),
+            "diagnostic_dry_run_active":     is_diagnostic_dry_run(),
+            "env_vars": {
+                "FMP_BLOCK_FULL_HISTORICAL": os.getenv("FMP_BLOCK_FULL_HISTORICAL", "not-set"),
+                "FMP_DIAGNOSTIC_DRY_RUN":    os.getenv("FMP_DIAGNOSTIC_DRY_RUN",    "not-set"),
+            },
+        },
+        "theme_rs": theme_rs_status,
+        "stock_compare": {
+            "hist_price_endpoint":    "historical-price-eod (date-ranged, from/to)",
+            "hist_price_range_days":  1826,
+            "hist_price_cache_ttl_s": 1800,
+            "profile_cache_ttl_s":    86400,
+            "quote_cache_ttl_s":      900,
+            "statement_cache_ttl_s":  86400,
+            "full_history_endpoint":  False,
+        },
+        "screener_returns": {
+            "hist_endpoint":    "historical-price-eod (date-ranged, from/to)",
+            "hist_range_days":  180,
+            "governor_enabled": True,
+            "full_history_endpoint": False,
+            "endpoint_mode":    "ranged",
+        },
+    }
+
+
 @app.get("/api/presets")
 @traceable(name="main.list_presets")
 async def list_presets(request: Request):

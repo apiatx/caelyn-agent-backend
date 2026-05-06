@@ -1,0 +1,83 @@
+Do not call FMP during validation.
+Do not run admin rebuilds.
+Do not trigger scheduled jobs.
+
+Goal:
+Finalize FMP historical cost control after removing /stable/historical-price-eod/full.
+
+Current confirmed fixes:
+- theme_rs_service no longer calls /stable/historical-price-eod/full.
+- stock_compare_service no longer calls /stable/historical-price-eod/full.
+- screener_returns_service is already date-ranged/governed.
+- fmp_full_guard.py blocks full historical calls.
+- Theme RS stampede bug was fixed by re-checking cache inside semaphore.
+
+Now add cadence and cache safety so Theme RS cannot refetch too often.
+
+Part 1 — Theme RS daily refresh guard
+
+Theme RS should refresh FMP historical data no more than once per day per proxy symbol.
+
+Implement or verify:
+- durable cache timestamp per proxy symbol/timeframe if available
+- if durable cache exists and is less than 24h old, skip FMP network call
+- if only in-memory cache exists, add disk or Neon timestamp if safe
+- process restart should not cause a full Theme RS refetch if cache is fresh
+- startup should use existing LKG/disk/Neon cache first
+- background Theme RS refresh should be once daily max unless manually forced
+
+Part 2 — Proxy symbol dedupe
+
+Before any Theme RS historical fetch:
+- dedupe proxy symbols
+- log count of unique proxy symbols
+- confirm it is fetching ETF/proxy symbols only, not every constituent ticker inside every ETF
+- return/report unique proxy symbol count
+
+Part 3 — Stock Compare fundamental cache check
+
+Do not rewrite Stock Compare.
+
+Inspect stock_compare_service and related fundamentals compare path.
+
+Confirm:
+- when user compares 2–5 tickers, fundamental/profile/metrics data is cache-first
+- if cache miss, FMP call is one per ticker per data group only when needed
+- repeated compare of the same ticker uses cache
+- no full-history endpoint is used
+- historical chart uses ranged from/to only
+- do not call FMP during validation
+
+If there are multiple separate FMP calls per ticker for profile/metrics/ratios, report them and propose a minimal cache-first consolidation, but do not overbuild.
+
+Part 4 — Admin/status visibility
+
+Add or confirm admin status exposes:
+- full historical calls blocked
+- theme_rs unique proxy symbols
+- theme_rs last refresh timestamp
+- theme_rs next eligible refresh
+- stock_compare historical endpoint mode: ranged
+- screener_returns endpoint mode: ranged
+
+Part 5 — Validation without FMP
+
+Use code inspection, import/compile, and cache-read-only endpoint checks only.
+
+Confirm:
+- zero actual /stable/historical-price-eod/full HTTP calls remain
+- Theme RS cannot refetch more than once daily per proxy symbol unless forced
+- process restart uses cache/LKG where possible
+- stock_compare historical uses ranged from/to
+- screener_returns remains ranged/governed
+- no FMP network calls during validation
+
+Final report:
+- files changed
+- Theme RS refresh cadence
+- Theme RS proxy symbol count/dedupe result
+- cache durability approach
+- Stock Compare FMP call behavior
+- admin/status fields added
+- validation results
+- remaining risks

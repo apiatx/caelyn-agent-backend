@@ -73,6 +73,13 @@ _LKG_PATH        = Path(__file__).parent.parent / "data" / "themes_rs_lkg.json"
 _LKG_SCHEMA_VER  = "v2_5y"
 _XC_PATH     = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
 _HIST_TTL    = 3600       # 1h — daily bars don't change intraday
+
+# Disk file storing per-TF last-computed unix timestamps (survives restarts).
+_REFRESH_TS_PATH = Path(__file__).parent.parent / "data" / "theme_rs_refresh_ts.json"
+# Historical TF refresh cadence — FMP history fetched at most once per day per TF.
+# 1D is exempt: it uses Tradier quotes only (no FMP history calls).
+_HIST_FETCH_CADENCE = 86_400   # 24 h
+
 _BENCHMARKS  = ["SPY", "QQQ"]
 
 _TIMEFRAME_BARS: dict[str, int] = {
@@ -192,6 +199,58 @@ def _save_lkg(data: list[dict]) -> None:
         tmp.replace(_LKG_PATH)
     except Exception as e:
         print(f"[THEME_RS] LKG save error: {e}")
+
+
+# ── Refresh timestamp persistence ─────────────────────────────────────────────
+
+def _load_refresh_ts() -> None:
+    """
+    Load per-TF last-computed timestamps from disk into _last_computed.
+    Called once at startup so process restarts don't reset the daily cadence guard.
+    Non-fatal: any error is logged and silently ignored.
+    """
+    try:
+        if not _REFRESH_TS_PATH.exists():
+            return
+        data = json.loads(_REFRESH_TS_PATH.read_text())
+        if not isinstance(data, dict):
+            return
+        loaded: list[str] = []
+        now = time.time()
+        for tf, ts in data.items():
+            if tf in _last_computed and isinstance(ts, (int, float)) and 0 < ts <= now:
+                _last_computed[tf] = float(ts)
+                loaded.append(f"{tf}={int(now - ts)}s_ago")
+        if loaded:
+            print(f"[THEME_RS] Refresh timestamps loaded from disk: {loaded}")
+        else:
+            print("[THEME_RS] Refresh timestamps: disk file exists but no valid entries")
+    except Exception as e:
+        print(f"[THEME_RS] Refresh timestamp load error (non-fatal): {e}")
+
+
+def _save_refresh_ts(tf: str, ts: float) -> None:
+    """
+    Atomically persist the last-computed timestamp for *tf* to disk.
+    Merges with existing entries so other TFs are not overwritten.
+    Non-fatal: any error is logged and silently ignored.
+    """
+    try:
+        existing: dict = {}
+        if _REFRESH_TS_PATH.exists():
+            try:
+                raw = json.loads(_REFRESH_TS_PATH.read_text())
+                if isinstance(raw, dict):
+                    existing = raw
+            except Exception:
+                pass
+        existing[tf] = ts
+        _REFRESH_TS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _REFRESH_TS_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(existing, indent=2))
+        tmp.replace(_REFRESH_TS_PATH)
+    except Exception as e:
+        print(f"[THEME_RS] Refresh timestamp save error (non-fatal): {e}")
 
 
 # ── Payload builders ───────────────────────────────────────────────────────────
@@ -971,6 +1030,15 @@ async def _compute(tf: str) -> list[dict]:
     all_proxy_with_bench = sorted(set(ALL_PROXY_SYMBOLS + _BENCHMARKS))
     proxy_syms_with_dram = all_proxy_with_bench   # alias for clarity below
     quote_syms = sorted(set(ALL_PROXY_SYMBOLS + ALL_CANDIDATE_SYMBOLS + _BENCHMARKS))
+    # Dedupe accounting: proxy+bench go through FMP history; constituents do not.
+    _raw_proxy_count = len(ALL_PROXY_SYMBOLS) + len(_BENCHMARKS)
+    print(
+        f"[THEME_RS] Symbol counts (tf={tf}): "
+        f"{len(proxy_syms_with_dram)} unique proxy+bench ETFs "
+        f"(raw={_raw_proxy_count}, deduped={_raw_proxy_count - len(proxy_syms_with_dram)} overlap) — "
+        f"FMP history for proxy/bench only. "
+        f"{len(ALL_CANDIDATE_SYMBOLS)} constituent stocks: quote+yfinance only, no FMP history."
+    )
 
     # ── 2. Fetch quotes (Tradier batch → Finnhub fallback) ────────────────────
     print(f"[THEME_RS] Fetching quotes for {len(quote_syms)} symbols …")
@@ -1075,13 +1143,29 @@ async def _compute(tf: str) -> list[dict]:
 
 # ── Background refresh (lock-guarded) ──────────────────────────────────────────
 
-async def _locked_refresh(tf: str) -> None:
+async def _locked_refresh(tf: str, force: bool = False) -> None:
     """
     Acquire the per-timeframe lock and run a full compute pass.
     Safe to call concurrently — the lock ensures only one refresh per timeframe
     runs at a time.  In asyncio (single-threaded) the lock.locked() check is
     atomic with the subsequent async-with acquisition.
+
+    Historical TFs (7D/30D/YTD/1Y/5Y) are guarded by a daily cadence limit:
+    FMP history will not be fetched more than once every _HIST_FETCH_CADENCE
+    seconds unless force=True.  1D is exempt (Tradier quotes, no FMP history).
+    Timestamps are persisted to disk so restarts don't reset the guard.
     """
+    # ── Daily cadence guard for historical TFs ────────────────────────────────
+    if tf != "1D" and not force:
+        age = time.time() - _last_computed.get(tf, 0.0)
+        if age < _HIST_FETCH_CADENCE:
+            remaining = int(_HIST_FETCH_CADENCE - age)
+            print(
+                f"[THEME_RS] {tf} refresh skipped — daily cadence guard"
+                f" (last={int(age)}s ago, next eligible in {remaining}s)"
+            )
+            return
+
     lock = _get_lock(tf)
     if lock.locked():
         print(f"[THEME_RS] {tf} refresh skipped — already in progress")
@@ -1097,6 +1181,7 @@ async def _locked_refresh(tf: str) -> None:
                 cache.set(f"{_CACHE_KEY}:{tf}", payload, _ttl_for_timeframe(tf))
                 _save_lkg(rows)
                 _last_computed[tf] = time.time()
+                _save_refresh_ts(tf, _last_computed[tf])   # persist across restarts
                 print(
                     f"[THEME_RS] {tf} refresh done in {time.time()-t0:.1f}s "
                     f"({len(rows)} themes)"
@@ -1134,9 +1219,11 @@ async def _warmup_loop() -> None:
         if now - _last_computed.get("1D", 0) >= _TTL_1D_MARKET:
             asyncio.create_task(_locked_refresh("1D"))
 
-        # Historical: target 900s since last successful compute
+        # Historical: target _HIST_FETCH_CADENCE (24h) since last successful compute.
+        # _locked_refresh() also enforces this guard internally; the loop check
+        # just avoids creating unnecessary tasks.
         for tf in ("7D", "30D", "YTD", "1Y", "5Y"):
-            if now - _last_computed.get(tf, 0) >= _TTL_HIST_MARKET:
+            if now - _last_computed.get(tf, 0) >= _HIST_FETCH_CADENCE:
                 asyncio.create_task(_locked_refresh(tf))
 
 
@@ -1182,6 +1269,12 @@ async def warmup_theme_rs() -> None:
         if themes_in_cache and not _lkg_has_5y(themes_in_cache):
             print("[THEME_RS] Startup: stale 5Y cache (all-None 5Y perf) — invalidating")
             cache.delete(_5y_key)
+
+    # Load persisted refresh timestamps before starting the background loop so
+    # the daily cadence guard has accurate last-computed values after a restart.
+    # If a TF was computed < 24h ago the initial loop kick will be skipped and
+    # LKG / cache will serve users until the next eligible window.
+    _load_refresh_ts()
 
     asyncio.create_task(_warmup_loop())
     print("[THEME_RS] Warmup task created (non-blocking)")
@@ -1321,3 +1414,48 @@ async def get_theme_rs_data(
                     classification,
                 )
             raise
+
+
+# ── Admin / telemetry ──────────────────────────────────────────────────────────
+
+def get_theme_rs_status() -> dict:
+    """
+    Return a diagnostic snapshot for admin/status endpoints.
+    Pure read — no FMP calls, no cache writes, no I/O beyond stat checks.
+    """
+    from services.theme_rs_universe import ALL_PROXY_SYMBOLS, ALL_CANDIDATE_SYMBOLS
+
+    now = time.time()
+    benchmarks = _BENCHMARKS
+    unique_proxy_count = len(sorted(set(ALL_PROXY_SYMBOLS + benchmarks)))
+
+    tf_status: dict[str, dict] = {}
+    for tf in list(_TIMEFRAME_BARS.keys()):
+        last_ts  = _last_computed.get(tf, 0.0)
+        age_s    = int(now - last_ts) if last_ts > 0 else None
+        cadence_s = _TTL_1D_MARKET if tf == "1D" else _HIST_FETCH_CADENCE
+        if last_ts > 0:
+            next_eligible_s = max(0, int(cadence_s - (now - last_ts)))
+            eligible_now    = (now - last_ts) >= cadence_s
+        else:
+            next_eligible_s = 0
+            eligible_now    = True
+        tf_status[tf] = {
+            "last_refresh_ts":    round(last_ts, 1) if last_ts > 0 else None,
+            "last_refresh_ago_s": age_s,
+            "next_eligible_in_s": next_eligible_s,
+            "eligible_now":       eligible_now,
+            "cadence_s":          cadence_s,
+        }
+
+    return {
+        "unique_proxy_bench_count": unique_proxy_count,
+        "candidate_symbol_count":   len(ALL_CANDIDATE_SYMBOLS),
+        "hist_fetch_cadence_s":     _HIST_FETCH_CADENCE,
+        "hist_endpoint_mode":       f"historical-price-eod date-ranged (last {_FMP_HIST_RANGE_DAYS} cal days)",
+        "lkg_path":                 str(_LKG_PATH),
+        "lkg_exists":               _LKG_PATH.exists(),
+        "refresh_ts_path":          str(_REFRESH_TS_PATH),
+        "refresh_ts_exists":        _REFRESH_TS_PATH.exists(),
+        "timeframes":               tf_status,
+    }
