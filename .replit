@@ -52,3 +52,4 @@ run = ["bash", "-c", "cd /home/runner/workspace/backend && python3.11 -m gunicor
 [userenv]
 
 [userenv.shared]
+FMP_BLOCK_FULL_HISTORICAL = "true"
