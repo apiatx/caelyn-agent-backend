@@ -1,182 +1,81 @@
-# Caelyn AI — FastAPI Trading Analysis Platform
+# Caelyn AI
 
-## Overview
+Caelyn AI is a FastAPI-based platform for real-time trading analysis, offering actionable insights across diverse asset classes through advanced screening, AI-driven analysis, and proprietary scoring engines.
 
-Caelyn AI is a sophisticated FastAPI-based platform designed for real-time trading analysis and intelligence. It provides a comprehensive suite of tools for institutional and retail investors, covering diverse asset classes from traditional equities and commodities to cryptocurrencies and prediction markets. The platform aims to deliver actionable insights through advanced screening, AI-driven analysis, and proprietary scoring engines, helping users identify opportunities and manage risk effectively.
+## Run & Operate
 
-Key capabilities include:
+```bash
+# Run the FastAPI application
+uvicorn backend.main:app --host 0.0.0.0 --port 5000 --reload
+
+# Placeholder for build, typecheck, codegen, db push commands
+_Populate as you build_
+```
+
+**Required Environment Variables:**
+_Populate as you build_
+
+## Stack
+
+**Frameworks:** FastAPI
+**Runtime Versions:** Python 3.x (specific version not provided, assume latest compatible)
+**ORM:** _Populate as you build_ (Neon PostgreSQL mentioned for persistence, but ORM not specified)
+**Validation:** Pydantic
+**Build Tool:** _Populate as you build_
+
+## Where things live
+
+- **Backend Entrypoint:** `backend/main.py`
+- **Thematic Context Provider:** `backend/services/thematic_context_provider.py`
+- **Dynamic Thematic Universe Builder:** `backend/services/dynamic_thematic_universe.py`
+- **Regime Engine:** `backend/core/regime_engine.py`
+- **Context Broker (AI Agent Integration):** `backend/agent/context_broker.py`
+- **Screener Hub Services:** `backend/services/playbook/strategy_screener/screener_router.py`, `backend/screener_hub_store.py`
+- **Market Data Service:** `backend/data/market_data_service.py`
+- **Data Schemas:** Defined via Pydantic models throughout `backend/` services.
+- **DB Schema:** Managed by Neon PostgreSQL. Table `screener_options_oi_cache` for options data. (Specific schema file not provided)
+- **API Contracts:** Defined implicitly by FastAPI routes and Pydantic models in `backend/` routers and services.
+- **Theme Files:** `backend/services/thematic_context_provider.py` (`_KEYWORD_ETF_MAP`), `data/x_consensus_weekly.json`, `data/sector_rotation_analysis.json`.
+
+## Architecture decisions
+
+- **Microservices-like Structure:** Major analytical features are implemented as self-contained services.
+- **Hybrid Caching Strategy:** In-memory state for real-time market data, disk-persistent caching for frequently accessed or static datasets for fast restarts.
+- **Hierarchical Scoring Engines:** Utilized in screeners for multi-factor analysis and robust signal generation.
+- **Multi-Agent AI Pipeline:** Prediction Markets feature uses a 6-agent Gemini pipeline for comprehensive market analysis.
+- **Deterministic Regime Detection:** The Playbook Engine's `serenity-regime` ensures consistent results without external API calls for core detection.
+- **Snapshot-First Calendar Pipeline:** Earnings calendar eliminates month-view hangs by pre-computing and serving weekly snapshots from cache/disk.
+- **Non-blocking Options OI Enrichment:** Live options data is fetched in background tasks, cached, and served without blocking request threads.
+
+## Product
+
 - Real-time Hyperliquid perpetuals and spot market screener with multi-factor scoring.
 - Comprehensive sector rotation analysis and AI-generated market commentary.
-- Deep dive into SEC Form 4 insider activity with conviction scoring and cluster detection.
-- Institutional 13F whale tracking, portfolio return analysis, and AI-summarized investment themes.
-- Polymarket prediction market intelligence with edge detection, mispricing signals, and a multi-agent AI trading pipeline.
-- Deterministic supply chain bottleneck discovery and regime detection engine for strategic investment playbooks.
-- Fundamental stock comparison tool with a wide range of financial metrics.
-- Catalyst calendar aggregating key market events like earnings, dividends, IPOs, and economic releases.
-- Real portfolio analytics for tracking and analyzing specific holdings.
+- Deep dive into SEC Form 4 insider activity with conviction scoring.
+- Institutional 13F whale tracking and AI-summarized investment themes.
+- Polymarket prediction market intelligence with edge detection and mispricing signals.
+- Deterministic supply chain bottleneck discovery and strategic investment playbooks.
+- Fundamental stock comparison tool and catalyst calendar.
+- Real portfolio analytics.
+- Thematic context layer and dynamic thematic universe building for enhanced screening.
 
-## User Preferences
+## User preferences
 
 No explicit user preferences were provided in the original `replit.md` file.
 
-## System Architecture
+## Gotchas
 
-The Caelyn AI platform is built on a FastAPI Python backend, running on port 5000. It features a modular architecture with distinct services for different analytical functions.
+- **FMP API Usage:** Excessive sequential calls to FMP for earnings data historically caused hangs; now mitigated by snapshot architecture.
+- **External API Rate Limits:** Implement robust error handling and back-off strategies for all external API calls (Hyperliquid, Tradier, Finnhub, FMP, Gemini, Claude, Perplexity AI) to avoid rate limiting.
+- **Cache Invalidation:** Ensure proper TTLs and invalidation mechanisms for cached data, especially for real-time market information.
+- **`yfinance` and `edgartools` Reliability:** Monitor for potential changes or unreliability in these less formal data sources.
 
-**Core Architectural Patterns:**
-- **Microservices-like Structure:** Each major analytical feature (Hyperliquid Screener, Sector Rotation, Insider Activity, Whale Watch, Prediction Markets, Playbook Engine, Stock Compare, Catalyst Calendar, Real Portfolio) is implemented as a self-contained service with its own router, service logic, and data models.
-- **In-Memory State Management:** Utilized for high-performance data access, particularly for Hyperliquid market data (assets, candles, trades, books, OI history).
-- **Disk-Persistent Caching:** Critical for fast server restarts and reducing initial data load times, especially for frequently accessed or static datasets like HIP-3 DEX assets and AI analysis results.
-- **Hierarchical Scoring Engines:** Employed in the Hyperliquid Screener to process candle features, short-term signals, structural quality, regime classification, and hero selection with guardrails.
-- **Multi-Agent AI Pipeline:** The Prediction Markets feature leverages a 6-agent Gemini pipeline (Fundamentals, Sentiment, Technical, Bull, Bear, RiskManager) for comprehensive market analysis and trading recommendations.
-- **Deterministic Regime Detection:** The Playbook Engine's `serenity-regime` is designed to produce consistent results based on predefined taxonomies and graphs, without external API calls for core detection.
-- **Metric-Aware Data Fetching:** For stock comparison, the system intelligently fetches only the necessary data points from external APIs based on the requested metrics.
-- **Importance Scoring:** Catalysts are automatically categorized by importance (high, medium, low) using deterministic rules based on event type, market cap, and associated keywords.
+## Pointers
 
-**UI/UX Decisions (Implied):**
-- Features like "Market Brief," "signal sections," "summary cards," and "guidance buckets" in the Hyperliquid Screener suggest a dashboard-oriented interface presenting categorized and summarized insights.
-- The "Sector Rotation Dashboard" and "Insider Activity Dashboard" imply visually rich interfaces for displaying trends, scores, and aggregated statistics.
-- The "Playbook" concept indicates a structured approach to investment strategies, potentially guiding users through discovery and analysis workflows.
-
-**Technical Implementations:**
-- **FastAPI:** Used for building robust and high-performance APIs.
-- **Pydantic:** Extensively used for data validation and serialization, defining models for various market assets, API requests, and responses.
-- **WebSockets:** Utilized for real-time data streaming from sources like Hyperliquid.
-- **Asynchronous Programming:** `asyncio` is used for managing concurrent operations, particularly for external API calls and background tasks.
-- **Database:** Neon PostgreSQL is used for persisting data such as insider transactions, whale holdings, and portfolio returns.
-- **Caching:** Redis or an in-memory dictionary-based cache is used for transient data (e.g., Finnhub quotes, FMP API responses) with defined TTLs.
-- **Universe Filtering:** Implemented with strict rules for Hyperliquid assets to ensure data quality, including volume gates for spot markets and allowlists.
-
-## Thematic Context Adapter (Apr 2025)
-
-A shared read-only thematic/regime/sector context layer was added to make the same intelligence used by the main agent available to non-chat endpoints — without creating a competing engine and without adding LLM calls to screeners.
-
-**New Files:**
-- `backend/services/thematic_context_provider.py` — Normalized snapshot aggregating regime, sector rotation, theme ETF RS scores, and X consensus. Cached as `thematic_context:snapshot:v1` (10 min TTL). Never raises.
-- `backend/services/theme_ticker_mapper.py` — Ticker→theme index built from `home_service.THEME_MAP` + `THEME_ETF_UNIVERSE`. O(1) lookups. Provides `get_ticker_theme_alignment()` for per-row annotation.
-
-**Modified Files:**
-- `backend/core/regime_engine.py` — Added write-through: `detect_market_regime()` now also writes result to `cache.set("regime:current_v1", ...)` so any endpoint can read it without `data_service`.
-- `backend/agent/context_broker.py` — `read_shared_context()` now also reads `regime:current_v1` and `thematic_context:snapshot:v1` (if pre-warmed). `build_context_overlay()` injects `shared_macro_regime`, `shared_active_themes`, `shared_emerging_themes` into LLM context.
-- `backend/main.py` — Added `GET /api/thematic-context/snapshot` and `POST /api/thematic-context/refresh`. Options screener adds 9 additive `theme_*` fields per ticker row.
-- `backend/services/playbook/strategy_screener/screener_router.py` — Populates `regime_context` (was always `null`); adds `theme_name`, `theme_state`, `regime_alignment_score`, `regime_alignment_label`, `thematic_badges`, `dead_zone_warning`, `base_score`, `final_score` per result row.
-
-**Cache sources reused (no new engines):**
-- `regime:current_v1` (new write-through from regime_engine)
-- `sr:dashboard:v1` (sector rotation background loop)
-- `sr:theme_data:v2` (sector rotation theme service)
-- `thematic_context:snapshot:v1` (self-populated, 10 min)
-- `data/x_consensus_weekly.json` (X consensus daily snapshot)
-- `data/sector_rotation_analysis.json` (Gemini disk fallback)
-- `notifai_weekly_summary_v2`, `fred:quick_macro` (existing)
-
-**Earnings: untouched.**
-
-## Dynamic Thematic Universe Builder (Apr 2026)
-
-Replaces hardcoded ticker lists in TA Screener and Options Flow with a dynamically built, multi-source ticker universe driven by ThematicContextProvider active/emerging themes.
-
-**New File:**
-- `backend/services/dynamic_thematic_universe.py` — Core builder.
-  - `get_dynamic_thematic_universe(active_only, include_emerging, max_tickers, force_refresh)` — async, builds or returns from 15-min in-memory cache.
-  - `get_cached_thematic_universe()` — sync, non-blocking read from cache. Used in hot paths.
-  - Discovery sources per theme: (1) ETF holdings via `etf_holdings_service` using keyword-augmented proxy ETFs, (2) FMP company peers via `stable/stock-peers` from anchor tickers, (3) X/Grok consensus from `x_consensus_weekly.json`, (4) static `related_tickers` fallback.
-  - `_KEYWORD_ETF_MAP` — maps granular sub-theme names (e.g. "AI Networking", "Datacenter / Compute") to ETF proxies so ETF holdings can be fetched even when theme data has empty `related_etfs`.
-  - Returns: `{tickers, sources_by_ticker, theme_map, snapshot_status, source_health, built_at, ticker_count}`.
-
-**TA Screener Integration** (`backend/data/market_data_service.py`):
-- After Phase A Finviz discovery: injects up to 15 thematic tickers (`_THEMATIC_ENRICH_CAP`) not already in the Finviz pool. These go through Phase B (enrichment) and Phase C (filter/rank) identically to Finviz candidates. Non-blocking (sync cache read only).
-- After Phase C scoring: annotates all `final_rows` with `theme_name`, `theme_state`, `regime_alignment_score`, `discovery_sources`. Uses dynamic universe `theme_map` first; falls back to `get_ticker_theme_alignment()` for Finviz-only tickers.
-
-**Options Flow Integration** (`backend/main.py`):
-- Cold prefilter path: replaces old `get_thematic_prefilter_universe()` call with `get_cached_thematic_universe()`. Dynamic universe tickers (up to 80) are prepended to `_master_seeds` before `engine.build_prefilter_snapshot()`.
-- Static `_master_seeds` remain as liquid options fallback after dynamic tickers.
-
-**Background Loop** (`backend/main.py`):
-- `_dynamic_thematic_universe_loop()` — refreshes every 15 minutes. 30-second initial delay for sector-rotation and X-consensus loops to warm first.
-- Started via `asyncio.create_task()` in the lifespan startup.
-
-**Guardrails:**
-- No LLM calls. No Tradier calls. No Earnings data touched.
-- All vendor calls time-bounded with asyncio.wait_for / httpx timeouts.
-- Never raises. Degrades gracefully if individual sources (ETF holdings, FMP peers) are unavailable.
-- Finviz broad discovery unchanged — thematic candidates are additive, not replacement.
-- Theme annotation is additive, not a filter.
-
-## Earnings Calendar Snapshot Architecture (May 2026)
-
-The curated earnings calendar pipeline was refactored to eliminate month-view hangs (previously 5+ minutes) via a snapshot-first pattern.
-
-**Problem solved:** `get_month_curated` called `get_curated_earnings_range()` 5× sequentially inline, each triggering up to 40 live FMP profile calls → total 200 live HTTP calls blocking the request thread.
-
-**New architecture:**
-- `get_month_curated` now calls `_get_snap_or_lkg_fast(mon, fri)` only — reads pre-built weekly snapshots from in-memory cache or disk. No enrichment on page load.
-- Missing weeks queue `asyncio.create_task(_background_build_week(...))` and return partial status. Callers reload in ~60s.
-- `_earnings_curated_precompute_loop()`: background async loop started at boot (20s delay). Builds current week + 5 future weeks. Repeats every 6h. Force-rebuilds all on Saturdays.
-- Disk persistence: snapshots written to `backend/data/earnings_snap_{mon}_{fri}.json` and LKG files. Survive restarts. `_load_all_earn_snaps_from_disk()` warms in-memory cache before first request.
-
-**New admin endpoints (require X-API-Key):**
-- `POST /api/catalysts/earnings/admin/rebuild-week?week_start=YYYY-MM-DD&weeks=N` — force-rebuild N consecutive weeks
-- `GET /api/catalysts/earnings/admin/snapshot-status` — shows per-week mem/disk snapshot state
-
-**Result:** Month view response time: ~0.2ms (from snapshots). SIMO shows correctly (isFocus=true, score=73, in Apr 27 week). Friday blanks are real FMP data (no events on those dates).
-
-## Screener Hub Options OI Enrichment (May 2026)
-
-Near-real-time options open interest, volume, and activity score columns in Screener Hub are now populated from live Tradier data using a non-blocking, cache-first, background-task pipeline.
-
-**New DB table (`screener_options_oi_cache`):**
-- Columns: `symbol`, `options_oi`, `previous_options_oi`, `options_oi_change`, `options_oi_change_pct`, `options_activity_score`, `total_volume`, `updated_at`, `provider`
-- TTL: 120 s during market hours, 900 s when closed
-- Stored in `screener_hub_store.py` via `upsert_screener_options_oi()` / `get_screener_options_oi()`
-
-**Enrichment flow (non-blocking):**
-1. `_enrich_options_page_aware(rows)` — called at the end of `get_screener_hub()`. Reads DB cache for all tab symbols, merges fresh rows immediately, fires a detached `asyncio.Task` for stale/missing symbols.
-2. `_bg_refresh_options_oi(stale, prev_cached_map)` — background task (no request blocking). Fetches Tradier OI for up to `_OPT_MAX_SYMS=40` symbols with `asyncio.Semaphore(_OPT_CONCURRENCY=3)`. Computes OI change, OI change %, and activity score (`min(10, vol/oi*2)`). Upserts to DB.
-3. `_fetch_tradier_oi_for_symbol(provider, sym)` — sums `openInterest` and `volume` across the 2 nearest expirations (calls + puts). 5 s per-call timeout, returns `{total_oi, total_volume}` or `None`.
-
-**`options_source` annotation:**
-- `"cache"` — served from DB (within TTL)
-- `"lkg"` — no DB entry; fallback to LKG JSON data
-- `"unavailable"` — no data (symbol has no listed options)
-
-**Key config constants** (in `screener_hub_service.py`):
-- `_OPT_REFRESH_ENABLED = True`
-- `_OPT_TTL_OPEN = 120` (seconds, market hours)
-- `_OPT_TTL_CLOSED = 900` (seconds, market closed)
-- `_OPT_MAX_SYMS = 40` (cap per background task)
-- `_OPT_TIMEOUT = 8.0` (seconds, base)
-- `_OPT_CONCURRENCY = 3` (concurrent Tradier fetch semaphore)
-
-**Behavior:** First request for a tab fires a background refresh for all stale symbols and returns immediately with whatever is in the DB cache (LKG fallback if empty). Subsequent requests (within TTL) serve real Tradier OI. No request path is ever blocked by Tradier I/O.
-
-**No FMP calls. Options Flow page untouched.**
-
-## External Dependencies
-
-The Caelyn AI platform integrates with several external services and APIs to gather and process financial data:
-
--   **Hyperliquid:**
-    *   REST API (for market snapshots, meta-data)
-    *   WebSocket API (for real-time market data)
--   **Tradier:** Primary live quote source (price, volume, bid/ask, 1D%) for Portfolio, Social Screener, Watchlist, and Calendar pages. Resilient fallback chain: Tradier → LKG Tradier cache (72 h) → FMP cached quote → Finnhub → null. Per-quote metadata fields: quote_source, quote_cached_at, quote_is_stale, quote_fallback_reason.
--   **Yahoo Finance (`yfinance`):** For historical price data (e.g., GOLD, sector rotation ETFs) and fallback for stock price enrichment.
--   **CoinGecko:** For cryptocurrency data (e.g., BTC).
--   **Finnhub:**
-    *   Real-time stock quotes.
-    *   Company profile and metrics (fallback for insider activity price enrichment).
--   **FRED (Federal Reserve Economic Data):** For macro-economic indicators (e.g., Fed Funds Rate, CPI, 10Y/2Y Treasury yields).
--   **SEC EDGAR (edgartools):**
-    *   For fetching SEC Form 4 filings (insider activity).
-    *   For fetching SEC Form 13F-HR filings (institutional holdings for Whale Watch).
-    *   For company ticker indices and full-text search (CUSIP to Ticker resolution).
--   **Financial Modeling Prep (FMP) Stable API (Starter Plan):**
-    *   Primary source for stock comparison metrics.
-    *   Primary source for Catalyst Calendar data (earnings, dividends, IPOs, splits, economic releases, treasury rates, SEC filings, analyst ratings, insider transactions).
--   **Polymarket:**
-    *   For prediction market data (prices, volume, order book).
-    *   Gamma events API (for market tags).
--   **Google Gemini (gemini-3-flash-preview):** Used for AI analysis in Sector Rotation and as the engine for all agents in the Prediction Market TradingAgents pipeline.
--   **Google Search:** Provides real-time information grounding for Gemini AI agents.
--   **Anthropic Claude (claude-haiku-4-5):** Used for generating AI theme summaries in the Whale Watch feature.
--   **Perplexity AI:** Used to discover new top whales for the Whale Watch feature.
+- **FastAPI Documentation:** [https://fastapi.tiangolo.com/](https://fastapi.tiangolo.com/)
+- **Pydantic Documentation:** [https://pydantic-docs.helpmanual.io/](https://pydantic-docs.helpmanual.io/)
+- **Hyperliquid API Docs:** _(Link not provided)_
+- **Tradier API Docs:** _(Link not provided)_
+- **FMP API Docs:** _(Link not provided)_
+- **Google Gemini API Docs:** _(Link not provided)_
+- **Anthropic Claude API Docs:** _(Link not provided)_

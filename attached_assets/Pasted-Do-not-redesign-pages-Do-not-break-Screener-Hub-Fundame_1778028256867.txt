@@ -1,0 +1,184 @@
+Do not redesign pages.
+Do not break Screener Hub, Fundamentals, Social, Watchlist+Portfolio, Bottlenecks, Chain Reaction, Options Flow, or existing routes.
+
+IMPORTANT:
+Do not hit FMP endpoints during validation.
+Do not run admin rebuilds.
+Do not warm FMP data.
+Do not call FMP historical endpoints.
+Do not call /stable/historical-price-eod/full.
+
+Goal:
+Ensure all FMP-backed screeners/pages share the same canonical FMP cache and never duplicate FMP calls for the same ticker/data type across pages.
+
+Current problem:
+Multiple pages can independently need the same FMP-backed fields:
+- Thematic Screener
+- Social Screener
+- Watchlist+Portfolio Screener
+- Fundamentals page
+- Calendar/catalyst features
+- any other FMP-backed screeners
+
+We need one shared FMP cache/read-through layer so the same ticker/data type fetched once can be reused everywhere.
+
+Part 1 — Audit FMP call sites by code inspection only
+
+Search backend code for FMP usage:
+- FMP_API_KEY
+- financialmodelingprep
+- stable/profile
+- stable/company-screener
+- stable/historical-price-eod
+- stable/quote
+- stable/key-metrics
+- stable/ratios
+- stable/stock-peers
+- earnings-calendar
+- stock-screener/company-screener
+
+Do not execute those calls.
+
+Return a compact map:
+- file/function
+- endpoint
+- purpose
+- cache used if any
+- whether page-load path can call it
+- whether it should use canonical cache
+
+Part 2 — Add/confirm canonical FMP cache interface
+
+Create or consolidate a shared service, for example:
+backend/services/fmp_cache_service.py
+
+It should expose cache-first functions like:
+- get_company_profile_cached(symbol)
+- get_company_profiles_cached(symbols)
+- get_fundamentals_cached(symbol)
+- get_screener_metadata_cached(symbol)
+- get_stock_screener_snapshot_cached(theme_or_filter_key)
+- get_historical_returns_cached(symbol)
+- get_peers_cached(symbol)
+
+Rules:
+1. All functions read cache first.
+2. No page-load function should call FMP unless explicitly allowed.
+3. FMP network calls require:
+   - source_job_name
+   - endpoint_group
+   - force=false/true
+   - budget governor check
+4. Cache key should include:
+   - provider = fmp
+   - endpoint_group
+   - symbol or filter_hash
+   - as_of_date / fetched_at
+5. Same ticker + same endpoint_group fetched within TTL should never call FMP again.
+
+Part 3 — Canonical cache tables or reuse existing tables
+
+Prefer reusing existing Neon tables if they already exist:
+- screener_fundamentals_cache
+- screener_returns_cache
+- screener_universe_snapshots
+- any profile/fundamentals caches already used by Fundamentals page
+
+If existing tables are fragmented, do not do a dangerous migration. Add a small compatibility wrapper that reads from all known caches in priority order.
+
+If a new table is necessary, propose it but do not run migration unless safe:
+fmp_cache_entries:
+- id
+- provider
+- endpoint_group
+- cache_key
+- symbol nullable
+- filter_hash nullable
+- payload_json
+- fetched_at
+- expires_at
+- source_job
+- metadata_json
+
+Part 4 — Enforce sharing for Screener Hub tabs
+
+Thematic, Social, Bottlenecks, and Watchlist+Portfolio should all use the same cached FMP profile/fundamental/screener metadata when they need:
+- company_name
+- market_cap
+- sector
+- industry
+- beta
+- last_annual_dividend
+- exchange
+- volume if from FMP screener metadata
+- price if from FMP screener metadata
+
+Do not let each tab independently fetch FMP for the same symbol.
+
+For Screener Hub:
+- page loads read cache only
+- scheduled/admin rebuilds may call FMP through the governor
+- discovery snapshots should store FMP screener metadata by symbol
+- other tabs should reuse this metadata if the same symbol appears there
+
+Part 5 — Protect Fundamentals page
+
+Do not break /api/fundamentals/compare.
+
+If Fundamentals currently calls FMP directly:
+- Do not rewrite the whole page.
+- Add cache-first wrapper around the direct call if easy.
+- Preserve response shape.
+- If cache miss and user-facing request needs data, existing behavior can remain for now, but log/report it as remaining risk.
+- Long-term: Fundamentals should also use canonical cache.
+
+Part 6 — FMP usage governor integration
+
+All new FMP network calls must go through existing FMP governor:
+- 120 RPM
+- 0.75s spacing
+- 500/job
+- 2500/day
+- 50000/month
+
+Admin status should expose:
+- FMP calls by endpoint_group
+- latest FMP jobs
+- cache hits/misses if available
+- page-load FMP calls detected if instrumented
+
+Part 7 — Fallback behavior
+
+If FMP budget/cache unavailable:
+- serve stale cached data if present
+- otherwise return null for non-critical fields
+- do not crash page
+- do not trigger emergency FMP calls from page load
+
+Part 8 — Validation without FMP usage
+
+Do not hit FMP.
+
+Allowed:
+- static code inspection
+- compile/import checks
+- cache-read GETs only if confirmed no FMP calls
+- admin status read
+
+Validate:
+1. Code search confirms all Screener Hub FMP paths go through cache/governor.
+2. Thematic/Social/Bottlenecks/Watchlist+Portfolio row enrichment uses shared cached FMP metadata where possible.
+3. Page-load Screener Hub endpoints do not call FMP.
+4. Options enrichment still uses Tradier cache/background and not FMP.
+5. /api/fundamentals/compare still works.
+6. /api/admin/screener-hub/status or relevant admin status reports FMP budget/cache info.
+
+Return:
+- FMP call-site audit
+- files changed
+- canonical cache approach
+- which existing caches are reused
+- which pages now share FMP cached data
+- whether any page-load FMP calls remain
+- remaining risk areas
+- validation results

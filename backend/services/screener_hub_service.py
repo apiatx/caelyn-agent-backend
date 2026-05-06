@@ -287,19 +287,32 @@ async def _fmp_peers_for_anchors(
 
     Returns (peer_symbols, anchors_that_returned_results).
     Never raises; returns empty lists on failure or missing API key.
+    Governor-protected: skips gracefully if daily/job budget is exhausted.
     """
     api_key = os.getenv("FMP_API_KEY") or ""
     if not api_key or not anchors:
         return [], []
 
+    try:
+        from services.fmp_governor import fmp_governor as _gov
+    except Exception:
+        _gov = None
+
     async def _one(anchor: str) -> list[str]:
         try:
+            if _gov is not None:
+                slot_ok = await _gov.acquire(job_name="fmp_peers")
+                if not slot_ok:
+                    print(f"[SCREENER_HUB] fmp_peers governor budget hit, skipping anchor={anchor}")
+                    return []
             async with httpx.AsyncClient() as client:
                 r = await client.get(
                     f"{FMP_BASE}/stock-peers",
                     params={"symbol": anchor.upper(), "apikey": api_key},
                     timeout=timeout,
                 )
+            if _gov is not None:
+                _gov.record_call()
             if r.status_code != 200:
                 return []
             raw = r.json()
@@ -2957,6 +2970,31 @@ def get_admin_status() -> dict:
         fmp_budget = _gov.status()
     except Exception:
         fmp_budget = None
+
+    # FMP call audit: per-endpoint counts, cache hit/miss rates, recent errors.
+    # Pulled from the in-process api_audit ring buffer — no DB or FMP calls.
+    fmp_call_audit: Optional[dict] = None
+    try:
+        from services import api_audit as _audit
+        _ar = _audit.get_report()
+        fmp_rows = [
+            r for r in _ar.get("aggregated_by_provider_endpoint", [])
+            if r.get("provider") == "fmp"
+        ]
+        fmp_call_audit = {
+            "fmp_calls_since_start":  _ar["totals_since_start"].get("fmp", 0),
+            "total_cache_hits":       _ar.get("total_cache_hits", 0),
+            "total_cache_misses":     _ar.get("total_cache_misses", 0),
+            "fmp_force_429_active":   _ar.get("fmp_force_429_active", False),
+            "fmp_by_endpoint":        fmp_rows[:25],
+            "recent_fmp_errors": [
+                c for c in _ar.get("recent_calls", [])
+                if c.get("provider") == "fmp" and not c.get("success", True)
+            ][-10:],
+        }
+    except Exception:
+        pass
+
     return {
         "as_of": _now_iso(),
         "status": "ok",
@@ -2965,4 +3003,5 @@ def get_admin_status() -> dict:
         "quote_cache":        quote_table_stats(),
         "latest_job_runs":    latest_job_runs(limit=20),
         "fmp_budget":         fmp_budget,
+        "fmp_call_audit":     fmp_call_audit,
     }

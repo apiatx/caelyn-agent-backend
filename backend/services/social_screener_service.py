@@ -311,6 +311,22 @@ async def _fmp_get(
 
 
 async def _fetch_profile(client: httpx.AsyncClient, ticker: str, key: str) -> dict:
+    # ── Cache-first: check screener_fundamentals_cache (DB) before FMP ──────
+    # Written by Screener Hub warm_fundamentals job and enrich_fund write-through.
+    # Avoids duplicate FMP profile calls for tickers already cached by other tabs.
+    try:
+        from services.fmp_cache_service import get_company_profile_cached as _gcp
+        cached = _gcp(ticker)
+        if cached and (cached.get("name") or cached.get("sector") or cached.get("industry")):
+            return {
+                "company_name": cached.get("name") or cached.get("company_name") or "",
+                "sector":       cached.get("sector") or "",
+                "industry":     cached.get("industry") or "",
+                "market_cap":   cached.get("market_cap"),
+            }
+    except Exception:
+        pass
+
     data = await _fmp_get(
         client, "profile",
         {"symbol": ticker, "apikey": key},
@@ -1264,6 +1280,33 @@ async def fetch_enrichment_for_symbols(
                             sym, profile, ratios, metrics, income, balance, cashflow,
                         )
                         fundamental_enrichment[sym] = row
+                        # ── Write-through to screener_fundamentals_cache ────────────
+                        # Lets Screener Hub tabs reuse this FMP fetch without calling
+                        # FMP again.  Fire-and-forget: never block enrich_fund.
+                        if profile or ratios or metrics:
+                            try:
+                                from data.screener_hub_store import upsert_fundamentals as _upsert_f
+                                _raw_profile = {
+                                    "companyName": profile.get("company_name", "") if isinstance(profile, dict) else "",
+                                    "sector":      profile.get("sector", "")       if isinstance(profile, dict) else "",
+                                    "industry":    profile.get("industry", "")     if isinstance(profile, dict) else "",
+                                    "marketCap":   profile.get("market_cap")       if isinstance(profile, dict) else None,
+                                }
+                                _upsert_f(
+                                    sym,
+                                    profile=_raw_profile,
+                                    metrics=metrics if isinstance(metrics, dict) else {},
+                                    ratios=ratios   if isinstance(ratios,  dict) else {},
+                                    market_cap=profile.get("market_cap") if isinstance(profile, dict) else None,
+                                    sector=profile.get("sector")         if isinstance(profile, dict) else None,
+                                    industry=profile.get("industry")     if isinstance(profile, dict) else None,
+                                    country=None,
+                                    exchange=None,
+                                    provider="fmp",
+                                    ttl_days=7,
+                                )
+                            except Exception:
+                                pass
                         quality = row.get("data_quality", "missing")
                         if quality != "missing":
                             successes_fund += 1
