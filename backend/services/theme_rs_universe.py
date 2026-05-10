@@ -217,7 +217,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "proxy_type": "etf",
         # SRVR = Pacer Data & Infrastructure Real Estate ETF (primary)
         "proxy_symbols": ["SRVR", "VPN", "DTCR"],
-        "candidate_symbols": ["EQIX", "DLR", "VRT", "ETN", "PWR", "CEG"],
+        "candidate_symbols": ["EQIX", "DLR", "VRT", "ETN", "PWR", "CEG", "NBIS"],
         "sector_tags": ["Technology", "Utilities", "Real Estate"],
         "keywords": ["data center", "REIT", "power", "colocation", "hyperscaler infrastructure"],
         "macro_sensitivities": ["AI capex", "power demand", "interest rates", "cloud growth"],
@@ -590,7 +590,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         # SOXX has ~20% weight in equipment makers (AMAT, LRCX, KLAC, ASML via ADR)
         # SMH is more fab-weighted; SOXX is closer to equipment.
         "proxy_symbols": ["SOXX", "SMH"],
-        "candidate_symbols": ["ASML", "AMAT", "LRCX", "KLAC", "TER", "ACLS", "ONTO"],
+        "candidate_symbols": ["ASML", "AMAT", "LRCX", "KLAC", "TER", "ACLS", "ONTO", "AEHR"],
         "sector_tags": ["Technology"],
         "keywords": ["semiconductor equipment", "lithography", "etch", "deposition", "ASML", "AMAT"],
         "macro_sensitivities": ["fab capex cycles", "leading-edge node ramp", "China restrictions"],
@@ -604,7 +604,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "proxy_type": "etf",
         # SMH = VanEck Semiconductor ETF (primary; broadest, most liquid)
         "proxy_symbols": ["SMH", "SOXX", "XSD", "PSI"],
-        "candidate_symbols": ["NVDA", "AMD", "INTC", "QCOM", "TSM", "AVGO", "ASML", "AMAT", "LRCX"],
+        "candidate_symbols": ["NVDA", "AMD", "INTC", "QCOM", "TSM", "AVGO", "ASML", "AMAT", "LRCX", "AMBA", "TXN"],
         "sector_tags": ["Technology"],
         "keywords": ["semiconductors", "chips", "fab", "GPU", "CPU", "AI chips", "fabless"],
         "macro_sensitivities": ["AI capex", "PC/mobile cycle", "China restrictions", "leading-edge node"],

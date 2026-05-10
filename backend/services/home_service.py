@@ -71,7 +71,7 @@ THEME_MAP: dict[str, list[str]] = {
         "TE", "UCTT", "VECO", "VSH", "ENTG", "AMAT", "LRCX",
     ],
     "Power / Cooling": [
-        "ETN", "POWL", "VRT", "VICR", "SMTC", "HUBB", "AMPX",
+        "ETN", "POWL", "VRT", "VICR", "SMTC", "HUBB", "AMPX", "NVTS",
     ],
     "Nuclear / Grid": [
         "BE", "CEG", "EQT", "FSLR", "TPL", "CCJ", "NNE", "SMR",
