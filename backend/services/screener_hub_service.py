@@ -1749,6 +1749,51 @@ def _build_bottlenecks_universe() -> tuple[list[str], dict]:
     return symbols, metadata
 
 
+# ── Canonical theme helpers (THEME_RS_UNIVERSE — same registry as Themes page) ──
+# Built once at import time via theme_ticker_mapper; pure O(1) dict lookups.
+# No LLM calls, no network IO.
+
+_CANON_NAME_NORMALIZE: dict[str, str] = {
+    "Memory / Storage":      "Memory & Storage",
+    "Robotics / Automation": "Robotics & Automation",
+    "Datacenter / Compute":  "Data Center Infrastructure",
+    "Aerospace / Defense":   "Defense",
+}
+_CANON_ID_NORMALIZE: dict[str, str] = {
+    "memory_/_storage":      "memory_storage",
+    "robotics_/_automation": "robotics_automation",
+    "datacenter_/_compute":  "datacenter_infra",
+    "aerospace_/_defense":   "defense",
+}
+
+
+def _get_canonical_theme_name(ticker: str) -> Optional[str]:
+    """Return the canonical display_name for a ticker from THEME_RS_UNIVERSE, or None.
+
+    Applies normalization so Source-2/3 "/" variants map to their THEME_RS_UNIVERSE
+    canonical "&" equivalents (e.g. 'Memory / Storage' → 'Memory & Storage').
+    """
+    try:
+        from services.theme_ticker_mapper import map_ticker_to_primary_theme
+        name = map_ticker_to_primary_theme(ticker)
+        return _CANON_NAME_NORMALIZE.get(name, name) if name else None
+    except Exception:
+        return None
+
+
+def _get_canonical_theme_id(ticker: str) -> Optional[str]:
+    """Return the canonical theme_id for a ticker from THEME_RS_UNIVERSE, or None.
+
+    Normalizes "/" variant IDs to their THEME_RS_UNIVERSE canonical form.
+    """
+    try:
+        from services.theme_ticker_mapper import map_ticker_to_theme_id
+        tid = map_ticker_to_theme_id(ticker)
+        return _CANON_ID_NORMALIZE.get(tid, tid) if tid else None
+    except Exception:
+        return None
+
+
 def _build_watchlist_portfolio_universe() -> list[str]:
     syms: set[str] = set()
     try:
@@ -2637,6 +2682,11 @@ async def get_screener_hub(
             "theme_relevance_score": theme_relevance_score,
             "industry_tier":         industry_tier,
             "liquidity_status":      liq_status,
+            # ── Canonical theme classification (from THEME_RS_UNIVERSE) ──────
+            # Same taxonomy as the Themes page — no LLM invented names.
+            "canonical_theme_name":  _get_canonical_theme_name(sym),
+            "canonical_theme_id":    _get_canonical_theme_id(sym),
+            "theme_source":          "canonical",
             "_meta": {
                 "country":                 row_country,
                 "exchange":                row_exchange,

@@ -1,0 +1,777 @@
+{
+  "symbol": "IVW",
+  "as_of": "2026-05-06",
+  "source": "fmp",
+  "holding_count": 143,
+  "holdings": [
+    {
+      "ticker": "NVDA",
+      "name": "NVIDIA CORP",
+      "weight": 14.169
+    },
+    {
+      "ticker": "MSFT",
+      "name": "MICROSOFT CORP",
+      "weight": 9.065
+    },
+    {
+      "ticker": "GOOGL",
+      "name": "ALPHABET INC CLASS A",
+      "weight": 6.71
+    },
+    {
+      "ticker": "AAPL",
+      "name": "APPLE INC",
+      "weight": 6.191
+    },
+    {
+      "ticker": "AVGO",
+      "name": "BROADCOM INC",
+      "weight": 6.012
+    },
+    {
+      "ticker": "GOOG",
+      "name": "ALPHABET INC CLASS C",
+      "weight": 5.333
+    },
+    {
+      "ticker": "AMZN",
+      "name": "AMAZON.COM INC",
+      "weight": 4.204
+    },
+    {
+      "ticker": "META",
+      "name": "META PLATFORMS INC CLASS A",
+      "weight": 3.927
+    },
+    {
+      "ticker": "BRK-B",
+      "name": "BERKSHIRE HATHAWAY INC CLASS B",
+      "weight": 2.534
+    },
+    {
+      "ticker": "LLY",
+      "name": "ELI LILLY",
+      "weight": 2.326
+    },
+    {
+      "ticker": "MU",
+      "name": "MICRON TECHNOLOGY INC",
+      "weight": 2.139
+    },
+    {
+      "ticker": "TSLA",
+      "name": "TESLA INC",
+      "weight": 2.015
+    },
+    {
+      "ticker": "AMD",
+      "name": "ADVANCED MICRO DEVICES INC",
+      "weight": 1.719
+    },
+    {
+      "ticker": "JPM",
+      "name": "JPMORGAN CHASE & CO",
+      "weight": 1.684
+    },
+    {
+      "ticker": "CAT",
+      "name": "CATERPILLAR INC",
+      "weight": 1.249
+    },
+    {
+      "ticker": "NFLX",
+      "name": "NETFLIX INC",
+      "weight": 1.102
+    },
+    {
+      "ticker": "LRCX",
+      "name": "LAM RESEARCH CORP",
+      "weight": 1.022
+    },
+    {
+      "ticker": "AMAT",
+      "name": "APPLIED MATERIAL INC",
+      "weight": 0.968
+    },
+    {
+      "ticker": "JNJ",
+      "name": "JOHNSON & JOHNSON",
+      "weight": 0.952
+    },
+    {
+      "ticker": "PLTR",
+      "name": "PALANTIR TECHNOLOGIES INC CLASS A",
+      "weight": 0.922
+    },
+    {
+      "ticker": "V",
+      "name": "VISA INC CLASS A",
+      "weight": 0.884
+    },
+    {
+      "ticker": "GEV",
+      "name": "GE VERNOVA INC",
+      "weight": 0.876
+    },
+    {
+      "ticker": "MA",
+      "name": "MASTERCARD INC CLASS A",
+      "weight": 0.805
+    },
+    {
+      "ticker": "RTX",
+      "name": "RTX CORP",
+      "weight": 0.689
+    },
+    {
+      "ticker": "KLAC",
+      "name": "KLA CORP",
+      "weight": 0.674
+    },
+    {
+      "ticker": "SNDK",
+      "name": "SANDISK CORP",
+      "weight": 0.616
+    },
+    {
+      "ticker": "CSCO",
+      "name": "CISCO SYSTEMS INC",
+      "weight": 0.586
+    },
+    {
+      "ticker": "GS",
+      "name": "GOLDMAN SACHS GROUP INC",
+      "weight": 0.532
+    },
+    {
+      "ticker": "ANET",
+      "name": "ARISTA NETWORKS INC",
+      "weight": 0.522
+    },
+    {
+      "ticker": "APH",
+      "name": "AMPHENOL CORP CLASS A",
+      "weight": 0.499
+    },
+    {
+      "ticker": "ABBV",
+      "name": "ABBVIE INC",
+      "weight": 0.497
+    },
+    {
+      "ticker": "ORCL",
+      "name": "ORACLE CORP",
+      "weight": 0.485
+    },
+    {
+      "ticker": "ISRG",
+      "name": "INTUITIVE SURGICAL INC",
+      "weight": 0.476
+    },
+    {
+      "ticker": "GE",
+      "name": "GE AEROSPACE",
+      "weight": 0.464
+    },
+    {
+      "ticker": "UBER",
+      "name": "UBER TECHNOLOGIES INC",
+      "weight": 0.446
+    },
+    {
+      "ticker": "WELL",
+      "name": "WELLTOWER INC",
+      "weight": 0.444
+    },
+    {
+      "ticker": "PM",
+      "name": "PHILIP MORRIS INTERNATIONAL INC",
+      "weight": 0.439
+    },
+    {
+      "ticker": "MS",
+      "name": "MORGAN STANLEY",
+      "weight": 0.412
+    },
+    {
+      "ticker": "BKNG",
+      "name": "BOOKING HOLDINGS INC",
+      "weight": 0.401
+    },
+    {
+      "ticker": "VRT",
+      "name": "VERTIV HOLDINGS CLASS A",
+      "weight": 0.387
+    },
+    {
+      "ticker": "APP",
+      "name": "APPLOVIN CORP CLASS A",
+      "weight": 0.385
+    },
+    {
+      "ticker": "KO",
+      "name": "COCA-COLA",
+      "weight": 0.379
+    },
+    {
+      "ticker": "AMGN",
+      "name": "AMGEN INC",
+      "weight": 0.358
+    },
+    {
+      "ticker": "CRWD",
+      "name": "CROWDSTRIKE HOLDINGS INC CLASS A",
+      "weight": 0.357
+    },
+    {
+      "ticker": "NEM",
+      "name": "NEWMONT",
+      "weight": 0.353
+    },
+    {
+      "ticker": "PWR",
+      "name": "QUANTA SERVICES INC",
+      "weight": 0.342
+    },
+    {
+      "ticker": "AXP",
+      "name": "AMERICAN EXPRESS",
+      "weight": 0.342
+    },
+    {
+      "ticker": "IBM",
+      "name": "INTERNATIONAL BUSINESS MACHINES CO",
+      "weight": 0.33
+    },
+    {
+      "ticker": "STX",
+      "name": "SEAGATE TECHNOLOGY HOLDINGS PLC",
+      "weight": 0.319
+    },
+    {
+      "ticker": "HWM",
+      "name": "HOWMET AEROSPACE INC",
+      "weight": 0.289
+    },
+    {
+      "ticker": "TJX",
+      "name": "TJX INC",
+      "weight": 0.281
+    },
+    {
+      "ticker": "MCD",
+      "name": "MCDONALDS CORP",
+      "weight": 0.265
+    },
+    {
+      "ticker": "GILD",
+      "name": "GILEAD SCIENCES INC",
+      "weight": 0.265
+    },
+    {
+      "ticker": "GLW",
+      "name": "CORNING INC",
+      "weight": 0.259
+    },
+    {
+      "ticker": "PANW",
+      "name": "PALO ALTO NETWORKS INC",
+      "weight": 0.247
+    },
+    {
+      "ticker": "ORLY",
+      "name": "OREILLY AUTOMOTIVE INC",
+      "weight": 0.237
+    },
+    {
+      "ticker": "MAR",
+      "name": "MARRIOTT INTERNATIONAL INC CLASS A",
+      "weight": 0.231
+    },
+    {
+      "ticker": "MPWR",
+      "name": "MONOLITHIC POWER SYSTEMS INC",
+      "weight": 0.23
+    },
+    {
+      "ticker": "BA",
+      "name": "BOEING",
+      "weight": 0.23
+    },
+    {
+      "ticker": "CIEN",
+      "name": "CIENA CORP",
+      "weight": 0.228
+    },
+    {
+      "ticker": "HLT",
+      "name": "HILTON WORLDWIDE HOLDINGS INC",
+      "weight": 0.213
+    },
+    {
+      "ticker": "LITE",
+      "name": "LUMENTUM HOLDINGS INC",
+      "weight": 0.211
+    },
+    {
+      "ticker": "FIX",
+      "name": "COMFORT SYSTEMS USA INC",
+      "weight": 0.206
+    },
+    {
+      "ticker": "TDG",
+      "name": "TRANSDIGM GROUP INC",
+      "weight": 0.2
+    },
+    {
+      "ticker": "CEG",
+      "name": "CONSTELLATION ENERGY CORP",
+      "weight": 0.199
+    },
+    {
+      "ticker": "HCA",
+      "name": "HCA HEALTHCARE INC",
+      "weight": 0.199
+    },
+    {
+      "ticker": "0I1W.L",
+      "name": "ROYAL CARIBBEAN GROUP LTD",
+      "weight": 0.197
+    },
+    {
+      "ticker": "PGR",
+      "name": "PROGRESSIVE CORP",
+      "weight": 0.193
+    },
+    {
+      "ticker": "COHR",
+      "name": "COHERENT CORP",
+      "weight": 0.187
+    },
+    {
+      "ticker": "CMI",
+      "name": "CUMMINS INC",
+      "weight": 0.185
+    },
+    {
+      "ticker": "INTU",
+      "name": "INTUIT INC",
+      "weight": 0.184
+    },
+    {
+      "ticker": "DASH",
+      "name": "DOORDASH INC CLASS A",
+      "weight": 0.184
+    },
+    {
+      "ticker": "PH",
+      "name": "PARKER-HANNIFIN CORP",
+      "weight": 0.183
+    },
+    {
+      "ticker": "HOOD",
+      "name": "ROBINHOOD MARKETS INC CLASS A",
+      "weight": 0.181
+    },
+    {
+      "ticker": "CDNS",
+      "name": "CADENCE DESIGN SYSTEMS INC",
+      "weight": 0.18
+    },
+    {
+      "ticker": "NOW",
+      "name": "SERVICENOW INC",
+      "weight": 0.174
+    },
+    {
+      "ticker": "0Y7S.L",
+      "name": "JOHNSON CONTROLS INTERNATIONAL PLC",
+      "weight": 0.174
+    },
+    {
+      "ticker": "CME",
+      "name": "CME GROUP INC CLASS A",
+      "weight": 0.172
+    },
+    {
+      "ticker": "BK",
+      "name": "BANK OF NEW YORK MELLON CORP",
+      "weight": 0.17
+    },
+    {
+      "ticker": "SPGI",
+      "name": "S&P GLOBAL INC",
+      "weight": 0.169
+    },
+    {
+      "ticker": "TT",
+      "name": "TRANE TECHNOLOGIES PLC",
+      "weight": 0.166
+    },
+    {
+      "ticker": "BSX",
+      "name": "BOSTON SCIENTIFIC CORP",
+      "weight": 0.165
+    },
+    {
+      "ticker": "MNST",
+      "name": "MONSTER BEVERAGE CORP",
+      "weight": 0.16
+    },
+    {
+      "ticker": "VST",
+      "name": "VISTRA CORP",
+      "weight": 0.152
+    },
+    {
+      "ticker": "DDOG",
+      "name": "DATADOG INC CLASS A",
+      "weight": 0.142
+    },
+    {
+      "ticker": "GD",
+      "name": "GENERAL DYNAMICS CORP",
+      "weight": 0.139
+    },
+    {
+      "ticker": "IDXX",
+      "name": "IDEXX LABORATORIES INC",
+      "weight": 0.133
+    },
+    {
+      "ticker": "SYK",
+      "name": "STRYKER CORP",
+      "weight": 0.127
+    },
+    {
+      "ticker": "EME",
+      "name": "EMCOR GROUP INC",
+      "weight": 0.124
+    },
+    {
+      "ticker": "TEL",
+      "name": "TE CONNECTIVITY PLC",
+      "weight": 0.124
+    },
+    {
+      "ticker": "AZO",
+      "name": "AUTOZONE INC",
+      "weight": 0.113
+    },
+    {
+      "ticker": "KKR",
+      "name": "KKR AND CO INC",
+      "weight": 0.112
+    },
+    {
+      "ticker": "IBKR",
+      "name": "INTERACTIVE BROKERS GROUP INC CLAS",
+      "weight": 0.111
+    },
+    {
+      "ticker": "FTNT",
+      "name": "FORTINET INC",
+      "weight": 0.106
+    },
+    {
+      "ticker": "EBAY",
+      "name": "EBAY INC",
+      "weight": 0.105
+    },
+    {
+      "ticker": "ROST",
+      "name": "ROSS STORES INC",
+      "weight": 0.105
+    },
+    {
+      "ticker": "MCO",
+      "name": "MOODYS CORP",
+      "weight": 0.099
+    },
+    {
+      "ticker": "0EV1.L",
+      "name": "CARNIVAL CORP",
+      "weight": 0.098
+    },
+    {
+      "ticker": "URI",
+      "name": "UNITED RENTALS INC",
+      "weight": 0.098
+    },
+    {
+      "ticker": "TER",
+      "name": "TERADYNE INC",
+      "weight": 0.096
+    },
+    {
+      "ticker": "CASY",
+      "name": "CASEYS GENERAL STORES INC",
+      "weight": 0.095
+    },
+    {
+      "ticker": "APO",
+      "name": "APOLLO GLOBAL MANAGEMENT INC",
+      "weight": 0.095
+    },
+    {
+      "ticker": "ADSK",
+      "name": "AUTODESK INC",
+      "weight": 0.091
+    },
+    {
+      "ticker": "EXPE",
+      "name": "EXPEDIA GROUP INC",
+      "weight": 0.086
+    },
+    {
+      "ticker": "TPR",
+      "name": "TAPESTRY INC",
+      "weight": 0.085
+    },
+    {
+      "ticker": "ABNB",
+      "name": "AIRBNB INC CLASS A",
+      "weight": 0.083
+    },
+    {
+      "ticker": "CVNA",
+      "name": "CARVANA CLASS A",
+      "weight": 0.081
+    },
+    {
+      "ticker": "SPG",
+      "name": "SIMON PROPERTY GROUP REIT INC",
+      "weight": 0.08
+    },
+    {
+      "ticker": "ROK",
+      "name": "ROCKWELL AUTOMATION INC",
+      "weight": 0.079
+    },
+    {
+      "ticker": "NRG",
+      "name": "NRG ENERGY INC",
+      "weight": 0.073
+    },
+    {
+      "ticker": "ULTA",
+      "name": "ULTA BEAUTY INC",
+      "weight": 0.07
+    },
+    {
+      "ticker": "FSLR",
+      "name": "FIRST SOLAR INC",
+      "weight": 0.07
+    },
+    {
+      "ticker": "VRSN",
+      "name": "VERISIGN INC",
+      "weight": 0.068
+    },
+    {
+      "ticker": "MSCI",
+      "name": "MSCI INC",
+      "weight": 0.066
+    },
+    {
+      "ticker": "EW",
+      "name": "EDWARDS LIFESCIENCES CORP",
+      "weight": 0.066
+    },
+    {
+      "ticker": "JBL",
+      "name": "JABIL INC",
+      "weight": 0.064
+    },
+    {
+      "ticker": "VTR",
+      "name": "VENTAS REIT INC",
+      "weight": 0.064
+    },
+    {
+      "ticker": "EA",
+      "name": "ELECTRONIC ARTS INC",
+      "weight": 0.063
+    },
+    {
+      "ticker": "YUM",
+      "name": "YUM BRANDS INC",
+      "weight": 0.062
+    },
+    {
+      "ticker": "AXON",
+      "name": "AXON ENTERPRISE INC",
+      "weight": 0.059
+    },
+    {
+      "ticker": "TTWO",
+      "name": "TAKE TWO INTERACTIVE SOFTWARE INC",
+      "weight": 0.059
+    },
+    {
+      "ticker": "RMD",
+      "name": "RESMED INC",
+      "weight": 0.049
+    },
+    {
+      "ticker": "INCY",
+      "name": "INCYTE CORP",
+      "weight": 0.048
+    },
+    {
+      "ticker": "LVS",
+      "name": "LAS VEGAS SANDS CORP",
+      "weight": 0.047
+    },
+    {
+      "ticker": "SATS",
+      "name": "ECHOSTAR CORP CLASS A",
+      "weight": 0.047
+    },
+    {
+      "ticker": "ROL",
+      "name": "ROLLINS INC",
+      "weight": 0.047
+    },
+    {
+      "ticker": "CINF",
+      "name": "CINCINNATI FINANCIAL CORP",
+      "weight": 0.044
+    },
+    {
+      "ticker": "RL",
+      "name": "RALPH LAUREN CORP CLASS A",
+      "weight": 0.041
+    },
+    {
+      "ticker": "VRSK",
+      "name": "VERISK ANALYTICS INC",
+      "weight": 0.04
+    },
+    {
+      "ticker": "LYV",
+      "name": "LIVE NATION ENTERTAINMENT INC",
+      "weight": 0.039
+    },
+    {
+      "ticker": "MTD",
+      "name": "METTLER TOLEDO INC",
+      "weight": 0.037
+    },
+    {
+      "ticker": "FICO",
+      "name": "FAIR ISAAC CORP",
+      "weight": 0.037
+    },
+    {
+      "ticker": "TKO",
+      "name": "TKO GROUP HOLDINGS INC CLASS A",
+      "weight": 0.037
+    },
+    {
+      "ticker": "WDAY",
+      "name": "WORKDAY INC CLASS A",
+      "weight": 0.036
+    },
+    {
+      "ticker": "DXCM",
+      "name": "DEXCOM INC",
+      "weight": 0.035
+    },
+    {
+      "ticker": "PODD",
+      "name": "INSULET CORP",
+      "weight": 0.035
+    },
+    {
+      "ticker": "WRB",
+      "name": "WR BERKLEY CORP",
+      "weight": 0.034
+    },
+    {
+      "ticker": "STE",
+      "name": "STERIS",
+      "weight": 0.031
+    },
+    {
+      "ticker": "WYNN",
+      "name": "WYNN RESORTS LTD",
+      "weight": 0.027
+    },
+    {
+      "ticker": "FOXA",
+      "name": "FOX CORP CLASS A",
+      "weight": 0.024
+    },
+    {
+      "ticker": "0Y5C.L",
+      "name": "ALLEGION PLC",
+      "weight": 0.018
+    },
+    {
+      "ticker": "FOX",
+      "name": "FOX CORP CLASS B",
+      "weight": 0.016
+    },
+    {
+      "ticker": "0UC3.L",
+      "name": "NORWEGIAN CRUISE LINE HOLDINGS LTD",
+      "weight": 0.013
+    }
+  ],
+  "updated_at": "2026-05-07T18:59:38+00:00",
+  "_fetched_at": 1778180378.7655861,
+  "top_holdings": [
+    {
+      "ticker": "NVDA",
+      "name": "NVIDIA CORP",
+      "weight": 14.169
+    },
+    {
+      "ticker": "MSFT",
+      "name": "MICROSOFT CORP",
+      "weight": 9.065
+    },
+    {
+      "ticker": "GOOGL",
+      "name": "ALPHABET INC CLASS A",
+      "weight": 6.71
+    },
+    {
+      "ticker": "AAPL",
+      "name": "APPLE INC",
+      "weight": 6.191
+    },
+    {
+      "ticker": "AVGO",
+      "name": "BROADCOM INC",
+      "weight": 6.012
+    },
+    {
+      "ticker": "GOOG",
+      "name": "ALPHABET INC CLASS C",
+      "weight": 5.333
+    },
+    {
+      "ticker": "AMZN",
+      "name": "AMAZON.COM INC",
+      "weight": 4.204
+    },
+    {
+      "ticker": "META",
+      "name": "META PLATFORMS INC CLASS A",
+      "weight": 3.927
+    },
+    {
+      "ticker": "BRK-B",
+      "name": "BERKSHIRE HATHAWAY INC CLASS B",
+      "weight": 2.534
+    },
+    {
+      "ticker": "LLY",
+      "name": "ELI LILLY",
+      "weight": 2.326
+    }
+  ]
+}

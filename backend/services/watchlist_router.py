@@ -606,105 +606,199 @@ async def refresh_by_id_endpoint(watchlist_id: str):
             if sym:
                 csv_map[sym.strip().upper()] = row
 
-        # ── Batch analysis via Claude ─────────────────────────────────────────
-        BATCH_SIZE = 22
-        batches = [tickers[i:i + BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
+        # ── Step 1: Classify each ticker into canonical themes ────────────────
+        # Uses THEME_RS_UNIVERSE (60-entry canonical registry) as the single
+        # source of truth — same taxonomy as the Themes page.  No LLM call
+        # is made to invent theme names; names come only from the registry.
+        try:
+            from services.theme_ticker_mapper import (
+                map_ticker_to_primary_theme,
+                map_ticker_to_theme_id,
+            )
+        except Exception as _tm_err:
+            print(f"[REFRESH] theme_ticker_mapper unavailable: {_tm_err}; falling back to single group")
+            map_ticker_to_primary_theme = lambda s: None
+            map_ticker_to_theme_id      = lambda s: None
+
+        _OTHER_LABEL   = "Other / Uncategorized"
+        _OTHER_ID      = "other_uncategorized"
+
+        # Normalize Source-2/3 names that have exact THEME_RS_UNIVERSE equivalents.
+        # "Memory / Storage" and "Robotics / Automation" etc. are the same theme as
+        # their "&" counterparts in THEME_RS_UNIVERSE — merge them into the canonical form.
+        _NAME_NORMALIZE: dict[str, str] = {
+            "Memory / Storage":    "Memory & Storage",
+            "Robotics / Automation": "Robotics & Automation",
+            "Datacenter / Compute":  "Data Center Infrastructure",
+            "Aerospace / Defense":   "Defense",
+        }
+        _ID_NORMALIZE: dict[str, str] = {
+            "memory_/_storage":        "memory_storage",
+            "robotics_/_automation":   "robotics_automation",
+            "datacenter_/_compute":    "datacenter_infra",
+            "aerospace_/_defense":     "defense",
+        }
+
+        ticker_to_canon_name: dict[str, str] = {}
+        ticker_to_canon_id:   dict[str, str] = {}
+        theme_groups: dict[str, list[str]]   = {}
+
+        for sym in tickers:
+            cname = map_ticker_to_primary_theme(sym) or _OTHER_LABEL
+            cid   = map_ticker_to_theme_id(sym)      or _OTHER_ID
+            # Apply normalization to collapse "/" variants into "&" canonical names
+            cname = _NAME_NORMALIZE.get(cname, cname)
+            cid   = _ID_NORMALIZE.get(cid, cid)
+            ticker_to_canon_name[sym] = cname
+            ticker_to_canon_id[sym]   = cid
+            theme_groups.setdefault(cname, []).append(sym)
+
+        # Canonical groups first (alphabetical), "Other" always last
+        sorted_groups: list[tuple[str, list[str]]] = sorted(
+            theme_groups.items(),
+            key=lambda kv: (kv[0] == _OTHER_LABEL, kv[0]),
+        )
+        print(
+            f"[REFRESH] {watchlist_id}: {len(tickers)} tickers → "
+            f"{len(sorted_groups)} canonical theme groups: "
+            + ", ".join(f"'{n}'({len(t)})" for n, t in sorted_groups)
+        )
 
         anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
 
-        async def analyze_batch(batch_tickers: list, batch_index: int) -> dict | None:
-            ticker_summaries = []
-            for sym in batch_tickers:
-                row = csv_map.get(sym.upper(), {})
-                parts = [f"{sym}:"]
-                for label, key in [
-                    ("Price", "Stock Price"),
-                    ("MCap", "Market Cap"),
-                    ("PE", "PE Ratio"),
-                    ("FwdPE", "Forward PE"),
-                    ("RSI", "Relative Strength Index (RSI)"),
-                    ("RevGrowth", "Revenue Growth (YoY)"),
-                    ("EPSEst", "EPS Growth Est."),
-                    ("FCF", "FCF Margin"),
-                    ("GrossMargin", "Gross Margin"),
-                    ("DE", "Debt / Equity"),
-                ]:
-                    val = row.get(key, "")
-                    if val:
-                        parts.append(f"{label}={val}")
-                ticker_summaries.append(" ".join(parts))
+        # ── Step 2: Per-group Claude call — insights only, NOT theme naming ──
+        # Title is locked to the canonical theme name; Claude only provides
+        # per-ticker catalyst / sentiment / insight fields.
+        BATCH_SIZE = 22
 
-            prompt = (
-                f"Analyze these {len(batch_tickers)} stocks and return ONLY a valid JSON object "
-                f"(no markdown fences, no extra text).\n\n"
-                f"Stocks:\n" + "\n".join(ticker_summaries) + "\n\n"
-                f'Return exactly this structure:\n'
-                f'{{\n'
-                f'  "id": "batch_{batch_index}",\n'
-                f'  "title": "<thematic group name, e.g. AI Infrastructure Leaders>",\n'
-                f'  "subtitle": "<one-line market context for this group>",\n'
-                f'  "tickers": [\n'
-                f'    {{\n'
-                f'      "symbol": "<ticker>",\n'
-                f'      "name": "<company name>",\n'
-                f'      "price": <float or null>,\n'
-                f'      "change_pct": <float or null>,\n'
-                f'      "catalyst": "<key near-term catalyst>",\n'
-                f'      "sentiment": "<bullish|neutral|bearish>",\n'
-                f'      "action_note": "<specific actionable note>",\n'
-                f'      "risk_level": "<low|medium|high>",\n'
-                f'      "key_insight": "<single most important insight>",\n'
-                f'      "technical_setup": "<technical pattern or level to watch>"\n'
-                f'    }}\n'
-                f'  ]\n'
-                f'}}'
-            )
+        async def analyze_theme_group(
+            group_name: str,
+            group_tickers: list[str],
+        ) -> dict | None:
+            """Build one section per canonical theme, Claude for insights only."""
+            all_ticker_rows: list[dict] = []
+            group_subtitle = ""
 
-            try:
-                import anthropic as _anthropic
-                client = _anthropic.AsyncAnthropic(api_key=anthropic_key, timeout=90.0)
-                response = await client.messages.create(
-                    model=MODEL_CLAUDE_PREMIUM,
-                    max_tokens=4000,
-                    messages=[{"role": "user", "content": prompt}],
+            # Sub-batch large groups; results merged under the same section
+            for chunk_start in range(0, len(group_tickers), BATCH_SIZE):
+                chunk = group_tickers[chunk_start : chunk_start + BATCH_SIZE]
+                ticker_summaries = []
+                for sym in chunk:
+                    row = csv_map.get(sym.upper(), {})
+                    parts = [f"{sym}:"]
+                    for label, key in [
+                        ("Price",       "Stock Price"),
+                        ("MCap",        "Market Cap"),
+                        ("PE",          "PE Ratio"),
+                        ("FwdPE",       "Forward PE"),
+                        ("RSI",         "Relative Strength Index (RSI)"),
+                        ("RevGrowth",   "Revenue Growth (YoY)"),
+                        ("EPSEst",      "EPS Growth Est."),
+                        ("FCF",         "FCF Margin"),
+                        ("GrossMargin", "Gross Margin"),
+                        ("DE",          "Debt / Equity"),
+                    ]:
+                        val = row.get(key, "")
+                        if val:
+                            parts.append(f"{label}={val}")
+                    ticker_summaries.append(" ".join(parts))
+
+                # Prompt: canonical theme name is supplied; Claude must NOT rename it
+                prompt = (
+                    f"Analyze these {len(chunk)} stocks. "
+                    f"They all belong to the '{group_name}' theme. "
+                    f"Return ONLY a valid JSON object (no markdown fences, no extra text).\n\n"
+                    f"Stocks:\n" + "\n".join(ticker_summaries) + "\n\n"
+                    f"Return exactly this structure "
+                    f"(do NOT change the theme name — it is fixed as '{group_name}'):\n"
+                    f'{{\n'
+                    f'  "subtitle": "<one-line market context for these {group_name} stocks>",\n'
+                    f'  "tickers": [\n'
+                    f'    {{\n'
+                    f'      "symbol": "<ticker>",\n'
+                    f'      "name": "<company name>",\n'
+                    f'      "price": <float or null>,\n'
+                    f'      "change_pct": <float or null>,\n'
+                    f'      "catalyst": "<key near-term catalyst>",\n'
+                    f'      "sentiment": "<bullish|neutral|bearish>",\n'
+                    f'      "action_note": "<specific actionable note>",\n'
+                    f'      "risk_level": "<low|medium|high>",\n'
+                    f'      "key_insight": "<single most important insight>",\n'
+                    f'      "technical_setup": "<technical pattern or level to watch>"\n'
+                    f'    }}\n'
+                    f'  ]\n'
+                    f'}}'
                 )
-                text = "".join(b.text for b in response.content if hasattr(b, "text"))
-                # Strip markdown fences if present
-                text = _re.sub(r"```json\s*", "", text)
-                text = _re.sub(r"```\s*", "", text).strip()
-                # Extract JSON object
-                m = _re.search(r'\{[\s\S]*\}', text)
-                if m:
-                    parsed = _json.loads(m.group())
-                    print(f"[REFRESH] Batch {batch_index}: {len(batch_tickers)} tickers → {len(parsed.get('tickers', []))} analyzed")
-                    return parsed
-                print(f"[REFRESH] Batch {batch_index}: no JSON found in response")
-                return None
-            except Exception as e:
-                print(f"[REFRESH] Batch {batch_index} failed: {type(e).__name__}: {e}")
+
+                try:
+                    import anthropic as _anthropic
+                    client = _anthropic.AsyncAnthropic(api_key=anthropic_key, timeout=90.0)
+                    response = await client.messages.create(
+                        model=MODEL_CLAUDE_PREMIUM,
+                        max_tokens=4000,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    text = "".join(b.text for b in response.content if hasattr(b, "text"))
+                    text = _re.sub(r"```json\s*", "", text)
+                    text = _re.sub(r"```\s*", "", text).strip()
+                    m_json = _re.search(r'\{[\s\S]*\}', text)
+                    if m_json:
+                        chunk_parsed = _json.loads(m_json.group())
+                        # Capture subtitle from first successful chunk
+                        if not group_subtitle:
+                            group_subtitle = chunk_parsed.get("subtitle", "")
+                        ticker_rows = chunk_parsed.get("tickers", [])
+                        # Inject canonical theme fields into every ticker row
+                        for tr in ticker_rows:
+                            sym_upper = str(tr.get("symbol", "")).upper()
+                            tr["canonical_theme_name"] = group_name
+                            tr["canonical_theme_id"]   = ticker_to_canon_id.get(sym_upper, _OTHER_ID)
+                            tr["theme_source"]          = "canonical"
+                        all_ticker_rows.extend(ticker_rows)
+                        print(
+                            f"[REFRESH] '{group_name}' chunk {chunk_start}: "
+                            f"{len(chunk)} tickers → {len(ticker_rows)} rows"
+                        )
+                    else:
+                        print(f"[REFRESH] '{group_name}' chunk {chunk_start}: no JSON in response")
+                except Exception as e:
+                    print(f"[REFRESH] '{group_name}' chunk {chunk_start} failed: {type(e).__name__}: {e}")
+
+            if not all_ticker_rows:
                 return None
 
-        # Run batches with max 3 in parallel to respect rate limits
+            # Derive canonical id from the first ticker in the group
+            canon_id = ticker_to_canon_id.get(group_tickers[0], _OTHER_ID)
+
+            return {
+                "id":                 canon_id,
+                "title":              group_name,           # ← ALWAYS canonical
+                "subtitle":           group_subtitle,
+                "canonical_theme_id": canon_id,
+                "theme_source":       "canonical",
+                "tickers":            all_ticker_rows,
+            }
+
+        # Run groups with max 3 in parallel to respect Claude rate limits
         semaphore = asyncio.Semaphore(3)
 
-        async def guarded_batch(batch_tickers: list, batch_index: int) -> dict | None:
+        async def guarded_group(group_name: str, group_tickers: list[str]) -> dict | None:
             async with semaphore:
-                return await analyze_batch(batch_tickers, batch_index)
+                return await analyze_theme_group(group_name, group_tickers)
 
-        print(f"[REFRESH] {watchlist_id}: {len(tickers)} tickers → {len(batches)} batches")
-        batch_tasks = [guarded_batch(b, i) for i, b in enumerate(batches)]
-        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=False)
+        group_tasks = [guarded_group(name, syms) for name, syms in sorted_groups]
+        group_results = await asyncio.gather(*group_tasks, return_exceptions=False)
 
-        sections = [r for r in batch_results if r is not None]
+        sections = [r for r in group_results if r is not None]
 
-        # ── Extract market themes from section titles ─────────────────────────
-        market_themes: list = []
-        seen: set = set()
+        # Market themes = deduplicated canonical section titles (no LLM-invented names)
+        market_themes: list[str] = []
+        seen_mt: set[str] = set()
         for section in sections:
             title = section.get("title", "")
-            if title and title not in seen:
+            if title and title not in seen_mt:
                 market_themes.append(title)
-                seen.add(title)
+                seen_mt.add(title)
         market_themes = market_themes[:8]
 
         analysis = {

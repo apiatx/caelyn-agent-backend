@@ -1,0 +1,91 @@
+Fix Watchlist theme categorization so it uses the same canonical themes as the Themes page.
+
+Context:
+- Backend repo contains the logic.
+- Frontend repo only displays results.
+- Do not invent new Watchlist-only theme names.
+- The Watchlist page currently shows inaccurate custom groups like:
+  - “Semiconductor & Advanced Tech Growth Plays”
+  - “High-Growth Tech & Energy Infrastructure”
+  - “Semiconductor & Energy Technology”
+  - “Semiconductor & Photonics Technology”
+  - “Semiconductor & Space Technology Growth Plays”
+- These do not match the Themes page and should be replaced.
+- The Themes page theme taxonomy must become the canonical source of truth.
+- The Watchlist should categorize tickers into the exact same themes used by the Themes page.
+
+Goal:
+Make Watchlist theme grouping reuse the canonical Themes page taxonomy and prevent duplicate/inconsistent theme logic.
+
+Tasks:
+1. Find the backend endpoint/service powering the Watchlist page theme sections/cards.
+   - Search for the labels shown above.
+   - Search watchlist theme grouping, strategy grouping, ticker categorization, and generated strategy sections.
+   - Identify whether this is static config, LLM-generated, cached JSON, or API-generated.
+
+2. Find the canonical Themes page source.
+   - Locate the theme registry/config/service used by the Themes page.
+   - Likely related endpoints:
+     - /api/sectors/relative-strength?mode=themes
+     - /api/sectors/performance?mode=themes
+     - /api/thematic-context/snapshot
+   - Determine the canonical theme IDs/names/ETF mappings used there.
+
+3. Replace Watchlist-only theme labels with canonical theme assignment.
+   - Watchlist theme sections must use exact canonical theme names from the Themes page.
+   - Do not create vague combined labels.
+   - Do not create ad-hoc “strategy” groups unless the UI explicitly switches to Strategy mode.
+   - Each ticker can belong to one primary canonical theme and optionally secondary themes.
+
+4. Add/centralize a reusable function, for example:
+   - get_canonical_theme_registry()
+   - classify_ticker_to_theme(symbol, profile, industry, sector, existing_tags)
+   - group_watchlist_by_canonical_themes(tickers)
+   
+   The function should:
+   - Prefer explicit mappings if they exist.
+   - Use company profile industry/sector where available.
+   - Use known ticker/theme overrides for important names.
+   - Fall back to “Other / Uncategorized” only if no confident match.
+   - Never invent a new theme name dynamically.
+
+5. Add a clean mapping layer for the current watchlist names.
+   Examples:
+   - ALAB, ANET, AVGO, MRVL, AAOI, AEHR, AMBA, ARM, AMKR, TSM, INTC, MU, SNDK, SIMO, SMCI should map into canonical Themes page themes such as Semiconductors, AI Infrastructure, Optical/CPO/Photonics, Memory/Storage, Advanced Packaging, Data Center Infrastructure, etc — but use the exact existing canonical names from the Themes page.
+   - CRDO, EQT, CEG, ETN, CIEN should not be lumped into vague “High-Growth Tech & Energy Infrastructure” unless that exact theme exists canonically.
+   - Energy names should go into canonical Power/Grid/Nuclear/Energy Infrastructure themes if those exist.
+   - Photonics/CPO names should go into the canonical photonics/CPO theme if it exists.
+
+6. Preserve existing Watchlist payload shape as much as possible so frontend changes are minimal.
+   - If current response returns sections/cards, keep that structure.
+   - Change section names and ticker membership only.
+   - Add fields if helpful:
+     - canonical_theme_id
+     - canonical_theme_name
+     - theme_source: "canonical"
+     - classification_confidence
+     - secondary_themes
+
+7. Caching:
+   - Do not add expensive new LLM/API calls.
+   - Reuse existing profile/fundamental/theme caches.
+   - The Watchlist should not call the Themes endpoint repeatedly if the registry can be imported server-side.
+   - If needed, cache canonical theme registry in memory with a safe TTL.
+
+8. Validation:
+   - Hit the Watchlist endpoint before and after.
+   - Confirm none of these old labels remain:
+     - “Semiconductor & Advanced Tech Growth Plays”
+     - “High-Growth Tech & Energy Infrastructure”
+     - “Semiconductor & Energy Technology”
+     - “Semiconductor & Photonics Technology”
+     - “Semiconductor & Space Technology Growth Plays”
+   - Confirm returned Watchlist sections match canonical Themes page theme names exactly.
+   - Confirm tickers are grouped under sensible canonical themes.
+   - Confirm no duplicate API/LLM calls were added.
+
+Deliver:
+- Summary of files changed.
+- Before/after endpoint sample.
+- List of canonical theme names now used by Watchlist.
+- Any tickers that still fall into Other / Uncategorized.
