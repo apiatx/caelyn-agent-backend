@@ -1,0 +1,46 @@
+Good. Now handle the remaining foreign/OTC tickers with a symbol normalization + alias mapping layer before classification.
+
+Do not categorize based on the exchange prefix itself. The exchange prefix should only help identify the underlying company.
+
+Goal:
+Foreign, OTC, ADR, and exchange-prefixed tickers should map to canonical themes when the underlying company clearly fits an existing theme.
+
+Implement a small explicit alias/normalization map for the current uncategorized exchange-prefixed tickers.
+
+Examples:
+- KRX:000660 / SK Hynix → Memory & Storage
+- OTC:ATEYY / Advantest ADR → Semiconductor Equipment
+- AIM:IQE / IQE plc → Photonics / Lasers or Semi Materials, whichever fits existing canonical taxonomy best
+- EPA:XFAB / X-FAB → Semi Materials or Semiconductors
+- ASX:EOS / Electro Optic Systems → Defense or Space Economy depending on existing taxonomy
+- TSX:MAL / Magellan Aerospace → Space Economy or Defense if appropriate
+- TSXV:AAG / Aftermath Silver should remain Other / Uncategorized unless there is a canonical metals/mining theme
+
+Tasks:
+1. Print the remaining 43 uncategorized tickers with any available company names from watchlist metadata/profile cache.
+2. Create an explicit alias map for foreign/OTC tickers:
+   - raw_symbol
+   - normalized_symbol
+   - company_name
+   - canonical_theme_id
+   - canonical_theme_name
+   - confidence
+   - reason
+3. Apply this alias map before fallbacking to Other / Uncategorized.
+4. Only map tickers with high confidence.
+5. Leave ambiguous names in Other / Uncategorized.
+6. Do not call LLMs or new APIs.
+7. Do not touch UI, routes, filters, or Screener Hub behavior.
+8. Rebuild the saved Watchlist analysis after mapping updates.
+9. Validate:
+   - total tickers still 137/137
+   - uncategorized count drops
+   - no duplicate symbols
+   - all mapped foreign/OTC tickers appear under canonical Themes page names
+   - old bad LLM-invented labels are still gone
+
+Deliver:
+- Remaining uncategorized before/after
+- Alias mappings added
+- Any tickers intentionally left uncategorized with reason
+- Files changed

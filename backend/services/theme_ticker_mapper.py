@@ -2,7 +2,8 @@
 theme_ticker_mapper.py — ticker → theme mapping helper.
 
 Combines theme maps in priority order:
-  1. THEME_RS_UNIVERSE          (new canonical 60-entry registry — PRIMARY)
+  0. _FOREIGN_ALIAS_MAP         (explicit foreign/OTC/ADR aliases — HIGHEST PRIORITY)
+  1. THEME_RS_UNIVERSE          (canonical 60-entry registry — PRIMARY)
   2. home_service.THEME_MAP     (curated ticker → theme name, FALLBACK)
   3. THEME_ETF_UNIVERSE         (old 20-theme ETF universe, FALLBACK)
 
@@ -22,6 +23,54 @@ Reused by:
 from __future__ import annotations
 
 from typing import Optional
+
+# ── Source 0: Foreign / OTC / ADR explicit alias map ─────────────────────────
+# Maps exchange-prefixed, OTC, and foreign tickers to canonical themes.
+# Only high-confidence, company-verified entries — no LLM calls, no heuristics.
+# Checked first so exchange-prefixed symbols are never missed by Sources 1-3.
+#
+# Format: "SYMBOL_UPPER": ("display_name", "theme_id")
+# theme_id must match a key in THEME_RS_UNIVERSE or home_service.THEME_MAP.
+_FOREIGN_ALIAS_MAP: dict[str, tuple[str, str]] = {
+    # Memory / Storage
+    "KRX:000660": ("Memory & Storage",              "memory_storage"),       # SK Hynix — #2 DRAM/NAND globally
+
+    # Semiconductor Equipment
+    "OTC:ATEYY":  ("Semiconductor Equipment",       "semicap_equipment"),    # Advantest ADR — SoC/memory test systems
+    "OTC:KRKNF":  ("Semiconductor Equipment",       "semicap_equipment"),    # Kokusai Electric — CVD/diffusion batch tools
+    "ETR:AIXA":   ("Semiconductor Equipment",       "semicap_equipment"),    # Aixtron SE — MOCVD for GaN/SiC/III-V
+    "FRA:KLA":    ("Semiconductor Equipment",       "semicap_equipment"),    # KLA Corp Frankfurt listing — process control
+
+    # Semi Materials
+    "AIM:IQE":    ("Semi Materials",                "semi_materials"),       # IQE plc — compound semiconductor epiwafer foundry
+    "EPA:SOI":    ("Semi Materials",                "semi_materials"),       # Soitec — SOI & compound semiconductor wafers
+
+    # Semiconductors
+    "EPA:XFAB":   ("Semiconductors",                "semiconductors"),       # X-FAB — analog/mixed-signal specialty foundry
+
+    # Substrates / Packaging
+    "AMS:BESI":   ("Substrates / Packaging",        "substrates_/_packaging"), # BE Semiconductor (BESI) — advanced packaging equipment
+
+    # Photonics / Lasers
+    "STO:SIVE":   ("Photonics / Lasers",            "photonics_/_lasers"),   # Sivers Semiconductors — photonics/mmW ICs
+
+    # Defense
+    "ASX:EOS":    ("Defense",                       "defense"),              # Electro Optic Systems — laser/EO systems for defense
+    "TSX:MAL":    ("Defense",                       "defense"),              # Magellan Aerospace — F-35 fuselage/defense structures
+
+    # Crypto Equities / Blockchain
+    "CIFR":       ("Crypto Equities / Blockchain",  "crypto_equities"),      # Cipher Mining — Bitcoin mining
+    "GLXY":       ("Crypto Equities / Blockchain",  "crypto_equities"),      # Galaxy Digital — crypto financial services
+
+    # Drones
+    "ONDS":       ("Drones",                        "drones"),               # Ondas Holdings — American Robotics / drone automation
+    "UMAC":       ("Drones",                        "drones"),               # Unusual Machines — FPV drone hardware
+
+    # Space Economy
+    "RDW":        ("Space Economy",                 "space"),                # Redwire Space — in-space manufacturing & solar arrays
+    "SIDU":       ("Space Economy",                 "space"),                # Sidus Space — small satellite constellation
+    "TSAT":       ("Space Economy",                 "space"),                # Telesat — LEO satellite constellation (Lightspeed)
+}
 
 # ── Index dicts (built once at import time, cheap in-memory) ─────────────────
 
@@ -43,7 +92,16 @@ def _build_index() -> None:
         return
     _built = True
 
-    # ── Source 1: THEME_RS_UNIVERSE (new canonical 60-entry universe — PRIMARY) ─
+    # ── Source 0: Foreign/OTC alias map (highest priority — explicit overrides) ─
+    for raw_sym, (display, theme_id) in _FOREIGN_ALIAS_MAP.items():
+        s = raw_sym.upper()
+        _TICKER_TO_THEMES.setdefault(s, [])
+        if display not in _TICKER_TO_THEMES[s]:
+            _TICKER_TO_THEMES[s].append(display)
+        _TICKER_TO_THEME_ID[s]       = theme_id
+        _TICKER_TO_CLASSIFICATION[s] = "sub_theme"
+
+    # ── Source 1: THEME_RS_UNIVERSE (canonical 60-entry universe — PRIMARY) ─────
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE
         for theme_id, meta in THEME_RS_UNIVERSE.items():
