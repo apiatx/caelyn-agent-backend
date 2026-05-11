@@ -57,6 +57,29 @@ _FOREIGN_ALIAS_MAP: dict[str, tuple[str, str]] = {
     # Defense
     "ASX:EOS":    ("Defense",                       "defense"),              # Electro Optic Systems — laser/EO systems for defense
     "TSX:MAL":    ("Defense",                       "defense"),              # Magellan Aerospace — F-35 fuselage/defense structures
+    "CODA":       ("Defense",                       "defense"),              # Coda Octopus — underwater sonar/3D seabed imaging for defense navies
+    "SYPR":       ("Defense",                       "defense"),              # Sypris Solutions — defense electronics, secure comms hardware, aerospace forgings
+    "PKE":        ("Defense",                       "defense"),              # Park Electrochemical — composite radomes/fairings for F-35, military aircraft, missiles
+    "IPX":        ("Defense",                       "defense"),              # IperionX — low-carbon titanium powders for aerospace/defense/space (DoD-linked)
+    "AIR":        ("Defense",                       "defense"),              # AAR Corp — aviation MRO for USAF/USN (~50% revenue from US government defense)
+
+    # Nuclear / Grid
+    "ASPI":       ("Nuclear / Grid",                "nuclear_/_grid"),       # ASP Isotopes — laser isotope enrichment for enriched uranium / nuclear fuel
+
+    # Cybersecurity
+    "LAES":       ("Cybersecurity",                 "cybersecurity"),        # SEALSQ Corp — post-quantum secure RISC-V microchips for IoT/automotive (WISeKey spinoff)
+
+    # Semiconductor Equipment
+    "TRT":        ("Semiconductor Equipment",       "semicap_equipment"),    # Trio-Tech International — semiconductor burn-in/test services for memory & logic
+
+    # Power / Cooling
+    "SEI":        ("Power / Cooling",               "power_/_cooling"),      # Solaris Energy Infrastructure — mobile power generation for AI data centers & industrial
+
+    # Quantum Computing
+    "INFQ":       ("Quantum Computing",             "quantum"),              # Infleqtion (formerly ColdQuanta) — quantum computing & sensing, Sqynet quantum network
+
+    # Semi Materials
+    "TSX:VNP":    ("Semi Materials",                "semi_materials"),       # 5N Plus Inc — specialty compound semiconductor materials (GaAs, Ge, Bi) for space solar & defense
 
     # Crypto Equities / Blockchain
     "CIFR":       ("Crypto Equities / Blockchain",  "crypto_equities"),      # Cipher Mining — Bitcoin mining

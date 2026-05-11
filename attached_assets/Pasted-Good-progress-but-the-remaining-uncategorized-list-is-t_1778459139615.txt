@@ -1,0 +1,74 @@
+Good progress, but the remaining uncategorized list is too conservative.
+
+Do another explicit mapping pass for the 24 intentionally uncategorized tickers. Many of these do have clear thematic fits based on company descriptions. Do not leave obvious ones in Other just because the canonical theme is not perfectly named.
+
+Use closest existing canonical theme. Do not create new themes unless the canonical Themes page already has them.
+
+Important principle:
+- Exchange/industry label is not enough by itself.
+- But if the company description clearly fits an existing canonical investment theme, classify it.
+- Other / Uncategorized should only be used when the company has no clear fit, is bankrupt/inactive, or lacks enough information.
+
+Suggested mappings to apply if confirmed against local metadata/descriptions:
+
+Aerospace / Space / Defense bucket:
+- AIR → Defense or Space Economy if the description supports aerospace/defense exposure
+- FLY → Space Economy or Defense if aerospace/air mobility/aviation tech exposure is clear
+- FTAI → Defense or Space Economy if aviation infrastructure/MRO/aerospace exposure is clear
+- CODA → Defense if underwater sonar/maritime defense tech is confirmed
+- SYPR → Defense if defense electronics/secure comms/aerospace components are confirmed
+- PKE → Defense or Space Economy if aerospace/defense electronics/components are confirmed
+- TSX:VNP → Space Economy if 5N Plus space/semiconductor/specialty materials exposure is confirmed
+
+Energy / Power / Infrastructure:
+- SEI → Power / Cooling, Clean Energy, or Nuclear / Grid if energy infrastructure/services exposure is confirmed
+- SDRL → Clean Energy is wrong; use Other only if no Oil & Gas canonical theme exists. If Power / Cooling or Energy Infrastructure exists as canonical, use the closest energy infrastructure theme.
+- VELO → leave Other unless description confirms infrastructure/energy/project finance theme
+
+Materials / Critical Minerals / Semis:
+- ASX:EQR → Semi Materials if tungsten/critical materials exposure supports semiconductor/industrial supply chain relevance
+- TSXV:AAG → Semi Materials only if silver/critical materials thesis is relevant; otherwise Other
+- IPX → Semi Materials if it is IperionX/titanium/critical materials
+- ALMU → Semi Materials if it is aluminum/materials supply chain
+- TEL → Semiconductors if this is TE Connectivity; otherwise validate symbol/company before mapping
+- TRT → Semiconductor Equipment or Semiconductors if Trio-Tech semiconductor testing/services is confirmed
+
+Nuclear / Uranium:
+- ASPI → Nuclear / Grid if ASP Isotopes/nuclear fuel/isotope enrichment exposure is confirmed
+
+Cybersecurity / Quantum / Defense:
+- LAES → Cybersecurity if SEALSQ/secure chips/post-quantum security exposure is confirmed. If canonical quantum security does not exist, use Cybersecurity or Quantum Computing, whichever is closer in THEME_RS_UNIVERSE.
+- OTC:QNTQF → Quantum Computing if Quantum eMotion or quantum security exposure is confirmed
+- INFQ → Quantum Computing if Infleqtion exposure is confirmed
+
+Crypto:
+- VOYG → If Voyager is bankrupt/inactive, leave Other with reason “bankrupt/inactive.” If still intentionally tracked as crypto equity legacy, map to Crypto Equities / Blockchain.
+
+Ambiguous / validate before mapping:
+- ADUR → Map only if description clearly fits an existing theme.
+- VIVO → Map only if description clearly fits an existing theme.
+- LOGI → likely Other unless you want a Consumer Tech/Hardware theme, which currently does not exist.
+
+Tasks:
+1. Print the 24 remaining uncategorized tickers with local company names/descriptions from the watchlist metadata/profile cache.
+2. For each ticker, assign:
+   - canonical_theme_id
+   - canonical_theme_name
+   - confidence
+   - reason
+3. Add explicit mappings only where confidence is medium-high or high.
+4. Do not add new API calls or LLM calls.
+5. Do not touch UI/routes/filters/Screener Hub behavior.
+6. Rebuild saved Watchlist analysis after mapping updates.
+7. Validate:
+   - total tickers still 137/137
+   - distinct symbols 137
+   - uncategorized count should drop materially from 24
+   - no old LLM-invented labels return
+   - all new sections are exact canonical Themes page names
+
+Deliver:
+- Before/after uncategorized count
+- Mapping table for all 24
+- Which ones remain Other and why
+- Files changed
