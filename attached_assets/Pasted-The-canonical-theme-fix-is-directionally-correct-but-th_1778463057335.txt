@@ -1,0 +1,103 @@
+The canonical theme fix is directionally correct, but the Watchlist page regressed.
+
+Current problem:
+- Watchlist sections now show canonical theme names correctly, but the cards are blank/skeleton-only.
+- Each card only shows tickers, with no company name, price, confidence, thesis, action text, or agent commentary.
+- The page also shows: ANALYSIS FAILED: Backend returned 500.
+- Before the taxonomy change, each ticker row had useful agent detail inside the section cards. We need that detail preserved/restored.
+- The new canonical grouping should change only the section grouping/title logic, not remove the per-ticker analysis.
+
+Goal:
+Keep canonical Themes page taxonomy for section grouping, but restore the previous rich per-ticker Watchlist card details and fix the 500.
+
+Required behavior:
+1. Watchlist sections use canonical Themes page names only.
+2. Inside each section, each ticker row must include the same rich fields as before:
+   - symbol
+   - company name
+   - current/last price
+   - confidence badge / rating if available
+   - thesis / reason
+   - action line / recommendation
+   - any existing agent summary fields previously shown by the frontend
+3. Claude/agent should NOT invent section titles anymore.
+4. Claude/agent MAY still generate per-ticker analysis/details.
+5. Saved analysis rebuild must preserve or regenerate rich per-ticker rows, not just ticker skeletons.
+6. Fix the backend 500 from the Watchlist refresh/analysis endpoint.
+
+Root cause to check:
+- The canonical rebuild likely wrote sections with rows like `{ symbol }` only.
+- The frontend expects richer item objects.
+- The refresh endpoint may be failing because the schema now differs from the previous saved analysis shape.
+
+Tasks:
+1. Inspect the old/pre-change Watchlist analysis response shape.
+   - Use git history if needed.
+   - Find what fields each ticker row/card used to include.
+   - Compare that to the current saved analysis object.
+
+2. Fix the canonical grouping pipeline:
+   - First classify/group tickers by canonical theme.
+   - Then attach the existing per-ticker enriched analysis fields.
+   - Do not strip fields when moving tickers into canonical sections.
+   - If an existing saved row has agent commentary, preserve it.
+   - If not available, generate/fill a safe fallback object with at least company name, price, confidence, thesis/reason, and action text.
+
+3. Fix the agent prompt/schema:
+   - Claude should receive canonical section assignments as locked metadata.
+   - Claude should only produce per-ticker insight fields.
+   - It must not rename sections.
+   - It must return data in the exact response shape expected by the frontend.
+
+4. Fix the 500:
+   - Reproduce with the Watchlist endpoint/refresh endpoint.
+   - Capture traceback.
+   - Fix schema/key mismatch, missing field access, serialization issue, or DB saved-analysis incompatibility.
+   - Add defensive defaults so one bad ticker cannot fail the whole Watchlist response.
+
+5. Rebuild saved Watchlist analysis again:
+   - Use canonical theme grouping.
+   - Preserve/restore rich ticker card fields.
+   - Confirm frontend no longer renders blank cards.
+
+6. Add 1D % price change from Tradier:
+   - Add per-ticker fields:
+     - price
+     - change_percent_1d
+     - quote_source: "tradier"
+     - quote_updated_at
+   - Use Tradier as primary source.
+   - Batch quote requests.
+   - Cache quotes for 10 minutes.
+   - Stay within Tradier market data rate limits.
+   - Do not call Tradier individually for every ticker on every page load.
+   - If quote cache exists and is fresh, use it.
+   - If Tradier fails, use last-known-good cached quote values and mark quote_source accordingly.
+
+7. Recommended quote cache behavior:
+   - Cache key: watchlist_quotes_v1 or equivalent.
+   - TTL: 10 minutes.
+   - Batch all 137 symbols in chunks that Tradier supports safely.
+   - Refresh in background or on explicit refresh, but never block the entire Watchlist page for quote failures.
+   - Frontend should show stale/LKG price data instead of blank fields.
+
+8. Validation:
+   - Watchlist endpoint returns HTTP 200.
+   - Refresh/analysis endpoint returns HTTP 200.
+   - No “Backend returned 500.”
+   - Section names remain canonical.
+   - Old fake labels are still gone.
+   - 137/137 tickers accounted for.
+   - Cards show rich detail again, not just symbols.
+   - Each row has price and 1D % change when available.
+   - Tradier quote data is cached for 10 minutes.
+   - No excessive Tradier calls.
+   - No UI/routes/filters unrelated to Watchlist changed.
+
+Deliver:
+- Root cause of the blank cards.
+- Root cause of the 500.
+- Files changed.
+- Before/after sample JSON for one section with 2 tickers.
+- Confirmation that cards now include rich fields.
+- Confirmation that 1D % change is coming from Tradier and cached for 10 minutes.

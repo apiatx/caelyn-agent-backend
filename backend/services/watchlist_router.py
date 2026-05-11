@@ -13,6 +13,7 @@ from agent.model_policy import MODEL_CLAUDE_PREMIUM, MODEL_GROK, MODEL_GPT4O, MO
 import asyncio
 import json as _json
 import re as _re
+from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -32,6 +33,90 @@ from services.watchlist_service import (
 from services.watchlist_analysis import run_analysis_pipeline
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
+
+
+# ── Quote enrichment helper ──────────────────────────────────────────────────
+
+async def _enrich_store_with_quotes(store: dict) -> dict:
+    """
+    Enrich every ticker row in store['analysis']['sections'] with:
+      - name         from Tradier quote description (if not already present)
+      - price        from Tradier live price (or CSV Stock Price fallback)
+      - change_pct_1d from Tradier 1D change %
+      - quote_source / quote_updated_at
+
+    Existing rich fields (catalyst, sentiment, action_note, etc.) are preserved.
+    Foreign/exchange-prefixed tickers that Tradier cannot quote keep whatever
+    fields they already have.  This function never blocks — it uses the LKG
+    quote cache and triggers a background refresh when the 10-min TTL expires.
+    """
+    from services.watchlist_quote_cache import get_watchlist_quotes
+
+    tickers: list[str]  = store.get("tickers", [])
+    csv_data: list[dict] = store.get("csv_data", [])
+    analysis: dict       = store.get("analysis") or {}
+    sections: list[dict] = analysis.get("sections", [])
+
+    if not tickers or not sections:
+        return store
+
+    # CSV fundamentals map — keyed by SYMBOL (uppercase)
+    csv_map: dict[str, dict] = {}
+    for row in csv_data:
+        sym = (row.get("Symbol") or row.get("symbol") or row.get("Ticker") or "").strip().upper()
+        if sym:
+            csv_map[sym] = row
+
+    # Get cached quotes (non-blocking); stale cache triggers background refresh
+    quote_map: dict[str, dict] = await get_watchlist_quotes(tickers)
+
+    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+
+    enriched_sections: list[dict] = []
+    for section in sections:
+        enriched_tickers: list[dict] = []
+        for row in section.get("tickers", []):
+            sym      = str(row.get("symbol", "")).upper()
+            q        = quote_map.get(sym, {})
+            csv_row  = csv_map.get(sym, {})
+            enriched = dict(row)   # copy — preserve all existing LLM fields
+
+            # ── Name ──────────────────────────────────────────────────────
+            # Priority: existing row name > Tradier description > symbol
+            if not enriched.get("name"):
+                enriched["name"] = (
+                    q.get("name")
+                    or csv_row.get("Company Name")
+                    or csv_row.get("Name")
+                    or sym
+                )
+
+            # ── Price ─────────────────────────────────────────────────────
+            # Priority: Tradier live > existing row price > CSV Stock Price
+            if q.get("price") is not None:
+                enriched["price"] = q["price"]
+            elif not enriched.get("price"):
+                csv_price = csv_row.get("Stock Price")
+                if csv_price:
+                    try:
+                        enriched["price"] = float(csv_price)
+                    except Exception:
+                        pass
+
+            # ── 1D % change (always overwrite with freshest Tradier data) ─
+            if q:
+                enriched["change_pct_1d"]    = q.get("change_pct_1d")
+                enriched["quote_source"]     = "tradier"
+                enriched["quote_updated_at"] = q.get("quote_updated_at", now_str)
+
+            enriched_tickers.append(enriched)
+
+        enriched_sections.append({**section, "tickers": enriched_tickers})
+
+    return {
+        **store,
+        "analysis": {**analysis, "sections": enriched_sections},
+    }
 
 
 # ── Request / Response Models ────────────────────────────────────────────────
@@ -545,10 +630,26 @@ async def rename_endpoint(watchlist_id: str, body: dict):
 
 @router.get("/{watchlist_id}")
 async def get_by_id_endpoint(watchlist_id: str):
-    """Return a specific watchlist by ID."""
+    """
+    Return a specific watchlist by ID.
+
+    Ticker rows are enriched on every GET with:
+      - name          (from Tradier description)
+      - price         (Tradier live, or CSV fallback)
+      - change_pct_1d (Tradier 1D % change)
+      - quote_source / quote_updated_at
+
+    All existing LLM-generated fields (catalyst, sentiment, action_note, etc.)
+    are preserved.  Quote data is served from a 10-minute in-memory cache;
+    a background refresh is triggered automatically when the TTL expires.
+    """
     store = load_watchlist(watchlist_id)
     if store is None:
         return {"empty": True}
+    try:
+        store = await _enrich_store_with_quotes(store)
+    except Exception as _enrich_err:
+        print(f"[WATCHLIST] Quote enrichment failed (returning raw): {_enrich_err}")
     return store
 
 
@@ -576,67 +677,58 @@ async def analyze_by_id_endpoint(watchlist_id: str):
     return result
 
 
-@router.post("/{watchlist_id}/refresh")
-async def refresh_by_id_endpoint(watchlist_id: str):
+async def _run_claude_analysis_background(watchlist_id: str) -> None:
     """
-    Batched LLM analysis for any size watchlist.
+    Background task: run full per-group Claude analysis and save to DB.
 
-    Splits tickers into batches of 22, runs up to 3 batches in parallel,
-    collects sections, saves analysis, and returns the full updated watchlist.
-    Works directly via the Anthropic API — no agent/data_service dependency.
+    Runs AFTER the HTTP response has already been returned to the client.
+    Sections use canonical THEME_RS_UNIVERSE names — Claude provides only
+    per-ticker insight fields (catalyst, sentiment, action_note, etc.),
+    never invents or renames sections.
     """
-    from datetime import datetime, timezone
-
     try:
         store = load_watchlist(watchlist_id)
         if store is None:
-            raise HTTPException(status_code=404, detail="Watchlist not found")
+            print(f"[BG_REFRESH] {watchlist_id}: watchlist disappeared — aborting")
+            return
 
-        tickers: list = store.get("tickers", [])
+        tickers: list  = store.get("tickers", [])
         csv_data: list = store.get("csv_data", [])
         store_name: str = store.get("name", "Watchlist")
 
         if not tickers:
-            raise HTTPException(status_code=400, detail="Watchlist has no tickers")
+            return
 
-        # Build Symbol → row lookup from csv_data
         csv_map: dict = {}
         for row in csv_data:
             sym = row.get("Symbol") or row.get("symbol") or row.get("Ticker") or ""
             if sym:
                 csv_map[sym.strip().upper()] = row
 
-        # ── Step 1: Classify each ticker into canonical themes ────────────────
-        # Uses THEME_RS_UNIVERSE (60-entry canonical registry) as the single
-        # source of truth — same taxonomy as the Themes page.  No LLM call
-        # is made to invent theme names; names come only from the registry.
+        # ── Classify tickers into canonical theme groups ───────────────────────
         try:
             from services.theme_ticker_mapper import (
                 map_ticker_to_primary_theme,
                 map_ticker_to_theme_id,
             )
         except Exception as _tm_err:
-            print(f"[REFRESH] theme_ticker_mapper unavailable: {_tm_err}; falling back to single group")
+            print(f"[BG_REFRESH] theme_ticker_mapper unavailable: {_tm_err}")
             map_ticker_to_primary_theme = lambda s: None
             map_ticker_to_theme_id      = lambda s: None
 
-        _OTHER_LABEL   = "Other / Uncategorized"
-        _OTHER_ID      = "other_uncategorized"
-
-        # Normalize Source-2/3 names that have exact THEME_RS_UNIVERSE equivalents.
-        # "Memory / Storage" and "Robotics / Automation" etc. are the same theme as
-        # their "&" counterparts in THEME_RS_UNIVERSE — merge them into the canonical form.
+        _OTHER_LABEL = "Other / Uncategorized"
+        _OTHER_ID    = "other_uncategorized"
         _NAME_NORMALIZE: dict[str, str] = {
-            "Memory / Storage":    "Memory & Storage",
+            "Memory / Storage":      "Memory & Storage",
             "Robotics / Automation": "Robotics & Automation",
             "Datacenter / Compute":  "Data Center Infrastructure",
             "Aerospace / Defense":   "Defense",
         }
         _ID_NORMALIZE: dict[str, str] = {
-            "memory_/_storage":        "memory_storage",
-            "robotics_/_automation":   "robotics_automation",
-            "datacenter_/_compute":    "datacenter_infra",
-            "aerospace_/_defense":     "defense",
+            "memory_/_storage":      "memory_storage",
+            "robotics_/_automation": "robotics_automation",
+            "datacenter_/_compute":  "datacenter_infra",
+            "aerospace_/_defense":   "defense",
         }
 
         ticker_to_canon_name: dict[str, str] = {}
@@ -646,42 +738,32 @@ async def refresh_by_id_endpoint(watchlist_id: str):
         for sym in tickers:
             cname = map_ticker_to_primary_theme(sym) or _OTHER_LABEL
             cid   = map_ticker_to_theme_id(sym)      or _OTHER_ID
-            # Apply normalization to collapse "/" variants into "&" canonical names
             cname = _NAME_NORMALIZE.get(cname, cname)
             cid   = _ID_NORMALIZE.get(cid, cid)
             ticker_to_canon_name[sym] = cname
             ticker_to_canon_id[sym]   = cid
             theme_groups.setdefault(cname, []).append(sym)
 
-        # Canonical groups first (alphabetical), "Other" always last
         sorted_groups: list[tuple[str, list[str]]] = sorted(
             theme_groups.items(),
             key=lambda kv: (kv[0] == _OTHER_LABEL, kv[0]),
         )
         print(
-            f"[REFRESH] {watchlist_id}: {len(tickers)} tickers → "
-            f"{len(sorted_groups)} canonical theme groups: "
-            + ", ".join(f"'{n}'({len(t)})" for n, t in sorted_groups)
+            f"[BG_REFRESH] {watchlist_id}: {len(tickers)} tickers → "
+            f"{len(sorted_groups)} canonical theme groups"
         )
 
         anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+        CHUNK_SIZE = 22
 
-        # ── Step 2: Per-group Claude call — insights only, NOT theme naming ──
-        # Title is locked to the canonical theme name; Claude only provides
-        # per-ticker catalyst / sentiment / insight fields.
-        BATCH_SIZE = 22
-
-        async def analyze_theme_group(
-            group_name: str,
-            group_tickers: list[str],
-        ) -> dict | None:
-            """Build one section per canonical theme, Claude for insights only."""
+        async def analyze_theme_group(group_name: str, group_tickers: list[str]) -> dict | None:
+            """One section per canonical theme; Claude provides per-ticker insights only."""
             all_ticker_rows: list[dict] = []
             group_subtitle = ""
 
-            # Sub-batch large groups; results merged under the same section
-            for chunk_start in range(0, len(group_tickers), BATCH_SIZE):
-                chunk = group_tickers[chunk_start : chunk_start + BATCH_SIZE]
+            for chunk_start in range(0, len(group_tickers), CHUNK_SIZE):
+                chunk = group_tickers[chunk_start : chunk_start + CHUNK_SIZE]
+
                 ticker_summaries = []
                 for sym in chunk:
                     row = csv_map.get(sym.upper(), {})
@@ -703,7 +785,7 @@ async def refresh_by_id_endpoint(watchlist_id: str):
                             parts.append(f"{label}={val}")
                     ticker_summaries.append(" ".join(parts))
 
-                # Prompt: canonical theme name is supplied; Claude must NOT rename it
+                # Section title is locked — Claude must NOT rename it
                 prompt = (
                     f"Analyze these {len(chunk)} stocks. "
                     f"They all belong to the '{group_name}' theme. "
@@ -741,14 +823,12 @@ async def refresh_by_id_endpoint(watchlist_id: str):
                     text = "".join(b.text for b in response.content if hasattr(b, "text"))
                     text = _re.sub(r"```json\s*", "", text)
                     text = _re.sub(r"```\s*", "", text).strip()
-                    m_json = _re.search(r'\{[\s\S]*\}', text)
+                    m_json = _re.search(r"\{[\s\S]*\}", text)
                     if m_json:
                         chunk_parsed = _json.loads(m_json.group())
-                        # Capture subtitle from first successful chunk
                         if not group_subtitle:
                             group_subtitle = chunk_parsed.get("subtitle", "")
                         ticker_rows = chunk_parsed.get("tickers", [])
-                        # Inject canonical theme fields into every ticker row
                         for tr in ticker_rows:
                             sym_upper = str(tr.get("symbol", "")).upper()
                             tr["canonical_theme_name"] = group_name
@@ -756,42 +836,41 @@ async def refresh_by_id_endpoint(watchlist_id: str):
                             tr["theme_source"]          = "canonical"
                         all_ticker_rows.extend(ticker_rows)
                         print(
-                            f"[REFRESH] '{group_name}' chunk {chunk_start}: "
+                            f"[BG_REFRESH] '{group_name}' chunk {chunk_start}: "
                             f"{len(chunk)} tickers → {len(ticker_rows)} rows"
                         )
                     else:
-                        print(f"[REFRESH] '{group_name}' chunk {chunk_start}: no JSON in response")
+                        print(f"[BG_REFRESH] '{group_name}' chunk {chunk_start}: no JSON in response")
                 except Exception as e:
-                    print(f"[REFRESH] '{group_name}' chunk {chunk_start} failed: {type(e).__name__}: {e}")
+                    print(f"[BG_REFRESH] '{group_name}' chunk {chunk_start} failed: {type(e).__name__}: {e}")
 
             if not all_ticker_rows:
-                return None
+                # Fallback: keep skeleton rows so section still appears
+                all_ticker_rows = [{"symbol": s} for s in group_tickers]
 
-            # Derive canonical id from the first ticker in the group
             canon_id = ticker_to_canon_id.get(group_tickers[0], _OTHER_ID)
-
             return {
                 "id":                 canon_id,
-                "title":              group_name,           # ← ALWAYS canonical
+                "title":              group_name,
                 "subtitle":           group_subtitle,
                 "canonical_theme_id": canon_id,
                 "theme_source":       "canonical",
                 "tickers":            all_ticker_rows,
             }
 
-        # Run groups with max 3 in parallel to respect Claude rate limits
+        # Run groups 3 at a time — respects Claude rate limits
         semaphore = asyncio.Semaphore(3)
 
-        async def guarded_group(group_name: str, group_tickers: list[str]) -> dict | None:
+        async def guarded_group(gname: str, gsyms: list[str]) -> dict | None:
             async with semaphore:
-                return await analyze_theme_group(group_name, group_tickers)
+                return await analyze_theme_group(gname, gsyms)
 
-        group_tasks = [guarded_group(name, syms) for name, syms in sorted_groups]
-        group_results = await asyncio.gather(*group_tasks, return_exceptions=False)
-
+        group_results = await asyncio.gather(
+            *[guarded_group(n, s) for n, s in sorted_groups],
+            return_exceptions=False,
+        )
         sections = [r for r in group_results if r is not None]
 
-        # Market themes = deduplicated canonical section titles (no LLM-invented names)
         market_themes: list[str] = []
         seen_mt: set[str] = set()
         for section in sections:
@@ -799,34 +878,74 @@ async def refresh_by_id_endpoint(watchlist_id: str):
             if title and title not in seen_mt:
                 market_themes.append(title)
                 seen_mt.add(title)
-        market_themes = market_themes[:8]
 
         analysis = {
-            "sections": sections,
-            "market_themes": market_themes,
-            "last_updated": datetime.now(timezone.utc).isoformat() + "Z",
+            "sections":               sections,
+            "market_themes":          market_themes[:8],
+            "generated_at":           datetime.now(timezone.utc).isoformat() + "Z",
+            "theme_source":           "canonical",
+            "classification_method":  "canonical_theme_registry",
         }
 
-        # ── Persist analysis back to the watchlist ────────────────────────────
         try:
             save_watchlist(csv_data, analysis, watchlist_id=watchlist_id, name=store_name)
+            total_enriched = sum(
+                len(s.get("tickers", [])) for s in sections
+                if s.get("id") != "other_uncategorized"
+                   or any(len(t) > 1 for t in s.get("tickers", []))
+            )
+            print(
+                f"[BG_REFRESH] {watchlist_id}: saved {len(sections)} sections, "
+                f"{sum(len(s.get('tickers',[])) for s in sections)} tickers"
+            )
         except Exception as save_err:
-            print(f"[REFRESH] Save failed (returning anyway): {save_err}")
+            print(f"[BG_REFRESH] Save failed: {save_err}")
 
-        # ── Return the full updated watchlist record ──────────────────────────
-        updated = load_watchlist(watchlist_id)
-        if updated:
-            return updated
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[BG_REFRESH] {watchlist_id}: top-level error: {e}")
 
-        return {
-            "id": watchlist_id,
-            "name": store_name,
-            "tickers": tickers,
-            "ticker_count": len(tickers),
-            "csv_data": csv_data,
-            "analysis": analysis,
-            "saved_at": datetime.now(timezone.utc).isoformat(),
-        }
+
+@router.post("/{watchlist_id}/refresh")
+async def refresh_by_id_endpoint(watchlist_id: str):
+    """
+    Trigger a full Claude re-analysis for a watchlist.
+
+    Returns HTTP 200 immediately with the current enriched analysis (Tradier
+    quotes + any previously-saved LLM insights).  The Claude per-group analysis
+    runs as a background task and saves to the DB when complete — subsequent
+    GET calls will show the updated data.
+
+    This design eliminates the previous HTTP timeout that the frontend
+    interpreted as "ANALYSIS FAILED: Backend returned 500".  Tradier quote
+    data is force-refreshed synchronously before returning so the response
+    always has fresh price / 1D-change data.
+    """
+    try:
+        store = load_watchlist(watchlist_id)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Watchlist not found")
+
+        tickers: list = store.get("tickers", [])
+        if not tickers:
+            raise HTTPException(status_code=400, detail="Watchlist has no tickers")
+
+        # Kick off the Claude background analysis immediately
+        asyncio.create_task(_run_claude_analysis_background(watchlist_id))
+        print(f"[REFRESH] {watchlist_id}: background Claude task started for {len(tickers)} tickers")
+
+        # Force-refresh Tradier quotes so the response has live price data
+        try:
+            from services.watchlist_quote_cache import refresh_watchlist_quotes_now
+            await refresh_watchlist_quotes_now(tickers)
+        except Exception as _qe:
+            print(f"[REFRESH] Tradier quote refresh failed (non-fatal): {_qe}")
+
+        # Return the current analysis enriched with fresh quotes — always HTTP 200
+        enriched = await _enrich_store_with_quotes(store)
+        enriched["refresh_status"] = "running"
+        return enriched
 
     except HTTPException:
         raise
