@@ -1,14 +1,22 @@
 """
-Watchlist quote cache — batched Tradier quotes for all watchlist tickers.
+Watchlist quote cache — shared with Home Watchlist Snapshot.
 
 Design:
-  - TTL: 10 minutes (module-level in-memory LKG dict)
-  - Batch size: 50 symbols per Tradier request
-  - Skips exchange-prefixed foreign tickers (ASX:, TSX:, TSXV:, OTC:, ...)
-  - Falls back to last-known-good on any Tradier failure
-  - Non-blocking: callers receive cached data immediately;
-    background refresh is kicked off only when TTL has expired
-  - Lock prevents duplicate concurrent refresh calls
+  - TTL: 10 minutes (module-level in-memory LKG dict) — unchanged.
+  - Delegates the actual quote fetch to home_service._batch_quotes(), which
+    already powers the Home Watchlist Snapshot. That helper goes through:
+        1) data_service.tradier.get_quotes()  (single batch, request-cached)
+        2) Tradier LKG cache  (72 h, per-symbol)
+        3) FMP /stable/quote  (covers tickers Tradier misses)
+    This eliminates duplicate Tradier batch calls between Home Snapshot and
+    the Watchlist page and means the Watchlist table inherits the same FMP
+    fallback for volume / average_volume.
+  - Skips exchange-prefixed foreign tickers (ASX:, TSX:, OTC:, …) — these
+    pass through Tradier's batch and silently return blank fields, which the
+    frontend renders as "—".
+  - Lock prevents duplicate concurrent refresh calls.
+  - If main.data_service isn't available yet (very early startup), falls
+    back to direct Tradier HTTP — same behaviour as the previous module.
 """
 from __future__ import annotations
 
@@ -19,9 +27,9 @@ from datetime import datetime, timezone
 
 import httpx
 
-_QUOTE_TTL = 600   # 10 minutes
-_BATCH_SIZE = 50   # safe Tradier batch size (supports ~200, keep conservative)
-_TIMEOUT = 12.0    # seconds per Tradier request
+_QUOTE_TTL = 600   # 10 minutes — DO NOT change
+_BATCH_SIZE = 50   # legacy fallback batch size
+_TIMEOUT = 12.0    # seconds per Tradier request (legacy fallback only)
 
 # Module-level LKG cache: SYMBOL (uppercase) → enriched quote dict
 _quote_cache: dict[str, dict] = {}
@@ -57,8 +65,56 @@ def _safe_float(v) -> float | None:
         return None
 
 
-async def _fetch_batch(symbols: list[str], api_key: str) -> dict[str, dict]:
-    """Fetch one batch of Tradier quotes; returns {SYMBOL: enriched_row}."""
+def _normalise(symbol: str, q: dict, now_str: str) -> dict:
+    """Translate a home_service-style quote row into the watchlist enriched shape."""
+    rel_vol = None
+    vol = _safe_float(q.get("volume"))
+    avg_vol = _safe_float(q.get("average_volume"))
+    if vol is not None and avg_vol and avg_vol > 0:
+        rel_vol = round(vol / avg_vol, 4)
+    return {
+        "price":            _safe_float(q.get("last") if q.get("last") is not None else q.get("price")),
+        "change_pct_1d":    _safe_float(q.get("change_percentage") if q.get("change_percentage") is not None else q.get("change_pct_1d")),
+        "volume":           vol,
+        "average_volume":   avg_vol,
+        "relative_volume":  rel_vol,
+        "name":             q.get("description") or q.get("name") or symbol,
+        "quote_source":     q.get("quote_source") or "tradier",
+        "quote_updated_at": now_str,
+    }
+
+
+async def _fetch_via_home_service(symbols: list[str]) -> dict[str, dict]:
+    """
+    Reuse home_service._batch_quotes (Tradier live → Tradier LKG → FMP fallback).
+    Returns {SYMBOL: enriched_row} in the watchlist shape.
+
+    Requires main.data_service to be initialised; raises RuntimeError otherwise
+    so the caller can fall back to the legacy direct-Tradier path.
+    """
+    try:
+        import main  # type: ignore
+    except Exception as exc:
+        raise RuntimeError(f"main module not importable: {exc}")
+
+    data_service = getattr(main, "data_service", None)
+    if data_service is None:
+        raise RuntimeError("main.data_service not yet initialised")
+
+    from services.home_service import _batch_quotes  # local import — avoid cycle
+
+    eligible = [s for s in symbols if _is_tradier_eligible(s)]
+    if not eligible:
+        return {}
+
+    raw = await _batch_quotes(eligible, data_service)
+    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    return {sym.upper(): _normalise(sym, q, now_str) for sym, q in raw.items()}
+
+
+# ── Legacy direct-Tradier path (used only if home_service isn't ready) ─────
+
+async def _fetch_batch_direct(symbols: list[str], api_key: str) -> dict[str, dict]:
     symbols_str = ",".join(s.upper() for s in symbols)
     url = "https://api.tradier.com/v1/markets/quotes"
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
@@ -86,15 +142,7 @@ async def _fetch_batch(symbols: list[str], api_key: str) -> dict[str, dict]:
             sym = (q.get("symbol") or "").upper()
             if not sym:
                 continue
-            result[sym] = {
-                "price":            _safe_float(q.get("last")),
-                "change_pct_1d":    _safe_float(q.get("change_percentage")),
-                "volume":           _safe_float(q.get("volume")),
-                "average_volume":   _safe_float(q.get("average_volume")),
-                "name":             q.get("description") or sym,
-                "quote_source":     "tradier",
-                "quote_updated_at": now_str,
-            }
+            result[sym] = _normalise(sym, q, now_str)
         return result
 
     except Exception as e:
@@ -102,22 +150,19 @@ async def _fetch_batch(symbols: list[str], api_key: str) -> dict[str, dict]:
         return {}
 
 
-async def _do_refresh(symbols: list[str]) -> None:
-    """Inner refresh — calls Tradier in parallel batches and updates cache."""
-    global _quote_cache, _cache_ts
-
+async def _fetch_direct(symbols: list[str]) -> dict[str, dict]:
     api_key = os.getenv("TRADIER_API_KEY", "")
     if not api_key:
-        print("[WQ_CACHE] No TRADIER_API_KEY — skipping quote refresh")
-        return
+        print("[WQ_CACHE] No TRADIER_API_KEY and no data_service — skipping refresh")
+        return {}
 
     eligible = [s for s in symbols if _is_tradier_eligible(s)]
     if not eligible:
-        return
+        return {}
 
     batches = [eligible[i : i + _BATCH_SIZE] for i in range(0, len(eligible), _BATCH_SIZE)]
     batch_results = await asyncio.gather(
-        *[_fetch_batch(b, api_key) for b in batches],
+        *[_fetch_batch_direct(b, api_key) for b in batches],
         return_exceptions=True,
     )
 
@@ -125,16 +170,40 @@ async def _do_refresh(symbols: list[str]) -> None:
     for br in batch_results:
         if isinstance(br, dict):
             merged.update(br)
+    return merged
+
+
+# ── Refresh orchestration ──────────────────────────────────────────────────
+
+async def _do_refresh(symbols: list[str]) -> None:
+    """Refresh via shared home_service path; legacy direct path as fallback."""
+    global _quote_cache, _cache_ts
+
+    merged: dict[str, dict] = {}
+    fetch_source = "shared(home_service)"
+    try:
+        merged = await _fetch_via_home_service(symbols)
+    except RuntimeError as warn:
+        # data_service not ready — fall back to direct Tradier
+        print(f"[WQ_CACHE] {warn}; using direct Tradier path")
+        merged = await _fetch_direct(symbols)
+        fetch_source = "direct(tradier)"
+    except Exception as exc:
+        print(f"[WQ_CACHE] shared-path error, falling back: {exc}")
+        merged = await _fetch_direct(symbols)
+        fetch_source = "direct(tradier)"
+
+    eligible_count = sum(1 for s in symbols if _is_tradier_eligible(s))
 
     if merged:
         _quote_cache = {**_quote_cache, **merged}
         _cache_ts = time.monotonic()
         print(
-            f"[WQ_CACHE] Refreshed {len(merged)}/{len(eligible)} quotes "
-            f"({len(batches)} Tradier batch(es)) for {len(symbols)} watchlist tickers"
+            f"[WQ_CACHE] Refreshed {len(merged)}/{eligible_count} quotes "
+            f"via {fetch_source} for {len(symbols)} watchlist tickers"
         )
     else:
-        print("[WQ_CACHE] All Tradier batches failed — retaining LKG cache")
+        print(f"[WQ_CACHE] No quotes returned ({fetch_source}) — retaining LKG cache")
 
 
 async def _locked_refresh(symbols: list[str]) -> None:
@@ -149,35 +218,37 @@ async def get_watchlist_quotes(
     force_refresh: bool = False,
 ) -> dict[str, dict]:
     """
-    Return cached quotes dict {SYMBOL: {price, change_pct_1d, volume, average_volume, name, quote_source, quote_updated_at}}.
+    Return cached quotes dict
+      {SYMBOL: {price, change_pct_1d, volume, average_volume,
+                relative_volume, name, quote_source, quote_updated_at}}.
 
     Behaviour:
-      - Empty cache (first call after server start): awaits a foreground fetch so
-        the very first GET response already contains live Tradier data.
-      - Stale cache (TTL expired, but LKG data exists): returns LKG immediately
-        and fires a background refresh — no blocking.
+      - Empty cache (first call after server start): awaits foreground fetch.
+      - Stale cache (>10 min) or force_refresh=True: returns LKG immediately
+        and kicks off a background refresh.
       - Fresh cache: returns immediately, no network call.
+
+    The underlying batch call is shared with home_service so Home Watchlist
+    Snapshot and the Watchlist page reuse the same quote payload (no duplicate
+    Tradier calls inside the 10-minute TTL window).
     """
     age = time.monotonic() - _cache_ts
     is_empty = not _quote_cache
     is_stale = age > _QUOTE_TTL
 
     if is_empty:
-        # First call ever — fetch synchronously so the response has live data
         await _locked_refresh(symbols)
     elif is_stale or force_refresh:
-        # Have LKG data — refresh in background without blocking the caller
         lock = _get_lock()
         if not lock.locked():
             asyncio.create_task(_locked_refresh(symbols))
+    else:
+        print(f"[WQ_CACHE] Cache hit ({len(_quote_cache)} symbols, age={age:.0f}s)")
 
     return _quote_cache
 
 
 async def refresh_watchlist_quotes_now(symbols: list[str]) -> dict[str, dict]:
-    """
-    Synchronously refresh and return quotes (awaits completion).
-    Use for background tasks where latency is acceptable.
-    """
+    """Synchronously refresh and return quotes (awaits completion)."""
     await _locked_refresh(symbols)
     return _quote_cache
