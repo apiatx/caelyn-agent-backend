@@ -4,13 +4,18 @@ Hyperliquid Market Matrix categorizer.
 Assigns every ScreenerAsset in the live Hyperliquid universe to exactly one of:
   stocks_etfs | crypto | commodities | indices | pre_ipo | themes
 
-Classification precedence:
-  1. Hyperliquid HIP-3 category tags applied by the normalizer
-     (e.g. "equity", "commodity", "index", "pre-IPO", "macro").
-  2. DEX prefix hint for HIP-3 markets (xyz/flx/cash → stocks, vntl → pre-IPO,
-     km → macro, abcd → index, hyna/para → crypto).
-  3. Symbol/name fallback against curated keyword lists.
-  4. Default: crypto (covers BTC/ETH/SOL/HYPE and the entire native HL perp set).
+Classification precedence (enforced in categorize_asset):
+  1. Stable backend exceptions (_EXCEPTION_CATEGORY_BY_SYMBOL) — pre_ipo / themes
+     that are known to carry mis-leading upstream tags.
+  2. Explicit non-stock symbol overrides (_COMMODITY_OVERRIDES / _INDEX_OVERRIDES)
+     — commodity and index symbols that can arrive with generic "equity" tags on
+     some HIP-3 DEXes.  These MUST fire before any "equity" tag handling.
+  3. Strong specific HIP-3 category tags: pre-ipo, commodity, theme, index.
+  4. DEX prefix hint for HIP-3 markets (xyz/flx/cash → stocks, vntl → pre-IPO,
+     km → macro, abcd → index, hyna/para → crypto) with per-symbol refinement.
+  5. Generic "equity" tag — only reached after all non-stock overrides above.
+  6. Symbol/name fallback against curated keyword lists.
+  7. Default: crypto (covers BTC/ETH/SOL/HYPE and the entire native HL perp set).
 
 Native Hyperliquid perps that do NOT carry a HIP-3 dex prefix are always crypto.
 Spot markets are crypto unless tagged otherwise.
@@ -38,11 +43,33 @@ TAB_ORDER: list[str] = ["stocks_etfs", "crypto", "commodities", "indices", "pre_
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Fallback symbol/name keyword lists (used only when HL tags are inconclusive)
+# Explicit non-stock symbol overrides
+#
+# These fire BEFORE any generic "equity" tag handling (step 2 in precedence).
+# Any symbol listed here will be routed to its designated tab regardless of
+# whatever upstream HIP-3 tags the normalizer attached.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Commodity futures / spot symbols — unambiguously not stocks/ETFs.
+_COMMODITY_OVERRIDES: frozenset[str] = frozenset({
+    "CL", "WTI", "BRENTOIL", "BRENT", "OIL", "NATGAS",
+    "GOLD", "SILVER", "COPPER", "PLATINUM", "PALLADIUM",
+})
+
+# Index / macro benchmarks — unambiguously not individual stocks.
+_INDEX_OVERRIDES: frozenset[str] = frozenset({
+    "SP500", "US500", "USA100", "USTECH", "NASDAQ", "XYZ100",
+    "JP225", "KR200", "EWY", "EWJ", "EWZ",
+})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fallback symbol/name keyword lists (used when HL tags are inconclusive)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Common commodity tickers/markers seen on HL HIP-3 DEXes.
 _COMMODITY_KEYWORDS = {
+    "CL",
     "GOLD", "XAU", "SILVER", "XAG", "PLATINUM", "XPT", "PALLADIUM", "XPD",
     "COPPER", "OIL", "WTI", "BRENT", "BRENTOIL", "USOIL", "USENERGY",
     "NATGAS", "GAS", "NGAS", "CORN", "WHEAT", "SOYBEAN", "SUGAR", "COFFEE",
@@ -50,9 +77,11 @@ _COMMODITY_KEYWORDS = {
 
 # Common index / index-ETF tickers on HL HIP-3.
 _INDEX_KEYWORDS = {
-    "SPX", "SP500", "SPY", "USA500", "US500", "NDX", "QQQ", "USTECH",
+    "SPX", "SP500", "SPY", "USA500", "US500", "USA100", "NDX", "QQQ",
+    "USTECH", "NASDAQ", "XYZ100",
     "DJI", "DOW", "RUSSELL", "RUT", "IWM", "SMALL2000", "VIX",
     "MAG7", "INFOTECH", "NUCLEAR", "DEFENSE", "ENERGY",
+    "JP225", "KR200",
     "EWY", "EWZ", "EWJ", "EFA", "EEM", "FXI", "XLK", "XLF",
     "XLE", "XLV", "XLY", "XLP", "XLI", "XLU", "XLB", "XLRE",
 }
@@ -92,13 +121,13 @@ _MACRO_TO_FX: set[str] = set()  # placeholder; FX has no dedicated tab
 
 # Stable exception map for known symbols that are frequently mis-tagged upstream.
 _EXCEPTION_CATEGORY_BY_SYMBOL: dict[str, str] = {
-    "CBRS": "pre_ipo",
-    "CEREBRAS": "pre_ipo",
-    "SPACEX": "pre_ipo",
-    "OPENAI": "pre_ipo",
+    "CBRS":      "pre_ipo",
+    "CEREBRAS":  "pre_ipo",
+    "SPACEX":    "pre_ipo",
+    "OPENAI":    "pre_ipo",
     "ANTHROPIC": "pre_ipo",
-    "ROBOT": "themes",
-    "SEMI": "themes",
+    "ROBOT":     "themes",
+    "SEMI":      "themes",
 }
 
 
@@ -120,11 +149,20 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
     if ":" in sym:
         sym = sym.split(":", 1)[1]
 
-    # ── 1. Stable backend exceptions for known upstream tag drift ──────────
+    # ── 1. Stable backend exceptions (pre_ipo / themes with known tag drift) ─
     if sym in _EXCEPTION_CATEGORY_BY_SYMBOL:
         return _EXCEPTION_CATEGORY_BY_SYMBOL[sym], "annotation"
 
-    # ── 2. Hyperliquid HIP-3 category tags (set by normalizer._hip3_tags) ──
+    # ── 2. Explicit non-stock symbol overrides ────────────────────────────────
+    # Commodity and index symbols that are known to arrive on some HIP-3 DEXes
+    # with generic tags like ["perp", "equity"].  These MUST be checked before
+    # any "equity" tag handling so they are never mis-routed to stocks_etfs.
+    if sym in _COMMODITY_OVERRIDES:
+        return "commodities", "annotation"
+    if sym in _INDEX_OVERRIDES:
+        return "indices", "annotation"
+
+    # ── 3. Strong specific HIP-3 category tags ────────────────────────────────
     if "pre-ipo" in tags_lower or "pre_ipo" in tags_lower:
         return "pre_ipo", "hyperliquid_category"
     if "commodity" in tags_lower:
@@ -133,10 +171,8 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
         return "themes", "hyperliquid_category"
     if "index" in tags_lower:
         return "indices", "hyperliquid_category"
-    if "equity" in tags_lower:
-        return "stocks_etfs", "hyperliquid_category"
 
-    # ── 3. DEX prefix hint (annotation-level) ──────────────────────────────
+    # ── 4. DEX prefix hint (annotation-level) ─────────────────────────────────
     # HL HIP-3 DEX prefixes carry a strong category signal even if asset-level
     # tags missed it (e.g. new ticker not yet in the curated keyword list).
     if dex.startswith("hl-"):
@@ -164,7 +200,11 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
         if prefix in ("hyna", "para"):
             return "crypto", "annotation"
 
-    # ── 4. Symbol/name fallback ────────────────────────────────────────────
+    # ── 5. Generic "equity" tag — only after all non-stock overrides above ─────
+    if "equity" in tags_lower:
+        return "stocks_etfs", "hyperliquid_category"
+
+    # ── 6. Symbol/name fallback ───────────────────────────────────────────────
     if sym in _PREIPO_KEYWORDS:
         return "pre_ipo", "fallback"
     if sym in _THEME_KEYWORDS:
@@ -176,7 +216,7 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
     if sym in _EQUITY_KEYWORDS:
         return "stocks_etfs", "fallback"
 
-    # ── 5. Default: crypto ─────────────────────────────────────────────────
+    # ── 7. Default: crypto ────────────────────────────────────────────────────
     # Native HL perps (BTC, ETH, SOL, HYPE, ...) and spot markets all land here.
     return "crypto", "fallback"
 

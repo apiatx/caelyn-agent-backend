@@ -1,0 +1,117 @@
+You are working in the real CaelynAI backend Replit repo on main.
+
+This is a surgical backend fix only. Do not create branches. Do not touch frontend. Do not use Codex branches or PRs.
+
+Goal:
+Fix Hyperliquid Market Matrix classification so commodities, indices, themes, and pre-IPO assets do not leak into Stocks/ETFs.
+
+Current known state:
+The backend endpoint already exists:
+
+GET /api/hyperliquid/screener/market-matrix
+
+It should return six tabs:
+- stocks_etfs
+- crypto
+- commodities
+- indices
+- pre_ipo
+- themes
+
+Important:
+There was a bad attempted merge that made all tab counts zero. That has been reverted. Do not repeat that mistake. Asset counts must remain non-zero.
+
+Only modify this file:
+backend/services/hyperliquid/categorizer.py
+
+Do not modify:
+- backend/services/hyperliquid/normalizer.py
+- frontend files
+- endpoint shape
+- build_market_matrix data population loop, except preserving existing crypto spot exclusion if already present
+- Agent Market Brief
+- top cards
+- rankings
+- unrelated Hyperliquid logic
+
+Before changing code:
+Run this and confirm current counts are non-zero:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs | map_values(.count)'
+
+If counts are all zero before you change anything, stop and report that current main is already broken.
+
+Problem:
+Generic Hyperliquid metadata tags like "equity" are too broad. Assets like commodities and indices can arrive with tags like ["perp","equity"], causing them to be placed in stocks_etfs.
+
+Fix:
+In categorize_asset, explicit symbol overrides for non-stock asset classes must run before any generic "equity" tag handling.
+
+Add or verify exact-symbol overrides:
+
+Commodities -> commodities:
+CL, WTI, BRENTOIL, BRENT, OIL, NATGAS, GOLD, SILVER, COPPER, PLATINUM, PALLADIUM
+
+Indices -> indices:
+SP500, US500, USA100, USTECH, NASDAQ, XYZ100, JP225, KR200, EWY, EWJ, EWZ
+
+Themes -> themes:
+ROBOT, SEMI
+
+Pre-IPO -> pre_ipo:
+CBRS, CEREBRAS, SPACEX, OPENAI, ANTHROPIC
+
+Required precedence inside categorize_asset:
+1. Explicit override symbols for commodities, indices, themes, and pre_ipo
+2. Strong specific metadata tags like theme, preipo, commodity, index, crypto
+3. DEX/annotation hints
+4. Generic "equity" tags only after non-stock overrides
+5. Existing fallback keyword/symbol logic
+6. Existing default behavior
+
+Do not remove crypto spot filtering.
+Crypto tab must be Hyperliquid perps only. If build_market_matrix already excludes crypto rows with market_type == "spot", preserve that logic.
+
+Validation after change:
+Run:
+
+python -m py_compile backend/services/hyperliquid/categorizer.py
+
+Restart/reload backend if needed.
+
+Then run:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs | keys'
+
+Expected: all six tabs are present.
+
+Run:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs | map_values(.count)'
+
+Expected: counts are non-zero. Do not accept a fix with all zero counts.
+
+This must return nothing:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs.stocks_etfs.assets[]?.coin' | egrep 'CL|NATGAS|BRENTOIL|WTI|COPPER|PLATINUM|PALLADIUM|SP500|XYZ100|JP225|KR200|USA100|EWY|EWJ|EWZ|ROBOT|SEMI|CBRS|CEREBRAS'
+
+These should return matches if present:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs.commodities.assets[]?.coin' | egrep 'CL|NATGAS|BRENTOIL|WTI|COPPER|PLATINUM|PALLADIUM|GOLD|SILVER'
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs.indices.assets[]?.coin' | egrep 'SP500|XYZ100|JP225|KR200|USA100|EWY|EWJ|EWZ'
+
+This must return nothing:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs.crypto.assets[] | select(.market_type=="spot") | .coin'
+
+Commit/push only if validation passes.
+
+Commit message:
+Fix Hyperliquid Market Matrix classification overrides
+
+Return:
+- exact file changed
+- exact summary of the classification precedence change
+- before/after validation outputs
+- commit hash if pushed
