@@ -89,6 +89,8 @@ async def _fetch_batch(symbols: list[str], api_key: str) -> dict[str, dict]:
             result[sym] = {
                 "price":            _safe_float(q.get("last")),
                 "change_pct_1d":    _safe_float(q.get("change_percentage")),
+                "volume":           _safe_float(q.get("volume")),
+                "average_volume":   _safe_float(q.get("average_volume")),
                 "name":             q.get("description") or sym,
                 "quote_source":     "tradier",
                 "quote_updated_at": now_str,
@@ -147,7 +149,7 @@ async def get_watchlist_quotes(
     force_refresh: bool = False,
 ) -> dict[str, dict]:
     """
-    Return cached quotes dict {SYMBOL: {price, change_pct_1d, name, quote_source, quote_updated_at}}.
+    Return cached quotes dict {SYMBOL: {price, change_pct_1d, volume, average_volume, name, quote_source, quote_updated_at}}.
 
     Behaviour:
       - Empty cache (first call after server start): awaits a foreground fetch so

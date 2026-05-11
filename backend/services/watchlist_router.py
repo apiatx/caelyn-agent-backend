@@ -106,6 +106,8 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             # ── 1D % change (always overwrite with freshest Tradier data) ─
             if q:
                 enriched["change_pct_1d"]    = q.get("change_pct_1d")
+                enriched["volume"]           = q.get("volume")
+                enriched["average_volume"]   = q.get("average_volume")
                 enriched["quote_source"]     = "tradier"
                 enriched["quote_updated_at"] = q.get("quote_updated_at", now_str)
 
