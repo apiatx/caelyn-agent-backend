@@ -488,8 +488,8 @@ _RWA    = {"ONDO", "CANTO", "CFG", "TRU", "MPL"}
 _HIP3_EQUITY     = {"TSLA", "NVDA", "AAPL", "MSFT", "META", "AMZN", "GOOGL", "HOOD", "COIN",
                     "INTC", "PLTR", "CRCL", "AMD", "NFLX", "UBER", "LYFT", "BABA", "TSM"}
 _HIP3_COMMODITY  = {"GOLD", "SILVER", "OIL", "GAS", "USOIL", "USENERGY"}
-_HIP3_INDEX      = {"US500", "USA500", "USTECH", "SMALL2000", "USBOND", "SPX", "NDX",
-                    "MAG7", "SEMIS", "INFOTECH", "NUCLEAR", "DEFENSE", "ENERGY", "ROBOT"}
+_HIP3_INDEX      = {"US500", "USA500", "USTECH", "SMALL2000", "USBOND", "SPX", "NDX"}
+_HIP3_THEME      = {"MAG7", "SEMIS", "SEMI", "INFOTECH", "NUCLEAR", "DEFENSE", "ENERGY", "ROBOT"}
 _HIP3_PREIPO     = {"SPACEX", "OPENAI", "ANTHROPIC"}
 _HIP3_MACRO      = {"EUR", "USBOND", "TOTAL2", "OTHERS", "BTCD"}
 
@@ -532,6 +532,7 @@ def _hip3_tags(dex_prefix: str, stripped_name: str) -> list[str]:
     # Asset-level refinement
     if n in _HIP3_EQUITY:    tags.append("equity")
     elif n in _HIP3_COMMODITY: tags.append("commodity")
+    elif n in _HIP3_THEME:   tags.append("theme")
     elif n in _HIP3_INDEX:   tags.append("index")
     elif n in _HIP3_PREIPO:  tags.append("pre-IPO")
     elif n in _HIP3_MACRO:   tags.append("macro")
