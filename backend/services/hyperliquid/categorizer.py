@@ -69,6 +69,16 @@ _THEME_KEYWORDS = {
     "ROBOT", "SEMI", "SEMIS", "INFOTECH", "NUCLEAR", "DEFENSE", "ENERGY", "AI",
 }
 
+_COMMODITY_OVERRIDE_SYMBOLS = {
+    "CL", "WTI", "BRENTOIL", "BRENT", "OIL", "NATGAS", "GOLD", "SILVER", "COPPER",
+    "PLATINUM", "PALLADIUM",
+}
+
+_INDEX_OVERRIDE_SYMBOLS = {
+    "SP500", "US500", "USA100", "USTECH", "NASDAQ", "XYZ100", "JP225", "KR200",
+    "EWY", "EWJ", "EWZ",
+}
+
 # Common equity tickers spanning major US stocks/ETFs traded on HL HIP-3 DEXes.
 _EQUITY_KEYWORDS = {
     "AAPL", "MSFT", "NVDA", "AMD", "INTC", "GOOG", "GOOGL", "META", "AMZN",
@@ -102,6 +112,13 @@ _EXCEPTION_CATEGORY_BY_SYMBOL: dict[str, str] = {
 }
 
 
+def _symbol_matches_override(sym: str, symbols: set[str]) -> bool:
+    """Match exact override symbols and common prefixed variants (e.g. US:SP500)."""
+    if sym in symbols:
+        return True
+    return any(sym.endswith(f":{s}") for s in symbols)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
@@ -120,11 +137,17 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
     if ":" in sym:
         sym = sym.split(":", 1)[1]
 
-    # ── 1. Stable backend exceptions for known upstream tag drift ──────────
+    # ── 1. Stable explicit non-stock overrides (hard precedence) ───────────
+    if _symbol_matches_override(sym, _THEME_KEYWORDS):
+        return "themes", "annotation"
     if sym in _EXCEPTION_CATEGORY_BY_SYMBOL:
         return _EXCEPTION_CATEGORY_BY_SYMBOL[sym], "annotation"
+    if _symbol_matches_override(sym, _COMMODITY_OVERRIDE_SYMBOLS):
+        return "commodities", "annotation"
+    if _symbol_matches_override(sym, _INDEX_OVERRIDE_SYMBOLS):
+        return "indices", "annotation"
 
-    # ── 2. Hyperliquid HIP-3 category tags (set by normalizer._hip3_tags) ──
+    # ── 2. Strong Hyperliquid metadata tags (specific only) ────────────────
     if "pre-ipo" in tags_lower or "pre_ipo" in tags_lower:
         return "pre_ipo", "hyperliquid_category"
     if "commodity" in tags_lower:
@@ -133,8 +156,8 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
         return "themes", "hyperliquid_category"
     if "index" in tags_lower:
         return "indices", "hyperliquid_category"
-    if "equity" in tags_lower:
-        return "stocks_etfs", "hyperliquid_category"
+    if "crypto" in tags_lower:
+        return "crypto", "hyperliquid_category"
 
     # ── 3. DEX prefix hint (annotation-level) ──────────────────────────────
     # HL HIP-3 DEX prefixes carry a strong category signal even if asset-level
@@ -164,7 +187,11 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
         if prefix in ("hyna", "para"):
             return "crypto", "annotation"
 
-    # ── 4. Symbol/name fallback ────────────────────────────────────────────
+    # ── 4. Generic equity tags only after all non-stock exclusions ─────────
+    if "equity" in tags_lower:
+        return "stocks_etfs", "hyperliquid_category"
+
+    # ── 5. Symbol/name fallback ────────────────────────────────────────────
     if sym in _PREIPO_KEYWORDS:
         return "pre_ipo", "fallback"
     if sym in _THEME_KEYWORDS:
@@ -176,7 +203,7 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
     if sym in _EQUITY_KEYWORDS:
         return "stocks_etfs", "fallback"
 
-    # ── 5. Default: crypto ─────────────────────────────────────────────────
+    # ── 6. Default: crypto ─────────────────────────────────────────────────
     # Native HL perps (BTC, ETH, SOL, HYPE, ...) and spot markets all land here.
     return "crypto", "fallback"
 
@@ -302,6 +329,9 @@ def build_market_matrix(
     fallback_count = 0
     for idx, a in enumerate(ranked):
         row = asset_to_matrix_row(a, rank=idx + 1)
+        # Market Matrix crypto tab is perp-only; exclude spot rows.
+        if row["asset_type"] == "crypto" and (row.get("market_type") or "").lower() == "spot":
+            continue
         if row["category_source"] == "fallback" and row["asset_type"] != "crypto":
             fallback_count += 1
         # Attach OI cap state if available
