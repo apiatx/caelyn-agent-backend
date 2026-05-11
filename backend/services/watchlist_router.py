@@ -108,7 +108,18 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                 enriched["change_pct_1d"]    = q.get("change_pct_1d")
                 enriched["volume"]           = q.get("volume")
                 enriched["average_volume"]   = q.get("average_volume")
-                enriched["quote_source"]     = "tradier"
+                # Pre-computed relative_volume (volume / average_volume) when both present.
+                rel_vol = q.get("relative_volume")
+                if rel_vol is None:
+                    v  = q.get("volume")
+                    av = q.get("average_volume")
+                    if v is not None and av:
+                        try:
+                            rel_vol = round(float(v) / float(av), 4)
+                        except Exception:
+                            rel_vol = None
+                enriched["relative_volume"]  = rel_vol
+                enriched["quote_source"]     = q.get("quote_source") or "tradier"
                 enriched["quote_updated_at"] = q.get("quote_updated_at", now_str)
 
             enriched_tickers.append(enriched)
