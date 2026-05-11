@@ -4,21 +4,27 @@ Hyperliquid Market Matrix categorizer.
 Assigns every ScreenerAsset in the live Hyperliquid universe to exactly one of:
   stocks_etfs | crypto | commodities | indices | pre_ipo | themes
 
-Classification precedence (enforced in categorize_asset):
-  1. Stable backend exceptions (_EXCEPTION_CATEGORY_BY_SYMBOL) — pre_ipo / themes
-     that are known to carry mis-leading upstream tags.
-  2. Explicit non-stock symbol overrides (_COMMODITY_OVERRIDES / _INDEX_OVERRIDES)
-     — commodity and index symbols that can arrive with generic "equity" tags on
-     some HIP-3 DEXes.  These MUST fire before any "equity" tag handling.
-  3. Strong specific HIP-3 category tags: pre-ipo, commodity, theme, index.
-  4. DEX prefix hint for HIP-3 markets (xyz/flx/cash → stocks, vntl → pre-IPO,
-     km → macro, abcd → index, hyna/para → crypto) with per-symbol refinement.
-  5. Generic "equity" tag — only reached after all non-stock overrides above.
-  6. Symbol/name fallback against curated keyword lists.
-  7. Default: crypto (covers BTC/ETH/SOL/HYPE and the entire native HL perp set).
-
-Native Hyperliquid perps that do NOT carry a HIP-3 dex prefix are always crypto.
-Spot markets are crypto unless tagged otherwise.
+Classification precedence (enforced inside categorize_asset):
+  1. Stable backend exceptions (_EXCEPTION_CATEGORY_BY_SYMBOL)
+     Known symbols mis-tagged upstream; always wins.
+  2. Commodity overrides (_COMMODITY_OVERRIDES)
+     Hard commodity/agri/metal/energy futures — BEFORE any "pre-ipo" tag.
+  3. Index overrides (_INDEX_OVERRIDES)
+     Hard benchmark/index symbols — BEFORE any "equity" tag.
+  4. Theme/basket overrides (_THEME_OVERRIDES)
+     Theme/sector/basket markets — BEFORE any "pre-ipo" tag.
+     (Prevents vntl DEX theme baskets from leaking into pre_ipo.)
+  5. Strong specific HIP-3 category tags:
+     pre-ipo → pre_ipo; commodity → commodities; theme → themes; index → indices.
+  6. DEX prefix hints (annotation-level, per-symbol refined):
+     xyz/flx/cash → stocks_etfs (with keyword refinement)
+     vntl → pre_ipo (with commodity/theme/index refinement)
+     abcd → indices
+     km → equity/stock/commodity/theme check; default stocks_etfs
+     hyna/para → crypto
+  7. Generic "equity" tag → stocks_etfs (only after all non-stock overrides).
+  8. Symbol/name fallback against curated keyword lists.
+  9. Default: crypto (native HL perps; spot markets filtered at endpoint level).
 """
 from __future__ import annotations
 
@@ -43,92 +49,130 @@ TAB_ORDER: list[str] = ["stocks_etfs", "crypto", "commodities", "indices", "pre_
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Explicit non-stock symbol overrides
+# Hard symbol overrides  (steps 1–4 in categorize_asset)
 #
-# These fire BEFORE any generic "equity" tag handling (step 2 in precedence).
-# Any symbol listed here will be routed to its designated tab regardless of
-# whatever upstream HIP-3 tags the normalizer attached.
+# These run BEFORE any tag-based logic so noisy upstream metadata
+# (e.g. a vntl DEX basket tagged "pre-IPO", or a commodity tagged "equity")
+# cannot force an asset into the wrong tab.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Commodity futures / spot symbols — unambiguously not stocks/ETFs.
-_COMMODITY_OVERRIDES: frozenset[str] = frozenset({
-    "CL", "WTI", "BRENTOIL", "BRENT", "OIL", "NATGAS",
-    "GOLD", "SILVER", "COPPER", "PLATINUM", "PALLADIUM",
-})
-
-# Index / macro benchmarks — unambiguously not individual stocks.
-_INDEX_OVERRIDES: frozenset[str] = frozenset({
-    "SP500", "US500", "USA100", "USTECH", "NASDAQ", "XYZ100",
-    "JP225", "KR200", "EWY", "EWJ", "EWZ",
-})
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Fallback symbol/name keyword lists (used when HL tags are inconclusive)
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Common commodity tickers/markers seen on HL HIP-3 DEXes.
-_COMMODITY_KEYWORDS = {
-    "CL",
-    "GOLD", "XAU", "SILVER", "XAG", "PLATINUM", "XPT", "PALLADIUM", "XPD",
-    "COPPER", "OIL", "WTI", "BRENT", "BRENTOIL", "USOIL", "USENERGY",
-    "NATGAS", "GAS", "NGAS", "CORN", "WHEAT", "SOYBEAN", "SUGAR", "COFFEE",
-}
-
-# Common index / index-ETF tickers on HL HIP-3.
-_INDEX_KEYWORDS = {
-    "SPX", "SP500", "SPY", "USA500", "US500", "USA100", "NDX", "QQQ",
-    "USTECH", "NASDAQ", "XYZ100",
-    "DJI", "DOW", "RUSSELL", "RUT", "IWM", "SMALL2000", "VIX",
-    "MAG7", "INFOTECH", "NUCLEAR", "DEFENSE", "ENERGY",
-    "JP225", "KR200",
-    "EWY", "EWZ", "EWJ", "EFA", "EEM", "FXI", "XLK", "XLF",
-    "XLE", "XLV", "XLY", "XLP", "XLI", "XLU", "XLB", "XLRE",
-}
-
-# Common pre-IPO names. These appear on HL HIP-3 (Ventral / vntl DEX).
-_PREIPO_KEYWORDS = {
-    "SPACEX", "OPENAI", "ANTHROPIC", "CEREBRAS", "STRIPE", "DATABRICKS",
-    "XAI", "PERPLEXITY", "FIGURE", "NEURALINK", "RIPPLE", "EPICGAMES",
-    "BYTEDANCE", "TIKTOK", "DISCORD", "REDDIT", "INSTACART", "KLARNA",
-    "SHEIN", "REVOLUT", "CHIME", "PLAID",
-}
-
-_THEME_KEYWORDS = {
-    "ROBOT", "SEMI", "SEMIS", "INFOTECH", "NUCLEAR", "DEFENSE", "ENERGY", "AI",
-}
-
-# Common equity tickers spanning major US stocks/ETFs traded on HL HIP-3 DEXes.
-_EQUITY_KEYWORDS = {
-    "AAPL", "MSFT", "NVDA", "AMD", "INTC", "GOOG", "GOOGL", "META", "AMZN",
-    "TSLA", "NFLX", "ORCL", "CRM", "ADBE", "CSCO", "QCOM", "AVGO", "MU",
-    "TSM", "ASML", "ARM", "PLTR", "SNOW", "DDOG", "NET", "CRWD", "PANW",
-    "ZS", "OKTA", "MDB", "TEAM", "SHOP", "SQ", "PYPL", "COIN", "HOOD",
-    "CRCL", "RBLX", "U", "ROKU", "ABNB", "UBER", "LYFT", "DASH",
-    "JPM", "BAC", "GS", "MS", "WFC", "C", "V", "MA", "AXP",
-    "BRK", "BRKA", "BRKB", "BABA", "BIDU", "PDD", "JD", "NIO", "XPEV",
-    "BA", "LMT", "RTX", "NOC", "GD", "GE", "F", "GM", "RIVN", "LCID",
-    "WMT", "TGT", "COST", "HD", "LOW", "MCD", "SBUX", "NKE", "DIS",
-    "KO", "PEP", "JNJ", "PFE", "MRK", "ABBV", "LLY", "UNH",
-    "XOM", "CVX", "COP", "OXY", "SLB", "HAL", "MPC", "VLO",
-}
-
-# Macro/FX (rare). Map to commodities only when the symbol is explicitly a
-# commodity; otherwise macro flows to crypto as a safe default (no FX tab exists).
-_MACRO_TO_INDEX = {"TOTAL2", "OTHERS", "BTCD"}  # crypto-aggregate macro markers
-_MACRO_TO_COMMODITY: set[str] = set()
-_MACRO_TO_FX: set[str] = set()  # placeholder; FX has no dedicated tab
-
-# Stable exception map for known symbols that are frequently mis-tagged upstream.
+# Step 1 — known mis-tagged assets whose upstream tag is reliably wrong.
 _EXCEPTION_CATEGORY_BY_SYMBOL: dict[str, str] = {
+    # Pre-IPO private companies with noisy DEX equity tags
     "CBRS":      "pre_ipo",
     "CEREBRAS":  "pre_ipo",
     "SPACEX":    "pre_ipo",
     "OPENAI":    "pre_ipo",
     "ANTHROPIC": "pre_ipo",
+    # Theme/sector baskets that sit on non-theme DEXes
     "ROBOT":     "themes",
     "SEMI":      "themes",
 }
+
+# Step 2 — commodity futures / spot / agri / metals.
+# MUST fire before the "pre-ipo" tag check so vntl-hosted commodity perps
+# (e.g. WHEAT, SOY) are not routed to pre_ipo.
+_COMMODITY_OVERRIDES: frozenset[str] = frozenset({
+    # Energy / crude
+    "CL", "WTI", "BRENTOIL", "BRENT", "OIL", "NATGAS",
+    # Metals
+    "GOLD", "SILVER", "COPPER", "PLATINUM", "PALLADIUM",
+    # Agri / softs
+    "WHEAT", "SOY", "SOYBEAN", "CORN", "COCOA", "COFFEE", "SUGAR",
+})
+
+# Step 3 — benchmark / index / country-index markets.
+# MUST fire before the "equity" tag check so known index perps are not
+# routed to stocks_etfs when tagged ["perp", "equity"].
+_INDEX_OVERRIDES: frozenset[str] = frozenset({
+    "SP500", "US500", "USA500", "USA100", "USTECH", "NASDAQ", "XYZ100",
+    "JP225", "KR200", "EWY", "EWJ", "EWZ",
+})
+
+# Step 4 — theme/sector/basket markets.
+# MUST fire before the "pre-ipo" tag check so vntl-hosted basket perps
+# (e.g. MAG7, BIOTECH, ENERGY) are not routed to pre_ipo.
+# Note: XAI is intentionally absent — it is a native Hyperliquid crypto token.
+_THEME_OVERRIDES: frozenset[str] = frozenset({
+    "MAG7",
+    "ENERGY", "DEFENSE", "NUCLEAR", "INFOTECH",
+    "BIOTECH", "SEMIS",
+    "AI", "DATACENTER", "POWER", "URANIUM",
+    "DRAM", "MEMORY", "QUANTUM", "PHOTONICS", "CPO",
+})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fallback keyword lists  (step 8 — only reached when tag/DEX logic is
+# inconclusive).  These must stay consistent with the override sets above.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_COMMODITY_KEYWORDS: frozenset[str] = frozenset({
+    "CL",
+    "GOLD", "XAU", "SILVER", "XAG", "PLATINUM", "XPT", "PALLADIUM", "XPD",
+    "COPPER", "OIL", "WTI", "BRENT", "BRENTOIL", "USOIL", "USENERGY",
+    "NATGAS", "GAS", "NGAS",
+    "WHEAT", "SOY", "SOYBEAN", "CORN", "COCOA", "COFFEE", "SUGAR",
+})
+
+_INDEX_KEYWORDS: frozenset[str] = frozenset({
+    "SPX", "SP500", "SPY", "USA500", "US500", "USA100", "NDX", "QQQ",
+    "USTECH", "NASDAQ", "XYZ100",
+    "DJI", "DOW", "RUSSELL", "RUT", "IWM", "SMALL2000", "VIX",
+    "JP225", "KR200",
+    "EWY", "EWZ", "EWJ", "EFA", "EEM", "FXI",
+    "XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLU", "XLB", "XLRE",
+    "USBOND",
+})
+
+# Theme/basket keyword set — XAI is excluded (it is a Hyperliquid crypto perp).
+_THEME_KEYWORDS: frozenset[str] = frozenset({
+    "ROBOT", "SEMI", "SEMIS",
+    "MAG7", "INFOTECH", "NUCLEAR", "DEFENSE", "ENERGY",
+    "BIOTECH", "AI", "DATACENTER", "POWER", "URANIUM",
+    "DRAM", "MEMORY", "QUANTUM", "PHOTONICS", "CPO",
+})
+
+# Private / pre-IPO company names.
+# XAI removed — on Hyperliquid, XAI is a native crypto token, not a pre-IPO.
+_PREIPO_KEYWORDS: frozenset[str] = frozenset({
+    "SPACEX", "OPENAI", "ANTHROPIC", "CEREBRAS", "STRIPE", "DATABRICKS",
+    "DATBRICKS", "PERPLEXITY", "RIPPLING", "FIGMA",
+    "FIGURE", "NEURALINK", "RIPPLE", "EPICGAMES",
+    "BYTEDANCE", "TIKTOK", "DISCORD", "KLARNA",
+    "SHEIN", "REVOLUT", "CHIME", "PLAID",
+})
+
+# Single-company public equities / ETFs.
+# Includes common US, Asian, and European names that appear on HL HIP-3 DEXes
+# without reliable equity tags (e.g. km-DEX stocks tagged only "macro").
+_EQUITY_KEYWORDS: frozenset[str] = frozenset({
+    # US mega-cap tech
+    "AAPL", "MSFT", "NVDA", "AMD", "INTC", "GOOG", "GOOGL", "META", "AMZN",
+    "TSLA", "NFLX", "ORCL", "CRM", "ADBE", "CSCO", "QCOM", "AVGO", "MU",
+    "TSM", "ASML", "ARM", "PLTR", "SNOW", "DDOG", "NET", "CRWD", "PANW",
+    "ZS", "OKTA", "MDB", "TEAM", "SHOP", "SQ", "PYPL", "COIN", "HOOD",
+    "CRCL", "RBLX", "U", "ROKU", "ABNB", "UBER", "LYFT", "DASH",
+    # US finance
+    "JPM", "BAC", "GS", "MS", "WFC", "C", "V", "MA", "AXP",
+    "BRK", "BRKA", "BRKB",
+    # US consumer / industrial / healthcare
+    "WMT", "TGT", "COST", "HD", "LOW", "MCD", "SBUX", "NKE", "DIS",
+    "KO", "PEP", "JNJ", "PFE", "MRK", "ABBV", "LLY", "UNH", "BMRN",
+    "BA", "LMT", "RTX", "NOC", "GD", "GE", "F", "GM", "RIVN", "LCID",
+    "RKLB", "DKNG", "GME", "HIMS", "MSTR", "MRVL", "ZM",
+    # US energy (single-company, not commodity futures)
+    "XOM", "CVX", "COP", "OXY", "SLB", "HAL", "MPC", "VLO",
+    # EM / Asian / European single stocks
+    "BABA", "BIDU", "PDD", "JD", "NIO", "XPEV",
+    "TENCENT", "XIAOMI", "HYUNDAI", "SMSN",
+    # Other HIP-3 equities
+    "SNDK", "EBAY", "HOOD", "URNM", "CAR", "LITE", "BIRD", "USAR",
+    "SKHX", "SMSN", "HYUNDAI",
+})
+
+# Symbols that are crypto-domain macro markers, not index/commodity assets.
+_MACRO_TO_INDEX: frozenset[str] = frozenset({"TOTAL2", "OTHERS", "BTCD"})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -139,30 +183,42 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
     """
     Return (asset_type, category_source) for a ScreenerAsset.
 
-    asset_type ∈ TAB_ORDER
+    asset_type     ∈ TAB_ORDER
     category_source ∈ {"hyperliquid_category", "annotation", "fallback"}
     """
     tags_lower = {t.lower() for t in (asset.tags or [])}
     dex = (asset.dex or "").lower()
     sym = (asset.display_name or asset.coin or "").upper()
-    # Strip HIP-3 prefix if present (e.g. "xyz:TSLA" → "TSLA")
+    # Strip HIP-3 DEX prefix if present (e.g. "xyz:TSLA" → "TSLA")
     if ":" in sym:
         sym = sym.split(":", 1)[1]
 
-    # ── 1. Stable backend exceptions (pre_ipo / themes with known tag drift) ─
+    # ── 1. Stable backend exceptions ──────────────────────────────────────────
+    # Known assets whose upstream HIP-3 tag is systematically wrong.
     if sym in _EXCEPTION_CATEGORY_BY_SYMBOL:
         return _EXCEPTION_CATEGORY_BY_SYMBOL[sym], "annotation"
 
-    # ── 2. Explicit non-stock symbol overrides ────────────────────────────────
-    # Commodity and index symbols that are known to arrive on some HIP-3 DEXes
-    # with generic tags like ["perp", "equity"].  These MUST be checked before
-    # any "equity" tag handling so they are never mis-routed to stocks_etfs.
+    # ── 2. Commodity symbol overrides ─────────────────────────────────────────
+    # Fire before the "pre-ipo" tag check so vntl-hosted commodity perps
+    # (WHEAT, SOY, CORN, COCOA, …) are never routed to pre_ipo.
     if sym in _COMMODITY_OVERRIDES:
         return "commodities", "annotation"
+
+    # ── 3. Index symbol overrides ─────────────────────────────────────────────
+    # Fire before the "equity" tag check so index perps tagged ["perp","equity"]
+    # are never routed to stocks_etfs.
     if sym in _INDEX_OVERRIDES:
         return "indices", "annotation"
 
-    # ── 3. Strong specific HIP-3 category tags ────────────────────────────────
+    # ── 4. Theme/basket symbol overrides ──────────────────────────────────────
+    # Fire before the "pre-ipo" tag check so vntl-hosted basket perps
+    # (MAG7, BIOTECH, ENERGY, DEFENSE, …) are never routed to pre_ipo.
+    if sym in _THEME_OVERRIDES:
+        return "themes", "annotation"
+
+    # ── 5. Strong specific HIP-3 category tags ────────────────────────────────
+    # At this point all known commodity/index/theme symbols have been handled,
+    # so these tag checks are reliable for the remaining population.
     if "pre-ipo" in tags_lower or "pre_ipo" in tags_lower:
         return "pre_ipo", "hyperliquid_category"
     if "commodity" in tags_lower:
@@ -172,13 +228,13 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
     if "index" in tags_lower:
         return "indices", "hyperliquid_category"
 
-    # ── 4. DEX prefix hint (annotation-level) ─────────────────────────────────
-    # HL HIP-3 DEX prefixes carry a strong category signal even if asset-level
-    # tags missed it (e.g. new ticker not yet in the curated keyword list).
+    # ── 6. DEX prefix hint (annotation-level, per-symbol refined) ────────────
     if dex.startswith("hl-"):
         prefix = dex[3:]
+
         if prefix in ("xyz", "flx", "cash"):
-            # Refine with symbol-level keywords before defaulting to stocks_etfs
+            # These DEXes are primarily equity/stock perps.
+            # Refine with symbol-level keywords before defaulting to stocks_etfs.
             if sym in _COMMODITY_KEYWORDS:
                 return "commodities", "annotation"
             if sym in _INDEX_KEYWORDS:
@@ -188,23 +244,53 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
             if sym in _PREIPO_KEYWORDS:
                 return "pre_ipo", "annotation"
             return "stocks_etfs", "annotation"
+
         if prefix == "vntl":
-            return "pre_ipo", "annotation"
-        if prefix == "abcd":
-            return "indices", "annotation"
-        if prefix == "km":
-            # macro DEX — refine, otherwise treat as indices (closest analog)
+            # vntl is primarily pre-IPO, but also hosts theme baskets and
+            # agri commodities. Hard overrides (steps 1–4) handle the known
+            # cases; anything reaching here without a match is treated as
+            # pre-IPO (true private company markets not yet in the override sets).
             if sym in _COMMODITY_KEYWORDS:
                 return "commodities", "annotation"
+            if sym in _THEME_KEYWORDS:
+                return "themes", "annotation"
+            if sym in _INDEX_KEYWORDS:
+                return "indices", "annotation"
+            return "pre_ipo", "annotation"
+
+        if prefix == "abcd":
             return "indices", "annotation"
+
+        if prefix == "km":
+            # km is a "macro" DEX hosting equities, true indices, FX, and macro
+            # markers.  True indices on km always carry an "index" tag and were
+            # already handled at step 5.  Remaining assets:
+            #   • equity-tagged stocks (NVDA, GOOGL, TSLA, …) → stocks_etfs
+            #   • stocks without equity tag (TENCENT, XIAOMI, RTX, …) → stocks_etfs
+            #   • known commodities → commodities
+            #   • known themes → themes
+            #   • unknowns (EUR, GLDMINE, …) → stocks_etfs (safer default; no FX tab)
+            if sym in _COMMODITY_KEYWORDS:
+                return "commodities", "annotation"
+            if sym in _THEME_KEYWORDS:
+                return "themes", "annotation"
+            if "equity" in tags_lower or sym in _EQUITY_KEYWORDS:
+                return "stocks_etfs", "annotation"
+            # Unknown km-DEX asset (TENCENT, XIAOMI, RTX, EUR, etc. without
+            # equity tag): default stocks_etfs — true indices are caught by
+            # their "index" tag at step 5 before reaching this handler.
+            return "stocks_etfs", "annotation"
+
         if prefix in ("hyna", "para"):
             return "crypto", "annotation"
 
-    # ── 5. Generic "equity" tag — only after all non-stock overrides above ─────
+    # ── 7. Generic "equity" tag ───────────────────────────────────────────────
+    # Only reached after all symbol-level overrides and DEX hints above.
+    # Safe to trust here because commodities/indices/themes are already gone.
     if "equity" in tags_lower:
         return "stocks_etfs", "hyperliquid_category"
 
-    # ── 6. Symbol/name fallback ───────────────────────────────────────────────
+    # ── 8. Symbol / name keyword fallback ─────────────────────────────────────
     if sym in _PREIPO_KEYWORDS:
         return "pre_ipo", "fallback"
     if sym in _THEME_KEYWORDS:
@@ -216,8 +302,9 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
     if sym in _EQUITY_KEYWORDS:
         return "stocks_etfs", "fallback"
 
-    # ── 7. Default: crypto ────────────────────────────────────────────────────
-    # Native HL perps (BTC, ETH, SOL, HYPE, ...) and spot markets all land here.
+    # ── 9. Default: crypto ────────────────────────────────────────────────────
+    # Native HL perps (BTC, ETH, SOL, HYPE, XAI, …) land here.
+    # Spot market filtering is enforced at the endpoint/router level.
     return "crypto", "fallback"
 
 
@@ -225,9 +312,6 @@ def asset_to_matrix_row(asset: ScreenerAsset, rank: Optional[int] = None) -> dic
     """
     Convert a ScreenerAsset to the Market Matrix row shape expected by the
     frontend Hyperliquid screener tabs.
-
-    Field naming matches the Market Matrix contract (snake_case for derived
-    metric fields, distinct from the camelCase /snapshot ScreenerRow).
     """
     asset_type, category_source = categorize_asset(asset)
 
@@ -237,14 +321,14 @@ def asset_to_matrix_row(asset: ScreenerAsset, rank: Optional[int] = None) -> dic
     prev = asset.prev_day_px
     fund = asset.funding
 
-    change_24h_pct = asset.pct_change_24h  # already in %
+    change_24h_pct = asset.pct_change_24h
     funding_ann_pct = (fund * 8760 * 100) if fund is not None else None
 
     premium_pct = None
     if asset.premium is not None:
         premium_pct = round(asset.premium * 100, 6)
 
-    mark_oracle_pct = asset.distance_mark_oracle_pct  # already in %
+    mark_oracle_pct = asset.distance_mark_oracle_pct
 
     vol_score = None
     if asset.volatility_score is not None:
@@ -262,7 +346,6 @@ def asset_to_matrix_row(asset: ScreenerAsset, rank: Optional[int] = None) -> dic
     if asset.dex and asset.dex.startswith("hl-"):
         annotation = asset.dex
 
-    # OI cap state set elsewhere; surfaced when available
     oi_cap_status = None
     oi_cap_util_pct = None
 
@@ -317,21 +400,19 @@ def build_market_matrix(
     """
     Build the full Market Matrix payload from a list of ScreenerAssets.
 
-    Returns the contract:
+    Returns:
       {
         "tabs": { <tab>: { label, count, assets[] } },
         "all_assets_count": int,
         "warnings": [str],
       }
-    `source` and `updated_at` are added by the caller.
+    `source` and `updated_at` are added by the caller (router).
     """
     tabs: dict[str, dict] = {
         t: {"label": TAB_LABELS[t], "count": 0, "assets": []}
         for t in TAB_ORDER
     }
 
-    # Rank assets globally by overall_score (desc) for consistent agent_rank
-    # values across tabs (mirrors how the snapshot endpoint ranks).
     ranked = sorted(
         assets,
         key=lambda a: (a.overall_score if a.overall_score is not None else -1),
@@ -340,11 +421,26 @@ def build_market_matrix(
 
     warnings: list[str] = []
     fallback_count = 0
+    spot_excluded = 0
     for idx, a in enumerate(ranked):
         row = asset_to_matrix_row(a, rank=idx + 1)
+
+        # Crypto tab = perpetuals only.
+        # Exclude native Hyperliquid spot listings (market_type=="spot" or
+        # canonical_coin_id like "@123") from the crypto tab.
+        if row["asset_type"] == "crypto":
+            is_spot = (
+                (a.market_type or "").lower() == "spot"
+                or "spot" in {t.lower() for t in (a.tags or [])}
+                or str(a.canonical_coin_id or "").startswith("@")
+            )
+            if is_spot:
+                spot_excluded += 1
+                continue
+
         if row["category_source"] == "fallback" and row["asset_type"] != "crypto":
             fallback_count += 1
-        # Attach OI cap state if available
+
         if oi_caps:
             cap = oi_caps.get(a.coin)
             oi_usd = a.open_interest_usd

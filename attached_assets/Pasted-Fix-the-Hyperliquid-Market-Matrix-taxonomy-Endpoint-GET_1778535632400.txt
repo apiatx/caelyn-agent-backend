@@ -1,0 +1,192 @@
+Fix the Hyperliquid Market Matrix taxonomy.
+
+Endpoint:
+GET /api/hyperliquid/screener/market-matrix
+
+The endpoint already works and the frontend already shows six toggles:
+
+- Stocks/ETFs
+- Crypto
+- Commodities
+- Indices
+- Pre-IPO Stocks
+- Themes
+
+The issue is that assets are still landing in the wrong tabs.
+
+Current examples from the UI:
+- Indices tab is showing single-name stocks like TSLA, MU, NVDA, GOOGL, BABA, TENCENT, BMRN. These should be Stocks/ETFs, not Indices.
+- Pre-IPO tab is showing theme/sector/commodity baskets like MAG7, ENERGY, DEFENSE, WHEAT, NUCLEAR, INFOTECH, SOY, SEMIS, BIOTECH. These should not be Pre-IPO.
+- Themes tab only shows SEMI and ROBOT, but many theme/sector baskets are currently landing elsewhere.
+- Crypto tab is still showing spot listings/junk spot assets. Crypto must be perpetuals only.
+- XAI on Hyperliquid is crypto, not a Theme.
+
+Goal:
+Make the six Market Matrix tabs deterministic, stable, and driven by the best available Hyperliquid metadata plus explicit symbol classification where metadata is noisy.
+
+Do not change the endpoint shape.
+
+Do not change frontend.
+
+Do not redesign or touch unrelated Hyperliquid sections like Agent Market Brief, top cards, rankings, or signal panels.
+
+Primary file is likely:
+backend/services/hyperliquid/categorizer.py
+
+You may inspect related Hyperliquid normalizer/metadata files if needed, but avoid unnecessary changes. If you change another file, explain why.
+
+Core classification principles:
+
+1. Exact known symbols should override noisy generic metadata.
+2. Generic tags like "equity" must not force commodities, indices, themes, or pre-IPO assets into Stocks/ETFs.
+3. Single-company equity perps should be Stocks/ETFs even if they come from a DEX or metadata source that looks index-like.
+4. Theme/sector/basket markets should be Themes unless they are clearly commodities, indices, crypto, or true private/pre-IPO companies.
+5. Pre-IPO should be reserved for true private/pre-IPO company markets.
+6. Crypto tab must include crypto perpetual markets only. Exclude spot markets.
+7. Do not hardcode the entire Hyperliquid universe as if it is complete. Use known examples plus scalable rules so new Hyperliquid listings can still classify correctly.
+
+Required category behavior:
+
+Stocks/ETFs:
+Single-company public equity and ETF-style public equity markets should land here.
+
+Known examples include but are not limited to:
+TSLA, MU, NVDA, GOOGL, BABA, TENCENT, BMRN, AAPL, AMZN, AMD, ARM, COIN, COST, CRCL, DKNG, EBAY, GME, HIMS, HOOD, INTC, LLY, META, MRVL, MSFT, NFLX, ORCL, PLTR, RIVN, RKLB, SNDK, TSM, ZM.
+
+There are more Hyperliquid stock/equity markets than this list. Do not limit Stocks/ETFs to only these names.
+
+Indices:
+Only actual benchmark, index, country/region index, or market-index style markets should land here.
+
+Known examples include but are not limited to:
+SP500, US500, USA500, USA100, USTECH, NASDAQ, XYZ100, JP225, KR200, EWY, EWJ, EWZ.
+
+There may be more index-like Hyperliquid markets. Use metadata plus symbol rules carefully, but do not classify single-company stocks as indices.
+
+Themes:
+Theme/sector/basket markets should land here.
+
+Known examples include but are not limited to:
+ROBOT, SEMI, SEMIS, MAG7, ENERGY, DEFENSE, NUCLEAR, INFOTECH, BIOTECH, AI, DATACENTER, POWER, URANIUM, DRAM, MEMORY, QUANTUM, PHOTONICS, CPO.
+
+There may be more Hyperliquid theme/basket markets. Use scalable theme detection where possible.
+
+Important:
+XAI should NOT be Themes. On Hyperliquid, XAI is crypto.
+
+Commodities:
+Commodity, agri, metal, and energy futures-style markets should land here.
+
+Known examples include but are not limited to:
+CL, WTI, BRENTOIL, BRENT, OIL, NATGAS, GOLD, SILVER, COPPER, PLATINUM, PALLADIUM, WHEAT, SOY, CORN, COCOA, COFFEE, SUGAR.
+
+There may be more commodity-style Hyperliquid markets. Use scalable rules.
+
+Pre-IPO Stocks:
+Only true private/pre-IPO company markets should land here.
+
+Known examples include but are not limited to:
+ANTHROPIC, SPACEX, OPENAI, CBRS, CEREBRAS.
+
+Potential examples if present and represented as private/pre-IPO markets:
+PERPLEXITY, RIPPLING, STRIPE, DATABRICKS, DATBRICKS, FIGMA.
+
+Do not classify theme baskets, commodities, or public ETFs as Pre-IPO.
+
+Crypto:
+Crypto tab should contain only crypto perpetual markets.
+
+Known examples include but are not limited to:
+BTC, ETH, SOL, HYPE, XRP, DOGE, SUI, TAO, ONDO, CRV, AAVE, XAI.
+
+There are many more Hyperliquid crypto perps than this list. Do not limit Crypto to only these symbols.
+
+Hard rule:
+Exclude anything with market_type == "spot" from the Crypto tab.
+Also exclude rows that are clearly Hyperliquid spot listings, such as canonical_coin_id values like "@123" or rows tagged only as spot without perp.
+
+Recommended precedence:
+1. Exact single-name public stock/equity override where needed
+2. Exact private/pre-IPO override
+3. Exact commodity override
+4. Exact index override
+5. Exact theme/basket override
+6. Strong specific Hyperliquid metadata/tags/annotations
+7. Generic equity tags only after the non-stock/non-index/non-theme/non-pre-IPO exclusions
+8. Crypto default only for perp markets
+9. Exclude spot rows from Crypto
+
+Important nuance:
+The current bug appears to come from generic metadata/tags like ["perp", "equity"] or broad DEX annotations being trusted too early. Fix the ordering so obvious non-stock symbols cannot be swallowed by Stocks/ETFs, and obvious single-company stocks cannot be swallowed by Indices.
+
+Validation:
+
+First confirm the endpoint still returns all six tabs:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs | keys'
+
+Then confirm counts are non-zero:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs | map_values(.count)'
+
+Do not accept a fix that returns all-zero counts.
+
+Stocks/ETFs must not contain obvious non-stocks:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs.stocks_etfs.assets[]?.coin' | egrep 'CL|NATGAS|BRENTOIL|WTI|COPPER|PLATINUM|PALLADIUM|WHEAT|SOY|SP500|USA500|US500|XYZ100|JP225|KR200|USA100|EWY|EWJ|EWZ|ROBOT|SEMI|SEMIS|MAG7|ENERGY|DEFENSE|NUCLEAR|INFOTECH|BIOTECH|CBRS|CEREBRAS|SPACEX|OPENAI|ANTHROPIC'
+
+Expected:
+No output.
+
+Indices must not contain obvious single-company public stocks:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs.indices.assets[]?.coin' | egrep 'TSLA|MU|NVDA|GOOGL|BABA|TENCENT|BMRN|AAPL|AMZN|AMD|MSFT|META|ORCL|PLTR'
+
+Expected:
+No output.
+
+Pre-IPO must not contain themes, sectors, commodities, or crypto:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs.pre_ipo.assets[]?.coin' | egrep 'MAG7|ENERGY|DEFENSE|WHEAT|SOY|NUCLEAR|INFOTECH|SEMIS|BIOTECH|ROBOT|SEMI|XAI'
+
+Expected:
+No output.
+
+Themes should include present theme/sector baskets:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs.themes.assets[]?.coin' | egrep 'ROBOT|SEMI|SEMIS|MAG7|ENERGY|DEFENSE|NUCLEAR|INFOTECH|BIOTECH'
+
+Expected:
+Matches for the theme markets currently present.
+
+Commodities should include present commodity/agri/metal/energy markets:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs.commodities.assets[]?.coin' | egrep 'CL|NATGAS|BRENTOIL|WTI|COPPER|PLATINUM|PALLADIUM|GOLD|SILVER|WHEAT|SOY'
+
+Expected:
+Matches for commodity markets currently present.
+
+Crypto should include XAI if present and must contain no spot markets:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs.crypto.assets[]?.coin' | egrep 'XAI|BTC|ETH|SOL|HYPE'
+
+Expected:
+Matches for present crypto perp markets.
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs.crypto.assets[] | select((.market_type // "" | ascii_downcase) == "spot" or ((.tags // []) | index("spot")) or ((.canonical_coin_id // "") | test("^@[0-9]+$"))) | .coin'
+
+Expected:
+No output.
+
+Also run:
+
+python -m py_compile backend/services/hyperliquid/categorizer.py
+
+Commit/push only if validation passes.
+
+Return:
+- files changed
+- classification strategy
+- before/after counts
+- validation outputs
+- commit hash
