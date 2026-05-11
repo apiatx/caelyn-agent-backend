@@ -1,0 +1,113 @@
+Fix duplicate assets in the Hyperliquid Market Matrix endpoint.
+
+Endpoint:
+GET /api/hyperliquid/screener/market-matrix
+
+Current issue:
+The frontend Market Matrix works, but many assets appear multiple times because Hyperliquid can list the same asset across multiple DEX/canonical markets.
+
+Examples:
+- TSLA can show 4 times
+- CRCL can show 2 times
+- COIN, NVDA, GOOGL, AMZN, etc. may also duplicate
+
+Goal:
+For the Market Matrix screener, display only one row per asset symbol per tab.
+
+Deduping rule:
+When multiple rows have the same user-facing asset symbol, keep the row with the highest volume.
+
+Preferred volume field:
+Use volume_24h_usd / 24h notional volume if available.
+If missing, fallback to whatever normalized volume field the matrix row already uses.
+If both missing, treat volume as 0.
+
+Important:
+Deduping should happen after classification, so the asset is first assigned to the correct tab, then duplicates within that tab are collapsed.
+
+Do not dedupe across unrelated assets.
+Do not dedupe by canonical_coin_id, because that is exactly what creates duplicates.
+Deduplicate by normalized display symbol, preferably:
+- row["coin"] uppercased
+or if needed:
+- row["display_name"] uppercased
+
+Examples:
+- xyz:TSLA, cash:TSLA, flx:TSLA, km:TSLA should collapse to one TSLA row
+- xyz:CRCL and flx:CRCL should collapse to one CRCL row
+- duplicate NVDA listings should collapse to one NVDA row
+
+Keep the row with the highest 24h volume/notional volume.
+
+Important edge cases:
+- Do not merge different assets that only partially match.
+- Do not merge BTC spot with BTC perp because spot assets should already be excluded from Crypto.
+- Do not merge theme basket symbols with similarly named stock symbols unless the normalized coin is exactly the same.
+- If the same symbol somehow appears in two different tabs due to classification, fix classification first; but the dedupe itself should operate per tab.
+
+Implementation location:
+Likely in backend/services/hyperliquid/categorizer.py inside or immediately after build_market_matrix.
+
+Do not change endpoint shape.
+Do not change frontend.
+Do not touch unrelated Hyperliquid sections.
+
+Suggested implementation:
+After rows are classified into tabs, run a dedupe pass for each tab:
+
+For each tab:
+1. Build dict keyed by normalized row["coin"].upper()
+2. For each row:
+   - Compare volume_24h_usd or equivalent numeric volume field
+   - Keep the row with the highest volume
+3. Replace tab assets with deduped rows
+4. Recompute tab count
+5. Preserve sorting/ranking behavior as much as possible
+
+If the existing build_market_matrix already sorts by agent score or rank, preserve that sort after dedupe. But the selected duplicate should always be the highest-volume row.
+
+Validation:
+Run compile check:
+
+python -m py_compile backend/services/hyperliquid/categorizer.py
+
+Restart/reload backend if needed.
+
+Run:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq '.tabs | map_values(.count)'
+
+Counts should remain non-zero and likely decrease because duplicates are removed.
+
+Check duplicates in Stocks/ETFs:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq -r '.tabs.stocks_etfs.assets[]?.coin' | sort | uniq -d
+
+Expected:
+No output, or explain any legitimate duplicate.
+
+Check specific symbols:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq -r '.tabs.stocks_etfs.assets[]? | select(.coin=="TSLA" or .coin=="CRCL" or .coin=="NVDA" or .coin=="GOOGL" or .coin=="AMZN") | [.coin, .canonical_coin_id, .volume_24h_usd] | @tsv'
+
+Expected:
+Each symbol appears once, and the retained row is the highest-volume listing.
+
+Also check all tabs for duplicate symbols:
+
+curl -s http://localhost:5000/api/hyperliquid/screener/market-matrix | jq -r '.tabs | to_entries[] | .key as $tab | .value.assets[]?.coin | "\($tab)\t\(.)"' | sort | awk 'seen[$0]++ {print}'
+
+Expected:
+No duplicate tab+coin pairs.
+
+Commit/push only if validation passes.
+
+Commit message:
+Deduplicate Hyperliquid Market Matrix assets by volume
+
+Return:
+- file(s) changed
+- dedupe strategy
+- before/after counts
+- validation outputs
+- commit hash

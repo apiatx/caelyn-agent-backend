@@ -466,6 +466,31 @@ def build_market_matrix(
             "(no Hyperliquid category tag or DEX hint)"
         )
 
+    # ── Per-tab deduplication by normalized coin symbol ────────────────────────
+    # Hyperliquid lists the same underlying asset across multiple DEX prefixes
+    # (xyz:TSLA, cash:TSLA, flx:TSLA, km:TSLA → all display as "TSLA").
+    # Within each tab, keep only the highest-volume row per display symbol.
+    # Deduplication operates per-tab so cross-tab classification is unaffected.
+    total_dupes = 0
+    for tab_key, tab_data in tabs.items():
+        best: dict[str, dict] = {}
+        for row in tab_data["assets"]:
+            key = (row.get("coin") or "").upper()
+            vol = row.get("volume_24h_usd") or 0.0
+            if key not in best or vol > (best[key].get("volume_24h_usd") or 0.0):
+                best[key] = row
+        deduped = list(best.values())
+        dupes = len(tab_data["assets"]) - len(deduped)
+        total_dupes += dupes
+        tab_data["assets"] = deduped
+        tab_data["count"] = len(deduped)
+
+    if total_dupes > 0:
+        warnings.append(
+            f"{total_dupes} duplicate asset rows removed (same symbol, multiple DEX listings; "
+            "highest-volume row retained per tab)"
+        )
+
     return {
         "tabs": tabs,
         "all_assets_count": len(ranked),
