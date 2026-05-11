@@ -100,6 +100,7 @@ _MC_MEGA  = 200_000_000_000
 _MC_LARGE =  10_000_000_000
 _MC_MID   =   2_000_000_000
 _MC_SMALL =     300_000_000
+_MC_MICRO_FLOOR =  50_000_000   # $50 M — min MC for in-theme small-cap eligibility
 
 
 # ── Circuit breaker (private — this service only) ─────────────────────────────
@@ -1171,12 +1172,12 @@ _QL_ADR_PENALTY     =  -8   # ADR (softer — often legitimate large-cap instrum
 _WEEK_CAND_MAX      = 250  # max raw candidates forwarded to enrichment (raised from 150 for better day coverage)
 _MAX_WEEK_ENRICH    = 180  # max events passed to _enrich_events (raised from 120)
 _WEEK_MAX_LIVE      = 40   # hard cap on live FMP profile/quote calls for week-clean
-_WEEK_PER_DAY_FLOOR = 30   # guaranteed candidate slots per trading day (prevents blank days)
+_WEEK_PER_DAY_FLOOR = 40   # guaranteed candidate slots per trading day (raised from 30 — helps Thu/Fri)
 _WEEK_CONCURRENCY   = 2    # semaphore for week-clean enrichment
-_WEEK_LIMIT_DEFAULT = 8    # default per-session cap
-_WEEK_TOTAL_DEFAULT = 60   # default topEvents cap
-_WEEK_LIMIT_MAX     = 15   # hard ceiling for limit_per_session
-_WEEK_TOTAL_MAX     = 100  # hard ceiling for max_total
+_WEEK_LIMIT_DEFAULT = 10   # default per-session cap (raised from 8 for ~25% more events)
+_WEEK_TOTAL_DEFAULT = 75   # default topEvents cap (raised from 60 for ~25% more events)
+_WEEK_LIMIT_MAX     = 20   # hard ceiling for limit_per_session (raised from 15)
+_WEEK_TOTAL_MAX     = 125  # hard ceiling for max_total (raised from 100)
 
 # importanceScore threshold above which an event is flagged isFocus=True.
 # Anchors/bottlenecks typically score 60-110; well-covered mid-caps ~45-55.
@@ -1187,16 +1188,16 @@ _DAY_CAND_MAX      = 80   # max raw candidates after pre-filter
 _DAY_MAX_ENRICH    = 80   # max events passed to enrichment (cache-first)
 _DAY_MAX_LIVE      = 20   # hard cap on live FMP profile calls for day-curated
 _DAY_CONCURRENCY   = 2    # semaphore for day-curated enrichment
-_DAY_LIMIT_DEFAULT = 15   # default results returned
-_DAY_LIMIT_MAX     = 30   # hard ceiling for day-curated limit
+_DAY_LIMIT_DEFAULT = 19   # default results returned (raised from 15 for ~25% more events)
+_DAY_LIMIT_MAX     = 38   # hard ceiling for day-curated limit (raised from 30)
 
 # ── Month-curated caps ─────────────────────────────────────────────────────────
 _MONTH_CAND_MAX        = 500  # max raw candidates after pre-filter (whole month)
 _MONTH_MAX_ENRICH      = 200  # max events passed to enrichment (cache-first)
 _MONTH_MAX_LIVE        = 40   # hard cap on live FMP profile calls for month-curated
 _MONTH_CONCURRENCY     = 2    # semaphore for month-curated enrichment
-_MONTH_PER_DAY_DEFAULT = 5    # default max curated events per day
-_MONTH_PER_DAY_MAX     = 10   # hard ceiling for max_per_day
+_MONTH_PER_DAY_DEFAULT = 7    # default max curated events per day (raised from 5 for ~25% more)
+_MONTH_PER_DAY_MAX     = 12   # hard ceiling for max_per_day (raised from 10)
 
 _WEEKDAY_NAMES = {0: "Monday", 1: "Tuesday", 2: "Wednesday",
                   3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
@@ -1513,6 +1514,13 @@ def _is_eligible(ev: dict, pre: dict, watchlist: set[str], portfolio: set[str]) 
     is_otc_like  = bool(_OTC_TICKER_RE.match(sym))
 
     if has_rev and has_eps and not is_otc_like:
+        return True
+
+    # Rule E: In-theme small cap ≥ $50 M — allow smaller names that are thematically
+    # relevant but don't make major US exchanges or reach mid-cap size.
+    # (theme/anchor/bottleneck already return True via Rule B above; this catches
+    # edge cases where profile enrichment didn't resolve exchange but MC is known.)
+    if mc is not None and mc >= _MC_MICRO_FLOOR and (themes or is_anchor or is_bottleneck):
         return True
 
     return False

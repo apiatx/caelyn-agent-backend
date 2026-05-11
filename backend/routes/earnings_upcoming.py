@@ -218,8 +218,8 @@ async def week_clean(
     week_end:          Optional[str] = Query(None, description="YYYY-MM-DD (Friday); default current week Friday"),
     scope:             Optional[str] = Query(None, description="all | watchlist | portfolio"),
     search:            Optional[str] = Query(None, description="Ticker or company name filter"),
-    limit_per_session: int           = Query(8, ge=1, le=15, description="Max events per session slot per day (default 8)"),
-    max_total:         int           = Query(60, ge=1, le=100, description="Max events in topEvents (default 60)"),
+    limit_per_session: int           = Query(10, ge=1, le=20, description="Max events per session slot per day (default 10)"),
+    max_total:         int           = Query(75, ge=1, le=125, description="Max events in topEvents (default 75)"),
 ):
     """
     Curated weekly earnings board for the Catalyst Calendar 'This Week' view.
@@ -233,7 +233,7 @@ async def week_clean(
     Constraints:
       • One week only (7 days max).
       • Max 2 FMP calendar calls per request (1 week = 1 chunk).
-      • Enrichment: top 40 candidates, concurrency=2, cache 24 h.
+      • Enrichment: top 180 candidates, concurrency=2, cache 24 h.
       • 429 circuit breaker → partial data, status=partial.
 
     Returns: { asOf, source, weekStart, weekEnd, days[], topEvents[], status, errors }
@@ -285,8 +285,8 @@ async def day_curated(
                                    description="YYYY-MM-DD (required)"),
     search:  Optional[str] = Query(None),
     scope:   Optional[str] = Query(None, description="all | watchlist | portfolio"),
-    limit:   int           = Query(15, ge=1, le=30,
-                                   description="Max curated events returned (1-30, default 15)"),
+    limit:   int           = Query(19, ge=1, le=38,
+                                   description="Max curated events returned (1-38, default 19)"),
 ):
     """
     Curated FMP earnings for a single date — same scoring / eligibility engine
@@ -458,8 +458,8 @@ async def month_curated(
                                        description="Month 1-12 (default current month)"),
     scope:       Optional[str] = Query(None, description="all | watchlist | portfolio"),
     search:      Optional[str] = Query(None),
-    max_per_day: int           = Query(5, ge=1, le=10,
-                                       description="Max curated events per day (1-10, default 5)"),
+    max_per_day: int           = Query(7, ge=1, le=12,
+                                       description="Max curated events per day (1-12, default 7)"),
 ):
     """
     Curated monthly earnings calendar overview.
