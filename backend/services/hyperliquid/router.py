@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from .categorizer import build_market_matrix
 from .models import HeroSignal, ScreenerAsset
 from .ranking_engine import generate_rationale, rank_assets
 from .signal_modules import build_signal_payload
@@ -891,6 +892,100 @@ async def agent_rank(req: AgentRankIn):
         "fearGreed":     fear_greed,
         "generatedAt":   _iso_now(),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/hyperliquid/screener/market-matrix
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Short backend cache + last-known-good fallback for the Market Matrix payload.
+_MATRIX_CACHE_TTL_S = 20.0
+_matrix_cache: dict[str, Any] = {"payload": None, "ts": 0.0, "last_good": None}
+
+
+@router.get("/market-matrix")
+async def get_market_matrix():
+    """
+    Hyperliquid Market Matrix screener — categorized live universe.
+
+    Returns the live Hyperliquid perp/spot universe partitioned into five
+    category tabs: stocks_etfs, crypto, commodities, indices, pre_ipo.
+
+    Source of truth: HyperliquidState (perp + HIP-3 DEXes + canonical spot).
+    Each asset is classified by Hyperliquid category tags first, then DEX
+    annotation, then a symbol fallback. Every market lands in exactly one tab.
+
+    Response shape:
+      {
+        "updated_at": ISO8601,
+        "source": "hyperliquid",
+        "tabs": { stocks_etfs|crypto|commodities|indices|pre_ipo: {label, count, assets[]} },
+        "all_assets_count": int,
+        "warnings": [str]
+      }
+    """
+    state = get_state_optional()
+    now = time.time()
+
+    # Serve from short cache when fresh
+    if (
+        _matrix_cache["payload"] is not None
+        and (now - _matrix_cache["ts"]) < _MATRIX_CACHE_TTL_S
+    ):
+        return _matrix_cache["payload"]
+
+    try:
+        if state is None:
+            raise RuntimeError("hyperliquid_state_unavailable")
+
+        assets = [
+            a for a in state.all_assets()
+            if a.market_status == "active"
+            and (not state.universe_allowlist or state.in_universe(a.coin))
+        ]
+
+        matrix = build_market_matrix(
+            assets,
+            oi_caps=dict(state.oi_caps) if state.oi_caps else None,
+            perps_at_oi_cap=set(state.perps_at_oi_cap) if state.perps_at_oi_cap else None,
+        )
+
+        payload = {
+            "updated_at":       _iso_now(),
+            "source":           "hyperliquid",
+            "tabs":             matrix["tabs"],
+            "all_assets_count": matrix["all_assets_count"],
+            "warnings":         matrix["warnings"],
+        }
+
+        _matrix_cache["payload"]  = payload
+        _matrix_cache["ts"]       = now
+        _matrix_cache["last_good"] = payload
+        return payload
+
+    except Exception as e:
+        # Fall back to last-known-good payload if Hyperliquid data is unavailable
+        last_good = _matrix_cache.get("last_good")
+        if last_good is not None:
+            stale = dict(last_good)
+            warnings = list(stale.get("warnings", []))
+            warnings.append(f"serving last-known-good payload: {type(e).__name__}: {str(e)[:120]}")
+            stale["warnings"] = warnings
+            stale["stale"] = True
+            return stale
+        # Otherwise return an empty but valid contract
+        from .categorizer import TAB_LABELS, TAB_ORDER
+        empty_tabs = {
+            t: {"label": TAB_LABELS[t], "count": 0, "assets": []}
+            for t in TAB_ORDER
+        }
+        return {
+            "updated_at":       _iso_now(),
+            "source":           "hyperliquid",
+            "tabs":             empty_tabs,
+            "all_assets_count": 0,
+            "warnings":         [f"market-matrix initializing: {type(e).__name__}"],
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
