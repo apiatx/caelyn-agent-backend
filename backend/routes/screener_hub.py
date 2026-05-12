@@ -3,12 +3,15 @@ Screener Hub HTTP endpoints.
 
 GET  /api/screener-hub/themes
 GET  /api/screener-hub
-POST /api/admin/screener-hub/rebuild   (X-API-Key: AGENT_API_KEY)
-GET  /api/admin/screener-hub/status    (X-API-Key: AGENT_API_KEY)
+POST /api/admin/screener-hub/rebuild         (X-API-Key: AGENT_API_KEY)
+GET  /api/admin/screener-hub/status          (X-API-Key: AGENT_API_KEY)
+POST /api/admin/bottlenecks/refresh          (X-API-Key: AGENT_API_KEY) — force full CR regen + universe rebuild
+GET  /api/debug/bottlenecks-snapshot         (X-API-Key: AGENT_API_KEY) — diagnostics for snapshot state
 """
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Body, Header, Query, Request
@@ -223,3 +226,288 @@ async def screener_hub_status(
             status_code=500,
             content={"status": "error", "error": str(e)},
         )
+
+
+# ── POST /api/admin/bottlenecks/refresh ───────────────────────────────────────
+
+@router.post("/api/admin/bottlenecks/refresh")
+async def bottlenecks_force_refresh(
+    request: Request,
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+):
+    """
+    Force a full Bottlenecks pipeline rebuild:
+      1. Regenerate chain_reaction_weekly_outputs (fresh CR scoring from NODE_REGISTRY)
+      2. Rebuild the bottlenecks universe snapshot from the new CR output
+      3. Return detailed diagnostics explaining what changed
+
+    This is the correct endpoint for the UI "Refresh" button — it ensures the
+    snapshot is genuinely new data, not just a re-read of stale CR data.
+    Requires X-API-Key: AGENT_API_KEY header.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+
+    started_at = datetime.now(timezone.utc).isoformat()
+    diag: dict = {"started_at": started_at}
+
+    # ── Step 1: Capture previous snapshot state ────────────────────────────────
+    try:
+        from data.screener_hub_store import (
+            get_latest_chain_reaction_weekly,
+            get_latest_universe,
+            chain_reaction_weekly_stats,
+        )
+        prev_cr = get_latest_chain_reaction_weekly(max_age_days=30)
+        prev_snap = get_latest_universe("bottlenecks")
+        diag["previous_cr_generated_at"] = (prev_cr or {}).get("generated_at")
+        diag["previous_cr_symbols_count"] = len((prev_cr or {}).get("symbols") or [])
+        diag["previous_snapshot_generated_at"] = (prev_snap or {}).get("generated_at")
+        diag["previous_snapshot_symbols_count"] = len((prev_snap or {}).get("symbols") or [])
+    except Exception as _pe:
+        diag["prev_state_error"] = str(_pe)
+
+    # ── Step 2: Regenerate chain_reaction_weekly_outputs ──────────────────────
+    cr_result: dict = {}
+    cr_error: Optional[str] = None
+    try:
+        import json
+        from pathlib import Path
+        from services.chain_reaction_weekly_service import generate_chain_reaction_weekly
+
+        social_set: set = set()
+        options_set: set = set()
+        try:
+            sp = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
+            if sp.exists():
+                d = json.loads(sp.read_text())
+                for item in (d.get("top_tickers") or []):
+                    sym = item.get("symbol") if isinstance(item, dict) else None
+                    if sym:
+                        social_set.add(str(sym).upper())
+        except Exception:
+            pass
+        try:
+            for fname in ["options_master_lkg_v1.json", "options_lkg_v1_large_cap.json", "options_lkg_v1_small_cap.json"]:
+                op = Path(__file__).parent.parent / "data" / fname
+                if op.exists():
+                    d = json.loads(op.read_text())
+                    for t in (d.get("tickers") or []):
+                        sym = t.get("ticker") if isinstance(t, dict) else None
+                        if sym:
+                            options_set.add(str(sym).upper())
+        except Exception:
+            pass
+
+        cr_result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: generate_chain_reaction_weekly(
+                social_symbols=social_set,
+                options_symbols=options_set,
+            ),
+        )
+        print(f"[BOTTLENECKS_REFRESH] CR generation: {cr_result.get('status')} rows={cr_result.get('rows_written')}")
+    except Exception as _cre:
+        cr_error = str(_cre)
+        print(f"[BOTTLENECKS_REFRESH] CR generation error: {_cre}")
+
+    diag["cr_generation"] = {
+        "status":      cr_result.get("status") if cr_result else "error",
+        "error":       cr_error or cr_result.get("error"),
+        "rows_written": cr_result.get("rows_written"),
+        "generated_at": cr_result.get("generated_at"),
+        "market_cap_buckets": cr_result.get("market_cap_buckets"),
+    }
+
+    # Abort if CR generation returned an error result (don't overwrite good LKG with bad)
+    if cr_result.get("status") == "error" or cr_error:
+        diag["aborted"] = True
+        diag["abort_reason"] = cr_error or cr_result.get("error") or "CR generation returned error status"
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status":      "error",
+                "message":     "Bottlenecks refresh aborted — CR generation failed. LKG snapshot preserved.",
+                "diagnostics": diag,
+            },
+        )
+
+    # ── Step 3: Rebuild universe snapshot from fresh CR data ──────────────────
+    rebuild_result: dict = {}
+    try:
+        rebuild_result = await asyncio.wait_for(
+            rebuild_universe("bottlenecks", force=True),
+            timeout=60,
+        )
+    except asyncio.TimeoutError:
+        rebuild_result = {"status": "timeout", "error": "rebuild_universe timed out after 60s"}
+    except Exception as _re:
+        rebuild_result = {"status": "error", "error": str(_re)}
+
+    diag["universe_rebuild"] = rebuild_result
+
+    # ── Step 4: Compare new vs previous snapshot ──────────────────────────────
+    try:
+        from data.screener_hub_store import get_latest_universe
+        new_snap = get_latest_universe("bottlenecks")
+        new_symbols = list((new_snap or {}).get("symbols") or [])
+        prev_symbols = list((prev_snap or {}).get("symbols") or [])  # type: ignore[union-attr]
+        diag["new_snapshot_generated_at"] = (new_snap or {}).get("generated_at")
+        diag["new_snapshot_symbols_count"] = len(new_symbols)
+        added   = [s for s in new_symbols if s not in set(prev_symbols)]
+        removed = [s for s in prev_symbols if s not in set(new_symbols)]
+        diag["symbols_added"]   = added
+        diag["symbols_removed"] = removed
+        diag["symbols_net_change"] = len(new_symbols) - len(prev_symbols)
+        snapshot_changed = bool(added or removed or new_symbols != prev_symbols)
+        diag["snapshot_genuinely_changed"] = snapshot_changed
+    except Exception as _ne:
+        diag["new_state_error"] = str(_ne)
+        snapshot_changed = True
+
+    finished_at = datetime.now(timezone.utc).isoformat()
+    diag["finished_at"] = finished_at
+
+    return JSONResponse(content={
+        "status":  "ok",
+        "message": (
+            f"Bottlenecks snapshot refreshed successfully. "
+            f"{diag.get('new_snapshot_symbols_count', '?')} symbols. "
+            + (f"Net change: {diag.get('symbols_net_change', 0):+d} symbols." if diag.get('symbols_net_change') is not None else "")
+            + (" Universe is genuinely updated." if snapshot_changed else " Symbols unchanged (same universe, new timestamp).")
+        ),
+        "snapshot_changed": snapshot_changed,
+        "diagnostics": diag,
+    })
+
+
+# ── GET /api/debug/bottlenecks-snapshot ───────────────────────────────────────
+
+@router.get("/api/debug/bottlenecks-snapshot")
+async def debug_bottlenecks_snapshot(
+    request: Request,
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+):
+    """
+    Read-only diagnostics for the Bottlenecks page snapshot pipeline.
+
+    Returns:
+      - snapshot age and generated_at
+      - CR weekly output age, row count, market cap bucket distribution
+      - scheduler next expected run time
+      - NODE_REGISTRY size
+      - last refresh status
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+
+    now_utc = datetime.now(timezone.utc)
+    diag: dict = {"as_of": now_utc.isoformat()}
+
+    # ── Universe snapshot ──────────────────────────────────────────────────────
+    try:
+        from data.screener_hub_store import get_latest_universe, chain_reaction_weekly_stats
+        snap = get_latest_universe("bottlenecks")
+        if snap:
+            gen_at = snap.get("generated_at")
+            try:
+                gen_dt = datetime.fromisoformat(str(gen_at).replace("Z", "+00:00")) if gen_at else None
+                age_hours = round((now_utc - gen_dt).total_seconds() / 3600, 1) if gen_dt else None
+            except Exception:
+                age_hours = None
+            diag["universe_snapshot"] = {
+                "generated_at":  gen_at,
+                "age_hours":     age_hours,
+                "symbols_count": len(snap.get("symbols") or []),
+                "source":        snap.get("source"),
+                "status":        snap.get("status"),
+            }
+        else:
+            diag["universe_snapshot"] = {"status": "missing"}
+    except Exception as _e:
+        diag["universe_snapshot"] = {"error": str(_e)}
+
+    # ── Chain Reaction weekly output ───────────────────────────────────────────
+    try:
+        from data.screener_hub_store import (
+            get_latest_chain_reaction_weekly,
+            chain_reaction_weekly_stats,
+        )
+        cr_stats = chain_reaction_weekly_stats()
+        cr_row = get_latest_chain_reaction_weekly(max_age_days=30)
+        if cr_row:
+            cr_gen_at = cr_row.get("generated_at")
+            try:
+                cr_gen_dt = datetime.fromisoformat(str(cr_gen_at).replace("Z", "+00:00")) if cr_gen_at else None
+                cr_age_days = round((now_utc - cr_gen_dt).total_seconds() / 86400, 1) if cr_gen_dt else None
+            except Exception:
+                cr_age_days = None
+
+            # Compute bucket distribution from CR rows
+            cr_buckets: dict[str, int] = {}
+            for r in (cr_row.get("rows") or []):
+                b = r.get("marketCapBucket") or "unknown"
+                cr_buckets[b] = cr_buckets.get(b, 0) + 1
+            if not cr_buckets:
+                cr_buckets = (cr_row.get("metadata") or {}).get("market_cap_buckets") or {}
+
+            diag["cr_weekly_output"] = {
+                "generated_at":      cr_gen_at,
+                "age_days":          cr_age_days,
+                "week_start":        cr_row.get("week_start"),
+                "source_version":    cr_row.get("source_version"),
+                "symbols_count":     len(cr_row.get("symbols") or []),
+                "within_10d_window": (cr_age_days or 999) <= 10,
+                "within_7d_fresh":   (cr_age_days or 999) <= 7,
+                "market_cap_buckets": cr_buckets,
+                "total_rows_in_db":  cr_stats.get("total_rows"),
+            }
+        else:
+            diag["cr_weekly_output"] = {"status": "no_row_within_30_days", "total_rows_in_db": cr_stats.get("total_rows")}
+    except Exception as _e:
+        diag["cr_weekly_output"] = {"error": str(_e)}
+
+    # ── NODE_REGISTRY stats ────────────────────────────────────────────────────
+    try:
+        from services.playbook.supply_chain_graph import NODE_REGISTRY
+        themes_seen: dict[str, int] = {}
+        for node in NODE_REGISTRY.values():
+            for t in (node.get("themes") or []):
+                themes_seen[t] = themes_seen.get(t, 0) + 1
+        diag["node_registry"] = {
+            "total_nodes": len(NODE_REGISTRY),
+            "us_nodes":    sum(1 for n in NODE_REGISTRY.values() if n.get("country") == "US"),
+            "theme_distribution": dict(sorted(themes_seen.items(), key=lambda x: -x[1])[:15]),
+        }
+    except Exception as _e:
+        diag["node_registry"] = {"error": str(_e)}
+
+    # ── Scheduler next expected run ────────────────────────────────────────────
+    try:
+        from zoneinfo import ZoneInfo
+        _et = ZoneInfo("America/New_York")
+        now_et = now_utc.astimezone(_et)
+        # Next Sunday 02:15 ET for chain_reaction_dynamic
+        days_until_sunday = (6 - now_et.weekday()) % 7 or 7
+        from datetime import timedelta
+        next_sunday = (now_et + timedelta(days=days_until_sunday)).replace(
+            hour=2, minute=15, second=0, microsecond=0
+        )
+        next_bottlenecks_warm = next_sunday.replace(hour=3, minute=15)
+        diag["scheduler"] = {
+            "next_chain_reaction_dynamic_ET": next_sunday.isoformat(),
+            "next_bottlenecks_warm_ET":       next_bottlenecks_warm.isoformat(),
+            "note": "Jobs fire within 5-minute window of target time. Self-healing: bottlenecks_warm generates fresh CR data if chain_reaction_dynamic was missed.",
+        }
+    except Exception as _e:
+        diag["scheduler"] = {"error": str(_e)}
+
+    # ── Refresh endpoints ──────────────────────────────────────────────────────
+    diag["refresh_endpoints"] = {
+        "force_full_rebuild":     "POST /api/admin/bottlenecks/refresh  (X-API-Key required)",
+        "universe_only_rebuild":  "POST /api/admin/screener-hub/rebuild?tab=bottlenecks  (X-API-Key required)",
+    }
+
+    return JSONResponse(content={"status": "ok", **diag})

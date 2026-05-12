@@ -912,6 +912,229 @@ NODE_REGISTRY: Dict[str, Dict[str, Any]] = {
         "us_access_proxy": "SSLLF", "adr_ticker": None,
         "giant_anchors": ["TSM"],
     },
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # PHASE 6 — HIDDEN GEM DIVERSIFICATION (small/mid-cap bottleneck names)
+    # Target: $50M–$20B market cap, real revenue, scarce position, re-rate potential.
+    # Themes: nuclear/uranium/SMR, rare earth, battery/grid storage, power ICs,
+    #         defense niche, specialty semiconductors, robotics, specialty grid.
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # ──────────────── NUCLEAR / URANIUM / SMR ────────────────────────────
+
+    "CCJ": {
+        "company_name": "Cameco Corporation", "country": "CA", "exchange": "NYSE",
+        "role": "Largest publicly traded uranium miner — Athabasca Basin Tier 1 assets; sole Western primary uranium supply anchor",
+        "themes": ["nuclear_uranium_smr", "ai_power_energy"],
+        "layer": 1, "bottleneck_score": 85, "confidence": "high",
+        "evidence": ["~15% global uranium production capacity", "US utilities locked into multi-year CCJ supply agreements", "SMR and AI datacenter nuclear demand underpins long-term contract floor"],
+        "us_access_proxy": "CCJ", "adr_ticker": None,
+        "giant_anchors": ["AI_Power_Buildout"],
+    },
+    "LEU": {
+        "company_name": "Centrus Energy", "country": "US", "exchange": "NYSE",
+        "role": "Sole US commercial uranium enrichment operator — American Centrifuge Plant (ACP); critical HALEU supplier for advanced reactors",
+        "themes": ["nuclear_uranium_smr", "ai_power_energy"],
+        "layer": 2, "bottleneck_score": 91, "confidence": "high",
+        "evidence": ["Only US facility licensed to produce HALEU (high-assay low-enriched uranium)", "Required feedstock for virtually all US SMR designs", "DOE contract for HALEU production — regulatory moat"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["AI_Power_Buildout"],
+    },
+    "BWXT": {
+        "company_name": "BWX Technologies", "country": "US", "exchange": "NYSE",
+        "role": "Primary US manufacturer of naval nuclear reactors and SMR components — sole-source DOE/Navy supplier",
+        "themes": ["nuclear_uranium_smr", "defense_optics", "ai_power_energy"],
+        "layer": 2, "bottleneck_score": 88, "confidence": "high",
+        "evidence": ["Sole manufacturer of US Navy nuclear reactor components", "Primary DOE nuclear facility services contractor", "SMR component fabrication partnerships with multiple reactor developers"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["AI_Power_Buildout"],
+    },
+    "NXE": {
+        "company_name": "NexGen Energy", "country": "CA", "exchange": "NYSE",
+        "role": "World-class undeveloped uranium deposit (Arrow, Athabasca Basin) — highest-grade large uranium resource globally",
+        "themes": ["nuclear_uranium_smr"],
+        "layer": 3, "bottleneck_score": 78, "confidence": "high",
+        "evidence": ["Arrow deposit: 4.4M lbs U3O8/yr at 2.37% avg grade — highest-grade large uranium globally", "Only permitted large uranium project in Canada advancing to construction"],
+        "us_access_proxy": "NXE", "adr_ticker": None,
+        "giant_anchors": [],
+    },
+    "UEC": {
+        "company_name": "Uranium Energy Corp", "country": "US", "exchange": "NYSE",
+        "role": "US-based in-situ uranium producer with near-term production flexibility — Texas and Wyoming ISR assets",
+        "themes": ["nuclear_uranium_smr"],
+        "layer": 3, "bottleneck_score": 74, "confidence": "medium",
+        "evidence": ["Only US-based near-production uranium ISR company with licensed facilities", "Production can be accelerated within 6 months from standby status"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": [],
+    },
+    "SMR": {
+        "company_name": "NuScale Power", "country": "US", "exchange": "NYSE",
+        "role": "Only NRC-certified small modular reactor (SMR) design in the US — VOYGR technology licensed for AI datacenter nuclear power",
+        "themes": ["nuclear_uranium_smr", "ai_power_energy"],
+        "layer": 2, "bottleneck_score": 72, "confidence": "medium",
+        "evidence": ["Only SMR design with full NRC Design Approval in the US", "AI hyperscalers actively exploring SMR for off-grid datacenter power"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["AI_Power_Buildout"],
+    },
+
+    # ──────────────── CRITICAL MATERIALS / RARE EARTH ────────────────────
+
+    "MP": {
+        "company_name": "MP Materials", "country": "US", "exchange": "NYSE",
+        "role": "Only integrated rare earth mine and processing company in the US — Mountain Pass, California",
+        "themes": ["critical_materials_rare_earth", "defense_optics"],
+        "layer": 3, "bottleneck_score": 87, "confidence": "high",
+        "evidence": ["Only US integrated rare earth mining and processing facility", "Critical for EV motors, defense magnets, and wind turbines", "DOD strategic supplier agreement for magnet production"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": [],
+    },
+    "UUUU": {
+        "company_name": "Energy Fuels", "country": "US", "exchange": "NYSE",
+        "role": "US uranium producer AND rare earth processing — White Mesa Mill is the only US facility processing both uranium and rare earth elements",
+        "themes": ["critical_materials_rare_earth", "nuclear_uranium_smr"],
+        "layer": 3, "bottleneck_score": 82, "confidence": "high",
+        "evidence": ["White Mesa Mill: only US rare earth processing operation at scale", "Dual revenue stream: uranium + rare earth materials", "Monazite REE feedstock processing — US supply chain independence"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": [],
+    },
+
+    # ──────────────── BATTERY STORAGE / GRID STORAGE ─────────────────────
+
+    "FLNC": {
+        "company_name": "Fluence Energy", "country": "US", "exchange": "NASDAQ",
+        "role": "Global leader in utility-scale battery energy storage systems (BESS) — Siemens and AES joint venture",
+        "themes": ["battery_grid_storage", "ai_power_energy", "grid_transformers"],
+        "layer": 1, "bottleneck_score": 76, "confidence": "high",
+        "evidence": ["#1 or #2 global BESS integrator by installed capacity", "Siemens/AES backing provides manufacturing and project finance moat", "AI datacenter backup and grid-scale storage demand accelerating"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["AI_Power_Buildout"],
+    },
+    "STEM": {
+        "company_name": "Stem Inc", "country": "US", "exchange": "NYSE",
+        "role": "AI-driven battery storage optimization software and hardware — Athena OS for grid-scale energy dispatch",
+        "themes": ["battery_grid_storage", "ai_power_energy"],
+        "layer": 2, "bottleneck_score": 65, "confidence": "medium",
+        "evidence": ["Athena AI software manages >7GWh of storage assets", "Asset-light software model on top of installed battery hardware"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["AI_Power_Buildout"],
+    },
+
+    # ──────────────── SPECIALTY GRID HARDWARE ────────────────────────────
+
+    "POWL": {
+        "company_name": "Powell Industries", "country": "US", "exchange": "NASDAQ",
+        "role": "Switchgear and electrical control systems for utilities, data centers, and LNG/petrochemical — domestic US manufacturer",
+        "themes": ["grid_transformers", "ai_power_energy"],
+        "layer": 3, "bottleneck_score": 79, "confidence": "high",
+        "evidence": ["US-manufactured switchgear with 2-3 year lead times", "Data center electrical infrastructure adoption accelerating", "LNG and utilities are primary recurring customers"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["AI_Power_Buildout"],
+    },
+    "GTLS": {
+        "company_name": "Chart Industries", "country": "US", "exchange": "NYSE",
+        "role": "Cryogenic equipment and heat transfer systems for LNG, hydrogen, and industrial gas — critical infrastructure bottleneck",
+        "themes": ["grid_transformers", "nuclear_uranium_smr", "ai_power_energy"],
+        "layer": 2, "bottleneck_score": 77, "confidence": "high",
+        "evidence": ["Dominant cryogenic heat exchanger supplier for LNG export terminals", "Hydrogen liquefaction equipment for emerging hydrogen supply chain", "Industrial gas compression and storage critical to semiconductor fabs"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["AI_Power_Buildout"],
+    },
+
+    # ──────────────── POWER ICs / RACK-LEVEL POWER ───────────────────────
+
+    "VICR": {
+        "company_name": "Vicor Corporation", "country": "US", "exchange": "NASDAQ",
+        "role": "Factorized Power Architecture ICs for AI rack-level power delivery — adopted by NVDA GB200 NVL72 power chain",
+        "themes": ["ai_power_energy", "ai_infrastructure"],
+        "layer": 3, "bottleneck_score": 84, "confidence": "high",
+        "evidence": ["NVDA GB200 NVL72 uses Vicor 48V-to-point power modules", "Factorized bus architecture reduces copper and improves efficiency at AI rack scale", "Hard to displace once designed into a power tree"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["NVDA", "Hyperscalers_AI_Capex"],
+    },
+
+    # ──────────────── DEFENSE NICHE ──────────────────────────────────────
+
+    "TDY": {
+        "company_name": "Teledyne Technologies", "country": "US", "exchange": "NYSE",
+        "role": "Defense EO/IR sensors (owns FLIR), space imaging, electronic warfare — sole source across multiple DoD sensor programs",
+        "themes": ["defense_optics", "space_sensing"],
+        "layer": 2, "bottleneck_score": 80, "confidence": "high",
+        "evidence": ["Owns FLIR — dominant US defense thermal imaging brand", "Teledyne cameras on every major NASA/DoD imaging mission", "Multiple sole-source or dual-source defense sensor programs"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": [],
+    },
+    "CACI": {
+        "company_name": "CACI International", "country": "US", "exchange": "NYSE",
+        "role": "Defense IT and electronic warfare — signals intelligence, cyber, and C4ISR for US DoD; critical technology integrator",
+        "themes": ["defense_optics"],
+        "layer": 2, "bottleneck_score": 71, "confidence": "high",
+        "evidence": ["Cleared workforce + classified programs create high switching costs", "SIGINT/EW programs directly tied to DoD modernization spend"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": [],
+    },
+
+    # ──────────────── SEMICONDUCTOR NICHE (SMALL/MID) ────────────────────
+
+    "ACMR": {
+        "company_name": "ACM Research", "country": "US", "exchange": "NASDAQ",
+        "role": "Wafer cleaning and surface prep equipment — leading China advanced node supplier; STRESS-FREE cleaning for 3D NAND and DRAM",
+        "themes": ["semicap_supply_chain", "memory"],
+        "layer": 4, "bottleneck_score": 76, "confidence": "high",
+        "evidence": ["Dominant cleaning equipment supplier to SMIC and YMTC (China advanced node)", "STRESS-FREE technology has no direct equivalent for 3D NAND stack cleaning", "Growing US and Taiwan customer pipeline"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": [],
+    },
+    "CEVA": {
+        "company_name": "CEVA Inc", "country": "US", "exchange": "NASDAQ",
+        "role": "Semiconductor IP licensing — DSP cores, 5G modem IP, Wi-Fi/BT IP, and AI/ML inference engines for edge chips",
+        "themes": ["ai_infrastructure", "semicap_supply_chain"],
+        "layer": 4, "bottleneck_score": 72, "confidence": "high",
+        "evidence": ["IP licensed into >12B chips shipped cumulatively", "5G and Wi-Fi 7 ramp drives modem/connectivity IP royalties", "AI edge inference IP adopted by multiple chip designers"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["NVDA"],
+    },
+    "VIAV": {
+        "company_name": "Viavi Solutions", "country": "US", "exchange": "NASDAQ",
+        "role": "Fiber and network test instruments for data center buildout — optical spectrum analyzers and OTDR for hyperscaler fiber deployment",
+        "themes": ["photonics_cpo", "ai_infrastructure"],
+        "layer": 4, "bottleneck_score": 70, "confidence": "high",
+        "evidence": ["Dominant fiber test instrument for hyperscaler intra-DC and campus fiber validation", "400G/800G upgrade cycle drives instrument refresh demand"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["MSFT", "GOOGL", "AMZN"],
+    },
+    "AZTA": {
+        "company_name": "Azenta (formerly Brooks Automation)", "country": "US", "exchange": "NASDAQ",
+        "role": "Semiconductor wafer handling, atmospheric robots, and cryogenic storage — critical for fab and genomics automation",
+        "themes": ["semicap_supply_chain", "advanced_packaging_test"],
+        "layer": 4, "bottleneck_score": 73, "confidence": "high",
+        "evidence": ["Dominant atmospheric wafer handling robot supplier for OSAT and memory fabs", "Cryogenic sample storage platform for biopharma"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": ["TSM"],
+    },
+
+    # ──────────────── PRECISION / ROBOTICS ───────────────────────────────
+
+    "TRMB": {
+        "company_name": "Trimble Inc", "country": "US", "exchange": "NASDAQ",
+        "role": "Precision GPS, construction automation, and factory robotics — infrastructure digitization platform",
+        "themes": ["industrial_onshoring", "ai_infrastructure"],
+        "layer": 2, "bottleneck_score": 68, "confidence": "high",
+        "evidence": ["Dominant precision GPS for construction and agriculture automation", "Semiconductor fab and EV plant construction efficiency enabler"],
+        "us_access_proxy": None, "adr_ticker": None,
+        "giant_anchors": [],
+    },
+
+    # ──────────────── FOREIGN PHASE 6 ────────────────────────────────────
+
+    "RYCEY": {
+        "company_name": "Rolls-Royce Holdings", "country": "GB", "exchange": "OTCMKTS",
+        "role": "Defence jet engines, nuclear power systems for submarines, and SMR design — power systems bottleneck for defence and civil nuclear",
+        "themes": ["nuclear_uranium_smr", "defense_optics", "ai_power_energy"],
+        "layer": 1, "bottleneck_score": 78, "confidence": "high",
+        "evidence": ["Sole supplier of UK nuclear submarine propulsion", "Rolls-Royce SMR program shortlisted for UK government support", "Defence engine sole-source for Typhoon, Hawk, and future platforms"],
+        "us_access_proxy": "RYCEY", "adr_ticker": "RYCEY",
+        "giant_anchors": [],
+    },
 }
 
 

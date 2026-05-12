@@ -1,0 +1,129 @@
+You are working in the CaelynAI backend repo.
+
+Work directly on main. Do not create a branch or PR.
+
+Goal:
+Audit and fix the Bottlenecks page backend refresh/snapshot pipeline without ripping out or rewriting the existing custom logic. The logic is already custom-wired and mostly working, but the output is stale and biased toward megacaps.
+
+User-facing problems:
+1. Bottlenecks page is mostly returning megacaps and obvious names.
+   - It needs to surface hidden-gem bottleneck stocks too.
+   - Target universe should include smaller real companies roughly $50M–$20B market cap when they qualify.
+   - These should be real revenue companies, major supplier/partner/deal winners, scarce bottleneck providers, niche monopoly/duopoly players, or companies that uniquely enable AI infrastructure / power / cooling / photonics / CPO / memory / packaging / grid / robotics / defense / advanced manufacturing / data center buildout.
+   - Do NOT remove the megacaps entirely. The page should compare market cap vs bottleneck value and show the best asymmetric bottleneck names, not just the largest obvious beneficiaries.
+
+2. Refresh button currently fails:
+   - UI says: “Refresh failed — snapshot unchanged”
+   - Page has not updated in weeks.
+   - Need to audit whether this is caused by model/API failure, stale cache, bad snapshot write logic, admin refresh route failure, scheduler failure, exception swallowing, missing env var, or LKG fallback always winning.
+
+3. Bottlenecks should refresh automatically weekly.
+   - Add/fix a weekly scheduled refresh if missing.
+   - Make sure the snapshot is persisted durably, preferably using the existing Neon/persistent cache pattern if this page already supports it.
+   - Do not rely only on in-memory state because deploy/restart will wipe it.
+
+Hard constraints:
+- Do not rewrite the Bottlenecks engine from scratch.
+- Preserve existing scoring fields, UI contract, endpoint shapes, and current frontend compatibility.
+- Make a surgical fix: audit first, then patch only what is necessary.
+- Keep existing custom bottleneck logic intact.
+- Add hidden-gem diversification as an additive ranking/diversification layer, not a replacement.
+
+Audit tasks:
+1. Locate the Bottlenecks page API endpoint(s), service(s), snapshot read/write code, refresh route, cache key(s), scheduler, and any frontend-facing response schema.
+2. Identify why the refresh button returns “snapshot unchanged.”
+3. Identify where the stale snapshot is coming from and why it has not updated in weeks.
+4. Identify what model/provider is used for refresh generation.
+   - Check env var names.
+   - Check whether the API call is failing.
+   - Check whether exceptions are swallowed and replaced by LKG.
+   - Check whether response parsing rejects valid model output.
+5. Identify the candidate universe source.
+   - Is it hardcoded?
+   - Is it ETF/index/megacap biased?
+   - Is it using only top market cap names?
+   - Is it filtering out small caps too aggressively?
+6. Check whether market cap, revenue, and profile enrichment are available from existing providers.
+   - Prefer FMP where appropriate because the paid Starter plan supports company profiles/reference data, limited market cap, limited statements/ratios, news, ratings, SEC filings, and market data.
+   - Avoid expensive per-symbol uncontrolled loops.
+   - Use caching and bounded candidate lists.
+7. Check whether there is already a weekly scheduler pattern used elsewhere in the backend and reuse that style.
+
+Implementation requirements:
+1. Fix manual refresh.
+   - The refresh endpoint/button path should force a rebuild or return a clear reason why it could not.
+   - It should not silently return stale data unless generation truly failed.
+   - If generation fails, return useful diagnostics: provider used, error class/message, previous snapshot age, attempted timestamp, and whether LKG was returned.
+
+2. Fix weekly auto-refresh.
+   - Add or repair weekly refresh scheduling.
+   - Suggested cadence: Sunday overnight ET.
+   - Log refresh start/end, provider, candidate count, output count, snapshot write status, and snapshot age.
+   - Make sure scheduler cannot overwrite a good snapshot with an empty/bad one.
+
+3. Add hidden-gem diversification without breaking existing scoring.
+   - Keep the current bottleneck/value score.
+   - Add market-cap bucket diversity after scoring:
+     * micro/small: $50M–$2B
+     * lower mid: $2B–$10B
+     * upper mid: $10B–$20B
+     * large/mega: $20B+
+   - Final output should intentionally include qualified smaller names when they score well.
+   - Do not include garbage pre-revenue shells unless there is a very strong reason.
+   - Require evidence fields where possible: revenue/profile/news/deal/filing/partner/theme reason.
+   - Add/keep fields like marketCap, marketCapBucket, revenueSignal, bottleneckReason, evidence, theme, and lastUpdated if compatible with existing schema.
+   - If schema cannot be changed safely, include these in existing metadata/details fields.
+
+4. Candidate universe:
+   - Expand the universe additively with a curated small/mid bottleneck candidate list and/or provider-discovered candidates.
+   - Themes to include:
+     * AI power and grid
+     * nuclear / uranium / SMR supply chain
+     * data center cooling
+     * CPO / photonics / optical networking
+     * advanced packaging / substrates / testing
+     * memory / storage / SSD / DRAM / NAND
+     * semicap equipment and niche suppliers
+     * robotics / automation
+     * defense / drones / rare earth / critical materials
+     * battery storage / grid hardware
+     * industrial bottlenecks
+   - The point is not random small caps. It is “small enough to re-rate, real enough to matter.”
+
+5. Snapshot validation:
+   - Reject empty outputs.
+   - Reject outputs where every item is missing ticker/name/reason.
+   - Do not overwrite LKG with failed or empty output.
+   - If snapshot is unchanged, explain why: identical hash, generation failed, parse failed, candidate count zero, provider unavailable, etc.
+
+6. Add diagnostics endpoint if one does not exist:
+   - Example: /api/debug/bottlenecks-snapshot
+   - Include:
+     * snapshot age
+     * last refresh started/finished
+     * last refresh status
+     * provider/model used
+     * cache source
+     * row/file key
+     * item count
+     * market cap bucket distribution
+     * last error
+     * next scheduled refresh time
+   - Protect it using the existing diagnostics/admin token pattern if applicable.
+
+Validation:
+Run curl or equivalent tests and report results:
+1. Current snapshot endpoint returns non-empty data.
+2. Manual refresh endpoint successfully rebuilds or gives a real diagnostic error.
+3. Snapshot updated timestamp changes after successful refresh.
+4. Market cap bucket distribution includes at least some <$20B candidates when they qualify.
+5. Existing frontend response does not break.
+6. Weekly scheduler is registered and logs expected next run.
+7. Bad/empty model output does not overwrite LKG.
+
+Deliverables:
+- Brief audit summary: root cause(s)
+- Files changed
+- Validation results
+- Any env vars needed
+- Confirmation that existing Bottlenecks frontend contract is preserved

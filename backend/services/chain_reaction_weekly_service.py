@@ -42,7 +42,15 @@ except Exception:
     get_latest_chain_reaction_weekly = lambda **kw: None  # type: ignore
 
 _GLOBAL_CAP = 400
-_SOURCE_VERSION = "v1"
+_SOURCE_VERSION = "v2"
+
+# Minimum market cap (USD) to include a symbol — filters pre-revenue shells
+_MIN_MCAP_USD = 50_000_000   # $50M
+
+# Diversity: guarantee at least this many small/mid-cap slots in top results
+_DIVERSITY_SLOTS = 10          # positions 5–25 reserved for <$20B when available
+_DIVERSITY_MCAP_THRESHOLD = 20_000_000_000  # $20B
+_DIVERSITY_BN_SCORE_MIN   = 65  # must have this bottleneck_score to qualify
 
 
 # ── Scoring helpers ────────────────────────────────────────────────────────────
@@ -145,6 +153,85 @@ def _theme_alignment_score(themes: list) -> float:
     return min(100.0, len(themes) * 25.0)
 
 
+def _market_cap_bucket(mcap: Optional[float]) -> str:
+    """Classify market cap into human-readable bucket."""
+    if mcap is None:
+        return "unknown"
+    if mcap < 2_000_000_000:
+        return "micro_small"       # $50M–$2B
+    if mcap < 10_000_000_000:
+        return "lower_mid"         # $2B–$10B
+    if mcap < 20_000_000_000:
+        return "upper_mid"         # $10B–$20B
+    return "large_mega"            # $20B+
+
+
+def _apply_diversity_pass(rows: list[dict]) -> list[dict]:
+    """
+    Post-sort diversity pass: ensure small/mid-cap hidden gems appear near
+    the top of the output and are not buried behind large-cap names.
+
+    Algorithm:
+    - Keep top 4 rows exactly as-is (highest-scoring anchors).
+    - From positions 5 onwards, interleave qualifying small/mid names
+      into the first _DIVERSITY_SLOTS available positions, then append
+      the remaining large-cap rows.
+    - A row qualifies for promotion if:
+        market_cap < _DIVERSITY_MCAP_THRESHOLD AND
+        bottleneck_score >= _DIVERSITY_BN_SCORE_MIN
+    - Rows without market_cap data are treated as potential small caps
+      only if bottleneck_score >= _DIVERSITY_BN_SCORE_MIN + 5.
+    """
+    if len(rows) <= 5:
+        return rows
+
+    anchors = rows[:4]
+    rest = rows[4:]
+
+    small_mid: list[dict] = []
+    large_cap: list[dict] = []
+
+    for r in rest:
+        mcap = r.get("market_cap")
+        bn   = float(r.get("bottleneck_score") or 0)
+        if mcap is None:
+            if bn >= _DIVERSITY_BN_SCORE_MIN + 5:
+                small_mid.append(r)
+            else:
+                large_cap.append(r)
+        elif mcap < _DIVERSITY_MCAP_THRESHOLD and bn >= _DIVERSITY_BN_SCORE_MIN:
+            small_mid.append(r)
+        else:
+            large_cap.append(r)
+
+    # Sort each bucket by final_score descending
+    small_mid.sort(key=lambda r: r["final_score"], reverse=True)
+    large_cap.sort(key=lambda r: r["final_score"], reverse=True)
+
+    # Interleave: take up to _DIVERSITY_SLOTS from small_mid, then append large_cap
+    promoted   = small_mid[:_DIVERSITY_SLOTS]
+    remaining_small = small_mid[_DIVERSITY_SLOTS:]
+
+    mixed = []
+    si, li = 0, 0
+    diversity_inserted = 0
+    for i in range(len(rest)):
+        if diversity_inserted < _DIVERSITY_SLOTS and si < len(promoted):
+            mixed.append(promoted[si]); si += 1; diversity_inserted += 1
+        elif li < len(large_cap):
+            mixed.append(large_cap[li]); li += 1
+        elif si < len(promoted):
+            mixed.append(promoted[si]); si += 1
+        else:
+            break
+
+    # Append any remaining rows in score order
+    leftover = remaining_small + large_cap[li:]
+    leftover.sort(key=lambda r: r["final_score"], reverse=True)
+
+    return anchors + mixed + leftover
+
+
 def _get_tradeable_ticker(ticker: str, node: dict) -> str:
     """Return the best US-tradeable ticker for this node."""
     return str(
@@ -242,6 +329,10 @@ def generate_chain_reaction_weekly(
         mcap = _to_float(profile.get("marketCap") or profile.get("mktCap"))
         chg  = _to_float(quote.get("change_percentage"))
 
+        # Skip pre-revenue shells below minimum market cap threshold
+        if mcap is not None and mcap < _MIN_MCAP_USD:
+            continue
+
         scored_rows.append({
             "bottleneck_ticker":       us_ticker,
             "company_name":            node.get("company_name") or profile.get("companyName") or us_ticker,
@@ -249,8 +340,10 @@ def generate_chain_reaction_weekly(
             "anchor_theme":            (themes[0] if themes else None),
             "supply_chain_role":       node.get("role"),
             "bottleneck_type":         node.get("confidence"),
+            "bottleneckReason":        node.get("role"),        # alias for UI
             "layer":                   layer,
             "themes":                  themes,
+            "theme":                   (themes[0] if themes else None),
             "theme_alignment_score":   ta_score,
             "bottleneck_score":        bn_score,
             "momentum_score":          mom_score,
@@ -260,15 +353,40 @@ def generate_chain_reaction_weekly(
             "options_score":           options_sc,
             "final_score":             final_score,
             "market_cap":              mcap,
-            "change_percent_1d":       chg,
+            "marketCap":               mcap,                    # alias for UI
+            "marketCapBucket":         _market_cap_bucket(mcap),
+            "revenueSignal":           (
+                "revenue_growth_strong" if _to_float(metrics.get("revenueGrowthTTM") or metrics.get("revenueGrowth") or 0) is not None
+                and (_to_float(metrics.get("revenueGrowthTTM") or metrics.get("revenueGrowth") or 0) or 0) > 0.15
+                else "revenue_present" if profile.get("revenue") or metrics.get("revenueTTM")
+                else None
+            ),
             "evidence":                evidence,
+            "change_percent_1d":       chg,
             "discovery_sources":       discovery_sources,
             "country":                 node.get("country"),
             "exchange":                node.get("exchange"),
+            "lastUpdated":             datetime.now(timezone.utc).isoformat(),
         })
+
+    # ── Validate: reject empty output ────────────────────────────────────────
+    if not scored_rows:
+        return {"status": "error", "error": "No scored rows produced — NODE_REGISTRY may be empty or all tickers filtered"}
+
+    valid_rows = [r for r in scored_rows if r.get("bottleneck_ticker") and r.get("supply_chain_role")]
+    if len(valid_rows) < 5:
+        return {
+            "status": "error",
+            "error": f"Output validation failed: only {len(valid_rows)} rows have required ticker+role fields",
+            "raw_count": len(scored_rows),
+        }
 
     # ── Sort by final_score descending ────────────────────────────────────────
     scored_rows.sort(key=lambda r: r["final_score"], reverse=True)
+
+    # ── Diversity pass: promote hidden-gem small/mid caps ─────────────────────
+    scored_rows = _apply_diversity_pass(scored_rows)
+
     symbols = [r["bottleneck_ticker"] for r in scored_rows]
 
     # ── Write to DB ───────────────────────────────────────────────────────────
@@ -278,12 +396,20 @@ def generate_chain_reaction_weekly(
     from datetime import timedelta
     week_start = today - timedelta(days=days_since_sunday)
 
+    # Market cap bucket distribution for diagnostics
+    bucket_dist: dict[str, int] = {}
+    for r in scored_rows:
+        b = r.get("marketCapBucket") or "unknown"
+        bucket_dist[b] = bucket_dist.get(b, 0) + 1
+
     meta: dict = {
-        "node_registry_count": len(NODE_REGISTRY),
-        "scored_count": len(scored_rows),
+        "node_registry_count":  len(NODE_REGISTRY),
+        "scored_count":         len(scored_rows),
         "social_overlap_count": sum(1 for r in scored_rows if "social_overlap" in r["discovery_sources"]),
-        "options_overlap_count": sum(1 for r in scored_rows if "options_overlap" in r["discovery_sources"]),
-        "generated_by": "chain_reaction_weekly_service",
+        "options_overlap_count":sum(1 for r in scored_rows if "options_overlap" in r["discovery_sources"]),
+        "generated_by":         "chain_reaction_weekly_service",
+        "source_version":       _SOURCE_VERSION,
+        "market_cap_buckets":   bucket_dist,
     }
 
     ok = insert_chain_reaction_weekly_output(
@@ -297,14 +423,15 @@ def generate_chain_reaction_weekly(
 
     generated_at = datetime.now(timezone.utc).isoformat()
     result = {
-        "status": "ok" if ok else "db_write_failed",
-        "generated_at": generated_at,
-        "week_start": week_start.isoformat(),
-        "rows_written": len(scored_rows),
-        "symbols_count": len(symbols),
-        "metadata": meta,
+        "status":          "ok" if ok else "db_write_failed",
+        "generated_at":    generated_at,
+        "week_start":      week_start.isoformat(),
+        "rows_written":    len(scored_rows),
+        "symbols_count":   len(symbols),
+        "metadata":        meta,
+        "market_cap_buckets": bucket_dist,
     }
-    print(f"[CR_WEEKLY] Generated {len(scored_rows)} scored rows, db_ok={ok}")
+    print(f"[CR_WEEKLY] Generated {len(scored_rows)} scored rows (v2 diversity pass applied), db_ok={ok}, buckets={bucket_dist}")
     return result
 
 

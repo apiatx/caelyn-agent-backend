@@ -124,7 +124,57 @@ async def _run_bottlenecks_warm() -> None:
     from services.screener_hub_service import (
         rebuild_universe, warm_tab_fundamentals,
     )
-    # Refresh the universe snapshot first so any dynamic CR output or NODE_REGISTRY changes flow in.
+
+    # ── Self-healing: regenerate CR weekly data if it is stale ───────────────
+    # The chain_reaction_dynamic slot (Sun 2:15 ET) can be missed if the server
+    # restarts after the 5-minute fire window. This guard ensures bottlenecks_warm
+    # always has fresh CR data, even when the earlier slot was skipped.
+    try:
+        from services.chain_reaction_weekly_service import (
+            get_latest_cr_weekly_output,
+            generate_chain_reaction_weekly,
+        )
+        import json
+        from pathlib import Path
+
+        cr_row = get_latest_cr_weekly_output(max_age_days=7)
+        if cr_row is None:
+            print("[SCREENER_HUB][SCHED] bottlenecks_warm: CR output stale or missing — generating fresh CR data now")
+            social_set: set = set()
+            options_set: set = set()
+            try:
+                sp = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
+                if sp.exists():
+                    d = json.loads(sp.read_text())
+                    for item in (d.get("top_tickers") or []):
+                        sym = item.get("symbol") if isinstance(item, dict) else None
+                        if sym:
+                            social_set.add(str(sym).upper())
+            except Exception as _se:
+                print(f"[SCREENER_HUB][SCHED] bottlenecks_warm social load error: {_se}")
+            try:
+                for fname in ["options_master_lkg_v1.json", "options_lkg_v1_large_cap.json", "options_lkg_v1_small_cap.json"]:
+                    op = Path(__file__).parent.parent / "data" / fname
+                    if op.exists():
+                        d = json.loads(op.read_text())
+                        for t in (d.get("tickers") or []):
+                            sym = t.get("ticker") if isinstance(t, dict) else None
+                            if sym:
+                                options_set.add(str(sym).upper())
+            except Exception as _oe:
+                print(f"[SCREENER_HUB][SCHED] bottlenecks_warm options load error: {_oe}")
+
+            cr_result = generate_chain_reaction_weekly(
+                social_symbols=social_set,
+                options_symbols=options_set,
+            )
+            print(f"[SCREENER_HUB][SCHED] bottlenecks_warm: inline CR generation done: {cr_result.get('status')} rows={cr_result.get('rows_written')}")
+        else:
+            print(f"[SCREENER_HUB][SCHED] bottlenecks_warm: CR output is fresh (generated_at={cr_row.get('generated_at')}) — skipping inline regeneration")
+    except Exception as _cr_err:
+        print(f"[SCREENER_HUB][SCHED] bottlenecks_warm CR self-heal error (non-fatal): {_cr_err}")
+
+    # ── Refresh universe snapshot then warm fundamentals ──────────────────────
     await rebuild_universe("bottlenecks", force=False)
     print("[SCREENER_HUB][SCHED] bottlenecks fundamentals warm starting")
     out = await warm_tab_fundamentals("bottlenecks", force=False, max_calls=200)
