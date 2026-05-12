@@ -142,7 +142,8 @@ def load_watchlist(watchlist_id: Optional[str] = None) -> Optional[Dict[str, Any
                     if data:
                         print(f"[Watchlist] Loaded most recent '{data.get('name')}' from PostgreSQL")
                         return data
-            return None
+            # If Neon is available but the specific record isn't found,
+            # fall through to the JSON file fallback below.
     except Exception as e:
         print(f"[Watchlist] PostgreSQL load failed ({e}), falling back to JSON")
 

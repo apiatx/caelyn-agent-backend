@@ -3969,7 +3969,7 @@ async def create_watchlist_endpoint(
     if not body.tickers:
         raise HTTPException(status_code=400, detail="No tickers provided.")
 
-    tickers = [t.strip().upper() for t in body.tickers if t.strip()]
+    tickers = list(dict.fromkeys(t.strip().upper() for t in body.tickers if t.strip()))
     watchlist_id = str(_uuid.uuid4())
     saved_at = datetime.now(timezone.utc).isoformat()
 

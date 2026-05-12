@@ -306,6 +306,48 @@ def enrich_csv_data(
     return enriched
 
 
+def _map_neon_cache_to_cols(cached: dict) -> dict:
+    """
+    Convert a screener_fundamentals_cache row into the same column-name dict
+    that fetch_fundamentals() returns, so enrich_csv_data() can consume it.
+    Only fills fields that are non-null in the cache.
+    """
+    result: dict = {}
+    profile = cached.get("profile") or {}
+    metrics = cached.get("metrics") or {}
+    ratios  = cached.get("ratios")  or {}
+
+    price = profile.get("price")
+    if price is not None:
+        result["Stock Price"] = f"${float(price):.2f}"
+
+    mcap = cached.get("market_cap")
+    if mcap:
+        result["Market Cap"] = _fmt_market_cap(float(mcap))
+
+    pe = ratios.get("peRatioTTM") or metrics.get("peRatioTTM")
+    if pe is not None:
+        result["PE Ratio"] = str(round(float(pe), 2))
+
+    rev_growth = ratios.get("revenueGrowthTTM") or metrics.get("revenueGrowthTTM")
+    if rev_growth is not None:
+        result["Revenue Growth (YoY)"] = _fmt_pct(float(rev_growth))
+
+    gm = ratios.get("grossProfitMarginTTM") or metrics.get("grossProfitMarginTTM")
+    if gm is not None:
+        result["Gross Margin"] = _fmt_pct(float(gm))
+
+    de = (
+        ratios.get("debtEquityRatioTTM")
+        or metrics.get("debtEquityRatioTTM")
+        or metrics.get("debtToEquity")
+    )
+    if de is not None:
+        result["Debt / Equity"] = str(round(float(de), 2))
+
+    return result
+
+
 async def enrich_if_needed(
     tickers: List[str],
     csv_data: List[Dict],
@@ -314,31 +356,66 @@ async def enrich_if_needed(
     """
     Top-level helper. Detects missing fundamentals and, if absent, fetches them.
     Safe to call unconditionally — no-op when data is already present.
+
+    Cache hierarchy (avoids paid FMP calls when possible):
+      1. CSV already has fundamentals → return as-is.
+      2. screener_fundamentals_cache (Neon DB, 7-day TTL) → reuse without FMP.
+      3. FMP + EDGAR live fetch → only for tickers still missing after DB check.
     """
     if has_fundamental_data(csv_data):
         print("[ENRICHER] CSV already has fundamentals — skipping enrichment")
         return csv_data
 
-    key = fmp_api_key or os.getenv("FMP_API_KEY", "")
-    if not key:
-        print("[ENRICHER] No FMP_API_KEY — cannot enrich fundamentals")
+    tickers_upper = [t.upper() for t in tickers if t.strip()]
+
+    # ── Step 1: pull whatever is already in screener_fundamentals_cache ────────
+    db_hits: dict = {}
+    db_misses: list = list(tickers_upper)
+    try:
+        from services.fmp_cache_service import _get_fundamentals as _db_get_fund
+        cached_rows = _db_get_fund(tickers_upper)
+        if cached_rows:
+            for sym, row in cached_rows.items():
+                mapped = _map_neon_cache_to_cols(row)
+                if mapped:
+                    db_hits[sym] = mapped
+            db_misses = [t for t in tickers_upper if t not in db_hits]
+            print(
+                f"[ENRICHER] Neon cache: {len(db_hits)} hit(s), "
+                f"{len(db_misses)} miss(es) — {db_misses or 'none'}"
+            )
+    except Exception as _ce:
+        print(f"[ENRICHER] Neon cache check skipped: {_ce}")
+
+    # ── Step 2: merge DB hits into csv_data first ──────────────────────────────
+    if db_hits:
+        csv_data = enrich_csv_data(csv_data, db_hits)
+
+    # ── Step 3: for remaining misses fetch live from FMP + EDGAR ──────────────
+    if not db_misses:
+        print("[ENRICHER] All tickers served from Neon cache — no FMP calls needed")
         return csv_data
 
-    print(f"[ENRICHER] Fetching fundamentals for {len(tickers)} ticker(s) via FMP + EDGAR")
+    key = fmp_api_key or os.getenv("FMP_API_KEY", "")
+    if not key:
+        print("[ENRICHER] No FMP_API_KEY — cannot enrich remaining tickers")
+        return csv_data
+
+    print(f"[ENRICHER] Fetching fundamentals for {len(db_misses)} ticker(s) via FMP + EDGAR")
     try:
-        fundamentals = await fetch_fundamentals(tickers, key)
-        enriched = enrich_csv_data(csv_data, fundamentals)
+        fundamentals = await fetch_fundamentals(db_misses, key)
+        csv_data = enrich_csv_data(csv_data, fundamentals)
         filled = sum(
             1
-            for row in enriched
+            for row in csv_data
             for col in _FUNDAMENTAL_COLS
             if row.get(col) and str(row.get(col)).strip()
         )
         print(
             f"[ENRICHER] Done — {filled} fundamental fields populated "
-            f"across {len(enriched)} ticker(s)"
+            f"across {len(csv_data)} ticker(s)"
         )
-        return enriched
+        return csv_data
     except Exception as exc:
-        print(f"[ENRICHER] Enrichment failed ({exc}) — returning original csv_data")
+        print(f"[ENRICHER] Enrichment failed ({exc}) — returning partially-enriched csv_data")
         return csv_data

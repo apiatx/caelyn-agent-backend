@@ -922,11 +922,33 @@ def _load_watchlist() -> set[str]:
 
 
 def _load_portfolio() -> set[str]:
+    """Load portfolio symbols from disk JSON files (mirrors catalyst_calendar_service logic)."""
+    syms: set[str] = set()
     try:
-        from services.portfolio_service import get_portfolio_symbols
-        return {s.upper() for s in (get_portfolio_symbols() or [])}
+        import json as _json
+        from pathlib import Path as _Path
+        candidates = [
+            "data/portfolio_holdings.json",
+            *[str(p) for p in _Path("data").glob("portfolio_holdings_*.json")],
+        ]
+        for fname in candidates:
+            p = _Path(fname)
+            if not p.exists():
+                continue
+            try:
+                data = _json.loads(p.read_text())
+                holdings = data.get("holdings", data) if isinstance(data, dict) else data
+                if isinstance(holdings, list):
+                    for h in holdings:
+                        if isinstance(h, dict):
+                            sym = h.get("symbol") or h.get("ticker")
+                            if sym:
+                                syms.add(sym.upper())
+            except Exception:
+                pass
     except Exception:
-        return set()
+        pass
+    return syms
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────

@@ -1,0 +1,105 @@
+Audit first. Do not make large changes until you understand the current data flow.
+
+Goal:
+Fix Watchlist CSV upload, fundamentals persistence, FMP call gating, duplicate ticker handling, and Earnings page Watchlist/Portfolio tabs so we reuse Neon/database data and avoid duplicate paid FMP calls.
+
+Context:
+- Work in the CaelynAI backend.
+- This is Replit. Do not worry about git.
+- FMP is paid but should not be used unnecessarily.
+- If a user uploads a Watchlist CSV that already contains complete fundamentals/financials/company data, no FMP enrichment call should be made for those fields.
+- If duplicate symbols already exist in the system/database, reuse the existing saved asset/fundamental record.
+- Watchlist and Portfolio earnings tabs must use saved user watchlist/portfolio tickers and cached earnings data.
+- Earnings dates/info should be saved in Neon and reused.
+- FMP should only be called for genuinely missing or stale required fields.
+
+Audit tasks first:
+1. Find the Watchlist CSV upload/import flow.
+   - Identify where uploaded rows are parsed.
+   - Identify where symbols are normalized.
+   - Identify where records are saved.
+   - Identify whether uploaded financial/fundamental fields are persisted.
+   - Identify whether FMP enrichment is called during upload.
+   - Identify whether FMP is called once per upload, once per ticker, on refresh, weekly, or every page load.
+
+2. Find the Watchlist page data endpoint(s).
+   - Identify whether page load triggers FMP calls.
+   - Identify whether it uses saved Neon data first.
+   - Identify whether duplicate tickers are deduped before enrichment.
+   - Identify whether ticker aliases/symbol normalization prevent duplicate assets.
+
+3. Find the Portfolio holdings data endpoint(s).
+   - Identify how portfolio tickers are saved.
+   - Identify whether portfolio tickers share the same asset/company/fundamental registry as Watchlist.
+   - Identify whether duplicate fundamentals are being fetched separately for portfolio vs watchlist.
+
+4. Find the Earnings/Catalyst Calendar backend.
+   - Identify the endpoint used by Earnings page tabs/toggles.
+   - Identify whether tab=watchlist and tab=portfolio are implemented or ignored.
+   - Identify whether Watchlist/Portfolio earnings currently fetch broad calendar data and filter client-side, or fetch by saved symbols.
+   - Identify whether earnings info is saved/cached in Neon.
+   - Identify current refresh TTL for earnings dates/report info.
+
+5. Add temporary or permanent diagnostics/logging:
+   - Log when an FMP call is made.
+   - Log reason: missing_field, stale_field, missing_earnings, manual_refresh, cache_miss, etc.
+   - Log symbol count and deduped symbol count.
+   - Log source returned to frontend: uploaded_csv, neon_saved, fmp_fresh, fmp_cached, earnings_cache, lkg.
+   - Do not log API keys.
+
+Required fix behavior:
+1. Create or enforce a single asset/company/fundamental registry keyed by normalized symbol.
+   - Watchlist and Portfolio should reference the same saved asset/fundamentals record.
+   - Duplicate tickers should never trigger duplicate FMP calls.
+   - Normalize symbols consistently before lookup/enrichment.
+
+2. CSV upload:
+   - If CSV contains usable financial/fundamental/company fields, save them to Neon.
+   - Mark source as uploaded_csv.
+   - Do not call FMP for fields already present and valid.
+   - Only call FMP for missing required fields.
+   - Deduplicate uploaded symbols before enrichment.
+   - If ticker already exists in DB with sufficient data, reuse it and do not call FMP.
+
+3. Watchlist page:
+   - Load from Neon first.
+   - Hydrate quote/volume from the existing real-time quote service/Tradier path where available, not FMP.
+   - Do not trigger FMP fundamentals refresh on normal page load unless data is missing/stale by explicit TTL.
+   - Return metadata per symbol showing data_source and last_refreshed.
+
+4. Portfolio page:
+   - Same rule as Watchlist.
+   - Portfolio and Watchlist should reuse saved asset/company/fundamental records.
+
+5. Earnings page Watchlist/Portfolio tabs:
+   - Implement backend support if missing.
+   - Watchlist tab should pull user watchlist symbols from Neon.
+   - Portfolio tab should pull user portfolio symbols from Neon.
+   - Deduplicate symbols.
+   - Query cached earnings records first.
+   - Only call FMP earnings endpoint for missing/stale symbols or missing date ranges.
+   - Save earnings results to Neon.
+   - Return earnings metadata: source, last_refreshed, symbol_count, deduped_symbol_count, fmp_calls_made.
+
+6. Protect against broad unnecessary calls:
+   - Watchlist/Portfolio earnings tabs should not call the broad “All earnings” endpoint and then filter if that causes excess data/cost.
+   - Use symbol-targeted or cached lookup where possible.
+   - If broad weekly calendar cache already exists and is fresh, it can be reused first before symbol-level FMP calls.
+
+Validation:
+- Upload a CSV with complete fundamentals for duplicate and existing tickers.
+- Confirm zero FMP calls for symbols/fields already present.
+- Confirm uploaded fields are saved to Neon.
+- Confirm reloading Watchlist does not trigger FMP.
+- Confirm duplicate tickers are collapsed before enrichment.
+- Confirm Watchlist Earnings tab returns only watchlist tickers.
+- Confirm Portfolio Earnings tab returns only portfolio tickers.
+- Confirm earnings info is saved and reused on second request.
+- Add/return diagnostics proving fmp_calls_made is 0 on cached paths.
+
+Deliverables:
+1. Audit summary with exact files/functions/endpoints involved.
+2. Current FMP call behavior: upload vs page load vs scheduled refresh.
+3. Minimal backend changes made.
+4. Validation commands/results.
+5. Any frontend contract changes needed.

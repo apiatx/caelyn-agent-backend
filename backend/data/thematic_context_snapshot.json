@@ -3,11 +3,10 @@
   "active_themes": [
     {
       "name": "Semiconductors",
-      "score": 90.5,
+      "score": 89.5,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (90/100) vs theme universe. Outperforming SPY -0.1%, QQQ -0.3%. Breadth 38%.",
-        "X consensus: 2 tickers mentioned"
+        "Top-percentile RS (90/100) vs theme universe. Outperforming SPY -0.1%, QQQ -0.3%. Breadth 38%."
       ],
       "related_etfs": [
         "SMH",
@@ -60,11 +59,10 @@
     },
     {
       "name": "Semiconductor Equipment",
-      "score": 82.9,
+      "score": 82.4,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (82/100) vs theme universe. Outperforming SPY -0.3%, QQQ -0.5%. Breadth 40%.",
-        "X consensus: 1 ticker mentioned"
+        "Top-percentile RS (82/100) vs theme universe. Outperforming SPY -0.3%, QQQ -0.5%. Breadth 40%."
       ],
       "related_etfs": [
         "SOXX",
@@ -94,11 +92,10 @@
     },
     {
       "name": "Clean Energy",
-      "score": 81.4,
+      "score": 80.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (81/100) vs theme universe. Outperforming SPY -0.6%, QQQ -0.7%. Breadth 11%.",
-        "X consensus: 1 ticker mentioned"
+        "Top-percentile RS (81/100) vs theme universe. Outperforming SPY -0.6%, QQQ -0.7%. Breadth 11%."
       ],
       "related_etfs": [
         "ICLN",
@@ -340,7 +337,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-05-12T16:36:15.247116+00:00",
+  "last_updated": "2026-05-12T18:37:32.112495+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -348,8 +345,8 @@
     "sector_rotation": "ok",
     "theme_rs_service": "ok",
     "theme_rotation": "ok",
-    "x_consensus": "ok",
+    "x_consensus": "stale",
     "polymarket": "fallback"
   },
-  "_saved_at": 1778603775.2471442
+  "_saved_at": 1778611052.1125662
 }
