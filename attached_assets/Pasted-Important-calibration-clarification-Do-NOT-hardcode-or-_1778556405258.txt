@@ -1,0 +1,121 @@
+Important calibration clarification:
+
+Do NOT hardcode or force target percentages for LONG / SHORT / WATCH / NEUTRAL / AVOID.
+
+The distribution targets are diagnostic sanity checks only. They are not quotas.
+
+The signal classifier must be market-regime adaptive:
+- In a bullish market, more LONG/WATCH is acceptable.
+- In a bearish market, more SHORT/WATCH/AVOID is acceptable.
+- In a choppy market, more WATCH/NEUTRAL is acceptable.
+- If most assets genuinely lack signal, NEUTRAL can be high.
+- If the market flips bearish, the system must not force longs just to hit a target distribution.
+
+Use the distribution checks only to identify obvious classifier bugs, such as:
+- AVOID firing on 30-40%+ of assets because a thin-volume threshold is too aggressive.
+- LONG firing on 40%+ of assets because constructive thresholds are too loose.
+- SHORT never firing because bearish logic is broken.
+- NEUTRAL disappearing entirely because every partial input becomes a signal.
+
+Correct approach:
+1. Determine market regime / category regime first where possible.
+2. Score each asset independently using normalized available inputs.
+3. Classify signal based on absolute and relative evidence, not a forced percentage.
+4. Use broad distribution only as a post-validation smell test.
+
+Please implement adaptive thresholds rather than quotas.
+
+Recommended logic:
+
+A. Compute category/regime context:
+- For each tab/category, calculate:
+  - percent of assets with positive 24h change
+  - median 24h change
+  - percent above benchmark if available
+  - median opportunity score
+  - median risk score
+- Classify regime:
+  - BULLISH if median 24h > 0 and more than 55% assets green
+  - BEARISH if median 24h < 0 and more than 55% assets red
+  - MIXED otherwise
+
+B. Use regime-adjusted thresholds, not fixed output percentages:
+
+Base thresholds:
+- LONG if opportunityScore >= 0.55 and bullish evidence >= 2 and avoidCondition false
+- SHORT if opportunityScore >= 0.55 and bearish evidence >= 2 and avoidCondition false
+- WATCH if opportunityScore >= 0.38 or partial setup exists
+- NEUTRAL if insufficient evidence
+- AVOID only for severe untradeable conditions
+
+Regime adjustment:
+- In BULLISH regime:
+  - LONG threshold can be slightly lower, e.g. 0.50
+  - SHORT threshold can be slightly higher, e.g. 0.60
+- In BEARISH regime:
+  - SHORT threshold can be slightly lower, e.g. 0.50
+  - LONG threshold can be slightly higher, e.g. 0.60
+- In MIXED regime:
+  - Keep base thresholds.
+  - Prefer WATCH over forcing LONG/SHORT when evidence is incomplete.
+
+C. Directional evidence should be independent:
+
+Bullish evidence examples:
+- positive 24h change
+- positive relative strength / time-series momentum
+- OI delta positive when available
+- volume velocity elevated when available
+- buy trade imbalance
+- positive book pressure
+- existing old signalDirection/composite/agent score bullish
+- flowLabel in Building / Buying / Squeeze / Absorbing
+- funding not severely dislocated
+
+Bearish evidence examples:
+- negative 24h change
+- negative relative strength / time-series momentum
+- OI rising while price falling
+- volume velocity elevated during sell pressure
+- sell trade imbalance
+- negative book pressure
+- old signalDirection/composite bearish
+- flowLabel in Selling / Flush
+- funding/premium unwind risk
+
+D. Missing data handling:
+- Missing OI delta or volume velocity should be excluded from the scoring denominator, not counted as zero.
+- Warming fields should reduce confidence, not flip direction.
+- If OI/volume are warming but old momentum/composite/flow signals are strong, classify WATCH or directional with lower confidence.
+
+E. Risk handling:
+- Risk should not override signal except in severe cases.
+- A good but risky long should be:
+  matrixSignal: LONG
+  riskLabel: CROWDED or HIGH
+- Not:
+  matrixSignal: CROWDED
+
+F. AVOID should be rare but not quota-limited:
+AVOID only when:
+- severe cap risk
+- severe thin liquidity
+- broken core market data
+- extreme dislocation
+- untradeable spread/depth
+- risk_score extremely high and opportunity_score weak
+
+Do not use volume < $500K alone as automatic AVOID for HIP-3 stocks/ETFs if that universe naturally has smaller liquidity. Use category-aware liquidity thresholds.
+
+G. Validation:
+After changes, report:
+- market/category regime classification
+- signal distribution, but only as diagnostic
+- top LONG rows
+- top SHORT rows
+- top WATCH rows
+- highest risk rows
+- examples where signal is LONG but risk is CROWDED/HIGH
+- examples where AVOID fired and exact reason
+
+Again: do NOT tune to hit fixed percentages. Tune so the classifier reflects actual market conditions.

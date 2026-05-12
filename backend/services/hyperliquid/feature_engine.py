@@ -744,24 +744,20 @@ def compute_universe_ranks(assets: list[ScreenerAsset]) -> list[ScreenerAsset]:
     return list(result_map.values())
 
 
-def compute_matrix_signals(asset: ScreenerAsset) -> dict:
+def compute_matrix_signals(asset: ScreenerAsset, market_regime: str = "MIXED") -> dict:
     """
     Compute the Market Matrix signal layer from already-scored ScreenerAsset fields.
 
-    Adds:
-      vol_oi_ratio            — day_ntl_vlm / open_interest_usd
-      funding_label/reason    — compact funding regime string
-      flow_label/reason       — aggregate flow/OI/volume/tape signal
-      long_liq_15m            — stub (null until liquidation feed wired)
-      short_liq_15m           — stub
-      liquidation_bias_15m    — stub
-      liquidation_context     — stub
-      matrix_signal           — LONG|SHORT|WATCH|CROWDED|AVOID|NEUTRAL
-      matrix_signal_reason    — one-line reason
-      matrix_signal_detail    — nuanced sub-type label
-      opportunity_score       — 0-1 "how actionable is this row?"
-      risk_score              — 0-1 overall risk level
-      risk_label/reason       — LOW|MED|HIGH|CROWDED|CAP RISK|THIN
+    Core principle: signal_direction and risk are SEPARATED.
+      - matrixSignal shows opportunity direction (LONG/SHORT/WATCH/NEUTRAL/AVOID)
+      - riskLabel shows the risk profile (LOW/MED/HIGH/CROWDED/CAP RISK/THIN)
+      - AVOID is rare — only for genuinely untradeable conditions
+      - CROWDED is primarily a riskLabel, not a matrixSignal
+      - Missing OI/vol fields (warming) are excluded from denominator, not penalised
+
+    market_regime: "BULLISH" | "BEARISH" | "MIXED"
+      Computed once per batch in run_full_feature_pass() from the population of assets.
+      Adjusts LONG/SHORT decision thresholds — signals remain evidence-based, not quotas.
 
     Called from run_full_feature_pass() after all scoring is complete.
     No external API calls. Pure function of existing model fields.
@@ -770,19 +766,27 @@ def compute_matrix_signals(asset: ScreenerAsset) -> dict:
 
     # ── Pre-compute helpers ────────────────────────────────────────────────────
     fund          = asset.funding or 0.0
-    ann_fund      = fund * 8760                         # annualized rate (decimal)
+    ann_fund      = fund * 8760                          # annualized rate (decimal)
     abs_ann       = abs(ann_fund)
     premium       = asset.premium or 0.0
     dist_oracle   = asset.distance_mark_oracle_pct or 0.0
     oi_usd        = asset.open_interest_usd or 0.0
     vlm           = asset.day_ntl_vlm or 0.0
-    oi_15m        = asset.oi_change_15m or 0.0          # decimal fraction
-    oi_1h         = asset.oi_change_1h or 0.0           # decimal fraction
-    vol_imp_15m   = asset.volume_impulse_15m             # ratio vs rolling avg, or None
-    vol_imp_1h    = asset.volume_impulse                 # 1h ratio vs rolling avg, or None
+    mom_24h       = asset.pct_change_24h or 0.0
+    mom_1h        = asset.momentum_1h or 0.0
+
+    # OI deltas: raw values, None when warming
+    oi_15m_raw    = asset.oi_change_15m                  # None or decimal fraction
+    oi_1h_raw     = asset.oi_change_1h                   # None or decimal fraction
+    oi_15m        = oi_15m_raw or 0.0
+    oi_1h         = oi_1h_raw  or 0.0
+
+    # Volume velocity: None when candle history short
+    vol_imp_15m   = asset.volume_impulse_15m             # None or ratio
+    vol_imp_1h    = asset.volume_impulse                 # None or ratio
+
     flow_imb      = asset.recent_trade_imbalance or 0.0  # -1..+1
     book_imb      = asset.orderbook_imbalance or 0.0     # -1..+1
-    mom_1h        = asset.momentum_1h or 0.0             # %
     spread_bps    = asset.spread_bps or 0.0
     avoid_score   = asset.avoid_score or 0.0
     tradability   = asset.tradability_penalty or 0.0
@@ -794,13 +798,14 @@ def compute_matrix_signals(asset: ScreenerAsset) -> dict:
     oi_cap_flag   = asset.open_interest_cap_flag
     liq_score     = asset.liquidity_score or 50.0
     mom_score     = asset.momentum_score or 50.0
+    comp_sig      = asset.composite_signal_score or 50.0  # 0-100
+    breakout_sc   = asset.breakout_score or 50.0
 
     # ── 1. Vol / OI ratio ─────────────────────────────────────────────────────
     if vlm > 0 and oi_usd > 0:
         updates["vol_oi_ratio"] = round(vlm / oi_usd, 3)
 
     # ── 2. Funding label ──────────────────────────────────────────────────────
-    # Priority: Dislocated → Extreme → Hot / Shorts Paying → Longs Paying → Neutral → Cheap
     disloc_cond = abs(dist_oracle) > 1.0 or abs(premium) > 0.01
     if disloc_cond and abs_ann > 0.30:
         funding_label  = "Dislocated"
@@ -831,26 +836,25 @@ def compute_matrix_signals(asset: ScreenerAsset) -> dict:
     updates["funding_reason"] = funding_reason
 
     # ── 3. Flow label ─────────────────────────────────────────────────────────
-    # Use OI delta, volume velocity, trade/book imbalance.
-    # Liquidation feed not yet available — squeeze/flush inferred from existing flags.
-    oi_rising      = oi_15m  >  0.005     # >0.5% OI growth over 15m
-    oi_falling     = oi_15m  < -0.005     # >0.5% OI loss over 15m
-    vol_elevated   = (vol_imp_15m or 0.0) > 1.30   # 30% above rolling average
-    buy_pressure   = flow_imb > 0.15
-    sell_pressure  = flow_imb < -0.15
-    bid_heavy      = book_imb > 0.15
-    ask_heavy      = book_imb < -0.15
-    thin           = tradability > 60 or spread_bps > 30 or (vlm > 0 and vlm < 500_000)
+    # "Thin" = truly illiquid: extremely wide spread OR very low volume AND high penalty.
+    # Calibrated to NOT fire on HIP-3 stocks/ETFs with moderate but real volume.
+    oi_rising    = oi_15m  >  0.005
+    oi_falling   = oi_15m  < -0.005
+    vol_elevated = (vol_imp_15m or 0.0) > 1.30
+    buy_pressure = flow_imb > 0.15
+    sell_pressure= flow_imb < -0.15
+    bid_heavy    = book_imb > 0.15
+    ask_heavy    = book_imb < -0.15
+    # Hard thin: spread ≥ 100bps, OR (tradability > 80 AND vlm < $100K)
+    truly_thin   = spread_bps > 100 or (tradability > 80 and vlm < 100_000)
 
-    if thin:
+    if truly_thin:
         flow_label  = "Thin"
         flow_reason = "Thin liquidity"
     elif squeeze:
-        # crowded_short + price moving up → short liquidations inferred
         flow_label  = "Squeeze"
         flow_reason = "Shorts squeezed"
     elif collapse_risk > 60 and oi_falling and sell_pressure:
-        # exhaustion + OI unwinding + selling → long flush inferred
         flow_label  = "Flush"
         flow_reason = "Longs flushed"
     elif oi_rising and vol_elevated and buy_pressure:
@@ -882,105 +886,63 @@ def compute_matrix_signals(asset: ScreenerAsset) -> dict:
     updates["liquidation_bias_15m"] = None
     updates["liquidation_context"]  = None
 
-    # ── 5. Matrix signal ──────────────────────────────────────────────────────
-    # Priority: AVOID → CROWDED → LONG → SHORT → WATCH → NEUTRAL
-    if thin or avoid_score > 65 or oi_cap_flag:
-        if oi_cap_flag and not thin and avoid_score <= 65:
-            matrix_signal        = "AVOID"
-            matrix_signal_reason = "OI cap risk"
-            matrix_signal_detail = "Avoid / Thin"
-        else:
-            matrix_signal        = "AVOID"
-            matrix_signal_reason = "Thin liquidity / cap risk"
-            matrix_signal_detail = "Avoid / Thin"
-    elif crowded_long or (ann_fund > 0.25 and oi_1h > 0.01):
-        matrix_signal        = "CROWDED"
-        matrix_signal_reason = "Funding too hot"
-        matrix_signal_detail = "Crowded Long"
-    elif squeeze:
-        matrix_signal        = "LONG"
-        matrix_signal_reason = "Short squeeze confirmed"
-        matrix_signal_detail = "Short Squeeze"
-    elif (oi_rising and vol_elevated and buy_pressure
-          and abs_ann < 0.25 and mom_1h >= 0):
-        matrix_signal        = "LONG"
-        matrix_signal_reason = "OI + volume building"
-        matrix_signal_detail = "Fresh Long Build"
-    elif (asset.signal_direction == "long"
-          and flow_label in ("Building", "Buying", "Absorbing")
-          and abs_ann < 0.20):
-        matrix_signal        = "LONG"
-        matrix_signal_reason = "Buy pressure confirmed"
-        matrix_signal_detail = "Fresh Long Build"
-    elif (oi_rising and sell_pressure and mom_1h < 0):
-        matrix_signal        = "SHORT"
-        matrix_signal_reason = "Fresh shorts building"
-        matrix_signal_detail = "Bear Build"
-    elif (flow_label in ("Flush",) and sell_pressure):
-        matrix_signal        = "SHORT"
-        matrix_signal_reason = "Sell pressure confirmed"
-        matrix_signal_detail = "Bear Build"
-    elif (asset.signal_direction == "short"
-          and flow_label in ("Selling", "Flush")):
-        matrix_signal        = "SHORT"
-        matrix_signal_reason = "Sell pressure confirmed"
-        matrix_signal_detail = "Bear Build"
-    elif (crowded_short or exhaustion > 55 or collapse_risk > 55
-          or flow_label in ("Absorbing",)):
-        matrix_signal        = "WATCH"
-        matrix_signal_reason = (
-            "Breakout forming" if crowded_short
-            else "Reversal possible after flush"
-        )
-        matrix_signal_detail = "Breakout Watch"
-    else:
-        matrix_signal        = "NEUTRAL"
-        matrix_signal_reason = "No clear signal"
-        matrix_signal_detail = "Neutral"
+    # ── 5. Opportunity score (0–1) ────────────────────────────────────────────
+    # Missing OI delta or volume velocity are EXCLUDED from the denominator
+    # (not counted as zero), so warming assets are not penalised.
+    #
+    # Weights (full set sums to 1.0):
+    #   price / RS / momentum     0.20
+    #   OI delta 15m              0.20  (omitted when warming)
+    #   volume velocity 15m       0.15  (omitted when warming)
+    #   trade + book flow         0.15
+    #   composite / breakout      0.15
+    #   funding quality           0.10
+    #   liquidity / tradability   0.05
+    opp_parts: list[tuple[float, float]] = []  # (score_0_100, weight)
 
-    updates["matrix_signal"]        = matrix_signal
-    updates["matrix_signal_reason"] = matrix_signal_reason
-    updates["matrix_signal_detail"] = matrix_signal_detail
+    # 5a. Price / RS / momentum — always available
+    price_rs_score = _clip(mom_score, 0, 100)
+    opp_parts.append((price_rs_score, 0.20))
 
-    # ── 6. Opportunity score (0-1) ────────────────────────────────────────────
-    # Weighting per spec:
-    #   25% OI delta, 20% vol velocity, 15% momentum/RS, 15% tape/book,
-    #   10% funding quality, 10% flow confirmation, 5% liquidity
-    oi_delta_score = _clip(abs(oi_15m) * 100 * 5, 0, 100)         # 2% 15m Δ = 100
-    vol_vel_score  = _clip((vol_imp_15m or 1.0) * 50, 0, 100)     # 2× impulse = 100
-    tape_score     = _clip(50 + (flow_imb * 0.5 + book_imb * 0.5) * 50, 0, 100)
-    # Funding quality: near-zero = high clarity; extreme = low clarity
-    fund_quality   = _clip(100 - abs_ann * 100, 20, 100)
-    # Flow confirmation bonus
-    flow_conf      = (
-        100 if flow_label in ("Building", "Squeeze")
-        else 80 if flow_label == "Buying"
-        else 60 if flow_label == "Absorbing"
-        else 30 if flow_label == "Thin"
-        else 50
-    )
+    # 5b. OI delta 15m — only when snapshot history exists
+    if oi_15m_raw is not None:
+        # Positive OI builds opportunity; negative reduces it
+        oi_dir_score = _clip(50 + oi_15m_raw * 100 * 25, 0, 100)
+        opp_parts.append((oi_dir_score, 0.20))
 
-    opp_raw = (
-        oi_delta_score * 0.25 +
-        vol_vel_score  * 0.20 +
-        mom_score      * 0.15 +
-        tape_score     * 0.15 +
-        fund_quality   * 0.10 +
-        flow_conf      * 0.10 +
-        liq_score      * 0.05
-    )
-    updates["opportunity_score"] = round(_clip(opp_raw / 100, 0.0, 1.0), 3)
+    # 5c. Volume velocity 15m — only when candle history exists
+    if vol_imp_15m is not None:
+        vol_vel_score = _clip((vol_imp_15m - 1.0) * 50 + 50, 0, 100)
+        opp_parts.append((vol_vel_score, 0.15))
 
-    # ── 7. Risk score (0-1) ───────────────────────────────────────────────────
-    # Weighting per spec:
-    #   25% funding extreme, 20% mark-oracle dislocation, 20% OI cap,
-    #   15% thin liquidity/spread, 10% liq aftershock (stub 0), 10% overextended
-    fund_risk    = _clip(abs_ann * 100, 0, 100)
-    disloc_risk  = _clip(abs(dist_oracle) / 0.015 * 100, 0, 100)   # 1.5% gap = max
-    cap_risk_raw = 80.0 if oi_cap_flag else _clip(asset.crowding_score or 0, 0, 80)
-    thin_risk    = _clip(tradability, 0, 100)
-    liq_aftershock = 0.0  # TODO: wire from liquidation feed
-    overext_risk = _clip((exhaustion + collapse_risk) / 2, 0, 100)
+    # 5d. Trade + book flow — always available
+    tape_score = _clip(50 + (flow_imb * 0.5 + book_imb * 0.5) * 50, 0, 100)
+    opp_parts.append((tape_score, 0.15))
+
+    # 5e. Composite + breakout signal — always available (the engine's own verdict)
+    existing_sig = _clip(comp_sig * 0.60 + breakout_sc * 0.40, 0, 100)
+    opp_parts.append((existing_sig, 0.15))
+
+    # 5f. Funding quality — near-zero funding = clarity; extreme = noise
+    fund_quality = _clip(100 - abs_ann * 150, 20, 100)
+    opp_parts.append((fund_quality, 0.10))
+
+    # 5g. Liquidity / tradability
+    liq_trade_score = _clip(liq_score * 0.60 + (100 - tradability) * 0.40, 0, 100)
+    opp_parts.append((liq_trade_score, 0.05))
+
+    total_weight = sum(w for _, w in opp_parts)
+    opp_raw      = sum(s * w for s, w in opp_parts)
+    opp_val      = round(_clip(opp_raw / total_weight / 100, 0.0, 1.0), 3) if total_weight > 0 else 0.5
+    updates["opportunity_score"] = opp_val
+
+    # ── 6. Risk score (0–1) ────────────────────────────────────────────────────
+    fund_risk      = _clip(abs_ann * 100, 0, 100)
+    disloc_risk    = _clip(abs(dist_oracle) / 0.015 * 100, 0, 100)  # 1.5% gap = max
+    cap_risk_raw   = 80.0 if oi_cap_flag else _clip(asset.crowding_score or 0, 0, 80)
+    thin_risk      = _clip(tradability * 0.50 + (spread_bps / 100) * 30, 0, 100)
+    liq_aftershock = 0.0   # TODO: wire from liquidation feed
+    overext_risk   = _clip((exhaustion + collapse_risk) / 2, 0, 100)
 
     risk_raw = (
         fund_risk      * 0.25 +
@@ -993,20 +955,27 @@ def compute_matrix_signals(asset: ScreenerAsset) -> dict:
     risk_val = round(_clip(risk_raw / 100, 0.0, 1.0), 3)
     updates["risk_score"] = risk_val
 
-    # ── 8. Risk label / reason ────────────────────────────────────────────────
+    # ── 7. Risk label / reason ─────────────────────────────────────────────────
+    # LOW < 0.35 | MED 0.35–0.60 | HIGH 0.60–0.78
+    # CROWDED: bullish but crowded (hot funding + elevated OI)
+    # CAP RISK: OI cap utilization
+    # THIN: genuinely illiquid
     if oi_cap_flag:
         risk_label  = "CAP RISK"
         risk_reason = "OI cap utilization risk"
-    elif thin or tradability > 50:
+    elif truly_thin:
         risk_label  = "THIN"
         risk_reason = "Thin liquidity / unreliable signal"
-    elif crowded_long and abs_ann > 0.25:
+    elif (crowded_long or ann_fund > 0.20) and risk_val >= 0.40:
         risk_label  = "CROWDED"
-        risk_reason = "High funding + OI building aggressively"
-    elif risk_val > 0.65:
+        risk_reason = "High funding + OI crowding"
+    elif risk_val >= 0.78:
         risk_label  = "HIGH"
         risk_reason = "Stretched or unstable setup"
-    elif risk_val > 0.40:
+    elif risk_val >= 0.60:
+        risk_label  = "HIGH"
+        risk_reason = "Elevated risk — extended momentum or dislocation"
+    elif risk_val >= 0.35:
         risk_label  = "MED"
         risk_reason = "Some risk but tradeable"
     else:
@@ -1015,6 +984,154 @@ def compute_matrix_signals(asset: ScreenerAsset) -> dict:
 
     updates["risk_label"]  = risk_label
     updates["risk_reason"] = risk_reason
+
+    # ── 8. Matrix signal ──────────────────────────────────────────────────────
+    # Separation principle: direction first, risk second.
+    #
+    # AVOID: rare — only genuinely untradeable or broken markets.
+    # CROWDED: only when risk dominates AND no directional signal (risk_score ≥ 0.80).
+    # LONG / SHORT: directional conviction.
+    # WATCH: setup improving, warming, or partial signal.
+    # NEUTRAL: nothing to act on.
+
+    # ── AVOID gate (rare — genuinely untradeable/broken only) ────────────────────
+    severe_avoid = (
+        truly_thin
+        or (oi_cap_flag and risk_val >= 0.85)
+        or (risk_val >= 0.85 and opp_val < 0.40)
+        or spread_bps > 200
+    )
+
+    # ── Regime-adaptive thresholds ────────────────────────────────────────────
+    # Base: LONG/SHORT both at 0.55 (MIXED market)
+    # BULLISH: long threshold relaxed to 0.50, short tightened to 0.60
+    # BEARISH: short threshold relaxed to 0.50, long tightened to 0.60
+    if market_regime == "BULLISH":
+        long_opp_thr  = 0.50
+        short_opp_thr = 0.60
+    elif market_regime == "BEARISH":
+        long_opp_thr  = 0.60
+        short_opp_thr = 0.50
+    else:  # MIXED
+        long_opp_thr  = 0.55
+        short_opp_thr = 0.55
+
+    # ── Bullish directional evidence (spec §C) ────────────────────────────────
+    # Each is an independent signal — absence of negatives does NOT count except
+    # where the spec explicitly lists "funding not severely dislocated" as bullish.
+    # OI / vol velocity only counted when available (not warming).
+    clong = 0
+    if mom_24h > 0:                                                  clong += 1  # positive 24h
+    if mom_score > 55:                                               clong += 1  # RS / time-series momentum
+    if oi_15m_raw is not None and oi_15m_raw > 0:                   clong += 1  # OI delta positive
+    if vol_imp_15m is not None and vol_imp_15m > 1.20:              clong += 1  # vol velocity elevated
+    if flow_imb > 0.15:                                              clong += 1  # buy trade imbalance
+    if book_imb > 0.15:                                              clong += 1  # bid-side book pressure
+    if (asset.signal_direction == "long" or comp_sig > 58):         clong += 1  # engine verdict bullish
+    if flow_label in ("Building", "Buying", "Squeeze", "Absorbing"): clong += 1 # constructive tape
+    if abs_ann < 0.30:                                               clong += 1  # funding not severely dislocated
+    # Max clong = 9
+
+    # ── Bearish directional evidence (spec §C) ────────────────────────────────
+    cshort = 0
+    if mom_24h < 0:                                                  cshort += 1  # negative 24h
+    if mom_score < 45:                                               cshort += 1  # negative RS / momentum
+    if oi_15m_raw is not None and oi_15m_raw < 0:                   cshort += 1  # OI delta negative
+    if oi_rising and mom_1h < 0:                                     cshort += 1  # OI up while price down
+    if vol_imp_15m is not None and vol_imp_15m > 1.20 and flow_imb < 0: cshort += 1  # vol elevated + selling
+    if flow_imb < -0.15:                                             cshort += 1  # sell trade imbalance
+    if book_imb < -0.15:                                             cshort += 1  # ask-side book pressure
+    if (asset.signal_direction == "short" or comp_sig < 42):        cshort += 1  # engine verdict bearish
+    if flow_label in ("Selling", "Flush"):                           cshort += 1  # destructive tape
+    # Max cshort = 9
+
+    # ── Signal decision ───────────────────────────────────────────────────────
+    # Priority: AVOID → squeeze-LONG → LONG → SHORT → WATCH → CROWDED → NEUTRAL
+    # Risk labels (CROWDED/HIGH) are set independently — a good risky LONG stays LONG.
+    if severe_avoid:
+        matrix_signal        = "AVOID"
+        matrix_signal_reason = (
+            "OI cap risk"              if oi_cap_flag
+            else "Spread too wide"     if spread_bps > 200
+            else "Thin liquidity"
+        )
+        matrix_signal_detail = "Avoid / Thin"
+
+    elif squeeze:
+        # Short squeeze → always LONG; risk label carries the crowding information
+        matrix_signal        = "LONG"
+        matrix_signal_reason = "Short squeeze confirmed"
+        matrix_signal_detail = "Short Squeeze"
+
+    elif opp_val >= long_opp_thr and clong >= 2:
+        # LONG: meets regime-adjusted opportunity bar + ≥ 2 independent bullish signals
+        matrix_signal        = "LONG"
+        matrix_signal_reason = (
+            "OI + volume building"               if flow_label == "Building"
+            else "Buy pressure confirmed"        if flow_label in ("Buying", "Absorbing")
+            else "Price + OI building, funding hot" if abs_ann > 0.40
+            else "Momentum + flow constructive"
+        )
+        matrix_signal_detail = "Fresh Long Build"
+
+    elif opp_val >= short_opp_thr and cshort >= 2:
+        # SHORT: meets regime-adjusted bar + ≥ 2 independent bearish signals
+        matrix_signal        = "SHORT"
+        matrix_signal_reason = (
+            "Fresh shorts building"   if (oi_15m_raw is not None and oi_15m_raw < 0)
+            else "Sell pressure confirmed"
+        )
+        matrix_signal_detail = "Bear Build"
+
+    elif (opp_val >= 0.38 and (clong >= 1 or cshort >= 1)):
+        # WATCH: any directional lean with meaningful opportunity score.
+        # This covers warming states (OI/vol not yet available but other signals active),
+        # partial setups, and "improving but not confirmed" configurations.
+        if crowded_short:
+            watch_reason = "Breakout forming"
+        elif flow_label == "Squeeze":
+            watch_reason = "Short squeeze developing"
+        elif exhaustion > 60 or collapse_risk > 60:
+            watch_reason = "Reversal possible after flush"
+        elif flow_label == "Building":
+            watch_reason = "OI + volume building"
+        elif (oi_15m_raw is None or vol_imp_15m is None) and clong >= 1:
+            watch_reason = "Momentum positive, OI/volume warming"
+        elif cshort >= 2:
+            watch_reason = "Bearish pressure building"
+        elif clong >= 2:
+            watch_reason = "Setup improving — partial signal"
+        else:
+            watch_reason = "Directional lean — insufficient confirmation"
+        matrix_signal        = "WATCH"
+        matrix_signal_reason = watch_reason
+        matrix_signal_detail = "Breakout Watch"
+
+    elif (crowded_short or flow_label == "Squeeze"
+          or exhaustion > 65 or collapse_risk > 65):
+        # WATCH: explicit setup flags even without strong opp score
+        matrix_signal        = "WATCH"
+        matrix_signal_reason = (
+            "Breakout forming"            if crowded_short
+            else "Short squeeze developing" if flow_label == "Squeeze"
+            else "Reversal possible after flush"
+        )
+        matrix_signal_detail = "Breakout Watch"
+
+    elif risk_val >= 0.80 and opp_val < 0.46:
+        # CROWDED as matrixSignal: only when risk fully dominates with no directional edge
+        matrix_signal        = "CROWDED"
+        matrix_signal_reason = "Funding too hot"
+        matrix_signal_detail = "Crowded Long"
+
+    else:
+        matrix_signal        = "NEUTRAL"
+        matrix_signal_reason = "No clear signal"
+        matrix_signal_detail = "Neutral"
+
+    updates["matrix_signal"]        = matrix_signal
+    updates["matrix_signal_reason"] = matrix_signal_reason
+    updates["matrix_signal_detail"] = matrix_signal_detail
 
     return updates
 
@@ -1051,6 +1168,36 @@ def _weighted_avg(parts: list[tuple[str, float, float]], default: float = 50.0) 
 # Full feature pass over all state assets
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _compute_market_regime(assets: list[ScreenerAsset]) -> str:
+    """
+    Classify the current market regime from the scored asset population.
+
+    Returns "BULLISH" | "BEARISH" | "MIXED".
+
+    Rules (per spec):
+      BULLISH  — median 24h change > 0  AND  > 55 % of assets are green
+      BEARISH  — median 24h change < 0  AND  > 55 % of assets are red
+      MIXED    — everything else (sideways, divergent, insufficient data)
+
+    Only assets with non-null pct_change_24h are included.
+    Requires at least 10 assets to avoid noise at startup.
+    """
+    changes = [a.pct_change_24h for a in assets if a.pct_change_24h is not None]
+    if len(changes) < 10:
+        return "MIXED"
+
+    n = len(changes)
+    green_pct = sum(1 for c in changes if c > 0) / n
+    red_pct   = 1.0 - green_pct
+    median_24h = sorted(changes)[n // 2]
+
+    if median_24h > 0 and green_pct > 0.55:
+        return "BULLISH"
+    if median_24h < 0 and red_pct > 0.55:
+        return "BEARISH"
+    return "MIXED"
+
+
 def run_full_feature_pass(state: HyperliquidState):
     """
     Compute all features for every asset in state.
@@ -1065,6 +1212,16 @@ def run_full_feature_pass(state: HyperliquidState):
     """
     updated: list[ScreenerAsset] = []
     skipped_non_universe = 0
+
+    # ── Batch-level market regime ─────────────────────────────────────────────
+    # Computed once from the existing (pre-pass) asset data so every asset in
+    # this pass sees the same regime context.  The previous pass's scores are
+    # good enough for the distribution check; they update each iteration.
+    universe_assets = [
+        a for coin, a in state.assets.items()
+        if not state.universe_allowlist or coin in state.universe_allowlist
+    ]
+    market_regime = _compute_market_regime(universe_assets)
 
     for coin, asset in list(state.assets.items()):
         # ── Universe gate ────────────────────────────────────────────────
@@ -1093,8 +1250,8 @@ def run_full_feature_pass(state: HyperliquidState):
         if struct_feats:
             asset = asset.model_copy(update=struct_feats)
 
-        # Matrix signal layer (funding label, flow label, matrix signal, opportunity/risk)
-        matrix_feats = compute_matrix_signals(asset)
+        # Matrix signal layer — regime-adaptive thresholds passed in
+        matrix_feats = compute_matrix_signals(asset, market_regime)
         if matrix_feats:
             asset = asset.model_copy(update=matrix_feats)
 
@@ -1108,5 +1265,8 @@ def run_full_feature_pass(state: HyperliquidState):
 
     if skipped_non_universe:
         print(f"[HL][feature] Skipped {skipped_non_universe} non-universe assets during feature pass")
+
+    print(f"[HL][feature] Market regime: {market_regime} "
+          f"(scored {len(updated)} assets)")
 
     return len(updated)

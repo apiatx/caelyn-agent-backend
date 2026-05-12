@@ -1,0 +1,190 @@
+The new Hyperliquid signal layer is technically working, but the signal classification is too conservative and too punitive.
+
+Problem:
+- It is only producing a tiny number of LONG signals across the whole market.
+- Many potentially good trades are being labeled AVOID or CROWDED.
+- Vast majority of rows are NEUTRAL or low-scored.
+- Missing/warming OI delta or volume velocity appears to be hurting scores/signals too much.
+- Funding/crowding/thin labels seem to override directional opportunity too aggressively.
+
+Do NOT roll back the backend.
+Do NOT remove the new fields.
+Do NOT break existing raw fields or cards.
+This is a calibration fix to the signal logic only.
+
+Goal:
+Make the screener surface actionable candidates first, then show risk separately.
+
+Core principle:
+Signal direction and risk must be separated.
+
+matrixSignal should primarily be:
+- LONG
+- SHORT
+- WATCH
+- NEUTRAL
+- AVOID only for severe untradeable conditions
+
+CROWDED should usually be a riskLabel, not the main matrixSignal.
+
+Examples:
+Good:
+matrixSignal: LONG
+riskLabel: CROWDED
+matrixReason: "Price + OI building, funding hot"
+
+Bad:
+matrixSignal: CROWDED
+riskLabel: CROWDED
+
+Good:
+matrixSignal: WATCH
+riskLabel: MED
+matrixReason: "Momentum positive, OI/volume warming"
+
+Bad:
+matrixSignal: NEUTRAL
+matrixReason: "No clear signal" just because OI delta is null
+
+Calibration tasks:
+
+1. Treat missing/warming OI delta and volume velocity as UNKNOWN, not bearish.
+If oi_delta_15m_pct or volume_velocity_15m is null because snapshots are warming:
+- Do not score it as zero.
+- Do not penalize opportunity_score heavily.
+- Use available signals: 24h momentum, relative strength, existing composite signal, trade imbalance, book imbalance, funding, premium, volume, existing breakout/agent score.
+- If other signals are constructive, classify as WATCH or LONG even while OI/Vol fields are warming.
+
+2. Lower LONG threshold.
+Current LONG logic is too strict.
+
+New suggested LONG condition:
+matrixSignal = LONG if:
+- opportunity_score >= 0.45
+AND at least two constructive inputs are present:
+  - positive 24h change
+  - positive existing signalDirection / side / compositeSignal
+  - positive relative strength / time-series momentum
+  - OI delta positive when available
+  - volume velocity > 1.2 when available
+  - buy/positive trade imbalance
+  - positive/supportive book imbalance
+  - flowLabel is Building, Buying, Squeeze, or Absorbing
+  - funding is not extreme-dislocation
+
+Funding hot should increase risk, but should not automatically prevent LONG unless truly extreme.
+
+3. Lower WATCH threshold.
+matrixSignal = WATCH if:
+- opportunity_score >= 0.32
+OR partial constructive inputs exist
+OR OI/volume history is warming but price/momentum/flow is positive
+OR current existing logic would have been breakout/bullish/long-ish
+
+WATCH should be common. It means “interesting but not confirmed.”
+
+4. Make AVOID rare.
+matrixSignal = AVOID only if:
+- severe cap risk
+- severe thin liquidity
+- extreme mark/oracle dislocation
+- broken/missing core market data
+- risk_score >= 0.85 AND opportunity_score < 0.45
+- flowLabel is Thin AND liquidity is truly below hard threshold
+
+Do NOT mark AVOID merely because:
+- funding is elevated
+- riskLabel is MED/HIGH
+- OI delta is missing
+- volume velocity is missing
+- flowLabel is Mixed
+- liquidity is smaller but still tradeable
+
+5. Move CROWDED out of matrixSignal in most cases.
+If a setup is bullish but crowded:
+- matrixSignal should be LONG or WATCH
+- riskLabel should be CROWDED
+- riskReason should mention funding/premium/OI crowding
+
+Only set matrixSignal = CROWDED if:
+- risk_score >= 0.80
+- funding/premium is extreme
+- opportunity_score is not strong enough to justify LONG/WATCH
+- or price is already extended and reversal risk dominates
+
+6. Rebalance opportunity_score.
+Current scores are too compressed around 0.3–0.5.
+
+Recalibrate opportunity_score so strong candidates can reach 0.65–0.90.
+
+Suggested:
+- Normalize each component to 0–1.
+- Missing components should be excluded from denominator, not counted as zero.
+- Existing strong signals should matter more.
+
+Suggested weights:
+- 20% price / relative strength / time-series momentum
+- 20% OI delta when available
+- 15% volume velocity when available
+- 15% trade/book flow
+- 15% existing composite/agent/breakout signal
+- 10% funding quality
+- 5% liquidity/tradability
+
+If OI delta or volume velocity are unavailable, redistribute that weight across available components instead of penalizing.
+
+7. Recalibrate risk_score.
+Risk should warn, not suppress.
+
+Risk labels:
+- LOW: risk_score < 0.35
+- MED: 0.35–0.60
+- HIGH: 0.60–0.78
+- CROWDED: funding/premium crowding or risk_score >= 0.70 with bullish setup
+- CAP RISK: actual cap utilization issue
+- THIN: actual liquidity issue
+
+Do not let riskLabel override matrixSignal except for severe AVOID cases.
+
+8. Use existing old logic as fallback.
+The old fields were useful and should influence the new matrixSignal:
+- signalDirection
+- compositeSignal
+- overallScore
+- agentScore
+- breakout score
+- time-series momentum
+- relative strength
+- vol impulse
+- short squeeze module
+- order book pressure
+
+If the old logic says a row is attractive but new OI/Vol fields are warming, classify at least WATCH, possibly LONG.
+
+9. Expected output distribution.
+After calibration, on a 600+ asset universe, it is reasonable to see something like:
+- LONG: 5–15% of assets
+- SHORT: 3–10%
+- WATCH: 15–30%
+- NEUTRAL: 40–65%
+- AVOID: under 5–8%
+- CROWDED as main matrixSignal: rare, preferably under 3–5%
+
+CROWDED should more often appear as riskLabel, not matrixSignal.
+
+10. Validation.
+After changes, validate live endpoint distribution:
+- Count matrixSignal values across all assets.
+- Count riskLabel values.
+- Show top 20 by opportunityScore.
+- Confirm multiple LONG and WATCH rows exist.
+- Confirm AVOID is rare.
+- Confirm OI/volume warming does not cause mass NEUTRAL/AVOID.
+- Confirm old fields still exist.
+
+Report:
+- Files changed
+- Logic changes made
+- Signal distribution before/after
+- Top 10 rows by opportunityScore with:
+  coin, matrixSignal, opportunityScore, riskLabel, matrixReason
