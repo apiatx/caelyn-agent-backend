@@ -403,25 +403,59 @@ async def bottlenecks_force_refresh(
 
     diag["visible_snapshot"] = visible_diag
 
+    # ── Step 6: Rebuild strategy screener snapshot from new CR data ───────────
+    # This writes to screener_snapshots + screener_reports so that
+    # GET /api/strategy-screener/latest serves the new diverse candidates
+    # with full ReportPanel-compatible payloads for every visible row.
+    screener_snap_diag: dict = {}
+    try:
+        from services.playbook.strategy_screener.screener_service import generate_snapshot_from_cr
+        screener_snap = await asyncio.wait_for(
+            generate_snapshot_from_cr(manual_override=True),
+            timeout=120,
+        )
+        if screener_snap and screener_snap.get("status") == "complete":
+            screener_snap_diag = {
+                "status":          "complete",
+                "snapshot_id":     screener_snap.get("snapshot_id"),
+                "results_count":   screener_snap.get("results_count"),
+                "generation_notes": screener_snap.get("generation_notes"),
+            }
+        else:
+            screener_snap_diag = {
+                "status":  "empty" if not screener_snap else screener_snap.get("status", "unknown"),
+                "message": "generate_snapshot_from_cr returned no/incomplete snapshot",
+            }
+    except asyncio.TimeoutError:
+        screener_snap_diag = {"status": "timeout", "error": "generate_snapshot_from_cr timed out after 120s"}
+    except Exception as _sse:
+        screener_snap_diag = {"status": "error", "error": str(_sse)}
+
+    diag["screener_snapshot"] = screener_snap_diag
+
     finished_at = datetime.now(timezone.utc).isoformat()
     diag["finished_at"] = finished_at
 
-    n_visible = visible_diag.get("visible_count", "?")
-    n_gems    = (visible_diag.get("diversity_gate_result") or {}).get("hidden_gems_achieved", 0)
+    n_visible  = visible_diag.get("visible_count", "?")
+    n_gems     = (visible_diag.get("diversity_gate_result") or {}).get("hidden_gems_achieved", 0)
+    n_screener = screener_snap_diag.get("results_count", "?")
     return JSONResponse(content={
         "status":  "ok",
         "message": (
             f"Bottlenecks refresh complete. "
             f"Universe: {diag.get('new_snapshot_symbols_count', '?')} symbols. "
             f"Visible top: {n_visible} rows ({n_gems} Phase-6 hidden gems). "
+            f"Screener snapshot: {n_screener} candidates with full reports. "
             + (f"Net universe change: {diag.get('symbols_net_change', 0):+d}. " if diag.get('symbols_net_change') is not None else "")
             + ("Universe genuinely updated." if snapshot_changed else "Universe symbols unchanged (new timestamp).")
         ),
-        "snapshot_changed":  snapshot_changed,
-        "visible_tickers":   visible_diag.get("visible_tickers", []),
-        "visible_count":     n_visible,
-        "visible_snapshot":  visible_diag,
-        "diagnostics":       diag,
+        "snapshot_changed":    snapshot_changed,
+        "visible_tickers":     visible_diag.get("visible_tickers", []),
+        "visible_count":       n_visible,
+        "screener_snapshot_id": screener_snap_diag.get("snapshot_id"),
+        "screener_results_count": n_screener,
+        "visible_snapshot":    visible_diag,
+        "diagnostics":         diag,
     })
 
 

@@ -1,0 +1,82 @@
+You are working in the CaelynAI backend Replit.
+
+Do not rebuild the Bottlenecks / Chain Reaction page. Do not create a new replacement architecture.
+
+Goal:
+Merge today’s new Bottlenecks work into the old existing Strategy Screener / Chain Reaction backend path so we keep BOTH:
+1. the old custom Strategy Screener / Serenity report/detail logic
+2. today’s new hidden-gem universe, diversity gate, refresh fixes, diagnostics, and market cap bucket work
+
+Problem:
+The old frontend-visible path was:
+GET /api/strategy-screener/latest
+
+That path powered the original Chain Reaction page and report/detail panel.
+
+Today, a new path was added:
+GET /api/bottlenecks/current
+
+That exposed the new diverse bottleneck rows, but it bypassed the old report/detail logic. Result: table shows new rows but report panel says “Report unavailable — showing snapshot data.”
+
+Do not erase either path. Do not throw away today’s work. Do not throw away the old screener.
+
+Backend task:
+Audit both paths end-to-end before changing code.
+
+OLD PATH:
+- GET /api/strategy-screener/latest
+- strategy screener snapshot builder
+- report/detail payload generator
+- ReportPanel-compatible fields
+- stored snapshot/report table/file/key
+- current 20-row selection logic
+
+NEW PATH:
+- GET /api/bottlenecks/current
+- chain_reaction_weekly_outputs
+- diversity gate
+- hidden-gem universe
+- market cap bucket logic
+- POST /api/admin/bottlenecks/refresh
+- diagnostics endpoint
+
+Then choose the smallest merge point.
+
+Preferred fix:
+Keep GET /api/strategy-screener/latest as the canonical frontend page endpoint if possible, because that preserves the original report/detail contract.
+
+Internally, modify the existing strategy screener snapshot builder so it uses the new bottlenecks/chain_reaction_weekly_outputs/diversity-gated candidate universe as input.
+
+The final output should still preserve the old Strategy Screener response shape and report/detail compatibility.
+
+Hard requirements:
+1. One seamless backend source for the page.
+2. No split-brain where table rows come from one endpoint and reports come from another incompatible endpoint.
+3. Preserve old Strategy Screener report/detail logic.
+4. Preserve today’s new hidden-gem/diversity/refresh/diagnostics work.
+5. Refresh updates the actual page-visible rows.
+6. Every visible row has usable report/detail payload.
+7. Do not delete /api/bottlenecks/current unless it is safely folded into the old path or kept as internal/debug.
+8. Do not delete /api/strategy-screener/latest unless the old report/detail behavior is fully preserved elsewhere.
+9. Do not expose endpoint/internal implementation copy to users.
+
+Validation:
+1. Force refresh with POST /api/admin/bottlenecks/refresh.
+2. Fetch the final canonical page endpoint.
+3. Confirm visible rows include broader hidden-gem/diverse candidates when qualified.
+4. Confirm response shape supports old ReportPanel.
+5. Confirm reports work for at least 3 visible rows, including at least one newly-added hidden-gem/small-mid name if visible.
+6. Confirm market cap buckets still exist.
+7. Confirm diagnostics still expose diversity gate, hidden-gem count, theme distribution, and snapshot freshness.
+
+Report back:
+- Old path map
+- New path map
+- Exact merge point chosen
+- Files changed
+- Whether /api/strategy-screener/latest remains canonical
+- Whether /api/bottlenecks/current remains internal/debug or page-facing
+- Visible ticker list
+- Report validation for 3 rows
+- Confirmation old custom logic was preserved
+- Confirmation today’s new work was preserved
