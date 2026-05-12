@@ -446,3 +446,250 @@ def get_latest_cr_weekly_output(max_age_days: int = 10) -> Optional[dict]:
     except Exception as e:
         print(f"[CR_WEEKLY] get_latest error: {e}")
         return None
+
+
+# ── Phase 6 hidden-gem ticker set (small/mid-cap cross-theme bottlenecks) ──────
+# Used by the cross-theme diversity gate to guarantee representation.
+
+_PHASE6_HIDDEN_GEMS: frozenset[str] = frozenset({
+    "CCJ", "LEU", "BWXT", "NXE", "UEC", "SMR",    # nuclear / uranium / SMR
+    "MP", "UUUU",                                   # rare earth / critical materials
+    "FLNC", "STEM",                                 # battery / grid storage
+    "POWL", "GTLS",                                 # specialty grid hardware
+    "VICR",                                         # power ICs
+    "TDY", "CACI",                                  # defense niche
+    "ACMR", "CEVA", "VIAV", "AZTA",                # semiconductor niche
+    "TRMB",                                         # robotics / precision
+    "RYCEY",                                        # UK nuclear / defense ADR
+})
+
+_VISIBLE_TOP_DEFAULT: int = 20
+_VIS_THEMES_REQUIRED: int = 4      # min distinct themes in visible set
+_VIS_SMALL_MID_MIN:   int = 5      # min <$20B names in visible set
+_VIS_GEM_MIN:         int = 2      # min Phase 6 hidden gems in visible set
+_VIS_SMALL_MID_MCAP:  float = 20_000_000_000.0   # $20B threshold
+_VIS_GEM_BN_MIN:      float = 65.0               # bn_score floor for gem promotion
+
+
+def _vis_is_gem(r: dict) -> bool:
+    return r.get("bottleneck_ticker", "").upper() in _PHASE6_HIDDEN_GEMS
+
+
+def _vis_is_small_mid(r: dict) -> bool:
+    mcap = r.get("market_cap") or r.get("marketCap")
+    bn   = float(r.get("bottleneck_score") or 0)
+    if mcap is None:
+        return bn >= _DIVERSITY_BN_SCORE_MIN        # unknown cap: trust bn_score
+    return mcap < _VIS_SMALL_MID_MCAP and bn >= 55.0
+
+
+def _vis_promote(pool: list, predicate, n_needed: int, selected: list) -> tuple[list, list]:
+    """
+    Promote up to n_needed rows matching predicate from pool into selected,
+    swapping out the lowest-final_score non-protected row in selected.
+    Returns (new_selected, new_pool).
+    """
+    promoted = 0
+    pool = list(pool)
+    selected = list(selected)
+    candidates = sorted((r for r in pool if predicate(r)),
+                        key=lambda r: r.get("final_score", 0), reverse=True)
+    for cand in candidates:
+        if promoted >= n_needed:
+            break
+        # Find victim: prefer non-gem AND non-small-mid; fallback to non-gem
+        victims = [r for r in selected if not _vis_is_gem(r) and not _vis_is_small_mid(r)]
+        if not victims:
+            victims = [r for r in selected if not _vis_is_gem(r)]
+        if not victims:
+            break
+        victims.sort(key=lambda r: r.get("final_score", 0))
+        victim = victims[0]
+        selected = [r for r in selected if r is not victim]
+        pool = [r for r in pool if r is not cand]
+        selected.append(cand)
+        pool.append(victim)
+        promoted += 1
+    return selected, pool
+
+
+def build_cross_theme_top(
+    limit: int = _VISIBLE_TOP_DEFAULT,
+    max_age_days: int = 10,
+    require_themes: int = _VIS_THEMES_REQUIRED,
+    require_small_mid: int = _VIS_SMALL_MID_MIN,
+    require_gems: int = _VIS_GEM_MIN,
+    prev_visible_tickers: Optional[list] = None,
+) -> dict:
+    """
+    Build a cross-theme diverse top-N from the latest chain_reaction_weekly_outputs.
+
+    Algorithm:
+      1. Load the latest CR weekly output (already final_score-sorted + diversity-passed).
+      2. Start with the natural top `limit` rows.
+      3. Apply 3 diversity criteria — promote from the tail if not met:
+           a) ≥ require_themes distinct primary themes
+           b) ≥ require_small_mid names with market_cap < $20B
+           c) ≥ require_gems Phase 6 hidden-gem tickers
+      4. Return rows + full per-gem diagnostics + tickers_changed flag.
+
+    Returns a dict with:
+      status, rows, visible_snapshot_id, visible_generated_at,
+      visible_count, visible_tickers, universe_count, universe_tickers,
+      universe_only_tickers, overlap_count, selected_from_universe_count,
+      gem_candidates_with_reasons, diversity_gate_result,
+      themes_in_visible, market_cap_buckets_in_visible,
+      tickers_changed, metadata_refreshed_only
+    """
+    cr_row = get_latest_cr_weekly_output(max_age_days=max_age_days)
+    if not cr_row:
+        return {
+            "status": "error",
+            "error": (
+                f"No chain_reaction_weekly_output found within {max_age_days} days. "
+                "Run POST /api/admin/bottlenecks/refresh to generate fresh data."
+            ),
+            "rows": [], "visible_tickers": [],
+        }
+
+    def _us_tradeable(ticker: str) -> bool:
+        """Return True for US-listed tickers; reject foreign exchange codes like 3037.TW, 8035.T."""
+        if not ticker:
+            return False
+        if "." in ticker:
+            suffix = ticker.rsplit(".", 1)[-1]
+            # Allow single-letter class suffixes: BRK.A, BRK.B
+            if len(suffix) == 1 and suffix.isalpha():
+                return True
+            # Reject exchange/country suffixes 2+ chars: .TW .HK .DE .KS .T etc.
+            return False
+        return True
+
+    all_rows: list[dict] = [
+        r for r in (cr_row.get("rows") or [])
+        if r.get("bottleneck_ticker") and _us_tradeable(r["bottleneck_ticker"])
+    ]
+    if not all_rows:
+        return {
+            "status": "error",
+            "error": "chain_reaction_weekly_output exists but rows list is empty.",
+            "rows": [], "visible_tickers": [],
+        }
+
+    cr_generated_at = cr_row.get("generated_at")
+    cr_week_start   = cr_row.get("week_start")
+    universe_tickers = [r["bottleneck_ticker"] for r in all_rows]
+
+    # ── Start: natural top-N from pre-sorted rows ─────────────────────────────
+    selected: list[dict] = list(all_rows[:limit])
+    pool:     list[dict] = list(all_rows[limit:])
+
+    # ── Gate C: ≥ require_gems Phase 6 hidden gems ────────────────────────────
+    gems_now = sum(1 for r in selected if _vis_is_gem(r))
+    needed   = max(0, require_gems - gems_now)
+    if needed:
+        gem_pool = [r for r in pool if _vis_is_gem(r)
+                    and float(r.get("bottleneck_score") or 0) >= _VIS_GEM_BN_MIN]
+        selected, pool = _vis_promote(gem_pool, _vis_is_gem, needed, selected)
+
+    # ── Gate B: ≥ require_small_mid small/mid-cap names ───────────────────────
+    sm_now  = sum(1 for r in selected if _vis_is_small_mid(r))
+    needed  = max(0, require_small_mid - sm_now)
+    if needed:
+        sm_pool = [r for r in pool if _vis_is_small_mid(r) and not _vis_is_gem(r)]
+        selected, pool = _vis_promote(sm_pool, _vis_is_small_mid, needed, selected)
+
+    # ── Gate A: ≥ require_themes distinct themes (diagnostic only — swap risky) ─
+    themes_set: set[str] = set()
+    for r in selected:
+        for t in (r.get("themes") or [r.get("anchor_theme")] or []):
+            if t:
+                themes_set.add(str(t))
+
+    # ── Build visible metadata ────────────────────────────────────────────────
+    visible_tickers = [r["bottleneck_ticker"] for r in selected]
+    vis_set         = set(visible_tickers)
+    univ_set        = set(universe_tickers)
+
+    vis_buckets: dict[str, int] = {}
+    for r in selected:
+        b = r.get("marketCapBucket") or "unknown"
+        vis_buckets[b] = vis_buckets.get(b, 0) + 1
+
+    # ── Per-gem diagnostics ───────────────────────────────────────────────────
+    all_rows_by_ticker = {r["bottleneck_ticker"]: (i, r) for i, r in enumerate(all_rows)}
+    gem_diag: dict[str, dict] = {}
+    for ticker in sorted(_PHASE6_HIDDEN_GEMS):
+        in_universe = ticker in univ_set
+        in_visible  = ticker in vis_set
+        if ticker in all_rows_by_ticker:
+            rank, row = all_rows_by_ticker[ticker]
+            fs   = row.get("final_score")
+            bn   = row.get("bottleneck_score")
+            buck = row.get("marketCapBucket", "unknown")
+            if in_visible:
+                reason = f"included: rank={rank+1} final_score={fs} bn={bn} bucket={buck}"
+            else:
+                reason = (
+                    f"excluded_below_diversity_gate: rank={rank+1} final_score={fs} "
+                    f"bn={bn} bucket={buck} — scored below top-{limit} diversity threshold"
+                )
+        elif in_universe:
+            row, fs, bn, buck = None, None, None, "unknown"
+            reason = "excluded_universe_mismatch: in universe snapshot but missing from rows_json"
+        else:
+            row, fs, bn, buck = None, None, None, "unknown"
+            reason = (
+                "not_in_universe: ticker absent from chain_reaction_weekly_output. "
+                "Possible causes: (1) no cached fundamentals/quotes for this symbol, "
+                "(2) market_cap below $50M threshold, or (3) foreign ticker without US proxy."
+            )
+        gem_diag[ticker] = {
+            "in_universe":      in_universe,
+            "in_visible":       in_visible,
+            "reason":           reason,
+            "final_score":      fs,
+            "bottleneck_score": bn,
+            "marketCapBucket":  buck,
+        }
+
+    diversity_gate_result = {
+        "themes_required":       require_themes,
+        "themes_achieved":       len(themes_set),
+        "themes_present":        sorted(themes_set),
+        "themes_gate_met":       len(themes_set) >= require_themes,
+        "small_mid_required":    require_small_mid,
+        "small_mid_achieved":    sum(1 for r in selected if _vis_is_small_mid(r)),
+        "small_mid_gate_met":    sum(1 for r in selected if _vis_is_small_mid(r)) >= require_small_mid,
+        "hidden_gems_required":  require_gems,
+        "hidden_gems_achieved":  sum(1 for r in selected if _vis_is_gem(r)),
+        "hidden_gems_gate_met":  sum(1 for r in selected if _vis_is_gem(r)) >= require_gems,
+    }
+
+    # ── tickers_changed vs previous ───────────────────────────────────────────
+    prev_set = set(prev_visible_tickers or [])
+    tickers_changed = (prev_set != vis_set) if prev_visible_tickers is not None else None
+
+    snap_id = f"cr_top_{cr_week_start or 'unknown'}_{limit}"
+
+    return {
+        "status":                       "ok",
+        "visible_snapshot_id":          snap_id,
+        "visible_generated_at":         cr_generated_at,
+        "visible_count":                len(selected),
+        "visible_tickers":              visible_tickers,
+        "universe_count":               len(all_rows),
+        "universe_tickers":             universe_tickers,
+        "universe_only_tickers":        [t for t in universe_tickers if t not in vis_set],
+        "overlap_count":                len(vis_set & univ_set),
+        "selected_from_universe_count": len(selected),
+        "gem_candidates_with_reasons":  gem_diag,
+        "diversity_gate_result":        diversity_gate_result,
+        "themes_in_visible":            sorted(themes_set),
+        "market_cap_buckets_in_visible": vis_buckets,
+        "tickers_changed":              tickers_changed,
+        "metadata_refreshed_only":      False if tickers_changed else (True if tickers_changed is False else None),
+        "week_start":                   cr_week_start,
+        "source_version":               cr_row.get("source_version"),
+        "rows":                         selected,
+    }

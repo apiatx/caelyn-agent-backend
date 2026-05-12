@@ -348,37 +348,80 @@ async def bottlenecks_force_refresh(
     diag["universe_rebuild"] = rebuild_result
 
     # ── Step 4: Compare new vs previous snapshot ──────────────────────────────
+    new_symbols:  list = []
+    prev_symbols: list = []
+    snapshot_changed = True
     try:
         from data.screener_hub_store import get_latest_universe
         new_snap = get_latest_universe("bottlenecks")
-        new_symbols = list((new_snap or {}).get("symbols") or [])
+        new_symbols  = list((new_snap or {}).get("symbols") or [])
         prev_symbols = list((prev_snap or {}).get("symbols") or [])  # type: ignore[union-attr]
-        diag["new_snapshot_generated_at"] = (new_snap or {}).get("generated_at")
+        diag["new_snapshot_generated_at"]  = (new_snap or {}).get("generated_at")
         diag["new_snapshot_symbols_count"] = len(new_symbols)
         added   = [s for s in new_symbols if s not in set(prev_symbols)]
         removed = [s for s in prev_symbols if s not in set(new_symbols)]
-        diag["symbols_added"]   = added
-        diag["symbols_removed"] = removed
-        diag["symbols_net_change"] = len(new_symbols) - len(prev_symbols)
-        snapshot_changed = bool(added or removed or new_symbols != prev_symbols)
+        diag["symbols_added"]              = added
+        diag["symbols_removed"]            = removed
+        diag["symbols_net_change"]         = len(new_symbols) - len(prev_symbols)
+        snapshot_changed                   = bool(added or removed or new_symbols != prev_symbols)
         diag["snapshot_genuinely_changed"] = snapshot_changed
     except Exception as _ne:
         diag["new_state_error"] = str(_ne)
-        snapshot_changed = True
+
+    # ── Step 5: Build cross-theme visible top snapshot ─────────────────────────
+    # This is the data the Chain Reaction / Bottlenecks page should display.
+    # GET /api/bottlenecks/current reads from the same source.
+    visible_diag: dict = {}
+    try:
+        from services.chain_reaction_weekly_service import build_cross_theme_top
+        # Capture the previous visible tickers before the refresh so tickers_changed is accurate
+        _prev_vis = build_cross_theme_top(limit=20, max_age_days=30)
+        prev_visible_tickers = _prev_vis.get("visible_tickers") or []
+        vis_result = build_cross_theme_top(limit=20, max_age_days=10,
+                                           prev_visible_tickers=prev_visible_tickers)
+        if vis_result.get("status") == "ok":
+            visible_diag = {
+                "visible_snapshot_id":           vis_result["visible_snapshot_id"],
+                "visible_generated_at":          vis_result["visible_generated_at"],
+                "visible_count":                 vis_result["visible_count"],
+                "visible_tickers":               vis_result["visible_tickers"],
+                "universe_count":                vis_result["universe_count"],
+                "universe_only_tickers":         vis_result["universe_only_tickers"],
+                "overlap_count":                 vis_result["overlap_count"],
+                "selected_from_universe_count":  vis_result["selected_from_universe_count"],
+                "gem_candidates_with_reasons":   vis_result["gem_candidates_with_reasons"],
+                "diversity_gate_result":         vis_result["diversity_gate_result"],
+                "themes_in_visible":             vis_result["themes_in_visible"],
+                "market_cap_buckets_in_visible": vis_result["market_cap_buckets_in_visible"],
+                "tickers_changed":               vis_result["tickers_changed"],
+                "metadata_refreshed_only":       vis_result["metadata_refreshed_only"],
+            }
+        else:
+            visible_diag = {"error": vis_result.get("error", "build_cross_theme_top returned non-ok status")}
+    except Exception as _ve:
+        visible_diag = {"error": str(_ve)}
+
+    diag["visible_snapshot"] = visible_diag
 
     finished_at = datetime.now(timezone.utc).isoformat()
     diag["finished_at"] = finished_at
 
+    n_visible = visible_diag.get("visible_count", "?")
+    n_gems    = (visible_diag.get("diversity_gate_result") or {}).get("hidden_gems_achieved", 0)
     return JSONResponse(content={
         "status":  "ok",
         "message": (
-            f"Bottlenecks snapshot refreshed successfully. "
-            f"{diag.get('new_snapshot_symbols_count', '?')} symbols. "
-            + (f"Net change: {diag.get('symbols_net_change', 0):+d} symbols." if diag.get('symbols_net_change') is not None else "")
-            + (" Universe is genuinely updated." if snapshot_changed else " Symbols unchanged (same universe, new timestamp).")
+            f"Bottlenecks refresh complete. "
+            f"Universe: {diag.get('new_snapshot_symbols_count', '?')} symbols. "
+            f"Visible top: {n_visible} rows ({n_gems} Phase-6 hidden gems). "
+            + (f"Net universe change: {diag.get('symbols_net_change', 0):+d}. " if diag.get('symbols_net_change') is not None else "")
+            + ("Universe genuinely updated." if snapshot_changed else "Universe symbols unchanged (new timestamp).")
         ),
-        "snapshot_changed": snapshot_changed,
-        "diagnostics": diag,
+        "snapshot_changed":  snapshot_changed,
+        "visible_tickers":   visible_diag.get("visible_tickers", []),
+        "visible_count":     n_visible,
+        "visible_snapshot":  visible_diag,
+        "diagnostics":       diag,
     })
 
 
@@ -508,6 +551,109 @@ async def debug_bottlenecks_snapshot(
     diag["refresh_endpoints"] = {
         "force_full_rebuild":     "POST /api/admin/bottlenecks/refresh  (X-API-Key required)",
         "universe_only_rebuild":  "POST /api/admin/screener-hub/rebuild?tab=bottlenecks  (X-API-Key required)",
+        "visible_top_read":       "GET  /api/bottlenecks/current  (public; default limit=20)",
     }
 
     return JSONResponse(content={"status": "ok", **diag})
+
+
+# ── GET /api/bottlenecks/current ──────────────────────────────────────────────
+#
+# Public read endpoint — returns the cross-theme diverse top-N from the latest
+# chain_reaction_weekly_outputs run.  This is the correct data source for the
+# Chain Reaction / Bottlenecks page; it replaces /api/strategy-screener/latest
+# which is regime-locked to the current AI-hardware / semicap cohort.
+#
+# Query params:
+#   limit       int  1–110   default 20   — how many rows to return
+#   full        bool         default false — if true, returns full universe (all rows)
+#   max_age_days int 1–30    default 10   — reject CR data older than this many days
+#   require_gems int 0–5     default 2    — min Phase-6 hidden gems in result set
+#   require_small_mid int 0–10 default 5 — min <$20B names in result set
+#   require_themes int 0–8   default 4   — min distinct themes in result set
+#   diagnostics bool         default false — if true, include gem_candidates_with_reasons etc.
+
+@router.get("/api/bottlenecks/current")
+async def bottlenecks_current(
+    request: Request,
+    limit:             int  = Query(default=20,   ge=1,  le=110,  description="Rows to return (1–110)"),
+    full:              bool = Query(default=False,                 description="Return all rows in universe"),
+    max_age_days:      int  = Query(default=10,   ge=1,  le=30,   description="Reject CR data older than N days"),
+    require_gems:      int  = Query(default=2,    ge=0,  le=5,    description="Min Phase-6 hidden gems in result"),
+    require_small_mid: int  = Query(default=5,    ge=0,  le=10,   description="Min <$20B names in result"),
+    require_themes:    int  = Query(default=4,    ge=0,  le=8,    description="Min distinct themes in result"),
+    diagnostics:       bool = Query(default=False,                description="Include per-gem diagnostics"),
+):
+    """
+    Cross-theme diverse top-N from chain_reaction_weekly_outputs.
+
+    Unlike /api/strategy-screener/latest (which is regime-locked to the current
+    AI-hardware / semicap discovery cohort), this endpoint reads directly from
+    the CR weekly scoring run and applies a 3-criterion diversity gate:
+
+      • ≥ require_themes distinct primary themes
+      • ≥ require_small_mid names with market_cap < $20B
+      • ≥ require_gems Phase 6 hidden-gem tickers
+
+    Set full=true to bypass the limit and receive the complete scored universe.
+    Set diagnostics=true to include per-gem inclusion/exclusion reasoning.
+
+    status values:
+      "ok"    — result ready
+      "error" — no fresh CR data; run POST /api/admin/bottlenecks/refresh
+    """
+    try:
+        from services.chain_reaction_weekly_service import build_cross_theme_top
+
+        effective_limit = 110 if full else limit
+        result = build_cross_theme_top(
+            limit=effective_limit,
+            max_age_days=max_age_days,
+            require_themes=require_themes,
+            require_small_mid=require_small_mid,
+            require_gems=require_gems,
+        )
+    except Exception as _e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "error": str(_e)},
+        )
+
+    if result.get("status") == "error":
+        return JSONResponse(status_code=404, content=result)
+
+    # Always include these top-level fields
+    response: dict = {
+        "status":               result["status"],
+        "visible_snapshot_id":  result["visible_snapshot_id"],
+        "visible_generated_at": result["visible_generated_at"],
+        "visible_count":        result["visible_count"],
+        "visible_tickers":      result["visible_tickers"],
+        "universe_count":       result["universe_count"],
+        "week_start":           result["week_start"],
+        "source_version":       result["source_version"],
+        "themes_in_visible":    result["themes_in_visible"],
+        "market_cap_buckets_in_visible": result["market_cap_buckets_in_visible"],
+        "diversity_gate_result": result["diversity_gate_result"],
+        "rows":                 result["rows"],
+        "full_universe":        full,
+        "limit_applied":        effective_limit,
+        # Guidance for frontend migration
+        "data_source":          "chain_reaction_weekly_outputs",
+        "note": (
+            "This endpoint supersedes /api/strategy-screener/latest for the "
+            "Chain Reaction / Bottlenecks page. It applies a cross-theme "
+            "diversity gate to surface names from nuclear, rare earth, battery, "
+            "defense, and semiconductor-niche themes alongside the semicap core."
+        ),
+    }
+
+    # Optional diagnostics (per-gem inclusion reasoning + universe diff)
+    if diagnostics:
+        response["gem_candidates_with_reasons"]  = result["gem_candidates_with_reasons"]
+        response["universe_tickers"]             = result["universe_tickers"]
+        response["universe_only_tickers"]        = result["universe_only_tickers"]
+        response["overlap_count"]                = result["overlap_count"]
+        response["selected_from_universe_count"] = result["selected_from_universe_count"]
+
+    return JSONResponse(content=response)

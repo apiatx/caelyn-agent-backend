@@ -1,0 +1,108 @@
+You are working in the CaelynAI backend repo.
+
+Work directly on main. Do not create a branch or PR.
+
+The frontend refresh plumbing is now fixed and calls:
+POST /api/admin/bottlenecks/refresh
+
+But the Chain Reaction / Bottlenecks page is still showing basically the same old 20-stock AI hardware / semicap / packaging cohort after refresh:
+TOELY, ACLS, CRDO, TER, KLIC, etc.
+
+The UI says generated today, but the actual visible stocks look stale or still locked to the old AI Hardware Core Bottlenecks issue.
+
+Problem:
+The prior backend fix expanded NODE_REGISTRY from 89 to 110 and claimed the refreshed universe had 106 symbols with 21 new hidden-gem names:
+CCJ, LEU, BWXT, NXE, UEC, SMR, MP, UUUU, FLNC, STEM, POWL, GTLS, VICR, TDY, CACI, ACMR, CEVA, VIAV, AZTA, TRMB, RYCEY.
+
+However, the actual Chain Reaction page endpoint still returns only the old/current 20 visible entries and none of many newly added hidden-gem names. So the backend may be refreshing the broad universe snapshot, but the strategy-screener / chain-reaction visible snapshot is still constrained to the old top-20 playbook issue.
+
+Audit exactly where the frontend-visible 20 rows come from.
+
+Required audit:
+1. Compare these endpoints after a forced refresh:
+   - POST /api/admin/bottlenecks/refresh
+   - GET /api/debug/bottlenecks-snapshot
+   - the exact endpoint consumed by Chain Reaction / strategy-screener page
+   - any screener-hub bottlenecks endpoint
+2. For each endpoint, print:
+   - snapshot id
+   - generated_at
+   - week_start
+   - item count
+   - first 30 tickers
+   - all tickers
+   - theme distribution
+   - market cap bucket distribution
+   - cache source / DB key / file key
+3. Confirm whether the 106-symbol refreshed universe and the 20-row strategy-screener snapshot are separate objects.
+4. Confirm whether the visible Chain Reaction page is reading:
+   - old strategy_screener snapshot
+   - current chain_reaction_weekly snapshot
+   - screener_hub bottlenecks snapshot
+   - universe snapshot
+   - LKG fallback
+   - local JSON file
+   - Neon row
+5. Find any hard cap like top 20 / limit=20 / slice(0, 20) / default page size / current_issue entries only.
+6. Find any theme lock or prompt constraint that forces the issue to:
+   - AI Hardware Core Bottlenecks
+   - semicap supply chain
+   - advanced packaging test
+   - photonics CPO
+   - memory HBM
+7. Find whether newly added themes are being excluded before final visible ranking:
+   - nuclear/uranium/SMR
+   - rare earth / critical materials
+   - battery / grid storage
+   - specialty grid hardware
+   - power ICs
+   - defense niche
+   - robotics / precision
+
+Implementation requirements:
+1. The refresh endpoint must update the actual frontend-visible Chain Reaction / Bottlenecks snapshot, not only the broader universe metadata.
+2. The visible result set should not be locked to the same old 20 AI hardware names every week.
+3. Preserve existing custom logic, but make the visible cohort represent the best current bottlenecks across active market themes, not only one issue theme.
+4. Keep the top 20 display if that is intentional, but the top 20 must be selected after a broad cross-theme ranking/diversity pass.
+5. Add a final cross-theme diversity gate before writing the frontend-visible snapshot:
+   - include at least 4-6 distinct themes when enough qualified candidates exist
+   - include at least 5-8 <$20B names when enough qualified candidates exist
+   - include at least 2-4 true hidden-gem names from the expanded registry when they meet quality thresholds
+   - do not include garbage/pre-revenue names just to satisfy diversity
+6. If the page intentionally has a single “issue” mode, add/return a broader “All Bottlenecks” or “Cross-Theme Bottlenecks” snapshot that the Chain Reaction page can use by default.
+7. If the 106-symbol universe exists but frontend-visible endpoint is capped to 20, make sure the endpoint can return:
+   - default top 20 cross-theme diverse rows
+   - optional limit=100/full=true to view the full universe
+8. Add diagnostics proving the visible snapshot changed:
+   - visible_snapshot_id
+   - visible_generated_at
+   - visible_count
+   - visible_tickers
+   - universe_snapshot_id
+   - universe_count
+   - universe_only_tickers
+   - overlap_count
+   - selected_from_universe_count
+   - reason each hidden-gem candidate was included or excluded
+9. Do not allow generated_at to update if the actual visible ticker set did not change unless response explicitly says:
+   - metadata_refreshed_only: true
+   - tickers_changed: false
+   - reason: "same top ranked cohort after scoring"
+
+Validation:
+After fixing, run a forced refresh and show:
+1. POST /api/admin/bottlenecks/refresh response.
+2. The exact frontend-visible endpoint response.
+3. Full visible ticker list.
+4. Market cap bucket distribution.
+5. Theme distribution.
+6. Count of visible names under $20B.
+7. Whether any of the newly added hidden-gem names are visible.
+8. If not visible, list exactly why each was excluded.
+9. Confirm the UI-visible 20 rows are not just the old semicap/advanced-packaging cohort again.
+
+Success criteria:
+- Refresh updates the actual visible Chain Reaction/Bottlenecks data.
+- Header, timestamp, and row tickers all refer to the same snapshot.
+- No fake freshness: if tickers do not change, the endpoint says tickers_changed=false.
+- The visible top 20 has meaningful cross-theme diversity when qualified candidates exist.
