@@ -67,6 +67,9 @@ _EXCEPTION_CATEGORY_BY_SYMBOL: dict[str, str] = {
     # Theme/sector baskets that sit on non-theme DEXes
     "ROBOT":     "themes",
     "SEMI":      "themes",
+    "GLDMINE":   "themes",   # gold miners basket — km-DEX defaults to stocks_etfs without this
+    # Commodity ETFs mis-tagged as equities upstream
+    "URNM":      "commodities",  # Sprott Uranium Miners ETF — not a single-stock equity
 }
 
 # Step 2 — commodity futures / spot / agri / metals.
@@ -167,7 +170,7 @@ _EQUITY_KEYWORDS: frozenset[str] = frozenset({
     "BABA", "BIDU", "PDD", "JD", "NIO", "XPEV",
     "TENCENT", "XIAOMI", "HYUNDAI", "SMSN",
     # Other HIP-3 equities
-    "SNDK", "EBAY", "HOOD", "URNM", "CAR", "LITE", "BIRD", "USAR",
+    "SNDK", "EBAY", "HOOD", "CAR", "LITE", "BIRD", "USAR",
     "SKHX", "SMSN", "HYUNDAI",
 })
 
