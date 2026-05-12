@@ -455,6 +455,22 @@ def init_tables():
             )
         """)
 
+        # ── Symbol-driven earnings cache (Watchlist / Portfolio universes) ───
+        # Keyed by universe ('watchlist' | 'portfolio').  Each row stores the
+        # full list of FMP earnings events for that universe's symbol set,
+        # fetched once over a 120-day forward window and refreshed when the
+        # symbol set changes or the 30-day TTL expires.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.user_earnings_cache (
+                universe        TEXT PRIMARY KEY,
+                events          JSONB NOT NULL DEFAULT '[]',
+                symbols         JSONB NOT NULL DEFAULT '[]',
+                fetched_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                fmp_window_from TEXT,
+                fmp_window_to   TEXT
+            )
+        """)
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")

@@ -4006,6 +4006,24 @@ async def create_watchlist_endpoint(
             ok = watchlist_write(watchlist_id, name, csv_rows, {}, tickers)
             if ok:
                 print(f"[API] Watchlist '{name}' saved to PostgreSQL (id={watchlist_id})")
+                # Trigger symbol-driven earnings sync for the watchlist universe
+                try:
+                    from services.user_earnings_service import (
+                        invalidate_user_earnings,
+                        sync_universe_background,
+                    )
+                    from config import FMP_API_KEY as _fmp_key_earn
+                    from services.catalyst_calendar_service import _load_watchlist_symbols
+                    # Load all watchlist symbols (including this new watchlist)
+                    all_wl_syms = _load_watchlist_symbols()
+                    invalidate_user_earnings("watchlist")
+                    import asyncio as _aio
+                    _aio.create_task(
+                        sync_universe_background("watchlist", all_wl_syms, _fmp_key_earn or "")
+                    )
+                    print(f"[API] Watchlist earnings sync triggered ({len(all_wl_syms)} symbols)")
+                except Exception as _sync_err:
+                    print(f"[API] Watchlist earnings sync trigger failed: {_sync_err}")
                 return {
                     "id": watchlist_id,
                     "name": name,
@@ -4646,6 +4664,31 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
     portfolio_file.parent.mkdir(parents=True, exist_ok=True)
     with open(portfolio_file, "w") as f:
         _json.dump(body, f)
+
+    # Trigger symbol-driven earnings sync for the portfolio universe
+    try:
+        holdings = body.get("holdings", [])
+        pf_syms: set[str] = set()
+        for h in holdings:
+            if isinstance(h, dict):
+                sym = h.get("symbol") or h.get("ticker") or ""
+                if sym:
+                    pf_syms.add(sym.strip().upper())
+        if pf_syms:
+            from services.user_earnings_service import (
+                invalidate_user_earnings,
+                sync_universe_background,
+            )
+            from config import FMP_API_KEY as _fmp_key_pf
+            import asyncio as _aio
+            invalidate_user_earnings("portfolio")
+            _aio.create_task(
+                sync_universe_background("portfolio", pf_syms, _fmp_key_pf or "")
+            )
+            print(f"[API] Portfolio earnings sync triggered ({len(pf_syms)} symbols)")
+    except Exception as _pf_sync_err:
+        print(f"[API] Portfolio earnings sync trigger failed: {_pf_sync_err}")
+
     return {"success": True}
 
 

@@ -2013,6 +2013,85 @@ async def get_events(
     elif scope_syms:
         effective_syms = scope_syms
 
+    # ── Symbol-driven short-circuit for watchlist / portfolio earnings ────────
+    #
+    # The broad FMP earnings-calendar covers only a narrow date window (30 d by
+    # default).  If a watchlist/portfolio symbol has earnings outside that window
+    # it disappears — that's the bug.  For scope=watchlist|portfolio we bypass
+    # the broad fetch entirely and use a 120-day forward window cached in Neon,
+    # keyed by universe.  The All tab is unaffected.
+    if (
+        scope in ("watchlist", "portfolio")
+        and tab == "earnings_dates"
+        and mode == "upcoming"
+    ):
+        syms = watchlist if scope == "watchlist" else portfolio
+        print(
+            f"[catalyst] symbol-driven earnings path: "
+            f"universe={scope} symbols={len(syms)} "
+            f"first_10={sorted(syms)[:10]}"
+        )
+        from services.user_earnings_service import get_or_sync_user_earnings  # lazy
+
+        req_from = from_date or _today()
+        req_to   = to_date   or _date_offset(120)
+
+        events, meta = await get_or_sync_user_earnings(
+            universe  = scope,
+            symbols   = syms,
+            fmp_key   = fmp_key,
+            from_date = req_from,
+            to_date   = req_to,
+        )
+
+        # Apply any additional caller filters (sector, mc_bucket, eventType,
+        # explicit symbol list).  Never filter to symbols=None here — that would
+        # return All events for non-watchlist symbols.
+        events = _filter_events(events, symbols_filter, sector, mc_bucket, event_type_filter)
+        events = sorted(
+            events,
+            key=lambda e: (e.get("date", ""), e.get("symbol", "")),
+        )[:limit]
+
+        ms = int((time.monotonic() - t0) * 1000)
+        _fmp_this = get_total_calls("fmp") - _fmp_before
+        print(
+            f"[catalyst] symbol-driven earnings done: "
+            f"scope={scope} events={len(events)} fmp_calls={_fmp_this} ms={ms}"
+        )
+        record_request(
+            route   = f"/api/catalysts/events?tab={tab}&scope={scope}",
+            page    = "calendar",
+            feature = "earnings_symbol_driven",
+            provider_calls = {"fmp": _fmp_this, "finnhub": 0, "finviz": 0,
+                              "polygon": 0, "alpha_vantage": 0, "tradier": 0},
+            cache_hits   = 0,
+            cache_misses = 0,
+            elapsed_ms   = ms,
+            http_status  = 200,
+            extra        = {"tab": tab, "scope": scope, "events": len(events)},
+        )
+        return {
+            "asOf":   datetime.now(timezone.utc).isoformat(),
+            "tab":    tab,
+            "mode":   mode,
+            "from":   req_from,
+            "to":     req_to,
+            "filters": {
+                "scope":     scope,
+                "sector":    sector,
+                "marketCap": mc_bucket,
+                "eventType": event_type_filter,
+                "symbols":   sorted(symbols_filter) if symbols_filter else None,
+            },
+            "events":  events,
+            "count":   len(events),
+            "status":  "ok",
+            "errors":  [],
+            "meta":    meta,
+        }
+    # ── End symbol-driven short-circuit ──────────────────────────────────────
+
     tabs_to_fetch = ALL_TABS if tab == "all" else [tab]
     all_events: list[dict] = []
     errors: list[dict] = []

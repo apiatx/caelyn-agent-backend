@@ -1,0 +1,191 @@
+The Earnings Calendar Watchlist and Portfolio toggles still do not work.
+
+Current bug:
+- The Watchlist and Portfolio tabs are showing the same broad stocks from the All tab.
+- That means the backend/frontend is still reusing the All earnings calendar payload instead of using the user’s actual saved Watchlist and Portfolio symbols.
+
+This needs to be fixed at the data-source level.
+
+Backend repo:
+apiatx/caelyn-agent-backend
+
+Important context:
+- Watchlist symbols are saved from the Watchlist page/upload flow into Neon.
+- Portfolio symbols are saved from the Portfolio page into Neon.
+- FMP should be the primary earnings source. The paid plan includes Earnings Calendar and Earnings Report access, and supports 300 calls/minute, so this should be cheap if cached correctly.
+- Do not use Finnhub for this unless FMP is missing something and an existing fallback already exists.
+- Do not use LLM calls.
+- Do not only filter the broad All calendar response unless the date window is guaranteed to contain every user symbol. User watchlist/portfolio earnings must be symbol-driven.
+
+Required behavior:
+
+1. Watchlist earnings flow
+When a user uploads or updates a watchlist:
+- Read all saved watchlist symbols from Neon.
+- Normalize symbols:
+  - uppercase
+  - trim whitespace
+  - dedupe
+  - remove blanks / invalid rows
+- For each symbol, fetch/cache its next earnings event.
+- Store normalized earnings records in a durable cache/table keyed by:
+  - user_id if available
+  - universe = "watchlist"
+  - symbol
+  - earnings_date / fiscal_date
+  - source = "fmp"
+  - fetched_at / updated_at
+
+2. Portfolio earnings flow
+When a user adds/updates/removes a portfolio holding:
+- Read all current portfolio symbols from Neon.
+- Normalize/dedupe symbols.
+- Fetch/cache each symbol’s next earnings event.
+- Store normalized earnings records keyed by:
+  - user_id if available
+  - universe = "portfolio"
+  - symbol
+  - earnings_date / fiscal_date
+  - source = "fmp"
+  - fetched_at / updated_at
+
+3. Calendar endpoint behavior
+Find the endpoint used by the Earnings tab, likely:
+- /api/catalysts/events?tab=earnings_dates
+or similar.
+
+It must support:
+- universe=all
+- universe=watchlist
+- universe=portfolio
+
+Expected:
+- universe=all:
+  - use the existing broad earnings calendar logic.
+- universe=watchlist:
+  - do NOT return broad All events.
+  - load the user's saved watchlist symbols from Neon.
+  - return earnings only for those symbols.
+- universe=portfolio:
+  - do NOT return broad All events.
+  - load the user's saved portfolio symbols from Neon.
+  - return earnings only for those symbols.
+
+4. Do not rely on All calendar filtering only
+This is the likely current bug.
+
+Bad behavior:
+- Fetch All earnings for a week/month.
+- Click Watchlist.
+- Still return All earnings because the universe filter is ignored or not applied.
+
+Correct behavior:
+- Watchlist tab starts from saved watchlist symbols.
+- Portfolio tab starts from saved portfolio symbols.
+- Then fetch/read earnings for those symbols.
+
+5. Data shape
+Return the same event shape the current Calendar frontend expects, but include/normalize these fields where available:
+
+{
+  symbol,
+  companyName,
+  earningsDate,
+  nextEarningsDate,
+  lastEarningsDate,
+  reportTime,
+  epsEstimate,
+  epsActual,
+  epsSurprise,
+  epsSurprisePercent,
+  revenueEstimate,
+  revenueActual,
+  revenueSurprise,
+  revenueSurprisePercent,
+  beatMissLabel,
+  source: "fmp",
+  universe: "watchlist" | "portfolio" | "all"
+}
+
+Use null or "—" frontend-side for missing fields. Do not return undefined.
+
+6. Refresh/caching rules
+- On watchlist upload/update:
+  - trigger a watchlist earnings sync.
+- On portfolio add/update/remove:
+  - trigger a portfolio earnings sync.
+- Also allow lazy sync:
+  - if the Calendar page requests universe=watchlist or universe=portfolio and earnings cache is missing/stale, fetch then return results.
+- TTL:
+  - 30 days is fine for next earnings dates.
+  - If the user changes watchlist/portfolio symbols, refresh affected symbols immediately.
+- Store durable cache in Neon or the existing durable snapshot/cache system.
+- Do not rely on in-memory cache only.
+
+7. FMP strategy
+Use FMP as primary source.
+
+Preferred strategy:
+- For a user symbol list, fetch earnings per symbol or use any existing FMP earnings endpoint available in the codebase.
+- If FMP Earnings Calendar is date-window based only, query a broad enough future range, e.g. today through +120 days, then filter by the user symbols.
+- If there is a symbol-specific FMP earnings report endpoint already wrapped in the backend, use it for next/last earnings enrichment.
+- Avoid repeated calls on every page load. Cache results.
+
+8. API response metadata
+For debugging, include metadata in the response:
+
+{
+  universe,
+  symbols_count,
+  events_count,
+  cache_status: "hit" | "miss" | "partial" | "refreshed",
+  source: "fmp"
+}
+
+9. Logging
+Add logs for:
+- requested universe
+- loaded watchlist/portfolio symbol count
+- first 10 symbols
+- cache hit/miss
+- FMP call count
+- returned event count
+
+10. Validation
+Run these tests:
+
+A. All:
+GET /api/catalysts/events?tab=earnings_dates&universe=all
+
+Expected:
+- broad earnings calendar stocks.
+
+B. Watchlist:
+GET /api/catalysts/events?tab=earnings_dates&universe=watchlist
+
+Expected:
+- only symbols saved in the user’s Watchlist table.
+- zero symbols outside the watchlist.
+
+C. Portfolio:
+GET /api/catalysts/events?tab=earnings_dates&universe=portfolio
+
+Expected:
+- only symbols saved in the user’s Portfolio table.
+- zero symbols outside the portfolio.
+
+D. Upload new watchlist:
+- Upload a watchlist CSV with symbols that are not currently showing in All.
+- Confirm Neon watchlist symbols update.
+- Confirm earnings sync runs.
+- Confirm Calendar Earnings Watchlist tab returns those symbols’ earnings events.
+
+E. Add new portfolio stock:
+- Add a new stock to Portfolio.
+- Confirm Neon portfolio symbols update.
+- Confirm portfolio earnings sync runs.
+- Confirm Calendar Earnings Portfolio tab returns that stock’s next earnings event.
+
+Hard rule:
+If universe=watchlist or universe=portfolio, never return the unfiltered All earnings list.
+If no user symbols exist, return an empty result with a clear message.
