@@ -149,6 +149,35 @@ class ScreenerAsset(BaseModel):
     avoid_due_to_spread: bool = False
     dislocated_vs_oracle: bool = False
 
+    # ── Matrix signal layer ────────────────────────────────────────────────
+    # Volume / OI ratio
+    vol_oi_ratio: Optional[float] = None        # day_ntl_vlm / open_interest_usd
+
+    # Funding label (compact string for frontend table)
+    funding_label: Optional[str] = None         # Cheap|Neutral|Shorts Paying|Longs Paying|Hot|Extreme|Dislocated
+    funding_reason: Optional[str] = None
+
+    # Flow label (aggregate flow/OI/volume/liq signal)
+    flow_label: Optional[str] = None            # Building|Buying|Selling|Squeeze|Flush|Absorbing|Mixed|Thin
+    flow_reason: Optional[str] = None
+
+    # Liquidation stubs (TODO: wire when liquidation aggregation feed is available)
+    long_liq_15m: Optional[float] = None
+    short_liq_15m: Optional[float] = None
+    liquidation_bias_15m: Optional[float] = None
+    liquidation_context: Optional[str] = None
+
+    # Main frontend-facing matrix signal
+    matrix_signal: Optional[str] = None         # LONG|SHORT|WATCH|CROWDED|AVOID|NEUTRAL
+    matrix_signal_reason: Optional[str] = None
+    matrix_signal_detail: Optional[str] = None  # Fresh Long Build|Short Squeeze|Crowded Long|Bear Build|etc.
+
+    # Opportunity and risk scores (0-1)
+    opportunity_score: Optional[float] = None   # "how interesting/actionable is this row?"
+    risk_score: Optional[float] = None          # overall risk level
+    risk_label: Optional[str] = None            # LOW|MED|HIGH|CROWDED|CAP RISK|THIN
+    risk_reason: Optional[str] = None
+
     # ── Contract metadata ─────────────────────────────────────────────────
     market_status: str = "active"
     max_leverage: Optional[int] = None

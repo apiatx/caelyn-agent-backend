@@ -1,0 +1,465 @@
+You are working in the CaelynAI backend Replit project.
+
+Goal:
+Upgrade the Hyperliquid Market Matrix backend data so the frontend can show a cleaner pure-signal table.
+
+Do NOT rebuild the Hyperliquid page logic.
+Do NOT remove existing fields.
+Do NOT break existing cards/modules/endpoints.
+This is an additive backend signal-layer upgrade.
+
+Current issue:
+The Hyperliquid page already has useful modules and data:
+- Market Matrix
+- Vol Impulse
+- Short Squeeze
+- Funding Extremes
+- Relative Strength Leaders
+- Order Book Pressure
+- OI Regime Shift
+- OI Cap Risk
+- Time-Series Momentum
+- Agent Market Brief
+- Long/short/breakout/collapse classifications
+
+But the Market Matrix exposes too many raw ingredients. We want the backend to calculate clean fields so the frontend can show:
+
+Coin | Mark | 24h % | OI Δ | Vol Vel | Funding | Flow | Signal | Risk | Score | Rank
+
+Main visible signal values:
+- LONG
+- SHORT
+- WATCH
+- CROWDED
+- AVOID
+- NEUTRAL
+
+Backend should still preserve all raw values for the detail panel.
+
+Target new fields per asset row:
+- oi_delta_5m_pct
+- oi_delta_15m_pct
+- oi_delta_1h_pct
+- volume_velocity_15m
+- volume_velocity_1h
+- vol_oi_ratio
+- funding_label
+- funding_reason
+- flow_label
+- flow_reason
+- signal_direction
+- signal_reason
+- signal_detail
+- opportunity_score
+- risk_score
+- risk_label
+- risk_reason
+- rank
+
+Keep existing fields:
+- coin
+- mark
+- 24h change
+- funding
+- open interest
+- volume
+- premium
+- mark/oracle delta
+- book imbalance
+- trade imbalance
+- volume score
+- signal
+- agent score
+- agent rank
+- any existing raw fields used by other widgets
+
+Important:
+- Work only in the backend Replit project.
+- Do not worry about Git.
+- Make minimal safe changes.
+- Preserve backward compatibility.
+- Add new fields to existing response rows rather than replacing the response shape.
+- Avoid per-asset historical REST calls across all assets on every refresh.
+- Use existing Hyperliquid fetch paths/services wherever possible.
+- Hyperliquid is free/unlimited in our setup, but still cache intelligently.
+
+Backend tasks:
+
+1. Audit current Hyperliquid backend files
+Find the services/routes powering:
+- Market Matrix
+- /api/hyperliquid/screener/agent-rank or equivalent
+- Top gainers/losers
+- High funding/negative funding
+- OI leaders
+- Volume leaders
+- Relative strength
+- Order book pressure
+- OI regime shift
+- OI cap risk
+- Time-series momentum
+
+Find the cleanest place to enrich each asset row before returning it to the frontend.
+
+Do not rewrite the existing scoring engine. Reuse existing fields wherever possible.
+
+2. Add lightweight rolling snapshot cache
+Add an in-memory rolling snapshot cache for Hyperliquid asset context.
+
+Store per-symbol snapshots for:
+- latest
+- about 5 minutes ago
+- about 15 minutes ago
+- about 1 hour ago
+
+Snapshot fields:
+- timestamp
+- mark price
+- open interest
+- 24h volume or current available volume source
+- funding rate
+- premium
+- mark/oracle spread
+- book imbalance if available
+- trade imbalance if available
+
+Preferred:
+- Use the existing full-market Hyperliquid context fetch, likely metaAndAssetCtxs or equivalent.
+- On each full-market refresh, store/update the current snapshot.
+- Calculate deltas from latest vs nearest prior snapshot.
+- If no prior snapshot exists yet, return null and a warming state.
+
+Do NOT do historical REST calls for every asset on every refresh.
+
+3. Calculate OI delta
+Add:
+- oi_delta_5m_pct
+- oi_delta_15m_pct
+- oi_delta_1h_pct
+
+Formula:
+(current_open_interest - previous_open_interest) / previous_open_interest * 100
+
+Guardrails:
+- If previous OI is missing or zero, return null.
+- Prefer existing USD-normalized OI if available.
+- Otherwise use the same OI unit currently used in the page.
+- Do not remove the existing raw OI field.
+
+4. Calculate volume velocity
+Add:
+- volume_velocity_15m
+- volume_velocity_1h
+- vol_oi_ratio
+
+If actual recent volume already exists from candles/trades, use it.
+
+If only rolling 24h volume exists:
+- Estimate recent volume by comparing current 24h volume against previous snapshot 24h volume.
+- For 15m:
+  current_24h_volume_delta = current_24h_volume - volume_24h_15m_ago
+  expected_15m_volume = current_24h_volume / 96
+  volume_velocity_15m = current_24h_volume_delta / expected_15m_volume
+
+For 1h:
+  current_24h_volume_delta = current_24h_volume - volume_24h_1h_ago
+  expected_1h_volume = current_24h_volume / 24
+  volume_velocity_1h = current_24h_volume_delta / expected_1h_volume
+
+vol_oi_ratio:
+24h volume notional / open interest notional
+
+Guardrails:
+- Return null if denominator is missing/zero.
+- Clamp extreme nonsense values.
+- Do not remove existing raw volume fields.
+
+5. Add Funding label
+Create a compact funding_label and funding_reason.
+
+funding_label options:
+- Cheap
+- Neutral
+- Shorts Paying
+- Longs Paying
+- Hot
+- Extreme
+- Dislocated
+
+Suggested logic:
+- Negative funding: "Shorts Paying"
+- Small/normal funding: "Neutral" or "Cheap"
+- Positive but not extreme funding: "Longs Paying"
+- High positive funding: "Hot"
+- Very high absolute funding or extreme premium/mark-oracle gap: "Extreme" or "Dislocated"
+
+funding_reason examples:
+- "Funding neutral"
+- "Shorts paying"
+- "Longs paying but not extreme"
+- "Funding hot"
+- "Premium / oracle gap stretched"
+
+Also add funding_score if helpful:
+- Positive = clean/supportive
+- Negative = crowded/risky
+- Neutral = 0
+
+6. Add Flow label
+Create a compact flow_label and flow_reason using:
+- OI delta
+- volume velocity
+- trade imbalance
+- book imbalance
+- liquidation data if available
+
+flow_label options:
+- Building
+- Buying
+- Selling
+- Squeeze
+- Flush
+- Absorbing
+- Mixed
+- Thin
+
+Suggested logic:
+- OI up + volume velocity up + buy pressure: "Building"
+- Buy tape + supportive book: "Buying"
+- Sell tape + weak book: "Selling"
+- Short liquidations + price up: "Squeeze"
+- Long liquidations + price down: "Flush"
+- Sell pressure but price holds / bid support: "Absorbing"
+- Conflicting inputs: "Mixed"
+- Low liquidity / bad spread / weak data: "Thin"
+
+flow_reason examples:
+- "OI + volume building"
+- "Buy pressure confirmed"
+- "Sell pressure confirmed"
+- "Shorts squeezed"
+- "Longs flushed"
+- "Sellers absorbed"
+- "Mixed tape/book"
+- "Thin liquidity"
+
+If liquidation feed is not currently wired:
+- Add fields with null/defaults.
+- Do not block the rest of the work.
+- Include TODO where liquidation aggregation should plug in.
+
+Fields to support liquidation later:
+- long_liq_15m
+- short_liq_15m
+- liquidation_bias_15m
+- liquidation_context
+
+7. Add simplified signal_direction
+This is the main frontend-facing signal.
+
+signal_direction options:
+- LONG
+- SHORT
+- WATCH
+- CROWDED
+- AVOID
+- NEUTRAL
+
+Add:
+- signal_direction
+- signal_reason
+- signal_detail
+
+Rules:
+
+LONG:
+- OI rising
+- volume velocity elevated
+- price up or holding strong
+- funding not too hot
+- flow supportive
+
+Example reason:
+"OI + volume building"
+
+SHORT:
+- price down
+- OI rising
+- sell pressure
+- weak tape/book
+
+Example reason:
+"Fresh shorts building"
+
+WATCH:
+- setup improving but not confirmed
+- breakout forming
+- reversal possible after flush
+- strong relative strength but missing confirmation
+
+Example reason:
+"Breakout forming"
+
+CROWDED:
+- price up
+- OI up
+- funding hot
+- premium/basis stretched
+- long-side risk elevated
+
+Example reason:
+"Funding too hot"
+
+AVOID:
+- thin liquidity
+- severe OI cap risk
+- extreme dislocation
+- unreliable/noisy market
+
+Example reason:
+"Thin liquidity / cap risk"
+
+NEUTRAL:
+- no clear signal
+
+signal_detail can preserve the more nuanced original idea:
+- Fresh Long Build
+- Short Squeeze
+- Crowded Long
+- Bear Build
+- Long Flush
+- Absorption
+- Breakout Watch
+- Avoid / Thin
+- Neutral
+
+But the frontend main table should show signal_direction, not signal_detail.
+
+8. Add opportunity_score
+Add opportunity_score from 0.00 to 1.00.
+
+This replaces/augments agent_score as the cleaner “pay attention” score.
+
+Suggested weighting:
+- 25% OI delta
+- 20% volume velocity
+- 15% relative strength / price momentum
+- 15% tape/book pressure
+- 10% funding quality
+- 10% liquidation/flow confirmation
+- 5% liquidity/tradability
+
+Important:
+- opportunity_score is not purely bullish.
+- It means “how interesting/actionable is this row?”
+- signal_direction tells long/short/watch/avoid.
+
+Keep existing agent_score too.
+
+9. Add risk_score and risk_label
+Add:
+- risk_score from 0.00 to 1.00
+- risk_label
+- risk_reason
+
+risk_label options:
+- LOW
+- MED
+- HIGH
+- CROWDED
+- CAP RISK
+- THIN
+
+Suggested weighting:
+- 25% funding extreme
+- 20% premium / mark-oracle dislocation
+- 20% OI cap utilization / cap risk
+- 15% thin liquidity / spread
+- 10% recent liquidation aftershock
+- 10% overextended price momentum
+
+Examples:
+- LOW: clean setup, normal funding, liquid market
+- MED: some risk but tradeable
+- HIGH: stretched or unstable
+- CROWDED: high funding/premium and OI building aggressively
+- CAP RISK: OI cap utilization problem
+- THIN: low liquidity/unreliable signal
+
+A row can have high opportunity_score and high risk_score. That is expected.
+
+10. Sorting
+Default backend rank should prefer:
+- opportunity_score descending
+- then risk_score ascending
+- then existing agent_score/rank as fallback
+
+Do not remove existing agent_rank.
+
+11. Response shape example
+Each row should include both old and new fields.
+
+Example:
+{
+  "coin": "MU",
+  "mark": 776.67,
+  "change_24h_pct": -0.77,
+  "funding_rate": 0.000031,
+  "open_interest": 121280000,
+  "volume_24h": 139210000,
+  "premium_pct": 0.1102,
+  "mark_oracle_delta_pct": 0.1186,
+  "book_imbalance": 0.862,
+  "trade_imbalance": 0.836,
+
+  "oi_delta_5m_pct": 1.2,
+  "oi_delta_15m_pct": 3.8,
+  "oi_delta_1h_pct": 7.4,
+  "volume_velocity_15m": 2.1,
+  "volume_velocity_1h": 1.6,
+  "vol_oi_ratio": 1.15,
+
+  "funding_label": "Cheap",
+  "funding_reason": "Funding neutral",
+
+  "flow_label": "Building",
+  "flow_reason": "OI + volume building",
+
+  "long_liq_15m": 0,
+  "short_liq_15m": 1250000,
+  "liquidation_bias_15m": 1250000,
+  "liquidation_context": "Squeeze",
+
+  "signal_direction": "LONG",
+  "signal_reason": "OI + volume building",
+  "signal_detail": "Fresh Long Build",
+
+  "opportunity_score": 0.82,
+  "risk_score": 0.34,
+  "risk_label": "MED",
+  "risk_reason": "Funding normal, liquidity acceptable",
+
+  "agent_score": existing value,
+  "agent_rank": existing value
+}
+
+12. Validation
+After implementation, validate:
+- Existing Hyperliquid endpoint still returns data.
+- Existing frontend fields still exist.
+- New fields exist on rows.
+- Null/warming fields serialize safely.
+- opportunity_score is between 0 and 1.
+- risk_score is between 0 and 1.
+- signal_direction is always one of LONG, SHORT, WATCH, CROWDED, AVOID, NEUTRAL.
+- funding_label is always a string.
+- flow_label is always a string.
+- risk_label is always a string.
+- Existing cards/modules still have their required fields.
+
+Provide me:
+- Files changed
+- Endpoints touched
+- Example JSON row before/after
+- Which fields are warming/null until snapshots accumulate
+- Whether liquidation data is wired or stubbed

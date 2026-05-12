@@ -392,6 +392,29 @@ def asset_to_matrix_row(asset: ScreenerAsset, rank: Optional[int] = None) -> dic
 
         "is_active":              asset.market_status == "active",
         "market_status":          asset.market_status,
+
+        # ── Matrix signal layer (new additive fields) ──────────────────────
+        "oi_delta_5m_pct":    round(asset.oi_change_5m  * 100, 4) if asset.oi_change_5m  is not None else None,
+        "oi_delta_15m_pct":   round(asset.oi_change_15m * 100, 4) if asset.oi_change_15m is not None else None,
+        "oi_delta_1h_pct":    round(asset.oi_change_1h  * 100, 4) if asset.oi_change_1h  is not None else None,
+        "volume_velocity_15m": asset.volume_impulse_15m,
+        "volume_velocity_1h":  asset.volume_impulse,
+        "vol_oi_ratio":        asset.vol_oi_ratio,
+        "funding_label":       asset.funding_label,
+        "funding_reason":      asset.funding_reason,
+        "flow_label":          asset.flow_label,
+        "flow_reason":         asset.flow_reason,
+        "long_liq_15m":        asset.long_liq_15m,
+        "short_liq_15m":       asset.short_liq_15m,
+        "liquidation_bias_15m": asset.liquidation_bias_15m,
+        "liquidation_context": asset.liquidation_context,
+        "signal_direction":    asset.matrix_signal,
+        "signal_reason":       asset.matrix_signal_reason,
+        "signal_detail":       asset.matrix_signal_detail,
+        "opportunity_score":   asset.opportunity_score,
+        "risk_score":          asset.risk_score,
+        "risk_label":          asset.risk_label,
+        "risk_reason":         asset.risk_reason,
     }
 
 

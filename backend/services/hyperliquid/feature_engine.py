@@ -744,6 +744,281 @@ def compute_universe_ranks(assets: list[ScreenerAsset]) -> list[ScreenerAsset]:
     return list(result_map.values())
 
 
+def compute_matrix_signals(asset: ScreenerAsset) -> dict:
+    """
+    Compute the Market Matrix signal layer from already-scored ScreenerAsset fields.
+
+    Adds:
+      vol_oi_ratio            — day_ntl_vlm / open_interest_usd
+      funding_label/reason    — compact funding regime string
+      flow_label/reason       — aggregate flow/OI/volume/tape signal
+      long_liq_15m            — stub (null until liquidation feed wired)
+      short_liq_15m           — stub
+      liquidation_bias_15m    — stub
+      liquidation_context     — stub
+      matrix_signal           — LONG|SHORT|WATCH|CROWDED|AVOID|NEUTRAL
+      matrix_signal_reason    — one-line reason
+      matrix_signal_detail    — nuanced sub-type label
+      opportunity_score       — 0-1 "how actionable is this row?"
+      risk_score              — 0-1 overall risk level
+      risk_label/reason       — LOW|MED|HIGH|CROWDED|CAP RISK|THIN
+
+    Called from run_full_feature_pass() after all scoring is complete.
+    No external API calls. Pure function of existing model fields.
+    """
+    updates: dict = {}
+
+    # ── Pre-compute helpers ────────────────────────────────────────────────────
+    fund          = asset.funding or 0.0
+    ann_fund      = fund * 8760                         # annualized rate (decimal)
+    abs_ann       = abs(ann_fund)
+    premium       = asset.premium or 0.0
+    dist_oracle   = asset.distance_mark_oracle_pct or 0.0
+    oi_usd        = asset.open_interest_usd or 0.0
+    vlm           = asset.day_ntl_vlm or 0.0
+    oi_15m        = asset.oi_change_15m or 0.0          # decimal fraction
+    oi_1h         = asset.oi_change_1h or 0.0           # decimal fraction
+    vol_imp_15m   = asset.volume_impulse_15m             # ratio vs rolling avg, or None
+    vol_imp_1h    = asset.volume_impulse                 # 1h ratio vs rolling avg, or None
+    flow_imb      = asset.recent_trade_imbalance or 0.0  # -1..+1
+    book_imb      = asset.orderbook_imbalance or 0.0     # -1..+1
+    mom_1h        = asset.momentum_1h or 0.0             # %
+    spread_bps    = asset.spread_bps or 0.0
+    avoid_score   = asset.avoid_score or 0.0
+    tradability   = asset.tradability_penalty or 0.0
+    exhaustion    = asset.exhaustion_score or 0.0
+    collapse_risk = asset.collapse_risk_score or 0.0
+    crowded_long  = asset.crowded_long
+    crowded_short = asset.crowded_short
+    squeeze       = asset.squeeze_candidate
+    oi_cap_flag   = asset.open_interest_cap_flag
+    liq_score     = asset.liquidity_score or 50.0
+    mom_score     = asset.momentum_score or 50.0
+
+    # ── 1. Vol / OI ratio ─────────────────────────────────────────────────────
+    if vlm > 0 and oi_usd > 0:
+        updates["vol_oi_ratio"] = round(vlm / oi_usd, 3)
+
+    # ── 2. Funding label ──────────────────────────────────────────────────────
+    # Priority: Dislocated → Extreme → Hot / Shorts Paying → Longs Paying → Neutral → Cheap
+    disloc_cond = abs(dist_oracle) > 1.0 or abs(premium) > 0.01
+    if disloc_cond and abs_ann > 0.30:
+        funding_label  = "Dislocated"
+        funding_reason = "Premium / oracle gap stretched"
+    elif abs_ann > 0.50:
+        funding_label  = "Extreme"
+        funding_reason = "Funding extreme — both sides at risk"
+    elif ann_fund < -0.10:
+        funding_label  = "Shorts Paying"
+        funding_reason = "Shorts paying heavily"
+    elif ann_fund < -0.03:
+        funding_label  = "Shorts Paying"
+        funding_reason = "Shorts paying"
+    elif abs_ann <= 0.03:
+        funding_label  = "Cheap"
+        funding_reason = "Funding neutral"
+    elif ann_fund > 0.25:
+        funding_label  = "Hot"
+        funding_reason = "Funding hot"
+    elif ann_fund > 0.10:
+        funding_label  = "Longs Paying"
+        funding_reason = "Longs paying but not extreme"
+    else:
+        funding_label  = "Neutral"
+        funding_reason = "Funding neutral"
+
+    updates["funding_label"]  = funding_label
+    updates["funding_reason"] = funding_reason
+
+    # ── 3. Flow label ─────────────────────────────────────────────────────────
+    # Use OI delta, volume velocity, trade/book imbalance.
+    # Liquidation feed not yet available — squeeze/flush inferred from existing flags.
+    oi_rising      = oi_15m  >  0.005     # >0.5% OI growth over 15m
+    oi_falling     = oi_15m  < -0.005     # >0.5% OI loss over 15m
+    vol_elevated   = (vol_imp_15m or 0.0) > 1.30   # 30% above rolling average
+    buy_pressure   = flow_imb > 0.15
+    sell_pressure  = flow_imb < -0.15
+    bid_heavy      = book_imb > 0.15
+    ask_heavy      = book_imb < -0.15
+    thin           = tradability > 60 or spread_bps > 30 or (vlm > 0 and vlm < 500_000)
+
+    if thin:
+        flow_label  = "Thin"
+        flow_reason = "Thin liquidity"
+    elif squeeze:
+        # crowded_short + price moving up → short liquidations inferred
+        flow_label  = "Squeeze"
+        flow_reason = "Shorts squeezed"
+    elif collapse_risk > 60 and oi_falling and sell_pressure:
+        # exhaustion + OI unwinding + selling → long flush inferred
+        flow_label  = "Flush"
+        flow_reason = "Longs flushed"
+    elif oi_rising and vol_elevated and buy_pressure:
+        flow_label  = "Building"
+        flow_reason = "OI + volume building"
+    elif buy_pressure and bid_heavy:
+        flow_label  = "Buying"
+        flow_reason = "Buy pressure confirmed"
+    elif sell_pressure and ask_heavy:
+        flow_label  = "Selling"
+        flow_reason = "Sell pressure confirmed"
+    elif sell_pressure and not ask_heavy and mom_1h > 0:
+        flow_label  = "Absorbing"
+        flow_reason = "Sellers absorbed"
+    elif oi_rising and not buy_pressure and not sell_pressure:
+        flow_label  = "Mixed"
+        flow_reason = "OI building — tape mixed"
+    else:
+        flow_label  = "Mixed"
+        flow_reason = "Mixed tape/book"
+
+    updates["flow_label"]  = flow_label
+    updates["flow_reason"] = flow_reason
+
+    # ── 4. Liquidation stubs ──────────────────────────────────────────────────
+    # TODO: wire when Hyperliquid liquidation aggregation feed is available.
+    updates["long_liq_15m"]         = None
+    updates["short_liq_15m"]        = None
+    updates["liquidation_bias_15m"] = None
+    updates["liquidation_context"]  = None
+
+    # ── 5. Matrix signal ──────────────────────────────────────────────────────
+    # Priority: AVOID → CROWDED → LONG → SHORT → WATCH → NEUTRAL
+    if thin or avoid_score > 65 or oi_cap_flag:
+        if oi_cap_flag and not thin and avoid_score <= 65:
+            matrix_signal        = "AVOID"
+            matrix_signal_reason = "OI cap risk"
+            matrix_signal_detail = "Avoid / Thin"
+        else:
+            matrix_signal        = "AVOID"
+            matrix_signal_reason = "Thin liquidity / cap risk"
+            matrix_signal_detail = "Avoid / Thin"
+    elif crowded_long or (ann_fund > 0.25 and oi_1h > 0.01):
+        matrix_signal        = "CROWDED"
+        matrix_signal_reason = "Funding too hot"
+        matrix_signal_detail = "Crowded Long"
+    elif squeeze:
+        matrix_signal        = "LONG"
+        matrix_signal_reason = "Short squeeze confirmed"
+        matrix_signal_detail = "Short Squeeze"
+    elif (oi_rising and vol_elevated and buy_pressure
+          and abs_ann < 0.25 and mom_1h >= 0):
+        matrix_signal        = "LONG"
+        matrix_signal_reason = "OI + volume building"
+        matrix_signal_detail = "Fresh Long Build"
+    elif (asset.signal_direction == "long"
+          and flow_label in ("Building", "Buying", "Absorbing")
+          and abs_ann < 0.20):
+        matrix_signal        = "LONG"
+        matrix_signal_reason = "Buy pressure confirmed"
+        matrix_signal_detail = "Fresh Long Build"
+    elif (oi_rising and sell_pressure and mom_1h < 0):
+        matrix_signal        = "SHORT"
+        matrix_signal_reason = "Fresh shorts building"
+        matrix_signal_detail = "Bear Build"
+    elif (flow_label in ("Flush",) and sell_pressure):
+        matrix_signal        = "SHORT"
+        matrix_signal_reason = "Sell pressure confirmed"
+        matrix_signal_detail = "Bear Build"
+    elif (asset.signal_direction == "short"
+          and flow_label in ("Selling", "Flush")):
+        matrix_signal        = "SHORT"
+        matrix_signal_reason = "Sell pressure confirmed"
+        matrix_signal_detail = "Bear Build"
+    elif (crowded_short or exhaustion > 55 or collapse_risk > 55
+          or flow_label in ("Absorbing",)):
+        matrix_signal        = "WATCH"
+        matrix_signal_reason = (
+            "Breakout forming" if crowded_short
+            else "Reversal possible after flush"
+        )
+        matrix_signal_detail = "Breakout Watch"
+    else:
+        matrix_signal        = "NEUTRAL"
+        matrix_signal_reason = "No clear signal"
+        matrix_signal_detail = "Neutral"
+
+    updates["matrix_signal"]        = matrix_signal
+    updates["matrix_signal_reason"] = matrix_signal_reason
+    updates["matrix_signal_detail"] = matrix_signal_detail
+
+    # ── 6. Opportunity score (0-1) ────────────────────────────────────────────
+    # Weighting per spec:
+    #   25% OI delta, 20% vol velocity, 15% momentum/RS, 15% tape/book,
+    #   10% funding quality, 10% flow confirmation, 5% liquidity
+    oi_delta_score = _clip(abs(oi_15m) * 100 * 5, 0, 100)         # 2% 15m Δ = 100
+    vol_vel_score  = _clip((vol_imp_15m or 1.0) * 50, 0, 100)     # 2× impulse = 100
+    tape_score     = _clip(50 + (flow_imb * 0.5 + book_imb * 0.5) * 50, 0, 100)
+    # Funding quality: near-zero = high clarity; extreme = low clarity
+    fund_quality   = _clip(100 - abs_ann * 100, 20, 100)
+    # Flow confirmation bonus
+    flow_conf      = (
+        100 if flow_label in ("Building", "Squeeze")
+        else 80 if flow_label == "Buying"
+        else 60 if flow_label == "Absorbing"
+        else 30 if flow_label == "Thin"
+        else 50
+    )
+
+    opp_raw = (
+        oi_delta_score * 0.25 +
+        vol_vel_score  * 0.20 +
+        mom_score      * 0.15 +
+        tape_score     * 0.15 +
+        fund_quality   * 0.10 +
+        flow_conf      * 0.10 +
+        liq_score      * 0.05
+    )
+    updates["opportunity_score"] = round(_clip(opp_raw / 100, 0.0, 1.0), 3)
+
+    # ── 7. Risk score (0-1) ───────────────────────────────────────────────────
+    # Weighting per spec:
+    #   25% funding extreme, 20% mark-oracle dislocation, 20% OI cap,
+    #   15% thin liquidity/spread, 10% liq aftershock (stub 0), 10% overextended
+    fund_risk    = _clip(abs_ann * 100, 0, 100)
+    disloc_risk  = _clip(abs(dist_oracle) / 0.015 * 100, 0, 100)   # 1.5% gap = max
+    cap_risk_raw = 80.0 if oi_cap_flag else _clip(asset.crowding_score or 0, 0, 80)
+    thin_risk    = _clip(tradability, 0, 100)
+    liq_aftershock = 0.0  # TODO: wire from liquidation feed
+    overext_risk = _clip((exhaustion + collapse_risk) / 2, 0, 100)
+
+    risk_raw = (
+        fund_risk      * 0.25 +
+        disloc_risk    * 0.20 +
+        cap_risk_raw   * 0.20 +
+        thin_risk      * 0.15 +
+        liq_aftershock * 0.10 +
+        overext_risk   * 0.10
+    )
+    risk_val = round(_clip(risk_raw / 100, 0.0, 1.0), 3)
+    updates["risk_score"] = risk_val
+
+    # ── 8. Risk label / reason ────────────────────────────────────────────────
+    if oi_cap_flag:
+        risk_label  = "CAP RISK"
+        risk_reason = "OI cap utilization risk"
+    elif thin or tradability > 50:
+        risk_label  = "THIN"
+        risk_reason = "Thin liquidity / unreliable signal"
+    elif crowded_long and abs_ann > 0.25:
+        risk_label  = "CROWDED"
+        risk_reason = "High funding + OI building aggressively"
+    elif risk_val > 0.65:
+        risk_label  = "HIGH"
+        risk_reason = "Stretched or unstable setup"
+    elif risk_val > 0.40:
+        risk_label  = "MED"
+        risk_reason = "Some risk but tradeable"
+    else:
+        risk_label  = "LOW"
+        risk_reason = "Clean setup, normal funding, liquid market"
+
+    updates["risk_label"]  = risk_label
+    updates["risk_reason"] = risk_reason
+
+    return updates
+
+
 def _compute_composite(asset: ScreenerAsset, extra: dict, mode: str = "balanced") -> float:
     """Combine component scores into one composite signal score (0–100)."""
     WEIGHTS = {
@@ -817,6 +1092,11 @@ def run_full_feature_pass(state: HyperliquidState):
         struct_feats = compute_structural_quality(asset, candles_1h)
         if struct_feats:
             asset = asset.model_copy(update=struct_feats)
+
+        # Matrix signal layer (funding label, flow label, matrix signal, opportunity/risk)
+        matrix_feats = compute_matrix_signals(asset)
+        if matrix_feats:
+            asset = asset.model_copy(update=matrix_feats)
 
         state.assets[coin] = asset
         updated.append(asset)

@@ -215,6 +215,37 @@ def _asset_to_row(asset: ScreenerAsset, rank: int) -> dict:
         "signalDirection":  _dir(asset.signal_direction),
         "signalConfidence": asset.signal_confidence,
 
+        # ── Matrix signal layer (new additive fields) ──────────────────────
+        # OI deltas expressed as percentage (existing oiChange* are decimal fractions)
+        "oiDelta5mPct":   round(asset.oi_change_5m * 100, 4)  if asset.oi_change_5m  is not None else None,
+        "oiDelta15mPct":  round(asset.oi_change_15m * 100, 4) if asset.oi_change_15m is not None else None,
+        "oiDelta1hPct":   round(asset.oi_change_1h * 100, 4)  if asset.oi_change_1h  is not None else None,
+        # Volume velocity ratios (ratio of recent vol vs rolling average)
+        "volumeVelocity15m": asset.volume_impulse_15m,
+        "volumeVelocity1h":  asset.volume_impulse,
+        # Vol / OI ratio
+        "volOiRatio":     asset.vol_oi_ratio,
+        # Funding label
+        "fundingLabel":   asset.funding_label,
+        "fundingReason":  asset.funding_reason,
+        # Flow label
+        "flowLabel":      asset.flow_label,
+        "flowReason":     asset.flow_reason,
+        # Liquidation stubs — null until liquidation feed is wired
+        "longLiq15m":          asset.long_liq_15m,
+        "shortLiq15m":         asset.short_liq_15m,
+        "liquidationBias15m":  asset.liquidation_bias_15m,
+        "liquidationContext":  asset.liquidation_context,
+        # Matrix signal — main frontend-facing direction signal
+        "matrixSignal":        asset.matrix_signal,
+        "matrixSignalReason":  asset.matrix_signal_reason,
+        "matrixSignalDetail":  asset.matrix_signal_detail,
+        # Opportunity and risk (0-1)
+        "opportunityScore":    asset.opportunity_score,
+        "riskScore":           asset.risk_score,
+        "riskLabel":           asset.risk_label,
+        "riskReason":          asset.risk_reason,
+
         # ── Contract metadata ─────────────────────────────────────────────
         "maxLeverage":   asset.max_leverage,
         "szDecimals":    asset.sz_decimals,
