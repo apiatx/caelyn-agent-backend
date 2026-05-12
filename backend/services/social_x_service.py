@@ -1396,8 +1396,26 @@ def build_x_dashboard() -> dict:
     _lkg_sections: list[str] = list((current_snap or {}).get("_lkg_sections_used") or [])
     _lkg_set: set[str] = set(_lkg_sections)
 
-    def _sec_status(key: str, data) -> str:
-        """Return 'ok', 'lkg', or 'empty' for a section."""
+    # Map each UI section to the cache-level keys it depends on so that
+    # section_status reflects only THAT section's freshness, not the whole
+    # snapshot.  e.g. sentiment_acceleration can be empty without marking
+    # x_consensus as lkg.
+    _UI_CACHE_DEPS: dict[str, set[str]] = {
+        "x_consensus":            {"_backend_ranked", "consensus_picks"},
+        "freshest_alpha":         {"_mention_data", "_backend_ranked"},
+        "theme_leadership":       {"consensus_picks"},
+        "sentiment_acceleration": {"_mention_data"},
+    }
+
+    def _sec_status(section_key: str, data) -> str:
+        """Return 'ok', 'lkg', or 'empty' for a section.
+
+        'lkg'   — section has data AND at least one of its underlying cache
+                  keys was restored from LKG on this scan.
+        'ok'    — section has data and all underlying cache keys were fresh.
+        'empty' — section produced no rows/items (may be legitimate, e.g.
+                  sentiment_acceleration when no momentum divergence exists).
+        """
         if isinstance(data, list):
             has_data = len(data) > 0
         elif isinstance(data, dict):
@@ -1408,7 +1426,9 @@ def build_x_dashboard() -> dict:
             has_data = bool(data)
         if not has_data:
             return "empty"
-        if _lkg_set:
+        # Check only the cache keys this specific section depends on
+        deps = _UI_CACHE_DEPS.get(section_key, set())
+        if deps & _lkg_set:   # any dependency was LKG-restored
             return "lkg"
         return "ok"
 

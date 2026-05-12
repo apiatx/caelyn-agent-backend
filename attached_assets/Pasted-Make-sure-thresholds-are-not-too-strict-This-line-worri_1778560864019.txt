@@ -1,0 +1,48 @@
+Make sure thresholds are not too strict
+
+This line worries me a little:
+
+each of the 4 sections is checked against a minimum count threshold
+
+That’s good, but only if thresholds match the section.
+
+For example:
+
+consensus_picks should probably require >= 1
+_backend_ranked maybe >= 3 or >= 5
+_mention_data maybe >= 3
+top_tickers maybe >= 1
+sentiment_acceleration might legitimately be empty sometimes
+
+If it requires too many rows, you could accidentally preserve stale LKG forever even when today’s data is valid but naturally smaller.
+
+Ask it:
+
+Show me the exact validation thresholds used for each Social section and explain why each threshold is safe. Make sure sentiment_acceleration can legitimately be empty without poisoning the whole cache.
+2. Confirm LKG merge does not create mixed-date weirdness
+
+Partial merge is fine, but you want the UI/debug metadata to make that clear.
+
+Example: X Consensus fresh today, Leading Themes preserved from yesterday.
+
+That’s okay — but diagnostics should expose it clearly so you don’t think all sections are current.
+
+Ask it:
+
+Confirm that when one Social section is restored from LKG, the response exposes section_status and lkg_sections clearly enough for frontend/debugging. Show a sample JSON response from /api/social/diagnostics and the main Social endpoint.
+3. Confirm empty new scans are rejected, not saved as “current”
+
+This matters. If a totally empty Grok response still gets saved as current with old sections merged in, that may be acceptable, but you want the cache status to say lkg_partial or stale_lkg, not ok.
+
+Ask:
+
+If Grok returns a totally empty or malformed response, does the backend avoid writing it as a fresh successful current snapshot? Confirm the cache_status and diagnostics result for this case.
+4. Make sure “prior snapshot” exists after multiple failures
+
+The summary says _save_disk_cache rotates current → prior. Good. But with the new merge logic, make sure repeated bad runs do not eventually rotate a half-baked merged snapshot into prior and lose the original clean one.
+
+This is the sneaky failure mode.
+
+Ask:
+
+Confirm repeated failed Social scans cannot degrade the prior/current cache pair over time. If current is partial_merged from LKG and the next run also fails, do we still preserve the last truly good sections?
