@@ -1,0 +1,183 @@
+You are auditing the CaelynAI backend only. Do not implement new features yet. Do not refactor. Do not create branches or PRs. Work directly on main only if you need to inspect locally, but this task is an audit/report only.
+
+Goal:
+Verify whether the AI agent/chat endpoint has complete structured access to all signal currently returned by the major app pages, so that when a user asks a question in chat, the LLM can reason across the same data the user is seeing on-screen.
+
+Repositories:
+Backend: apiatx/caelyn-agent-backend
+Frontend context may be referenced only if necessary, but this is primarily a backend audit.
+
+Important project architecture:
+- Backend logic lives in apiatx/caelyn-agent-backend.
+- Frontend display lives in apiatx/caelyn-agent-frontend.
+- /api/query is the primary chat endpoint.
+- query_agent() / TradingAgent.handle_query() are believed to be the main reasoning path.
+- The chat may already receive page context or frontend context. Confirm exactly how.
+- Do not assume page data reaches the agent just because the page endpoint exists.
+
+Pages/signals to audit:
+1. Options Flow page
+2. Screener page
+3. Themes page
+4. Macro page
+5. Social page
+6. Hyperliquid page
+7. Calendar page, earnings specifically
+8. Watchlist page
+9. Portfolio page
+10. Whale Watch page
+11. Insider Activity page
+12. Any TradingView widgets/iframes or chart state passed from frontend
+
+Audit questions:
+
+A) /api/query context intake
+- Locate the /api/query route and request model/schema.
+- Identify all fields accepted from the frontend, especially:
+  - page
+  - current route
+  - selected ticker
+  - visible symbols
+  - frontend_context
+  - page_context
+  - dashboard_context
+  - chatbox_mode
+  - preset_intent
+  - collab_agents
+  - reasoning_model
+  - any attached snapshot/context payloads
+- Confirm whether arbitrary frontend page context is preserved, filtered, truncated, ignored, or transformed.
+- Confirm whether the final LLM prompt actually receives this context.
+
+B) Agent orchestration path
+- Trace /api/query → query_agent() → TradingAgent.handle_query() or the actual current path.
+- Identify where page context enters the agent data bundle.
+- Identify whether page context is included in:
+  - intent routing
+  - data gathering
+  - collaborator prompts
+  - final synthesis prompt
+- Confirm whether collaborator agents can see the page context or only the final model can.
+- Confirm whether the final answer has access to `_caelyn_collab_findings`, backend-gathered data, and frontend-provided page data together.
+
+C) Page endpoint coverage
+For each page listed above, identify:
+- Backend endpoint(s) serving the page.
+- Main service/module used.
+- Data returned by the endpoint.
+- Cache/LKG source, if any.
+- Whether that same data is available to the agent automatically.
+- If not automatic, whether the frontend must pass it into /api/query.
+- Whether there is a backend aggregator/context endpoint the agent can call to reconstruct it.
+
+Use this table format:
+
+Page | Endpoint(s) | Service/module | Main signal fields | Cache/LKG | Does agent get this automatically? | How agent gets it | Gaps
+
+D) “Page as subagent” audit
+The user believes every page may already operate as a subagent. Verify what is actually true:
+- Does each page have a page-specific agent/service?
+- Is it just a data endpoint?
+- Does it run LLM analysis?
+- Does it produce structured signal summaries?
+- Is the output consumed by /api/query?
+- Is there a central registry of page contexts/tools?
+- Are there intent profiles or aliases that map user questions to page data sources?
+
+Classify each page as:
+1. True agent/subagent
+2. Structured data provider
+3. Cached signal provider
+4. Frontend-only view
+5. Not connected to chat context
+
+E) Screen-visible data parity
+Determine whether the backend can see everything rendered on the screen:
+- Backend-returned JSON: yes/no depending on whether /api/query receives or fetches it.
+- Frontend-computed fields: likely no unless frontend sends them.
+- React Query cached data: no unless explicitly serialized into chat request.
+- Selected filters/tabs/sort state: no unless frontend sends them.
+- TradingView iframe/widget ticker/timeframe/chart state: no unless frontend sends it.
+- User-selected ticker from chart popup: no unless frontend sends it.
+- Portfolio/watchlist tickers from Neon: backend may fetch directly; verify.
+- User holdings/positions and PnL: verify current source and whether chat can access.
+
+F) Specific high-priority verification points
+1. Options Flow:
+   - Does the agent receive unusual options flow results, net premium, sweep/OTM/OI fields, tab/category, and LKG status?
+2. Screener:
+   - Does the agent receive filtered screener rows, market cap, volume, technical/fundamental fields, and the user’s current selected filters?
+3. Themes:
+   - Does the agent receive theme RS, timeframe, ETF mappings, parent sectors, and theme leaders?
+4. Macro:
+   - Does the agent receive macro regime, treasury/FRED/FMP economic context, market risk premium, and relevant cache timestamps?
+5. Social:
+   - Does the agent receive X consensus, Freshest Alpha, sentiment acceleration, ticker mentions, and source freshness?
+6. Hyperliquid:
+   - Does the agent receive perps/spot data, funding, open interest, liquidations, position context, and chart symbol mapping?
+7. Calendar / Earnings:
+   - Does the agent receive upcoming earnings, last earnings, EPS/revenue beat/miss, watchlist/portfolio filtered earnings, and selected date range?
+8. Watchlist:
+   - Does the agent receive the user’s actual saved Neon watchlist plus quote/volume/rel-vol/signal overlays?
+9. Portfolio:
+   - Does the agent receive actual holdings, weights, PnL, exposure, and current quote data?
+10. Whale Watch:
+   - Does the agent receive whale/institutional/senate/large transaction data that is rendered?
+11. Insider Activity:
+   - Does the agent receive insider buy/sell stats and transaction details?
+12. TradingView:
+   - Does the chat payload include symbols/layout/timeframe from frontend-only widgets?
+   - If not, flag this as a gap. Backend cannot read iframe state directly.
+
+G) Token/truncation risk
+- Check whether large page context payloads are truncated before reaching the LLM.
+- Identify max context limits or summarization logic.
+- Identify whether full tables are passed, top N rows only, or summaries only.
+- Confirm whether truncation could hide critical rows visible on-screen.
+- Recommend safe limits, but do not implement.
+
+H) Cost/rate-limit sanity
+Use existing API strategy:
+- FMP Starter paid plan should be leaned on for fundamentals, earnings, news, calendar, insider/senate, macro/economics where appropriate.
+- Tradier should remain primary for options/live market data.
+- Public.com can remain options/live backup.
+- Hyperliquid is free/unlimited and should be used directly for Hyperliquid data.
+- Avoid adding new API calls during chat if cached page data or LKG snapshots already exist.
+- The agent should prefer cached page snapshots/context over re-fetching expensive APIs when answering screen-context questions.
+
+I) Required final report
+Return a concise but complete audit report with:
+
+1. Executive summary:
+   - Is the agent currently getting full screen/page context? Yes / Partial / No.
+   - Biggest gaps.
+   - Highest-risk missing context.
+
+2. Architecture trace:
+   - /api/query path.
+   - Where frontend context enters.
+   - Where backend page data enters.
+   - Where final LLM prompt is built.
+
+3. Page-by-page table:
+   Page | Current backend source | Agent access status | Missing fields/context | Risk level | Recommendation
+
+4. TradingView/iframe verdict:
+   - Explicitly state whether backend can see TradingView widget state.
+   - Identify exact frontend payload needed if missing.
+
+5. “Page as subagent” verdict:
+   - Which pages are true subagents vs data providers.
+   - Whether the current design is enough or needs a central context registry.
+
+6. Recommended next implementation plan:
+   - No code yet.
+   - Prioritize minimal changes.
+   - Prefer a unified `agent_context_snapshot` / `screen_context` contract rather than custom one-off patches.
+   - Include backend and frontend responsibilities separately.
+
+Validation:
+- Use code inspection first.
+- If possible, run local curl tests against /api/query with mocked page_context and confirm it appears in the final agent prompt/logs.
+- Do not make external API calls unless already part of existing tests.
+- Do not burn paid API calls for this audit.
