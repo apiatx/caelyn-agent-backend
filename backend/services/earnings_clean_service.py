@@ -1141,6 +1141,67 @@ _THEME_BOTTLENECKS: set[str] = {
 
 _ALL_THEME_SYMS: set[str] = {sym for basket in _THEME_BASKETS.values() for sym in basket}
 
+# ── Extended thematic universe (static registry + dynamic cache — sync, ~0ms) ──
+# Reads _STATIC_TICKER_TO_THEMES (built at import from THEME_MAP + THEME_ETF_UNIVERSE +
+# THEME_RS_UNIVERSE — ~400 tickers) and the cached dynamic thematic universe.
+# Refreshed at most every 15 minutes.  Never raises.  No HTTP calls.
+_ext_theme_map_cache:     dict[str, list[str]] = {}
+_ext_theme_map_built_at:  float                = 0.0
+_EXT_THEME_TTL            = 15 * 60   # 15-minute refresh interval
+
+
+def _get_ext_theme_map() -> dict[str, list[str]]:
+    """
+    Return {sym: [theme_name, …]} for all tickers in the platform's extended thematic universe.
+
+    Sources (sync, no HTTP, no async):
+      1. thematic_context_provider._STATIC_TICKER_TO_THEMES  — built at import (~400 tickers)
+      2. dynamic_thematic_universe.get_cached_thematic_universe().theme_map — 15-min TTL
+
+    Never raises.  Falls back to whatever partial data was collected.
+    Cached in module-level dict; refreshed every _EXT_THEME_TTL seconds.
+    """
+    global _ext_theme_map_cache, _ext_theme_map_built_at
+    now = time.monotonic()
+    if _ext_theme_map_built_at > 0 and now - _ext_theme_map_built_at < _EXT_THEME_TTL:
+        return _ext_theme_map_cache
+
+    merged: dict[str, list[str]] = {}
+
+    # Source 1: static registry (no I/O — built at Python import time)
+    try:
+        from services.thematic_context_provider import (
+            _build_static_registry,
+            _STATIC_TICKER_TO_THEMES,
+        )
+        _build_static_registry()
+        for sym, themes in _STATIC_TICKER_TO_THEMES.items():
+            if themes:
+                merged[sym] = list(themes)
+    except Exception as e:
+        print(f"[earn_clean] ext_theme_map static: {e}")
+
+    # Source 2: cached dynamic universe (sync read — ~0ms, never blocks even when cold)
+    try:
+        from services.dynamic_thematic_universe import get_cached_thematic_universe
+        dyn = get_cached_thematic_universe()
+        for sym, meta in (dyn.get("theme_map") or {}).items():
+            sym_u = sym.upper()
+            name  = (meta.get("theme_name") or "") if isinstance(meta, dict) else ""
+            if not name:
+                continue
+            existing = merged.get(sym_u, [])
+            if name not in existing:
+                merged[sym_u] = existing + [name]
+    except Exception as e:
+        print(f"[earn_clean] ext_theme_map dynamic: {e}")
+
+    _ext_theme_map_cache    = merged
+    _ext_theme_map_built_at = now
+    print(f"[earn_clean] ext_theme_map refreshed: {len(merged)} tickers across extended universe")
+    return merged
+
+
 # ── Quality / liquidity scoring constants ─────────────────────────────────────
 
 # Matches preferred shares, warrants, units by symbol suffix pattern.
@@ -1169,15 +1230,15 @@ _QL_PREF_SYM_HIT    = -25   # high-confidence preferred / warrant from symbol pa
 _QL_PREF_NAME_HIT   = -20   # preferred / warrant detected in company name
 _QL_ADR_PENALTY     =  -8   # ADR (softer — often legitimate large-cap instruments)
 
-_WEEK_CAND_MAX      = 250  # max raw candidates forwarded to enrichment (raised from 150 for better day coverage)
-_MAX_WEEK_ENRICH    = 180  # max events passed to _enrich_events (raised from 120)
-_WEEK_MAX_LIVE      = 40   # hard cap on live FMP profile/quote calls for week-clean
-_WEEK_PER_DAY_FLOOR = 40   # guaranteed candidate slots per trading day (raised from 30 — helps Thu/Fri)
+_WEEK_CAND_MAX      = 400  # max raw candidates forwarded to enrichment (raised for ext theme coverage)
+_MAX_WEEK_ENRICH    = 300  # max events passed to _enrich_events (raised; extras use profile cache)
+_WEEK_MAX_LIVE      = 40   # hard cap on LIVE FMP profile HTTP calls (unchanged — FMP budget safe)
+_WEEK_PER_DAY_FLOOR = 60   # guaranteed candidate slots per trading day (raised from 40 — helps Thu/Fri)
 _WEEK_CONCURRENCY   = 2    # semaphore for week-clean enrichment
-_WEEK_LIMIT_DEFAULT = 10   # default per-session cap (raised from 8 for ~25% more events)
-_WEEK_TOTAL_DEFAULT = 75   # default topEvents cap (raised from 60 for ~25% more events)
-_WEEK_LIMIT_MAX     = 20   # hard ceiling for limit_per_session (raised from 15)
-_WEEK_TOTAL_MAX     = 125  # hard ceiling for max_total (raised from 100)
+_WEEK_LIMIT_DEFAULT = 13   # default per-session cap (raised from 10 for ~30% more events)
+_WEEK_TOTAL_DEFAULT = 100  # default topEvents cap (raised from 75 for ~33% more events)
+_WEEK_LIMIT_MAX     = 26   # hard ceiling for limit_per_session (raised from 20)
+_WEEK_TOTAL_MAX     = 165  # hard ceiling for max_total (raised from 125)
 
 # importanceScore threshold above which an event is flagged isFocus=True.
 # Anchors/bottlenecks typically score 60-110; well-covered mid-caps ~45-55.
@@ -1188,16 +1249,16 @@ _DAY_CAND_MAX      = 80   # max raw candidates after pre-filter
 _DAY_MAX_ENRICH    = 80   # max events passed to enrichment (cache-first)
 _DAY_MAX_LIVE      = 20   # hard cap on live FMP profile calls for day-curated
 _DAY_CONCURRENCY   = 2    # semaphore for day-curated enrichment
-_DAY_LIMIT_DEFAULT = 19   # default results returned (raised from 15 for ~25% more events)
-_DAY_LIMIT_MAX     = 38   # hard ceiling for day-curated limit (raised from 30)
+_DAY_LIMIT_DEFAULT = 25   # default results returned (raised from 19 for ~30% more events)
+_DAY_LIMIT_MAX     = 50   # hard ceiling for day-curated limit (raised from 38)
 
 # ── Month-curated caps ─────────────────────────────────────────────────────────
 _MONTH_CAND_MAX        = 500  # max raw candidates after pre-filter (whole month)
 _MONTH_MAX_ENRICH      = 200  # max events passed to enrichment (cache-first)
 _MONTH_MAX_LIVE        = 40   # hard cap on live FMP profile calls for month-curated
 _MONTH_CONCURRENCY     = 2    # semaphore for month-curated enrichment
-_MONTH_PER_DAY_DEFAULT = 7    # default max curated events per day (raised from 5 for ~25% more)
-_MONTH_PER_DAY_MAX     = 12   # hard ceiling for max_per_day (raised from 10)
+_MONTH_PER_DAY_DEFAULT = 9    # default max curated events per day (raised from 7 for ~30% more)
+_MONTH_PER_DAY_MAX     = 16   # hard ceiling for max_per_day (raised from 12)
 
 _WEEKDAY_NAMES = {0: "Monday", 1: "Tuesday", 2: "Wednesday",
                   3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
@@ -1230,13 +1291,14 @@ def _pre_score(ev: dict, watchlist: set[str], portfolio: set[str]) -> dict:
     No profile data needed — safe to call before enrichment.
 
     Theme scoring (capped at 40 total):
-      in theme basket: +20 | anchor: +25 | bottleneck: +20
+      in hardcoded basket: +20 | anchor: +25 | bottleneck: +20
+      in extended universe only (static registry / dynamic cache): +12 (softer boost)
 
     qualityLiquidity (partial — exchange component added after enrichment):
       preferred/warrant symbol pattern: -25
       preferred/warrant company name:   -20
       ADR / ordinary share name:         -8
-      Theme-basket membership cancels any pre-enrichment penalty.
+      Any theme membership (hardcoded or extended) cancels pre-enrichment penalty.
     """
     sym = (ev.get("symbol") or "").upper()
     has_eps = ev.get("epsEstimated") is not None
@@ -1246,10 +1308,17 @@ def _pre_score(ev: dict, watchlist: set[str], portfolio: set[str]) -> dict:
     is_bottleneck = sym in _THEME_BOTTLENECKS
     in_theme      = sym in _ALL_THEME_SYMS
 
+    # Extended thematic universe — ~400 tickers from static registry + dynamic cache.
+    # Sync, ~0ms, no HTTP.  Only applied for tickers NOT already in hardcoded baskets.
+    ext_map        = _get_ext_theme_map()
+    ext_theme_list = [t for t in ext_map.get(sym, []) if t]
+    in_ext         = bool(ext_theme_list) and not in_theme and not is_anchor and not is_bottleneck
+
     raw_theme = 0
     if in_theme:      raw_theme += 20
     if is_anchor:     raw_theme += 25
     if is_bottleneck: raw_theme += 20
+    if in_ext:        raw_theme += 12   # softer boost for extended-only tickers
     theme_score = min(raw_theme, 40)   # cap at 40
 
     is_portfolio = sym in portfolio
@@ -1271,16 +1340,19 @@ def _pre_score(ev: dict, watchlist: set[str], portfolio: set[str]) -> dict:
     elif _QUAL_NAME_ADR_RE.search(cname):
         ql_pre = _QL_ADR_PENALTY                    # -8:  ADR / ordinary share
 
-    # Theme-basket membership cancels the pre-enrichment penalty:
-    # If the ticker is a known hot theme, anchor, or bottleneck let it through.
-    if ql_pre < 0 and (in_theme or is_anchor or is_bottleneck):
+    # Any theme membership (hardcoded or extended) cancels the pre-enrichment penalty
+    if ql_pre < 0 and (in_theme or is_anchor or is_bottleneck or in_ext):
         ql_pre = 0
+
+    # Merge hardcoded + extended theme names for display (deduped, hardcoded first)
+    hc_themes     = _symbol_themes(sym)
+    merged_themes = hc_themes + [t for t in ext_theme_list if t not in hc_themes]
 
     return {
         "score":        theme_score + wp_score + est_score + ql_pre,
         "isAnchor":     is_anchor,
         "isBottleneck": is_bottleneck,
-        "themes":       _symbol_themes(sym),
+        "themes":       merged_themes,
         "breakdown": {
             "marketCap":            0,        # filled after enrichment
             "theme":                theme_score,
@@ -1410,8 +1482,12 @@ def _is_raw_candidate(ev: dict, watchlist: set[str], portfolio: set[str]) -> boo
     """
     sym = (ev.get("symbol") or "").upper()
 
-    # Always keep: explicit theme, anchor, bottleneck
+    # Always keep: explicit theme, anchor, bottleneck (hardcoded baskets)
     if sym in _ALL_THEME_SYMS or sym in _THEME_ANCHORS or sym in _THEME_BOTTLENECKS:
+        return True
+
+    # Always keep: extended thematic universe (static registry + dynamic cache — ~400 tickers)
+    if sym in _get_ext_theme_map():
         return True
 
     # Always keep: user watchlist / portfolio
@@ -1701,7 +1777,7 @@ async def get_curated_earnings_range(
     Core curated earnings engine — THE single source of truth for all curated views.
 
     Always uses week-clean parameters:
-      max_candidates=_WEEK_CAND_MAX (250), max_enrich=_MAX_WEEK_ENRICH (180),
+      max_candidates=_WEEK_CAND_MAX (400), max_enrich=_MAX_WEEK_ENRICH (300),
       max_live=_WEEK_MAX_LIVE (40),        concurrency=_WEEK_CONCURRENCY (2)
 
     All curated endpoints (week-clean, day-curated, month-curated) MUST call

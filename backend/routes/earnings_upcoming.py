@@ -218,8 +218,8 @@ async def week_clean(
     week_end:          Optional[str] = Query(None, description="YYYY-MM-DD (Friday); default current week Friday"),
     scope:             Optional[str] = Query(None, description="all | watchlist | portfolio"),
     search:            Optional[str] = Query(None, description="Ticker or company name filter"),
-    limit_per_session: int           = Query(10, ge=1, le=20, description="Max events per session slot per day (default 10)"),
-    max_total:         int           = Query(75, ge=1, le=125, description="Max events in topEvents (default 75)"),
+    limit_per_session: int           = Query(13, ge=1, le=26, description="Max events per session slot per day (default 13)"),
+    max_total:         int           = Query(100, ge=1, le=165, description="Max events in topEvents (default 100)"),
 ):
     """
     Curated weekly earnings board for the Catalyst Calendar 'This Week' view.
@@ -285,8 +285,8 @@ async def day_curated(
                                    description="YYYY-MM-DD (required)"),
     search:  Optional[str] = Query(None),
     scope:   Optional[str] = Query(None, description="all | watchlist | portfolio"),
-    limit:   int           = Query(19, ge=1, le=38,
-                                   description="Max curated events returned (1-38, default 19)"),
+    limit:   int           = Query(25, ge=1, le=50,
+                                   description="Max curated events returned (1-50, default 25)"),
 ):
     """
     Curated FMP earnings for a single date — same scoring / eligibility engine
@@ -458,8 +458,8 @@ async def month_curated(
                                        description="Month 1-12 (default current month)"),
     scope:       Optional[str] = Query(None, description="all | watchlist | portfolio"),
     search:      Optional[str] = Query(None),
-    max_per_day: int           = Query(7, ge=1, le=12,
-                                       description="Max curated events per day (1-12, default 7)"),
+    max_per_day: int           = Query(9, ge=1, le=16,
+                                       description="Max curated events per day (1-16, default 9)"),
 ):
     """
     Curated monthly earnings calendar overview.
