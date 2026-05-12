@@ -1,0 +1,184 @@
+Implement the minimal backend side of “agent sees what I see” based on the completed audit.
+
+Scope:
+Backend only.
+Do not touch frontend files.
+Do not refactor unrelated systems.
+Do not create branches or PRs.
+Work in the backend Replit project only.
+
+Goal:
+Make /api/query accept, preserve, compress, route with, and inject frontend-provided screen/page context into the agent reasoning path.
+
+Current audit finding:
+- QueryRequest has no page_context / screen_context field.
+- extra="ignore" likely drops any frontend-provided page context.
+- The agent is currently page-blind by default.
+- Several page data sources exist but are not reachable by the agent.
+
+Backend tasks:
+
+1. Add screen_context support to /api/query
+- Locate the /api/query request schema/model.
+- Add a field named `screen_context` or `page_context`. Prefer `screen_context`.
+- It should accept a flexible dict/object payload.
+- Do not silently drop this field.
+- Preserve at least:
+  - route
+  - page
+  - tab
+  - selected_symbol
+  - visible_symbols
+  - filters
+  - sort
+  - visible_rows
+  - rendered_sections
+  - tradingview_context
+  - freshness/cache metadata
+
+2. Inject screen_context into the agent path
+Trace the existing flow:
+/api/query → query_agent() → TradingAgent.handle_query() or the current equivalent path.
+
+Make sure screen_context is included in:
+- intent/category routing hints
+- user context / agent context bundle
+- final LLM synthesis prompt
+- collaborator context if the collaborator path supports it
+
+The agent should be able to answer questions like:
+- “What looks good here?”
+- “Which of these are strongest?”
+- “What’s the best setup on this page?”
+without needing the user to restate the current page.
+
+3. Safe compression / token handling
+- Add defensive size limits.
+- Do not dump unlimited rows into the prompt.
+- Prioritize high-signal fields.
+- Preserve qualitative signal text better than the current 200-character hard truncation where possible.
+- Avoid cutting off Grok/social analysis, filing descriptions, analyst summaries, earnings notes, or conviction explanations into useless stubs.
+- Include counts/metadata for omitted rows.
+
+Recommended compression priority:
+- page, route, tab
+- selected_symbol
+- visible_symbols
+- visible row count
+- top visible rows
+- active filters/sort
+- high-signal rendered section summaries
+- tradingview symbols/timeframes
+- freshness/cache status
+
+4. Add missing data_router / category access
+Wire these existing backend data sources into the agent-accessible data router and category mapping:
+
+A) Hyperliquid
+- Add a hyperliquid category/data_router arm.
+- It should access the same screener snapshot used by the Hyperliquid page.
+- Include:
+  - overall_score
+  - composite_signal
+  - funding
+  - open interest
+  - spread_bps
+  - market/category
+  - rankings
+  - top assets
+  - timestamp/cache status
+- Avoid expensive/fresh calls when cached page snapshot is available.
+
+B) Whale Watch
+- Add a whale_watch category/data_router arm.
+- Wire the existing whale_watch_service or equivalent.
+- Add aliases/mappings for:
+  - whale watch
+  - whale activity
+  - 13F
+  - institutional buying
+  - fund flows
+  - big money buying
+
+C) Insider Activity
+- Add an insider_activity category/data_router arm.
+- Wire the rich Form 4 / insider conviction-scored data, not just generic Finviz insider buying.
+- Fix aliases so insider-related queries do not fall back to generic market_scan.
+- Include:
+  - ticker
+  - insider name/entity
+  - transaction type
+  - buy/sell
+  - value
+  - shares
+  - filing date
+  - conviction score
+  - signal/rationale
+  - source/cache timestamp
+
+D) Social / X Consensus
+- Add a social_x or x_consensus_dashboard category/data_router arm.
+- Feed the cached X consensus dashboard data into the agent path.
+- Use x_consensus_weekly.json or the current canonical cache if the path has changed.
+- Include the same dashboard sections visible on the Social page:
+  - trend_leaders
+  - momentum_alerts
+  - portfolio_risk
+  - contrarian_signals
+- Avoid rerunning Grok live when the dashboard/cache already has relevant X signal.
+
+5. Watchlist and Portfolio context
+- Make active Neon watchlist tickers available to user context for all relevant query categories, not only explicit portfolio_review.
+- Make portfolio holdings available when relevant and already accessible.
+- Do not require users to paste tickers for ambient watchlist/portfolio-aware questions.
+- Avoid adding expensive quote/fundamental calls here; use existing cached/LKG context where possible.
+
+6. TradingView context handling
+Backend cannot read TradingView iframes/widgets directly.
+The frontend will send tradingview_context inside screen_context.
+
+Make sure backend preserves and injects:
+- widget symbols
+- raw symbols
+- TradingView symbols
+- timeframe
+- active widget
+- layout/page source
+
+Do not attempt to scrape or fetch TradingView iframe content.
+
+7. Diagnostics
+Add debug-safe logging for /api/query showing:
+- screen_context received: true/false
+- page
+- route
+- tab
+- selected_symbol
+- visible_symbols count
+- visible_rows count
+- rendered_sections keys
+- tradingview widget count
+
+Do not log full sensitive payloads.
+Do not log secrets.
+Do not expose private portfolio details in normal logs beyond counts/keys.
+
+8. Validation
+Run backend validation only.
+
+At minimum:
+- Send a mocked /api/query request with screen_context for Hyperliquid.
+- Confirm backend accepts the field and does not drop it.
+- Confirm the agent prompt/context bundle includes the screen_context summary.
+- Confirm “what looks good here?” can route/use Hyperliquid context when page=hyperliquid.
+- Confirm insider_activity, whale_watch, and social_x categories are reachable.
+- Confirm no new expensive external API calls happen when cached/LKG data is available.
+
+Return:
+- Files changed
+- Exact request schema added
+- Where screen_context is injected
+- Data_router/category arms added
+- Before/after sample /api/query payload
+- Validation results
+- Remaining gaps
