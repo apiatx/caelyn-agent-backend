@@ -194,6 +194,14 @@ class ScreenerAsset(BaseModel):
     prev_rank: Optional[int] = None
     rank_change: Optional[int] = None
 
+    # ── Freshness metadata ────────────────────────────────────────────────
+    # signal_computed_at: unix timestamp when compute_matrix_signals() last ran for this asset
+    signal_computed_at: Optional[float] = None
+    # oi_delta_source: "live" when oi_history has snapshots, "warming" while accumulating
+    oi_delta_source: Optional[str] = None
+    # vol_velocity_source: "live" when 5m candle history is sufficient, "warming" otherwise
+    vol_velocity_source: Optional[str] = None
+
     last_updated_ts: float = Field(default_factory=time.time)
 
 

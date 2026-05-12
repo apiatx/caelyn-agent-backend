@@ -246,6 +246,15 @@ def _asset_to_row(asset: ScreenerAsset, rank: int) -> dict:
         "riskLabel":           asset.risk_label,
         "riskReason":          asset.risk_reason,
 
+        # ── Freshness metadata ─────────────────────────────────────────────
+        # signalComputedAt: unix timestamp of last feature-pass for this asset
+        "signalComputedAt":  asset.signal_computed_at,
+        # signalAgeSec: seconds elapsed since last feature pass (null if never computed)
+        "signalAgeSec":      round(time.time() - asset.signal_computed_at, 1) if asset.signal_computed_at else None,
+        # oiDeltaSource / volVelocitySource: "live" = history available, "warming" = still accumulating
+        "oiDeltaSource":     asset.oi_delta_source,
+        "volVelocitySource": asset.vol_velocity_source,
+
         # ── Contract metadata ─────────────────────────────────────────────
         "maxLeverage":   asset.max_leverage,
         "szDecimals":    asset.sz_decimals,
@@ -313,7 +322,9 @@ async def get_snapshot(
     """
     state = _get_state()
 
-    assets = state.all_assets()
+    # Use LKG snapshot when available — avoids serving partial mid-pass states.
+    # Falls back to live assets during first boot before the initial pass completes.
+    assets = state.scored_assets()
 
     # Filter
     if market_type in ("perp", "spot"):
@@ -970,7 +981,7 @@ async def get_market_matrix():
             raise RuntimeError("hyperliquid_state_unavailable")
 
         assets = [
-            a for a in state.all_assets()
+            a for a in state.scored_assets()
             if a.market_status == "active"
             and (not state.universe_allowlist or state.in_universe(a.coin))
         ]
@@ -1017,6 +1028,102 @@ async def get_market_matrix():
             "all_assets_count": 0,
             "warnings":         [f"market-matrix initializing: {type(e).__name__}"],
         }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/hyperliquid/screener/diagnostics
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/diagnostics")
+async def get_diagnostics():
+    """
+    Internal health / freshness diagnostics for the Hyperliquid screener.
+
+    Returns a snapshot of:
+      - boot / readiness status
+      - LKG pass freshness (seconds since last complete feature pass)
+      - OI history coverage (how many coins have warming vs live delta data)
+      - Signal distribution across the current scored universe
+      - Market regime classification
+      - WS connectivity status
+    """
+    state = get_state_optional()
+    now = time.time()
+
+    if state is None:
+        return {"status": "not_initialized", "message": "Hyperliquid state not yet created"}
+
+    assets = state.scored_assets()
+    active = [a for a in assets if a.market_status == "active"]
+    perps  = [a for a in active if a.market_type == "perp"]
+
+    # Signal distribution
+    sig_dist: dict[str, int] = {}
+    for a in active:
+        label = a.matrix_signal or "unscored"
+        sig_dist[label] = sig_dist.get(label, 0) + 1
+
+    # OI data coverage
+    oi_live    = sum(1 for a in perps if a.oi_delta_source == "live")
+    oi_warming = sum(1 for a in perps if a.oi_delta_source == "warming")
+    oi_unset   = sum(1 for a in perps if a.oi_delta_source is None)
+
+    # Vol velocity coverage
+    vol_live    = sum(1 for a in perps if a.vol_velocity_source == "live")
+    vol_warming = sum(1 for a in perps if a.vol_velocity_source == "warming")
+
+    # Signal age distribution
+    now_ts = now
+    aged_bins = {"<60s": 0, "60-120s": 0, "120-300s": 0, ">300s": 0, "unscored": 0}
+    for a in active:
+        if a.signal_computed_at is None:
+            aged_bins["unscored"] += 1
+        else:
+            age = now_ts - a.signal_computed_at
+            if age < 60:      aged_bins["<60s"] += 1
+            elif age < 120:   aged_bins["60-120s"] += 1
+            elif age < 300:   aged_bins["120-300s"] += 1
+            else:             aged_bins[">300s"] += 1
+
+    # Market regime from active assets
+    from .feature_engine import _compute_market_regime
+    regime = _compute_market_regime(active)
+
+    lkg_age_s = round(now - state.lkg_pass_ts, 1) if state.lkg_pass_ts else None
+
+    return {
+        "status":        "ready" if state.is_ready else "initializing",
+        "is_ready":      state.is_ready,
+        "ws_connected":  state.ws_connected,
+        "boot_ts":       state.boot_ts,
+        "uptime_s":      round(now - state.boot_ts, 1) if state.boot_ts else None,
+        "lkg_pass_ts":   state.lkg_pass_ts,
+        "lkg_age_s":     lkg_age_s,
+        "lkg_asset_count": len(state.lkg_assets),
+        "live_asset_count": len(state.assets),
+        "active_count":  len(active),
+        "perp_count":    len(perps),
+        "spot_count":    sum(1 for a in active if a.market_type == "spot"),
+        "market_regime": regime,
+        "signal_distribution": sig_dist,
+        "oi_delta_coverage": {
+            "live":    oi_live,
+            "warming": oi_warming,
+            "unset":   oi_unset,
+            "total_perps": len(perps),
+            "live_pct": round(oi_live / len(perps) * 100, 1) if perps else 0,
+        },
+        "vol_velocity_coverage": {
+            "live":    vol_live,
+            "warming": vol_warming,
+            "total_perps": len(perps),
+            "live_pct": round(vol_live / len(perps) * 100, 1) if perps else 0,
+        },
+        "signal_age_bins": aged_bins,
+        "oi_history_coins": sum(1 for h in state.oi_history.values() if h),
+        "server_ts":     now,
+        "server_ts_iso": _iso_ts(now),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1071,7 +1178,7 @@ async def screener_ws(websocket: WebSocket):
 
 
 def _build_ws_snapshot(state: HyperliquidState) -> dict:
-    assets = [a for a in state.all_assets() if a.market_status == "active"]
+    assets = [a for a in state.scored_assets() if a.market_status == "active"]
     assets.sort(key=lambda a: a.overall_score or 0, reverse=True)
     rows = [_asset_to_row(a, rank=i + 1) for i, a in enumerate(assets[:300])]
     meta = _build_meta(rows, state)

@@ -1,0 +1,301 @@
+You are working in the CaelynAI backend Replit project.
+
+Goal:
+Stabilize the Hyperliquid signal engine so the frontend consistently receives OI Δ, Volume Velocity, Flow, Signal, Risk, Score, and raw market fields without frequent blanks during refresh/recalculation.
+
+Important:
+- Do NOT roll back the current Hyperliquid signal calibration.
+- Do NOT remove existing fields.
+- Do NOT break existing endpoints.
+- Do NOT change frontend response contracts except additive fields.
+- Do NOT force signal distributions.
+- This is a reliability/stability upgrade, not a scoring rewrite.
+
+Current problem:
+The frontend cleanup is done, but several backend-derived fields are still inconsistent or blank:
+- OI Δ is often blank/warming.
+- Volume Velocity is often blank/warming.
+- Flow is often blank.
+- Some other signal fields appear in-and-out across refreshes.
+- During recalculation, the UI would behave better if the backend kept returning the last completed values until the refreshed calculation is fully ready.
+
+Desired behavior:
+The backend should return last-known-good values for computed fields until the next full feature pass is complete.
+
+Do not return partially recalculated rows that blank out computed fields.
+
+Core requirement:
+Implement stable last-known-good behavior for Hyperliquid computed signal fields.
+
+The frontend should always receive:
+- latest raw market fields where available
+- last completed computed signal fields where a fresh value is not ready
+- explicit freshness/status metadata so the UI can show stale/warming safely
+
+Fields to stabilize:
+- oi_delta_5m_pct / oiDelta5mPct
+- oi_delta_15m_pct / oiDelta15mPct
+- oi_delta_1h_pct / oiDelta1hPct
+- volume_velocity_15m / volumeVelocity15m
+- volume_velocity_1h / volumeVelocity1h
+- vol_oi_ratio / volOiRatio
+- funding_label / fundingLabel
+- funding_reason / fundingReason
+- flow_label / flowLabel
+- flow_reason / flowReason
+- matrix_signal / matrixSignal
+- matrix_reason / matrixReason
+- matrix_detail / matrixDetail
+- opportunity_score / opportunityScore
+- risk_score / riskScore
+- risk_label / riskLabel
+- risk_reason / riskReason
+- liquidation fields if available
+
+Task 1 — Audit current refresh lifecycle
+Find:
+- where Hyperliquid raw market data is fetched
+- where rolling snapshots are updated
+- where compute_matrix_signals() runs
+- where /screener/snapshot rows are serialized
+- where /screener/market-matrix rows are serialized
+- whether rows can be returned while feature pass is partially done
+
+Identify if blank fields are caused by:
+- missing snapshot history
+- snapshot lookup failing
+- recalculation race
+- field naming mismatch
+- partial row replacement
+- serialization dropping values
+- frontend receiving rows before compute_matrix_signals() completes
+
+Do not perform a huge audit. Focus only on Hyperliquid signal generation and response serialization.
+
+Task 2 — Add computed-field Last Known Good cache
+Add an in-memory LKG cache keyed by asset symbol/coin.
+
+For each asset, cache the last completed computed fields:
+- OI deltas
+- volume velocities
+- vol/OI
+- funding label/reason
+- flow label/reason
+- liquidation context/bias if available
+- matrix signal/reason/detail
+- opportunity score
+- risk score/label/reason
+- timestamp of computation
+
+Use only completed feature pass outputs.
+
+If current pass cannot compute a field:
+- fall back to LKG value
+- add metadata that value is stale/fallback
+- do NOT blank it unless no LKG exists
+
+Add freshness metadata per row:
+- signalComputedAt
+- signalAgeSec
+- signalSource: "fresh" | "lkg" | "warming" | "partial"
+- oiDeltaSource: "fresh" | "lkg" | "warming"
+- volumeVelocitySource: "fresh" | "lkg" | "warming"
+- flowSource: "fresh" | "lkg" | "warming"
+
+Use snake_case equivalents on market-matrix endpoint if that endpoint uses snake_case:
+- signal_computed_at
+- signal_age_sec
+- signal_source
+- oi_delta_source
+- volume_velocity_source
+- flow_source
+
+Task 3 — Atomic feature pass publication
+Avoid publishing half-computed rows.
+
+Implement or verify this pattern:
+1. Fetch raw Hyperliquid data.
+2. Update snapshots.
+3. Compute all feature/signal fields into a temporary batch object.
+4. Validate the batch.
+5. Only after successful completion, publish/swap it as the active computed signal state.
+
+If a new feature pass fails or is incomplete:
+- keep serving the previous active computed signal state
+- log the failure
+- do not replace good fields with nulls
+
+This matters more than perfect freshness. Stale-but-valid is better than fresh-but-blank.
+
+Task 4 — Persist compact rolling snapshots
+OI Δ and Volume Velocity depend on snapshots. They should not reset completely on backend restart.
+
+Add persistence for compact Hyperliquid rolling snapshots using the safest existing project pattern:
+- existing disk cache helper, or
+- Neon if already used for durable caches, or
+- a lightweight JSONL/JSON file if that is the established pattern
+
+Do not overbuild.
+
+Persist only compact per-symbol snapshots:
+- timestamp
+- symbol/coin
+- mark
+- open_interest
+- volume_24h
+- funding_rate
+- premium
+- mark_oracle_delta
+- book_imbalance if available
+- trade_imbalance if available
+
+Cadence:
+- persist every completed feature pass, or every 60 seconds
+- keep retention for at least:
+  - 5m
+  - 15m
+  - 1h
+  - optional 24h if cheap
+- prune old snapshots to avoid unbounded growth
+
+On backend boot:
+- load persisted recent snapshots
+- seed the in-memory rolling snapshot cache
+- OI Δ / Vol Vel should recover quickly after restart instead of being blank for a long time
+
+Task 5 — Make OI Δ and Volume Velocity robust
+For OI delta:
+- If exact 15m snapshot is unavailable, use nearest snapshot within reasonable tolerance.
+- If 15m is unavailable but 1h is available, return 1h fallback and set source/fallback metadata.
+- If 5m is available, use it where 15m is not yet warmed.
+- Do not set to 0 unless it is truly zero.
+- Do not blank the field if LKG exists.
+
+For Volume Velocity:
+- If actual recent volume is unavailable and 24h volume delta is used, make sure the calculation does not fail when rolling 24h volume decreases/resets.
+- Guard against negative deltas from source resets.
+- If volume delta cannot be calculated, use LKG if available.
+- If no LKG exists, return null with source="warming".
+
+Task 6 — Make Flow always classify safely
+flowLabel should almost never be blank.
+
+Even when OI Δ / Vol Vel / liquidation are unavailable, classify using available inputs:
+- trade imbalance
+- book imbalance
+- price momentum
+- funding
+- existing old signal fields
+- raw volume/OI context
+
+Fallback flow labels:
+- Buying
+- Selling
+- Building
+- Mixed
+- Thin
+- Squeeze
+- Flush
+- Absorbing
+
+If insufficient data:
+- return "Mixed" or "Neutral"
+- do not return blank
+
+Task 7 — Liquidation feed: additive only
+If real Hyperliquid liquidation data can be wired safely, do it.
+If not, keep liquidation fields null/default and do not let that blank Flow or Signal.
+
+Fields:
+- long_liq_5m / longLiq5m
+- short_liq_5m / shortLiq5m
+- long_liq_15m / longLiq15m
+- short_liq_15m / shortLiq15m
+- long_liq_1h / longLiq1h
+- short_liq_1h / shortLiq1h
+- liquidation_bias_15m / liquidationBias15m
+- liquidation_context / liquidationContext
+
+Missing liquidation data should never penalize opportunity score or blank flow.
+
+Task 8 — Response consistency across endpoints
+Ensure both endpoints expose consistent values:
+- /screener/snapshot uses camelCase if that is current convention
+- /screener/market-matrix uses snake_case if that is current convention
+
+But the values should match.
+
+Validate that the same asset has consistent:
+- matrixSignal/matrix_signal
+- opportunityScore/opportunity_score
+- riskLabel/risk_label
+- flowLabel/flow_label
+- OI delta
+- volume velocity
+
+Task 9 — Add diagnostics
+Add or update a lightweight diagnostics endpoint/log for Hyperliquid signal health.
+
+Report:
+- total assets
+- assets with fresh signal fields
+- assets using LKG signal fields
+- assets warming
+- assets with OI delta 5m
+- assets with OI delta 15m
+- assets with OI delta 1h
+- assets with volume velocity 15m
+- assets with volume velocity 1h
+- assets with flowLabel non-blank
+- latest completed feature pass timestamp
+- current feature pass status
+- snapshot source: memory/disk/neon
+- persisted snapshot count
+- signal distribution
+- risk distribution
+
+If there is already an admin/debug route pattern, use it.
+
+Task 10 — Validation
+After implementation:
+
+A. Validate immediately after boot:
+- endpoints return rows
+- raw fields are present
+- signal fields are present or source="lkg"/"warming"
+- flowLabel is not blank
+- no row crashes serialization
+- OI/Vol fields are not incorrectly 0
+
+B. Validate after 5 minutes:
+- OI 5m coverage improves
+- volume velocity coverage improves
+
+C. Validate after 15 minutes:
+- OI 15m coverage improves
+- volume velocity 15m coverage improves
+
+D. Restart validation:
+- restart backend
+- confirm persisted snapshots reload
+- OI/Vol fields do not fully reset to blank if persisted snapshots exist
+- LKG computed fields remain available until fresh pass completes
+
+E. Endpoint consistency:
+- compare one symbol across /screener/snapshot and /screener/market-matrix
+- confirm values match despite camelCase/snake_case naming
+
+Report back:
+- files changed
+- root cause of blanks
+- how LKG cache works
+- whether feature pass publication is atomic
+- snapshot persistence method and retention
+- diagnostics endpoint/log added
+- before/after coverage:
+  - OI delta coverage
+  - volume velocity coverage
+  - nonblank flow coverage
+  - nonblank signal coverage
+- restart behavior
+- any remaining limitations

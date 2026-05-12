@@ -76,6 +76,13 @@ class HyperliquidState:
         # Timestamp of last OI cap refresh
         self.oi_caps_ts: Optional[float] = None
 
+        # ── Last-known-good complete feature-pass snapshot ─────────────────
+        # Atomically swapped at the end of each successful run_full_feature_pass().
+        # Endpoints read from this dict so they always see a coherent, fully-scored
+        # universe rather than a partially-updated state.assets mid-pass.
+        self.lkg_assets: dict[str, ScreenerAsset] = {}
+        self.lkg_pass_ts: Optional[float] = None
+
         # Timing
         self.boot_ts: Optional[float] = None
         self.last_mids_ts: Optional[float] = None
@@ -114,6 +121,18 @@ class HyperliquidState:
 
     def all_assets(self) -> list[ScreenerAsset]:
         """Return a stable snapshot of all current assets."""
+        return list(self.assets.values())
+
+    def scored_assets(self) -> list[ScreenerAsset]:
+        """
+        Return assets from the last-known-good complete feature pass if available,
+        otherwise fall back to the live (possibly mid-pass) assets dict.
+
+        Use this in endpoints instead of all_assets() to avoid serving partial
+        signal states during a running feature pass.
+        """
+        if self.lkg_assets:
+            return list(self.lkg_assets.values())
         return list(self.assets.values())
 
     def perp_assets(self) -> list[ScreenerAsset]:

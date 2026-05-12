@@ -415,6 +415,11 @@ def asset_to_matrix_row(asset: ScreenerAsset, rank: Optional[int] = None) -> dic
         "risk_score":          asset.risk_score,
         "risk_label":          asset.risk_label,
         "risk_reason":         asset.risk_reason,
+
+        # ── Freshness metadata ─────────────────────────────────────────────
+        "signal_computed_at":   asset.signal_computed_at,
+        "oi_delta_source":      asset.oi_delta_source,
+        "vol_velocity_source":  asset.vol_velocity_source,
     }
 
 

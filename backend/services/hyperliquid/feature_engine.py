@@ -1133,6 +1133,11 @@ def compute_matrix_signals(asset: ScreenerAsset, market_regime: str = "MIXED") -
     updates["matrix_signal_reason"] = matrix_signal_reason
     updates["matrix_signal_detail"] = matrix_signal_detail
 
+    # ── Freshness metadata ─────────────────────────────────────────────────────
+    updates["signal_computed_at"]    = time.time()
+    updates["oi_delta_source"]       = "live"    if oi_15m_raw is not None else "warming"
+    updates["vol_velocity_source"]   = "live"    if vol_imp_15m is not None else "warming"
+
     return updates
 
 
@@ -1263,10 +1268,17 @@ def run_full_feature_pass(state: HyperliquidState):
     for asset in ranked:
         state.assets[asset.coin] = asset
 
+    # ── Atomic LKG swap ───────────────────────────────────────────────────────
+    # After the full pass is complete and all scores are final, atomically publish
+    # the new snapshot to state.lkg_assets. Endpoints read from lkg_assets so they
+    # always see a coherent, fully-scored universe — never a partial mid-pass state.
+    state.lkg_assets = dict(state.assets)
+    state.lkg_pass_ts = time.time()
+
     if skipped_non_universe:
         print(f"[HL][feature] Skipped {skipped_non_universe} non-universe assets during feature pass")
 
     print(f"[HL][feature] Market regime: {market_regime} "
-          f"(scored {len(updated)} assets)")
+          f"(scored {len(updated)} assets, lkg updated)")
 
     return len(updated)

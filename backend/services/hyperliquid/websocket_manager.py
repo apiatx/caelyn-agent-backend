@@ -55,6 +55,81 @@ _WS_URL = "wss://api.hyperliquid.xyz/ws"
 _HIP3_CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "hyperliquid_hip3_cache.json"
 _HIP3_CACHE_MAX_AGE_S = 86400   # 24 hours — still useful even if stale; API refresh overwrites
 
+# ── Disk snapshot for OI history (enables OI Δ on first cycle after restart) ──
+_SIGNAL_SNAPSHOT_PATH = Path(__file__).parent.parent.parent / "data" / "hyperliquid_signal_snapshots.json"
+_SIGNAL_SNAPSHOT_MAX_AGE_S = 7200   # discard if older than 2h — history would be useless
+
+
+def _save_signal_snapshots(state: HyperliquidState) -> None:
+    """
+    Persist per-coin OI history snapshots to disk.
+
+    Saves up to the last 10 (ts, oi_usd) pairs per coin from state.oi_history.
+    On next restart, _load_signal_snapshots() restores these into state.oi_history
+    so OI Δ fields (oi_delta_5m/15m/1h) become available after the first 60s cycle
+    rather than requiring an hour of warm-up.
+
+    Atomic write: .tmp → replace to prevent corrupt reads on crash.
+    """
+    try:
+        snapshots: dict = {}
+        for coin, history in state.oi_history.items():
+            snaps = list(history)
+            if not snaps:
+                continue
+            snapshots[coin] = [
+                {"ts": ts, "oi_usd": oi_usd}
+                for ts, oi_usd in snaps[-10:]   # last 10 ≈ ~10 min at 60s cadence
+            ]
+        if not snapshots:
+            return
+        _SIGNAL_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"saved_at": time.time(), "coin_count": len(snapshots), "snapshots": snapshots}
+        tmp = _SIGNAL_SNAPSHOT_PATH.with_suffix(".tmp")
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        tmp.replace(_SIGNAL_SNAPSHOT_PATH)
+    except Exception as exc:
+        print(f"[HL][signal_snapshots] Save error: {exc}")
+
+
+def _load_signal_snapshots(state: HyperliquidState) -> int:
+    """
+    Restore per-coin OI history from disk into state.oi_history.
+
+    Called during the boot sequence (before the initial feature pass) so that
+    _compute_oi_changes() can immediately produce OI Δ values on the first 60s cycle.
+    Returns the number of coins whose histories were restored.
+    Snapshots older than _SIGNAL_SNAPSHOT_MAX_AGE_S are silently discarded.
+    """
+    try:
+        if not _SIGNAL_SNAPSHOT_PATH.exists():
+            return 0
+        with open(_SIGNAL_SNAPSHOT_PATH) as f:
+            data = json.load(f)
+        age_s = time.time() - data.get("saved_at", 0)
+        if age_s > _SIGNAL_SNAPSHOT_MAX_AGE_S:
+            print(f"[HL][signal_snapshots] Snapshot too old ({age_s / 3600:.1f}h), discarding")
+            return 0
+        snapshots = data.get("snapshots", {})
+        restored = 0
+        for coin, snaps in snapshots.items():
+            for entry in snaps:
+                ts     = entry.get("ts")
+                oi_usd = entry.get("oi_usd")
+                if ts and oi_usd:
+                    state.oi_history[coin].append((ts, oi_usd))
+            if snaps:
+                restored += 1
+        print(
+            f"[HL][signal_snapshots] Restored OI history for {restored} coins "
+            f"({sum(len(s) for s in snapshots.values())} points, age={age_s / 60:.1f} min)"
+        )
+        return restored
+    except Exception as exc:
+        print(f"[HL][signal_snapshots] Load error: {exc}")
+        return 0
+
 
 def _save_hip3_cache(state: HyperliquidState) -> None:
     """Persist all HIP-3 assets (coin contains ':') to disk after each enrich cycle."""
@@ -275,6 +350,12 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
     # 6b. OI caps for HIP-3 DEXes + main crypto perps at cap
     print("[HL][boot] Fetching OI caps...")
     await _refresh_oi_caps(state, client)
+
+    # 6c. Restore OI history from disk — enables OI Δ on first 60s cycle after restart
+    print("[HL][boot] Loading signal snapshots...")
+    n_restored = _load_signal_snapshots(state)
+    if n_restored > 0:
+        print(f"[HL][boot] OI history restored for {n_restored} coins — OI Δ ready on first cycle")
 
     # 7. Initial feature pass
     print("[HL][boot] Running feature pass...")
@@ -653,6 +734,7 @@ async def _periodic_feature_recompute(state: HyperliquidState):
             _compute_oi_changes(state)
             run_full_feature_pass(state)
             _save_score_snapshots(state)
+            _save_signal_snapshots(state)   # persist OI history for fast recovery after restart
         except Exception as e:
             print(f"[HL][feature_recompute] Error: {e}")
 
