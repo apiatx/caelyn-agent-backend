@@ -21,8 +21,8 @@ except ImportError:
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "caelyn_default_jwt_secret_change_in_production")
 JWT_ALGORITHM = "HS256"
-TOKEN_EXPIRY_REMEMBER = timedelta(days=30)
-TOKEN_EXPIRY_SESSION = timedelta(hours=24)
+TOKEN_EXPIRY_REMEMBER = timedelta(days=90)
+TOKEN_EXPIRY_SESSION = timedelta(days=7)
 
 AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
 AUTH_PASSWORD_HASH = os.getenv("AUTH_PASSWORD_HASH", "")
