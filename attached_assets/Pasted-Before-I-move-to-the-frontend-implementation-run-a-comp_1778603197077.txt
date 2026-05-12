@@ -1,0 +1,265 @@
+Before I move to the frontend implementation, run a complete backend agent-context coverage validation.
+
+Goal:
+Verify whether the chat agent can access the data needed from every major page on demand, and whether the new screen_context path will preserve page-visible context once the frontend sends it.
+
+Do not implement new features unless a tiny validation fix is required.
+Do not refactor.
+Return a pass/fail matrix with file/function references.
+
+Pages to validate:
+1. Options Flow
+2. Screener
+3. Themes
+4. Macro
+5. Social / X Consensus
+6. Hyperliquid
+7. Calendar / Earnings
+8. Watchlist
+9. Portfolio
+10. Whale Watch
+11. Insider Activity
+12. TradingView / frontend-only chart context
+
+Validation A — /api/query screen_context path
+For a mocked /api/query request with screen_context containing:
+- route
+- page
+- tab
+- selected_symbol
+- visible_symbols
+- filters
+- sort
+- visible_rows
+- rendered_sections
+- tradingview_context
+- freshness/cache metadata
+
+Confirm:
+1. QueryRequest accepts screen_context.
+2. screen_context is not dropped by schema validation.
+3. screen_context is compressed safely.
+4. screen_context reaches market_data["_screen_context"].
+5. screen_context reaches the final LLM prompt/context bundle.
+6. screen_context is available before final synthesis.
+7. screen_context can influence routing for ambiguous queries like “what looks good here?”
+
+Validation B — page-by-page backend data access
+For each page, confirm the agent has an accessible backend category/data_router path.
+
+Return this table:
+
+Page | Agent category | Endpoint/service source | Can agent fetch on demand? | Uses cache/LKG? | Main fields available | Missing fields | Pass/Fail | File/function refs
+
+Validate each page specifically:
+
+1. Options Flow
+Confirm agent can access:
+- unusual options rows
+- symbol
+- call/put
+- strike
+- expiration
+- premium
+- volume
+- open interest
+- sweep/OTM flags
+- unusual score/signal
+- net premium
+- category/tab
+- timestamp/cache status
+
+2. Screener
+Confirm agent can access:
+- screener rows
+- ticker
+- company
+- price
+- change %
+- volume
+- relative volume
+- market cap
+- theme
+- technical/fundamental fields
+- current filters if provided through screen_context
+- sort state if provided through screen_context
+
+3. Themes
+Confirm agent can access:
+- theme relative strength
+- theme performance
+- timeframe
+- ETF/ticker mappings
+- parent sector/classification
+- theme leaders
+- cache freshness
+
+4. Macro
+Confirm agent can access:
+- macro regime
+- treasury/rates data
+- FRED/economic indicators if currently wired
+- market risk/risk premium fields if available
+- economic releases
+- cache freshness
+
+5. Social / X Consensus
+Confirm agent can access:
+- cached X consensus dashboard
+- x_consensus_weekly.json or canonical cache path
+- trend_leaders
+- momentum_alerts
+- portfolio_risk
+- contrarian_signals
+- ticker mentions
+- consensus scores
+- sentiment acceleration
+- source freshness
+Confirm this does not trigger live Grok/XAI calls unless explicitly intended.
+
+6. Hyperliquid
+Confirm agent can access:
+- same screener snapshot as page
+- asset/symbol
+- overall_score
+- composite_signal
+- funding
+- open interest
+- spread_bps
+- rank
+- market/category
+- timestamp/cache status
+Confirm fallback behavior if in-memory state is empty after restart.
+
+7. Calendar / Earnings
+Confirm agent can access:
+- earnings events
+- ticker
+- company
+- report date/time
+- next earnings date
+- last earnings
+- EPS estimate/actual/surprise
+- revenue estimate/actual/surprise
+- beat/miss
+- selected tab/toggle/date range through screen_context
+- watchlist/portfolio filtered earnings if backend supports it or if frontend sends visible rows
+
+8. Watchlist
+Confirm agent can access:
+- actual saved Neon watchlist tickers
+- symbols
+- company/name if available
+- page-visible quote/signal fields if provided through screen_context
+- ambient watchlist tickers in _user_context for all relevant query categories
+Confirm it does not trigger fresh quote/fundamental API calls on every query.
+
+9. Portfolio
+Confirm agent can access:
+- actual portfolio holdings
+- symbols
+- quantity/value/weight/PnL if backend stores them
+- exposure/theme if available
+- portfolio context in _user_context where relevant
+- page-visible portfolio metrics if provided through screen_context
+
+10. Whale Watch
+Confirm agent can access:
+- whale_watch_service or equivalent
+- institution/fund/entity
+- ticker
+- transaction/filing type
+- value
+- shares
+- position change
+- date
+- signal/score if available
+- cache/freshness
+
+11. Insider Activity
+Confirm agent can access:
+- rich Form 4 / insider conviction-scored data
+- ticker
+- insider name/entity
+- role
+- transaction type
+- buy/sell
+- shares
+- value
+- filing date
+- conviction score
+- signal/rationale
+- cache/freshness
+Confirm insider aliases do not route to generic market_scan.
+
+12. TradingView / chart widgets
+Confirm:
+- Backend cannot read TradingView iframe/widget internals directly.
+- Backend preserves tradingview_context if frontend sends it.
+- tradingview_context reaches final LLM context.
+- Required frontend fields are:
+  - raw_symbol
+  - tradingview_symbol
+  - timeframe/interval
+  - active_widget_symbol
+  - layout
+  - source
+
+Validation C — ambiguous “here” routing
+For each page, test or reason from code whether this works:
+
+query = "what looks good here?"
+screen_context.page = PAGE_NAME
+
+Expected category:
+- options_flow → options_flow
+- screener → screener
+- themes → themes/thematic
+- macro → macro
+- social → social_x or x_consensus_dashboard
+- hyperliquid → hyperliquid
+- calendar + tab earnings → earnings/calendar
+- watchlist → watchlist/portfolio_review/user_context
+- portfolio → portfolio_review
+- whale_watch → whale_watch
+- insider_activity → insider_activity
+
+Return:
+Page | screen_context.page | expected category | actual category | Pass/Fail
+
+Validation D — frontend-visible data parity
+For every page, classify backend status:
+
+1. Fully backend-reconstructable
+2. Backend can fetch source data but not current filters/sort/visible rows
+3. Requires frontend screen_context for exact visible state
+4. Frontend-only and requires screen_context
+5. Missing backend data arm
+
+Return:
+Page | Status 1-5 | Explanation | Required frontend context
+
+Important:
+Most pages will still require frontend screen_context for exact visible state. That is okay. The goal is to clearly separate:
+- backend on-demand data access
+- frontend screen-visible context
+- TradingView frontend-only context
+
+Validation E — final answer readiness
+Confirm the final LLM can receive a combined context containing:
+- backend data_router output
+- _screen_context
+- _user_context
+- shared context broker overlays
+- collaborator findings if enabled
+
+Return:
+Pass/Fail with file/function refs.
+
+Final output:
+1. Executive verdict:
+   - Is backend ready for frontend screen_context implementation? Yes/No/Partial
+2. Page-by-page matrix
+3. Missing backend gaps, if any
+4. Frontend-required context by page
+5. Any blocking issues before frontend starts
