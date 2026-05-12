@@ -1,0 +1,49 @@
+Great. Now do a validation-only pass. Do not add new features.
+
+Goal:
+Prove the Watchlist upload, Watchlist page, Portfolio page, and Earnings Watchlist/Portfolio scopes are now cache-first and not making duplicate FMP calls.
+
+Validation requirements:
+
+1. CSV upload with complete fundamentals
+- Upload or simulate a CSV containing duplicate tickers and complete fundamental/company fields.
+- Confirm duplicate tickers are collapsed.
+- Confirm uploaded fundamentals are saved.
+- Confirm FMP calls made = 0 for those symbols.
+- Show the exact log output from [ENRICHER] Neon cache and any FMP governor/call logs.
+
+2. CSV upload with existing tickers already in Neon
+- Use tickers already present in screener_fundamentals_cache.
+- Confirm Neon hits > 0.
+- Confirm only misses trigger FMP.
+- Confirm duplicate tickers do not create duplicate FMP calls.
+
+3. Watchlist page load
+- Load the saved watchlist.
+- Confirm data is read from Neon/JSON/cache first.
+- Confirm normal page load does not trigger fundamentals FMP calls.
+- Confirm quote/volume comes from the quote service path, not FMP fundamentals enrichment.
+
+4. Portfolio earnings scope
+- Hit the earnings endpoint with scope=portfolio.
+- Confirm it returns events for portfolio symbols if those symbols have earnings.
+- Confirm it no longer returns empty because of the old bad import.
+- Confirm symbol_count and deduped_symbol_count if metadata exists.
+
+5. Watchlist earnings scope
+- Hit the earnings endpoint with scope=watchlist.
+- Confirm it uses saved watchlist symbols.
+- Confirm repeated requests reuse cached earnings data.
+- Confirm second request has fmp_calls_made = 0 or logs proving no fresh FMP call.
+
+6. Diagnostics
+- If the endpoints do not currently return fmp_calls_made/source/cache metadata, add minimal response metadata or logs only.
+- Do not redesign the API.
+- Do not touch frontend yet unless backend response contract is confirmed.
+
+Deliver:
+- Exact endpoints tested.
+- Exact commands or curl requests used.
+- Logs showing FMP avoided.
+- Whether anything still causes FMP calls on upload/page load/tab switch.
+- Any frontend changes required next.
