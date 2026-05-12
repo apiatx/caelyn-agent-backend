@@ -2,5 +2,51 @@
   {
     "scan_ts": "TEST",
     "test": true
+  },
+  {
+    "scan_ts": "2026-01-01T08:00:00+00:00",
+    "cache_write_status": "aborted_empty_phase1",
+    "sections_missing": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "lkg_sections_used": [],
+    "error": "Phase-1 returned no data from any batch \u2014 existing cache kept"
+  },
+  {
+    "scan_ts": "2026-01-02T08:00:00+00:00",
+    "cache_write_status": "written_clean",
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 15,
+    "mention_records": 14,
+    "error": null
+  },
+  {
+    "scan_ts": "2026-01-03T08:00:00+00:00",
+    "cache_write_status": "written_lkg_partial",
+    "sections_ok": [
+      "_mention_data",
+      "top_tickers"
+    ],
+    "sections_missing": [
+      "_backend_ranked",
+      "consensus_picks"
+    ],
+    "lkg_sections_used": [
+      "_backend_ranked",
+      "consensus_picks"
+    ],
+    "ticker_count": 11,
+    "mention_records": 5,
+    "error": null
   }
 ]

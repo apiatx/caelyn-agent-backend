@@ -376,10 +376,25 @@ def load_scan_diagnostics() -> list:
 def _save_disk_cache(data: dict) -> None:
     try:
         _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        # Rotate: current → prior before writing new current.
+        # Rotate current → prior ONLY when current is a clean scan (no LKG sections).
+        # This guarantees prior always holds the last genuinely full scan, so
+        # future LKG merges always fall back to truly clean data even after
+        # many consecutive bad runs.  A merged snapshot that rotated into prior
+        # is still fine data-wise but we prefer the last clean one as anchor.
         if _CACHE_PATH.exists():
             try:
-                _PRIOR_CACHE_PATH.write_text(_CACHE_PATH.read_text())
+                _current_text = _CACHE_PATH.read_text()
+                _current_json = json.loads(_current_text)
+                _current_is_clean = not (_current_json.get("_lkg_sections_used") or [])
+                if _current_is_clean:
+                    _PRIOR_CACHE_PATH.write_text(_current_text)
+                    print("[X_CONSENSUS] Prior snapshot updated (current was clean)")
+                else:
+                    print(
+                        "[X_CONSENSUS] Prior snapshot preserved — current has LKG "
+                        f"sections {_current_json.get('_lkg_sections_used')}; "
+                        "keeping last clean prior intact"
+                    )
             except Exception as e:
                 print(f"[X_CONSENSUS] Prior cache rotate error: {e}")
         data["_saved_at"] = time.time()
@@ -836,6 +851,21 @@ async def _run_refresh(data_service) -> Optional[dict]:
 
     if not combined_data:
         print("[X_CONSENSUS] Phase-1 returned nothing — aborting refresh (keep existing cache)")
+        _append_scan_diagnostics({
+            "scan_ts":            datetime.now(timezone.utc).isoformat(),
+            "accounts_count":     len(X_SELECT_ACCOUNTS),
+            "batch_count":        len(batches),
+            "batches_returned":   0,
+            "sections_ok":        [],
+            "sections_missing":   ["_backend_ranked", "_mention_data", "consensus_picks", "top_tickers"],
+            "lkg_sections_used":  [],
+            "ticker_count":       0,
+            "mention_records":    0,
+            "consensus_picks":    0,
+            "top_tickers":        0,
+            "cache_write_status": "aborted_empty_phase1",
+            "error":              "Phase-1 returned no data from any batch — existing cache kept",
+        })
         return None
 
     # ── Backend scoring ───────────────────────────────────────────────────
@@ -978,6 +1008,7 @@ async def _run_refresh(data_service) -> Optional[dict]:
         )
 
     # ── Diagnostics log ───────────────────────────────────────────────────────
+    _write_status = "written_lkg_partial" if _lkg_merged else "written_clean"
     _append_scan_diagnostics({
         "scan_ts":            datetime.now(timezone.utc).isoformat(),
         "accounts_count":     len(X_SELECT_ACCOUNTS),
@@ -990,7 +1021,7 @@ async def _run_refresh(data_service) -> Optional[dict]:
         "mention_records":    len(snapshot.get("_mention_data") or []),
         "consensus_picks":    len((snapshot.get("raw") or {}).get("consensus_picks") or []),
         "top_tickers":        len(snapshot.get("top_tickers") or []),
-        "cache_write_status": "written",
+        "cache_write_status": _write_status,
         "error":              None,
     })
 
