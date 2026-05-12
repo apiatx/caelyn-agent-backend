@@ -2505,6 +2505,11 @@ class QueryRequest(BaseModel):
     # Phase 0 bridges this to collab_preset so all downstream logic stays unchanged.
     # If both are provided, collab_preset wins.
     collaboration_mode: Optional[str] = None
+    # screen_context: page-level snapshot injected by the frontend on every /api/query call.
+    # Contains the current page slug, active tab, visible symbols list, and top visible rows
+    # so the agent can tailor its reasoning to what the user is actually looking at.
+    # All fields are optional — absence of any key must be handled gracefully.
+    screen_context: Optional[dict] = None
 
 @traceable(name="main.build_meta")
 def _build_meta(req_id: str, preset_intent=None, conv_id=None, routing=None, timing_ms=None, reasoning_model=None):
@@ -3545,6 +3550,15 @@ async def query_agent(
         print(f"[STREAM] Starting _stream_query for req_id={req_id}")
         if agent is None:
             raise RuntimeError("Agent not initialized — server startup may have failed. Check [INIT] logs.")
+        _sc = body.screen_context or {}
+        _sc_page = _sc.get("page") or _sc.get("route") or ""
+        _sc_symbols = _sc.get("visible_symbols") or []
+        _sc_rows = _sc.get("visible_rows_count") or len(_sc.get("visible_rows") or [])
+        if _sc:
+            print(
+                f"[SCREEN_CTX] page={_sc_page!r} | tab={_sc.get('tab', '')!r} | "
+                f"symbols={len(_sc_symbols)} | visible_rows={_sc_rows}"
+            )
         task = asyncio.create_task(
             agent.handle_query(
                 user_query,
@@ -3559,6 +3573,7 @@ async def query_agent(
                 user_id=_user_id,
                 reasoning_mode=body.reasoning_mode,
                 collab_preset=body.collab_preset,
+                screen_context=body.screen_context,
             )
         )
 

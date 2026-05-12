@@ -16,6 +16,16 @@ MAX_TOTAL_CHARS = 80000
 MAX_ARRAY_ITEMS = 15
 MAX_STRING_LENGTH = 200
 MAX_DESCRIPTION_LENGTH = 100
+MAX_QUALITATIVE_LENGTH = 500
+
+# Fields that carry meaningful qualitative text — truncated at 500 chars instead of 200
+QUALITATIVE_FIELDS: frozenset[str] = frozenset({
+    "summary", "analysis", "rationale", "thesis", "explanation",
+    "notes", "context", "why_trending", "catalyst", "grok_analysis",
+    "insight", "narrative", "commentary", "signal", "reasoning",
+    "outlook", "comment", "detail", "overview", "description_long",
+    "market_commentary", "setup_rationale", "conviction_reason",
+})
 
 
 STRIP_FIELDS = {
@@ -70,8 +80,9 @@ def _compress_value(value, key=""):
         return None
 
     if isinstance(value, str):
-        if len(value) > MAX_STRING_LENGTH:
-            return value[:MAX_STRING_LENGTH] + "..."
+        max_len = MAX_QUALITATIVE_LENGTH if key in QUALITATIVE_FIELDS else MAX_STRING_LENGTH
+        if len(value) > max_len:
+            return value[:max_len] + "..."
         return value
 
     if isinstance(value, (int, float, bool)):
@@ -184,6 +195,11 @@ def compress_for_claude(market_data: dict, category: str) -> dict:
 
     raw_size = len(json.dumps(market_data, default=str))
 
+    # Passthrough keys that must survive compression unchanged.
+    # _compress_generic skips _-prefixed keys; we preserve them explicitly.
+    _passthrough_keys = ("_screen_context",)
+    _saved_passthrough = {k: market_data[k] for k in _passthrough_keys if k in market_data}
+
     compressors = {
         "best_trades": _compress_best_trades,
         "briefing": _compress_briefing,
@@ -201,6 +217,9 @@ def compress_for_claude(market_data: dict, category: str) -> dict:
         compressed = compressor(market_data)
     else:
         compressed = _compress_generic(market_data)
+
+    # Restore passthrough keys after compression
+    compressed.update(_saved_passthrough)
 
     compressed_size = len(json.dumps(compressed, default=str))
     compressed["_compression"] = {

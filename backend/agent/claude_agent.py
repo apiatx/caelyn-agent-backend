@@ -269,9 +269,9 @@ class TradingAgent:
         }
 
     @traceable(name="caelyn_main_agent")
-    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default", reasoning_mode: str = None, collab_preset: str = None) -> dict:
+    async def handle_query(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default", reasoning_mode: str = None, collab_preset: str = None, screen_context: dict = None) -> dict:
         try:
-            return await self._handle_query_inner(user_prompt, history=history, preset_intent=preset_intent, request_id=request_id, csv_data=csv_data, chatbox_mode=chatbox_mode, reasoning_model=reasoning_model, collab_agents=collab_agents, primary_model=primary_model, user_id=user_id, reasoning_mode=reasoning_mode, collab_preset=collab_preset)
+            return await self._handle_query_inner(user_prompt, history=history, preset_intent=preset_intent, request_id=request_id, csv_data=csv_data, chatbox_mode=chatbox_mode, reasoning_model=reasoning_model, collab_agents=collab_agents, primary_model=primary_model, user_id=user_id, reasoning_mode=reasoning_mode, collab_preset=collab_preset, screen_context=screen_context)
         except Exception as e:
             import traceback
             print(f"[AGENT] FATAL: handle_query crashed with unhandled exception: {e}")
@@ -287,7 +287,7 @@ class TradingAgent:
             }
 
     @traceable(name="handle_query_inner")
-    async def _handle_query_inner(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default", reasoning_mode: str = None, collab_preset: str = None) -> dict:
+    async def _handle_query_inner(self, user_prompt: str, history: list = None, preset_intent: str = None, request_id: str = "", csv_data: str = None, chatbox_mode: bool = False, reasoning_model: str = "agent_collab", collab_agents: list = None, primary_model: str = None, user_id: str = "default", reasoning_mode: str = None, collab_preset: str = None, screen_context: dict = None) -> dict:
         start_time = time.time()
         if history is None:
             history = []
@@ -296,6 +296,13 @@ class TradingAgent:
         print(f"[AGENT] === NEW REQUEST === (followup={is_followup}, history_turns={len(history)}, preset={preset_intent or 'none'})")
         print(f"[AGENT] Query: {user_prompt[:100]}")
         print(f"[AGENT] preset_intent raw value: '{preset_intent}' (type={type(preset_intent).__name__})")
+        # Diagnostic: log screen_context summary when present
+        if screen_context and isinstance(screen_context, dict):
+            _scp = screen_context.get("page") or screen_context.get("route") or ""
+            _scs = screen_context.get("visible_symbols") or []
+            _scr = screen_context.get("visible_rows_count") or len(screen_context.get("visible_rows") or [])
+            print(f"[SCREEN_CTX] Received: page={_scp!r} | tab={screen_context.get('tab','')!r} | "
+                  f"symbols={len(_scs)} | visible_rows={_scr}")
 
         reasoning_brief = None
 
@@ -705,6 +712,29 @@ class TradingAgent:
             else:
                 category = query_info.get("category", "general")
 
+            # ── Screen context page hint (preset path) ────────────────────────
+            # If the user is on a specific page and asked a generic question,
+            # override the ambiguous category to match the active page.
+            if screen_context and isinstance(screen_context, dict):
+                _PAGE_TO_CAT: dict[str, str] = {
+                    "hyperliquid": "hyperliquid", "hl": "hyperliquid",
+                    "perps": "hyperliquid", "crypto_perps": "hyperliquid",
+                    "whale_watch": "whale_watch", "whale-watch": "whale_watch",
+                    "insider": "insider_activity",
+                    "insider_activity": "insider_activity",
+                    "insider-activity": "insider_activity",
+                    "social_x": "social_x", "social-x": "social_x",
+                    "x_dashboard": "social_x",
+                }
+                _AMBIENT = frozenset({"general", "chat", "market_scan", "cross_asset_trending"})
+                _raw_pg = screen_context.get("page") or screen_context.get("route") or ""
+                _pg_slug = _raw_pg.lower().strip("/").split("/")[-1].replace("-", "_")
+                _pg_mapped = _PAGE_TO_CAT.get(_pg_slug)
+                if _pg_mapped and category in _AMBIENT:
+                    print(f"[SCREEN_CTX] page_hint override (preset): {category} → {_pg_mapped} (page={_pg_slug!r})")
+                    category = _pg_mapped
+                    query_info["category"] = _pg_mapped
+
             # Force category override for prediction_markets preset —
             # prevents _refine_plan_with_query or _plan_to_query_info from
             # reclassifying to a different category (e.g. "investments")
@@ -798,6 +828,27 @@ class TradingAgent:
             routing_confidence = query_info.pop("_routing_confidence", "low")
             query_info["original_prompt"] = user_prompt
             category = query_info.get("category", "general")
+
+            # ── Screen context page hint (orchestration path) ─────────────────
+            if screen_context and isinstance(screen_context, dict):
+                _PAGE_TO_CAT2: dict[str, str] = {
+                    "hyperliquid": "hyperliquid", "hl": "hyperliquid",
+                    "perps": "hyperliquid", "crypto_perps": "hyperliquid",
+                    "whale_watch": "whale_watch", "whale-watch": "whale_watch",
+                    "insider": "insider_activity",
+                    "insider_activity": "insider_activity",
+                    "insider-activity": "insider_activity",
+                    "social_x": "social_x", "social-x": "social_x",
+                    "x_dashboard": "social_x",
+                }
+                _AMBIENT2 = frozenset({"general", "chat", "market_scan", "cross_asset_trending"})
+                _raw_pg2 = screen_context.get("page") or screen_context.get("route") or ""
+                _pg_slug2 = _raw_pg2.lower().strip("/").split("/")[-1].replace("-", "_")
+                _pg_mapped2 = _PAGE_TO_CAT2.get(_pg_slug2)
+                if _pg_mapped2 and category in _AMBIENT2:
+                    print(f"[SCREEN_CTX] page_hint override (orch): {category} → {_pg_mapped2} (page={_pg_slug2!r})")
+                    category = _pg_mapped2
+                    query_info["category"] = _pg_mapped2
 
             plan = query_info.get("orchestration_plan")
             if not plan:
@@ -1012,6 +1063,68 @@ class TradingAgent:
                     print(f"[USER_CONTEXT] Portfolio injected for user={user_id!r}: {list(_uc.keys())}")
             except Exception as _uc_err:
                 print(f"[USER_CONTEXT] Skipped (non-fatal): {_uc_err}")
+
+        # ── Watchlist ambient context (companion to portfolio exposure) ────────
+        if not is_followup and market_data and isinstance(market_data, dict) \
+                and category not in _USER_CTX_EXCLUDED:
+            try:
+                from services.user_context_service import get_watchlist_slice
+                _wl = get_watchlist_slice(user_id)
+                if _wl:
+                    if "_user_context" in market_data and isinstance(market_data["_user_context"], dict):
+                        market_data["_user_context"].update(_wl)
+                    else:
+                        market_data["_user_context"] = _wl
+                    print(f"[USER_CONTEXT] Watchlist ambient: {_wl.get('user_watchlist_tickers', '')[:60]}")
+            except Exception as _wl_err:
+                print(f"[USER_CONTEXT] Watchlist skipped (non-fatal): {_wl_err}")
+
+        # ── Screen context injection — agent sees what the user sees ──────────
+        if screen_context and isinstance(screen_context, dict) and isinstance(market_data, dict):
+            try:
+                _sc_slim: dict = {}
+                for _f in ("page", "route", "tab", "selected_symbol"):
+                    _v = screen_context.get(_f)
+                    if _v:
+                        _sc_slim[_f] = str(_v)[:80]
+                _vs = screen_context.get("visible_symbols") or []
+                if isinstance(_vs, list) and _vs:
+                    _sc_slim["visible_symbols"] = [str(s) for s in _vs[:20]]
+                _vrc = screen_context.get("visible_rows_count") or len(screen_context.get("visible_rows") or [])
+                if _vrc:
+                    _sc_slim["visible_rows_count"] = int(_vrc)
+                _vr = screen_context.get("visible_rows") or []
+                if isinstance(_vr, list) and _vr:
+                    _KEEP_FIELDS = frozenset((
+                        "ticker", "symbol", "coin", "name", "score", "overall_score",
+                        "composite_signal", "change_24h", "pct_change_24h", "volume",
+                        "sector", "rating", "signal", "pattern", "market_type",
+                    ))
+                    _slim_rows = []
+                    for _row in _vr[:10]:
+                        if isinstance(_row, dict):
+                            _slim_rows.append({k: v for k, v in _row.items() if k in _KEEP_FIELDS and v is not None})
+                    if _slim_rows:
+                        _sc_slim["top_visible_rows"] = _slim_rows
+                _af = screen_context.get("active_filters")
+                if _af and isinstance(_af, dict):
+                    _sc_slim["active_filters"] = {k: str(v)[:50] for k, v in list(_af.items())[:6]}
+                _tv = screen_context.get("tradingview_context")
+                if _tv and isinstance(_tv, dict):
+                    _tv_slim = {}
+                    for _tf in ("symbols", "raw_symbols", "timeframe", "active_widget"):
+                        _tv_v = _tv.get(_tf)
+                        if _tv_v:
+                            _tv_slim[_tf] = ([str(x) for x in _tv_v[:10]] if isinstance(_tv_v, list) else str(_tv_v)[:80])
+                    if _tv_slim:
+                        _sc_slim["tradingview"] = _tv_slim
+                if _sc_slim:
+                    market_data["_screen_context"] = _sc_slim
+                    print(f"[SCREEN_CTX] Injected into market_data: page={_sc_slim.get('page', '')!r} | "
+                          f"symbols={len(_sc_slim.get('visible_symbols', []))} | "
+                          f"visible_rows_count={_sc_slim.get('visible_rows_count', 0)}")
+            except Exception as _sci_err:
+                print(f"[SCREEN_CTX] Injection skipped (non-fatal): {_sci_err}")
         # ─────────────────────────────────────────────────────────────────────
 
         plan = query_info.get("orchestration_plan", {}) if 'query_info' in locals() and isinstance(query_info, dict) else {}

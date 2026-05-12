@@ -46,6 +46,10 @@ _EXCLUDED_CATEGORIES: frozenset[str] = frozenset({
 _SR_DISK_CACHE = Path(__file__).parent.parent / "data" / "sector_rotation_analysis.json"
 _SR_DISK_TTL = 7 * 24 * 3600  # 7 days
 
+# X consensus weekly snapshot (written by social_x_service)
+_X_CONSENSUS_DISK = Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
+_X_CONSENSUS_TTL = 7 * 24 * 3600  # 7 days
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Public: read all cache sources
@@ -108,6 +112,9 @@ def read_shared_context() -> dict:
             tag = (regime_snap.get("regime") or "")[:40]
             if tag:
                 ctx["_macro_regime_tag"] = tag
+
+        # ── 6b. X consensus weekly snapshot (disk) ────────────────────────────
+        _read_x_consensus_disk(ctx)
 
         # ── 6. Thematic snapshot — active/emerging themes (if already cached) ─
         # Read thematic_context:snapshot:v1 only if it already exists in cache.
@@ -205,12 +212,57 @@ def build_context_overlay(category: str, ctx: dict) -> Optional[dict]:
     if emerging_themes:
         overlay["shared_emerging_themes"] = f"Emerging: {emerging_themes}"[:140]
 
+    # ── X consensus top tickers + market sentiment ─────────────────────────
+    x_tickers = ctx.get("_x_consensus_tickers", "")
+    x_sentiment = ctx.get("_x_consensus_sentiment", "")
+    if x_tickers:
+        label = f"X consensus leaders: {x_tickers}"
+        if x_sentiment:
+            label += f" | {x_sentiment}"
+        overlay["shared_x_consensus"] = label[:190]
+
     return overlay if overlay else None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Internal helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _read_x_consensus_disk(ctx: dict) -> None:
+    """Read x_consensus_weekly.json and extract top tickers + market sentiment."""
+    try:
+        if not _X_CONSENSUS_DISK.exists():
+            return
+        raw = json.loads(_X_CONSENSUS_DISK.read_text())
+        saved_at = raw.get("_saved_at") or raw.get("generated_at_ts") or 0
+        if isinstance(saved_at, str):
+            saved_at = 0  # can't easily parse, skip TTL check
+        if saved_at and time.time() - float(saved_at) > _X_CONSENSUS_TTL:
+            return
+        # Top tickers: may be a list of dicts with "ticker" key, or list of strings
+        raw_tickers = raw.get("top_tickers") or raw.get("tickers") or []
+        tickers: list[str] = []
+        for entry in raw_tickers[:5]:
+            if isinstance(entry, str):
+                tickers.append(entry)
+            elif isinstance(entry, dict):
+                sym = entry.get("ticker") or entry.get("symbol") or ""
+                if sym:
+                    tickers.append(str(sym))
+        if tickers:
+            ctx["_x_consensus_tickers"] = ", ".join(tickers)
+        # Market sentiment
+        sentiment = (
+            raw.get("market_sentiment")
+            or raw.get("overall_sentiment")
+            or raw.get("market_mood")
+            or ""
+        )
+        if sentiment and isinstance(sentiment, str):
+            ctx["_x_consensus_sentiment"] = sentiment[:60]
+    except Exception:
+        pass
+
 
 def _read_sr_disk_cache(ctx: dict) -> None:
     """Disk fallback: read sector rotation analysis.json."""

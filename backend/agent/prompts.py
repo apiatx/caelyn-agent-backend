@@ -609,6 +609,10 @@ Categories:
 - "crypto": Cryptocurrency, Bitcoin, altcoins, DeFi, funding rates, perpetuals, meme coins. ONLY when the query is EXCLUSIVELY about crypto.
 - "cross_market": Query explicitly mentions MULTIPLE asset classes (stocks AND crypto, stocks AND commodities, crypto AND commodities, or "all markets", "across markets", "every asset class"). Examples: "what's trending across all markets", "best opportunities in stocks and crypto", "show me stocks, crypto, and commodities", "highest conviction across all asset classes". This takes PRIORITY over individual asset categories.
 - "ai_screener": Custom screen with specific quantitative filters ("find stocks with revenue >30%", "screen for oversold with insider buying"). NOT general "best trades".
+- "hyperliquid": Hyperliquid DEX perpetuals or spot screener, HL perps, funding rates on Hyperliquid, Hyperliquid markets specifically. NOT general crypto.
+- "whale_watch": Institutional 13F filings, whale positioning, hedge fund holdings, big-money flows, large institutional investors, fund flows.
+- "insider_activity": SEC Form 4 insider transactions, executive buying/selling, insider conviction scores, director purchases, officer transactions.
+- "social_x": X/Twitter consensus dashboard, top trader sentiment on X, social X alpha feed, X signals, what traders are saying on X.
 - "chat": Conversational query, opinion question, explanation request, or general discussion that does NOT need a full data scan. Examples: "what do you think about holding through earnings?", "explain the bull case for uranium", "should I take profits?", "is the market topping?", "what's your take on NVDA?". If the user mentions 1-2 specific tickers, still classify as "chat" but extract the tickers.
 - "general": General market/strategy/educational question.
 

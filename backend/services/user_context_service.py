@@ -96,3 +96,41 @@ def get_portfolio_slice(user_id: str = "default") -> Optional[dict]:
     except Exception as e:
         print(f"[USER_CONTEXT] get_portfolio_slice error (non-fatal): {e}")
         return None
+
+
+def get_watchlist_slice(user_id: str = "default") -> Optional[dict]:
+    """
+    Return the active watchlist as a compact ambient context string.
+
+    Returns:
+        {"user_watchlist_tickers": "NVDA, AMD, TSLA, AAPL, BTC"}
+        or None if no watchlist or any error.
+
+    Privacy: only ticker symbols are returned — no quantities or cost data.
+    """
+    try:
+        from services.watchlist_service import load_watchlist
+        wl = load_watchlist()
+        if not wl:
+            return None
+        tickers = wl.get("tickers") or []
+        if not isinstance(tickers, list) or not tickers:
+            return None
+        # Normalise — each element may be a str or a dict with a "ticker" key
+        symbols: list[str] = []
+        for entry in tickers:
+            if isinstance(entry, str):
+                sym = entry.upper().strip()
+            elif isinstance(entry, dict):
+                sym = (entry.get("ticker") or entry.get("symbol") or "").upper().strip()
+            else:
+                sym = ""
+            if sym:
+                symbols.append(sym)
+        symbols = symbols[:20]
+        if not symbols:
+            return None
+        return {"user_watchlist_tickers": ", ".join(symbols)}
+    except Exception as e:
+        print(f"[USER_CONTEXT] get_watchlist_slice error (non-fatal): {e}")
+        return None

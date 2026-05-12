@@ -526,6 +526,110 @@ class DataRouter:
                 pass
             return fast_ctx
 
+        elif category == "hyperliquid":
+            try:
+                from services.hyperliquid.router import get_state_optional
+                state = get_state_optional()
+                if state is None:
+                    return {"error": "Hyperliquid state not ready", "source": "hl_screener"}
+                assets = state.scored_assets()
+                assets = [a for a in assets if getattr(a, "mark_px", None) is not None]
+                assets.sort(key=lambda a: getattr(a, "overall_score", 0) or 0, reverse=True)
+                top = assets[:30]
+                rows = []
+                for a in top:
+                    row = {}
+                    for field in (
+                        "coin", "market_type", "overall_score", "composite_signal_score",
+                        "momentum_score", "breakout_score", "liquidity_score",
+                        "structural_quality_score", "funding", "open_interest_usd",
+                        "spread_bps", "pct_change_24h", "day_ntl_vlm",
+                    ):
+                        v = getattr(a, field, None)
+                        if v is not None:
+                            row[field] = v
+                    rows.append(row)
+                perp_count = sum(1 for a in assets if getattr(a, "market_type", "") == "perp")
+                spot_count = sum(1 for a in assets if getattr(a, "market_type", "") == "spot")
+                return {
+                    "top_assets": rows,
+                    "stats": {
+                        "total_scored": len(assets),
+                        "perp_count": perp_count,
+                        "spot_count": spot_count,
+                    },
+                    "source": "hl_screener_lkg",
+                }
+            except Exception as e:
+                return {"error": str(e), "source": "hl_screener"}
+
+        elif category == "whale_watch":
+            try:
+                from services.whale_watch_service import get_whales, get_whale_stats
+                whales_list, stats = await asyncio.gather(
+                    get_whales(category=None),
+                    get_whale_stats(),
+                    return_exceptions=True,
+                )
+                if isinstance(whales_list, Exception):
+                    whales_list = []
+                if isinstance(stats, Exception):
+                    stats = {}
+                top_whales = (whales_list or [])[:15]
+                return {
+                    "top_whales": top_whales,
+                    "stats": stats or {},
+                    "source": "whale_watch_service",
+                }
+            except Exception as e:
+                return {"error": str(e), "source": "whale_watch_service"}
+
+        elif category == "insider_activity":
+            try:
+                from services.insider_activity_service import (
+                    _query_transactions, _executor as _ia_exec, get_insider_stats,
+                )
+                loop = asyncio.get_event_loop()
+                transactions, summary = await loop.run_in_executor(
+                    _ia_exec,
+                    lambda: _query_transactions(
+                        "buys", "1m", None, "score", "desc", None, 20, 0, None, False, None
+                    ),
+                )
+                stats = {}
+                try:
+                    stats = await asyncio.wait_for(get_insider_stats(), timeout=8.0)
+                except Exception:
+                    pass
+                return {
+                    "recent_buys": (transactions or [])[:20],
+                    "summary": summary if isinstance(summary, dict) else {},
+                    "stats": stats or {},
+                    "source": "insider_activity_service",
+                }
+            except Exception as e:
+                return {"error": str(e), "source": "insider_activity_service"}
+
+        elif category == "social_x":
+            try:
+                from services.social_x_service import build_x_dashboard
+                dashboard = build_x_dashboard()
+                return {
+                    "top_tickers": (dashboard.get("top_tickers") or [])[:20],
+                    "key_themes": dashboard.get("key_themes") or [],
+                    "x_consensus": (dashboard.get("x_consensus") or [])[:15],
+                    "freshest_alpha": dashboard.get("freshest_alpha") or {},
+                    "theme_leadership": dashboard.get("theme_leadership") or {},
+                    "sentiment_acceleration": (dashboard.get("sentiment_acceleration") or [])[:10],
+                    "market_pulse": dashboard.get("market_pulse"),
+                    "portfolio_bias": dashboard.get("portfolio_bias"),
+                    "generated_at": dashboard.get("generated_at"),
+                    "is_stale": dashboard.get("is_stale"),
+                    "source": "social_x_dashboard",
+                }
+            except Exception as e:
+                return {"error": str(e), "source": "social_x_dashboard"}
+
         else:
             # Final catch-all — return empty dict, identical to original line 5144-5145.
             return {}

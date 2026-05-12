@@ -78,6 +78,33 @@ PRESET_ALIASES: dict[str, str] = {
     "social": "social_momentum",
     "wsb": "social_momentum",
     "reddit": "social_momentum",
+    # --- Hyperliquid perps ---
+    "hyperliquid": "hyperliquid_screener",
+    "hype": "hyperliquid_screener",
+    "hl": "hyperliquid_screener",
+    "perps": "hyperliquid_screener",
+    "crypto_perps": "hyperliquid_screener",
+    "hl_screener": "hyperliquid_screener",
+    # --- Whale watch / 13F ---
+    "whale_watch": "whale_watch",
+    "whale": "whale_watch",
+    "whales": "whale_watch",
+    "13f": "whale_watch",
+    "institutional": "whale_watch",
+    "big_money": "whale_watch",
+    "fund_flows": "whale_watch",
+    "whale_activity": "whale_watch",
+    # --- Insider activity (Form 4) ---
+    "insider_activity": "insider_activity",
+    "insider": "insider_activity",
+    "form4": "insider_activity",
+    "insider_form4": "insider_activity",
+    "insider_filings": "insider_activity",
+    # --- Social X dashboard ---
+    "social_x": "social_x_dashboard",
+    "x_dashboard": "social_x_dashboard",
+    "x_consensus_dashboard": "social_x_dashboard",
+    "x_alpha": "social_x_dashboard",
     "long_term_conviction": "investment_ideas",
     "investments": "investment_ideas",
     "sqglp": "investment_ideas",
@@ -859,6 +886,78 @@ INTENT_PROFILES: dict[str, dict] = {
         "response_style": "full_thesis",
         "priority_depth": "deep",
     },
+    # ---- Hyperliquid perpetuals/spot screener ----
+    "hyperliquid_screener": {
+        "intent": "hyperliquid",
+        "asset_classes": ["crypto"],
+        "modules": {
+            "x_sentiment": False,
+            "social_sentiment": False,
+            "technical_scan": False,
+            "fundamental_validation": False,
+            "macro_context": False,
+            "liquidity_filter": False,
+            "earnings_data": False,
+            "ticker_research": False,
+        },
+        "risk_framework": "neutral",
+        "response_style": "screener_table",
+        "priority_depth": "medium",
+    },
+    # ---- Whale watch / 13F institutional tracker ----
+    "whale_watch": {
+        "intent": "whale_watch",
+        "asset_classes": ["equities"],
+        "modules": {
+            "x_sentiment": False,
+            "social_sentiment": False,
+            "technical_scan": False,
+            "fundamental_validation": False,
+            "macro_context": False,
+            "liquidity_filter": False,
+            "earnings_data": False,
+            "ticker_research": False,
+        },
+        "risk_framework": "neutral",
+        "response_style": "institutional_brief",
+        "priority_depth": "medium",
+    },
+    # ---- Insider activity (Form 4) ----
+    "insider_activity": {
+        "intent": "insider_activity",
+        "asset_classes": ["equities"],
+        "modules": {
+            "x_sentiment": False,
+            "social_sentiment": False,
+            "technical_scan": False,
+            "fundamental_validation": False,
+            "macro_context": False,
+            "liquidity_filter": False,
+            "earnings_data": False,
+            "ticker_research": False,
+        },
+        "risk_framework": "neutral",
+        "response_style": "institutional_brief",
+        "priority_depth": "medium",
+    },
+    # ---- Social X dashboard (zero Grok calls, cached snapshots only) ----
+    "social_x_dashboard": {
+        "intent": "social_x",
+        "asset_classes": ["equities"],
+        "modules": {
+            "x_sentiment": False,
+            "social_sentiment": False,
+            "technical_scan": False,
+            "fundamental_validation": False,
+            "macro_context": False,
+            "liquidity_filter": False,
+            "earnings_data": False,
+            "ticker_research": False,
+        },
+        "risk_framework": "neutral",
+        "response_style": "institutional_brief",
+        "priority_depth": "medium",
+    },
 }
 
 
@@ -889,6 +988,11 @@ INTENT_TO_CATEGORY: dict[str, str] = {
     "news_intelligence": "news_intelligence",
     "crypto": "crypto",
     "commodities": "commodities",
+    # New data-router arms
+    "hyperliquid": "hyperliquid",
+    "whale_watch": "whale_watch",
+    "insider_activity": "insider_activity",
+    "social_x": "social_x",
 }
 
 ASSET_CLASS_CATEGORY_MAP: dict[str, str] = {
