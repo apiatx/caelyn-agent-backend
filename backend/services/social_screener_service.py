@@ -679,9 +679,12 @@ def _aggregate_universe(
                         "catalysts":    [str(c) for c in (m.get("catalysts") or []) if c][:3],
                     })
 
-    # 3. Fall back to _backend_ranked when _mention_data is sparse / absent
-    if not buckets:
-        for bs in (snapshot or {}).get("_backend_ranked") or []:
+    # 3. Fall back to _backend_ranked when _mention_data is sparse / absent.
+    #    Also tries the prior snapshot when the current one is completely empty
+    #    (belt-and-suspenders — LKG merge in x_consensus_cache normally prevents
+    #    this, but protects against a cold start or on-disk corruption).
+    def _buckets_from_backend_ranked(ranked_list: list) -> None:
+        for bs in ranked_list:
             if not isinstance(bs, dict):
                 continue
             sym = _normalize_ticker(bs.get("ticker"))
@@ -711,6 +714,26 @@ def _aggregate_universe(
                 "bullish_count":     unique_n,
                 "bearish_count":     0,
             }
+
+    if not buckets:
+        _buckets_from_backend_ranked((snapshot or {}).get("_backend_ranked") or [])
+
+    if not buckets:
+        # Both _mention_data and current _backend_ranked are empty — try prior snapshot
+        # as a last resort so the screener always has some data to display.
+        try:
+            from services.x_consensus_cache import _load_prior_cache as _lpc_fb
+            _prior_snap_fb = _lpc_fb()
+            if _prior_snap_fb:
+                _prior_br = (_prior_snap_fb.get("_backend_ranked") or [])
+                if _prior_br:
+                    print(
+                        f"[SOCIAL_SCREENER] aggregate_universe fallback: "
+                        f"using prior snapshot _backend_ranked ({len(_prior_br)} tickers)"
+                    )
+                    _buckets_from_backend_ranked(_prior_br)
+        except Exception as _fb_exc:
+            print(f"[SOCIAL_SCREENER] prior-snapshot fallback error: {_fb_exc}")
 
     # 4. Guarantee every ticker already visible on the Social page appears in the
     #    screener.  Tickers already present from _mention_data / _backend_ranked

@@ -98,6 +98,20 @@ _CACHE_TTL_SECONDS = 23 * 3600  # 23 hours — refreshed once daily at noon; fre
 _BATCH_SIZE = 8                 # accounts per Phase-1 batch (focused x_search per group)
 _PHASE1_CONCURRENCY = 2         # max concurrent Grok batch calls
 
+# ── Section-level validation minimums ────────────────────────────────────────
+# A new snapshot must clear these thresholds per section before the cache is
+# overwritten.  If a section is below minimum the last-known-good value is
+# merged in instead of discarding it (LKG-merge behaviour).
+_SECTION_MIN_BACKEND_RANKED:  int = 3   # scored tickers in _backend_ranked
+_SECTION_MIN_MENTION_DATA:    int = 1   # per-account records in _mention_data
+_SECTION_MIN_CONSENSUS_PICKS: int = 1   # items in raw.consensus_picks
+_SECTION_MIN_TOP_TICKERS:     int = 1   # items in top_tickers
+
+# Rolling per-scan diagnostics log — persisted to disk so ops can inspect
+# what happened on the last N scans without reading server logs.
+_SCAN_DIAGNOSTICS_PATH = Path(__file__).parent.parent / "data" / "social_scan_diagnostics.json"
+_SCAN_DIAGNOSTICS_MAX  = 30  # keep last N entries
+
 # Module-level lock so only one background refresh runs at a time across the
 # whole process, regardless of how many Home requests land simultaneously.
 _REFRESH_LOCK = asyncio.Lock()
@@ -233,6 +247,130 @@ def load_ticker_history() -> dict:
     except Exception as e:
         print(f"[X_CONSENSUS] Ticker history read error: {e}")
         return {}
+
+
+def _validate_snapshot_sections(snapshot: dict) -> dict[str, bool]:
+    """Check which sections of a freshly-built snapshot meet minimum content
+    thresholds.
+
+    Returns {section_name: True/False}.
+      True  — section has enough data; safe to overwrite cache.
+      False — section is empty/below minimum; LKG value should be preserved.
+    """
+    br  = snapshot.get("_backend_ranked") or []
+    md  = snapshot.get("_mention_data") or []
+    raw = snapshot.get("raw") or {}
+    cp  = raw.get("consensus_picks") or []
+    ht  = snapshot.get("top_tickers") or []
+    return {
+        "_backend_ranked":  len(br) >= _SECTION_MIN_BACKEND_RANKED,
+        "_mention_data":    len(md) >= _SECTION_MIN_MENTION_DATA,
+        "consensus_picks":  len(cp) >= _SECTION_MIN_CONSENSUS_PICKS,
+        "top_tickers":      len(ht) >= _SECTION_MIN_TOP_TICKERS,
+    }
+
+
+def _merge_lkg_sections(
+    new_snap: dict,
+    lkg_snap: Optional[dict],
+    section_ok: dict[str, bool],
+) -> list[str]:
+    """Overwrite empty sections in new_snap with last-known-good values.
+
+    Mutates new_snap in place.
+    Returns list of section names that were restored from LKG (for logging/diagnostics).
+    Only sections that failed validation are touched — sections that passed keep
+    the fresh data from the new scan.
+    """
+    if not lkg_snap:
+        return []
+
+    merged: list[str] = []
+
+    if not section_ok.get("_backend_ranked"):
+        lkg_br = lkg_snap.get("_backend_ranked")
+        if lkg_br:
+            new_snap["_backend_ranked"] = lkg_br
+            merged.append("_backend_ranked")
+            print(
+                f"[X_CONSENSUS][LKG] _backend_ranked preserved from prior "
+                f"({len(lkg_br)} tickers)"
+            )
+
+    if not section_ok.get("_mention_data"):
+        lkg_md = lkg_snap.get("_mention_data")
+        if lkg_md:
+            new_snap["_mention_data"] = lkg_md
+            merged.append("_mention_data")
+            print(
+                f"[X_CONSENSUS][LKG] _mention_data preserved from prior "
+                f"({len(lkg_md)} records)"
+            )
+
+    raw_new = new_snap.get("raw")
+    raw_lkg = lkg_snap.get("raw")
+    if isinstance(raw_new, dict) and isinstance(raw_lkg, dict):
+        if not section_ok.get("consensus_picks"):
+            lkg_cp = raw_lkg.get("consensus_picks")
+            if lkg_cp:
+                raw_new["consensus_picks"] = lkg_cp
+                merged.append("consensus_picks")
+                print(
+                    f"[X_CONSENSUS][LKG] raw.consensus_picks preserved from prior "
+                    f"({len(lkg_cp)} picks)"
+                )
+
+    if not section_ok.get("top_tickers"):
+        lkg_ht = lkg_snap.get("top_tickers")
+        if lkg_ht:
+            new_snap["top_tickers"] = lkg_ht
+            merged.append("top_tickers")
+            print(
+                f"[X_CONSENSUS][LKG] top_tickers preserved from prior "
+                f"({len(lkg_ht)} tickers)"
+            )
+
+    return merged
+
+
+def _append_scan_diagnostics(entry: dict) -> None:
+    """Append one diagnostics entry to the rolling JSON log.
+
+    Keeps the last _SCAN_DIAGNOSTICS_MAX entries.
+    Never raises — diagnostics must never break the main refresh loop.
+    """
+    try:
+        _SCAN_DIAGNOSTICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        existing: list = []
+        if _SCAN_DIAGNOSTICS_PATH.exists():
+            try:
+                raw_text = _SCAN_DIAGNOSTICS_PATH.read_text()
+                existing = json.loads(raw_text) or []
+                if not isinstance(existing, list):
+                    existing = []
+            except Exception:
+                existing = []
+        existing.append(entry)
+        existing = existing[-_SCAN_DIAGNOSTICS_MAX:]
+        _SCAN_DIAGNOSTICS_PATH.write_text(json.dumps(existing, indent=2))
+    except Exception as exc:
+        print(f"[X_CONSENSUS] Diagnostics write error: {exc}")
+
+
+def load_scan_diagnostics() -> list:
+    """Return the rolling scan diagnostics list from disk (newest last).
+
+    Returns an empty list if the file does not exist or is unreadable.
+    Public — imported by the /api/social/diagnostics endpoint.
+    """
+    if not _SCAN_DIAGNOSTICS_PATH.exists():
+        return []
+    try:
+        raw = json.loads(_SCAN_DIAGNOSTICS_PATH.read_text())
+        return raw if isinstance(raw, list) else []
+    except Exception as exc:
+        print(f"[X_CONSENSUS] Diagnostics read error: {exc}")
+        return []
 
 
 def _save_disk_cache(data: dict) -> None:
@@ -821,10 +959,47 @@ async def _run_refresh(data_service) -> Optional[dict]:
         # to derive section rankings deterministically — zero extra API calls.
         "_mention_data":        mention_data,
     }
+
+    # ── Section-level validation + LKG merge ─────────────────────────────────
+    # Read the CURRENT disk cache BEFORE it gets rotated inside _save_disk_cache,
+    # so we can restore any sections that came back empty from this scan.
+    _pre_write_lkg = _load_disk_cache()
+    _section_ok    = _validate_snapshot_sections(snapshot)
+    _lkg_merged    = _merge_lkg_sections(snapshot, _pre_write_lkg, _section_ok)
+    snapshot["_lkg_sections_used"] = _lkg_merged
+
+    _sections_ok_names   = [k for k, v in _section_ok.items() if v]
+    _sections_fail_names = [k for k, v in _section_ok.items() if not v]
+    if _lkg_merged:
+        print(
+            f"[X_CONSENSUS] LKG merge applied — "
+            f"failed sections: {_sections_fail_names}, "
+            f"restored from prior: {_lkg_merged}"
+        )
+
+    # ── Diagnostics log ───────────────────────────────────────────────────────
+    _append_scan_diagnostics({
+        "scan_ts":            datetime.now(timezone.utc).isoformat(),
+        "accounts_count":     len(X_SELECT_ACCOUNTS),
+        "batch_count":        len(batches),
+        "batches_returned":   len(combined_data),
+        "sections_ok":        _sections_ok_names,
+        "sections_missing":   _sections_fail_names,
+        "lkg_sections_used":  _lkg_merged,
+        "ticker_count":       len(snapshot.get("_backend_ranked") or []),
+        "mention_records":    len(snapshot.get("_mention_data") or []),
+        "consensus_picks":    len((snapshot.get("raw") or {}).get("consensus_picks") or []),
+        "top_tickers":        len(snapshot.get("top_tickers") or []),
+        "cache_write_status": "written",
+        "error":              None,
+    })
+
     _save_disk_cache(snapshot)
     print(
         f"[X_CONSENSUS] Refresh complete — {len(snapshot['top_tickers'])} tickers, "
-        f"{len(backend_ranked)} backend-scored, {len(mention_data)} mention records saved"
+        f"{len(snapshot.get('_backend_ranked') or [])} backend-scored, "
+        f"{len(snapshot.get('_mention_data') or [])} mention records saved"
+        + (f" | LKG-merged: {_lkg_merged}" if _lkg_merged else "")
     )
     return snapshot
 

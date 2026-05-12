@@ -3284,6 +3284,79 @@ async def social_fundamental_screener(
         )
 
 
+@app.get("/api/social/diagnostics")
+@limiter.limit("30/minute")
+@traceable(name="main.social_diagnostics")
+async def social_diagnostics(
+    request: Request,
+    _sub: None = Depends(require_subscription),
+):
+    """
+    Social page scan diagnostics — last N scan entries showing per-section
+    validation results, LKG-merge activity, ticker counts, and any errors.
+
+    Returns:
+      diagnostics   — list of scan entries, newest last
+      summary       — quick health snapshot derived from the latest entry
+      cache_info    — current disk-cache state (age, staleness, section counts)
+    """
+    try:
+        from services.x_consensus_cache import (
+            load_scan_diagnostics,
+            _load_disk_cache,
+            _is_fresh,
+        )
+        import time as _time
+
+        entries = load_scan_diagnostics()
+        latest  = entries[-1] if entries else {}
+
+        # Summary from the most recent scan
+        summary: dict = {}
+        if latest:
+            summary = {
+                "last_scan_at":       latest.get("scan_ts"),
+                "sections_ok":        latest.get("sections_ok", []),
+                "sections_missing":   latest.get("sections_missing", []),
+                "lkg_sections_used":  latest.get("lkg_sections_used", []),
+                "ticker_count":       latest.get("ticker_count", 0),
+                "mention_records":    latest.get("mention_records", 0),
+                "cache_write_status": latest.get("cache_write_status"),
+                "health": (
+                    "degraded" if latest.get("sections_missing")
+                    else "ok"
+                ),
+            }
+
+        # Current disk-cache state
+        raw = _load_disk_cache()
+        cache_info: dict = {"available": bool(raw)}
+        if raw:
+            age_s = int(_time.time() - float(raw.get("_saved_at") or 0))
+            cache_info.update({
+                "generated_at":    raw.get("generated_at"),
+                "age_seconds":     age_s,
+                "is_fresh":        _is_fresh(raw),
+                "top_tickers":     len(raw.get("top_tickers") or []),
+                "backend_ranked":  len(raw.get("_backend_ranked") or []),
+                "mention_records": len(raw.get("_mention_data") or []),
+                "consensus_picks": len((raw.get("raw") or {}).get("consensus_picks") or []),
+                "lkg_sections":    raw.get("_lkg_sections_used") or [],
+            })
+
+        return JSONResponse(content={
+            "diagnostics": entries,
+            "summary":     summary,
+            "cache_info":  cache_info,
+        })
+    except Exception as exc:
+        print(f"[SOCIAL_DIAGNOSTICS] Error: {exc}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(exc), "endpoint": "/api/social/diagnostics"},
+        )
+
+
 @app.post("/api/social/x-dashboard/refresh")
 @limiter.limit("4/minute")
 @traceable(name="main.social_x_dashboard_refresh")

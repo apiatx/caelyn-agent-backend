@@ -1,0 +1,141 @@
+Do not rewrite the existing Social/Grok prompt.
+Do not change the selected X account list.
+Do not change trader tiers, account weighting, scoring, ranking, ticker extraction intent, or the once-per-day scan schedule unless the existing implementation is clearly broken.
+
+The issue is that the Social page sometimes shows blank or incomplete sections on refresh even though the daily scan/cache should already have data.
+
+Current affected sections:
+
+X Consensus
+Fresh
+Leading Themes
+Sentiment Acceleration
+Social Screener ticker universe
+Goal
+
+Make the existing Social cache and response layer reliable.
+
+Same existing daily Grok scan.
+Same existing prompt.
+Same existing backend logic.
+Better validation, merging, and fallback behavior.
+
+Required Backend Fixes
+Audit the Social cache read/write path
+
+Find where the daily Grok/X Social result is generated, parsed, cached, and returned to the frontend.
+
+Identify whether blank sections are caused by:
+
+Grok returning a partial response
+parser/schema mismatch
+cache overwrite with empty sections
+frontend receiving partial data
+stale cache not being used correctly
+Add section-level validation before cache overwrite
+
+Do not treat the whole Social response as valid just because the request succeeded.
+
+Validate each section independently:
+
+x_consensus
+fresh
+leading_themes
+sentiment_acceleration
+screener_tickers / ticker_universe
+
+If a new daily run has one blank section but the prior cached snapshot has a good version of that section, preserve the prior good section.
+
+Do not overwrite good cached data with empty arrays, nulls, missing fields, or parser failures.
+
+Add last-known-good merge behavior
+
+If the latest result is partial:
+
+keep valid fresh sections
+preserve missing sections from last-known-good
+mark metadata so the frontend/debug logs know what happened
+
+Suggested metadata:
+
+{
+  "cache_status": "partial_merged",
+  "section_status": {
+    "x_consensus": "fresh",
+    "fresh": "fresh",
+    "leading_themes": "lkg_preserved",
+    "sentiment_acceleration": "empty_no_prior",
+    "screener_tickers": "fresh"
+  },
+  "generated_at": "...",
+  "lkg_generated_at": "..."
+}
+Never let a failed or partial daily scan poison the cache
+
+If Grok fails, times out, returns malformed JSON, or returns an incomplete result:
+
+return existing LKG snapshot
+log the failure
+do not overwrite the prior good cache
+Normalize response shape
+
+The frontend should always receive a stable canonical shape:
+
+{
+  x_consensus: [],
+  fresh: [],
+  leading_themes: [],
+  sentiment_acceleration: [],
+  screener_tickers: [],
+  generated_at: string | null,
+  cache_status: "fresh" | "lkg" | "partial_merged" | "stale_lkg" | "empty",
+  section_status: Record<string, string>
+}
+
+Do not make the frontend guess between alternate field names.
+
+Protect the Social Screener ticker universe
+
+The screener should list all tickers detected by the existing backend logic from the selected accounts.
+
+Do not make screener tickers dependent only on top-card sections like x_consensus.
+
+If the existing backend already extracts a full ticker universe, preserve that as a first-class cache field.
+
+If one UI section is blank, the screener ticker universe should not randomly shrink unless the underlying daily scan truly changed.
+
+Add diagnostics logging
+
+For each daily Social scan/cache write, log:
+
+{
+  "social_scan_date": "...",
+  "accounts_count": 0,
+  "sections_returned": [],
+  "sections_missing": [],
+  "ticker_count": 0,
+  "cache_write_status": "fresh_written | partial_merged | lkg_preserved | rejected_empty",
+  "error": null
+}
+
+If xAI/Grok usage/cost metadata is available from the response, log it. Do not fail if unavailable.
+
+Do not change scan cadence
+
+Keep the once-per-day scan.
+
+Do not add expensive refreshes on page load.
+
+The Social page should read cached/LKG data first.
+
+Backend Validation
+
+Validate:
+
+Hard refresh Social endpoint multiple times.
+Confirm all canonical keys are always present.
+Simulate or inspect case where one section is missing.
+Confirm prior good section is preserved.
+Confirm fully empty response does not overwrite LKG.
+Confirm screener ticker count does not randomly shrink because one top section is missing.
+Confirm once-per-day schedule is unchanged.

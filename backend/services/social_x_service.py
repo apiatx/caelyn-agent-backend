@@ -1385,14 +1385,57 @@ def build_x_dashboard() -> dict:
     )
 
     # ── Step 3: Build sections (each respects classified map) ─────────────────
+    x_consensus_data            = _build_x_consensus(cur_raw, classified)
+    freshest_alpha_data         = _build_freshest_alpha(current_snap, prior_snap, classified)
+    theme_leadership_data       = _build_theme_leadership(cur_raw)
+    sentiment_acceleration_data = _build_sentiment_accel(current_snap, prior_snap, classified)
+
+    # ── Section-status + cache-status (reliability diagnostics) ───────────────
+    # Tells the frontend which sections have live data vs LKG vs empty, without
+    # changing any existing field that callers depend on.
+    _lkg_sections: list[str] = list((current_snap or {}).get("_lkg_sections_used") or [])
+    _lkg_set: set[str] = set(_lkg_sections)
+
+    def _sec_status(key: str, data) -> str:
+        """Return 'ok', 'lkg', or 'empty' for a section."""
+        if isinstance(data, list):
+            has_data = len(data) > 0
+        elif isinstance(data, dict):
+            has_data = bool(
+                data.get("trades") or data.get("themes") or data.get("market_pulse")
+            )
+        else:
+            has_data = bool(data)
+        if not has_data:
+            return "empty"
+        if _lkg_set:
+            return "lkg"
+        return "ok"
+
+    section_status = {
+        "x_consensus":            _sec_status("x_consensus",            x_consensus_data),
+        "freshest_alpha":         _sec_status("freshest_alpha",         freshest_alpha_data),
+        "theme_leadership":       _sec_status("theme_leadership",       theme_leadership_data),
+        "sentiment_acceleration": _sec_status("sentiment_acceleration", sentiment_acceleration_data),
+    }
+    if not current_snap:
+        cache_status = "no_data"
+    elif _lkg_set:
+        cache_status = "lkg_partial"
+    else:
+        cache_status = "ok"
+
     return {
         **home_payload,
         "market_pulse":   cur_raw.get("market_pulse"),
         "portfolio_bias": cur_raw.get("portfolio_bias"),
         "spotlight":      cur_raw.get("spotlight"),
-        "x_consensus":            _build_x_consensus(cur_raw, classified),
-        "freshest_alpha":         _build_freshest_alpha(current_snap, prior_snap, classified),
-        "theme_leadership":       _build_theme_leadership(cur_raw),
-        "sentiment_acceleration": _build_sentiment_accel(current_snap, prior_snap, classified),
+        "x_consensus":            x_consensus_data,
+        "freshest_alpha":         freshest_alpha_data,
+        "theme_leadership":       theme_leadership_data,
+        "sentiment_acceleration": sentiment_acceleration_data,
         "metadata":               _build_metadata(current_snap),
+        "section_status":         section_status,
+        "cache_status":           cache_status,
+        "lkg_sections":           sorted(_lkg_set),
     }
