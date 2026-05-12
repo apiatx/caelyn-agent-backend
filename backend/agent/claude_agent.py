@@ -717,14 +717,44 @@ class TradingAgent:
             # override the ambiguous category to match the active page.
             if screen_context and isinstance(screen_context, dict):
                 _PAGE_TO_CAT: dict[str, str] = {
+                    # ── Hyperliquid perps/spot screener ──────────────────────
                     "hyperliquid": "hyperliquid", "hl": "hyperliquid",
                     "perps": "hyperliquid", "crypto_perps": "hyperliquid",
+                    # ── Whale watch / 13F ────────────────────────────────────
                     "whale_watch": "whale_watch", "whale-watch": "whale_watch",
+                    # ── Insider activity / Form 4 ────────────────────────────
                     "insider": "insider_activity",
                     "insider_activity": "insider_activity",
                     "insider-activity": "insider_activity",
+                    # ── Social / X consensus dashboard ───────────────────────
                     "social_x": "social_x", "social-x": "social_x",
                     "x_dashboard": "social_x",
+                    # ── Options flow ─────────────────────────────────────────
+                    "options_flow": "options_flow",
+                    "options": "options_flow",
+                    "options-flow": "options_flow",
+                    # ── Stock screener ────────────────────────────────────────
+                    "screener": "custom_screen",
+                    "stock_screener": "custom_screen",
+                    "screen": "custom_screen",
+                    # ── Themes / relative strength ───────────────────────────
+                    "themes": "thematic",
+                    "theme": "thematic",
+                    "thematic": "thematic",
+                    # ── Macro / economy ───────────────────────────────────────
+                    "macro": "macro",
+                    "economy": "macro",
+                    "macro_overview": "macro",
+                    # ── Calendar / earnings ───────────────────────────────────
+                    "calendar": "earnings_catalyst",
+                    "earnings": "earnings_catalyst",
+                    "earnings_calendar": "earnings_catalyst",
+                    # ── Watchlist ─────────────────────────────────────────────
+                    "watchlist": "portfolio_review",
+                    "watch_list": "portfolio_review",
+                    # ── Portfolio ─────────────────────────────────────────────
+                    "portfolio": "portfolio_review",
+                    "holdings": "portfolio_review",
                 }
                 _AMBIENT = frozenset({"general", "chat", "market_scan", "cross_asset_trending"})
                 _raw_pg = screen_context.get("page") or screen_context.get("route") or ""
@@ -832,14 +862,44 @@ class TradingAgent:
             # ── Screen context page hint (orchestration path) ─────────────────
             if screen_context and isinstance(screen_context, dict):
                 _PAGE_TO_CAT2: dict[str, str] = {
+                    # ── Hyperliquid perps/spot screener ──────────────────────
                     "hyperliquid": "hyperliquid", "hl": "hyperliquid",
                     "perps": "hyperliquid", "crypto_perps": "hyperliquid",
+                    # ── Whale watch / 13F ────────────────────────────────────
                     "whale_watch": "whale_watch", "whale-watch": "whale_watch",
+                    # ── Insider activity / Form 4 ────────────────────────────
                     "insider": "insider_activity",
                     "insider_activity": "insider_activity",
                     "insider-activity": "insider_activity",
+                    # ── Social / X consensus dashboard ───────────────────────
                     "social_x": "social_x", "social-x": "social_x",
                     "x_dashboard": "social_x",
+                    # ── Options flow ─────────────────────────────────────────
+                    "options_flow": "options_flow",
+                    "options": "options_flow",
+                    "options-flow": "options_flow",
+                    # ── Stock screener ────────────────────────────────────────
+                    "screener": "custom_screen",
+                    "stock_screener": "custom_screen",
+                    "screen": "custom_screen",
+                    # ── Themes / relative strength ───────────────────────────
+                    "themes": "thematic",
+                    "theme": "thematic",
+                    "thematic": "thematic",
+                    # ── Macro / economy ───────────────────────────────────────
+                    "macro": "macro",
+                    "economy": "macro",
+                    "macro_overview": "macro",
+                    # ── Calendar / earnings ───────────────────────────────────
+                    "calendar": "earnings_catalyst",
+                    "earnings": "earnings_catalyst",
+                    "earnings_calendar": "earnings_catalyst",
+                    # ── Watchlist ─────────────────────────────────────────────
+                    "watchlist": "portfolio_review",
+                    "watch_list": "portfolio_review",
+                    # ── Portfolio ─────────────────────────────────────────────
+                    "portfolio": "portfolio_review",
+                    "holdings": "portfolio_review",
                 }
                 _AMBIENT2 = frozenset({"general", "chat", "market_scan", "cross_asset_trending"})
                 _raw_pg2 = screen_context.get("page") or screen_context.get("route") or ""
@@ -1083,46 +1143,130 @@ class TradingAgent:
         if screen_context and isinstance(screen_context, dict) and isinstance(market_data, dict):
             try:
                 _sc_slim: dict = {}
+
+                # ── Scalar page identity fields ───────────────────────────────
                 for _f in ("page", "route", "tab", "selected_symbol"):
                     _v = screen_context.get(_f)
                     if _v:
                         _sc_slim[_f] = str(_v)[:80]
+
+                # ── Visible symbols list (up to 30) ───────────────────────────
                 _vs = screen_context.get("visible_symbols") or []
                 if isinstance(_vs, list) and _vs:
-                    _sc_slim["visible_symbols"] = [str(s) for s in _vs[:20]]
+                    _sc_slim["visible_symbols"] = [str(s) for s in _vs[:30]]
+
+                # ── Visible row count ─────────────────────────────────────────
                 _vrc = screen_context.get("visible_rows_count") or len(screen_context.get("visible_rows") or [])
                 if _vrc:
                     _sc_slim["visible_rows_count"] = int(_vrc)
+
+                # ── Visible rows — expanded field allowlist ───────────────────
                 _vr = screen_context.get("visible_rows") or []
                 if isinstance(_vr, list) and _vr:
                     _KEEP_FIELDS = frozenset((
-                        "ticker", "symbol", "coin", "name", "score", "overall_score",
-                        "composite_signal", "change_24h", "pct_change_24h", "volume",
-                        "sector", "rating", "signal", "pattern", "market_type",
+                        # identity
+                        "ticker", "symbol", "coin", "name", "company", "company_name",
+                        # scoring / signals
+                        "score", "overall_score", "composite_signal", "composite_signal_score",
+                        "signal", "rating", "pattern", "conviction_score", "heat_score",
+                        "unusual_score",
+                        # price / change
+                        "price", "mark_px", "change", "change_pct", "pct_change",
+                        "change_24h", "pct_change_24h",
+                        # volume / liquidity
+                        "volume", "rel_volume", "relative_volume",
+                        # classification
+                        "theme", "sector", "market_type", "market_cap",
+                        # crypto/perps specific
+                        "open_interest", "open_interest_usd", "funding", "spread_bps",
+                        # options specific
+                        "premium", "net_premium", "sweep", "otm", "option_type",
+                        "call_put", "strike", "expiration", "expiry",
+                        # earnings / calendar specific
+                        "eps_estimate", "eps_actual", "eps_surprise",
+                        "revenue_estimate", "revenue_actual", "revenue_surprise",
+                        "report_date",
+                        # insider / whale specific
+                        "filing_date", "transaction_date", "transaction_type",
+                        "insider_name", "insider_title", "institution", "fund",
+                        "value", "value_usd", "shares",
+                        # portfolio specific
+                        "pnl", "weight", "exposure", "cost_basis", "avg_cost",
                     ))
                     _slim_rows = []
-                    for _row in _vr[:10]:
+                    for _row in _vr[:15]:
                         if isinstance(_row, dict):
-                            _slim_rows.append({k: v for k, v in _row.items() if k in _KEEP_FIELDS and v is not None})
+                            _slim_rows.append({
+                                k: v for k, v in _row.items()
+                                if k in _KEEP_FIELDS and v is not None
+                            })
                     if _slim_rows:
                         _sc_slim["top_visible_rows"] = _slim_rows
+
+                # ── Active filters ────────────────────────────────────────────
                 _af = screen_context.get("active_filters")
                 if _af and isinstance(_af, dict):
-                    _sc_slim["active_filters"] = {k: str(v)[:50] for k, v in list(_af.items())[:6]}
+                    _sc_slim["active_filters"] = {k: str(v)[:60] for k, v in list(_af.items())[:8]}
+
+                # ── Sort state ────────────────────────────────────────────────
+                _sort = screen_context.get("sort")
+                if _sort and isinstance(_sort, dict):
+                    _sc_slim["sort"] = {
+                        k: str(v)[:40]
+                        for k, v in _sort.items()
+                        if k in ("column", "key", "field", "direction", "order", "asc", "desc")
+                    }
+                elif _sort and isinstance(_sort, str):
+                    _sc_slim["sort"] = _sort[:60]
+
+                # ── Rendered sections (section keys + short summaries only) ──
+                _rs = screen_context.get("rendered_sections")
+                if _rs and isinstance(_rs, dict):
+                    _sc_slim["rendered_sections"] = {
+                        k: (str(v)[:80] if not isinstance(v, dict) else str(v.get("summary") or v.get("label") or k)[:80])
+                        for k, v in list(_rs.items())[:8]
+                    }
+                elif _rs and isinstance(_rs, list):
+                    _sc_slim["rendered_sections"] = [str(s)[:40] for s in _rs[:8]]
+
+                # ── Freshness / cache metadata ────────────────────────────────
+                _fresh = screen_context.get("freshness") or screen_context.get("cache_metadata")
+                if _fresh and isinstance(_fresh, dict):
+                    _sc_slim["freshness"] = {
+                        k: str(v)[:60]
+                        for k, v in _fresh.items()
+                        if k in ("source", "last_updated", "stale", "partial", "cache_age_s",
+                                 "cache_status", "is_stale", "updated_at", "generated_at")
+                    }
+
+                # ── TradingView context (expanded) ────────────────────────────
                 _tv = screen_context.get("tradingview_context")
                 if _tv and isinstance(_tv, dict):
                     _tv_slim = {}
-                    for _tf in ("symbols", "raw_symbols", "timeframe", "active_widget"):
+                    # list fields
+                    for _tf in ("symbols", "raw_symbols"):
+                        _tv_v = _tv.get(_tf)
+                        if _tv_v and isinstance(_tv_v, list):
+                            _tv_slim[_tf] = [str(x) for x in _tv_v[:10]]
+                    # scalar fields
+                    for _tf in ("timeframe", "interval", "active_widget",
+                                "tradingview_symbol", "layout", "source"):
                         _tv_v = _tv.get(_tf)
                         if _tv_v:
-                            _tv_slim[_tf] = ([str(x) for x in _tv_v[:10]] if isinstance(_tv_v, list) else str(_tv_v)[:80])
+                            _tv_slim[_tf] = str(_tv_v)[:80]
                     if _tv_slim:
                         _sc_slim["tradingview"] = _tv_slim
+
                 if _sc_slim:
                     market_data["_screen_context"] = _sc_slim
-                    print(f"[SCREEN_CTX] Injected into market_data: page={_sc_slim.get('page', '')!r} | "
-                          f"symbols={len(_sc_slim.get('visible_symbols', []))} | "
-                          f"visible_rows_count={_sc_slim.get('visible_rows_count', 0)}")
+                    print(
+                        f"[SCREEN_CTX] Injected: page={_sc_slim.get('page', '')!r} | "
+                        f"symbols={len(_sc_slim.get('visible_symbols', []))} | "
+                        f"rows={_sc_slim.get('visible_rows_count', 0)} | "
+                        f"sort={'yes' if 'sort' in _sc_slim else 'no'} | "
+                        f"fresh={'yes' if 'freshness' in _sc_slim else 'no'} | "
+                        f"tv={'yes' if 'tradingview' in _sc_slim else 'no'}"
+                    )
             except Exception as _sci_err:
                 print(f"[SCREEN_CTX] Injection skipped (non-fatal): {_sci_err}")
         # ─────────────────────────────────────────────────────────────────────

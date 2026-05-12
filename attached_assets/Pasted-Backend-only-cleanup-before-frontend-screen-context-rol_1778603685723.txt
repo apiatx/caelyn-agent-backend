@@ -1,0 +1,183 @@
+Backend-only cleanup before frontend screen_context rollout.
+
+Do not change any page behavior.
+Do not change any page endpoint response shape.
+Do not refactor unrelated systems.
+Do not add new API calls.
+Do not modify frontend files.
+Goal: make sure the agent can see the contents/context of each page when the frontend sends screen_context.
+
+Based on the completed backend audit, fix only these context plumbing gaps:
+
+1. Add missing page slugs to _PAGE_TO_CAT in both routing paths
+The audit found that only hyperliquid, whale_watch, insider_activity, and social_x are currently mapped.
+
+Add mappings for these pages in both _PAGE_TO_CAT dicts in claude_agent.py:
+- options_flow → options_flow
+- options → options_flow
+- screener → custom_screen or ai_screener, whichever is the current best general screener category
+- themes → thematic
+- theme → thematic
+- macro → macro
+- calendar → earnings_catalyst
+- earnings → earnings_catalyst
+- watchlist → portfolio_review or watchlist_context if one exists; otherwise route to portfolio_review while preserving screen_context
+- portfolio → portfolio_review
+
+Keep existing mappings for:
+- hyperliquid
+- whale_watch
+- insider_activity
+- social_x
+
+The purpose:
+If the user asks “what looks good here?” from any major page, and the classifier output is ambient/general/chat/market_scan/cross_asset_trending, the page hint should route to the current page’s category.
+
+Do not override clearly specific user intent. Only use page hint when the current classifier category is ambient/general.
+
+2. Preserve additional screen_context fields
+Currently the backend captures:
+- page
+- route
+- tab
+- selected_symbol
+- visible_symbols
+- active_filters
+- visible_rows
+- partial tradingview context
+
+Add safe preservation for:
+- sort
+- rendered_sections
+- freshness or cache metadata
+- tradingview_context.tradingview_symbol
+- tradingview_context.layout
+- tradingview_context.source
+- tradingview_context.interval if separate from timeframe
+
+Do this inside the existing slim _screen_context builder.
+Keep size limits.
+Do not dump unlimited payloads.
+
+Suggested limits:
+- visible_symbols: keep current cap or increase modestly if safe
+- visible_rows: keep bounded, but make sure all high-signal row fields from frontend survive
+- rendered_sections: preserve section keys and concise summaries, not giant blobs
+- freshness: preserve cache status, source, last_updated, stale/partial flags
+- sort: preserve column/key and direction
+- tradingview_context: preserve symbols, raw_symbols, tradingview_symbol, timeframe, interval, active_widget, layout, source
+
+3. Expand visible_rows field allowlist without changing page behavior
+The current visible_rows allowlist is too narrow for several pages.
+
+Preserve common high-signal fields if present:
+- ticker
+- symbol
+- coin
+- name
+- company
+- company_name
+- score
+- overall_score
+- composite_signal
+- composite_signal_score
+- signal
+- rating
+- pattern
+- theme
+- sector
+- market_type
+- price
+- mark_px
+- change
+- change_pct
+- pct_change
+- pct_change_24h
+- volume
+- rel_volume
+- relative_volume
+- market_cap
+- open_interest
+- open_interest_usd
+- funding
+- spread_bps
+- premium
+- net_premium
+- heat_score
+- unusual_score
+- sweep
+- otm
+- option_type
+- call_put
+- strike
+- expiration
+- expiry
+- eps_estimate
+- eps_actual
+- eps_surprise
+- revenue_estimate
+- revenue_actual
+- revenue_surprise
+- report_date
+- filing_date
+- transaction_date
+- transaction_type
+- insider_name
+- insider_title
+- institution
+- fund
+- value
+- value_usd
+- shares
+- conviction_score
+- pnl
+- weight
+- exposure
+- cost_basis
+- avg_cost
+
+Do not create new data fetches. Only preserve fields if frontend sends them.
+
+4. Keep backend data arms unchanged unless a tiny routing reference is required
+Do not rewrite Options Flow, Themes, Watchlist, Portfolio, Calendar, or any page endpoint.
+The point is not to rebuild the page data. The point is to let the agent see the page contents via screen_context.
+
+5. Validation
+Run mocked /api/query tests for these page contexts:
+- options_flow
+- screener
+- themes
+- macro
+- calendar / earnings
+- watchlist
+- portfolio
+- social_x
+- hyperliquid
+- whale_watch
+- insider_activity
+
+For each test:
+query = "what looks good here?"
+screen_context.page = PAGE
+screen_context.visible_rows = one fake representative row
+screen_context.sort = one fake sort object
+screen_context.freshness = one fake freshness object
+screen_context.tradingview_context = one fake chart object when relevant
+
+Confirm:
+- screen_context is accepted
+- _screen_context reaches final prompt
+- page hint routes to expected category when initial category is ambient/general
+- sort is preserved
+- freshness is preserved
+- rendered_sections is preserved when sent
+- tradingview_symbol/layout/source are preserved when sent
+- no page endpoints changed
+- no new API calls added
+
+Return:
+- Files changed
+- Exact mappings added
+- Exact screen_context fields preserved
+- Validation matrix by page
+- Confirmation that no page behavior/endpoints were changed
