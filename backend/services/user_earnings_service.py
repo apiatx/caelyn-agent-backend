@@ -230,6 +230,17 @@ async def _sync_from_fmp(
             f"for window={win_from}→{win_to}"
         )
 
+        # If FMP returned zero total events for a 120-day window, this is a
+        # transient API failure (rate-limit, empty response, etc.). Do NOT write
+        # a zero-event result to cache — it would poison every future request
+        # for the 30-day TTL. Return [] so the next request will retry.
+        if not all_events:
+            print(
+                f"[user_earnings] FMP returned 0 events (transient failure?) "
+                f"— skipping cache write for universe={universe}"
+            )
+            return []
+
         # Filter to exactly the user's symbol set
         filtered = [
             ev for ev in all_events

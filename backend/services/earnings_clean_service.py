@@ -1958,6 +1958,183 @@ async def get_curated_earnings_range(
     return result
 
 
+# ── Watchlist-scoped week-clean (symbol-driven, not curated-pool filtered) ─────
+
+async def _get_week_clean_watchlist_scope(
+    api_key:           str,
+    from_str:          str,
+    to_str:            str,
+    week_start,
+    week_end,
+    search:            Optional[str],
+    limit_per_session: int,
+    max_total:         int,
+) -> dict:
+    """
+    Symbol-driven watchlist earnings for the week-clean endpoint.
+
+    Bypasses the curated pipeline entirely.  Loads the user's saved Watchlist
+    symbols from Neon (same source as the Watchlist page), then reads/syncs a
+    120-day earnings window from user_earnings_service (Neon cache keyed by
+    universe="watchlist") and filters to the requested week window.
+
+    Never returns All-calendar symbols — only symbols that are actually saved in
+    the user's Watchlist.
+    """
+    from services.user_earnings_service import get_or_sync_user_earnings  # lazy
+
+    # Load watchlist symbols from Neon (same source as Watchlist page)
+    wl_syms_raw = _load_watchlist()
+
+    # US-ticker count (for display). We do NOT filter foreign tickers out of the
+    # symbol set passed to user_earnings_service — doing so would create a
+    # different cache key than the one used by /api/catalysts/events (which uses
+    # all symbols including foreign ones). A mismatched key forces a re-sync on
+    # every request. FMP naturally returns no results for foreign-exchange tickers
+    # (AIM:IQE, ASX:EOS, etc.) so they're silently excluded from events anyway.
+    wl_syms_us_count = sum(1 for s in wl_syms_raw if s and ":" not in s)
+
+    print(
+        f"[week_clean_watchlist] scope=watchlist "
+        f"neon_total={len(wl_syms_raw)} us_tickers={wl_syms_us_count} "
+        f"window={from_str}→{to_str}"
+    )
+    if wl_syms_raw:
+        us_only = sorted(s for s in wl_syms_raw if ":" not in s)
+        print(f"[week_clean_watchlist] first 20 US tickers: {us_only[:20]}")
+
+    # ── Empty watchlist ────────────────────────────────────────────────────────
+    if not wl_syms_raw:
+        return {
+            "asOf":         _today(),
+            "source":       "fmp",
+            "weekStart":    from_str,
+            "weekEnd":      to_str,
+            "days":         _build_empty_days(week_start, week_end),
+            "topEvents":    [],
+            "status":       "ok",
+            "errors":       [],
+            "scope":        "watchlist",
+            "symbolsCount": 0,
+            "eventsCount":  0,
+            "message":      "No watchlist symbols found",
+        }
+
+    # ── Fetch from 120-day Neon cache, filter to requested week ────────────────
+    # Pass ALL raw symbols (including foreign) to match the cache key used by
+    # other code paths that call user_earnings_service with the full symbol set.
+    try:
+        events, meta = await get_or_sync_user_earnings(
+            universe  = "watchlist",
+            symbols   = wl_syms_raw,
+            fmp_key   = api_key,
+            from_date = from_str,
+            to_date   = to_str,
+        )
+    except Exception as _err:
+        print(f"[week_clean_watchlist] user_earnings_service error: {_err}")
+        events, meta = [], {
+            "cache_status": "error",
+            "universe":     "watchlist",
+            "symbols_count": wl_syms_us_count,
+            "events_count":  0,
+        }
+
+    # ── Optional text search ───────────────────────────────────────────────────
+    if search:
+        sl = search.strip().lower()
+        events = [
+            e for e in events
+            if sl in (e.get("symbol") or "").lower()
+            or sl in (e.get("companyName") or "").lower()
+        ]
+
+    # ── Stamp each event with scope/source/session defaults ───────────────────
+    for ev in events:
+        ev["scope"] = "watchlist"
+        ev.setdefault("source", "fmp")
+        ev.setdefault("session", "unknown")
+        ev.setdefault("importanceScore", 0)
+        ev.setdefault("themeTags", [])
+
+    print(
+        f"[week_clean_watchlist] returning {len(events)} events "
+        f"cache_status={meta.get('cache_status')} "
+        f"symbols_count={meta.get('symbols_count', wl_syms_us_count)}"
+    )
+
+    # ── Build days[] (same structure as standard week-clean) ──────────────────
+    days_map: dict[str, list[dict]] = {}
+    cur = week_start
+    while cur <= week_end:
+        days_map[cur.strftime("%Y-%m-%d")] = []
+        cur += timedelta(days=1)
+
+    seen: set[tuple[str, str]] = set()
+    for ev in events:
+        sym = (ev.get("symbol") or "").upper()
+        d   = (ev.get("date") or "")
+        key = (sym, d)
+        if key in seen:
+            continue
+        seen.add(key)
+        if d in days_map:
+            days_map[d].append(ev)
+
+    days: list[dict] = []
+    for date_str in sorted(days_map.keys()):
+        day_evs   = days_map[date_str]
+        pre_mkt   = [e for e in day_evs if e.get("session") == "preMarket"][:limit_per_session]
+        after_hrs = [e for e in day_evs if e.get("session") == "afterHours"][:limit_per_session]
+        during    = [e for e in day_evs if e.get("session") == "duringMarket"][:limit_per_session]
+        unknown   = [
+            e for e in day_evs
+            if e.get("session") not in ("preMarket", "afterHours", "duringMarket")
+        ][:limit_per_session]
+        entries   = pre_mkt + during + after_hrs + unknown
+        d_obj     = datetime.strptime(date_str, "%Y-%m-%d")
+        label     = d_obj.strftime("%a, %b ") + str(d_obj.day)
+        days.append({
+            "date":         date_str,
+            "label":        label,
+            "weekday":      _WEEKDAY_NAMES.get(d_obj.weekday(), ""),
+            "count":        len(day_evs),
+            "preMarket":    pre_mkt,
+            "afterHours":   after_hrs,
+            "duringMarket": during,
+            "unknown":      unknown,
+            "entries":      entries,
+        })
+
+    all_deduped = [ev for evs in days_map.values() for ev in evs]
+    top_events  = sorted(
+        all_deduped, key=lambda e: -(e.get("importanceScore") or 0)
+    )[:max_total]
+
+    # Empty-but-valid: watchlist has symbols but none report this week
+    message = None
+    if wl_syms_raw and not events:
+        message = "No upcoming earnings found for your watchlist this week"
+
+    result = {
+        "asOf":         _today(),
+        "source":       "fmp",
+        "weekStart":    from_str,
+        "weekEnd":      to_str,
+        "days":         days,
+        "topEvents":    top_events,
+        "status":       "ok",
+        "errors":       [],
+        "scope":        "watchlist",
+        "symbolsCount": wl_syms_us_count,
+        "eventsCount":  len(events),
+        "meta":         meta,
+    }
+    if message:
+        result["message"] = message
+    return result
+
+
 # ── Public API: get_week_clean ─────────────────────────────────────────────────
 
 async def get_week_clean(
@@ -2008,6 +2185,24 @@ async def get_week_clean(
 
     from_str = ws.strftime("%Y-%m-%d")
     to_str   = we.strftime("%Y-%m-%d")
+
+    # ── Watchlist short-circuit ────────────────────────────────────────────────
+    # When scope=watchlist we bypass the curated All pipeline entirely and use
+    # the symbol-driven user_earnings_service path so the frontend sees events
+    # only for the user's actual saved Watchlist tickers — not the curated top
+    # earnings subset that happens to overlap with the watchlist.
+    if scope == "watchlist":
+        return await _get_week_clean_watchlist_scope(
+            api_key           = api_key,
+            from_str          = from_str,
+            to_str            = to_str,
+            week_start        = ws,
+            week_end          = we,
+            search            = search,
+            limit_per_session = limit_per_session,
+            max_total         = max_total,
+        )
+    # ── End watchlist short-circuit ───────────────────────────────────────────
 
     # -- Result cache (skip for filtered views)
     _wk_ck = f"earnings:curated:week:{from_str}:{to_str}"

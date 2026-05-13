@@ -1,0 +1,269 @@
+Fix ONLY the Watchlist toggle on the Earnings tab of the Calendar page.
+
+Backend repo:
+apiatx/caelyn-agent-backend
+
+Critical context:
+- The All toggle is working correctly. Do not change it.
+- The All toggle uses a custom curated/thematic earnings calendar. That logic is separate and should remain untouched.
+- The Watchlist toggle is currently wrong because it is still showing the same curated symbols as All.
+- The Watchlist toggle must use the user’s actual saved Watchlist symbols from the Watchlist page.
+
+Goal:
+When the user clicks Watchlist on the Earnings tab of the Calendar page, the calendar should show upcoming earnings events only for tickers on the user’s saved/uploaded Watchlist page.
+
+Expected behavior:
+- All toggle:
+  - Keep current curated/thematic earnings logic exactly as-is.
+- Watchlist toggle:
+  - Load the user’s saved Watchlist tickers from Neon / the same backend source used by the Watchlist page.
+  - Scan those symbols for upcoming earnings events over the next 2 months.
+  - Return all upcoming earnings events found for those watchlist symbols.
+  - Display them in the same response shape/style that the All toggle calendar already uses.
+  - If a watchlist symbol has no earnings event in the next 2 months, omit it.
+  - Never show tickers that are not on the user’s Watchlist.
+
+Hard rule:
+The Watchlist toggle must NOT filter or reuse the All curated earnings dataset.
+The Watchlist toggle must start from the saved Watchlist symbol list.
+
+Implementation requirements:
+
+1. Find the Calendar Earnings backend endpoint.
+Likely something like:
+GET /api/catalysts/events?tab=earnings_dates...
+or the current route used by the Calendar Earnings page.
+
+2. Identify the scope/toggle param.
+The frontend should be sending something like:
+scope=all
+scope=watchlist
+scope=portfolio
+
+For this fix, only implement/repair:
+scope=watchlist
+
+Do not modify scope=all.
+
+3. Add a strict branch:
+If tab == "earnings_dates" AND scope == "watchlist":
+  - bypass the All curated calendar logic completely
+  - call a dedicated watchlist earnings function
+Else:
+  - continue existing behavior
+
+Pseudo-logic:
+
+if tab == "earnings_dates" and scope == "watchlist":
+    return get_watchlist_earnings_calendar(...)
+else:
+    return existing_calendar_logic(...)
+
+4. Load Watchlist symbols from the real Watchlist source.
+Find the exact backend service/table/query used by the Watchlist page.
+
+Do NOT use:
+- hardcoded symbols
+- curated earnings symbols
+- thematic earnings symbols
+- frontend-provided symbol lists
+- All calendar results
+
+Use the saved Watchlist symbols from Neon.
+
+Normalize symbols:
+- trim whitespace
+- uppercase
+- dedupe
+- remove blanks
+- remove invalid rows
+- keep only stock tickers that can be sent to FMP earnings calendar/report endpoints
+
+5. Earnings scan window:
+For Watchlist scope, scan:
+- today through today + 2 months
+
+This should be enough for the calendar month/current/next-month use case.
+
+6. FMP usage:
+Use FMP as the primary source.
+
+Preferred:
+- Use the FMP Earnings Calendar endpoint with a date range covering today through +2 months.
+- Then filter returned events by the saved Watchlist symbol set.
+
+This is acceptable because it ensures every watchlist symbol with an upcoming event in that range can appear.
+
+Alternative if already implemented:
+- Use a symbol-driven FMP earnings lookup per watchlist symbol.
+- But cache it and do not do N calls every page load.
+
+Do not add previous earnings, EPS actuals, revenue actuals, or beat/miss data right now.
+This is forward-looking upcoming earnings only.
+
+7. Monthly cache:
+Create or reuse a durable Watchlist earnings cache.
+
+Cache requirements:
+- Universe/scope: "watchlist"
+- Symbol set hash: hash of sorted watchlist symbols
+- Window start date
+- Window end date
+- Events JSON
+- fetched_at
+- expires_at or TTL logic
+
+TTL:
+- 30 days is fine.
+- If the watchlist symbols change, invalidate/resync immediately.
+
+Important:
+Use Neon or existing durable cache/snapshot system.
+Do not rely only on in-memory cache.
+
+8. Watchlist update trigger:
+When a user uploads or saves a new Watchlist on the Watchlist page:
+- invalidate the watchlist earnings cache
+- trigger background sync for upcoming earnings over the next 2 months
+- do not block the watchlist upload response if the sync is slow
+
+Also support lazy sync:
+- If Calendar requests scope=watchlist and cache is missing/stale, sync then return results.
+
+9. Response shape:
+Return the same shape the frontend already uses for the All calendar, so the Watchlist tab renders in the same exact style.
+
+If All returns:
+{
+  days: [...]
+}
+
+then Watchlist should also return:
+{
+  days: [...]
+}
+
+If All returns:
+{
+  events: [...]
+}
+
+then Watchlist should also return:
+{
+  events: [...]
+}
+
+Do not invent a new frontend-only shape.
+
+Each watchlist earnings event should include the fields already used by the calendar UI, such as:
+- symbol
+- ticker
+- companyName
+- date / earningsDate / nextEarningsDate
+- reportTime if available
+- epsEstimate if available
+- revenueEstimate if available
+- source: "fmp"
+- scope: "watchlist"
+
+Use whichever field names match the existing All event shape.
+
+10. Filtering rules:
+After loading FMP earnings events:
+- include event only if event.symbol is in saved_watchlist_symbols
+- exclude event if symbol is not in the user’s Watchlist
+- exclude duplicate symbol/date rows
+- do not include ETFs, funds, blank rows, or weird malformed symbols unless the Watchlist page already supports them as stocks
+
+11. Empty state:
+If the user has no saved Watchlist symbols:
+Return 200 with an empty calendar response and metadata:
+{
+  scope: "watchlist",
+  symbols_count: 0,
+  events_count: 0,
+  message: "No watchlist symbols found"
+}
+
+If the user has symbols but none have earnings in the next 2 months:
+Return 200 with empty events/days and:
+{
+  scope: "watchlist",
+  symbols_count: N,
+  events_count: 0,
+  message: "No upcoming earnings found for your watchlist"
+}
+
+Do not fall back to All curated results.
+
+12. Logging:
+Add logs specifically for Watchlist scope:
+- route/query params
+- scope
+- number of watchlist symbols loaded
+- first 20 symbols
+- date window scanned
+- cache hit/miss/stale
+- FMP calls used
+- earnings events returned
+- any symbols with matched earnings
+- any exception traceback
+
+13. Validation:
+Before saying done, run and report:
+
+A. Confirm All still works:
+GET /api/catalysts/events?tab=earnings_dates&scope=all
+
+Expected:
+- current curated/thematic All calendar still works
+- no behavior change
+
+B. Confirm Watchlist loads real Watchlist symbols:
+Use the backend source/table that powers the Watchlist page and print:
+- symbol count
+- first 20 watchlist symbols
+
+C. Confirm Watchlist endpoint:
+GET /api/catalysts/events?tab=earnings_dates&scope=watchlist
+
+Expected:
+- returns 200
+- returns only symbols from the saved Watchlist
+- zero symbols outside the saved Watchlist
+- event count > 0 if watchlist contains stocks with earnings in next 2 months
+- empty response is allowed only if no saved watchlist symbols have upcoming earnings
+
+D. Confirm no All leakage:
+Compare symbols from:
+GET /api/catalysts/events?tab=earnings_dates&scope=all
+
+versus:
+GET /api/catalysts/events?tab=earnings_dates&scope=watchlist
+
+The Watchlist response may overlap with All only when the same ticker is actually in the saved Watchlist.
+But Watchlist must never contain symbols outside the saved Watchlist.
+
+E. Test watchlist upload:
+- Upload/save a new watchlist with a few known tickers.
+- Confirm Neon saved symbols changed.
+- Confirm watchlist earnings cache invalidated.
+- Confirm Calendar Watchlist endpoint now returns earnings only for the newly saved symbols.
+
+14. Do not implement Portfolio yet.
+Portfolio is next.
+This task is only:
+Calendar Earnings tab → Watchlist toggle → saved Watchlist symbols → upcoming earnings events.
+
+15. Do not implement:
+- previous earnings
+- EPS actual
+- EPS beat/miss
+- revenue actual
+- revenue beat/miss
+- earnings transcripts
+- frontend redesign
+- changes to All toggle
+
+Success definition:
+The Calendar Earnings Watchlist toggle displays upcoming earnings events for the user’s actual saved Watchlist stocks, in the same calendar style as All, and never falls back to the curated All dataset.
